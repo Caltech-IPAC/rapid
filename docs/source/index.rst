@@ -19,7 +19,7 @@ Pipeline, under development at IPAC/Caltech.
 Getting the Source Code
 ==================
 
-Please refer to the `GitHub Repository <https://github.com/Caltech-IPAC/rapid>`_ for the source code.
+Please refer to the `RAPID GitHub Repository <https://github.com/Caltech-IPAC/rapid>`_ for the source code.
 
 
 
