@@ -3,10 +3,10 @@
    You can adapt this file completely to your liking, but it should at least
    contain the root `toctree` directive.
 
-Caltech-IPAC-RAPID's Data Reduction Pipeline Documentation
+RAPID Image-Difference Pipeline Documentation
 ==============================================
 
-Welcome! This is the documentation for the RAPID Data Reduction
+Welcome! This is the documentation for the RAPID Image-Difference
 Pipeline, under development at IPAC/Caltech.
 
 
@@ -16,7 +16,14 @@ Pipeline, under development at IPAC/Caltech.
 
 
 
-Indices and tables
+Getting the Source Code
+==================
+
+Please refer to the `Github repository: <https://github.com/Caltech-IPAC/rapid>`_ for the source code.
+
+
+
+Indices and Tables
 ==================
 
 * :ref:`genindex`
