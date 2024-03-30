@@ -19,15 +19,23 @@ Building C code on laptop
 
 The script to build on a laptop the C software system for the RAPID pipeline is
 
-  /source/code/location/rapid/c/builds/build_laptop.csh
+.. code-block::
+
+   /source/code/location/rapid/c/builds/build_laptop.csh
 
 This script is has been tested on a Mac laptop running macOS Montery.
   
-1. Prerequisite for atlas-library build: brew install gfortran
+1. Prerequisite for atlas-library build:
+
+.. code-block::
+
+   brew install gfortran
 
 2. Modify the following line in the build script to configure build environment, setting the absolute path of the rapid git repo.  E.g.,
 
-  setenv RAPID_SW /source/code/location/rapid
+.. code-block::
+
+   setenv RAPID_SW /source/code/location/rapid
 
 3. Run the build script.
 
@@ -59,17 +67,23 @@ Building C code on Linux machine
 
 The script to build on a Linux machine the C software system for the RAPID pipeline is
 
-  /source/code/location/rapid/c/builds/build.csh
+.. code-block::
+
+   /source/code/location/rapid/c/builds/build.csh
 
 It is assumed the atlas library is located in
 
-  /usr/lib64/atlas
+.. code-block::
+
+   /usr/lib64/atlas
 
 Furthermore, it is assumed gfortran is in the PATH.
   
 1. Modify the following line in the build script to configure build environment, setting the absolute path of the rapid git repo.  E.g.,
 
-  setenv RAPID_SW /source/code/location/rapid
+.. code-block::
+
+   setenv RAPID_SW /source/code/location/rapid
 
 2. Run the build script.
 
