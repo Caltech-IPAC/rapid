@@ -10,10 +10,6 @@ Welcome! This is the documentation for the RAPID Image-Difference
 Pipeline, under development at IPAC/Caltech.
 
 
-.. toctree::
-   :maxdepth: 2
-   :caption: Contents:
-
 
 
 Getting the Source Code
@@ -21,9 +17,15 @@ Getting the Source Code
 
 Please refer to the `RAPID GitHub Repository <https://github.com/Caltech-IPAC/rapid>`_ for the source code.
 
-.. Separate file for installation of the pipeline and building the C code.
+..
+   Separate file for installation of the pipeline and building the C code.
+
+
+
+.. toctree::
+   :maxdepth: 2
    
-  install/install.rst
+   install/install.rst
 
 
 Indices and Tables
