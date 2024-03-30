@@ -4,7 +4,7 @@
    contain the root `toctree` directive.
 
 RAPID Image-Difference Pipeline Documentation
-==============================================
+####################################################
 
 Welcome! This is the documentation for the RAPID Image-Difference
 Pipeline, under development at IPAC/Caltech.
@@ -17,7 +17,7 @@ Pipeline, under development at IPAC/Caltech.
 
 
 Getting the Source Code
-==================
+*****************************
 
 Please refer to the `RAPID GitHub Repository <https://github.com/Caltech-IPAC/rapid>`_ for the source code.
 
