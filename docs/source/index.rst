@@ -11,8 +11,7 @@ Pipeline, under development at IPAC/Caltech.
 
 
 .. note::
-   This is note text. Use a note for information you want the user to
-   pay particular attention to.
+   Development of source code and documentation is currently ongoing.
 
 
 Getting the Source Code
