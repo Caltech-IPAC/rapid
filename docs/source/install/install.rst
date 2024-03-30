@@ -1,6 +1,3 @@
-Installing RAPID Pipeline
-************************************
-
 Download the source code
 ====================
 
