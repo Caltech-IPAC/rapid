@@ -21,6 +21,9 @@ Getting the Source Code
 
 Please refer to the `RAPID GitHub Repository <https://github.com/Caltech-IPAC/rapid>`_ for the source code.
 
+.. Separate file for installation of the pipeline and building the C code.
+   
+  install/install.rst
 
 
 Indices and Tables
