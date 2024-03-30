@@ -10,14 +10,16 @@ Download the source code
    git clone https://github.com/Caltech-IPAC/rapid
 
 
-The C code in this git repo must be built, in order to run the RAPID pipeline.
+The C code in this git repo must be built, in order to run the RAPID
+pipeline.  Depending on whether the build is on a Mac laptop or a
+Linux machine, there are separate build scripts referred to below.
 
 
-Building C code on laptop
+Building C code on Mac laptop
 ========================
 
 
-The script to build on a laptop the C software system for the RAPID pipeline is
+The script to build on a Mac laptop the C software system for the RAPID pipeline is
 
 .. code-block::
 
@@ -25,19 +27,19 @@ The script to build on a laptop the C software system for the RAPID pipeline is
 
 This script is has been tested on a Mac laptop running macOS Montery.
   
-1. Prerequisite for atlas-library build:
+1. Prerequisite for the atlas-library build in the build script:
 
 .. code-block::
 
    brew install gfortran
 
-2. Modify the following line in the build script to configure build environment, setting the absolute path of the rapid git repo.  E.g.,
+2. Modify the following line in the build script to configure the environment within the script, setting the absolute path of the rapid git repo:
 
 .. code-block::
 
    setenv RAPID_SW /source/code/location/rapid
 
-3. Run the build script.
+3. Run the build script:
 
 .. code-block::
    
@@ -79,13 +81,13 @@ It is assumed the atlas library is located in
 
 Furthermore, it is assumed gfortran is in the PATH.
   
-1. Modify the following line in the build script to configure build environment, setting the absolute path of the rapid git repo.  E.g.,
+1. Modify the following line in the build script to configure the environment within the script, setting the absolute path of the rapid git repo:
 
 .. code-block::
 
    setenv RAPID_SW /source/code/location/rapid
 
-2. Run the build script.
+2. Run the build script:
 
 .. code-block::
    
