@@ -32,8 +32,9 @@ This script is has been tested on a Mac laptop running macOS Montery.
 3. Run the build script.
 
 .. code-block::
-  cd /source/code/location/rapid/c/builds
-  ./build_laptop.csh >& build_laptop.out &
+   
+   cd /source/code/location/rapid/c/builds
+   ./build_laptop.csh >& build_laptop.out &
 
 The script may take some time to finish as building the atlas library,
 which is needed by sextractor, is part of the process.
@@ -42,13 +43,14 @@ The binary executables, libraries, and include file are
 installed under the following paths:
 
 .. code-block::
-  /source/code/location/rapid/c/bin
-  /source/code/location/rapid/c/lib
-  /source/code/location/rapid/c/include
-  /source/code/location/rapid/c/atlas/lib
-  /source/code/location/rapid/c/atlas/include
-  /source/code/location/rapid/c/common/fftw/lib
-  /source/code/location/rapid/c/common/fftw/include
+   
+   /source/code/location/rapid/c/bin
+   /source/code/location/rapid/c/lib
+   /source/code/location/rapid/c/include
+   /source/code/location/rapid/c/atlas/lib
+   /source/code/location/rapid/c/atlas/include
+   /source/code/location/rapid/c/common/fftw/lib
+   /source/code/location/rapid/c/common/fftw/include
   
 
   
@@ -72,15 +74,17 @@ Furthermore, it is assumed gfortran is in the PATH.
 2. Run the build script.
 
 .. code-block::
-  cd /source/code/location/rapid/c/builds
-  ./build.csh >& build.out &
+   
+   cd /source/code/location/rapid/c/builds
+   ./build.csh >& build.out &
 
 The binary executables, libraries, and include file are
 installed under the following paths:
 
 .. code-block::
-  /source/code/location/rapid/c/bin
-  /source/code/location/rapid/c/lib
-  /source/code/location/rapid/c/include
-  /source/code/location/rapid/c/common/fftw/lib
-  /source/code/location/rapid/c/common/fftw/include
+   
+   /source/code/location/rapid/c/bin
+   /source/code/location/rapid/c/lib
+   /source/code/location/rapid/c/include
+   /source/code/location/rapid/c/common/fftw/lib
+   /source/code/location/rapid/c/common/fftw/include
