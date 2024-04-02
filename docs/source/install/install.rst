@@ -60,14 +60,15 @@ installed under the following paths:
    /source/code/location/rapid/c/common/fftw/include
   
 .. warning::
-    The configure script made by autogen.sh in the build script did
-    not work on the Mac laptop used to test the build script.  In
-    order to fix the problem, a hacked version of the configure script
+    The sextractor configure script made by autogen.sh in the build script did
+    not work on the Mac laptop used to test the build script.  To fix
+    the problem, a hacked version of the sextractor configure script
     is copied into the sextractor build directory and rerun as part of
     the build process.
 
-    Users may wish to comment out this portion in the build script to
-    experiment with whether the problem is indeed experienced on their Mac laptop.
+    Users may wish to comment out this portion in the sextractor
+    section of the build script in order to experiment with whether
+    the problem is indeed experienced on their Mac laptop.
 
   
 Building C code on Linux machine
