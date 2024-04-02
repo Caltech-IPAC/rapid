@@ -195,7 +195,9 @@ rm -rf sextractor-2.25.0
 tar -xvf sextractor-2.25.0.tar
 cd sextractor-2.25.0
 ./autogen.sh
-./configure CPPFLAGS=-I${RAPID_SW}/c/common/fftw/include LDFLAGS=-L${RAPID_SW}/c/common/fftw/lib --enable-static --prefix=${RAPID_SW}/c --with-fftw-libdir=${RAPID_SW}/c/common/fftw/lib --with-fftw-incdir=${RAPID_SW}/c/common/fftw/include --with-atlaslibdir=${RAPID_SW}/c/atlas/lib --with-atlas-incdir=${RAPID_SW}/c/atlas/include --enable-threads=4
+./configure CPPFLAGS=-I${RAPID_SW}/c/common/fftw/include:${RAPID_SW}/c/atlas/include LDFLAGS=-L${RAPID_SW}/c/common/fftw/lib:${RAPID_SW}/c/atlas/lib --enable-static --prefix=${RAPID_SW}/c --with-fftw-libdir=${RAPID_SW}/c/common/fftw/lib --with-fftw-incdir=${RAPID_SW}/c/common/fftw/include --with-atlas-libdir=${RAPID_SW}/c/atlas/lib --with-atlas-incdir=${RAPID_SW}/c/atlas/include --enable-threads=4
+cp -p ../configure_hacked configure
+./configure CPPFLAGS=-I${RAPID_SW}/c/common/fftw/include:${RAPID_SW}/c/atlas/include LDFLAGS=-L${RAPID_SW}/c/common/fftw/lib:${RAPID_SW}/c/atlas/lib --enable-static --prefix=${RAPID_SW}/c --with-fftw-libdir=${RAPID_SW}/c/common/fftw/lib --with-fftw-incdir=${RAPID_SW}/c/common/fftw/include --with-atlas-libdir=${RAPID_SW}/c/atlas/lib --with-atlas-incdir=${RAPID_SW}/c/atlas/include --enable-threads=4
 make
 make install 
 echo " "     
