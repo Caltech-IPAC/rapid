@@ -24,7 +24,7 @@ The script to build on a Mac laptop the C software system for the RAPID pipeline
 
 This script is has been tested on a Mac laptop running macOS Montery.
   
-1. Prerequisite for the atlas-library build in the build script:
+1. Prerequisite for the atlas-library build in the build script (you may need to install brew on your Mac laptop):
 
 .. code-block::
 
