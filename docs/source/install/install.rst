@@ -39,7 +39,13 @@ This script is has been tested on a Mac laptop running macOS Montery.
 
    setenv RAPID_SW /source/code/location/rapid
 
-3. Run the build script:
+3. Modify the following line in the build script to configure the PATH environment variable within the script, ensuring that all paths to commands like make, gcc, ls, rm, gfortran, autoconf, automake, libtool, etc. are accessible:
+
+.. code-block::
+
+   setenv PATH /bin:/usr/local/bin:/usr/bin:/usr/sbin:/sbin:/opt/X11/bin
+
+4. Run the build script:
 
 .. code-block::
    
