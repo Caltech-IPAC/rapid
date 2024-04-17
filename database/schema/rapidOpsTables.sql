@@ -59,12 +59,14 @@ SET default_tablespace = pipeline_data_01;
 CREATE TABLE exposures (
     expid integer NOT NULL,                         -- Primary key
     dateobs timestamp without time zone NOT NULL,   -- Header keyword: DATE-OBS
-    field integer NOT NULL,                         -- Foreign key from Fields table; Header keyword FIELD
+    field integer NOT NULL,
     fid smallint NOT NULL,                          -- Foreign key from Filters table
     exptime real NOT NULL,                          -- Header keyword EXPTIME
     mjdobs double precision NOT NULL,               -- Header keyword MJD-OBS
     status smallint DEFAULT 1 NOT NULL,
-    infobits integer DEFAULT 0 NOT NULL
+    infobits integer DEFAULT 0 NOT NULL,
+    created timestamp without time zone             -- Timestamp of database record INSERT
+        DEFAULT now() NOT NULL
 );
 
 ALTER TABLE exposures OWNER TO rapidadminrole;
@@ -109,12 +111,13 @@ CREATE TABLE l2files (
     expid integer NOT NULL,
     chipid smallint NOT NULL,                            -- FITS-header keyword: SCA-NUM
     version smallint NOT NULL,
+    vbest smallint NOT NULL,
     field integer NOT NULL,
     fid smallint NOT NULL,
-    dateobs date NOT NULL,                               -- FITS-header keyword: DATE-OBS
+    dateobs timestamp without time zone NOT NULL,        -- FITS-header keyword: DATE-OBS
     mjdobs double precision NOT NULL,                    -- FITS-header keyword: MJD-OBS
     exptime real NOT NULL,                               -- FITS-header keyword: EXPTIME
-    infobits bigint DEFAULT 0 NOT NULL,                  -- Bit-wise information flags
+    infobits integer DEFAULT 0 NOT NULL,                  -- Bit-wise information flags
     filename character varying(255) NOT NULL,            -- Full path and filename
     checksum character varying(32) NOT NULL,             -- MD5 checksum of entire file
     status smallint DEFAULT 0 NOT NULL,                  -- Set to zero if bad and one if good (verify automatically with
@@ -166,7 +169,6 @@ CREATE TABLE l2files (
     skymean real NOT NULL,                               -- FITS-header keyword: SKY-MEAN
     created timestamp without time zone                  -- Timestamp of database record INSERT or last UPDATE
         DEFAULT now() NOT NULL,
-    vbest smallint NOT NULL,
     CONSTRAINT l2files_vbest_check CHECK ((vbest = ANY (ARRAY[0, 1, 2]))),
     CONSTRAINT l2files_version_check CHECK ((version > 0)),
     CONSTRAINT l2files_ra_check CHECK (((ra >= 0.0) AND (ra < 360.0))),
