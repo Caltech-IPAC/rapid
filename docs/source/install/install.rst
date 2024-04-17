@@ -80,7 +80,10 @@ installed under the following paths:
     section of the build script in order to experiment with whether
     the problem is indeed experienced particularly on their Mac laptop.
 
-  
+.. warning::
+    This build script worked on a Mac laptop running macOS Monterey with a 2.9 GHz Dual-Core Intel Core i5 processor.
+    It has not been fully tested for the new processor chips, like the Apple M3 Max.
+
 Building C code on Linux machine
 ========================
 
