@@ -11,4 +11,5 @@ RUN yum -y install gfortran
 RUN yum -y install autoconf
 RUN yum -y install automake
 RUN yum -y install libtool
+RUN yum -y install zlib-devel
 
