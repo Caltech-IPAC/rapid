@@ -13,4 +13,5 @@ RUN yum -y install autoconf
 RUN yum -y install automake
 RUN yum -y install libtool
 RUN yum -y install zlib-devel
-
+RUN yum -y install atlas
+RUN yum -y install atlas-devel
