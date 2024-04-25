@@ -4,7 +4,6 @@ Install Docker on EC2 instance
 Install Docker on Ubuntu EC2 instance
 **********************************************************
 
-
 1. Ssh into Ubuntu EC2 instance
 
 
@@ -40,6 +39,5 @@ Install Docker on Ubuntu EC2 instance
 
 Install Docker on Centos EC2 instance
 **********************************************************
-
 
 TBW
