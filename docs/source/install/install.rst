@@ -145,12 +145,14 @@ launched, as shown in the instructions below, and the latter is tied
 to how the infrastructure software in 
 RAPID project's Docker image has been pre-installed.
 
-0. Install docker if not already done; otherwise, skip this step:
+0. Install ``docker`` and create Docker image if not already done;
+   otherwise, skip to next step:
 
 .. toctree::
    :maxdepth: 3
    
    docker.rst
+   docker_image.rst
 
 1. Ssh into the EC2 instance, and launch the Docker container with the
    following commands:
