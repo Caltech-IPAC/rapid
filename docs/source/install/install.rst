@@ -143,7 +143,14 @@ variables.  The former is tied directly to how the docker container is
 launched, as shown in the instructions below, and the latter is tied
 to how the infrastructure software in 
 RAPID project's Docker image has been pre-installed.
-  
+
+Install docker if not already done; otherwise, skip this step:
+
+.. toctree::
+   :maxdepth: 2
+   
+   docker.rst
+
 1. Ssh into the EC2 instance, and launch the Docker container with the
    following commands:
 
