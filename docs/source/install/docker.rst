@@ -33,3 +33,9 @@ Install Docker on Ubuntu EC2 instance
 .. code-block::
 
    sudo docker run hello-world
+
+
+Install Docker on Centos EC2 instance
+====================
+
+TBW
