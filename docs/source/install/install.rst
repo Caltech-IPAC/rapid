@@ -130,7 +130,7 @@ installed under the following paths:
 Building C code on EC2 instance inside Docker container
 ========================
 
-The script to build on a Linux machine the C software system for the RAPID pipeline is
+The script to build inside a Docker container the C software system for the RAPID pipeline is
 
 .. code-block::
 
@@ -158,7 +158,7 @@ documented below.  The source-code location is
 mapped from a location outside the container to inside the container
 in the ``docker run`` command.
 Therefore, the C-code build only needs to be done once, and this will
-be persisted even after the container is exited.
+be persisted even after exiting the container.
 
 2. Run the build script inside the container:
 
