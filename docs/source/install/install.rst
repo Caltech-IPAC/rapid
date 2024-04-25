@@ -1,5 +1,5 @@
 Download the source code
-====================
+####################################################
 
 .. code-block::
 
@@ -8,14 +8,15 @@ Download the source code
 
 
 The C code in this git repo must be built, in order to run the RAPID
-pipeline.  Depending on whether the build is on a Mac laptop or a
-Linux machine, there are separate build scripts referred to below.
+pipeline.  Depending on whether the build is on a Mac laptop, a
+Linux machine, or inside a Docker container on a Linux machine,
+there are separate build scripts referred to below.
 
 The build commands below can be repeated safely as the build scripts
-documented below remove prior build/install files before proceeding.
+remove prior build/install files before proceeding.
 
 Building C code on Mac laptop
-========================
+####################################################
 
 
 The script to build on a Mac laptop the C software system for the RAPID pipeline is
@@ -89,7 +90,7 @@ installed under the following paths:
     It has not been fully tested for the new processor chips, like the Apple M3 Max.
 
 Building C code on Linux machine
-========================
+####################################################
 
 The script to build on a Linux machine the C software system for the RAPID pipeline is
 
@@ -130,7 +131,7 @@ installed under the following paths:
    /source/code/location/rapid/c/common/fftw/include
 
 Building C code on EC2 instance inside Docker container
-========================
+####################################################
 
 The script to build inside a Docker container the C software system for the RAPID pipeline is
 
@@ -144,7 +145,7 @@ launched, as shown in the instructions below, and the latter is tied
 to how the infrastructure software in 
 RAPID project's Docker image has been pre-installed.
 
-Install docker if not already done; otherwise, skip this step:
+0. Install docker if not already done; otherwise, skip this step:
 
 .. toctree::
    :maxdepth: 3
@@ -156,6 +157,7 @@ Install docker if not already done; otherwise, skip this step:
 
 .. code-block::
 
+   ssh -i ~/.ssh/MyKey.pem ubuntu@ubuntu@ec2-34-219-130-182.us-west-2.compute.amazonaws.com
    sudo docker run -it -v /source/code/location/rapid:/code rapid:1.0 bash
 
 In this case, the rapid:1.0 Docker image is run.
