@@ -149,7 +149,7 @@ Install docker if not already done; otherwise, skip this step:
 .. toctree::
    :maxdepth: 2
    
-   docker.rst
+docker.rst
 
 1. Ssh into the EC2 instance, and launch the Docker container with the
    following commands:
