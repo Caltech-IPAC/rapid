@@ -11,6 +11,8 @@ The C code in this git repo must be built, in order to run the RAPID
 pipeline.  Depending on whether the build is on a Mac laptop or a
 Linux machine, there are separate build scripts referred to below.
 
+The build commands below can be repeated safely as the build scripts
+documented below remove prior build/install files before proceeding.
 
 Building C code on Mac laptop
 ========================
@@ -57,7 +59,7 @@ This script is has been tested on a Mac laptop running macOS Montery.
 The script may take some time to finish as building the atlas library
 (perhaps 12 hours or more), which is needed by sextractor, is part of the process.
 
-The binary executables, libraries, and include file are
+The binary executables, libraries, and include files are
 installed under the following paths:
 
 .. code-block::
@@ -116,7 +118,7 @@ Furthermore, it is assumed gfortran is in the PATH.
    cd /source/code/location/rapid/c/builds
    ./build.csh >& build.out &
 
-The binary executables, libraries, and include file are
+The binary executables, libraries, and include files are
 installed under the following paths:
 
 .. code-block::
@@ -141,8 +143,6 @@ variables.  The former is tied directly to how the docker container is
 launched, as shown in the instructions below, and the latter is tied
 to how the infrastructure software in 
 RAPID project's Docker image has been pre-installed.
-The build commands below can be repeated safely as the build script
-removes prior build/install files before proceeding.
   
 1. Ssh into the EC2 instance, and launch the Docker container with the
    following commands:
@@ -156,7 +156,7 @@ In this case, the rapid:1.0 Docker image is run.
 The C-code-build location is embedded in the source-code location, as
 documented below.  The source-code location is
 mapped from a location outside the container to inside the container
-in the ``docker run`` command.
+in the ``docker run -v`` command option.
 Therefore, the C-code build only needs to be done once, and this will
 be persisted even after exiting the container.
 
@@ -169,7 +169,7 @@ be persisted even after exiting the container.
 
    tail -f build_inside_container.out
 
-The binary executables, libraries, and include file are
+The binary executables, libraries, and include files are
 installed under the following paths inside the container:
 
 .. code-block::
