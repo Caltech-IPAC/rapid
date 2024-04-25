@@ -39,7 +39,9 @@ This script is has been tested on a Mac laptop running macOS Montery.
 
    setenv RAPID_SW /source/code/location/rapid
 
-3. Modify the following line in the build script to configure the PATH environment variable within the script, ensuring that all paths to commands like make, gcc, ls, rm, gfortran, autoconf, automake, libtool, etc. are accessible:
+3. Modify the following line in the build script to configure the PATH
+   environment variable within the script, ensuring that all paths to
+   commands like ``make``, ``gcc``, ``ls``, ``rm``, ``gfortran``, ``autoconf``, ``automake``, ``libtool``, etc. are accessible:
 
 .. code-block::
 
@@ -124,3 +126,59 @@ installed under the following paths:
    /source/code/location/rapid/c/include
    /source/code/location/rapid/c/common/fftw/lib
    /source/code/location/rapid/c/common/fftw/include
+
+Building C code on EC2 instance inside Docker container
+========================
+
+The script to build on a Linux machine the C software system for the RAPID pipeline is
+
+.. code-block::
+
+   /source/code/location/rapid/c/builds/build_inside_container.sh
+
+This script has preconfigured RAPID_SW and PATH environment
+variables.  The former is tied directly to how the docker container is
+launched, as shown in the instructions below, and the latter is tied
+to how the infrastructure software in 
+RAPID project's Docker image has been pre-installed.
+The build commands below can be repeated safely as the build script
+removes prior build/install files before proceeding.
+  
+1. Ssh into the EC2 instance, and launch the Docker container with the
+   following commands:
+
+.. code-block::
+
+   sudo docker run -it -v /source/code/location/rapid:/code rapid:1.0 bash
+
+In this case, the rapid:1.0 Docker image is run.
+
+The C-code-build location is embedded in the source-code location, as
+documented below.  The source-code location is
+mapped from a location outside the container to inside the container
+in the ``docker run`` command.
+Therefore, the C-code build only needs to be done once, and this will
+be persisted even after the container is exited.
+
+2. Run the build script inside the container:
+
+.. code-block::
+   
+   cd /code/c/builds
+   ./build_inside_container.sh >& build_inside_container.out &
+
+   tail -f build_inside_container.out
+
+The binary executables, libraries, and include file are
+installed under the following paths inside the container:
+
+.. code-block::
+   
+   /code/c/bin
+   /code/c/lib
+   /code/c/include
+   /code/c/common/fftw/lib
+   /code/c/common/fftw/include
+
+The binary executatables and libraries therein cannot be executed
+outside the container even though they are visible outside.
