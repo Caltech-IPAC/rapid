@@ -73,6 +73,17 @@ make install
 echo " "     
 echo "--->Finished building wcslib library."
 
+#--------Build wcstools---------------------
+echo " "     
+echo "--->Building wcstools, version 3.9.7 ..."
+cd ${RAPID_SW}/c/common/wcstools
+rm -rf wcstools-3.9.7
+tar -xvf wcstools-3.9.7.tar
+cd wcstools-3.9.7
+make all
+echo " "     
+echo "--->Finished building wcstools."
+
 #--------Build swarp binary---------------------
 echo " "     
 echo "--->Building swarp, version 2.41.5 ..."
