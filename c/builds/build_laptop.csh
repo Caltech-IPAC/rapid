@@ -9,9 +9,9 @@
 #
 
 #--------Configure build environment--------------------------
-setenv RAPID_SW /Users/laher/Documents/rapid/git/rapid
+setenv RAPID_SW /Users/laher/git/rapid
 # A well-defined path is essential.
-setenv PATH /usr/local/bin:/usr/bin:/usr/sbin:/sbin:/opt/X11/bin
+setenv PATH /bin:/usr/local/bin:/usr/bin:/usr/sbin:/sbin:/opt/X11/bin
 
 #--------Remove old and make new delivery directories--------------------------
 cd ${RAPID_SW}/c
