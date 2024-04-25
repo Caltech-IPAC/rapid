@@ -64,6 +64,19 @@ cp ${RAPID_SW}/c/common/cfitsio/cfitsio-4.3.1/funpack ${RAPID_SW}/c/bin
 echo " "
 echo "--->Finished building CFITSIO library."
 
+#--------Build wcslib library---------------------
+echo " "     
+echo "--->Building wcslib library, version 8.2.2 ..."
+cd ${RAPID_SW}/c/common/wcslib
+rm -rf wcslib-8.2.2
+tar -xvf wcslib-8.2.2.tar
+cd wcslib-8.2.2
+./configure --prefix=${RAPID_SW}/c  --with-cfitsiolib=${RAPID_SW}/c/lib --with-cfitsioinc=${RAPID_SW}/c/include/cfitsio
+make
+make install 
+echo " "     
+echo "--->Finished building wcslib library."
+
 #--------Build swarp binary---------------------
 echo " "     
 echo "--->Building swarp, version 2.41.5 ..."
