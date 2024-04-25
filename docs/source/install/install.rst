@@ -191,5 +191,18 @@ installed under the following paths inside the container:
    /code/c/common/fftw/lib
    /code/c/common/fftw/include
 
+Here are listings:
+
+.. code-block::
+
+   [root@ip-172-31-28-194 bin]# ls /code/c/bin
+   fitsverify  fpack  funpack  generateSmoothLampPattern  gsl-config  gsl-histogram  gsl-randist  hdrupdate  imcopy  imheaders  ldactoasc	makeTestFitsFile  sex  swarp  verifyHduSums
+   [root@ip-172-31-28-194 bin]# ls /code/c/lib
+   libcfitsio.a  libcfitsio.so  libcfitsio.so.10  libcfitsio.so.10.4.3.1  libgsl.a  libgsl.la  libgsl.so  libgsl.so.23  libgsl.so.23.1.0  libgslcblas.a  libgslcblas.la  libgslcblas.so  libgslcblas.so.0	libgslcblas.so.0.0.0  libnan.a	libnan.so  libnumericalrecipes.a  libnumericalrecipes.so  pkgconfig
+   [root@ip-172-31-28-194 bin]# ls /code/c/common/fftw/lib
+   cmake  libfftw3f.a  libfftw3f.la  libfftw3f_threads.a  libfftw3f_threads.la  pkgconfig
+   [root@ip-172-31-28-194 bin]# ls /code/c/common/fftw/include
+   fftw3.f  fftw3.f03  fftw3.h  fftw3l.f03  fftw3q.f03
+
 The binary executatables and libraries therein cannot be executed
 outside the container even though they are visible outside.
