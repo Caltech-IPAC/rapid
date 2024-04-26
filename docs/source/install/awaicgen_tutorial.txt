@@ -1,5 +1,5 @@
-[root@0a97cfa9bbfa bin]# export LD_LIBRARY_PATH=/code/c/lib
-[root@0a97cfa9bbfa bin]# ./awaicgen 
+# export LD_LIBRARY_PATH=/code/c/lib
+# ./awaicgen 
 
 A generic WISE Astronomical Image Coadder, Version 5.2
 
