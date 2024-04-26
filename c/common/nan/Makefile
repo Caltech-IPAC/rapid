@@ -25,6 +25,9 @@ $(LIB_NAME)$(SHLIB_SUFFIX): nanvalue.o
 .PHONY: clean
 clean:
 	$(RM) *.o
+	if [ -f $(LIB_NAME).a ]; then \
+		$(RM) $(LIB_NAME).a; \
+	fi;
 	if [ -f $(RAPID_LIB_PATH)/$(LIB_NAME).a ]; then \
 		$(RM) $(RAPID_LIB_PATH)/$(LIB_NAME).a; \
 	fi;
