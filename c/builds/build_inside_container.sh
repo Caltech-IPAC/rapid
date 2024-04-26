@@ -85,6 +85,20 @@ make all
 echo " "     
 echo "--->Finished building wcstools."
 
+#--------Build awaicgen binary---------------------
+echo " "     
+echo "--->Building awaicgen, version 5.2 ..."
+cd ${RAPID_SW}/c/common/awaicgen
+rm -rf awaicgen-5.2
+tar -xvf awaicgen-5.2.tar
+cd ${RAPID_SW}/c/common/awaicgen/awaicgen-5.2/libtwoplane
+make
+cd ${RAPID_SW}/c/common/awaicgen/awaicgen-5.2
+make
+cp -p awaicgen ${RAPID_SW}/c/bin
+echo " "     
+echo "--->Finished building awaicgen."
+
 #--------Build swarp binary---------------------
 echo " "     
 echo "--->Building swarp, version 2.41.5 ..."
