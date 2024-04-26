@@ -3,7 +3,7 @@ Download the source code
 
 .. code-block::
 
-   cd /source/code/location
+   cd /source-code/location
    git clone https://github.com/Caltech-IPAC/rapid
 
 
@@ -23,7 +23,7 @@ The script to build on a Mac laptop the C software system for the RAPID pipeline
 
 .. code-block::
 
-   /source/code/location/rapid/c/builds/build_laptop.csh
+   /source-code/location/rapid/c/builds/build_laptop.csh
 
 This script is has been tested on a Mac laptop running macOS Montery.
   
@@ -40,7 +40,7 @@ This script is has been tested on a Mac laptop running macOS Montery.
 
 .. code-block::
 
-   setenv RAPID_SW /source/code/location/rapid
+   setenv RAPID_SW /source-code/location/rapid
 
 3. Modify the following line in the build script to configure the PATH
    environment variable within the script, ensuring that all paths to
@@ -54,7 +54,7 @@ This script is has been tested on a Mac laptop running macOS Montery.
 
 .. code-block::
    
-   cd /source/code/location/rapid/c/builds
+   cd /source-code/location/rapid/c/builds
    ./build_laptop.csh >& build_laptop.out &
 
 The script may take some time to finish as building the atlas library
@@ -65,13 +65,13 @@ installed under the following paths:
 
 .. code-block::
    
-   /source/code/location/rapid/c/bin
-   /source/code/location/rapid/c/lib
-   /source/code/location/rapid/c/include
-   /source/code/location/rapid/c/atlas/lib
-   /source/code/location/rapid/c/atlas/include
-   /source/code/location/rapid/c/common/fftw/lib
-   /source/code/location/rapid/c/common/fftw/include
+   /source-code/location/rapid/c/bin
+   /source-code/location/rapid/c/lib
+   /source-code/location/rapid/c/include
+   /source-code/location/rapid/c/atlas/lib
+   /source-code/location/rapid/c/atlas/include
+   /source-code/location/rapid/c/common/fftw/lib
+   /source-code/location/rapid/c/common/fftw/include
   
 .. warning::
     The sextractor configure script made by autogen.sh in the build
@@ -96,7 +96,7 @@ The script to build on a Linux machine the C software system for the RAPID pipel
 
 .. code-block::
 
-   /source/code/location/rapid/c/builds/build.csh
+   /source-code/location/rapid/c/builds/build.csh
 
 It is assumed the atlas library is located in
 
@@ -110,13 +110,13 @@ Furthermore, it is assumed gfortran is in the PATH.
 
 .. code-block::
 
-   setenv RAPID_SW /source/code/location/rapid
+   setenv RAPID_SW /source-code/location/rapid
 
 2. Run the build script:
 
 .. code-block::
    
-   cd /source/code/location/rapid/c/builds
+   cd /source-code/location/rapid/c/builds
    ./build.csh >& build.out &
 
 The binary executables, libraries, and include files are
@@ -124,11 +124,11 @@ installed under the following paths:
 
 .. code-block::
    
-   /source/code/location/rapid/c/bin
-   /source/code/location/rapid/c/lib
-   /source/code/location/rapid/c/include
-   /source/code/location/rapid/c/common/fftw/lib
-   /source/code/location/rapid/c/common/fftw/include
+   /source-code/location/rapid/c/bin
+   /source-code/location/rapid/c/lib
+   /source-code/location/rapid/c/include
+   /source-code/location/rapid/c/common/fftw/lib
+   /source-code/location/rapid/c/common/fftw/include
 
 Building C code on EC2 instance inside Docker container
 ####################################################
@@ -137,7 +137,7 @@ The script to build inside a Docker container the C software system for the RAPI
 
 .. code-block::
 
-   /source/code/location/rapid/c/builds/build_inside_container.sh
+   /source-code/location/rapid/c/builds/build_inside_container.sh
 
 This script has preconfigured RAPID_SW and PATH environment
 variables.  The former is tied directly to how the docker container is
@@ -160,7 +160,7 @@ RAPID project's Docker image has been pre-installed.
 .. code-block::
 
    ssh -i ~/.ssh/MyKey.pem ubuntu@ubuntu@ec2-34-219-130-182.us-west-2.compute.amazonaws.com
-   sudo docker run -it -v /source/code/location/rapid:/code rapid:1.0 bash
+   sudo docker run -it -v /source-code/location/rapid:/code rapid:1.0 bash
 
 In this case, the rapid:1.0 Docker image is run.
 
