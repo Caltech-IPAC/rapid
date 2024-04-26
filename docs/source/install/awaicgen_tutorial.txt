@@ -1,0 +1,104 @@
+[root@0a97cfa9bbfa bin]# export LD_LIBRARY_PATH=/code/c/lib
+[root@0a97cfa9bbfa bin]# ./awaicgen 
+
+A generic WISE Astronomical Image Coadder, Version 5.2
+
+Usage: awaicgen
+ -f1 <inp_image_list_fname>  (Required; list of images in FITS format)
+ -f2 <inp_mask_list_fname>   (Optional; list of bad-pixel masks in 32-bit INT
+                              FITS format; only values 0 -> 2^31 are used)
+ -f3 <inp_uncert_list_fname> (Optional; list of uncertainty images in
+                              FITS format)
+ -f4 <inp_prf_list_fname>    (Required; list of PRF FITS images each
+                              labeled with location on array)
+ -f5 <inp_mcm_mod_image>     (Optional; input starting model image to
+                              support MCM; Default = flat image of 1's
+                              if -fp 1 is not specified)
+ -fp <tophatprior_flag>      (Optional; create/use overlap-area weighted co-add
+                              for MCM starting model: 1=yes, 0=no; Default=0)
+ -m  <inp_fatalmask_bits>    (Optional; bitstring template specifying
+                              pixels to omit as set in input masks; Default=0)
+ -ms <inp_satmask_bits>      (Optional; bitstring template specifying
+                              saturated pixels from input mask to tag
+                              in output mask (-om); Default=0)
+ -X  <mosaic_size_x>         (Required [deg]; E-W mosaic dimension
+                              for crota2=0)
+ -Y  <mosaic_size_y>         (Required [deg]; N-S mosaic dimension
+                              for crota2=0)
+ -R  <RA_center>             (Required [deg]; RA of mosaic center)
+ -D  <Dec_center>            (Required [deg]; Dec. of mosaic center)
+ -C  <mosaic_rotation>       (Optional [deg]; in terms of crota2:
+                              +Y axis W of N; Default=0)
+ -ps <pixelscale_factor>     (Optional; output mosaic linear pixel scale
+                              relative to input pixel scale; Default=0.5)
+ -pa <pixelscale_absolute>   (Optional [asec]; output mosaic pixel scale
+                              in absolute units; if specified, over-rides -ps)
+ -pc <mos_cellsize_factor>   (Optional; for PRF placement: internal linear
+                              cell pixel size relative to mosaic pixel size;
+                              =input PRF pixel sizes (-f4); Default=0.5)
+ -d <drizzle_factor>         (Optional; input pixel linear drizzle factor;
+                              =ratio: new pix scl/native pix scl (<= 1); only
+                              used for simple coadds (-sc 1); Default=1.0)
+ -wf <inv_var_weight_flag>   (Optional; interp/combine input pixels using
+                              inverse variance weighting: 1=yes, 0=no;
+                              Default=0; if yes, requires -f3 input)
+ -sf <pixelflux_scale_flag>  (Optional; scale output pixel flux with pixel
+                              size: 1=yes, 0=no; Default=0)
+ -sc <simple_coadd_flag>     (Optional; create simple co-add/mosaic using exact
+                              overlap-area weighting: 1=yes, 0=no; Default=0)
+ -n  <num_mcm_iterations>    (Optional; number of MCM iterations;
+                              Default=1 => coadd, no resolution enhancement)
+ -nt <num_threads>           (Optional; number of concurrent threads to spawn;
+                              set to number of CPU cores available; Default=1)
+ -rf <rotate_prf_proj_flag>  (Optional; rotate PRF when projecting input
+                              frame pixels: 1=yes, 0=no; recommended for -n > 1
+                              if PRF severely non-axisymmetric; Default=0)
+ -ct <prf_cell_size_tol>     (Optional [asec]; maximum tolerance for difference
+                              between cell-grid pixel size [-pc] and input
+                              PRF pixel size; Default=0.0001 arcsec)
+ -if <interpolation_option>  (Optional; method for interpolating PRF onto
+                              co-add cell-grid: 0=nearest neighbor,
+                              1=area-overlap weighting [only possible for
+                              -n = 1 & -rf = 0]; Default=0)
+ -t <unc_sigfigs_retained>   (Optional; number of significant figures to retain
+                              in output coverages (-o2) and uncertainties (-o3)
+                              to assist in compression; Default=0 => no change)
+ -h <cfv_pctdiff_thres>      (Optional; minimum tolerance for % difference in
+                              real CFV from iteration n -> n+1 below which MCM
+                              pixel-cell arrays get frozen at n; aids in
+                              noise-suppression; activated if -n > 1 and
+                              -o5,-o6 specified; Default=0 => no suppression)
+ -o1 <out_mosaic_image>      (Required; output mosaic image FITS filename)
+ -o2 <out_mosaic_cov_map>    (Required; output mosaic coverage map FITS fname)
+ -o3 <out_uncert_mosaic>     (Optional; output uncertainty mosaic FITS fname;
+                              only applicable to -n = 1 and -sc 1 co-adds;
+                              based on input prior uncertainties)
+ -o4 <out_stddev_mosaic>     (Optional; output standard deviation mosaic
+                              FITS filename; only possible under -sc 1;
+                              N.B: will not account for correlated noise like
+                              -o3 output. Latter accounts for movement of
+                              noise-power to low freq.)
+ -o5 <out_corfac_mosaic>     (Optional; output mosaic of MCM correction-factors;
+                              only valid when -n > 1)
+ -o6 <out_cfvuncert_mosaic>  (Optional; output mosaic of data derived
+                              MCM uncertainties (from CFV); only valid
+                              when -n > 1)
+ -o7 <out_cellmosaic_image>  (Optional; output mosaic basename in upsampled
+                              cell-grid frame; for debug or resuming MCM later;
+                              will be appended with mcm iteration number)
+ -o8 <out_cellcfv_image>     (Optional; output CFV mosaic basename in upsampled
+                              cell-grid frame for debug purposes; will be
+                              appended with mcm iteration number)
+ -o9 <out_cellcor_image>     (Optional; output mosaic of MCM correction
+                              factors in upsampled cell-grid frame;
+                              will be appended with mcm iteration number)
+ -oi <out_celliter_image>    (Optional; output mosaic of position-dep iteration
+                              numbers; only generated if -o5,-o6 specified)
+ -of <out_firstmcm_image>    (Optional; output mosaic intensity image from
+                              first MCM iteration; only generated for -n > 1)
+ -om <out_mask_image>        (Optional; output 8-bit mosaic showing locations
+                              of bad and saturated pixels that occur at least
+                              once in stack; only applicable to -n = 1 co-adds)
+ -g                          (Optional; switch to print debug statements
+                              to stdout and files)
+ -v                          (Optional; switch to print more verbose output)

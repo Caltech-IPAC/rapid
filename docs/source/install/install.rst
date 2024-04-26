@@ -220,3 +220,14 @@ of Mark M. R. Calabretta (`URL <https://www.atnf.csiro.au/people/mcalabre/WCS/>`
 
 The WCS tools of Jessica Mink also has a libwcs.a (located in /code/c/common/wcstools/wcstools-3.9.7/libwcs), which may be a
 different version (`URL <http://tdc-www.harvard.edu/wcstools/>`_).
+
+To run a binary executable, you must first set LD_LIBRARY_PATH.  Here
+is an example of running ``awaicgen`` without command-line options to
+get its online tutorial:
+
+.. code-block::
+   
+   export LD_LIBRARY_PATH=/code/c/lib
+   /code/c/bin/awaicgen
+
+.. include:: awaicgen_tutorial.txt
