@@ -231,3 +231,4 @@ get its online tutorial:
    /code/c/bin/awaicgen
 
 .. include:: awaicgen_tutorial.txt
+   :literal:
