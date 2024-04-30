@@ -19,7 +19,6 @@ rm -rf include
 mkdir bin
 mkdir lib
 mkdir include
-mkdir -p include/cfitsio
 mkdir -p include/nan
 mkdir -p include/numericalrecipes
 
