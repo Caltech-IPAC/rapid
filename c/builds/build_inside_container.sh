@@ -61,6 +61,24 @@ cp ${RAPID_SW}/c/common/cfitsio/cfitsio-4.3.1/funpack ${RAPID_SW}/c/bin
 echo " "
 echo "--->Finished building CFITSIO library."
 
+#--------Build CCfits library-------------------------------
+echo " "
+echo "--->Building CCfits library, vsn 2.6 ..."
+cd ${RAPID_SW}/c/common/CCfits/
+rm -rf CCfits-2.6
+tar -xvf CCfits-2.6.tar
+cd CCfits-2.6
+./configure --prefix=${RAPID_SW}/c/common/CCfits/CCfits-2.6 --with-cfitsio-include=${RAPID_SW}/c/include/cfitsio --with-cfitsio-libdir=${RAPID_SW}/c/lib
+make
+make install
+echo " "
+echo "--->Done with CCfits-library make install ..."
+mkdir -p ${RAPID_SW}/c/include/CCfits
+cp ${RAPID_SW}/c/common/CCfits/CCfits-2.6/lib/libCCfits* ${RAPID_SW}/c/lib
+cp ${RAPID_SW}/c/common/CCfits/CCfits-2.6/include/CCfits/*.h ${RAPID_SW}/c/include/CCfits
+echo " "
+echo "--->Finished building CCfits library."
+
 #--------Build wcslib library---------------------
 echo " "     
 echo "--->Building wcslib library, version 8.2.2 ..."
