@@ -1,0 +1,36 @@
+FROM redhat/ubi9
+
+RUN yum install -y pip
+
+RUN pip install numpy
+RUN pip install astropy
+RUN pip install psycopg2-binary
+RUN pip install opencv-python-headless
+
+RUN yum -y install gcc
+RUN yum -y install g++
+RUN yum -y install gfortran
+RUN yum -y install autoconf
+RUN yum -y install automake
+RUN yum -y install libtool
+RUN yum -y install zlib-devel
+RUN yum -y install atlas
+RUN yum -y install atlas-devel
+
+
+RUN yum -y install cmake
+RUN yum -y install wget
+
+# There is not enough space on an EC2 instance with an 8-GByte boot disk
+# to build the boost library, which is needed for SExtractorPlusPlus.
+# Also, machine memory of at least 4 GB is required.
+
+RUN cd /data/tmp && \
+    wget https://boostorg.jfrog.io/artifactory/main/release/1.85.0/source/boost_1_85_0.tar.gz && \
+    gunzip boost_1_85_0.tar.gz && \
+    tar -xvf boost_1_85_0.tar && \
+    cd boost_1_85_0 && \
+    ./bootstrap.sh --prefix=/usr/local && \
+    ./b2 install && \
+    cd /data/tmp && \
+    rm -rf /data/tmp/*
