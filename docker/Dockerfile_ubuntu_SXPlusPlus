@@ -21,6 +21,7 @@ RUN yum -y install atlas-devel
 RUN yum -y install cmake
 RUN yum -y install wget
 
+# Install Boost library under /usr/local (needed by SourceXtractorPlusPlus).
 # There is not enough space on an EC2 instance with an 8-GByte boot disk
 # to build the boost library, which is needed for SExtractorPlusPlus.
 # Also, machine memory of at least 4 GB is required.
@@ -32,5 +33,19 @@ RUN cd /tmp && \
     cd boost_1_85_0 && \
     ./bootstrap.sh --prefix=/usr/local && \
     ./b2 install && \
+    cd /tmp && \
+    rm -rf /tmp/*
+
+# Install log4cpp under /usr/local (needed by SourceXtractorPlusPlus).
+
+RUN cd /tmp && \
+    wget https://sourceforge.net/projects/log4cpp/files/latest/download/log4cpp-1.1.4.tar.gz && \
+    gunzip  log4cpp-1.1.4.tar.gz && \
+    tar -xvf log4cpp-1.1.4.tar && \
+    cd log4cpp && \
+    ./configure && \
+    make && \
+    make check && \
+    make install && \
     cd /tmp && \
     rm -rf /tmp/*
