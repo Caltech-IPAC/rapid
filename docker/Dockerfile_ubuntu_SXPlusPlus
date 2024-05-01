@@ -25,12 +25,12 @@ RUN yum -y install wget
 # to build the boost library, which is needed for SExtractorPlusPlus.
 # Also, machine memory of at least 4 GB is required.
 
-RUN cd /data/tmp && \
+RUN cd /tmp && \
     wget https://boostorg.jfrog.io/artifactory/main/release/1.85.0/source/boost_1_85_0.tar.gz && \
     gunzip boost_1_85_0.tar.gz && \
     tar -xvf boost_1_85_0.tar && \
     cd boost_1_85_0 && \
     ./bootstrap.sh --prefix=/usr/local && \
     ./b2 install && \
-    cd /data/tmp && \
-    rm -rf /data/tmp/*
+    cd /tmp && \
+    rm -rf /tmp/*
