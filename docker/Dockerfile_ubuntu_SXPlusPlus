@@ -6,6 +6,7 @@ RUN pip install numpy
 RUN pip install astropy
 RUN pip install psycopg2-binary
 RUN pip install opencv-python-headless
+RUN pip install pytest
 
 RUN yum -y install gcc
 RUN yum -y install g++
@@ -51,7 +52,7 @@ RUN cd /tmp && \
     cd /tmp && \
     rm -rf /tmp/*
 
-# Install gmock library under /usr/local/lib64 (needed by SourceXtractorPlusPlus).
+# Install gmock and gtest libraries under /usr/local/lib64 (needed by SourceXtractorPlusPlus).
 
 RUN cd /tmp && \
     git clone https://github.com/google/googletest.git -b v1.14.0 && \
