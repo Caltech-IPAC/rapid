@@ -20,6 +20,7 @@ RUN yum -y install atlas-devel
 
 RUN yum -y install cmake
 RUN yum -y install wget
+RUN yum -y install git
 
 # Install Boost library under /usr/local (needed by SourceXtractorPlusPlus).
 # There is not enough space on an EC2 instance with an 8-GByte boot disk
@@ -36,7 +37,7 @@ RUN cd /tmp && \
     cd /tmp && \
     rm -rf /tmp/*
 
-# Install log4cpp under /usr/local (needed by SourceXtractorPlusPlus).
+# Install log4cpp library under /usr/local (needed by SourceXtractorPlusPlus).
 
 RUN cd /tmp && \
     wget https://sourceforge.net/projects/log4cpp/files/latest/download/log4cpp-1.1.4.tar.gz && \
@@ -46,6 +47,19 @@ RUN cd /tmp && \
     ./configure && \
     make && \
     make check && \
+    make install && \
+    cd /tmp && \
+    rm -rf /tmp/*
+
+# Install gmock library under /usr/local/lib64 (needed by SourceXtractorPlusPlus).
+
+RUN cd /tmp && \
+    git clone https://github.com/google/googletest.git -b v1.14.0 && \
+    cd googletest && \
+    mkdir build && \
+    cd build && \
+    cmake .. && \
+    make && \
     make install && \
     cd /tmp && \
     rm -rf /tmp/*
