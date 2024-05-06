@@ -67,7 +67,7 @@ RUN cd /tmp && \
 
 # Install xz and diff commands.
 
-RUN dnf install xz
+RUN dnf -y install xz
 
 RUN cd /tmp && \
     curl --silent --output diffutils-3.10.tar.xz ftp://ftp.gnu.org/gnu/diffutils/diffutils-3.10.tar.xz && \
