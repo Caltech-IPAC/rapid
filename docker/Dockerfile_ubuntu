@@ -5,6 +5,7 @@ RUN yum install -y pip
 RUN pip install --upgrade numpy
 RUN pip install --upgrade astropy
 RUN pip install --upgrade psycopg2-binary
+RUN pip install healpy
 
 RUN yum -y install gcc
 RUN yum -y install g++
