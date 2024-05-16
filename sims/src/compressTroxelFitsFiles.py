@@ -1,5 +1,5 @@
-import boto3 
-import os 
+import boto3
+import os
 import numpy as np
 from astropy.io import fits
 import subprocess
@@ -79,9 +79,6 @@ for my_bucket_object in my_bucket.objects.all():
 
 
     # Check if lite FITS file already exists.
-    
-    gzfname_output_1 = fname_input.replace(".fits","_lite.fits")
-    gzfname_output_2 = gzfname_output_1.replace("/","_lite/")
 
     file_to_check = "s3://" + bucket_name + "/" + subdir_only + "_lite/" + gzfname_output
     cmd = "aws s3 ls " + file_to_check
@@ -90,7 +87,7 @@ for my_bucket_object in my_bucket.objects.all():
     if (retval == 0):
         print("*** Warning: File exists in S3 bucket ({}); skipping...".format(file_to_check))
         continue
-    
+
     nfiles += 1
 
 
@@ -102,7 +99,7 @@ for my_bucket_object in my_bucket.objects.all():
 
 
     print("Reducing size of FITS file...")
-    
+
     hdul_input = fits.open(fname_input)
 
     ffis = ["SCI"]
@@ -122,7 +119,7 @@ for my_bucket_object in my_bucket.objects.all():
     hdu = fits.HDUList(hdu_list)
     hdu.writeto(fname_output,overwrite=True,checksum=True)
 
-      
+
     cmd = "rm " + fname_input
     execute_command(cmd)
 
@@ -131,6 +128,6 @@ for my_bucket_object in my_bucket.objects.all():
 
     cmd = "aws s3 cp " + gzfname_output + " s3://" + bucket_name + "/" + subdir_only + "_lite/" + gzfname_output
     execute_command(cmd)
-      
+
     cmd = "rm " + gzfname_output
     execute_command(cmd)
