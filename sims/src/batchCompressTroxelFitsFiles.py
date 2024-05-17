@@ -194,16 +194,6 @@ def compress_files():
             continue
 
 
-
-
-        # 17179 is corrupt...
-        if subdir_only == str(17179):
-            print("============> 17179 is corrupt; skipping ...")
-            continue
-
-
-        
-
         # Copy 18 input files from input S3 bucket to local machine.
 
         cmd = "aws s3 cp --quiet --recursive s3://" + bucket_name_input + "/" + subdir_only + " new"
