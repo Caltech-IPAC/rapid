@@ -16,3 +16,4 @@ RUN yum -y install libtool
 RUN yum -y install zlib-devel
 RUN yum -y install atlas
 RUN yum -y install atlas-devel
+RUN yum -y install postgresql
