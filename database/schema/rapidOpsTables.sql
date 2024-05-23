@@ -59,7 +59,7 @@ SET default_tablespace = pipeline_data_01;
 CREATE TABLE exposures (
     expid integer NOT NULL,                         -- Primary key
     dateobs timestamp without time zone NOT NULL,   -- Header keyword: DATE-OBS
-    field integer NOT NULL,
+    field integer NOT NULL,                         -- level-6 healpix index (NESTED) from RA_TARG, DEC_TARG
     fid smallint NOT NULL,                          -- Foreign key from Filters table
     exptime real NOT NULL,                          -- Header keyword EXPTIME
     mjdobs double precision NOT NULL,               -- Header keyword MJD-OBS
