@@ -38,7 +38,7 @@ def compute_checksum(fname,dbcksum=None):
 
     cksum = md5(fname)
 
-    if self.exit_code = 68:
+    if self.exit_code == 68:
         return
 
     if debug == 1:
