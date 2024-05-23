@@ -210,7 +210,7 @@ class RAPIDDB:
 
 
     def add_l2file(self,expid,chipid,field,fid,dateobs,mjdobs,exptime,infobits,
-        filename,crval1,crval2,crpix1,crpix2,cd11,cd12,cd21,cd22,
+        filename,checksum,crval1,crval2,crpix1,crpix2,cd11,cd12,cd21,cd22,
         ctype1,ctype2,cunit1,cunit2,a_order,a_0_2,a_0_3,a_0_4,a_1_1,a_1_2,
         a_1_3,a_2_0,a_2_1,a_2_2,a_3_0,a_3_1,a_4_0,b_order,b_0_2,b_0_3,
         b_0_4,b_1_1,b_1_2,b_1_3,b_2_0,b_2_1,b_2_2,b_3_0,b_3_1,
