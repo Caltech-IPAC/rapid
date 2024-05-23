@@ -199,6 +199,8 @@ class RAPIDDB:
             print("*** Error: Could not insert Exposures record; quitting...")
             self.exit_code = 67
 
+            self.conn.commit()           # Commit database transaction
+
 
     def add_l2file(self,expid,chipid,field,fid,dateobs,mjdobs,exptime,infobits,
         filename,crval1,crval2,crpix1,crpix2,cd11,cd12,cd21,cd22,
