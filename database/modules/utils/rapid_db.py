@@ -294,7 +294,7 @@ class RAPIDDB:
                "TEMPLATE_DATEOBS": dateobs}
 
         rep["TEMPLATE_MJDOBS"] = str(mjdobs)
-        rep["TEMPLATE_EXPTIM"] = str(exptime)
+        rep["TEMPLATE_EXPTIME"] = str(exptime)
         rep["TEMPLATE_INFOBITS"] = str(infobits)
         rep["TEMPLATE_FILENAME"] = filename
         rep["TEMPLATE_CHECKSUM"] = checksum
