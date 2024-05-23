@@ -17,8 +17,8 @@ def md5(fname):
                 hash_md5.update(chunk)
         return hash_md5.hexdigest()
     except:
-        print("*** Error: Cannot open file =",fname,"; quitting...")
-        exit(65)
+        print("*** Error: Cannot open file to compute checksum =",fname,"; quitting...")
+        self.exit_code = 68
 
 
 def compute_checksum(fname,dbcksum=None):
@@ -37,6 +37,9 @@ def compute_checksum(fname,dbcksum=None):
     # Compute checksum and optionally compare with that stored in database.
 
     cksum = md5(fname)
+
+    if self.exit_code = 68:
+        return
 
     if debug == 1:
         print('cksum = {}'.format(cksum))
@@ -68,6 +71,7 @@ class RAPIDDB:
         65 = Input file does not exist
         66 = File checksum does not match database checksum
         67 = Could not execute database query.
+        68 = Could not open file to compute checksum.
     """
 
     def __init__(self):
@@ -123,6 +127,7 @@ class RAPIDDB:
         '''
         Close database cursor and then connection.
         '''
+
 
         try:
             self.cur.close()
@@ -198,8 +203,10 @@ class RAPIDDB:
             self.fid = None
             print("*** Error: Could not insert Exposures record; quitting...")
             self.exit_code = 67
+            return
 
-        self.conn.commit()           # Commit database transaction
+        if self.exit_code == 0:
+            self.conn.commit()           # Commit database transaction
 
 
     def add_l2file(self,expid,chipid,field,fid,dateobs,mjdobs,exptime,infobits,
@@ -212,14 +219,6 @@ class RAPIDDB:
         '''
         Add record in L2files database table.
         '''
-
-
-        # Compute file checksum.
-
-        checksum = compute_checksum(filename)
-
-        if self.exit_code != 0:
-            return
 
 
         # Define query template.
@@ -366,6 +365,10 @@ class RAPIDDB:
             self.version = None
             print("*** Error: Could not insert L2Files record; quitting...")
             self.exit_code = 67
+            return
+
+        if self.exit_code == 0:
+            self.conn.commit()           # Commit database transaction
 
 
     def update_l2file(self,rid,checksum,status,version):
@@ -428,3 +431,7 @@ class RAPIDDB:
         except (Exception, psycopg2.DatabaseError) as error:
             print('*** Error updating L2Files record ({}); skipping...'.format(error))
             self.exit_code = 67
+            return
+
+        if self.exit_code == 0:
+            self.conn.commit()           # Commit database transaction
