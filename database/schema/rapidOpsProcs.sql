@@ -7,7 +7,7 @@
 --------------------------------------------------------------------------------------------------------------------------
 
 
--- Insert a new record into the Exposures table.
+-- Insert a new record into the Exposures table or update existing one.
 --
 create function addExposure (
     dateobs_             timestamp,
@@ -25,6 +25,7 @@ create function addExposure (
         r_               record;
         fid_             smallint;
         expid_           integer;
+        expid__          integer;
 
     begin
 
@@ -43,34 +44,64 @@ create function addExposure (
         end;
 
 
-        -- Insert Exposures record.
+        -- Insert or update record.
 
-        begin
+        expid__ := null;
 
-            insert into Exposures
-            (dateobs,
-             mjdobs,
-	     field,
-             fid,
-             exptime,
-             status,
-             infobits
-            )
-            values
-            (dateobs_,
-             mjdobs_,
-	     field_,
-             fid_,
-             exptime_,
-             status_,
-             infobits_
-            )
-            returning expid into strict expid_;
-            exception
-                when no_data_found then
-                    raise exception
-                        '*** Error in registerExposure: Row could not be inserted into Exposures table.';
-        end;
+        select expid
+        into expid__
+        from Exposures
+        where dateobs = dateobs_;
+
+        if (expid__ is null) then
+
+            -- Insert Exposures record.
+
+            begin
+
+                insert into Exposures
+                (dateobs,
+                 mjdobs,
+                 field,
+                 fid,
+                 exptime,
+                 status,
+                 infobits
+                )
+                values
+                (dateobs_,
+                 mjdobs_,
+                 field_,
+                 fid_,
+                 exptime_,
+                 status_,
+                 infobits_
+                )
+                returning expid into strict expid_;
+                exception
+                    when no_data_found then
+                        raise exception
+                            '*** Error in registerExposure: Row could not be inserted into Exposures table.';
+            end;
+
+        else
+
+            -- Update record in Exposures table.
+
+            expid_ := expid__;
+
+            update Exposures
+            set dateobs = dateobs_,
+                mjdobs = mjdobs_,
+                field = field_,
+                fid = fid_,
+                exptime = exptime_,
+                status = status_,
+                infobits = infobits_,
+                created = now()
+            where expid = expid_;
+
+        end if;
 
         select expid_, fid_ into r_;
 
@@ -178,25 +209,25 @@ create function addL2File (
             insert into L2Files
             (expid,chipid,version,status,vbest,
              field,fid,dateobs,mjdobs,exptime,infobits,
-	     filename,checksum,crval1,crval2,
-	     crpix1,crpix2,cd11,cd12,cd21,cd22,ctype1,ctype2,
-	     cunit1,cunit2,a_order,a_0_2,a_0_3,a_0_4,a_1_1,a_1_2,
-	     a_1_3,a_2_0,a_2_1,a_2_2,a_3_0,a_3_1,a_4_0,b_order,
-	     b_0_2,b_0_3,b_0_4,b_1_1,b_1_2,b_1_3,b_2_0,b_2_1,
-	     b_2_2,b_3_0,b_3_1,b_4_0,equinox,ra,dec,paobsy,pafpa,
-	     zptmag,skymean
-	    )
+             filename,checksum,crval1,crval2,
+             crpix1,crpix2,cd11,cd12,cd21,cd22,ctype1,ctype2,
+             cunit1,cunit2,a_order,a_0_2,a_0_3,a_0_4,a_1_1,a_1_2,
+             a_1_3,a_2_0,a_2_1,a_2_2,a_3_0,a_3_1,a_4_0,b_order,
+             b_0_2,b_0_3,b_0_4,b_1_1,b_1_2,b_1_3,b_2_0,b_2_1,
+             b_2_2,b_3_0,b_3_1,b_4_0,equinox,ra,dec,paobsy,pafpa,
+             zptmag,skymean
+            )
             values
-	    (expid_,chipid_,version_,status_,vbest_,
+            (expid_,chipid_,version_,status_,vbest_,
              field_,fid_,dateobs_,mjdobs_,exptime_,infobits_,
-	     filename_,checksum_,crval1_,crval2_,
-	     crpix1_,crpix2_,cd11_,cd12_,cd21_,cd22_,ctype1_,ctype2_,
-	     cunit1_,cunit2_,a_order_,a_0_2_,a_0_3_,a_0_4_,a_1_1_,a_1_2_,
-	     a_1_3_,a_2_0_,a_2_1_,a_2_2_,a_3_0_,a_3_1_,a_4_0_,b_order_,
-	     b_0_2_,b_0_3_,b_0_4_,b_1_1_,b_1_2_,b_1_3_,b_2_0_,b_2_1_,
-	     b_2_2_,b_3_0_,b_3_1_,b_4_0_,equinox_,ra_,dec_,paobsy_,pafpa_,
-	     zptmag_,skymean_
-	    )
+             filename_,checksum_,crval1_,crval2_,
+             crpix1_,crpix2_,cd11_,cd12_,cd21_,cd22_,ctype1_,ctype2_,
+             cunit1_,cunit2_,a_order_,a_0_2_,a_0_3_,a_0_4_,a_1_1_,a_1_2_,
+             a_1_3_,a_2_0_,a_2_1_,a_2_2_,a_3_0_,a_3_1_,a_4_0_,b_order_,
+             b_0_2_,b_0_3_,b_0_4_,b_1_1_,b_1_2_,b_1_3_,b_2_0_,b_2_1_,
+             b_2_2_,b_3_0_,b_3_1_,b_4_0_,equinox_,ra_,dec_,paobsy_,pafpa_,
+             zptmag_,skymean_
+            )
             returning rid into strict rid_;
             exception
                 when no_data_found then
