@@ -368,7 +368,7 @@ class RAPIDDB:
             self.conn.commit()           # Commit database transaction
 
 
-    def update_l2file(self,rid,checksum,status,version):
+    def update_l2file(self,rid,filename,checksum,status,version):
 
         '''
         Update record in L2files database table.
