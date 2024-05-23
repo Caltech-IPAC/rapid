@@ -138,7 +138,7 @@ def compress_files():
 
         except:
             #print("-----2-----> No match in",gzfname_input)
-            pass
+            continue
 
         if subdir_only in files_input.keys():
             files_input[subdir_only].append(only_gzfname_input)
