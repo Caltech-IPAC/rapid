@@ -18,3 +18,13 @@ RUN yum -y install zlib-devel
 RUN yum -y install atlas
 RUN yum -y install atlas-devel
 RUN yum -y install postgresql
+RUN yum -y install unzip
+
+# Install AWS CLI
+
+RUN cd /tmp && \
+    curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip" && \
+    unzip awscliv2.zip && \
+    ./aws/install && \
+    cd /tmp && \
+    rm -rf /tmp/*
