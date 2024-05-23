@@ -18,7 +18,8 @@ def md5(fname):
         return hash_md5.hexdigest()
     except:
         print("*** Error: Cannot open file to compute checksum =",fname,"; quitting...")
-        self.exit_code = 68
+        return(68)
+
 
 
 def compute_checksum(fname,dbcksum=None):
@@ -30,16 +31,15 @@ def compute_checksum(fname,dbcksum=None):
 
     if isExist == False:
         print('*** Error: File does not exist ({}); returning...'.format(fname))
-        self.exit_code = 65
-        return
+        return 65
 
 
     # Compute checksum and optionally compare with that stored in database.
 
     cksum = md5(fname)
 
-    if self.exit_code == 68:
-        return
+    if cksum == 68:
+        return 68
 
     if debug == 1:
         print('cksum = {}'.format(cksum))
@@ -50,12 +50,9 @@ def compute_checksum(fname,dbcksum=None):
                 print("File checksum is correct...")
             else:
                 print('*** Error: File checksum is incorrect ({}); returning...'.format(fname))
-                self.exit_code = 66
-                return
+                return 66
 
     return cksum
-
-
 
 
 class RAPIDDB:
@@ -376,14 +373,6 @@ class RAPIDDB:
         '''
         Update record in L2files database table.
         '''
-
-
-        # Compute file checksum.
-
-        checksum = compute_checksum(filename)
-
-        if self.exit_code != 0:
-            return
 
 
         # Define query template.
