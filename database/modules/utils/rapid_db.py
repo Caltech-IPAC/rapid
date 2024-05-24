@@ -198,7 +198,7 @@ class RAPIDDB:
         else:
             self.expid = None
             self.fid = None
-            print("*** Error: Could not insert Exposures record; quitting...")
+            print("*** Error: Could not insert or update Exposures record; quitting...")
             self.exit_code = 67
             return
 
@@ -419,6 +419,69 @@ class RAPIDDB:
 
         except (Exception, psycopg2.DatabaseError) as error:
             print('*** Error updating L2Files record ({}); skipping...'.format(error))
+            self.exit_code = 67
+            return
+
+        if self.exit_code == 0:
+            self.conn.commit()           # Commit database transaction
+
+
+    def register_l2filemeta(self,rid,ra0,dec0,ra1,dec1,ra2,dec2,ra3,dec3,ra4,dec4,x,y,z):
+
+        '''
+        Insert or update record in L2FileMeta database table.
+        '''
+
+
+        # Define query template.
+
+        query_template =\
+            "select * from registerL2FileMeta(" +\
+            "cast(TEMPLATE_RID as integer)," +\
+            "cast(TEMPLATE_RA0 as double precision)," +\
+            "cast(TEMPLATE_Z AS double precision));"
+
+        # Query database.
+
+        print('----> rid = {}'.format(rid))
+        print('----> ra0 = {}'.format(ra0))
+        print('----> dec0 = {}'.format(dec0))
+
+        rep = {"TEMPLATE_RID": str(rid)}
+
+        rep["TEMPLATE_RA0"] = str(ra0)
+        rep["TEMPLATE_DEC0"] = str(dec0)
+        rep["TEMPLATE_RA1"] = str(ra1)
+        rep["TEMPLATE_DEC1"] = str(dec1)
+        rep["TEMPLATE_RA2"] = str(ra2)
+        rep["TEMPLATE_DEC2"] = str(dec2)
+        rep["TEMPLATE_RA3"] = str(ra3)
+        rep["TEMPLATE_DEC3"] = str(dec3)
+        rep["TEMPLATE_RA4"] = str(ra4)
+        rep["TEMPLATE_DEC4"] = str(dec4)
+        rep["TEMPLATE_X"] = str(x)
+        rep["TEMPLATE_Y"] = str(y)
+        rep["TEMPLATE_Z"] = strz)
+
+        rep = dict((re.escape(k), v) for k, v in rep.items())
+        pattern = re.compile("|".join(rep.keys()))
+        query = pattern.sub(lambda m: rep[re.escape(m.group(0))], query_template)
+
+        print('query = {}'.format(query))
+
+        # Execute query.
+
+        try:
+            self.cur.execute(query)
+
+            try:
+                for record in cur:
+                    print(record)
+            except:
+                    print("Nothing returned from database stored function; continuing...")
+
+        except (Exception, psycopg2.DatabaseError) as error:
+            print('*** Error inserting or updating L2FileMeta record ({}); skipping...'.format(error))
             self.exit_code = 67
             return
 
