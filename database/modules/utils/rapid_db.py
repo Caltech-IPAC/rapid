@@ -461,7 +461,7 @@ class RAPIDDB:
         rep["TEMPLATE_DEC4"] = str(dec4)
         rep["TEMPLATE_X"] = str(x)
         rep["TEMPLATE_Y"] = str(y)
-        rep["TEMPLATE_Z"] = strz)
+        rep["TEMPLATE_Z"] = str(z)
 
         rep = dict((re.escape(k), v) for k, v in rep.items())
         pattern = re.compile("|".join(rep.keys()))
