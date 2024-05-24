@@ -9,10 +9,10 @@ def compute_xyz(ra,dec):
     alpha = math.radians(ra);
     delta = math.radians(dec);
 
-    cosalpha = cos(alpha);
-    sinalpha = sin(alpha);
-    cosdelta = cos(delta);
-    sindelta = sin(delta);
+    cosalpha = math.cos(alpha);
+    sinalpha = math.sin(alpha);
+    cosdelta = math.cos(delta);
+    sindelta = math.sin(delta);
 
     x = cosdelta * cosalpha;
     y = cosdelta * sinalpha;
