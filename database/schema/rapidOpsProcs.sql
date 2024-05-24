@@ -81,7 +81,7 @@ create function addExposure (
                 exception
                     when no_data_found then
                         raise exception
-                            '*** Error in registerExposure: Row could not be inserted into Exposures table.';
+                            '*** Error in addExposure: Row could not be inserted into Exposures table.';
             end;
 
         else
@@ -357,6 +357,114 @@ create function updateL2File (
             when no_data_found then
                 raise exception
                     '*** Error in updateL2File: Cannot update L2Files record for rid=%', rid_;
+
+    end;
+
+$$ language plpgsql;
+
+
+-- Insert a new record into or update an existing record in the L2FileMeta table.
+--
+create function registerL2FileMeta (
+    rid_                 integer,
+    ra0_                 double precision,
+    dec0_                double precision,
+    ra1_                 double precision,
+    dec1_                double precision,
+    ra2_                 double precision,
+    dec2_                double precision,
+    ra3_                 double precision,
+    dec3_                double precision,
+    ra4_                 double precision,
+    dec4_                double precision,
+    x_                   double precision,
+    y_                   double precision,
+    z_                   double precision
+)
+    returns void as $$
+
+    declare
+
+        rid__    integer;
+
+    begin
+
+
+        -- Insert or update record, as appropriate.
+
+        select rid
+        into rid__
+        from L2FileMeta
+        where rid = rid_;
+
+        if not found then
+
+
+            -- Insert L2FileMeta record.
+
+            begin
+
+                insert into L2FileMeta
+                (rid,
+                 ra0,
+                 dec0,
+                 ra1,
+                 dec1,
+                 ra2,
+                 dec2,
+                 ra3,
+                 dec3,
+                 ra4,
+                 dec4,
+                 x,
+                 y,
+                 z
+                )
+                values
+                (rid_,
+                 ra0_,
+                 dec0_,
+                 ra1_,
+                 dec1_,
+                 ra2_,
+                 dec2_,
+                 ra3_,
+                 dec3_,
+                 ra4_,
+                 dec4_,
+                 x_,
+                 y_,
+                 z_
+                );
+                exception
+                    when no_data_found then
+                        raise exception
+                            '*** Error in registerL2FileMeta: L2FileMeta record for rid=% not inserted.', rid_;
+
+            end;
+
+        else
+
+
+            -- Update L2FileMeta record.
+
+            update L2FileMeta
+            set ra0 = ra0_,
+                dec0 = dec0_,
+                ra1 = ra1_,
+                dec1 = dec1_,
+                ra2 = ra2_,
+                dec2 = dec2_,
+                ra3 = ra3_,
+                dec3 = dec3_,
+                ra4 = ra4_,
+                dec4 = dec4_,
+                x = x_,
+                y = y_,
+                z = z_
+            where rid = rid_;
+
+        end if;
 
     end;
 

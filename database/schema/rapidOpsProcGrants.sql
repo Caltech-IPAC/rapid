@@ -85,3 +85,21 @@ grant EXECUTE on FUNCTION updateL2File (
     status_   smallint,
     version_  smallint
 ) to rapidporole;
+
+
+grant EXECUTE on FUNCTION registerL2FileMeta (
+    rid_                 integer,
+    ra0_                 double precision,
+    dec0_                double precision,
+    ra1_                 double precision,
+    dec1_                double precision,
+    ra2_                 double precision,
+    dec2_                double precision,
+    ra3_                 double precision,
+    dec3_                double precision,
+    ra4_                 double precision,
+    dec4_                double precision,
+    x_                   double precision,
+    y_                   double precision,
+    z_                   double precision
+) to rapidporole;
