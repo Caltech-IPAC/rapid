@@ -28,3 +28,7 @@ RUN cd /tmp && \
     ./aws/install && \
     cd /tmp && \
     rm -rf /tmp/*
+
+# Install ps command.
+
+RUN yum -y install procps
