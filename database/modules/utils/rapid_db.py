@@ -439,6 +439,17 @@ class RAPIDDB:
             "select * from registerL2FileMeta(" +\
             "cast(TEMPLATE_RID as integer)," +\
             "cast(TEMPLATE_RA0 as double precision)," +\
+            "cast(TEMPLATE_DEC0 as double precision)," +\
+            "cast(TEMPLATE_RA1 as double precision)," +\
+            "cast(TEMPLATE_DEC1 as double precision)," +\
+            "cast(TEMPLATE_RA2 as double precision)," +\
+            "cast(TEMPLATE_DEC2 as double precision)," +\
+            "cast(TEMPLATE_RA3 as double precision)," +\
+            "cast(TEMPLATE_DEC3 as double precision)," +\
+            "cast(TEMPLATE_RA4 as double precision)," +\
+            "cast(TEMPLATE_DEC4 as double precision)," +\
+            "cast(TEMPLATE_Z as double precision)," +\
+            "cast(TEMPLATE_Y as double precision)," +\
             "cast(TEMPLATE_Z AS double precision));"
 
         # Query database.
