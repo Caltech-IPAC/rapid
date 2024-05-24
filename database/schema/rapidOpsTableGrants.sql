@@ -101,3 +101,23 @@ GRANT INSERT,UPDATE,SELECT,REFERENCES ON TABLE l2files TO rapidporole;
 
 REVOKE ALL ON SEQUENCE l2files_rid_seq FROM rapidporole;
 GRANT USAGE ON SEQUENCE l2files_rid_seq TO rapidporole;
+
+
+-------------------
+-- L2fileMeta table
+-------------------
+
+-- rapidreadrole
+
+REVOKE ALL ON TABLE l2filemeta FROM rapidreadrole;
+GRANT SELECT ON TABLE l2filemeta TO GROUP rapidreadrole;
+
+-- rapidadminrole
+
+REVOKE ALL ON TABLE l2filemeta FROM rapidadminrole;
+GRANT ALL ON TABLE l2filemeta TO GROUP rapidadminrole;
+
+-- rapidporole
+
+REVOKE ALL ON TABLE l2filemeta FROM rapidporole;
+GRANT INSERT,UPDATE,SELECT,REFERENCES ON TABLE l2filemeta TO rapidporole;

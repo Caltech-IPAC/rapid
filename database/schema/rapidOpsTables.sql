@@ -20,7 +20,6 @@ CREATE TABLE filters (
 
 ALTER TABLE filters OWNER TO rapidadminrole;
 
-
 SET default_tablespace = pipeline_indx_01;
 
 ALTER TABLE ONLY filters ADD CONSTRAINT filters_pkey PRIMARY KEY (fid);
@@ -40,7 +39,6 @@ CREATE TABLE chips (
 );
 
 ALTER TABLE chips OWNER TO rapidadminrole;
-
 
 SET default_tablespace = pipeline_indx_01;
 
@@ -82,7 +80,6 @@ CREATE SEQUENCE exposures_expid_seq
 ALTER SEQUENCE exposures_expid_seq OWNER TO rapidadminrole;
 
 ALTER TABLE exposures ALTER COLUMN expid SET DEFAULT nextval('exposures_expid_seq'::regclass);
-
 
 SET default_tablespace = pipeline_indx_01;
 
@@ -212,3 +209,40 @@ CREATE INDEX l2files_radec_idx ON l2files (q3c_ang2ipix(ra, dec));
 CLUSTER l2files_radec_idx ON l2files;
 ANALYZE l2files;
 
+
+
+
+-----------------------------
+-- TABLE: L2FileMeta
+-----------------------------
+
+SET default_tablespace = pipeline_data_01;
+
+CREATE TABLE l2filemeta (
+    rid integer NOT NULL,
+    ra0 double precision NOT NULL,
+    dec0 double precision NOT NULL,
+    ra1 double precision NOT NULL,
+    dec1 double precision NOT NULL,
+    ra2 double precision NOT NULL,
+    dec2 double precision NOT NULL,
+    ra3 double precision NOT NULL,
+    dec3 double precision NOT NULL,
+    ra4 double precision NOT NULL,
+    dec4 double precision NOT NULL,
+    x double precision NOT NULL,
+    y double precision NOT NULL,
+    z double precision NOT NULL
+);
+
+ALTER TABLE l2filemeta OWNER TO rapidadminrole;
+
+SET default_tablespace = pipeline_indx_01;
+
+ALTER TABLE ONLY l2filemeta ADD CONSTRAINT l2filemeta_pkey PRIMARY KEY (rid);
+
+ALTER TABLE ONLY l2filemeta ADD CONSTRAINT l2filemeta_rid_fk FOREIGN KEY (rid) REFERENCES l2files(rid);
+
+CREATE INDEX l2filemeta_radec_idx ON l2filemeta (q3c_ang2ipix(ra0, dec0));
+CLUSTER l2filemeta_radec_idx ON l2filemeta;
+ANALYZE l2filemeta;

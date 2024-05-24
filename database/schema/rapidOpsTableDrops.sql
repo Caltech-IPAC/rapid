@@ -8,7 +8,14 @@
 
 
 -------------------
--- L2files table
+-- L2FileMeta table
+-------------------
+
+DROP TABLE l2filemeta;
+
+
+-------------------
+-- L2Files table
 -------------------
 
 DROP TABLE l2files;
