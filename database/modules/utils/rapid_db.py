@@ -539,6 +539,7 @@ class RAPIDDB:
             self.exit_code = 67
             return
 
+        return records
 
     def update_l2filemeta_hp6(self,rid,hp6):
 
