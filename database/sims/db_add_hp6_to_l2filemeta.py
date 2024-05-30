@@ -27,7 +27,7 @@ def add_hp6_indexes():
         ra = rec[1]
         dec = rec[2]
 
-        
+
         # Compute level-6 healpix index (NESTED pixel ordering).
 
         hp6 = hp.ang2pix(nside,ra,dec,nest=True,lonlat=True)
@@ -43,7 +43,7 @@ def add_hp6_indexes():
     dbh.close()
 
 
-    
+
 # Main program.
 
 if __name__ == '__main__':
