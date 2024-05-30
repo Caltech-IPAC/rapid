@@ -498,3 +498,88 @@ class RAPIDDB:
 
         if self.exit_code == 0:
             self.conn.commit()           # Commit database transaction
+
+
+    def get_all_l2filemeta(self):
+
+        '''
+        Get all records in L2FileMeta database table.
+        '''
+
+
+        # Define query.
+
+        query = "select rid,ra0,dec0 from L2FileMeta;"
+
+
+        # Query database.
+
+        print('----> rid = {}'.format(rid))
+        print('----> ra0 = {}'.format(ra0))
+        print('----> dec0 = {}'.format(dec0))
+
+        print('query = {}'.format(query))
+
+
+        # Execute query.
+
+        try:
+            self.cur.execute(query)
+
+            try:
+                records = []
+                nrecs = 0
+                for record in cur:
+                    records.append(record)
+                    nrecs += 1
+
+                print("nrecs =",nrecs)
+
+            except:
+                    print("Nothing returned from database query; continuing...")
+
+        except (Exception, psycopg2.DatabaseError) as error:
+            print('*** Error getting all L2FileMeta records ({}); skipping...'.format(error))
+            self.exit_code = 67
+            return
+
+
+    def update_l2filemeta_hp6(self,rid,hp6):
+
+        '''
+        Update hp6 index in L2FileMeta database record.
+        '''
+
+
+        # Define query.
+
+        query = "update L2FileMeta set hp6 = " + str(hp6) + " where rid = " + str(rid) + ";"
+
+
+        # Query database.
+
+        print('----> rid = {}'.format(rid))
+        print('----> hp6 = {}'.format(hp6))
+
+        print('query = {}'.format(query))
+
+
+        # Execute query.
+
+        try:
+            self.cur.execute(query)
+
+            try:
+                records = []
+                for record in cur:
+                    records.append(record)
+            except:
+                    print("Nothing returned from database query; continuing...")
+
+        except (Exception, psycopg2.DatabaseError) as error:
+            print('*** Error updating L2FileMeta record ({}); skipping...'.format(error))
+            self.exit_code = 67
+            return
+
+        if self.exit_code == 0:
+            self.conn.commit()           # Commit database transaction
