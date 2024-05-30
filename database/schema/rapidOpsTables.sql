@@ -232,7 +232,8 @@ CREATE TABLE l2filemeta (
     dec4 double precision NOT NULL,
     x double precision NOT NULL,
     y double precision NOT NULL,
-    z double precision NOT NULL
+    z double precision NOT NULL,
+    hp6 integer NOT NULL
 );
 
 ALTER TABLE l2filemeta OWNER TO rapidadminrole;
