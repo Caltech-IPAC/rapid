@@ -91,7 +91,7 @@ def register_exposure(dbh,header,expid,fid):
     # Assign field number as level-6 healpix index (NESTED pixel ordering).
 
     level = 6
-    nside = 2**6
+    nside = 2**level
     field = hp.ang2pix(nside,ra,dec,nest=True,lonlat=True)
 
 
@@ -298,7 +298,7 @@ def register_l2file(dbh,header,subdir_only,file,expid,fid):
     # Assign field number as level-6 healpix index (NESTED pixel ordering).
 
     level = 6
-    nside = 2**6
+    nside = 2**level
     field = hp.ang2pix(nside,ra,dec,nest=True,lonlat=True)
 
 
@@ -375,7 +375,17 @@ def compute_and_register_l2filemeta(dbh,header,wcs,rid):
 
     x,y,z = util.compute_xyz(ra0,dec0)
 
-    dbh.register_l2filemeta(rid,ra0,dec0,ra1,dec1,ra2,dec2,ra3,dec3,ra4,dec4,x,y,z)
+
+    # Compute level-6 healpix index (NESTED pixel ordering).
+
+    level = 6
+    nside = 2**level
+    hp6 = hp.ang2pix(nside,ra0,dec0,nest=True,lonlat=True)
+
+
+    # Register record in database.
+
+    dbh.register_l2filemeta(rid,ra0,dec0,ra1,dec1,ra2,dec2,ra3,dec3,ra4,dec4,x,y,z,hp6)
 
 
 def register_files():

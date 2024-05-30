@@ -101,5 +101,6 @@ grant EXECUTE on FUNCTION registerL2FileMeta (
     dec4_                double precision,
     x_                   double precision,
     y_                   double precision,
-    z_                   double precision
+    z_                   double precision,
+    hp6_                 integer
 ) to rapidporole;
