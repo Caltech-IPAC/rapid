@@ -412,7 +412,7 @@ class RAPIDDB:
             self.cur.execute(query)
 
             try:
-                for record in cur:
+                for record in self.cur:
                     print(record)
             except:
                     print("Nothing returned from database stored function; continuing...")
@@ -486,7 +486,7 @@ class RAPIDDB:
             self.cur.execute(query)
 
             try:
-                for record in cur:
+                for record in self.cur:
                     print(record)
             except:
                     print("Nothing returned from database stored function; continuing...")
@@ -525,7 +525,7 @@ class RAPIDDB:
             try:
                 records = []
                 nrecs = 0
-                for record in cur:
+                for record in self.cur:
                     records.append(record)
                     nrecs += 1
 
@@ -568,7 +568,7 @@ class RAPIDDB:
 
             try:
                 records = []
-                for record in cur:
+                for record in self.cur:
                     records.append(record)
             except:
                     print("Nothing returned from database query; continuing...")
