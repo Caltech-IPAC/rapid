@@ -514,10 +514,6 @@ class RAPIDDB:
 
         # Query database.
 
-        print('----> rid = {}'.format(rid))
-        print('----> ra0 = {}'.format(ra0))
-        print('----> dec0 = {}'.format(dec0))
-
         print('query = {}'.format(query))
 
 
