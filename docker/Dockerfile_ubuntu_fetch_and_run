@@ -37,6 +37,10 @@ RUN yum -y install procps
 
 ADD fetch_and_run.sh /usr/local/bin/fetch_and_run.sh
 
+# Add python script called awsBatchJobLowLevelScript_CompressTroxelFitsFiles.py located in ../sims/src/ subdirectory in RAPID git repo.
+
+ADD ../sims/src/awsBatchJobLowLevelScript_CompressTroxelFitsFiles.py /usr/local/bin/awsBatchJobLowLevelScript_CompressTroxelFitsFiles.py
+
 WORKDIR /tmp
 
 ENTRYPOINT ["/usr/local/bin/fetch_and_run.sh"]
