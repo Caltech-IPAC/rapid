@@ -135,6 +135,8 @@ def submit_jobs():
             }
         )
 
+        print("response =",response)
+
 
         # Increment number of jobs.
         
