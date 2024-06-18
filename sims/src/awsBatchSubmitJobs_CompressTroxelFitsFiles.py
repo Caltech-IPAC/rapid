@@ -140,7 +140,7 @@ def submit_jobs():
         
         njobs += 1
 
-        if njobs > 0:
+        if njobs > 4:
             exit(0)
 
 
