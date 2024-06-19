@@ -142,8 +142,9 @@ def submit_jobs():
         
         njobs += 1
 
-        if njobs > 4:
-            exit(0)
+        # Comment out the two following lines for the full run.
+        #if njobs > 4:
+        #    exit(0)
 
 
 if __name__ == '__main__':
