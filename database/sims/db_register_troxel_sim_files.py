@@ -11,7 +11,7 @@ from astropy.wcs import WCS
 import modules.utils.rapid_pipeline_subs as util
 import database.modules.utils.rapid_db as db
 
-bucket_name_input = 'sims-sn-h158-lite'
+bucket_name_input = 'sims-sn-f184-lite'
 subdir_work = "work"
 
 aws_access_key_id = os.getenv('AWS_ACCESS_KEY_ID')
