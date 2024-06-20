@@ -1,0 +1,46 @@
+FROM redhat/ubi9
+
+RUN yum install -y pip
+
+RUN pip install --upgrade numpy
+RUN pip install --upgrade astropy
+RUN pip install --upgrade psycopg2-binary
+RUN pip install healpy
+RUN pip install boto3
+
+RUN yum -y install gcc
+RUN yum -y install g++
+RUN yum -y install gfortran
+RUN yum -y install autoconf
+RUN yum -y install automake
+RUN yum -y install libtool
+RUN yum -y install zlib-devel
+RUN yum -y install atlas
+RUN yum -y install atlas-devel
+RUN yum -y install postgresql
+RUN yum -y install unzip
+RUN yum -y install git
+
+# Install AWS CLI
+
+RUN cd /tmp && \
+    curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip" && \
+    unzip awscliv2.zip && \
+    ./aws/install && \
+    cd /tmp && \
+    rm -rf /tmp/*
+
+# Install ps command.
+
+RUN yum -y install procps
+
+# Checkout RAPID git repo.
+
+RUN git clone https://github.com/Caltech-IPAC/rapid code
+WORKDIR /code
+
+# Build C code in RAPID software stack.
+
+ARG RAPID_SW=/code
+RUN cd /code/c/builds && \
+    ./build_inside_container.sh
