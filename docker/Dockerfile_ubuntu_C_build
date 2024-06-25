@@ -44,3 +44,8 @@ WORKDIR /code
 ARG RAPID_SW=/code
 RUN cd /code/c/builds && \
     ./build_inside_container.sh
+
+# Configure run-time environment.
+
+ENV PATH=/code/c/bin:/root/.local/bin:/root/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+ENV LD_LIBRARY_PATH=/code/c/lib
