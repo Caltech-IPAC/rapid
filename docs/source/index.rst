@@ -36,7 +36,7 @@ in the RAPID git repo.  The docker image self-contains a
 RAPID git-clone of under the /code directory (no volume binding to an
 external filesystem containing the RAPID git repo is necessary).  The
 docker image also contains a
-C-code build of the RAPID software stack with the following run-time environment::
+C-code build of the RAPID software stack with the following run-time environment:
 
 .. code-block::
 
