@@ -30,7 +30,7 @@ code for image-differencing, etc.  It is based on
 
 .. code-block::
 
-rapid/docker/Dockerfile_ubuntu_C_build
+   rapid/docker/Dockerfile_ubuntu_C_build
 
 in the RAPID git repo.  The docker image self-contains a
 RAPID git-clone of under the /code directory (no volume binding to an
@@ -40,8 +40,8 @@ C-code build of the RAPID software stack with the following run-time environment
 
 .. code-block::
 
-export PATH=/code/c/bin:/root/.local/bin:/root/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
-export LD_LIBRARY_PATH=/code/c/lib
+   export PATH=/code/c/bin:/root/.local/bin:/root/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+   export LD_LIBRARY_PATH=/code/c/lib
 
 
 
