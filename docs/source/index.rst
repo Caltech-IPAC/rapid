@@ -14,6 +14,37 @@ Pipeline, under development at IPAC/Caltech.
    Development of source code and documentation is currently ongoing.
 
 
+Running the latest RAPID Pipeline 
+*************************************
+
+A docker image has been pre-built from a recent git-clone of the RAPID Github
+repository.  This docker image offers the convenience of having the RAPID
+pipeline already installed and ready to run.  It is publicly available from 
+
+.. code-block::
+
+   public.ecr.aws/y9b1s7h8/rapid_c_build:latest
+
+You can use it to docker-run a container and from within execute
+code for image-differencing, etc.  It is based on
+
+.. code-block::
+
+rapid/docker/Dockerfile_ubuntu_C_build
+
+in the RAPID git repo.  The docker image self-contains a
+RAPID git-clone of under the /code directory (no volume binding to an
+external filesystem containing the RAPID git repo is necessary).  The
+docker image also contains a
+C-code build of the RAPID software stack with the following run-time environment::
+
+.. code-block::
+
+export PATH=/code/c/bin:/root/.local/bin:/root/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+export LD_LIBRARY_PATH=/code/c/lib
+
+
+
 Getting the Source Code
 *****************************
 
