@@ -33,7 +33,7 @@ code for image-differencing, etc.  It is based on
    rapid/docker/Dockerfile_ubuntu_C_build
 
 in the RAPID git repo.  The docker image self-contains a
-RAPID git-clone of under the /code directory (no volume binding to an
+RAPID git-clone in the /code directory (no volume binding to an
 external filesystem containing the RAPID git repo is necessary).  The
 docker image also contains a
 C-code build of the RAPID software stack with the following run-time environment:
