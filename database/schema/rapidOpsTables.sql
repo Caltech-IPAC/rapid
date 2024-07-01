@@ -233,7 +233,9 @@ CREATE TABLE l2filemeta (
     x double precision NOT NULL,
     y double precision NOT NULL,
     z double precision NOT NULL,
-    hp6 integer NOT NULL               -- level-6 healpix index (NESTED) pertaining to (ra0,dec0)
+    hp6 integer NOT NULL,               -- level-6 healpix index (NESTED) pertaining to (ra0,dec0)
+    fid smallint NOT NULL,
+    chipid smallint NOT NULL
 );
 
 ALTER TABLE l2filemeta OWNER TO rapidadminrole;
@@ -243,6 +245,10 @@ SET default_tablespace = pipeline_indx_01;
 ALTER TABLE ONLY l2filemeta ADD CONSTRAINT l2filemeta_pkey PRIMARY KEY (rid);
 
 ALTER TABLE ONLY l2filemeta ADD CONSTRAINT l2filemeta_rid_fk FOREIGN KEY (rid) REFERENCES l2files(rid);
+
+CREATE INDEX l2filemeta_hp6_idx ON l2filemeta (hp6);
+CREATE INDEX l2filemeta_fid_idx ON l2filemeta (fid);
+CREATE INDEX l2filemeta_chipid_idx ON l2filemeta (chipid);
 
 CREATE INDEX l2filemeta_radec_idx ON l2filemeta (q3c_ang2ipix(ra0, dec0));
 CLUSTER l2filemeta_radec_idx ON l2filemeta;

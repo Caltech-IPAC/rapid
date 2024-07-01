@@ -543,6 +543,7 @@ class RAPIDDB:
 
         return records
 
+
     def update_l2filemeta_hp6(self,rid,hp6):
 
         '''
@@ -559,6 +560,90 @@ class RAPIDDB:
 
         print('----> rid = {}'.format(rid))
         print('----> hp6 = {}'.format(hp6))
+
+        print('query = {}'.format(query))
+
+
+        # Execute query.
+
+        try:
+            self.cur.execute(query)
+
+            try:
+                records = []
+                for record in self.cur:
+                    records.append(record)
+            except:
+                    print("Nothing returned from database query; continuing...")
+
+        except (Exception, psycopg2.DatabaseError) as error:
+            print('*** Error updating L2FileMeta record ({}); skipping...'.format(error))
+            self.exit_code = 67
+            return
+
+        if self.exit_code == 0:
+            self.conn.commit()           # Commit database transaction
+
+
+    def get_all_l2files_assoc_rid_with_fid_and_chipid(self):
+
+        '''
+        Get all records in L2Files database table.
+        '''
+
+
+        # Define query.
+
+        query = "select rid,fid,chipid from L2Files;"
+
+
+        # Query database.
+
+        print('query = {}'.format(query))
+
+
+        # Execute query.
+
+        try:
+            self.cur.execute(query)
+
+            try:
+                records = []
+                nrecs = 0
+                for record in self.cur:
+                    records.append(record)
+                    nrecs += 1
+
+                print("nrecs =",nrecs)
+
+            except:
+                    print("Nothing returned from database query; continuing...")
+
+        except (Exception, psycopg2.DatabaseError) as error:
+            print('*** Error getting all L2Files records ({}); skipping...'.format(error))
+            self.exit_code = 67
+            return
+
+        return records
+
+
+    def update_l2filemeta_fid_chipid(self,rid,fid,chipid):
+
+        '''
+        Update fid and chipid columns in L2FileMeta database record.
+        '''
+
+
+        # Define query.
+
+        query = "update L2FileMeta set fid = " + str(fid) + ", chipid = " + str(chipid) + " where rid = " + str(rid) + ";"
+
+
+        # Query database.
+
+        print('----> rid = {}'.format(rid))
+        print('----> fid = {}'.format(fid))
+        print('----> chipid = {}'.format(chipid))
 
         print('query = {}'.format(query))
 
