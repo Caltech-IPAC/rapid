@@ -69,7 +69,6 @@ CREATE TABLE exposures (
 
 ALTER TABLE exposures OWNER TO rapidadminrole;
 
-
 CREATE SEQUENCE exposures_expid_seq
     START WITH 1
     INCREMENT BY 1
@@ -210,8 +209,6 @@ CLUSTER l2files_radec_idx ON l2files;
 ANALYZE l2files;
 
 
-
-
 -----------------------------
 -- TABLE: L2FileMeta
 -----------------------------
@@ -245,11 +242,351 @@ SET default_tablespace = pipeline_indx_01;
 ALTER TABLE ONLY l2filemeta ADD CONSTRAINT l2filemeta_pkey PRIMARY KEY (rid);
 
 ALTER TABLE ONLY l2filemeta ADD CONSTRAINT l2filemeta_rid_fk FOREIGN KEY (rid) REFERENCES l2files(rid);
+ALTER TABLE ONLY l2filemeta ADD CONSTRAINT l2filemeta_fid_fk FOREIGN KEY (fid) REFERENCES filters(fid);
+ALTER TABLE ONLY l2filemeta ADD CONSTRAINT l2filemeta_chipid_fk FOREIGN KEY (chipid) REFERENCES chips(chipid);
 
 CREATE INDEX l2filemeta_hp6_idx ON l2filemeta (hp6);
 CREATE INDEX l2filemeta_fid_idx ON l2filemeta (fid);
 CREATE INDEX l2filemeta_chipid_idx ON l2filemeta (chipid);
 
+-- Q3C indexing will speed up ad-hoc cone searches on (ra, dec).
+
 CREATE INDEX l2filemeta_radec_idx ON l2filemeta (q3c_ang2ipix(ra0, dec0));
 CLUSTER l2filemeta_radec_idx ON l2filemeta;
 ANALYZE l2filemeta;
+
+
+-----------------------------
+-- TABLE: Pipelines
+-----------------------------
+
+SET default_tablespace = pipeline_data_01;
+
+CREATE TABLE pipelines (
+    ppid smallint NOT NULL,
+    priority smallint NOT NULL,
+    script character varying(255) default 'TBD' NOT NULL,
+    descrip character varying(255) NOT NULL
+);
+
+ALTER TABLE pipelines OWNER TO rapidadminrole;
+
+SET default_tablespace = pipeline_indx_01;
+
+ALTER TABLE ONLY pipelines ADD CONSTRAINT pipelinespk UNIQUE (ppid);
+
+ALTER TABLE ONLY pipelines ADD CONSTRAINT pipelinespk2 UNIQUE (priority);
+
+
+-----------------------------
+-- TABLE: SwVersions
+-----------------------------
+
+SET default_tablespace = pipeline_data_01;
+
+CREATE TABLE swversions (
+    svid smallint NOT NULL,
+    cvstag varchar(30) NOT NULL,
+    installed timestamp NOT NULL,
+    comment varchar(255),
+    release varchar(15) NOT NULL
+);
+
+ALTER TABLE swversions OWNER TO rapidadminrole;
+
+SET default_tablespace = pipeline_indx_01;
+
+CREATE SEQUENCE swversions_svid_seq
+    INCREMENT BY 1
+    NO MAXVALUE
+    NO MINVALUE
+    CACHE 1;
+
+ALTER TABLE swversions_svid_seq OWNER TO rapidadminrole;
+
+ALTER TABLE swversions ALTER COLUMN svid SET DEFAULT nextval('swversions_svid_seq'::regclass);
+
+ALTER TABLE ONLY swversions ADD CONSTRAINT swversions_pkey PRIMARY KEY (svid);
+
+
+-----------------------------
+-- TABLE: RefImages
+-----------------------------
+
+SET default_tablespace = pipeline_data_01;
+
+CREATE TABLE refimages (
+    rfid integer NOT NULL,
+    field integer NOT NULL,               -- level-6 healpix index (NESTED) pertaining to (ra0,dec0)
+    chipid smallint NOT NULL,
+    fid smallint NOT NULL,
+    ppid smallint NOT NULL,
+    version smallint NOT NULL,
+    vbest smallint NOT NULL,
+    filename character varying(255),
+    status smallint DEFAULT 0 NOT NULL,
+    checksum character varying(32),
+    created timestamp without time zone DEFAULT now() NOT NULL,
+    svid integer NOT NULL,
+    avid integer,
+    archivestatus smallint DEFAULT 0 NOT NULL,
+    infobits integer DEFAULT 0 NOT NULL,
+    CONSTRAINT refimages_vbest_check CHECK ((vbest = ANY (ARRAY[0, 1, 2]))),
+    CONSTRAINT refimages_version_check CHECK ((version > 0))
+);
+
+ALTER TABLE refimages OWNER TO rapidadminrole;
+
+CREATE SEQUENCE refimages_rfid_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MAXVALUE
+    NO MINVALUE
+    CACHE 1;
+
+ALTER TABLE refimages_rfid_seq OWNER TO rapidadminrole;
+
+ALTER TABLE refimages ALTER COLUMN rfid SET DEFAULT nextval('refimages_rfid_seq'::regclass);
+
+SET default_tablespace = pipeline_indx_01;
+
+ALTER TABLE ONLY refimages ADD CONSTRAINT refimages_pkey PRIMARY KEY (rfid);
+
+ALTER TABLE ONLY refimages ADD CONSTRAINT refimagespk UNIQUE (field, chipid, fid, ppid, version);
+
+ALTER TABLE ONLY refimages ADD CONSTRAINT refimages_chipid_fk FOREIGN KEY (chipid) REFERENCES chips(chipid);
+ALTER TABLE ONLY refimages ADD CONSTRAINT refimages_fid_fk FOREIGN KEY (fid) REFERENCES filters(fid);
+ALTER TABLE ONLY refimages ADD CONSTRAINT refimages_ppid_fk FOREIGN KEY (ppid) REFERENCES pipelines(ppid);
+ALTER TABLE ONLY refimages ADD CONSTRAINT refimages_svid_fk FOREIGN KEY (svid) REFERENCES swversions(svid);
+
+CREATE INDEX refimages_field_idx on refimages (field);
+CREATE INDEX refimages_chipid_idx on refimages (chipid);
+CREATE INDEX refimages_fid_idx on refimages (fid);
+CREATE INDEX refimages_created_idx on refimages (created);
+CREATE INDEX refimages_vbest_idx on refimages (vbest);
+CREATE INDEX refimages_ppid_idx on refimages (ppid);
+CREATE INDEX refimages_avid_idx on refimages (avid);
+CREATE INDEX refimages_archivestatus_idx on refimages (archivestatus);
+CREATE INDEX refimages_status_idx on refimages (status);
+
+
+-----------------------------
+-- TABLE: DiffImages
+-----------------------------
+
+SET default_tablespace = pipeline_data_01;
+
+CREATE TABLE diffimages (
+    pid integer NOT NULL,                          -- Primary key
+    expid integer NOT NULL,                        -- Exposure ID
+    chipid smallint NOT NULL,                      -- Chip ID
+    ppid smallint NOT NULL,                        -- Pipeline ID
+    version smallint NOT NULL,
+    vbest smallint NOT NULL,
+    rfid integer NOT NULL,                         -- Foreign key, from RefImages (RefIms) table
+    field integer NOT NULL,                        -- level-6 healpix index (NESTED) pertaining to (ra0,dec0)
+    fid smallint NOT NULL,                         -- Foreign key from Filters table
+    jd double precision,                           -- Julian date of start of image
+    ra0 double precision NOT NULL,                 -- Center of image
+    dec0 double precision NOT NULL,
+    ra1 double precision NOT NULL,                 -- Lower-left corner of image
+    dec1 double precision NOT NULL,
+    ra2 double precision NOT NULL,                 -- Lower-right corner of image
+    dec2 double precision NOT NULL,
+    ra3 double precision NOT NULL,                 -- Upper-right corner of image
+    dec3 double precision NOT NULL,
+    ra4 double precision NOT NULL,                 -- Upper-left corner of image
+    dec4 double precision NOT NULL,
+    infobitssci integer NOT NULL,                  -- Image InfoBits for input science image
+    infobitsref integer NOT NULL,                  -- Image InfoBits for input reference image
+    filename text NOT NULL,                        -- Full path and filename of positive difference image
+    checksum character varying(32),
+    status smallint DEFAULT 0 NOT NULL,            -- Good/bad diff image (1/0) based on several internal image QA indicators
+    created timestamp without time zone NOT NULL,  -- Date/time of record creation
+    svid integer NOT NULL,
+    avid integer,
+    archivestatus smallint DEFAULT 0 NOT NULL,
+    nalertpackets integer,                         -- Number of alert packets (avro files) generated
+    CONSTRAINT diffimages_vbest_check CHECK ((vbest = ANY (ARRAY[0, 1, 2]))),
+    CONSTRAINT diffimages_version_check CHECK ((version > 0)),
+    CONSTRAINT diffimages_ra0_check CHECK (((ra0 >= 0.0) AND (ra0 < 360.0))),
+    CONSTRAINT diffimages_dec0_check CHECK (((dec0 >= -90.0) AND (dec0 <= 90.0))),
+    CONSTRAINT diffimages_ra1_check CHECK (((ra1 >= 0.0) AND (ra1 < 360.0))),
+    CONSTRAINT diffimages_dec1_check CHECK (((dec1 >= -90.0) AND (dec1 <= 90.0))),
+    CONSTRAINT diffimages_ra2_check CHECK (((ra2 >= 0.0) AND (ra2 < 360.0))),
+    CONSTRAINT diffimages_dec2_check CHECK (((dec2 >= -90.0) AND (dec2 <= 90.0))),
+    CONSTRAINT diffimages_ra3_check CHECK (((ra3 >= 0.0) AND (ra3 < 360.0))),
+    CONSTRAINT diffimages_dec3_check CHECK (((dec3 >= -90.0) AND (dec3 <= 90.0))),
+    CONSTRAINT diffimages_ra4_check CHECK (((ra4 >= 0.0) AND (ra4 < 360.0))),
+    CONSTRAINT diffimages_dec4_check CHECK (((dec4 >= -90.0) AND (dec4 <= 90.0)))
+);
+
+ALTER TABLE diffimages OWNER TO rapidadminrole;
+
+CREATE SEQUENCE diffimages_pid_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MAXVALUE
+    NO MINVALUE
+    CACHE 1;
+
+ALTER SEQUENCE diffimages_pid_seq OWNER TO rapidadminrole;
+
+ALTER TABLE diffimages ALTER COLUMN pid SET DEFAULT nextval('diffimages_pid_seq'::regclass);
+
+SET default_tablespace = pipeline_indx_01;
+
+ALTER TABLE ONLY diffimages ADD CONSTRAINT diffimages_pkey PRIMARY KEY (pid);
+
+ALTER TABLE ONLY diffimages ADD CONSTRAINT diffimagespk UNIQUE (expid, chipid, ppid, version);
+
+ALTER TABLE ONLY diffimages ADD CONSTRAINT diffimages_expid_fk FOREIGN KEY (expid) REFERENCES exposures(expid);
+ALTER TABLE ONLY diffimages ADD CONSTRAINT diffimages_chipid_fk FOREIGN KEY (chipid) REFERENCES chips(chipid);
+ALTER TABLE ONLY diffimages ADD CONSTRAINT diffimages_fid_fk FOREIGN KEY (fid) REFERENCES filters(fid);
+ALTER TABLE ONLY diffimages ADD CONSTRAINT diffimages_ppid_fk FOREIGN KEY (ppid) REFERENCES pipelines(ppid);
+ALTER TABLE ONLY diffimages ADD CONSTRAINT diffimages_rfid_fk FOREIGN KEY (rfid) REFERENCES refimages(rfid);
+ALTER TABLE ONLY diffimages ADD CONSTRAINT diffimages_svid_fk FOREIGN KEY (svid) REFERENCES swversions(svid);
+
+CREATE INDEX diffimages_expid_idx on diffimages(expid);
+CREATE INDEX diffimages_chipid_idx on diffimages(chipid);
+CREATE INDEX diffimages_ppid_idx on diffimages(ppid);
+CREATE INDEX diffimages_rfid_idx on diffimages(rfid);
+CREATE INDEX diffimages_field_idx on diffimages(field);
+CREATE INDEX diffimages_fid_idx on diffimages(fid);
+CREATE INDEX diffimages_jd_idx on diffimages(jd);
+CREATE INDEX diffimages_status_idx on diffimages(status);
+CREATE INDEX diffimages_created_idx on diffimages(created);
+CREATE INDEX diffimages_infobitssci_idx on diffimages(infobitssci);
+CREATE INDEX diffimages_field_chipid_idx on diffimages(field, chipid);
+CREATE INDEX diffimages_vbest_idx ON diffimages (vbest);
+
+-- Q3C indexing will speed up ad-hoc cone searches on (ra, dec).
+
+CREATE INDEX diffimages_radec_idx ON diffimages (q3c_ang2ipix(ra0, dec0));
+CLUSTER diffimages_radec_idx ON diffimages;
+ANALYZE diffimages;
+
+
+-----------------------------
+-- TABLE: AlertNames
+-----------------------------
+
+SET default_tablespace = pipeline_data_01;
+
+CREATE TABLE alertnames (
+    alertname char(12) NOT NULL,     -- Primary key
+    chipid smallint NOT NULL,        -- Readout channel of candidate when alert was first created
+    field integer NOT NULL,          -- Field containing candidate when alert was first created
+    ra double precision NOT NULL,    -- Right Ascension
+    dec double precision NOT NULL,   -- Declination
+    jd double precision NOT NULL,    -- Julian date of initial name usage
+    candid bigint NOT NULL,          -- Candidate ID associated with initial name usage
+    CONSTRAINT alertnames_ra_check CHECK (((ra >= 0.0) AND (ra < 360.0))),
+    CONSTRAINT alertnames_dec_check CHECK (((dec >= -90.0) AND (dec <= 90.0)))
+);
+
+ALTER TABLE alertnames OWNER TO rapidadminrole;
+
+SET default_tablespace = pipeline_indx_01;
+
+ALTER TABLE ONLY alertnames
+    ADD CONSTRAINT alertnames_pkey PRIMARY KEY (alertname);
+
+CREATE INDEX alertnames_chipid_idx on alertnames(chipid);
+CREATE INDEX alertnames_field_idx on alertnames(field);
+CREATE INDEX alertnames_jd_idx on alertnames(jd);
+CREATE INDEX alertnames_candid_idx on alertnames(candid);
+
+-- Q3C indexing will speed up ad-hoc cone searches on (ra, dec).
+
+CREATE INDEX alertnames_radec_idx ON alertnames (q3c_ang2ipix(ra, dec));
+CLUSTER alertnames_radec_idx ON alertnames;
+ANALYZE alertnames;
+
+CREATE SEQUENCE alertnames_an24id_seq
+    INCREMENT BY 1
+    NO MAXVALUE
+    NO MINVALUE
+    CACHE 1;
+
+ALTER TABLE alertnames_an24id_seq OWNER TO rapidadminrole;
+
+CREATE SEQUENCE alertnames_an25id_seq
+    INCREMENT BY 1
+    NO MAXVALUE
+    NO MINVALUE
+    CACHE 1;
+
+ALTER TABLE alertnames_an25id_seq OWNER TO rapidadminrole;
+
+CREATE SEQUENCE alertnames_an26id_seq
+    INCREMENT BY 1
+    NO MAXVALUE
+    NO MINVALUE
+    CACHE 1;
+
+ALTER TABLE alertnames_an26id_seq OWNER TO rapidadminrole;
+
+CREATE SEQUENCE alertnames_an27id_seq
+    INCREMENT BY 1
+    NO MAXVALUE
+    NO MINVALUE
+    CACHE 1;
+
+ALTER TABLE alertnames_an27id_seq OWNER TO rapidadminrole;
+
+CREATE SEQUENCE alertnames_an28id_seq
+    INCREMENT BY 1
+    NO MAXVALUE
+    NO MINVALUE
+    CACHE 1;
+
+ALTER TABLE alertnames_an28id_seq OWNER TO rapidadminrole;
+
+CREATE SEQUENCE alertnames_an29id_seq
+    INCREMENT BY 1
+    NO MAXVALUE
+    NO MINVALUE
+    CACHE 1;
+
+ALTER TABLE alertnames_an29id_seq OWNER TO rapidadminrole;
+
+CREATE SEQUENCE alertnames_an30id_seq
+    INCREMENT BY 1
+    NO MAXVALUE
+    NO MINVALUE
+    CACHE 1;
+
+ALTER TABLE alertnames_an30id_seq OWNER TO rapidadminrole;
+
+CREATE SEQUENCE alertnames_an31id_seq
+    INCREMENT BY 1
+    NO MAXVALUE
+    NO MINVALUE
+    CACHE 1;
+
+ALTER TABLE alertnames_an31id_seq OWNER TO rapidadminrole;
+
+CREATE SEQUENCE alertnames_an32id_seq
+    INCREMENT BY 1
+    NO MAXVALUE
+    NO MINVALUE
+    CACHE 1;
+
+ALTER TABLE alertnames_an32id_seq OWNER TO rapidadminrole;
+
+CREATE SEQUENCE alertnames_an33id_seq
+    INCREMENT BY 1
+    NO MAXVALUE
+    NO MINVALUE
+    CACHE 1;
+
+ALTER TABLE alertnames_an33id_seq OWNER TO rapidadminrole;
+
+CREATE SEQUENCE alertnames_an34id_seq
+    INCREMENT BY 1
+    NO MAXVALUE
+    NO MINVALUE
+    CACHE 1;
+
+ALTER TABLE alertnames_an34id_seq OWNER TO rapidadminrole;

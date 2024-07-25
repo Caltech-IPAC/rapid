@@ -42,3 +42,38 @@ DROP TABLE filters;
 -------------------
 
 DROP TABLE chips;
+
+
+-------------------
+-- DiffImages table
+-------------------
+
+DROP TABLE diffimages;
+
+
+-------------------
+-- RefImages table
+-------------------
+
+DROP TABLE refimages;
+
+
+-------------------
+-- Pipelines table
+-------------------
+
+DROP TABLE pipelines;
+
+
+-------------------
+-- SwVersions table
+-------------------
+
+DROP TABLE swversions;
+
+
+-------------------
+-- AlertNames table
+-------------------
+
+DROP TABLE alertnames;

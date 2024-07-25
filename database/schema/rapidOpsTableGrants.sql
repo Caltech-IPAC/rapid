@@ -121,3 +121,103 @@ GRANT ALL ON TABLE l2filemeta TO GROUP rapidadminrole;
 
 REVOKE ALL ON TABLE l2filemeta FROM rapidporole;
 GRANT INSERT,UPDATE,SELECT,REFERENCES ON TABLE l2filemeta TO rapidporole;
+
+
+-------------------
+-- Pipelines table
+-------------------
+
+-- rapidreadrole
+
+REVOKE ALL ON TABLE pipelines FROM rapidreadrole;
+GRANT SELECT ON TABLE pipelines TO GROUP rapidreadrole;
+
+-- rapidadminrole
+
+REVOKE ALL ON TABLE pipelines FROM rapidadminrole;
+GRANT ALL ON TABLE pipelines TO GROUP rapidadminrole;
+
+-- rapidporole
+
+REVOKE ALL ON TABLE pipelines FROM rapidporole;
+GRANT INSERT,UPDATE,SELECT,REFERENCES ON TABLE pipelines TO rapidporole;
+
+
+-------------------
+-- SwVersions table
+-------------------
+
+-- rapidreadrole
+
+REVOKE ALL ON TABLE swversions FROM rapidreadrole;
+GRANT SELECT ON TABLE swversions TO GROUP rapidreadrole;
+
+-- rapidadminrole
+
+REVOKE ALL ON TABLE swversions FROM rapidadminrole;
+GRANT ALL ON TABLE swversions TO GROUP rapidadminrole;
+
+-- rapidporole
+
+REVOKE ALL ON TABLE swversions FROM rapidporole;
+GRANT INSERT,UPDATE,SELECT,REFERENCES ON TABLE swversions TO rapidporole;
+
+
+-------------------
+-- RefImages table
+-------------------
+
+-- rapidreadrole
+
+REVOKE ALL ON TABLE refimages FROM rapidreadrole;
+GRANT SELECT ON TABLE refimages TO GROUP rapidreadrole;
+
+-- rapidadminrole
+
+REVOKE ALL ON TABLE refimages FROM rapidadminrole;
+GRANT ALL ON TABLE refimages TO GROUP rapidadminrole;
+
+-- rapidporole
+
+REVOKE ALL ON TABLE refimages FROM rapidporole;
+GRANT INSERT,UPDATE,SELECT,REFERENCES ON TABLE refimages TO rapidporole;
+
+
+-------------------
+-- DiffImages table
+-------------------
+
+-- rapidreadrole
+
+REVOKE ALL ON TABLE diffimages FROM rapidreadrole;
+GRANT SELECT ON TABLE diffimages TO GROUP rapidreadrole;
+
+-- rapidadminrole
+
+REVOKE ALL ON TABLE diffimages FROM rapidadminrole;
+GRANT ALL ON TABLE diffimages TO GROUP rapidadminrole;
+
+-- rapidporole
+
+REVOKE ALL ON TABLE diffimages FROM rapidporole;
+GRANT INSERT,UPDATE,SELECT,REFERENCES ON TABLE diffimages TO rapidporole;
+
+
+-------------------
+-- AlertNames table
+-------------------
+
+-- rapidreadrole
+
+REVOKE ALL ON TABLE alertnames FROM rapidreadrole;
+GRANT SELECT ON TABLE alertnames TO GROUP rapidreadrole;
+
+-- rapidadminrole
+
+REVOKE ALL ON TABLE alertnames FROM rapidadminrole;
+GRANT ALL ON TABLE alertnames TO GROUP rapidadminrole;
+
+-- rapidporole
+
+REVOKE ALL ON TABLE alertnames FROM rapidporole;
+GRANT INSERT,UPDATE,SELECT,REFERENCES ON TABLE alertnames TO rapidporole;
