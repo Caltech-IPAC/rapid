@@ -49,14 +49,14 @@ DROP TABLE chips;
 -------------------
 
 DROP TABLE diffimages;
-
+DROP SEQUENCE diffimages_pid_seq;
 
 -------------------
 -- RefImages table
 -------------------
 
 DROP TABLE refimages;
-
+DROP SEQUENCE refimages_rfid_seq;
 
 -------------------
 -- Pipelines table
@@ -70,10 +70,21 @@ DROP TABLE pipelines;
 -------------------
 
 DROP TABLE swversions;
-
+DROP SEQUENCE swversions_svid_seql
 
 -------------------
 -- AlertNames table
 -------------------
 
 DROP TABLE alertnames;
+DROP SEQUENCE alertnames_an24id_seq;
+DROP SEQUENCE alertnames_an25id_seq;
+DROP SEQUENCE alertnames_an26id_seq;
+DROP SEQUENCE alertnames_an27id_seq;
+DROP SEQUENCE alertnames_an28id_seq;
+DROP SEQUENCE alertnames_an29id_seq;
+DROP SEQUENCE alertnames_an30id_seq;
+DROP SEQUENCE alertnames_an31id_seq;
+DROP SEQUENCE alertnames_an32id_seq;
+DROP SEQUENCE alertnames_an33id_seq;
+DROP SEQUENCE alertnames_an34id_seq;
