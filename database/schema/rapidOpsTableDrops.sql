@@ -70,7 +70,7 @@ DROP TABLE pipelines;
 -------------------
 
 DROP TABLE swversions;
-DROP SEQUENCE swversions_svid_seql
+DROP SEQUENCE swversions_svid_seql;
 
 -------------------
 -- AlertNames table
