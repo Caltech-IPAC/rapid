@@ -152,15 +152,23 @@ GRANT INSERT,UPDATE,SELECT,REFERENCES ON TABLE pipelines TO rapidporole;
 REVOKE ALL ON TABLE swversions FROM rapidreadrole;
 GRANT SELECT ON TABLE swversions TO GROUP rapidreadrole;
 
+REVOKE ALL ON SEQUENCE swversions_svid_seq FROM rapidreadrole;
+
 -- rapidadminrole
 
 REVOKE ALL ON TABLE swversions FROM rapidadminrole;
 GRANT ALL ON TABLE swversions TO GROUP rapidadminrole;
 
+REVOKE ALL ON SEQUENCE swversions_svid_seq FROM rapidadminrole;
+GRANT ALL ON SEQUENCE swversions_svid_seq TO GROUP rapidadminrole;
+
 -- rapidporole
 
 REVOKE ALL ON TABLE swversions FROM rapidporole;
 GRANT INSERT,UPDATE,SELECT,REFERENCES ON TABLE swversions TO rapidporole;
+
+REVOKE ALL ON SEQUENCE swversions_svid_seq FROM rapidporole;
+GRANT USAGE ON SEQUENCE swversions_svid_seq TO rapidporole;
 
 
 -------------------
@@ -172,15 +180,23 @@ GRANT INSERT,UPDATE,SELECT,REFERENCES ON TABLE swversions TO rapidporole;
 REVOKE ALL ON TABLE refimages FROM rapidreadrole;
 GRANT SELECT ON TABLE refimages TO GROUP rapidreadrole;
 
+REVOKE ALL ON SEQUENCE refimages_rfid_seq FROM rapidreadrole;
+
 -- rapidadminrole
 
 REVOKE ALL ON TABLE refimages FROM rapidadminrole;
 GRANT ALL ON TABLE refimages TO GROUP rapidadminrole;
 
+REVOKE ALL ON SEQUENCE refimages_rfid_seq FROM rapidadminrole;
+GRANT ALL ON SEQUENCE refimages_rfid_seq TO GROUP rapidadminrole;
+
 -- rapidporole
 
 REVOKE ALL ON TABLE refimages FROM rapidporole;
 GRANT INSERT,UPDATE,SELECT,REFERENCES ON TABLE refimages TO rapidporole;
+
+REVOKE ALL ON SEQUENCE refimages_rfid_seq FROM rapidporole;
+GRANT USAGE ON SEQUENCE refimages_rfid_seq TO rapidporole;
 
 
 -------------------
@@ -192,15 +208,23 @@ GRANT INSERT,UPDATE,SELECT,REFERENCES ON TABLE refimages TO rapidporole;
 REVOKE ALL ON TABLE diffimages FROM rapidreadrole;
 GRANT SELECT ON TABLE diffimages TO GROUP rapidreadrole;
 
+REVOKE ALL ON SEQUENCE diffimages_pid_seq FROM rapidreadrole;
+
 -- rapidadminrole
 
 REVOKE ALL ON TABLE diffimages FROM rapidadminrole;
 GRANT ALL ON TABLE diffimages TO GROUP rapidadminrole;
 
+REVOKE ALL ON SEQUENCE diffimages_pid_seq FROM rapidadminrole;
+GRANT ALL ON SEQUENCE diffimages_pid_seq TO GROUP rapidadminrole;
+
 -- rapidporole
 
 REVOKE ALL ON TABLE diffimages FROM rapidporole;
 GRANT INSERT,UPDATE,SELECT,REFERENCES ON TABLE diffimages TO rapidporole;
+
+REVOKE ALL ON SEQUENCE diffimages_pid_seq FROM rapidporole;
+GRANT USAGE ON SEQUENCE diffimages_pid_seq TO rapidporole;
 
 
 -------------------
@@ -212,12 +236,72 @@ GRANT INSERT,UPDATE,SELECT,REFERENCES ON TABLE diffimages TO rapidporole;
 REVOKE ALL ON TABLE alertnames FROM rapidreadrole;
 GRANT SELECT ON TABLE alertnames TO GROUP rapidreadrole;
 
+REVOKE ALL ON SEQUENCE alertnames_an24id_seq FROM rapidreadrole;
+REVOKE ALL ON SEQUENCE alertnames_an25id_seq FROM rapidreadrole;
+REVOKE ALL ON SEQUENCE alertnames_an26id_seq FROM rapidreadrole;
+REVOKE ALL ON SEQUENCE alertnames_an27id_seq FROM rapidreadrole;
+REVOKE ALL ON SEQUENCE alertnames_an28id_seq FROM rapidreadrole;
+REVOKE ALL ON SEQUENCE alertnames_an29id_seq FROM rapidreadrole;
+REVOKE ALL ON SEQUENCE alertnames_an30id_seq FROM rapidreadrole;
+REVOKE ALL ON SEQUENCE alertnames_an31id_seq FROM rapidreadrole;
+REVOKE ALL ON SEQUENCE alertnames_an32id_seq FROM rapidreadrole;
+REVOKE ALL ON SEQUENCE alertnames_an33id_seq FROM rapidreadrole;
+REVOKE ALL ON SEQUENCE alertnames_an34id_seq FROM rapidreadrole;
+
 -- rapidadminrole
 
 REVOKE ALL ON TABLE alertnames FROM rapidadminrole;
 GRANT ALL ON TABLE alertnames TO GROUP rapidadminrole;
 
+REVOKE ALL ON SEQUENCE alertnames_an24id_seq FROM rapidadminrole;
+REVOKE ALL ON SEQUENCE alertnames_an25id_seq FROM rapidadminrole;
+REVOKE ALL ON SEQUENCE alertnames_an26id_seq FROM rapidadminrole;
+REVOKE ALL ON SEQUENCE alertnames_an27id_seq FROM rapidadminrole;
+REVOKE ALL ON SEQUENCE alertnames_an28id_seq FROM rapidadminrole;
+REVOKE ALL ON SEQUENCE alertnames_an29id_seq FROM rapidadminrole;
+REVOKE ALL ON SEQUENCE alertnames_an30id_seq FROM rapidadminrole;
+REVOKE ALL ON SEQUENCE alertnames_an31id_seq FROM rapidadminrole;
+REVOKE ALL ON SEQUENCE alertnames_an32id_seq FROM rapidadminrole;
+REVOKE ALL ON SEQUENCE alertnames_an33id_seq FROM rapidadminrole;
+REVOKE ALL ON SEQUENCE alertnames_an34id_seq FROM rapidadminrole;
+
+GRANT ALL ON SEQUENCE alertnames_an24id_seq TO GROUP rapidadminrole;
+GRANT ALL ON SEQUENCE alertnames_an25id_seq TO GROUP rapidadminrole;
+GRANT ALL ON SEQUENCE alertnames_an26id_seq TO GROUP rapidadminrole;
+GRANT ALL ON SEQUENCE alertnames_an27id_seq TO GROUP rapidadminrole;
+GRANT ALL ON SEQUENCE alertnames_an28id_seq TO GROUP rapidadminrole;
+GRANT ALL ON SEQUENCE alertnames_an29id_seq TO GROUP rapidadminrole;
+GRANT ALL ON SEQUENCE alertnames_an30id_seq TO GROUP rapidadminrole;
+GRANT ALL ON SEQUENCE alertnames_an31id_seq TO GROUP rapidadminrole;
+GRANT ALL ON SEQUENCE alertnames_an32id_seq TO GROUP rapidadminrole;
+GRANT ALL ON SEQUENCE alertnames_an33id_seq TO GROUP rapidadminrole;
+GRANT ALL ON SEQUENCE alertnames_an34id_seq TO GROUP rapidadminrole;
+
 -- rapidporole
 
 REVOKE ALL ON TABLE alertnames FROM rapidporole;
 GRANT INSERT,UPDATE,SELECT,REFERENCES ON TABLE alertnames TO rapidporole;
+
+REVOKE ALL ON SEQUENCE alertnames_an24id_seq FROM rapidporole;
+REVOKE ALL ON SEQUENCE alertnames_an25id_seq FROM rapidporole;
+REVOKE ALL ON SEQUENCE alertnames_an26id_seq FROM rapidporole;
+REVOKE ALL ON SEQUENCE alertnames_an27id_seq FROM rapidporole;
+REVOKE ALL ON SEQUENCE alertnames_an28id_seq FROM rapidporole;
+REVOKE ALL ON SEQUENCE alertnames_an29id_seq FROM rapidporole;
+REVOKE ALL ON SEQUENCE alertnames_an30id_seq FROM rapidporole;
+REVOKE ALL ON SEQUENCE alertnames_an31id_seq FROM rapidporole;
+REVOKE ALL ON SEQUENCE alertnames_an32id_seq FROM rapidporole;
+REVOKE ALL ON SEQUENCE alertnames_an33id_seq FROM rapidporole;
+REVOKE ALL ON SEQUENCE alertnames_an34id_seq FROM rapidporole;
+
+GRANT USAGE ON SEQUENCE alertnames_an24id_seq TO rapidporole;
+GRANT USAGE ON SEQUENCE alertnames_an25id_seq TO rapidporole;
+GRANT USAGE ON SEQUENCE alertnames_an26id_seq TO rapidporole;
+GRANT USAGE ON SEQUENCE alertnames_an27id_seq TO rapidporole;
+GRANT USAGE ON SEQUENCE alertnames_an28id_seq TO rapidporole;
+GRANT USAGE ON SEQUENCE alertnames_an29id_seq TO rapidporole;
+GRANT USAGE ON SEQUENCE alertnames_an30id_seq TO rapidporole;
+GRANT USAGE ON SEQUENCE alertnames_an31id_seq TO rapidporole;
+GRANT USAGE ON SEQUENCE alertnames_an32id_seq TO rapidporole;
+GRANT USAGE ON SEQUENCE alertnames_an33id_seq TO rapidporole;
+GRANT USAGE ON SEQUENCE alertnames_an34id_seq TO rapidporole;
