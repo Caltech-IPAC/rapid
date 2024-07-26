@@ -378,12 +378,13 @@ SET default_tablespace = pipeline_data_01;
 
 CREATE TABLE diffimages (
     pid integer NOT NULL,                          -- Primary key
+    rid integer NOT NULL,                          -- Foreign key from L2Files table
     expid integer NOT NULL,                        -- Exposure ID
     chipid smallint NOT NULL,                      -- Chip ID
     ppid smallint NOT NULL,                        -- Pipeline ID
     version smallint NOT NULL,
     vbest smallint NOT NULL,
-    rfid integer NOT NULL,                         -- Foreign key, from RefImages (RefIms) table
+    rfid integer NOT NULL,                         -- Foreign key, from RefImages table
     field integer NOT NULL,                        -- level-6 healpix index (NESTED) pertaining to (ra0,dec0)
     fid smallint NOT NULL,                         -- Foreign key from Filters table
     jd double precision,                           -- Julian date of start of image
@@ -438,7 +439,7 @@ SET default_tablespace = pipeline_indx_01;
 
 ALTER TABLE ONLY diffimages ADD CONSTRAINT diffimages_pkey PRIMARY KEY (pid);
 
-ALTER TABLE ONLY diffimages ADD CONSTRAINT diffimagespk UNIQUE (expid, chipid, ppid, version);
+ALTER TABLE ONLY diffimages ADD CONSTRAINT diffimagespk UNIQUE (rid, ppid, version);
 
 ALTER TABLE ONLY diffimages ADD CONSTRAINT diffimages_expid_fk FOREIGN KEY (expid) REFERENCES exposures(expid);
 ALTER TABLE ONLY diffimages ADD CONSTRAINT diffimages_chipid_fk FOREIGN KEY (chipid) REFERENCES chips(chipid);
@@ -590,3 +591,55 @@ CREATE SEQUENCE alertnames_an34id_seq
     CACHE 1;
 
 ALTER TABLE alertnames_an34id_seq OWNER TO rapidadminrole;
+
+
+-----------------------------
+-- TABLE: Jobs
+-----------------------------
+
+SET default_tablespace = pipeline_data_01;
+
+CREATE TABLE jobs (
+    jid integer NOT NULL,
+    ppid smallint NOT NULL,
+    expid integer,
+    chipid smallint,
+    field integer,
+    fid smallint,
+    rid integer,
+    machine smallint,
+    started timestamp,
+    ended timestamp,
+    elapsed interval,
+    exitcode smallint,
+    status smallint DEFAULT 0,
+    slurm integer,
+    CONSTRAINT jobs_status_check CHECK (((status >= -1) AND (status <= 1)))
+);
+
+ALTER TABLE jobs OWNER TO rapidadminrole
+
+SET default_tablespace = pipeline_indx_01;
+
+CREATE SEQUENCE jobs_jid_seq
+    INCREMENT BY 1
+    NO MAXVALUE
+    NO MINVALUE
+    CACHE 1;
+
+ALTER TABLE jobs_jid_seq OWNER TO rapidadminrole;
+
+ALTER TABLE jobs ALTER COLUMN jid SET DEFAULT nextval('jobs_jid_seq'::regclass);
+
+ALTER TABLE ONLY jobs ADD CONSTRAINT jobs_pkey PRIMARY KEY (jid);
+
+CREATE INDEX jobs_ppid_idx on jobs (ppid);
+CREATE INDEX jobs_expid_idx on jobs (expid);
+CREATE INDEX jobs_field_idx on jobs (field);
+CREATE INDEX jobs_chipid_idx on jobs (chipid);
+CREATE INDEX jobs_fid_idx on jobs (fid);
+CREATE INDEX jobs_rid_idx on jobs (rid);
+CREATE INDEX jobs_status_idx on jobs (status);
+CREATE INDEX jobs_exitcode_idx on jobs (exitcode);
+CREATE INDEX jobs_machine_idx on jobs (machine);
+CREATE INDEX jobs_started_idx on jobs (started);

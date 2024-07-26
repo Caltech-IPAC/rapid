@@ -305,3 +305,31 @@ GRANT USAGE ON SEQUENCE alertnames_an31id_seq TO rapidporole;
 GRANT USAGE ON SEQUENCE alertnames_an32id_seq TO rapidporole;
 GRANT USAGE ON SEQUENCE alertnames_an33id_seq TO rapidporole;
 GRANT USAGE ON SEQUENCE alertnames_an34id_seq TO rapidporole;
+
+
+-------------------
+-- Jobs table
+-------------------
+
+-- rapidreadrole
+
+REVOKE ALL ON TABLE jobs FROM rapidreadrole;
+GRANT SELECT ON TABLE jobs TO GROUP rapidreadrole;
+
+REVOKE ALL ON SEQUENCE jobs_jid_seq FROM rapidreadrole;
+
+-- rapidadminrole
+
+REVOKE ALL ON TABLE jobs FROM rapidadminrole;
+GRANT ALL ON TABLE jobs TO GROUP rapidadminrole;
+
+REVOKE ALL ON SEQUENCE jobs_jid_seq FROM rapidadminrole;
+GRANT ALL ON SEQUENCE jobs_jid_seq TO GROUP rapidadminrole;
+
+-- rapidporole
+
+REVOKE ALL ON TABLE jobs FROM rapidporole;
+GRANT INSERT,UPDATE,SELECT,REFERENCES ON TABLE jobs TO rapidporole;
+
+REVOKE ALL ON SEQUENCE jobs_jid_seq FROM rapidporole;
+GRANT USAGE ON SEQUENCE jobs_jid_seq TO rapidporole;

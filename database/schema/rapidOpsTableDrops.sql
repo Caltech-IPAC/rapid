@@ -88,3 +88,11 @@ DROP SEQUENCE alertnames_an31id_seq;
 DROP SEQUENCE alertnames_an32id_seq;
 DROP SEQUENCE alertnames_an33id_seq;
 DROP SEQUENCE alertnames_an34id_seq;
+
+
+-------------------
+-- Jobs table
+-------------------
+
+DROP TABLE jobs;
+DROP SEQUENCE jobs_jid_seq;
