@@ -447,7 +447,9 @@ ALTER TABLE ONLY diffimages ADD CONSTRAINT diffimages_fid_fk FOREIGN KEY (fid) R
 ALTER TABLE ONLY diffimages ADD CONSTRAINT diffimages_ppid_fk FOREIGN KEY (ppid) REFERENCES pipelines(ppid);
 ALTER TABLE ONLY diffimages ADD CONSTRAINT diffimages_rfid_fk FOREIGN KEY (rfid) REFERENCES refimages(rfid);
 ALTER TABLE ONLY diffimages ADD CONSTRAINT diffimages_svid_fk FOREIGN KEY (svid) REFERENCES swversions(svid);
+ALTER TABLE ONLY diffimages ADD CONSTRAINT diffimages_rid_fk FOREIGN KEY (rid) REFERENCES l2files(rid);
 
+CREATE INDEX diffimages_rid_idx on diffimages(rid);
 CREATE INDEX diffimages_expid_idx on diffimages(expid);
 CREATE INDEX diffimages_chipid_idx on diffimages(chipid);
 CREATE INDEX diffimages_ppid_idx on diffimages(ppid);
@@ -617,7 +619,7 @@ CREATE TABLE jobs (
     CONSTRAINT jobs_status_check CHECK (((status >= -1) AND (status <= 1)))
 );
 
-ALTER TABLE jobs OWNER TO rapidadminrole
+ALTER TABLE jobs OWNER TO rapidadminrole;
 
 SET default_tablespace = pipeline_indx_01;
 
