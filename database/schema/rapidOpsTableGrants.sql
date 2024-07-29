@@ -172,6 +172,34 @@ GRANT USAGE ON SEQUENCE swversions_svid_seq TO rapidporole;
 
 
 -------------------
+-- ArchiveVersions table
+-------------------
+
+-- rapidreadrole
+
+REVOKE ALL ON TABLE archiveversions FROM rapidreadrole;
+GRANT SELECT ON TABLE archiveversions TO GROUP rapidreadrole;
+
+REVOKE ALL ON SEQUENCE archiveversions_avid_seq FROM rapidreadrole;
+
+-- rapidadminrole
+
+REVOKE ALL ON TABLE archiveversions FROM rapidadminrole;
+GRANT ALL ON TABLE archiveversions TO GROUP rapidadminrole;
+
+REVOKE ALL ON SEQUENCE archiveversions_avid_seq FROM rapidadminrole;
+GRANT ALL ON SEQUENCE archiveversions_avid_seq TO GROUP rapidadminrole;
+
+-- rapidporole
+
+REVOKE ALL ON TABLE archiveversions FROM rapidporole;
+GRANT INSERT,UPDATE,SELECT,REFERENCES ON TABLE archiveversions TO rapidporole;
+
+REVOKE ALL ON SEQUENCE archiveversions_avid_seq FROM rapidporole;
+GRANT USAGE ON SEQUENCE archiveversions_avid_seq TO rapidporole;
+
+
+-------------------
 -- RefImages table
 -------------------
 

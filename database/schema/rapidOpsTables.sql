@@ -310,6 +310,35 @@ ALTER TABLE ONLY swversions ADD CONSTRAINT swversions_pkey PRIMARY KEY (svid);
 
 
 -----------------------------
+-- TABLE: ArchiveVersions
+-----------------------------
+
+SET default_tablespace = pipeline_data_01;
+
+CREATE TABLE archiveversions (
+    avid integer NOT NULL,
+    archived timestamp NOT NULL
+);
+
+ALTER TABLE archiveversions OWNER TO rapidadminrole;
+
+SET default_tablespace = pipeline_indx_01;
+
+CREATE SEQUENCE archiveversions_avid_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MAXVALUE
+    NO MINVALUE
+    CACHE 1;
+
+ALTER TABLE archiveversions_avid_seq OWNER TO rapidadminrole;
+
+ALTER TABLE archiveversions ALTER COLUMN avid SET DEFAULT nextval('archiveversions_avid_seq'::regclass);
+
+ALTER TABLE ONLY archiveversions ADD CONSTRAINT archiveversions_pkey PRIMARY KEY (avid);
+
+
+-----------------------------
 -- TABLE: RefImages
 -----------------------------
 
@@ -358,6 +387,7 @@ ALTER TABLE ONLY refimages ADD CONSTRAINT refimages_chipid_fk FOREIGN KEY (chipi
 ALTER TABLE ONLY refimages ADD CONSTRAINT refimages_fid_fk FOREIGN KEY (fid) REFERENCES filters(fid);
 ALTER TABLE ONLY refimages ADD CONSTRAINT refimages_ppid_fk FOREIGN KEY (ppid) REFERENCES pipelines(ppid);
 ALTER TABLE ONLY refimages ADD CONSTRAINT refimages_svid_fk FOREIGN KEY (svid) REFERENCES swversions(svid);
+ALTER TABLE ONLY refimages ADD CONSTRAINT refimages_avid_fk FOREIGN KEY (avid) REFERENCES archiveversions(avid);
 
 CREATE INDEX refimages_field_idx on refimages (field);
 CREATE INDEX refimages_chipid_idx on refimages (chipid);
@@ -448,6 +478,7 @@ ALTER TABLE ONLY diffimages ADD CONSTRAINT diffimages_ppid_fk FOREIGN KEY (ppid)
 ALTER TABLE ONLY diffimages ADD CONSTRAINT diffimages_rfid_fk FOREIGN KEY (rfid) REFERENCES refimages(rfid);
 ALTER TABLE ONLY diffimages ADD CONSTRAINT diffimages_svid_fk FOREIGN KEY (svid) REFERENCES swversions(svid);
 ALTER TABLE ONLY diffimages ADD CONSTRAINT diffimages_rid_fk FOREIGN KEY (rid) REFERENCES l2files(rid);
+ALTER TABLE ONLY diffimages ADD CONSTRAINT diffimages_avid_fk FOREIGN KEY (avid) REFERENCES archiveversions(avid);
 
 CREATE INDEX diffimages_rid_idx on diffimages(rid);
 CREATE INDEX diffimages_expid_idx on diffimages(expid);

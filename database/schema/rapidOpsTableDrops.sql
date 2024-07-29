@@ -43,13 +43,12 @@ DROP TABLE filters;
 
 DROP TABLE chips;
 
-
 -------------------
--- DiffImages table
+-- ArchiveVersions table
 -------------------
 
-DROP TABLE diffimages;
-DROP SEQUENCE diffimages_pid_seq;
+DROP TABLE archiveversions;
+DROP SEQUENCE archiveversions_avid_seq;
 
 -------------------
 -- RefImages table
@@ -57,6 +56,14 @@ DROP SEQUENCE diffimages_pid_seq;
 
 DROP TABLE refimages;
 DROP SEQUENCE refimages_rfid_seq;
+
+
+-------------------
+-- DiffImages table
+-------------------
+
+DROP TABLE diffimages;
+DROP SEQUENCE diffimages_pid_seq;
 
 -------------------
 -- Pipelines table
