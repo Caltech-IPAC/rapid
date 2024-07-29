@@ -104,3 +104,34 @@ DROP FUNCTION registerL2FileMeta (
     z_                   double precision,
     hp6_                 integer
 );
+
+
+DROP FUNCTION addDiffImage (
+    rid_                  integer,
+    ppid_                 smallint,
+    rfid_                 integer,
+    infobitssci_          integer,
+    infobitsref_          integer,
+    ra0_                  double precision,
+    dec0_                 double precision,
+    ra1_                  double precision,
+    dec1_                 double precision,
+    ra2_                  double precision,
+    dec2_                 double precision,
+    ra3_                  double precision,
+    dec3_                 double precision,
+    ra4_                  double precision,
+    dec4_                 double precision,
+    filename_             character varying(255),
+    checksum_             character varying(32),
+    status_               smallint
+);
+
+
+DROP FUNCTION updateDiffImage (
+    pid_         integer,
+    filename_    varchar(255),
+    checkSum_    varchar(32),
+    status_      smallint,
+    version_     smallint
+);
