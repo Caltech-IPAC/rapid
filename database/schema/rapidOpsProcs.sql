@@ -473,3 +473,246 @@ create function registerL2FileMeta (
     end;
 
 $$ language plpgsql;
+
+
+-- Insert a new record into the DiffImages table.
+--
+create function addDiffImage (
+    rid_                  integer,
+    ppid_                 smallint,
+    rfid_                 integer,
+    infobitssci_          integer,
+    infobitsref_          integer,
+    ra0_                  double precision,
+    dec0_                 double precision,
+    ra1_                  double precision,
+    dec1_                 double precision,
+    ra2_                  double precision,
+    dec2_                 double precision,
+    ra3_                  double precision,
+    dec3_                 double precision,
+    ra4_                  double precision,
+    dec4_                 double precision,
+    filename_             character varying(255),
+    checksum_             character varying(32),
+    status_               smallint
+)
+    returns record as $$
+
+    declare
+
+        r_                record;
+        pid_              integer;
+        version_          smallint;
+        status_           smallint;
+        vbest_            smallint;
+        svid_             smallint;
+        expid_            integer;
+        chipid_           smallint;
+        field_            integer;
+        fid_              smallint;
+        mjdobs_           double precision;
+        jd_               double precision;
+
+    begin
+
+        -- Processed images are versioned according to unique (rid, ppid) pairs.
+
+        -- Note that the vBest flag is updated when database stored
+        -- function updateDiffImage is executed.
+
+        select coalesce(max(version), 0) + 1
+        into version_
+        from DiffImages
+        where rid = rid_
+        and ppid = ppid_;
+
+        if not found then
+            version_ := 1;
+        end if;
+
+        -- Get foreign-key values and other quantities for table normalization.
+
+        begin
+
+            select expid, chipid, field, fid, mjdobs
+            into strict expid_, chipid_, field_, fid_, mjdobs_
+            from L2Files
+            where rid = rid_;
+            exception
+                when no_data_found then
+                    raise exception
+                        '*** Error in addProcImage: RawImages record rid=% not found.', rid_;
+
+        end;
+
+        jd_ := mjdobs_ + 2400000.5;
+
+        -- Get software version number.
+
+        begin
+
+            select svid
+            into strict svid_
+            from SwVersions
+            order by svid desc
+            limit 1;
+            exception
+                when no_data_found then
+                    raise exception
+                        '*** Error in addDiffImage: SwVersions record not found.';
+
+        end;
+
+        status_ := 0;
+        vbest_ := 0;
+
+        -- Insert DiffImages record.
+
+        begin
+
+            insert into DiffImages
+            (rid, ppid, version, status, vbest, filename, checksum,
+             expid, chipid, field, fid, jd, svid,
+	     rfid, infobitssci, infobitsref,
+	     ra0, dec0, ra1, dec1, ra2, dec2, ra3, dec3, ra4, dec4
+            )
+            values
+            (rid_, ppid_, version_, status_, vbest_, filename_, checksum_,
+             expid_, chipid_, field_, fid_, jd_, svid_,
+	     rfid_, infobitssci_, infobitsref_,
+	     ra0_, dec0_, ra1_, dec1_, ra2_, dec2_, ra3_, dec3_, ra4_, dec4_
+            )
+            returning pid into strict pid_;
+            exception
+                when no_data_found then
+                    raise exception
+                        '*** Error in addDiffImage: DiffImages record for rid,ppid=%,% not inserted.', rid_,ppid_;
+
+        end;
+
+        select pid_, version_ into r_;
+
+        return r_;
+
+    end;
+
+$$ language plpgsql;
+
+
+-- Update a DiffImages record with a filename, checksum, status, and version.
+-- The status must have a non-zero value for the record to be valid.
+-- The vBest flag for the record is also updated automatically, from
+-- zero to one, unless the record has been locked (with vBest flag = 2).
+--
+create function updateDiffImage (
+    pid_         integer,
+    filename_    varchar(255),
+    checkSum_    varchar(32),
+    status_      smallint,
+    version_     smallint
+)
+
+    returns void as $$
+
+    declare
+
+        pid__            integer;
+        currentVBest_    smallint;
+        rid_             integer;
+        ppid_            smallint;
+        vBest_           smallint;
+        bestIs2_         boolean;
+        count_           integer;
+
+    begin
+
+        bestIs2_ := 'f';
+
+        -- First, get the rid, ppid for the difference image.
+
+        begin
+
+            select rid, ppid
+            into strict rid_, ppid_
+            from DiffImages
+            where pid = pid_;
+            exception
+                when no_data_found then
+                    raise exception
+                        '*** Error in updateDiffImage: DiffImages record not found for pid=%', pid_;
+
+        end;
+
+        -- If this isn't the first DiffImages record
+        -- for the exposure and chip, then set the vBest flag to 0
+        -- for records associated with all prior versions. Update
+        -- the new DiffImages record with its version number and
+        -- vBest flag equal to 1 (latest is best).
+
+        -- If any of the products associated with the DiffImages record has a
+        -- locked vBest flag (meaning vBest has been set to 2), then
+        -- don't update any vBest values and set the new vBest value
+        -- to 0. Otherwise, the record we are about to insert is the
+        -- new best record (i.e., vBest = 1) and all others are not
+        -- (i.e., vBest = 0).
+
+        -- Raise exception if more than one record with vBest > 0 is found.
+
+
+        select count(*)
+        into count_
+        from DiffImages
+        where rid = rid_
+        and ppid = ppid_
+        and vBest in (1, 2);
+
+        if (count_ <> 0) then
+            if (count_ > 1) then
+                raise exception
+                    '*** Error in updateDiffImage: More than one DiffImages record with vBest>0 returned.';
+            end if;
+
+            select pid, vBest
+            into pid__, currentVBest_
+            from DiffImages
+            where rid = rid_
+            and ppid = ppid_
+            and vBest in (1, 2);
+
+            if (currentvBest_ = 1) then -- vBest is not locked
+                update DiffImages
+                set vBest = 0
+                where pid = pid__;
+
+                if not found then
+                    raise exception '*** Error in updateDiffImage: Cannot update DiffImages record.';
+                end if;
+            else
+                bestIs2_ := 't';
+            end if;
+
+        end if;
+
+        if bestIs2_ = 't' then
+            vBest_ := 0;
+        else
+            vBest_ := 1;
+        end if;
+
+        update DiffImages
+        set filename = filename_,
+        checkSum = checkSum_,
+        status = status_,
+        version = version_,
+        vBest = vBest_
+        where pid = pid_;
+
+        exception --------> Required for turning entire block into a transaction.
+            when no_data_found then
+                raise exception
+                    '*** Error in updateDiffImage: Cannot update DiffImages record for pid=%', pid_;
+
+    end;
+
+$$ language plpgsql;
