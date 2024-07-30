@@ -135,3 +135,25 @@ DROP FUNCTION updateDiffImage (
     status_      smallint,
     version_     smallint
 );
+
+
+DROP FUNCTION addRefImage (
+    chipid_               smallint,
+    field_                integer,
+    fid_                  smallint,
+    ppid_                 smallint,
+    rfid_                 integer,
+    infobits_             integer,
+    filename_             character varying(255),
+    checksum_             character varying(32),
+    status_               smallint
+);
+
+
+DROP FUNCTION updateRefImage (
+    rfid_         integer,
+    filename_    varchar(255),
+    checkSum_    varchar(32),
+    status_      smallint,
+    version_     smallint
+);
