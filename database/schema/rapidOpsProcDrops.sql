@@ -151,9 +151,25 @@ DROP FUNCTION addRefImage (
 
 
 DROP FUNCTION updateRefImage (
-    rfid_         integer,
+    rfid_        integer,
     filename_    varchar(255),
     checkSum_    varchar(32),
     status_      smallint,
     version_     smallint
+);
+
+
+DROP FUNCTION addAlertName (
+    name_   char(12),
+    chipid_ smallint,                        
+    field_  integer,                        
+    ra_     double precision,                 
+    dec_    double precision,
+    jd_     double precision,
+    candId_ bigint
+);
+
+
+DROP FUNCTION computeAlertName (
+    yeartwodigits_ smallint
 );

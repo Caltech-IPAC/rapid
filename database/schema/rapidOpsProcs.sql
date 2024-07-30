@@ -814,7 +814,7 @@ $$ language plpgsql;
 -- zero to one, unless the record has been locked (with vBest flag = 2).
 --
 create function updateRefImage (
-    rfid_         integer,
+    rfid_        integer,
     filename_    varchar(255),
     checkSum_    varchar(32),
     status_      smallint,
@@ -926,6 +926,160 @@ create function updateRefImage (
             when no_data_found then
                 raise exception
                     '*** Error in updateRefImage: Cannot update RefImages record for rfid=%', rfid_;
+
+    end;
+
+$$ language plpgsql;
+
+
+-- Insert a new record into the AlertNames table. 
+--
+create function addAlertName (
+    name_   char(12),
+    chipid_   smallint,                        
+    field_  integer,                        
+    ra_     double precision,                 
+    dec_    double precision,
+    jd_     double precision,
+    candId_ bigint
+)
+    returns void as $$
+
+    begin
+
+
+        -- Insert AlertNames record.
+
+        begin
+
+            insert into AlertNames (name, chipid, field, ra, dec, jd, candId)
+            values (name_, chipid_, field_, ra_, dec_, jd_, candId_);
+            exception
+                when no_data_found then
+                    raise exception 
+                        '*** Error in addAlertName: AlertNames record for name=% not inserted.', name_;
+
+        end;
+
+    end;
+
+$$ language plpgsql;
+
+
+-- Insert a new record into the AlertNames table. 
+--
+create function computeAlertName (
+    yeartwodigits_ smallint
+)
+    returns char(12) as $$
+
+    declare
+
+        anId_    bigint;
+        start_   bigint;
+        num_     bigint;
+        rem_     bigint;
+        res_     varchar(7);
+        name_    char(12);
+        let_     char(1);
+        c        char(1)[];
+
+    begin
+
+        c[1] := 'a';
+        c[2] := 'b';
+        c[3] := 'c';
+        c[4] := 'd';
+        c[5] := 'e';
+        c[6] := 'f';
+        c[7] := 'g';
+        c[8] := 'h';
+        c[9] := 'i';
+        c[10] := 'j';
+        c[11] := 'k';
+        c[12] := 'l';
+        c[13] := 'm';
+        c[14] := 'n';
+        c[15] := 'o';
+        c[16] := 'p';
+        c[17] := 'q';
+        c[18] := 'r';
+        c[19] := 's';
+        c[20] := 't';
+        c[21] := 'u';
+        c[22] := 'v';
+        c[23] := 'w';
+        c[24] := 'x';
+        c[25] := 'y';
+        c[26] := 'z';
+
+
+
+        -- perl -e '$start=321272407;
+        -- @c = qw ( a b c d e f g h i j k l m n o p q r s t u v w x y z );
+        -- $num = 0 + $start; $res=""; while ($num > 0) { $num--; $rem=$num % 26; 
+        -- $let = $c[$rem]; $res = $let . $res; $num = ($num - $rem) / 26; } print "$res\n";'
+        -- aaaaaaa
+
+        -- perl -e ' $start=321272407;
+        -- @c = qw ( a b c d e f g h i j k l m n o p q r s t u v w x y z );
+        -- $num = 8031810175 + $start; $res=""; while ($num > 0) { $num--; $rem=$num % 26; 
+        -- $let = $c[$rem]; $res = $let + $res . $num = ($num - $rem) / 26; } print "$res\n";'
+        -- zzzzzzz
+
+        start_ := 321272407;
+
+        anId_ := - 1;
+
+        if (yeartwodigits_ = 24) then
+            select nextval('alertnames_an24id_seq') into anId_;
+        elseif (yeartwodigits_ = 25) then
+            select nextval('alertnames_an25id_seq') into anId_;
+        elseif (yeartwodigits_ = 26) then
+            select nextval('alertnames_an26id_seq') into anId_;
+        elseif (yeartwodigits_ = 27) then
+            select nextval('alertnames_an27id_seq') into anId_;
+        elseif (yeartwodigits_ = 28) then
+            select nextval('alertnames_an28id_seq') into anId_;
+        elseif (yeartwodigits_ = 29) then
+            select nextval('alertnames_an29id_seq') into anId_;
+        elseif (yeartwodigits_ = 30) then
+            select nextval('alertnames_an30id_seq') into anId_;
+        elseif (yeartwodigits_ = 31) then
+            select nextval('alertnames_an31id_seq') into anId_;
+        elseif (yeartwodigits_ = 32) then
+            select nextval('alertnames_an32id_seq') into anId_;
+        elseif (yeartwodigits_ = 33) then
+            select nextval('alertnames_an33id_seq') into anId_;
+        elseif (yeartwodigits_ = 34) then
+            select nextval('alertnames_an34id_seq') into anId_;
+        else
+            name_ := 'notsupported'; 
+            return name_;
+        end if;
+
+        anId_ := anId_ - 1;               -- Algorithm is for zero-based input index.
+
+        if (anId_ > 8031810175) then
+            name_ := 'idoutofrange';
+            return name_;
+        end if;
+
+        num_ := anId_ + start_;
+
+        res_ := '';
+
+        while (num_ > 0) loop
+            num_ := num_ - 1;
+            rem_ := num_ % 26;
+            let_ := c[rem_ + 1];          -- PosgreSQL arrays are one-based.
+            res_ := let_ || res_;         -- Need to reverse characters in string.
+            num_ := (num_ - rem_) / 26;
+        end loop;
+
+        name_ := 'RAPID' || cast(yeartwodigits_ as char(2)) || cast(res_ as char(7));
+
+        return name_;
 
     end;
 

@@ -151,9 +151,25 @@ grant EXECUTE on FUNCTION addRefImage (
 
 
 grant EXECUTE on FUNCTION updateRefImage (
-    rfid_         integer,
+    rfid_        integer,
     filename_    varchar(255),
     checkSum_    varchar(32),
     status_      smallint,
     version_     smallint
+) to rapidporole;
+
+
+grant EXECUTE on FUNCTION addAlertName (
+    name_   char(12),
+    chipid_ smallint,                        
+    field_  integer,                        
+    ra_     double precision,                 
+    dec_    double precision,
+    jd_     double precision,
+    candId_ bigint
+) to rapidporole;
+
+
+grant EXECUTE on FUNCTION computeAlertName (
+    yeartwodigits_ smallint
 ) to rapidporole;
