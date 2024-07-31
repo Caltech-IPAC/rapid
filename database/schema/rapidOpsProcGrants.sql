@@ -173,3 +173,21 @@ grant EXECUTE on FUNCTION addAlertName (
 grant EXECUTE on FUNCTION computeAlertName (
     yeartwodigits_ smallint
 ) to rapidporole;
+
+
+grant EXECUTE on FUNCTION startJob (
+    ppid_           smallint,
+    fid_            smallint,
+    expid_          integer,
+    field_          integer,
+    chipid_         smallint,
+    rid_            integer,
+    machine_        smallint,
+    slurm_          integer
+) to rapidporole;
+
+
+grant EXECUTE on FUNCTION endJob (
+    jid_       integer,
+    exitcode_  smallint
+) to rapidporole;

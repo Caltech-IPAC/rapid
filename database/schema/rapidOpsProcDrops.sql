@@ -173,3 +173,21 @@ DROP FUNCTION addAlertName (
 DROP FUNCTION computeAlertName (
     yeartwodigits_ smallint
 );
+
+
+DROP FUNCTION startJob (
+    ppid_           smallint,
+    fid_            smallint,
+    expid_          integer,
+    field_          integer,
+    chipid_         smallint,
+    rid_            integer,
+    machine_        smallint,
+    slurm_          integer
+);
+
+
+DROP FUNCTION endJob (
+    jid_       integer,
+    exitcode_  smallint
+);

@@ -785,12 +785,9 @@ create function addRefImage (
         begin
 
             insert into RefImages
-            (chipid, field, fid, ppid, version, status, vbest, filename, checksum, infobits, svid
-             
-            )
+            (chipid, field, fid, ppid, version, status, vbest, filename, checksum, infobits, svid)
             values
-            (chipid_, field_, fid_, ppid_, version_, status_, vbest_, filename_, checksum_, infobits, svid_
-            )
+            (chipid_, field_, fid_, ppid_, version_, status_, vbest_, filename_, checksum_, infobits, svid_)
             returning rfid into strict rfid_;
             exception
                 when no_data_found then
@@ -932,13 +929,13 @@ create function updateRefImage (
 $$ language plpgsql;
 
 
--- Insert a new record into the AlertNames table. 
+-- Insert a new record into the AlertNames table.
 --
 create function addAlertName (
     name_   char(12),
-    chipid_   smallint,                        
-    field_  integer,                        
-    ra_     double precision,                 
+    chipid_ smallint,
+    field_  integer,
+    ra_     double precision,
     dec_    double precision,
     jd_     double precision,
     candId_ bigint
@@ -956,7 +953,7 @@ create function addAlertName (
             values (name_, chipid_, field_, ra_, dec_, jd_, candId_);
             exception
                 when no_data_found then
-                    raise exception 
+                    raise exception
                         '*** Error in addAlertName: AlertNames record for name=% not inserted.', name_;
 
         end;
@@ -966,7 +963,7 @@ create function addAlertName (
 $$ language plpgsql;
 
 
--- Insert a new record into the AlertNames table. 
+-- Insert a new record into the AlertNames table.
 --
 create function computeAlertName (
     yeartwodigits_ smallint
@@ -1017,13 +1014,13 @@ create function computeAlertName (
 
         -- perl -e '$start=321272407;
         -- @c = qw ( a b c d e f g h i j k l m n o p q r s t u v w x y z );
-        -- $num = 0 + $start; $res=""; while ($num > 0) { $num--; $rem=$num % 26; 
+        -- $num = 0 + $start; $res=""; while ($num > 0) { $num--; $rem=$num % 26;
         -- $let = $c[$rem]; $res = $let . $res; $num = ($num - $rem) / 26; } print "$res\n";'
         -- aaaaaaa
 
         -- perl -e ' $start=321272407;
         -- @c = qw ( a b c d e f g h i j k l m n o p q r s t u v w x y z );
-        -- $num = 8031810175 + $start; $res=""; while ($num > 0) { $num--; $rem=$num % 26; 
+        -- $num = 8031810175 + $start; $res=""; while ($num > 0) { $num--; $rem=$num % 26;
         -- $let = $c[$rem]; $res = $let + $res . $num = ($num - $rem) / 26; } print "$res\n";'
         -- zzzzzzz
 
@@ -1054,7 +1051,7 @@ create function computeAlertName (
         elseif (yeartwodigits_ = 34) then
             select nextval('alertnames_an34id_seq') into anId_;
         else
-            name_ := 'notsupported'; 
+            name_ := 'notsupported';
             return name_;
         end if;
 
@@ -1080,6 +1077,156 @@ create function computeAlertName (
         name_ := 'RAPID' || cast(yeartwodigits_ as char(2)) || cast(res_ as char(7));
 
         return name_;
+
+    end;
+
+$$ language plpgsql;
+
+
+-- Load job into Jobs table.
+--
+create function startJob (
+    ppid_           smallint,
+    fid_            smallint,
+    expid_          integer,
+    field_          integer,
+    chipid_         smallint,
+    rid_            integer,
+    machine_        smallint,
+    slurm_          integer
+)
+    returns integer as $$
+
+    declare
+
+        jid_     integer;
+
+    begin
+
+        -- Insert record if not found.
+
+        if (expid_ is not null) then
+
+            select jid
+            into jid_
+            from Jobs
+            where ppid = ppid_
+            and rid = rid_;
+
+        else
+
+            select jid
+            into jid_
+            from Jobs
+            where ppid = ppid_
+            and fid = fid_
+            and chipid = chipid_
+            and field = field_;
+
+        end if;
+
+        if not found then
+
+            -- Insert Jobs record.
+
+            begin
+
+                insert into Jobs
+                (ppid,
+                 expid,
+                 field,
+                 chipid,
+                 fid,
+                 rid,
+                 machine,
+                 slurm,
+                 started)
+                values
+                (ppid_,
+                 expid_,
+                 field_,
+                 chipid_,
+                 fid_,
+                 rid_,
+                 machine_,
+                 slurm_,
+                 now())
+                returning jid into strict jid_;
+                exception
+                    when no_data_found then
+                        raise exception
+                            '*** Error in startJob: Row could not be inserted into Jobs table.';
+
+            end;
+
+        else
+
+            -- Update Jobs record.
+
+            update Jobs
+            set machine = machine_,
+                slurm = slurm_,
+                started = now(),
+                ended = null,
+                elapsed = null,
+                exitcode = null,
+                status = 0
+            where jid = jid_;
+
+        end if;
+
+        return jid_;
+
+    end;
+
+$$ language plpgsql;
+
+
+-- Registers information about a completed job in the Jobs table.
+--
+create function endJob (
+    jid_       integer,
+    exitcode_  smallint
+)
+    returns void as $$
+
+    declare
+
+    started_ timestamp;
+    ended_   timestamp;
+    elapsed_ interval;
+
+    begin
+
+         begin
+
+            select started
+            into strict started_
+            from Jobs
+            where jid = jid_;
+            exception
+                when no_data_found then
+                    raise exception
+                        '*** Error in endJob: Jobs record jid=% not found.', jid_;
+
+        end;
+
+        begin
+
+            ended_ = now();
+            elapsed_ := ended_ - started_;
+
+            update Jobs
+            set ended = ended_,
+                elapsed = elapsed_,
+                exitcode = exitcode_,
+                status = 1
+            where jid = jid_;
+            exception --------> Required for turning entire block into a transaction.
+                when no_data_found then
+                    raise exception
+                        '*** Error in endJob: Cannot update Jobs record for jid=%', jid_;
+        end;
 
     end;
 
