@@ -14,12 +14,12 @@ Pipeline, under development at IPAC/Caltech.
    Development of source code and documentation is currently ongoing.
 
 
-Running the latest RAPID Pipeline 
+Running the latest RAPID Pipeline
 *************************************
 
 A docker image has been pre-built from a recent git-clone of the RAPID Github
 repository.  This docker image offers the convenience of having the RAPID
-pipeline already installed and ready to run.  It is publicly available from 
+pipeline already installed and ready to run.  It is publicly available from
 
 .. code-block::
 
@@ -59,9 +59,17 @@ Installing RAPID Pipeline
 
 .. toctree::
    :maxdepth: 2
-   
+
    install/install.rst
 
+
+RAPID Operations Database
+************************************
+
+.. toctree::
+   :maxdepth: 2
+
+   db/db.rst
 
 Indices and Tables
 ==================
