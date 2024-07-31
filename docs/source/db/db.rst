@@ -25,3 +25,11 @@ convenience (which is not generally needed).
 A diagram of the database-table schema is given as follows:
 
 .. image:: dbschema.png
+
+Difference images and reference images are versioned in their
+respective database tables, given by the version column, which is also
+embedded in the filesystem path.  The best version is given by vbest, a smallint table
+column that stores 0 for not best, 1 for best that is usually the
+latest version, or 2 if the version is locked.  It is a matter of
+policy whether old versions will be kept in the filesystem and/or
+database (these could be removed at will).
