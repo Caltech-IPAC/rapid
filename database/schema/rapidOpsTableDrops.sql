@@ -38,10 +38,10 @@ DROP TABLE filters;
 
 
 -------------------
--- Chips table
+-- SCAs table
 -------------------
 
-DROP TABLE chips;
+DROP TABLE scas;
 
 -------------------
 -- ArchiveVersions table

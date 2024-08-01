@@ -20,7 +20,7 @@ grant EXECUTE on FUNCTION addExposure (
 
 grant EXECUTE on FUNCTION addL2File (
     expid_                integer,
-    chipid_               smallint,
+    sca_                  smallint,
     field_                integer,
     fid_                  smallint,
     dateobs_              timestamp without time zone,
@@ -138,7 +138,7 @@ grant EXECUTE on FUNCTION updateDiffImage (
 
 
 grant EXECUTE on FUNCTION addRefImage (
-    chipid_               smallint,
+    sca_                  smallint,
     field_                integer,
     fid_                  smallint,
     ppid_                 smallint,
@@ -161,7 +161,7 @@ grant EXECUTE on FUNCTION updateRefImage (
 
 grant EXECUTE on FUNCTION addAlertName (
     name_   char(12),
-    chipid_ smallint,                        
+    sca_    smallint,                        
     field_  integer,                        
     ra_     double precision,                 
     dec_    double precision,
@@ -180,7 +180,7 @@ grant EXECUTE on FUNCTION startJob (
     fid_            smallint,
     expid_          integer,
     field_          integer,
-    chipid_         smallint,
+    sca_            smallint,
     rid_            integer,
     machine_        smallint,
     slurm_          integer

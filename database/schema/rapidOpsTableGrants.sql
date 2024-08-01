@@ -28,23 +28,23 @@ GRANT INSERT,UPDATE,SELECT,REFERENCES ON TABLE filters TO rapidporole;
 
 
 -------------------
--- Chips table
+-- SCAs table
 -------------------
 
 -- rapidreadrole
 
-REVOKE ALL ON TABLE chips FROM rapidreadrole;
-GRANT SELECT ON TABLE chips TO GROUP rapidreadrole;
+REVOKE ALL ON TABLE scas FROM rapidreadrole;
+GRANT SELECT ON TABLE scas TO GROUP rapidreadrole;
 
 -- rapidadminrole
 
-REVOKE ALL ON TABLE chips FROM rapidadminrole;
-GRANT ALL ON TABLE chips TO GROUP rapidadminrole;
+REVOKE ALL ON TABLE scas FROM rapidadminrole;
+GRANT ALL ON TABLE scas TO GROUP rapidadminrole;
 
 -- rapidporole
 
-REVOKE ALL ON TABLE chips FROM rapidporole;
-GRANT INSERT,UPDATE,SELECT,REFERENCES ON TABLE chips TO rapidporole;
+REVOKE ALL ON TABLE scas FROM rapidporole;
+GRANT INSERT,UPDATE,SELECT,REFERENCES ON TABLE scas TO rapidporole;
 
 
 -------------------

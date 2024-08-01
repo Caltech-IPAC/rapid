@@ -28,24 +28,24 @@ ALTER TABLE ONLY filters ADD CONSTRAINT filterspk UNIQUE (filter);
 
 
 -----------------------------
--- TABLE: Chips
+-- TABLE: Scas
 -----------------------------
 
 SET default_tablespace = pipeline_data_01;
 
-CREATE TABLE chips (
-    chipid smallint NOT NULL,                            -- Primary key
-    CONSTRAINT chipspk CHECK (((chipid >= 1) AND (chipid <= 18)))
+CREATE TABLE scas (
+    sca smallint NOT NULL,                            -- Primary key
+    CONSTRAINT scaspk CHECK (((sca >= 1) AND (sca <= 18)))
 );
 
-ALTER TABLE chips OWNER TO rapidadminrole;
+ALTER TABLE scas OWNER TO rapidadminrole;
 
 SET default_tablespace = pipeline_indx_01;
 
-ALTER TABLE ONLY chips ADD CONSTRAINT chipspk2 UNIQUE (chipid);
+ALTER TABLE ONLY scas ADD CONSTRAINT scaspk2 UNIQUE (sca);
 
 
-INSERT into chips (chipid) SELECT generate_series(1,18);
+INSERT into scas (sca) SELECT generate_series(1,18);
 
 
 -----------------------------
@@ -105,7 +105,7 @@ SET default_tablespace = pipeline_data_01;
 CREATE TABLE l2files (
     rid integer NOT NULL,                                -- Primary key
     expid integer NOT NULL,
-    chipid smallint NOT NULL,                            -- FITS-header keyword: SCA-NUM
+    sca smallint NOT NULL,                            -- FITS-header keyword: SCA-NUM
     version smallint NOT NULL,
     vbest smallint NOT NULL,
     field integer NOT NULL,
@@ -188,13 +188,14 @@ SET default_tablespace = pipeline_indx_01;
 
 ALTER TABLE ONLY l2files ADD CONSTRAINT l2files_pkey PRIMARY KEY (rid);
 
-ALTER TABLE ONLY l2files ADD CONSTRAINT l2filespk UNIQUE (expid, chipid, version);
+ALTER TABLE ONLY l2files ADD CONSTRAINT l2filespk UNIQUE (expid, sca, version);
 
 ALTER TABLE ONLY l2files ADD CONSTRAINT l2files_expid_fk FOREIGN KEY (expid) REFERENCES exposures(expid);
-ALTER TABLE ONLY l2files ADD CONSTRAINT l2files_chipid_fk FOREIGN KEY (chipid) REFERENCES chips(chipid);
+ALTER TABLE ONLY l2files ADD CONSTRAINT l2files_sca_fk FOREIGN KEY (sca) REFERENCES scas(sca);
 ALTER TABLE ONLY l2files ADD CONSTRAINT l2files_fid_fk FOREIGN KEY (fid) REFERENCES filters(fid);
 
 CREATE INDEX l2files_rid_idx ON l2files (rid);
+CREATE INDEX l2files_sca_idx ON l2files (sca);
 CREATE INDEX l2files_field_idx ON l2files (field);
 CREATE INDEX l2files_fid_idx ON l2files (fid);
 CREATE INDEX l2files_infobits_idx ON l2files (infobits);
@@ -232,7 +233,7 @@ CREATE TABLE l2filemeta (
     z double precision NOT NULL,
     hp6 integer NOT NULL,               -- level-6 healpix index (NESTED) pertaining to (ra0,dec0)
     fid smallint NOT NULL,
-    chipid smallint NOT NULL
+    sca smallint NOT NULL
 );
 
 ALTER TABLE l2filemeta OWNER TO rapidadminrole;
@@ -243,11 +244,11 @@ ALTER TABLE ONLY l2filemeta ADD CONSTRAINT l2filemeta_pkey PRIMARY KEY (rid);
 
 ALTER TABLE ONLY l2filemeta ADD CONSTRAINT l2filemeta_rid_fk FOREIGN KEY (rid) REFERENCES l2files(rid);
 ALTER TABLE ONLY l2filemeta ADD CONSTRAINT l2filemeta_fid_fk FOREIGN KEY (fid) REFERENCES filters(fid);
-ALTER TABLE ONLY l2filemeta ADD CONSTRAINT l2filemeta_chipid_fk FOREIGN KEY (chipid) REFERENCES chips(chipid);
+ALTER TABLE ONLY l2filemeta ADD CONSTRAINT l2filemeta_sca_fk FOREIGN KEY (sca) REFERENCES scas(sca);
 
 CREATE INDEX l2filemeta_hp6_idx ON l2filemeta (hp6);
 CREATE INDEX l2filemeta_fid_idx ON l2filemeta (fid);
-CREATE INDEX l2filemeta_chipid_idx ON l2filemeta (chipid);
+CREATE INDEX l2filemeta_sca_idx ON l2filemeta (sca);
 
 -- Q3C indexing will speed up ad-hoc cone searches on (ra, dec).
 
@@ -347,7 +348,7 @@ SET default_tablespace = pipeline_data_01;
 CREATE TABLE refimages (
     rfid integer NOT NULL,
     field integer NOT NULL,               -- level-6 healpix index (NESTED) pertaining to (ra0,dec0)
-    chipid smallint NOT NULL,
+    sca smallint NOT NULL,
     fid smallint NOT NULL,
     ppid smallint NOT NULL,
     version smallint NOT NULL,
@@ -381,16 +382,16 @@ SET default_tablespace = pipeline_indx_01;
 
 ALTER TABLE ONLY refimages ADD CONSTRAINT refimages_pkey PRIMARY KEY (rfid);
 
-ALTER TABLE ONLY refimages ADD CONSTRAINT refimagespk UNIQUE (field, chipid, fid, ppid, version);
+ALTER TABLE ONLY refimages ADD CONSTRAINT refimagespk UNIQUE (field, sca, fid, ppid, version);
 
-ALTER TABLE ONLY refimages ADD CONSTRAINT refimages_chipid_fk FOREIGN KEY (chipid) REFERENCES chips(chipid);
+ALTER TABLE ONLY refimages ADD CONSTRAINT refimages_sca_fk FOREIGN KEY (sca) REFERENCES scas(sca);
 ALTER TABLE ONLY refimages ADD CONSTRAINT refimages_fid_fk FOREIGN KEY (fid) REFERENCES filters(fid);
 ALTER TABLE ONLY refimages ADD CONSTRAINT refimages_ppid_fk FOREIGN KEY (ppid) REFERENCES pipelines(ppid);
 ALTER TABLE ONLY refimages ADD CONSTRAINT refimages_svid_fk FOREIGN KEY (svid) REFERENCES swversions(svid);
 ALTER TABLE ONLY refimages ADD CONSTRAINT refimages_avid_fk FOREIGN KEY (avid) REFERENCES archiveversions(avid);
 
 CREATE INDEX refimages_field_idx on refimages (field);
-CREATE INDEX refimages_chipid_idx on refimages (chipid);
+CREATE INDEX refimages_sca_idx on refimages (sca);
 CREATE INDEX refimages_fid_idx on refimages (fid);
 CREATE INDEX refimages_created_idx on refimages (created);
 CREATE INDEX refimages_vbest_idx on refimages (vbest);
@@ -410,7 +411,7 @@ CREATE TABLE diffimages (
     pid integer NOT NULL,                          -- Primary key
     rid integer NOT NULL,                          -- Foreign key from L2Files table
     expid integer NOT NULL,                        -- Exposure ID
-    chipid smallint NOT NULL,                      -- Chip ID
+    sca smallint NOT NULL,                      -- Chip ID
     ppid smallint NOT NULL,                        -- Pipeline ID
     version smallint NOT NULL,
     vbest smallint NOT NULL,
@@ -472,7 +473,7 @@ ALTER TABLE ONLY diffimages ADD CONSTRAINT diffimages_pkey PRIMARY KEY (pid);
 ALTER TABLE ONLY diffimages ADD CONSTRAINT diffimagespk UNIQUE (rid, ppid, version);
 
 ALTER TABLE ONLY diffimages ADD CONSTRAINT diffimages_expid_fk FOREIGN KEY (expid) REFERENCES exposures(expid);
-ALTER TABLE ONLY diffimages ADD CONSTRAINT diffimages_chipid_fk FOREIGN KEY (chipid) REFERENCES chips(chipid);
+ALTER TABLE ONLY diffimages ADD CONSTRAINT diffimages_sca_fk FOREIGN KEY (sca) REFERENCES scas(sca);
 ALTER TABLE ONLY diffimages ADD CONSTRAINT diffimages_fid_fk FOREIGN KEY (fid) REFERENCES filters(fid);
 ALTER TABLE ONLY diffimages ADD CONSTRAINT diffimages_ppid_fk FOREIGN KEY (ppid) REFERENCES pipelines(ppid);
 ALTER TABLE ONLY diffimages ADD CONSTRAINT diffimages_rfid_fk FOREIGN KEY (rfid) REFERENCES refimages(rfid);
@@ -482,7 +483,7 @@ ALTER TABLE ONLY diffimages ADD CONSTRAINT diffimages_avid_fk FOREIGN KEY (avid)
 
 CREATE INDEX diffimages_rid_idx on diffimages(rid);
 CREATE INDEX diffimages_expid_idx on diffimages(expid);
-CREATE INDEX diffimages_chipid_idx on diffimages(chipid);
+CREATE INDEX diffimages_sca_idx on diffimages(sca);
 CREATE INDEX diffimages_ppid_idx on diffimages(ppid);
 CREATE INDEX diffimages_rfid_idx on diffimages(rfid);
 CREATE INDEX diffimages_field_idx on diffimages(field);
@@ -491,7 +492,7 @@ CREATE INDEX diffimages_jd_idx on diffimages(jd);
 CREATE INDEX diffimages_status_idx on diffimages(status);
 CREATE INDEX diffimages_created_idx on diffimages(created);
 CREATE INDEX diffimages_infobitssci_idx on diffimages(infobitssci);
-CREATE INDEX diffimages_field_chipid_idx on diffimages(field, chipid);
+CREATE INDEX diffimages_field_sca_idx on diffimages(field, sca);
 CREATE INDEX diffimages_vbest_idx ON diffimages (vbest);
 
 -- Q3C indexing will speed up ad-hoc cone searches on (ra, dec).
@@ -509,7 +510,7 @@ SET default_tablespace = pipeline_data_01;
 
 CREATE TABLE alertnames (
     alertname char(12) NOT NULL,     -- Primary key
-    chipid smallint NOT NULL,        -- Readout channel of candidate when alert was first created
+    sca smallint NOT NULL,        -- Readout channel of candidate when alert was first created
     field integer NOT NULL,          -- Field containing candidate when alert was first created
     ra double precision NOT NULL,    -- Right Ascension
     dec double precision NOT NULL,   -- Declination
@@ -526,7 +527,7 @@ SET default_tablespace = pipeline_indx_01;
 ALTER TABLE ONLY alertnames
     ADD CONSTRAINT alertnames_pkey PRIMARY KEY (alertname);
 
-CREATE INDEX alertnames_chipid_idx on alertnames(chipid);
+CREATE INDEX alertnames_sca_idx on alertnames(sca);
 CREATE INDEX alertnames_field_idx on alertnames(field);
 CREATE INDEX alertnames_jd_idx on alertnames(jd);
 CREATE INDEX alertnames_candid_idx on alertnames(candid);
@@ -636,7 +637,7 @@ CREATE TABLE jobs (
     jid integer NOT NULL,
     ppid smallint NOT NULL,
     expid integer,
-    chipid smallint,
+    sca smallint,
     field integer,
     fid smallint,
     rid integer,
@@ -669,7 +670,7 @@ ALTER TABLE ONLY jobs ADD CONSTRAINT jobs_pkey PRIMARY KEY (jid);
 CREATE INDEX jobs_ppid_idx on jobs (ppid);
 CREATE INDEX jobs_expid_idx on jobs (expid);
 CREATE INDEX jobs_field_idx on jobs (field);
-CREATE INDEX jobs_chipid_idx on jobs (chipid);
+CREATE INDEX jobs_sca_idx on jobs (sca);
 CREATE INDEX jobs_fid_idx on jobs (fid);
 CREATE INDEX jobs_rid_idx on jobs (rid);
 CREATE INDEX jobs_status_idx on jobs (status);

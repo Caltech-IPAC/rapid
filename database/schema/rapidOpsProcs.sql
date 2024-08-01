@@ -116,7 +116,7 @@ $$ language plpgsql;
 --
 create function addL2File (
     expid_                integer,
-    chipid_               smallint,
+    sca_                  smallint,
     field_                integer,
     fid_                  smallint,
     dateobs_              timestamp without time zone,
@@ -184,7 +184,7 @@ create function addL2File (
 
     begin
 
-        -- Processed images are versioned according to unique (expid, chipid) pairs.
+        -- Processed images are versioned according to unique (expid, sca) pairs.
 
         -- Note that the vBest flag is updated when database stored
         -- function updateL2File is executed.
@@ -193,7 +193,7 @@ create function addL2File (
         into version_
         from L2Files
         where expid = expid_
-        and chipid = chipid_;
+        and sca = sca_;
 
         if not found then
             version_ := 1;
@@ -207,7 +207,7 @@ create function addL2File (
         begin
 
             insert into L2Files
-            (expid,chipid,version,status,vbest,
+            (expid,sca,version,status,vbest,
              field,fid,dateobs,mjdobs,exptime,infobits,
              filename,checksum,crval1,crval2,
              crpix1,crpix2,cd11,cd12,cd21,cd22,ctype1,ctype2,
@@ -218,7 +218,7 @@ create function addL2File (
              zptmag,skymean
             )
             values
-            (expid_,chipid_,version_,status_,vbest_,
+            (expid_,sca_,version_,status_,vbest_,
              field_,fid_,dateobs_,mjdobs_,exptime_,infobits_,
              filename_,checksum_,crval1_,crval2_,
              crpix1_,crpix2_,cd11_,cd12_,cd21_,cd22_,ctype1_,ctype2_,
@@ -232,7 +232,7 @@ create function addL2File (
             exception
                 when no_data_found then
                     raise exception
-                        '*** Error in addL2File: L2Files record for expid,chipid=%,% not inserted.', expid_,chipid_;
+                        '*** Error in addL2File: L2Files record for expid,sca=%,% not inserted.', expid_,sca_;
 
         end;
 
@@ -265,7 +265,7 @@ create function updateL2File (
         rid__            integer;
         currentVBest_    smallint;
         expid_           integer;
-        chipid_          smallint;
+        sca_             smallint;
         vBest_           smallint;
         bestIs2_         boolean;
         count_           integer;
@@ -274,12 +274,12 @@ create function updateL2File (
 
         bestIs2_ := 'f';
 
-        -- First, get the expid, chipid for the L2 image.
+        -- First, get the expid, sca for the L2 image.
 
         begin
 
-            select expid, chipid
-            into strict expid_, chipid_
+            select expid, sca
+            into strict expid_, sca_
             from l2files
             where rid = rid_;
             exception
@@ -290,7 +290,7 @@ create function updateL2File (
         end;
 
         -- If this isn't the first L2Files record
-        -- for the exposure and chip, then set the vBest flag to 0
+        -- for the exposure and sca, then set the vBest flag to 0
         -- for records associated with all prior versions. Update
         -- the new L2Files record with its version number and
         -- vBest flag equal to 1 (latest is best).
@@ -309,7 +309,7 @@ create function updateL2File (
         into count_
         from L2Files
         where expid = expid_
-        and chipid = chipid_
+        and sca = sca_
         and vBest in (1, 2);
 
         if (count_ <> 0) then
@@ -322,7 +322,7 @@ create function updateL2File (
             into rid__, currentVBest_
             from L2Files
             where expid = expid_
-            and chipid = chipid_
+            and sca = sca_
             and vBest in (1, 2);
 
             if (currentvBest_ = 1) then -- vBest is not locked
@@ -508,7 +508,7 @@ create function addDiffImage (
         vbest_            smallint;
         svid_             smallint;
         expid_            integer;
-        chipid_           smallint;
+        sca_              smallint;
         field_            integer;
         fid_              smallint;
         mjdobs_           double precision;
@@ -516,7 +516,7 @@ create function addDiffImage (
 
     begin
 
-        -- Processed images are versioned according to unique (rid, ppid) pairs.
+        -- Difference images are versioned according to unique (rid, ppid) pairs.
 
         -- Note that the vBest flag is updated when database stored
         -- function updateDiffImage is executed.
@@ -535,8 +535,8 @@ create function addDiffImage (
 
         begin
 
-            select expid, chipid, field, fid, mjdobs
-            into strict expid_, chipid_, field_, fid_, mjdobs_
+            select expid, sca, field, fid, mjdobs
+            into strict expid_, sca_, field_, fid_, mjdobs_
             from L2Files
             where rid = rid_;
             exception
@@ -573,13 +573,13 @@ create function addDiffImage (
 
             insert into DiffImages
             (rid, ppid, version, status, vbest, filename, checksum,
-             expid, chipid, field, fid, jd, svid,
+             expid, sca, field, fid, jd, svid,
 	     rfid, infobitssci, infobitsref,
 	     ra0, dec0, ra1, dec1, ra2, dec2, ra3, dec3, ra4, dec4
             )
             values
             (rid_, ppid_, version_, status_, vbest_, filename_, checksum_,
-             expid_, chipid_, field_, fid_, jd_, svid_,
+             expid_, sca_, field_, fid_, jd_, svid_,
 	     rfid_, infobitssci_, infobitsref_,
 	     ra0_, dec0_, ra1_, dec1_, ra2_, dec2_, ra3_, dec3_, ra4_, dec4_
             )
@@ -645,7 +645,7 @@ create function updateDiffImage (
         end;
 
         -- If this isn't the first DiffImages record
-        -- for the exposure and chip, then set the vBest flag to 0
+        -- for the exposure and sca, then set the vBest flag to 0
         -- for records associated with all prior versions. Update
         -- the new DiffImages record with its version number and
         -- vBest flag equal to 1 (latest is best).
@@ -721,7 +721,7 @@ $$ language plpgsql;
 -- Insert a new record into the RefImages table.
 --
 create function addRefImage (
-    chipid_               smallint,
+    sca_                  smallint,
     field_                integer,
     fid_                  smallint,
     ppid_                 smallint,
@@ -744,7 +744,7 @@ create function addRefImage (
 
     begin
 
-        -- Reference images are versioned according to unique (chipid, field, fid, ppid) quartets.
+        -- Reference images are versioned according to unique (sca, field, fid, ppid) quartets.
 
         -- Note that the vBest flag is updated when database stored
         -- function updateRefImage is executed.
@@ -752,7 +752,7 @@ create function addRefImage (
         select coalesce(max(version), 0) + 1
         into version_
         from RefImages
-        where chipid = chipid_
+        where sca = sca_
         and field = field_
         and fid = fid_
         and ppid = ppid_;
@@ -785,14 +785,14 @@ create function addRefImage (
         begin
 
             insert into RefImages
-            (chipid, field, fid, ppid, version, status, vbest, filename, checksum, infobits, svid)
+            (sca, field, fid, ppid, version, status, vbest, filename, checksum, infobits, svid)
             values
-            (chipid_, field_, fid_, ppid_, version_, status_, vbest_, filename_, checksum_, infobits, svid_)
+            (sca_, field_, fid_, ppid_, version_, status_, vbest_, filename_, checksum_, infobits, svid_)
             returning rfid into strict rfid_;
             exception
                 when no_data_found then
                     raise exception
-                        '*** Error in addRefImage: RefImages record for chipid,field,fid,ppid=%,%,%,% not inserted.', chipid_,field_,fid_,ppid_;
+                        '*** Error in addRefImage: RefImages record for sca,field,fid,ppid=%,%,%,% not inserted.', sca_,field_,fid_,ppid_;
 
         end;
 
@@ -824,7 +824,7 @@ create function updateRefImage (
 
         rfid__            integer;
         currentVBest_     smallint;
-        chipid_           smallint;
+        sca_              smallint;
         field_            integer;
         fid_              smallint;
         ppid_             smallint;
@@ -836,12 +836,12 @@ create function updateRefImage (
 
         bestIs2_ := 'f';
 
-        -- First, get the chipid, field, fid, ppid for the reference image.
+        -- First, get the sca, field, fid, ppid for the reference image.
 
         begin
 
-            select chipid, field, fid, ppid
-            into strict chipid_, field_ fid_, ppid_
+            select sca, field, fid, ppid
+            into strict sca_, field_ fid_, ppid_
             from RefImages
             where rfid = rfid_;
             exception
@@ -852,7 +852,7 @@ create function updateRefImage (
         end;
 
         -- If this isn't the first RefImages record
-        -- for the exposure and chip, then set the vBest flag to 0
+        -- for the exposure and sca, then set the vBest flag to 0
         -- for records associated with all prior versions. Update
         -- the new RefImages record with its version number and
         -- vBest flag equal to 1 (latest is best).
@@ -870,7 +870,7 @@ create function updateRefImage (
         select count(*)
         into count_
         from RefImages
-        where chipid = chipid_
+        where sca = sca_
 	and field = field_
 	and fid = fid_
         and ppid = ppid_
@@ -885,7 +885,7 @@ create function updateRefImage (
             select rfid, vBest
             into rfid__, currentVBest_
             from RefImages
-            where chipid = chipid_
+            where sca = sca_
 	    and field = field_
 	    and fid = fid_
             and ppid = ppid_
@@ -933,7 +933,7 @@ $$ language plpgsql;
 --
 create function addAlertName (
     name_   char(12),
-    chipid_ smallint,
+    sca_    smallint,
     field_  integer,
     ra_     double precision,
     dec_    double precision,
@@ -949,8 +949,8 @@ create function addAlertName (
 
         begin
 
-            insert into AlertNames (name, chipid, field, ra, dec, jd, candId)
-            values (name_, chipid_, field_, ra_, dec_, jd_, candId_);
+            insert into AlertNames (name, sca, field, ra, dec, jd, candId)
+            values (name_, sca_, field_, ra_, dec_, jd_, candId_);
             exception
                 when no_data_found then
                     raise exception
@@ -1090,7 +1090,7 @@ create function startJob (
     fid_            smallint,
     expid_          integer,
     field_          integer,
-    chipid_         smallint,
+    sca_            smallint,
     rid_            integer,
     machine_        smallint,
     slurm_          integer
@@ -1120,7 +1120,7 @@ create function startJob (
             from Jobs
             where ppid = ppid_
             and fid = fid_
-            and chipid = chipid_
+            and sca = sca_
             and field = field_;
 
         end if;
@@ -1135,7 +1135,7 @@ create function startJob (
                 (ppid,
                  expid,
                  field,
-                 chipid,
+                 sca,
                  fid,
                  rid,
                  machine,
@@ -1145,7 +1145,7 @@ create function startJob (
                 (ppid_,
                  expid_,
                  field_,
-                 chipid_,
+                 sca_,
                  fid_,
                  rid_,
                  machine_,
