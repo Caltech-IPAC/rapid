@@ -105,7 +105,7 @@ SET default_tablespace = pipeline_data_01;
 CREATE TABLE l2files (
     rid integer NOT NULL,                                -- Primary key
     expid integer NOT NULL,
-    sca smallint NOT NULL,                            -- FITS-header keyword: SCA-NUM
+    sca smallint NOT NULL,                               -- FITS-header keyword: SCA-NUM
     version smallint NOT NULL,
     vbest smallint NOT NULL,
     field integer NOT NULL,
@@ -411,7 +411,7 @@ CREATE TABLE diffimages (
     pid integer NOT NULL,                          -- Primary key
     rid integer NOT NULL,                          -- Foreign key from L2Files table
     expid integer NOT NULL,                        -- Exposure ID
-    sca smallint NOT NULL,                      -- Chip ID
+    sca smallint NOT NULL,                         -- SCA-NUM
     ppid smallint NOT NULL,                        -- Pipeline ID
     version smallint NOT NULL,
     vbest smallint NOT NULL,
