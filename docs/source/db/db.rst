@@ -3,6 +3,9 @@ RAPID Operations Database
 
 The RAPID pipeline utilizes a PostgreSQL database.  The Q3C library
 has been installed as a plug-in for fast queries on sky position.
+  
+.. warning::
+    The database design described below is evolving and subject to change.
 
 The database was built from source code and deployed on the
 build machine using the following script:
