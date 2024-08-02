@@ -191,3 +191,21 @@ grant EXECUTE on FUNCTION endJob (
     jid_       integer,
     exitcode_  smallint
 ) to rapidporole;
+
+
+grant EXECUTE on FUNCTION getLatestSwVersion (
+) to rapidporole;
+
+
+grant EXECUTE on FUNCTION registerRefImCatalog (
+    rfcatid_  integer,
+    rfid_     integer,
+    ppid_     smallint,
+    catType_  smallint,
+    sca_      smallint,
+    field_    integer,
+    fid_      smallint,
+    filename_ varchar(255),
+    checksum_ varchar(32),
+    status_   smallint
+) to rapidporole;

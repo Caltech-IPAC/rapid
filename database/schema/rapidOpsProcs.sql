@@ -1231,3 +1231,118 @@ create function endJob (
     end;
 
 $$ language plpgsql;
+
+
+-- Get latest software version.
+--
+create function getLatestSwVersion (
+)
+    returns smallint as $$
+
+    declare
+
+        svid_    smallint;
+
+    begin
+
+        begin
+
+            select svid
+            into strict svid_
+            from SwVersions
+            order by svid desc
+            limit 1;
+            exception
+                when no_data_found then
+                    raise exception
+                        '*** Error in getLatestSwVersion: SwVersions record not found.';
+
+        end;
+
+        return svid_;
+
+    end;
+
+$$ language plpgsql;
+
+
+-- Insert a new record into or update an existing record in the RefImCatalogs table.
+--
+create function registerRefImCatalog (
+    rfcatid_  integer,
+    rfid_     integer,
+    ppid_     smallint,
+    catType_  smallint,
+    sca_      smallint,
+    field_    integer,
+    fid_      smallint,
+    filename_ varchar(255),
+    checksum_ varchar(32),
+    status_   smallint
+)
+    returns void as $$
+
+    declare
+
+        rfcatid__  integer;
+        svid_      smallint;
+
+    begin
+
+
+        -- Get latest software version number.
+
+        select svid into svid_ from getLatestSwVersion();
+
+
+        -- Insert or update record, as appropriate.
+
+        select rfcatid
+        into rfcatid__
+        from RefImCatalogs
+        where rfcatid = rfcatid_;
+
+        if not found then
+
+
+            -- Insert RefImCatalogs record.
+
+            begin
+
+                insert into RefImCatalogs
+                (rfcatid, rfid, ppid, catType, field, sca, fid,
+                 svid, filename, checksum, status, created)
+                values
+                (rfcatid_, rfid_, ppid_, catType_, field_, sca_, fid_,
+                 svid_, filename_, checksum_, status_, now());
+                exception
+                    when no_data_found then
+                        raise exception
+                            '*** Error in registerRefImCatalog: RefImCatalogs record for rfid=%, ppid=%, catType=% not inserted.', rfid_, ppid_, catType_;
+
+            end;
+
+        else
+
+
+            -- Update RefImCatalogs record.
+
+            update RefImCatalogs
+            set rfid = rfid_,
+                ppid = ppid_,
+                catType = catType_,
+                field = field_,
+                sca = sca_,
+                fid = fid_,
+                svid = svid_,
+                filename = filename_,
+                checksum = checksum_,
+                status = status_,
+                created = now()
+            where rfcatid = rfcatid_;
+
+        end if;
+
+    end;
+
+$$ language plpgsql;
