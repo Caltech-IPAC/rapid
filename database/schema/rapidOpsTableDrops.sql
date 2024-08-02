@@ -103,3 +103,11 @@ DROP SEQUENCE alertnames_an34id_seq;
 
 DROP TABLE jobs;
 DROP SEQUENCE jobs_jid_seq;
+
+
+-------------------
+-- RefImCatalogs table
+-------------------
+
+DROP TABLE refimcatalogs;
+DROP SEQUENCE refimcatalogs_rfcatid_seq;

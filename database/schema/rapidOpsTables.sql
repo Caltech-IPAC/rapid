@@ -677,3 +677,67 @@ CREATE INDEX jobs_status_idx on jobs (status);
 CREATE INDEX jobs_exitcode_idx on jobs (exitcode);
 CREATE INDEX jobs_machine_idx on jobs (machine);
 CREATE INDEX jobs_started_idx on jobs (started);
+
+
+-----------------------------
+-- TABLE: RefImCatalogs
+-----------------------------
+
+SET default_tablespace = pipeline_data_01;
+
+CREATE TABLE refimcatalogs (
+    rfcatid integer NOT NULL,
+    rfid integer NOT NULL,
+    ppid smallint NOT NULL,
+    cattype smallint NOT NULL,
+    sca smallint NOT NULL,
+    field integer NOT NULL,
+    fid smallint NOT NULL,
+    svid smallint NOT NULL,
+    filename character varying(255) NOT NULL,
+    checksum character varying(32) NOT NULL,
+    status smallint DEFAULT 0 NOT NULL,
+    created timestamp without time zone NOT NULL,
+    archivestatus smallint DEFAULT 0 NOT NULL,
+    avid integer
+);
+
+ALTER TABLE refimcatalogs OWNER TO rapidadminrole;
+
+SET default_tablespace = pipeline_indx_01;
+
+CREATE SEQUENCE refimcatalogs_rfcatid_seq
+    INCREMENT BY 1
+    NO MAXVALUE
+    NO MINVALUE
+    CACHE 1;
+
+ALTER TABLE refimcatalogs_rfcatid_seq OWNER TO rapidadminrole;
+
+ALTER TABLE refimcatalogs ALTER COLUMN rfcatid SET DEFAULT nextval('refimcatalogs_rfcatid_seq'::regclass);
+
+ALTER TABLE ONLY refimcatalogs ADD CONSTRAINT refimcatalogs_pkey PRIMARY KEY (rfcatid);
+
+ALTER TABLE ONLY refimcatalogs ADD CONSTRAINT refimcatalogspk UNIQUE (rfid, ppid, cattype);
+
+ALTER TABLE ONLY refimcatalogs ADD CONSTRAINT refimcatalogs_rfid_fk FOREIGN KEY (rfid) REFERENCES refimages(rfid);
+
+ALTER TABLE ONLY refimcatalogs ADD CONSTRAINT refimcatalogs_ppid_fk FOREIGN KEY (ppid) REFERENCES pipelines(ppid);
+
+ALTER TABLE ONLY refimcatalogs ADD CONSTRAINT refimcatalogs_sca_fk FOREIGN KEY (sca) REFERENCES scas(sca);
+
+ALTER TABLE ONLY refimcatalogs ADD CONSTRAINT refimcatalogs_fid_fk FOREIGN KEY (fid) REFERENCES filters(fid);
+
+ALTER TABLE ONLY refimcatalogs ADD CONSTRAINT refimcatalogs_avid_fk FOREIGN KEY (avid) REFERENCES archiveversions(avid);
+
+CREATE INDEX refimcatalogs_created_idx ON refimcatalogs (created);
+CREATE INDEX refimcatalogs_rfid_idx ON refimcatalogs (rfid);
+CREATE INDEX refimcatalogs_ppid_idx ON refimcatalogs (ppid);
+CREATE INDEX refimcatalogs_cattype_idx ON refimcatalogs (cattype);
+CREATE INDEX refimcatalogs_archivestatus_idx ON refimcatalogs (archivestatus);
+CREATE INDEX refimcatalogs_status_idx ON refimcatalogs (status);
+CREATE INDEX refimcatalogs_sca_idx ON refimcatalogs (sca);
+CREATE INDEX refimcatalogs_fid_idx ON refimcatalogs (fid);
+CREATE INDEX refimcatalogs_field_idx ON refimcatalogs (field);
+CREATE INDEX refimcatalogs_svid_idx ON refimcatalogs (svid);
+CREATE INDEX refimcatalogs_avid_idx ON refimcatalogs (avid);

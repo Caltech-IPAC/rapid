@@ -361,3 +361,31 @@ GRANT INSERT,UPDATE,SELECT,REFERENCES ON TABLE jobs TO rapidporole;
 
 REVOKE ALL ON SEQUENCE jobs_jid_seq FROM rapidporole;
 GRANT USAGE ON SEQUENCE jobs_jid_seq TO rapidporole;
+
+
+-------------------
+-- RefImCatalogs table
+-------------------
+
+-- rapidreadrole
+
+REVOKE ALL ON TABLE refimcatalogs FROM rapidreadrole;
+GRANT SELECT ON TABLE refimcatalogs TO GROUP rapidreadrole;
+
+REVOKE ALL ON SEQUENCE refimcatalogs_rfcatid_seq FROM rapidreadrole;
+
+-- rapidadminrole
+
+REVOKE ALL ON TABLE refimcatalogs FROM rapidadminrole;
+GRANT ALL ON TABLE refimcatalogs TO GROUP rapidadminrole;
+
+REVOKE ALL ON SEQUENCE refimcatalogs_rfcatid_seq FROM rapidadminrole;
+GRANT ALL ON SEQUENCE refimcatalogs_rfcatid_seq TO GROUP rapidadminrole;
+
+-- rapidporole
+
+REVOKE ALL ON TABLE refimcatalogs FROM rapidporole;
+GRANT INSERT,UPDATE,SELECT,REFERENCES ON TABLE refimcatalogs TO rapidporole;
+
+REVOKE ALL ON SEQUENCE refimcatalogs_rfcatid_seq FROM rapidporole;
+GRANT USAGE ON SEQUENCE refimcatalogs_rfcatid_seq TO rapidporole;
