@@ -741,3 +741,27 @@ CREATE INDEX refimcatalogs_fid_idx ON refimcatalogs (fid);
 CREATE INDEX refimcatalogs_field_idx ON refimcatalogs (field);
 CREATE INDEX refimcatalogs_svid_idx ON refimcatalogs (svid);
 CREATE INDEX refimcatalogs_avid_idx ON refimcatalogs (avid);
+CREATE INDEX jobs_started_idx on jobs (started);
+
+
+-----------------------------
+-- TABLE: RefImImages
+-----------------------------
+
+SET default_tablespace = pipeline_data_01;
+
+CREATE TABLE refimimages (
+    rfid integer NOT NULL,
+    rid integer NOT NULL
+);
+
+ALTER TABLE refimimages OWNER TO rapidadminrole;
+
+SET default_tablespace = pipeline_indx_01;
+
+ALTER TABLE ONLY refimimages ADD CONSTRAINT refimimages_rfid_fk FOREIGN KEY (rfid) REFERENCES refimages(rfid);
+
+ALTER TABLE ONLY refimimages ADD CONSTRAINT refimimages_rid_fk FOREIGN KEY (rid) REFERENCES l2files(rid);
+
+CREATE INDEX refimimages_rid_idx ON refimimages (rid);
+CREATE INDEX refimimages_rfid_idx ON refimimages (rfid);

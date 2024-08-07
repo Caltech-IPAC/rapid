@@ -389,3 +389,23 @@ GRANT INSERT,UPDATE,SELECT,REFERENCES ON TABLE refimcatalogs TO rapidporole;
 
 REVOKE ALL ON SEQUENCE refimcatalogs_rfcatid_seq FROM rapidporole;
 GRANT USAGE ON SEQUENCE refimcatalogs_rfcatid_seq TO rapidporole;
+
+
+-------------------
+-- Refimimages table
+-------------------
+
+-- rapidreadrole
+
+REVOKE ALL ON TABLE refimimages FROM rapidreadrole;
+GRANT SELECT ON TABLE refimimages TO GROUP rapidreadrole;
+
+-- rapidadminrole
+
+REVOKE ALL ON TABLE refimimages FROM rapidadminrole;
+GRANT ALL ON TABLE refimimages TO GROUP rapidadminrole;
+
+-- rapidporole
+
+REVOKE ALL ON TABLE refimimages FROM rapidporole;
+GRANT INSERT,UPDATE,SELECT,REFERENCES ON TABLE refimimages TO rapidporole;

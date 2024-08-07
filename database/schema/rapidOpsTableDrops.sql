@@ -43,12 +43,14 @@ DROP TABLE filters;
 
 DROP TABLE scas;
 
+
 -------------------
 -- ArchiveVersions table
 -------------------
 
 DROP TABLE archiveversions;
 DROP SEQUENCE archiveversions_avid_seq;
+
 
 -------------------
 -- RefImages table
@@ -65,6 +67,7 @@ DROP SEQUENCE refimages_rfid_seq;
 DROP TABLE diffimages;
 DROP SEQUENCE diffimages_pid_seq;
 
+
 -------------------
 -- Pipelines table
 -------------------
@@ -78,6 +81,7 @@ DROP TABLE pipelines;
 
 DROP TABLE swversions;
 DROP SEQUENCE swversions_svid_seq;
+
 
 -------------------
 -- AlertNames table
@@ -111,3 +115,10 @@ DROP SEQUENCE jobs_jid_seq;
 
 DROP TABLE refimcatalogs;
 DROP SEQUENCE refimcatalogs_rfcatid_seq;
+
+
+-------------------
+-- RefImImages table
+-------------------
+
+DROP TABLE refimimages;
