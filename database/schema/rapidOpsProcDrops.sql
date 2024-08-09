@@ -209,3 +209,9 @@ DROP FUNCTION registerRefImCatalog (
     checksum_ varchar(32),
     status_   smallint
 );
+
+
+DROP FUNCTION registerRefImImages (
+    rfid_ integer,
+    rid_ integer
+);

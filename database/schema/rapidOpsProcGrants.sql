@@ -209,3 +209,9 @@ grant EXECUTE on FUNCTION registerRefImCatalog (
     checksum_ varchar(32),
     status_   smallint
 ) to rapidporole;
+
+
+grant EXECUTE on FUNCTION registerRefImImages (
+    rfid_ integer,
+    rid_ integer
+) to rapidporole;

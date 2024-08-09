@@ -1346,3 +1346,48 @@ create function registerRefImCatalog (
     end;
 
 $$ language plpgsql;
+
+
+-- Insert a new record into the RefImImages table, if record is not found.
+--
+create function registerRefImImages (
+    rfid_ integer,
+    rid_ integer
+)
+    returns void as $$
+
+    declare
+
+        rfid__  integer;
+
+    begin
+
+
+        -- Insert or update record, as appropriate.
+
+        select rfid
+        into rfid__
+        from RefImImages
+        where rfid = rfid_
+        and rid = rid_;
+
+        if not found then
+
+            begin
+
+                insert into RefImImages
+                (rfid, rid)
+                values
+                (rfid_, rid_);
+                exception
+                    when no_data_found then
+                        raise exception
+                            '*** Error in registerRefImImages: RefImImages record for rfid=%, rid=% not inserted.', rfid_, rid_;
+
+            end;
+
+        end if;
+
+    end;
+
+$$ language plpgsql;
