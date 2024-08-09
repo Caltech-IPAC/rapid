@@ -71,6 +71,14 @@ RAPID Operations Database
 
    db/db.rst
 
+RAPID Pipeline Design
+************************************
+
+.. toctree::
+   :maxdepth: 2
+
+   pl/pl.rst
+
 Indices and Tables
 ==================
 
