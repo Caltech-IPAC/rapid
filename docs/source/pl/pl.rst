@@ -1,12 +1,16 @@
-.. RAPID Pipeline Design
+Introduction
+####################################################
+Below describes the current design of the RAPID pipeline and its rationale.
+
+.. warning::
+    The pipeline design described below is evolving and subject to change.
+
 
 Computer Languages
 ####################################################
 
 The RAPID pipeline is written in Python, with some system calls to OS commands and C executable binaries.
 
-.. warning::
-    The pipeline design described below is evolving and subject to change.
 
 Reference Images
 ####################################################
