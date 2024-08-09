@@ -28,7 +28,7 @@ approximately square and with similar area.
 The tiles are basically aligned in rows within declination bins, with the most right-ascension
 bins at the equator and progressively fewer as
 the poles are approached (see table below).  There is one circular tile capping each pole.
-For NSIDE=10, the tile size is approximately 4 degrees on a side.
+For NSIDE=10, the tile size is approximately 4.5 degrees on a side.
 
 
 Table: Number of right-ascension bins per declination bin for NSIDE=10.
