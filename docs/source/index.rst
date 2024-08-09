@@ -83,7 +83,7 @@ Acronyms
 ************************************
 
 .. toctree::
-   :maxdepth: 1
+   :maxdepth: 2
 
    acronyms.rst
 
