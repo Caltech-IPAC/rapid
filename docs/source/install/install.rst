@@ -29,7 +29,7 @@ The script to build on a Mac laptop the C software system for the RAPID pipeline
    /source-code/location/rapid/c/builds/build_laptop.csh
 
 This script is has been tested on a Mac laptop running macOS Montery.
-  
+
 1. Prerequisites for the atlas-library build in the build script (you may need to install brew on your Mac laptop):
 
 .. code-block::
@@ -56,7 +56,7 @@ This script is has been tested on a Mac laptop running macOS Montery.
 4. Run the build script:
 
 .. code-block::
-   
+
    cd /source-code/location/rapid/c/builds
    ./build_laptop.csh >& build_laptop.out &
 
@@ -67,7 +67,7 @@ The binary executables, libraries, and include files are
 installed under the following paths:
 
 .. code-block::
-   
+
    /source-code/location/rapid/c/bin
    /source-code/location/rapid/c/lib
    /source-code/location/rapid/c/include
@@ -75,7 +75,7 @@ installed under the following paths:
    /source-code/location/rapid/c/atlas/include
    /source-code/location/rapid/c/common/fftw/lib
    /source-code/location/rapid/c/common/fftw/include
-  
+
 .. warning::
     The sextractor configure script made by autogen.sh in the build
     script initially did
@@ -108,7 +108,7 @@ It is assumed the atlas library is located in
    /usr/lib64/atlas
 
 Furthermore, it is assumed gfortran is in the PATH.
-  
+
 1. Modify the following line in the build script to configure the environment within the script, setting the absolute path of the rapid git repo:
 
 .. code-block::
@@ -118,7 +118,7 @@ Furthermore, it is assumed gfortran is in the PATH.
 2. Run the build script:
 
 .. code-block::
-   
+
    cd /source-code/location/rapid/c/builds
    ./build.csh >& build.out &
 
@@ -126,7 +126,7 @@ The binary executables, libraries, and include files are
 installed under the following paths:
 
 .. code-block::
-   
+
    /source-code/location/rapid/c/bin
    /source-code/location/rapid/c/lib
    /source-code/location/rapid/c/include
@@ -145,7 +145,7 @@ The script to build inside a Docker container the C software system for the RAPI
 This script has preconfigured RAPID_SW and PATH environment
 variables.  The former is tied directly to how the docker container is
 launched, as shown in the instructions below, and the latter is tied
-to how the infrastructure software in 
+to how the infrastructure software in
 RAPID project's Docker image has been pre-installed.
 
 0. Install ``docker`` and create Docker image if not already done;
@@ -153,7 +153,7 @@ RAPID project's Docker image has been pre-installed.
 
 .. toctree::
    :maxdepth: 3
-   
+
    docker.rst
    docker_image.rst
 
@@ -177,7 +177,7 @@ be persisted even after exiting the container.
 2. Run the build script inside the container:
 
 .. code-block::
-   
+
    cd /code/c/builds
    ./build_inside_container.sh >& build_inside_container.out &
 
@@ -187,7 +187,7 @@ The binary executables, libraries, and include files are
 installed under the following paths inside the container:
 
 .. code-block::
-   
+
    /code/c/bin
    /code/c/lib
    /code/c/include
@@ -226,7 +226,7 @@ is an example of running ``awaicgen`` without command-line options to
 get its online tutorial:
 
 .. code-block::
-   
+
    export LD_LIBRARY_PATH=/code/c/lib
    /code/c/bin/awaicgen
 
