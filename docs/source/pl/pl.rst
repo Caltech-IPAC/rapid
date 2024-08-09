@@ -1,5 +1,8 @@
-Introduction
+RAPID Pipeline Design
 ####################################################
+
+Introduction
+************************************
 Below describes the current design of the RAPID pipeline and its rationale.
 
 .. warning::
@@ -7,13 +10,13 @@ Below describes the current design of the RAPID pipeline and its rationale.
 
 
 Computer Languages
-####################################################
+************************************
 
 The RAPID pipeline is written in Python, with some system calls to OS commands and C executable binaries.
 
 
 Reference Images
-####################################################
+************************************
 
 Reference images are needed for image differencing.  The maximum-tolerable number of pixels in a reference image
 constrains the footprint of a reference image on the sky.  As will be seen below, it will be necessary to adopt
