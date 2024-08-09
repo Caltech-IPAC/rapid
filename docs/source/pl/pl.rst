@@ -18,5 +18,6 @@ bins at the equator and progressively fewer as
 the poles are approached.  There is one circular tile capping each pole.
 For NSIDE=10, the tile size is approximately 4 degrees on a side.
 
-These tiles are much larger than the Roman WFI focal plane, and, therefore, the reference images are
-not constructed to have any overlap regions outside of the sky tile.
+The sky tiles are much larger than the Roman WFI focal plane, and, therefore, the reference images are
+not constructed to have any overlap regions outside of the sky tile.  Since a given Roman exposure may overlap
+a tile boundary, difference-imaging for such an exposure will involve pertinent adjacent reference images.
