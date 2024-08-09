@@ -79,6 +79,14 @@ RAPID Pipeline Design
 
    pl/pl.rst
 
+Acronyms
+************************************
+
+.. toctree::
+   :maxdepth: 1
+
+   acronyms.rst
+
 Indices and Tables
 ==================
 
