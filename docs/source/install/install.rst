@@ -1,5 +1,8 @@
-Download the source code
+Installing RAPID Pipeline
 ####################################################
+
+Download the source code
+************************************
 
 .. code-block::
 
@@ -19,7 +22,7 @@ A build takes about 15 minutes, with most of time spent on the GSL and
 FFTW libraries.
 
 Building C code on Mac laptop
-####################################################
+************************************
 
 
 The script to build on a Mac laptop the C software system for the RAPID pipeline is
@@ -93,7 +96,7 @@ installed under the following paths:
     It has not been fully tested for the new processor chips, like the Apple M3 Max.
 
 Building C code on Linux machine
-####################################################
+************************************
 
 The script to build on a Linux machine the C software system for the RAPID pipeline is
 
@@ -134,7 +137,7 @@ installed under the following paths:
    /source-code/location/rapid/c/common/fftw/include
 
 Building C code on EC2 instance inside Docker container
-####################################################
+************************************
 
 The script to build inside a Docker container the C software system for the RAPID pipeline is
 
