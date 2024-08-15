@@ -57,7 +57,9 @@ SET default_tablespace = pipeline_data_01;
 CREATE TABLE exposures (
     expid integer NOT NULL,                         -- Primary key
     dateobs timestamp without time zone NOT NULL,   -- Header keyword: DATE-OBS
-    field integer NOT NULL,                         -- level-6 healpix index (NESTED) from RA_TARG, DEC_TARG
+    field integer NOT NULL,                         -- Roman tessellation index for RA_TARG, DEC_TARG
+    hp6 integer NOT NULL,                           -- Level-6 healpix index (NESTED) for RA_TARG, DEC_TARG
+    hp9 integer NOT NULL,                           -- Level-9 healpix index (NESTED) for RA_TARG, DEC_TARG
     fid smallint NOT NULL,                          -- Foreign key from Filters table
     exptime real NOT NULL,                          -- Header keyword EXPTIME
     mjdobs double precision NOT NULL,               -- Header keyword MJD-OBS
@@ -90,6 +92,8 @@ ALTER TABLE ONLY exposures ADD CONSTRAINT exposures_fid_fk FOREIGN KEY (fid) REF
 
 CREATE INDEX exposures_fid_idx ON exposures (fid);
 CREATE INDEX exposures_field_idx ON exposures (field);
+CREATE INDEX exposures_hp6_idx ON exposures (hp6);
+CREATE INDEX exposures_hp9_idx ON exposures (hp9);
 CREATE INDEX exposures_exptime_idx ON exposures (exptime);
 CREATE INDEX exposures_mjdobs_idx ON exposures (mjdobs);
 CREATE INDEX exposureps_status_idx ON exposures (status);
@@ -108,7 +112,9 @@ CREATE TABLE l2files (
     sca smallint NOT NULL,                               -- FITS-header keyword: SCA-NUM
     version smallint NOT NULL,
     vbest smallint NOT NULL,
-    field integer NOT NULL,
+    field integer NOT NULL,                              -- Roman tessellation index for (ra0,dec0)
+    hp6 integer NOT NULL,                                -- Level-6 healpix index (NESTED) for (ra0,dec0)
+    hp9 integer NOT NULL,                                -- Level-9 healpix index (NESTED) for (ra0,dec0)
     fid smallint NOT NULL,
     dateobs timestamp without time zone NOT NULL,        -- FITS-header keyword: DATE-OBS
     mjdobs double precision NOT NULL,                    -- FITS-header keyword: MJD-OBS
@@ -197,6 +203,8 @@ ALTER TABLE ONLY l2files ADD CONSTRAINT l2files_fid_fk FOREIGN KEY (fid) REFEREN
 CREATE INDEX l2files_rid_idx ON l2files (rid);
 CREATE INDEX l2files_sca_idx ON l2files (sca);
 CREATE INDEX l2files_field_idx ON l2files (field);
+CREATE INDEX l2files_hp6_idx ON l2files (hp6);
+CREATE INDEX l2files_hp9_idx ON l2files (hp9);
 CREATE INDEX l2files_fid_idx ON l2files (fid);
 CREATE INDEX l2files_infobits_idx ON l2files (infobits);
 CREATE INDEX l2files_status_idx ON l2files (status);
@@ -231,7 +239,8 @@ CREATE TABLE l2filemeta (
     x double precision NOT NULL,
     y double precision NOT NULL,
     z double precision NOT NULL,
-    hp6 integer NOT NULL,               -- level-6 healpix index (NESTED) pertaining to (ra0,dec0)
+    hp6 integer NOT NULL,               -- Level-6 healpix index (NESTED) for (ra0,dec0)
+    hp9 integer NOT NULL,               -- Level-9 healpix index (NESTED) for (ra0,dec0)
     fid smallint NOT NULL,
     sca smallint NOT NULL
 );
@@ -247,6 +256,7 @@ ALTER TABLE ONLY l2filemeta ADD CONSTRAINT l2filemeta_fid_fk FOREIGN KEY (fid) R
 ALTER TABLE ONLY l2filemeta ADD CONSTRAINT l2filemeta_sca_fk FOREIGN KEY (sca) REFERENCES scas(sca);
 
 CREATE INDEX l2filemeta_hp6_idx ON l2filemeta (hp6);
+CREATE INDEX l2filemeta_hp9_idx ON l2filemeta (hp9);
 CREATE INDEX l2filemeta_fid_idx ON l2filemeta (fid);
 CREATE INDEX l2filemeta_sca_idx ON l2filemeta (sca);
 
@@ -347,7 +357,9 @@ SET default_tablespace = pipeline_data_01;
 
 CREATE TABLE refimages (
     rfid integer NOT NULL,
-    field integer NOT NULL,               -- level-6 healpix index (NESTED) pertaining to (ra0,dec0)
+    field integer NOT NULL,               -- Roman tessellation index for (ra0,dec0)
+    hp6 integer NOT NULL,                 -- Level-6 healpix index (NESTED) for (ra0,dec0)
+    hp9 integer NOT NULL,                 -- Level-9 healpix index (NESTED) for (ra0,dec0)
     sca smallint NOT NULL,
     fid smallint NOT NULL,
     ppid smallint NOT NULL,
@@ -390,15 +402,17 @@ ALTER TABLE ONLY refimages ADD CONSTRAINT refimages_ppid_fk FOREIGN KEY (ppid) R
 ALTER TABLE ONLY refimages ADD CONSTRAINT refimages_svid_fk FOREIGN KEY (svid) REFERENCES swversions(svid);
 ALTER TABLE ONLY refimages ADD CONSTRAINT refimages_avid_fk FOREIGN KEY (avid) REFERENCES archiveversions(avid);
 
-CREATE INDEX refimages_field_idx on refimages (field);
-CREATE INDEX refimages_sca_idx on refimages (sca);
-CREATE INDEX refimages_fid_idx on refimages (fid);
-CREATE INDEX refimages_created_idx on refimages (created);
-CREATE INDEX refimages_vbest_idx on refimages (vbest);
-CREATE INDEX refimages_ppid_idx on refimages (ppid);
-CREATE INDEX refimages_avid_idx on refimages (avid);
-CREATE INDEX refimages_archivestatus_idx on refimages (archivestatus);
-CREATE INDEX refimages_status_idx on refimages (status);
+CREATE INDEX refimages_field_idx ON refimages (field);
+CREATE INDEX refimages_hp6_idx ON refimages (hp6);
+CREATE INDEX refimages_hp9_idx ON refimages (hp9);
+CREATE INDEX refimages_sca_idx ON refimages (sca);
+CREATE INDEX refimages_fid_idx ON refimages (fid);
+CREATE INDEX refimages_created_idx ON refimages (created);
+CREATE INDEX refimages_vbest_idx ON refimages (vbest);
+CREATE INDEX refimages_ppid_idx ON refimages (ppid);
+CREATE INDEX refimages_avid_idx ON refimages (avid);
+CREATE INDEX refimages_archivestatus_idx ON refimages (archivestatus);
+CREATE INDEX refimages_status_idx ON refimages (status);
 
 
 -----------------------------
@@ -416,7 +430,9 @@ CREATE TABLE diffimages (
     version smallint NOT NULL,
     vbest smallint NOT NULL,
     rfid integer NOT NULL,                         -- Foreign key, from RefImages table
-    field integer NOT NULL,                        -- level-6 healpix index (NESTED) pertaining to (ra0,dec0)
+    field integer NOT NULL,                        -- Roman tessellation index for (ra0,dec0)
+    hp6 integer NOT NULL,                          -- Level-6 healpix index (NESTED) for (ra0,dec0)
+    hp9 integer NOT NULL,                          -- Level-9 healpix index (NESTED) for (ra0,dec0)
     fid smallint NOT NULL,                         -- Foreign key from Filters table
     jd double precision,                           -- Julian date of start of image
     ra0 double precision NOT NULL,                 -- Center of image
@@ -481,18 +497,20 @@ ALTER TABLE ONLY diffimages ADD CONSTRAINT diffimages_svid_fk FOREIGN KEY (svid)
 ALTER TABLE ONLY diffimages ADD CONSTRAINT diffimages_rid_fk FOREIGN KEY (rid) REFERENCES l2files(rid);
 ALTER TABLE ONLY diffimages ADD CONSTRAINT diffimages_avid_fk FOREIGN KEY (avid) REFERENCES archiveversions(avid);
 
-CREATE INDEX diffimages_rid_idx on diffimages(rid);
-CREATE INDEX diffimages_expid_idx on diffimages(expid);
-CREATE INDEX diffimages_sca_idx on diffimages(sca);
-CREATE INDEX diffimages_ppid_idx on diffimages(ppid);
-CREATE INDEX diffimages_rfid_idx on diffimages(rfid);
-CREATE INDEX diffimages_field_idx on diffimages(field);
-CREATE INDEX diffimages_fid_idx on diffimages(fid);
-CREATE INDEX diffimages_jd_idx on diffimages(jd);
-CREATE INDEX diffimages_status_idx on diffimages(status);
-CREATE INDEX diffimages_created_idx on diffimages(created);
-CREATE INDEX diffimages_infobitssci_idx on diffimages(infobitssci);
-CREATE INDEX diffimages_field_sca_idx on diffimages(field, sca);
+CREATE INDEX diffimages_rid_idx ON diffimages(rid);
+CREATE INDEX diffimages_expid_idx ON diffimages(expid);
+CREATE INDEX diffimages_sca_idx ON diffimages(sca);
+CREATE INDEX diffimages_ppid_idx ON diffimages(ppid);
+CREATE INDEX diffimages_rfid_idx ON diffimages(rfid);
+CREATE INDEX diffimages_field_idx ON diffimages(field);
+CREATE INDEX diffimages_hp6_idx ON diffimages (hp6);
+CREATE INDEX diffimages_hp9_idx ON diffimages (hp9);
+CREATE INDEX diffimages_fid_idx ON diffimages(fid);
+CREATE INDEX diffimages_jd_idx ON diffimages(jd);
+CREATE INDEX diffimages_status_idx ON diffimages(status);
+CREATE INDEX diffimages_created_idx ON diffimages(created);
+CREATE INDEX diffimages_infobitssci_idx ON diffimages(infobitssci);
+CREATE INDEX diffimages_field_sca_idx ON diffimages(field, sca);
 CREATE INDEX diffimages_vbest_idx ON diffimages (vbest);
 
 -- Q3C indexing will speed up ad-hoc cone searches on (ra, dec).
@@ -510,8 +528,10 @@ SET default_tablespace = pipeline_data_01;
 
 CREATE TABLE alertnames (
     alertname char(12) NOT NULL,     -- Primary key
-    sca smallint NOT NULL,        -- Readout channel of candidate when alert was first created
-    field integer NOT NULL,          -- Field containing candidate when alert was first created
+    sca smallint NOT NULL,           -- Readout channel of candidate when alert was first created
+    field integer NOT NULL,          -- Roman tessellation index for (ra,dec)
+    hp6 integer NOT NULL,            -- Level-6 healpix index (NESTED) for (ra,dec)
+    hp9 integer NOT NULL,            -- Level-9 healpix index (NESTED) for (ra,dec)
     ra double precision NOT NULL,    -- Right Ascension
     dec double precision NOT NULL,   -- Declination
     jd double precision NOT NULL,    -- Julian date of initial name usage
@@ -527,10 +547,12 @@ SET default_tablespace = pipeline_indx_01;
 ALTER TABLE ONLY alertnames
     ADD CONSTRAINT alertnames_pkey PRIMARY KEY (alertname);
 
-CREATE INDEX alertnames_sca_idx on alertnames(sca);
-CREATE INDEX alertnames_field_idx on alertnames(field);
-CREATE INDEX alertnames_jd_idx on alertnames(jd);
-CREATE INDEX alertnames_candid_idx on alertnames(candid);
+CREATE INDEX alertnames_sca_idx ON alertnames(sca);
+CREATE INDEX alertnames_field_idx ON alertnames(field);
+CREATE INDEX alertnames_hp6_idx ON alertnames (hp6);
+CREATE INDEX alertnames_hp9_idx ON alertnames (hp9);
+CREATE INDEX alertnames_jd_idx ON alertnames(jd);
+CREATE INDEX alertnames_candid_idx ON alertnames(candid);
 
 -- Q3C indexing will speed up ad-hoc cone searches on (ra, dec).
 
@@ -667,16 +689,16 @@ ALTER TABLE jobs ALTER COLUMN jid SET DEFAULT nextval('jobs_jid_seq'::regclass);
 
 ALTER TABLE ONLY jobs ADD CONSTRAINT jobs_pkey PRIMARY KEY (jid);
 
-CREATE INDEX jobs_ppid_idx on jobs (ppid);
-CREATE INDEX jobs_expid_idx on jobs (expid);
-CREATE INDEX jobs_field_idx on jobs (field);
-CREATE INDEX jobs_sca_idx on jobs (sca);
-CREATE INDEX jobs_fid_idx on jobs (fid);
-CREATE INDEX jobs_rid_idx on jobs (rid);
-CREATE INDEX jobs_status_idx on jobs (status);
-CREATE INDEX jobs_exitcode_idx on jobs (exitcode);
-CREATE INDEX jobs_machine_idx on jobs (machine);
-CREATE INDEX jobs_started_idx on jobs (started);
+CREATE INDEX jobs_ppid_idx ON jobs (ppid);
+CREATE INDEX jobs_expid_idx ON jobs (expid);
+CREATE INDEX jobs_field_idx ON jobs (field);
+CREATE INDEX jobs_sca_idx ON jobs (sca);
+CREATE INDEX jobs_fid_idx ON jobs (fid);
+CREATE INDEX jobs_rid_idx ON jobs (rid);
+CREATE INDEX jobs_status_idx ON jobs (status);
+CREATE INDEX jobs_exitcode_idx ON jobs (exitcode);
+CREATE INDEX jobs_machine_idx ON jobs (machine);
+CREATE INDEX jobs_started_idx ON jobs (started);
 
 
 -----------------------------
@@ -691,7 +713,9 @@ CREATE TABLE refimcatalogs (
     ppid smallint NOT NULL,
     cattype smallint NOT NULL,
     sca smallint NOT NULL,
-    field integer NOT NULL,
+    field integer NOT NULL,                        -- Roman tessellation index for (ra0,dec0)
+    hp6 integer NOT NULL,                          -- Level-6 healpix index (NESTED) for (ra0,dec0)
+    hp9 integer NOT NULL,                          -- Level-9 healpix index (NESTED) for (ra0,dec0)
     fid smallint NOT NULL,
     svid smallint NOT NULL,
     filename character varying(255) NOT NULL,
@@ -739,9 +763,11 @@ CREATE INDEX refimcatalogs_status_idx ON refimcatalogs (status);
 CREATE INDEX refimcatalogs_sca_idx ON refimcatalogs (sca);
 CREATE INDEX refimcatalogs_fid_idx ON refimcatalogs (fid);
 CREATE INDEX refimcatalogs_field_idx ON refimcatalogs (field);
+CREATE INDEX refimcatalogs_hp6_idx ON refimcatalogs (hp6);
+CREATE INDEX refimcatalogs_hp9_idx ON refimcatalogs (hp9);
 CREATE INDEX refimcatalogs_svid_idx ON refimcatalogs (svid);
 CREATE INDEX refimcatalogs_avid_idx ON refimcatalogs (avid);
-CREATE INDEX jobs_started_idx on jobs (started);
+CREATE INDEX jobs_started_idx ON jobs (started);
 
 
 -----------------------------
