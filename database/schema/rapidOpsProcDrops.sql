@@ -13,6 +13,7 @@ DROP FUNCTION addExposure (
     field_               integer,
     hp6_                 integer,
     hp9_                 integer,
+    filter_              character varying(16),
     exptime_             real,
     infobits_            integer,
     status_              smallint
