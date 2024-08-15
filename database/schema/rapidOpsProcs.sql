@@ -1297,6 +1297,7 @@ create function registerRefImCatalog (
     field_    integer,
     hp6_      integer,
     hp9_      integer,
+    fid_      smallint,
     filename_ varchar(255),
     checksum_ varchar(32),
     status_   smallint
