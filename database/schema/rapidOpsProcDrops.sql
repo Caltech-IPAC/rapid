@@ -11,7 +11,8 @@ DROP FUNCTION addExposure (
     dateobs_             timestamp,
     mjdobs_              double precision,
     field_               integer,
-    filter_              character varying(16),
+    hp6_                 integer,
+    hp9_                 integer,
     exptime_             real,
     infobits_            integer,
     status_              smallint
@@ -22,6 +23,8 @@ DROP FUNCTION addL2File (
     expid_                integer,
     sca_                  smallint,
     field_                integer,
+    hp6_                 integer,
+    hp9_                 integer,
     fid_                  smallint,
     dateobs_              timestamp without time zone,
     mjdobs_               double precision,
@@ -79,7 +82,7 @@ DROP FUNCTION addL2File (
 
 
 DROP FUNCTION updateL2File (
-    rid_      integer, 
+    rid_      integer,
     filename_ varchar(255),
     checkSum_ varchar(32),
     status_   smallint,
@@ -102,7 +105,8 @@ DROP FUNCTION registerL2FileMeta (
     x_                   double precision,
     y_                   double precision,
     z_                   double precision,
-    hp6_                 integer
+    hp6_                 integer,
+    hp9_                 integer
 );
 
 
@@ -140,6 +144,8 @@ DROP FUNCTION updateDiffImage (
 DROP FUNCTION addRefImage (
     sca_                  smallint,
     field_                integer,
+    hp6_                  integer,
+    hp9_                  integer,
     fid_                  smallint,
     ppid_                 smallint,
     rfid_                 integer,
@@ -161,9 +167,11 @@ DROP FUNCTION updateRefImage (
 
 DROP FUNCTION addAlertName (
     name_   char(12),
-    sca_    smallint,                        
-    field_  integer,                        
-    ra_     double precision,                 
+    sca_    smallint,
+    field_  integer,
+    hp6_    integer,
+    hp9_    integer,
+    ra_     double precision,
     dec_    double precision,
     jd_     double precision,
     candId_ bigint
@@ -204,6 +212,8 @@ DROP FUNCTION registerRefImCatalog (
     catType_  smallint,
     sca_      smallint,
     field_    integer,
+    hp6_      integer,
+    hp9_      integer,
     fid_      smallint,
     filename_ varchar(255),
     checksum_ varchar(32),

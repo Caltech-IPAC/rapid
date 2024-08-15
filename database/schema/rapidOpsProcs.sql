@@ -13,6 +13,8 @@ create function addExposure (
     dateobs_             timestamp,
     mjdobs_              double precision,
     field_               integer,
+    hp6_                 integer,
+    hp9_                 integer,
     filter_              character varying(16),
     exptime_             real,
     infobits_            integer,
@@ -63,6 +65,8 @@ create function addExposure (
                 (dateobs,
                  mjdobs,
                  field,
+                 hp6,
+                 hp9,
                  fid,
                  exptime,
                  status,
@@ -72,6 +76,8 @@ create function addExposure (
                 (dateobs_,
                  mjdobs_,
                  field_,
+                 hp6_,
+                 hp9_,
                  fid_,
                  exptime_,
                  status_,
@@ -94,6 +100,8 @@ create function addExposure (
             set dateobs = dateobs_,
                 mjdobs = mjdobs_,
                 field = field_,
+                hp6 = hp6_,
+                hp9 = hp9_,
                 fid = fid_,
                 exptime = exptime_,
                 status = status_,
@@ -118,6 +126,8 @@ create function addL2File (
     expid_                integer,
     sca_                  smallint,
     field_                integer,
+    hp6_                  integer,
+    hp9_                  integer,
     fid_                  smallint,
     dateobs_              timestamp without time zone,
     mjdobs_               double precision,
@@ -208,7 +218,7 @@ create function addL2File (
 
             insert into L2Files
             (expid,sca,version,status,vbest,
-             field,fid,dateobs,mjdobs,exptime,infobits,
+             field,hp6,hp9,fid,dateobs,mjdobs,exptime,infobits,
              filename,checksum,crval1,crval2,
              crpix1,crpix2,cd11,cd12,cd21,cd22,ctype1,ctype2,
              cunit1,cunit2,a_order,a_0_2,a_0_3,a_0_4,a_1_1,a_1_2,
@@ -219,7 +229,7 @@ create function addL2File (
             )
             values
             (expid_,sca_,version_,status_,vbest_,
-             field_,fid_,dateobs_,mjdobs_,exptime_,infobits_,
+             field_,hp6_,hp9_,fid_,dateobs_,mjdobs_,exptime_,infobits_,
              filename_,checksum_,crval1_,crval2_,
              crpix1_,crpix2_,cd11_,cd12_,cd21_,cd22_,ctype1_,ctype2_,
              cunit1_,cunit2_,a_order_,a_0_2_,a_0_3_,a_0_4_,a_1_1_,a_1_2_,
@@ -380,7 +390,8 @@ create function registerL2FileMeta (
     x_                   double precision,
     y_                   double precision,
     z_                   double precision,
-    hp6_                 integer
+    hp6_                 integer,
+    hp9_                 integer
 )
     returns void as $$
 
@@ -420,7 +431,8 @@ create function registerL2FileMeta (
                  x,
                  y,
                  z,
-		 hp6
+                 hp6,
+                 hp9
                 )
                 values
                 (rid_,
@@ -437,7 +449,8 @@ create function registerL2FileMeta (
                  x_,
                  y_,
                  z_,
-		 hp6_
+                 hp6_,
+                 hp9_
                 );
                 exception
                     when no_data_found then
@@ -465,7 +478,8 @@ create function registerL2FileMeta (
                 x = x_,
                 y = y_,
                 z = z_,
-		hp6 = hp6_
+                hp6 = hp6_,
+                hp9 = hp9_
             where rid = rid_;
 
         end if;
@@ -510,6 +524,8 @@ create function addDiffImage (
         expid_            integer;
         sca_              smallint;
         field_            integer;
+        hp6_              integer;
+        hp9_              integer;
         fid_              smallint;
         mjdobs_           double precision;
         jd_               double precision;
@@ -535,8 +551,8 @@ create function addDiffImage (
 
         begin
 
-            select expid, sca, field, fid, mjdobs
-            into strict expid_, sca_, field_, fid_, mjdobs_
+            select expid, sca, field, hp6, hp9, fid, mjdobs
+            into strict expid_, sca_, field_, hp6_, hp9_, fid_, mjdobs_
             from L2Files
             where rid = rid_;
             exception
@@ -573,15 +589,15 @@ create function addDiffImage (
 
             insert into DiffImages
             (rid, ppid, version, status, vbest, filename, checksum,
-             expid, sca, field, fid, jd, svid,
-	     rfid, infobitssci, infobitsref,
-	     ra0, dec0, ra1, dec1, ra2, dec2, ra3, dec3, ra4, dec4
+             expid, sca, field, hp6, hp9, fid, jd, svid,
+             rfid, infobitssci, infobitsref,
+             ra0, dec0, ra1, dec1, ra2, dec2, ra3, dec3, ra4, dec4
             )
             values
             (rid_, ppid_, version_, status_, vbest_, filename_, checksum_,
-             expid_, sca_, field_, fid_, jd_, svid_,
-	     rfid_, infobitssci_, infobitsref_,
-	     ra0_, dec0_, ra1_, dec1_, ra2_, dec2_, ra3_, dec3_, ra4_, dec4_
+             expid_, sca_, field_, hp6_, hp9_, fid_, jd_, svid_,
+             rfid_, infobitssci_, infobitsref_,
+             ra0_, dec0_, ra1_, dec1_, ra2_, dec2_, ra3_, dec3_, ra4_, dec4_
             )
             returning pid into strict pid_;
             exception
@@ -723,6 +739,8 @@ $$ language plpgsql;
 create function addRefImage (
     sca_                  smallint,
     field_                integer,
+    hp6_                  integer,
+    hp9_                  integer,
     fid_                  smallint,
     ppid_                 smallint,
     rfid_                 integer,
@@ -785,9 +803,9 @@ create function addRefImage (
         begin
 
             insert into RefImages
-            (sca, field, fid, ppid, version, status, vbest, filename, checksum, infobits, svid)
+            (sca, field, hp6, hp9, fid, ppid, version, status, vbest, filename, checksum, infobits, svid)
             values
-            (sca_, field_, fid_, ppid_, version_, status_, vbest_, filename_, checksum_, infobits, svid_)
+            (sca_, field_, hp6_, hp9_, fid_, ppid_, version_, status_, vbest_, filename_, checksum_, infobits, svid_)
             returning rfid into strict rfid_;
             exception
                 when no_data_found then
@@ -871,8 +889,8 @@ create function updateRefImage (
         into count_
         from RefImages
         where sca = sca_
-	and field = field_
-	and fid = fid_
+        and field = field_
+        and fid = fid_
         and ppid = ppid_
         and vBest in (1, 2);
 
@@ -886,8 +904,8 @@ create function updateRefImage (
             into rfid__, currentVBest_
             from RefImages
             where sca = sca_
-	    and field = field_
-	    and fid = fid_
+            and field = field_
+            and fid = fid_
             and ppid = ppid_
             and vBest in (1, 2);
 
@@ -935,6 +953,8 @@ create function addAlertName (
     name_   char(12),
     sca_    smallint,
     field_  integer,
+    hp6_    integer,
+    hp9_    integer,
     ra_     double precision,
     dec_    double precision,
     jd_     double precision,
@@ -949,8 +969,8 @@ create function addAlertName (
 
         begin
 
-            insert into AlertNames (name, sca, field, ra, dec, jd, candId)
-            values (name_, sca_, field_, ra_, dec_, jd_, candId_);
+            insert into AlertNames (name, sca, field, hp6, hp9, ra, dec, jd, candId)
+            values (name_, sca_, field_, hp6_, hp9_, ra_, dec_, jd_, candId_);
             exception
                 when no_data_found then
                     raise exception
@@ -1275,7 +1295,8 @@ create function registerRefImCatalog (
     catType_  smallint,
     sca_      smallint,
     field_    integer,
-    fid_      smallint,
+    hp6_      integer,
+    hp9_      integer,
     filename_ varchar(255),
     checksum_ varchar(32),
     status_   smallint
@@ -1310,10 +1331,10 @@ create function registerRefImCatalog (
             begin
 
                 insert into RefImCatalogs
-                (rfcatid, rfid, ppid, catType, field, sca, fid,
+                (rfcatid, rfid, ppid, catType, field, hp6, hp9, sca, fid,
                  svid, filename, checksum, status, created)
                 values
-                (rfcatid_, rfid_, ppid_, catType_, field_, sca_, fid_,
+                (rfcatid_, rfid_, ppid_, catType_, field_, hp6_, hp9_, sca_, fid_,
                  svid_, filename_, checksum_, status_, now());
                 exception
                     when no_data_found then
@@ -1332,6 +1353,8 @@ create function registerRefImCatalog (
                 ppid = ppid_,
                 catType = catType_,
                 field = field_,
+                hp6 = hp6_,
+                hp9 = hp9_,
                 sca = sca_,
                 fid = fid_,
                 svid = svid_,

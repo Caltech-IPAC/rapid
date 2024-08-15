@@ -11,6 +11,8 @@ grant EXECUTE on FUNCTION addExposure (
     dateobs_             timestamp,
     mjdobs_              double precision,
     field_               integer,
+    hp6_                 integer,
+    hp9_                 integer,
     filter_              character varying(16),
     exptime_             real,
     infobits_            integer,
@@ -22,6 +24,8 @@ grant EXECUTE on FUNCTION addL2File (
     expid_                integer,
     sca_                  smallint,
     field_                integer,
+    hp6_                 integer,
+    hp9_                 integer,
     fid_                  smallint,
     dateobs_              timestamp without time zone,
     mjdobs_               double precision,
@@ -79,7 +83,7 @@ grant EXECUTE on FUNCTION addL2File (
 
 
 grant EXECUTE on FUNCTION updateL2File (
-    rid_      integer, 
+    rid_      integer,
     filename_ varchar(255),
     checkSum_ varchar(32),
     status_   smallint,
@@ -102,7 +106,8 @@ grant EXECUTE on FUNCTION registerL2FileMeta (
     x_                   double precision,
     y_                   double precision,
     z_                   double precision,
-    hp6_                 integer
+    hp6_                 integer,
+    hp9_                 integer
 ) to rapidporole;
 
 
@@ -140,6 +145,8 @@ grant EXECUTE on FUNCTION updateDiffImage (
 grant EXECUTE on FUNCTION addRefImage (
     sca_                  smallint,
     field_                integer,
+    hp6_                  integer,
+    hp9_                  integer,
     fid_                  smallint,
     ppid_                 smallint,
     rfid_                 integer,
@@ -161,9 +168,11 @@ grant EXECUTE on FUNCTION updateRefImage (
 
 grant EXECUTE on FUNCTION addAlertName (
     name_   char(12),
-    sca_    smallint,                        
-    field_  integer,                        
-    ra_     double precision,                 
+    sca_    smallint,
+    field_  integer,
+    hp6_    integer,
+    hp9_    integer,
+    ra_     double precision,
     dec_    double precision,
     jd_     double precision,
     candId_ bigint
@@ -204,6 +213,8 @@ grant EXECUTE on FUNCTION registerRefImCatalog (
     catType_  smallint,
     sca_      smallint,
     field_    integer,
+    hp6_      integer,
+    hp9_      integer,
     fid_      smallint,
     filename_ varchar(255),
     checksum_ varchar(32),
