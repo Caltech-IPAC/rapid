@@ -861,7 +861,7 @@ class RAPIDDB:
 
         print('----> expid = {}'.format(expid))
         print('----> field = {}'.format(field))
-        print('----> hp6 = {}'.format(ho6))
+        print('----> hp6 = {}'.format(hp6))
         print('----> hp9 = {}'.format(hp9))
 
         print('query = {}'.format(query))
