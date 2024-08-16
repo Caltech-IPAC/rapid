@@ -752,7 +752,7 @@ class RAPIDDB:
         return records
 
 
-    def update_l2files_field,hp6_hp9(self,rid,field,hp6,hp9):
+    def update_l2files_field_hp6_hp9(self,rid,field,hp6,hp9):
 
         '''
         Update field,hp6,hp9 indices in L2Files database record.
