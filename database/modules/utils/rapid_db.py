@@ -842,7 +842,7 @@ class RAPIDDB:
         return records
 
 
-    def update_exposures_field,hp6_hp9(self,expid,field,hp6,hp9):
+    def update_exposures_field_hp6_hp9(self,expid,field,hp6,hp9):
 
         '''
         Update field,hp6,hp9 indices in Exposures database record.
