@@ -667,3 +667,222 @@ class RAPIDDB:
 
         if self.exit_code == 0:
             self.conn.commit()           # Commit database transaction
+
+
+    def update_l2filemeta_hp9(self,rid,hp9):
+
+        '''
+        Update hp9 index in L2FileMeta database record.
+        '''
+
+
+        # Define query.
+
+        query = "update L2FileMeta set hp9 = " + str(hp9) + " where rid = " + str(rid) + ";"
+
+
+        # Query database.
+
+        print('----> rid = {}'.format(rid))
+        print('----> hp9 = {}'.format(hp9))
+
+        print('query = {}'.format(query))
+
+
+        # Execute query.
+
+        try:
+            self.cur.execute(query)
+
+            try:
+                records = []
+                for record in self.cur:
+                    records.append(record)
+            except:
+                    print("Nothing returned from database query; continuing...")
+
+        except (Exception, psycopg2.DatabaseError) as error:
+            print('*** Error updating L2FileMeta record ({}); skipping...'.format(error))
+            self.exit_code = 67
+            return
+
+        if self.exit_code == 0:
+            self.conn.commit()           # Commit database transaction
+
+
+    def get_all_l2files(self):
+
+        '''
+        Get all records in L2Files database table.
+        '''
+
+
+        # Define query.
+
+        query = "select rid,crval1,crval2 from L2Files;"
+
+
+        # Query database.
+
+        print('query = {}'.format(query))
+
+
+        # Execute query.
+
+        try:
+            self.cur.execute(query)
+
+            try:
+                records = []
+                nrecs = 0
+                for record in self.cur:
+                    records.append(record)
+                    nrecs += 1
+
+                print("nrecs =",nrecs)
+
+            except:
+                    print("Nothing returned from database query; continuing...")
+
+        except (Exception, psycopg2.DatabaseError) as error:
+            print('*** Error getting all L2Files records ({}); skipping...'.format(error))
+            self.exit_code = 67
+            return
+
+        return records
+
+
+    def update_l2files_field,hp6_hp9(self,rid,field,hp6,hp9):
+
+        '''
+        Update field,hp6,hp9 indices in L2Files database record.
+        '''
+
+
+        # Define query.
+
+        query = "update L2Files set field = " + str(field) +\
+            ", hp6 = " + str(hp6) +\
+            ", hp9 = " + str(hp9) +\
+            " where rid = " + str(rid) + ";"
+
+
+        # Query database.
+
+        print('----> rid = {}'.format(rid))
+        print('----> field = {}'.format(field))
+        print('----> hp6 = {}'.format(hp6))
+        print('----> hp9 = {}'.format(hp9))
+
+        print('query = {}'.format(query))
+
+
+        # Execute query.
+
+        try:
+            self.cur.execute(query)
+
+            try:
+                records = []
+                for record in self.cur:
+                    records.append(record)
+            except:
+                    print("Nothing returned from database query; continuing...")
+
+        except (Exception, psycopg2.DatabaseError) as error:
+            print('*** Error updating L2Files record ({}); skipping...'.format(error))
+            self.exit_code = 67
+            return
+
+        if self.exit_code == 0:
+            self.conn.commit()           # Commit database transaction
+
+
+    def get_all_exposures(self):
+
+        '''
+        Get all records in Exposures database table.
+        '''
+
+
+        # Define query.
+        # Here we query the L2Files table for all exposures, since
+        # RA_TARG, DEC_TARG are currently stored here.
+
+        query = "select distinct expid, ra, dec from L2Files;"
+
+
+        # Query database.
+
+        print('query = {}'.format(query))
+
+
+        # Execute query.
+
+        try:
+            self.cur.execute(query)
+
+            try:
+                records = []
+                nrecs = 0
+                for record in self.cur:
+                    records.append(record)
+                    nrecs += 1
+
+                print("nrecs =",nrecs)
+
+            except:
+                    print("Nothing returned from database query; continuing...")
+
+        except (Exception, psycopg2.DatabaseError) as error:
+            print('*** Error getting all Exposures records ({}); skipping...'.format(error))
+            self.exit_code = 67
+            return
+
+        return records
+
+
+    def update_exposures_field,hp6_hp9(self,expid,field,hp6,hp9):
+
+        '''
+        Update field,hp6,hp9 indices in Exposures database record.
+        '''
+
+
+        # Define query.
+
+        query = "update Exposures set field = " + str(field) +\
+            ", hp6 = " + str(hp6) +\
+            ", hp9 = " + str(hp9) +\
+            " where expid = " + str(expid) + ";"
+
+
+        # Query database.
+
+        print('----> expid = {}'.format(expid))
+        print('----> field = {}'.format(field))
+        print('----> hp6 = {}'.format(ho6))
+        print('----> hp9 = {}'.format(hp9))
+
+        print('query = {}'.format(query))
+
+
+        # Execute query.
+
+        try:
+            self.cur.execute(query)
+
+            try:
+                records = []
+                for record in self.cur:
+                    records.append(record)
+            except:
+                    print("Nothing returned from database query; continuing...")
+
+        except (Exception, psycopg2.DatabaseError) as error:
+            print('*** Error updating Exposures record ({}); skipping...'.format(error))
+            self.exit_code = 67
+            return
+
+        if self.exit_code == 0:
+            self.conn.commit()           # Commit database transaction
