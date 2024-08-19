@@ -20,9 +20,9 @@ Reference Images
 
 Reference images are needed for image differencing.  The maximum-tolerable number of pixels in a reference image
 constrains the footprint of a reference image on the sky.  As will be seen below, it will be necessary to adopt
-a sub-tile scheme within the Roman tesselation.
+a sub-tile scheme within the Roman tessellation.
 
-The reference images will be constructed for sky tiles given by the NSIDE=10 Roman tesselation.
+The reference images will be constructed for sky tiles given by the NSIDE=10 Roman tessellation.
 In this gridding scheme, the sky is divided into 2402 tiles that are, in general,
 approximately square and with similar area.
 The tiles are basically aligned in rows within declination bins, with the most right-ascension
