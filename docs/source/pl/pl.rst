@@ -93,6 +93,12 @@ different SCAs will be stacked to make reference images.
 There should be some minimum observation-time interval between a science image and reference image, so that
 transients are actually detectable.
 
+For each image-differencing operation, image resampling is necessary.
+``SWarp`` can be used to resample the reference image into the distorted grid of the science image.
+In cases where the reference image consists of too few coadded inputs for undersampling to be resolved, it may be
+necessary to instead use ``awaicgen`` to resample the science image into the undistorted grid of the reference image
+(``awaicgen`` does not produce coadds mapped into distorted grids).
+
 Questions:
 
 * Buffer regions around reference image relative to what?
