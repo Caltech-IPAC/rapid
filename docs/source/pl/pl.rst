@@ -90,4 +90,10 @@ will involve pertinent neighboring reference images.
 Reference images will be constructed for different filters.  For a given filter, images from
 different SCAs will be stacked to make reference images.
 
-Sub-tile scheme or increase NSIDE?
+There should be some minimum observation-time interval between a science image and reference image, so that
+transients are actually detectable.
+
+Questions:
+* Buffer regions around reference image relative to what?
+* Sub-tile scheme or increase NSIDE?
+* Construct reference images on the fly?
