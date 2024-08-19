@@ -1,6 +1,9 @@
 RAPID Operations Database
 ####################################################
 
+Introduction
+************************************
+
 The RAPID pipeline utilizes a PostgreSQL database.  The Q3C library
 has been installed as a plug-in for fast queries on sky position.
 
@@ -26,9 +29,24 @@ roles, grants, table spaces, and some basic database-table content.  It also
 includes SQL files to drop tables and stored functions as a
 convenience (which is not generally needed).
 
+Schema
+************************************
+
 A diagram of the database-table schema is given as follows:
 
 .. image:: dbschema.png
+
+
+There are multiple provisions for indexing on sky position:
+
+* Q3C indexing
+* The field column in various tables store the Roman tessellation index for the associated sky position.
+  With NSIDE=10, these are relatively large rectangular buckets that are approximately 4 degrees on a side.
+* Healpix level-6 index (hp6), with an approximate resolution of 0.92 degrees (almost the width of the Roman WIFI or 6 SCAs plus gaps).
+* Healpix level-9 indices (hp9), with an approximate resolution of 0.11 degrees (almost the width of a Roman SCA).
+
+Record Versioning
+************************************
 
 L2 files, difference images, and reference images are versioned in their
 respective database tables (L2Files, DiffImages, and RefImages), given by the version column.  The version
@@ -38,6 +56,10 @@ column that stores 0 for not best, 1 for best that is usually the
 latest version, or 2 if the version is locked.  It is a matter of
 policy whether old versions will be kept in the filesystem and/or
 database (these could be removed at will).
+
+
+Sky-Position Queries Using Q3C Library Functions
+************************************
 
 The L2FileMeta and DiffImages database tables store the image centers
 (ra0, dec0) and their four corners (rai, deci, i=1,...,4).  Database
