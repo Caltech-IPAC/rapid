@@ -17,6 +17,16 @@ subdir_work = "work"
 aws_access_key_id = os.getenv('AWS_ACCESS_KEY_ID')
 aws_secret_access_key = os.getenv('AWS_SECRET_ACCESS_KEY')
 
+# Global variables.
+
+level6 = 6
+nside6 = 2**level6
+
+level9 = 9
+nside9 = 2**level9
+
+roman_tessellation_dict = util.read_roman_tessellation_nside10()
+
 
 def execute_command(cmd,no_check=False):
     print("cmd = ",cmd)
@@ -88,16 +98,24 @@ def register_exposure(dbh,header,expid,fid):
     status = 1
 
 
-    # Assign field number as level-6 healpix index (NESTED pixel ordering).
+    # Compute level-6 healpix index (NESTED pixel ordering).
 
-    level = 6
-    nside = 2**level
-    field = hp.ang2pix(nside,ra,dec,nest=True,lonlat=True)
+    hp6 = hp.ang2pix(nside6,ra,dec,nest=True,lonlat=True)
+
+
+    # Compute level-9 healpix index (NESTED pixel ordering).
+
+    hp9 = hp.ang2pix(nside9,ra,dec,nest=True,lonlat=True)
+
+
+    # Compute field.
+
+    field = util.get_roman_tessellation_index(roman_tessellation_dict,ra,dec)
 
 
     # Insert or update record in Exposures database table.
 
-    dbh.add_exposure(dateobs,mjdobs,field,filter,exptime,infobits,status)
+    dbh.add_exposure(dateobs,mjdobs,field,hp6,hp9,filter,exptime,infobits,status)
 
     expid = dbh.expid
     fid = dbh.fid
@@ -295,16 +313,24 @@ def register_l2file(dbh,header,subdir_only,file,expid,fid):
     status = 0         # Keep status = 0 until vbest is updated in a later step.
 
 
-    # Assign field number as level-6 healpix index (NESTED pixel ordering).
+    # Compute level-6 healpix index (NESTED pixel ordering).
 
-    level = 6
-    nside = 2**level
-    field = hp.ang2pix(nside,ra,dec,nest=True,lonlat=True)
+    hp6 = hp.ang2pix(nside6,ra,dec,nest=True,lonlat=True)
+
+
+    # Compute level-9 healpix index (NESTED pixel ordering).
+
+    hp9 = hp.ang2pix(nside9,ra,dec,nest=True,lonlat=True)
+
+
+    # Compute field.
+
+    field = util.get_roman_tessellation_index(roman_tessellation_dict,ra,dec)
 
 
     # Insert record in L2Files database table.
 
-    dbh.add_l2file(expid,chipid,field,fid,dateobs,mjdobs,exptime,infobits,
+    dbh.add_l2file(expid,chipid,field,hp6,hp9,fid,dateobs,mjdobs,exptime,infobits,
         status,filename,checksum,crval1,crval2,crpix1,crpix2,cd11,cd12,cd21,cd22,
         ctype1,ctype2,cunit1,cunit2,a_order,a_0_2,a_0_3,a_0_4,a_1_1,a_1_2,
         a_1_3,a_2_0,a_2_1,a_2_2,a_3_0,a_3_1,a_4_0,b_order,b_0_2,b_0_3,
@@ -378,14 +404,17 @@ def compute_and_register_l2filemeta(dbh,header,wcs,rid):
 
     # Compute level-6 healpix index (NESTED pixel ordering).
 
-    level = 6
-    nside = 2**level
-    hp6 = hp.ang2pix(nside,ra0,dec0,nest=True,lonlat=True)
+    hp6 = hp.ang2pix(nside6,ra,dec,nest=True,lonlat=True)
+
+
+    # Compute level-9 healpix index (NESTED pixel ordering).
+
+    hp9 = hp.ang2pix(nside9,ra,dec,nest=True,lonlat=True)
 
 
     # Register record in database.
 
-    dbh.register_l2filemeta(rid,ra0,dec0,ra1,dec1,ra2,dec2,ra3,dec3,ra4,dec4,x,y,z,hp6)
+    dbh.register_l2filemeta(rid,ra0,dec0,ra1,dec1,ra2,dec2,ra3,dec3,ra4,dec4,x,y,z,hp6,hp9)
 
 
 def register_files():
