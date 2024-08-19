@@ -94,6 +94,7 @@ There should be some minimum observation-time interval between a science image a
 transients are actually detectable.
 
 Questions:
+
 * Buffer regions around reference image relative to what?
 * Sub-tile scheme or increase NSIDE?
 * Construct reference images on the fly?
