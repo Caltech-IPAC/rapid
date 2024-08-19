@@ -42,7 +42,7 @@ There are multiple provisions for indexing on sky position:
 * Q3C indexing
 * The field column in various tables store the Roman tessellation index for the associated sky position.
   With NSIDE=10, these are relatively large rectangular buckets that are approximately 4 degrees on a side.
-* Healpix level-6 index (hp6), with an approximate resolution of 0.92 degrees (almost the width of the Roman WIFI or 6 SCAs plus gaps).
+* Healpix level-6 index (hp6), with an approximate resolution of 0.92 degrees (almost the width of the Roman WFI or 6 SCAs plus gaps).
 * Healpix level-9 indices (hp9), with an approximate resolution of 0.11 degrees (almost the width of a Roman SCA).
 
 Record Versioning
