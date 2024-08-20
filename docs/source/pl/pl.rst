@@ -81,6 +81,11 @@ center_dec   count      dec-bin num
 ==========   =====      ===========
 
 
+Here is a 3-D plot of the Roman tessellation for NSIDE=10:
+
+.. image:: Roman_Tessel_NSIDE10_2402.png
+
+
 The sky tiles are much larger than the Roman WFI focal plane (which is roughly 0.5 degrees by 1.2 degrees with gaps).
 It is an open question at this point whether the reference images are constructed to have any buffer regions
 outside of the sky tile (or smaller sub-tile).
