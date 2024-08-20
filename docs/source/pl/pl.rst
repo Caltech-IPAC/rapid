@@ -5,7 +5,11 @@ Introduction
 ************************************
 Below describes the current design of the RAPID pipeline and its rationale.
 
-.. warning::
+The pipeline will interact with the RAPID operations database, most likely in a
+loosely coupled way, in order to keep the design flexible and control the number
+of simultaneous connections.
+
+.. note::
     The pipeline design described below is evolving and subject to change.
 
 
