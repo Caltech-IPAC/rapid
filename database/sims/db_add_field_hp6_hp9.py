@@ -50,7 +50,8 @@ def add_field_hp6_hp9_indexes_to_l2files(roman_tessellation_dict):
     dbh = db.RAPIDDB()
 
 
-    # For all records, get rid, ra0, dec0.
+    # For all records, get rid, ra0, dec0.  The L2FileMeta table stores ra0, dec0,
+    # and so the query must join the L2Files and L2FileMeta tables.
 
     recs = dbh.get_all_l2files()
 

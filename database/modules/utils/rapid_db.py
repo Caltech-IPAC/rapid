@@ -719,7 +719,7 @@ class RAPIDDB:
 
         # Define query.
 
-        query = "select rid,crval1,crval2 from L2Files;"
+        query = "select a.rid, ra0, dec0 from L2Files a, L2FileMeta b where a.rid = b.rid;"
 
 
         # Query database.

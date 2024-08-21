@@ -51,9 +51,8 @@ def get_fits_header(file):
     hdul_input = fits.open(subdir_work + "/" + file)
 
     header = hdul_input[1].header         # Not PRIMARY header, but image header.
-    wcs = WCS(header)
 
-    return header,wcs
+    return header
 
 
 def register_exposure(dbh,header,expid,fid):
@@ -139,7 +138,7 @@ def get_keyword_value(header,key):
     return value
 
 
-def register_l2file(dbh,header,subdir_only,file,expid,fid):
+def register_l2file(dbh,header,wcs,subdir_only,file,expid,fid):
 
     #print("header =",header)
 
@@ -313,19 +312,27 @@ def register_l2file(dbh,header,subdir_only,file,expid,fid):
     status = 0         # Keep status = 0 until vbest is updated in a later step.
 
 
+    # Compute sky position of image center.
+
+    sky0 = compute_center_sky_position(header,wcs)
+
+    ra0 = sky0.ra.degree
+    dec0 = sky0.dec.degree
+
+
     # Compute level-6 healpix index (NESTED pixel ordering).
 
-    hp6 = hp.ang2pix(nside6,ra,dec,nest=True,lonlat=True)
+    hp6 = hp.ang2pix(nside6,ra0,dec0,nest=True,lonlat=True)
 
 
     # Compute level-9 healpix index (NESTED pixel ordering).
 
-    hp9 = hp.ang2pix(nside9,ra,dec,nest=True,lonlat=True)
+    hp9 = hp.ang2pix(nside9,ra0,dec0,nest=True,lonlat=True)
 
 
     # Compute field.
 
-    field = util.get_roman_tessellation_index(roman_tessellation_dict,ra,dec)
+    field = util.get_roman_tessellation_index(roman_tessellation_dict,ra0,dec0)
 
 
     # Insert record in L2Files database table.
@@ -359,7 +366,7 @@ def finalize_l2file(dbh,rid,version,filename,checksum):
     dbh.update_l2file(rid,filename,checksum,status,version)
 
 
-def compute_and_register_l2filemeta(dbh,header,wcs,rid):
+def compute_center_sky_position(header,wcs):
 
     key = "NAXIS1"
     naxis1 = get_keyword_value(header,key)
@@ -369,6 +376,22 @@ def compute_and_register_l2filemeta(dbh,header,wcs,rid):
 
     x0 = 0.5 * naxis1 + 0.5 - 1.0     # Integer pixel coordinates are zero-based and centered on pixel.
     y0 = 0.5 * naxis2 + 0.5 - 1.0
+
+
+    sky0 = wcs.pixel_to_world(x0, y0)
+
+    return sky0
+
+
+def compute_corner_sky_positions(header,wcs):
+
+    key = "NAXIS1"
+    naxis1 = get_keyword_value(header,key)
+
+    key = "NAXIS2"
+    naxis2 = get_keyword_value(header,key)
+
+    # Integer pixel coordinates are zero-based and centered on pixel.
 
     x1 = 0.5 - 1.0     # We want the extreme outer image edges.
     y1 = 0.5 - 1.0
@@ -382,11 +405,17 @@ def compute_and_register_l2filemeta(dbh,header,wcs,rid):
     x4 = 0.5 - 1.0
     y4 = naxis2 + 0.5 - 1.0
 
-    sky0 = wcs.pixel_to_world(x0, y0)
     sky1 = wcs.pixel_to_world(x1, y1)
     sky2 = wcs.pixel_to_world(x2, y2)
     sky3 = wcs.pixel_to_world(x3, y3)
     sky4 = wcs.pixel_to_world(x4, y4)
+
+    return sky1,sky2,sky3,sky4
+
+def compute_and_register_l2filemeta(dbh,header,wcs,rid):
+
+    sky0 = compute_center_sky_position(header,wcs)
+    sky1,sky2,sky3,sky4 = compute_corner_sky_positions(header,wcs)
 
     ra0 = sky0.ra.degree
     dec0 = sky0.dec.degree
@@ -404,12 +433,12 @@ def compute_and_register_l2filemeta(dbh,header,wcs,rid):
 
     # Compute level-6 healpix index (NESTED pixel ordering).
 
-    hp6 = hp.ang2pix(nside6,ra,dec,nest=True,lonlat=True)
+    hp6 = hp.ang2pix(nside6,ra0,dec0,nest=True,lonlat=True)
 
 
     # Compute level-9 healpix index (NESTED pixel ordering).
 
-    hp9 = hp.ang2pix(nside9,ra,dec,nest=True,lonlat=True)
+    hp9 = hp.ang2pix(nside9,ra0,dec0,nest=True,lonlat=True)
 
 
     # Register record in database.
@@ -484,11 +513,13 @@ def register_files():
         for file in files_input[subdir_only]:
 
             print("file =",file)
-            header,wcs = get_fits_header(file)
+            header = get_fits_header(file)
             if expid is None:
                 expid,fid = register_exposure(dbh,header,expid,fid)
 
-            rid,version,filename,checksum = register_l2file(dbh,header,subdir_only,file,expid,fid)
+            wcs = WCS(header)
+
+            rid,version,filename,checksum = register_l2file(dbh,header,wcs,subdir_only,file,expid,fid)
 
             finalize_l2file(dbh,rid,version,filename,checksum)     # Keep same filename and version for now.
 
