@@ -122,3 +122,11 @@ DROP SEQUENCE refimcatalogs_rfcatid_seq;
 -------------------
 
 DROP TABLE refimimages;
+
+
+-------------------
+-- Downlinks table
+-------------------
+
+DROP TABLE downlinks;
+DROP SEQUENCE downlinks_did_seq;

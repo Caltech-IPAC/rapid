@@ -791,3 +791,42 @@ ALTER TABLE ONLY refimimages ADD CONSTRAINT refimimages_rid_fk FOREIGN KEY (rid)
 
 CREATE INDEX refimimages_rid_idx ON refimimages (rid);
 CREATE INDEX refimimages_rfid_idx ON refimimages (rfid);
+
+
+-----------------------------
+-- TABLE: Downlinks
+-----------------------------
+
+SET default_tablespace = pipeline_data_01;
+
+CREATE TABLE downlinks (
+    did integer NOT NULL,                                        -- Primary key
+    datednlk timestamp without time zone NOT NULL,
+    filename character varying(255),
+    status smallint DEFAULT 0 NOT NULL,
+    checksum character varying(32),
+    created timestamp without time zone DEFAULT now() NOT NULL
+);
+
+ALTER TABLE downlinks OWNER TO rapidadminrole;
+
+CREATE SEQUENCE downlinks_did_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MAXVALUE
+    NO MINVALUE
+    CACHE 1;
+
+ALTER SEQUENCE downlinks_did_seq OWNER TO rapidadminrole;
+
+ALTER TABLE downlinks ALTER COLUMN did SET DEFAULT nextval('downlinks_did_seq'::regclass);
+
+SET default_tablespace = pipeline_indx_01;
+
+ALTER TABLE ONLY downlinks ADD CONSTRAINT downlinks_pkey PRIMARY KEY (did);
+
+ALTER TABLE ONLY downlinks ADD CONSTRAINT downlinkspk UNIQUE (datednlk);
+
+CREATE INDEX exposureps_status_idx ON downlinks (status);
+CREATE INDEX downlinks_datednlk_idx ON downlinks (datednlk);
+CREATE INDEX downlinks_created_idx ON downlinks (created);

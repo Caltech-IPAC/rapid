@@ -409,3 +409,31 @@ GRANT ALL ON TABLE refimimages TO GROUP rapidadminrole;
 
 REVOKE ALL ON TABLE refimimages FROM rapidporole;
 GRANT INSERT,UPDATE,SELECT,REFERENCES ON TABLE refimimages TO rapidporole;
+
+
+-------------------
+-- Downlinks table
+-------------------
+
+-- rapidreadrole
+
+REVOKE ALL ON TABLE downlinks FROM rapidreadrole;
+GRANT SELECT ON TABLE downlinks TO GROUP rapidreadrole;
+
+REVOKE ALL ON SEQUENCE downlinks_did_seq FROM rapidreadrole;
+
+-- rapidadminrole
+
+REVOKE ALL ON TABLE downlinks FROM rapidadminrole;
+GRANT ALL ON TABLE downlinks TO GROUP rapidadminrole;
+
+REVOKE ALL ON SEQUENCE downlinks_did_seq FROM rapidadminrole;
+GRANT ALL ON SEQUENCE downlinks_did_seq TO GROUP rapidadminrole;
+
+-- rapidporole
+
+REVOKE ALL ON TABLE downlinks FROM rapidporole;
+GRANT INSERT,UPDATE,SELECT,REFERENCES ON TABLE downlinks TO rapidporole;
+
+REVOKE ALL ON SEQUENCE downlinks_did_seq FROM rapidporole;
+GRANT USAGE ON SEQUENCE downlinks_did_seq TO rapidporole;
