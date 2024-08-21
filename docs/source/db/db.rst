@@ -27,7 +27,7 @@ git repository:
 It includes SQL files to define datatabase tables, stored functions,
 roles, grants, table spaces, and some basic database-table content.  It also
 includes SQL files to drop tables and stored functions as a
-convenience (which is not generally needed).
+convenience (which are not generally needed).
 
 Schema
 ************************************
