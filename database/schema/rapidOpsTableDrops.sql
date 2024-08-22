@@ -125,8 +125,8 @@ DROP TABLE refimimages;
 
 
 -------------------
--- Downlinks table
+-- SOCProcs table
 -------------------
 
-DROP TABLE downlinks;
-DROP SEQUENCE downlinks_did_seq;
+DROP TABLE socprocs;
+DROP SEQUENCE socprocs_did_seq;

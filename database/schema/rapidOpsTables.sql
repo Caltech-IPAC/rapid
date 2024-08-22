@@ -794,39 +794,40 @@ CREATE INDEX refimimages_rfid_idx ON refimimages (rfid);
 
 
 -----------------------------
--- TABLE: Downlinks
+-- TABLE: SOCProcs
 -----------------------------
 
 SET default_tablespace = pipeline_data_01;
 
-CREATE TABLE downlinks (
+CREATE TABLE socprocs (
     did integer NOT NULL,                                        -- Primary key
-    datednlk timestamp without time zone NOT NULL,
+    datedeliv timestamp without time zone NOT NULL,
     filename character varying(255),
     status smallint DEFAULT 0 NOT NULL,
     checksum character varying(32),
     created timestamp without time zone DEFAULT now() NOT NULL
 );
 
-ALTER TABLE downlinks OWNER TO rapidadminrole;
+ALTER TABLE socprocs OWNER TO rapidadminrole;
 
-CREATE SEQUENCE downlinks_did_seq
+CREATE SEQUENCE socprocs_did_seq
     START WITH 1
     INCREMENT BY 1
     NO MAXVALUE
     NO MINVALUE
     CACHE 1;
 
-ALTER SEQUENCE downlinks_did_seq OWNER TO rapidadminrole;
+ALTER SEQUENCE socprocs_did_seq OWNER TO rapidadminrole;
 
-ALTER TABLE downlinks ALTER COLUMN did SET DEFAULT nextval('downlinks_did_seq'::regclass);
+ALTER TABLE socprocs ALTER COLUMN did SET DEFAULT nextval('socprocs_did_seq'::regclass);
 
 SET default_tablespace = pipeline_indx_01;
 
-ALTER TABLE ONLY downlinks ADD CONSTRAINT downlinks_pkey PRIMARY KEY (did);
+ALTER TABLE ONLY socprocs ADD CONSTRAINT socprocs_pkey PRIMARY KEY (did);
 
-ALTER TABLE ONLY downlinks ADD CONSTRAINT downlinkspk UNIQUE (datednlk);
+ALTER TABLE ONLY socprocs ADD CONSTRAINT socprocspk UNIQUE (datedeliv);
 
-CREATE INDEX exposureps_status_idx ON downlinks (status);
-CREATE INDEX downlinks_datednlk_idx ON downlinks (datednlk);
-CREATE INDEX downlinks_created_idx ON downlinks (created);
+CREATE INDEX socprocs_datedeliv_idx ON socprocs (datedeliv);
+CREATE INDEX exposureps_filename_idx ON socprocs (filename);
+CREATE INDEX exposureps_status_idx ON socprocs (status);
+CREATE INDEX socprocs_created_idx ON socprocs (created);
