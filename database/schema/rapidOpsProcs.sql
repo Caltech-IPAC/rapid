@@ -1415,3 +1415,81 @@ create function registerRefImImages (
     end;
 
 $$ language plpgsql;
+
+
+-- Insert a new record into the SOCProcs table or update existing one.
+--
+create function addSOCProc (
+    datedeliv_            timestamp,
+    filename_             character varying(255),
+    checksum_             character varying(32),
+    status_               smallint
+)
+    returns record as $$
+
+    declare
+
+        r_               record;
+        did_           integer;
+        did__          integer;
+
+    begin
+
+
+        -- Insert or update record.
+
+        did__ := null;
+
+        select did
+        into did__
+        from SOCProcs
+        where datedeliv = datedeliv_;
+
+        if (did__ is null) then
+
+            -- Insert SOCProcs record.
+
+            begin
+
+                insert into SOCProcs
+                (datedeliv,
+                 filename,
+                 checksum,
+                 status
+                )
+                values
+                (datedeliv_,
+                 filename_,
+                 checksum_,
+                 status_
+                )
+                returning did into strict did_;
+                exception
+                    when no_data_found then
+                        raise exception
+                            '*** Error in addSOCProc: Row could not be inserted into SOCProcs table.';
+            end;
+
+        else
+
+            -- Update record in SOCProcs table.
+
+            did_ := did__;
+
+            update SOCProcs
+            set datedeliv = datedeliv_,
+                filename = filename_,
+                checksum = checksum_,
+                status = status_,
+                created = now()
+            where did = did_;
+
+        end if;
+
+        select did_, fid_ into r_;
+
+        return r_;
+
+    end;
+
+$$ language plpgsql;

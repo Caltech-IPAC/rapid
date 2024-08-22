@@ -226,3 +226,11 @@ grant EXECUTE on FUNCTION registerRefImImages (
     rfid_ integer,
     rid_ integer
 ) to rapidporole;
+
+
+grant EXECUTE on FUNCTION addSOCProc (
+    datedeliv_            timestamp,
+    filename_             character varying(255),
+    checksum_             character varying(32),
+    status_               smallint
+) to rapidporole;

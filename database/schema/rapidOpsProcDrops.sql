@@ -226,3 +226,11 @@ DROP FUNCTION registerRefImImages (
     rfid_ integer,
     rid_ integer
 );
+
+
+DROP FUNCTION addSOCProc (
+    datedeliv_            timestamp,
+    filename_             character varying(255),
+    checksum_             character varying(32),
+    status_               smallint
+);
