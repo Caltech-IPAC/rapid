@@ -46,6 +46,53 @@ def execute_command(cmd,no_check=False):
     return retval
 
 
+def compute_center_sky_position(header,wcs):
+
+    key = "NAXIS1"
+    naxis1 = get_keyword_value(header,key)
+
+    key = "NAXIS2"
+    naxis2 = get_keyword_value(header,key)
+
+    x0 = 0.5 * naxis1 + 0.5 - 1.0     # Integer pixel coordinates are zero-based and centered on pixel.
+    y0 = 0.5 * naxis2 + 0.5 - 1.0
+
+
+    sky0 = wcs.pixel_to_world(x0, y0)
+
+    return sky0
+
+
+def compute_corner_sky_positions(header,wcs):
+
+    key = "NAXIS1"
+    naxis1 = get_keyword_value(header,key)
+
+    key = "NAXIS2"
+    naxis2 = get_keyword_value(header,key)
+
+    # Integer pixel coordinates are zero-based and centered on pixel.
+
+    x1 = 0.5 - 1.0     # We want the extreme outer image edges.
+    y1 = 0.5 - 1.0
+
+    x2 = naxis1 + 0.5 - 1.0
+    y2 = 0.5 - 1.0
+
+    x3 = naxis1 + 0.5 - 1.0
+    y3 = naxis2 + 0.5 - 1.0
+
+    x4 = 0.5 - 1.0
+    y4 = naxis2 + 0.5 - 1.0
+
+    sky1 = wcs.pixel_to_world(x1, y1)
+    sky2 = wcs.pixel_to_world(x2, y2)
+    sky3 = wcs.pixel_to_world(x3, y3)
+    sky4 = wcs.pixel_to_world(x4, y4)
+
+    return sky1,sky2,sky3,sky4
+
+
 def get_fits_header(file):
 
     hdul_input = fits.open(subdir_work + "/" + file)
@@ -365,52 +412,6 @@ def finalize_l2file(dbh,rid,version,filename,checksum):
 
     dbh.update_l2file(rid,filename,checksum,status,version)
 
-
-def compute_center_sky_position(header,wcs):
-
-    key = "NAXIS1"
-    naxis1 = get_keyword_value(header,key)
-
-    key = "NAXIS2"
-    naxis2 = get_keyword_value(header,key)
-
-    x0 = 0.5 * naxis1 + 0.5 - 1.0     # Integer pixel coordinates are zero-based and centered on pixel.
-    y0 = 0.5 * naxis2 + 0.5 - 1.0
-
-
-    sky0 = wcs.pixel_to_world(x0, y0)
-
-    return sky0
-
-
-def compute_corner_sky_positions(header,wcs):
-
-    key = "NAXIS1"
-    naxis1 = get_keyword_value(header,key)
-
-    key = "NAXIS2"
-    naxis2 = get_keyword_value(header,key)
-
-    # Integer pixel coordinates are zero-based and centered on pixel.
-
-    x1 = 0.5 - 1.0     # We want the extreme outer image edges.
-    y1 = 0.5 - 1.0
-
-    x2 = naxis1 + 0.5 - 1.0
-    y2 = 0.5 - 1.0
-
-    x3 = naxis1 + 0.5 - 1.0
-    y3 = naxis2 + 0.5 - 1.0
-
-    x4 = 0.5 - 1.0
-    y4 = naxis2 + 0.5 - 1.0
-
-    sky1 = wcs.pixel_to_world(x1, y1)
-    sky2 = wcs.pixel_to_world(x2, y2)
-    sky3 = wcs.pixel_to_world(x3, y3)
-    sky4 = wcs.pixel_to_world(x4, y4)
-
-    return sky1,sky2,sky3,sky4
 
 def compute_and_register_l2filemeta(dbh,header,wcs,rid):
 
