@@ -46,6 +46,17 @@ def execute_command(cmd,no_check=False):
     return retval
 
 
+def get_keyword_value(header,key):
+
+    try:
+        value = header[key]
+    except:
+        print("*** Error: Cannot find header value for key =",key)
+        exit(0)
+
+    return value
+
+
 def compute_center_sky_position(header,wcs):
 
     key = "NAXIS1"
@@ -173,16 +184,6 @@ def register_exposure(dbh,header,expid,fid):
     # Return expid and fid.
 
     return expid,fid
-
-def get_keyword_value(header,key):
-
-    try:
-        value = header[key]
-    except:
-        print("*** Error: Cannot find header value for key =",key)
-        exit(0)
-
-    return value
 
 
 def register_l2file(dbh,header,wcs,subdir_only,file,expid,fid):
