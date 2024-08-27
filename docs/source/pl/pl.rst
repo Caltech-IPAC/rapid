@@ -27,6 +27,7 @@ constrains the footprint of a reference image on the sky.  As will be seen below
 a sub-tile scheme within the Roman tessellation.
 
 The reference images will be constructed for sky tiles given by the NSIDE=10 Roman tessellation.
+Please refer to the `SkyMap GitHub Repository <https://github.com/darioflute/skymap>`_ for the source code.
 In this gridding scheme, the sky is divided into 2402 tiles that are, in general,
 approximately square and with similar area.
 The tiles are basically aligned in rows within declination bins, with the most right-ascension
