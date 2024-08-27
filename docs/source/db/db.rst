@@ -43,7 +43,7 @@ There are multiple provisions for indexing on sky position:
 * The field column in various tables store the Roman tessellation index for the associated sky position.
   With NSIDE=10, these are relatively large rectangular buckets that are approximately 4 degrees on a side.
 * Healpix level-6 index (hp6), with an approximate resolution of 0.92 degrees (almost the width of the Roman WFI or 6 SCAs plus gaps).
-  There are 49152 level-6 indices.
+  There are 49,152 level-6 indices.
 * Healpix level-9 index (hp9), with an approximate resolution of 0.11 degrees (almost the width of a Roman SCA).
   There are 3,145,728 level-9 indices.
 
