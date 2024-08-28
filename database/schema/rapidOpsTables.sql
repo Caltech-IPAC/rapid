@@ -96,7 +96,7 @@ CREATE INDEX exposures_hp6_idx ON exposures (hp6);
 CREATE INDEX exposures_hp9_idx ON exposures (hp9);
 CREATE INDEX exposures_exptime_idx ON exposures (exptime);
 CREATE INDEX exposures_mjdobs_idx ON exposures (mjdobs);
-CREATE INDEX exposureps_status_idx ON exposures (status);
+CREATE INDEX exposures_status_idx ON exposures (status);
 CREATE INDEX exposures_infobits_idx ON exposures (infobits);
 
 
@@ -829,6 +829,6 @@ ALTER TABLE ONLY socprocs ADD CONSTRAINT socprocs_pkey PRIMARY KEY (did);
 ALTER TABLE ONLY socprocs ADD CONSTRAINT socprocspk UNIQUE (datedeliv);
 
 CREATE INDEX socprocs_datedeliv_idx ON socprocs (datedeliv);
-CREATE INDEX exposureps_filename_idx ON socprocs (filename);
-CREATE INDEX exposureps_status_idx ON socprocs (status);
+CREATE INDEX socprocs_filename_idx ON socprocs (filename);
+CREATE INDEX socprocs_status_idx ON socprocs (status);
 CREATE INDEX socprocs_created_idx ON socprocs (created);
