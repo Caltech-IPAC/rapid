@@ -803,6 +803,7 @@ CREATE TABLE socprocs (
     did integer NOT NULL,                                        -- Primary key
     datedeliv timestamp without time zone NOT NULL,
     filename character varying(255),
+    filesize integer,
     status smallint DEFAULT 0 NOT NULL,
     checksum character varying(32),
     created timestamp without time zone DEFAULT now() NOT NULL
