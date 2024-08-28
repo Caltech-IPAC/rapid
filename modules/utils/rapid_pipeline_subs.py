@@ -4,6 +4,43 @@ from astropy.io import fits
 import re
 
 
+rtd = 180.0 / math.pi
+dtr = 1.0 / rtd
+
+
+#-------------------------------------------------------------------
+# Given (x, y, z) on the unit sphere, compute (R.A., Dec.).
+
+def convert_xyz_to_radec(x,y,z):
+
+    zn = z
+    if (zn < -1.0):
+        zn = -1.0
+    elif (zn > 1.0):
+        zn = 1.0
+
+    dec = rtd * math.asin(zn)
+
+    denom = math.sqrt(x * x + y * y)
+
+    xn = x / denom
+
+    if (xn < -1.0):
+        xn = -1.0
+    elif (xn > 1.0):
+        xn = 1.0
+
+    ra = rtd * math.acos(xn)
+
+    if (y < 0.0):
+        ra = 360.0 - ra
+
+    if math.isnan(ra):
+        ra = 0.0
+
+    return ra,dec
+
+
 #-------------------------------------------------------------------
 # Given (R.A., Dec.), compute (x, y, z) on the unit sphere.
 
