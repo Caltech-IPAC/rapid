@@ -97,11 +97,11 @@ For the RAPID project, the parameter setting NSIDE=512 will be used.  This will 
 A tile size near the equator is 0.08789 degrees wide in ra and 0.0746 degrees high in dec.  This is roughly between 66% and 75% of the
 width of an SCA, which is approximately 0.12 degrees.  The tile sizes vary over the sky; for example, the height of a dec bin ranges
 from approximately 0.075 degrees to 0.1 degrees, and similarly for the widths of ra bins.  There are 2049 dec bins total, and 4096 ra
-bins near the equator.
+bins per dec bin near the equator.
 
 The reference images will be constructed to have sufficient buffer regions outside of the sky tile,
 since a single Roman SCA image may overlap multiple tiles.
-The buffer regions will account for arbitrary placement of individual frames relative to tile center sky positions, and
+The buffer regions will account for arbitrary placement of individual frames relative to tile-center sky positions, and
 also for arbitrary pointing roll angles.
 Nominally the pixel scale for the reference images
 will be the same as individual frames, but the size of reference images will be larger, having ~6Kx6K pixels instead of ~4Kx4K pixels.
