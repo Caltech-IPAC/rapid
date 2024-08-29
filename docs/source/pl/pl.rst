@@ -109,6 +109,8 @@ will be the same as individual frames, but the size of reference images will be 
 Reference images will be constructed for different filters.  For a given filter, images from
 different SCAs will be stacked to make reference images.
 
+All reference images will have north up.
+
 There should be some minimum observation-time interval between a science image and reference image, so that
 transients are actually detectable.
 
