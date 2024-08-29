@@ -93,8 +93,10 @@ Here is a 3-D plot of the Roman tessellation for NSIDE=10:
 
 .. image:: Roman_Tessel_NSIDE10_2402.png
 
-For the RAPID project, the parameter setting NSIDE=512 will be used.  This will result in 6,291,458 tiles covering the entire sky.
-A tile size near the equator is 0.08789 degrees wide in ra and 0.0746 degrees high in dec.  This is roughly between 66% and 75% of the
+For the RAPID project, the parameter setting NSIDE=512 will be used, and this will give much smaller tile sizes,
+resulting in 6,291,458 tiles covering the entire sky.
+The tile size near the equator, for example, is 0.08789 degrees wide in ra and 0.0746 degrees high in dec.
+This is roughly between 66% and 75% of the
 width of an SCA, which is approximately 0.12 degrees.  The tile sizes vary over the sky; for example, the height of a dec bin ranges
 from approximately 0.075 degrees to 0.1 degrees, and similarly for the widths of ra bins.  There are 2049 dec bins total, and 4096 ra
 bins per dec bin near the equator.
