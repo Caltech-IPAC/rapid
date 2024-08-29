@@ -23,12 +23,14 @@ Reference Images
 ************************************
 
 Reference images are needed for image differencing.  The maximum-tolerable number of pixels in a reference image
-constrains the footprint of a reference image on the sky.  As will be seen below, it will be necessary to adopt
-a sub-tile scheme within the Roman tessellation.
+constrains the footprint of a reference image on the sky.
+The reference images will be constructed for sky tiles given by the Roman tessellation scheme.
+As will be seen below, it will be necessary to adopt
+a tile size that is suitable for the size of a Roman SCA image.
 
-The reference images will be constructed for sky tiles given by the NSIDE=10 Roman tessellation.
-Please refer to the `SkyMap GitHub Repository <https://github.com/darioflute/skymap>`_ for the source code.
-In this gridding scheme, the sky is divided into 2402 tiles that are, in general,
+Please refer to the `SkyMap GitHub Repository <https://github.com/darioflute/skymap>`_ for the Roman-tessellation source code.
+In one implementation of this gridding scheme (for illustrative purposes here), the parameter setting NSIDE=10
+yields a sky that is divided into 2402 reltively large tiles, which are, in general,
 approximately square and with similar area.
 The tiles are basically aligned in rows within declination bins, with the most right-ascension
 bins at the equator and progressively fewer as
@@ -85,17 +87,24 @@ center_dec   count      dec-bin num
 90.0         1          41
 ==========   =====      ===========
 
+These sky tiles are much larger than the Roman WFI focal plane (which is roughly 0.5 degrees by 1.2 degrees with gaps).
 
 Here is a 3-D plot of the Roman tessellation for NSIDE=10:
 
 .. image:: Roman_Tessel_NSIDE10_2402.png
 
+For the RAPID project, the parameter setting NSIDE=512 will be used.  This will result in 6,291,458 tiles covering the entire sky.
+A tile size near the equator is 0.08789 degrees wide in ra and 0.0746 degrees high in dec.  This is roughly between 66% and 75% of the
+width of an SCA, which is approximately 0.12 degrees.  The tile sizes vary over the sky; for example, the height of a dec bin ranges
+from approximately 0.075 degrees to 0.1 degrees, and similarly for the widths of ra bins.  There are 2049 dec bins total, and 4096 ra
+bins near the equator.
 
-The sky tiles are much larger than the Roman WFI focal plane (which is roughly 0.5 degrees by 1.2 degrees with gaps).
-It is an open question at this point whether the reference images are constructed to have any buffer regions
-outside of the sky tile (or smaller sub-tile).
-Since a given Roman exposure may overlap a tile or sub-tile boundary, difference-imaging for such an exposure
-will involve pertinent neighboring reference images.
+The reference images will be constructed to have sufficient buffer regions outside of the sky tile,
+since a single Roman SCA image may overlap multiple tiles.
+The buffer regions will account for arbitrary placement of individual frames relative to tile center sky positions, and
+also for arbitrary pointing roll angles.
+Nominally the pixel scale for the reference images
+will be the same as individual frames, but the size of reference images will be larger, having ~6Kx6K pixels instead of ~4Kx4K pixels.
 
 Reference images will be constructed for different filters.  For a given filter, images from
 different SCAs will be stacked to make reference images.
@@ -103,14 +112,13 @@ different SCAs will be stacked to make reference images.
 There should be some minimum observation-time interval between a science image and reference image, so that
 transients are actually detectable.
 
+Image Differencing
+************************************
+
 For each image-differencing operation, image resampling is necessary.
 ``SWarp`` can be used to resample the reference image into the distorted grid of the science image.
 In cases where the reference image consists of too few coadded inputs for undersampling to be resolved, it may be
 necessary to instead use ``awaicgen`` to resample the science image into the undistorted grid of the reference image
 (``awaicgen`` does not produce coadds mapped into distorted grids).
 
-Questions:
 
-* Buffer regions around reference image relative to what?
-* Sub-tile scheme or increase NSIDE?
-* Construct reference images on the fly?
