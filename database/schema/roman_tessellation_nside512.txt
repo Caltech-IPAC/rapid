@@ -1,0 +1,335 @@
+Building SQLite Database for Roman Sky Tiles with NSIDE=512
+August 29, 2024
+
+This is one and you're done, and then copy it to an S3 bucket for safekeeping.
+
+Start with FITS file from running the skymap code:
+
+/Users/laher/Folks/rapid/romantessellation_nside512.fits
+
+Use Thoth to convert it into a SQLite database.  This executes
+the following operations SQL statements:
+
+numberOfColumns, numberOfRows = 7, 6291458
+SQL=create table Thoth1 (cra double, cdec double, ramin double, ramax double, decmin double, decmax double, rownum int8);
+Table successfully created!
+SQL=CREATE INDEX Thoth1rownum_idx ON Thoth1 (rownum);
+Index on rownum column successfully created!
+SQL=insert into Thoth1 values (?, ?, ?, ?, ?, ?, ?);
+numberOfColumns, numberOfRows = 7, 6291458
+Confirmed number of rows in SQLite database table Thoth1 = 6291458
+Finished adding new table to SQLite database.
+
+cd /Users/laher/git/rapid/database/schema
+cp -p ~/.Thoth/thoth.db roman_tessellation_nside512.db
+
+Now fix the problems present in the original FITS file:
+
+sqlite3 roman_tessellation_nside512.db
+
+alter table thoth1 rename to skytiles;
+alter table skytiles rename column rownum to rtid;
+alter table skytiles rename column decmin to tmp;
+alter table skytiles rename column decmax to decmin;
+alter table skytiles rename column tmp to decmax;
+
+select * from skytiles where rtid=2;
+
+cra|cdec|ramin|ramax|decmax|decmin|rtid
+0.0|89.90863|-22.5|22.5|89.954315|89.862946|2
+
+Looks good!
+
+select * from skytiles where rtid in (1,6291458);
+
+cra|cdec|ramin|ramax|decmax|decmin|rtid
+0.0|90.0|0.0|360.0|89.954315|90.0|1
+0.0|-90.0|0.0|0.0|-90.0|-89.954315|6291458
+
+As can be seen above, some of these values are messed up.
+Fix as follows:
+
+update skytiles set decmin=89.954315, decmax=90.0, cdec = 89.9771575 where rtid=1;
+update skytiles set decmin=-90.0, decmax=-89.954315, cdec = -89.9771575 where rtid=6291458;
+
+select * from skytiles where rtid in (1,6291458);
+
+cra|cdec|ramin|ramax|decmax|decmin|rtid
+0.0|89.9771575|0.0|360.0|90.0|89.954315|1
+0.0|-89.9771575|0.0|0.0|-89.954315|-90.0|6291458
+
+Looks correct now!
+
+Add database indexes:
+
+drop index Thoth1rownum_idx;
+create index skytiles_rtid_idx on skytiles (rtid);
+create index skytiles_ramin_idx on skytiles (ramin);
+create index skytiles_ramax_idx on skytiles (ramax);
+create index skytiles_decmin_idx on skytiles (decmin);
+create index skytiles_decmax_idx on skytiles (decmax);
+
+Assume image-center sky position is (ra,dec) = (11.1,-43.8) and query for the rtid:
+
+select * from skytiles where decmin <=-43.8 and decmax > -43.8 and ramin <= 11.1 and ramax > 11.1;
+
+cra|cdec|ramin|ramax|decmax|decmin|rtid
+11.067073|-43.80449|11.021341|11.112804|-43.754818|-43.85415|5321355
+
+This query runs in about 10 seconds on my Mac laptop.
+
+
+Index the 2049 dec bins with dbid in a separate database table...
+
+The dec bin indices (or dbid) will then be added as a new column to the skytiles database table.
+
+create table decbins (dbid integer primary key autoincrement, cdec double, nrabins integer);
+
+insert into decbins (cdec,nrabins)
+select cdec, count(*) from skytiles group by cdec order by cdec;
+
+create index decbins_dbid_idx on decbins (dbid);
+create index decbins_cdec_idx on decbins (cdec);
+
+select * from decbins order by dbid;
+
+alter table skytiles add column dbid integer null;
+
+update skytiles
+set dbid = decbins.dbid
+from decbins
+where skytiles.cdec = decbins.cdec;
+
+select * from decbins where cdec=89.26903;
+
+dbid|cdec
+2041|89.26903
+
+select * from skytiles where cdec=89.26903;
+
+cra|cdec|ramin|ramax|decmax|decmin|rtid|dbid
+0.0|89.26903|-2.8125|2.8125|89.31471|89.22334|226|2041
+5.625|89.26903|2.8125|8.4375|89.31471|89.22334|227|2041
+11.25|89.26903|8.4375|14.0625|89.31471|89.22334|228|2041
+16.875|89.26903|14.0625|19.6875|89.31471|89.22334|229|2041
+22.5|89.26903|19.6875|25.3125|89.31471|89.22334|230|2041
+28.125|89.26903|25.3125|30.9375|89.31471|89.22334|231|2041
+33.75|89.26903|30.9375|36.5625|89.31471|89.22334|232|2041
+39.375|89.26903|36.5625|42.1875|89.31471|89.22334|233|2041
+45.0|89.26903|42.1875|47.8125|89.31471|89.22334|234|2041
+50.625|89.26903|47.8125|53.4375|89.31471|89.22334|235|2041
+56.25|89.26903|53.4375|59.0625|89.31471|89.22334|236|2041
+61.875|89.26903|59.0625|64.6875|89.31471|89.22334|237|2041
+67.5|89.26903|64.6875|70.3125|89.31471|89.22334|238|2041
+73.125|89.26903|70.3125|75.9375|89.31471|89.22334|239|2041
+78.75|89.26903|75.9375|81.5625|89.31471|89.22334|240|2041
+84.375|89.26903|81.5625|87.1875|89.31471|89.22334|241|2041
+90.0|89.26903|87.1875|92.8125|89.31471|89.22334|242|2041
+95.625|89.26903|92.8125|98.4375|89.31471|89.22334|243|2041
+101.25|89.26903|98.4375|104.0625|89.31471|89.22334|244|2041
+106.875|89.26903|104.0625|109.6875|89.31471|89.22334|245|2041
+112.5|89.26903|109.6875|115.3125|89.31471|89.22334|246|2041
+118.125|89.26903|115.3125|120.9375|89.31471|89.22334|247|2041
+123.75|89.26903|120.9375|126.5625|89.31471|89.22334|248|2041
+129.375|89.26903|126.5625|132.1875|89.31471|89.22334|249|2041
+135.0|89.26903|132.1875|137.8125|89.31471|89.22334|250|2041
+140.625|89.26903|137.8125|143.4375|89.31471|89.22334|251|2041
+146.25|89.26903|143.4375|149.0625|89.31471|89.22334|252|2041
+151.875|89.26903|149.0625|154.6875|89.31471|89.22334|253|2041
+157.5|89.26903|154.6875|160.3125|89.31471|89.22334|254|2041
+163.125|89.26903|160.3125|165.9375|89.31471|89.22334|255|2041
+168.75|89.26903|165.9375|171.5625|89.31471|89.22334|256|2041
+174.375|89.26903|171.5625|177.1875|89.31471|89.22334|257|2041
+180.0|89.26903|177.1875|182.8125|89.31471|89.22334|258|2041
+185.625|89.26903|182.8125|188.4375|89.31471|89.22334|259|2041
+191.25|89.26903|188.4375|194.0625|89.31471|89.22334|260|2041
+196.875|89.26903|194.0625|199.6875|89.31471|89.22334|261|2041
+202.5|89.26903|199.6875|205.3125|89.31471|89.22334|262|2041
+208.125|89.26903|205.3125|210.9375|89.31471|89.22334|263|2041
+213.75|89.26903|210.9375|216.5625|89.31471|89.22334|264|2041
+219.375|89.26903|216.5625|222.1875|89.31471|89.22334|265|2041
+225.0|89.26903|222.1875|227.8125|89.31471|89.22334|266|2041
+230.625|89.26903|227.8125|233.4375|89.31471|89.22334|267|2041
+236.25|89.26903|233.4375|239.0625|89.31471|89.22334|268|2041
+241.875|89.26903|239.0625|244.6875|89.31471|89.22334|269|2041
+247.5|89.26903|244.6875|250.3125|89.31471|89.22334|270|2041
+253.125|89.26903|250.3125|255.9375|89.31471|89.22334|271|2041
+258.75|89.26903|255.9375|261.5625|89.31471|89.22334|272|2041
+264.375|89.26903|261.5625|267.1875|89.31471|89.22334|273|2041
+270.0|89.26903|267.1875|272.8125|89.31471|89.22334|274|2041
+275.625|89.26903|272.8125|278.4375|89.31471|89.22334|275|2041
+281.25|89.26903|278.4375|284.0625|89.31471|89.22334|276|2041
+286.875|89.26903|284.0625|289.6875|89.31471|89.22334|277|2041
+292.5|89.26903|289.6875|295.3125|89.31471|89.22334|278|2041
+298.125|89.26903|295.3125|300.9375|89.31471|89.22334|279|2041
+303.75|89.26903|300.9375|306.5625|89.31471|89.22334|280|2041
+309.375|89.26903|306.5625|312.1875|89.31471|89.22334|281|2041
+315.0|89.26903|312.1875|317.8125|89.31471|89.22334|282|2041
+320.625|89.26903|317.8125|323.4375|89.31471|89.22334|283|2041
+326.25|89.26903|323.4375|329.0625|89.31471|89.22334|284|2041
+331.875|89.26903|329.0625|334.6875|89.31471|89.22334|285|2041
+337.5|89.26903|334.6875|340.3125|89.31471|89.22334|286|2041
+343.125|89.26903|340.3125|345.9375|89.31471|89.22334|287|2041
+348.75|89.26903|345.9375|351.5625|89.31471|89.22334|288|2041
+354.375|89.26903|351.5625|357.1875|89.31471|89.22334|289|2041
+
+
+Create copy of skytiles as virtual database table with r-tree index for faster querying...
+
+create virtual table vskytiles using rtree (rtid,ramin,ramax,decmin,decmax);
+
+insert into vskytiles (rtid,ramin,ramax,decmin,decmax)
+select rtid,ramin,ramax,decmin,decmax from skytiles order by rtid;
+
+
+
+Assume image-center sky position is (ra,dec) = (11.1,-43.8) and query for the rtid:
+
+select * from vskytiles where decmin <=-43.8 and decmax > -43.8 and ramin <= 11.1 and ramax > 11.1;
+
+rtid|ramin|ramax|decmin|decmax
+5321355|11.0213394165039|11.1128044128418|-43.8541564941406|-43.7548179626465
+
+This query runs almost instantaneously on my Mac laptop.
+
+
+EXPERIMENT: See if I can create a virtual rtree table with additional columns...
+
+create virtual table test using rtree (rtid,ramin,ramax,decmin,decmax,cra double,cdec double);
+.headers on
+select * from test;
+drop table test;
+
+Yes, it works too.
+
+
+TEST: Algorithm to find 8 neighboring sky tiles...
+
+Assume image-center sky position is (ra,dec) = (11.1,-43.8) and query for the rtid:
+
+Step 1.  Fast query for rtid
+
+select * from vskytiles where decmin <=-43.8 and decmax > -43.8 and ramin <= 11.1 and ramax > 11.1;
+
+rtid|ramin|ramax|decmin|decmax
+5321355|11.0213394165039|11.1128044128418|-43.8541564941406|-43.7548179626465
+
+Step 2.  Query for entire skytiles record
+
+select * from skytiles where rtid=5321355;
+
+cra|cdec|ramin|ramax|decmax|decmin|rtid|dbid
+11.067073|-43.80449|11.021341|11.112804|-43.754818|-43.85415|5321355|493
+
+Step 3.  Query decbins table for nrabins, in the current dec bin, as well as below and above
+
+Be mindful that you are not already at one of the poles.
+
+select min(rtid),max(rtid) from skytiles;
+min(rtid)|max(rtid)
+1|6291458
+
+select min(dbid),max(dbid) from decbins;
+min(dbid)|max(dbid)
+1|2049
+
+
+select * from decbins where dbid in (492,493,494) order by dbid;
+
+dbid|cdec|nrabins
+492|-43.903805|3928
+493|-43.80449|3936
+494|-43.705135|3944
+
+Step 4.  Query its adjacent skytiles records and see whether we are on a 0-360 boundary crossing
+
+NOTE: While we are calling it "a 0-360 boundary crossing", technically, we are looking for whether
+we are at the first or last ra bin in a given dec bin, in which case the rtid of the adjecent sky tile
+in the same dec bin across the boundary will be related to a negative or positive offset given by
+the number of ra bins in that dec bin.
+
+If not at a 0-360 boundary crossing, the dbids will be the same as the sky tile of interest.
+
+Be mindful that you are not already at one of the poles.
+
+select min(rtid),max(rtid) from skytiles;
+min(rtid)|max(rtid)
+1|6291458
+
+select min(dbid),max(dbid) from decbins;
+min(dbid)|max(dbid)
+1|2049
+
+select * from skytiles where rtid in (5321354, 5321356);
+
+cra|cdec|ramin|ramax|decmax|decmin|rtid|dbid
+10.97561|-43.80449|10.929878|11.021341|-43.754818|-43.85415|5321354|493
+11.158537|-43.80449|11.112804|11.204268|-43.754818|-43.85415|5321356|493
+
+These records both have dbid=493, so we are not at a 0-360 boundary crossing.
+
+These two sky tiles are neighbors.
+
+Step 5.  Get the neighbors in adjacent declination bins.
+
+select * from skytiles where  ramin <= 11.1 and ramax > 11.1 and dbid in (492, 494);
+
+cra|cdec|ramin|ramax|decmax|decmin|rtid|dbid
+11.089613|-43.903805|11.043788|11.135438|-43.85415|-43.953445|5325291|492
+11.135902|-43.705135|11.090263|11.181541|-43.655445|-43.754818|5317412|494
+
+These two sky tiles are below and above adjecent neighbors.
+
+Step 6.  For the below adjacent neighbor, query its adjacent skytiles records and see whether we are on a 0-360 boundary crossing
+
+If not at a 0-360 boundary crossing, the dbids will be the same as the sky tile of interest.
+
+Be mindful that you are not already at one of the poles.
+
+select min(rtid),max(rtid) from skytiles;
+min(rtid)|max(rtid)
+1|6291458
+
+select min(dbid),max(dbid) from decbins;
+min(dbid)|max(dbid)
+1|2049
+
+select * from skytiles where rtid in (5325290, 5325292);
+
+cra|cdec|ramin|ramax|decmax|decmin|rtid|dbid
+10.997963|-43.903805|10.952139|11.043788|-43.85415|-43.953445|5325290|492
+11.181263|-43.903805|11.135438|11.227088|-43.85415|-43.953445|5325292|492
+
+These records both have dbid=492, so we are not at a 0-360 boundary crossing.
+
+These two sky tiles are also neighbors.
+
+
+Step 6.  For the above adjacent neighbor, query its adjacent skytiles records and see whether we are on a 0-360 boundary crossing
+
+If not at a 0-360 boundary crossing, the dbids will be the same as the sky tile of interest.
+
+Be mindful that you are not already at one of the poles.
+
+select min(rtid),max(rtid) from skytiles;
+min(rtid)|max(rtid)
+1|6291458
+
+select min(dbid),max(dbid) from decbins;
+min(dbid)|max(dbid)
+1|2049
+
+select * from skytiles where rtid in (5317411, 5317413);
+
+cra|cdec|ramin|ramax|decmax|decmin|rtid|dbid
+11.044624|-43.705135|10.998986|11.090263|-43.655445|-43.754818|5317411|494
+11.2271805|-43.705135|11.181541|11.2728195|-43.655445|-43.754818|5317413|494
+
+These records both have dbid=494, so we are not at a 0-360 boundary crossing.
+
+These two sky tiles are also neighbors.
+
+
+
+
+
