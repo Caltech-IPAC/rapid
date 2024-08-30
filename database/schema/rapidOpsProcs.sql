@@ -737,7 +737,6 @@ $$ language plpgsql;
 -- Insert a new record into the RefImages table.
 --
 create function addRefImage (
-    sca_                  smallint,
     field_                integer,
     hp6_                  integer,
     hp9_                  integer,
@@ -762,7 +761,7 @@ create function addRefImage (
 
     begin
 
-        -- Reference images are versioned according to unique (sca, field, fid, ppid) quartets.
+        -- Reference images are versioned according to unique (field, fid, ppid) quartets.
 
         -- Note that the vBest flag is updated when database stored
         -- function updateRefImage is executed.
@@ -770,8 +769,7 @@ create function addRefImage (
         select coalesce(max(version), 0) + 1
         into version_
         from RefImages
-        where sca = sca_
-        and field = field_
+        where field = field_
         and fid = fid_
         and ppid = ppid_;
 
@@ -803,14 +801,14 @@ create function addRefImage (
         begin
 
             insert into RefImages
-            (sca, field, hp6, hp9, fid, ppid, version, status, vbest, filename, checksum, infobits, svid)
+            (field, hp6, hp9, fid, ppid, version, status, vbest, filename, checksum, infobits, svid)
             values
-            (sca_, field_, hp6_, hp9_, fid_, ppid_, version_, status_, vbest_, filename_, checksum_, infobits, svid_)
+            (field_, hp6_, hp9_, fid_, ppid_, version_, status_, vbest_, filename_, checksum_, infobits, svid_)
             returning rfid into strict rfid_;
             exception
                 when no_data_found then
                     raise exception
-                        '*** Error in addRefImage: RefImages record for sca,field,fid,ppid=%,%,%,% not inserted.', sca_,field_,fid_,ppid_;
+                        '*** Error in addRefImage: RefImages record for field,fid,ppid=%,%,% not inserted.', field_,fid_,ppid_;
 
         end;
 
@@ -842,7 +840,6 @@ create function updateRefImage (
 
         rfid__            integer;
         currentVBest_     smallint;
-        sca_              smallint;
         field_            integer;
         fid_              smallint;
         ppid_             smallint;
@@ -854,12 +851,12 @@ create function updateRefImage (
 
         bestIs2_ := 'f';
 
-        -- First, get the sca, field, fid, ppid for the reference image.
+        -- First, get the field, fid, ppid for the reference image.
 
         begin
 
-            select sca, field, fid, ppid
-            into strict sca_, field_ fid_, ppid_
+            select field, fid, ppid
+            into strict field_ fid_, ppid_
             from RefImages
             where rfid = rfid_;
             exception
@@ -870,7 +867,7 @@ create function updateRefImage (
         end;
 
         -- If this isn't the first RefImages record
-        -- for the exposure and sca, then set the vBest flag to 0
+        -- for the field, filter, and ppid, then set the vBest flag to 0
         -- for records associated with all prior versions. Update
         -- the new RefImages record with its version number and
         -- vBest flag equal to 1 (latest is best).
@@ -888,8 +885,7 @@ create function updateRefImage (
         select count(*)
         into count_
         from RefImages
-        where sca = sca_
-        and field = field_
+        where field = field_
         and fid = fid_
         and ppid = ppid_
         and vBest in (1, 2);
@@ -903,8 +899,7 @@ create function updateRefImage (
             select rfid, vBest
             into rfid__, currentVBest_
             from RefImages
-            where sca = sca_
-            and field = field_
+            where field = field_
             and fid = fid_
             and ppid = ppid_
             and vBest in (1, 2);
@@ -1293,7 +1288,6 @@ create function registerRefImCatalog (
     rfid_     integer,
     ppid_     smallint,
     catType_  smallint,
-    sca_      smallint,
     field_    integer,
     hp6_      integer,
     hp9_      integer,
@@ -1332,10 +1326,10 @@ create function registerRefImCatalog (
             begin
 
                 insert into RefImCatalogs
-                (rfcatid, rfid, ppid, catType, field, hp6, hp9, sca, fid,
+                (rfcatid, rfid, ppid, catType, field, hp6, hp9, fid,
                  svid, filename, checksum, status, created)
                 values
-                (rfcatid_, rfid_, ppid_, catType_, field_, hp6_, hp9_, sca_, fid_,
+                (rfcatid_, rfid_, ppid_, catType_, field_, hp6_, hp9_, fid_,
                  svid_, filename_, checksum_, status_, now());
                 exception
                     when no_data_found then
@@ -1356,7 +1350,6 @@ create function registerRefImCatalog (
                 field = field_,
                 hp6 = hp6_,
                 hp9 = hp9_,
-                sca = sca_,
                 fid = fid_,
                 svid = svid_,
                 filename = filename_,

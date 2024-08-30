@@ -360,7 +360,6 @@ CREATE TABLE refimages (
     field integer NOT NULL,               -- Roman tessellation index for (ra0,dec0)
     hp6 integer NOT NULL,                 -- Level-6 healpix index (NESTED) for (ra0,dec0)
     hp9 integer NOT NULL,                 -- Level-9 healpix index (NESTED) for (ra0,dec0)
-    sca smallint NOT NULL,
     fid smallint NOT NULL,
     ppid smallint NOT NULL,
     version smallint NOT NULL,
@@ -394,9 +393,8 @@ SET default_tablespace = pipeline_indx_01;
 
 ALTER TABLE ONLY refimages ADD CONSTRAINT refimages_pkey PRIMARY KEY (rfid);
 
-ALTER TABLE ONLY refimages ADD CONSTRAINT refimagespk UNIQUE (field, sca, fid, ppid, version);
+ALTER TABLE ONLY refimages ADD CONSTRAINT refimagespk UNIQUE (field, fid, ppid, version);
 
-ALTER TABLE ONLY refimages ADD CONSTRAINT refimages_sca_fk FOREIGN KEY (sca) REFERENCES scas(sca);
 ALTER TABLE ONLY refimages ADD CONSTRAINT refimages_fid_fk FOREIGN KEY (fid) REFERENCES filters(fid);
 ALTER TABLE ONLY refimages ADD CONSTRAINT refimages_ppid_fk FOREIGN KEY (ppid) REFERENCES pipelines(ppid);
 ALTER TABLE ONLY refimages ADD CONSTRAINT refimages_svid_fk FOREIGN KEY (svid) REFERENCES swversions(svid);
@@ -405,7 +403,6 @@ ALTER TABLE ONLY refimages ADD CONSTRAINT refimages_avid_fk FOREIGN KEY (avid) R
 CREATE INDEX refimages_field_idx ON refimages (field);
 CREATE INDEX refimages_hp6_idx ON refimages (hp6);
 CREATE INDEX refimages_hp9_idx ON refimages (hp9);
-CREATE INDEX refimages_sca_idx ON refimages (sca);
 CREATE INDEX refimages_fid_idx ON refimages (fid);
 CREATE INDEX refimages_created_idx ON refimages (created);
 CREATE INDEX refimages_vbest_idx ON refimages (vbest);
@@ -712,7 +709,6 @@ CREATE TABLE refimcatalogs (
     rfid integer NOT NULL,
     ppid smallint NOT NULL,
     cattype smallint NOT NULL,
-    sca smallint NOT NULL,
     field integer NOT NULL,                        -- Roman tessellation index for (ra0,dec0)
     hp6 integer NOT NULL,                          -- Level-6 healpix index (NESTED) for (ra0,dec0)
     hp9 integer NOT NULL,                          -- Level-9 healpix index (NESTED) for (ra0,dec0)
@@ -748,8 +744,6 @@ ALTER TABLE ONLY refimcatalogs ADD CONSTRAINT refimcatalogs_rfid_fk FOREIGN KEY 
 
 ALTER TABLE ONLY refimcatalogs ADD CONSTRAINT refimcatalogs_ppid_fk FOREIGN KEY (ppid) REFERENCES pipelines(ppid);
 
-ALTER TABLE ONLY refimcatalogs ADD CONSTRAINT refimcatalogs_sca_fk FOREIGN KEY (sca) REFERENCES scas(sca);
-
 ALTER TABLE ONLY refimcatalogs ADD CONSTRAINT refimcatalogs_fid_fk FOREIGN KEY (fid) REFERENCES filters(fid);
 
 ALTER TABLE ONLY refimcatalogs ADD CONSTRAINT refimcatalogs_avid_fk FOREIGN KEY (avid) REFERENCES archiveversions(avid);
@@ -760,14 +754,12 @@ CREATE INDEX refimcatalogs_ppid_idx ON refimcatalogs (ppid);
 CREATE INDEX refimcatalogs_cattype_idx ON refimcatalogs (cattype);
 CREATE INDEX refimcatalogs_archivestatus_idx ON refimcatalogs (archivestatus);
 CREATE INDEX refimcatalogs_status_idx ON refimcatalogs (status);
-CREATE INDEX refimcatalogs_sca_idx ON refimcatalogs (sca);
 CREATE INDEX refimcatalogs_fid_idx ON refimcatalogs (fid);
 CREATE INDEX refimcatalogs_field_idx ON refimcatalogs (field);
 CREATE INDEX refimcatalogs_hp6_idx ON refimcatalogs (hp6);
 CREATE INDEX refimcatalogs_hp9_idx ON refimcatalogs (hp9);
 CREATE INDEX refimcatalogs_svid_idx ON refimcatalogs (svid);
 CREATE INDEX refimcatalogs_avid_idx ON refimcatalogs (avid);
-CREATE INDEX jobs_started_idx ON jobs (started);
 
 
 -----------------------------

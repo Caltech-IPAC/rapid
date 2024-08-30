@@ -143,7 +143,6 @@ DROP FUNCTION updateDiffImage (
 
 
 DROP FUNCTION addRefImage (
-    sca_                  smallint,
     field_                integer,
     hp6_                  integer,
     hp9_                  integer,
@@ -211,7 +210,6 @@ DROP FUNCTION registerRefImCatalog (
     rfid_     integer,
     ppid_     smallint,
     catType_  smallint,
-    sca_      smallint,
     field_    integer,
     hp6_      integer,
     hp9_      integer,
