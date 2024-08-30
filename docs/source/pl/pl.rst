@@ -101,6 +101,12 @@ width of an SCA, which is approximately 0.12 degrees.  The tile sizes vary over 
 from approximately 0.075 degrees to 0.1 degrees, and similarly for the widths of ra bins.  There are 2049 dec bins total, and 4096 ra
 bins per dec bin near the equator.
 
+For comparison, here are the sky footprints of a simulated Roman SCA frame (Roman_TDS_simple_model_F184_11474_2_lite.fits),
+Skymap sky tiles for NSIDE=512, and Healpix pixels for level=9:
+
+.. image:: RomanSCAFrame_vs_SkymapNSIDE512_and_Healpix9.png
+
+
 The reference images will be constructed to have sufficient buffer regions outside of the sky tile,
 since a single Roman SCA image may overlap multiple tiles.
 The buffer regions will account for arbitrary placement of individual frames relative to tile-center sky positions, and
