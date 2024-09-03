@@ -294,6 +294,8 @@ select min(dbid),max(dbid) from decbins;
 min(dbid)|max(dbid)
 1|2049
 
+The following rtids are -1 and +1 relative to rtid=5325291.
+
 select * from skytiles where rtid in (5325290, 5325292);
 
 cra|cdec|ramin|ramax|decmax|decmin|rtid|dbid
@@ -305,7 +307,7 @@ These records both have dbid=492, so we are not at a 0-360 boundary crossing.
 These two sky tiles are also neighbors.
 
 
-Step 6.  For the above adjacent neighbor, query its adjacent skytiles records and see whether we are on a 0-360 boundary crossing
+Step 7.  For the above adjacent neighbor, query its adjacent skytiles records and see whether we are on a 0-360 boundary crossing
 
 If not at a 0-360 boundary crossing, the dbids will be the same as the sky tile of interest.
 
@@ -318,6 +320,8 @@ min(rtid)|max(rtid)
 select min(dbid),max(dbid) from decbins;
 min(dbid)|max(dbid)
 1|2049
+
+The following rtids are -1 and +1 relative to rtid=5317412.
 
 select * from skytiles where rtid in (5317411, 5317413);
 
