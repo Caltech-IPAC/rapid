@@ -280,7 +280,8 @@ cra|cdec|ramin|ramax|decmax|decmin|rtid|dbid
 
 These two sky tiles are below and above adjecent neighbors.
 
-Step 6.  For the below adjacent neighbor, query its adjacent skytiles records and see whether we are on a 0-360 boundary crossing
+Step 6.  For the below-adjacent neighbor, query its adjacent skytiles records (in the same ra bin)
+         and see whether we are on a 0-360 boundary crossing
 
 If not at a 0-360 boundary crossing, the dbids will be the same as the sky tile of interest.
 
@@ -307,7 +308,8 @@ These records both have dbid=492, so we are not at a 0-360 boundary crossing.
 These two sky tiles are also neighbors.
 
 
-Step 7.  For the above adjacent neighbor, query its adjacent skytiles records and see whether we are on a 0-360 boundary crossing
+Step 7.  For the above-adjacent neighbor, query its adjacent skytiles records (in the same ra bin)
+         and see whether we are on a 0-360 boundary crossing
 
 If not at a 0-360 boundary crossing, the dbids will be the same as the sky tile of interest.
 
