@@ -64,6 +64,7 @@ def compute_xyz(ra,dec):
 #-------------------------------------------------------------------
 # Read in Roman tessellation data and return in data structure
 # that can be searched quickly in dec bins and then in ra bins.
+# This algorithm is generally only appropriate for NSIDE=10 or smaller.
 
 def read_roman_tessellation_nside10():
 
@@ -109,6 +110,7 @@ def read_roman_tessellation_nside10():
 
 #-------------------------------------------------------------------
 # Get Roman tessellation index for given (ra,dec).
+# This algorithm is generally only appropriate for NSIDE=10 or smaller.
 
 def get_roman_tessellation_index(rt_dict,ra,dec):
 
