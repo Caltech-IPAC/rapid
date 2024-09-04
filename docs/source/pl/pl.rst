@@ -19,18 +19,18 @@ Computer Languages
 The RAPID pipeline is written in Python, with some system calls to OS commands and C executable binaries.
 
 
-Reference Images
+Sky Tiles
 ************************************
 
-Reference images are needed for image differencing.  The maximum-tolerable number of pixels in a reference image
-constrains the footprint of a reference image on the sky.
-The reference images will be constructed for sky tiles given by the Roman tessellation scheme.
-As will be seen below, it will be necessary to adopt
-a tile size that is suitable for the size of a Roman SCA image.
+
+.. warning::
+    This section explains the Roman tessellation schema using large sky tiles, for illustration purposes only
+    (large tiles are easier to list and plot).
+    Much smaller tiles will be adopted for the RAPID pipeline, as discussed below in the section entitled Reference Images.
 
 Please refer to the `SkyMap GitHub Repository <https://github.com/darioflute/skymap>`_ for the Roman-tessellation source code.
 In one implementation of this gridding scheme (for illustrative purposes here), the parameter setting NSIDE=10
-yields a sky that is divided into 2402 reltively large tiles, which are, in general,
+yields a sky that is divided into 2402 relatively large tiles, which are, in general,
 approximately square and with similar area.
 The tiles are basically aligned in rows within declination bins, with the most right-ascension
 bins at the equator and progressively fewer as
@@ -93,13 +93,29 @@ Here is a 3-D plot of the Roman tessellation for NSIDE=10:
 
 .. image:: Roman_Tessel_NSIDE10_2402.png
 
-For the RAPID project, the parameter setting NSIDE=512 will be used, and this will give much smaller tile sizes,
-resulting in 6,291,458 tiles covering the entire sky.
+As will be seen below, it will be necessary to adopt
+a tile size that is suitable for Roman SCA images.
+
+
+Reference Images
+************************************
+
+Reference images are needed for image differencing.  The maximum-tolerable number of pixels in a reference image
+constrains the footprint of a reference image on the sky.
+The reference images will be constructed for sky tiles given by the Roman tessellation scheme.
+
+For the RAPID project, the Roman-tessellation parameter setting NSIDE=512 will be used,
+and this will give tile sizes somewhat smaller than that of a Roman SCA image.
+This results in 6,291,458 tiles covering the entire sky.
 The tile size near the equator, for example, is 0.08789 degrees wide in ra and 0.0746 degrees high in dec.
 This is roughly between 66% and 75% of the
 width of an SCA, which is approximately 0.12 degrees.  The tile sizes vary over the sky; for example, the height of a dec bin ranges
 from approximately 0.075 degrees to 0.1 degrees, and similarly for the widths of ra bins.  There are 2049 dec bins total, and 4096 ra
 bins per dec bin near the equator.
+
+The sky tiles are indexed starting with one, and these indexes, associated with different sky positions, such as the center of a reference image,
+are stored in the field column of various tables in the RAPID operations database.
+The maximum value of the field or sky-tile index is 6,291,458.
 
 For comparison, here are the sky footprints of a simulated Roman SCA image (Roman_TDS_simple_model_F184_11474_2_lite.fits),
 Skymap tiles for NSIDE=512, and Healpix pixels for level=9:
@@ -122,6 +138,7 @@ All reference images will have north up.
 
 There should be some minimum observation-time interval between a science image and reference image, so that
 transients are actually detectable.
+
 
 Image Differencing
 ************************************
