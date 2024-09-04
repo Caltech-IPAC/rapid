@@ -30,7 +30,7 @@ class RomanTessellationNSIDE512:
 
         sqlite_dbname = "roman_tessellation_nside512.db"
 
-        dbname = os.getenv('DBNAME')
+        dbname = os.getenv('ROMANTESSELLATIONDBNAME')
 
         if dbname is None:
 

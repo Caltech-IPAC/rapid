@@ -1,6 +1,6 @@
 import healpy as hp
 import database.modules.utils.rapid_db as db
-import modules.utils.rapid_pipeline_subs as util
+import database.modules.utils.roman_tessellation_db as sqlite
 
 def add_hp9_indexes_to_l2filemeta():
 
@@ -42,7 +42,7 @@ def add_hp9_indexes_to_l2filemeta():
     dbh.close()
 
 
-def add_field_hp6_hp9_indexes_to_l2files(roman_tessellation_dict):
+def add_field_hp6_hp9_indexes_to_l2files(roman_tessellation_db):
 
 
     # Open database connection.
@@ -83,7 +83,8 @@ def add_field_hp6_hp9_indexes_to_l2files(roman_tessellation_dict):
 
         # Compute field.
 
-        field = util.get_roman_tessellation_index(roman_tessellation_dict,ra,dec)
+        roman_tessellation_db.get_rtid(ra,dec)
+        field = roman_tessellation_db.rtid
 
 
         # Update record with commit.
@@ -96,7 +97,7 @@ def add_field_hp6_hp9_indexes_to_l2files(roman_tessellation_dict):
     dbh.close()
 
 
-def add_field_hp6_hp9_indexes_to_exposures(roman_tessellation_dict):
+def add_field_hp6_hp9_indexes_to_exposures(roman_tessellation_db):
 
 
     # Open database connection.
@@ -136,8 +137,8 @@ def add_field_hp6_hp9_indexes_to_exposures(roman_tessellation_dict):
 
         # Compute field.
 
-        field = util.get_roman_tessellation_index(roman_tessellation_dict,ra,dec)
-
+        roman_tessellation_db.get_rtid(ra,dec)
+        field = roman_tessellation_db.rtid
 
         # Update record with commit.
 
@@ -152,9 +153,9 @@ def add_field_hp6_hp9_indexes_to_exposures(roman_tessellation_dict):
 # Main program.
 
 if __name__ == '__main__':
-    rtd = util.read_roman_tessellation_nside10()
+    rtdb = sqlite.RomanTessellationNSIDE512()
     add_hp9_indexes_to_l2filemeta()
-    add_field_hp6_hp9_indexes_to_l2files(rtd)
-    add_field_hp6_hp9_indexes_to_exposures(rtd)
+    add_field_hp6_hp9_indexes_to_l2files(rtdb)
+    add_field_hp6_hp9_indexes_to_exposures(rtdb)
 
     exit(0)

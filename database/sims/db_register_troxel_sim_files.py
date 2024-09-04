@@ -10,6 +10,7 @@ from astropy.wcs import WCS
 
 import modules.utils.rapid_pipeline_subs as util
 import database.modules.utils.rapid_db as db
+import database.modules.utils.roman_tessellation_db as sqlite
 
 bucket_name_input = 'sims-sn-f184-lite'
 subdir_work = "work"
@@ -25,7 +26,7 @@ nside6 = 2**level6
 level9 = 9
 nside9 = 2**level9
 
-roman_tessellation_dict = util.read_roman_tessellation_nside10()
+roman_tessellation_db = sqlite.RomanTessellationNSIDE512()
 
 
 def execute_command(cmd,no_check=False):
@@ -167,7 +168,8 @@ def register_exposure(dbh,header,expid,fid):
 
     # Compute field.
 
-    field = util.get_roman_tessellation_index(roman_tessellation_dict,ra,dec)
+    roman_tessellation_db.get_rtid(ra,dec)
+    field = roman_tessellation_db.rtid
 
 
     # Insert or update record in Exposures database table.
@@ -380,7 +382,8 @@ def register_l2file(dbh,header,wcs,subdir_only,file,expid,fid):
 
     # Compute field.
 
-    field = util.get_roman_tessellation_index(roman_tessellation_dict,ra0,dec0)
+    roman_tessellation_db.get_rtid(ra0,dec0)
+    field = roman_tessellation_db.rtid
 
 
     # Insert record in L2Files database table.
