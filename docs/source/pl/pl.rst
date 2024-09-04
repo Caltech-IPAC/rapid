@@ -24,7 +24,7 @@ Sky Tiles
 
 
 .. warning::
-    This section explains the Roman tessellation schema using large sky tiles, for illustration purposes only
+    This section explains the Roman tessellation scheme using large sky tiles, for illustration purposes only
     (large tiles are easier to list and plot).
     Much smaller tiles will be adopted for the RAPID pipeline, as discussed below in the section entitled Reference Images.
 
@@ -113,7 +113,8 @@ width of an SCA, which is approximately 0.12 degrees.  The tile sizes vary over 
 from approximately 0.075 degrees to 0.1 degrees, and similarly for the widths of ra bins.  There are 2049 dec bins total, and 4096 ra
 bins per dec bin near the equator.
 
-The sky tiles are indexed starting with one, and these indexes, associated with different sky positions, such as the center of a reference image,
+The sky tiles of the Roman tessellation are indexed starting with one, and these indexes,
+associated with different sky positions, such as the center of a reference image,
 are stored in the field column of various tables in the RAPID operations database.
 The maximum value of the field or sky-tile index is 6,291,458.
 
