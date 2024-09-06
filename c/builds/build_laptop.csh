@@ -27,7 +27,7 @@ mkdir -p include/nan
 mkdir -p include/numericalrecipes
 
 #--------Build GSL library---------------------
-echo " "     
+echo " "
 echo "--->Building GSL 2.5 library ..."
 cd ${RAPID_SW}/c/common/gsl
 rm -rf gsl-2.5
@@ -37,7 +37,7 @@ cd gsl-2.5
 make
 make check
 make install
-echo " "     
+echo " "
 echo "--->Finished building GSL 2.5 library."
 
 #--------Build cfitsio library-------------------------------
@@ -65,7 +65,7 @@ echo " "
 echo "--->Finished building CFITSIO library."
 
 #--------Build wcslib library---------------------
-echo " "     
+echo " "
 echo "--->Building wcslib library, version 8.2.2 ..."
 cd ${RAPID_SW}/c/common/wcslib
 rm -rf wcslib-8.2.2
@@ -73,23 +73,23 @@ tar -xvf wcslib-8.2.2.tar
 cd wcslib-8.2.2
 ./configure --prefix=${RAPID_SW}/c  --with-cfitsiolib=${RAPID_SW}/c/lib --with-cfitsioinc=${RAPID_SW}/c/include/cfitsio
 make
-make install 
-echo " "     
+make install
+echo " "
 echo "--->Finished building wcslib library."
 
 #--------Build wcstools---------------------
-echo " "     
+echo " "
 echo "--->Building wcstools, version 3.9.7 ..."
 cd ${RAPID_SW}/c/common/wcstools
 rm -rf wcstools-3.9.7
 tar -xvf wcstools-3.9.7.tar
 cd wcstools-3.9.7
 make all
-echo " "     
+echo " "
 echo "--->Finished building wcstools."
 
 #--------Build awaicgen binary---------------------
-echo " "     
+echo " "
 echo "--->Building awaicgen, version 5.2 ..."
 cd ${RAPID_SW}/c/common/awaicgen
 rm -rf awaicgen-5.2
@@ -99,11 +99,11 @@ make
 cd ${RAPID_SW}/c/common/awaicgen/awaicgen-5.2
 make
 cp -p awaicgen ${RAPID_SW}/c/bin
-echo " "     
+echo " "
 echo "--->Finished building awaicgen."
 
 #--------Build swarp binary---------------------
-echo " "     
+echo " "
 echo "--->Building swarp, version 2.41.5 ..."
 cd ${RAPID_SW}/c/common/swarp
 rm -rf swarp-2.41.5
@@ -112,8 +112,8 @@ cd swarp-2.41.5
 ./autogen.sh
 ./configure --prefix=${RAPID_SW}/c --enable-threads=8  --with-cfitsio-libdir=${RAPID_SW}/c/lib --with-cfitsio-incdir=${RAPID_SW}/c/include/cfitsio
 make
-make install 
-echo " "     
+make install
+echo " "
 echo "--->Finished building swarp."
 
 #--------Build fitsverify module-------------------
@@ -192,7 +192,7 @@ echo " "
 echo "--->Finished building makeTestFitsFile module."
 
 #--------Build fftw library-------------------
-echo " "     
+echo " "
 echo "--->Building fftw library ..."
 cd ${RAPID_SW}/c/common/fftw
 rm -rf bin lib include share
@@ -207,7 +207,7 @@ echo " "
 echo "--->Finished building fftw library."
 
 #--------Build atlas library---------------------
-echo " "     
+echo " "
 echo "--->Building sextractor, version 3.10.3 ..."
 cd ${RAPID_SW}/c/common/atlas
 rm -rf ATLAS3.10.3
@@ -216,17 +216,17 @@ mv ATLAS ATLAS3.10.3
 cd ATLAS3.10.3
 mkdir build
 cd build
-../configure -b 64 --prefix=$RAPID_SW/c/atlas --with-netlib-lapack-tarfile=$RAPID_SW/c/common/atlas/lapack-3.12.0.tar.gz 
+../configure -b 64 --prefix=$RAPID_SW/c/atlas --with-netlib-lapack-tarfile=$RAPID_SW/c/common/atlas/lapack-3.12.0.tar.gz
 make build
 make check
 make ptcheck
 make time
 make install
-echo " "     
+echo " "
 echo "--->Finished building atlas library."
 
 #--------Build sextractor binary---------------------
-echo " "     
+echo " "
 echo "--->Building sextractor, version 2.25.0 ..."
 cd ${RAPID_SW}/c/common/sextractor
 rm -rf sextractor-2.25.0
@@ -237,6 +237,15 @@ cd sextractor-2.25.0
 cp -p ../configure_hacked configure
 ./configure CPPFLAGS=-I${RAPID_SW}/c/common/fftw/include:${RAPID_SW}/c/atlas/include LDFLAGS=-L${RAPID_SW}/c/common/fftw/lib:${RAPID_SW}/c/atlas/lib --enable-static --prefix=${RAPID_SW}/c --with-fftw-libdir=${RAPID_SW}/c/common/fftw/lib --with-fftw-incdir=${RAPID_SW}/c/common/fftw/include --with-atlas-libdir=${RAPID_SW}/c/atlas/lib --with-atlas-incdir=${RAPID_SW}/c/atlas/include --enable-threads=4
 make
-make install 
-echo " "     
+make install
+echo " "
 echo "--->Finished building sextractor."
+
+#--------Build computeOverlapArea module-------------------
+echo " "
+echo "--->Building computeOverlapArea module ..."
+cd ${RAPID_SW}/c/src/computeOverlapArea
+make clean
+make
+echo " "
+echo "--->Finished building computeOverlapArea module."
