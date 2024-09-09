@@ -44,7 +44,7 @@ class RomanTessellationNSIDE512:
         try:
             self.conn = sqlite3.connect(database=dbname)
         except:
-            print("Could not connect to database...")
+            print("*** Error: Could not connect to database in sub roman_tessellation_db.__init__...")
             self.exit_code = 64
             return
 
@@ -77,7 +77,7 @@ class RomanTessellationNSIDE512:
         finally:
             if self.conn is not None:
                 self.conn.close()
-                print('Database connection closed.')
+                print('Database connection closed in sub roman_tessellation_db.close.')
 
 
     def get_rtid(self,ra,dec):
@@ -120,11 +120,111 @@ class RomanTessellationNSIDE512:
             if record is not None:
                 self.rtid = record[0]
             else:
-                print("*** Error unexpected query return value; returning None...")
+                print("*** Error: Unexpected query return value in sub roman_tessellation_db.get_rtid; returning None...")
                 self.exit_code = 69
                 return
 
         except (Exception, sqlite3.DatabaseError) as error:
-            print("*** Error executing get_rtid; returning None...")
+            print("*** Error executing sub roman_tessellation_db.get_rtid; returning None...")
+            self.exit_code = 67
+            return
+
+
+    def get_center_sky_position(self,rtid):
+
+        '''
+        Get center sky position (RA, Dec) for given rtid.
+        '''
+
+
+        # Define query template.
+
+        query_template = "select cra,cdec from skytiles " +\
+                         "where rtid = QUERY_RTID;"
+
+
+        # Substitute parameters into query template.
+
+        rep = {}
+        rep["QUERY_RTID"] = str(rtid)
+
+
+        rep = dict((re.escape(k), v) for k, v in rep.items())
+        pattern = re.compile("|".join(rep.keys()))
+        query = pattern.sub(lambda m: rep[re.escape(m.group(0))], query_template)
+
+        print('query = {}'.format(query))
+
+
+        # Execute query.
+
+        self.rtid = None
+
+        try:
+            self.cur.execute(query)
+
+            record = self.cur.fetchone()
+
+            if record is not None:
+                self.cra = record[0]
+                self.cdec = record[1]
+            else:
+                print("*** Error: Unexpected query return value in sub roman_tessellation_db.get_center_sky_position; returning None...")
+                self.exit_code = 69
+                return
+
+        except (Exception, sqlite3.DatabaseError) as error:
+            print("*** Error executing sub roman_tessellation_db.get_center_sky_position; returning None...")
+            self.exit_code = 67
+            return
+
+
+    def get_extreme_sky_positions(self,rtid):
+
+        '''
+        Get ramin, ramax, decmin, decmmax sky positions (RA, Dec) for given rtid.
+        '''
+
+
+        # Define query template.
+
+        query_template = "select ramin,ramax,decmin,decmax from skytiles " +\
+                         "where rtid = QUERY_RTID;"
+
+
+        # Substitute parameters into query template.
+
+        rep = {}
+        rep["QUERY_RTID"] = str(rtid)
+
+
+        rep = dict((re.escape(k), v) for k, v in rep.items())
+        pattern = re.compile("|".join(rep.keys()))
+        query = pattern.sub(lambda m: rep[re.escape(m.group(0))], query_template)
+
+        print('query = {}'.format(query))
+
+
+        # Execute query.
+
+        self.rtid = None
+
+        try:
+            self.cur.execute(query)
+
+            record = self.cur.fetchone()
+
+            if record is not None:
+                self.ramin = record[0]
+                self.ramax = record[1]
+                self.decmin = record[2]
+                self.decmax = record[3]
+            else:
+                print("*** Error: Unexpected query return value in sub roman_tessellation_db.get_extreme_sky_positions; returning None...")
+                self.exit_code = 69
+                return
+
+        except (Exception, sqlite3.DatabaseError) as error:
+            print("*** Error executing sub roman_tessellation_db.get_extreme_sky_positions; returning None...")
             self.exit_code = 67
             return
