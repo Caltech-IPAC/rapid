@@ -83,7 +83,7 @@ class RomanTessellationNSIDE512:
     def get_rtid(self,ra,dec):
 
         '''
-        Get rtid for given (RA, Dec).
+        Query SQLite database for rtid associated with given (RA, Dec).
         '''
 
 
@@ -133,7 +133,7 @@ class RomanTessellationNSIDE512:
     def get_center_sky_position(self,rtid):
 
         '''
-        Get center sky position (RA, Dec) for given rtid.
+        Query SQLite database for center sky position (RA, Dec) associated with given rtid.
         '''
 
 
@@ -158,7 +158,8 @@ class RomanTessellationNSIDE512:
 
         # Execute query.
 
-        self.rtid = None
+        self.ra0 = None
+        self.dec0 = None
 
         try:
             self.cur.execute(query)
@@ -166,8 +167,8 @@ class RomanTessellationNSIDE512:
             record = self.cur.fetchone()
 
             if record is not None:
-                self.cra = record[0]
-                self.cdec = record[1]
+                self.ra0 = record[0]
+                self.dec0 = record[1]
             else:
                 print("*** Error: Unexpected query return value in sub roman_tessellation_db.get_center_sky_position; returning None...")
                 self.exit_code = 69
@@ -179,10 +180,11 @@ class RomanTessellationNSIDE512:
             return
 
 
-    def get_extreme_sky_positions(self,rtid):
+    def get_corner_sky_positions(self,rtid):
 
         '''
-        Get ramin, ramax, decmin, decmmax sky positions (RA, Dec) for given rtid.
+        Query SQLite database for ramin, ramax, decmin, decmmax sky positions (RA, Dec) associated with given rtid.
+        Then formulate the sky positions of the four corners.
         '''
 
 
@@ -207,7 +209,19 @@ class RomanTessellationNSIDE512:
 
         # Execute query.
 
-        self.rtid = None
+        self.ramin = None
+        self.ramax = None
+        self.decmin = None
+        self.decmax = None
+
+        self.ra1 = None
+        self.dec1 = None
+        self.ra2 = None
+        self.dec2 = None
+        self.ra3 = None
+        self.dec3 = None
+        self.ra4 = None
+        self.dec4 = None
 
         try:
             self.cur.execute(query)
@@ -220,11 +234,20 @@ class RomanTessellationNSIDE512:
                 self.decmin = record[2]
                 self.decmax = record[3]
             else:
-                print("*** Error: Unexpected query return value in sub roman_tessellation_db.get_extreme_sky_positions; returning None...")
+                print("*** Error: Unexpected query return value in sub roman_tessellation_db.get_corner_sky_positions; returning None...")
                 self.exit_code = 69
                 return
 
         except (Exception, sqlite3.DatabaseError) as error:
-            print("*** Error executing sub roman_tessellation_db.get_extreme_sky_positions; returning None...")
+            print("*** Error executing sub roman_tessellation_db.get_corner_sky_positions; returning None...")
             self.exit_code = 67
             return
+
+        self.ra1 = ramin
+        self.dec1 = decmin
+        self.ra2 = ramax
+        self.dec2 = decmin
+        self.ra3 = ramax
+        self.dec3 = decmax
+        self.ra4 = ramin
+        self.dec4 = decmax
