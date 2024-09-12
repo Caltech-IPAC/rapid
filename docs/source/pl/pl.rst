@@ -132,10 +132,15 @@ also for arbitrary pointing roll angles.
 Nominally the pixel scale for the reference images
 will be the same as individual frames, but the size of reference images will be larger, having ~6Kx6K pixels instead of ~4Kx4K pixels.
 
+
+Here is the sky footprint, shown in cyan, of the proposed reference image for the example given above:
+
+.. image:: ReferenceImage.png
+
 Reference images will be constructed for different filters.  For a given filter, images from
 different SCAs will be stacked to make reference images.
 
-All reference images will have north up.
+All reference images will have no rotation and north up.
 
 There should be some minimum observation-time interval between a science image and reference image, so that
 transients are actually detectable.
