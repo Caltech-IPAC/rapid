@@ -137,6 +137,10 @@ Here is the sky footprint, shown in cyan, of the proposed reference image for th
 
 .. image:: ReferenceImage.png
 
+It is possible for the science image, represented in green, to be incompletely covered by the proposed reference image, especially
+for cases where the science-image center is far from the tile center and rotated by some odd multiple of 45 degrees.  This
+could be remedied by making the reference image bigger, but at a cost of more reference-image pixels to store and process.
+
 Reference images will be constructed for different filters.  For a given filter, images from
 different SCAs will be stacked to make reference images.
 
