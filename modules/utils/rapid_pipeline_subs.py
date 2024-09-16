@@ -2,10 +2,33 @@ import os
 import math
 from astropy.io import fits
 import re
+import subprocess
 
 
 rtd = 180.0 / math.pi
 dtr = 1.0 / rtd
+
+
+def execute_command(code_to_execute_args):
+
+    '''
+    Execute python script.
+    '''
+
+    print("execute_command: code_to_execute_args =",code_to_execute_args)
+
+
+    # Execute code_to_execute.  Not that STDERR and STDOUT are merged into the same data stream.
+
+    code_to_execute_object = subprocess.run(code_to_execute_args, capture_output=True, text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+
+    returncode = code_to_execute_object.returncode
+    print("returncode =",returncode)
+
+    code_to_execute_stdout_stderr = code_to_execute_object.stdout
+    print("code_to_execute_stdout_stderr =\n",code_to_execute_stdout_stderr)
+
+    return returncode
 
 
 #-------------------------------------------------------------------
