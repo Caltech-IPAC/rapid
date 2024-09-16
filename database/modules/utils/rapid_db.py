@@ -886,3 +886,69 @@ class RAPIDDB:
 
         if self.exit_code == 0:
             self.conn.commit()           # Commit database transaction
+
+
+    def get_l2filemeta_record(self,rid):
+
+        '''
+        Get record from L2FileMeta database table for given rid.
+        '''
+
+
+        # Define query template.
+
+        query_template =\
+            "select sca,fid,ra0,dec0,ra1,dec1,ra2,dec2,ra3,dec3,ra4,dec4 from L2FileMeta where rid=TEMPLATE_RID;"
+
+
+        # Query database.
+
+        print('----> rid = {}'.format(rid))
+
+        rid_str = str(rid)
+
+        rep = {"TEMPLATE_RID": rid_str}
+
+        rep = dict((re.escape(k), v) for k, v in rep.items())
+        pattern = re.compile("|".join(rep.keys()))
+        query = pattern.sub(lambda m: rep[re.escape(m.group(0))], query_template)
+
+        print('query = {}'.format(query))
+
+
+        # Execute query.
+
+        self.cur.execute(query)
+        record = self.cur.fetchone()
+
+        if record is not None:
+            sca = record[0]
+            fid = record[1]
+            ra0 = record[2]
+            dec0 = record[3]
+            ra1 = record[4]
+            dec1 = record[5]
+            ra2 = record[6]
+            dec2 = record[7]
+            ra3 = record[8]
+            dec3 = record[9]
+            ra4 = record[10]
+            dec4 = record[11]
+        else:
+            sca = None
+            fid = None
+            ra0 = None
+            dec0 = None
+            ra1 = None
+            dec1 = None
+            ra2 = None
+            dec2 = None
+            ra3 = None
+            dec3 = None
+            ra4 = None
+            dec4 = None
+            print("*** Error: Could not get L2FileMeta database record; quitting...")
+            self.exit_code = 67
+
+
+    return sca,fid,ra0,dec0,ra1,dec1,ra2,dec2,ra3,dec3,ra4,dec4
