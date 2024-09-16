@@ -952,3 +952,87 @@ class RAPIDDB:
 
 
     return sca,fid,ra0,dec0,ra1,dec1,ra2,dec2,ra3,dec3,ra4,dec4
+
+
+    def get_overlapping_l2files(self,rid,fid,field_ra0,field_dec0,
+                                field_ra1,field_dec1,field_ra2,field_dec2,field_ra3,field_dec3,field_ra4,field_dec4,radius_of_initial_cone_search=None):
+
+        '''
+        Query database for RIDs and distances from tile center for all science images that
+        overlap the sky tile associated with the input science image and its filter.
+        Returned list is ordered by distance from tile center.
+        '''
+
+
+        # Radius of initial cone search, in angular degrees.
+
+        if radius_of_initial_cone_search is None:
+            radius_of_initial_cone_search = 0.18
+
+
+        # Define query template.
+
+        query_template =\
+            "select rid,ra0,dec0,ra1,dec1,ra2,dec2,ra3,dec3,ra4,dec4,q3c_dist(ra0, dec0, cast(TEMPLATE_RA0 as double precision), cast(TEMPLATE_DEC0 as double precision)) as dist " +\
+            "from L2FileMeta " +\
+            "where fid = TEMPLATE_FID " +\
+            "and q3c_radial_query(ra0, dec0, cast(TEMPLATE_RA0 as double precision), cast(TEMPLATE_DEC0 as double precision), cast(TEMPLATE_RADIUS as double precision)) " +\
+            "and (q3c_poly_query(ra1, dec1, array[cast(TEMPLATE_RA1 as double precision), cast(TEMPLATE_DEC1 as double precision),cast(TEMPLATE_RA2 as double precision), cast(TEMPLATE_DEC2 as double precision),cast(TEMPLATE_RA3 as double precision), cast(TEMPLATE_DEC3 as double precision),cast(TEMPLATE_RA4 as double precision), cast(TEMPLATE_DEC4 as double precision)]) " +\
+            "or q3c_poly_query(ra2, dec2, array[cast(TEMPLATE_RA1 as double precision), cast(TEMPLATE_DEC1 as double precision),cast(TEMPLATE_RA2 as double precision), cast(TEMPLATE_DEC2 as double precision),cast(TEMPLATE_RA3 as double precision), cast(TEMPLATE_DEC3 as double precision),cast(TEMPLATE_RA4 as double precision), cast(TEMPLATE_DEC4 as double precision)]) " +\
+            "or q3c_poly_query(ra3, dec3, array[cast(TEMPLATE_RA1 as double precision), cast(TEMPLATE_DEC1 as double precision),cast(TEMPLATE_RA2 as double precision), cast(TEMPLATE_DEC2 as double precision),cast(TEMPLATE_RA3 as double precision), cast(TEMPLATE_DEC3 as double precision),cast(TEMPLATE_RA4 as double precision), cast(TEMPLATE_DEC4 as double precision)]) " +\
+            "or q3c_poly_query(ra4, dec4, array[cast(TEMPLATE_RA1 as double precision), cast(TEMPLATE_DEC1 as double precision),cast(TEMPLATE_RA2 as double precision), cast(TEMPLATE_DEC2 as double precision),cast(TEMPLATE_RA3 as double precision), cast(TEMPLATE_DEC3 as double precision),cast(TEMPLATE_RA4 as double precision), cast(TEMPLATE_DEC4 as double precision)]) " +\
+            "or q3c_poly_query(ra0, dec0, array[cast(TEMPLATE_RA1 as double precision), cast(TEMPLATE_DEC1 as double precision),cast(TEMPLATE_RA2 as double precision), cast(TEMPLATE_DEC2 as double precision),cast(TEMPLATE_RA3 as double precision), cast(TEMPLATE_DEC3 as double precision),cast(TEMPLATE_RA4 as double precision), cast(TEMPLATE_DEC4 as double precision)])) " +\
+            "and rid != TEMPLATE_RID " +\
+            "order by dist; "
+
+
+        # Formulate query by substituting parameters into query template.
+
+        print('----> rid = {}'.format(rid))
+        print('----> fid = {}'.format(fid))
+        print('----> radius_of_initial_cone_search = {}'.format(radius_of_initial_cone_search))
+
+        rep = {"TEMPLATE_RID": str(rid)}
+        rep["TEMPLATE_FID"] = str(fid)
+        rep["TEMPLATE_RA0"] = str(field_ra0)
+        rep["TEMPLATE_DEC0"] = str(field_dec0)
+        rep["TEMPLATE_RA1"] = str(field_ra1)
+        rep["TEMPLATE_DEC1"] = str(field_dec1)
+        rep["TEMPLATE_RA2"] = str(field_ra2)
+        rep["TEMPLATE_DEC2"] = str(field_dec2)
+        rep["TEMPLATE_RA3"] = str(field_ra3)
+        rep["TEMPLATE_DEC3"] = str(field_dec3)
+        rep["TEMPLATE_RA4"] = str(field_ra4)
+        rep["TEMPLATE_DEC4"] = str(field_dec4)
+        rep["TEMPLATE_RADIUS"] = str(radius_of_initial_cone_search)
+
+        rep = dict((re.escape(k), v) for k, v in rep.items())
+        pattern = re.compile("|".join(rep.keys()))
+        query = pattern.sub(lambda m: rep[re.escape(m.group(0))], query_template)
+
+        print('query = {}'.format(query))
+
+
+        # Execute query.
+
+        try:
+            self.cur.execute(query)
+
+            try:
+                records = []
+                nrecs = 0
+                for record in self.cur:
+                    records.append(record)
+                    nrecs += 1
+
+                print("nrecs =",nrecs)
+
+            except:
+                    print("Nothing returned from database query; continuing...")
+
+        except (Exception, psycopg2.DatabaseError) as error:
+            print('*** Error from database method RAPIDDB.get_overlapping_l2files ({}); skipping...'.format(error))
+            self.exit_code = 67
+            return
+
+        return records
