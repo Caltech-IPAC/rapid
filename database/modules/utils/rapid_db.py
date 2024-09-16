@@ -1036,3 +1036,58 @@ class RAPIDDB:
             return
 
         return records
+
+
+    def get_info_for_l2file(self,rid):
+
+        '''
+        Query L2Files database table for filename, sca, mjdobs, exptime, infobits, and status for given RID.
+        '''
+
+
+        # Define query template.
+
+        query_template =\
+            "select filename,sca,mjdobs,exptime,infobits,status " +\
+            "from L2Files " +\
+            "where rid != TEMPLATE_RID; "
+
+
+        # Formulate query by substituting parameters into query template.
+
+        print('----> rid = {}'.format(rid))
+
+        rep = {"TEMPLATE_RID": str(rid)}
+
+        rep = dict((re.escape(k), v) for k, v in rep.items())
+        pattern = re.compile("|".join(rep.keys()))
+        query = pattern.sub(lambda m: rep[re.escape(m.group(0))], query_template)
+
+        print('query = {}'.format(query))
+
+
+        # Execute query.
+
+        self.cur.execute(query)
+        record = self.cur.fetchone()
+
+        if record is not None:
+            filename = record[0]
+            sca = record[1]
+            mjdobs = record[2]
+            exptime = record[3]
+            infobits = record[4]
+            status = record[5]
+
+        else:
+            filename = None
+            sca = None
+            mjdobs = None
+            exptime = None
+            infobits = None
+            status = None
+            print("*** Error: Could not get L2Files database record; quitting...")
+            self.exit_code = 67
+
+
+    return filename,sca,mjdobs,exptime,infobits,status
