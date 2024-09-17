@@ -1041,14 +1041,14 @@ class RAPIDDB:
     def get_info_for_l2file(self,rid):
 
         '''
-        Query L2Files database table for filename, sca, mjdobs, exptime, infobits, and status for given RID.
+        Query L2Files database table for filename, expid, sca, mjdobs, exptime, infobits, and status for given RID.
         '''
 
 
         # Define query template.
 
         query_template =\
-            "select filename,sca,mjdobs,exptime,infobits,status " +\
+            "select filename,expid,sca,mjdobs,exptime,infobits,status " +\
             "from L2Files " +\
             "where rid = TEMPLATE_RID; "
 
@@ -1073,14 +1073,16 @@ class RAPIDDB:
 
         if record is not None:
             filename = record[0]
-            sca = record[1]
-            mjdobs = record[2]
-            exptime = record[3]
-            infobits = record[4]
-            status = record[5]
+            expid = record[1]
+            sca = record[2]
+            mjdobs = record[3]
+            exptime = record[4]
+            infobits = record[5]
+            status = record[6]
 
         else:
             filename = None
+            expid = None
             sca = None
             mjdobs = None
             exptime = None
@@ -1090,7 +1092,71 @@ class RAPIDDB:
             self.exit_code = 67
 
 
-    return filename,sca,mjdobs,exptime,infobits,status
+    return filename,expid,sca,mjdobs,exptime,infobits,status
+
+
+    def get_best_reference_image(self,ppid,field,fid):
+
+        '''
+        Query RefImages database table for the best (latest unless version is locked) version of reference image.
+        '''
+
+
+        # Define query template.
+
+        query_template =\
+            "select rfid,filename " +\
+            "from RefImages " +\
+            "where vbest > 0 " +\
+            "and status > 0 " +\
+            "and field = TEMPLATE_FIELD " +\
+            "and fid = TEMPLATE_FID; "
+
+
+        # Formulate query by substituting parameters into query template.
+
+        print('----> field = {}'.format(field))
+        print('----> fid = {}'.format(fid))
+
+        rep = {"TEMPLATE_FIELD": str(field)}
+        rep["TEMPLATE_FID"] = str(fid)
+
+        rep = dict((re.escape(k), v) for k, v in rep.items())
+        pattern = re.compile("|".join(rep.keys()))
+        query = pattern.sub(lambda m: rep[re.escape(m.group(0))], query_template)
+
+        print('query = {}'.format(query))
+
+
+        # Execute query.
+
+        self.cur.execute(query)
+        record = self.cur.fetchone()
+
+        if record is not None:
+            rfid = record[0]
+            filename = record[1]
+
+        else:
+            rfid = None
+            filename = None
+
+            print("*** Error: Could not get RefImages database record; continuing...")
+            self.exit_code = 67
+
+
+    return rfid,filename
+
+
+
+
+
+
+
+
+
+
+
 
 
 
@@ -1115,17 +1181,17 @@ create function startJob (
 
 
 
-    def add_exposure(self,dateobs,mjdobs,field,filter,exptime,infobits,status):
+    def start_job(self,dateobs,mjdobs,field,filter,exptime,infobits,status):
 
         '''
-        Add record in Exposures database table.
+        Insert or update record in Jobs database table.  Return job ID.
         '''
 
 
         # Define query template.
 
         query_template =\
-            "select * from addExposure(" +\
+            "select jid from startJob(" +\
             "cast('TEMPLATE_DATEOBS' as timestamp)," +\
             "cast(TEMPLATE_MJDOBS as double precision)," +\
             "cast(TEMPLATE_FIELD as integer)," +\
@@ -1182,59 +1248,5 @@ create function startJob (
 
         if self.exit_code == 0:
             self.conn.commit()           # Commit database transaction
-
-
-    def get_best_reference_image(self,ppid,field,fid):
-
-        '''
-        Query RefImages database table for the best (latest unless version is locked) version of reference image.
-        '''
-
-
-        # Define query template.
-
-        query_template =\
-            "select rfid,filename " +\
-            "from RefImages " +\
-            "where vbest > 0 " +\
-            "and status > 0 " +\
-            "and field = TEMPLATE_FIELD " +\
-            "and fid = TEMPLATE_FID; "
-
-
-        # Formulate query by substituting parameters into query template.
-
-        print('----> field = {}'.format(field))
-        print('----> fid = {}'.format(fid))
-
-        rep = {"TEMPLATE_FIELD": str(field)}
-        rep["TEMPLATE_FID"] = str(fid)
-
-        rep = dict((re.escape(k), v) for k, v in rep.items())
-        pattern = re.compile("|".join(rep.keys()))
-        query = pattern.sub(lambda m: rep[re.escape(m.group(0))], query_template)
-
-        print('query = {}'.format(query))
-
-
-        # Execute query.
-
-        self.cur.execute(query)
-        record = self.cur.fetchone()
-
-        if record is not None:
-            rfid = record[0]
-            filename = record[1]
-
-        else:
-            rfid = None
-            filename = None
-
-            print("*** Error: Could not get RefImages database record; continuing...")
-            self.exit_code = 67
-
-
-    return rfid,filename
-
 
 
