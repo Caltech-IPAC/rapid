@@ -1197,6 +1197,7 @@ create function startJob (
             "select rfid,filename " +\
             "from RefImages " +\
             "where vbest > 0 " +\
+            "and status > 0 " +\
             "and field = TEMPLATE_FIELD " +\
             "and fid = TEMPLATE_FID; "
 
