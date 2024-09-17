@@ -158,6 +158,7 @@ class RAPIDDB:
             "(expid integer," +\
             " fid smallint);"
 
+
         # Query database.
 
         print('----> dateobs = {}'.format(dateobs))
@@ -281,6 +282,7 @@ class RAPIDDB:
             "(rid integer," +\
             " version smallint);"
 
+
         # Query database.
 
         print('----> expid = {}'.format(expid))
@@ -385,6 +387,7 @@ class RAPIDDB:
             "cast(TEMPLATE_STATUS as smallint)," +\
             "cast(TEMPLATE_VERSION AS smallint));"
 
+
         # Query database.
 
         print('----> rid = {}'.format(rid))
@@ -405,6 +408,7 @@ class RAPIDDB:
         query = pattern.sub(lambda m: rep[re.escape(m.group(0))], query_template)
 
         print('query = {}'.format(query))
+
 
         # Execute query.
 
@@ -453,6 +457,7 @@ class RAPIDDB:
             "cast(TEMPLATE_Z AS double precision)," +\
             "cast(TEMPLATE_HP6 AS integer));"
 
+
         # Query database.
 
         print('----> rid = {}'.format(rid))
@@ -481,6 +486,7 @@ class RAPIDDB:
         query = pattern.sub(lambda m: rep[re.escape(m.group(0))], query_template)
 
         print('query = {}'.format(query))
+
 
         # Execute query.
 
@@ -1150,41 +1156,7 @@ class RAPIDDB:
     return rfid,filename
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-create function startJob (
-    ppid_           smallint,
-    fid_            smallint,
-    expid_          integer,
-    field_          integer,
-    sca_            smallint,
-    rid_            integer,
-    machine_        smallint,
-    slurm_          integer
-)
-    returns integer as $$
-
-
-
-    jid = dbh.start_job(ppid,fid,expid,field,sca,rid,machine,slurm)
-
-
-
-
-    def start_job(self,dateobs,mjdobs,field,filter,exptime,infobits,status):
+    def start_job(self,ppid,fid,expid,field,sca,rid,machine='null',slurm='null'):
 
         '''
         Insert or update record in Jobs database table.  Return job ID.
@@ -1195,40 +1167,42 @@ create function startJob (
 
         query_template =\
             "select jid from startJob(" +\
-            "cast('TEMPLATE_DATEOBS' as timestamp)," +\
-            "cast(TEMPLATE_MJDOBS as double precision)," +\
+            "cast('TEMPLATE_PPID' as smallint)," +\
+            "cast(TEMPLATE_FID as smallint)," +\
+            "cast(TEMPLATE_EXPID as integer)," +\
             "cast(TEMPLATE_FIELD as integer)," +\
-            "cast('TEMPLATE_FILTER' as character varying(16))," +\
-            "cast(TEMPLATE_EXPTIME as real), " +\
-            "cast(TEMPLATE_INFOBITS as integer), " +\
-            "cast(TEMPLATE_STATUS as smallint)) as " +\
-            "(expid integer," +\
-            " fid smallint);"
+            "cast('TEMPLATE_SCA' as smallint)," +\
+            "cast(TEMPLATE_RID as integer), " +\
+            "cast(TEMPLATE_MACHINE as smallint), " +\
+            "cast(TEMPLATE_SLURM as integer)) as " +\
+            "(jid integer);"
+
 
         # Query database.
 
-        print('----> dateobs = {}'.format(dateobs))
-        print('----> mjdobs = {}'.format(mjdobs))
+        print('----> ppid = {}'.format(ppid))
+        print('----> fid = {}'.format(fid))
+        print('----> expid = {}'.format(expid))
         print('----> field = {}'.format(field))
-        print('----> filter = {}'.format(filter))
-        print('----> exptime = {}'.format(exptime))
-        print('----> infobits = {}'.format(infobits))
-        print('----> status = {}'.format(status))
+        print('----> sca = {}'.format(sca))
+        print('----> rid = {}'.format(rid))
 
-        mjdobs_str = str(mjdobs)
+        ppid_str = str(ppid)
+        fid_str = str(fid)
+        expid_str = str(expid)
         field_str = str(field)
-        exptime_str = str(exptime)
-        infobits_str = str(infobits)
-        status_str = str(status)
+        sca_str = str(sca)
+        rid_str = str(rid)
 
-        rep = {"TEMPLATE_DATEOBS": dateobs,
-               "TEMPLATE_MJDOBS": mjdobs_str,
-               "TEMPLATE_FIELD": field_str,
-               "TEMPLATE_FILTER": filter,
-               "TEMPLATE_EXPTIME": exptime_str}
+        rep = {"TEMPLATE_PPID": ppid_str,
+               "TEMPLATE_FID": fid_str,
+               "TEMPLATE_EXPID": expid_str,
+               "TEMPLATE_FIELD": field_str}
 
-        rep["TEMPLATE_INFOBITS"] = infobits_str
-        rep["TEMPLATE_STATUS"] = status_str
+        rep["TEMPLATE_SCA"] = sca_str
+        rep["TEMPLATE_RID"] = rid_str
+        rep["TEMPLATE_MACHINE"] = str(machine)
+        rep["TEMPLATE_SLURM"] = str(slurm)
 
         rep = dict((re.escape(k), v) for k, v in rep.items())
         pattern = re.compile("|".join(rep.keys()))
@@ -1240,16 +1214,14 @@ create function startJob (
         record = self.cur.fetchone()
 
         if record is not None:
-            self.expid = record[0]
-            self.fid = record[1]
+            jid = record[0]
         else:
-            self.expid = None
-            self.fid = None
-            print("*** Error: Could not insert or update Exposures record; returning...")
+            jid = None
+            print("*** Error: Could not insert or update Jobs record; returning...")
             self.exit_code = 67
             return
 
         if self.exit_code == 0:
             self.conn.commit()           # Commit database transaction
 
-
+    return jid
