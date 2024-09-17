@@ -17,7 +17,7 @@ def md5(fname):
                 hash_md5.update(chunk)
         return hash_md5.hexdigest()
     except:
-        print("*** Error: Cannot open file to compute checksum =",fname,"; quitting...")
+        print("*** Error: Cannot open file to compute checksum =",fname,"; returning...")
         return(68)
 
 
@@ -198,7 +198,7 @@ class RAPIDDB:
         else:
             self.expid = None
             self.fid = None
-            print("*** Error: Could not insert or update Exposures record; quitting...")
+            print("*** Error: Could not insert or update Exposures record; returning...")
             self.exit_code = 67
             return
 
@@ -360,7 +360,7 @@ class RAPIDDB:
         else:
             self.rid = None
             self.version = None
-            print("*** Error: Could not insert L2Files record; quitting...")
+            print("*** Error: Could not insert L2Files record; returning...")
             self.exit_code = 67
             return
 
@@ -947,7 +947,7 @@ class RAPIDDB:
             dec3 = None
             ra4 = None
             dec4 = None
-            print("*** Error: Could not get L2FileMeta database record; quitting...")
+            print("*** Error: Could not get L2FileMeta database record; returning...")
             self.exit_code = 67
 
 
@@ -1050,7 +1050,7 @@ class RAPIDDB:
         query_template =\
             "select filename,sca,mjdobs,exptime,infobits,status " +\
             "from L2Files " +\
-            "where rid != TEMPLATE_RID; "
+            "where rid = TEMPLATE_RID; "
 
 
         # Formulate query by substituting parameters into query template.
@@ -1086,8 +1086,154 @@ class RAPIDDB:
             exptime = None
             infobits = None
             status = None
-            print("*** Error: Could not get L2Files database record; quitting...")
+            print("*** Error: Could not get L2Files database record; returning...")
             self.exit_code = 67
 
 
     return filename,sca,mjdobs,exptime,infobits,status
+
+
+
+
+
+
+create function startJob (
+    ppid_           smallint,
+    fid_            smallint,
+    expid_          integer,
+    field_          integer,
+    sca_            smallint,
+    rid_            integer,
+    machine_        smallint,
+    slurm_          integer
+)
+    returns integer as $$
+
+
+
+
+
+
+
+    def add_exposure(self,dateobs,mjdobs,field,filter,exptime,infobits,status):
+
+        '''
+        Add record in Exposures database table.
+        '''
+
+
+        # Define query template.
+
+        query_template =\
+            "select * from addExposure(" +\
+            "cast('TEMPLATE_DATEOBS' as timestamp)," +\
+            "cast(TEMPLATE_MJDOBS as double precision)," +\
+            "cast(TEMPLATE_FIELD as integer)," +\
+            "cast('TEMPLATE_FILTER' as character varying(16))," +\
+            "cast(TEMPLATE_EXPTIME as real), " +\
+            "cast(TEMPLATE_INFOBITS as integer), " +\
+            "cast(TEMPLATE_STATUS as smallint)) as " +\
+            "(expid integer," +\
+            " fid smallint);"
+
+        # Query database.
+
+        print('----> dateobs = {}'.format(dateobs))
+        print('----> mjdobs = {}'.format(mjdobs))
+        print('----> field = {}'.format(field))
+        print('----> filter = {}'.format(filter))
+        print('----> exptime = {}'.format(exptime))
+        print('----> infobits = {}'.format(infobits))
+        print('----> status = {}'.format(status))
+
+        mjdobs_str = str(mjdobs)
+        field_str = str(field)
+        exptime_str = str(exptime)
+        infobits_str = str(infobits)
+        status_str = str(status)
+
+        rep = {"TEMPLATE_DATEOBS": dateobs,
+               "TEMPLATE_MJDOBS": mjdobs_str,
+               "TEMPLATE_FIELD": field_str,
+               "TEMPLATE_FILTER": filter,
+               "TEMPLATE_EXPTIME": exptime_str}
+
+        rep["TEMPLATE_INFOBITS"] = infobits_str
+        rep["TEMPLATE_STATUS"] = status_str
+
+        rep = dict((re.escape(k), v) for k, v in rep.items())
+        pattern = re.compile("|".join(rep.keys()))
+        query = pattern.sub(lambda m: rep[re.escape(m.group(0))], query_template)
+
+        print('query = {}'.format(query))
+
+        self.cur.execute(query)
+        record = self.cur.fetchone()
+
+        if record is not None:
+            self.expid = record[0]
+            self.fid = record[1]
+        else:
+            self.expid = None
+            self.fid = None
+            print("*** Error: Could not insert or update Exposures record; returning...")
+            self.exit_code = 67
+            return
+
+        if self.exit_code == 0:
+            self.conn.commit()           # Commit database transaction
+
+
+    def get_best_reference_image(self,ppid,field,fid):
+
+        '''
+        Query RefImages database table for the best (latest unless version is locked) version of reference image.
+        '''
+
+
+        # Define query template.
+
+        query_template =\
+            "select rfid,filename " +\
+            "from RefImages " +\
+            "where vbest > 0 " +\
+            "and field = TEMPLATE_FIELD " +\
+            "and fid = TEMPLATE_FID; "
+
+
+        # Formulate query by substituting parameters into query template.
+
+        print('----> field = {}'.format(field))
+        print('----> fid = {}'.format(fid))
+
+        rep = {"TEMPLATE_FIELD": str(field)}
+        rep["TEMPLATE_FID"] = str(fid)
+
+        rep = dict((re.escape(k), v) for k, v in rep.items())
+        pattern = re.compile("|".join(rep.keys()))
+        query = pattern.sub(lambda m: rep[re.escape(m.group(0))], query_template)
+
+        print('query = {}'.format(query))
+
+
+        # Execute query.
+
+        self.cur.execute(query)
+        record = self.cur.fetchone()
+
+        if record is not None:
+            rfid = record[0]
+            filename = record[1]
+
+        else:
+            rfid = None
+            filename = None
+
+            print("*** Error: Could not get RefImages database record; continuing...")
+            self.exit_code = 67
+
+
+    return rfid,filename
+
+
+
