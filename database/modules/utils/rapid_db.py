@@ -1047,14 +1047,14 @@ class RAPIDDB:
     def get_info_for_l2file(self,rid):
 
         '''
-        Query L2Files database table for filename, expid, sca, field, mjdobs, exptime, infobits, and status for given RID.
+        Query select columns in L2Files database table for given RID.
         '''
 
 
         # Define query template.
 
         query_template =\
-            "select filename,expid,sca,field,mjdobs,exptime,infobits,status " +\
+            "select filename,expid,sca,field,mjdobs,exptime,infobits,status,vbest,version " +\
             "from L2Files " +\
             "where rid = TEMPLATE_RID; "
 
@@ -1086,6 +1086,8 @@ class RAPIDDB:
             exptime = record[5]
             infobits = record[6]
             status = record[7]
+            vbest = record[8]
+            version = record[9]
 
         else:
             filename = None
@@ -1096,11 +1098,13 @@ class RAPIDDB:
             exptime = None
             infobits = None
             status = None
+            vbest = None
+            version = None
             print("*** Error: Could not get select columns from L2Files database record; returning...")
             self.exit_code = 67
 
 
-    return filename,expid,sca,field,mjdobs,exptime,infobits,status
+    return record
 
 
     def get_best_reference_image(self,ppid,field,fid):
