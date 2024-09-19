@@ -24,7 +24,7 @@ rid = os.getenv('RID')
 
 if rid is None:
 
-    print("*** Error: Env. var. RID not set; quitting)
+    print("*** Error: Env. var. RID not set; quitting...")
     exit(64)
 
 
@@ -34,7 +34,7 @@ roman_tessellation_dbname = os.getenv('ROMANTESSELLATIONDBNAME')
 
 if roman_tessellation_dbname is None:
 
-    print("*** Error: Env. var. ROMANTESSELLATIONDBNAME not set; quitting)
+    print("*** Error: Env. var. ROMANTESSELLATIONDBNAME not set; quitting...")
     exit(64)
 
 roman_tessellation_db = sqlite.RomanTessellationNSIDE512()
@@ -51,12 +51,12 @@ aws_secret_access_key = os.getenv('AWS_SECRET_ACCESS_KEY')
 
 if aws_access_key_id is None:
 
-    print("*** Error: Env. var. AWS_ACCESS_KEY_ID not set; quitting)
+    print("*** Error: Env. var. AWS_ACCESS_KEY_ID not set; quitting...")
     exit(64)
 
 if aws_secret_access_key is None:
 
-    print("*** Error: Env. var. AWS_SECRET_ACCESS_KEY not set; quitting)
+    print("*** Error: Env. var. AWS_SECRET_ACCESS_KEY not set; quitting...")
     exit(64)
 
 print("aws_access_key_id =",aws_access_key_id)
@@ -66,7 +66,7 @@ rapid_sw = os.getenv('RAPID_SW')
 
 if rapid_sw is None:
 
-    print("*** Error: Env. var. RAPID_SW not set; quitting)
+    print("*** Error: Env. var. RAPID_SW not set; quitting...")
     exit(64)
 
 print("rapid_sw =",rapid_sw)
