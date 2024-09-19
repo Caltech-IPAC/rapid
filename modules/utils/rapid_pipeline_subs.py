@@ -31,6 +31,49 @@ def execute_command(code_to_execute_args):
     return returncode
 
 
+
+#-------------------------------------------------------------------
+# Given pixel location (x, y) on a tangent plane, compute the corresponding
+# sky position (R.A., Dec.), neglecting geometric distortion.
+
+def tan_proj(x,y,crpix1,crpix2,crval1,crval2,cdelt1,cdelt2,crota2):
+
+    print("crpix1,crpix2,crval1,crval2,cdelt1,cdelt2,crota2 =",crpix1,crpix2,crval1,crval2,cdelt1,cdelt2,crota2)
+
+    glong  = crval1
+    glat   = crval2
+    twist = crota2
+
+    fsamp = x - crpix1
+    fline = y - crpix2
+
+    rpp1 = cdelt1 * dtr
+    rpp2 = cdelt2 * dtr
+    xx = -fsamp * rpp1
+    yy = -fline * rpp2
+
+    rtwist = twist * dtr
+    temp = xx * math.cos(rtwist) - yy * math.sin(rtwist)
+    yy = xx * math.sin(rtwist) + yy * math.cos(rtwist)
+    xx = temp
+
+    delta = math.atan(math.sqrt( xx * xx + yy * yy ))
+
+    if (xx == 0.0) and (yy == 0.0): yy = 1.0
+    beta = math.atan2(-xx, yy)
+    glatr = glat * dtr
+    glongr = glong * dtr
+    lat = math.asin(-math.sin(delta) * math.cos(beta) * math.cos(glatr) + math.cos(delta) * math.sin(glatr))
+    xxx = math.sin(glatr) * math.sin(delta) * math.cos(beta) + math.cos(glatr) * math.cos(delta)
+    yyy = math.sin(delta) * math.sin(beta)
+    lon = glongr + math.atan2(yyy, xxx)
+
+    lat = lat * rtd
+    lon = lon * rtd
+
+    return (lon,lat)
+
+
 #-------------------------------------------------------------------
 # Given (x, y, z) on the unit sphere, compute (R.A., Dec.).
 
