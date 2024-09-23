@@ -143,6 +143,8 @@ class RAPIDDB:
         Add record in Exposures database table.
         '''
 
+        self.exit_code = 0
+
 
         # Define query template.
 
@@ -217,6 +219,8 @@ class RAPIDDB:
         '''
         Add record in L2files database table.
         '''
+
+        self.exit_code = 0
 
 
         # Define query template.
@@ -376,6 +380,8 @@ class RAPIDDB:
         Update record in L2files database table.
         '''
 
+        self.exit_code = 0
+
 
         # Define query template.
 
@@ -435,6 +441,8 @@ class RAPIDDB:
         '''
         Insert or update record in L2FileMeta database table.
         '''
+
+        self.exit_code = 0
 
 
         # Define query template.
@@ -514,6 +522,8 @@ class RAPIDDB:
         Get all records in L2FileMeta database table.
         '''
 
+        self.exit_code = 0
+
 
         # Define query.
 
@@ -556,6 +566,8 @@ class RAPIDDB:
         Update hp6 index in L2FileMeta database record.
         '''
 
+        self.exit_code = 0
+
 
         # Define query.
 
@@ -596,6 +608,8 @@ class RAPIDDB:
         '''
         Get all records in L2Files database table.
         '''
+
+        self.exit_code = 0
 
 
         # Define query.
@@ -638,6 +652,8 @@ class RAPIDDB:
         '''
         Update fid and chipid columns in L2FileMeta database record.
         '''
+
+        self.exit_code = 0
 
 
         # Define query.
@@ -722,6 +738,8 @@ class RAPIDDB:
         Get all records in L2Files database table.
         '''
 
+        self.exit_code = 0
+
 
         # Define query.
 
@@ -763,6 +781,8 @@ class RAPIDDB:
         '''
         Update field,hp6,hp9 indices in L2Files database record.
         '''
+
+        self.exit_code = 0
 
 
         # Define query.
@@ -810,6 +830,8 @@ class RAPIDDB:
         Get all records in Exposures database table.
         '''
 
+        self.exit_code = 0
+
 
         # Define query.
         # Here we query the L2Files table for all exposures, since
@@ -853,6 +875,8 @@ class RAPIDDB:
         '''
         Update field,hp6,hp9 indices in Exposures database record.
         '''
+
+        self.exit_code = 0
 
 
         # Define query.
@@ -899,6 +923,8 @@ class RAPIDDB:
         '''
         Get record from L2FileMeta database table for given rid.
         '''
+
+        self.exit_code = 0
 
 
         # Define query template.
@@ -968,6 +994,8 @@ class RAPIDDB:
         overlap the sky tile associated with the input science image and its filter.
         Returned list is ordered by distance from tile center.
         '''
+
+        self.exit_code = 0
 
 
         # Radius of initial cone search, in angular degrees.
@@ -1050,6 +1078,8 @@ class RAPIDDB:
         Query select columns in L2Files database table for given RID.
         '''
 
+        self.exit_code = 0
+
 
         # Define query template.
 
@@ -1113,6 +1143,8 @@ class RAPIDDB:
         Query RefImages database table for the best (latest unless version is locked) version of reference image.
         '''
 
+        self.exit_code = 0
+
 
         # Define query template.
 
@@ -1165,6 +1197,8 @@ class RAPIDDB:
         '''
         Insert or update record in Jobs database table.  Return job ID.
         '''
+
+        self.exit_code = 0
 
 
         # Define query template.
