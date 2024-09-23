@@ -1178,8 +1178,7 @@ class RAPIDDB:
             "cast('TEMPLATE_SCA' as smallint)," +\
             "cast(TEMPLATE_RID as integer), " +\
             "cast(TEMPLATE_MACHINE as smallint), " +\
-            "cast(TEMPLATE_SLURM as integer)) as " +\
-            "(jid integer);"
+            "cast(TEMPLATE_SLURM as integer));"
 
 
         # Query database.
