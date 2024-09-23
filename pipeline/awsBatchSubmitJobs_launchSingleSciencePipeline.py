@@ -502,6 +502,6 @@ if __name__ == '__main__':
     config_output_filename = "job_config_jid" + str(jid) + ".ini"
     with open(config_output_filename, 'w') as config_outputfile:
 
-    config_output.write(config_outputfile)
+        config_output.write(config_outputfile)
 
     #submit_job()
