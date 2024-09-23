@@ -274,10 +274,6 @@ if __name__ == '__main__':
      exit(64)
 
 
-    #
-    # Query database for a reference image, or make one if it does not exist.
-    #
-
     # Get field number (rtid) of sky tile containing center of input science image.
 
     roman_tessellation_db.get_rtid(ra0,dec0)
@@ -286,6 +282,9 @@ if __name__ == '__main__':
     if rtid != field:
         print("*** Error: rtid (= {}) does not match field (= {}); quitting....".format(rtid,field))
         exit(64)
+
+
+    # Get sky positions of center and four corners of sky tile.
 
     roman_tessellation_db.get_center_sky_position(rtid)
     ra0_field = roman_tessellation_db.ra0
@@ -301,8 +300,42 @@ if __name__ == '__main__':
     dec4_field = roman_tessellation_db.dec4
 
 
+    # Compute the sky positions of the four corners of the reference.
+    # Remember the reference image is centered on the sky tile with zero rotation.
+
+    ra0_refimage = ra0_field
+    dec0_refimage = dec0_field
+
+    crpix1_refimage = 0.5 * float(naxis1_refimage) + 0.5
+    crpix2_refimage = 0.5 * float(naxis2_refimage) + 0.5
+    crval1_refimage = 11.067073
+    crval2_refimage = -43.80449
+
+
+    # Integer pixel coordinates are zero-based and centered on pixel.
+
+    x1_refimage = 0.5 - 1.0     # We want the extreme outer image edges.
+    y1_refimage = 0.5 - 1.0
+
+    x2_refimage = naxis1_refimage + 0.5 - 1.0
+    y2_refimage = 0.5 - 1.0
+
+    x3_refimage = naxis1_refimage + 0.5 - 1.0
+    y3_refimage = naxis2_refimage + 0.5 - 1.0
+
+    x4_refimage = 0.5 - 1.0
+    y4_refimage = naxis2_refimage + 0.5 - 1.0
+
+
+    ra1_refimage,dec1_refimage = util.tan_proj(x1_refimage,y1_refimage,crpix1_refimage,crpix2_refimage,crval1_refimage,crval2_refimage,cdelt1_refimage,cdelt2_refimage,crota2_refimage)
+    ra2_refimage,dec2_refimage = util.tan_proj(x2_refimage,y2_refimage,crpix1_refimage,crpix2_refimage,crval1_refimage,crval2_refimage,cdelt1_refimage,cdelt2_refimage,crota2_refimage)
+    ra3_refimage,dec3_refimage = util.tan_proj(x3_refimage,y3_refimage,crpix1_refimage,crpix2_refimage,crval1_refimage,crval2_refimage,cdelt1_refimage,cdelt2_refimage,crota2_refimage)
+    ra4_refimage,dec4_refimage = util.tan_proj(x4_refimage,y4_refimage,crpix1_refimage,crpix2_refimage,crval1_refimage,crval2_refimage,cdelt1_refimage,cdelt2_refimage,crota2_refimage)
+
+
     # Query RefImages database table for the best (latest unless version is locked) version of reference image.
     # A reference image depends only on pipeline number, field, filter, and version.
+    # If a reference image does not exist, then aggregate all the inputs required to make one.
 
     rfid,filename_refimage = dbh.get_best_reference_image(ppid_refimage,field,fid)
 
@@ -312,7 +345,7 @@ if __name__ == '__main__':
     if rfid is not None:
         input_images_csv_file = None
     else:
-        input_images_csv_file = "ref_image_inputs_jid" + str(jid) + ".csv"
+        input_images_csv_file = "0.5 * float(naxis1_refimage) + 0.5+ str(jid) + ".csv"
 
         # Query L2FileMeta database table for RID,ra0,dec0,ra1,dec1,ra2,dec2,ra3,dec3,ra4,dec4,
         # and distance from tile center (degrees) for all science images that
@@ -388,7 +421,7 @@ if __name__ == '__main__':
         exit(dbh.exit_code)
 
 
-    # Write config file for job.
+    # Populate config-file dictionary for job.
 
     config_output = configparser.ConfigParser()
 
@@ -451,6 +484,20 @@ if __name__ == '__main__':
     config_output['REF_IMAGE']['rfid'] = str(rfid)
     config_output['REF_IMAGE']['filename'] = filename_refimage
     config_output['REF_IMAGE']['input_images_csv_file'] = input_images_csv_file
+
+    config_output['REF_IMAGE']['ra0'] = str(ra0_refimage)
+    config_output['REF_IMAGE']['dec0'] = str(dec0_refimage)
+    config_output['REF_IMAGE']['ra1'] = str(ra1_refimage)
+    config_output['REF_IMAGE']['dec1'] = str(dec1_refimage)
+    config_output['REF_IMAGE']['ra2'] = str(ra2_refimage)
+    config_output['REF_IMAGE']['dec2'] = str(dec2_refimage)
+    config_output['REF_IMAGE']['ra3'] = str(ra3_refimage)
+    config_output['REF_IMAGE']['dec3'] = str(dec3_refimage)
+    config_output['REF_IMAGE']['ra4'] = str(ra4_refimage)
+    config_output['REF_IMAGE']['dec4'] = str(dec4_refimage)
+
+
+    # Write config file for job.
 
     config_output_filename = "job_config_jid" + str(jid) + ".ini"
     with open(config_output_filename, 'w') as config_outputfile:
