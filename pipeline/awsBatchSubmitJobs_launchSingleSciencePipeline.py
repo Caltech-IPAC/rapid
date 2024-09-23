@@ -401,27 +401,27 @@ if __name__ == '__main__':
             if dbh.exit_code >= 64:
                 exit(dbh.exit_code)
 
-            filename_refimage = image_info[0]
-            expid_refimage = image_info[1]
-            sca_refimage = image_info[2]
-            field_refimage = image_info[3]
-            mjdobs_refimage = image_info[4]
-            exptime_refimage = image_info[5]
-            infobits_refimage = image_info[6]
-            status_refimage = image_info[7]
-            vbest_refimage = image_info[8]
-            version_refimage = image_info[9]
+            filename_refimage_input = image_info[0]
+            expid_refimage_input= image_info[1]
+            sca_refimage_input= image_info[2]
+            field_refimage_input= image_info[3]
+            mjdobs_refimage_input= image_info[4]
+            exptime_refimage_input= image_info[5]
+            infobits_refimage_input= image_info[6]
+            status_refimage_input= image_info[7]
+            vbest_refimage_input= image_info[8]
+            version_refimage_input= image_info[9]
 
-            if status_refimage == 0: continue             # Omit if status = 0
-            if vbest_refimage == 0: continue              # Omit if not the best version
+            if status_refimage_input== 0: continue             # Omit if status = 0
+            if vbest_refimage_input== 0: continue              # Omit if not the best version
 
-            filename_refimage_inputs .append(filename_refimage)
-            expid_refimage_inputs .append(expid_refimage)
-            sca_refimage_inputs .append(sca_refimage)
-            field_refimage_inputs .append(field_refimage)
-            mjdobs_refimage_inputs .append(mjdobs_refimage)
-            exptime_refimage_inputs .append(exptime_refimage)
-            infobits_refimage_inputs .append(infobits_refimage)
+            filename_refimage_inputs .append(filename_refimage_input
+            expid_refimage_inputs .append(expid_refimage_input
+            sca_refimage_inputs .append(sca_refimage_input
+            field_refimage_inputs .append(field_refimage_input
+            mjdobs_refimage_inputs .append(mjdobs_refimage_input
+            exptime_refimage_inputs .append(exptime_refimage_input
+            infobits_refimage_inputs .append(infobits_refimage_input
 
 
     # Close database connection.
