@@ -1104,7 +1104,7 @@ class RAPIDDB:
             self.exit_code = 67
 
 
-    return record
+        return record
 
 
     def get_best_reference_image(self,ppid,field,fid):
@@ -1157,7 +1157,7 @@ class RAPIDDB:
             self.exit_code = 67
 
 
-    return rfid,filename
+        return rfid,filename
 
 
     def start_job(self,ppid,fid,expid,field,sca,rid,machine='null',slurm='null'):
@@ -1228,4 +1228,4 @@ class RAPIDDB:
         if self.exit_code == 0:
             self.conn.commit()           # Commit database transaction
 
-    return jid
+        return jid
