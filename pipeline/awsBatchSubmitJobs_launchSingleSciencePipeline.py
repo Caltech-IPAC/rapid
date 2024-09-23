@@ -367,7 +367,7 @@ if __name__ == '__main__':
         # For each overlapping image, query L2Files database table for filename, sca, mjdobs, exptime, infobits, and status.
 
         filename_refimage_inputs = []
-        exid_refimage_inputs = []
+        expid_refimage_inputs = []
         sca_refimage_inputs = []
         field_refimage_inputs = []
         mjdobs_refimage_inputs = []
@@ -383,7 +383,7 @@ if __name__ == '__main__':
                 exit(dbh.exit_code)
 
             filename_refimage = image_info[0]
-            expid_refimage = image_info[1]=
+            expid_refimage = image_info[1]
             sca_refimage = image_info[2]
             field_refimage = image_info[3]
             mjdobs_refimage = image_info[4]
