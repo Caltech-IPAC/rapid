@@ -408,13 +408,13 @@ if __name__ == '__main__':
             if status_refimage == 0: continue             # Omit if status = 0
             if vbest_refimage == 0: continue              # Omit if not the best version
 
-            filename.append(refim_inputs_filename_refimage)
-            expid.append(refim_inputs_expid_refimage)
-            sca.append(refim_inputs_sca_refimage)
-            field.append(refim_inputs_field_refimage)
-            mjdobs.append(refim_inputs_mjdobs_refimage)
-            exptime.append(refim_inputs_exptime_refimage)
-            infobits.append(refim_inputs_infobits_refimage)
+            filename_refimage_inputs .append(refim_inputs_filename_refimage)
+            expid_refimage_inputs .append(refim_inputs_expid_refimage)
+            sca_refimage_inputs .append(refim_inputs_sca_refimage)
+            field_refimage_inputs .append(refim_inputs_field_refimage)
+            mjdobs_refimage_inputs .append(refim_inputs_mjdobs_refimage)
+            exptime_refimage_inputs .append(refim_inputs_exptime_refimage)
+            infobits_refimage_inputs .append(refim_inputs_infobits_refimage)
 
 
     # Close database connection.
