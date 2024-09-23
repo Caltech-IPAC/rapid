@@ -259,7 +259,7 @@ if __name__ == '__main__':
         exit(dbh.exit_code)
 
     filename = image_info[0]
-    expid = image_info[1]=
+    expid = image_info[1]
     sca = image_info[2]
     field = image_info[3]
     mjdobs = image_info[4]
