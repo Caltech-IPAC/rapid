@@ -271,7 +271,7 @@ if __name__ == '__main__':
 
     if vbest == 0:
         print('*** Error: vbest is zero for rid = {}; quitting....'.format(rid))
-     exit(64)
+        exit(64)
 
 
     # Get field number (rtid) of sky tile containing center of input science image.
