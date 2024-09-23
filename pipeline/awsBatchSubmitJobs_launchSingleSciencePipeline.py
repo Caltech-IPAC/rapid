@@ -364,6 +364,7 @@ if __name__ == '__main__':
     if rfid is not None:
         input_images_csv_file = None
     else:
+        filename_refimage = "None"
         input_images_csv_file = "input_images_for_refimage_"+ str(jid) + ".csv"
 
         # Query L2FileMeta database table for RID,ra0,dec0,ra1,dec1,ra2,dec2,ra3,dec3,ra4,dec4,
