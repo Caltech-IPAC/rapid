@@ -67,7 +67,7 @@ class RAPIDDB:
         64 = Cannot connect to database
         65 = Input file does not exist
         66 = File checksum does not match database checksum
-        67 = Could not execute database query.
+        67 = Could not execute database query or no record(s) returned.
         68 = Could not open file to compute checksum.
     """
 
@@ -1153,7 +1153,7 @@ class RAPIDDB:
             rfid = None
             filename = None
 
-            print("*** Error: Could not get RefImages database record; continuing...")
+            print("*** Error: Could not get best RefImages database record; continuing...")
             self.exit_code = 67
 
 

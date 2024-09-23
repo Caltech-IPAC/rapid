@@ -342,7 +342,8 @@ if __name__ == '__main__':
 
     rfid,filename_refimage = dbh.get_best_reference_image(ppid_refimage,field,fid)
 
-    if dbh.exit_code >= 64:
+    if dbh.exit_code >= 64 and dbh.exit_code != 67:
+        print("*** Error from {}; quitting ".format{swname})
         exit(dbh.exit_code)
 
     if rfid is not None:
