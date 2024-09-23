@@ -243,11 +243,11 @@ class RomanTessellationNSIDE512:
             self.exit_code = 67
             return
 
-        self.ra1 = ramin
-        self.dec1 = decmin
-        self.ra2 = ramax
-        self.dec2 = decmin
-        self.ra3 = ramax
-        self.dec3 = decmax
-        self.ra4 = ramin
-        self.dec4 = decmax
+        self.ra1 = self.ramin
+        self.dec1 = self.decmin
+        self.ra2 = self.ramax
+        self.dec2 = self.decmin
+        self.ra3 = self.ramax
+        self.dec3 = self.decmax
+        self.ra4 = self.ramin
+        self.dec4 = self.decmax
