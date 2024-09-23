@@ -69,6 +69,13 @@ if rapid_sw is None:
     print("*** Error: Env. var. RAPID_SW not set; quitting...")
     exit(64)
 
+rapid_work = os.getenv('RAPID_WORK')
+
+if rapid_work is None:
+
+    print("*** Error: Env. var. RAPID_WORK not set; quitting...")
+    exit(64)
+
 cfg_path = rapid_sw + "/cdf"
 
 print("rapid_sw =",rapid_sw)
@@ -503,7 +510,7 @@ if __name__ == '__main__':
 
     # Write config file for job.
 
-    config_output_filename = "job_config_jid" + str(jid) + ".ini"
+    config_output_filename = rapid_work + "/job_config_jid" + str(jid) + ".ini"
     with open(config_output_filename, 'w') as config_outputfile:
 
         config_output.write(config_outputfile)
