@@ -69,7 +69,10 @@ if rapid_sw is None:
     print("*** Error: Env. var. RAPID_SW not set; quitting...")
     exit(64)
 
+cfg_path = rapid_sw + "/cdf"
+
 print("rapid_sw =",rapid_sw)
+print("cfg_path =",cfg_path)
 
 
 # Read input parameters from .ini file.
