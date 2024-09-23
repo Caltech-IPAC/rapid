@@ -336,6 +336,14 @@ if __name__ == '__main__':
     ra4_refimage,dec4_refimage = util.tan_proj(x4_refimage,y4_refimage,crpix1_refimage,crpix2_refimage,crval1_refimage,crval2_refimage,cdelt1_refimage,cdelt2_refimage,crota2_refimage)
 
 
+    # Insert or update record in Jobs database table and return job ID.
+
+    jid = dbh.start_job(ppid,fid,expid,field,sca,rid)
+
+    if dbh.exit_code >= 64:
+        exit(dbh.exit_code)
+
+
     # Query RefImages database table for the best (latest unless version is locked) version of reference image.
     # A reference image depends only on pipeline number, field, filter, and version.
     # If a reference image does not exist, then aggregate all the inputs required to make one.
@@ -407,14 +415,6 @@ if __name__ == '__main__':
             mjdobs.append(refim_inputs_mjdobs_refimage)
             exptime.append(refim_inputs_exptime_refimage)
             infobits.append(refim_inputs_infobits_refimage)
-
-
-    # Insert or update record in Jobs database table and return job ID.
-
-    jid = dbh.start_job(ppid,fid,expid,field,sca,rid)
-
-    if dbh.exit_code >= 64:
-        exit(dbh.exit_code)
 
 
     # Close database connection.
