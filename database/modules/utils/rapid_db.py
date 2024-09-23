@@ -957,7 +957,7 @@ class RAPIDDB:
             self.exit_code = 67
 
 
-    return sca,fid,ra0,dec0,ra1,dec1,ra2,dec2,ra3,dec3,ra4,dec4
+        return sca,fid,ra0,dec0,ra1,dec1,ra2,dec2,ra3,dec3,ra4,dec4
 
 
     def get_overlapping_l2files(self,rid,fid,field_ra0,field_dec0,
