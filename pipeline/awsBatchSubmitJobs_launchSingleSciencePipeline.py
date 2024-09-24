@@ -337,10 +337,29 @@ if __name__ == '__main__':
     y4_refimage = naxis2_refimage + 0.5 - 1.0
 
 
-    ra1_refimage,dec1_refimage = util.tan_proj(x1_refimage,y1_refimage,crpix1_refimage,crpix2_refimage,crval1_refimage,crval2_refimage,cdelt1_refimage,cdelt2_refimage,crota2_refimage)
-    ra2_refimage,dec2_refimage = util.tan_proj(x2_refimage,y2_refimage,crpix1_refimage,crpix2_refimage,crval1_refimage,crval2_refimage,cdelt1_refimage,cdelt2_refimage,crota2_refimage)
-    ra3_refimage,dec3_refimage = util.tan_proj(x3_refimage,y3_refimage,crpix1_refimage,crpix2_refimage,crval1_refimage,crval2_refimage,cdelt1_refimage,cdelt2_refimage,crota2_refimage)
-    ra4_refimage,dec4_refimage = util.tan_proj(x4_refimage,y4_refimage,crpix1_refimage,crpix2_refimage,crval1_refimage,crval2_refimage,cdelt1_refimage,cdelt2_refimage,crota2_refimage)
+    ra1_refimage,dec1_refimage = util.tan_proj(x1_refimage,y1_refimage,
+                                               crpix1_refimage,crpix2_refimage,
+                                               crval1_refimage,crval2_refimage,
+                                               cdelt1_refimage,cdelt2_refimage,
+                                               crota2_refimage)
+
+    ra2_refimage,dec2_refimage = util.tan_proj(x2_refimage,y2_refimage,
+                                               crpix1_refimage,crpix2_refimage,
+                                               crval1_refimage,crval2_refimage,
+                                               cdelt1_refimage,cdelt2_refimage,
+                                               crota2_refimage)
+
+    ra3_refimage,dec3_refimage = util.tan_proj(x3_refimage,y3_refimage,
+                                               crpix1_refimage,crpix2_refimage,
+                                               crval1_refimage,crval2_refimage,
+                                               cdelt1_refimage,cdelt2_refimage,
+                                               crota2_refimage)
+
+    ra4_refimage,dec4_refimage = util.tan_proj(x4_refimage,y4_refimage,
+                                               crpix1_refimage,crpix2_refimage,
+                                               crval1_refimage,crval2_refimage,
+                                               cdelt1_refimage,cdelt2_refimage,
+                                               crota2_refimage)
 
 
     # Insert or update record in Jobs database table and return job ID.
@@ -351,7 +370,8 @@ if __name__ == '__main__':
         exit(dbh.exit_code)
 
 
-    # Query RefImages database table for the best (latest unless version is locked) version of reference image.
+    # Query RefImages database table for the best version of reference image
+    # (which is usually the latest unless a prior version is locked).
     # A reference image depends only on pipeline number, field, filter, and version.
     # If a reference image does not exist, then aggregate all the inputs required to make one.
 
@@ -377,27 +397,37 @@ if __name__ == '__main__':
         # L2FileMeta table does NOT join with the L2Files table, in order to optimize query speed).
 
         radius_of_initial_cone_search = 0.18
-        overlapping_images = dbh.get_overlapping_l2files(rid,fid,ra0_field,dec0_field,ra1_field,dec1_field,ra2_field,dec2_field,
-                                                         ra3_field,dec3_field,ra4_field,dec4_field,radius_of_initial_cone_search)
+        overlapping_images = dbh.get_overlapping_l2files(rid,fid,ra0_field,dec0_field,
+                                                         ra1_field,dec1_field,
+                                                         ra2_field,dec2_field,
+                                                         ra3_field,dec3_field,
+                                                         ra4_field,dec4_field,
+                                                         radius_of_initial_cone_search)
 
         if dbh.exit_code >= 64:
             exit(dbh.exit_code)
 
 
-        # For each overlapping image, query L2Files database table for filename, sca, mjdobs, exptime, infobits, and status.
+        # For each overlapping image, query L2Files database table for
+        # filename, sca, mjdobs, exptime, infobits, and status.
 
-        filename_refimage_inputs = []
-        expid_refimage_inputs = []
-        sca_refimage_inputs = []
-        field_refimage_inputs = []
-        mjdobs_refimage_inputs = []
-        exptime_refimage_inputs = []
-        infobits_refimage_inputs = []
+        f = open(input_images_csv_file, "w")
 
-        for image in overlapping_images:
-            rid_refimage = image[0]
+        for image_meta in overlapping_images:
+            rid_refimage_input = image_meta[0]
+            ra0_refimage_input = image_meta[1]
+            dec0_refimage_input = image_meta[2]
+            ra1_refimage_input = image_meta[3]
+            dec1_refimage_input = image_meta[4]
+            ra2_refimage_input = image_meta[5]
+            dec2_refimage_input = image_meta[6]
+            ra3_refimage_input = image_meta[7]
+            dec3_refimage_input = image_meta[8]
+            ra4_refimage_input = image_meta[9]
+            dec4_refimage_input = image_meta[10]
+            cone_search_dist_refimage_input = image_meta[11]
 
-            image_info = dbh.get_info_for_l2file(rid_refimage)
+            image_info = dbh.get_info_for_l2file(rid_refimage_input)
 
             if dbh.exit_code >= 64:
                 exit(dbh.exit_code)
@@ -416,13 +446,31 @@ if __name__ == '__main__':
             if status_refimage_input== 0: continue             # Omit if status = 0
             if vbest_refimage_input== 0: continue              # Omit if not the best version
 
-            filename_refimage_inputs .append(filename_refimage_input)
-            expid_refimage_inputs .append(expid_refimage_input)
-            sca_refimage_inputs .append(sca_refimage_input)
-            field_refimage_inputs .append(field_refimage_input)
-            mjdobs_refimage_inputs .append(mjdobs_refimage_input)
-            exptime_refimage_inputs .append(exptime_refimage_input)
-            infobits_refimage_inputs .append(infobits_refimage_input)
+            csv_record = str(rid_refimage_input) + "," +\
+                         str(ra0_refimage_input) + "," +\
+                         str(dec0_refimage_input) + "," +\
+                         str(ra1_refimage_input) + "," +\
+                         str(dec1_refimage_input) + "," +\
+                         str(ra2_refimage_input) + "," +\
+                         str(dec2_refimage_input) + "," +\
+                         str(ra3_refimage_input) + "," +\
+                         str(dec3_refimage_input) + "," +\
+                         str(ra4_refimage_input) + "," +\
+                         str(dec4_refimage_input) + "," +\
+                         str(filename_refimage_input) + "," +\
+                         str(expid_refimage_input) + "," +\
+                         str(sca_refimage_input) + "," +\
+                         str(field_refimage_input) + "," +\
+                         str(mjdobs_refimage_input) + "," +\
+                         str(exptime_refimage_input) + "," +\
+                         str(infobits_refimage_input) + "," +\
+                         str(status_refimage_input) + "," +\
+                         str(vbest_refimage_input) + "," +\
+                         str(version_refimage_input) + "," +\
+
+            f.write(csv_record)
+
+        f.close()
 
 
     # Close database connection.
