@@ -14,9 +14,9 @@ NUMBER_OF_CPUS = 4
 subdir_input = "new"
 subdir_output = "new-lite"
 
-bucket_name_input = 'sims-sn-f184'
-bucket_name_output = 'sims-sn-f184-lite'
-filterstring = 'F184'
+bucket_name_input = 'sims-sn-j129'
+bucket_name_output = 'sims-sn-j129-lite'
+filterstring = 'J129'
 
 aws_access_key_id = os.getenv('AWS_ACCESS_KEY_ID')
 aws_secret_access_key = os.getenv('AWS_SECRET_ACCESS_KEY')
@@ -36,7 +36,7 @@ def worker(input, output):
         result = calculate(func, args)
         output.put(result)
 
-        
+
 #
 # Function used to calculate result
 #
@@ -81,16 +81,16 @@ def process_fits_file_in_subdir(file):
     gzfname_output = fname_output + ".gz"
 
 
-    
+
 
     # Let astropy do the gunzipping and gzipping.
 
     #fname_input = file
     #fname_output = fname_input.replace(".fits","_lite.fits")
-    
 
 
-    
+
+
     print("fname_input =",fname_input)
     print("fname_output =",fname_output)
 
@@ -100,7 +100,7 @@ def process_fits_file_in_subdir(file):
     if (retval != 0):
         print("*** Error: Input file from S3 bucket could not be unzipped ({}); skipping...".format(cmd))
         return(0)
-    
+
     print("Reducing size of FITS file...")
 
     hdul_input = fits.open(subdir_input + "/" + fname_input)
