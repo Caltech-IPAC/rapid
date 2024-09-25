@@ -10,14 +10,34 @@ swvers = "1.0"
 subdir_input = "new"
 subdir_output = "new-lite"
 
-bucket_name_input = 'sims-sn-j129'
-bucket_name_output = 'sims-sn-j129-lite'
+
+
+# Input FILTERSTRING, such as 'J129' (needs to be uppercase as in the *.fits.gz filenames).
+
+filterstring = os.getenv('FILTERSTRING')
+
+if filterstring is None:
+
+    print("*** Error: Env. var. FILTERSTRING not set; quitting...")
+    exit(64)
+
+filter_substring_for_dir = filterstring.lower()
+
+bucket_name_input = 'sims-sn-' + filter_substring_for_dir
+bucket_name_output = 'sims-sn-' + filter_substring_for_dir +'-lite'
 
 aws_access_key_id = os.getenv('AWS_ACCESS_KEY_ID')
 aws_secret_access_key = os.getenv('AWS_SECRET_ACCESS_KEY')
 
-print("aws_access_key_id =",aws_access_key_id)
-print("aws_secret_access_key =",aws_secret_access_key)
+if aws_access_key_id is None:
+
+    print("*** Error: Env. var. AWS_ACCESS_KEY_ID not set; quitting...")
+    exit(64)
+
+if aws_secret_access_key is None:
+
+    print("*** Error: Env. var. AWS_SECRET_ACCESS_KEY not set; quitting...")
+    exit(64)
 
 
 # Set up AWS Batch.
@@ -122,6 +142,10 @@ def submit_jobs():
                     {
                         'name': 'INPUTSUBDIR',
                         'value': subdir_only
+                    },
+                    {
+                        'name': 'FILTERSTRING',
+                        'value': filterstring
                     },
                     {
                         'name': 'BATCH_FILE_S3_URL',

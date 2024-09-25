@@ -14,9 +14,20 @@ NUMBER_OF_CPUS = 4
 subdir_input = "new"
 subdir_output = "new-lite"
 
-bucket_name_input = 'sims-sn-j129'
-bucket_name_output = 'sims-sn-j129-lite'
-filterstring = 'J129'
+
+# Input FILTERSTRING, such as 'J129' (needs to be uppercase as in the *.fits.gz filenames).
+
+filterstring = os.getenv('FILTERSTRING')
+
+if filterstring is None:
+
+    print("*** Error: Env. var. FILTERSTRING not set; quitting...")
+    exit(64)
+
+filter_substring_for_dir = filterstring.lower()
+
+bucket_name_input = 'sims-sn-' + filter_substring_for_dir
+bucket_name_output = 'sims-sn-' + filter_substring_for_dir +'-lite'
 
 aws_access_key_id = os.getenv('AWS_ACCESS_KEY_ID')
 aws_secret_access_key = os.getenv('AWS_SECRET_ACCESS_KEY')
