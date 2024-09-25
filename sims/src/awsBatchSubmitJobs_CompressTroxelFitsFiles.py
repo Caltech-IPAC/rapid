@@ -10,8 +10,8 @@ swvers = "1.0"
 subdir_input = "new"
 subdir_output = "new-lite"
 
-bucket_name_input = 'sims-sn-f184'
-bucket_name_output = 'sims-sn-f184-lite'
+bucket_name_input = 'sims-sn-j129'
+bucket_name_output = 'sims-sn-j129-lite'
 
 aws_access_key_id = os.getenv('AWS_ACCESS_KEY_ID')
 aws_secret_access_key = os.getenv('AWS_SECRET_ACCESS_KEY')
@@ -112,7 +112,7 @@ def submit_jobs():
         # Submit single job for 18 SCA_NUM input files in input S3 bucket for a given exposure.
 
         job_name = job_name_base + subdir_only
-        
+
         response = client.submit_job(
             jobName=job_name,
             jobQueue=job_queue,
@@ -125,7 +125,7 @@ def submit_jobs():
                     },
                     {
                         'name': 'BATCH_FILE_S3_URL',
-                        'value': 's3://sims-sn-f184-lite/awsBatchJobLowLevelScript_CompressTroxelFitsFiles.sh'
+                        'value': 's3://sims-sn-j129-lite/awsBatchJobLowLevelScript_CompressTroxelFitsFiles.sh'
                     },
                     {
                         'name': 'BATCH_FILE_TYPE',
@@ -139,7 +139,7 @@ def submit_jobs():
 
 
         # Increment number of jobs.
-        
+
         njobs += 1
 
         # Comment out the two following lines for the full run.
