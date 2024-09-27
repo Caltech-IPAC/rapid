@@ -59,8 +59,8 @@ if aws_secret_access_key is None:
     print("*** Error: Env. var. AWS_SECRET_ACCESS_KEY not set; quitting...")
     exit(64)
 
-print("aws_access_key_id =",aws_access_key_id)
-print("aws_secret_access_key =",aws_secret_access_key)
+#print("aws_access_key_id =",aws_access_key_id)
+#print("aws_secret_access_key =",aws_secret_access_key)
 
 rapid_sw = os.getenv('RAPID_SW')
 
