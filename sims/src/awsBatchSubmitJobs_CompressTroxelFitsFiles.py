@@ -47,7 +47,7 @@ client = boto3.client('batch')
 
 # Define job definition.  Use AWS Batch Console to set this up once.
 
-job_definition = "arn:aws:batch:us-west-2:891377127831:job-definition/Fetch_and_run:2"
+job_definition = "arn:aws:batch:us-west-2:891377127831:job-definition/Fetch_and_run:3"
 
 
 # Define job queue.  Use AWS Batch Console to set this up once.
