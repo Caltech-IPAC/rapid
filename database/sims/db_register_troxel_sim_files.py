@@ -12,7 +12,19 @@ import modules.utils.rapid_pipeline_subs as util
 import database.modules.utils.rapid_db as db
 import database.modules.utils.roman_tessellation_db as sqlite
 
-bucket_name_input = 'sims-sn-f184-lite'
+
+# Input FILTERSTRING, such as 'J129' (needs to be uppercase as in the *.fits.gz filenames).
+
+filterstring = os.getenv('FILTERSTRING')
+
+if filterstring is None:
+
+    print("*** Error: Env. var. FILTERSTRING not set; quitting...")
+    exit(64)
+
+filter_substring_for_dir = filterstring.lower()
+
+bucket_name_input = 'sims-sn-' + filter_substring_for_dir +'-lite'
 subdir_work = "work"
 
 aws_access_key_id = os.getenv('AWS_ACCESS_KEY_ID')
