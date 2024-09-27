@@ -131,7 +131,7 @@ def submit_jobs():
 
         # Submit single job for 18 SCA_NUM input files in input S3 bucket for a given exposure.
 
-        job_name = job_name_base + subdir_only
+        job_name = job_name_base + "_" + filter_substring_for_dir + "_" + subdir_only
 
         response = client.submit_job(
             jobName=job_name,
