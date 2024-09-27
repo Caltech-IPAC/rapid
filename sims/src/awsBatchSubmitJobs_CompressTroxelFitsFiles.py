@@ -57,7 +57,7 @@ job_queue = 'arn:aws:batch:us-west-2:891377127831:job-queue/getting-started-wiza
 
 # Define job name.
 
-job_name_base = "my_first_boto3_aws_batch_job"
+job_name_base = "rapid_compress_job"
 
 
 
