@@ -12,14 +12,29 @@ NUMBER_OF_CPUS = 9
 subdir_input = "new"
 subdir_output = "new-lite"
 
-bucket_name_input = 'sims-sn-h158'
-bucket_name_output = 'sims-sn-h158-lite'
+
+# Input optional SUBDIR to do just one subdir.
+
+subdir_only_just_this_one = os.getenv('SUBDIR')
+
+
+# Input FILTERSTRING, such as 'J129' (needs to be uppercase as in the *.fits.gz filenames).
+
+filterstring = os.getenv('FILTERSTRING')
+
+if filterstring is None:
+
+    print("*** Error: Env. var. FILTERSTRING not set; quitting...")
+    exit(64)
+
+filter_substring_for_dir = filterstring.lower()
+
+bucket_name_input = 'sims-sn-' + filter_substring_for_dir
+bucket_name_output = 'sims-sn-' + filter_substring_for_dir +'-lite'
+
 
 aws_access_key_id = os.getenv('AWS_ACCESS_KEY_ID')
 aws_secret_access_key = os.getenv('AWS_SECRET_ACCESS_KEY')
-
-print("aws_access_key_id =",aws_access_key_id)
-print("aws_secret_access_key =",aws_secret_access_key)
 
 
 #
@@ -31,7 +46,7 @@ def worker(input, output):
         result = calculate(func, args)
         output.put(result)
 
-        
+
 #
 # Function used to calculate result
 #
@@ -77,7 +92,7 @@ def process_fits_file_in_subdir(file):
     if (retval != 0):
         print("*** Error: Input file from S3 bucket could not be unzipped ({}); skipping...".format(cmd))
         return(0)
-    
+
     print("Reducing size of FITS file...")
 
     hdul_input = fits.open(subdir_input + "/" + fname_input)
@@ -182,6 +197,13 @@ def compress_files():
     nfiles = 0
 
     for subdir_only in files_input.keys():
+
+        if subdir_only_just_this_one is None:
+            pass
+        else
+            if subdir_only_just_this_one != subdir_only:
+                continue
+
 
         print("subdir_only =",subdir_only)
 
