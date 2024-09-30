@@ -10,10 +10,10 @@ echo "Args: $@"
 
 # Test if var is unset (undefined).
 
-if [ -z ${var+x} ]; then 
-    echo "input var is unset; resetting to 4..."; 
+if [ -z ${var+x} ]; then
+    echo "input var is unset; resetting to 4...";
     var=4
-else 
+else
     echo "input var is set to '$var'";
 fi
 
@@ -29,8 +29,8 @@ echo "This is my first real AWS Batch job!."
 
 
 echo "Executing /usr/bin/python3 /usr/local/bin/awsBatchJobLowLevelScript_CompressTroxelFitsFiles.py"
-/usr/bin/python3 /usr/local/bin/awsBatchJobLowLevelScript_CompressTroxelFitsFiles.py
-
+/usr/bin/python3 /usr/local/bin/awsBatchJobLowLevelScript_CompressTroxelFitsFiles.py >& rapid_compress_job_${FILTERSTRING}_${INPUTSUBDIR}_log.txt
+aws s3 cp --quiet --recursive rapid_compress_job_${FILTERSTRING}_${INPUTSUBDIR}_log.txt s3://rapid-pipeline-logs/${FILTERSTRING}/${INPUTSUBDIR}
 
 echo "jobId: $AWS_BATCH_JOB_ID"
 date
