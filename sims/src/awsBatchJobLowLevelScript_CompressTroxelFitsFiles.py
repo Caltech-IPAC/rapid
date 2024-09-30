@@ -1,5 +1,6 @@
 import boto3
 import os
+import time
 import numpy as np
 from astropy.io import fits
 import subprocess
@@ -58,14 +59,28 @@ def calculate(func, args):
 
 
 def execute_command(cmd,no_check=False):
-    print("cmd = ",cmd)
-    p = subprocess.Popen(cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
-    for line in p.stdout.readlines():
-        print("--->",line)
-        strvalue = line.decode('utf-8').strip()
-        print(strvalue)
-    retval = p.wait()
-    print("retval =",retval)
+
+    max_ntries = 5
+
+    ntries = 0
+    while ntries < max_ntries:
+
+        print("ntries = ",ntries)
+        print("Executing cmd = ",cmd)
+
+        p = subprocess.Popen(cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+        for line in p.stdout.readlines():
+            print("--->",line)
+            strvalue = line.decode('utf-8').strip()
+            print(strvalue)
+        retval = p.wait()
+        print("retval =",retval)
+
+        if (retval == 0):
+            break
+
+        time.sleep(3)
+        ntries += 1
 
     if not no_check:
         if (retval != 0):
