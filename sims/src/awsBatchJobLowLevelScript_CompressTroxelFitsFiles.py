@@ -16,6 +16,13 @@ subdir_input = "new"
 subdir_output = "new-lite"
 
 
+# Print out AWS Batch jobId to log file.
+
+aws_batch_job_id = os.getenv('AWS_BATCH_JOB_ID')
+
+print("aws_batch_job_id =",aws_batch_job_id)
+
+
 # Input FILTERSTRING, such as 'J129' (needs to be uppercase as in the *.fits.gz filenames).
 
 filterstring = os.getenv('FILTERSTRING')
@@ -239,7 +246,7 @@ def compress_files():
         # Copy 18 output files from local machine to output S3 bucket.
 
         cmd = "aws s3 cp --quiet --recursive new-lite s3://" + bucket_name_output + "/" + subdir_only
-        execute_command(cmd)
+        exit_code = execute_command(cmd)
 
         cmd = "rm -rf " + subdir_input + "/*fits"
         execute_command(cmd)
@@ -247,6 +254,8 @@ def compress_files():
         cmd = "rm -rf " + subdir_output + "/*fits.gz"
         execute_command(cmd)
 
+        return exit_code
 
 if __name__ == '__main__':
-    compress_files()
+    exit_code = compress_files()
+    exit(exit_code)
