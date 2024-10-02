@@ -39,7 +39,11 @@ response = ec2.start_instances(
 
 print("After starting EC2 instance: response =",response)
 
-print("Sleeping for 30 seconds; then will attempt to attach volume {} to device {}...".format(aws_ec2_volume_id,aws_ec2_volume_device))
+
+if (aws_ec2_volume_id is not None) and (aws_ec2_volume_device is not None):
+    print("Sleeping for 30 seconds; then will attempt to attach volume {} to device {}...".format(aws_ec2_volume_id,aws_ec2_volume_device))
+else:
+    print("Sleeping for 30 seconds; then will call ec2.describe_instances to see if machine is running...")
 time.sleep(30)
 
 
