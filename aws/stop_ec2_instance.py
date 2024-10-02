@@ -132,6 +132,9 @@ response = ec2.stop_instances(
 
 print("After calling ec2.stop_instances: response =",response)
 
+print("Sleeping for 30 seconds; then will check again...")
+time.sleep(30)
+
 
 # Describe EC2 instance and get public DNS name,corresponding IP address, and final state.
 
