@@ -28,9 +28,12 @@ env
 echo "This is my first real AWS Batch job!."
 
 
-echo "Executing /usr/bin/python3 /usr/local/bin/awsBatchJobLowLevelScript_CompressTroxelFitsFiles.py"
-/usr/bin/python3 /usr/local/bin/awsBatchJobLowLevelScript_CompressTroxelFitsFiles.py >& rapid_compress_job_${FILTERSTRING}_${INPUTSUBDIR}_log.txt
-aws s3 cp --quiet --recursive rapid_compress_job_${FILTERSTRING}_${INPUTSUBDIR}_log.txt s3://rapid-pipeline-logs/${FILTERSTRING}/${INPUTSUBDIR}
+logfile="rapid_compress_job_${FILTERSTRING}_${INPUTSUBDIR}_log.txt"
+echo "logfile = $logfile"
+
+echo "Executing /usr/bin/python3 /usr/local/bin/awsBatchJobLowLevelScript_CompressTroxelFitsFiles.py >& $logfile"
+/usr/bin/python3 /usr/local/bin/awsBatchJobLowLevelScript_CompressTroxelFitsFiles.py >& $logfile
+aws s3 cp --quiet $logfile s3://rapid-pipeline-logs/${FILTERSTRING}/$logfile
 
 echo "jobId: $AWS_BATCH_JOB_ID"
 date
