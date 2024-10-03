@@ -93,6 +93,8 @@ grant EXECUTE on FUNCTION updateL2File (
 
 grant EXECUTE on FUNCTION registerL2FileMeta (
     rid_                 integer,
+    fid_                 smallint,
+    sca_                 smallint,
     ra0_                 double precision,
     dec0_                double precision,
     ra1_                 double precision,

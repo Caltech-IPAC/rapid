@@ -377,6 +377,8 @@ $$ language plpgsql;
 --
 create function registerL2FileMeta (
     rid_                 integer,
+    fid_                 smallint,
+    sca_                 smallint,
     ra0_                 double precision,
     dec0_                double precision,
     ra1_                 double precision,
@@ -418,6 +420,8 @@ create function registerL2FileMeta (
 
                 insert into L2FileMeta
                 (rid,
+                 fid,
+                 sca,
                  ra0,
                  dec0,
                  ra1,
@@ -436,6 +440,8 @@ create function registerL2FileMeta (
                 )
                 values
                 (rid_,
+                 fid_,
+                 sca_,
                  ra0_,
                  dec0_,
                  ra1_,
@@ -465,7 +471,9 @@ create function registerL2FileMeta (
             -- Update L2FileMeta record.
 
             update L2FileMeta
-            set ra0 = ra0_,
+            set fid = fid_,
+                sca = sca_,
+                ra0 = ra0_,
                 dec0 = dec0_,
                 ra1 = ra1_,
                 dec1 = dec1_,

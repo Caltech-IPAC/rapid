@@ -93,6 +93,8 @@ DROP FUNCTION updateL2File (
 
 DROP FUNCTION registerL2FileMeta (
     rid_                 integer,
+    fid_                 smallint,
+    sca_                 smallint,
     ra0_                 double precision,
     dec0_                double precision,
     ra1_                 double precision,

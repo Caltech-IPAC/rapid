@@ -207,7 +207,6 @@ def register_l2file(dbh,header,wcs,subdir_only,file,expid,fid):
     key = "DATE-OBS"
     dateobs = get_keyword_value(header,key)
 
-
     #print("dateobs =",dateobs)
 
     key = "MJD-OBS"
@@ -429,7 +428,10 @@ def finalize_l2file(dbh,rid,version,filename,checksum):
     dbh.update_l2file(rid,filename,checksum,status,version)
 
 
-def compute_and_register_l2filemeta(dbh,header,wcs,rid):
+def compute_and_register_l2filemeta(dbh,header,wcs,rid,fid):
+
+    key = "SCA_NUM"
+    sca = get_keyword_value(header,key)
 
     sky0 = compute_center_sky_position(header,wcs)
     sky1,sky2,sky3,sky4 = compute_corner_sky_positions(header,wcs)
@@ -460,7 +462,7 @@ def compute_and_register_l2filemeta(dbh,header,wcs,rid):
 
     # Register record in database.
 
-    dbh.register_l2filemeta(rid,ra0,dec0,ra1,dec1,ra2,dec2,ra3,dec3,ra4,dec4,x,y,z,hp6,hp9)
+    dbh.register_l2filemeta(rid,ra0,dec0,ra1,dec1,ra2,dec2,ra3,dec3,ra4,dec4,x,y,z,hp6,hp9,fid,sca)
 
 
 def register_files():
@@ -540,7 +542,7 @@ def register_files():
 
             finalize_l2file(dbh,rid,version,filename,checksum)     # Keep same filename and version for now.
 
-            compute_and_register_l2filemeta(dbh,header,wcs,rid)
+            compute_and_register_l2filemeta(dbh,header,wcs,rid,fid)
 
 
         # Clean up work directory.

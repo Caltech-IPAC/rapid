@@ -467,7 +467,7 @@ class RAPIDDB:
 
 ########################################################################################################
 
-    def register_l2filemeta(self,rid,ra0,dec0,ra1,dec1,ra2,dec2,ra3,dec3,ra4,dec4,x,y,z,hp6,hp9):
+    def register_l2filemeta(self,rid,ra0,dec0,ra1,dec1,ra2,dec2,ra3,dec3,ra4,dec4,x,y,z,hp6,hp9,fid,sca):
 
         '''
         Insert or update record in L2FileMeta database table.
@@ -481,6 +481,8 @@ class RAPIDDB:
         query_template =\
             "select * from registerL2FileMeta(" +\
             "cast(TEMPLATE_RID as integer)," +\
+            "cast(TEMPLATE_FID as smallint)," +\
+            "cast(TEMPLATE_SCA as smallint)," +\
             "cast(TEMPLATE_RA0 as double precision)," +\
             "cast(TEMPLATE_DEC0 as double precision)," +\
             "cast(TEMPLATE_RA1 as double precision)," +\
@@ -505,6 +507,8 @@ class RAPIDDB:
         print('----> dec0 = {}'.format(dec0))
 
         rep = {"TEMPLATE_RID": str(rid)}
+        rep = {"TEMPLATE_FID": str(fid)}
+        rep = {"TEMPLATE_SCA": str(sca)}
 
         rep["TEMPLATE_RA0"] = str(ra0)
         rep["TEMPLATE_DEC0"] = str(dec0)
