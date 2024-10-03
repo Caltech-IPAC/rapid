@@ -232,7 +232,7 @@ class RAPIDDB:
 
 ########################################################################################################
 
-    def add_l2file(self,expid,chipid,field,hp6,hp9,fid,dateobs,mjdobs,exptime,infobits,
+    def add_l2file(self,expid,sca,field,hp6,hp9,fid,dateobs,mjdobs,exptime,infobits,
         status,filename,checksum,crval1,crval2,crpix1,crpix2,cd11,cd12,cd21,cd22,
         ctype1,ctype2,cunit1,cunit2,a_order,a_0_2,a_0_3,a_0_4,a_1_1,a_1_2,
         a_1_3,a_2_0,a_2_1,a_2_2,a_3_0,a_3_1,a_4_0,b_order,b_0_2,b_0_3,
@@ -251,7 +251,7 @@ class RAPIDDB:
         query_template =\
             "select * from addL2File(" +\
             "cast(TEMPLATE_EXPID as integer)," +\
-            "cast(TEMPLATE_CHIPID as smallint)," +\
+            "cast(TEMPLATE_SCA as smallint)," +\
             "cast(TEMPLATE_FIELD as integer)," +\
             "cast(TEMPLATE_HP6 as integer)," +\
             "cast(TEMPLATE_HP9 as integer)," +\
@@ -315,11 +315,11 @@ class RAPIDDB:
         # Query database.
 
         print('----> expid = {}'.format(expid))
-        print('----> chipid = {}'.format(chipid))
+        print('----> sca = {}'.format(sca))
         print('----> filename = {}'.format(filename))
 
         rep = {"TEMPLATE_EXPID": str(expid),
-               "TEMPLATE_CHIPID": str(chipid),
+               "TEMPLATE_SCA": str(sca),
                "TEMPLATE_FIELD": str(field),
                "TEMPLATE_HP6": str(hp6),
                "TEMPLATE_HP9": str(hp9),
@@ -642,7 +642,7 @@ class RAPIDDB:
 
 ########################################################################################################
 
-    def get_all_l2files_assoc_rid_with_fid_and_chipid(self):
+    def get_all_l2files_assoc_rid_with_fid_and_sca(self):
 
         '''
         Get all records in L2Files database table.
@@ -653,7 +653,7 @@ class RAPIDDB:
 
         # Define query.
 
-        query = "select rid,fid,chipid from L2Files;"
+        query = "select rid,fid,sca from L2Files;"
 
 
         # Query database.
@@ -688,10 +688,10 @@ class RAPIDDB:
 
 ########################################################################################################
 
-    def update_l2filemeta_fid_chipid(self,rid,fid,chipid):
+    def update_l2filemeta_fid_sca(self,rid,fid,sca):
 
         '''
-        Update fid and chipid columns in L2FileMeta database record.
+        Update fid and sca columns in L2FileMeta database record.
         '''
 
         self.exit_code = 0
@@ -699,14 +699,14 @@ class RAPIDDB:
 
         # Define query.
 
-        query = "update L2FileMeta set fid = " + str(fid) + ", chipid = " + str(chipid) + " where rid = " + str(rid) + ";"
+        query = "update L2FileMeta set fid = " + str(fid) + ", sca = " + str(sca) + " where rid = " + str(rid) + ";"
 
 
         # Query database.
 
         print('----> rid = {}'.format(rid))
         print('----> fid = {}'.format(fid))
-        print('----> chipid = {}'.format(chipid))
+        print('----> sca = {}'.format(sca))
 
         print('query = {}'.format(query))
 

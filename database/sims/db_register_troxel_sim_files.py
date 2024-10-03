@@ -226,7 +226,7 @@ def register_l2file(dbh,header,wcs,subdir_only,file,expid,fid):
     dec = get_keyword_value(header,key)
 
     key = "SCA_NUM"
-    chipid = get_keyword_value(header,key)
+    sca = get_keyword_value(header,key)
 
     key = "CRVAL1"
     crval1 = get_keyword_value(header,key)
@@ -400,7 +400,7 @@ def register_l2file(dbh,header,wcs,subdir_only,file,expid,fid):
 
     # Insert record in L2Files database table.
 
-    dbh.add_l2file(expid,chipid,field,hp6,hp9,fid,dateobs,mjdobs,exptime,infobits,
+    dbh.add_l2file(expid,sca,field,hp6,hp9,fid,dateobs,mjdobs,exptime,infobits,
         status,filename,checksum,crval1,crval2,crpix1,crpix2,cd11,cd12,cd21,cd22,
         ctype1,ctype2,cunit1,cunit2,a_order,a_0_2,a_0_3,a_0_4,a_1_1,a_1_2,
         a_1_3,a_2_0,a_2_1,a_2_2,a_3_0,a_3_1,a_4_0,b_order,b_0_2,b_0_3,
