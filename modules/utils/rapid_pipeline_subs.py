@@ -4,6 +4,7 @@ from astropy.io import fits
 import re
 import subprocess
 
+debug = True
 
 rtd = 180.0 / math.pi
 dtr = 1.0 / rtd
@@ -31,14 +32,14 @@ def execute_command(code_to_execute_args):
     return returncode
 
 
-
 #-------------------------------------------------------------------
 # Given pixel location (x, y) on a tangent plane, compute the corresponding
 # sky position (R.A., Dec.), neglecting geometric distortion.
 
 def tan_proj(x,y,crpix1,crpix2,crval1,crval2,cdelt1,cdelt2,crota2):
 
-    print("crpix1,crpix2,crval1,crval2,cdelt1,cdelt2,crota2 =",crpix1,crpix2,crval1,crval2,cdelt1,cdelt2,crota2)
+    if debug:
+        print("crpix1,crpix2,crval1,crval2,cdelt1,cdelt2,crota2 =",crpix1,crpix2,crval1,crval2,cdelt1,cdelt2,crota2)
 
     glong  = crval1
     glat   = crval2
