@@ -467,7 +467,7 @@ class RAPIDDB:
 
 ########################################################################################################
 
-    def register_l2filemeta(self,rid,ra0,dec0,ra1,dec1,ra2,dec2,ra3,dec3,ra4,dec4,x,y,z,hp6):
+    def register_l2filemeta(self,rid,ra0,dec0,ra1,dec1,ra2,dec2,ra3,dec3,ra4,dec4,x,y,z,hp6,hp9):
 
         '''
         Insert or update record in L2FileMeta database table.
@@ -494,7 +494,8 @@ class RAPIDDB:
             "cast(TEMPLATE_Z as double precision)," +\
             "cast(TEMPLATE_Y as double precision)," +\
             "cast(TEMPLATE_Z AS double precision)," +\
-            "cast(TEMPLATE_HP6 AS integer));"
+            "cast(TEMPLATE_HP6 AS integer)," +\
+            "cast(TEMPLATE_HP9 AS integer));"
 
 
         # Query database.
@@ -519,6 +520,7 @@ class RAPIDDB:
         rep["TEMPLATE_Y"] = str(y)
         rep["TEMPLATE_Z"] = str(z)
         rep["TEMPLATE_HP6"] = str(hp6)
+        rep["TEMPLATE_HP9"] = str(hp9)
 
         rep = dict((re.escape(k), v) for k, v in rep.items())
         pattern = re.compile("|".join(rep.keys()))
