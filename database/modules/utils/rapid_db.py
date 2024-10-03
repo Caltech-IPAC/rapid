@@ -5,8 +5,10 @@ import hashlib
 
 debug = 1
 
-
+########################################################################################################
 # Common methods.
+########################################################################################################
+
 
 def md5(fname):
     hash_md5 = hashlib.md5()
@@ -55,6 +57,10 @@ def compute_checksum(fname,dbcksum=None):
     return cksum
 
 
+########################################################################################################
+########################################################################################################
+########################################################################################################
+
 class RAPIDDB:
 
     """
@@ -70,6 +76,9 @@ class RAPIDDB:
         67 = Could not execute database query or no record(s) returned.
         68 = Could not open file to compute checksum.
     """
+
+
+########################################################################################################
 
     def __init__(self):
 
@@ -119,6 +128,8 @@ class RAPIDDB:
             print('record = {}'.format(record))
 
 
+########################################################################################################
+
     def close(self):
 
         '''
@@ -136,6 +147,8 @@ class RAPIDDB:
                 self.conn.close()
                 print('Database connection closed.')
 
+
+########################################################################################################
 
     def add_exposure(self,dateobs,mjdobs,field,filter,exptime,infobits,status):
 
@@ -208,6 +221,8 @@ class RAPIDDB:
         if self.exit_code == 0:
             self.conn.commit()           # Commit database transaction
 
+
+########################################################################################################
 
     def add_l2file(self,expid,chipid,field,fid,dateobs,mjdobs,exptime,infobits,
         status,filename,checksum,crval1,crval2,crpix1,crpix2,cd11,cd12,cd21,cd22,
@@ -374,6 +389,8 @@ class RAPIDDB:
             self.conn.commit()           # Commit database transaction
 
 
+########################################################################################################
+
     def update_l2file(self,rid,filename,checksum,status,version):
 
         '''
@@ -435,6 +452,8 @@ class RAPIDDB:
         if self.exit_code == 0:
             self.conn.commit()           # Commit database transaction
 
+
+########################################################################################################
 
     def register_l2filemeta(self,rid,ra0,dec0,ra1,dec1,ra2,dec2,ra3,dec3,ra4,dec4,x,y,z,hp6):
 
@@ -516,6 +535,8 @@ class RAPIDDB:
             self.conn.commit()           # Commit database transaction
 
 
+########################################################################################################
+
     def get_all_l2filemeta(self):
 
         '''
@@ -560,6 +581,8 @@ class RAPIDDB:
         return records
 
 
+########################################################################################################
+
     def update_l2filemeta_hp6(self,rid,hp6):
 
         '''
@@ -602,6 +625,8 @@ class RAPIDDB:
         if self.exit_code == 0:
             self.conn.commit()           # Commit database transaction
 
+
+########################################################################################################
 
     def get_all_l2files_assoc_rid_with_fid_and_chipid(self):
 
@@ -647,6 +672,8 @@ class RAPIDDB:
         return records
 
 
+########################################################################################################
+
     def update_l2filemeta_fid_chipid(self,rid,fid,chipid):
 
         '''
@@ -691,6 +718,8 @@ class RAPIDDB:
             self.conn.commit()           # Commit database transaction
 
 
+########################################################################################################
+
     def update_l2filemeta_hp9(self,rid,hp9):
 
         '''
@@ -731,6 +760,8 @@ class RAPIDDB:
         if self.exit_code == 0:
             self.conn.commit()           # Commit database transaction
 
+
+########################################################################################################
 
     def get_all_l2files(self):
 
@@ -775,6 +806,8 @@ class RAPIDDB:
 
         return records
 
+
+########################################################################################################
 
     def update_l2files_field_hp6_hp9(self,rid,field,hp6,hp9):
 
@@ -824,6 +857,8 @@ class RAPIDDB:
             self.conn.commit()           # Commit database transaction
 
 
+########################################################################################################
+
     def get_all_exposures(self):
 
         '''
@@ -869,6 +904,8 @@ class RAPIDDB:
 
         return records
 
+
+########################################################################################################
 
     def update_exposures_field_hp6_hp9(self,expid,field,hp6,hp9):
 
@@ -917,6 +954,8 @@ class RAPIDDB:
         if self.exit_code == 0:
             self.conn.commit()           # Commit database transaction
 
+
+########################################################################################################
 
     def get_l2filemeta_record(self,rid):
 
@@ -986,8 +1025,15 @@ class RAPIDDB:
         return sca,fid,ra0,dec0,ra1,dec1,ra2,dec2,ra3,dec3,ra4,dec4
 
 
-    def get_overlapping_l2files(self,rid,fid,field_ra0,field_dec0,
-                                field_ra1,field_dec1,field_ra2,field_dec2,field_ra3,field_dec3,field_ra4,field_dec4,radius_of_initial_cone_search=None):
+########################################################################################################
+
+    def get_overlapping_l2files(self,rid,fid,
+                                field_ra0,field_dec0,
+                                field_ra1,field_dec1,
+                                field_ra2,field_dec2,
+                                field_ra3,field_dec3,
+                                field_ra4,field_dec4,
+                                radius_of_initial_cone_search=None):
 
         '''
         Query database for RIDs and distances from tile center for all science images that
@@ -1072,6 +1118,8 @@ class RAPIDDB:
         return records
 
 
+########################################################################################################
+
     def get_info_for_l2file(self,rid):
 
         '''
@@ -1137,6 +1185,8 @@ class RAPIDDB:
         return record
 
 
+########################################################################################################
+
     def get_best_reference_image(self,ppid,field,fid):
 
         '''
@@ -1191,6 +1241,8 @@ class RAPIDDB:
 
         return rfid,filename
 
+
+########################################################################################################
 
     def start_job(self,ppid,fid,expid,field,sca,rid,machine='null',slurm='null'):
 
