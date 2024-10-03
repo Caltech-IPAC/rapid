@@ -150,7 +150,7 @@ class RAPIDDB:
 
 ########################################################################################################
 
-    def add_exposure(self,dateobs,mjdobs,field,filter,exptime,infobits,status):
+    def add_exposure(self,dateobs,mjdobs,field,hp6,hp9,filter,exptime,infobits,status):
 
         '''
         Add record in Exposures database table.
@@ -166,6 +166,8 @@ class RAPIDDB:
             "cast('TEMPLATE_DATEOBS' as timestamp)," +\
             "cast(TEMPLATE_MJDOBS as double precision)," +\
             "cast(TEMPLATE_FIELD as integer)," +\
+            "cast(TEMPLATE_HP6 as integer)," +\
+            "cast(TEMPLATE_HP9 as integer)," +\
             "cast('TEMPLATE_FILTER' as character varying(16))," +\
             "cast(TEMPLATE_EXPTIME as real), " +\
             "cast(TEMPLATE_INFOBITS as integer), " +\
@@ -179,6 +181,8 @@ class RAPIDDB:
         print('----> dateobs = {}'.format(dateobs))
         print('----> mjdobs = {}'.format(mjdobs))
         print('----> field = {}'.format(field))
+        print('----> hp6 = {}'.format(hp6))
+        print('----> hp9 = {}'.format(hp9))
         print('----> filter = {}'.format(filter))
         print('----> exptime = {}'.format(exptime))
         print('----> infobits = {}'.format(infobits))
@@ -186,6 +190,8 @@ class RAPIDDB:
 
         mjdobs_str = str(mjdobs)
         field_str = str(field)
+        hp6_str = str(hp6)
+        hp9_str = str(hp9)
         exptime_str = str(exptime)
         infobits_str = str(infobits)
         status_str = str(status)
@@ -193,6 +199,8 @@ class RAPIDDB:
         rep = {"TEMPLATE_DATEOBS": dateobs,
                "TEMPLATE_MJDOBS": mjdobs_str,
                "TEMPLATE_FIELD": field_str,
+               "TEMPLATE_HP6": hp6_str,
+               "TEMPLATE_HP9": hp9_str,
                "TEMPLATE_FILTER": filter,
                "TEMPLATE_EXPTIME": exptime_str}
 
