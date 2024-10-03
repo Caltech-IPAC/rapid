@@ -503,12 +503,15 @@ class RAPIDDB:
         # Query database.
 
         print('----> rid = {}'.format(rid))
+        print('----> fid = {}'.format(fid))
+        print('----> sca = {}'.format(sca))
         print('----> ra0 = {}'.format(ra0))
         print('----> dec0 = {}'.format(dec0))
 
         rep = {"TEMPLATE_RID": str(rid)}
-        rep = {"TEMPLATE_FID": str(fid)}
-        rep = {"TEMPLATE_SCA": str(sca)}
+
+        rep["TEMPLATE_FID"] = str(fid)
+        rep["TEMPLATE_SCA"] = str(sca)
 
         rep["TEMPLATE_RA0"] = str(ra0)
         rep["TEMPLATE_DEC0"] = str(dec0)
