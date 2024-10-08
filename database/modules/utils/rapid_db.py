@@ -1282,7 +1282,7 @@ class RAPIDDB:
             "cast(TEMPLATE_FID as smallint)," +\
             "cast(TEMPLATE_EXPID as integer)," +\
             "cast(TEMPLATE_FIELD as integer)," +\
-            "cast('TEMPLATE_SCA' as smallint)," +\
+            "cast(TEMPLATE_SCA as smallint)," +\
             "cast(TEMPLATE_RID as integer), " +\
             "cast(TEMPLATE_MACHINE as smallint), " +\
             "cast(TEMPLATE_SLURM as integer)) as jid;"
