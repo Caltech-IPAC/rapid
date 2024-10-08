@@ -89,7 +89,7 @@ config_input.read(config_input_filename)
 verbose = int(config_input['DEFAULT']['verbose'])
 debug = int(config_input['DEFAULT']['debug'])
 ppid = int(config_input['SCI_IMAGE']['ppid'])
-config_output_s3_bucket_base = config_input['DEFAULT']['config_output_bucket_base']
+config_output_s3_bucket_base = config_input['DEFAULT']['config_output_s3_bucket_base']
 ppid_refimage = int(config_input['REF_IMAGE']['ppid_refimage'])
 naxis1_refimage = int(config_input['REF_IMAGE']['naxis1_refimage'])
 naxis2_refimage = int(config_input['REF_IMAGE']['naxis2_refimage'])
