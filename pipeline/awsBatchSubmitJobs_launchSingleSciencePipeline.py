@@ -488,7 +488,7 @@ if __name__ == '__main__':
     proc_date = datetime_now.strftime('%Y%m%d')
     config_output_filename = rapid_work + "/job_config_jid" + str(jid) + ".ini"
     config_output_s3_bucket = config_output_s3_bucket_base + "/" + proc_date
-    config_output_s3_bucket_destname = config_output_s3_bucket_base + "/" + proc_date + "/" config_output_filename
+    config_output_s3_bucket_destname = config_output_s3_bucket_base + "/" + proc_date + "/" + config_output_filename
 
 
     config_output = configparser.ConfigParser()
