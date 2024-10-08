@@ -465,7 +465,7 @@ if __name__ == '__main__':
                          str(infobits_refimage_input) + "," +\
                          str(status_refimage_input) + "," +\
                          str(vbest_refimage_input) + "," +\
-                         str(version_refimage_input) + "," +\
+                         str(version_refimage_input)
 
             f.write(csv_record)
 
