@@ -90,7 +90,9 @@ verbose = int(config_input['DEFAULT']['verbose'])
 debug = int(config_input['DEFAULT']['debug'])
 ppid = int(config_input['SCI_IMAGE']['ppid'])
 config_output_s3_bucket_base = config_input['DEFAULT']['config_output_s3_bucket_base']
+product_s3_bucket_base = config_input['DEFAULT']['product_s3_bucket_base']
 ppid_refimage = int(config_input['REF_IMAGE']['ppid_refimage'])
+
 naxis1_refimage = int(config_input['REF_IMAGE']['naxis1_refimage'])
 naxis2_refimage = int(config_input['REF_IMAGE']['naxis2_refimage'])
 cdelt1_refimage = float(config_input['REF_IMAGE']['cdelt1_refimage'])
@@ -118,8 +120,120 @@ job_queue = config_input['AWS_BATCH']['job_queue']
 job_name_base = config_input['AWS_BATCH']['job_name_base']
 
 
+# Get the awaicgen parameters.  Some of these parameters will be overwritten by this script.
+# Do not convert to numerical types, since these will just be passed through (except for those
+# overwritten by this script).
+
+awaicgen_dict = {}
+
+awaicgen_dict["awaicgen_input_images_list_file"] = config_input['AWAICGEN']['awaicgen_input_images_list_file']
+awaicgen_dict["awaicgen_mosaic_size_x"] = config_input['AWAICGEN']['awaicgen_mosaic_size_x']
+awaicgen_dict["awaicgen_mosaic_size_y"] = config_input['AWAICGEN']['awaicgen_mosaic_size_y']
+awaicgen_dict["awaicgen_RA_center"] = config_input['AWAICGEN']['awaicgen_RA_center']
+awaicgen_dict["awaicgen_Dec_center"] = config_input['AWAICGEN']['awaicgen_Dec_center']
+awaicgen_dict["awaicgen_mosaic_rotation"] = config_input['AWAICGEN']['awaicgen_mosaic_rotation']
+awaicgen_dict["awaicgen_pixelscale_factor"] = config_input['AWAICGEN']['awaicgen_pixelscale_factor']
+awaicgen_dict["awaicgen_pixelscale_absolute"] = config_input['AWAICGEN']['awaicgen_pixelscale_absolute']
+awaicgen_dict["awaicgen_mos_cellsize_factor"] = config_input['AWAICGEN']['awaicgen_mos_cellsize_factor']
+awaicgen_dict["awaicgen_drizzle_factor"] = config_input['AWAICGEN']['awaicgen_drizzle_factor']
+awaicgen_dict["awaicgen_inv_var_weight_flag"] = config_input['AWAICGEN']['awaicgen_inv_var_weight_flag']
+awaicgen_dict["awaicgen_pixelflux_scale_flag"] = config_input['AWAICGEN']['awaicgen_pixelflux_scale_flag']
+awaicgen_dict["awaicgen_simple_coadd_flag"] = config_input['AWAICGEN']['awaicgen_simple_coadd_flag']
+awaicgen_dict["awaicgen_num_threads"] = config_input['AWAICGEN']['awaicgen_num_threads']
+awaicgen_dict["awaicgen_unc_sigfigs_retained"] = config_input['AWAICGEN']['awaicgen_unc_sigfigs_retained']
+awaicgen_dict["awaicgen_output_mosaic_image_file"] = config_input['AWAICGEN']['awaicgen_output_mosaic_image_file']
+awaicgen_dict["awaicgen_output_mosaic_cov_map_file"] = config_input['AWAICGEN']['awaicgen_output_mosaic_cov_map_file']
+awaicgen_dict["awaicgen_output_mosaic_uncert_image_file"] = config_input['AWAICGEN']['awaicgen_output_mosaic_uncert_image_file']
+awaicgen_dict["awaicgen_debug"] = config_input['AWAICGEN']['awaicgen_debug']
+awaicgen_dict["awaicgen_verbose"] = config_input['AWAICGEN']['awaicgen_verbose']
 
 
+# Get the swarp parameters.  Some of these parameters will be overwritten by this script.
+# Do not convert to numerical types, since these will just be passed through.
+
+swarp_dict = {}
+
+swarp_dict["swarp_input_image"] = config_input['SWARP']['swarp_input_image']
+swarp_dict["swarp_config_file"] = config_input['SWARP']['swarp_config_file']
+swarp_dict["swart_FSCALE_DEFAULT"] = config_input['SWARP']['swart_FSCALE_DEFAULT']
+swarp_dict["swarp_RESAMPLING_TYPE"] = config_input['SWARP']['swarp_RESAMPLING_TYPE']
+swarp_dict["swarp_SATLEV_KEYWORD"] = config_input['SWARP']['swarp_SATLEV_KEYWORD']
+swarp_dict["swarp_SATLEV_DEFAULT"] = config_input['SWARP']['swarp_SATLEV_DEFAULT']
+swarp_dict["swarp_RESAMPLE_DIR"] = config_input['SWARP']['swarp_RESAMPLE_DIR']
+swarp_dict["swarp_IMAGEOUT_NAME"] = config_input['SWARP']['swarp_IMAGEOUT_NAME']
+swarp_dict["swarp_WEIGHTOUT_NAME"] = config_input['SWARP']['swarp_WEIGHTOUT_NAME']
+swarp_dict["swarp_VERBOSE_TYPE"] = config_input['SWARP']['swarp_VERBOSE_TYPE']
+
+
+# Get the sextractor parameters.  Some of these parameters will be overwritten by this script.
+# Do not convert to numerical types, since these will just be passed through.
+
+sextractor_dict = {}
+
+sextractor_dict["sextractor_CATALOG_NAME"] = config_input['SEXTRACTOR']['sextractor_CATALOG_NAME']
+sextractor_dict["sextractor_CATALOG_TYPE"] = config_input['SEXTRACTOR']['sextractor_CATALOG_TYPE']
+sextractor_dict["sextractor_PARAMETERS_NAME"] = config_input['SEXTRACTOR']['sextractor_PARAMETERS_NAME']
+sextractor_dict["sextractor_DETECT_TYPE"] = config_input['SEXTRACTOR']['sextractor_DETECT_TYPE']
+sextractor_dict["sextractor_DETECT_MINAREA"] = config_input['SEXTRACTOR']['sextractor_DETECT_MINAREA']
+sextractor_dict["sextractor_DETECT_MAXAREA"] = config_input['SEXTRACTOR']['sextractor_DETECT_MAXAREA']
+sextractor_dict["sextractor_THRESH_TYPE"] = config_input['SEXTRACTOR']['sextractor_THRESH_TYPE']
+sextractor_dict["sextractor_DETECT_THRESH"] = config_input['SEXTRACTOR']['sextractor_DETECT_THRESH']
+sextractor_dict["sextractor_ANALYSIS_THRESH"] = config_input['SEXTRACTOR']['sextractor_ANALYSIS_THRESH']
+sextractor_dict["sextractor_FILTER"] = config_input['SEXTRACTOR']['sextractor_FILTER']
+sextractor_dict["sextractor_FILTER_NAME"] = config_input['SEXTRACTOR']['sextractor_FILTER_NAME']
+sextractor_dict["sextractor_FILTER_THRESH"] = config_input['SEXTRACTOR']['sextractor_FILTER_THRESH']
+sextractor_dict["sextractor_DEBLEND_NTHRESH"] = config_input['SEXTRACTOR']['sextractor_DEBLEND_NTHRESH']
+sextractor_dict["sextractor_DEBLEND_MINCONT"] = config_input['SEXTRACTOR']['sextractor_DEBLEND_MINCONT']
+sextractor_dict["sextractor_CLEAN"] = config_input['SEXTRACTOR']['sextractor_CLEAN']
+sextractor_dict["sextractor_CLEAN_PARAM"] = config_input['SEXTRACTOR']['sextractor_CLEAN_PARAM']
+sextractor_dict["sextractor_MASK_TYPE"] = config_input['SEXTRACTOR']['sextractor_MASK_TYPE']
+sextractor_dict["sextractor_WEIGHT_TYPE"] = config_input['SEXTRACTOR']['sextractor_WEIGHT_TYPE']
+sextractor_dict["sextractor_RESCALE_WEIGHTS"] = config_input['SEXTRACTOR']['sextractor_RESCALE_WEIGHTS']
+sextractor_dict["sextractor_WEIGHT_IMAGE"] = config_input['SEXTRACTOR']['sextractor_WEIGHT_IMAGE']
+sextractor_dict["sextractor_WEIGHT_GAIN"] = config_input['SEXTRACTOR']['sextractor_WEIGHT_GAIN']
+sextractor_dict["sextractor_WEIGHT_THRESH"] = config_input['SEXTRACTOR']['sextractor_WEIGHT_THRESH']
+sextractor_dict["sextractor_FLAG_IMAGE"] = config_input['SEXTRACTOR']['sextractor_FLAG_IMAGE']
+sextractor_dict["sextractor_FLAG_TYPE"] = config_input['SEXTRACTOR']['sextractor_FLAG_TYPE']
+sextractor_dict["sextractor_PHOT_APERTURES"] = config_input['SEXTRACTOR']['sextractor_PHOT_APERTURES']
+sextractor_dict["sextractor_PHOT_AUTOPARAMS"] = config_input['SEXTRACTOR']['sextractor_PHOT_AUTOPARAMS']
+sextractor_dict["sextractor_PHOT_PETROPARAMS"] = config_input['SEXTRACTOR']['sextractor_PHOT_PETROPARAMS']
+sextractor_dict["sextractor_PHOT_AUTOAPERS"] = config_input['SEXTRACTOR']['sextractor_PHOT_AUTOAPERS']
+sextractor_dict["sextractor_PHOT_FLUXFRAC"] = config_input['SEXTRACTOR']['sextractor_PHOT_FLUXFRAC']
+sextractor_dict["sextractor_SATUR_LEVEL"] = config_input['SEXTRACTOR']['sextractor_SATUR_LEVEL']
+sextractor_dict["sextractor_SATUR_KEY"] = config_input['SEXTRACTOR']['sextractor_SATUR_KEY']
+sextractor_dict["sextractor_MAG_ZEROPOINT"] = config_input['SEXTRACTOR']['sextractor_MAG_ZEROPOINT']
+sextractor_dict["sextractor_MAG_GAMMA"] = config_input['SEXTRACTOR']['sextractor_MAG_GAMMA']
+sextractor_dict["sextractor_GAIN"] = config_input['SEXTRACTOR']['sextractor_GAIN']
+sextractor_dict["sextractor_GAIN_KEY"] = config_input['SEXTRACTOR']['sextractor_GAIN_KEY']
+sextractor_dict["sextractor_PIXEL_SCALE"] = config_input['SEXTRACTOR']['sextractor_PIXEL_SCALE']
+sextractor_dict["sextractor_SEEING_FWHM"] = config_input['SEXTRACTOR']['sextractor_SEEING_FWHM']
+sextractor_dict["sextractor_STARNNW_NAME"] = config_input['SEXTRACTOR']['sextractor_STARNNW_NAME']
+sextractor_dict["sextractor_BACK_TYPE"] = config_input['SEXTRACTOR']['sextractor_BACK_TYPE']
+sextractor_dict["sextractor_BACK_VALUE"] = config_input['SEXTRACTOR']['sextractor_BACK_VALUE']
+sextractor_dict["sextractor_BACK_SIZE"] = config_input['SEXTRACTOR']['sextractor_BACK_SIZE']
+sextractor_dict["sextractor_BACK_FILTERSIZE"] = config_input['SEXTRACTOR']['sextractor_BACK_FILTERSIZE']
+sextractor_dict["sextractor_BACKPHOTO_TYPE"] = config_input['SEXTRACTOR']['sextractor_BACKPHOTO_TYPE']
+sextractor_dict["sextractor_BACKPHOTO_THICK"] = config_input['SEXTRACTOR']['sextractor_BACKPHOTO_THICK']
+sextractor_dict["sextractor_BACK_FILTTHRESH"] = config_input['SEXTRACTOR']['sextractor_BACK_FILTTHRESH']
+sextractor_dict["sextractor_CHECKIMAGE_TYPE"] = config_input['SEXTRACTOR']['sextractor_CHECKIMAGE_TYPE']
+sextractor_dict["sextractor_CHECKIMAGE_NAME"] = config_input['SEXTRACTOR']['sextractor_CHECKIMAGE_NAME']
+sextractor_dict["sextractor_MEMORY_OBJSTACK"] = config_input['SEXTRACTOR']['sextractor_MEMORY_OBJSTACK']
+sextractor_dict["sextractor_MEMORY_PIXSTACK"] = config_input['SEXTRACTOR']['sextractor_MEMORY_PIXSTACK']
+sextractor_dict["sextractor_MEMORY_BUFSIZE"] = config_input['SEXTRACTOR']['sextractor_MEMORY_BUFSIZE']
+sextractor_dict["sextractor_ASSOC_NAME"] = config_input['SEXTRACTOR']['sextractor_ASSOC_NAME']
+sextractor_dict["sextractor_ASSOC_DATA"] = config_input['SEXTRACTOR']['sextractor_ASSOC_DATA']
+sextractor_dict["sextractor_ASSOC_PARAMS"] = config_input['SEXTRACTOR']['sextractor_ASSOC_PARAMS']
+sextractor_dict["sextractor_ASSOCCOORD_TYPE"] = config_input['SEXTRACTOR']['sextractor_ASSOCCOORD_TYPE']
+sextractor_dict["sextractor_ASSOC_RADIUS"] = config_input['SEXTRACTOR']['sextractor_ASSOC_RADIUS']
+sextractor_dict["sextractor_ASSOC_TYPE"] = config_input['SEXTRACTOR']['sextractor_ASSOC_TYPE']
+sextractor_dict["sextractor_ASSOCSELEC_TYPE"] = config_input['SEXTRACTOR']['sextractor_ASSOCSELEC_TYPE']
+sextractor_dict["sextractor_VERBOSE_TYPE"] = config_input['SEXTRACTOR']['sextractor_VERBOSE_TYPE']
+sextractor_dict["sextractor_HEADER_SUFFIX"] = config_input['SEXTRACTOR']['sextractor_HEADER_SUFFIX']
+sextractor_dict["sextractor_NTHREADS"] = config_input['SEXTRACTOR']['sextractor_NTHREADS']
+sextractor_dict["sextractor_FITS_UNSIGNED"] = config_input['SEXTRACTOR']['sextractor_FITS_UNSIGNED']
+sextractor_dict["sextractor_INTERP_MAXXLAG"] = config_input['SEXTRACTOR']['sextractor_INTERP_MAXXLAG']
+sextractor_dict["sextractor_INTERP_MAXYLAG"] = config_input['SEXTRACTOR']['sextractor_INTERP_MAXYLAG']
+sextractor_dict["sextractor_INTERP_TYPE"] = config_input['SEXTRACTOR']['sextractor_INTERP_TYPE']
 
 
 def build_command_line_args(input_file,output_dir,orderlet):
@@ -317,8 +431,17 @@ if __name__ == '__main__':
 
     crpix1_refimage = 0.5 * float(naxis1_refimage) + 0.5
     crpix2_refimage = 0.5 * float(naxis2_refimage) + 0.5
-    crval1_refimage = 11.067073
-    crval2_refimage = -43.80449
+    crval1_refimage = ra0_refimage
+    crval2_refimage = dec0_refimage
+
+
+    # Update the awaicgen dictionary.
+
+    awaicgen_dict["awaicgen_mosaic_size_x"] = str(naxis1_refimage)
+    awaicgen_dict["awaicgen_mosaic_size_y"] = str(naxis2_refimage)
+    awaicgen_dict["awaicgen_RA_center"] = str(ra0_refimage)
+    awaicgen_dict["awaicgen_Dec_center"] = str(dec0_refimage)
+    awaicgen_dict["awaicgen_mosaic_rotation"] = str(crota2_refimage)
 
 
     # Integer pixel coordinates are zero-based and centered on pixel.
@@ -563,6 +686,10 @@ if __name__ == '__main__':
     config_output['REF_IMAGE']['dec3'] = str(dec3_refimage)
     config_output['REF_IMAGE']['ra4'] = str(ra4_refimage)
     config_output['REF_IMAGE']['dec4'] = str(dec4_refimage)
+
+    config_output['AWAICGEN'] = awaicgen_dict
+    config_output['SWARP'] = swarp_dict
+    config_output['SEXTRACTOR'] = sextractor_dict
 
 
     # Write output config file for job.
