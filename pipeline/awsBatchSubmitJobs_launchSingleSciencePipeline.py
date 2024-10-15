@@ -507,7 +507,10 @@ if __name__ == '__main__':
         input_images_csv_file = None
     else:
         filename_refimage = "None"
-        input_images_csv_file = rapid_work + "/input_images_for_refimage_jid"+ str(jid) + ".csv"
+        input_images_csv_file_base = "input_images_for_refimage_jid"+ str(jid) + ".csv"
+        input_images_csv_file = rapid_work + "/" + input_images_csv_file_base
+        input_images_csv_file_s3_bucket_object_name = proc_date + "/" + input_images_csv_file_base
+
 
         # Query L2FileMeta database table for RID,ra0,dec0,ra1,dec1,ra2,dec2,ra3,dec3,ra4,dec4,
         # and distance from tile center (degrees) for all science images that
@@ -709,22 +712,43 @@ if __name__ == '__main__':
         config_output.write(config_outputfile)
 
 
-    # Upload output config file for job to S3 bucket.
+    # Upload output config file for job, along with associated file(s) if any, to S3 bucket.
 
     s3_client = boto3.client('s3')
 
     uploaded_to_bucket = True
 
     try:
-        response = s3_client.upload_file(config_output_filename,config_output_s3_bucket,config_output_s3_bucket_object_name)
+        response = s3_client.upload_file(config_output_filename,
+                                         config_output_s3_bucket,
+                                         config_output_s3_bucket_object_name)
     except ClientError as e:
-        print("*** Error: Failed to upload {} to S3 bucket {}/{}"\
+        print("*** Error: Failed to upload {} to s3://{}/{}"\
             .format(config_output_filename,config_output_s3_bucket,config_output_s3_bucket_object_name))
         uploaded_to_bucket = False
 
     if uploaded_to_bucket:
-        print("Successfully uploaded {} to S3 bucket {}/{}"\
+        print("Successfully uploaded {} to s3://{}/{}"\
             .format(config_output_filename,config_output_s3_bucket,config_output_s3_bucket_object_name))
+
+    if rfid is None:
+
+        uploaded_to_bucket = True
+
+        try:
+            response = s3_client.upload_file(input_images_csv_file,
+                                            config_output_s3_bucket,
+                                            input_images_csv_file_s3_bucket_object_name)
+        except ClientError as e:
+            print("*** Error: Failed to upload {} to s3://{}/{}"\
+                .format(input_images_csv_file,config_output_s3_bucket,input_images_csv_file_s3_bucket_object_name))
+            uploaded_to_bucket = False
+
+        if uploaded_to_bucket:
+            print("Successfully uploaded {} to s3://{}/{}"\
+                .format(input_images_csv_file,config_output_s3_bucket,input_images_csv_file_s3_bucket_object_name))
+
+
 
 
     #submit_job()
