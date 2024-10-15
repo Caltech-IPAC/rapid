@@ -609,9 +609,10 @@ if __name__ == '__main__':
     proc_utc_datetime = datetime_utc_now.strftime('%Y-%m-%dT%H:%M:%SZ')
     datetime_now = datetime.utcnow()
     proc_date = datetime_now.strftime('%Y%m%d')
-    config_output_filename = rapid_work + "/job_config_jid" + str(jid) + ".ini"
-    config_output_s3_bucket = config_output_s3_bucket_base + "/" + proc_date
-    config_output_s3_bucket_destname = config_output_s3_bucket_base + "/" + proc_date + "/" + config_output_filename
+    config_output_filename_base = "job_config_jid" + str(jid) + ".ini"
+    config_output_filename = rapid_work + "/" + config_output_filename_base
+    config_output_s3_bucket = config_output_s3_bucket_base
+    config_output_s3_bucket_destname = proc_date + "/" + config_output_filename_base
 
 
     config_output = configparser.ConfigParser()
@@ -711,7 +712,6 @@ if __name__ == '__main__':
     # Upload output config file for job to S3 bucket.
 
     s3_client = boto3.client('s3')
-    object_name = config_output_filename
 
     uploaded_to_bucket = True
 
