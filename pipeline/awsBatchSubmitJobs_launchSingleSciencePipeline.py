@@ -698,7 +698,7 @@ if __name__ == '__main__':
     with open(config_output_filename, 'w') as config_outputfile:
 
         config_outputfile.write("#" + "\n")
-        config_outputfile.write("# " + config_output_s3_bucket_destname + "\n")
+        config_outputfile.write("# " + config_output_s3_bucket + "/" + config_output_s3_bucket_object_name + "\n")
         config_outputfile.write("#" + "\n")
         config_outputfile.write("# " + proc_utc_datetime + "\n")
         config_outputfile.write("#" + "\n")
