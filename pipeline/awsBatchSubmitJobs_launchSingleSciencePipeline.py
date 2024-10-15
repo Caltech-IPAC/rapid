@@ -30,6 +30,14 @@ if rid is None:
     exit(64)
 
 
+# Compute processing datetime (UT) and processing date (Pacific time).
+
+datetime_utc_now = datetime.utcnow()
+proc_utc_datetime = datetime_utc_now.strftime('%Y-%m-%dT%H:%M:%SZ')
+datetime_now = datetime.utcnow()
+proc_date = datetime_now.strftime('%Y%m%d')
+
+
 # Ensure sqlite database that defines the Roman sky tessellation is available.
 
 roman_tessellation_dbname = os.getenv('ROMANTESSELLATIONDBNAME')
@@ -608,10 +616,6 @@ if __name__ == '__main__':
 
     # Populate config-file dictionary for job.
 
-    datetime_utc_now = datetime.utcnow()
-    proc_utc_datetime = datetime_utc_now.strftime('%Y-%m-%dT%H:%M:%SZ')
-    datetime_now = datetime.utcnow()
-    proc_date = datetime_now.strftime('%Y%m%d')
     config_output_filename_base = "job_config_jid" + str(jid) + ".ini"
     config_output_filename = rapid_work + "/" + config_output_filename_base
     config_output_s3_bucket = config_output_s3_bucket_base
