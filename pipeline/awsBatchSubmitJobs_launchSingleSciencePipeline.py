@@ -612,7 +612,7 @@ if __name__ == '__main__':
     config_output_filename_base = "job_config_jid" + str(jid) + ".ini"
     config_output_filename = rapid_work + "/" + config_output_filename_base
     config_output_s3_bucket = config_output_s3_bucket_base
-    config_output_s3_bucket_destname = proc_date + "/" + config_output_filename_base
+    config_output_s3_bucket_object_name = proc_date + "/" + config_output_filename_base
 
 
     config_output = configparser.ConfigParser()
@@ -716,13 +716,15 @@ if __name__ == '__main__':
     uploaded_to_bucket = True
 
     try:
-        response = s3_client.upload_file(config_output_filename, config_output_s3_bucket, object_name)
+        response = s3_client.upload_file(config_output_filename,config_output_s3_bucket,config_output_s3_bucket_object_name)
     except ClientError as e:
-        print("*** Error: Failed to upload {} to S3 bucket {}".format(config_output_filename,config_output_s3_bucket))
+        print("*** Error: Failed to upload {} to S3 bucket {}/{}"\
+            .format(config_output_filename,config_output_s3_bucket,config_output_s3_bucket_object_name))
         uploaded_to_bucket = False
 
     if uploaded_to_bucket:
-        print("Successfully uploaded {} to S3 bucket {}".format(config_output_filename,config_output_s3_bucket))
+        print("Successfully uploaded {} to S3 bucket {}/{}"\
+            .format(config_output_filename,config_output_s3_bucket,config_output_s3_bucket_object_name))
 
 
     #submit_job()
