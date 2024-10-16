@@ -20,7 +20,7 @@ print("swname =", swname)
 print("swvers =", swvers)
 
 
-# RID of input file.
+# RID of input file, read from environment variable RID.
 
 rid = os.getenv('RID')
 
@@ -323,104 +323,76 @@ def build_command_line_args(input_file,output_dir,orderlet):
 
 
 
-def submit_job():
-
-    cmd = build_command_line_args(l1_file,outdir,orderlet)
-    exitcode_from_command = execute_command(cmd)
 
 
-    s3 = boto3.resource('s3')
+
+def submit_job_to_aws_batch(proc_date,jid,job_info_s3_bucket,job_config_ini_file_s3_bucket_object_name,input_images_csv_file_s3_bucket_object_name):
+
+    # Example of how to build command line and execute it using
+    # execute_command method in modules.utils.rapid_pipeline_subs as util
+    #    cmd = build_command_line_args(l1_file,outdir,orderlet)
+    #    exitcode_from_command = util.execute_command(cmd)
 
 
-    # Parse input files in input S3 bucket.
-
-    my_bucket_input = s3.Bucket(bucket_name_input)
-
-    files_input = {}
-
-    for my_bucket_input_object in my_bucket_input.objects.all():
-
-        #print(my_bucket_input_object.key)
-
-        gzfname_input = my_bucket_input_object.key
-
-        filename_match = re.match(r"(.+)/(.+\.fits\.gz)",gzfname_input)
-
-        try:
-            subdir_only = filename_match.group(1)
-            only_gzfname_input = filename_match.group(2)
-            #print("-----0-----> subdir_only =",subdir_only)
-            #print("-----1-----> only_gzfname_input =",only_gzfname_input)
-
-        except:
-            #print("-----2-----> No match in",gzfname_input)
-            continue
-
-        if subdir_only in files_input.keys():
-            files_input[subdir_only].append(only_gzfname_input)
-        else:
-            files_input[subdir_only] = [only_gzfname_input]
+    print("proc_date =",proc_date)
+    print("jid =",jid)
+    print("job_info_s3_bucket =",job_info_s3_bucket)
+    print("job_config_ini_file_s3_bucket_object_name =",job_config_ini_file_s3_bucket_object_name)
+    print("input_images_csv_file_s3_bucket_object_name =",input_images_csv_file_s3_bucket_object_name)
 
 
-    # Loop over subdirs and launch one AWS Batch job per subdir.
+    # Submit single job.
 
-    njobs = 0
+    job_name_base = "SingleSciencePipeline_
+    job_name = job_name_base + proc_date + "_jid" + jid
 
-    for subdir_only in files_input.keys():
+    response = client.submit_job(
+        jobName=job_name,
+        jobQueue=job_queue,
+        jobDefinition=job_definition,
+        containerOverrides={
+            'environment': [
+                {
+                    'name': 'JOBPROCDATE,
+                    'value': proc_date
+                },
+                {
+                    'name': 'RAPID_JOB_ID',
+                    'value': jid
+                },
+                {
+                    'name': 'JOBS3BUCKET',
+                    'value': job_info_s3_bucket
+                },
+                {
+                    'name': 'JOBCONFIGOBJNAME,
+                    'value': job_config_ini_file_s3_bucket_object_name
+                }
+                {
+                    'name': 'REFIMAGEINPUTSOBJNAME,
+                    'value': input_images_csv_file_s3_bucket_object_name
+                }
+            ]
+        }
+    )
 
-        print("subdir_only =",subdir_only)
-
-
-        # Submit single job for 18 SCA_NUM input files in input S3 bucket for a given exposure.
-
-        job_name = job_name_base + subdir_only
-
-        response = client.submit_job(
-            jobName=job_name,
-            jobQueue=job_queue,
-            jobDefinition=job_definition,
-            containerOverrides={
-                'environment': [
-                    {
-                        'name': 'JOBS3BUCKET',
-                        'value': job_info_s3_bucket
-                    },
-                    {
-                        'name': 'JOBCONFIGOBJNAME,
-                        'value': job_config_ini_file_s3_bucket_object_name
-                    }
-                    {
-                        'name': 'REFIMAGEINPUTSOBJNAME,
-                        'value': input_images_csv_file_s3_bucket_object_name
-                    }
-                ]
-            }
-        )
-
-        print("response =",response)
+    print("response =",response)
 
 
 
 
 
-
-
-
-        # Increment number of jobs.
-
-        njobs += 1
-
-        # Comment out the two following lines for the full run.
-        #if njobs > 4:
-        #    exit(0)
 
 
 
 if __name__ == '__main__':
 
+
     #
-    # Given the RID of the input science image...
+    # Launch a science pipeline for input science image (obtained from environment variable RID above), which
+    # entails machine-generating a config file, and, if applicable, a CVS file with reference-image inputs.
     #
+
 
     # Open database connection.
 
@@ -810,4 +782,4 @@ if __name__ == '__main__':
 
 
 
-    #submit_job()
+    submit_job_to_aws_batch(proc_date,jid,job_info_s3_bucket,job_config_ini_file_s3_bucket_object_name,input_images_csv_file_s3_bucket_object_name)
