@@ -62,6 +62,8 @@ def execute_command(cmd,no_check=False):
 
         if (retval == 0):
             break
+        elif no_check:
+            break
 
         print("Sleeping 30 seconds, then try again (up to {} tries)...".format(max_ntries))
         time.sleep(30)
@@ -533,6 +535,10 @@ def register_files():
 
         print("subdir_only =",subdir_only)
 
+        # Check disk space.
+
+        cmd = "df -h " + subdir_work
+        execute_command(cmd,no_check=True)
 
         # Copy 18 input files from input S3 bucket to local machine.
 
