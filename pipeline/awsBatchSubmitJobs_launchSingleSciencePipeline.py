@@ -97,7 +97,7 @@ config_input.read(config_input_filename)
 verbose = int(config_input['DEFAULT']['verbose'])
 debug = int(config_input['DEFAULT']['debug'])
 ppid = int(config_input['SCI_IMAGE']['ppid'])
-config_output_s3_bucket_base = config_input['DEFAULT']['config_output_s3_bucket_base']
+job_info_s3_bucket_base = config_input['DEFAULT']['job_info_s3_bucket_base']
 product_s3_bucket_base = config_input['DEFAULT']['product_s3_bucket_base']
 ppid_refimage = int(config_input['REF_IMAGE']['ppid_refimage'])
 
@@ -382,22 +382,28 @@ def submit_job():
             containerOverrides={
                 'environment': [
                     {
-                        'name': 'INPUTSUBDIR',
-                        'value': subdir_only
+                        'name': 'JOBS3BUCKET',
+                        'value': job_info_s3_bucket
                     },
                     {
-                        'name': 'BATCH_FILE_S3_URL',
-                        'value': 's3://sims-sn-f184-lite/awsBatchJobLowLevelScript_CompressTroxelFitsFiles.sh'
-                    },
+                        'name': 'JOBCONFIGOBJNAME,
+                        'value': job_config_ini_file_s3_bucket_object_name
+                    }
                     {
-                        'name': 'BATCH_FILE_TYPE',
-                        'value': 'script'
+                        'name': 'REFIMAGEINPUTSOBJNAME,
+                        'value': input_images_csv_file_s3_bucket_object_name
                     }
                 ]
             }
         )
 
         print("response =",response)
+
+
+
+
+
+
 
 
         # Increment number of jobs.
@@ -665,104 +671,104 @@ if __name__ == '__main__':
 
     # Populate config-file dictionary for job.
 
-    config_output_filename_base = "job_config_jid" + str(jid) + ".ini"
-    config_output_filename = rapid_work + "/" + config_output_filename_base
-    config_output_s3_bucket = config_output_s3_bucket_base
-    config_output_s3_bucket_object_name = proc_date + "/" + config_output_filename_base
+    job_config_ini_file_filename_base = "job_config_jid" + str(jid) + ".ini"
+    job_config_ini_file_filename = rapid_work + "/" + job_config_ini_file_filename_base
+    job_info_s3_bucket = job_info_s3_bucket_base
+    job_config_ini_file_s3_bucket_object_name = proc_date + "/" + job_config_ini_file_filename_base
 
 
-    config_output = configparser.ConfigParser()
+    job_config = configparser.ConfigParser()
 
-    config_output['DEFAULT'] = {'debug': str(debug),
+    job_config['DEFAULT'] = {'debug': str(debug),
 
                          'swname': swname,
 
                          'swvers': swvers,
                          'jid': str(jid)}
-    config_output['DEFAULT']['verbose'] = str(verbose)
+    job_config['DEFAULT']['verbose'] = str(verbose)
 
-    config_output['SCI_IMAGE'] = {}
+    job_config['SCI_IMAGE'] = {}
 
-    config_output['SCI_IMAGE']['ppid'] = str(ppid)
-    config_output['SCI_IMAGE']['rid'] = str(rid)
-    config_output['SCI_IMAGE']['sca'] = str(sca)
-    config_output['SCI_IMAGE']['fid'] = str(fid)
+    job_config['SCI_IMAGE']['ppid'] = str(ppid)
+    job_config['SCI_IMAGE']['rid'] = str(rid)
+    job_config['SCI_IMAGE']['sca'] = str(sca)
+    job_config['SCI_IMAGE']['fid'] = str(fid)
 
-    config_output['SCI_IMAGE']['filename'] = str(filename)
-    config_output['SCI_IMAGE']['expid'] = str(expid)
-    config_output['SCI_IMAGE']['sca'] = str(sca)
-    config_output['SCI_IMAGE']['field'] = str(field)
-    config_output['SCI_IMAGE']['mjdobs'] = str(mjdobs)
-    config_output['SCI_IMAGE']['exptime'] = str(exptime)
-    config_output['SCI_IMAGE']['infobits'] = str(infobits)
-    config_output['SCI_IMAGE']['status'] = str(status)
+    job_config['SCI_IMAGE']['filename'] = str(filename)
+    job_config['SCI_IMAGE']['expid'] = str(expid)
+    job_config['SCI_IMAGE']['sca'] = str(sca)
+    job_config['SCI_IMAGE']['field'] = str(field)
+    job_config['SCI_IMAGE']['mjdobs'] = str(mjdobs)
+    job_config['SCI_IMAGE']['exptime'] = str(exptime)
+    job_config['SCI_IMAGE']['infobits'] = str(infobits)
+    job_config['SCI_IMAGE']['status'] = str(status)
 
-    config_output['SCI_IMAGE']['ra0'] = str(ra0)
-    config_output['SCI_IMAGE']['dec0'] = str(dec0)
-    config_output['SCI_IMAGE']['ra1'] = str(ra1)
-    config_output['SCI_IMAGE']['dec1'] = str(dec1)
-    config_output['SCI_IMAGE']['ra2'] = str(ra2)
-    config_output['SCI_IMAGE']['dec2'] = str(dec2)
-    config_output['SCI_IMAGE']['ra3'] = str(ra3)
-    config_output['SCI_IMAGE']['dec3'] = str(dec3)
-    config_output['SCI_IMAGE']['ra4'] = str(ra4)
-    config_output['SCI_IMAGE']['dec4'] = str(dec4)
+    job_config['SCI_IMAGE']['ra0'] = str(ra0)
+    job_config['SCI_IMAGE']['dec0'] = str(dec0)
+    job_config['SCI_IMAGE']['ra1'] = str(ra1)
+    job_config['SCI_IMAGE']['dec1'] = str(dec1)
+    job_config['SCI_IMAGE']['ra2'] = str(ra2)
+    job_config['SCI_IMAGE']['dec2'] = str(dec2)
+    job_config['SCI_IMAGE']['ra3'] = str(ra3)
+    job_config['SCI_IMAGE']['dec3'] = str(dec3)
+    job_config['SCI_IMAGE']['ra4'] = str(ra4)
+    job_config['SCI_IMAGE']['dec4'] = str(dec4)
 
-    config_output['SKY_TILE'] = {}
+    job_config['SKY_TILE'] = {}
 
-    config_output['SKY_TILE']['rtid'] = str(rtid)
+    job_config['SKY_TILE']['rtid'] = str(rtid)
 
-    config_output['SKY_TILE']['ra0'] = str(ra0_field)
-    config_output['SKY_TILE']['dec0'] = str(dec0_field)
-    config_output['SKY_TILE']['ra1'] = str(ra1_field)
-    config_output['SKY_TILE']['dec1'] = str(dec1_field)
-    config_output['SKY_TILE']['ra2'] = str(ra2_field)
-    config_output['SKY_TILE']['dec2'] = str(dec2_field)
-    config_output['SKY_TILE']['ra3'] = str(ra3_field)
-    config_output['SKY_TILE']['dec3'] = str(dec3_field)
-    config_output['SKY_TILE']['ra4'] = str(ra4_field)
-    config_output['SKY_TILE']['dec4'] = str(dec4_field)
+    job_config['SKY_TILE']['ra0'] = str(ra0_field)
+    job_config['SKY_TILE']['dec0'] = str(dec0_field)
+    job_config['SKY_TILE']['ra1'] = str(ra1_field)
+    job_config['SKY_TILE']['dec1'] = str(dec1_field)
+    job_config['SKY_TILE']['ra2'] = str(ra2_field)
+    job_config['SKY_TILE']['dec2'] = str(dec2_field)
+    job_config['SKY_TILE']['ra3'] = str(ra3_field)
+    job_config['SKY_TILE']['dec3'] = str(dec3_field)
+    job_config['SKY_TILE']['ra4'] = str(ra4_field)
+    job_config['SKY_TILE']['dec4'] = str(dec4_field)
 
 
-    config_output['REF_IMAGE'] = {}
+    job_config['REF_IMAGE'] = {}
 
-    config_output['REF_IMAGE']['ppid'] = str(ppid_refimage)
-    config_output['REF_IMAGE']['naxis1'] = str(naxis1_refimage)
-    config_output['REF_IMAGE']['naxis2'] = str(naxis2_refimage)
-    config_output['REF_IMAGE']['rfid'] = str(rfid)
-    config_output['REF_IMAGE']['filename'] = filename_refimage
-    config_output['REF_IMAGE']['input_images_csv_file'] = input_images_csv_file
+    job_config['REF_IMAGE']['ppid'] = str(ppid_refimage)
+    job_config['REF_IMAGE']['naxis1'] = str(naxis1_refimage)
+    job_config['REF_IMAGE']['naxis2'] = str(naxis2_refimage)
+    job_config['REF_IMAGE']['rfid'] = str(rfid)
+    job_config['REF_IMAGE']['filename'] = filename_refimage
+    job_config['REF_IMAGE']['input_images_csv_file'] = input_images_csv_file
 
-    config_output['REF_IMAGE']['ra0'] = str(ra0_refimage)
-    config_output['REF_IMAGE']['dec0'] = str(dec0_refimage)
-    config_output['REF_IMAGE']['ra1'] = str(ra1_refimage)
-    config_output['REF_IMAGE']['dec1'] = str(dec1_refimage)
-    config_output['REF_IMAGE']['ra2'] = str(ra2_refimage)
-    config_output['REF_IMAGE']['dec2'] = str(dec2_refimage)
-    config_output['REF_IMAGE']['ra3'] = str(ra3_refimage)
-    config_output['REF_IMAGE']['dec3'] = str(dec3_refimage)
-    config_output['REF_IMAGE']['ra4'] = str(ra4_refimage)
-    config_output['REF_IMAGE']['dec4'] = str(dec4_refimage)
+    job_config['REF_IMAGE']['ra0'] = str(ra0_refimage)
+    job_config['REF_IMAGE']['dec0'] = str(dec0_refimage)
+    job_config['REF_IMAGE']['ra1'] = str(ra1_refimage)
+    job_config['REF_IMAGE']['dec1'] = str(dec1_refimage)
+    job_config['REF_IMAGE']['ra2'] = str(ra2_refimage)
+    job_config['REF_IMAGE']['dec2'] = str(dec2_refimage)
+    job_config['REF_IMAGE']['ra3'] = str(ra3_refimage)
+    job_config['REF_IMAGE']['dec3'] = str(dec3_refimage)
+    job_config['REF_IMAGE']['ra4'] = str(ra4_refimage)
+    job_config['REF_IMAGE']['dec4'] = str(dec4_refimage)
 
-    config_output['AWAICGEN'] = awaicgen_dict
-    config_output['SWARP'] = swarp_dict
-    config_output['SEXTRACTOR'] = sextractor_dict
+    job_config['AWAICGEN'] = awaicgen_dict
+    job_config['SWARP'] = swarp_dict
+    job_config['SEXTRACTOR'] = sextractor_dict
 
 
     # Write output config file for job.
 
-    with open(config_output_filename, 'w') as config_outputfile:
+    with open(job_config_ini_file_filename, 'w') as job_configfile:
 
-        config_outputfile.write("#" + "\n")
-        config_outputfile.write("# s3://" + config_output_s3_bucket + "/" + config_output_s3_bucket_object_name + "\n")
-        config_outputfile.write("#" + "\n")
-        config_outputfile.write("# " + proc_utc_datetime + "\n")
-        config_outputfile.write("#" + "\n")
-        config_outputfile.write("# Machine-generated by " + swname + "\n")
-        config_outputfile.write("#" + "\n")
-        config_outputfile.write("\n")
+        job_configfile.write("#" + "\n")
+        job_configfile.write("# s3://" + job_info_s3_bucket + "/" + job_config_ini_file_s3_bucket_object_name + "\n")
+        job_configfile.write("#" + "\n")
+        job_configfile.write("# " + proc_utc_datetime + "\n")
+        job_configfile.write("#" + "\n")
+        job_configfile.write("# Machine-generated by " + swname + "\n")
+        job_configfile.write("#" + "\n")
+        job_configfile.write("\n")
 
-        config_output.write(config_outputfile)
+        job_config.write(job_configfile)
 
 
     # Upload output config file for job, along with associated file(s) if any, to S3 bucket.
@@ -772,17 +778,17 @@ if __name__ == '__main__':
     uploaded_to_bucket = True
 
     try:
-        response = s3_client.upload_file(config_output_filename,
-                                         config_output_s3_bucket,
-                                         config_output_s3_bucket_object_name)
+        response = s3_client.upload_file(job_config_ini_file_filename,
+                                         job_info_s3_bucket,
+                                         job_config_ini_file_s3_bucket_object_name)
     except ClientError as e:
         print("*** Error: Failed to upload {} to s3://{}/{}"\
-            .format(config_output_filename,config_output_s3_bucket,config_output_s3_bucket_object_name))
+            .format(job_config_ini_file_filename,job_info_s3_bucket,job_config_ini_file_s3_bucket_object_name))
         uploaded_to_bucket = False
 
     if uploaded_to_bucket:
         print("Successfully uploaded {} to s3://{}/{}"\
-            .format(config_output_filename,config_output_s3_bucket,config_output_s3_bucket_object_name))
+            .format(job_config_ini_file_filename,job_info_s3_bucket,job_config_ini_file_s3_bucket_object_name))
 
     if rfid is None:
 
@@ -790,16 +796,16 @@ if __name__ == '__main__':
 
         try:
             response = s3_client.upload_file(input_images_csv_file,
-                                            config_output_s3_bucket,
+                                            job_info_s3_bucket,
                                             input_images_csv_file_s3_bucket_object_name)
         except ClientError as e:
             print("*** Error: Failed to upload {} to s3://{}/{}"\
-                .format(input_images_csv_file,config_output_s3_bucket,input_images_csv_file_s3_bucket_object_name))
+                .format(input_images_csv_file,job_info_s3_bucket,input_images_csv_file_s3_bucket_object_name))
             uploaded_to_bucket = False
 
         if uploaded_to_bucket:
             print("Successfully uploaded {} to s3://{}/{}"\
-                .format(input_images_csv_file,config_output_s3_bucket,input_images_csv_file_s3_bucket_object_name))
+                .format(input_images_csv_file,job_info_s3_bucket,input_images_csv_file_s3_bucket_object_name))
 
 
 
