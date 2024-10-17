@@ -293,46 +293,7 @@ sextractor_dict["sextractor_INTERP_MAXYLAG"] = config_input['SEXTRACTOR']['sextr
 sextractor_dict["sextractor_INTERP_TYPE"] = config_input['SEXTRACTOR']['sextractor_INTERP_TYPE']
 
 
-def build_command_line_args(input_file,output_dir,orderlet):
-
-    '''
-    Build command line.
-    '''
-
-    code_to_execute_args = ["python"]
-    code_to_execute_args.append(script_to_execute)
-    code_to_execute_args.append("-f")
-    code_to_execute_args.append(input_file)
-    code_to_execute_args.append("-o")
-    code_to_execute_args.append(orderlet)
-    code_to_execute_args.append("--outdir")
-    code_to_execute_args.append(output_dir)
-    code_to_execute_args.append("--spectrum_plot")
-    code_to_execute_args.append("True")
-    code_to_execute_args.append("--fsr_plot")
-    code_to_execute_args.append("True")
-    code_to_execute_args.append("--fit_plot")
-    code_to_execute_args.append("True")
-
-    print("code_to_execute_args =",code_to_execute_args)
-
-    return code_to_execute_args
-
-
-
-
-
-
-
-
-
 def submit_job_to_aws_batch(proc_date,jid,job_info_s3_bucket,job_config_ini_file_s3_bucket_object_name,input_images_csv_file_s3_bucket_object_name):
-
-    # Example of how to build command line and execute it using
-    # execute_command method in modules.utils.rapid_pipeline_subs as util
-    #    cmd = build_command_line_args(l1_file,outdir,orderlet)
-    #    exitcode_from_command = util.execute_command(cmd)
-
 
     print("proc_date =",proc_date)
     print("jid =",jid)
@@ -416,7 +377,7 @@ if __name__ == '__main__':
     if dbh.exit_code >= 64:
         exit(dbh.exit_code)
 
-    filename = image_info[0]
+    objectname_sciimage = image_info[0]
     expid = image_info[1]
     sca = image_info[2]
     field = image_info[3]
@@ -666,9 +627,8 @@ if __name__ == '__main__':
     job_config['SCI_IMAGE']['sca'] = str(sca)
     job_config['SCI_IMAGE']['fid'] = str(fid)
 
-    job_config['SCI_IMAGE']['filename'] = str(filename)
+    job_config['SCI_IMAGE']['objectname_sciimage'] = str(objectname_sciimage)
     job_config['SCI_IMAGE']['expid'] = str(expid)
-    job_config['SCI_IMAGE']['sca'] = str(sca)
     job_config['SCI_IMAGE']['field'] = str(field)
     job_config['SCI_IMAGE']['mjdobs'] = str(mjdobs)
     job_config['SCI_IMAGE']['exptime'] = str(exptime)

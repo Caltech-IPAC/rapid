@@ -19,6 +19,7 @@ RUN yum -y install atlas
 RUN yum -y install atlas-devel
 RUN yum -y install postgresql
 RUN yum -y install unzip
+RUN yum -y install git
 
 # Install AWS CLI
 
@@ -33,15 +34,23 @@ RUN cd /tmp && \
 
 RUN yum -y install procps
 
-# Add and run script called awsBatchSubmitJobs_runSingleSciencePipeline.sh located in pipeline/ subdirectory in RAPID git repo.
-# You must build docker image from top-level rapid directory.
 
-ADD pipeline/awsBatchSubmitJobs_runSingleSciencePipeline.sh /usr/local/bin/awsBatchSubmitJobs_runSingleSciencePipeline.sh
+# Checkout RAPID git repo.
 
-# Add python script called awsBatchSubmitJobs_runSingleSciencePipeline.py located in pipeline/ subdirectory in RAPID git repo.
+RUN git clone https://github.com/Caltech-IPAC/rapid code
+WORKDIR /code
 
-ADD pipeline/awsBatchSubmitJobs_runSingleSciencePipeline.py /usr/local/bin/awsBatchSubmitJobs_runSingleSciencePipeline.py
+# Build C code in RAPID software stack.
+
+ARG RAPID_SW=/code
+RUN cd /code/c/builds && \
+    ./build_inside_container.sh
+
+# Configure run-time environment.
+
+ENV PATH=/code/c/bin:/root/.local/bin:/root/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+ENV LD_LIBRARY_PATH=/code/c/lib
 
 WORKDIR /tmp
 
-ENTRYPOINT ["/usr/local/bin/awsBatchSubmitJobs_runSingleSciencePipeline.sh"]
+ENTRYPOINT ["/code/pipeline/awsBatchSubmitJobs_runSingleSciencePipeline.sh"]

@@ -31,8 +31,8 @@ echo "AWS Batch job to run single RAPID pipeline on a science image."
 logfile="rapid_compress_job_${JOBPROCDATE}_${RAPID_JOB_ID}_log.txt"
 echo "logfile = $logfile"
 
-echo "Executing /usr/bin/python3 /usr/local/bin/awsBatchSubmitJobs_runSingleSciencePipeline.py >& $logfile"
-/usr/bin/python3 /usr/local/bin/awsBatchSubmitJobs_runSingleSciencePipeline.py >& $logfile
+echo "Executing /usr/bin/python3 /code/pipeline/awsBatchSubmitJobs_runSingleSciencePipeline.py >& $logfile"
+/usr/bin/python3 /code/pipeline/awsBatchSubmitJobs_runSingleSciencePipeline.py >& $logfile
 
 exitcode=$?
 
