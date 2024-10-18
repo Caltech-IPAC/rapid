@@ -75,7 +75,12 @@ print("input_images_csv_file_s3_bucket_object_name =",input_images_csv_file_s3_b
 
 
 
-def build_awaicgen_command_line_args(cdelt1_refimage,refimage_inputs_txt_file,awaicgen_dict):
+def build_awaicgen_command_line_args(ra0_refimage,
+                                     dec0_refimage,
+                                     cdelt1_refimage,
+                                     crota2_refimage,
+                                     refimage_inputs_txt_file,
+                                     awaicgen_dict):
 
     '''
     Build awaicgen command line.
@@ -101,17 +106,16 @@ def build_awaicgen_command_line_args(cdelt1_refimage,refimage_inputs_txt_file,aw
     code_to_execute_args.append(X)
     code_to_execute_args.append("-Y")
     code_to_execute_args.append(Y)
+    code_to_execute_args.append("-R")
+    code_to_execute_args.append(ra0_refimage)
+    code_to_execute_args.append("-D")
+    code_to_execute_args.append(dec0_refimage)
+    code_to_execute_args.append("-C")
+    code_to_execute_args.append(crota2_refimage)
 
 
 
-    code_to_execute_args.append("--outdir")
-    code_to_execute_args.append(output_dir)
-    code_to_execute_args.append("--spectrum_plot")
-    code_to_execute_args.append("True")
-    code_to_execute_args.append("--fsr_plot")
-    code_to_execute_args.append("True")
-    code_to_execute_args.append("--fit_plot")
-    code_to_execute_args.append("True")
+
 
     print("code_to_execute_args =",code_to_execute_args)
 
@@ -195,6 +199,16 @@ if __name__ == '__main__':
     cdelt1_refimage = float(config_input['REF_IMAGE']['cdelt1_refimage'])
     cdelt2_refimage = float(config_input['REF_IMAGE']['cdelt2_refimage'])
     crota2_refimage = float(config_input['REF_IMAGE']['crota2_refimage'])
+    ra0_refimage = float(config_input['REF_IMAGE']['ra0_refimage'])
+    dec0_refimage = float(config_input['REF_IMAGE']['dec0_refimage'])
+    ra1_refimage = float(config_input['REF_IMAGE']['ra1_refimage'])
+    dec1_refimage = float(config_input['REF_IMAGE']['dec1_refimage'])
+    ra2_refimage = float(config_input['REF_IMAGE']['ra2_refimage'])
+    dec2_refimage = float(config_input['REF_IMAGE']['dec2_refimage'])
+    ra3_refimage = float(config_input['REF_IMAGE']['ra3_refimage'])
+    dec3_refimage = float(config_input['REF_IMAGE']['dec3_refimage'])
+    ra4_refimage = float(config_input['REF_IMAGE']['ra4_refimage'])
+    dec4_refimage = float(config_input['REF_IMAGE']['dec4_refimage'])
 
     awaicgen_dict = config_input['AWAICGEN']
 
@@ -273,7 +287,12 @@ if __name__ == '__main__':
 
             # Execute awaicgen to generate reference image.
 
-            awaicgen_cmd = build_awaicgen_command_line_args(cdelt1_refimage,refimage_inputs_txt_file,awaicgen_dict)
+            awaicgen_cmd = build_awaicgen_command_line_args(ra0_refimage,
+                                                            dec0_refimage,
+                                                            cdelt1_refimage,
+                                                            crota2_refimage,
+                                                            refimage_inputs_txt_file,
+                                                            awaicgen_dict)
             exitcode_from_awaicgen = util.execute_command(awaicgen_cmd)
 
 
