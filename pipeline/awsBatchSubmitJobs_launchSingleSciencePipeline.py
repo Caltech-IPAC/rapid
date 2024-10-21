@@ -3,6 +3,7 @@ import os
 from astropy.io import fits
 import subprocess
 import re
+import math
 import configparser
 from datetime import datetime
 from botocore.exceptions import ClientError
@@ -154,6 +155,17 @@ awaicgen_dict["awaicgen_output_mosaic_cov_map_file"] = config_input['AWAICGEN'][
 awaicgen_dict["awaicgen_output_mosaic_uncert_image_file"] = config_input['AWAICGEN']['awaicgen_output_mosaic_uncert_image_file']
 awaicgen_dict["awaicgen_debug"] = config_input['AWAICGEN']['awaicgen_debug']
 awaicgen_dict["awaicgen_verbose"] = config_input['AWAICGEN']['awaicgen_verbose']
+
+
+# Update the awaicgen dictionary for quantities that do not vary with sky location.
+
+pixel_scale = math.fabs(cdelt1_refimage)
+awaicgen_mosaic_size_x = pixel_scale * float(naxis1_refimage)
+awaicgen_mosaic_size_y = pixel_scale * float(naxis2_refimage)
+
+awaicgen_dict["awaicgen_mosaic_size_x"] = str(awaicgen_mosaic_size_x)
+awaicgen_dict["awaicgen_mosaic_size_y"] = str(awaicgen_mosaic_size_y)
+awaicgen_dict["awaicgen_mosaic_rotation"] = str(crota2_refimage)
 
 
 # Get the swarp parameters.  Some of these parameters will be overwritten by this script.
@@ -431,13 +443,10 @@ if __name__ == '__main__':
     crval2_refimage = dec0_refimage
 
 
-    # Update the awaicgen dictionary.
+    # Update the awaicgen dictionary for mosaic center.
 
-    awaicgen_dict["awaicgen_mosaic_size_x"] = str(naxis1_refimage)
-    awaicgen_dict["awaicgen_mosaic_size_y"] = str(naxis2_refimage)
     awaicgen_dict["awaicgen_RA_center"] = str(ra0_refimage)
     awaicgen_dict["awaicgen_Dec_center"] = str(dec0_refimage)
-    awaicgen_dict["awaicgen_mosaic_rotation"] = str(crota2_refimage)
 
 
     # Integer pixel coordinates are zero-based and centered on pixel.

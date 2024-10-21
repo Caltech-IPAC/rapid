@@ -2,7 +2,6 @@ import os
 import csv
 import configparser
 import re
-import math
 import boto3
 
 
@@ -63,6 +62,7 @@ if input_images_csv_file_s3_bucket_object_name is None:
     exit(64)
 
 
+# Print out basic information for log file.
 
 print("job_proc_date =",job_proc_date)
 print("jid =",jid)
@@ -71,61 +71,57 @@ print("job_config_ini_file_s3_bucket_object_name =",job_config_ini_file_s3_bucke
 print("input_images_csv_file_s3_bucket_object_name =",input_images_csv_file_s3_bucket_object_name)
 
 
-
-
-
-
-def build_awaicgen_command_line_args(ra0_refimage,
-                                     dec0_refimage,
-                                     cdelt1_refimage,
-                                     crota2_refimage,
-                                     refimage_inputs_txt_file,
-                                     awaicgen_dict):
+def build_awaicgen_command_line_args(awaicgen_dict):
 
     '''
     Build awaicgen command line.
     '''
 
-# ./awaicgen -f1 inplist.txt -X 1.72 -Y 1.72 -R 219.26262 -D -12.79843 -C 72.43 -pa 1.5 -wf 0 -sf 1 -sc 1 -nt 24 -o1 output2.fits -v
-
     software_to_execute = 'awaicgen'
-    awaicgen_mosaic_size_x = int(awaicgen_dict["awaicgen_mosaic_size_x"])
-    awaicgen_mosaic_size_y = int(awaicgen_dict["awaicgen_mosaic_size_y"])
 
-    pixel_scale = math.fabs(cdelt1_refimage)
-    X = pixel_scale * float(awaicgen_mosaic_size_x)
-    Y = pixel_scale * float(awaicgen_mosaic_size_y)
-
+    awaicgen_input_images_list_file = awaicgen_dict["awaicgen_input_images_list_file"]
+    awaicgen_mosaic_size_x = float(awaicgen_dict["awaicgen_mosaic_size_x"])
     awaicgen_mosaic_size_y = float(awaicgen_dict["awaicgen_mosaic_size_y"])
-
+    awaicgen_RA_center = float(awaicgen_dict["awaicgen_RA_center"])
+    awaicgen_Dec_center = float(awaicgen_dict["awaicgen_Dec_center"])
+    awaicgen_mosaic_rotation = float(awaicgen_dict["awaicgen_mosaic_rotation"])
+    awaicgen_pixelscale_absolute = float(awaicgen_dict["awaicgen_pixelscale_absolute"])
+    awaicgen_inv_var_weight_flag = int(awaicgen_dict["awaicgen_inv_var_weight_flag"])
+    awaicgen_pixelflux_scale_flag = int(awaicgen_dict["awaicgen_pixelflux_scale_flag"])
+    awaicgen_simple_coadd_flag = int(awaicgen_dict["awaicgen_simple_coadd_flag"])
+    awaicgen_num_threads = int(awaicgen_dict["awaicgen_num_threads"])
+    awaicgen_output_mosaic_image_file = awaicgen_dict["awaicgen_output_mosaic_image_file"]
 
     code_to_execute_args = [software_to_execute]
     code_to_execute_args.append("-f1")
-    code_to_execute_args.append(refimage_inputs_txt_file)
+    code_to_execute_args.append(awaicgen_input_images_list_file)
     code_to_execute_args.append("-X")
     code_to_execute_args.append(X)
     code_to_execute_args.append("-Y")
     code_to_execute_args.append(Y)
     code_to_execute_args.append("-R")
-    code_to_execute_args.append(ra0_refimage)
+    code_to_execute_args.append(awaicgen_RA_center)
     code_to_execute_args.append("-D")
-    code_to_execute_args.append(dec0_refimage)
+    code_to_execute_args.append(awaicgen_Dec_center)
     code_to_execute_args.append("-C")
-    code_to_execute_args.append(crota2_refimage)
-
-
-
+    code_to_execute_args.append(awaicgen_mosaic_rotation)
+    code_to_execute_args.append("-pa")
+    code_to_execute_args.append(awaicgen_pixelscale_absolute)
+    code_to_execute_args.append("-wf")
+    code_to_execute_args.append(awaicgen_inv_var_weight_flag)
+    code_to_execute_args.append("-sf")
+    code_to_execute_args.append(awaicgen_pixelflux_scale_flag)
+    code_to_execute_args.append("-sc")
+    code_to_execute_args.append(awaicgen_simple_coadd_flag)
+    code_to_execute_args.append("-nt")
+    code_to_execute_args.append(awaicgen_num_threads)
+    code_to_execute_args.append("-o1")
+    code_to_execute_args.append(awaicgen_output_mosaic_image_file)
 
 
     print("code_to_execute_args =",code_to_execute_args)
 
     return code_to_execute_args
-
-
-
-
-
-
 
 
 if __name__ == '__main__':
@@ -278,21 +274,25 @@ if __name__ == '__main__':
 
             # Write list of reference-image input filenames for awaicgen.
 
-            refimage_inputs_txt_file = 'refimage_inputs.txt'
+            awaicgen_input_images_list_file = 'refimage_inputs.txt'
             f = open(refimage_inputs_txt_file, "w")
-            for fname in refimage_input_filenames:
+            for fname in awaicgen_refimage_input_filenames:
                 f.write(fname + "\n")
             f.close()
 
 
             # Execute awaicgen to generate reference image.
 
-            awaicgen_cmd = build_awaicgen_command_line_args(ra0_refimage,
-                                                            dec0_refimage,
-                                                            cdelt1_refimage,
-                                                            crota2_refimage,
-                                                            refimage_inputs_txt_file,
-                                                            awaicgen_dict)
+
+            awaicgen_dict["awaicgen_input_images_list_file"] = awaicgen_input_images_list_file
+
+
+awaicgen_output_mosaic_image_file =
+
+            awaicgen_dict["awaicgen_output_mosaic_image_file"] = awaicgen_output_mosaic_image_file
+
+
+            awaicgen_cmd = build_awaicgen_command_line_args(awaicgen_dict)
             exitcode_from_awaicgen = util.execute_command(awaicgen_cmd)
 
 
