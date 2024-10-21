@@ -239,7 +239,6 @@ cat << EOF > fp_hist.avsc
 		{"name": "adpctdif1", "type": ["null", "float"], "default": null, "doc": "Full sci image astrometric RMS along R.A. with respect to Gaia1 [arcsec]"},
 		{"name": "adpctdif2", "type": ["null", "float"], "default": null, "doc": "Full sci image astrometric RMS along Dec. with respect to Gaia1 [arcsec]"},
 		{"name": "diffmaglim", "type": ["null", "float"], "default": null, "doc": "Expected 5-sigma mag limit in difference image based on global noise estimate [mag]"},
-		{"name": "programid", "type": "int", "doc": "Program ID: encodes either public, collab, or caltech mode"},
 		{"name": "jd", "type": "double", "doc": "Observation Julian date at start of exposure [days]"},
 		{"name": "forcediffimflux", "type": ["null", "float"], "default": null, "doc": "Forced difference image PSF-fit flux [DN]"},
 		{"name": "forcediffimfluxunc", "type": ["null", "float"], "default": null, "doc": "1-sigma uncertainty in forcediffimflux [DN]"},
