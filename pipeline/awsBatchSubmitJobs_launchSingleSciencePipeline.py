@@ -316,7 +316,6 @@ def submit_job_to_aws_batch(proc_date,jid,job_info_s3_bucket,job_config_ini_file
 
     # Submit single job.
 
-    job_name_base = "SingleSciencePipeline_
     job_name = job_name_base + proc_date + "_jid" + jid
 
     response = client.submit_job(
