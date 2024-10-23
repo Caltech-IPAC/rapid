@@ -276,25 +276,41 @@ if __name__ == '__main__':
 
             awaicgen_input_images_list_file = 'refimage_inputs.txt'
             f = open(refimage_inputs_txt_file, "w")
-            for fname in awaicgen_refimage_input_filenames:
+            for fname in refimage_input_filenames:
                 f.write(fname + "\n")
             f.close()
 
 
             # Execute awaicgen to generate reference image.
 
-
             awaicgen_dict["awaicgen_input_images_list_file"] = awaicgen_input_images_list_file
 
-
-awaicgen_output_mosaic_image_file =
+            awaicgen_output_mosaic_image_file = awaicgen_dict["awaicgen_output_mosaic_image_file"]
+            product_s3_bucket = product_s3_bucket_base
+            awaicgen_output_mosaic_image_s3_bucket_object_name = job_proc_date + "/" + awaicgen_dict["awaicgen_output_mosaic_image_file"]
 
             awaicgen_dict["awaicgen_output_mosaic_image_file"] = awaicgen_output_mosaic_image_file
-
 
             awaicgen_cmd = build_awaicgen_command_line_args(awaicgen_dict)
             exitcode_from_awaicgen = util.execute_command(awaicgen_cmd)
 
+
+            # Upload reference image to S3 bucket.
+
+            uploaded_to_bucket = True
+
+            try:
+                response = s3_client.upload_file(awaicgen_output_mosaic_image_file,
+                                                 product_s3_bucket,
+                                                 awaicgen_output_mosaic_image_s3_bucket_object_name)
+            except ClientError as e:
+                print("*** Error: Failed to upload {} to s3://{}/{}"\
+                    .format(awaicgen_output_mosaic_image_file,product_s3_bucket,awaicgen_output_mosaic_image_s3_bucket_object_name))
+                uploaded_to_bucket = False
+
+            if uploaded_to_bucket:
+                print("Successfully uploaded {} to s3://{}/{}"\
+                    .format(awaicgen_output_mosaic_image_file,product_s3_bucket,awaicgen_output_mosaic_image_s3_bucket_object_name))
 
 
     exit(0)
