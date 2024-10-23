@@ -337,11 +337,11 @@ def submit_job_to_aws_batch(proc_date,jid,job_info_s3_bucket,job_config_ini_file
                     'value': job_info_s3_bucket
                 },
                 {
-                    'name': 'JOBCONFIGOBJNAME,
+                    'name': 'JOBCONFIGOBJNAME',
                     'value': job_config_ini_file_s3_bucket_object_name
                 }
                 {
-                    'name': 'REFIMAGEINPUTSOBJNAME,
+                    'name': 'REFIMAGEINPUTSOBJNAME',
                     'value': input_images_csv_file_s3_bucket_object_name
                 }
             ]
