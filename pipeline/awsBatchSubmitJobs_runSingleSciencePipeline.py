@@ -188,7 +188,13 @@ if __name__ == '__main__':
     sky_tile_ra4 = float(config_input['SKY_TILE']['ra4'])
     sky_tile_dec4 = float(config_input['SKY_TILE']['dec4'])
 
-    rfid = int(config_input['REF_IMAGE']['rfid'])
+    rfid_str = config_input['REF_IMAGE']['rfid']
+
+    if rfid_str == 'None':
+        rfid = None
+    else:
+        rfid = int(rfid_str)
+
     ppid_refimage = int(config_input['REF_IMAGE']['ppid_refimage'])
     naxis1_refimage = int(config_input['REF_IMAGE']['naxis1_refimage'])
     naxis2_refimage = int(config_input['REF_IMAGE']['naxis2_refimage'])
