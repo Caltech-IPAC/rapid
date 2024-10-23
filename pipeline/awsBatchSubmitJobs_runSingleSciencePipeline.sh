@@ -28,7 +28,7 @@ env
 echo "AWS Batch job to run single RAPID pipeline on a science image."
 
 
-logfile="rapid_compress_job_${JOBPROCDATE}_${RAPID_JOB_ID}_log.txt"
+logfile="rapid_pipeline_job_${JOBPROCDATE}_${RAPID_JOB_ID}_log.txt"
 echo "logfile = $logfile"
 
 echo "Executing /usr/bin/python3 /code/pipeline/awsBatchSubmitJobs_runSingleSciencePipeline.py >& $logfile"
@@ -57,7 +57,7 @@ else
     echo ##################################################################
     echo
 
-    exit 64
+    exitcode=64
 
 fi
 
@@ -65,8 +65,8 @@ fi
 echo "Executing aws s3 cp --quiet $logfile s3://rapid-pipeline-logs/${JOBPROCDATE}/$logfile"
 aws s3 cp --quiet $logfile s3://rapid-pipeline-logs/${JOBPROCDATE}/$logfile
 
-exitcode=$?
-
+awss3cpexitcode=$?
+echo "awss3cpexitcode=$awss3cpexitcode"
 
 if [ $exitcode -eq 0 ]
 then
