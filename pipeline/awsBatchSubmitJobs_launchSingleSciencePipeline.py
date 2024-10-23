@@ -325,7 +325,7 @@ def submit_job_to_aws_batch(proc_date,jid,job_info_s3_bucket,job_config_ini_file
         containerOverrides={
             'environment': [
                 {
-                    'name': 'JOBPROCDATE,
+                    'name': 'JOBPROCDATE',
                     'value': proc_date
                 },
                 {
