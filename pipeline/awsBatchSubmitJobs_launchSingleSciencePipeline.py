@@ -330,7 +330,7 @@ def submit_job_to_aws_batch(proc_date,jid,job_info_s3_bucket,job_config_ini_file
                 },
                 {
                     'name': 'RAPID_JOB_ID',
-                    'value': jid
+                    'value': str(jid)
                 },
                 {
                     'name': 'JOBS3BUCKET',
