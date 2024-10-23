@@ -627,6 +627,9 @@ if __name__ == '__main__':
 
                          'swvers': swvers,
                          'jid': str(jid)}
+
+    job_config['DEFAULT']['job_info_s3_bucket_base'] = job_info_s3_bucket_base
+    job_config['DEFAULT']['product_s3_bucket_base'] = product_s3_bucket_base
     job_config['DEFAULT']['verbose'] = str(verbose)
 
     job_config['SCI_IMAGE'] = {}
