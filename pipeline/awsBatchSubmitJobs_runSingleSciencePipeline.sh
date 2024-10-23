@@ -68,7 +68,7 @@ aws s3 cp --quiet $logfile s3://rapid-pipeline-logs/${JOBPROCDATE}/$logfile
 awss3cpexitcode=$?
 echo "awss3cpexitcode=$awss3cpexitcode"
 
-if [ $exitcode -eq 0 ]
+if [ $awss3cpexitcode -eq 0 ]
 then
 
     echo
@@ -86,7 +86,7 @@ else
     echo ##################################################################
     echo
 
-    exit 64
+    exit 66
 
 fi
 

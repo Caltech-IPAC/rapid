@@ -215,102 +215,102 @@ if __name__ == '__main__':
 
     # Optionally read in CVS file containing inputs for generating reference image.
 
-        if rfid is None:
+    if rfid is None:
 
-            print("Downloading s3://{}/{} into {}...".format(job_info_s3_bucket,input_images_csv_file_s3_bucket_object_name,input_images_csv_filename))
+        print("Downloading s3://{}/{} into {}...".format(job_info_s3_bucket,input_images_csv_file_s3_bucket_object_name,input_images_csv_filename))
 
-            response = s3_client.download_file(job_info_s3_bucket,input_images_csv_file_s3_bucket_object_name,input_images_csv_filename)
+        response = s3_client.download_file(job_info_s3_bucket,input_images_csv_file_s3_bucket_object_name,input_images_csv_filename)
 
-            print("response =",response)
+        print("response =",response)
 
-            refimage_input_metadata = []
-            refimage_input_filenames = []
+        refimage_input_metadata = []
+        refimage_input_filenames = []
 
-            with open(input_images_csv_filename, newline='') as csvfile:
+        with open(input_images_csv_filename, newline='') as csvfile:
 
-                refimage_inputs_reader = csv.reader(csvfile, delimiter=',')
+            refimage_inputs_reader = csv.reader(csvfile, delimiter=',')
 
-                for row in refimage_inputs_reader:
+            for row in refimage_inputs_reader:
 
-                    print(', '.join(row))
+                print(', '.join(row))
 
-                    refimage_input_metadata.append(row)
+                refimage_input_metadata.append(row)
 
-                    refimage_input_s3_full_name = row[11]                                                   # TODO
+                refimage_input_s3_full_name = row[11]                                                   # TODO
 
-                    filename_match = re.match(r"s3://(.+?)/(.+)", refimage_input_s3_full_name)              # TODO
+                filename_match = re.match(r"s3://(.+?)/(.+)", refimage_input_s3_full_name)              # TODO
 
-                    try:
-                        refimage_input_s3_bucket_name = filename_match.group(1)
-                        refimage_input_s3_object_name = filename_match.group(2)
-                        print("s3_bucket_name = {}, s3_object_name = {}".\
-                            format(refimage_input_s3_bucket_name,refimage_input_s3_object_name))
+                try:
+                    refimage_input_s3_bucket_name = filename_match.group(1)
+                    refimage_input_s3_object_name = filename_match.group(2)
+                    print("s3_bucket_name = {}, s3_object_name = {}".\
+                        format(refimage_input_s3_bucket_name,refimage_input_s3_object_name))
 
-                    except:
-                        print("*** Error: Could not parse refimage_input_s3_full_name; quitting...")
-                        exit(64)
+                except:
+                    print("*** Error: Could not parse refimage_input_s3_full_name; quitting...")
+                    exit(64)
 
-                    filename_match2 = re.match(r".+?/(.+)", refimage_input_s3_object_name)                 # TODO
+                filename_match2 = re.match(r".+?/(.+)", refimage_input_s3_object_name)                 # TODO
 
-                    try:
-                        refimage_input_filename = filename_match2.group(1)
-                        print("refimage_input_filename = {}".format(refimage_input_filename))
+                try:
+                    refimage_input_filename = filename_match2.group(1)
+                    print("refimage_input_filename = {}".format(refimage_input_filename))
 
-                    except:
-                        print("*** Error: Could not parse refimage_input_s3_object_name; quitting...")
-                        exit(64)
+                except:
+                    print("*** Error: Could not parse refimage_input_s3_object_name; quitting...")
+                    exit(64)
 
-                    refimage_input_filenames.append(refimage_input_filename)
-
-
-                    # Download reference-image input from associated S3 bucket.
-
-                    print("Downloading s3://{}/{} into {}...".format(refimage_input_s3_bucket_name,refimage_input_s3_object_name,refimage_input_filename))
-
-                    response = s3_client.download_file(refimage_input_s3_bucket_name,refimage_input_s3_object_name,refimage_input_filename)
-
-                    print("response =",response)
+                refimage_input_filenames.append(refimage_input_filename)
 
 
-            # Write list of reference-image input filenames for awaicgen.
+                # Download reference-image input from associated S3 bucket.
 
-            awaicgen_input_images_list_file = 'refimage_inputs.txt'
-            f = open(refimage_inputs_txt_file, "w")
-            for fname in refimage_input_filenames:
-                f.write(fname + "\n")
-            f.close()
+                print("Downloading s3://{}/{} into {}...".format(refimage_input_s3_bucket_name,refimage_input_s3_object_name,refimage_input_filename))
 
+                response = s3_client.download_file(refimage_input_s3_bucket_name,refimage_input_s3_object_name,refimage_input_filename)
 
-            # Execute awaicgen to generate reference image.
-
-            awaicgen_dict["awaicgen_input_images_list_file"] = awaicgen_input_images_list_file
-
-            awaicgen_output_mosaic_image_file = awaicgen_dict["awaicgen_output_mosaic_image_file"]
-            product_s3_bucket = product_s3_bucket_base
-            awaicgen_output_mosaic_image_s3_bucket_object_name = job_proc_date + "/" + awaicgen_dict["awaicgen_output_mosaic_image_file"]
-
-            awaicgen_dict["awaicgen_output_mosaic_image_file"] = awaicgen_output_mosaic_image_file
-
-            awaicgen_cmd = build_awaicgen_command_line_args(awaicgen_dict)
-            exitcode_from_awaicgen = util.execute_command(awaicgen_cmd)
+                print("response =",response)
 
 
-            # Upload reference image to S3 bucket.
+        # Write list of reference-image input filenames for awaicgen.
 
-            uploaded_to_bucket = True
-
-            try:
-                response = s3_client.upload_file(awaicgen_output_mosaic_image_file,
-                                                 product_s3_bucket,
-                                                 awaicgen_output_mosaic_image_s3_bucket_object_name)
-            except ClientError as e:
-                print("*** Error: Failed to upload {} to s3://{}/{}"\
-                    .format(awaicgen_output_mosaic_image_file,product_s3_bucket,awaicgen_output_mosaic_image_s3_bucket_object_name))
-                uploaded_to_bucket = False
-
-            if uploaded_to_bucket:
-                print("Successfully uploaded {} to s3://{}/{}"\
-                    .format(awaicgen_output_mosaic_image_file,product_s3_bucket,awaicgen_output_mosaic_image_s3_bucket_object_name))
+        awaicgen_input_images_list_file = 'refimage_inputs.txt'
+        f = open(refimage_inputs_txt_file, "w")
+        for fname in refimage_input_filenames:
+            f.write(fname + "\n")
+        f.close()
 
 
-    exit(0)
+        # Execute awaicgen to generate reference image.
+
+        awaicgen_dict["awaicgen_input_images_list_file"] = awaicgen_input_images_list_file
+
+        awaicgen_output_mosaic_image_file = awaicgen_dict["awaicgen_output_mosaic_image_file"]
+        product_s3_bucket = product_s3_bucket_base
+        awaicgen_output_mosaic_image_s3_bucket_object_name = job_proc_date + "/" + awaicgen_dict["awaicgen_output_mosaic_image_file"]
+
+        awaicgen_dict["awaicgen_output_mosaic_image_file"] = awaicgen_output_mosaic_image_file
+
+        awaicgen_cmd = build_awaicgen_command_line_args(awaicgen_dict)
+        exitcode_from_awaicgen = util.execute_command(awaicgen_cmd)
+
+
+        # Upload reference image to S3 bucket.
+
+        uploaded_to_bucket = True
+
+        try:
+            response = s3_client.upload_file(awaicgen_output_mosaic_image_file,
+                                             product_s3_bucket,
+                                             awaicgen_output_mosaic_image_s3_bucket_object_name)
+        except ClientError as e:
+            print("*** Error: Failed to upload {} to s3://{}/{}"\
+                .format(awaicgen_output_mosaic_image_file,product_s3_bucket,awaicgen_output_mosaic_image_s3_bucket_object_name))
+            uploaded_to_bucket = False
+
+        if uploaded_to_bucket:
+            print("Successfully uploaded {} to s3://{}/{}"\
+                .format(awaicgen_output_mosaic_image_file,product_s3_bucket,awaicgen_output_mosaic_image_s3_bucket_object_name))
+
+
+exit(0)
