@@ -617,7 +617,9 @@ if __name__ == '__main__':
     job_info_s3_bucket = job_info_s3_bucket_base
     job_config_ini_file_s3_bucket_object_name = proc_date + "/" + job_config_ini_file_filename_base
 
-    awaicgen_dict["awaicgen_output_mosaic_image_file"] = "rapid_refimage_rfid"+ str(rfid) + ".fits"
+    awaicgen_dict["awaicgen_output_mosaic_image_file"] = "awaicgen_output_mosaic_image"+ ".fits"
+    awaicgen_dict["awaicgen_output_mosaic_cov_map_file"] = "awaicgen_output_mosaic_cov_map"+ ".fits"
+    awaicgen_dict["awaicgen_output_mosaic_uncert_image_file"] = "awaicgen_output_mosaic_uncert_image"+ ".fits"
 
     job_config = configparser.ConfigParser()
 

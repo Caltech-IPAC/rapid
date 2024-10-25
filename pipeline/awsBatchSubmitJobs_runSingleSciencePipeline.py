@@ -281,7 +281,7 @@ if __name__ == '__main__':
         # Write list of reference-image input filenames for awaicgen.
 
         awaicgen_input_images_list_file = 'refimage_inputs.txt'
-        f = open(refimage_inputs_txt_file, "w")
+        f = open(awaicgen_input_images_list_file, "w")
         for fname in refimage_input_filenames:
             f.write(fname + "\n")
         f.close()
