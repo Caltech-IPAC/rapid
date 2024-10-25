@@ -190,8 +190,6 @@ After the AWS Batch job finishes, there are files written to S3 buckets that can
 
    aws s3 ls --recursive s3://rapid-pipeline-files
 
-.. highlight::
-
    2024-10-15 16:03:31     120092 20241015/input_images_for_refimage_jid1.csv
    2024-10-15 16:03:31       4551 20241015/job_config_jid1.ini
    2024-09-03 16:42:56 1535762432 roman_tessellation_nside512.db
@@ -200,9 +198,9 @@ After the AWS Batch job finishes, there are files written to S3 buckets that can
 
    aws s3 ls --recursive s3://rapid-pipeline-logs
 
-.. highlight::
-
    2024-10-23 10:20:00        656 20241023/rapid_pipeline_job_20241023_1_log.txt
+
+Download and examine log file:
 
 .. code-block::
 
