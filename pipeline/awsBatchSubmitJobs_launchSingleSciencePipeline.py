@@ -673,16 +673,17 @@ if __name__ == '__main__':
     job_config['SKY_TILE']['ra4'] = str(ra4_field)
     job_config['SKY_TILE']['dec4'] = str(dec4_field)
 
-
     job_config['REF_IMAGE'] = {}
 
     job_config['REF_IMAGE']['ppid'] = str(ppid_refimage)
-    job_config['REF_IMAGE']['naxis1'] = str(naxis1_refimage)
-    job_config['REF_IMAGE']['naxis2'] = str(naxis2_refimage)
     job_config['REF_IMAGE']['rfid'] = str(rfid)
     job_config['REF_IMAGE']['filename'] = filename_refimage
     job_config['REF_IMAGE']['input_images_csv_file'] = input_images_csv_file
-
+    job_config['REF_IMAGE']['naxis1'] = str(naxis1_refimage)
+    job_config['REF_IMAGE']['naxis2'] = str(naxis2_refimage)
+    job_config['REF_IMAGE']['cdelt1'] = str(cdelt1_refimage)
+    job_config['REF_IMAGE']['cdelt2'] = str(cdelt2_refimage)
+    job_config['REF_IMAGE']['crota2'] = str(crota2_refimage)
     job_config['REF_IMAGE']['ra0'] = str(ra0_refimage)
     job_config['REF_IMAGE']['dec0'] = str(dec0_refimage)
     job_config['REF_IMAGE']['ra1'] = str(ra1_refimage)
