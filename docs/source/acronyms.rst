@@ -1,7 +1,7 @@
 Acronyms
 ####################################################
 
-RAPID Project
+`RAPID Project <https://www.ipac.caltech.edu/project/rapid>`_
 *************************************
 
 +-----------------+----------------------------------------------------------+
@@ -11,7 +11,7 @@ RAPID Project
 +-----------------+----------------------------------------------------------+
 | ISG             | IPAC Support Group                                       |
 +-----------------+----------------------------------------------------------+
-| RAPID           | Report Alerts Promptly from Image Differencing           |
+| RAPID           | Roman Alerts Promptly from Image Differencing            |
 +-----------------+----------------------------------------------------------+
 
 Roman Space Telescope
