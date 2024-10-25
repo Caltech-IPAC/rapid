@@ -137,7 +137,7 @@ Tag the Docker image with "latest" and push to ECR with these two commands:
 
 The following shows commands to launch an instance of the RAPID pipeline as AWS Batch job.
 The to-be-run Docker container rapid_science_pipeline:1.0 has /code built in, so there is no need to mount an external volume for /code.
-Since this Docker image has a built-in ENTRYPOINT, you must override it  with the ``--entrypoint bash`` option
+Since this Docker image contains the ENTRYPOINT instruction, you must override it  with the ``--entrypoint bash`` option
 (and do not put ``bash`` at the end of the command).
 
 .. code-block::
@@ -150,10 +150,6 @@ Since this Docker image has a built-in ENTRYPOINT, you must override it  with th
 
    docker stop russ-test-jobsubmit
    docker rm russ-test-jobsubmit
-
-
-
-.. code-block::
 
    docker run -it --entrypoint bash --name russ-test-jobsubmit -v /home/ubuntu/work/test_20240923:/work rapid_science_pipeline:1.0
 
