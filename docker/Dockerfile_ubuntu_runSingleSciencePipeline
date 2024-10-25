@@ -50,6 +50,8 @@ RUN cd /code/c/builds && \
 
 ENV PATH=/code/c/bin:/root/.local/bin:/root/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 ENV LD_LIBRARY_PATH=/code/c/lib
+ENV PYTHONPATH=/code
+ENV PYTHONUNBUFFERED=1
 
 WORKDIR /tmp
 
