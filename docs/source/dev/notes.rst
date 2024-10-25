@@ -171,10 +171,10 @@ Since this Docker image contains the ENTRYPOINT instruction, you must override i
 
    git config --global --add safe.directory /code
 
-   cd /code
+   cd /tmp
    export ROMANTESSELLATIONDBNAME=/work/roman_tessellation_nside512.db
    export RID=172211
-   python3 pipeline/awsBatchSubmitJobs_launchSingleSciencePipeline.py
+   python3 /code/pipeline/awsBatchSubmitJobs_launchSingleSciencePipeline.py
 
    exit
 
