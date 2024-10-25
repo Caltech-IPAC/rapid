@@ -16,17 +16,20 @@ Login with your IPAC credentials (not sure whether VPN must be running).
 Developer Guidelines
 ************************************
 
-1. Set up your text editor to clip trailing spaces when saving source-code file (e.g., BBEdit has a preference that does this).
+#. Set up your text editor to clip trailing spaces when saving source-code file (e.g., BBEdit has a preference that does this).
 
-2. Think strategically when pushing a source-code file to the git repo whether a simple git diff between revisions will allow a clear and unambiguous indication of the code changes.  For example, numerous stylistic changes can hide substantive changes that affect code behavior and should be deferred to a separate revision.
+#. Think strategically when pushing a source-code file to the git repo whether a simple git diff between revisions
+   will allow a clear and unambiguous indication of the code changes.  For example, numerous stylistic changes can
+   hide substantive changes that affect code behavior and should be deferred to a separate revision.
 
-3. Before checking into the git repo modifications to someone else's source code,
+#. Before checking into the git repo modifications to someone else's source code,
    let that person know what to expect (and assure there is a sufficient level of trust beforehand).
 
-4. Always test code changes before the code is put into operations; the development is not done until the code changes have been tested.
+#. Always test code changes before the code is put into operations; the development is not done until the code changes have been tested.
 
-5. Include a sufficiency of comments in your source code!
+#. Include a sufficiency of comments in your source code!
 
+#. Remember to ``git pull`` before any ``git push`` and often, in order to make sure your RAPID git repo is up to date.
 
 Running RAPID Pipeline under AWS Batch
 ********************************************
