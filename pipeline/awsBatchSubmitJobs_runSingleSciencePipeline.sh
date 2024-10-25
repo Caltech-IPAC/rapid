@@ -28,7 +28,7 @@ env
 echo "AWS Batch job to run single RAPID pipeline on a science image."
 
 
-logfile="rapid_pipeline_job_${JOBPROCDATE}_${RAPID_JOB_ID}_log.txt"
+logfile="rapid_pipeline_job_${JOBPROCDATE}_jid${RAPID_JOB_ID}_log.txt"
 echo "logfile = $logfile"
 
 echo "Executing /usr/bin/python3 /code/pipeline/awsBatchSubmitJobs_runSingleSciencePipeline.py >& $logfile"
