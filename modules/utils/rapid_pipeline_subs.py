@@ -20,8 +20,11 @@ def execute_command(code_to_execute_args):
 
 
     # Execute code_to_execute.  Not that STDERR and STDOUT are merged into the same data stream.
+    # AWS Batch runs Python 3.9.  According to https://docs.python.org/3.9/library/subprocess.html#subprocess.run,
+    # if you wish to capture and combine both streams into one, use stdout=PIPE and stderr=STDOUT instead of capture_output.
+    # capture_output=False is the default.
 
-    code_to_execute_object = subprocess.run(code_to_execute_args, capture_output=True, text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+    code_to_execute_object = subprocess.run(code_to_execute_args,text=True,stdout=subprocess.PIPE,stderr=subprocess.STDOUT)
 
     returncode = code_to_execute_object.returncode
     print("returncode =",returncode)
