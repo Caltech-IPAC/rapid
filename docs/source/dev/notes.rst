@@ -4,10 +4,11 @@ RAPID Pipeline Development Notes
 Increasing AWS Cloud Limits
 ************************************
 
-Submit ticket requesting AWS increase the relevant limit for the RAPID project
+Submit a ticket to the IPAC Support Group (ISG) requesting an AWS increase
+in the relevant limit for the RAPID project
 (this involves Wendy submitting a ticket to AWS).
 
-IPAC Support Request URL: `URL <https://jira.ipac.caltech.edu/servicedesk/customer/portal/4/>`_
+`ISG Request URL <https://jira.ipac.caltech.edu/servicedesk/customer/portal/4/>`_
 
 Login with your IPAC credentials (not sure whether VPN must be running).
 
@@ -17,9 +18,12 @@ Developer Guidelines
 
 1. Set up your text editor to clip trailing spaces when saving source-code file (e.g., BBEdit has a preference that does this).
 
-2. Think strategically when pushing a source-code file to the git repo whether a simple git diff between revisions will allow a clear and unambiguous indication of the code changes.
+2. Think strategically when pushing a source-code file to the git repo whether
+a simple git diff between revisions will allow a clear and unambiguous indication of the code changes.
+For example, numerous stylistic changes can hide substantive changes that affect code behavior and should be deferred to a separate revision.
 
-3. Before modifying someone else's source code and checking it into the git repo, let that person know what to expect (and assure there is a sufficient level of trust beforehand).
+3. Before checking into the git repo modifications to someone else's source code,
+let that person know what to expect (and assure there is a sufficient level of trust beforehand).
 
 4. Always test code changes before the code is put into operations; the development is not done until the code changes have been tested.
 
