@@ -114,7 +114,7 @@ Authenticate your Docker client to the registry as follows:
 
    aws ecr-public get-login-password --region us-east-1 | docker login --username AWS --password-stdin public.ecr.aws/y9b1s7h8
 
-Now get the Docker image tag as follows:
+Now get the Docker image ID as follows:
 
 .. code-block::
 
@@ -133,6 +133,82 @@ Tag the Docker image with "latest" and push to ECR with these two commands:
 
    docker tag a76b1373bfe2 public.ecr.aws/y9b1s7h8/rapid_science_pipeline:latest
    docker push public.ecr.aws/y9b1s7h8/rapid_science_pipeline:latest
+
+
+Now run commands to launch an instance of the RAPID pipeline as AWS Batch job:
+
+.. code-block::
+
+   mkdir -p /home/ubuntu/work/test_20240923
+   cd /home/ubuntu/work/test_20240923
+   aws s3 cp s3://rapid-pipeline-files/roman_tessellation_nside512.db /home/ubuntu/work/test_20240923/roman_tessellation_nside512.db
+
+   sudo su
+
+   docker stop russ-test-jobsubmit
+   docker rm russ-test-jobsubmit
+
+   docker run -it --name russ-test-jobsubmit -v /home/ubuntu/rapid:/code -v /home/ubuntu/work/test_20240923:/work  rapid:1.0 bash
+
+
+Running container rapid_science_pipeline:1.0, which has /code built in, so no need to mount external volume for /code.
+Override ENTRYPOINT with ``--entrypoint bash`` option (and do not put ``bash`` at the end of the command).
+
+.. code-block::
+
+   docker run -it --entrypoint bash --name russ-test-jobsubmit -v /home/ubuntu/work/test_20240923:/work rapid_science_pipeline:1.0
+
+   export DBPORT=5432
+   export DBNAME=rapidopsdb
+   export DBUSER=rapidporuss
+   export DBSERVER=35.165.53.98
+   export DBPASS="????"
+   export AWS_DEFAULT_REGION=us-west-2
+   export AWS_SECRET_ACCESS_KEY=????
+   export AWS_ACCESS_KEY_ID=????
+   export PYTHONUNBUFFERED=1
+   export LD_LIBRARY_PATH=/code/c/lib
+   export PATH=/code/c/bin:$PATH
+   export export RAPID_SW=/code
+   export export RAPID_WORK=/work
+   export PYTHONPATH=/code
+   export PYTHONUNBUFFERED=1
+
+   git config --global --add safe.directory /code
+
+   cd /code
+   export ROMANTESSELLATIONDBNAME=/work/roman_tessellation_nside512.db
+   export RID=172211
+   python3 pipeline/awsBatchSubmitJobs_launchSingleSciencePipeline.py
+
+   exit
+
+
+After the AWS Batch job finishes, there are files written to S3 buckets that can be examined:
+
+.. code-block::
+
+   aws s3 ls --recursive s3://rapid-pipeline-files
+
+.. highlight::
+
+   2024-10-15 16:03:31     120092 20241015/input_images_for_refimage_jid1.csv
+   2024-10-15 16:03:31       4551 20241015/job_config_jid1.ini
+   2024-09-03 16:42:56 1535762432 roman_tessellation_nside512.db
+
+.. code-block::
+
+   aws s3 ls --recursive s3://rapid-pipeline-logs
+
+.. highlight::
+
+   2024-10-23 10:20:00        656 20241023/rapid_pipeline_job_20241023_1_log.txt
+
+.. code-block::
+
+   aws s3 cp s3://rapid-pipeline-logs/20241023/rapid_pipeline_job_20241023_1_log.txt rapid_pipeline_job_20241023_1_log.txt
+
+   more rapid_pipeline_job_20241023_1_log.txt
 
 
 
