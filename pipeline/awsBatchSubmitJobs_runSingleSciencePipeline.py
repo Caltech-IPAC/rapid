@@ -4,6 +4,8 @@ import configparser
 import re
 import boto3
 
+import modules.utils.rapid_pipeline_subs as util
+
 
 swname = "awsBatchSubmitJobs_runSingleSciencePipeline.py"
 swvers = "1.0"
