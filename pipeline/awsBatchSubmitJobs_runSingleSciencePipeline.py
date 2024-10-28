@@ -4,6 +4,7 @@ import configparser
 import re
 import boto3
 from botocore.exceptions import ClientError
+from astropy.io import fits
 
 import modules.utils.rapid_pipeline_subs as util
 
@@ -234,6 +235,7 @@ if __name__ == '__main__':
 
         refimage_input_metadata = []
         refimage_input_filenames = []
+        refimage_input_filenames_reformatted = []
 
         n = 0
 
@@ -282,6 +284,28 @@ if __name__ == '__main__':
 
                 print("response =",response)
 
+
+                # Unzip the gz file.
+
+                gunzip_cmd = ['gunzip', 'refimage_input_filename']
+                exitcode_from_gunzip = util.execute_command(gunzip_cmd)
+
+                # Reformat the FITS file so that the image data are contained in the PRIMARY header.
+
+                fname_input = refimage_input_filename.replace(".fits.gz",".fits")
+                fname_output = refimage_input_filename.replace(".fits.gz","_reformatted.fits")
+
+                refimage_input_filenames_reformatted.append(fname_output)
+
+                hdul_1 = fits.open(fname_input)
+                hdu_list = []
+                hdr = data_1 = hdul_1[1].header
+                data = data_1 = hdul_1[1].data
+                hdu = fits.PrimaryHDU(header=hdr,data=data)
+                hdu_list.append(hdu)
+                hdu = fits.HDUList(hdu_list)
+                hdu.writeto(fname_output,overwrite=True,checksum=True)
+
                 n += 1
                 if n > 5:
                    break
@@ -292,7 +316,7 @@ if __name__ == '__main__':
         awaicgen_input_images_list_file = 'refimage_inputs.txt'
         f = open(awaicgen_input_images_list_file, "w")
         n = 0
-        for fname in refimage_input_filenames:
+        for fname in refimage_input_filenames_reformatted:
             f.write(fname + "\n")
             n += 1
             if n > 5:
