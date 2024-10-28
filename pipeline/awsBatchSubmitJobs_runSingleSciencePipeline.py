@@ -334,8 +334,10 @@ if __name__ == '__main__':
         awaicgen_output_mosaic_image_file = awaicgen_dict["awaicgen_output_mosaic_image_file"]
         awaicgen_output_mosaic_cov_map_file = awaicgen_dict["awaicgen_output_mosaic_cov_map_file"]
         product_s3_bucket = product_s3_bucket_base
-        awaicgen_output_mosaic_image_s3_bucket_object_name = job_proc_date + "/" + awaicgen_dict["awaicgen_output_mosaic_image_file"]
-        awaicgen_output_mosaic_cov_map_s3_bucket_object_name = job_proc_date + "/" + awaicgen_dict["awaicgen_output_mosaic_cov_map_file"]
+        awaicgen_output_mosaic_image_s3_bucket_object_name = job_proc_date + "/jid" + str(jid) + "/" +\
+            awaicgen_dict["awaicgen_output_mosaic_image_file"]
+        awaicgen_output_mosaic_cov_map_s3_bucket_object_name = job_proc_date + "/jid" + str(jid) + "/" +\
+            awaicgen_dict["awaicgen_output_mosaic_cov_map_file"]
 
         awaicgen_dict["awaicgen_output_mosaic_image_file"] = awaicgen_output_mosaic_image_file
 
@@ -374,6 +376,9 @@ if __name__ == '__main__':
             response = s3_client.upload_file(awaicgen_output_mosaic_cov_map_file,
                                              product_s3_bucket,
                                              awaicgen_output_mosaic_cov_map_s3_bucket_object_name)
+
+            print("response =",response)
+
         except ClientError as e:
             print("*** Error: Failed to upload {} to s3://{}/{}"\
                 .format(awaicgen_output_mosaic_cov_map_file,product_s3_bucket,awaicgen_output_mosaic_cov_map_s3_bucket_object_name))
