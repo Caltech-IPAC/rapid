@@ -29,8 +29,11 @@ def execute_command(code_to_execute_args):
     returncode = code_to_execute_object.returncode
     print("returncode =",returncode)
 
-    code_to_execute_stdout_stderr = code_to_execute_object.stdout
-    print("code_to_execute_stdout_stderr =\n",code_to_execute_stdout_stderr)
+    code_to_execute_stdout_stdout = code_to_execute_object.stdout
+    print("code_to_execute_stdout_stdout =\n",code_to_execute_stdout_stdout)
+
+    code_to_execute_stdout_stderr = code_to_execute_object.stderr
+    print("code_to_execute_stdout_stderr (should be empty since STDERR is combined with STDOUT) =\n",code_to_execute_stdout_stderr)
 
     return returncode
 
