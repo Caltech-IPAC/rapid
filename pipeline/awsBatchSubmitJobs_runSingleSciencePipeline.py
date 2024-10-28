@@ -95,6 +95,7 @@ def build_awaicgen_command_line_args(awaicgen_dict):
     awaicgen_simple_coadd_flag = int(awaicgen_dict["awaicgen_simple_coadd_flag"])
     awaicgen_num_threads = int(awaicgen_dict["awaicgen_num_threads"])
     awaicgen_output_mosaic_image_file = awaicgen_dict["awaicgen_output_mosaic_image_file"]
+    awaicgen_output_mosaic_cov_map_file = awaicgen_dict["awaicgen_output_mosaic_cov_map_file"]
 
     code_to_execute_args = [software_to_execute]
     code_to_execute_args.append("-f1")
@@ -121,6 +122,8 @@ def build_awaicgen_command_line_args(awaicgen_dict):
     code_to_execute_args.append(str(awaicgen_num_threads))
     code_to_execute_args.append("-o1")
     code_to_execute_args.append(awaicgen_output_mosaic_image_file)
+    code_to_execute_args.append("-o2")
+    code_to_execute_args.append(awaicgen_output_mosaic_cov_map_file)
 
 
     print("code_to_execute_args =",code_to_execute_args)
@@ -314,6 +317,7 @@ if __name__ == '__main__':
         # Write list of reference-image input filenames for awaicgen.
 
         awaicgen_input_images_list_file = 'refimage_inputs.txt'
+
         f = open(awaicgen_input_images_list_file, "w")
         n = 0
         for fname in refimage_input_filenames_reformatted:
@@ -324,21 +328,26 @@ if __name__ == '__main__':
         f.close()
 
 
+        # Set filenames and S3 object names for reference-image products.
+
+        awaicgen_output_mosaic_image_file = awaicgen_dict["awaicgen_output_mosaic_image_file"]
+        awaicgen_output_mosaic_cov_map_file = awaicgen_dict["awaicgen_output_mosaic_cov_map_file"]
+        product_s3_bucket = product_s3_bucket_base
+        awaicgen_output_mosaic_image_s3_bucket_object_name = job_proc_date + "/" + awaicgen_dict["awaicgen_output_mosaic_image_file"]
+        awaicgen_output_mosaic_cov_map_s3_bucket_object_name = job_proc_date + "/" + awaicgen_dict["awaicgen_output_mosaic_cov_map_file"]
+
+        awaicgen_dict["awaicgen_output_mosaic_image_file"] = awaicgen_output_mosaic_image_file
+
+
         # Execute awaicgen to generate reference image.
 
         awaicgen_dict["awaicgen_input_images_list_file"] = awaicgen_input_images_list_file
-
-        awaicgen_output_mosaic_image_file = awaicgen_dict["awaicgen_output_mosaic_image_file"]
-        product_s3_bucket = product_s3_bucket_base
-        awaicgen_output_mosaic_image_s3_bucket_object_name = job_proc_date + "/" + awaicgen_dict["awaicgen_output_mosaic_image_file"]
-
-        awaicgen_dict["awaicgen_output_mosaic_image_file"] = awaicgen_output_mosaic_image_file
 
         awaicgen_cmd = build_awaicgen_command_line_args(awaicgen_dict)
         exitcode_from_awaicgen = util.execute_command(awaicgen_cmd)
 
 
-        # Upload reference image to S3 bucket.
+        # Upload reference-image products to S3 bucket.
 
         uploaded_to_bucket = True
 
@@ -354,6 +363,21 @@ if __name__ == '__main__':
         if uploaded_to_bucket:
             print("Successfully uploaded {} to s3://{}/{}"\
                 .format(awaicgen_output_mosaic_image_file,product_s3_bucket,awaicgen_output_mosaic_image_s3_bucket_object_name))
+
+        uploaded_to_bucket = True
+
+        try:
+            response = s3_client.upload_file(awaicgen_output_mosaic_cov_map_file,
+                                             product_s3_bucket,
+                                             awaicgen_output_mosaic_cov_map_s3_bucket_object_name)
+        except ClientError as e:
+            print("*** Error: Failed to upload {} to s3://{}/{}"\
+                .format(awaicgen_output_mosaic_cov_map_file,product_s3_bucket,awaicgen_output_mosaic_cov_map_s3_bucket_object_name))
+            uploaded_to_bucket = False
+
+        if uploaded_to_bucket:
+            print("Successfully uploaded {} to s3://{}/{}"\
+                .format(awaicgen_output_mosaic_cov_map_file,product_s3_bucket,awaicgen_output_mosaic_cov_map_s3_bucket_object_name))
 
 
 exit(0)
