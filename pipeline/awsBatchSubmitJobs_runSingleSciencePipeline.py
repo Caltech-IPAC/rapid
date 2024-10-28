@@ -287,7 +287,7 @@ if __name__ == '__main__':
 
                 # Unzip the gz file.
 
-                gunzip_cmd = ['gunzip', 'refimage_input_filename']
+                gunzip_cmd = ['gunzip', refimage_input_filename]
                 exitcode_from_gunzip = util.execute_command(gunzip_cmd)
 
                 # Reformat the FITS file so that the image data are contained in the PRIMARY header.
