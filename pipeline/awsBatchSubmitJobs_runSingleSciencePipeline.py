@@ -3,6 +3,7 @@ import csv
 import configparser
 import re
 import boto3
+from botocore.exceptions import ClientError
 
 import modules.utils.rapid_pipeline_subs as util
 
@@ -234,6 +235,8 @@ if __name__ == '__main__':
         refimage_input_metadata = []
         refimage_input_filenames = []
 
+        n = 0
+
         with open(input_images_csv_filename, newline='') as csvfile:
 
             refimage_inputs_reader = csv.reader(csvfile, delimiter=',')
@@ -279,13 +282,21 @@ if __name__ == '__main__':
 
                 print("response =",response)
 
+                n += 1
+                if n > 5:
+                   break
+
 
         # Write list of reference-image input filenames for awaicgen.
 
         awaicgen_input_images_list_file = 'refimage_inputs.txt'
         f = open(awaicgen_input_images_list_file, "w")
+        n = 0
         for fname in refimage_input_filenames:
             f.write(fname + "\n")
+            n += 1
+            if n > 5:
+                break
         f.close()
 
 
