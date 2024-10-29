@@ -178,7 +178,6 @@ Since this Docker image contains the ENTRYPOINT instruction, you must override i
 
    exit
 
-
 After the AWS Batch job finishes, there are files written to S3 buckets that can be examined:
 
 .. code-block::
@@ -186,7 +185,7 @@ After the AWS Batch job finishes, there are files written to S3 buckets that can
    aws s3 ls --recursive s3://rapid-pipeline-files
 
    2024-10-28 11:18:38     120092 20241028/input_images_for_refimage_jid1.csv
-2024-10-28 11:18:38       6025 20241028/job_config_jid1.ini
+   2024-10-28 11:18:38       6025 20241028/job_config_jid1.ini
    2024-09-03 16:42:56 1535762432 roman_tessellation_nside512.db
 
 .. code-block::
@@ -208,8 +207,8 @@ are given generic filenames in these buckets, and will be renamed to filenames l
 
 .. code-block::
 
-rapid_field1234567_fid7_ppid15_v2_rfid12394758_refimage.fits
-rapid_field1234567_fid7_ppid15_v2_rfid12394758_covmap.fits
+   rapid_field1234567_fid7_ppid15_v2_rfid12394758_refimage.fits
+   rapid_field1234567_fid7_ppid15_v2_rfid12394758_covmap.fits
 
 after these products are registered in the RAPID pipeline operations database and then copied to
 a more permanent location (and ultimately archived in MAST).  The ``ppid`` gives the pipeline number
