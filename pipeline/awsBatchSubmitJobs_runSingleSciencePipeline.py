@@ -8,7 +8,7 @@ from astropy.io import fits
 
 import modules.utils.rapid_pipeline_subs as util
 
-max_n_images_to_coadd = 30
+max_n_images_to_coadd = 10
 
 swname = "awsBatchSubmitJobs_runSingleSciencePipeline.py"
 swvers = "1.0"
