@@ -13,7 +13,7 @@ dtr = 1.0 / rtd
 def execute_command(code_to_execute_args):
 
     '''
-    Execute python script.
+    Execute a command with options.
     '''
 
     print("execute_command: code_to_execute_args =",code_to_execute_args)
@@ -217,3 +217,59 @@ def get_roman_tessellation_index(rt_dict,ra,dec):
                 exit(64)
 
     return None
+
+
+def build_awaicgen_command_line_args(awaicgen_dict):
+
+    '''
+    Build awaicgen command line.
+    '''
+
+    software_to_execute = 'awaicgen'
+
+    awaicgen_input_images_list_file = awaicgen_dict["awaicgen_input_images_list_file"]
+    awaicgen_mosaic_size_x = float(awaicgen_dict["awaicgen_mosaic_size_x"])
+    awaicgen_mosaic_size_y = float(awaicgen_dict["awaicgen_mosaic_size_y"])
+    awaicgen_RA_center = float(awaicgen_dict["awaicgen_RA_center"])
+    awaicgen_Dec_center = float(awaicgen_dict["awaicgen_Dec_center"])
+    awaicgen_mosaic_rotation = float(awaicgen_dict["awaicgen_mosaic_rotation"])
+    awaicgen_pixelscale_absolute = float(awaicgen_dict["awaicgen_pixelscale_absolute"])
+    awaicgen_inv_var_weight_flag = int(awaicgen_dict["awaicgen_inv_var_weight_flag"])
+    awaicgen_pixelflux_scale_flag = int(awaicgen_dict["awaicgen_pixelflux_scale_flag"])
+    awaicgen_simple_coadd_flag = int(awaicgen_dict["awaicgen_simple_coadd_flag"])
+    awaicgen_num_threads = int(awaicgen_dict["awaicgen_num_threads"])
+    awaicgen_output_mosaic_image_file = awaicgen_dict["awaicgen_output_mosaic_image_file"]
+    awaicgen_output_mosaic_cov_map_file = awaicgen_dict["awaicgen_output_mosaic_cov_map_file"]
+
+    code_to_execute_args = [software_to_execute]
+    code_to_execute_args.append("-f1")
+    code_to_execute_args.append(awaicgen_input_images_list_file)
+    code_to_execute_args.append("-X")
+    code_to_execute_args.append(str(awaicgen_mosaic_size_x))
+    code_to_execute_args.append("-Y")
+    code_to_execute_args.append(str(awaicgen_mosaic_size_y))
+    code_to_execute_args.append("-R")
+    code_to_execute_args.append(str(awaicgen_RA_center))
+    code_to_execute_args.append("-D")
+    code_to_execute_args.append(str(awaicgen_Dec_center))
+    code_to_execute_args.append("-C")
+    code_to_execute_args.append(str(awaicgen_mosaic_rotation))
+    code_to_execute_args.append("-pa")
+    code_to_execute_args.append(str(awaicgen_pixelscale_absolute))
+    code_to_execute_args.append("-wf")
+    code_to_execute_args.append(str(awaicgen_inv_var_weight_flag))
+    code_to_execute_args.append("-sf")
+    code_to_execute_args.append(str(awaicgen_pixelflux_scale_flag))
+    code_to_execute_args.append("-sc")
+    code_to_execute_args.append(str(awaicgen_simple_coadd_flag))
+    code_to_execute_args.append("-nt")
+    code_to_execute_args.append(str(awaicgen_num_threads))
+    code_to_execute_args.append("-o1")
+    code_to_execute_args.append(awaicgen_output_mosaic_image_file)
+    code_to_execute_args.append("-o2")
+    code_to_execute_args.append(awaicgen_output_mosaic_cov_map_file)
+    code_to_execute_args.append("-v")
+
+    print("code_to_execute_args =",code_to_execute_args)
+
+    return code_to_execute_args
