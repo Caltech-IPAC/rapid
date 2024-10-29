@@ -203,14 +203,15 @@ After the AWS Batch job finishes, there are files written to S3 buckets that can
 
 The general theme for how the output files are organized in the S3 buckets is according to
 processing date (Pacific Time) and the associated job ID.  The reference-image products from ``awaicgen``
-are given generic filenames in these buckets, and will be renamed to filenames like:
+are given generic filenames in these buckets, and, later, will be renamed to filenames like:
 
 .. code-block::
 
    rapid_field1234567_fid7_ppid15_v2_rfid12394758_refimage.fits
    rapid_field1234567_fid7_ppid15_v2_rfid12394758_covmap.fits
 
-after these products are registered in the RAPID pipeline operations database and then copied to
+The above filenames are created after these products are registered in the RAPID pipeline operations database.
+The products are then copied to
 a more permanent location (and ultimately archived in MAST).  The ``ppid`` gives the pipeline number
 that generated the reference image, which could be either the difference-image pipeline (``ppid=15``)
 or a dedicated reference-image pipeline (``ppid=12``).
@@ -223,5 +224,5 @@ Download and examine log file:
 
    more rapid_pipeline_job_20241023_1_log.txt
 
-
+Last modified: Tue Oct 29 7:32 a.m.
 
