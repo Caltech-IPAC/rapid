@@ -218,11 +218,10 @@ or a dedicated reference-image pipeline (``ppid=12``).
 
 Download and examine log file:
 
-.. code_block::
+.. code-block::
 
    aws s3 cp s3://rapid-pipeline-logs/20241028/rapid_pipeline_job_20241028_jid1_log.txt rapid_pipeline_job_20241028_1_log.txt
-
    more rapid_pipeline_job_20241023_1_log.txt
 
-Last modified: Tue Oct 29 7:32 a.m.
+Last modified: Tue Oct 29 7:34 a.m.
 
