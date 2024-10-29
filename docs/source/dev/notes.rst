@@ -185,21 +185,42 @@ After the AWS Batch job finishes, there are files written to S3 buckets that can
 
    aws s3 ls --recursive s3://rapid-pipeline-files
 
-   2024-10-15 16:03:31     120092 20241015/input_images_for_refimage_jid1.csv
-   2024-10-15 16:03:31       4551 20241015/job_config_jid1.ini
+   2024-10-28 11:18:38     120092 20241028/input_images_for_refimage_jid1.csv
+2024-10-28 11:18:38       6025 20241028/job_config_jid1.ini
    2024-09-03 16:42:56 1535762432 roman_tessellation_nside512.db
 
 .. code-block::
 
    aws s3 ls --recursive s3://rapid-pipeline-logs
 
-   2024-10-23 10:20:00        656 20241023/rapid_pipeline_job_20241023_1_log.txt
-
-Download and examine log file:
+   2024-10-28 11:22:34      17129 20241028/rapid_pipeline_job_20241028_jid1_log.txt
 
 .. code-block::
 
-   aws s3 cp s3://rapid-pipeline-logs/20241023/rapid_pipeline_job_20241023_1_log.txt rapid_pipeline_job_20241023_1_log.txt
+   aws s3 ls --recursive s3://rapid-product-files
+
+   2024-10-28 11:22:29  196004160 20241028/jid1/awaicgen_output_mosaic_cov_map.fits
+   2024-10-28 11:22:26  196004160 20241028/jid1/awaicgen_output_mosaic_image.fits
+
+The general theme for how the output files are organized in the S3 buckets is according to
+processing date (Pacific Time) and the associated job ID.  The reference-image products from ``awaicgen``
+are given generic filenames in these buckets, and will be renamed to filenames like:
+
+.. code-block::
+
+rapid_field1234567_fid7_ppid15_v2_rfid12394758_refimage.fits
+rapid_field1234567_fid7_ppid15_v2_rfid12394758_covmap.fits
+
+after these products are registered in the RAPID pipeline operations database and then copied to
+a more permanent location (and ultimately archived in MAST).  The ``ppid`` gives the pipeline number
+that generated the reference image, which could be either the difference-image pipeline (``ppid=15``)
+or a dedicated reference-image pipeline (``ppid=12``).
+
+Download and examine log file:
+
+.. code_block::
+
+   aws s3 cp s3://rapid-pipeline-logs/20241028/rapid_pipeline_job_20241028_jid1_log.txt rapid_pipeline_job_20241028_1_log.txt
 
    more rapid_pipeline_job_20241023_1_log.txt
 
