@@ -8,12 +8,14 @@ from astropy.io import fits
 
 import modules.utils.rapid_pipeline_subs as util
 
+max_n_images_to_coadd = 30
 
 swname = "awsBatchSubmitJobs_runSingleSciencePipeline.py"
 swvers = "1.0"
 
 print("swname =", swname)
 print("swvers =", swvers)
+print("max_n_images_to_coadd =", max_n_images_to_coadd)
 
 
 # JOBPROCDATE of pipeline job.
@@ -253,8 +255,14 @@ if __name__ == '__main__':
                 hdu = fits.HDUList(hdu_list)
                 hdu.writeto(fname_output,overwrite=True,checksum=True)
 
+
+                # Delete the original FITS file locally to save disk space.
+
+                rm_cmd = ['rm', '-f', fname_input]
+                exitcode_from_rm = util.execute_command(rm_cmd)
+
                 n += 1
-                if n > 5:
+                if n >= max_n_images_to_coadd:
                    break
 
 
@@ -267,7 +275,7 @@ if __name__ == '__main__':
         for fname in refimage_input_filenames_reformatted:
             f.write(fname + "\n")
             n += 1
-            if n > 5:
+            if n >= max_n_images_to_coadd:
                 break
         f.close()
 
