@@ -82,10 +82,11 @@ but has the advantage of removing all Docker debris from the boot-disk volume,
 thus reclaiming disk space:
 
 .. code-block::
+
    docker system prune -a -f
 
-
 .. warning::
+
    The above ``docker system prune`` command and the ``docker build`` command below will not work properly or as intended,
    meaning the expected disk space will not be reclaimed,
    unless all containers running the Docker image ``rapid_science_pipeline:1.0`` are stopped!
