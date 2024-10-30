@@ -8,14 +8,12 @@ from astropy.io import fits
 
 import modules.utils.rapid_pipeline_subs as util
 
-max_n_images_to_coadd = 10
 
 swname = "awsBatchSubmitJobs_runSingleSciencePipeline.py"
 swvers = "1.0"
 
 print("swname =", swname)
 print("swvers =", swvers)
-print("max_n_images_to_coadd =", max_n_images_to_coadd)
 
 
 # JOBPROCDATE of pipeline job.
@@ -149,6 +147,7 @@ if __name__ == '__main__':
         rfid = int(rfid_str)
 
     ppid_refimage = int(config_input['REF_IMAGE']['ppid'])
+    max_n_images_to_coadd = int(config_input['REF_IMAGE']['max_n_images_to_coadd'])
     naxis1_refimage = int(config_input['REF_IMAGE']['naxis1'])
     naxis2_refimage = int(config_input['REF_IMAGE']['naxis2'])
     cdelt1_refimage = float(config_input['REF_IMAGE']['cdelt1'])
@@ -170,6 +169,8 @@ if __name__ == '__main__':
     swarp_dict = config_input['SWARP']
 
     sextractor_dict = config_input['SEXTRACTOR']
+
+    print("max_n_images_to_coadd =", max_n_images_to_coadd)
 
 
     # Optionally read in CVS file containing inputs for generating reference image.

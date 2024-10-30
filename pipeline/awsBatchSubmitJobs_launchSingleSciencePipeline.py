@@ -97,11 +97,13 @@ config_input.read(config_input_filename)
 
 verbose = int(config_input['DEFAULT']['verbose'])
 debug = int(config_input['DEFAULT']['debug'])
-ppid = int(config_input['SCI_IMAGE']['ppid'])
 job_info_s3_bucket_base = config_input['DEFAULT']['job_info_s3_bucket_base']
 product_s3_bucket_base = config_input['DEFAULT']['product_s3_bucket_base']
-ppid_refimage = int(config_input['REF_IMAGE']['ppid_refimage'])
 
+ppid = int(config_input['SCI_IMAGE']['ppid'])
+
+ppid_refimage = int(config_input['REF_IMAGE']['ppid_refimage'])
+max_n_images_to_coadd = int(config_input['REF_IMAGE']['max_n_images_to_coadd'])
 naxis1_refimage = int(config_input['REF_IMAGE']['naxis1_refimage'])
 naxis2_refimage = int(config_input['REF_IMAGE']['naxis2_refimage'])
 cdelt1_refimage = float(config_input['REF_IMAGE']['cdelt1_refimage'])
@@ -678,6 +680,7 @@ if __name__ == '__main__':
     job_config['REF_IMAGE'] = {}
 
     job_config['REF_IMAGE']['ppid'] = str(ppid_refimage)
+    job_config['REF_IMAGE']['max_n_images_to_coadd'] = str(max_n_images_to_coadd)
     job_config['REF_IMAGE']['rfid'] = str(rfid)
     job_config['REF_IMAGE']['filename'] = filename_refimage
     job_config['REF_IMAGE']['input_images_csv_file'] = input_images_csv_file
