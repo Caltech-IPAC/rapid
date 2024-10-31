@@ -16,7 +16,8 @@ of simultaneous connections.
 Computer Languages
 ************************************
 
-The RAPID pipeline is written in Python, with some system calls to OS commands and C executable binaries.
+The RAPID pipeline is written in Python, with some bash scripts, and system calls to OS commands and C executable binaries.
+A few Perl scripts are used to prepare ad-hoc data for database ingestion, etc.
 
 
 Sky Tiles
