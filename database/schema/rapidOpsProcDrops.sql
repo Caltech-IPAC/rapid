@@ -234,3 +234,22 @@ DROP FUNCTION addSOCProc (
     checksum_             character varying(32),
     status_               smallint
 );
+
+
+DROP FUNCTION addPSF (
+    fid_                  smallint,
+    sca_                  smallint,
+    filename_             character varying(255),
+    checksum_             character varying(32),
+    status_               smallint
+
+);
+
+
+DROP FUNCTION updatePSF (
+    psfid_      integer,
+    filename_ varchar(255),
+    checkSum_ varchar(32),
+    status_   smallint,
+    version_  smallint
+);

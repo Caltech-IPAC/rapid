@@ -130,3 +130,11 @@ DROP TABLE refimimages;
 
 DROP TABLE socprocs;
 DROP SEQUENCE socprocs_did_seq;
+
+
+-----------------------------
+-- TABLE: PSFs
+-----------------------------
+
+CREATE TABLE psfs;
+DROP SEQUENCE psfs_psfid_seq;

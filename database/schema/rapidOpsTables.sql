@@ -824,3 +824,54 @@ CREATE INDEX socprocs_datedeliv_idx ON socprocs (datedeliv);
 CREATE INDEX socprocs_filename_idx ON socprocs (filename);
 CREATE INDEX socprocs_status_idx ON socprocs (status);
 CREATE INDEX socprocs_created_idx ON socprocs (created);
+
+
+-----------------------------
+-- TABLE: PSFs
+-----------------------------
+
+SET default_tablespace = pipeline_data_01;
+
+CREATE TABLE psfs (
+    psfid integer NOT NULL,                              -- Primary key
+    fid smallint NOT NULL,
+    sca smallint NOT NULL,                               -- FITS-header keyword: SCA-NUM
+    version smallint NOT NULL,
+    vbest smallint NOT NULL,
+    filename character varying(255) NOT NULL,            -- Full path and filename
+    checksum character varying(32) NOT NULL,             -- MD5 checksum of entire file
+    status smallint DEFAULT 0 NOT NULL,                  -- Set to zero if bad and one if good (verify automatically with
+                                                         -- DATASUM and CHECKSUM keywords, or set this manually later, if necessary)
+    created timestamp without time zone                  -- Timestamp of database record INSERT or last UPDATE
+        DEFAULT now() NOT NULL,
+    CONSTRAINT psfs_vbest_check CHECK ((vbest = ANY (ARRAY[0, 1, 2]))),
+    CONSTRAINT psfs_version_check CHECK ((version > 0))
+);
+
+ALTER TABLE psfs OWNER TO rapidadminrole;
+
+CREATE SEQUENCE psfs_psfid_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MAXVALUE
+    NO MINVALUE
+    CACHE 1;
+
+ALTER SEQUENCE psfs_psfid_seq OWNER TO rapidadminrole;
+
+ALTER TABLE psfs ALTER COLUMN psfid SET DEFAULT nextval('psfs_psfid_seq'::regclass);
+
+SET default_tablespace = pipeline_indx_01;
+
+ALTER TABLE ONLY psfs ADD CONSTRAINT psfs_pkey PRIMARY KEY (psfid);
+
+ALTER TABLE ONLY psfs ADD CONSTRAINT psfspk UNIQUE (fid, sca, version);
+
+ALTER TABLE ONLY psfs ADD CONSTRAINT psfs_sca_fk FOREIGN KEY (sca) REFERENCES scas(sca);
+ALTER TABLE ONLY psfs ADD CONSTRAINT psfs_fid_fk FOREIGN KEY (fid) REFERENCES filters(fid);
+
+CREATE INDEX psfs_psfid_idx ON psfs (psfid);
+CREATE INDEX psfs_sca_idx ON psfs (sca);
+CREATE INDEX psfs_status_idx ON psfs (status);
+CREATE INDEX psfs_vbest_idx ON psfs (vbest);
+

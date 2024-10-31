@@ -437,3 +437,31 @@ GRANT INSERT,UPDATE,SELECT,REFERENCES ON TABLE socprocs TO rapidporole;
 
 REVOKE ALL ON SEQUENCE socprocs_did_seq FROM rapidporole;
 GRANT USAGE ON SEQUENCE socprocs_did_seq TO rapidporole;
+
+
+-------------------
+-- PSFs table
+-------------------
+
+-- rapidreadrole
+
+REVOKE ALL ON TABLE psfs FROM rapidreadrole;
+GRANT SELECT ON TABLE psfs TO GROUP rapidreadrole;
+
+REVOKE ALL ON SEQUENCE psfs_psfid_seq FROM rapidreadrole;
+
+-- rapidadminrole
+
+REVOKE ALL ON TABLE psfs FROM rapidadminrole;
+GRANT ALL ON TABLE psfs TO GROUP rapidadminrole;
+
+REVOKE ALL ON SEQUENCE psfs_psfid_seq FROM rapidadminrole;
+GRANT ALL ON SEQUENCE psfs_psfid_seq TO GROUP rapidadminrole;
+
+-- rapidporole
+
+REVOKE ALL ON TABLE psfs FROM rapidporole;
+GRANT INSERT,UPDATE,SELECT,REFERENCES ON TABLE psfs TO rapidporole;
+
+REVOKE ALL ON SEQUENCE psfs_psfid_seq FROM rapidporole;
+GRANT USAGE ON SEQUENCE psfs_psfid_seq TO rapidporole;

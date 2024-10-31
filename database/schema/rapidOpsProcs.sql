@@ -1494,3 +1494,190 @@ create function addSOCProc (
     end;
 
 $$ language plpgsql;
+
+
+-- Insert a new record into the PSFs table.
+--
+create function addPSF (
+    fid_                  smallint,
+    sca_                  smallint,
+    filename_             character varying(255),
+    checksum_             character varying(32),
+    status_               smallint
+
+)
+    returns record as $$
+
+    declare
+
+        r_                record;
+        psfid_            integer;
+        version_          smallint;
+        status_           smallint;
+        vbest_            smallint;
+
+    begin
+
+        -- Processed images are versioned according to unique (fid, sca) pairs.
+
+        -- Note that the vBest flag is updated when database stored
+        -- function updatePSF is executed.
+
+        select coalesce(max(version), 0) + 1
+        into version_
+        from PSFs
+        where fid = fid_
+        and sca = sca_;
+
+        if not found then
+            version_ := 1;
+        end if;
+
+        status_ := 0;
+        vbest_ := 0;
+
+        -- Insert PSFs record.
+
+        begin
+
+            insert into PSFs
+            (fid,sca,version,status,vbest,
+             filename,checksum
+            )
+            values
+            (fid_,sca_,version_,status_,vbest_,
+             filename_,checksum_
+            )
+            returning psfid into strict psfid_;
+            exception
+                when no_data_found then
+                    raise exception
+                        '*** Error in addPSF: PSFs record for fid,sca=%,% not inserted.', fid_,sca_;
+
+        end;
+
+        select psfid_, version_ into r_;
+
+        return r_;
+
+    end;
+
+$$ language plpgsql;
+
+
+-- Update a PSFs record with a filename, checksum, status, and version.
+-- The status must have a non-zero value for the record to be valid.
+-- The vBest flag for the record is also updated automatically, from
+-- zero to one, unless the record has been locked (with vBest flag = 2).
+--
+create function updatePSF (
+    psfid_      integer,
+    filename_ varchar(255),
+    checkSum_ varchar(32),
+    status_   smallint,
+    version_  smallint
+)
+
+    returns void as $$
+
+    declare
+
+        psfid__            integer;
+        currentVBest_    smallint;
+        fid_           integer;
+        sca_             smallint;
+        vBest_           smallint;
+        bestIs2_         boolean;
+        count_           integer;
+
+    begin
+
+        bestIs2_ := 'f';
+
+        -- First, get the fid, sca for the L2 image.
+
+        begin
+
+            select fid, sca
+            into strict fid_, sca_
+            from psfs
+            where psfid = psfid_;
+            exception
+                when no_data_found then
+                    raise exception
+                        '*** Error in updatePSF: PSFs record not found for psfid=%', psfid_;
+
+        end;
+
+        -- If this isn't the first PSFs record
+        -- for the exposure and sca, then set the vBest flag to 0
+        -- for records associated with all prior versions. Update
+        -- the new PSFs record with its version number and
+        -- vBest flag equal to 1 (latest is best).
+
+        -- If any of the products associated with the PSFs record has a
+        -- locked vBest flag (meaning vBest has been set to 2), then
+        -- don't update any vBest values and set the new vBest value
+        -- to 0. Otherwise, the record we are about to insert is the
+        -- new best record (i.e., vBest = 1) and all others are not
+        -- (i.e., vBest = 0).
+
+        -- Raise exception if more than one record with vBest > 0 is found.
+
+
+        select count(*)
+        into count_
+        from PSFs
+        where fid = fid_
+        and sca = sca_
+        and vBest in (1, 2);
+
+        if (count_ <> 0) then
+            if (count_ > 1) then
+                raise exception
+                    '*** Error in updatePSF: More than one PSFs record with vBest>0 returned.';
+            end if;
+
+            select psfid, vBest
+            into psfid__, currentVBest_
+            from PSFs
+            where fid = fid_
+            and sca = sca_
+            and vBest in (1, 2);
+
+            if (currentvBest_ = 1) then -- vBest is not locked
+                update PSFs
+                set vBest = 0
+                where psfid = psfid__;
+
+                if not found then
+                    raise exception '*** Error in updatePSF: Cannot update PSFs record.';
+                end if;
+            else
+                bestIs2_ := 't';
+            end if;
+
+        end if;
+
+        if bestIs2_ = 't' then
+            vBest_ := 0;
+        else
+            vBest_ := 1;
+        end if;
+
+        update PSFs
+        set filename = filename_,
+        checkSum = checkSum_,
+        status = status_,
+        version = version_,
+        vBest = vBest_
+        where psfid = psfid_;
+
+        exception --------> Required for turning entire block into a transaction.
+            when no_data_found then
+                raise exception
+                    '*** Error in updatePSF: Cannot update PSFs record for psfid=%', psfid_;
+
+    end;
+
+$$ language plpgsql;
