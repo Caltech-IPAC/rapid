@@ -40,8 +40,10 @@ A diagram of the database-table schema is given as follows:
 There are multiple provisions for indexing on sky position:
 
 * Q3C indexing
-* The field column in various tables store the Roman tessellation index for the associated sky position.
-  With NSIDE=10, these are relatively large rectangular buckets that are approximately 4 degrees on a side.
+* The field column in various tables stores the Roman tessellation index for the sky tile associated with sky position.
+  For the RAPID project, the Roman-tessellation parameter setting NSIDE=512 will be used,
+  which results in tile sizes somewhat smaller than that of a Roman SCA image,
+  and a total of 6,291,458 tiles covering the entire sky.
 * Healpix level-6 index (hp6), with an approximate resolution of 0.92 degrees (almost the width of the Roman WFI or 6 SCAs plus gaps).
   There are 49,152 level-6 indices.
 * Healpix level-9 index (hp9), with an approximate resolution of 0.11 degrees (almost the width of a Roman SCA).
