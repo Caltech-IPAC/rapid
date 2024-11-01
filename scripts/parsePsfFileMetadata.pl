@@ -32,7 +32,7 @@ foreach my $f (@files) {
 
     my $s3f = "s3://rapid-pipeline-files/psfs/" . $f;
 
-    #`aws s3 cp PSFs/$f $s3f`;
+    `aws s3 cp PSFs/$f $s3f`;
 
     $sca += 0;    # Remove leading zero.
 
