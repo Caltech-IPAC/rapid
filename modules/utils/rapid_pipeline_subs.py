@@ -240,6 +240,7 @@ def build_awaicgen_command_line_args(awaicgen_dict):
     awaicgen_num_threads = int(awaicgen_dict["awaicgen_num_threads"])
     awaicgen_output_mosaic_image_file = awaicgen_dict["awaicgen_output_mosaic_image_file"]
     awaicgen_output_mosaic_cov_map_file = awaicgen_dict["awaicgen_output_mosaic_cov_map_file"]
+    awaicgen_output_mosaic_uncert_image_file = awaicgen_dict["awaicgen_output_mosaic_uncert_image_file"]
 
     code_to_execute_args = [software_to_execute]
     code_to_execute_args.append("-f1")
@@ -268,6 +269,8 @@ def build_awaicgen_command_line_args(awaicgen_dict):
     code_to_execute_args.append(awaicgen_output_mosaic_image_file)
     code_to_execute_args.append("-o2")
     code_to_execute_args.append(awaicgen_output_mosaic_cov_map_file)
+    code_to_execute_args.append("-o3")
+    code_to_execute_args.append(awaicgen_output_mosaic_uncert_image_file)
     code_to_execute_args.append("-v")
 
     print("code_to_execute_args =",code_to_execute_args)

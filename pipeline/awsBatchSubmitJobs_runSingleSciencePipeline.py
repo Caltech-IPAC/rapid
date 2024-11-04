@@ -285,11 +285,14 @@ if __name__ == '__main__':
 
         awaicgen_output_mosaic_image_file = awaicgen_dict["awaicgen_output_mosaic_image_file"]
         awaicgen_output_mosaic_cov_map_file = awaicgen_dict["awaicgen_output_mosaic_cov_map_file"]
+        awaicgen_output_mosaic_uncert_image_file = awaicgen_dict["awaicgen_output_mosaic_uncert_image_file"]
         product_s3_bucket = product_s3_bucket_base
         awaicgen_output_mosaic_image_s3_bucket_object_name = job_proc_date + "/jid" + str(jid) + "/" +\
             awaicgen_dict["awaicgen_output_mosaic_image_file"]
         awaicgen_output_mosaic_cov_map_s3_bucket_object_name = job_proc_date + "/jid" + str(jid) + "/" +\
             awaicgen_dict["awaicgen_output_mosaic_cov_map_file"]
+        awaicgen_output_mosaic_uncert_image_s3_bucket_object_name = job_proc_date + "/jid" + str(jid) + "/" +\
+            awaicgen_dict["awaicgen_output_mosaic_uncert_image_file"]
 
         awaicgen_dict["awaicgen_output_mosaic_image_file"] = awaicgen_output_mosaic_image_file
 
@@ -339,6 +342,22 @@ if __name__ == '__main__':
         if uploaded_to_bucket:
             print("Successfully uploaded {} to s3://{}/{}"\
                 .format(awaicgen_output_mosaic_cov_map_file,product_s3_bucket,awaicgen_output_mosaic_cov_map_s3_bucket_object_name))
+
+        try:
+            response = s3_client.upload_file(awaicgen_output_mosaic_uncert_image_file,
+                                             product_s3_bucket,
+                                             awaicgen_output_mosaic_uncert_image_s3_bucket_object_name)
+
+            print("response =",response)
+
+        except ClientError as e:
+            print("*** Error: Failed to upload {} to s3://{}/{}"\
+                .format(awaicgen_output_mosaic_uncert_image_file,product_s3_bucket,awaicgen_output_mosaic_uncert_image_s3_bucket_object_name))
+            uploaded_to_bucket = False
+
+        if uploaded_to_bucket:
+            print("Successfully uploaded {} to s3://{}/{}"\
+                .format(awaicgen_output_mosaic_uncert_image_file,product_s3_bucket,awaicgen_output_mosaic_uncert_image_s3_bucket_object_name))
 
 
 exit(0)
