@@ -300,6 +300,8 @@ if __name__ == '__main__':
         # Execute awaicgen to generate reference image.
 
         awaicgen_dict["awaicgen_input_images_list_file"] = awaicgen_input_images_list_file
+        # For uncertainty images list, just use input images list, in order to test the code mechanically.
+        awaicgen_dict["awaicgen_input_uncert_list_file"] = awaicgen_input_images_list_file
 
         awaicgen_cmd = util.build_awaicgen_command_line_args(awaicgen_dict)
         exitcode_from_awaicgen = util.execute_command(awaicgen_cmd)

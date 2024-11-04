@@ -228,6 +228,7 @@ def build_awaicgen_command_line_args(awaicgen_dict):
     software_to_execute = 'awaicgen'
 
     awaicgen_input_images_list_file = awaicgen_dict["awaicgen_input_images_list_file"]
+    awaicgen_input_uncert_list_file = awaicgen_dict["awaicgen_input_uncert_list_file"]
     awaicgen_mosaic_size_x = float(awaicgen_dict["awaicgen_mosaic_size_x"])
     awaicgen_mosaic_size_y = float(awaicgen_dict["awaicgen_mosaic_size_y"])
     awaicgen_RA_center = float(awaicgen_dict["awaicgen_RA_center"])
@@ -245,6 +246,8 @@ def build_awaicgen_command_line_args(awaicgen_dict):
     code_to_execute_args = [software_to_execute]
     code_to_execute_args.append("-f1")
     code_to_execute_args.append(awaicgen_input_images_list_file)
+    code_to_execute_args.append("-f3")
+    code_to_execute_args.append(awaicgen_input_uncert_list_file)
     code_to_execute_args.append("-X")
     code_to_execute_args.append(str(awaicgen_mosaic_size_x))
     code_to_execute_args.append("-Y")
