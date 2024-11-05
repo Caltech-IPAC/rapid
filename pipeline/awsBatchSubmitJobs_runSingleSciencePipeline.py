@@ -362,4 +362,8 @@ if __name__ == '__main__':
                 .format(awaicgen_output_mosaic_uncert_image_file,product_s3_bucket,awaicgen_output_mosaic_uncert_image_s3_bucket_object_name))
 
 
-exit(0)
+terminating_exitcode = 0
+
+print("terminating_exitcode =",terminating_exitcode)
+
+exit(terminating_exitcode)
