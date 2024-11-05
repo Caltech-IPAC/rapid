@@ -15,6 +15,9 @@ swvers = "1.0"
 print("swname =", swname)
 print("swvers =", swvers)
 
+aws_batch_job_id = os.getenv('AWS_BATCH_JOB_ID')
+print("aws_batch_job_id =", aws_batch_job_id)
+
 
 # JOBPROCDATE of pipeline job.
 
