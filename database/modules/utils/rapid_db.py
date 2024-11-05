@@ -1335,3 +1335,59 @@ class RAPIDDB:
             self.conn.commit()           # Commit database transaction
 
         return jid
+
+
+########################################################################################################
+
+    def end_job(self,jid,job_exitcode,aws_batch_job_id):
+
+        '''
+        Register exitcode and end timestamp in Jobs database table.  Return void.
+        '''
+
+        self.exit_code = 0
+
+
+        # Define query template.
+
+        query_template =\
+            "select from endJob(" +\
+            "cast(TEMPLATE_JID as integer)," +\
+            "cast(TEMPLATE_EXITCODE as smallint)," +\
+            "cast('TEMPLATE_AWSBATJOBID' as varchar(64)));"
+
+
+        # Query database.
+
+        print('----> jid = {}'.format(jid))
+        print('----> job_exitcode = {}'.format(job_exitcode))
+
+        jid_str = str(jid)
+        job_exitcode_str = str(job_exitcode)
+
+        rep = {"TEMPLATE_JID": jid_str,
+               "TEMPLATE_EXITCODE": job_exitcode_str}
+
+        rep["TEMPLATE_AWSBATJOBID"] = aws_batch_job_id
+
+        rep = dict((re.escape(k), v) for k, v in rep.items())
+        pattern = re.compile("|".join(rep.keys()))
+        query = pattern.sub(lambda m: rep[re.escape(m.group(0))], query_template)
+
+        print('query = {}'.format(query))
+
+        self.cur.execute(query)
+        record = self.cur.fetchone()
+
+        if record is not None:
+            print("*** Messagge: Successfully executed stored funtion endJob; returning...")
+        else:
+            jid = None
+            print("*** Error: Could not execute stored funtion endJob; returning...")
+            self.exit_code = 67
+            return
+
+        if self.exit_code == 0:
+            self.conn.commit()           # Commit database transaction
+
+        return jid
