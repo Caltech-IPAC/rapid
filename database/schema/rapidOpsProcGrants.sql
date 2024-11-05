@@ -199,7 +199,8 @@ grant EXECUTE on FUNCTION startJob (
 
 grant EXECUTE on FUNCTION endJob (
     jid_       integer,
-    exitcode_  smallint
+    exitcode_  smallint,
+    awsbatchjobid varchar(64)
 ) to rapidporole;
 
 

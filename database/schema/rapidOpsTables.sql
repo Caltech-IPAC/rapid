@@ -679,6 +679,7 @@ CREATE TABLE jobs (
     exitcode smallint,
     status smallint DEFAULT 0,
     slurm integer,
+    awsbatchjobid varchar(64),
     CONSTRAINT jobs_status_check CHECK (((status >= -1) AND (status <= 1)))
 );
 

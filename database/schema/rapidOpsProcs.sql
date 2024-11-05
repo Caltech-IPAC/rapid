@@ -1208,8 +1208,10 @@ $$ language plpgsql;
 -- Registers information about a completed job in the Jobs table.
 --
 create function endJob (
-    jid_       integer,
-    exitcode_  smallint
+    jid_             integer,
+    exitcode_        smallint,
+    awsbatchjobid_   varchar(64)
+
 )
     returns void as $$
 
@@ -1243,6 +1245,7 @@ create function endJob (
             set ended = ended_,
                 elapsed = elapsed_,
                 exitcode = exitcode_,
+                awsbatchjobid = awsbatchjobid_,
                 status = 1
             where jid = jid_;
             exception --------> Required for turning entire block into a transaction.

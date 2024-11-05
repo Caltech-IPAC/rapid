@@ -199,7 +199,8 @@ DROP FUNCTION startJob (
 
 DROP FUNCTION endJob (
     jid_       integer,
-    exitcode_  smallint
+    exitcode_  smallint,
+    awsbatchjobid varchar(64)
 );
 
 
