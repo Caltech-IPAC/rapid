@@ -750,7 +750,6 @@ create function addRefImage (
     hp9_                  integer,
     fid_                  smallint,
     ppid_                 smallint,
-    rfid_                 integer,
     infobits_             integer,
     filename_             character varying(255),
     checksum_             character varying(32),
