@@ -99,6 +99,7 @@ verbose = int(config_input['DEFAULT']['verbose'])
 debug = int(config_input['DEFAULT']['debug'])
 job_info_s3_bucket_base = config_input['DEFAULT']['job_info_s3_bucket_base']
 product_s3_bucket_base = config_input['DEFAULT']['product_s3_bucket_base']
+job_config_filename_base = config_input['DEFAULT']['job_config_filename_base']
 
 ppid = int(config_input['SCI_IMAGE']['ppid'])
 
@@ -615,7 +616,7 @@ if __name__ == '__main__':
 
     # Populate config-file dictionary for job.
 
-    job_config_ini_file_filename_base = "job_config_jid" + str(jid) + ".ini"
+    job_config_ini_file_filename_base = job_config_filename_base + str(jid) + ".ini"
     job_config_ini_file_filename = rapid_work + "/" + job_config_ini_file_filename_base
     job_info_s3_bucket = job_info_s3_bucket_base
     job_config_ini_file_s3_bucket_object_name = proc_date + "/" + job_config_ini_file_filename_base
