@@ -1391,3 +1391,136 @@ class RAPIDDB:
             self.conn.commit()           # Commit database transaction
 
         return jid
+
+
+########################################################################################################
+
+    def add_refimage(self,ppid,field,fid,hp6,hp9,infobits,status,filename,checksum):
+
+        '''
+        Add record in RefImages database table.
+        '''
+
+        self.exit_code = 0
+
+
+        # Define query template.
+
+        query_template =\
+            "select * from addRefImage(" +\
+            "cast(TEMPLATE_FIELD as integer)," +\
+            "cast(TEMPLATE_HP6 as integer)," +\
+            "cast(TEMPLATE_HP9 as integer)," +\
+            "cast(TEMPLATE_FID as smallint)," +\
+            "cast(TEMPLATE_PPID as smallint)," +\
+            "cast(TEMPLATE_INFOBITS as integer)," +\
+            "cast('TEMPLATE_FILENAME' as character varying(255))," +\
+            "cast('TEMPLATE_CHECKSUM' as character varying(32))," +\
+            "cast(TEMPLATE_STATUS as smallint)) as " +\
+            "(rfid integer," +\
+            " version smallint);"
+
+
+        # Query database.
+
+        print('----> expid = {}'.format(expid))
+        print('----> sca = {}'.format(sca))
+        print('----> filename = {}'.format(filename))
+
+        rep = {"TEMPLATE_PPID": str(ppid),
+               "TEMPLATE_FIELD": str(field),
+               "TEMPLATE_HP6": str(hp6),
+               "TEMPLATE_HP9": str(hp9),
+               "TEMPLATE_FID": str(fid)}
+
+        rep["TEMPLATE_INFOBITS"] = str(infobits)
+        rep["TEMPLATE_FILENAME"] = filename
+        rep["TEMPLATE_CHECKSUM"] = checksum
+        rep["TEMPLATE_STATUS"] = str(status)
+
+
+        rep = dict((re.escape(k), v) for k, v in rep.items())
+        pattern = re.compile("|".join(rep.keys()))
+        query = pattern.sub(lambda m: rep[re.escape(m.group(0))], query_template)
+
+        print('query = {}'.format(query))
+
+        self.cur.execute(query)
+        record = self.cur.fetchone()
+
+        if record is not None:
+            self.rfid = record[0]
+            self.version = record[1]
+        else:
+            self.rfid = None
+            self.version = None
+            print("*** Error: Could not insert RefImages record; returning...")
+            self.exit_code = 67
+            return
+
+        if self.exit_code == 0:
+            self.conn.commit()           # Commit database transaction
+
+
+########################################################################################################
+
+    def update_refimage(self,rfid,filename,checksum,status,version):
+
+        '''
+        Update record in RefImages database table.
+        '''
+
+        self.exit_code = 0
+
+
+        # Define query template.
+
+        query_template =\
+            "select * from updateRefImage(" +\
+            "cast(TEMPLATE_RFID as integer)," +\
+            "cast('TEMPLATE_FILENAME' as character varying(255))," +\
+            "cast('TEMPLATE_CHECKSUM' as character varying(32))," +\
+            "cast(TEMPLATE_STATUS as smallint)," +\
+            "cast(TEMPLATE_VERSION AS smallint));"
+
+
+        # Query database.
+
+        print('----> rfid = {}'.format(rfid))
+        print('----> filename = {}'.format(filename))
+        print('----> checksum = {}'.format(checksum))
+        print('----> status = {}'.format(status))
+        print('----> version = {}'.format(version))
+
+        rep = {"TEMPLATE_RFID": str(rfid),
+               "TEMPLATE_FILENAME": filename,
+               "TEMPLATE_CHECKSUM": checksum}
+
+        rep["TEMPLATE_STATUS"] = str(status)
+        rep["TEMPLATE_VERSION"] = str(version)
+
+        rep = dict((re.escape(k), v) for k, v in rep.items())
+        pattern = re.compile("|".join(rep.keys()))
+        query = pattern.sub(lambda m: rep[re.escape(m.group(0))], query_template)
+
+        print('query = {}'.format(query))
+
+
+        # Execute query.
+
+        try:
+            self.cur.execute(query)
+
+            try:
+                for record in self.cur:
+                    print(record)
+            except:
+                    print("Nothing returned from database stored function; continuing...")
+
+        except (Exception, psycopg2.DatabaseError) as error:
+            print('*** Error updating RefImages record ({}); skipping...'.format(error))
+            self.exit_code = 67
+            return
+
+        if self.exit_code == 0:
+            self.conn.commit()           # Commit database transaction
