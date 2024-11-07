@@ -100,6 +100,7 @@ debug = int(config_input['DEFAULT']['debug'])
 job_info_s3_bucket_base = config_input['DEFAULT']['job_info_s3_bucket_base']
 product_s3_bucket_base = config_input['DEFAULT']['product_s3_bucket_base']
 job_config_filename_base = config_input['DEFAULT']['job_config_filename_base']
+product_config_filename_base = config_input['DEFAULT']['product_config_filename_base']
 
 ppid = int(config_input['SCI_IMAGE']['ppid'])
 
@@ -630,10 +631,10 @@ if __name__ == '__main__':
 
     # Populate config-file dictionary for job.
 
-    job_config_ini_file_filename_base = job_config_filename_base + str(jid) + ".ini"
-    job_config_ini_file_filename = rapid_work + "/" + job_config_ini_file_filename_base
+    job_config_ini_file_filename = job_config_filename_base + str(jid) + ".ini"
+    job_config_ini_file = rapid_work + "/" + job_config_ini_file_filename
     job_info_s3_bucket = job_info_s3_bucket_base
-    job_config_ini_file_s3_bucket_object_name = proc_date + "/" + job_config_ini_file_filename_base
+    job_config_ini_file_s3_bucket_object_name = proc_date + "/" + job_config_ini_file_filename
 
     job_config = configparser.ConfigParser()
 
@@ -646,6 +647,7 @@ if __name__ == '__main__':
 
     job_config['DEFAULT']['job_info_s3_bucket_base'] = job_info_s3_bucket_base
     job_config['DEFAULT']['product_s3_bucket_base'] = product_s3_bucket_base
+    job_config['DEFAULT']['product_config_filename_base'] = product_config_filename_base
     job_config['DEFAULT']['verbose'] = str(verbose)
 
     job_config['SCI_IMAGE'] = {}
@@ -719,7 +721,7 @@ if __name__ == '__main__':
 
     # Write output config file for job.
 
-    with open(job_config_ini_file_filename, 'w') as job_configfile:
+    with open(job_config_ini_file, 'w') as job_configfile:
 
         job_configfile.write("#" + "\n")
         job_configfile.write("# s3://" + job_info_s3_bucket + "/" + job_config_ini_file_s3_bucket_object_name + "\n")
@@ -740,17 +742,17 @@ if __name__ == '__main__':
     uploaded_to_bucket = True
 
     try:
-        response = s3_client.upload_file(job_config_ini_file_filename,
+        response = s3_client.upload_file(job_config_ini_file,
                                          job_info_s3_bucket,
                                          job_config_ini_file_s3_bucket_object_name)
     except ClientError as e:
         print("*** Error: Failed to upload {} to s3://{}/{}"\
-            .format(job_config_ini_file_filename,job_info_s3_bucket,job_config_ini_file_s3_bucket_object_name))
+            .format(job_config_ini_file,job_info_s3_bucket,job_config_ini_file_s3_bucket_object_name))
         uploaded_to_bucket = False
 
     if uploaded_to_bucket:
         print("Successfully uploaded {} to s3://{}/{}"\
-            .format(job_config_ini_file_filename,job_info_s3_bucket,job_config_ini_file_s3_bucket_object_name))
+            .format(job_config_ini_file,job_info_s3_bucket,job_config_ini_file_s3_bucket_object_name))
 
     if rfid is None:
 
@@ -773,7 +775,7 @@ if __name__ == '__main__':
     submit_job_to_aws_batch(proc_date,
                             jid,
                             job_info_s3_bucket,
-                            job_config_ini_file_filename_base,
+                            job_config_ini_file_filename,
                             job_config_ini_file_s3_bucket_object_name,
                             input_images_csv_filename,
                             input_images_csv_file_s3_bucket_object_name)
