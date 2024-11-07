@@ -422,7 +422,7 @@ if __name__ == '__main__':
     # Populate config-file dictionary for products.
 
     product_config_ini_filename = product_config_filename_base + str(jid) + ".ini"
-    product_config_ini_file_s3_bucket_object_name = proc_date + "/" + product_config_ini_filename
+    product_config_ini_file_s3_bucket_object_name = job_proc_date + "/" + product_config_ini_filename
 
     product_config = configparser.ConfigParser()
 
