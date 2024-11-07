@@ -1192,6 +1192,7 @@ create function startJob (
                 ended = null,
                 elapsed = null,
                 exitcode = null,
+                started = now(),
                 status = 0
             where jid = jid_;
 
