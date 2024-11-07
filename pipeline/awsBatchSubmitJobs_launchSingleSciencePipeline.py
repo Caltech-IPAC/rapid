@@ -630,10 +630,10 @@ if __name__ == '__main__':
 
     # Populate config-file dictionary for job.
 
-    job_config_ini_file_filename = job_config_filename_base + str(jid) + ".ini"
-    job_config_ini_file_filename = rapid_work + "/" + job_config_ini_file_filename
+    job_config_ini_file_filename_base = job_config_filename_base + str(jid) + ".ini"
+    job_config_ini_file_filename = rapid_work + "/" + job_config_ini_file_filename_base
     job_info_s3_bucket = job_info_s3_bucket_base
-    job_config_ini_file_s3_bucket_object_name = proc_date + "/" + job_config_ini_file_filename
+    job_config_ini_file_s3_bucket_object_name = proc_date + "/" + job_config_ini_file_filename_base
 
     job_config = configparser.ConfigParser()
 
@@ -773,7 +773,7 @@ if __name__ == '__main__':
     submit_job_to_aws_batch(proc_date,
                             jid,
                             job_info_s3_bucket,
-                            job_config_ini_file_filename,
+                            job_config_ini_file_filename_base,
                             job_config_ini_file_s3_bucket_object_name,
                             input_images_csv_filename,
                             input_images_csv_file_s3_bucket_object_name)
