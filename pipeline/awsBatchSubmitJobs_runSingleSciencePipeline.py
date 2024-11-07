@@ -5,6 +5,7 @@ import re
 import boto3
 from botocore.exceptions import ClientError
 from astropy.io import fits
+import numpy as np
 
 import modules.utils.rapid_pipeline_subs as util
 
@@ -189,6 +190,7 @@ if __name__ == '__main__':
         refimage_input_metadata = []
         refimage_input_filenames = []
         refimage_input_filenames_reformatted = []
+        refimage_input_filenames_reformatted_unc = []
 
         n = 0
 
@@ -244,20 +246,33 @@ if __name__ == '__main__':
                 exitcode_from_gunzip = util.execute_command(gunzip_cmd)
 
                 # Reformat the FITS file so that the image data are contained in the PRIMARY header.
+                # Also, compute via a simple model the uncertainty image from the science image,
+                # assuming some value for the electronics gain (electrons/ADU), which is unavailable for Roman WFI.
 
                 fname_input = refimage_input_filename.replace(".fits.gz",".fits")
                 fname_output = refimage_input_filename.replace(".fits.gz","_reformatted.fits")
+                fname_output_unc = refimage_input_filename.replace(".fits.gz","_reformatted_unc.fits")
 
                 refimage_input_filenames_reformatted.append(fname_output)
+                refimage_input_filenames_reformatted_unc.append(fname_output_unc)
 
                 hdul_1 = fits.open(fname_input)
+                hdr = hdul_1[1].header
+                data = hdul_1[1].data
+
                 hdu_list = []
-                hdr = data_1 = hdul_1[1].header
-                data = data_1 = hdul_1[1].data
                 hdu = fits.PrimaryHDU(header=hdr,data=data)
                 hdu_list.append(hdu)
                 hdu = fits.HDUList(hdu_list)
                 hdu.writeto(fname_output,overwrite=True,checksum=True)
+
+                gain = 5.0
+                hdu_list_unc = []
+                data_unc = np.sqrt(np.array(data) / gain)
+                hdu_unc = fits.PrimaryHDU(header=hdr,data=data_unc)
+                hdu_list_unc.append(hdu_unc)
+                hdu_unc = fits.HDUList(hdu_list_unc)
+                hdu_unc.writeto(fname_output_unc,overwrite=True,checksum=True)
 
 
                 # Delete the original FITS file locally to save disk space.
@@ -270,13 +285,27 @@ if __name__ == '__main__':
                    break
 
 
-        # Write list of reference-image input filenames for awaicgen.
+        # Write list of reference-image science input filenames for awaicgen.
 
-        awaicgen_input_images_list_file = 'refimage_inputs.txt'
+        awaicgen_input_images_list_file = awaicgen_dict["awaicgen_input_images_list_file"]
 
         f = open(awaicgen_input_images_list_file, "w")
         n = 0
         for fname in refimage_input_filenames_reformatted:
+            f.write(fname + "\n")
+            n += 1
+            if n >= max_n_images_to_coadd:
+                break
+        f.close()
+
+
+        # Write list of reference-image uncertainty input filenames for awaicgen.
+
+        awaicgen_input_uncert_list_file = awaicgen_dict["awaicgen_input_uncert_list_file"]
+
+        f = open(awaicgen_input_images_list_file, "w")
+        n = 0
+        for fname in refimage_input_filenames_reformatted_unc:
             f.write(fname + "\n")
             n += 1
             if n >= max_n_images_to_coadd:
@@ -301,10 +330,6 @@ if __name__ == '__main__':
 
 
         # Execute awaicgen to generate reference image.
-
-        awaicgen_dict["awaicgen_input_images_list_file"] = awaicgen_input_images_list_file
-        # For uncertainty images list, just use input images list, in order to test the code mechanically.
-        awaicgen_dict["awaicgen_input_uncert_list_file"] = awaicgen_input_images_list_file
 
         awaicgen_cmd = util.build_awaicgen_command_line_args(awaicgen_dict)
         exitcode_from_awaicgen = util.execute_command(awaicgen_cmd)
