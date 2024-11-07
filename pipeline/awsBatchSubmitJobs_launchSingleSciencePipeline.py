@@ -309,7 +309,13 @@ sextractor_dict["sextractor_INTERP_MAXYLAG"] = config_input['SEXTRACTOR']['sextr
 sextractor_dict["sextractor_INTERP_TYPE"] = config_input['SEXTRACTOR']['sextractor_INTERP_TYPE']
 
 
-def submit_job_to_aws_batch(proc_date,jid,job_info_s3_bucket,job_config_ini_file_s3_bucket_object_name,input_images_csv_file_s3_bucket_object_name):
+def submit_job_to_aws_batch(proc_date,
+                            jid,
+                            job_info_s3_bucket,
+                            job_config_ini_file_filename,
+                            job_config_ini_file_s3_bucket_object_name,
+                            input_images_csv_filename,
+                            input_images_csv_file_s3_bucket_object_name):
 
     print("proc_date =",proc_date)
     print("jid =",jid)
@@ -341,8 +347,16 @@ def submit_job_to_aws_batch(proc_date,jid,job_info_s3_bucket,job_config_ini_file
                     'value': job_info_s3_bucket
                 },
                 {
+                    'name': 'JOBCONFIGFILENAME',
+                    'value': job_config_ini_file_filename
+                },
+                {
                     'name': 'JOBCONFIGOBJNAME',
                     'value': job_config_ini_file_s3_bucket_object_name
+                },
+                {
+                    'name': 'REFIMAGEINPUTSFILENAME',
+                    'value': input_images_csv_filename
                 },
                 {
                     'name': 'REFIMAGEINPUTSOBJNAME',
@@ -515,9 +529,9 @@ if __name__ == '__main__':
         input_images_csv_file = None
     else:
         filename_refimage = "None"
-        input_images_csv_file_base = "input_images_for_refimage_jid"+ str(jid) + ".csv"
-        input_images_csv_file = rapid_work + "/" + input_images_csv_file_base
-        input_images_csv_file_s3_bucket_object_name = proc_date + "/" + input_images_csv_file_base
+        input_images_csv_filename = "input_images_for_refimage_jid"+ str(jid) + ".csv"
+        input_images_csv_file = rapid_work + "/" + input_images_csv_filename
+        input_images_csv_file_s3_bucket_object_name = proc_date + "/" + input_images_csv_filename
 
 
         # Query L2FileMeta database table for RID,ra0,dec0,ra1,dec1,ra2,dec2,ra3,dec3,ra4,dec4,
@@ -616,10 +630,10 @@ if __name__ == '__main__':
 
     # Populate config-file dictionary for job.
 
-    job_config_ini_file_filename_base = job_config_filename_base + str(jid) + ".ini"
-    job_config_ini_file_filename = rapid_work + "/" + job_config_ini_file_filename_base
+    job_config_ini_file_filename = job_config_filename_base + str(jid) + ".ini"
+    job_config_ini_file_filename = rapid_work + "/" + job_config_ini_file_filename
     job_info_s3_bucket = job_info_s3_bucket_base
-    job_config_ini_file_s3_bucket_object_name = proc_date + "/" + job_config_ini_file_filename_base
+    job_config_ini_file_s3_bucket_object_name = proc_date + "/" + job_config_ini_file_filename
 
     job_config = configparser.ConfigParser()
 
@@ -756,6 +770,10 @@ if __name__ == '__main__':
                 .format(input_images_csv_file,job_info_s3_bucket,input_images_csv_file_s3_bucket_object_name))
 
 
-
-
-    submit_job_to_aws_batch(proc_date,jid,job_info_s3_bucket,job_config_ini_file_s3_bucket_object_name,input_images_csv_file_s3_bucket_object_name)
+    submit_job_to_aws_batch(proc_date,
+                            jid,
+                            job_info_s3_bucket,
+                            job_config_ini_file_filename,
+                            job_config_ini_file_s3_bucket_object_name,
+                            input_images_csv_filename,
+                            input_images_csv_file_s3_bucket_object_name)
