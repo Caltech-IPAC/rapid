@@ -303,7 +303,7 @@ if __name__ == '__main__':
 
         awaicgen_input_uncert_list_file = awaicgen_dict["awaicgen_input_uncert_list_file"]
 
-        f = open(awaicgen_input_images_list_file, "w")
+        f = open(awaicgen_input_uncert_list_file, "w")
         n = 0
         for fname in refimage_input_filenames_reformatted_unc:
             f.write(fname + "\n")
