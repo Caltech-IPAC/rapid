@@ -6,6 +6,7 @@ import boto3
 from botocore.exceptions import ClientError
 from astropy.io import fits
 import numpy as np
+from datetime import datetime
 
 import modules.utils.rapid_pipeline_subs as util
 import database.modules.utils.rapid_db as db
@@ -19,6 +20,16 @@ print("swvers =", swvers)
 
 aws_batch_job_id = os.getenv('AWS_BATCH_JOB_ID')
 print("aws_batch_job_id =", aws_batch_job_id)
+
+
+# Compute processing datetime (UT) and processing datetime (Pacific time).
+
+datetime_utc_now = datetime.utcnow()
+proc_utc_datetime = datetime_utc_now.strftime('%Y-%m-%dT%H:%M:%SZ')
+datetime_now = datetime.utcnow()
+proc_datetime = datetime_now.strftime('%Y-%m-%dT%H:%M:%S PT')
+
+print("proc_datetime =",proc_datetime)
 
 
 # JOBPROCDATE of pipeline job.
