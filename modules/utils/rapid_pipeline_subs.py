@@ -3,6 +3,7 @@ import math
 from astropy.io import fits
 import re
 import subprocess
+from modules.sip_tpv.sip_tpv.sip_to_pv import sip_to_pv
 
 debug = True
 
@@ -279,3 +280,28 @@ def build_awaicgen_command_line_args(awaicgen_dict):
     print("code_to_execute_args =",code_to_execute_args)
 
     return code_to_execute_args
+
+
+#-------------------------------------------------------------------
+# Given FITS file with sip distortion, create corresponding new
+# FITS file with pv distortion (with image data moved to PRIMARY header).
+
+def convert_from_sip_to_pv(input_fits_file_with_sip,hdu_index,output_fits_file_with_pv):
+    '''
+    hdu_index is zero-based, and corresponds to HDU with image data.
+    '''
+
+    hdul = fits.open(input_fits_file_with_sip)
+
+    sip_header = hdul[hdu_index].header
+
+    if debug:
+        print("Type for sip_header =",type(sip_header))
+
+    sip_to_pv(sip_header)
+
+    hdul[hdu_index].header = sip_header
+
+    new_hdu = fits.PrimaryHDU(data=hdul[hdu_index].data,header=hdul[hdu_index].header)
+
+    new_hdu.writeto(output_fits_file_with_pv,overwrite=True,checksum=True)
