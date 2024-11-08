@@ -448,7 +448,18 @@ if __name__ == '__main__':
 
     if rfid is None:
         product_config['REF_IMAGE']['rfid'] = str(rfid)
+        product_config['REF_IMAGE']['ppid'] = str(ppid_sciimage)
         product_config['REF_IMAGE']['awaicgen_output_mosaic_image_file_checksum'] = checksum
+
+        mosaic_image_name_for_db_record = "s3://{}/{}".format(product_s3_bucket,awaicgen_output_mosaic_image_s3_bucket_object_name)
+        mosaic_cov_map_name_for_db_record = "s3://{}/{}".format(product_s3_bucket,awaicgen_output_mosaic_cov_map_s3_bucket_object_name)
+        mosaic_uncert_image_name_for_db_record = "s3://{}/{}".format(product_s3_bucket,awaicgen_output_mosaic_uncert_image_s3_bucket_object_name)
+
+        product_config['REF_IMAGE']['awaicgen_output_mosaic_image_file'] = mosaic_image_name_for_db_record
+        product_config['REF_IMAGE']['awaicgen_output_mosaic_cov_map_file'] = mosaic_cov_map_name_for_db_record
+        product_config['REF_IMAGE']['awaicgen_output_mosaic_uncert_image_file'] = mosaic_uncert_image_name_for_db_record
+        product_config['REF_IMAGE']['awaicgen_output_mosaic_image_status'] = 1
+        product_config['REF_IMAGE']['awaicgen_output_mosaic_image_infobits'] = 0
 
 
     # Write product config file for job.
