@@ -447,6 +447,9 @@ if __name__ == '__main__':
     product_config['DEFAULT']['verbose'] = str(verbose)
 
     if rfid is None:
+
+        product_config['REF_IMAGE'] = {}
+
         product_config['REF_IMAGE']['rfid'] = str(rfid)
         product_config['REF_IMAGE']['ppid'] = str(ppid_sciimage)
         product_config['REF_IMAGE']['awaicgen_output_mosaic_image_file_checksum'] = checksum
