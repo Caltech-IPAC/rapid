@@ -8,6 +8,7 @@ RUN pip install --upgrade psycopg2-binary
 RUN pip install healpy
 RUN pip install boto3
 RUN pip install pyfftw
+RUN pip install sympy
 
 RUN yum -y install gcc
 RUN yum -y install g++
