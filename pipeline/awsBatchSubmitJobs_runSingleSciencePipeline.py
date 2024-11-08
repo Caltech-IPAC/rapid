@@ -438,16 +438,17 @@ if __name__ == '__main__':
     product_config = configparser.ConfigParser()
 
     product_config['DEFAULT'] = {'debug': str(debug),
-
-                         'swname': swname,
-
-                         'swvers': swvers,
-                         'jid': str(jid)}
+                                 'swname': swname,
+                                 'swvers': swvers}
 
     product_config['DEFAULT']['product_s3_bucket_base'] = product_s3_bucket_base
-    if rfid is None:
-        product_config['DEFAULT']['awaicgen_output_mosaic_image_file_checksum'] = checksum
+    product_config['DEFAULT']['jid'] = str(jid)
+    product_config['DEFAULT']['job_proc_date'] = job_proc_date
     product_config['DEFAULT']['verbose'] = str(verbose)
+
+    if rfid is None:
+        product_config['REF_IMAGE']['rfid'] = str(rfid)
+        product_config['REF_IMAGE']['awaicgen_output_mosaic_image_file_checksum'] = checksum
 
 
     # Write product config file for job.
