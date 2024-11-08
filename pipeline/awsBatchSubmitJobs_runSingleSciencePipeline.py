@@ -461,8 +461,8 @@ if __name__ == '__main__':
         product_config['REF_IMAGE']['awaicgen_output_mosaic_image_file'] = mosaic_image_name_for_db_record
         product_config['REF_IMAGE']['awaicgen_output_mosaic_cov_map_file'] = mosaic_cov_map_name_for_db_record
         product_config['REF_IMAGE']['awaicgen_output_mosaic_uncert_image_file'] = mosaic_uncert_image_name_for_db_record
-        product_config['REF_IMAGE']['awaicgen_output_mosaic_image_status'] = 1
-        product_config['REF_IMAGE']['awaicgen_output_mosaic_image_infobits'] = 0
+        product_config['REF_IMAGE']['awaicgen_output_mosaic_image_status'] = str(1)
+        product_config['REF_IMAGE']['awaicgen_output_mosaic_image_infobits'] = str(0)
 
 
     # Write product config file for job.
