@@ -5,9 +5,17 @@ import signal
 import configparser
 import boto3
 import re
+import healpy as hp
 
 import modules.utils.rapid_pipeline_subs as util
 import database.modules.utils.rapid_db as db
+
+level6 = 6
+nside6 = 2**level6
+
+level9 = 9
+nside9 = 2**level9
+
 
 swname = "registerCompletedJobInDB.py"
 swvers = "1.0"
@@ -83,6 +91,9 @@ debug = int(config_input['DEFAULT']['debug'])
 job_info_s3_bucket_base = config_input['DEFAULT']['job_info_s3_bucket_base']
 job_logs_s3_bucket_base = config_input['DEFAULT']['job_logs_s3_bucket_base']
 product_s3_bucket_base = config_input['DEFAULT']['product_s3_bucket_base']
+job_config_filename_base = config_input['DEFAULT']['job_config_filename_base']
+product_config_filename_base = config_input['DEFAULT']['product_config_filename_base']
+awaicgen_output_mosaic_image_file = config_input['AWAICGEN']['awaicgen_output_mosaic_image_file']
 
 
 
@@ -108,19 +119,18 @@ while True:
 
     # Examine log files for given processing date.
 
+    logs_bucket = s3_resource.Bucket(job_logs_s3_bucket_base)
 
-    my_bucket = s3_resource.Bucket(job_logs_s3_bucket_base)
-
-    nfiles = 0
+    njobs = 0
     log_filenames = []
     jids = []
 
-    for my_bucket_object in my_bucket.objects.all():
+    for logs_bucket_object in logs_bucket.objects.all():
 
         if debug > 0:
-            print(my_bucket_object.key)
+            print(logs_bucket_object.key)
 
-        input_file = my_bucket_object.key
+        input_file = logs_bucket_object.key
 
         filename_match = re.match(r"(\d\d\d\d\d\d\d\d)/(.+jid(\d+)_log\.txt)",input_file)
 
@@ -138,15 +148,23 @@ while True:
                 log_filenames.append(filename_only)
                 jids.append(jid)
 
-                nfiles += 1
+                njobs += 1
 
         except:
             if debug > 0:
                 print("-----2-----> No match in",input_file)
 
 
-    print("End of S3 bucket listing...")
-    print("nfiles = ",nfiles)
+    print("End of logs S3 bucket listing...")
+    print("njobs = ",njobs)
+
+
+    # Open database connection.
+
+    dbh = db.RAPIDDB()
+
+    if dbh.exit_code >= 64:
+        exit(dbh.exit_code)
 
 
     # Loop over jobs for a given processing date.
@@ -169,6 +187,7 @@ while True:
 
         job_exitcode = 64
         aws_batch_job_id = 'not_found'
+
         file = open(log_fname, "r")
         search_string1 = "aws_batch_job_id"
         search_string2 = "terminating_exitcode"
@@ -186,13 +205,6 @@ while True:
                 job_exitcode = tokens[1]
 
 
-        # Open database connection.
-
-        dbh = db.RAPIDDB()
-
-        if dbh.exit_code >= 64:
-            exit(dbh.exit_code)
-
         # Update Jobs record.
 
         dbh.end_job(jid,job_exitcode,aws_batch_job_id)
@@ -201,15 +213,126 @@ while True:
             exit(dbh.exit_code)
 
 
+        # Download job config file, in order to harvest some of its metadata.
+
+        job_config_ini_filename = job_config_filename_base + str(jid) + ".ini"
+
+        s3_bucket_object_name = datearg + '/' + job_config_ini_filename
+
+        print("Downloading s3://{}/{} into {}...".format(job_info_s3_bucket_base,s3_bucket_object_name,job_config_ini_filename))
+
+        response = s3_client.download_file(job_info_s3_bucket_base,s3_bucket_object_name,job_config_ini_filename)
+
+        print("response =",response)
+
+
+        # Harvest job metadata from job config file
+
+        job_config_input = configparser.ConfigParser()
+        job_config_input.read(job_config_ini_filename)
+
+        fid = int(job_config_input['SCI_IMAGE']['fid'])
+
+        rtid = int(job_config_input['SKY_TILE']['rtid'])
+        field = rtid
+        ra0 = float(job_config_input['SKY_TILE']['ra0'])
+        dec0 = float(job_config_input['SKY_TILE']['dec0'])
+
+        print("rtid,ra0,dec0 =",rtid,ra0,dec0 )
+
+
+        # Compute level-6 healpix index (NESTED pixel ordering).
+
+        hp6 = hp.ang2pix(nside6,ra0,dec0,nest=True,lonlat=True)
+
+
+        # Compute level-9 healpix index (NESTED pixel ordering).
+
+        hp9 = hp.ang2pix(nside9,ra0,dec0,nest=True,lonlat=True)
+
+        print("hp6,hp9 =",hp6,hp9)
+
+
+        # Inventory products associated with job.
+
+        product_bucket = s3_resource.Bucket(product_s3_bucket_base)
+
+        job_prefix = datearg + '/jid' + str(jid)
+
+        print("job_prefix =",job_prefix)
+
+        for product_bucket_object in product_bucket.objects.filter(Prefix=job_prefix):
+
+            print("------------->",product_bucket_object)
+
+            if awaicgen_output_mosaic_image_file in product_bucket_object.key:
+
+                print("Found in reference image in S3 product bucket: {}".format(awaicgen_output_mosaic_image_file))
+
+                # Download product config file, in order to read the MD5 checksum of the reference image.
+
+                product_config_ini_filename = product_config_filename_base + str(jid) + ".ini"
+
+                s3_bucket_object_name = datearg + '/' + product_config_ini_filename
+
+                print("Downloading s3://{}/{} into {}...".format(product_s3_bucket_base,s3_bucket_object_name,product_config_ini_filename))
+
+                response = s3_client.download_file(product_s3_bucket_base,s3_bucket_object_name,product_config_ini_filename)
+
+                print("response =",response)
+
+
+                # Read input parameters from product config .ini file.
+
+                product_config_input_filename = product_config_ini_filename
+                product_config_input = configparser.ConfigParser()
+                product_config_input.read(product_config_input_filename)
+
+
+                # Harvest product metadata from product config file
+
+                rfid_str = product_config_input['REF_IMAGE']['rfid']
+
+                if rfid_str == 'None':
+                    rfid = None
+
+                    ppid_refimage = int(product_config_input['REF_IMAGE']['ppid'])
+
+                    checksum_refimage = product_config_input['REF_IMAGE']['awaicgen_output_mosaic_image_file_checksum']
+                    filename_refimage = product_config_input['REF_IMAGE']['awaicgen_output_mosaic_image_file']
+                    infobits_refimage = int(product_config_input['REF_IMAGE']['awaicgen_output_mosaic_image_infobits'])
+                    status_refimage = int(product_config_input['REF_IMAGE']['awaicgen_output_mosaic_image_status'])
+
+
+                    # Insert record in RefImages database table.
+
+                    dbh.add_refimage(ppid_refimage,field,fid,hp6,hp9,infobits_refimage,status_refimage,filename_refimage,checksum_refimage)
+
+                    if dbh.exit_code >= 64:
+                        exit(dbh.exit_code)
+
+                    rfid = dbh.rfid
+                    version_refimage = dbh.version
+
+                    print("rfid =",rfid)
+                    print("version_refimage =",version_refimage)
+
+
+                    # Finalize record in RefImages database table, (in order to set vbest = 1 for current record).
+                    # Filename, checksum, infobits, and status are unchanged.
+
+                    dbh.update_refimage(rfid,filename_refimage,checksum_refimage,status_refimage,version_refimage)
+
+                    if dbh.exit_code >= 64:
+                        exit(dbh.exit_code)
+
+
         # Close database connection.
 
         dbh.close()
 
         if dbh.exit_code >= 64:
             exit(dbh.exit_code)
-
-
-
 
 
     # Test code.
