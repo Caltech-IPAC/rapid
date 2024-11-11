@@ -762,7 +762,6 @@ create function addRefImage (
         r_                record;
         rfid_             integer;
         version_          smallint;
-        status_           smallint;
         vbest_            smallint;
         svid_             smallint;
 
@@ -800,7 +799,6 @@ create function addRefImage (
 
         end;
 
-        status_ := 0;
         vbest_ := 0;
 
         -- Insert RefImages record.
@@ -810,7 +808,7 @@ create function addRefImage (
             insert into RefImages
             (field, hp6, hp9, fid, ppid, version, status, vbest, filename, checksum, infobits, svid)
             values
-            (field_, hp6_, hp9_, fid_, ppid_, version_, status_, vbest_, filename_, checksum_, infobits, svid_)
+            (field_, hp6_, hp9_, fid_, ppid_, version_, status_, vbest_, filename_, checksum_, infobits_, svid_)
             returning rfid into strict rfid_;
             exception
                 when no_data_found then
@@ -863,7 +861,7 @@ create function updateRefImage (
         begin
 
             select field, fid, ppid
-            into strict field_ fid_, ppid_
+            into strict field_, fid_, ppid_
             from RefImages
             where rfid = rfid_;
             exception
