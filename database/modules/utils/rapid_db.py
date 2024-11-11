@@ -1423,8 +1423,8 @@ class RAPIDDB:
 
         # Query database.
 
-        print('----> expid = {}'.format(expid))
-        print('----> sca = {}'.format(sca))
+        print('----> ppid = {}'.format(ppid))
+        print('----> field = {}'.format(field))
         print('----> filename = {}'.format(filename))
 
         rep = {"TEMPLATE_PPID": str(ppid),
