@@ -220,6 +220,9 @@ def get_roman_tessellation_index(rt_dict,ra,dec):
     return None
 
 
+#-------------------------------------------------------------------
+# Build command line for awaicgen.
+
 def build_awaicgen_command_line_args(awaicgen_dict):
 
     '''
@@ -283,6 +286,194 @@ def build_awaicgen_command_line_args(awaicgen_dict):
 
 
 #-------------------------------------------------------------------
+# Build command line for swarp.
+
+def build_swarp_command_line_args(swarp_dict):
+
+    '''
+    Build swarp command line.
+    '''
+
+    software_to_execute = 'swarp'
+
+    swarp_input_image = swarp_dict["swarp_input_image"]
+    swarp_IMAGEOUT_NAME = swarp_dict["swarp_IMAGEOUT_NAME"]
+    swarp_WEIGHTOUT_NAME = swarp_dict["swarp_WEIGHTOUT_NAME"]
+    swarp_HEADER_ONLY = swarp_dict["swarp_HEADER_ONLY"]
+    swarp_HEADER_SUFFIX = swarp_dict["swarp_HEADER_SUFFIX"]
+    swarp_WEIGHT_TYPE = swarp_dict["swarp_WEIGHT_TYPE"]
+    swarp_RESCALE_WEIGHTS = swarp_dict["swarp_RESCALE_WEIGHTS"]
+    swarp_WEIGHT_SUFFIX = swarp_dict["swarp_WEIGHT_SUFFIX"]
+    swarp_WEIGHT_IMAGE = swarp_dict["swarp_WEIGHT_IMAGE"]
+    swarp_WEIGHT_THRESH = swarp_dict["swarp_WEIGHT_THRESH"]
+    swarp_COMBINE = swarp_dict["swarp_COMBINE"]
+    swarp_COMBINE_TYPE = swarp_dict["swarp_COMBINE_TYPE"]
+    swarp_CLIP_AMPFRAC = swarp_dict["swarp_CLIP_AMPFRAC"]
+    swarp_CLIP_SIGMA = swarp_dict["swarp_CLIP_SIGMA"]
+    swarp_CLIP_WRITELOG = swarp_dict["swarp_CLIP_WRITELOG"]
+    swarp_CLIP_LOGNAME = swarp_dict["swarp_CLIP_LOGNAME"]
+    swarp_BLANK_BADPIXELS = swarp_dict["swarp_BLANK_BADPIXELS"]
+    swarp_CELESTIAL_TYPE = swarp_dict["swarp_CELESTIAL_TYPE"]
+    swarp_PROJECTION_TYPE = swarp_dict["swarp_PROJECTION_TYPE"]
+    swarp_PROJECTION_ERR = swarp_dict["swarp_PROJECTION_ERR"]
+    swarp_CENTER_TYPE = swarp_dict["swarp_CENTER_TYPE"]
+    swarp_CENTER = swarp_dict["swarp_CENTER"]
+    swarp_PIXELSCALE_TYPE = swarp_dict["swarp_PIXELSCALE_TYPE"]
+    swarp_PIXEL_SCALE = swarp_dict["swarp_PIXEL_SCALE"]
+    swarp_IMAGE_SIZE = swarp_dict["swarp_IMAGE_SIZE"]
+    swarp_RESAMPLE = swarp_dict["swarp_RESAMPLE"]
+    swarp_RESAMPLE_DIR = swarp_dict["swarp_RESAMPLE_DIR"]
+    swarp_RESAMPLE_SUFFIX = swarp_dict["swarp_RESAMPLE_SUFFIX"]
+    swarp_RESAMPLING_TYPE = swarp_dict["swarp_RESAMPLING_TYPE"]
+    swarp_OVERSAMPLING = swarp_dict["swarp_OVERSAMPLING"]
+    swarp_INTERPOLATE = swarp_dict["swarp_INTERPOLATE"]
+    swarp_FSCALASTRO_TYPE = swarp_dict["swarp_FSCALASTRO_TYPE"]
+    swarp_FSCALE_KEYWORD = swarp_dict["swarp_FSCALE_KEYWORD"]
+    swarp_FSCALE_DEFAULT = swarp_dict["swarp_FSCALE_DEFAULT"]
+    swarp_GAIN_KEYWORD = swarp_dict["swarp_GAIN_KEYWORD"]
+    swarp_GAIN_DEFAULT = swarp_dict["swarp_GAIN_DEFAULT"]
+    swarp_SATLEV_KEYWORD = swarp_dict["swarp_SATLEV_KEYWORD"]
+    swarp_SATLEV_DEFAULT = swarp_dict["swarp_SATLEV_DEFAULT"]
+    swarp_SUBTRACT_BACK = swarp_dict["swarp_SUBTRACT_BACK"]
+    swarp_BACK_TYPE = swarp_dict["swarp_BACK_TYPE"]
+    swarp_BACK_DEFAULT = swarp_dict["swarp_BACK_DEFAULT"]
+    swarp_BACK_SIZE = swarp_dict["swarp_BACK_SIZE"]
+    swarp_BACK_FILTERSIZE = swarp_dict["swarp_BACK_FILTERSIZE"]
+    swarp_BACK_FILTTHRESH = swarp_dict["swarp_BACK_FILTTHRESH"]
+    swarp_VMEM_DIR = swarp_dict["swarp_VMEM_DIR"]
+    swarp_VMEM_MAX = swarp_dict["swarp_VMEM_MAX"]
+    swarp_MEM_MAX = swarp_dict["swarp_MEM_MAX"]
+    swarp_COMBINE_BUFSIZE  = swarp_dict["swarp_COMBINE_BUFSIZE "]
+    swarp_DELETE_TMPFILES = swarp_dict["swarp_DELETE_TMPFILES"]
+    swarp_COPY_KEYWORDS = swarp_dict["swarp_COPY_KEYWORDS"]
+    swarp_WRITE_FILEINFO = swarp_dict["swarp_WRITE_FILEINFO"]
+    swarp_WRITE_XML = swarp_dict["swarp_WRITE_XML"]
+    swarp_NNODES = swarp_dict["swarp_NNODES"]
+    swarp_NODE_INDEX = swarp_dict["swarp_NODE_INDEX"]
+    swarp_NTHREADS = swarp_dict["swarp_NTHREADS"]
+    swarp_NOPENFILES_MAX = swarp_dict["swarp_NOPENFILES_MAX"]
+
+    code_to_execute_args = [software_to_execute]
+    code_to_execute_args.append(swarp_input_image)
+    code_to_execute_args.append("-IMAGEOUT_NAME")
+    code_to_execute_args.append(swarp_IMAGEOUT_NAME)
+    code_to_execute_args.append("-WEIGHTOUT_NAME")
+    code_to_execute_args.append(swarp_WEIGHTOUT_NAME)
+    code_to_execute_args.append("-HEADER_ONLY")
+    code_to_execute_args.append(swarp_HEADER_ONLY)
+    code_to_execute_args.append("-HEADER_SUFFIX")
+    code_to_execute_args.append(swarp_HEADER_SUFFIX)
+    code_to_execute_args.append("-WEIGHT_TYPE")
+    code_to_execute_args.append(swarp_WEIGHT_TYPE)
+    code_to_execute_args.append("-RESCALE_WEIGHTS")
+    code_to_execute_args.append(swarp_RESCALE_WEIGHTS)
+    code_to_execute_args.append("-WEIGHT_SUFFIX")
+    code_to_execute_args.append(swarp_WEIGHT_SUFFIX)
+    code_to_execute_args.append("-WEIGHT_IMAGE")
+    code_to_execute_args.append(swarp_WEIGHT_IMAGE)
+    code_to_execute_args.append("-WEIGHT_THRESH")
+    code_to_execute_args.append(swarp_WEIGHT_THRESH)
+    code_to_execute_args.append("-COMBINE")
+    code_to_execute_args.append(swarp_COMBINE)
+    code_to_execute_args.append("-COMBINE_TYPE")
+    code_to_execute_args.append(swarp_COMBINE_TYPE)
+    code_to_execute_args.append("-CLIP_AMPFRAC")
+    code_to_execute_args.append(swarp_CLIP_AMPFRAC)
+    code_to_execute_args.append("-CLIP_SIGMA")
+    code_to_execute_args.append(swarp_CLIP_SIGMA)
+    code_to_execute_args.append("-CLIP_WRITELOG")
+    code_to_execute_args.append(swarp_CLIP_WRITELOG)
+    code_to_execute_args.append("-CLIP_LOGNAME")
+    code_to_execute_args.append(swarp_CLIP_LOGNAME)
+    code_to_execute_args.append("-BLANK_BADPIXELS")
+    code_to_execute_args.append(swarp_BLANK_BADPIXELS)
+    code_to_execute_args.append("-CELESTIAL_TYPE")
+    code_to_execute_args.append(swarp_CELESTIAL_TYPE)
+    code_to_execute_args.append("-PROJECTION_TYPE")
+    code_to_execute_args.append(swarp_PROJECTION_TYPE)
+    code_to_execute_args.append("-PROJECTION_ERR")
+    code_to_execute_args.append(swarp_PROJECTION_ERR)
+    code_to_execute_args.append("-CENTER_TYPE")
+    code_to_execute_args.append(swarp_CENTER_TYPE)
+    code_to_execute_args.append("-CENTER")
+    code_to_execute_args.append(swarp_CENTER)
+    code_to_execute_args.append("-PIXELSCALE_TYPE")
+    code_to_execute_args.append(swarp_PIXELSCALE_TYPE)
+    code_to_execute_args.append("-PIXEL_SCALE")
+    code_to_execute_args.append(swarp_PIXEL_SCALE)
+    code_to_execute_args.append("-IMAGE_SIZE")
+    code_to_execute_args.append(swarp_IMAGE_SIZE)
+    code_to_execute_args.append("-RESAMPLE")
+    code_to_execute_args.append(swarp_RESAMPLE)
+    code_to_execute_args.append("-RESAMPLE_DIR")
+    code_to_execute_args.append(swarp_RESAMPLE_DIR)
+    code_to_execute_args.append("-RESAMPLE_SUFFIX")
+    code_to_execute_args.append(swarp_RESAMPLE_SUFFIX)
+    code_to_execute_args.append("-RESAMPLING_TYPE")
+    code_to_execute_args.append(swarp_RESAMPLING_TYPE)
+    code_to_execute_args.append("-OVERSAMPLING")
+    code_to_execute_args.append(swarp_OVERSAMPLING)
+    code_to_execute_args.append("-INTERPOLATE")
+    code_to_execute_args.append(swarp_INTERPOLATE)
+    code_to_execute_args.append("-FSCALASTRO_TYPE")
+    code_to_execute_args.append(swarp_FSCALASTRO_TYPE)
+    code_to_execute_args.append("-FSCALE_KEYWORD")
+    code_to_execute_args.append(swarp_FSCALE_KEYWORD)
+    code_to_execute_args.append("-FSCALE_DEFAULT")
+    code_to_execute_args.append(swarp_FSCALE_DEFAULT)
+    code_to_execute_args.append("-GAIN_KEYWORD")
+    code_to_execute_args.append(swarp_GAIN_KEYWORD)
+    code_to_execute_args.append("-GAIN_DEFAULT")
+    code_to_execute_args.append(swarp_GAIN_DEFAULT)
+    code_to_execute_args.append("-SATLEV_KEYWORD")
+    code_to_execute_args.append(swarp_SATLEV_KEYWORD)
+    code_to_execute_args.append("-SATLEV_DEFAULT")
+    code_to_execute_args.append(swarp_SATLEV_DEFAULT)
+    code_to_execute_args.append("-SUBTRACT_BACK")
+    code_to_execute_args.append(swarp_SUBTRACT_BACK)
+    code_to_execute_args.append("-BACK_TYPE")
+    code_to_execute_args.append(swarp_BACK_TYPE)
+    code_to_execute_args.append("-BACK_DEFAULT")
+    code_to_execute_args.append(swarp_BACK_DEFAULT)
+    code_to_execute_args.append("-BACK_SIZE")
+    code_to_execute_args.append(swarp_BACK_SIZE)
+    code_to_execute_args.append("-BACK_FILTERSIZE")
+    code_to_execute_args.append(swarp_BACK_FILTERSIZE)
+    code_to_execute_args.append("-BACK_FILTTHRESH")
+    code_to_execute_args.append(swarp_BACK_FILTTHRESH)
+    code_to_execute_args.append("-VMEM_DIR")
+    code_to_execute_args.append(swarp_VMEM_DIR)
+    code_to_execute_args.append("-VMEM_MAX")
+    code_to_execute_args.append(swarp_VMEM_MAX)
+    code_to_execute_args.append("-MEM_MAX")
+    code_to_execute_args.append(swarp_MEM_MAX)
+    code_to_execute_args.append("-COMBINE_BUFSIZE ")
+    code_to_execute_args.append(swarp_COMBINE_BUFSIZE )
+    code_to_execute_args.append("-DELETE_TMPFILES")
+    code_to_execute_args.append(swarp_DELETE_TMPFILES)
+    code_to_execute_args.append("-COPY_KEYWORDS")
+    code_to_execute_args.append(swarp_COPY_KEYWORDS)
+    code_to_execute_args.append("-WRITE_FILEINFO")
+    code_to_execute_args.append(swarp_WRITE_FILEINFO)
+    code_to_execute_args.append("-WRITE_XML")
+    code_to_execute_args.append(swarp_WRITE_XML)
+    code_to_execute_args.append("-VERBOSE_TYPE")
+    code_to_execute_args.append(swarp_VERBOSE_TYPE)
+    code_to_execute_args.append("-NNODES")
+    code_to_execute_args.append(swarp_NNODES)
+    code_to_execute_args.append("-NODE_INDEX")
+    code_to_execute_args.append(swarp_NODE_INDEX)
+    code_to_execute_args.append("-NTHREADS")
+    code_to_execute_args.append(swarp_NTHREADS)
+    code_to_execute_args.append("-NOPENFILES_MAX")
+    code_to_execute_args.append(swarp_NOPENFILES_MAX)
+
+    print("code_to_execute_args =",code_to_execute_args)
+
+    return code_to_execute_args
+
+
+#-------------------------------------------------------------------
 # Given FITS file with sip distortion, create corresponding new
 # FITS file with pv distortion (with image data moved to PRIMARY header).
 
@@ -305,3 +496,70 @@ def convert_from_sip_to_pv(input_fits_file_with_sip,hdu_index,output_fits_file_w
     new_hdu = fits.PrimaryHDU(data=hdul[hdu_index].data,header=hdul[hdu_index].header)
 
     new_hdu.writeto(output_fits_file_with_pv,overwrite=True,checksum=True)
+
+
+#-------------------------------------------------------------------
+# Resample reference image with no distortion to science FITS file with
+# sip distortion. Since swarp is utilized, both output science and reference images
+# are converted to pv distortion.  Provide input hdu indices (zero based)
+# for where input image data reside.  Output images are moved to PRIMARY header.
+
+def resample_reference_image_to_science_image_with_pv_distortion(
+    input_science_image,
+    hdu_index_for_science_image_data,
+    input_reference_image,
+    hdu_index_for_reference_image_data,
+    swarp_dict):
+
+
+    # Output resampled reference image.
+    output_resampled_reference_image = input_reference_image.replace(".fits","_resampled.fits")
+
+    print("input_science_image =",input_science_image)
+    print("input_reference_image =",input_reference_image)
+    print("output_resampled_reference_image =",output_resampled_reference_image)
+
+
+    Convert sip distortion to pv distortion.
+
+    sci_fits_file_with_pv = input_science_image.replace(".fits","_pv.fits")
+    ref_fits_file_with_pv = input_reference_image.replace(".fits","_pv.fits")
+
+    convert_from_sip_to_pv(input_science_image,hdu_index_for_science_image_data,sci_fits_file_with_pv)
+    convert_from_sip_to_pv(input_reference_image,hdu_index_with_image_data,ref_fits_file_with_pv)
+
+
+    # Output weight file.
+
+    output_weight_file = output_resampled_reference_image.replace(".fits","_wt.fits")
+
+
+    # Create symlink to sci_fits_file_with_pv from output_resampled_reference_image,
+    # which requires the .head filename suffix, in order to be fed implicitly into swarp.
+
+    distort_grid_header_file_symlink = output_resampled_reference_image.replace(".fits",".head")
+
+    print("distort_grid_header_file_symlink =",distort_grid_header_file_symlink)
+
+    if os.path.islink(distort_grid_header_file_symlink):
+        os.unlink(distort_grid_header_file_symlink)
+
+    os.symlink(sci_fits_file_with_pv, distort_grid_header_file_symlink)
+
+
+    # Swarp the reference image.
+
+    swarp_dict["swarp_input_image"] = ref_fits_file_with_pv
+    swarp_dict["swarp_IMAGEOUT_NAME"] = output_resampled_reference_image
+    swarp_dict["swarp_WEIGHTOUT_NAME"] = output_weight_file
+
+
+    # Execute swarp.
+
+    swarp_cmd = build_swarp_command_line_args(swarp_dict)
+    exitcode_from_swarp = execute_command(swarp_cmd)
+
+
+    # Return select filenames (in case the files need to be uploaded to the S3 product bucket for examination).
+
+    return sci_fits_file_with_pv, ref_fits_file_with_pv, output_resampled_reference_image
