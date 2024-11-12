@@ -563,3 +563,224 @@ def resample_reference_image_to_science_image_with_pv_distortion(
     # Return select filenames (in case the files need to be uploaded to the S3 product bucket for examination).
 
     return sci_fits_file_with_pv, ref_fits_file_with_pv, output_resampled_reference_image
+
+
+#-------------------------------------------------------------------
+# Build command line for sextractor.
+
+def build_sextractor_command_line_args(sextractor_dict):
+
+    '''
+    Build sextractor command line.
+    '''
+
+    software_to_execute = 'sex'
+
+    sextractor_input_image = sextractor_dict["sextractor_input_image"]
+    sextractor_CATALOG_NAME = sextractor_dict["sextractor_CATALOG_NAME"]
+    sextractor_CATALOG_TYPE = sextractor_dict["sextractor_CATALOG_TYPE"]
+    sextractor_PARAMETERS_NAME = sextractor_dict["sextractor_PARAMETERS_NAME"]
+    sextractor_DETECT_TYPE = sextractor_dict["sextractor_DETECT_TYPE"]
+    sextractor_DETECT_MINAREA = sextractor_dict["sextractor_DETECT_MINAREA"]
+    sextractor_DETECT_MAXAREA = sextractor_dict["sextractor_DETECT_MAXAREA"]
+    sextractor_THRESH_TYPE = sextractor_dict["sextractor_THRESH_TYPE"]
+    sextractor_DETECT_THRESH = sextractor_dict["sextractor_DETECT_THRESH"]
+    sextractor_ANALYSIS_THRESH = sextractor_dict["sextractor_ANALYSIS_THRESH"]
+    sextractor_FILTER = sextractor_dict["sextractor_FILTER"]
+    sextractor_FILTER_NAME = sextractor_dict["sextractor_FILTER_NAME"]
+    sextractor_FILTER_THRESH = sextractor_dict["sextractor_FILTER_THRESH"]
+    sextractor_DEBLEND_NTHRESH = sextractor_dict["sextractor_DEBLEND_NTHRESH"]
+    sextractor_DEBLEND_MINCONT = sextractor_dict["sextractor_DEBLEND_MINCONT"]
+    sextractor_CLEAN = sextractor_dict["sextractor_CLEAN"]
+    sextractor_CLEAN_PARAM = sextractor_dict["sextractor_CLEAN_PARAM"]
+    sextractor_MASK_TYPE = sextractor_dict["sextractor_MASK_TYPE"]
+    sextractor_WEIGHT_TYPE = sextractor_dict["sextractor_WEIGHT_TYPE"]
+    sextractor_RESCALE_WEIGHTS = sextractor_dict["sextractor_RESCALE_WEIGHTS"]
+    sextractor_WEIGHT_IMAGE = sextractor_dict["sextractor_WEIGHT_IMAGE"]
+    sextractor_WEIGHT_GAIN = sextractor_dict["sextractor_WEIGHT_GAIN"]
+    sextractor_WEIGHT_THRESH = sextractor_dict["sextractor_WEIGHT_THRESH"]
+    sextractor_FLAG_IMAGE = sextractor_dict["sextractor_FLAG_IMAGE"]
+    sextractor_FLAG_TYPE = sextractor_dict["sextractor_FLAG_TYPE"]
+    sextractor_PHOT_APERTURES = sextractor_dict["sextractor_PHOT_APERTURES"]
+    sextractor_PHOT_AUTOPARAMS = sextractor_dict["sextractor_PHOT_AUTOPARAMS"]
+    sextractor_PHOT_PETROPARAMS = sextractor_dict["sextractor_PHOT_PETROPARAMS"]
+    sextractor_PHOT_AUTOAPERS = sextractor_dict["sextractor_PHOT_AUTOAPERS"]
+    sextractor_PHOT_FLUXFRAC = sextractor_dict["sextractor_PHOT_FLUXFRAC"]
+    sextractor_SATUR_LEVEL = sextractor_dict["sextractor_SATUR_LEVEL"]
+    sextractor_SATUR_KEY = sextractor_dict["sextractor_SATUR_KEY"]
+    sextractor_MAG_ZEROPOINT = sextractor_dict["sextractor_MAG_ZEROPOINT"]
+    sextractor_MAG_GAMMA = sextractor_dict["sextractor_MAG_GAMMA"]
+    sextractor_GAIN = sextractor_dict["sextractor_GAIN"]
+    sextractor_GAIN_KEY = sextractor_dict["sextractor_GAIN_KEY"]
+    sextractor_PIXEL_SCALE = sextractor_dict["sextractor_PIXEL_SCALE"]
+    sextractor_SEEING_FWHM = sextractor_dict["sextractor_SEEING_FWHM"]
+    sextractor_STARNNW_NAME = sextractor_dict["sextractor_STARNNW_NAME"]
+    sextractor_BACK_TYPE = sextractor_dict["sextractor_BACK_TYPE"]
+    sextractor_BACK_VALUE = sextractor_dict["sextractor_BACK_VALUE"]
+    sextractor_BACK_SIZE = sextractor_dict["sextractor_BACK_SIZE"]
+    sextractor_BACK_FILTERSIZE = sextractor_dict["sextractor_BACK_FILTERSIZE"]
+    sextractor_BACKPHOTO_TYPE = sextractor_dict["sextractor_BACKPHOTO_TYPE"]
+    sextractor_BACKPHOTO_THICK = sextractor_dict["sextractor_BACKPHOTO_THICK"]
+    sextractor_BACK_FILTTHRESH = sextractor_dict["sextractor_BACK_FILTTHRESH"]
+    sextractor_CHECKIMAGE_TYPE = sextractor_dict["sextractor_CHECKIMAGE_TYPE"]
+    sextractor_CHECKIMAGE_NAME = sextractor_dict["sextractor_CHECKIMAGE_NAME"]
+    sextractor_MEMORY_OBJSTACK = sextractor_dict["sextractor_MEMORY_OBJSTACK"]
+    sextractor_MEMORY_PIXSTACK = sextractor_dict["sextractor_MEMORY_PIXSTACK"]
+    sextractor_MEMORY_BUFSIZE = sextractor_dict["sextractor_MEMORY_BUFSIZE"]
+    sextractor_ASSOC_NAME = sextractor_dict["sextractor_ASSOC_NAME"]
+    sextractor_ASSOC_DATA = sextractor_dict["sextractor_ASSOC_DATA"]
+    sextractor_ASSOC_PARAMS = sextractor_dict["sextractor_ASSOC_PARAMS"]
+    sextractor_ASSOCCOORD_TYPE = sextractor_dict["sextractor_ASSOCCOORD_TYPE"]
+    sextractor_ASSOC_RADIUS = sextractor_dict["sextractor_ASSOC_RADIUS"]
+    sextractor_ASSOC_TYPE = sextractor_dict["sextractor_ASSOC_TYPE"]
+    sextractor_ASSOCSELEC_TYPE = sextractor_dict["sextractor_ASSOCSELEC_TYPE"]
+    sextractor_VERBOSE_TYPE = sextractor_dict["sextractor_VERBOSE_TYPE"]
+    sextractor_HEADER_SUFFIX = sextractor_dict["sextractor_HEADER_SUFFIX"]
+    sextractor_WRITE_XML = sextractor_dict["sextractor_WRITE_XML"]
+    sextractor_NTHREADS = sextractor_dict["sextractor_NTHREADS"]
+    sextractor_FITS_UNSIGNED = sextractor_dict["sextractor_FITS_UNSIGNED"]
+    sextractor_INTERP_MAXXLAG = sextractor_dict["sextractor_INTERP_MAXXLAG"]
+    sextractor_INTERP_MAXYLAG = sextractor_dict["sextractor_INTERP_MAXYLAG"]
+    sextractor_INTERP_TYPE = sextractor_dict["sextractor_INTERP_TYPE"]
+
+    code_to_execute_args = [software_to_execute]
+    code_to_execute_args.append(sextractor_input_image)
+    code_to_execute_args.append("-CATALOG_NAME")
+    code_to_execute_args.append(sextractor_CATALOG_NAME)
+    code_to_execute_args.append("-CATALOG_TYPE")
+    code_to_execute_args.append(sextractor_CATALOG_TYPE)
+    code_to_execute_args.append("-PARAMETERS_NAME")
+    code_to_execute_args.append(sextractor_PARAMETERS_NAME)
+    code_to_execute_args.append("-DETECT_TYPE")
+    code_to_execute_args.append(sextractor_DETECT_TYPE)
+    code_to_execute_args.append("-DETECT_MINAREA")
+    code_to_execute_args.append(sextractor_DETECT_MINAREA)
+    code_to_execute_args.append("-DETECT_MAXAREA")
+    code_to_execute_args.append(sextractor_DETECT_MAXAREA)
+    code_to_execute_args.append("-THRESH_TYPE")
+    code_to_execute_args.append(sextractor_THRESH_TYPE)
+    code_to_execute_args.append("-DETECT_THRESH")
+    code_to_execute_args.append(sextractor_DETECT_THRESH)
+    code_to_execute_args.append("-ANALYSIS_THRESH")
+    code_to_execute_args.append(sextractor_ANALYSIS_THRESH)
+    code_to_execute_args.append("-FILTER")
+    code_to_execute_args.append(sextractor_FILTER)
+    code_to_execute_args.append("-FILTER_NAME")
+    code_to_execute_args.append(sextractor_FILTER_NAME)
+    code_to_execute_args.append("-FILTER_THRESH")
+    code_to_execute_args.append(sextractor_FILTER_THRESH)
+    code_to_execute_args.append("-DEBLEND_NTHRESH")
+    code_to_execute_args.append(sextractor_DEBLEND_NTHRESH)
+    code_to_execute_args.append("-DEBLEND_MINCONT")
+    code_to_execute_args.append(sextractor_DEBLEND_MINCONT)
+    code_to_execute_args.append("-CLEAN")
+    code_to_execute_args.append(sextractor_CLEAN)
+    code_to_execute_args.append("-CLEAN_PARAM")
+    code_to_execute_args.append(sextractor_CLEAN_PARAM)
+    code_to_execute_args.append("-MASK_TYPE")
+    code_to_execute_args.append(sextractor_MASK_TYPE)
+    code_to_execute_args.append("-WEIGHT_TYPE")
+    code_to_execute_args.append(sextractor_WEIGHT_TYPE)
+    code_to_execute_args.append("-RESCALE_WEIGHTS")
+    code_to_execute_args.append(sextractor_RESCALE_WEIGHTS)
+    code_to_execute_args.append("-WEIGHT_IMAGE")
+    code_to_execute_args.append(sextractor_WEIGHT_IMAGE)
+    code_to_execute_args.append("-WEIGHT_GAIN")
+    code_to_execute_args.append(sextractor_WEIGHT_GAIN)
+    code_to_execute_args.append("-WEIGHT_THRESH")
+    code_to_execute_args.append(sextractor_WEIGHT_THRESH)
+    code_to_execute_args.append("-FLAG_IMAGE")
+    code_to_execute_args.append(sextractor_FLAG_IMAGE)
+    code_to_execute_args.append("-FLAG_TYPE")
+    code_to_execute_args.append(sextractor_FLAG_TYPE)
+    code_to_execute_args.append("-PHOT_APERTURES")
+    code_to_execute_args.append(sextractor_PHOT_APERTURES)
+    code_to_execute_args.append("-PHOT_AUTOPARAMS")
+    code_to_execute_args.append(sextractor_PHOT_AUTOPARAMS)
+    code_to_execute_args.append("-PHOT_PETROPARAMS")
+    code_to_execute_args.append(sextractor_PHOT_PETROPARAMS)
+    code_to_execute_args.append("-PHOT_AUTOAPERS")
+    code_to_execute_args.append(sextractor_PHOT_AUTOAPERS)
+    code_to_execute_args.append("-PHOT_FLUXFRAC")
+    code_to_execute_args.append(sextractor_PHOT_FLUXFRAC)
+    code_to_execute_args.append("-SATUR_LEVEL")
+    code_to_execute_args.append(sextractor_SATUR_LEVEL)
+    code_to_execute_args.append("-SATUR_KEY")
+    code_to_execute_args.append(sextractor_SATUR_KEY)
+    code_to_execute_args.append("-MAG_ZEROPOINT")
+    code_to_execute_args.append(sextractor_MAG_ZEROPOINT)
+    code_to_execute_args.append("-MAG_GAMMA")
+    code_to_execute_args.append(sextractor_MAG_GAMMA)
+    code_to_execute_args.append("-GAIN")
+    code_to_execute_args.append(sextractor_GAIN)
+    code_to_execute_args.append("-GAIN_KEY")
+    code_to_execute_args.append(sextractor_GAIN_KEY)
+    code_to_execute_args.append("-PIXEL_SCALE")
+    code_to_execute_args.append(sextractor_PIXEL_SCALE)
+    code_to_execute_args.append("-SEEING_FWHM")
+    code_to_execute_args.append(sextractor_SEEING_FWHM)
+    code_to_execute_args.append("-STARNNW_NAME")
+    code_to_execute_args.append(sextractor_STARNNW_NAME)
+    code_to_execute_args.append("-BACK_TYPE")
+    code_to_execute_args.append(sextractor_BACK_TYPE)
+    code_to_execute_args.append("-BACK_VALUE")
+    code_to_execute_args.append(sextractor_BACK_VALUE)
+    code_to_execute_args.append("-BACK_SIZE")
+    code_to_execute_args.append(sextractor_BACK_SIZE)
+    code_to_execute_args.append("-BACK_FILTERSIZE")
+    code_to_execute_args.append(sextractor_BACK_FILTERSIZE)
+    code_to_execute_args.append("-BACKPHOTO_TYPE")
+    code_to_execute_args.append(sextractor_BACKPHOTO_TYPE)
+    code_to_execute_args.append("-BACKPHOTO_THICK")
+    code_to_execute_args.append(sextractor_BACKPHOTO_THICK)
+    code_to_execute_args.append("-BACK_FILTTHRESH")
+    code_to_execute_args.append(sextractor_BACK_FILTTHRESH)
+    code_to_execute_args.append("-CHECKIMAGE_TYPE")
+    code_to_execute_args.append(sextractor_CHECKIMAGE_TYPE)
+    code_to_execute_args.append("-CHECKIMAGE_NAME")
+    code_to_execute_args.append(sextractor_CHECKIMAGE_NAME)
+    code_to_execute_args.append("-MEMORY_OBJSTACK")
+    code_to_execute_args.append(sextractor_MEMORY_OBJSTACK)
+    code_to_execute_args.append("-MEMORY_PIXSTACK")
+    code_to_execute_args.append(sextractor_MEMORY_PIXSTACK)
+    code_to_execute_args.append("-MEMORY_BUFSIZE")
+    code_to_execute_args.append(sextractor_MEMORY_BUFSIZE)
+    code_to_execute_args.append("-ASSOC_NAME")
+    code_to_execute_args.append(sextractor_ASSOC_NAME)
+    code_to_execute_args.append("-ASSOC_DATA")
+    code_to_execute_args.append(sextractor_ASSOC_DATA)
+    code_to_execute_args.append("-ASSOC_PARAMS")
+    code_to_execute_args.append(sextractor_ASSOC_PARAMS)
+    code_to_execute_args.append("-ASSOCCOORD_TYPE")
+    code_to_execute_args.append(sextractor_ASSOCCOORD_TYPE)
+    code_to_execute_args.append("-ASSOC_RADIUS")
+    code_to_execute_args.append(sextractor_ASSOC_RADIUS)
+    code_to_execute_args.append("-ASSOC_TYPE")
+    code_to_execute_args.append(sextractor_ASSOC_TYPE)
+    code_to_execute_args.append("-ASSOCSELEC_TYPE")
+    code_to_execute_args.append(sextractor_ASSOCSELEC_TYPE)
+    code_to_execute_args.append("-VERBOSE_TYPE")
+    code_to_execute_args.append(sextractor_VERBOSE_TYPE)
+    code_to_execute_args.append("-HEADER_SUFFIX")
+    code_to_execute_args.append(sextractor_HEADER_SUFFIX)
+    code_to_execute_args.append("-WRITE_XML")
+    code_to_execute_args.append(sextractor_WRITE_XML)
+    code_to_execute_args.append("-NTHREADS")
+    code_to_execute_args.append(sextractor_NTHREADS)
+    code_to_execute_args.append("-FITS_UNSIGNED")
+    code_to_execute_args.append(sextractor_FITS_UNSIGNED)
+    code_to_execute_args.append("-INTERP_MAXXLAG")
+    code_to_execute_args.append(sextractor_INTERP_MAXXLAG)
+    code_to_execute_args.append("-INTERP_MAXYLAG")
+    code_to_execute_args.append(sextractor_INTERP_MAXYLAG)
+    code_to_execute_args.append("-INTERP_TYPE")
+    code_to_execute_args.append(sextractor_INTERP_TYPE)
+
+    print("code_to_execute_args =",code_to_execute_args)
+
+    return code_to_execute_args
+
+
+
+
+
