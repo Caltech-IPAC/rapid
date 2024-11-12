@@ -1513,7 +1513,6 @@ create function addPSF (
         r_                record;
         psfid_            integer;
         version_          smallint;
-        status_           smallint;
         vbest_            smallint;
 
     begin
@@ -1533,7 +1532,6 @@ create function addPSF (
             version_ := 1;
         end if;
 
-        status_ := 0;
         vbest_ := 0;
 
         -- Insert PSFs record.
