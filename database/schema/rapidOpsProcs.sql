@@ -189,7 +189,6 @@ create function addL2File (
         r_               record;
         rid_              integer;
         version_          smallint;
-        status_           smallint;
         vbest_            smallint;
 
     begin
@@ -209,7 +208,6 @@ create function addL2File (
             version_ := 1;
         end if;
 
-        status_ := 0;
         vbest_ := 0;
 
         -- Insert L2Files record.
