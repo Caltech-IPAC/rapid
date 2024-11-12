@@ -524,7 +524,6 @@ create function addDiffImage (
         r_                record;
         pid_              integer;
         version_          smallint;
-        status_           smallint;
         vbest_            smallint;
         svid_             smallint;
         expid_            integer;
@@ -586,7 +585,6 @@ create function addDiffImage (
 
         end;
 
-        status_ := 0;
         vbest_ := 0;
 
         -- Insert DiffImages record.
