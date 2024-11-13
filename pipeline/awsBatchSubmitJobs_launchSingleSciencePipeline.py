@@ -102,6 +102,8 @@ product_s3_bucket_base = config_input['DEFAULT']['product_s3_bucket_base']
 job_config_filename_base = config_input['DEFAULT']['job_config_filename_base']
 product_config_filename_base = config_input['DEFAULT']['product_config_filename_base']
 
+sca_gain = float(config_input['INSTRUMENT']['sca_gain'])
+
 ppid = int(config_input['SCI_IMAGE']['ppid'])
 
 ppid_refimage = int(config_input['REF_IMAGE']['ppid_refimage'])
@@ -368,12 +370,6 @@ def submit_job_to_aws_batch(proc_date,
     )
 
     print("response =",response)
-
-
-
-
-
-
 
 
 if __name__ == '__main__':
@@ -649,6 +645,8 @@ if __name__ == '__main__':
     job_config['DEFAULT']['product_s3_bucket_base'] = product_s3_bucket_base
     job_config['DEFAULT']['product_config_filename_base'] = product_config_filename_base
     job_config['DEFAULT']['verbose'] = str(verbose)
+
+    job_config['INSTRUMENT']['sca_gain'] = str(sca_gain)
 
     job_config['SCI_IMAGE'] = {}
 

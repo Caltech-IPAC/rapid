@@ -138,6 +138,8 @@ if __name__ == '__main__':
     product_s3_bucket_base = config_input['DEFAULT']['product_s3_bucket_base']
     product_config_filename_base = config_input['DEFAULT']['product_config_filename_base']
 
+    sca_gain = float(config_input['INSTRUMENT']['sca_gain'])
+
     ppid_sciimage = int(config_input['SCI_IMAGE']['ppid'])
 
     rid_sciimage = int(config_input['SCI_IMAGE']['rid'])
@@ -278,7 +280,7 @@ if __name__ == '__main__':
 
                 # Reformat the FITS file so that the image data are contained in the PRIMARY header.
                 # Also, compute via a simple model the uncertainty image from the science image,
-                # assuming some value for the electronics gain (electrons/ADU), which is unavailable for Roman WFI.
+                # assuming some value for the SCA gain (electrons/ADU), which is unavailable for Roman WFI.
 
                 fname_input = refimage_input_filename.replace(".fits.gz",".fits")
                 fname_output = refimage_input_filename.replace(".fits.gz","_reformatted.fits")
@@ -297,9 +299,8 @@ if __name__ == '__main__':
                 hdu = fits.HDUList(hdu_list)
                 hdu.writeto(fname_output,overwrite=True,checksum=True)
 
-                gain = 5.0
                 hdu_list_unc = []
-                data_unc = np.sqrt(np.array(data) / gain)
+                data_unc = np.sqrt(np.array(data) / sca_gain)
                 hdu_unc = fits.PrimaryHDU(header=hdr,data=data_unc)
                 hdu_list_unc.append(hdu_unc)
                 hdu_unc = fits.HDUList(hdu_list_unc)
