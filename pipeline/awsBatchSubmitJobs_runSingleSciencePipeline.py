@@ -284,17 +284,17 @@ if __name__ == '__main__':
     print("max_n_images_to_coadd =", max_n_images_to_coadd)
 
 
-    # Download science image from S3 bucket.
+    # Download gzipped science image from S3 bucket.
 
-    science_image_filename = download_file_from_s3_bucket(s3_client,s3_full_name_science_image)
+    science_image_filename_gz = download_file_from_s3_bucket(s3_client,s3_full_name_science_image)
 
 
     # Upload science image to product S3 bucket (in order to test upload method).
 
     product_s3_bucket = product_s3_bucket_base
-    s3_object_name_science_image = job_proc_date + "/jid" + str(jid) + "/" + science_image_filename
+    s3_object_name_science_image = job_proc_date + "/jid" + str(jid) + "/" + science_image_filename_gz
 
-    upload_files_to_s3_bucket(s3_client,product_s3_bucket,[science_image_filename],[s3_object_name_science_image])
+    upload_files_to_s3_bucket(s3_client,product_s3_bucket,[science_image_filename_gz],[s3_object_name_science_image])
 
 
     # Optionally read in CVS file containing inputs for generating reference image.
@@ -586,6 +586,50 @@ if __name__ == '__main__':
     if uploaded_to_bucket:
         print("Successfully uploaded {} to s3://{}/{}"\
             .format(product_config_ini_filename,product_s3_bucket,product_config_ini_file_s3_bucket_object_name))
+
+
+
+
+
+# Unzip the science image gzipped file.
+
+gunzip_cmd = ['gunzip', science_image_filename_gz]
+exitcode_from_gunzip = util.execute_command(gunzip_cmd)
+
+science_image_filename = science_image_filename_gz.replace(".fits.gz",".fits")
+
+hdu_index_for_science_image_data = 1
+hdu_index_for_reference_image_data = 0
+
+
+# Swarp the reference image into the distortion frame of the science image.
+
+sci_fits_file_with_pv,\
+    ref_fits_file_with_pv,\
+    output_resampled_reference_image =\
+    resample_reference_image_to_science_image_with_pv_distortion(science_image_filename,\
+                                                                 hdu_index_for_science_image_data,\
+                                                                 awaicgen_output_mosaic_image_file,\
+                                                                 hdu_index_for_reference_image_data,\
+                                                                 swarp_dict)
+
+
+# Upload intermediate FITS files to product S3 bucket for diagnostic purposes.
+
+product_s3_bucket = product_s3_bucket_base
+s3_object_name_sci_fits_file_with_pv = job_proc_date + "/jid" + str(jid) + "/" + sci_fits_file_with_pv
+s3_object_name_ref_fits_file_with_pv = job_proc_date + "/jid" + str(jid) + "/" + ref_fits_file_with_pv
+s3_object_name_output_resampled_reference_image = job_proc_date + "/jid" + str(jid) + "/" + output_resampled_reference_image
+
+filenames = [sci_fits_file_with_pv,ref_fits_file_with_pv,output_resampled_reference_image]
+objectnames = [s3_object_name_sci_fits_file_with_pv,s3_object_name_ref_fits_file_with_pv,s3_object_name_output_resampled_reference_image]
+upload_files_to_s3_bucket(s3_client,product_s3_bucket,filenames,objectnames)
+
+
+# Get listing of working directory as a diagnostic.
+
+ls_cmd = ['ls','-ltr']
+exitcode_from_ls = util.execute_command(ls_cmd)
 
 
 terminating_exitcode = 0

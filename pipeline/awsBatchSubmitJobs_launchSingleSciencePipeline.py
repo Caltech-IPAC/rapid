@@ -523,7 +523,10 @@ if __name__ == '__main__':
         exit(dbh.exit_code)
 
     if rfid is not None:
+
+        print("*** Message: Reference image found in database for rfid={}".format(rfid))
         input_images_csv_file = None
+
     else:
         filename_refimage = "None"
         input_images_csv_filename = "input_images_for_refimage_jid"+ str(jid) + ".csv"
