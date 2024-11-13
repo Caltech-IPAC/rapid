@@ -112,6 +112,35 @@ print("job_config_ini_file_s3_bucket_object_name =",job_config_ini_file_s3_bucke
 print("input_images_csv_file_s3_bucket_object_name =",input_images_csv_file_s3_bucket_object_name)
 
 
+def upload_files_to_s3_bucket(s3_client,s3_bucketfilenames,object_names):
+
+    '''
+    Upload list of files to S3 bucket.  Corresponding list of S3 bucket object names must be provided.
+    '''
+
+    uploaded_to_bucket = True
+
+    for filename,object_name in zip(filenames,object_names):
+
+        try:
+            response = s3_client.upload_file(filename,
+                                             s3_bucket,
+                                             object_name)
+
+            print("response =",response)
+
+        except ClientError as e:
+            print("*** Error: Failed to upload {} to s3://{}/{}"\
+                .format(filename,s3_bucket,object_name))
+            uploaded_to_bucket = False
+            break
+
+        if uploaded_to_bucket:
+            print("Successfully uploaded {} to s3://{}/{}"\
+                .format(filename,s3_bucket,object_name))
+
+    return uploaded_to_bucket
+
 
 if __name__ == '__main__':
 
@@ -498,14 +527,6 @@ if __name__ == '__main__':
     if uploaded_to_bucket:
         print("Successfully uploaded {} to s3://{}/{}"\
             .format(product_config_ini_filename,product_s3_bucket,product_config_ini_file_s3_bucket_object_name))
-
-
-
-
-
-
-
-
 
 
 terminating_exitcode = 0
