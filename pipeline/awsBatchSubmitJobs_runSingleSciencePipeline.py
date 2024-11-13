@@ -112,7 +112,6 @@ print("job_config_ini_file_s3_bucket_object_name =",job_config_ini_file_s3_bucke
 print("input_images_csv_file_s3_bucket_object_name =",input_images_csv_file_s3_bucket_object_name)
 
 
-
 def download_file_from_s3_bucket(s3_client,s3_full_name):
 
     '''
