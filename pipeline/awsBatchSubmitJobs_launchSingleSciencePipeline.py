@@ -403,7 +403,7 @@ if __name__ == '__main__':
     if dbh.exit_code >= 64:
         exit(dbh.exit_code)
 
-    objectname_sciimage = image_info[0]
+    s3_full_name_science_image = image_info[0]
     expid = image_info[1]
     sca = image_info[2]
     field = image_info[3]
@@ -655,7 +655,7 @@ if __name__ == '__main__':
     job_config['SCI_IMAGE']['sca'] = str(sca)
     job_config['SCI_IMAGE']['fid'] = str(fid)
 
-    job_config['SCI_IMAGE']['objectname_sciimage'] = str(objectname_sciimage)
+    job_config['SCI_IMAGE']['s3_full_name_science_image'] = s3_full_name_science_image
     job_config['SCI_IMAGE']['expid'] = str(expid)
     job_config['SCI_IMAGE']['field'] = str(field)
     job_config['SCI_IMAGE']['mjdobs'] = str(mjdobs)

@@ -219,7 +219,7 @@ if __name__ == '__main__':
     rid_sciimage = int(config_input['SCI_IMAGE']['rid'])
     sca_sciimage = int(config_input['SCI_IMAGE']['sca'])
     fid_sciimage = int(config_input['SCI_IMAGE']['fid'])
-    s3_bucket_object_name_sciimage = config_input['SCI_IMAGE']['objectname_sciimage']
+    s3_full_name_science_image = config_input['SCI_IMAGE']['s3_full_name_science_image']
     expid_sciimage = int(config_input['SCI_IMAGE']['expid'])
     field_sciimage = int(config_input['SCI_IMAGE']['field'])
     mjdobs_sciimage = float(config_input['SCI_IMAGE']['mjdobs'])
@@ -282,6 +282,19 @@ if __name__ == '__main__':
     sextractor_dict = config_input['SEXTRACTOR']
 
     print("max_n_images_to_coadd =", max_n_images_to_coadd)
+
+
+    # Download science image from S3 bucket.
+
+    science_image_filename = download_file_from_s3_bucket(s3_client,s3_full_name_science_image)
+
+
+    # Upload science image to product S3 bucket (in order to test upload method).
+
+    product_s3_bucket = product_s3_bucket_base
+    s3_object_name_science_image = job_proc_date + "/jid" + str(jid) + "/" + science_image_filename
+
+    upload_files_to_s3_bucket(s3_client,product_s3_bucket,[science_image_filename],[s3_object_name_science_image])
 
 
     # Optionally read in CVS file containing inputs for generating reference image.
@@ -351,6 +364,7 @@ if __name__ == '__main__':
 
                 gunzip_cmd = ['gunzip', refimage_input_filename]
                 exitcode_from_gunzip = util.execute_command(gunzip_cmd)
+
 
                 # Reformat the FITS file so that the image data are contained in the PRIMARY header.
                 # Also, compute via a simple model the uncertainty image from the science image,
