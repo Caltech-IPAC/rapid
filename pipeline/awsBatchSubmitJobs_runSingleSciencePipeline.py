@@ -607,11 +607,11 @@ hdu_index_for_reference_image_data = 0
 sci_fits_file_with_pv,\
     ref_fits_file_with_pv,\
     output_resampled_reference_image =\
-    resample_reference_image_to_science_image_with_pv_distortion(science_image_filename,\
-                                                                 hdu_index_for_science_image_data,\
-                                                                 awaicgen_output_mosaic_image_file,\
-                                                                 hdu_index_for_reference_image_data,\
-                                                                 swarp_dict)
+    util.resample_reference_image_to_science_image_with_pv_distortion(science_image_filename,\
+                                                                      hdu_index_for_science_image_data,\
+                                                                      awaicgen_output_mosaic_image_file,\
+                                                                      hdu_index_for_reference_image_data,\
+                                                                      swarp_dict)
 
 
 # Upload intermediate FITS files to product S3 bucket for diagnostic purposes.
