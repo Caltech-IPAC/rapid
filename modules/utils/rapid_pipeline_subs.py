@@ -520,7 +520,7 @@ def resample_reference_image_to_science_image_with_pv_distortion(
     print("output_resampled_reference_image =",output_resampled_reference_image)
 
 
-    Convert sip distortion to pv distortion.
+    # Convert sip distortion to pv distortion.
 
     sci_fits_file_with_pv = input_science_image.replace(".fits","_pv.fits")
     ref_fits_file_with_pv = input_reference_image.replace(".fits","_pv.fits")
