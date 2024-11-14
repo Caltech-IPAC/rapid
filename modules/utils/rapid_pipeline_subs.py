@@ -552,7 +552,11 @@ def resample_reference_image_to_science_image_with_pv_distortion(
 
     # Swarp the reference image.
 
-    swarp_dict["swarp_input_image"] = ref_fits_file_with_pv
+    if pv_convert_flag_for_reference_image_data:
+        swarp_dict["swarp_input_image"] = ref_fits_file_with_pv
+    else:
+        swarp_dict["swarp_input_image"] = input_reference_image
+
     swarp_dict["swarp_IMAGEOUT_NAME"] = output_resampled_reference_image
     swarp_dict["swarp_WEIGHTOUT_NAME"] = output_weight_file
 
