@@ -348,6 +348,7 @@ def build_swarp_command_line_args(swarp_dict):
     swarp_COPY_KEYWORDS = swarp_dict["swarp_COPY_KEYWORDS".lower()]
     swarp_WRITE_FILEINFO = swarp_dict["swarp_WRITE_FILEINFO".lower()]
     swarp_WRITE_XML = swarp_dict["swarp_WRITE_XML".lower()]
+    swarp_VERBOSE_TYPE = swarp_dict["swarp_VERBOSE_TYPE".lower()]
     swarp_NNODES = swarp_dict["swarp_NNODES".lower()]
     swarp_NODE_INDEX = swarp_dict["swarp_NODE_INDEX".lower()]
     swarp_NTHREADS = swarp_dict["swarp_NTHREADS".lower()]
