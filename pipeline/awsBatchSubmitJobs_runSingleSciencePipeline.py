@@ -167,6 +167,10 @@ def upload_files_to_s3_bucket(s3_client,s3_bucket_name,filenames,s3_object_names
 
     for filename,s3_object_name in zip(filenames,s3_object_names):
 
+        if not os.path.exists(filename):
+            print("*** Warning: File does not exist ({}); skipping...".format(filename))
+            continue
+
         try:
             response = s3_client.upload_file(filename,
                                              s3_bucket_name,
@@ -646,8 +650,13 @@ s3_object_name_sci_fits_file_with_pv = job_proc_date + "/jid" + str(jid) + "/" +
 s3_object_name_ref_fits_file_with_pv = job_proc_date + "/jid" + str(jid) + "/" + ref_fits_file_with_pv
 s3_object_name_output_resampled_reference_image = job_proc_date + "/jid" + str(jid) + "/" + output_resampled_reference_image
 
-filenames = [sci_fits_file_with_pv,ref_fits_file_with_pv,output_resampled_reference_image]
-objectnames = [s3_object_name_sci_fits_file_with_pv,s3_object_name_ref_fits_file_with_pv,s3_object_name_output_resampled_reference_image]
+filenames = [sci_fits_file_with_pv,output_resampled_reference_image]
+objectnames = [s3_object_name_sci_fits_file_with_pv,s3_object_name_output_resampled_reference_image]
+
+if pv_convert_flag_for_reference_image_data:
+    filenames.append(ref_fits_file_with_pv)
+    objectnames.append(s3_object_name_ref_fits_file_with_pv)
+
 upload_files_to_s3_bucket(s3_client,product_s3_bucket,filenames,objectnames)
 
 
