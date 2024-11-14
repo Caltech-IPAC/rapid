@@ -509,6 +509,7 @@ def resample_reference_image_to_science_image_with_pv_distortion(
     hdu_index_for_science_image_data,
     input_reference_image,
     hdu_index_for_reference_image_data,
+    pv_convert_flag_for_reference_image_data,
     swarp_dict):
 
 
@@ -526,7 +527,9 @@ def resample_reference_image_to_science_image_with_pv_distortion(
     ref_fits_file_with_pv = input_reference_image.replace(".fits","_pv.fits")
 
     convert_from_sip_to_pv(input_science_image,hdu_index_for_science_image_data,sci_fits_file_with_pv)
-    convert_from_sip_to_pv(input_reference_image,hdu_index_for_reference_image_data,ref_fits_file_with_pv)
+
+    if pv_convert_flag_for_reference_image_data:
+        convert_from_sip_to_pv(input_reference_image,hdu_index_for_reference_image_data,ref_fits_file_with_pv)
 
 
     # Output weight file.

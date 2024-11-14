@@ -591,6 +591,23 @@ if __name__ == '__main__':
 
 
 
+
+
+
+
+
+# TODO: Need to handle case where rfid is not None (reference image
+# already exists and was queried from the database by the launch script).
+
+
+
+
+
+
+
+
+
+
 # Unzip the science image gzipped file.
 
 gunzip_cmd = ['gunzip', science_image_filename_gz]
@@ -602,6 +619,13 @@ hdu_index_for_science_image_data = 1
 hdu_index_for_reference_image_data = 0
 
 
+# Since the reference image was made by awaicgen, there is no geometric image distortion,
+# and, hence, no need to convert from sip to pv distortion, so the following flag is set to False.
+# Set the following flag to True only for the case where the reference image is a single Roman SCA image.
+
+pv_convert_flag_for_reference_image_data = False                   # TODO
+
+
 # Swarp the reference image into the distortion frame of the science image.
 
 sci_fits_file_with_pv,\
@@ -611,6 +635,7 @@ sci_fits_file_with_pv,\
                                                                       hdu_index_for_science_image_data,\
                                                                       awaicgen_output_mosaic_image_file,\
                                                                       hdu_index_for_reference_image_data,\
+                                                                      pv_convert_flag_for_reference_image_data,\
                                                                       swarp_dict)
 
 
