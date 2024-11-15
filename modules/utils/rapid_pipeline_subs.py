@@ -610,11 +610,11 @@ def resample_reference_image_to_science_image_with_pv_distortion(
 
     # Return select filenames (in case the files need to be uploaded to the S3 product bucket for examination).
 
-    return sci_fits_file_with_pv,
-           ref_fits_file_with_pv,
-           ref_uncert_fits_file_with_pv,
-           output_resampled_reference_image,
-           output_resampled_reference_uncert_image
+    return sci_fits_file_with_pv,\
+        ref_fits_file_with_pv,\
+        ref_uncert_fits_file_with_pv,\
+        output_resampled_reference_image,\
+        output_resampled_reference_uncert_image
 
 
 #-------------------------------------------------------------------
