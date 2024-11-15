@@ -792,7 +792,7 @@ exitcode_from_ls = util.execute_command(ls_cmd)
 
 reformatted_science_image_filename,\
     reformatted_science_uncert_image_filename =\
-    reformat_troxel_fits_file_and_compute_uncertainty_image_via_simple_model(science_image_filename,sca_gain):
+    reformat_troxel_fits_file_and_compute_uncertainty_image_via_simple_model(science_image_filename,sca_gain)
 
 n_sigma = 3.0
 avg_sci_img,std_sci_img,std,cnt_sci_img,std = avg_data_with_clipping(reformatted_science_image_filename,n_sigma)
