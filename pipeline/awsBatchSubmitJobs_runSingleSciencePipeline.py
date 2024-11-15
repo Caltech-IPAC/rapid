@@ -390,6 +390,9 @@ if __name__ == '__main__':
     ra4_refimage = float(config_input['REF_IMAGE']['ra4'])
     dec4_refimage = float(config_input['REF_IMAGE']['dec4'])
 
+    astrometric_uncert_x = float(config_input['ZOGY']['astrometric_uncert_x'])
+    astrometric_uncert_y = float(config_input['ZOGY']['astrometric_uncert_y'])
+
     awaicgen_dict = config_input['AWAICGEN']
 
     swarp_dict = config_input['SWARP']
@@ -668,6 +671,11 @@ if __name__ == '__main__':
         product_config['REF_IMAGE']['awaicgen_output_mosaic_image_status'] = str(1)
         product_config['REF_IMAGE']['awaicgen_output_mosaic_image_infobits'] = str(0)
 
+    product_config['ZOGY'] = {}
+
+    product_config['ZOGY']['astrometric_uncert_x'] = str(astrometric_uncert_x)
+    product_config['ZOGY']['astrometric_uncert_y'] = str(astrometric_uncert_y)
+
 
     # Write product config file for job.
 
@@ -711,8 +719,8 @@ if __name__ == '__main__':
 
 
 
-# TODO: Need to handle case where rfid is not None (reference image
-# already exists and was queried from the database by the launch script).
+    # TODO: Need to handle case where rfid is not None (reference image
+    # already exists and was queried from the database by the launch script).
 
 
 
@@ -723,101 +731,83 @@ if __name__ == '__main__':
 
 
 
-# Unzip the science image gzipped file.
+    # Unzip the science image gzipped file.
 
-gunzip_cmd = ['gunzip', science_image_filename_gz]
-exitcode_from_gunzip = util.execute_command(gunzip_cmd)
+    gunzip_cmd = ['gunzip', science_image_filename_gz]
+    exitcode_from_gunzip = util.execute_command(gunzip_cmd)
 
-science_image_filename = science_image_filename_gz.replace(".fits.gz",".fits")
+    science_image_filename = science_image_filename_gz.replace(".fits.gz",".fits")
 
-hdu_index_for_science_image_data = 1
-hdu_index_for_reference_image_data = 0
-
-
-# Since the reference image was made by awaicgen, there is no geometric image distortion,
-# and, hence, no need to convert from sip to pv distortion, so the following flag is set to False.
-# Set the following flag to True only for the case where the reference image is a single Roman SCA image.
-
-pv_convert_flag_for_reference_image_data = False                   # TODO
+    hdu_index_for_science_image_data = 1
+    hdu_index_for_reference_image_data = 0
 
 
-# Swarp the reference image and associated uncertainty image into the distortion frame of the science image.
+    # Since the reference image was made by awaicgen, there is no geometric image distortion,
+    # and, hence, no need to convert from sip to pv distortion, so the following flag is set to False.
+    # Set the following flag to True only for the case where the reference image is a single Roman SCA image.
 
-sci_fits_file_with_pv,\
-    ref_fits_file_with_pv,\
-    ref_uncert_fits_file_with_pv,\
-    output_resampled_reference_image,\
-    output_resampled_reference_uncert_image =\
-    util.resample_reference_image_to_science_image_with_pv_distortion(science_image_filename,\
-                                                                      hdu_index_for_science_image_data,\
-                                                                      awaicgen_output_mosaic_image_file,\
-                                                                      awaicgen_output_mosaic_uncert_image_file,\
-                                                                      hdu_index_for_reference_image_data,\
-                                                                      pv_convert_flag_for_reference_image_data,\
-                                                                      swarp_dict)
+    pv_convert_flag_for_reference_image_data = False                   # TODO
 
 
-# Upload intermediate FITS files to product S3 bucket for diagnostic purposes.
+    # Swarp the reference image and associated uncertainty image into the distortion frame of the science image.
 
-product_s3_bucket = product_s3_bucket_base
-s3_object_name_sci_fits_file_with_pv = job_proc_date + "/jid" + str(jid) + "/" + sci_fits_file_with_pv
-s3_object_name_ref_fits_file_with_pv = job_proc_date + "/jid" + str(jid) + "/" + ref_fits_file_with_pv
-s3_object_name_output_resampled_reference_image = job_proc_date + "/jid" + str(jid) + "/" + output_resampled_reference_image
-s3_object_name_output_resampled_reference_uncert_image = job_proc_date + "/jid" + str(jid) + "/" + output_resampled_reference_uncert_image
-
-filenames = [sci_fits_file_with_pv,
-             output_resampled_reference_image,
-             output_resampled_reference_uncert_image]
-
-objectnames = [s3_object_name_sci_fits_file_with_pv,
-               s3_object_name_output_resampled_reference_image,
-               s3_object_name_output_resampled_reference_uncert_image]
-
-if pv_convert_flag_for_reference_image_data:
-    filenames.append(ref_fits_file_with_pv)
-    objectnames.append(s3_object_name_ref_fits_file_with_pv)
-
-upload_files_to_s3_bucket(s3_client,product_s3_bucket,filenames,objectnames)
+    sci_fits_file_with_pv,\
+        ref_fits_file_with_pv,\
+        ref_uncert_fits_file_with_pv,\
+        output_resampled_reference_image,\
+        output_resampled_reference_uncert_image =\
+        util.resample_reference_image_to_science_image_with_pv_distortion(science_image_filename,\
+                                                                          hdu_index_for_science_image_data,\
+                                                                          awaicgen_output_mosaic_image_file,\
+                                                                          awaicgen_output_mosaic_uncert_image_file,\
+                                                                          hdu_index_for_reference_image_data,\
+                                                                          pv_convert_flag_for_reference_image_data,\
+                                                                          swarp_dict)
 
 
-# Get listing of working directory as a diagnostic.
+    # Upload intermediate FITS files to product S3 bucket for diagnostic purposes.
 
-ls_cmd = ['ls','-ltr']
-exitcode_from_ls = util.execute_command(ls_cmd)
+    product_s3_bucket = product_s3_bucket_base
+    s3_object_name_sci_fits_file_with_pv = job_proc_date + "/jid" + str(jid) + "/" + sci_fits_file_with_pv
+    s3_object_name_ref_fits_file_with_pv = job_proc_date + "/jid" + str(jid) + "/" + ref_fits_file_with_pv
+    s3_object_name_output_resampled_reference_image = job_proc_date + "/jid" + str(jid) + "/" + output_resampled_reference_image
+    s3_object_name_output_resampled_reference_uncert_image = job_proc_date + "/jid" + str(jid) + "/" + output_resampled_reference_uncert_image
 
+    filenames = [sci_fits_file_with_pv,
+                 output_resampled_reference_image,
+                 output_resampled_reference_uncert_image]
 
-# Reformat the Troxel OpenUniverse simulated image FITS file
-# so that the image data are contained in the PRIMARY header.
-# Compute uncertainty image via simple model (photon noise only).
+    objectnames = [s3_object_name_sci_fits_file_with_pv,
+                   s3_object_name_output_resampled_reference_image,
+                   s3_object_name_output_resampled_reference_uncert_image]
 
-reformatted_science_image_filename,\
-    reformatted_science_uncert_image_filename =\
-    reformat_troxel_fits_file_and_compute_uncertainty_image_via_simple_model(science_image_filename,sca_gain)
+    if pv_convert_flag_for_reference_image_data:
+        filenames.append(ref_fits_file_with_pv)
+        objectnames.append(s3_object_name_ref_fits_file_with_pv)
 
-n_sigma = 3.0
-avg_sci_img,std_sci_img,cnt_sci_img = avg_data_with_clipping(reformatted_science_image_filename,n_sigma)
-avg_ref_img,std_ref_img,cnt_ref_img = avg_data_with_clipping(output_resampled_reference_image,n_sigma)
-
-print("avg_sci_img,std_sci_img,cnt_sci_img =",avg_sci_img,std_sci_img,cnt_sci_img)
-print("avg_ref_img,std_ref_img,cnt_ref_img =",avg_ref_img,std_ref_img,cnt_ref_img)
-
-
-
+    upload_files_to_s3_bucket(s3_client,product_s3_bucket,filenames,objectnames)
 
 
+    # Get listing of working directory as a diagnostic.
+
+    ls_cmd = ['ls','-ltr']
+    exitcode_from_ls = util.execute_command(ls_cmd)
 
 
-# The image data in science_image_filename and sci_fits_file_with_pv FITS files are the same, only the
-# represensation of geometric distortion in the FITS headers are different (sip versus pv).
-#
-# ZOGY only cares about the image data, not what is in the FITS headers.
-# Usage: python py_zogy.py <NewImage> <RefImage> <NewPSF> <RefPSF> <NewSigmaImage> <RefSigmaImage> <NewSigmaMode> <RefSigmaMode> <AstUncertX> <AstUncertY> <DiffImage> <DiffPSF> <ScorrImage>
+    # Reformat the Troxel OpenUniverse simulated image FITS file
+    # so that the image data are contained in the PRIMARY header.
+    # Compute uncertainty image via simple model (photon noise only).
 
+    reformatted_science_image_filename,\
+        reformatted_science_uncert_image_filename =\
+        reformat_troxel_fits_file_and_compute_uncertainty_image_via_simple_model(science_image_filename,sca_gain)
 
-# /usr/bin/python3
+    n_sigma = 3.0
+    avg_sci_img,std_sci_img,cnt_sci_img = avg_data_with_clipping(reformatted_science_image_filename,n_sigma)
+    avg_ref_img,std_ref_img,cnt_ref_img = avg_data_with_clipping(output_resampled_reference_image,n_sigma)
 
-# Assume top-level directory of rapid git repo is mapped to /code inside Docker container.
-# /code/modules/zogy/v21Aug2018/py_zogy.py
+    print("avg_sci_img,std_sci_img,cnt_sci_img =",avg_sci_img,std_sci_img,cnt_sci_img)
+    print("avg_ref_img,std_ref_img,cnt_ref_img =",avg_ref_img,std_ref_img,cnt_ref_img)
 
 
 
@@ -825,8 +815,30 @@ print("avg_ref_img,std_ref_img,cnt_ref_img =",avg_ref_img,std_ref_img,cnt_ref_im
 
 
 
-terminating_exitcode = 0
+    # The image data in science_image_filename and sci_fits_file_with_pv FITS files are the same, only the
+    # represensation of geometric distortion in the FITS headers are different (sip versus pv).
+    #
+    # ZOGY only cares about the image data, not what is in the FITS headers.
+    # Usage: python py_zogy.py <NewImage> <RefImage> <NewPSF> <RefPSF> <NewSigmaImage> <RefSigmaImage>
+    #                    <NewSigmaMode> <RefSigmaMode> <AstUncertX> <AstUncertY> <DiffImage> <DiffPSF> <ScorrImage>
 
-print("terminating_exitcode =",terminating_exitcode)
 
-exit(terminating_exitcode)
+
+
+
+    # /usr/bin/python3
+
+    # Assume top-level directory of rapid git repo is mapped to /code inside Docker container.
+    # /code/modules/zogy/v21Aug2018/py_zogy.py
+
+
+
+
+
+
+
+    terminating_exitcode = 0
+
+    print("terminating_exitcode =",terminating_exitcode)
+
+    exit(terminating_exitcode)
