@@ -630,14 +630,17 @@ hdu_index_for_reference_image_data = 0
 pv_convert_flag_for_reference_image_data = False                   # TODO
 
 
-# Swarp the reference image into the distortion frame of the science image.
+# Swarp the reference image and associated uncertainty image into the distortion frame of the science image.
 
 sci_fits_file_with_pv,\
     ref_fits_file_with_pv,\
-    output_resampled_reference_image =\
+    ref_uncert_fits_file_with_pv,\
+    output_resampled_reference_image,\
+    output_resampled_reference_uncert_image =\
     util.resample_reference_image_to_science_image_with_pv_distortion(science_image_filename,\
                                                                       hdu_index_for_science_image_data,\
                                                                       awaicgen_output_mosaic_image_file,\
+                                                                      awaicgen_output_mosaic_uncert_image_file,\
                                                                       hdu_index_for_reference_image_data,\
                                                                       pv_convert_flag_for_reference_image_data,\
                                                                       swarp_dict)
@@ -649,9 +652,15 @@ product_s3_bucket = product_s3_bucket_base
 s3_object_name_sci_fits_file_with_pv = job_proc_date + "/jid" + str(jid) + "/" + sci_fits_file_with_pv
 s3_object_name_ref_fits_file_with_pv = job_proc_date + "/jid" + str(jid) + "/" + ref_fits_file_with_pv
 s3_object_name_output_resampled_reference_image = job_proc_date + "/jid" + str(jid) + "/" + output_resampled_reference_image
+s3_object_name_output_resampled_reference_uncert_image = job_proc_date + "/jid" + str(jid) + "/" + output_resampled_reference_uncert_image
 
-filenames = [sci_fits_file_with_pv,output_resampled_reference_image]
-objectnames = [s3_object_name_sci_fits_file_with_pv,s3_object_name_output_resampled_reference_image]
+filenames = [sci_fits_file_with_pv,
+             output_resampled_reference_image,
+             output_resampled_reference_uncert_image]
+
+objectnames = [s3_object_name_sci_fits_file_with_pv,
+               s3_object_name_output_resampled_reference_image,
+               s3_object_name_output_resampled_reference_uncert_image]
 
 if pv_convert_flag_for_reference_image_data:
     filenames.append(ref_fits_file_with_pv)
