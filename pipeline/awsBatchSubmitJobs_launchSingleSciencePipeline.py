@@ -175,6 +175,15 @@ awaicgen_dict["awaicgen_mosaic_size_y"] = str(awaicgen_mosaic_size_y)
 awaicgen_dict["awaicgen_mosaic_rotation"] = str(crota2_refimage)
 
 
+# Get the ZOGY parameters.
+# Do not convert to numerical types, since these will just be passed through.
+
+zogy_dict = {}
+
+zogy_dict["astrometric_uncert_x"] = config_input['ZOGY']['astrometric_uncert_x']
+zogy_dict["astrometric_uncert_y"] = config_input['ZOGY']['astrometric_uncert_y']
+
+
 # Get the swarp parameters.  Some of these parameters will be overwritten by this script.
 # Do not convert to numerical types, since these will just be passed through.
 
@@ -717,6 +726,7 @@ if __name__ == '__main__':
     job_config['REF_IMAGE']['ra4'] = str(ra4_refimage)
     job_config['REF_IMAGE']['dec4'] = str(dec4_refimage)
 
+    job_config['ZOGY'] = zogy_dict
     job_config['AWAICGEN'] = awaicgen_dict
     job_config['SWARP'] = swarp_dict
     job_config['SEXTRACTOR'] = sextractor_dict
