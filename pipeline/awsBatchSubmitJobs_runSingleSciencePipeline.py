@@ -6,6 +6,7 @@ import boto3
 from botocore.exceptions import ClientError
 from astropy.io import fits
 import numpy as np
+import numpy.ma as ma
 from datetime import datetime
 
 import modules.utils.rapid_pipeline_subs as util
@@ -189,6 +190,116 @@ def upload_files_to_s3_bucket(s3_client,s3_bucket_name,filenames,s3_object_names
                 .format(filename,s3_bucket_name,s3_object_name))
 
     return uploaded_to_bucket
+
+
+def compute_clip_corr(n_sigma):
+
+    """
+    Compute a correction factor to properly reinflate the variance after it is
+    naturally diminished via data-clipping.  Employ a simple Monte Carlo method
+    and standard normal deviates to simulate the data-clipping and obtain the
+    correction factor.
+    """
+
+    var_trials = []
+    for x in range(0,10):
+        a = np.random.normal(0.0, 1.0, 1000000)
+        med = np.median(a, axis=0)
+        p16 = np.percentile(a, 16, axis=0)
+        p84 = np.percentile(a, 84, axis=0)
+        sigma = 0.5 * (p84 - p16)
+        mdmsg = med - n_sigma * sigma
+        b = np.less(a,mdmsg)
+        mdpsg = med + n_sigma * sigma
+        c = np.greater(a,mdpsg)
+        mask = np.any([b,c],axis=0)
+        mx = ma.masked_array(a, mask)
+        var = ma.getdata(mx.var(axis=0))
+        var_trials.append(var)
+
+    np_var_trials = np.array(var_trials)
+    avg_var_trials = np.mean(np_var_trials)
+    std_var_trials = np.std(np_var_trials)
+    corr_fact = 1.0 / avg_var_trials
+
+    return corr_fact
+
+
+def avg_data_with_clipping(input_filename,n_sigma = 3.0):
+
+    """
+    Statistics with outlier rejection (n-sigma data-trimming), ignoring NaNs, across all data array dimensions.
+    Assumes the 2D image data are in the PRIMARY HDU of the FITS file.
+    """
+
+    hdul = fits.open(input_filename)
+    data_array = hdul[0].data
+
+    cf = compute_clip_corr(n_sigma)
+    sqrtcf = np.sqrt(cf)
+
+    a = np.array(data_array)
+
+    med = np.nanmedian(a)
+    p16 = np.nanpercentile(a,16)
+    p84 = np.nanpercentile(a,84)
+    sigma = 0.5 * (p84 - p16)
+    mdmsg = med - n_sigma * sigma
+    b = np.less(a,mdmsg)
+    mdpsg = med + n_sigma * sigma
+    c = np.greater(a,mdpsg)
+    d = np.where(np.isnan(a),True,False)
+    mask = b | c | d
+    mx = ma.masked_array(a, mask)
+    avg = ma.getdata(mx.mean())
+    std = ma.getdata(mx.std()) * sqrtcf
+    cnt = ma.getdata(mx.count())
+
+    return avg,std,cnt
+
+
+#-------------------------------------------------------------------
+# Reformat a Troxel OpenUniverse simulated image FITS file
+# so that the image data are contained in the PRIMARY header.
+# Assumes the 2D image data are in the second HDU of the FITS file.
+# Compute uncertainty image via simple model (photon noise only).
+# We do this because the uncertainty image is not available as
+# we removed the uncertainy FITS extension earlier from the
+# Troxel OpenUniverse simulated images to save on disk-space costs.
+#
+# Inputs are:
+# 1. A single gunzipped Troxel OpenUniverse simulated image (as
+#    read directly from the S3 bucket where it is stored), and
+# 2. SCA gain.
+
+def reformat_troxel_fits_file_and_compute_uncertainty_image_via_simple_model(input_filename,sca_gain):
+
+
+    # Reformat the FITS file so that the image data are contained in the PRIMARY header.
+    # Also, compute via a simple model the uncertainty image from the science image,
+    # assuming some value for the SCA gain (electrons/ADU), which is unavailable for Roman WFI.
+
+    fname_output = input_filename.replace(".fits","_reformatted.fits")
+    fname_output_unc = input_filename.replace(".fits","_reformatted_unc.fits")
+
+    hdul = fits.open(input_filename)
+    hdr = hdul[1].header
+    data = hdul[1].data
+
+    hdu_list = []
+    hdu = fits.PrimaryHDU(header=hdr,data=data)
+    hdu_list.append(hdu)
+    hdu = fits.HDUList(hdu_list)
+    hdu.writeto(fname_output,overwrite=True,checksum=True)
+
+    hdu_list_unc = []
+    data_unc = np.sqrt(np.array(data) / sca_gain)
+    hdu_unc = fits.PrimaryHDU(header=hdr,data=data_unc)
+    hdu_list_unc.append(hdu_unc)
+    hdu_unc = fits.HDUList(hdu_list_unc)
+    hdu_unc.writeto(fname_output_unc,overwrite=True,checksum=True)
+
+    return fname_output,fname_output_unc
 
 
 if __name__ == '__main__':
@@ -381,9 +492,9 @@ if __name__ == '__main__':
                 refimage_input_filenames_reformatted.append(fname_output)
                 refimage_input_filenames_reformatted_unc.append(fname_output_unc)
 
-                hdul_1 = fits.open(fname_input)
-                hdr = hdul_1[1].header
-                data = hdul_1[1].data
+                hdul = fits.open(fname_input)
+                hdr = hdul[1].header
+                data = hdul[1].data
 
                 hdu_list = []
                 hdu = fits.PrimaryHDU(header=hdr,data=data)
@@ -673,6 +784,45 @@ upload_files_to_s3_bucket(s3_client,product_s3_bucket,filenames,objectnames)
 
 ls_cmd = ['ls','-ltr']
 exitcode_from_ls = util.execute_command(ls_cmd)
+
+
+# Reformat the Troxel OpenUniverse simulated image FITS file
+# so that the image data are contained in the PRIMARY header.
+# Compute uncertainty image via simple model (photon noise only).
+
+reformatted_science_image_filename,\
+    reformatted_science_uncert_image_filename =\
+    reformat_troxel_fits_file_and_compute_uncertainty_image_via_simple_model(science_image_filename,sca_gain):
+
+n_sigma = 3.0
+avg_sci_img,std_sci_img,std,cnt_sci_img,std = avg_data_with_clipping(reformatted_science_image_filename,n_sigma)
+avg_ref_img,std_ref_img,std,cnt_ref_img,std = avg_data_with_clipping(output_resampled_reference_image,n_sigma)
+
+print("avg_sci_img,std_sci_img,std,cnt_sci_img =",avg_sci_img,std_sci_img,std,cnt_sci_img)
+print("avg_ref_img,std_ref_img,std,cnt_ref_img,std =",avg_ref_img,std_ref_img,std,cnt_ref_img,std)
+
+
+
+
+
+
+
+# The image data in science_image_filename and sci_fits_file_with_pv FITS files are the same, only the
+# represensation of geometric distortion in the FITS headers are different (sip versus pv).
+#
+# ZOGY only cares about the image data, not what is in the FITS headers.
+# Usage: python py_zogy.py <NewImage> <RefImage> <NewPSF> <RefPSF> <NewSigmaImage> <RefSigmaImage> <NewSigmaMode> <RefSigmaMode> <AstUncertX> <AstUncertY> <DiffImage> <DiffPSF> <ScorrImage>
+
+
+# /usr/bin/python3
+
+# Assume top-level directory of rapid git repo is mapped to /code inside Docker container.
+# /code/modules/zogy/v21Aug2018/py_zogy.py
+
+
+
+
+
 
 
 terminating_exitcode = 0
