@@ -402,6 +402,16 @@ if __name__ == '__main__':
     sca,fid,ra0,dec0,ra1,dec1,ra2,dec2,ra3,dec3,ra4,dec4 = dbh.get_l2filemeta_record(rid)
 
     if dbh.exit_code >= 64:
+        print("*** Error from {}; quitting ".format(swname))
+        exit(dbh.exit_code)
+
+
+    # Query PSFs database table for the best version of PSF, required by ZOGY.
+
+    psfid,s3_full_name_psf = dbh.get_best_psf(sca,fid)
+
+    if dbh.exit_code >= 64:
+        print("*** Error from {}; quitting ".format(swname))
         exit(dbh.exit_code)
 
 
@@ -726,7 +736,12 @@ if __name__ == '__main__':
     job_config['REF_IMAGE']['ra4'] = str(ra4_refimage)
     job_config['REF_IMAGE']['dec4'] = str(dec4_refimage)
 
+
+    zogy_dict["psfid"] = str(psfid)
+    zogy_dict["s3_full_name_psf"] = s3_full_name_psf
+
     job_config['ZOGY'] = zogy_dict
+
     job_config['AWAICGEN'] = awaicgen_dict
     job_config['SWARP'] = swarp_dict
     job_config['SEXTRACTOR'] = sextractor_dict

@@ -392,6 +392,7 @@ if __name__ == '__main__':
 
     astrometric_uncert_x = float(config_input['ZOGY']['astrometric_uncert_x'])
     astrometric_uncert_y = float(config_input['ZOGY']['astrometric_uncert_y'])
+    s3_full_name_psf = config_input['ZOGY']['s3_full_name_psf']
 
     awaicgen_dict = config_input['AWAICGEN']
 
@@ -823,7 +824,7 @@ if __name__ == '__main__':
     #                    <NewSigmaMode> <RefSigmaMode> <AstUncertX> <AstUncertY> <DiffImage> <DiffPSF> <ScorrImage>
 
 
-
+    print("s3_full_name_psf = ",s3_full_name_psf)
 
 
     # /usr/bin/python3
