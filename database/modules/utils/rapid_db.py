@@ -1524,3 +1524,60 @@ class RAPIDDB:
 
         if self.exit_code == 0:
             self.conn.commit()           # Commit database transaction
+
+
+########################################################################################################
+
+    def get_best_psf(self,sca,fid):
+
+        '''
+        Query PSFs database table for the best (latest unless version is locked) version of PSF.
+        '''
+
+        self.exit_code = 0
+
+
+        # Define query template.
+
+        query_template =\
+            "select psfid,filename " +\
+            "from PSFs " +\
+            "where vbest > 0 " +\
+            "and status > 0 " +\
+            "and sca = TEMPLATE_SCA " +\
+            "and fid = TEMPLATE_FID; "
+
+
+        # Formulate query by substituting parameters into query template.
+
+        print('----> sca = {}'.format(sca))
+        print('----> fid = {}'.format(fid))
+
+        rep = {"TEMPLATE_SCA": str(sca)}
+        rep["TEMPLATE_FID"] = str(fid)
+
+        rep = dict((re.escape(k), v) for k, v in rep.items())
+        pattern = re.compile("|".join(rep.keys()))
+        query = pattern.sub(lambda m: rep[re.escape(m.group(0))], query_template)
+
+        print('query = {}'.format(query))
+
+
+        # Execute query.
+
+        self.cur.execute(query)
+        record = self.cur.fetchone()
+
+        if record is not None:
+            psfid = record[0]
+            filename = record[1]
+
+        else:
+            psfid = None
+            filename = None
+
+            print("*** Error: Could not get best PSFs database record; continuing...")
+            self.exit_code = 67
+
+
+        return psfid,filename
