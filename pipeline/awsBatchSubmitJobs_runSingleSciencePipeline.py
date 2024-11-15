@@ -795,11 +795,11 @@ reformatted_science_image_filename,\
     reformat_troxel_fits_file_and_compute_uncertainty_image_via_simple_model(science_image_filename,sca_gain)
 
 n_sigma = 3.0
-avg_sci_img,std_sci_img,std,cnt_sci_img,std = avg_data_with_clipping(reformatted_science_image_filename,n_sigma)
-avg_ref_img,std_ref_img,std,cnt_ref_img,std = avg_data_with_clipping(output_resampled_reference_image,n_sigma)
+avg_sci_img,std_sci_img,cnt_sci_img = avg_data_with_clipping(reformatted_science_image_filename,n_sigma)
+avg_ref_img,std_ref_img,cnt_ref_img = avg_data_with_clipping(output_resampled_reference_image,n_sigma)
 
-print("avg_sci_img,std_sci_img,std,cnt_sci_img =",avg_sci_img,std_sci_img,std,cnt_sci_img)
-print("avg_ref_img,std_ref_img,std,cnt_ref_img,std =",avg_ref_img,std_ref_img,std,cnt_ref_img,std)
+print("avg_sci_img,std_sci_img,cnt_sci_img =",avg_sci_img,std_sci_img,cnt_sci_img)
+print("avg_ref_img,std_ref_img,cnt_ref_img =",avg_ref_img,std_ref_img,cnt_ref_img)
 
 
 
