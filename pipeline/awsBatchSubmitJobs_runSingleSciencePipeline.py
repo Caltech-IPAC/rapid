@@ -844,6 +844,8 @@ if __name__ == '__main__':
                 filename_diffpsf,
                 filename_scorrimage]
 
+    exitcode_from_zogy = util.execute_command(zogy_cmd)
+
 
     # Upload intermediate FITS files to product S3 bucket for diagnostic purposes.
 
