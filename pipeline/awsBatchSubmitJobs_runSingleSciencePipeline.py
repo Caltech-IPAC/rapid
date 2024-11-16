@@ -837,7 +837,7 @@ if __name__ == '__main__':
                 reformatted_science_uncert_image_filename,
                 output_resampled_reference_uncert_image,
                 str(std_sci_img),
-                str(output_resampled_reference_uncert_image),
+                str(std_ref_img),
                 str(astrometric_uncert_x),
                 str(astrometric_uncert_y),
                 filename_diffimage,
