@@ -225,7 +225,7 @@ def compute_clip_corr(n_sigma):
     return corr_fact
 
 
-def avg_data_with_clipping(input_filename,n_sigma = 3.0):
+def avg_data_with_clipping(input_filename,n_sigma = 3.0,hdu_index = 0):
 
     """
     Statistics with outlier rejection (n-sigma data-trimming), ignoring NaNs, across all data array dimensions.
@@ -233,7 +233,7 @@ def avg_data_with_clipping(input_filename,n_sigma = 3.0):
     """
 
     hdul = fits.open(input_filename)
-    data_array = hdul[0].data
+    data_array = hdul[hdu_index].data
 
     cf = compute_clip_corr(n_sigma)
     sqrtcf = np.sqrt(cf)
@@ -266,13 +266,14 @@ def avg_data_with_clipping(input_filename,n_sigma = 3.0):
 # We do this because the uncertainty image is not available as
 # we removed the uncertainy FITS extension earlier from the
 # Troxel OpenUniverse simulated images to save on disk-space costs.
+# Resize images to 4089x4089 (odd number of pixels on each side).
 #
 # Inputs are:
 # 1. A single gunzipped Troxel OpenUniverse simulated image (as
 #    read directly from the S3 bucket where it is stored), and
 # 2. SCA gain.
 
-def reformat_troxel_fits_file_and_compute_uncertainty_image_via_simple_model(input_filename,sca_gain):
+def reformat_troxel_fits_file_and_compute_uncertainty_image_via_simple_model(input_filename,sca_gain,clipped_image_mean):
 
 
     # Reformat the FITS file so that the image data are contained in the PRIMARY header.
@@ -286,14 +287,20 @@ def reformat_troxel_fits_file_and_compute_uncertainty_image_via_simple_model(inp
     hdr = hdul[1].header
     data = hdul[1].data
 
+    np_data = np.array(data)
+    new_row = np.full(arr.shape[1], clipped_image_mean)
+    new_arr = np.append(np_data, [new_row], axis=0)       # Append extra row of trimmed-average background.
+    new_col = np.full((new_arr.shape[0], 1), clipped_image_mean)
+    new_np_data = np.append(new_arr, new_col, axis=1)     # Append extra column of trimmed-average background.
+
     hdu_list = []
-    hdu = fits.PrimaryHDU(header=hdr,data=data)
+    hdu = fits.PrimaryHDU(header=hdr,data=new_np_data)
     hdu_list.append(hdu)
     hdu = fits.HDUList(hdu_list)
     hdu.writeto(fname_output,overwrite=True,checksum=True)
 
     hdu_list_unc = []
-    data_unc = np.sqrt(np.array(data) / sca_gain)
+    data_unc = np.sqrt(np.array(new_np_data) / sca_gain)
     hdu_unc = fits.PrimaryHDU(header=hdr,data=data_unc)
     hdu_list_unc.append(hdu_unc)
     hdu_unc = fits.HDUList(hdu_list_unc)
@@ -739,25 +746,38 @@ if __name__ == '__main__':
 
     science_image_filename = science_image_filename_gz.replace(".fits.gz",".fits")
 
-    hdu_index_for_science_image_data = 1
-    hdu_index_for_reference_image_data = 0
+
+    # Compute image statistics for image resizing.
+
+    n_sigma = 3.0
+    avg_sci_img,std_sci_img,cnt_sci_img = avg_data_with_clipping(science_image_filename,n_sigma,1)
 
 
+    # Reformat the Troxel OpenUniverse simulated image FITS file
+    # so that the image data are contained in the PRIMARY header.
+    # Compute uncertainty image via simple model (photon noise only).
+    # Resize images to 4089x4089 (odd number of pixels on each side).
+
+    reformatted_science_image_filename,\
+        reformatted_science_uncert_image_filename =\
+        reformat_troxel_fits_file_and_compute_uncertainty_image_via_simple_model(science_image_filename,sca_gain,avg_sci_img)
+
+
+    # Swarp the reference image and associated uncertainty image into the distortion frame of the science image.
     # Since the reference image was made by awaicgen, there is no geometric image distortion,
     # and, hence, no need to convert from sip to pv distortion, so the following flag is set to False.
     # Set the following flag to True only for the case where the reference image is a single Roman SCA image.
 
+    hdu_index_for_science_image_data = 0
+    hdu_index_for_reference_image_data = 0
     pv_convert_flag_for_reference_image_data = False                   # TODO
-
-
-    # Swarp the reference image and associated uncertainty image into the distortion frame of the science image.
 
     sci_fits_file_with_pv,\
         ref_fits_file_with_pv,\
         ref_uncert_fits_file_with_pv,\
         output_resampled_reference_image,\
         output_resampled_reference_uncert_image =\
-        util.resample_reference_image_to_science_image_with_pv_distortion(science_image_filename,\
+        util.resample_reference_image_to_science_image_with_pv_distortion(reformatted_science_image_filename,\
                                                                           hdu_index_for_science_image_data,\
                                                                           awaicgen_output_mosaic_image_file,\
                                                                           awaicgen_output_mosaic_uncert_image_file,\
@@ -769,16 +789,22 @@ if __name__ == '__main__':
     # Upload intermediate FITS files to product S3 bucket for diagnostic purposes.
 
     product_s3_bucket = product_s3_bucket_base
+    s3_object_name_reformatted_science_image_filename = job_proc_date + "/jid" + str(jid) + "/" + reformatted_science_image_filename
+    s3_object_name_reformatted_science_uncert_image_filename = job_proc_date + "/jid" + str(jid) + "/" + reformatted_science_uncert_image_filename
     s3_object_name_sci_fits_file_with_pv = job_proc_date + "/jid" + str(jid) + "/" + sci_fits_file_with_pv
     s3_object_name_ref_fits_file_with_pv = job_proc_date + "/jid" + str(jid) + "/" + ref_fits_file_with_pv
     s3_object_name_output_resampled_reference_image = job_proc_date + "/jid" + str(jid) + "/" + output_resampled_reference_image
     s3_object_name_output_resampled_reference_uncert_image = job_proc_date + "/jid" + str(jid) + "/" + output_resampled_reference_uncert_image
 
-    filenames = [sci_fits_file_with_pv,
+    filenames = [reformatted_science_image_filename,
+                 reformatted_science_uncert_image_filename,
+                 sci_fits_file_with_pv,
                  output_resampled_reference_image,
                  output_resampled_reference_uncert_image]
 
-    objectnames = [s3_object_name_sci_fits_file_with_pv,
+    objectnames = [s3_object_name_reformatted_science_image_filename,
+                   s3_object_name_reformatted_science_uncert_image_filename,
+                   s3_object_name_sci_fits_file_with_pv,
                    s3_object_name_output_resampled_reference_image,
                    s3_object_name_output_resampled_reference_uncert_image]
 
@@ -789,13 +815,7 @@ if __name__ == '__main__':
     upload_files_to_s3_bucket(s3_client,product_s3_bucket,filenames,objectnames)
 
 
-    # Reformat the Troxel OpenUniverse simulated image FITS file
-    # so that the image data are contained in the PRIMARY header.
-    # Compute uncertainty image via simple model (photon noise only).
-
-    reformatted_science_image_filename,\
-        reformatted_science_uncert_image_filename =\
-        reformat_troxel_fits_file_and_compute_uncertainty_image_via_simple_model(science_image_filename,sca_gain)
+    # Compute image statistics for ZOGY.
 
     n_sigma = 3.0
     avg_sci_img,std_sci_img,cnt_sci_img = avg_data_with_clipping(reformatted_science_image_filename,n_sigma)
