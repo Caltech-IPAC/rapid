@@ -288,10 +288,10 @@ def reformat_troxel_fits_file_and_compute_uncertainty_image_via_simple_model(inp
     data = hdul[1].data
 
     np_data = np.array(data)
-    new_row = np.full(arr.shape[1], clipped_image_mean)
-    new_arr = np.append(np_data, [new_row], axis=0)       # Append extra row of trimmed-average background.
+    new_row = np.full(np_data.shape[1], clipped_image_mean)
+    new_arr = np.append(np_data, [new_row], axis=0)                 # Append extra row of trimmed-average background.
     new_col = np.full((new_arr.shape[0], 1), clipped_image_mean)
-    new_np_data = np.append(new_arr, new_col, axis=1)     # Append extra column of trimmed-average background.
+    new_np_data = np.append(new_arr, new_col, axis=1)               # Append extra column of trimmed-average background.
 
     hdu_list = []
     hdu = fits.PrimaryHDU(header=hdr,data=new_np_data)
