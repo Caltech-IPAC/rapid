@@ -789,12 +789,6 @@ if __name__ == '__main__':
     upload_files_to_s3_bucket(s3_client,product_s3_bucket,filenames,objectnames)
 
 
-    # Get listing of working directory as a diagnostic.
-
-    ls_cmd = ['ls','-ltr']
-    exitcode_from_ls = util.execute_command(ls_cmd)
-
-
     # Reformat the Troxel OpenUniverse simulated image FITS file
     # so that the image data are contained in the PRIMARY header.
     # Compute uncertainty image via simple model (photon noise only).
@@ -811,9 +805,12 @@ if __name__ == '__main__':
     print("avg_ref_img,std_ref_img,cnt_ref_img =",avg_ref_img,std_ref_img,cnt_ref_img)
 
 
+    # Download PSF from S3 bucket.
 
+    filename_psf = download_file_from_s3_bucket(s3_client,s3_full_name_psf)
 
-
+    print("s3_full_name_psf = ",s3_full_name_psf)
+    print("filename_psf = ",filename_psf)
 
 
     # The image data in science_image_filename and sci_fits_file_with_pv FITS files are the same, only the
@@ -822,21 +819,39 @@ if __name__ == '__main__':
     # ZOGY only cares about the image data, not what is in the FITS headers.
     # Usage: python py_zogy.py <NewImage> <RefImage> <NewPSF> <RefPSF> <NewSigmaImage> <RefSigmaImage>
     #                    <NewSigmaMode> <RefSigmaMode> <AstUncertX> <AstUncertY> <DiffImage> <DiffPSF> <ScorrImage>
-
-
-    print("s3_full_name_psf = ",s3_full_name_psf)
-
-
-    # /usr/bin/python3
-
+    #
     # Assume top-level directory of rapid git repo is mapped to /code inside Docker container.
-    # /code/modules/zogy/v21Aug2018/py_zogy.py
+
+    python_cmd = '/usr/bin/python3'
+    zogy_code = '/code/modules/zogy/v21Aug2018/py_zogy.py'
+    filename_diffimage
+    filename_diffpsf
+    filename_scorrimage
+
+    zogy_cmd = [python_cmd,
+                zogy_code,
+                reformatted_science_image_filename,
+                output_resampled_reference_image,
+                filename_psf,
+                filename_psf,
+                reformatted_science_uncert_image_filename,
+                output_resampled_reference_uncert_image,
+                str(std_sci_img),
+                str(output_resampled_reference_uncert_image),
+                str(astrometric_uncert_x),
+                str(astrometric_uncert_y),
+                filename_diffimage,
+                filename_diffpsf,
+                filename_scorrimage]
 
 
+    # Get listing of working directory as a diagnostic.
+
+    ls_cmd = ['ls','-ltr']
+    exitcode_from_ls = util.execute_command(ls_cmd)
 
 
-
-
+    # Termination.
 
     terminating_exitcode = 0
 
