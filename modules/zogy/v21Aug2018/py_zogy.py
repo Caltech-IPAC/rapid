@@ -169,16 +169,16 @@ if __name__ == "__main__":
 		# Difference Image
 		tmp = fits.open(sys.argv[1])
 		tmp[0].data = D.astype(np.float32)
-		tmp.writeto(sys.argv[9], output_verify="warn", clobber=True)
+		tmp.writeto(sys.argv[9], output_verify="warn", overwrite=True,checksum=True)
 
 		# S_corr image
 		tmp[0].data = S_corr.astype(np.float32)
-		tmp.writeto(sys.argv[11], output_verify="warn", clobber=True)
+		tmp.writeto(sys.argv[11], output_verify="warn", overwrite=True,checksum=True)
 
 		# PSF Image
 		tmp = fits.open(sys.argv[3])
 		tmp[0].data = P_D.astype(np.float32)
-		tmp.writeto(sys.argv[10], output_verify="warn", clobber=True)
+		tmp.writeto(sys.argv[10], output_verify="warn", overwrite=True,checksum=True)
 
 	elif len(sys.argv) == 14:
 
@@ -190,16 +190,16 @@ if __name__ == "__main__":
 		# Difference Image
 		tmp = fits.open(sys.argv[1])
 		tmp[0].data = D.astype(np.float32)
-		tmp.writeto(sys.argv[11], output_verify="warn", clobber=True)
+		tmp.writeto(sys.argv[11], output_verify="warn", overwrite=True,checksum=True)
 
 		# S_corr image
 		tmp[0].data = S_corr.astype(np.float32)
-		tmp.writeto(sys.argv[13], output_verify="warn", clobber=True)
+		tmp.writeto(sys.argv[13], output_verify="warn", overwrite=True,checksum=True)
 
 		# PSF Image
 		tmp = fits.open(sys.argv[3])
 		tmp[0].data = P_D.astype(np.float32)
-		tmp.writeto(sys.argv[12], output_verify="warn", clobber=True)
+		tmp.writeto(sys.argv[12], output_verify="warn", overwrite=True,checksum=True)
 
 	else:
 
