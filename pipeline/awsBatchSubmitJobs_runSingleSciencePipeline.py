@@ -824,9 +824,9 @@ if __name__ == '__main__':
 
     python_cmd = '/usr/bin/python3'
     zogy_code = '/code/modules/zogy/v21Aug2018/py_zogy.py'
-    filename_diffimage
-    filename_diffpsf
-    filename_scorrimage
+    filename_diffimage = 'diffimage.fits'
+    filename_diffpsf = 'diffpsf.fits'
+    filename_scorrimage = 'scorrimage.fits'
 
     zogy_cmd = [python_cmd,
                 zogy_code,
@@ -843,6 +843,24 @@ if __name__ == '__main__':
                 filename_diffimage,
                 filename_diffpsf,
                 filename_scorrimage]
+
+
+    # Upload intermediate FITS files to product S3 bucket for diagnostic purposes.
+
+    product_s3_bucket = product_s3_bucket_base
+    s3_object_name_diffimage = job_proc_date + "/jid" + str(jid) + "/" + filename_diffimage
+    s3_object_name_diffpsf = job_proc_date + "/jid" + str(jid) + "/" + filename_diffpsf
+    s3_object_name_scorrimage = job_proc_date + "/jid" + str(jid) + "/" + filename_scorrimage
+
+    filenames = [filename_diffimage,
+                 filename_diffpsf,
+                 filename_scorrimage]
+
+    objectnames = [s3_object_name_diffimage,
+                   s3_object_name_diffpsf,
+                   s3_object_name_scorrimage]
+
+    upload_files_to_s3_bucket(s3_client,product_s3_bucket,filenames,objectnames)
 
 
     # Get listing of working directory as a diagnostic.
