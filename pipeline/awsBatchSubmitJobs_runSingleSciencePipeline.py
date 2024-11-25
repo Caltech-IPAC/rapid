@@ -425,7 +425,46 @@ if __name__ == '__main__':
 
     # Optionally read in CVS file containing inputs for generating reference image.
 
-    if rfid is None:
+    if rfid is not None:
+
+
+        # Download reference image and associated coverage map and uncertainty image from S3 bucket.
+
+        s3_full_name_reference_image = config_input['REF_IMAGE']['filename']
+        awaicgen_output_mosaic_image_file = download_file_from_s3_bucket(s3_client,s3_full_name_reference_image)
+
+        # For now, require the filename derived from the database record is same as in job configuration file under AWAICGEN block.
+
+        if awaicgen_output_mosaic_image_file == awaicgen_dict["awaicgen_output_mosaic_image_file"]:
+
+        else:
+            print("*** Error: Filename derived from database record {} is not same as filename in job configuration file {}; quitting...".\
+                format(awaicgen_output_mosaic_image_file,awaicgen_dict["awaicgen_output_mosaic_image_file"]))
+            exit(64)
+
+        awaicgen_output_mosaic_cov_map_file = awaicgen_dict["awaicgen_output_mosaic_cov_map_file"]
+        awaicgen_output_mosaic_uncert_image_file = awaicgen_dict["awaicgen_output_mosaic_uncert_image_file"]
+        product_s3_bucket = product_s3_bucket_base
+        awaicgen_output_mosaic_cov_map_s3_bucket_object_name = job_proc_date + "/jid" + str(jid) + "/" +\
+            awaicgen_dict["awaicgen_output_mosaic_cov_map_file"]
+        awaicgen_output_mosaic_uncert_image_s3_bucket_object_name = job_proc_date + "/jid" + str(jid) + "/" +\
+            awaicgen_dict["awaicgen_output_mosaic_uncert_image_file"]
+
+        print("Downloading s3://{}/{} into {}...".\
+            format(product_s3_bucket,awaicgen_output_mosaic_cov_map_s3_bucket_object_name,awaicgen_output_mosaic_cov_map_file))
+
+        response = s3_client.download_file(product_s3_bucket,awaicgen_output_mosaic_cov_map_s3_bucket_object_name,awaicgen_output_mosaic_cov_map_file)
+
+        print("response =",response)
+
+        print("Downloading s3://{}/{} into {}...".\
+            format(product_s3_bucket,awaicgen_output_mosaic_uncert_image_s3_bucket_object_name,awaicgen_output_mosaic_uncert_image_file))
+
+        response = s3_client.download_file(product_s3_bucket,awaicgen_output_mosaic_uncert_image_s3_bucket_object_name,awaicgen_output_mosaic_uncert_image_file)
+
+        print("response =",response)
+
+    else:
 
         print("Downloading s3://{}/{} into {}...".format(job_info_s3_bucket,input_images_csv_file_s3_bucket_object_name,input_images_csv_filename))
 
