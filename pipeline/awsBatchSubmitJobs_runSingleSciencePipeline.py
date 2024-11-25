@@ -416,7 +416,7 @@ if __name__ == '__main__':
 
     # Download gzipped science image from S3 bucket.
 
-    science_image_filename_gz = download_file_from_s3_bucket(s3_client,s3_full_name_science_image)
+    science_image_filename_gz,subdirs_science_image = download_file_from_s3_bucket(s3_client,s3_full_name_science_image)
 
 
     # Upload science image to product S3 bucket (in order to test upload method).
@@ -813,7 +813,7 @@ if __name__ == '__main__':
 
     # Download PSF from S3 bucket.
 
-    filename_psf = download_file_from_s3_bucket(s3_client,s3_full_name_psf)
+    filename_psf,subdirs_psf = download_file_from_s3_bucket(s3_client,s3_full_name_psf)
 
     print("s3_full_name_psf = ",s3_full_name_psf)
     print("filename_psf = ",filename_psf)
