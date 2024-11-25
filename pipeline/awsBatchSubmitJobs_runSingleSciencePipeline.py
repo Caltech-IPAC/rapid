@@ -136,10 +136,11 @@ def download_file_from_s3_bucket(s3_client,s3_full_name):
         print("*** Error: Could not parse s3_full_name; quitting...")
         exit(64)
 
-    string_match2 = re.match(r".+/(.+)", s3_object_name)                 # TODO
+    string_match2 = re.match(r"(.+)/(.+)", s3_object_name)                 # TODO
 
     try:
-        filename = string_match2.group(1)
+        subdirs = string_match2.group(1)
+        filename = string_match2.group(2)
         print("filename = {}".format(filename))
 
     except:
@@ -155,7 +156,7 @@ def download_file_from_s3_bucket(s3_client,s3_full_name):
 
     print("response =",response)
 
-    return filename
+    return filename,subdirs
 
 
 def upload_files_to_s3_bucket(s3_client,s3_bucket_name,filenames,s3_object_names):
@@ -433,7 +434,7 @@ if __name__ == '__main__':
         # Download reference image and associated coverage map and uncertainty image from S3 bucket.
 
         s3_full_name_reference_image = config_input['REF_IMAGE']['filename']
-        awaicgen_output_mosaic_image_file = download_file_from_s3_bucket(s3_client,s3_full_name_reference_image)
+        awaicgen_output_mosaic_image_file,subdirs = download_file_from_s3_bucket(s3_client,s3_full_name_reference_image)
 
         # For now, require the filename derived from the database record is same as in job configuration file under AWAICGEN block.
 
@@ -445,9 +446,9 @@ if __name__ == '__main__':
 
         awaicgen_output_mosaic_cov_map_file = awaicgen_dict["awaicgen_output_mosaic_cov_map_file"]
         awaicgen_output_mosaic_uncert_image_file = awaicgen_dict["awaicgen_output_mosaic_uncert_image_file"]
-        awaicgen_output_mosaic_cov_map_s3_bucket_object_name = job_proc_date + "/jid" + str(jid) + "/" +\
+        awaicgen_output_mosaic_cov_map_s3_bucket_object_name = subdirs + "/" +\
             awaicgen_dict["awaicgen_output_mosaic_cov_map_file"]
-        awaicgen_output_mosaic_uncert_image_s3_bucket_object_name = job_proc_date + "/jid" + str(jid) + "/" +\
+        awaicgen_output_mosaic_uncert_image_s3_bucket_object_name = subdirs + "/" +\
             awaicgen_dict["awaicgen_output_mosaic_uncert_image_file"]
 
         print("Downloading s3://{}/{} into {}...".\
