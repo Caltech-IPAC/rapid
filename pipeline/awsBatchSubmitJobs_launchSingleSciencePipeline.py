@@ -544,7 +544,7 @@ if __name__ == '__main__':
     if rfid is not None:
 
         print("*** Message: Reference image found in database for rfid={}".format(rfid))
-        input_images_csv_file = None
+        input_images_csv_file = "None"
 
     else:
         filename_refimage = "None"
