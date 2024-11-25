@@ -342,8 +342,8 @@ while True:
         a = a + 1
         print("n,a =",n,a)
 
-    print("Sleeping 10 seconds...")
-    time.sleep(10)
+    print("Sleeping 30 seconds...")
+    time.sleep(30)
     print("Waking up...")
 
     if i == 3:
