@@ -136,7 +136,7 @@ def download_file_from_s3_bucket(s3_client,s3_full_name):
         print("*** Error: Could not parse s3_full_name; quitting...")
         exit(64)
 
-    string_match2 = re.match(r".+?/(.+)", s3_object_name)                 # TODO
+    string_match2 = re.match(r".+/(.+)", s3_object_name)                 # TODO
 
     try:
         filename = string_match2.group(1)
@@ -852,6 +852,16 @@ if __name__ == '__main__':
     exitcode_from_zogy = util.execute_command(zogy_cmd)
 
 
+
+    # Compute MD5 checksum of difference image.
+
+    print("Computing checksum of ",filename_diffimage)
+    checksum_diffimage = db.compute_checksum(filename_diffimage)
+
+    if checksum_diffimage == 65 or checksum_diffimage == 68 or checksum_diffimage == 66:
+        print("*** Error: Unexpected value for checksum =",checksum_diffimage)
+
+
     # Upload intermediate FITS files to product S3 bucket for diagnostic purposes.
 
     product_s3_bucket = product_s3_bucket_base
@@ -887,6 +897,7 @@ if __name__ == '__main__':
     zogy_diffpsf_name_for_db_record = "s3://{}/{}".format(product_s3_bucket,s3_object_name_diffpsf)
     zogy_scorrimage_name_for_db_record = "s3://{}/{}".format(product_s3_bucket,s3_object_name_scorrimage)
 
+    product_config['ZOGY']['zogy_output_diffimage_file_checksum'] = checksum_diffimage
     product_config['ZOGY']['zogy_output_diffimage_file'] = zogy_diffimage_name_for_db_record
     product_config['ZOGY']['zogy_output_diffpsf_file'] = zogy_diffpsf_name_for_db_record
     product_config['ZOGY']['zogy_output_scorrimage_file'] = zogy_scorrimage_name_for_db_record
