@@ -500,9 +500,9 @@ def convert_from_sip_to_pv(input_fits_file_with_sip,hdu_index,output_fits_file_w
 
 
 #-------------------------------------------------------------------
-# Resample reference image  and its uncertainty image, with either no
-# distortion or sip distortion to the reference frame of the
-# science FITS file with sip distortion.
+# Resample reference image and its coverage map and uncertainty image,
+# with either no distortion or sip distortion to the reference frame
+# of thescience FITS file with sip distortion.
 # Since swarp is utilized, both output science and reference images
 # are converted to pv distortion, as necessary.
 # Provide input hdu indices (zero based) for where input image data reside.
@@ -512,6 +512,7 @@ def resample_reference_image_to_science_image_with_pv_distortion(
     input_science_image,
     hdu_index_for_science_image_data,
     input_reference_image,
+    input_reference_cov_map,
     input_reference_uncert_image,
     hdu_index_for_reference_image_data,
     pv_convert_flag_for_reference_image_data,
@@ -520,36 +521,42 @@ def resample_reference_image_to_science_image_with_pv_distortion(
 
     # Output resampled reference image.
     output_resampled_reference_image = input_reference_image.replace(".fits","_resampled.fits")
+    output_resampled_reference_cov_map = input_reference_cov_map.replace(".fits","_resampled.fits")
     output_resampled_reference_uncert_image = input_reference_uncert_image.replace(".fits","_resampled.fits")
 
     print("input_science_image =",input_science_image)
     print("input_reference_image =",input_reference_image)
+    print("input_reference_cov_map =",input_reference_cov_map)
     print("input_reference_uncert_image =",input_reference_uncert_image)
     print("output_resampled_reference_image =",output_resampled_reference_image)
+    print("output_resampled_reference_cov_map =",output_resampled_reference_cov_map)
     print("output_resampled_reference_uncert_image =",output_resampled_reference_uncert_image)
 
 
     # Convert sip distortion to pv distortion.
 
-    sci_fits_file_with_pv = input_science_image.replace(".fits","_pv.fits")
-    ref_fits_file_with_pv = input_reference_image.replace(".fits","_pv.fits")
+    sci_img_fits_file_with_pv = input_science_image.replace(".fits","_pv.fits")
+    ref_img_fits_file_with_pv = input_reference_image.replace(".fits","_pv.fits")
+    ref_cov_fits_file_with_pv = input_reference_cov_map.replace(".fits","_pv.fits")
     ref_uncert_fits_file_with_pv = input_reference_uncert_image.replace(".fits","_pv.fits")
 
 
-    convert_from_sip_to_pv(input_science_image,hdu_index_for_science_image_data,sci_fits_file_with_pv)
+    convert_from_sip_to_pv(input_science_image,hdu_index_for_science_image_data,sci_img_fits_file_with_pv)
 
     if pv_convert_flag_for_reference_image_data:
-        convert_from_sip_to_pv(input_reference_image,hdu_index_for_reference_image_data,ref_fits_file_with_pv)
+        convert_from_sip_to_pv(input_reference_image,hdu_index_for_reference_image_data,ref_img_fits_file_with_pv)
+        convert_from_sip_to_pv(input_reference_cov_map,hdu_index_for_reference_image_data,ref_cov_fits_file_with_pv)
         convert_from_sip_to_pv(input_reference_uncert_image,hdu_index_for_reference_image_data,ref_uncert_fits_file_with_pv)
 
 
     # Output weight files.
 
     output_weight_file = output_resampled_reference_image.replace(".fits","_wt.fits")
+    output_cov_weight_file = output_resampled_reference_cov_image.replace(".fits","_wt.fits")
     output_uncert_weight_file = output_resampled_reference_uncert_image.replace(".fits","_wt.fits")
 
 
-    # Create symlink to sci_fits_file_with_pv from output_resampled_reference_image,
+    # Create symlink to sci_img_fits_file_with_pv from output_resampled_reference_image,
     # which requires the .head filename suffix, in order to be fed implicitly into swarp.
 
     distort_grid_header_file_symlink = output_resampled_reference_image.replace(".fits",".head")
@@ -559,7 +566,19 @@ def resample_reference_image_to_science_image_with_pv_distortion(
     if os.path.islink(distort_grid_header_file_symlink):
         os.unlink(distort_grid_header_file_symlink)
 
-    os.symlink(sci_fits_file_with_pv, distort_grid_header_file_symlink)
+    os.symlink(sci_img_fits_file_with_pv, distort_grid_header_file_symlink)
+
+
+    # Repeat for reference coverage map.
+
+    distort_grid_header_file_symlink = output_resampled_reference_cov_map.replace(".fits",".head")
+
+    print("distort_grid_header_file_symlink =",distort_grid_header_file_symlink)
+
+    if os.path.islink(distort_grid_header_file_symlink):
+        os.unlink(distort_grid_header_file_symlink)
+
+    os.symlink(sci_img_fits_file_with_pv, distort_grid_header_file_symlink)
 
 
     # Repeat for reference uncertainty image.
@@ -571,13 +590,13 @@ def resample_reference_image_to_science_image_with_pv_distortion(
     if os.path.islink(distort_grid_header_file_symlink):
         os.unlink(distort_grid_header_file_symlink)
 
-    os.symlink(sci_fits_file_with_pv, distort_grid_header_file_symlink)
+    os.symlink(sci_img_fits_file_with_pv, distort_grid_header_file_symlink)
 
 
     # Swarp the reference image.
 
     if pv_convert_flag_for_reference_image_data:
-        swarp_dict["swarp_input_image".lower()] = ref_fits_file_with_pv
+        swarp_dict["swarp_input_image".lower()] = ref_img_fits_file_with_pv
     else:
         swarp_dict["swarp_input_image".lower()] = input_reference_image
 
@@ -586,6 +605,23 @@ def resample_reference_image_to_science_image_with_pv_distortion(
 
 
     # Execute swarp for the reference image.
+
+    swarp_cmd = build_swarp_command_line_args(swarp_dict)
+    exitcode_from_swarp = execute_command(swarp_cmd)
+
+
+    # Swarp the reference coverage map.
+
+    if pv_convert_flag_for_reference_image_data:
+        swarp_dict["swarp_input_image".lower()] = ref_cov_fits_file_with_pv
+    else:
+        swarp_dict["swarp_input_image".lower()] = input_reference_cov_map
+
+    swarp_dict["swarp_IMAGEOUT_NAME".lower()] = output_resampled_reference_cov_map
+    swarp_dict["swarp_WEIGHTOUT_NAME".lower()] = output_cov_weight_file
+
+
+    # Execute swarp for the reference coverage map.
 
     swarp_cmd = build_swarp_command_line_args(swarp_dict)
     exitcode_from_swarp = execute_command(swarp_cmd)
@@ -610,10 +646,12 @@ def resample_reference_image_to_science_image_with_pv_distortion(
 
     # Return select filenames (in case the files need to be uploaded to the S3 product bucket for examination).
 
-    return sci_fits_file_with_pv,\
-        ref_fits_file_with_pv,\
+    return sci_img_fits_file_with_pv,\
+        ref_img_fits_file_with_pv,\
+        ref_cov_fits_file_with_pv,\
         ref_uncert_fits_file_with_pv,\
         output_resampled_reference_image,\
+        output_resampled_reference_cov_map,\
         output_resampled_reference_uncert_image
 
 
