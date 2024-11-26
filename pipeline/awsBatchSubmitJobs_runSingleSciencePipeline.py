@@ -885,6 +885,8 @@ if __name__ == '__main__':
     # Mask difference image with output_resampled_reference_cov_map.
 
     filename_diffimage_masked = 'diffimage_masked.fits'
+    filename_diffpsf_masked = 'diffpsf_masked.fits'
+    filename_scorrimage_masked = 'scorrimage_masked.fits'
 
     mask_difference_image_with_resampled_reference_cov_map(filename_diffimage,output_resampled_reference_cov_map,filename_diffimage_masked)
     mask_difference_image_with_resampled_reference_cov_map(filename_diffpsf,output_resampled_reference_cov_map,filename_diffpsf_masked)
