@@ -310,6 +310,29 @@ def reformat_troxel_fits_file_and_compute_uncertainty_image_via_simple_model(inp
     return fname_output,fname_output_unc
 
 
+def mask_difference_image_with_resampled_reference_cov_map(input_filename,mask_filename,output_filename):
+
+    hdul_input = fits.open(input_filename)
+    hdr_input = hdul_input[0].header
+    data_input = hdul_input[0].data
+
+    hdul_mask = fits.open(mask_filename)
+    data_mask = hdul_mask[0].data
+
+    np_data_input = np.array(data_input)
+    np_data_mask = np.array(data_mask)
+
+    np_data_output = np.where(np_data_mask >= 1.0,np_data_input,0.0)
+
+    hdu_list = []
+    hdu = fits.PrimaryHDU(header=hdr_input,data=np_data_output)
+    hdu_list.append(hdu)
+    hdu = fits.HDUList(hdu_list)
+    hdu.writeto(output_filename,overwrite=True,checksum=True)
+
+    return
+
+
 if __name__ == '__main__':
 
 
@@ -760,12 +783,15 @@ if __name__ == '__main__':
 
     sci_fits_file_with_pv,\
         ref_fits_file_with_pv,\
+        ref_cov_fits_file_with_pv,\
         ref_uncert_fits_file_with_pv,\
         output_resampled_reference_image,\
+        output_resampled_reference_cov_map,\
         output_resampled_reference_uncert_image =\
         util.resample_reference_image_to_science_image_with_pv_distortion(reformatted_science_image_filename,\
                                                                           hdu_index_for_science_image_data,\
                                                                           awaicgen_output_mosaic_image_file,\
+                                                                          awaicgen_output_mosaic_cov_map_file,\
                                                                           awaicgen_output_mosaic_uncert_image_file,\
                                                                           hdu_index_for_reference_image_data,\
                                                                           pv_convert_flag_for_reference_image_data,\
@@ -780,18 +806,21 @@ if __name__ == '__main__':
     s3_object_name_sci_fits_file_with_pv = job_proc_date + "/jid" + str(jid) + "/" + sci_fits_file_with_pv
     s3_object_name_ref_fits_file_with_pv = job_proc_date + "/jid" + str(jid) + "/" + ref_fits_file_with_pv
     s3_object_name_output_resampled_reference_image = job_proc_date + "/jid" + str(jid) + "/" + output_resampled_reference_image
+    s3_object_name_output_resampled_reference_cov_map = job_proc_date + "/jid" + str(jid) + "/" + output_resampled_reference_cov_map
     s3_object_name_output_resampled_reference_uncert_image = job_proc_date + "/jid" + str(jid) + "/" + output_resampled_reference_uncert_image
 
     filenames = [reformatted_science_image_filename,
                  reformatted_science_uncert_image_filename,
                  sci_fits_file_with_pv,
                  output_resampled_reference_image,
+                 output_resampled_reference_cov_map,
                  output_resampled_reference_uncert_image]
 
     objectnames = [s3_object_name_reformatted_science_image_filename,
                    s3_object_name_reformatted_science_uncert_image_filename,
                    s3_object_name_sci_fits_file_with_pv,
                    s3_object_name_output_resampled_reference_image,
+                   s3_object_name_output_resampled_reference_cov_map,
                    s3_object_name_output_resampled_reference_uncert_image]
 
     if pv_convert_flag_for_reference_image_data:
@@ -853,11 +882,19 @@ if __name__ == '__main__':
     exitcode_from_zogy = util.execute_command(zogy_cmd)
 
 
+    # Mask difference image with output_resampled_reference_cov_map.
 
-    # Compute MD5 checksum of difference image.
+    filename_diffimage_masked = 'diffimage_masked.fits'
 
-    print("Computing checksum of ",filename_diffimage)
-    checksum_diffimage = db.compute_checksum(filename_diffimage)
+    mask_difference_image_with_resampled_reference_cov_map(filename_diffimage,output_resampled_reference_cov_map,filename_diffimage_masked)
+    mask_difference_image_with_resampled_reference_cov_map(filename_diffpsf,output_resampled_reference_cov_map,filename_diffpsf_masked)
+    mask_difference_image_with_resampled_reference_cov_map(filename_scorrimage,output_resampled_reference_cov_map,filename_scorrimage_masked)
+
+
+    # Compute MD5 checksum of masked difference image.
+
+    print("Computing checksum of ",filename_diffimage_masked)
+    checksum_diffimage = db.compute_checksum(filename_diffimage_masked)
 
     if checksum_diffimage == 65 or checksum_diffimage == 68 or checksum_diffimage == 66:
         print("*** Error: Unexpected value for checksum =",checksum_diffimage)
@@ -866,13 +903,13 @@ if __name__ == '__main__':
     # Upload intermediate FITS files to product S3 bucket for diagnostic purposes.
 
     product_s3_bucket = product_s3_bucket_base
-    s3_object_name_diffimage = job_proc_date + "/jid" + str(jid) + "/" + filename_diffimage
-    s3_object_name_diffpsf = job_proc_date + "/jid" + str(jid) + "/" + filename_diffpsf
-    s3_object_name_scorrimage = job_proc_date + "/jid" + str(jid) + "/" + filename_scorrimage
+    s3_object_name_diffimage = job_proc_date + "/jid" + str(jid) + "/" + filename_diffimage_masked
+    s3_object_name_diffpsf = job_proc_date + "/jid" + str(jid) + "/" + filename_diffpsf_masked
+    s3_object_name_scorrimage = job_proc_date + "/jid" + str(jid) + "/" + filename_scorrimage_masked
 
-    filenames = [filename_diffimage,
-                 filename_diffpsf,
-                 filename_scorrimage]
+    filenames = [filename_diffimage_masked,
+                 filename_diffpsf_masked,
+                 filename_scorrimage_masked]
 
     objectnames = [s3_object_name_diffimage,
                    s3_object_name_diffpsf,
