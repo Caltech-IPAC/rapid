@@ -552,7 +552,7 @@ def resample_reference_image_to_science_image_with_pv_distortion(
     # Output weight files.
 
     output_weight_file = output_resampled_reference_image.replace(".fits","_wt.fits")
-    output_cov_weight_file = output_resampled_reference_cov_image.replace(".fits","_wt.fits")
+    output_cov_weight_file = output_resampled_reference_cov_map.replace(".fits","_wt.fits")
     output_uncert_weight_file = output_resampled_reference_uncert_image.replace(".fits","_wt.fits")
 
 
