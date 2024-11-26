@@ -610,6 +610,18 @@ def resample_reference_image_to_science_image_with_pv_distortion(
     exitcode_from_swarp = execute_command(swarp_cmd)
 
 
+    # Override swarp-parameter dictionary to disable background subtraction
+    # for both reference coverage map and reference uncertainty image.
+
+    swarp_SUBTRACT_BACK = 'N'
+    swarp_BACK_TYPE = 'MANUAL'
+    swarp_BACK_DEFAULT = '0.0'
+
+    swarp_dict["swarp_SUBTRACT_BACK".lower()] = swarp_SUBTRACT_BACK
+    swarp_dict["swarp_BACK_TYPE".lower()] = swarp_BACK_TYPE
+    swarp_dict["swarp_BACK_DEFAULT".lower()] = swarp_BACK_DEFAULT
+
+
     # Swarp the reference coverage map.
 
     if pv_convert_flag_for_reference_image_data:
