@@ -885,11 +885,9 @@ if __name__ == '__main__':
     # Mask difference image with output_resampled_reference_cov_map.
 
     filename_diffimage_masked = 'diffimage_masked.fits'
-    filename_diffpsf_masked = 'diffpsf_masked.fits'
     filename_scorrimage_masked = 'scorrimage_masked.fits'
 
     mask_difference_image_with_resampled_reference_cov_map(filename_diffimage,output_resampled_reference_cov_map,filename_diffimage_masked)
-    mask_difference_image_with_resampled_reference_cov_map(filename_diffpsf,output_resampled_reference_cov_map,filename_diffpsf_masked)
     mask_difference_image_with_resampled_reference_cov_map(filename_scorrimage,output_resampled_reference_cov_map,filename_scorrimage_masked)
 
 
@@ -906,11 +904,11 @@ if __name__ == '__main__':
 
     product_s3_bucket = product_s3_bucket_base
     s3_object_name_diffimage = job_proc_date + "/jid" + str(jid) + "/" + filename_diffimage_masked
-    s3_object_name_diffpsf = job_proc_date + "/jid" + str(jid) + "/" + filename_diffpsf_masked
+    s3_object_name_diffpsf = job_proc_date + "/jid" + str(jid) + "/" + filename_diffpsf
     s3_object_name_scorrimage = job_proc_date + "/jid" + str(jid) + "/" + filename_scorrimage_masked
 
     filenames = [filename_diffimage_masked,
-                 filename_diffpsf_masked,
+                 filename_diffpsf,
                  filename_scorrimage_masked]
 
     objectnames = [s3_object_name_diffimage,
