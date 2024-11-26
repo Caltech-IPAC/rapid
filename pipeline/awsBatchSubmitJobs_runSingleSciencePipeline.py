@@ -891,9 +891,6 @@ if __name__ == '__main__':
 
     product_config['ZOGY'] = {}
 
-    product_config['ZOGY']['astrometric_uncert_x'] = str(astrometric_uncert_x)
-    product_config['ZOGY']['astrometric_uncert_y'] = str(astrometric_uncert_y)
-
     zogy_diffimage_name_for_db_record = "s3://{}/{}".format(product_s3_bucket,s3_object_name_diffimage)
     zogy_diffpsf_name_for_db_record = "s3://{}/{}".format(product_s3_bucket,s3_object_name_diffpsf)
     zogy_scorrimage_name_for_db_record = "s3://{}/{}".format(product_s3_bucket,s3_object_name_scorrimage)
