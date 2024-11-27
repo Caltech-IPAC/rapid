@@ -1220,7 +1220,7 @@ class RAPIDDB:
         # Define query template.
 
         query_template =\
-            "select rfid,filename " +\
+            "select rfid,filename,infobits " +\
             "from RefImages " +\
             "where vbest > 0 " +\
             "and status > 0 " +\
@@ -1251,16 +1251,18 @@ class RAPIDDB:
         if record is not None:
             rfid = record[0]
             filename = record[1]
+            infobits = record[2]
 
         else:
             rfid = None
             filename = None
+            infobits = None
 
             print("*** Error: Could not get best RefImages database record; continuing...")
             self.exit_code = 67
 
 
-        return rfid,filename
+        return rfid,filename,infobits
 
 
 ########################################################################################################
@@ -1581,3 +1583,214 @@ class RAPIDDB:
 
 
         return psfid,filename
+
+
+########################################################################################################
+
+    def get_info_for_job(self,jid):
+
+        '''
+        Query select columns in Jobs database table for given JID.
+        '''
+
+        self.exit_code = 0
+
+
+        # Define query template.
+
+        query_template =\
+            "select ppid,rid,rfid,expid,sca,field,fid,started,ended,status " +\
+            "from Jobs " +\
+            "where jid = TEMPLATE_JID; "
+
+
+        # Formulate query by substituting parameters into query template.
+
+        print('----> jid = {}'.format(jid))
+
+        rep = {"TEMPLATE_JID": str(jid)}
+
+        rep = dict((re.escape(k), v) for k, v in rep.items())
+        pattern = re.compile("|".join(rep.keys()))
+        query = pattern.sub(lambda m: rep[re.escape(m.group(0))], query_template)
+
+        print('query = {}'.format(query))
+
+
+        # Execute query.
+
+        self.cur.execute(query)
+        record = self.cur.fetchone()
+
+        if record is not None:
+            ppid = record[0]
+            rid = record[1]
+            rfid = record[2]
+            expid = record[3]
+            sca = record[4]
+            field = record[5]
+            fid = record[6]
+            started = record[7]
+            ended = record[8]
+            status = record[9]
+
+        else:
+            print("*** Error: Could not get select columns from Jobs database record; returning...")
+            self.exit_code = 67
+
+
+        return record
+
+
+########################################################################################################
+
+    def add_diffimage(self,rid,ppid,rfid,infobitssci,infobitsref,
+        ra0,dec0,ra1,dec1,ra2,dec2,ra3,dec3,ra4,dec4,status,filename,checksum):
+
+        '''
+        Add record in DiffImages database table.
+        '''
+
+        self.exit_code = 0
+
+
+        # Define query template.
+
+        query_template =\
+            "select * from addDiffImage(" +\
+            "cast(TEMPLATE_RID as integer)," +\
+            "cast(TEMPLATE_PPID as smallint)," +\
+            "cast(TEMPLATE_RFID as integer)," +\
+            "cast(TEMPLATE_INFOBITSSCI as integer)," +\
+            "cast(TEMPLATE_INFOBITSREF as integer)," +\
+            "cast(TEMPLATE_RA0 as double precision)," +\
+            "cast(TEMPLATE_DEC0 as double precision)," +\
+            "cast(TEMPLATE_RA1 as double precision)," +\
+            "cast(TEMPLATE_DEC1 as double precision)," +\
+            "cast(TEMPLATE_RA2 as double precision)," +\
+            "cast(TEMPLATE_DEC2 as double precision)," +\
+            "cast(TEMPLATE_RA3 as double precision)," +\
+            "cast(TEMPLATE_DEC3 as double precision)," +\
+            "cast(TEMPLATE_RA4 as double precision)," +\
+            "cast(TEMPLATE_DEC4 as double precision)," +\
+            "cast('TEMPLATE_FILENAME' as character varying(255))," +\
+            "cast('TEMPLATE_CHECKSUM' as character varying(32))," +\
+            "cast(TEMPLATE_STATUS as smallint)) as " +\
+            "(pid integer," +\
+            " version smallint);"
+
+
+        # Query database.
+
+        print('----> rid = {}'.format(rid))
+        print('----> ppid = {}'.format(ppid))
+        print('----> rfid = {}'.format(rfid))
+        print('----> filename = {}'.format(filename))
+
+        rep = {"TEMPLATE_RID": str(rid),
+               "TEMPLATE_PPID": str(ppid),
+               "TEMPLATE_RFID": str(rfid),
+               "TEMPLATE_INFOBITSSCI": str(infobitssci),
+               "TEMPLATE_INFOBITSREF": str(infobitsref)}
+
+        rep["TEMPLATE_RA0"] = str(ra0)
+        rep["TEMPLATE_DEC0"] = str(dec0)
+        rep["TEMPLATE_RA1"] = str(ra1)
+        rep["TEMPLATE_DEC1"] = str(dec1)
+        rep["TEMPLATE_RA2"] = str(ra2)
+        rep["TEMPLATE_DEC2"] = str(dec2)
+        rep["TEMPLATE_RA3"] = str(ra3)
+        rep["TEMPLATE_DEC3"] = str(dec3)
+        rep["TEMPLATE_RA4"] = str(ra4)
+        rep["TEMPLATE_DEC4"] = str(dec4)
+
+        rep["TEMPLATE_FILENAME"] = filename
+        rep["TEMPLATE_CHECKSUM"] = checksum
+        rep["TEMPLATE_STATUS"] = str(status)
+
+
+        rep = dict((re.escape(k), v) for k, v in rep.items())
+        pattern = re.compile("|".join(rep.keys()))
+        query = pattern.sub(lambda m: rep[re.escape(m.group(0))], query_template)
+
+        print('query = {}'.format(query))
+
+        self.cur.execute(query)
+        record = self.cur.fetchone()
+
+        if record is not None:
+            self.pid = record[0]
+            self.version = record[1]
+        else:
+            self.pid = None
+            self.version = None
+            print("*** Error: Could not insert DiffImages record; returning...")
+            self.exit_code = 67
+            return
+
+        if self.exit_code == 0:
+            self.conn.commit()           # Commit database transaction
+
+
+########################################################################################################
+
+    def update_diffimage(self,rfid,filename,checksum,status,version):
+
+        '''
+        Update record in DiffImages database table.
+        '''
+
+        self.exit_code = 0
+
+
+        # Define query template.
+
+        query_template =\
+            "select * from updateDiffImage(" +\
+            "cast(TEMPLATE_RFID as integer)," +\
+            "cast('TEMPLATE_FILENAME' as character varying(255))," +\
+            "cast('TEMPLATE_CHECKSUM' as character varying(32))," +\
+            "cast(TEMPLATE_STATUS as smallint)," +\
+            "cast(TEMPLATE_VERSION AS smallint));"
+
+
+        # Query database.
+
+        print('----> rfid = {}'.format(rfid))
+        print('----> filename = {}'.format(filename))
+        print('----> checksum = {}'.format(checksum))
+        print('----> status = {}'.format(status))
+        print('----> version = {}'.format(version))
+
+        rep = {"TEMPLATE_RFID": str(rfid),
+               "TEMPLATE_FILENAME": filename,
+               "TEMPLATE_CHECKSUM": checksum}
+
+        rep["TEMPLATE_STATUS"] = str(status)
+        rep["TEMPLATE_VERSION"] = str(version)
+
+        rep = dict((re.escape(k), v) for k, v in rep.items())
+        pattern = re.compile("|".join(rep.keys()))
+        query = pattern.sub(lambda m: rep[re.escape(m.group(0))], query_template)
+
+        print('query = {}'.format(query))
+
+
+        # Execute query.
+
+        try:
+            self.cur.execute(query)
+
+            try:
+                for record in self.cur:
+                    print(record)
+            except:
+                    print("Nothing returned from database stored function; continuing...")
+
+        except (Exception, psycopg2.DatabaseError) as error:
+            print('*** Error updating DiffImages record ({}); skipping...'.format(error))
+            self.exit_code = 67
+            return
+
+        if self.exit_code == 0:
+            self.conn.commit()           # Commit database transaction
