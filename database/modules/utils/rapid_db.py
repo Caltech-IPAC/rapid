@@ -1734,7 +1734,7 @@ class RAPIDDB:
 
 ########################################################################################################
 
-    def update_diffimage(self,rfid,filename,checksum,status,version):
+    def update_diffimage(self,pid,filename,checksum,status,version):
 
         '''
         Update record in DiffImages database table.
@@ -1747,7 +1747,7 @@ class RAPIDDB:
 
         query_template =\
             "select * from updateDiffImage(" +\
-            "cast(TEMPLATE_RFID as integer)," +\
+            "cast(TEMPLATE_PID as integer)," +\
             "cast('TEMPLATE_FILENAME' as character varying(255))," +\
             "cast('TEMPLATE_CHECKSUM' as character varying(32))," +\
             "cast(TEMPLATE_STATUS as smallint)," +\
@@ -1756,13 +1756,13 @@ class RAPIDDB:
 
         # Query database.
 
-        print('----> rfid = {}'.format(rfid))
+        print('----> pid = {}'.format(pid))
         print('----> filename = {}'.format(filename))
         print('----> checksum = {}'.format(checksum))
         print('----> status = {}'.format(status))
         print('----> version = {}'.format(version))
 
-        rep = {"TEMPLATE_RFID": str(rfid),
+        rep = {"TEMPLATE_PID": str(pid),
                "TEMPLATE_FILENAME": filename,
                "TEMPLATE_CHECKSUM": checksum}
 
