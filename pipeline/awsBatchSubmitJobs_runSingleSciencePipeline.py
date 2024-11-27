@@ -311,13 +311,14 @@ def reformat_troxel_fits_file_and_compute_uncertainty_image_via_simple_model(inp
 
 
 #-------------------------------------------------------------------
-# Mask input image with input mask.  Values in input image are
-# reset to 0.0 if mask is less than 0.5 at pixel location.
+# Mask input image with input mask.  Values in input image are reset
+# to 0.0 if mask is less than the given threshold at a pixel location,
+# which is nominally 0.5 in cov map (converted to float after swarping).
 # This method is applied to ZOGY outputs because swarping the
 # reference image resets NaNs to zero, which would otherwise
 # give bogus positive image values in the difference image.
 
-def mask_difference_image_with_resampled_reference_cov_map(input_filename,mask_filename,output_filename):
+def mask_difference_image_with_resampled_reference_cov_map(input_filename,mask_filename,output_filename,thresh):
 
     hdul_input = fits.open(input_filename)
     hdr_input = hdul_input[0].header
@@ -329,7 +330,7 @@ def mask_difference_image_with_resampled_reference_cov_map(input_filename,mask_f
     np_data_input = np.array(data_input)
     np_data_mask = np.array(data_mask)
 
-    np_data_output = np.where(np_data_mask >= 0.5,np_data_input,0.0)
+    np_data_output = np.where(np_data_mask >= thresh,np_data_input,0.0)
 
     hdu_list = []
     hdu = fits.PrimaryHDU(header=hdr_input,data=np_data_output)
@@ -433,6 +434,8 @@ if __name__ == '__main__':
 
     astrometric_uncert_x = float(config_input['ZOGY']['astrometric_uncert_x'])
     astrometric_uncert_y = float(config_input['ZOGY']['astrometric_uncert_y'])
+    zogy_output_diffimage_file = config_input['ZOGY']['zogy_output_diffimage_file']
+    post_zogy_keep_diffimg_lower_cov_map_thresh = float(config_input['ZOGY']['post_zogy_keep_diffimg_lower_cov_map_thresh'])
     s3_full_name_psf = config_input['ZOGY']['s3_full_name_psf']
 
     awaicgen_dict = config_input['AWAICGEN']
@@ -463,6 +466,7 @@ if __name__ == '__main__':
 
         # Download reference image and associated coverage map and uncertainty image from S3 bucket.
 
+        infobits_refimage = config_input['REF_IMAGE']['infobits']
         s3_full_name_reference_image = config_input['REF_IMAGE']['filename']
         awaicgen_output_mosaic_image_file,subdirs = download_file_from_s3_bucket(s3_client,s3_full_name_reference_image)
 
@@ -496,6 +500,8 @@ if __name__ == '__main__':
         print("response =",response)
 
     else:
+
+        infobits_refimage = 0                                                             # TODO
 
         print("Downloading s3://{}/{} into {}...".format(job_info_s3_bucket,input_images_csv_file_s3_bucket_object_name,input_images_csv_filename))
 
@@ -746,13 +752,7 @@ if __name__ == '__main__':
         product_config['REF_IMAGE']['awaicgen_output_mosaic_cov_map_file'] = mosaic_cov_map_name_for_db_record
         product_config['REF_IMAGE']['awaicgen_output_mosaic_uncert_image_file'] = mosaic_uncert_image_name_for_db_record
         product_config['REF_IMAGE']['awaicgen_output_mosaic_image_status'] = str(1)
-        product_config['REF_IMAGE']['awaicgen_output_mosaic_image_infobits'] = str(0)
-
-
-
-
-
-
+        product_config['REF_IMAGE']['awaicgen_output_mosaic_image_infobits'] = str(infobits_refimage)
 
 
     # Unzip the science image gzipped file.
@@ -891,11 +891,18 @@ if __name__ == '__main__':
 
     # Mask difference image with output_resampled_reference_cov_map.
 
-    filename_diffimage_masked = 'diffimage_masked.fits'
+    filename_diffimage_masked = zogy_output_diffimage_file                     # Nominally diffimage_masked.fits
     filename_scorrimage_masked = 'scorrimage_masked.fits'
 
-    mask_difference_image_with_resampled_reference_cov_map(filename_diffimage,output_resampled_reference_cov_map,filename_diffimage_masked)
-    mask_difference_image_with_resampled_reference_cov_map(filename_scorrimage,output_resampled_reference_cov_map,filename_scorrimage_masked)
+    mask_difference_image_with_resampled_reference_cov_map(filename_diffimage,
+                                                           output_resampled_reference_cov_map,
+                                                           filename_diffimage_masked,
+                                                           post_zogy_keep_diffimg_lower_cov_map_thresh)
+
+    mask_difference_image_with_resampled_reference_cov_map(filename_scorrimage,
+                                                           output_resampled_reference_cov_map,
+                                                           filename_scorrimage_masked,
+                                                           post_zogy_keep_diffimg_lower_cov_map_thresh)
 
 
     # Compute MD5 checksum of masked difference image.
@@ -939,10 +946,38 @@ if __name__ == '__main__':
     zogy_diffpsf_name_for_db_record = "s3://{}/{}".format(product_s3_bucket,s3_object_name_diffpsf)
     zogy_scorrimage_name_for_db_record = "s3://{}/{}".format(product_s3_bucket,s3_object_name_scorrimage)
 
+    product_config['ZOGY']['rid'] = str(rid_sciimage)
+    product_config['ZOGY']['ppid'] = str(ppid_sciimage)
+    product_config['ZOGY']['rfid'] = str(rfid)
+
+
+    # By design, the following is redundant.  It is also written to REF_IMAGE block above
+    # only if it was necessary for this pipeline instance to generate a reference image.
+
+    product_config['ZOGY']['awaicgen_output_mosaic_image_infobits'] = str(infobits_refimage)
+
     product_config['ZOGY']['zogy_output_diffimage_file_checksum'] = checksum_diffimage
     product_config['ZOGY']['zogy_output_diffimage_file'] = zogy_diffimage_name_for_db_record
     product_config['ZOGY']['zogy_output_diffpsf_file'] = zogy_diffpsf_name_for_db_record
     product_config['ZOGY']['zogy_output_scorrimage_file'] = zogy_scorrimage_name_for_db_record
+    product_config['ZOGY']['zogy_output_diffimage_file_status'] = str(1)
+    product_config['ZOGY']['zogy_output_diffimage_file_infobits'] = str(0)                                        # TODO
+
+
+    # The following sky positions are correct for the difference image
+    # only because the current code reprojects the reference image
+    # into the distorted grid of the science image.
+
+    product_config['ZOGY']['ra0'] = str(ra0_sciimage)
+    product_config['ZOGY']['dec0'] = str(dec0_sciimage)
+    product_config['ZOGY']['ra1'] = str(ra1_sciimage)
+    product_config['ZOGY']['dec1'] = str(dec1_sciimage)
+    product_config['ZOGY']['ra2'] = str(ra2_sciimage)
+    product_config['ZOGY']['dec2'] = str(dec2_sciimage)
+    product_config['ZOGY']['ra3'] = str(ra3_sciimage)
+    product_config['ZOGY']['dec3'] = str(dec3_sciimage)
+    product_config['ZOGY']['ra4'] = str(ra4_sciimage)
+    product_config['ZOGY']['dec4'] = str(dec4_sciimage)
 
 
     # Write product config file for job.
