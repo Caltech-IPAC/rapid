@@ -94,9 +94,7 @@ product_s3_bucket_base = config_input['DEFAULT']['product_s3_bucket_base']
 job_config_filename_base = config_input['DEFAULT']['job_config_filename_base']
 product_config_filename_base = config_input['DEFAULT']['product_config_filename_base']
 awaicgen_output_mosaic_image_file = config_input['AWAICGEN']['awaicgen_output_mosaic_image_file']
-
-
-
+zogy_output_diffimage_file = config_input['ZOGY']['zogy_output_diffimage_file']
 
 
 # Set signal hander.
@@ -265,33 +263,40 @@ while True:
 
             print("------------->",product_bucket_object)
 
+
+            # Download product config file, in order to read the MD5 checksum of the reference image.
+
+            product_config_ini_filename = product_config_filename_base + str(jid) + ".ini"
+
+            s3_bucket_object_name = datearg + '/' + product_config_ini_filename
+
+            print("Downloading s3://{}/{} into {}...".format(product_s3_bucket_base,s3_bucket_object_name,product_config_ini_filename))
+
+            response = s3_client.download_file(product_s3_bucket_base,s3_bucket_object_name,product_config_ini_filename)
+
+            print("response =",response)
+
+
+            # Read input parameters from product config .ini file.
+
+            product_config_input_filename = product_config_ini_filename
+            product_config_input = configparser.ConfigParser()
+            product_config_input.read(product_config_input_filename)
+
+
+            # Reference image.
+
             if awaicgen_output_mosaic_image_file in product_bucket_object.key:
 
                 print("Found in reference image in S3 product bucket: {}".format(awaicgen_output_mosaic_image_file))
 
-                # Download product config file, in order to read the MD5 checksum of the reference image.
 
-                product_config_ini_filename = product_config_filename_base + str(jid) + ".ini"
+                # Harvest select product metadata from product config file
 
-                s3_bucket_object_name = datearg + '/' + product_config_ini_filename
-
-                print("Downloading s3://{}/{} into {}...".format(product_s3_bucket_base,s3_bucket_object_name,product_config_ini_filename))
-
-                response = s3_client.download_file(product_s3_bucket_base,s3_bucket_object_name,product_config_ini_filename)
-
-                print("response =",response)
-
-
-                # Read input parameters from product config .ini file.
-
-                product_config_input_filename = product_config_ini_filename
-                product_config_input = configparser.ConfigParser()
-                product_config_input.read(product_config_input_filename)
-
-
-                # Harvest product metadata from product config file
-
-                rfid_str = product_config_input['REF_IMAGE']['rfid']
+                try:
+                    rfid_str = product_config_input['REF_IMAGE']['rfid']
+                except:
+                    rfid_str == 'Not found'
 
                 if rfid_str == 'None':
                     rfid = None
@@ -322,6 +327,86 @@ while True:
                     # Filename, checksum, infobits, and status are unchanged.
 
                     dbh.update_refimage(rfid,filename_refimage,checksum_refimage,status_refimage,version_refimage)
+
+                    if dbh.exit_code >= 64:
+                        exit(dbh.exit_code)
+
+
+            # Difference image.
+
+            if zogy_output_diffimage_file in product_bucket_object.key:
+
+                print("Found in difference image in S3 product bucket: {}".format(zogy_output_diffimage_file))
+
+
+                # Harvest select product metadata from product config file
+
+                try:
+                    zogy_output_diffimage_file_checksum = product_config_input['ZOGY']['zogy_output_diffimage_file_checksum']
+                except:
+                    zogy_output_diffimage_file_checksum == 'Not found'
+
+                if zogy_output_diffimage_file_checksum != 'Not found':
+
+                    zogy_output_diffimage_file = product_config_input['ZOGY']['zogy_output_diffimage_file']
+                    rid_diffimage = product_config_input['ZOGY']['rid']
+                    ppid_diffimage = product_config_input['ZOGY']['ppid']
+                    rfid_diffimage = product_config_input['ZOGY']['rfid']
+
+                    ra0_diffimage = product_config_input['ZOGY']['ra0']
+                    dec0_diffimage = product_config_input['ZOGY']['dec0']
+                    ra1_diffimage = product_config_input['ZOGY']['ra1']
+                    dec1_diffimage = product_config_input['ZOGY']['dec1']
+                    ra2_diffimage = product_config_input['ZOGY']['ra2']
+                    dec2_diffimage = product_config_input['ZOGY']['dec2']
+                    ra3_diffimage = product_config_input['ZOGY']['ra3']
+                    dec3_diffimage = product_config_input['ZOGY']['dec3']
+                    ra4_diffimage = product_config_input['ZOGY']['ra4']
+                    dec4_diffimage = product_config_input['ZOGY']['dec4']
+
+                    checksum_diffimage = product_config_input['ZOGY']['zogy_output_diffimage_file_checksum']
+                    filename_diffimage = product_config_input['ZOGY']['zogy_output_diffimage_file']
+                    status_diffimage = product_config_input['ZOGY']['zogy_output_diffimage_file_status']
+                    infobits_diffimage = product_config_input['ZOGY']['zogy_output_diffimage_file_infobits']
+
+                    infobits_refimage = product_config_input['ZOGY']['awaicgen_output_mosaic_image_infobits']
+
+
+                    # Insert record in DiffImages database table.
+
+                    dbh.add_diffimage(rid_diffimage,
+                                      ppid_diffimage,
+                                      rfid_diffimage,
+                                      ra0_diffimage,
+                                      dec0_diffimage,
+                                      ra1_diffimage,
+                                      dec1_diffimage,
+                                      ra2_diffimage,
+                                      dec2_diffimage,
+                                      ra3_diffimage,
+                                      dec3_diffimage,
+                                      ra4_diffimage,
+                                      dec4_diffimage,
+                                      infobits_diffimage,
+                                      infobits_refimage,
+                                      status_diffimage,
+                                      filename_diffimage,
+                                      checksum_diffimage)
+
+                    if dbh.exit_code >= 64:
+                        exit(dbh.exit_code)
+
+                    pid = dbh.pid
+                    version_diffimage = dbh.version
+
+                    print("pid =",pid)
+                    print("version_diffimage =",version_diffimage)
+
+
+                    # Finalize record in DiffImages database table, (in order to set vbest = 1 for current record).
+                    # Filename, checksum, infobits, and status are unchanged.
+
+                    dbh.update_diffimage(pid,filename_diffimage,checksum_diffimage,status_diffimage,version_diffimage)
 
                     if dbh.exit_code >= 64:
                         exit(dbh.exit_code)
