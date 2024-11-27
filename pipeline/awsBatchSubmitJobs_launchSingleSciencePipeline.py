@@ -723,7 +723,7 @@ if __name__ == '__main__':
     job_config['REF_IMAGE']['max_n_images_to_coadd'] = str(max_n_images_to_coadd)
     job_config['REF_IMAGE']['rfid'] = str(rfid)
     job_config['REF_IMAGE']['filename'] = filename_refimage
-    job_config['REF_IMAGE']['infobits'] = infobits_refimage
+    job_config['REF_IMAGE']['infobits'] = str(infobits_refimage)
     job_config['REF_IMAGE']['input_images_csv_file'] = input_images_csv_file
     job_config['REF_IMAGE']['naxis1'] = str(naxis1_refimage)
     job_config['REF_IMAGE']['naxis2'] = str(naxis2_refimage)
