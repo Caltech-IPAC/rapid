@@ -182,6 +182,8 @@ zogy_dict = {}
 
 zogy_dict["astrometric_uncert_x"] = config_input['ZOGY']['astrometric_uncert_x']
 zogy_dict["astrometric_uncert_y"] = config_input['ZOGY']['astrometric_uncert_y']
+zogy_dict["zogy_output_diffimage_file"] = config_input['ZOGY']['zogy_output_diffimage_file']
+zogy_dict["post_zogy_keep_diffimg_lower_cov_map_thresh"] = config_input['ZOGY']['post_zogy_keep_diffimg_lower_cov_map_thresh']
 
 
 # Get the swarp parameters.  Some of these parameters will be overwritten by this script.
@@ -535,7 +537,7 @@ if __name__ == '__main__':
     # A reference image depends only on pipeline number, field, filter, and version.
     # If a reference image does not exist, then aggregate all the inputs required to make one.
 
-    rfid,filename_refimage = dbh.get_best_reference_image(ppid_refimage,field,fid)
+    rfid,filename_refimage,infobits_refimage = dbh.get_best_reference_image(ppid_refimage,field,fid)
 
     if dbh.exit_code >= 64 and dbh.exit_code != 67:
         print("*** Error from {}; quitting ".format(swname))
@@ -721,6 +723,7 @@ if __name__ == '__main__':
     job_config['REF_IMAGE']['max_n_images_to_coadd'] = str(max_n_images_to_coadd)
     job_config['REF_IMAGE']['rfid'] = str(rfid)
     job_config['REF_IMAGE']['filename'] = filename_refimage
+    job_config['REF_IMAGE']['infobits'] = infobits_refimage
     job_config['REF_IMAGE']['input_images_csv_file'] = input_images_csv_file
     job_config['REF_IMAGE']['naxis1'] = str(naxis1_refimage)
     job_config['REF_IMAGE']['naxis2'] = str(naxis2_refimage)
@@ -737,7 +740,6 @@ if __name__ == '__main__':
     job_config['REF_IMAGE']['dec3'] = str(dec3_refimage)
     job_config['REF_IMAGE']['ra4'] = str(ra4_refimage)
     job_config['REF_IMAGE']['dec4'] = str(dec4_refimage)
-
 
     zogy_dict["psfid"] = str(psfid)
     zogy_dict["s3_full_name_psf"] = s3_full_name_psf
