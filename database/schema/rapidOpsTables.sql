@@ -459,7 +459,7 @@ CREATE TABLE diffimages (
     filename text NOT NULL,                        -- Full path and filename of positive difference image
     checksum character varying(32),
     status smallint DEFAULT 0 NOT NULL,            -- Good/bad diff image (1/0) based on several internal image QA indicators
-    created timestamp without time zone NOT NULL,  -- Date/time of record creation
+    created timestamp without time zone DEFAULT now() NOT NULL,
     svid integer NOT NULL,
     avid integer,
     archivestatus smallint DEFAULT 0 NOT NULL,
