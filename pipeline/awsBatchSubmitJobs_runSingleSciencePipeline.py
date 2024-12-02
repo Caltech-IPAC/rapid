@@ -6,7 +6,6 @@ import boto3
 from botocore.exceptions import ClientError
 from astropy.io import fits
 import numpy as np
-import numpy.ma as ma
 from datetime import datetime
 
 import modules.utils.rapid_pipeline_subs as util
@@ -191,72 +190,6 @@ def upload_files_to_s3_bucket(s3_client,s3_bucket_name,filenames,s3_object_names
                 .format(filename,s3_bucket_name,s3_object_name))
 
     return uploaded_to_bucket
-
-
-def compute_clip_corr(n_sigma):
-
-    """
-    Compute a correction factor to properly reinflate the variance after it is
-    naturally diminished via data-clipping.  Employ a simple Monte Carlo method
-    and standard normal deviates to simulate the data-clipping and obtain the
-    correction factor.
-    """
-
-    var_trials = []
-    for x in range(0,10):
-        a = np.random.normal(0.0, 1.0, 1000000)
-        med = np.median(a, axis=0)
-        p16 = np.percentile(a, 16, axis=0)
-        p84 = np.percentile(a, 84, axis=0)
-        sigma = 0.5 * (p84 - p16)
-        mdmsg = med - n_sigma * sigma
-        b = np.less(a,mdmsg)
-        mdpsg = med + n_sigma * sigma
-        c = np.greater(a,mdpsg)
-        mask = np.any([b,c],axis=0)
-        mx = ma.masked_array(a, mask)
-        var = ma.getdata(mx.var(axis=0))
-        var_trials.append(var)
-
-    np_var_trials = np.array(var_trials)
-    avg_var_trials = np.mean(np_var_trials)
-    std_var_trials = np.std(np_var_trials)
-    corr_fact = 1.0 / avg_var_trials
-
-    return corr_fact
-
-
-def avg_data_with_clipping(input_filename,n_sigma = 3.0,hdu_index = 0):
-
-    """
-    Statistics with outlier rejection (n-sigma data-trimming), ignoring NaNs, across all data array dimensions.
-    Assumes the 2D image data are in the PRIMARY HDU of the FITS file.
-    """
-
-    hdul = fits.open(input_filename)
-    data_array = hdul[hdu_index].data
-
-    cf = compute_clip_corr(n_sigma)
-    sqrtcf = np.sqrt(cf)
-
-    a = np.array(data_array)
-
-    med = np.nanmedian(a)
-    p16 = np.nanpercentile(a,16)
-    p84 = np.nanpercentile(a,84)
-    sigma = 0.5 * (p84 - p16)
-    mdmsg = med - n_sigma * sigma
-    b = np.less(a,mdmsg)
-    mdpsg = med + n_sigma * sigma
-    c = np.greater(a,mdpsg)
-    d = np.where(np.isnan(a),True,False)
-    mask = b | c | d
-    mx = ma.masked_array(a, mask)
-    avg = ma.getdata(mx.mean())
-    std = ma.getdata(mx.std()) * sqrtcf
-    cnt = ma.getdata(mx.count())
-
-    return avg,std,cnt
 
 
 #-------------------------------------------------------------------
@@ -766,7 +699,7 @@ if __name__ == '__main__':
     # Compute image statistics for image resizing.
 
     n_sigma = 3.0
-    avg_sci_img,std_sci_img,cnt_sci_img = avg_data_with_clipping(science_image_filename,n_sigma,1)
+    avg_sci_img,std_sci_img,cnt_sci_img = util.avg_data_with_clipping(science_image_filename,n_sigma,1)
 
 
     # Reformat the Troxel OpenUniverse simulated image FITS file
@@ -840,8 +773,8 @@ if __name__ == '__main__':
     # Compute image statistics for ZOGY.
 
     n_sigma = 3.0
-    avg_sci_img,std_sci_img,cnt_sci_img = avg_data_with_clipping(reformatted_science_image_filename,n_sigma)
-    avg_ref_img,std_ref_img,cnt_ref_img = avg_data_with_clipping(output_resampled_reference_image,n_sigma)
+    avg_sci_img,std_sci_img,cnt_sci_img = util.avg_data_with_clipping(reformatted_science_image_filename,n_sigma)
+    avg_ref_img,std_ref_img,cnt_ref_img = util.avg_data_with_clipping(output_resampled_reference_image,n_sigma)
 
     print("avg_sci_img,std_sci_img,cnt_sci_img =",avg_sci_img,std_sci_img,cnt_sci_img)
     print("avg_ref_img,std_ref_img,cnt_ref_img =",avg_ref_img,std_ref_img,cnt_ref_img)
