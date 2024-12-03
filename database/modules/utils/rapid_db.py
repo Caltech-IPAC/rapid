@@ -1794,3 +1794,105 @@ class RAPIDDB:
 
         if self.exit_code == 0:
             self.conn.commit()           # Commit database transaction
+
+
+########################################################################################################
+
+    def register_refimimage(self,rfid,rid):
+
+        '''
+        Insert record in RefImImages database table.
+        '''
+
+        self.exit_code = 0
+
+
+        # Define query template.
+
+        query_template =\
+            "select * from registerRefImImage(" +\
+            "cast(TEMPLATE_RFID as integer)," +\
+            "cast(TEMPLATE_RID AS integer));"
+
+
+        # Query database.
+
+        print('----> rfid = {}'.format(rfid))
+        print('----> rid = {}'.format(rid))
+
+        rep = {"TEMPLATE_RFID": str(rfid)}
+
+        rep["TEMPLATE_RID"] = str(rid)
+
+
+        rep = dict((re.escape(k), v) for k, v in rep.items())
+        pattern = re.compile("|".join(rep.keys()))
+        query = pattern.sub(lambda m: rep[re.escape(m.group(0))], query_template)
+
+        print('query = {}'.format(query))
+
+
+        # Execute query.
+
+        try:
+            self.cur.execute(query)
+
+            try:
+                for record in self.cur:
+                    print(record)
+            except:
+                    print("Nothing returned from database stored function; continuing...")
+
+        except (Exception, psycopg2.DatabaseError) as error:
+            print('*** Error inserting or updating RefImImages record ({}); skipping...'.format(error))
+            self.exit_code = 67
+            return
+
+        if self.exit_code == 0:
+            self.conn.commit()           # Commit database transaction
+
+
+########################################################################################################
+
+    def get_distinct_fid_sca_from_psfs(self):
+
+        '''
+        Select all distinct fid, sca pairs in PSFs database table.
+        '''
+
+        self.exit_code = 0
+
+
+        # Define query.
+
+        query = "select distinct fid, sca from PSFs order by fid, sca;"
+
+
+        # Query database.
+
+        print('query = {}'.format(query))
+
+
+        # Execute query.
+
+        try:
+            self.cur.execute(query)
+
+            try:
+                records = []
+                nrecs = 0
+                for record in self.cur:
+                    records.append(record)
+                    nrecs += 1
+
+                print("nrecs =",nrecs)
+
+            except:
+                    print("Nothing returned from database query; continuing...")
+
+        except (Exception, psycopg2.DatabaseError) as error:
+            print('*** Error getting all distinct fid, sca pairs in PSFs database table ({}); skipping...'.format(error))
+            self.exit_code = 67
+            return
+
+        return records
