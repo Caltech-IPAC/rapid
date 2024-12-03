@@ -112,52 +112,6 @@ print("job_config_ini_file_s3_bucket_object_name =",job_config_ini_file_s3_bucke
 print("input_images_csv_file_s3_bucket_object_name =",input_images_csv_file_s3_bucket_object_name)
 
 
-def download_file_from_s3_bucket(s3_client,s3_full_name):
-
-    '''
-    Download file from S3 bucket.
-    The full name is assumed to be of the following form: s3://sims-sn-f184-lite/1856/Roman_TDS_simple_model_F184_1856_2_lite.fits.gz
-    and will be parsed for the s3 bucket name, object name, and filename.
-    '''
-
-
-    # Parse full name.
-
-    string_match = re.match(r"s3://(.+?)/(.+)", s3_full_name)              # TODO
-
-    try:
-        s3_bucket_name = string_match.group(1)
-        s3_object_name = string_match.group(2)
-        print("s3_bucket_name = {}, s3_s3_object_name = {}".\
-            format(s3_bucket_name,s3_object_name))
-
-    except:
-        print("*** Error: Could not parse s3_full_name; quitting...")
-        exit(64)
-
-    string_match2 = re.match(r"(.+)/(.+)", s3_object_name)                 # TODO
-
-    try:
-        subdirs = string_match2.group(1)
-        filename = string_match2.group(2)
-        print("filename = {}".format(filename))
-
-    except:
-        print("*** Error: Could not parse s3_object_name; quitting...")
-        exit(64)
-
-
-    # Download reference-image input from associated S3 bucket.
-
-    print("Downloading s3://{}/{} into {}...".format(s3_bucket_name,s3_object_name,filename))
-
-    response = s3_client.download_file(s3_bucket_name,s3_object_name,filename)
-
-    print("response =",response)
-
-    return filename,subdirs
-
-
 def upload_files_to_s3_bucket(s3_client,s3_bucket_name,filenames,s3_object_names):
 
     '''
