@@ -1371,7 +1371,7 @@ $$ language plpgsql;
 
 -- Insert a new record into the RefImImages table, if record is not found.
 --
-create function registerRefImImages (
+create function registerRefImImage (
     rfid_ integer,
     rid_ integer
 )

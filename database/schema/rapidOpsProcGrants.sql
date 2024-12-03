@@ -222,7 +222,7 @@ grant EXECUTE on FUNCTION registerRefImCatalog (
 ) to rapidporole;
 
 
-grant EXECUTE on FUNCTION registerRefImImages (
+grant EXECUTE on FUNCTION registerRefImImage (
     rfid_ integer,
     rid_ integer
 ) to rapidporole;

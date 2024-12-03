@@ -222,7 +222,7 @@ DROP FUNCTION registerRefImCatalog (
 );
 
 
-DROP FUNCTION registerRefImImages (
+DROP FUNCTION registerRefImImage (
     rfid_ integer,
     rid_ integer
 );
