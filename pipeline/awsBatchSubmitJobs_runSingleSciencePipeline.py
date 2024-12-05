@@ -112,40 +112,6 @@ print("job_config_ini_file_s3_bucket_object_name =",job_config_ini_file_s3_bucke
 print("input_images_csv_file_s3_bucket_object_name =",input_images_csv_file_s3_bucket_object_name)
 
 
-def upload_files_to_s3_bucket(s3_client,s3_bucket_name,filenames,s3_object_names):
-
-    '''
-    Upload list of files to S3 bucket.  Corresponding list of S3 bucket object names must be provided.
-    '''
-
-    uploaded_to_bucket = True
-
-    for filename,s3_object_name in zip(filenames,s3_object_names):
-
-        if not os.path.exists(filename):
-            print("*** Warning: File does not exist ({}); skipping...".format(filename))
-            continue
-
-        try:
-            response = s3_client.upload_file(filename,
-                                             s3_bucket_name,
-                                             s3_object_name)
-
-            print("response =",response)
-
-        except ClientError as e:
-            print("*** Error: Failed to upload {} to s3://{}/{}"\
-                .format(filename,s3_bucket_name,s3_object_name))
-            uploaded_to_bucket = False
-            break
-
-        if uploaded_to_bucket:
-            print("Successfully uploaded {} to s3://{}/{}"\
-                .format(filename,s3_bucket_name,s3_object_name))
-
-    return uploaded_to_bucket
-
-
 #-------------------------------------------------------------------
 # Reformat a Troxel OpenUniverse simulated image FITS file
 # so that the image data are contained in the PRIMARY header.
@@ -336,14 +302,14 @@ if __name__ == '__main__':
 
     # Download gzipped science image from S3 bucket.
 
-    science_image_filename_gz,subdirs_science_image = download_file_from_s3_bucket(s3_client,s3_full_name_science_image)
+    science_image_filename_gz,subdirs_science_image = util.download_file_from_s3_bucket(s3_client,s3_full_name_science_image)
 
 
     # Upload science image to product S3 bucket (in order to test upload method).
 
     s3_object_name_science_image = job_proc_date + "/jid" + str(jid) + "/" + science_image_filename_gz
 
-    upload_files_to_s3_bucket(s3_client,product_s3_bucket,[science_image_filename_gz],[s3_object_name_science_image])
+    util.upload_files_to_s3_bucket(s3_client,product_s3_bucket,[science_image_filename_gz],[s3_object_name_science_image])
 
 
     # Optionally read in CVS file containing inputs for generating reference image.
@@ -355,7 +321,7 @@ if __name__ == '__main__':
 
         infobits_refimage = config_input['REF_IMAGE']['infobits']
         s3_full_name_reference_image = config_input['REF_IMAGE']['filename']
-        awaicgen_output_mosaic_image_file,subdirs = download_file_from_s3_bucket(s3_client,s3_full_name_reference_image)
+        awaicgen_output_mosaic_image_file,subdirs = util.download_file_from_s3_bucket(s3_client,s3_full_name_reference_image)
 
         # For now, require the filename derived from the database record is same as in job configuration file under AWAICGEN block.
 
@@ -721,7 +687,7 @@ if __name__ == '__main__':
         filenames.append(ref_fits_file_with_pv)
         objectnames.append(s3_object_name_ref_fits_file_with_pv)
 
-    upload_files_to_s3_bucket(s3_client,product_s3_bucket,filenames,objectnames)
+    util.upload_files_to_s3_bucket(s3_client,product_s3_bucket,filenames,objectnames)
 
 
     # Compute image statistics for ZOGY.
@@ -736,7 +702,7 @@ if __name__ == '__main__':
 
     # Download PSF from S3 bucket.
 
-    filename_psf,subdirs_psf = download_file_from_s3_bucket(s3_client,s3_full_name_psf)
+    filename_psf,subdirs_psf = util.download_file_from_s3_bucket(s3_client,s3_full_name_psf)
 
     print("s3_full_name_psf = ",s3_full_name_psf)
     print("filename_psf = ",filename_psf)
@@ -816,7 +782,7 @@ if __name__ == '__main__':
                    s3_object_name_diffpsf,
                    s3_object_name_scorrimage]
 
-    upload_files_to_s3_bucket(s3_client,product_s3_bucket,filenames,objectnames)
+    util.upload_files_to_s3_bucket(s3_client,product_s3_bucket,filenames,objectnames)
 
 
     # Get listing of working directory as a diagnostic.
