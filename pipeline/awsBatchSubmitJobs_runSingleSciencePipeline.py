@@ -165,7 +165,7 @@ def reformat_troxel_fits_file_and_compute_uncertainty_image_via_simple_model(inp
 
 #-------------------------------------------------------------------
 # Mask input image with input mask.  Values in input image are reset
-# to 0.0 if mask is less than the given threshold at a pixel location,
+# to NaN if mask is less than the given threshold at a pixel location,
 # which is nominally 0.5 in cov map (converted to float after swarping).
 # This method is applied to ZOGY outputs because swarping the
 # reference image resets NaNs to zero, which would otherwise
@@ -183,7 +183,7 @@ def mask_difference_image_with_resampled_reference_cov_map(input_filename,mask_f
     np_data_input = np.array(data_input)
     np_data_mask = np.array(data_mask)
 
-    np_data_output = np.where(np_data_mask >= thresh,np_data_input,0.0)
+    np_data_output = np.where(np_data_mask >= thresh,np_data_input,np.nan)
 
     hdu_list = []
     hdu = fits.PrimaryHDU(header=hdr_input,data=np_data_output)
