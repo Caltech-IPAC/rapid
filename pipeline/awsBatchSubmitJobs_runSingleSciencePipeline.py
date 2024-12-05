@@ -217,6 +217,8 @@ if __name__ == '__main__':
     debug = int(config_input['DEFAULT']['debug'])
     job_info_s3_bucket_base = config_input['DEFAULT']['job_info_s3_bucket_base']
     product_s3_bucket_base = config_input['DEFAULT']['product_s3_bucket_base']
+    refimage_psf_s3_bucket_dir = config_input['DEFAULT']['refimage_psf_s3_bucket_dir']
+    refimage_psf_filename = config_input['DEFAULT']['refimage_psf_filename']
 
     product_s3_bucket = product_s3_bucket_base
 
@@ -700,12 +702,19 @@ if __name__ == '__main__':
     print("avg_ref_img,std_ref_img,cnt_ref_img =",avg_ref_img,std_ref_img,cnt_ref_img)
 
 
-    # Download PSF from S3 bucket.
+    # Download PSFs from S3 bucket.
 
     filename_psf,subdirs_psf = util.download_file_from_s3_bucket(s3_client,s3_full_name_psf)
 
     print("s3_full_name_psf = ",s3_full_name_psf)
     print("filename_psf = ",filename_psf)
+
+    refimage_psf_filename = refimage_psf_filename.replace("FID",str(fid_sciimage))
+    s3_full_name_refimage_psf = "s3://" + job_info_s3_bucket + "/" + refimage_psf_s3_bucket_dir + "/" + refimage_psf_filename
+    filename_refimage_psf,subdirs_refimage_psf = util.download_file_from_s3_bucket(s3_client,s3_full_name_refimage_psf)
+
+    print("s3_full_name_refimage_psf = ",s3_full_name_refimage_psf)
+    print("filename_refimage_psf = ",filename_refimage_psf)
 
 
     # The image data in science_image_filename and sci_fits_file_with_pv FITS files are the same, only the
@@ -728,7 +737,7 @@ if __name__ == '__main__':
                 reformatted_science_image_filename,
                 output_resampled_reference_image,
                 filename_psf,
-                filename_psf,
+                filename_refimage_psf,
                 reformatted_science_uncert_image_filename,
                 output_resampled_reference_uncert_image,
                 str(std_sci_img),
