@@ -101,6 +101,8 @@ job_info_s3_bucket_base = config_input['DEFAULT']['job_info_s3_bucket_base']
 product_s3_bucket_base = config_input['DEFAULT']['product_s3_bucket_base']
 job_config_filename_base = config_input['DEFAULT']['job_config_filename_base']
 product_config_filename_base = config_input['DEFAULT']['product_config_filename_base']
+refimage_psf_s3_bucket_dir = config_input['DEFAULT']['refimage_psf_s3_bucket_dir']
+refimage_psf_filename = config_input['DEFAULT']['refimage_psf_filename']
 
 sca_gain = float(config_input['INSTRUMENT']['sca_gain'])
 
@@ -671,6 +673,8 @@ if __name__ == '__main__':
     job_config['DEFAULT']['product_s3_bucket_base'] = product_s3_bucket_base
     job_config['DEFAULT']['product_config_filename_base'] = product_config_filename_base
     job_config['DEFAULT']['verbose'] = str(verbose)
+    job_config['DEFAULT']['refimage_psf_s3_bucket_dir'] = refimage_psf_s3_bucket_dir
+    job_config['DEFAULT']['refimage_psf_filename'] = refimage_psf_filename
 
     job_config['INSTRUMENT'] = {}
 
