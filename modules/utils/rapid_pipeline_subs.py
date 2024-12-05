@@ -44,6 +44,40 @@ def execute_command(code_to_execute_args):
     return returncode
 
 
+def upload_files_to_s3_bucket(s3_client,s3_bucket_name,filenames,s3_object_names):
+
+    '''
+    Upload list of files to S3 bucket.  Corresponding list of S3 bucket object names must be provided.
+    '''
+
+    uploaded_to_bucket = True
+
+    for filename,s3_object_name in zip(filenames,s3_object_names):
+
+        if not os.path.exists(filename):
+            print("*** Warning: File does not exist ({}); skipping...".format(filename))
+            continue
+
+        try:
+            response = s3_client.upload_file(filename,
+                                             s3_bucket_name,
+                                             s3_object_name)
+
+            print("response =",response)
+
+        except ClientError as e:
+            print("*** Error: Failed to upload {} to s3://{}/{}"\
+                .format(filename,s3_bucket_name,s3_object_name))
+            uploaded_to_bucket = False
+            break
+
+        if uploaded_to_bucket:
+            print("Successfully uploaded {} to s3://{}/{}"\
+                .format(filename,s3_bucket_name,s3_object_name))
+
+    return uploaded_to_bucket
+
+
 def download_file_from_s3_bucket(s3_client,s3_full_name):
 
     '''
@@ -1000,6 +1034,48 @@ def build_sextractor_command_line_args(sextractor_dict):
     return code_to_execute_args
 
 
+def smooth_image_by_local_clipped_averaging(nx,ny,data,x_window = 3,y_window = 3,n_sigma = 3.0):
 
+    x_hwin = int((x_window - 1) / 2)
+    y_hwin = int((y_window - 1) / 2)
 
+    smooth_image = np.zeros(shape=(ny, nx))
+    smooth_image[:] = np.nan                                              # Initialize 2-D array of NaNs
 
+    for i in range(0,ny):
+        for j in range(0,nx):
+
+            if np.isnan(data[i, j]): continue
+
+            data_list = []
+            for ii in range(i - y_hwin, i + y_hwin + 1):
+                if ((ii < 0) or (ii >= ny)): continue
+                for jj in range(j - x_hwin, j + x_hwin + 1):
+                    if ((jj < 0) or (jj >= ny)): continue
+
+                    datum = data[ii, jj]
+
+                    #print(datum)
+
+                    if not np.isnan(datum):
+                        data_list.append(datum)
+
+            if len(data_list) > 0:
+
+                a = np.array(data_list)
+
+                med = np.median(a)
+                p16 = np.percentile(a,16)
+                p84 = np.percentile(a,84)
+                sigma = 0.5 * (p84 - p16)
+                mdmsg = med - n_sigma * sigma
+                b = np.less(a,mdmsg)
+                mdpsg = med + n_sigma * sigma
+                c = np.greater(a,mdpsg)
+                mask = b | c
+                mx = ma.masked_array(a, mask)
+                avg = ma.getdata(mx.mean())
+
+                smooth_image[i, j] = avg.item()
+
+    return smooth_image
