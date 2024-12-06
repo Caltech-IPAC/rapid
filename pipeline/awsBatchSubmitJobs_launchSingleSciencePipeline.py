@@ -5,7 +5,7 @@ import subprocess
 import re
 import math
 import configparser
-from datetime import datetime
+from datetime import datetime, timezone
 from botocore.exceptions import ClientError
 
 import modules.utils.rapid_pipeline_subs as util
@@ -35,8 +35,15 @@ if rid is None:
 
 datetime_utc_now = datetime.utcnow()
 proc_utc_datetime = datetime_utc_now.strftime('%Y-%m-%dT%H:%M:%SZ')
-datetime_now = datetime.utcnow()
-proc_date = datetime_now.strftime('%Y%m%d')
+
+
+def utc_to_local(utc_dt):
+    """Converts a UTC datetime object to local time."""
+
+    return utc_dt.replace(tzinfo=timezone.utc).astimezone(tz=to_zone)
+
+local_time = utc_to_local(datetime_utc_now)
+proc_date = local_time.strftime('%Y%m%d')
 
 
 # Ensure sqlite database that defines the Roman sky tessellation is available.
