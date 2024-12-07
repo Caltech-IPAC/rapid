@@ -773,8 +773,8 @@ if __name__ == '__main__':
     sextractor_dict["sextractor_input_image".lower()] = filename_diffimage_masked
     sextractor_dict["sextractor_CATALOG_NAME".lower()] = filename_diffimage_masked.replace(".fits",".txt")
 
-    sextractor_cmd = build_sextractor_command_line_args(sextractor_dict)
-    exitcode_from_sextractor = execute_command(sextractor_cmd)
+    sextractor_cmd = util.build_sextractor_command_line_args(sextractor_dict)
+    exitcode_from_sextractor = util.execute_command(sextractor_cmd)
 
 
     # Compute MD5 checksum of masked difference image.
