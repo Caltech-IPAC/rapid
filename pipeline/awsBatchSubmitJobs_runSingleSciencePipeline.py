@@ -7,10 +7,12 @@ from botocore.exceptions import ClientError
 from astropy.io import fits
 import numpy as np
 from datetime import datetime
+import time
 
 import modules.utils.rapid_pipeline_subs as util
 import database.modules.utils.rapid_db as db
 
+start_time_benchmark = time.time()
 
 swname = "awsBatchSubmitJobs_runSingleSciencePipeline.py"
 swvers = "1.0"
@@ -314,6 +316,13 @@ if __name__ == '__main__':
     util.upload_files_to_s3_bucket(s3_client,product_s3_bucket,[science_image_filename_gz],[s3_object_name_science_image])
 
 
+    # Code-timing benchmark.
+
+    end_time_benchmark = time.time()
+    print("Elapsed time in seconds after downloading science image =",end_time_benchmark - start_time_benchmark)
+    start_time_benchmark = end_time_benchmark
+
+
     # Optionally read in CVS file containing inputs for generating reference image.
 
     if rfid is not None:
@@ -575,6 +584,14 @@ if __name__ == '__main__':
             print("*** Error: Unexpected value for checksum =",checksum)
 
 
+    # Code-timing benchmark.
+
+    end_time_benchmark = time.time()
+    print("Elapsed time in seconds after downloading or generating reference image =",
+        end_time_benchmark - start_time_benchmark)
+    start_time_benchmark = end_time_benchmark
+
+
     # Populate config-file dictionary for products.
 
     product_config_ini_filename = product_config_filename_base + str(jid) + ".ini"
@@ -658,6 +675,13 @@ if __name__ == '__main__':
                                                                           hdu_index_for_reference_image_data,\
                                                                           pv_convert_flag_for_reference_image_data,\
                                                                           swarp_dict)
+
+
+    # Code-timing benchmark.
+
+    end_time_benchmark = time.time()
+    print("Elapsed time in seconds after swarping images =",end_time_benchmark - start_time_benchmark)
+    start_time_benchmark = end_time_benchmark
 
 
     # Upload intermediate FITS files to product S3 bucket for diagnostic purposes.
@@ -751,6 +775,14 @@ if __name__ == '__main__':
     exitcode_from_zogy = util.execute_command(zogy_cmd)
 
 
+    # Code-timing benchmark.
+
+    end_time_benchmark = time.time()
+    print("Elapsed time in seconds after running ZOGY =",
+        end_time_benchmark - start_time_benchmark)
+    start_time_benchmark = end_time_benchmark
+
+
     # Mask difference image with output_resampled_reference_cov_map.
 
     filename_diffimage_masked = zogy_output_diffimage_file                     # Nominally diffimage_masked.fits
@@ -767,6 +799,14 @@ if __name__ == '__main__':
                                                            post_zogy_keep_diffimg_lower_cov_map_thresh)
 
 
+    # Code-timing benchmark.
+
+    end_time_benchmark = time.time()
+    print("Elapsed time in seconds after masking difference image =",
+        end_time_benchmark - start_time_benchmark)
+    start_time_benchmark = end_time_benchmark
+
+
     # Compute SExtractor catalog for masked difference image.
 
     sextractor_dict["sextractor_input_image".lower()] = filename_diffimage_masked
@@ -776,6 +816,14 @@ if __name__ == '__main__':
     sextractor_dict["sextractor_CATALOG_NAME".lower()] = filename_diffimage_masked.replace(".fits",".txt")
     sextractor_cmd = util.build_sextractor_command_line_args(sextractor_dict)
     exitcode_from_sextractor = util.execute_command(sextractor_cmd)
+
+
+    # Code-timing benchmark.
+
+    end_time_benchmark = time.time()
+    print("Elapsed time in seconds after running SExtractor on difference image =",
+        end_time_benchmark - start_time_benchmark)
+    start_time_benchmark = end_time_benchmark
 
 
     # Compute MD5 checksum of masked difference image.
@@ -885,6 +933,14 @@ if __name__ == '__main__':
     if uploaded_to_bucket:
         print("Successfully uploaded {} to s3://{}/{}"\
             .format(product_config_ini_filename,product_s3_bucket,product_config_ini_file_s3_bucket_object_name))
+
+
+    # Code-timing benchmark.
+
+    end_time_benchmark = time.time()
+    print("Elapsed time in seconds after uploading products at pipeline end =",
+        end_time_benchmark - start_time_benchmark)
+    start_time_benchmark = end_time_benchmark
 
 
     # Termination.
