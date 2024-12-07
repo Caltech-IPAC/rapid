@@ -942,10 +942,12 @@ def build_sextractor_command_line_args(sextractor_dict):
     code_to_execute_args.append(sextractor_WEIGHT_GAIN)
     code_to_execute_args.append("-WEIGHT_THRESH")
     code_to_execute_args.append(sextractor_WEIGHT_THRESH)
-    code_to_execute_args.append("-FLAG_IMAGE")
-    code_to_execute_args.append(sextractor_FLAG_IMAGE)
-    code_to_execute_args.append("-FLAG_TYPE")
-    code_to_execute_args.append(sextractor_FLAG_TYPE)
+    ########################################################################### OMIT FLAGS
+    #code_to_execute_args.append("-FLAG_IMAGE")
+    #code_to_execute_args.append(sextractor_FLAG_IMAGE)
+    #code_to_execute_args.append("-FLAG_TYPE")
+    #code_to_execute_args.append(sextractor_FLAG_TYPE)
+    ###########################################################################
     code_to_execute_args.append("-PHOT_APERTURES")
     code_to_execute_args.append(sextractor_PHOT_APERTURES)
     code_to_execute_args.append("-PHOT_AUTOPARAMS")

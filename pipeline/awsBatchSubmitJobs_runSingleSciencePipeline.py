@@ -767,6 +767,16 @@ if __name__ == '__main__':
                                                            post_zogy_keep_diffimg_lower_cov_map_thresh)
 
 
+    # Compute SExtractor catalog for masked difference image.
+
+
+    sextractor_dict["sextractor_input_image".lower()] = filename_diffimage_masked
+    sextractor_dict["sextractor_CATALOG_NAME".lower()] = filename_diffimage_masked.replace(".fits",".txt")
+
+    sextractor_cmd = build_sextractor_command_line_args(sextractor_dict)
+    exitcode_from_sextractor = execute_command(sextractor_cmd)
+
+
     # Compute MD5 checksum of masked difference image.
 
     print("Computing checksum of ",filename_diffimage_masked)
