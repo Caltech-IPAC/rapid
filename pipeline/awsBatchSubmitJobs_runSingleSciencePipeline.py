@@ -769,10 +769,10 @@ if __name__ == '__main__':
 
     # Compute SExtractor catalog for masked difference image.
 
-
     sextractor_dict["sextractor_input_image".lower()] = filename_diffimage_masked
     sextractor_dict["sextractor_PARAMETERS_NAME".lower()] = "/code/cdf/rapidSexParamsDiffImage.inp"
     sextractor_dict["sextractor_FILTER_NAME".lower()] = "/code/cdf/rapidSexDiffImageFilter.conv"
+    sextractor_dict["sextractor_STARNNW_NAME".lower()] = "/code/cdf/rapidSexDiffImageStarGalaxyClassifier.nnw"
     sextractor_dict["sextractor_CATALOG_NAME".lower()] = filename_diffimage_masked.replace(".fits",".txt")
     sextractor_cmd = util.build_sextractor_command_line_args(sextractor_dict)
     exitcode_from_sextractor = util.execute_command(sextractor_cmd)
