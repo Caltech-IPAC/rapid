@@ -829,6 +829,7 @@ def build_sextractor_command_line_args(sextractor_dict):
 
     software_to_execute = 'sex'
 
+    sextractor_detection_image = sextractor_dict["sextractor_detection_image".lower()]
     sextractor_input_image = sextractor_dict["sextractor_input_image".lower()]
     sextractor_CATALOG_NAME = sextractor_dict["sextractor_CATALOG_NAME".lower()]
     sextractor_CATALOG_TYPE = sextractor_dict["sextractor_CATALOG_TYPE".lower()]
@@ -897,7 +898,7 @@ def build_sextractor_command_line_args(sextractor_dict):
     sextractor_INTERP_TYPE = sextractor_dict["sextractor_INTERP_TYPE".lower()]
 
     code_to_execute_args = [software_to_execute]
-    code_to_execute_args.append(sextractor_input_image)
+    code_to_execute_args.append(sextractor_detection_image + "," + sextractor_input_image)
     code_to_execute_args.append("-CATALOG_NAME")
     code_to_execute_args.append(sextractor_CATALOG_NAME)
     code_to_execute_args.append("-CATALOG_TYPE")
