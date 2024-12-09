@@ -156,7 +156,13 @@ def reformat_troxel_fits_file_and_compute_uncertainty_image_via_simple_model(inp
     hdu.writeto(fname_output,overwrite=True,checksum=True)
 
     hdu_list_unc = []
-    data_unc = np.sqrt(np.array(new_np_data) / sca_gain)
+
+
+    # Ensure data are positive for uncertainty calculations.
+
+    pos_np_data = np.where(new_np_data >= 0.0,new_np_data,0.0)
+
+    data_unc = np.sqrt(pos_np_data / sca_gain)
     hdu_unc = fits.PrimaryHDU(header=hdr,data=data_unc)
     hdu_list_unc.append(hdu_unc)
     hdu_unc = fits.HDUList(hdu_list_unc)
@@ -195,6 +201,45 @@ def mask_difference_image_with_resampled_reference_cov_map(input_filename,mask_f
 
     return
 
+
+#-------------------------------------------------------------------------------------------------------------
+# Compute diffimage_uncertainty for use as weight.fits in computing SExtractor catalog for differenced image.
+# Assume science-image photon noise, reference-image photon noise, and difference-image variance contribute.
+#-------------------------------------------------------------------------------------------------------------
+
+def compute_diffimage_uncertainty(sca_gain,
+                                  science_image_filename,
+                                  reference_image_filename,
+                                  diffimage_filename,
+                                  diffimage_unc_filename):
+
+    n_sigma = 3.0
+    hdu_num = 0
+    avg_dif_img,std_dif_img,cnt_dif_img = util.avg_data_with_clipping(diffimage_filename,n_sigma,hdu_num)
+
+    hdul_sci = fits.open(science_image_filename)
+    hdr_sci = hdul_sci[0].header
+    data_sci = hdul_sci[0].data
+    np_data_sci = np.array(data_sci)
+    pos_np_data_sci = np.where(np_data_sci >= 0.0,np_data_sci,0.0)
+
+    hdul_ref = fits.open(reference_image_filename)
+    hdr_ref = hdul_ref[0].header
+    data_ref = hdul_ref[0].data
+    np_data_ref = np.array(data_ref)
+    pos_np_data_ref = np.where(np_data_ref >= 0.0,np_data_ref,0.0)
+
+    hdu_list_unc = []
+    data_unc = np.sqrt((pos_np_data_sci + pos_np_data_ref) / sca_gain + std_dif_img * std_dif_img)
+    hdu_unc = fits.PrimaryHDU(header=hdr_sci,data=data_unc)
+    hdu_list_unc.append(hdu_unc)
+    hdu_unc = fits.HDUList(hdu_list_unc)
+    hdu_unc.writeto(diffimage_unc_filename,overwrite=True,checksum=True)
+
+
+#-------------------------------------------------------------------------------------------------------------
+# Main program.
+#-------------------------------------------------------------------------------------------------------------
 
 if __name__ == '__main__':
 
@@ -807,9 +852,25 @@ if __name__ == '__main__':
     start_time_benchmark = end_time_benchmark
 
 
-    # Compute SExtractor catalog for masked difference image.
+    # Generate diffimage uncertainty image, which will be the weight image for sextractor_WEIGHT_IMAGE.
 
+    filename_diffimage_unc_masked = 'filename_diffimage_uncert_masked.fits'
+    compute_diffimage_uncertainty(sca_gain,
+                                 reformatted_science_image_filename,
+                                 output_resampled_reference_image,
+                                 filename_diffimage_masked,
+                                 filename_diffimage_unc_masked)
+    filename_weight_image = filename_diffimage_unc_masked
+
+
+    # Compute SExtractor catalog for masked difference image.
+    # Execute SExtractor to first detect candidates on Scorr (S/N) match-filter
+    # image, then use to perform aperture phot on difference image to generate
+    # raw ascii catalog file.
+
+    sextractor_dict["sextractor_detection_image".lower()] = filename_scorrimage_masked
     sextractor_dict["sextractor_input_image".lower()] = filename_diffimage_masked
+    sextractor_dict["sextractor_WEIGHT_IMAGE".lower()] = filename_weight_image
     sextractor_dict["sextractor_PARAMETERS_NAME".lower()] = "/code/cdf/rapidSexParamsDiffImage.inp"
     sextractor_dict["sextractor_FILTER_NAME".lower()] = "/code/cdf/rapidSexDiffImageFilter.conv"
     sextractor_dict["sextractor_STARNNW_NAME".lower()] = "/code/cdf/rapidSexDiffImageStarGalaxyClassifier.nnw"
@@ -839,14 +900,17 @@ if __name__ == '__main__':
 
     product_s3_bucket = product_s3_bucket_base
     s3_object_name_diffimage = job_proc_date + "/jid" + str(jid) + "/" + filename_diffimage_masked
+    s3_object_name_diffimage_unc = job_proc_date + "/jid" + str(jid) + "/" + filename_diffimage_unc_masked
     s3_object_name_diffpsf = job_proc_date + "/jid" + str(jid) + "/" + filename_diffpsf
     s3_object_name_scorrimage = job_proc_date + "/jid" + str(jid) + "/" + filename_scorrimage_masked
 
     filenames = [filename_diffimage_masked,
+                 filename_diffimage_unc_masked,
                  filename_diffpsf,
                  filename_scorrimage_masked]
 
     objectnames = [s3_object_name_diffimage,
+                   s3_object_name_diffimage_unc,
                    s3_object_name_diffpsf,
                    s3_object_name_scorrimage]
 
