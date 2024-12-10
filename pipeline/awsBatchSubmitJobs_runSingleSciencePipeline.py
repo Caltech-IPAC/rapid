@@ -854,7 +854,7 @@ if __name__ == '__main__':
 
     # Generate diffimage uncertainty image, which will be the weight image for sextractor_WEIGHT_IMAGE.
 
-    filename_diffimage_unc_masked = 'filename_diffimage_uncert_masked.fits'
+    filename_diffimage_unc_masked = 'diffimage_uncert_masked.fits'
     compute_diffimage_uncertainty(sca_gain,
                                  reformatted_science_image_filename,
                                  output_resampled_reference_image,
