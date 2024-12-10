@@ -210,6 +210,7 @@ def mask_difference_image_with_resampled_reference_cov_map(input_filename,mask_f
 def compute_diffimage_uncertainty(sca_gain,
                                   science_image_filename,
                                   reference_image_filename,
+                                  refiamge_cov_map_filename,
                                   diffimage_filename,
                                   diffimage_unc_filename):
 
@@ -229,8 +230,14 @@ def compute_diffimage_uncertainty(sca_gain,
     np_data_ref = np.array(data_ref)
     pos_np_data_ref = np.where(np_data_ref >= 0.0,np_data_ref,0.0)
 
+    hdul_cov = fits.open(refiamge_cov_map_filename)
+    hdr_cov = hdul_cov[0].header
+    data_cov = hdul_cov[0].data
+    np_data_cov = np.array(data_cov)
+    pos_np_data_cov = np.where(np_data_cov >= 0.5,np_data_cov,np.nan)
+
     hdu_list_unc = []
-    data_unc = np.sqrt((pos_np_data_sci + pos_np_data_ref) / sca_gain + std_dif_img * std_dif_img)
+    data_unc = np.sqrt(pos_np_data_sci / sca_gain + pos_np_data_ref / (sca_gain * pos_np_data_cov) + std_dif_img * std_dif_img)
     hdu_unc = fits.PrimaryHDU(header=hdr_sci,data=data_unc.astype(np.float32))
     hdu_list_unc.append(hdu_unc)
     hdu_unc = fits.HDUList(hdu_list_unc)
@@ -858,6 +865,7 @@ if __name__ == '__main__':
     compute_diffimage_uncertainty(sca_gain,
                                  reformatted_science_image_filename,
                                  output_resampled_reference_image,
+                                 output_resampled_reference_cov_map,
                                  filename_diffimage_masked,
                                  filename_diffimage_unc_masked)
     filename_weight_image = filename_diffimage_unc_masked
