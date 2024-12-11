@@ -83,7 +83,7 @@ def download_file_from_s3_bucket(s3_client,s3_full_name):
     '''
     Download file from S3 bucket.
     The full name is assumed to be of the following form: s3://sims-sn-f184-lite/1856/Roman_TDS_simple_model_F184_1856_2_lite.fits.gz
-    and will be parsed for the s3 bucket name, object name, and filename.
+    and will be parsed for the s3 bucket name, object name, and filename.  Return filename, s3_subdirs, and boolean if successful.
     '''
 
 
@@ -115,13 +115,22 @@ def download_file_from_s3_bucket(s3_client,s3_full_name):
 
     # Download reference-image input from associated S3 bucket.
 
-    print("Downloading s3://{}/{} into {}...".format(s3_bucket_name,s3_object_name,filename))
+    downloaded_from_bucket = True
 
-    response = s3_client.download_file(s3_bucket_name,s3_object_name,filename)
+    print("Attempting to download s3://{}/{} into {}...".format(s3_bucket_name,s3_object_name,filename))
 
-    print("response =",response)
+    try:
+        response = s3_client.download_file(s3_bucket_name,s3_object_name,filename)
 
-    return filename,subdirs
+        print("response =",response)
+
+    except ClientError as e:
+        print("*** Warning: Failed to download {} from s3://{}/{}"\
+            .format(filename,s3_bucket_name,s3_object_name))
+        downloaded_from_bucket = False
+
+
+    return filename,subdirs,downloaded_from_bucket
 
 
 def compute_clip_corr(n_sigma):
