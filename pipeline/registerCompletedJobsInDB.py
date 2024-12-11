@@ -7,7 +7,7 @@ import boto3
 import re
 import healpy as hp
 
-import modules.utils.rapid_pipeline_subs as util
+import modules.utils.rapid_pipeline_subs as plsubs
 import database.modules.utils.rapid_db as db
 
 level6 = 6
@@ -168,6 +168,18 @@ while True:
     # Loop over jobs for a given processing date.
 
     for jid,log_fname in zip(jids,log_filenames):
+
+
+        # Check whether done file exists in S3 bucket for job, and skip if it exists.
+        # This is done by attempting to download the done file.  Regardless the sub
+        # always returns the filename and subdirs by parsing the s3_full_name.
+
+        s3_full_name_done_file = "s3://" + product_s3_bucket_base + "/" + datearg + '/jid' + str(jid) + "/diffimage_jid" +  str(jid)  + ".done"
+        done_filename,subdirs_done,downloaded_from_bucket = plsubs.download_file_from_s3_bucket(s3_client,s3_full_name_done_file)
+
+        if downloaded_from_bucket:
+            print("*** Warning: Done file exists ({}); skipping...".format(done_filename))
+            continue
 
 
         # Download log file from S3 bucket.
@@ -377,6 +389,8 @@ while True:
                     dbh.add_diffimage(rid_diffimage,
                                       ppid_diffimage,
                                       rfid_diffimage,
+                                      infobits_diffimage,
+                                      infobits_refimage,
                                       ra0_diffimage,
                                       dec0_diffimage,
                                       ra1_diffimage,
@@ -387,8 +401,6 @@ while True:
                                       dec3_diffimage,
                                       ra4_diffimage,
                                       dec4_diffimage,
-                                      infobits_diffimage,
-                                      infobits_refimage,
                                       status_diffimage,
                                       filename_diffimage,
                                       checksum_diffimage)
@@ -410,6 +422,21 @@ while True:
 
                     if dbh.exit_code >= 64:
                         exit(dbh.exit_code)
+
+
+                    # Touch done file.
+
+                    touch_cmd = ['touch', done_filename]
+                    exitcode_from_touch = plsubs.execute_command(touch_cmd)
+
+
+                    # Upload done file to S3 bucket.
+
+                    product_s3_bucket = product_s3_bucket_base
+                    s3_object_name_done_filename = datearg + "/jid" + str(jid) + "/" + done_filename
+                    filenames = [done_filename]
+                    objectnames = [s3_object_name_done_filename]
+                    plsubs.upload_files_to_s3_bucket(s3_client,product_s3_bucket,filenames,objectnames)
 
 
         # Close database connection.
