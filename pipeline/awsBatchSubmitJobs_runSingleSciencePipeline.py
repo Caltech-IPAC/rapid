@@ -358,7 +358,7 @@ if __name__ == '__main__':
 
     # Download gzipped science image from S3 bucket.
 
-    science_image_filename_gz,subdirs_science_image = util.download_file_from_s3_bucket(s3_client,s3_full_name_science_image)
+    science_image_filename_gz,subdirs_science_image,downloaded_from_bucket = util.download_file_from_s3_bucket(s3_client,s3_full_name_science_image)
 
 
     # Upload science image to product S3 bucket (in order to test upload method).
@@ -384,7 +384,7 @@ if __name__ == '__main__':
 
         infobits_refimage = config_input['REF_IMAGE']['infobits']
         s3_full_name_reference_image = config_input['REF_IMAGE']['filename']
-        awaicgen_output_mosaic_image_file,subdirs = util.download_file_from_s3_bucket(s3_client,s3_full_name_reference_image)
+        awaicgen_output_mosaic_image_file,subdirs,downloaded_from_bucket = util.download_file_from_s3_bucket(s3_client,s3_full_name_reference_image)
 
         # For now, require the filename derived from the database record is same as in job configuration file under AWAICGEN block.
 
@@ -780,14 +780,14 @@ if __name__ == '__main__':
 
     # Download PSFs from S3 bucket.
 
-    filename_psf,subdirs_psf = util.download_file_from_s3_bucket(s3_client,s3_full_name_psf)
+    filename_psf,subdirs_psf,downloaded_from_bucket = util.download_file_from_s3_bucket(s3_client,s3_full_name_psf)
 
     print("s3_full_name_psf = ",s3_full_name_psf)
     print("filename_psf = ",filename_psf)
 
     refimage_psf_filename = refimage_psf_filename.replace("FID",str(fid_sciimage))
     s3_full_name_refimage_psf = "s3://" + job_info_s3_bucket + "/" + refimage_psf_s3_bucket_dir + "/" + refimage_psf_filename
-    filename_refimage_psf,subdirs_refimage_psf = util.download_file_from_s3_bucket(s3_client,s3_full_name_refimage_psf)
+    filename_refimage_psf,subdirs_refimage_psf,downloaded_from_bucket = util.download_file_from_s3_bucket(s3_client,s3_full_name_refimage_psf)
 
     print("s3_full_name_refimage_psf = ",s3_full_name_refimage_psf)
     print("filename_refimage_psf = ",filename_refimage_psf)
