@@ -800,7 +800,7 @@ if __name__ == '__main__':
     bkgest_code = '/code/c/bin/bkgest'
     bkgest_include_dir = '/code/c/include'
     filename_bkg_subbed_science_image = 'bkg_subbed_science_image.fits'
-    filename_global_clippedmean_sciimage_tbl = 'blobal_clippedmean_science_image.tbl'
+    filename_global_clippedmean_sciimage_tbl = 'global_clippedmean_science_image.tbl'
 
     bkgest_cmd = [bkgest_code,
                   '-i',
