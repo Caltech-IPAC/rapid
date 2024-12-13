@@ -151,7 +151,7 @@ def reformat_troxel_fits_file_and_compute_uncertainty_image_via_simple_model(inp
     new_np_data = np.append(new_arr, new_col, axis=1)               # Append extra column of trimmed-average background.
 
     hdu_list = []
-    hdu = fits.PrimaryHDU(header=hdr,data=new_np_data)
+    hdu = fits.PrimaryHDU(header=hdr,data=new_np_data.astype(np.float32))
     hdu_list.append(hdu)
     hdu = fits.HDUList(hdu_list)
     hdu.writeto(fname_output,overwrite=True,checksum=True)
@@ -164,7 +164,7 @@ def reformat_troxel_fits_file_and_compute_uncertainty_image_via_simple_model(inp
     pos_np_data = np.where(new_np_data >= 0.0,new_np_data,0.0)
 
     data_unc = np.sqrt(pos_np_data / sca_gain)
-    hdu_unc = fits.PrimaryHDU(header=hdr,data=data_unc)
+    hdu_unc = fits.PrimaryHDU(header=hdr,data=data_unc.astype(np.float32))
     hdu_list_unc.append(hdu_unc)
     hdu_unc = fits.HDUList(hdu_list_unc)
     hdu_unc.writeto(fname_output_unc,overwrite=True,checksum=True)
