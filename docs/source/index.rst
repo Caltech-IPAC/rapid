@@ -28,15 +28,15 @@ pipeline already installed and ready to run.  It is publicly available from
 
 You can use it to docker-run a container and from within execute
 code for image-differencing, etc., using a docker-run command like the
-following (not that an entry point to bash is required for interactive use
+following (note that an entry point to bash is required for interactive use
 and to inhibit running the automated pipeline):
 
 .. code-block::
 
-   docker run -it --entrypoint bash --name my_test -v /home/ubuntu/work/test_20241206:/work rapid_science_pipeline:latest
+   docker run -it --entrypoint bash --name my_test -v /home/ubuntu/work/test_20241206:/work public.ecr.aws/y9b1s7h8/rapid_science_pipeline:latest
 
 
-This docker image is based on
+The Docker file used to generate this docker image is
 
 .. code-block::
 
