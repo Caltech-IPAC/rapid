@@ -24,14 +24,23 @@ pipeline already installed and ready to run.  It is publicly available from
 
 .. code-block::
 
-   public.ecr.aws/y9b1s7h8/rapid_c_build:latest
+   public.ecr.aws/y9b1s7h8/rapid_science_pipeline:latest
 
 You can use it to docker-run a container and from within execute
-code for image-differencing, etc.  It is based on
+code for image-differencing, etc., using a docker-run command like the
+following (not that an entry point to bash is required for interactive use
+and to inhibit running the automated pipeline):
 
 .. code-block::
 
-   rapid/docker/Dockerfile_ubuntu_C_build
+   docker run -it --entrypoint bash --name my_test -v /home/ubuntu/work/test_20241206:/work rapid_science_pipeline:latest
+
+
+This docker image is based on
+
+.. code-block::
+
+   rapid/docker/Dockerfile_ubuntu_runSingleSciencePipeline
 
 in the RAPID git repo.  The docker image self-contains a
 RAPID git-clone in the /code directory (no volume binding to an
@@ -79,6 +88,14 @@ RAPID Pipeline Design
    :maxdepth: 2
 
    pl/pl.rst
+
+RAPID Pipeline Development Notes
+************************************
+
+.. toctree::
+   :maxdepth: 2
+
+   dev/notes.rst
 
 Acronyms
 ************************************
