@@ -244,3 +244,12 @@ make clean
 make
 echo " "
 echo "--->Finished building computeOverlapArea module."
+
+#--------Build bkgest module-------------------
+echo " "
+echo "--->Building bkgest module ..."
+cd ${RAPID_SW}/c/src/bkgest
+make clean
+make
+echo " "
+echo "--->Finished building bkgest module."
