@@ -4,7 +4,7 @@ RAPID_INC_PATH = $(RAPID_SW)/c/include
 COMPILE.c = $(CC) $(CFLAGS) $(CPPFLAGS) $(TARGET_ARCH) -c
 LINK.c = $(CC) $(LINKFLAGS)
 CC = gcc -O2
-CFLAGS = -fPIC -std=c99
+CFLAGS = -fPIC -std=gnu99
 OUTPUT_OPTION = -o $@
 AR = ar
 ARFLAGS = rv
@@ -13,7 +13,7 @@ RM = rm
 CP = cp
 MV = mv
 ifdef DYLD_LIBRARY_PATH
-   SHLIB_SUFFIX =  .dylib 
+   SHLIB_SUFFIX =  .dylib
    SHLIB_LD = gcc -dynamiclib
    SHLIB_LD_ALT = gcc
 else
