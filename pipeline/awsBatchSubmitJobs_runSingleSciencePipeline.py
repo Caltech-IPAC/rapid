@@ -14,6 +14,7 @@ import database.modules.utils.rapid_db as db
 
 start_time_benchmark = time.time()
 
+
 swname = "awsBatchSubmitJobs_runSingleSciencePipeline.py"
 swvers = "1.0"
 
@@ -793,6 +794,43 @@ if __name__ == '__main__':
     print("filename_refimage_psf = ",filename_refimage_psf)
 
 
+    # Subtract background from science image.  Since the reference image has been swarped,
+    # it already has the background subtracted.
+
+    bkgest_code = '/code/c/bin/bkgest'
+    bkgest_include_dir = '/code/c/include'
+    filename_bkg_subbed_science_image = 'bkg_subbed_science_image.fits'
+    filename_global_clippedmean_sciimage_tbl = 'blobal_clippedmean_science_image.tbl'
+
+    bkgest_cmd = [bkgest_code,
+                  '-i',
+                  reformatted_science_image_filename,
+                  '-f',
+                  '2',
+                  '-c',
+                  '3',
+                  '-g',
+                  '100',
+                  '-w',
+                  '201',
+                  '-a',
+                  bkgest_include_dir,
+                  '-ot',
+                  filename_global_clippedmean_sciimage_tbl,
+                  '-o2',
+                  filename_bkg_subbed_science_image]
+
+    exitcode_from_bkgest = util.execute_command(bkgest_cmd)
+
+
+    # Code-timing benchmark.
+
+    end_time_benchmark = time.time()
+    print("Elapsed time in seconds after running bkgest on science image =",
+        end_time_benchmark - start_time_benchmark)
+    start_time_benchmark = end_time_benchmark
+
+
     # The image data in science_image_filename and sci_fits_file_with_pv FITS files are the same, only the
     # represensation of geometric distortion in the FITS headers are different (sip versus pv).
     #
@@ -802,6 +840,7 @@ if __name__ == '__main__':
     #
     # Assume top-level directory of rapid git repo is mapped to /code inside Docker container.
 
+
     python_cmd = '/usr/bin/python3'
     zogy_code = '/code/modules/zogy/v21Aug2018/py_zogy.py'
     filename_diffimage = 'diffimage.fits'
@@ -810,7 +849,7 @@ if __name__ == '__main__':
 
     zogy_cmd = [python_cmd,
                 zogy_code,
-                reformatted_science_image_filename,
+                filename_bkg_subbed_science_image,
                 output_resampled_reference_image,
                 filename_psf,
                 filename_refimage_psf,
