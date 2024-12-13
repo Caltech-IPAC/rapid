@@ -228,7 +228,7 @@ void bkgest_parse_args(int             argc,
            BKEP_Fnames->CP_Filename_FITS_Mask);
    }
 
-   if (!(BKEP_FITS->I_Operation < 1 ||BKEP_FITS->I_Operation > 3)) {
+   if (!(BKEP_FITS->I_Operation < 1 || BKEP_FITS->I_Operation > 3)) {
       if(BKEP_Stat->I_Verbose)
          printf("bkgest_parse_args: %s = %d\n",
             "ClippedMean calculation-type flag",BKEP_FITS->I_Operation);
@@ -243,7 +243,7 @@ void bkgest_parse_args(int             argc,
          printf("bkgest_parse_args: Output File 1 = %s\n",
          &BKEP_Fnames->CP_Filename_FITS_Out[1]);
    } else {
-      if (BKEP_FITS->I_Fits_Type == 1 ||BKEP_FITS->I_Fits_Type == 3) {
+      if ((BKEP_FITS->I_Fits_Type == 1 || BKEP_FITS->I_Fits_Type == 3) && BKEP_FITS->I_Operation != 2) {
          printf(
             "bkgest_parse_args: Missing output FITS filename %s\n",
             "(-o1 <fname>).");
@@ -269,7 +269,7 @@ void bkgest_parse_args(int             argc,
          printf("bkgest_parse_args: Output File 3 = %s\n",
          &BKEP_Fnames->CP_Filename_FITS_Out3[1]);
    } else {
-      if (BKEP_FITS->I_Fits_Type == 1 ||BKEP_FITS->I_Fits_Type == 3) {
+      if ((BKEP_FITS->I_Fits_Type == 1 || BKEP_FITS->I_Fits_Type == 3) && BKEP_FITS->I_Operation != 2) {
          printf(
             "bkgest_parse_args: Missing output FITS filename %s\n",
             "(-o3 <fname>).");
