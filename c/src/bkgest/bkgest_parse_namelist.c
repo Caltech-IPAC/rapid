@@ -62,15 +62,18 @@ void bkgest_parse_namelist(int            argc,
     fprintf(stdout, "       -n <input_namelist_fname> (Optional)\n");
     fprintf(stdout, "       -i <input_image_fname> (Namelist or required)\n");
     fprintf(stdout, "       -m <input_mask_fname> (Optional)\n");
-    fprintf(stdout, "       -c <clippedmean_calc_type> (1=Local, 2=Global, 3=Both) \n");
+    fprintf(stdout, "       -c <clippedmean_calc_type> %s\n",
+        "(1=Local, 2=Global, 3=Both, where global is grid filler if local not available due to bad pixels)");
+    fprintf(stdout, "       -f <output_image_type>  %s\n",
+       "(1=ClippedMean, 2=ClippedMean-Input, 3=Both, 4=None; default is 1)");
     fprintf(stdout, "       -o1 <output_clippedmean_fits_fname> %s\n",
-       "(Depends on -c option, required if -f 1 or -f 3 is specified)");
+       "(Required if -c 1 or -c 3 and -f 1 or -f 3 are specified, and not applicable if -c 2 is specified)");
     fprintf(stdout, "       -o2 <output_input-clippedmean_fits_fname> %s\n",
-       "(Depends on -c option, required if -f 2 or -f 3 is specified)");
+       "(Output image depends on -c option; required for -f 2 or -f 3, but not applicable for -f 1)");
     fprintf(stdout, "       -o3 <output_sky_scale_fits_fname> %s\n",
-       "(Depends on -c option, required if -f 1 or -f 3 is specified)");
+       "(Required if -c 1 or -c 3 and -f 1 or -f 3 are specified, and not applicable if -c 2 is specified)");
     fprintf(stdout, "       -ot <output_global_clippedmean_data_fname> %s\n",
-       "(Depends on -c option, required if -f 2 or -f 3 is specified)");
+       "(Required if -c 2 or -c 3 is specified)");
     fprintf(stdout, "       -l <log_fname> (Default is stdout)\n");
     fprintf(stdout, "       -w <local_clippedmean_input_window> %s\n",
        "(Depends on -c option; pixels on a side; default is 7 pixels)");
@@ -81,8 +84,6 @@ void bkgest_parse_namelist(int            argc,
        "(Optional, must be an integer 99% or less, default is 50%)");
     fprintf(stdout, "       -bg <integer_percent_of_global_clippedmean_number_bad_pixels_tolerated> %s\n",
        "(Optional, must be an integer 99% or less, default is 50%)");
-    fprintf(stdout, "       -f <output_image_type>  %s\n",
-       "(1=ClippedMean, 2=ClippedMean-Input, 3=Both, 4=None; default is 1)");
     fprintf(stdout, "       -p <data_plane_to_process> %s\n",
        "(1=All, 2=First, 3=Last; default is 1)");
     fprintf(stdout, "       -e <pothole> (Optional image value at and below which to ignore) \n");
