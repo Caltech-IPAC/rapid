@@ -113,3 +113,58 @@ Image: localClippedMean.fits [1:1]
  Samples & NaNs/Infs       = 12166932, 4552989
  Skewness & Kurtosis       = 0.972052, 17.887117
  Jarque-Bera Test          = 164115939.960197
+
+
+
+
+12/16/24
+
+time bkgest -i Roman_TDS_simple_model_F184_1856_2_lite_reformatted.fits -f 3 -c 1 -g 500 -w 501 -o1 localClippedMean.fits -o2 backgroundSubtracted.fits -o3 skyScale.fits -a /Users/laher/git/rapid_abandon_20240426/c/include
+echo $?
+
+bkgest_parse_namelist: Information only: Namelist not specified.
+bkgest_parse_args: Mask mask = 0
+bkgest_log_writer: Log File = stdout
+bkgest_log_writer: Input Image File = Roman_TDS_simple_model_F184_1856_2_lite_reformatted.fits
+bkgest_log_writer: Printing Log output to stdout
+
+Program bkgest, Version 1.3
+Input File = Roman_TDS_simple_model_F184_1856_2_lite_reformatted.fits
+Output File 1 (local clippedmean) = localClippedMean.fits
+Output File 2 (input - local clippedmean) = backgroundSubtracted.fits
+Output File 3 (local sky scale) = skyScale.fits
+Mask mask= 0
+Calculation Type = 1
+Local-ClippedMean Input Window (pixels) = 501
+Local-ClippedMean Grid Spacing (pixels) = 500
+Percentage of Bad Pixels Tolerated for Local ClippedMean = 50
+Percentage of Bad Pixels Tolerated for Global ClippedMean = 50
+Image Pothole Value = -1.797690e+308
+Data-Plane Flag = 1
+Output Image Type = 3
+Ancillary Data-File Path = /Users/laher/git/rapid_abandon_20240426/c/include
+Verbose flag = 0
+Super-verbose flag = 0
+Debug flag = 0
+Set-up to do local-clippedmean image calculation.
+bkgest Status Message      0x0000
+Normal exit from Function 0x0000: LOG_WRITER
+A total of        0   NaN's were produced in the results.
+Processing time: 4.204916 seconds
+Current date/time: Mon Dec 16 05:53:09 2024
+Program bkgest, version 1.3, terminated.
+
+real	0m4.782s
+user	0m2.407s
+sys	0m1.913s
+(base) laher [Mon Dec 16 05:53:09] [~/Folks/rapid] $ echo $?
+0
+
+
+APT.csh -i localClippedMean.fits
+
+APT.csh -i backgroundSubtracted.fits
+
+APT.csh -i skyScale.fits
+
+

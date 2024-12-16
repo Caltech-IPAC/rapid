@@ -58,6 +58,15 @@ void bkgest_parse_namelist(int            argc,
 
   if (argc==1) {
 
+    fprintf(stdout, "\nProgram bkgest by Russ Laher (laher@ipac.caltech.edu) 2024 Dec 16\n\n");
+
+    fprintf(stdout, "The bkgest program computes a background map from an input image\n");
+    fprintf(stdout, "by segementing the pixel space for the given grid spacing, computing\n");
+    fprintf(stdout, "the sigma=2.5 clipped mean over a subimage centered on each grid point\n");
+    fprintf(stdout, "of the given window size, and then computing between grid points the\n");
+    fprintf(stdout, "background for each pixel via bilinear interpolation.  Grid points that\n");
+    fprintf(stdout, "result in NaN are replaced with the global clipped mean.\n\n");
+
     fprintf(stdout, "Usage: bkgest\n");
     fprintf(stdout, "       -n <input_namelist_fname> (Optional)\n");
     fprintf(stdout, "       -i <input_image_fname> (Namelist or required)\n");

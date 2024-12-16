@@ -61,6 +61,16 @@ void bkgest_compute_results(double              *DP_Data_Image1,
     double nanvalue = NANVALUE;
 
 
+
+
+
+
+    double sigma = 2.5;
+
+
+
+
+
     /* For debug only */
     FILE    *fp_data;
 
@@ -286,7 +296,6 @@ void bkgest_compute_results(double              *DP_Data_Image1,
     }
     else
     {
-        double sigma = 3.0;
         double clippedmean, clippedmeanunc;
         int nsamps, nrejects;
         computeclippedmean(Input_Array, l, sigma, &clippedmean, &clippedmeanunc, &nsamps, &nrejects);
@@ -462,7 +471,6 @@ void bkgest_compute_results(double              *DP_Data_Image1,
                 }
             } else {
 
-                double sigma = 3.0;
                 double clippedmean, clippedmeanunc;
                 int nsamps, nrejects;
                 computeclippedmean(Input_Array, l, sigma, &clippedmean, &clippedmeanunc, &nsamps, &nrejects);
