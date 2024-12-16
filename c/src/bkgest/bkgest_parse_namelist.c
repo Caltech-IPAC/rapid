@@ -74,7 +74,7 @@ void bkgest_parse_namelist(int            argc,
     fprintf(stdout, "       -c <clippedmean_calc_type> %s\n",
         "(1=Local, 2=Global, 3=Both, where global is grid filler if local not available due to bad pixels)");
     fprintf(stdout, "       -f <output_image_type>  %s\n",
-       "(1=ClippedMean, 2=ClippedMean-Input, 3=Both, 4=None; default is 1)");
+       "(1=ClippedMean, 2=InputMinusClippedMean, 3=Both, 4=None; default is 1)");
     fprintf(stdout, "       -o1 <output_clippedmean_fits_fname> %s\n",
        "(Required if -c 1 or -c 3 and -f 1 or -f 3 are specified, and not applicable if -c 2 is specified)");
     fprintf(stdout, "       -o2 <output_input-clippedmean_fits_fname> %s\n",
