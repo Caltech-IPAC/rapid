@@ -352,7 +352,9 @@ if __name__ == '__main__':
 
     swarp_dict = config_input['SWARP']
 
-    sextractor_dict = config_input['SEXTRACTOR']
+    sextractor_diffimage_dict = config_input['SEXTRACTOR_DIFFIMAGE']
+    sextractor_sciimage_dict = config_input['SEXTRACTOR_SCIIMAGE']
+    sextractor_refimage_dict = config_input['SEXTRACTOR_REFIMAGE']
 
     print("max_n_images_to_coadd =", max_n_images_to_coadd)
 
@@ -810,9 +812,9 @@ if __name__ == '__main__':
                   '-c',
                   '3',
                   '-g',
-                  '100',
+                  '500',
                   '-w',
-                  '201',
+                  '501',
                   '-a',
                   bkgest_include_dir,
                   '-ot',
@@ -916,14 +918,14 @@ if __name__ == '__main__':
     # image, then use to perform aperture phot on difference image to generate
     # raw ascii catalog file.
 
-    sextractor_dict["sextractor_detection_image".lower()] = filename_scorrimage_masked
-    sextractor_dict["sextractor_input_image".lower()] = filename_diffimage_masked
-    sextractor_dict["sextractor_WEIGHT_IMAGE".lower()] = filename_weight_image
-    sextractor_dict["sextractor_PARAMETERS_NAME".lower()] = "/code/cdf/rapidSexParamsDiffImage.inp"
-    sextractor_dict["sextractor_FILTER_NAME".lower()] = "/code/cdf/rapidSexDiffImageFilter.conv"
-    sextractor_dict["sextractor_STARNNW_NAME".lower()] = "/code/cdf/rapidSexDiffImageStarGalaxyClassifier.nnw"
-    sextractor_dict["sextractor_CATALOG_NAME".lower()] = filename_diffimage_sextractor_catalog
-    sextractor_cmd = util.build_sextractor_command_line_args(sextractor_dict)
+    sextractor_diffimage_dict["sextractor_detection_image".lower()] = filename_scorrimage_masked
+    sextractor_diffimage_dict["sextractor_input_image".lower()] = filename_diffimage_masked
+    sextractor_diffimage_dict["sextractor_WEIGHT_IMAGE".lower()] = filename_weight_image
+    sextractor_diffimage_dict["sextractor_PARAMETERS_NAME".lower()] = "/code/cdf/rapidSexParamsDiffImage.inp"
+    sextractor_diffimage_dict["sextractor_FILTER_NAME".lower()] = "/code/cdf/rapidSexDiffImageFilter.conv"
+    sextractor_diffimage_dict["sextractor_STARNNW_NAME".lower()] = "/code/cdf/rapidSexDiffImageStarGalaxyClassifier.nnw"
+    sextractor_diffimage_dict["sextractor_CATALOG_NAME".lower()] = filename_diffimage_sextractor_catalog
+    sextractor_cmd = util.build_sextractor_command_line_args(sextractor_diffimage_dict)
     exitcode_from_sextractor = util.execute_command(sextractor_cmd)
 
 
