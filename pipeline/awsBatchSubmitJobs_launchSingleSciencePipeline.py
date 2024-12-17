@@ -267,7 +267,7 @@ swarp_dict["swarp_NOPENFILES_MAX"] = config_input['SWARP']['swarp_NOPENFILES_MAX
 
 sextractor_diffimage_dict = config_input['SEXTRACTOR_DIFFIMAGE']
 sextractor_sciimage_dict = config_input['SEXTRACTOR_SCIIMAGE']
-sextractor_refimage_dict = config_input['SEXTRACTOR_REFFIMAGE']
+sextractor_refimage_dict = config_input['SEXTRACTOR_REFIMAGE']
 
 
 def submit_job_to_aws_batch(proc_date,
