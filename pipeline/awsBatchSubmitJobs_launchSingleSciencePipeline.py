@@ -271,7 +271,7 @@ sextractor_sciimage_dict = config_input['SEXTRACTOR_SCIIMAGE']
 
 sextractor_refimage_dict = {}
 for key in config_input['SEXTRACTOR_REFIMAGE'].keys():
-    print('SEXTRACTOR_REFIMAGE: key, value =',key,sextractor_refimage_dict[key])
+    print('Input SEXTRACTOR_REFIMAGE: key, value =',key,config_input['SEXTRACTOR_REFIMAGE'][key])
     sextractor_refimage_dict[key] = config_input['SEXTRACTOR_REFIMAGE'][key]
 
 
@@ -708,7 +708,7 @@ if __name__ == '__main__':
 
     job_config['SEXTRACTOR_REFIMAGE'] = {}
     for key in sextractor_refimage_dict.keys():
-        print('SEXTRACTOR_REFIMAGE: key, value =',key,sextractor_refimage_dict[key])
+        print('Output SEXTRACTOR_REFIMAGE: key, value =',key,sextractor_refimage_dict[key])
         job_config['SEXTRACTOR_REFIMAGE'][key] = sextractor_refimage_dict[key]
 
 
