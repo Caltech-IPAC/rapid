@@ -267,7 +267,12 @@ swarp_dict["swarp_NOPENFILES_MAX"] = config_input['SWARP']['swarp_NOPENFILES_MAX
 
 sextractor_diffimage_dict = config_input['SEXTRACTOR_DIFFIMAGE']
 sextractor_sciimage_dict = config_input['SEXTRACTOR_SCIIMAGE']
-sextractor_refimage_dict = config_input['SEXTRACTOR_REFIMAGE']
+
+
+sextractor_refimage_dict = {}
+for key in config_input['SEXTRACTOR_REFIMAGE'].keys():
+    print('SEXTRACTOR_REFIMAGE: key, value =',key,sextractor_refimage_dict[key])
+    sextractor_refimage_dict[key] = config_input['SEXTRACTOR_REFIMAGE'][key]
 
 
 def submit_job_to_aws_batch(proc_date,
@@ -699,7 +704,12 @@ if __name__ == '__main__':
     job_config['SWARP'] = swarp_dict
     job_config['SEXTRACTOR_DIFFIMAGE'] = sextractor_diffimage_dict
     job_config['SEXTRACTOR_SCIIMAGE'] = sextractor_sciimage_dict
-    job_config['SEXTRACTOR_REFIMAGE'] = sextractor_refimage_dict
+
+
+    job_config['SEXTRACTOR_REFIMAGE'] = {}
+    for key in sextractor_refimage_dict.keys():
+        print('SEXTRACTOR_REFIMAGE: key, value =',key,sextractor_refimage_dict[key])
+        job_config['SEXTRACTOR_REFIMAGE'][key] = sextractor_refimage_dict[key]
 
 
     # Write output config file for job.
