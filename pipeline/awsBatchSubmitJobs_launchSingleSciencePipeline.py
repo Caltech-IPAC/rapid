@@ -105,14 +105,14 @@ config_input_filename = cfg_path + "/" + cfg_filename_only
 config_input = configparser.ConfigParser()
 config_input.read(config_input_filename)
 
-verbose = int(config_input['DEFAULT']['verbose'])
-debug = int(config_input['DEFAULT']['debug'])
-job_info_s3_bucket_base = config_input['DEFAULT']['job_info_s3_bucket_base']
-product_s3_bucket_base = config_input['DEFAULT']['product_s3_bucket_base']
-job_config_filename_base = config_input['DEFAULT']['job_config_filename_base']
-product_config_filename_base = config_input['DEFAULT']['product_config_filename_base']
-refimage_psf_s3_bucket_dir = config_input['DEFAULT']['refimage_psf_s3_bucket_dir']
-refimage_psf_filename = config_input['DEFAULT']['refimage_psf_filename']
+verbose = int(config_input['JOB_PARAMS']['verbose'])
+debug = int(config_input['JOB_PARAMS']['debug'])
+job_info_s3_bucket_base = config_input['JOB_PARAMS']['job_info_s3_bucket_base']
+product_s3_bucket_base = config_input['JOB_PARAMS']['product_s3_bucket_base']
+job_config_filename_base = config_input['JOB_PARAMS']['job_config_filename_base']
+product_config_filename_base = config_input['JOB_PARAMS']['product_config_filename_base']
+refimage_psf_s3_bucket_dir = config_input['JOB_PARAMS']['refimage_psf_s3_bucket_dir']
+refimage_psf_filename = config_input['JOB_PARAMS']['refimage_psf_filename']
 
 sca_gain = float(config_input['INSTRUMENT']['sca_gain'])
 
@@ -612,19 +612,19 @@ if __name__ == '__main__':
 
     job_config = configparser.ConfigParser()
 
-    job_config['DEFAULT'] = {'debug': str(debug),
+    job_config['JOB_PARAMS'] = {'debug': str(debug),
 
                          'swname': swname,
 
                          'swvers': swvers,
                          'jid': str(jid)}
 
-    job_config['DEFAULT']['job_info_s3_bucket_base'] = job_info_s3_bucket_base
-    job_config['DEFAULT']['product_s3_bucket_base'] = product_s3_bucket_base
-    job_config['DEFAULT']['product_config_filename_base'] = product_config_filename_base
-    job_config['DEFAULT']['verbose'] = str(verbose)
-    job_config['DEFAULT']['refimage_psf_s3_bucket_dir'] = refimage_psf_s3_bucket_dir
-    job_config['DEFAULT']['refimage_psf_filename'] = refimage_psf_filename
+    job_config['JOB_PARAMS']['job_info_s3_bucket_base'] = job_info_s3_bucket_base
+    job_config['JOB_PARAMS']['product_s3_bucket_base'] = product_s3_bucket_base
+    job_config['JOB_PARAMS']['product_config_filename_base'] = product_config_filename_base
+    job_config['JOB_PARAMS']['verbose'] = str(verbose)
+    job_config['JOB_PARAMS']['refimage_psf_s3_bucket_dir'] = refimage_psf_s3_bucket_dir
+    job_config['JOB_PARAMS']['refimage_psf_filename'] = refimage_psf_filename
 
     job_config['INSTRUMENT'] = {}
 

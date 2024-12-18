@@ -268,16 +268,16 @@ if __name__ == '__main__':
     config_input = configparser.ConfigParser()
     config_input.read(job_config_ini_file_filename)
 
-    verbose = int(config_input['DEFAULT']['verbose'])
-    debug = int(config_input['DEFAULT']['debug'])
-    job_info_s3_bucket_base = config_input['DEFAULT']['job_info_s3_bucket_base']
-    product_s3_bucket_base = config_input['DEFAULT']['product_s3_bucket_base']
-    refimage_psf_s3_bucket_dir = config_input['DEFAULT']['refimage_psf_s3_bucket_dir']
-    refimage_psf_filename = config_input['DEFAULT']['refimage_psf_filename']
+    verbose = int(config_input['JOB_PARAMS']['verbose'])
+    debug = int(config_input['JOB_PARAMS']['debug'])
+    job_info_s3_bucket_base = config_input['JOB_PARAMS']['job_info_s3_bucket_base']
+    product_s3_bucket_base = config_input['JOB_PARAMS']['product_s3_bucket_base']
+    refimage_psf_s3_bucket_dir = config_input['JOB_PARAMS']['refimage_psf_s3_bucket_dir']
+    refimage_psf_filename = config_input['JOB_PARAMS']['refimage_psf_filename']
 
     product_s3_bucket = product_s3_bucket_base
 
-    product_config_filename_base = config_input['DEFAULT']['product_config_filename_base']
+    product_config_filename_base = config_input['JOB_PARAMS']['product_config_filename_base']
 
     sca_gain = float(config_input['INSTRUMENT']['sca_gain'])
 
@@ -654,14 +654,14 @@ if __name__ == '__main__':
 
     product_config = configparser.ConfigParser()
 
-    product_config['DEFAULT'] = {'debug': str(debug),
+    product_config['JOB_PARAMS'] = {'debug': str(debug),
                                  'swname': swname,
                                  'swvers': swvers}
 
-    product_config['DEFAULT']['product_s3_bucket_base'] = product_s3_bucket_base
-    product_config['DEFAULT']['jid'] = str(jid)
-    product_config['DEFAULT']['job_proc_date'] = job_proc_date
-    product_config['DEFAULT']['verbose'] = str(verbose)
+    product_config['JOB_PARAMS']['product_s3_bucket_base'] = product_s3_bucket_base
+    product_config['JOB_PARAMS']['jid'] = str(jid)
+    product_config['JOB_PARAMS']['job_proc_date'] = job_proc_date
+    product_config['JOB_PARAMS']['verbose'] = str(verbose)
 
     if rfid is None:
 
