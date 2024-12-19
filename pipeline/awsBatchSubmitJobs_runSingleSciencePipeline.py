@@ -946,7 +946,7 @@ if __name__ == '__main__':
         print("*** Error: Unexpected value for checksum =",checksum_diffimage)
 
 
-    # Upload intermediate FITS files to product S3 bucket for diagnostic purposes.
+    # Upload intermediate and final FITS files to product S3 bucket.
 
     product_s3_bucket = product_s3_bucket_base
     s3_object_name_diffimage = job_proc_date + "/jid" + str(jid) + "/" + filename_diffimage_masked
@@ -954,18 +954,21 @@ if __name__ == '__main__':
     s3_object_name_diffimage_catalog = job_proc_date + "/jid" + str(jid) + "/" + filename_diffimage_sextractor_catalog
     s3_object_name_diffpsf = job_proc_date + "/jid" + str(jid) + "/" + filename_diffpsf
     s3_object_name_scorrimage = job_proc_date + "/jid" + str(jid) + "/" + filename_scorrimage_masked
+    s3_object_name_bkg_subbed_science_image = job_proc_date + "/jid" + str(jid) + "/" + filename_bkg_subbed_science_image
 
     filenames = [filename_diffimage_masked,
                  filename_diffimage_unc_masked,
                  filename_diffimage_sextractor_catalog,
                  filename_diffpsf,
-                 filename_scorrimage_masked]
+                 filename_scorrimage_masked,
+                 filename_bkg_subbed_science_image]
 
     objectnames = [s3_object_name_diffimage,
                    s3_object_name_diffimage_unc,
                    s3_object_name_diffimage_catalog,
                    s3_object_name_diffpsf,
-                   s3_object_name_scorrimage]
+                   s3_object_name_scorrimage,
+                   s3_object_name_bkg_subbed_science_image]
 
     util.upload_files_to_s3_bucket(s3_client,product_s3_bucket,filenames,objectnames)
 
