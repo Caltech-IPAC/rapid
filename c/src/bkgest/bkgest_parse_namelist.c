@@ -64,8 +64,11 @@ void bkgest_parse_namelist(int            argc,
     fprintf(stdout, "by segementing the pixel space for the given grid spacing, computing\n");
     fprintf(stdout, "the sigma=2.5 clipped mean over a subimage centered on each grid point\n");
     fprintf(stdout, "of the given window size, and then computing between grid points the\n");
-    fprintf(stdout, "background for each pixel via bilinear interpolation.  Grid points that\n");
-    fprintf(stdout, "result in NaN are replaced with the global clipped mean.\n\n");
+    fprintf(stdout, "background for each pixel via bilinear interpolation.  The gridding scheme\n");
+    fprintf(stdout, "is only pertinent for local background computations (-c 1 or -c 3 options),\n");
+    fprintf(stdout, "not computations for the global background (-c 2 option).  Grid points\n");
+    fprintf(stdout, "that result in NaN are replaced with the global clipped mean only if\n");
+    fprintf(stdout, "the -c 3 option is specified.\n\n");
 
     fprintf(stdout, "Usage: bkgest\n");
     fprintf(stdout, "       -n <input_namelist_fname> (Optional)\n");
@@ -74,7 +77,7 @@ void bkgest_parse_namelist(int            argc,
     fprintf(stdout, "       -c <clippedmean_calc_type> %s\n",
         "(1=Local, 2=Global, 3=Both, where global is grid filler if local not available due to bad pixels)");
     fprintf(stdout, "       -f <output_image_type>  %s\n",
-       "(1=ClippedMean, 2=InputMinusClippedMean, 3=Both, 4=None; default is 1)");
+       "(1=ClippedMean, 2=InputMinusøClippedMean, 3=Both, 4=None; default is 1)");
     fprintf(stdout, "       -o1 <output_clippedmean_fits_fname> %s\n",
        "(Required if -c 1 or -c 3 and -f 1 or -f 3 are specified, and not applicable if -c 2 is specified)");
     fprintf(stdout, "       -o2 <output_input-clippedmean_fits_fname> %s\n",
