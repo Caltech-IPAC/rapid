@@ -354,6 +354,7 @@ if __name__ == '__main__':
     sextractor_diffimage_dict = config_input['SEXTRACTOR_DIFFIMAGE']
     sextractor_sciimage_dict = config_input['SEXTRACTOR_SCIIMAGE']
     sextractor_refimage_dict = config_input['SEXTRACTOR_REFIMAGE']
+    bkgest_dict = config_input['BKGEST']
 
     print("max_n_images_to_coadd =", max_n_images_to_coadd)
 
@@ -627,13 +628,13 @@ if __name__ == '__main__':
                   '-i',
                   reformatted_science_image_filename,
                   '-f',
-                  '2',
+                  bkgest_dict["output_image_type"],
                   '-c',
-                  '3',
+                  bkgest_dict["clippedmean_calc_type"],
                   '-g',
-                  '500',
+                  bkgest_dict["local_clippedmean_grid_spacing"],
                   '-w',
-                  '501',
+                  bkgest_dict["local_clippedmean_input_window"],
                   '-a',
                   bkgest_include_dir,
                   '-ot',

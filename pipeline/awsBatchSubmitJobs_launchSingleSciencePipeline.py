@@ -273,6 +273,8 @@ for key in config_input['SEXTRACTOR_REFIMAGE'].keys():
     #print('Input SEXTRACTOR_REFIMAGE: key, value =',key,config_input['SEXTRACTOR_REFIMAGE'][key])
     sextractor_refimage_dict[key] = config_input['SEXTRACTOR_REFIMAGE'][key]
 
+bkgest_dict = config_input['BKGEST']
+
 
 def submit_job_to_aws_batch(proc_date,
                             jid,
@@ -708,6 +710,8 @@ if __name__ == '__main__':
     for key in sextractor_refimage_dict.keys():
         #print('Output SEXTRACTOR_REFIMAGE: key, value =',key,sextractor_refimage_dict[key])
         job_config['SEXTRACTOR_REFIMAGE'][key] = sextractor_refimage_dict[key]
+
+    job_config['BKGEST'] = bkgest_dict
 
 
     # Write output config file for job.
