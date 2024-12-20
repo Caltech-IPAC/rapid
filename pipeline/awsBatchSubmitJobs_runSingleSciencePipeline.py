@@ -1,5 +1,4 @@
 import os
-import csv
 import configparser
 import re
 import boto3
