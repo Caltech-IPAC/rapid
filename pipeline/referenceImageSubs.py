@@ -6,6 +6,7 @@ from astropy.io import fits
 import numpy as np
 
 import modules.utils.rapid_pipeline_subs as util
+import database.modules.utils.rapid_db as db
 
 
 # Subs used by the RAPID pipeline related to reference images and catalogs.
