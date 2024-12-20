@@ -430,7 +430,8 @@ if __name__ == '__main__':
                                                                         job_proc_date,
                                                                         awaicgen_dict,
                                                                         max_n_images_to_coadd,
-                                                                        sca_gain)
+                                                                        sca_gain,
+                                                                        product_s3_bucket)
 
         infobits_refimage = generateReferenceImage_return_list[0]
         checksum_refimage = generateReferenceImage_return_list[1]

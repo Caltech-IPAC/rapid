@@ -19,7 +19,8 @@ def generateReferenceImage(s3_client,
                            job_proc_date,
                            awaicgen_dict,
                            max_n_images_to_coadd,
-                           sca_gain):
+                           sca_gain,
+                           product_s3_bucket):
 
 
     infobits_refimage = 0                                                             # TODO
