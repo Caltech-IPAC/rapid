@@ -1,6 +1,7 @@
 import csv
 import re
 import boto3
+from botocore.exceptions import ClientError
 from astropy.io import fits
 import numpy as np
 
