@@ -4,6 +4,8 @@ import boto3
 from astropy.io import fits
 import numpy as np
 
+import modules.utils.rapid_pipeline_subs as util
+
 
 # Subs used by the RAPID pipeline related to reference images and catalogs.
 
@@ -14,6 +16,7 @@ def generateReferenceImage(s3_client,
                            jid,
                            job_proc_date,
                            awaicgen_dict,
+                           max_n_images_to_coadd,
                            sca_gain):
 
 

@@ -1,6 +1,5 @@
 import os
 import configparser
-import re
 import boto3
 from botocore.exceptions import ClientError
 from astropy.io import fits
@@ -430,6 +429,7 @@ if __name__ == '__main__':
                                                                         jid,
                                                                         job_proc_date,
                                                                         awaicgen_dict,
+                                                                        max_n_images_to_coadd,
                                                                         sca_gain)
 
         infobits_refimage = generateReferenceImage_return_list[0]
