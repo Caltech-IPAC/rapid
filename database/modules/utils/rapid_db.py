@@ -1896,3 +1896,107 @@ class RAPIDDB:
             return
 
         return records
+
+
+
+
+
+
+
+
+
+create function registerRefImCatalog (
+    rfid_     integer,
+    ppid_     smallint,
+    catType_  smallint,
+    field_    integer,
+    hp6_      integer,
+    hp9_      integer,
+    fid_      smallint,
+    filename_ varchar(255),
+    checksum_ varchar(32),
+    status_   smallint
+)
+
+
+
+
+
+########################################################################################################
+
+    def register_refimcatalog(self,
+                              rfid,
+                              ppid,
+                              cattype,
+                              field,
+                              hp6,
+                              hp9,
+                              status,
+                              filename,
+                              checksum):
+
+        '''
+        Add or update record in RefImCatalogs database table.
+        '''
+
+        self.exit_code = 0
+
+
+        # Define query template.
+
+        query_template =\
+            "select * from addRefImCatalog(" +\
+            "cast(TEMPLATE_RFID as integer)," +\
+            "cast(TEMPLATE_PPID as smallint)," +\
+            "cast(TEMPLATE_CATTYPE as smallint)," +\
+            "cast(TEMPLATE_FIELD as integer)," +\
+            "cast(TEMPLATE_HP6 as integer)," +\
+            "cast(TEMPLATE_HP9 as integer)," +\
+            "cast('TEMPLATE_FILENAME' as character varying(255))," +\
+            "cast('TEMPLATE_CHECKSUM' as character varying(32))," +\
+            "cast(TEMPLATE_STATUS as smallint)) as " +\
+            "(rfcatid integer," +\
+            " svid smallint);"
+
+
+        # Query database.
+
+        print('----> rfid = {}'.format(rfid))
+        print('----> ppid = {}'.format(ppid))
+        print('----> cattype = {}'.format(cattype))
+        print('----> field = {}'.format(field))
+        print('----> filename = {}'.format(filename))
+
+        rep = {"TEMPLATE_RFID": str(rfid),
+               "TEMPLATE_PPID": str(ppid),
+               "TEMPLATE_CATTYPE": str(cattype),
+               "TEMPLATE_FIELD": str(field),
+               "TEMPLATE_HP6": str(hp6),
+               "TEMPLATE_HP9": str(hp9)}
+
+        rep["TEMPLATE_FILENAME"] = filename
+        rep["TEMPLATE_CHECKSUM"] = checksum
+        rep["TEMPLATE_STATUS"] = str(status)
+
+
+        rep = dict((re.escape(k), v) for k, v in rep.items())
+        pattern = re.compile("|".join(rep.keys()))
+        query = pattern.sub(lambda m: rep[re.escape(m.group(0))], query_template)
+
+        print('query = {}'.format(query))
+
+        self.cur.execute(query)
+        record = self.cur.fetchone()
+
+        if record is not None:
+            self.rfcatid = record[0]
+            self.svid = record[1]
+        else:
+            self.rfcatid = None
+            self.svid = None
+            print("*** Error: Could not register RefImCatalogs record; returning...")
+            self.exit_code = 67
+            return
+
+        if self.exit_code == 0:
+            self.conn.commit()           # Commit database transaction
