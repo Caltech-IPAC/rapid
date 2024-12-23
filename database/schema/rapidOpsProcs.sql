@@ -1288,7 +1288,6 @@ $$ language plpgsql;
 -- Insert a new record into or update an existing record in the RefImCatalogs table.
 --
 create function registerRefImCatalog (
-    rfcatid_  integer,
     rfid_     integer,
     ppid_     smallint,
     catType_  smallint,
@@ -1300,12 +1299,13 @@ create function registerRefImCatalog (
     checksum_ varchar(32),
     status_   smallint
 )
-    returns void as $$
+    returns record as $$
 
     declare
 
-        rfcatid__  integer;
-        svid_      smallint;
+        rfcatid_          integer;
+        svid_             smallint;
+        r_                record;
 
     begin
 
@@ -1318,9 +1318,11 @@ create function registerRefImCatalog (
         -- Insert or update record, as appropriate.
 
         select rfcatid
-        into rfcatid__
+        into rfcatid_
         from RefImCatalogs
-        where rfcatid = rfcatid_;
+        where rfid = rfid_
+        and ppid = ppid_
+        and catType = catType_;
 
         if not found then
 
@@ -1330,11 +1332,12 @@ create function registerRefImCatalog (
             begin
 
                 insert into RefImCatalogs
-                (rfcatid, rfid, ppid, catType, field, hp6, hp9, fid,
+                (rfid, ppid, catType, field, hp6, hp9, fid,
                  svid, filename, checksum, status, created)
                 values
-                (rfcatid_, rfid_, ppid_, catType_, field_, hp6_, hp9_, fid_,
-                 svid_, filename_, checksum_, status_, now());
+                (rfid_, ppid_, catType_, field_, hp6_, hp9_, fid_,
+                 svid_, filename_, checksum_, status_, now())
+                returning rfcatid into strict rfcatid_;
                 exception
                     when no_data_found then
                         raise exception
@@ -1363,6 +1366,10 @@ create function registerRefImCatalog (
             where rfcatid = rfcatid_;
 
         end if;
+
+        select rfcatid_, svid_ into r_;
+
+        return r_;
 
     end;
 

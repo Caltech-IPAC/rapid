@@ -208,7 +208,6 @@ DROP FUNCTION getLatestSwVersion (
 
 
 DROP FUNCTION registerRefImCatalog (
-    rfcatid_  integer,
     rfid_     integer,
     ppid_     smallint,
     catType_  smallint,

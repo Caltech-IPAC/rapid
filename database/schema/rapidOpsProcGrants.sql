@@ -208,7 +208,6 @@ grant EXECUTE on FUNCTION getLatestSwVersion (
 
 
 grant EXECUTE on FUNCTION registerRefImCatalog (
-    rfcatid_  integer,
     rfid_     integer,
     ppid_     smallint,
     catType_  smallint,
