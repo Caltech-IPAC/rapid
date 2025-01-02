@@ -626,7 +626,7 @@ if __name__ == '__main__':
 
     bkgest_cmd = [bkgest_code,
                   '-i',
-                  reformatted_science_image_filename,
+                  sci_fits_file_with_pv,
                   '-f',
                   bkgest_dict["output_image_type"],
                   '-c',
