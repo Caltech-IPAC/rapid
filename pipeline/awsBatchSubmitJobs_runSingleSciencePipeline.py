@@ -446,13 +446,13 @@ if __name__ == '__main__':
 
         # Generate reference-image catalog.
 
-        generateReferenceImageCatalog_return_list = generateReferenceImageCatalog(s3_client,
-                                                                                  product_s3_bucket,
-                                                                                  jid,
-                                                                                  job_proc_date,
-                                                                                  awaicgen_output_mosaic_image_file,
-                                                                                  awaicgen_output_mosaic_uncert_image_file,
-                                                                                  sextractor_refimage_dict)
+        generateReferenceImageCatalog_return_list = rfs.generateReferenceImageCatalog(s3_client,
+                                                                                      product_s3_bucket,
+                                                                                      jid,
+                                                                                      job_proc_date,
+                                                                                      awaicgen_output_mosaic_image_file,
+                                                                                      awaicgen_output_mosaic_uncert_image_file,
+                                                                                      sextractor_refimage_dict)
 
         checksum_refimage_catalog = generateReferenceImageCatalog_return_list[0]
         filename_refimage_catalog = generateReferenceImageCatalog_return_list[1]
