@@ -444,19 +444,19 @@ if __name__ == '__main__':
         awaicgen_output_mosaic_uncert_image_s3_bucket_object_name = generateReferenceImage_return_list[7]
 
 
+        # Generate reference-image catalog.
 
+        generateReferenceImageCatalog_return_list = generateReferenceImageCatalog(s3_client,
+                                                                                  product_s3_bucket,
+                                                                                  jid,
+                                                                                  job_proc_date,
+                                                                                  awaicgen_output_mosaic_image_file,
+                                                                                  awaicgen_output_mosaic_uncert_image_file,
+                                                                                  sextractor_refimage_dict)
 
-
-
-
-
-
-
-
-
-
-
-
+        checksum_refimage_catalog = generateReferenceImageCatalog_return_list[0]
+        filename_refimage_catalog = generateReferenceImageCatalog_return_list[1]
+        refimage_catalog_s3_bucket_object_name = generateReferenceImage_return_list[2]
 
 
     # Code-timing benchmark.
@@ -494,12 +494,18 @@ if __name__ == '__main__':
         mosaic_image_name_for_db_record = "s3://{}/{}".format(product_s3_bucket,awaicgen_output_mosaic_image_s3_bucket_object_name)
         mosaic_cov_map_name_for_db_record = "s3://{}/{}".format(product_s3_bucket,awaicgen_output_mosaic_cov_map_s3_bucket_object_name)
         mosaic_uncert_image_name_for_db_record = "s3://{}/{}".format(product_s3_bucket,awaicgen_output_mosaic_uncert_image_s3_bucket_object_name)
+        refimage_catalog_name_for_db_record = "s3://{}/{}".format(product_s3_bucket,refimage_catalog_s3_bucket_object_name)
 
         product_config['REF_IMAGE']['awaicgen_output_mosaic_image_file'] = mosaic_image_name_for_db_record
         product_config['REF_IMAGE']['awaicgen_output_mosaic_cov_map_file'] = mosaic_cov_map_name_for_db_record
         product_config['REF_IMAGE']['awaicgen_output_mosaic_uncert_image_file'] = mosaic_uncert_image_name_for_db_record
         product_config['REF_IMAGE']['awaicgen_output_mosaic_image_status'] = str(1)
         product_config['REF_IMAGE']['awaicgen_output_mosaic_image_infobits'] = str(infobits_refimage)
+
+        product_config['REF_IMAGE']['sextractor_refimage_catalog_filename_for_db'] = refimage_catalog_name_for_db_record
+        product_config['REF_IMAGE']['sextractor_refimage_catalog_checksum'] = checksum_refimage_catalog
+        product_config['REF_IMAGE']['sextractor_refimage_catalog_cattype'] = str(1)
+        product_config['REF_IMAGE']['sextractor_refimage_catalog_status'] = str(1)
 
 
     # Unzip the science image gzipped file.
