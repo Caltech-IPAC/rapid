@@ -907,7 +907,12 @@ def build_sextractor_command_line_args(sextractor_dict):
     sextractor_INTERP_TYPE = sextractor_dict["sextractor_INTERP_TYPE".lower()]
 
     code_to_execute_args = [software_to_execute]
-    code_to_execute_args.append(sextractor_detection_image + "," + sextractor_input_image)
+
+    if sextractor_detection_image is None:
+        code_to_execute_args.append(sextractor_input_image)
+    else:
+        code_to_execute_args.append(sextractor_detection_image + "," + sextractor_input_image)
+
     code_to_execute_args.append("-CATALOG_NAME")
     code_to_execute_args.append(sextractor_CATALOG_NAME)
     code_to_execute_args.append("-CATALOG_TYPE")
