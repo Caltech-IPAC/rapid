@@ -280,7 +280,7 @@ def generateReferenceImageCatalog(s3_client,
 
     filename_refimage_catalog = filename_refimage_image.replace(".fits",".txt")
 
-    sextractor_refimage_dict["sextractor_detection_image".lower()] = None
+    sextractor_refimage_dict["sextractor_detection_image".lower()] = "None"
     sextractor_refimage_dict["sextractor_input_image".lower()] = filename_refimage_image
     sextractor_refimage_dict["sextractor_WEIGHT_IMAGE".lower()] = filename_refimage_uncert
     sextractor_refimage_dict["sextractor_PARAMETERS_NAME".lower()] = "/code/cdf/rapidSexParamsRefImage.inp"

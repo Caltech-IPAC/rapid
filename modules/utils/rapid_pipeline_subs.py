@@ -908,7 +908,7 @@ def build_sextractor_command_line_args(sextractor_dict):
 
     code_to_execute_args = [software_to_execute]
 
-    if sextractor_detection_image is None:
+    if sextractor_detection_image == "None":
         code_to_execute_args.append(sextractor_input_image)
     else:
         code_to_execute_args.append(sextractor_detection_image + "," + sextractor_input_image)
