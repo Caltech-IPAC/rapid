@@ -1907,6 +1907,7 @@ class RAPIDDB:
                               field,
                               hp6,
                               hp9,
+                              fid,
                               status,
                               filename,
                               checksum):
@@ -1921,13 +1922,14 @@ class RAPIDDB:
         # Define query template.
 
         query_template =\
-            "select * from addRefImCatalog(" +\
+            "select * from registerRefImCatalog(" +\
             "cast(TEMPLATE_RFID as integer)," +\
             "cast(TEMPLATE_PPID as smallint)," +\
             "cast(TEMPLATE_CATTYPE as smallint)," +\
             "cast(TEMPLATE_FIELD as integer)," +\
             "cast(TEMPLATE_HP6 as integer)," +\
             "cast(TEMPLATE_HP9 as integer)," +\
+            "cast(TEMPLATE_FID as smallint)," +\
             "cast('TEMPLATE_FILENAME' as character varying(255))," +\
             "cast('TEMPLATE_CHECKSUM' as character varying(32))," +\
             "cast(TEMPLATE_STATUS as smallint)) as " +\
@@ -1950,6 +1952,7 @@ class RAPIDDB:
                "TEMPLATE_HP6": str(hp6),
                "TEMPLATE_HP9": str(hp9)}
 
+        rep["TEMPLATE_FID"] = str(fid)
         rep["TEMPLATE_FILENAME"] = filename
         rep["TEMPLATE_CHECKSUM"] = checksum
         rep["TEMPLATE_STATUS"] = str(status)
