@@ -325,8 +325,9 @@ def generateReferenceImageCatalog(s3_client,
 
     # Return metadata about reference-image catalog that was generated.
 
-    generateReferenceImage_return_list = []
-    generateReferenceImage_return_list.append(checksum_refimage_catalog)
-    generateReferenceImage_return_list.append(filename_refimage_catalog)
+    generateReferenceImageCatalog_return_list = []
+    generateReferenceImageCatalog_return_list.append(checksum_refimage_catalog)
+    generateReferenceImageCatalog_return_list.append(filename_refimage_catalog)
+    generateReferenceImageCatalog_return_list.append(refimage_sextractor_catalog_s3_bucket_object_name)
 
-    return generateReferenceImage_return_list
+    return generateReferenceImageCatalog_return_list
