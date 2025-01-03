@@ -11,6 +11,11 @@ import database.modules.utils.rapid_db as db
 
 # Subs used by the RAPID pipeline related to reference images and catalogs.
 
+
+#####################################################################################
+# Generate reference image and upload it to S3 bucket.
+#####################################################################################
+
 def generateReferenceImage(s3_client,
                            job_info_s3_bucket,
                            input_images_csv_file_s3_bucket_object_name,
@@ -254,5 +259,74 @@ def generateReferenceImage(s3_client,
     generateReferenceImage_return_list.append(awaicgen_output_mosaic_image_s3_bucket_object_name)
     generateReferenceImage_return_list.append(awaicgen_output_mosaic_cov_map_s3_bucket_object_name)
     generateReferenceImage_return_list.append(awaicgen_output_mosaic_uncert_image_s3_bucket_object_name)
+
+    return generateReferenceImage_return_list
+
+
+#####################################################################################
+# Generate reference-image catalog and upload it to S3 bucket.
+#####################################################################################
+
+def generateReferenceImageCatalog(s3_client,
+                                  product_s3_bucket,
+                                  jid,
+                                  job_proc_date,
+                                  filename_refimage_image,
+                                  filename_refimage_uncert,
+                                  sextractor_refimage_dict):
+
+
+    # Compute SExtractor catalog for reference image.
+
+    filename_refimage_catalog = filename_refimage_image.replace(".fits",".txt")
+
+    sextractor_refimage_dict["sextractor_detection_image".lower()] = None
+    sextractor_refimage_dict["sextractor_input_image".lower()] = filename_refimage_image
+    sextractor_refimage_dict["sextractor_WEIGHT_IMAGE".lower()] = filename_refimage_uncert
+    sextractor_refimage_dict["sextractor_PARAMETERS_NAME".lower()] = "/code/cdf/rapidSexParamsRefImage.inp"
+    sextractor_refimage_dict["sextractor_FILTER_NAME".lower()] = "/code/cdf/rapidSexRefImageFilter.conv"
+    sextractor_refimage_dict["sextractor_STARNNW_NAME".lower()] = "/code/cdf/rapidSexRefImageStarGalaxyClassifier.nnw"
+    sextractor_refimage_dict["sextractor_CATALOG_NAME".lower()] = filename_refimage_catalog
+    sextractor_cmd = util.build_sextractor_command_line_args(sextractor_refimage_dict)
+    exitcode_from_sextractor = util.execute_command(sextractor_cmd)
+
+
+    # Upload reference-image catalog to S3 product bucket.
+
+    refimage_sextractor_catalog_s3_bucket_object_name = job_proc_date + "/jid" + str(jid) + "/" + filename_refimage_catalog
+
+    uploaded_to_bucket = True
+
+    try:
+        response = s3_client.upload_file(filename_refimage_catalog,
+                                         product_s3_bucket,
+                                         refimage_sextractor_catalog_s3_bucket_object_name)
+
+        print("response =",response)
+
+    except ClientError as e:
+        print("*** Error: Failed to upload {} to s3://{}/{}"\
+            .format(filename_refimage_catalog,product_s3_bucket,refimage_sextractor_catalog_s3_bucket_object_name))
+        uploaded_to_bucket = False
+
+    if uploaded_to_bucket:
+        print("Successfully uploaded {} to s3://{}/{}"\
+            .format(filename_refimage_catalog,product_s3_bucket,refimage_sextractor_catalog_s3_bucket_object_name))
+
+
+    # Compute MD5 checksum of reference-image catalog.
+
+    print("Computing checksum of reference-image catalog:",filename_refimage_catalog)
+    checksum_refimage_catalog = db.compute_checksum(filename_refimage_catalog)
+
+    if checksum_refimage_catalog == 65 or checksum_refimage_catalog == 68 or checksum_refimage_catalog == 66:
+        print("*** Error: Unexpected value for checksum =",checksum_refimage_catalog)
+
+
+    # Return metadata about reference-image catalog that was generated.
+
+    generateReferenceImage_return_list = []
+    generateReferenceImage_return_list.append(checksum_refimage_catalog)
+    generateReferenceImage_return_list.append(filename_refimage_catalog)
 
     return generateReferenceImage_return_list
