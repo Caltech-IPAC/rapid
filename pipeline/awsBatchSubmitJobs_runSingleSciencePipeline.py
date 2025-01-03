@@ -456,7 +456,7 @@ if __name__ == '__main__':
 
         checksum_refimage_catalog = generateReferenceImageCatalog_return_list[0]
         filename_refimage_catalog = generateReferenceImageCatalog_return_list[1]
-        refimage_catalog_s3_bucket_object_name = generateReferenceImage_return_list[2]
+        refimage_catalog_s3_bucket_object_name = generateReferenceImageCatalog_return_list[2]
 
 
     # Code-timing benchmark.

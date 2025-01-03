@@ -278,7 +278,7 @@ def generateReferenceImageCatalog(s3_client,
 
     # Compute SExtractor catalog for reference image.
 
-    filename_refimage_catalog = filename_refimage_image.replace(".fits",".txt")
+    filename_refimage_catalog = filename_refimage_image.replace("image.fits","refimsexcat.txt")
 
     sextractor_refimage_dict["sextractor_detection_image".lower()] = "None"
     sextractor_refimage_dict["sextractor_input_image".lower()] = filename_refimage_image
