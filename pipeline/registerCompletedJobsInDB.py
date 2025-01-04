@@ -344,6 +344,37 @@ while True:
                         exit(dbh.exit_code)
 
 
+                    # Parse metadata for reference-image catalog.
+
+                    sextractor_refimage_catalog_filename_for_db = product_config_input['REF_IMAGE']['sextractor_refimage_catalog_filename_for_db']
+                    sextractor_refimage_catalog_checksum = product_config_input['REF_IMAGE']['sextractor_refimage_catalog_checksum']
+                    sextractor_refimage_catalog_cattype = product_config_input['REF_IMAGE']['sextractor_refimage_catalog_cattype']
+                    sextractor_refimage_catalog_status = product_config_input['REF_IMAGE']['sextractor_refimage_catalog_status']
+
+
+                    # Insert record in RefImCatalogs database table.
+
+                    dbh.register_refimcatalog(rfid,
+                                              ppid_refimage,
+                                              sextractor_refimage_catalog_cattype,
+                                              field,
+                                              hp6,
+                                              hp9,
+                                              fid,
+                                              sextractor_refimage_catalog_status,
+                                              sextractor_refimage_catalog_filename_for_db,
+                                              sextractor_refimage_catalog_checksum)
+
+                    if dbh.exit_code >= 64:
+                        exit(dbh.exit_code)
+
+                    rfcatid = dbh.rfcatid
+                    svid = dbh.svid
+
+                    print("rfcatid =",rfcatid)
+                    print("svid =",svid)
+
+
             # Difference image.
 
             if zogy_output_diffimage_file in product_bucket_object.key:
