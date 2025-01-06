@@ -229,7 +229,7 @@ Download and examine log file:
 
    aws s3 ls --recursive s3://rapid-pipeline-logs/20241028
    aws s3 cp s3://rapid-pipeline-logs/20241028/rapid_pipeline_job_20241028_jid1_log.txt rapid_pipeline_job_20241028_jid1_log.txt
-   rapid_pipeline_job_20241028_jid1_log.txt
+   cat rapid_pipeline_job_20241028_jid1_log.txt
 
-Last modified: Tue Oct 29 9:26 a.m.
+Last modified: Tue 2025 Jan 6 5:24 a.m.
 
