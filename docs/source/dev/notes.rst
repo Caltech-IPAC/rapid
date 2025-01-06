@@ -209,7 +209,8 @@ After the AWS Batch job finishes, there are files written to S3 buckets that can
    2024-10-28 11:22:26  196004160 20241028/jid1/awaicgen_output_mosaic_image.fits
 
 The general theme for how the output files are organized in the S3 buckets is according to
-processing date (Pacific Time) and the associated job ID.  The reference-image products from ``awaicgen``
+processing date (Pacific Time) and the associated job ID (the same job ID can exist under
+different processing dates if reprocessing occurred).  The reference-image products from ``awaicgen``
 are given generic filenames in these buckets, and, later, will be renamed to filenames like:
 
 .. code-block::
