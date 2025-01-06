@@ -1312,7 +1312,7 @@ create function registerRefImCatalog (
 
         -- Get latest software version number.
 
-        select svid into svid_ from getLatestSwVersion();
+        select getLatestSwVersion into svid_ from getLatestSwVersion();
 
 
         -- Insert or update record, as appropriate.
