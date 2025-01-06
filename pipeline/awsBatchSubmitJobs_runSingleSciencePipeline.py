@@ -9,7 +9,7 @@ import time
 
 import modules.utils.rapid_pipeline_subs as util
 import database.modules.utils.rapid_db as db
-import pipeline.referenceImageSubs as rfs
+import pipeline.referenceImageSubs as rfis
 
 start_time_benchmark = time.time()
 
@@ -423,16 +423,16 @@ if __name__ == '__main__':
 
         # Generate reference image.
 
-        generateReferenceImage_return_list = rfs.generateReferenceImage(s3_client,
-                                                                        job_info_s3_bucket,
-                                                                        input_images_csv_file_s3_bucket_object_name,
-                                                                        input_images_csv_filename,
-                                                                        jid,
-                                                                        job_proc_date,
-                                                                        awaicgen_dict,
-                                                                        max_n_images_to_coadd,
-                                                                        sca_gain,
-                                                                        product_s3_bucket)
+        generateReferenceImage_return_list = rfis.generateReferenceImage(s3_client,
+                                                                         job_info_s3_bucket,
+                                                                         input_images_csv_file_s3_bucket_object_name,
+                                                                         input_images_csv_filename,
+                                                                         jid,
+                                                                         job_proc_date,
+                                                                         awaicgen_dict,
+                                                                         max_n_images_to_coadd,
+                                                                         sca_gain,
+                                                                         product_s3_bucket)
 
         infobits_refimage = generateReferenceImage_return_list[0]
         checksum_refimage = generateReferenceImage_return_list[1]
@@ -446,13 +446,13 @@ if __name__ == '__main__':
 
         # Generate reference-image catalog.
 
-        generateReferenceImageCatalog_return_list = rfs.generateReferenceImageCatalog(s3_client,
-                                                                                      product_s3_bucket,
-                                                                                      jid,
-                                                                                      job_proc_date,
-                                                                                      awaicgen_output_mosaic_image_file,
-                                                                                      awaicgen_output_mosaic_uncert_image_file,
-                                                                                      sextractor_refimage_dict)
+        generateReferenceImageCatalog_return_list = rfis.generateReferenceImageCatalog(s3_client,
+                                                                                       product_s3_bucket,
+                                                                                       jid,
+                                                                                       job_proc_date,
+                                                                                       awaicgen_output_mosaic_image_file,
+                                                                                       awaicgen_output_mosaic_uncert_image_file,
+                                                                                       sextractor_refimage_dict)
 
         checksum_refimage_catalog = generateReferenceImageCatalog_return_list[0]
         filename_refimage_catalog = generateReferenceImageCatalog_return_list[1]
