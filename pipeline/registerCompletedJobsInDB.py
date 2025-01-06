@@ -86,13 +86,13 @@ config_input_filename = cfg_path + "/" + cfg_filename_only
 config_input = configparser.ConfigParser()
 config_input.read(config_input_filename)
 
-verbose = int(config_input['DEFAULT']['verbose'])
-debug = int(config_input['DEFAULT']['debug'])
-job_info_s3_bucket_base = config_input['DEFAULT']['job_info_s3_bucket_base']
-job_logs_s3_bucket_base = config_input['DEFAULT']['job_logs_s3_bucket_base']
-product_s3_bucket_base = config_input['DEFAULT']['product_s3_bucket_base']
-job_config_filename_base = config_input['DEFAULT']['job_config_filename_base']
-product_config_filename_base = config_input['DEFAULT']['product_config_filename_base']
+verbose = int(config_input['JOB_PARAMS']['verbose'])
+debug = int(config_input['JOB_PARAMS']['debug'])
+job_info_s3_bucket_base = config_input['JOB_PARAMS']['job_info_s3_bucket_base']
+job_logs_s3_bucket_base = config_input['JOB_PARAMS']['job_logs_s3_bucket_base']
+product_s3_bucket_base = config_input['JOB_PARAMS']['product_s3_bucket_base']
+job_config_filename_base = config_input['JOB_PARAMS']['job_config_filename_base']
+product_config_filename_base = config_input['JOB_PARAMS']['product_config_filename_base']
 awaicgen_output_mosaic_image_file = config_input['AWAICGEN']['awaicgen_output_mosaic_image_file']
 zogy_output_diffimage_file = config_input['ZOGY']['zogy_output_diffimage_file']
 
@@ -392,9 +392,14 @@ while True:
                 if zogy_output_diffimage_file_checksum != 'Not found':
 
                     zogy_output_diffimage_file = product_config_input['ZOGY']['zogy_output_diffimage_file']
+
                     rid_diffimage = product_config_input['ZOGY']['rid']
                     ppid_diffimage = product_config_input['ZOGY']['ppid']
-                    rfid_diffimage = product_config_input['ZOGY']['rfid']
+
+                    if rfid is None:
+                        rfid_diffimage = product_config_input['ZOGY']['rfid']
+                    else:
+                        rfid_diffimage = rfid
 
                     ra0_diffimage = product_config_input['ZOGY']['ra0']
                     dec0_diffimage = product_config_input['ZOGY']['dec0']
