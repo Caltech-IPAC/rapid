@@ -380,7 +380,7 @@ CREATE TABLE refimages (
     status smallint DEFAULT 0 NOT NULL,
     checksum character varying(32),
     created timestamp without time zone DEFAULT now() NOT NULL,
-    svid integer NOT NULL,
+    svid smallint NOT NULL,
     avid integer,
     archivestatus smallint DEFAULT 0 NOT NULL,
     infobits integer DEFAULT 0 NOT NULL,
@@ -460,7 +460,7 @@ CREATE TABLE diffimages (
     checksum character varying(32),
     status smallint DEFAULT 0 NOT NULL,            -- Good/bad diff image (1/0) based on several internal image QA indicators
     created timestamp without time zone DEFAULT now() NOT NULL,
-    svid integer NOT NULL,
+    svid smallint NOT NULL,
     avid integer,
     archivestatus smallint DEFAULT 0 NOT NULL,
     nalertpackets integer,                         -- Number of alert packets (avro files) generated
