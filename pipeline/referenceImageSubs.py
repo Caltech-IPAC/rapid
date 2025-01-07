@@ -122,6 +122,12 @@ def generateReferenceImage(s3_client,
             hdu = fits.HDUList(hdu_list)
             hdu.writeto(fname_output,overwrite=True,checksum=True)
 
+
+            # Ensure data are positive for uncertainty calculations.
+
+            pos_data_norm = np.where(data_norm >= 0.0,data_norm,0.0)
+            data_unc = np.sqrt(pos_data_norm / sca_gain)
+
             data_unc = np.sqrt(np.array(data) / sca_gain) / exptime
             hdu_unc = fits.PrimaryHDU(header=hdr,data=data_unc)
             hdu_list_unc = []
