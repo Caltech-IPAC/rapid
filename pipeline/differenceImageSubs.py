@@ -16,11 +16,13 @@ import modules.utils.rapid_pipeline_subs as util
 # we removed the uncertainy FITS extension earlier from the
 # Troxel OpenUniverse simulated images to save on disk-space costs.
 # Resize images to 4089x4089 (odd number of pixels on each side).
+# Normalize by exposure time.
 #
 # Inputs are:
 # 1. A single gunzipped Troxel OpenUniverse simulated image (as
 #    read directly from the S3 bucket where it is stored), and
 # 2. SCA gain.
+# 3. EXPTIME
 
 def reformat_troxel_fits_file_and_compute_uncertainty_image_via_simple_model(input_filename,sca_gain,clipped_image_mean):
 
