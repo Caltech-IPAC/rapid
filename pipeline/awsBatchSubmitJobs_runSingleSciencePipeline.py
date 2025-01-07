@@ -226,6 +226,7 @@ if __name__ == '__main__':
     sextractor_sciimage_dict = config_input['SEXTRACTOR_SCIIMAGE']
     sextractor_refimage_dict = config_input['SEXTRACTOR_REFIMAGE']
     bkgest_dict = config_input['BKGEST']
+    sextractor_gainmatch_dict = config_input['SEXTRACTOR_GAINMATCH']
 
     print("max_n_images_to_coadd =", max_n_images_to_coadd)
 
