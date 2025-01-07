@@ -27,6 +27,26 @@ if aws_ec2_instance_id is None:
 ec2 = boto3.client('ec2')
 
 
+# Describe EC2 instance and get public DNS name,corresponding IP address, and final state.
+
+response = ec2.describe_instances(
+    InstanceIds=[
+        aws_ec2_instance_id,
+    ],
+    DryRun=False
+)
+
+print("After calling ec2.describe_instances: response =",response)
+
+current_ec2_instance_state = response['Reservations'][0]['Instances'][0]['State']['Name']
+
+print("current_ec2_instance_state =",current_ec2_instance_state)
+
+if current_ec2_instance_state == 'running':
+    print("EC2 instance is already running; terminating normally...")
+    exit(0)
+
+
 # Start EC2 instance.
 
 response = ec2.start_instances(
