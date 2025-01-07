@@ -98,6 +98,7 @@ def generateReferenceImage(s3_client,
             # Reformat the FITS file so that the image data are contained in the PRIMARY header.
             # Also, compute via a simple model the uncertainty image from the science image,
             # assuming some value for the SCA gain (electrons/ADU), which is unavailable for Roman WFI.
+            # Normalize by exposure time.
 
             fname_input = refimage_input_filename.replace(".fits.gz",".fits")
             fname_output = refimage_input_filename.replace(".fits.gz","_reformatted.fits")
