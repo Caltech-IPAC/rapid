@@ -47,7 +47,7 @@ def reformat_troxel_fits_file_and_compute_uncertainty_image_via_simple_model(inp
     new_col = np.full((new_arr.shape[0], 1), clipped_image_mean)
     new_np_data = np.append(new_arr, new_col, axis=1)               # Append extra column of trimmed-average background.
 
-    new_np_data_norm /= exptime
+    new_np_data_norm = new_np_data / exptime
 
     hdu = fits.PrimaryHDU(header=hdr,data=new_np_data_norm.astype(np.float32))
     hdu_list = []

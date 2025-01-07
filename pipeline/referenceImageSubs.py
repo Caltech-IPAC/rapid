@@ -114,7 +114,7 @@ def generateReferenceImage(s3_client,
             exptime = hdr["EXPTIME"]
             hdr["BUNIT"] = "DN/s"
 
-            data_norm /= exptime
+            data_norm = data / exptime
 
             hdu = fits.PrimaryHDU(header=hdr,data=data_norm)
             hdu_list = []
