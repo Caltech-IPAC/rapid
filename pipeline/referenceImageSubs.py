@@ -110,15 +110,20 @@ def generateReferenceImage(s3_client,
             hdr = hdul[1].header
             data = hdul[1].data
 
+            exptime = hdr["EXPTIME"]
+            hdr["BUNIT"] = "DN/s"
+
+            data_norm /= exptime
+
+            hdu = fits.PrimaryHDU(header=hdr,data=data_norm)
             hdu_list = []
-            hdu = fits.PrimaryHDU(header=hdr,data=data)
             hdu_list.append(hdu)
             hdu = fits.HDUList(hdu_list)
             hdu.writeto(fname_output,overwrite=True,checksum=True)
 
-            hdu_list_unc = []
-            data_unc = np.sqrt(np.array(data) / sca_gain)
+            data_unc = np.sqrt(np.array(data) / sca_gain) / exptime
             hdu_unc = fits.PrimaryHDU(header=hdr,data=data_unc)
+            hdu_list_unc = []
             hdu_list_unc.append(hdu_unc)
             hdu_unc = fits.HDUList(hdu_list_unc)
             hdu_unc.writeto(fname_output_unc,overwrite=True,checksum=True)

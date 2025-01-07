@@ -36,27 +36,31 @@ def reformat_troxel_fits_file_and_compute_uncertainty_image_via_simple_model(inp
     hdr = hdul[1].header
     data = hdul[1].data
 
+    exptime = hdr["EXPTIME"]
+    hdr["BUNIT"] = "DN/s"
+
     np_data = np.array(data)
     new_row = np.full(np_data.shape[1], clipped_image_mean)
     new_arr = np.append(np_data, [new_row], axis=0)                 # Append extra row of trimmed-average background.
     new_col = np.full((new_arr.shape[0], 1), clipped_image_mean)
     new_np_data = np.append(new_arr, new_col, axis=1)               # Append extra column of trimmed-average background.
 
+    new_np_data_norm /= exptime
+
+    hdu = fits.PrimaryHDU(header=hdr,data=new_np_data_norm.astype(np.float32))
     hdu_list = []
-    hdu = fits.PrimaryHDU(header=hdr,data=new_np_data.astype(np.float32))
     hdu_list.append(hdu)
     hdu = fits.HDUList(hdu_list)
     hdu.writeto(fname_output,overwrite=True,checksum=True)
-
-    hdu_list_unc = []
 
 
     # Ensure data are positive for uncertainty calculations.
 
     pos_np_data = np.where(new_np_data >= 0.0,new_np_data,0.0)
+    data_unc = np.sqrt(pos_np_data / sca_gain) / exptime
 
-    data_unc = np.sqrt(pos_np_data / sca_gain)
     hdu_unc = fits.PrimaryHDU(header=hdr,data=data_unc.astype(np.float32))
+    hdu_list_unc = []
     hdu_list_unc.append(hdu_unc)
     hdu_unc = fits.HDUList(hdu_list_unc)
     hdu_unc.writeto(fname_output_unc,overwrite=True,checksum=True)
