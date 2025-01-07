@@ -138,13 +138,51 @@ def compute_diffimage_uncertainty(sca_gain,
 
 
 ######################################################################################
-# Gain-match science and reference images by generating SExtractor catalogs for each,
-# assuming the provided reference image has been resampled into the reference grid
-# of the science image (or vice versa).  Distortion must be PV representation in
-# input FITS headers.
+# Gain-match science and reference images by generating SExtractor catalogs for each.
+# Assumptions:
+# 1. Input reference image is resampled into distortion grid science image (or vice versa).
+# 2. Distortion given byPV representation.
+# 3. Both input images have been locally background-subtracted.
 ######################################################################################
 
-def gainMatchScienceAndReferenceImages(sci_filename,
-                                       ref_filename):
+def gainMatchScienceAndReferenceImages(filename_sci_image,
+                                       filename_sci_uncert,
+                                       filename_ref_image,
+                                       filename_ref_uncert,
+                                       sextractor_gainmatch_dict):
 
-    pass
+
+    # Compute SExtractor catalog for science image.
+
+    filename_scigainmatchsexcat_catalog = sci_image_filename.replace(".fits","_scigainmatchsexcat.txt")
+
+    sextractor_gainmatch_dict["sextractor_detection_image".lower()] = "None"
+    sextractor_gainmatch_dict["sextractor_input_image".lower()] = filename_sci_image
+    sextractor_gainmatch_dict["sextractor_WEIGHT_IMAGE".lower()] = filename_sci_uncert
+    sextractor_gainmatch_dict["sextractor_PARAMETERS_NAME".lower()] = "/code/cdf/rapidSexParamsGainMatch.inp"
+    sextractor_gainmatch_dict["sextractor_FILTER_NAME".lower()] = "/code/cdf/rapidSexGainMatchFilter.conv"
+    sextractor_gainmatch_dict["sextractor_STARNNW_NAME".lower()] = "/code/cdf/rapidSexGainMatchStarGalaxyClassifier.nnw"
+    sextractor_gainmatch_dict["sextractor_CATALOG_NAME".lower()] = filename_scigainmatchsexcat_catalog
+    sextractor_cmd = util.build_sextractor_command_line_args(sextractor_gainmatch_dict)
+    exitcode_from_sextractor = util.execute_command(sextractor_cmd)
+
+
+    # Compute SExtractor catalog for reference image.
+
+    filename_refgainmatchsexcat_catalog = ref_image_filename.replace(".fits","_refgainmatchsexcat.txt")
+
+    sextractor_gainmatch_dict["sextractor_detection_image".lower()] = "None"
+    sextractor_gainmatch_dict["sextractor_input_image".lower()] = filename_ref_image
+    sextractor_gainmatch_dict["sextractor_WEIGHT_IMAGE".lower()] = filename_ref_uncert
+    sextractor_gainmatch_dict["sextractor_PARAMETERS_NAME".lower()] = "/code/cdf/rapidSexParamsGainMatch.inp"
+    sextractor_gainmatch_dict["sextractor_FILTER_NAME".lower()] = "/code/cdf/rapidSexGainMatchFilter.conv"
+    sextractor_gainmatch_dict["sextractor_STARNNW_NAME".lower()] = "/code/cdf/rapidSexGainMatchStarGalaxyClassifier.nnw"
+    sextractor_gainmatch_dict["sextractor_CATALOG_NAME".lower()] = filename_refgainmatchsexcat_catalog
+    sextractor_cmd = util.build_sextractor_command_line_args(sextractor_gainmatch_dict)
+    exitcode_from_sextractor = util.execute_command(sextractor_cmd)
+
+
+
+#   This is a work in progress.
+
+    return
