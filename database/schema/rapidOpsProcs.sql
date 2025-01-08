@@ -1136,7 +1136,6 @@ create function startJob (
             from Jobs
             where ppid = ppid_
             and fid = fid_
-            and sca = sca_
             and field = field_;
 
         end if;
