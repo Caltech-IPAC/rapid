@@ -1096,3 +1096,51 @@ def smooth_image_by_local_clipped_averaging(nx,ny,data,x_window = 3,y_window = 3
                 smooth_image[i, j] = avg.item()
 
     return smooth_image
+
+
+def parse_ascii_text_sextrator_catalog(catalog_filename,params_filename,params_to_parse):
+
+    '''
+    Method to parse ASCII text SExtractor catalog for select columns (no row filtering done here).
+    Translate SExtractor parameters like FLUX_RADIUS(1) into FLUX_RADIUS_1 to remove the appearance of being an array.
+    Such translated parameter names must be inputted to this method via the params_to_parse list.
+    '''
+
+    with open(params_filename, 'r') as file:
+        i = 0
+        idx = {}
+        for line in file:
+            param = line.strip()
+            param = param.replace("(","_")
+            param = param.replace(")","")
+            idx[param] = i
+            i += 1
+
+    j = 0
+    for param in idx.keys():
+        param_idx = idx[param]
+        j += 1
+
+    with open(catalog_filename, 'r') as file:
+        r = []
+        for line in file:
+
+            string_match = re.match(r"^#(.+)", line)
+
+            try:
+                # See if line is a comment, and skip if so.
+                c = string_match.group(1)
+                continue
+            except:
+                pass
+
+            all = line.strip().split()
+
+            vals = []
+            for p in params_to_parse:
+                j = idx[p]
+                vals.append(all[j])
+            print(vals)
+
+    return vals
+
