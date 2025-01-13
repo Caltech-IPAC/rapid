@@ -1140,7 +1140,7 @@ def parse_ascii_text_sextrator_catalog(catalog_filename,params_filename,params_t
             for p in params_to_parse:
                 j = idx[p]
                 vals.append(all[j])
-            print(vals)
 
-    return vals
+            r.append(vals)
 
+    return r
