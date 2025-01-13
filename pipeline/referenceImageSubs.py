@@ -125,7 +125,7 @@ def generateReferenceImage(s3_client,
 
             # Ensure data are positive for uncertainty calculations.
 
-            pos_data_norm = np.where(data_norm >= 0.0,data_norm,0.0)
+            pos_data_norm = np.abs(data_norm)
             data_unc = np.sqrt(pos_data_norm / sca_gain)
 
             hdu_unc = fits.PrimaryHDU(header=hdr,data=data_unc)

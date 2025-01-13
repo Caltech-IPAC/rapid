@@ -58,7 +58,7 @@ def reformat_troxel_fits_file_and_compute_uncertainty_image_via_simple_model(inp
 
     # Ensure data are positive for uncertainty calculations.
 
-    pos_np_data_norm = np.where(new_np_data_norm >= 0.0,new_np_data_norm,0.0)
+    pos_np_data_norm = np.abs(new_np_data_norm)
     data_unc = np.sqrt(pos_np_data_norm / sca_gain)
 
     hdu_unc = fits.PrimaryHDU(header=hdr,data=data_unc.astype(np.float32))
@@ -121,13 +121,13 @@ def compute_diffimage_uncertainty(sca_gain,
     hdr_sci = hdul_sci[0].header
     data_sci = hdul_sci[0].data
     np_data_sci = np.array(data_sci)
-    pos_np_data_sci = np.where(np_data_sci >= 0.0,np_data_sci,0.0)
+    pos_np_data_sci = np.abs(np_data_sci)
 
     hdul_ref = fits.open(reference_image_filename)
     hdr_ref = hdul_ref[0].header
     data_ref = hdul_ref[0].data
     np_data_ref = np.array(data_ref)
-    pos_np_data_ref = np.where(np_data_ref >= 0.0,np_data_ref,0.0)
+    pos_np_data_ref = np.abs(np_data_ref)
 
     hdul_cov = fits.open(refiamge_cov_map_filename)
     hdr_cov = hdul_cov[0].header
