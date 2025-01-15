@@ -147,7 +147,7 @@ def compute_diffimage_uncertainty(sca_gain,
 # Gain-match science and reference images by generating SExtractor catalogs for each.
 # Assumptions:
 # 1. Input reference image is resampled into distortion grid science image (or vice versa).
-# 2. Distortion given byPV representation.
+# 2. Distortion given by PV representation.
 # 3. Both input images have been locally background-subtracted.
 ######################################################################################
 
@@ -157,6 +157,35 @@ def gainMatchScienceAndReferenceImages(filename_sci_image,
                                        filename_ref_uncert,
                                        sextractor_gainmatch_dict):
 
+    # Initialize inputs.
+
+    params_file = "/code/cdf/rapidSexParamsGainMatch.inp"
+    filter_conv_file = "/code/cdf/rapidSexGainMatchFilter.conv"
+    classifier_nnw_file = "/code/cdf/rapidSexGainMatchStarGalaxyClassifier.nnw"
+    params_to_get_vals = ["XWIN_IMAGE","YWIN_IMAGE","FLUX_APER_6"]
+
+    # Thresholds are used to filter input ref-image catalog to
+    # support gain-matching with sci-image
+    magrefthresmin 15.0
+    magrefthresmax 19.5
+
+    # Keep only filtered ref-catalog sources that have no
+    # other ref-catalog source within a box of side length 2*refexclbox
+    # pixels. Also re-filter by keeping sources with mag <= refmagkeep
+    # and that fall at distance > edgebuffer pixels from any sci image edge.
+    refexclbox 10.5
+    refmagkeep 18.0
+    edgebuffer 100
+
+    # Minimum number of filtered-ref to sci catalog matches above which to
+    # proceed with flux-ratio'ing to compute relative gain-match factor
+    numsrcgmatchmin 20
+
+    # Match radius (pixels) to associate filtered ref-image catalog sources to sci-image
+    # catalog for purpose of gain-matching and estimating global RMS errors
+    # along X and Y axes to quantify overall registration accuracy.
+    radscirefmatch 1.0
+
 
     # Compute SExtractor catalog for science image.
 
@@ -165,9 +194,9 @@ def gainMatchScienceAndReferenceImages(filename_sci_image,
     sextractor_gainmatch_dict["sextractor_detection_image".lower()] = "None"
     sextractor_gainmatch_dict["sextractor_input_image".lower()] = filename_sci_image
     sextractor_gainmatch_dict["sextractor_WEIGHT_IMAGE".lower()] = filename_sci_uncert
-    sextractor_gainmatch_dict["sextractor_PARAMETERS_NAME".lower()] = "/code/cdf/rapidSexParamsGainMatch.inp"
-    sextractor_gainmatch_dict["sextractor_FILTER_NAME".lower()] = "/code/cdf/rapidSexGainMatchFilter.conv"
-    sextractor_gainmatch_dict["sextractor_STARNNW_NAME".lower()] = "/code/cdf/rapidSexGainMatchStarGalaxyClassifier.nnw"
+    sextractor_gainmatch_dict["sextractor_PARAMETERS_NAME".lower()] = params_file
+    sextractor_gainmatch_dict["sextractor_FILTER_NAME".lower()] = filter_conv_file
+    sextractor_gainmatch_dict["sextractor_STARNNW_NAME".lower()] = classifier_nnw_file
     sextractor_gainmatch_dict["sextractor_CATALOG_NAME".lower()] = filename_scigainmatchsexcat_catalog
     sextractor_cmd = util.build_sextractor_command_line_args(sextractor_gainmatch_dict)
     exitcode_from_sextractor = util.execute_command(sextractor_cmd)
@@ -180,15 +209,116 @@ def gainMatchScienceAndReferenceImages(filename_sci_image,
     sextractor_gainmatch_dict["sextractor_detection_image".lower()] = "None"
     sextractor_gainmatch_dict["sextractor_input_image".lower()] = filename_ref_image
     sextractor_gainmatch_dict["sextractor_WEIGHT_IMAGE".lower()] = filename_ref_uncert
-    sextractor_gainmatch_dict["sextractor_PARAMETERS_NAME".lower()] = "/code/cdf/rapidSexParamsGainMatch.inp"
-    sextractor_gainmatch_dict["sextractor_FILTER_NAME".lower()] = "/code/cdf/rapidSexGainMatchFilter.conv"
-    sextractor_gainmatch_dict["sextractor_STARNNW_NAME".lower()] = "/code/cdf/rapidSexGainMatchStarGalaxyClassifier.nnw"
+    sextractor_gainmatch_dict["sextractor_PARAMETERS_NAME".lower()] = params_file
+    sextractor_gainmatch_dict["sextractor_FILTER_NAME".lower()] = filter_conv_file
+    sextractor_gainmatch_dict["sextractor_STARNNW_NAME".lower()] = classifier_nnw_file
     sextractor_gainmatch_dict["sextractor_CATALOG_NAME".lower()] = filename_refgainmatchsexcat_catalog
     sextractor_cmd = util.build_sextractor_command_line_args(sextractor_gainmatch_dict)
     exitcode_from_sextractor = util.execute_command(sextractor_cmd)
+
+
+    # Parse XWIN_IMAGE,YWIN_IMAGE,FLUX_APER_6 (14-pixel diameter) from SExtractor catalog for science image.
+
+    sci_vals = util.parse_ascii_text_sextrator_catalog(filename_scigainmatchsexcat_catalog,params_file,params_to_get_vals)
+
+
+    # Parse XWIN_IMAGE,YWIN_IMAGE,FLUX_APER_6 (14-pixel diameter) from SExtractor catalog for reference image.
+
+    ref_vals = util.parse_ascii_text_sextrator_catalog(filename_scigainmatchsexcat_catalog,params_file,params_to_get_vals)
+
+
 
 
 
 #   This is a work in progress.
 
     return
+
+
+#---------------------------------------------------------------------
+# cross-match sources from ref and sci PSF catalogs and return matched
+# sci-catalog fluxes for use in gain-matching. Also return array storing
+# radial separations of all matches satisfying $radscirefmatch and RMSs
+# of separations along each axis. Based on algorithm in SourceMatch().
+
+def SourceMatchRefSci(xf_val,
+                      yf_val,
+                      xp_val,
+                      yp_val,
+                      fluxsci_val,
+                      nrefcat,
+                      radscirefmatch,
+                      verbose):
+
+    radsq = radscirefmatch * radscirefmatch
+    radaxis = radscirefmatch / np.sqrt(2.0)
+
+    mdnear = []
+    mdxnear = []
+    mdynear = []
+    mfluxsci = []
+
+    nmtch = 0
+
+    x_sci = np.array(xf_val)
+    y_sci = np.array(yf_val)
+    x_ref = np.array(xp_val)
+    y_ref = np.array(yp_val)
+    flux_sci = np.array(fluxsci_val)
+
+
+    # Loop over each input reference-catalog source.
+
+    for i in range(nrefcat):
+
+
+        # initialize since not guaranteed a sci-cat match at d <= radmatch.
+
+        mdnear.append(-999)
+        mfluxsci.append(-999)
+
+        dxi_val = np.where(np.abs(x_ref[i] - x_sci) <= radaxis)
+
+        if len(dxi_val[0]) != 0:
+
+            xfsub_val = x_sci[tuple(dxi_val)]
+            yfsub_val = y_sci[tuple(dxi_val)]
+            fluxscisub_val = flux_sci[tuple(dxi_val)]
+
+            dx_val = x_ref[i] - xfsub_val
+            dy_val = y_ref[i] - yfsub_val
+            radsq_val = (dx_val * dx_val) + (dy_val * dy_val)
+
+            idxmin = np.argmin(radsq_val)
+            minradsq = radsq_val[idxmin]
+
+            if minradsq <= radsq:
+
+                mdnear[i] = np.sqrt(minradsq)
+                mdxnear.append(dx_val[idxmin])
+                mdynear.append(dy_val[idxmin])
+                mfluxsci[i] = fluxscisub_val[idxmin]
+
+                nmtch += 1
+
+
+    # compute RMSs of separations along each axis to return below.
+    # Note effect of possible bias from radscirefmatch constraint.
+
+    dxrms = 0.0
+    dyrms = 0.0
+
+    if nmtch >= 3:
+        mdxnear_val = np.array(mdxnear)
+        dxrms = np.sqrt(np.mean(mdxnear_val * mdxnear_val))
+
+        mdynear_val = np.array(mdynear)
+        dyrms = np.sqrt(np.mean(mdynear_val * mdynear_val))
+
+    if verbose > 0:
+        print("iam: SourceMatchRefSci: number of matches = {}\n".format(nmtch))
+        print("iam: SourceMatchRefSci: DxRMS = {} pixels\n".format(dxrms))
+        print("iam: SourceMatchRefSci: DyRMS = {} pixels\n".format(dyrms))
+
+
+    return mdnear,mfluxsci,nmtch,dxrms,dyrms
