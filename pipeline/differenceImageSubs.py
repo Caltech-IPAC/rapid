@@ -157,7 +157,10 @@ def gainMatchScienceAndReferenceImages(filename_sci_image,
                                        filename_ref_uncert,
                                        sextractor_gainmatch_dict):
 
+
     # Initialize inputs.
+
+    verbose = 1
 
     params_file = "/code/cdf/rapidSexParamsGainMatch.inp"
     filter_conv_file = "/code/cdf/rapidSexGainMatchFilter.conv"
@@ -227,6 +230,115 @@ def gainMatchScienceAndReferenceImages(filename_sci_image,
     ref_vals = util.parse_ascii_text_sextrator_catalog(filename_scigainmatchsexcat_catalog,params_file,params_to_get_vals)
 
 
+    # Convert returned catalog values to 1-D lists.
+
+    num_rows_sci = len(sci_vals)
+
+    sci_x_vals = []
+    sci_y_vals = []
+    sci_flux_vals = []
+    for i in range(num_rows_sci):
+        sci_x = sci_vals[i][0]
+        sci_y = sci_vals[i][1]
+        sci_flux = sci_vals[i][2]
+        sci_x_vals.append(sci_x)
+        sci_y_vals.append(sci_y)
+        sci_flux_vals.append(sci_flux)
+
+    num_rows_ref = len(ref_vals)
+
+    ref_x_vals = []
+    ref_y_vals = []
+    ref_flux_vals = []
+    for i in range(num_rows_ref):
+        ref_x = ref_vals[i][0]
+        ref_y = ref_vals[i][1]
+        ref_flux = ref_vals[i][2]
+        ref_x_vals.append(ref_x)
+        ref_y_vals.append(ref_y)
+        ref_flux_vals.append(ref_flux)
+
+
+    # If possible, cross-match sources from ref and sci PSF catalogs and return matched
+    # sci-catalog fluxes for use in gain-matching.
+
+    scalefac = 1.0
+
+    if num_rows_sci > 0 and num_rows_ref > 0:
+
+        dscirefnear, fluxscinearest, nmtchsciref, dxrms, dyrms = SourceMatchRefSci(sci_x_vals,
+                                                                                   sci_y_vals,
+                                                                                   ref_x_vals,
+                                                                                   ref_y_vals,
+                                                                                   sci_flux_vals,
+                                                                                   num_rows_ref,
+                                                                                   radscirefmatch,
+                                                                                   verbose)
+
+
+
+    my $dscirefnear_val = PDL->new(@$dscirefnear);
+    my $fluxscinearest_val = PDL->new(@$fluxscinearest);
+
+    if( $nmtchsciref >= $numsrcgmatchmin ) {
+
+      # sci-cat fluxes != -999 are those that match ref-catalog sources.
+      my $idxgood_val = which($fluxscinearest_val > 0);
+
+      my $medradsep = ($dscirefnear_val->index($idxgood_val))->median;
+
+
+      $flxrat_val = PDL->new(($fluxrefkeep_val->index($idxgood_val)) /
+                             ($fluxscinearest_val->index($idxgood_val)));
+
+      $scalefac = $flxrat_val->median;
+
+      $dxrmsfin = $dxrms;
+      $dyrmsfin = $dyrms;
+
+      if( $verbose ) {
+        print "$iam: median separation of $nmtchsciref sci to filtered " .
+              "ref-catalog matches = $medradsep pixels; initial match " .
+              "radius was $radscirefmatch pixels\n";
+        print "$iam: final scale factor for gain-matching sci and ref " .
+              "images based on PSF-fit flux ratios = $scalefac\n";
+        print "$iam: final RMSs along axes to use: dxrms, dyrms = " .
+              "$dxrmsfin, $dyrmsfin pixels\n";
+      }
+
+    } else {
+      print "$iam: === Warning: number of matched sci and (filtered) ref " .
+            "PSF-catalog sources (nmtchsciref) is below threshold of " .
+            "$numsrcgmatchmin\n";
+      print "$iam: === Warning: gain-matching science and reference image " .
+            "pixels using matched PSF-fit fluxes not possible; using their " .
+            "image-based MAGZP values...\n";
+      print "$iam: === Warning: furthermore, assuming default RMSs for axial ".
+            "separations (~ registration errors) of dxrms, dyrms = " .
+            "$dxrmsfin, $dyrmsfin pixels\n";
+    }
+
+  } else {
+    print "$iam: === Warning: input number of sci or (filtered) ref " .
+          "PSF-catalog sources is zero\n";
+    print "$iam: === Warning: gain-matching science and reference image " .
+          "pixels using matched PSF-fit fluxes not possible; using their " .
+          "image-based MAGZP values...\n";
+    print "$iam: === Warning: furthermore, assuming default RMSs for axial ".
+          "separations (~ registration errors) of dxrms, dyrms = " .
+          "$dxrmsfin, $dyrmsfin pixels\n";
+  }
+
+
+
+
+
+
+
+
+
+
+
 
 
 
@@ -239,7 +351,7 @@ def gainMatchScienceAndReferenceImages(filename_sci_image,
 # cross-match sources from ref and sci PSF catalogs and return matched
 # sci-catalog fluxes for use in gain-matching. Also return array storing
 # radial separations of all matches satisfying $radscirefmatch and RMSs
-# of separations along each axis. Based on algorithm in SourceMatch().
+# of separations along each axis.
 
 def SourceMatchRefSci(xf_val,
                       yf_val,
