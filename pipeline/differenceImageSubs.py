@@ -161,16 +161,39 @@ def gainMatchScienceAndReferenceImages(filename_sci_image,
     # Initialize inputs.
 
     verbose = 1
+    iam = "Sub gainMatchScienceAndReferenceImages"
 
     params_file = "/code/cdf/rapidSexParamsGainMatch.inp"
     filter_conv_file = "/code/cdf/rapidSexGainMatchFilter.conv"
     classifier_nnw_file = "/code/cdf/rapidSexGainMatchStarGalaxyClassifier.nnw"
-    params_to_get_vals = ["XWIN_IMAGE","YWIN_IMAGE","FLUX_APER_6"]
+    params_to_get_vals = ["XWIN_IMAGE","YWIN_IMAGE","FLUX_APER_6","MAG_APER_6"]
+
+
 
     # Thresholds are used to filter input ref-image catalog to
     # support gain-matching with sci-image
-    magrefthresmin 15.0
-    magrefthresmax 19.5
+    # magrefthresmin 15.0
+    # magrefthresmax 19.5
+
+    # TODO: The following are for instrumental magnitudes.
+    magrefthresmin 1.0
+    magrefthresmax 5.5
+
+
+
+
+
+
+
+
+    # TODO: Read MAGZP from FITS header of reference image.
+    magzpref = 0.0
+
+
+
+
+
+
 
     # Keep only filtered ref-catalog sources that have no
     # other ref-catalog source within a box of side length 2*refexclbox
@@ -188,6 +211,18 @@ def gainMatchScienceAndReferenceImages(filename_sci_image,
     # catalog for purpose of gain-matching and estimating global RMS errors
     # along X and Y axes to quantify overall registration accuracy.
     radscirefmatch 1.0
+
+
+
+
+
+    # Read in keyword values from FITS header science image.
+
+    hdul_sci = fits.open(filename_sci_image)
+    hdr_sci = hdul_sci[0].header
+
+    naxis1 = hdr_sci["NAXIS1"]
+    naxis2 = hdr_sci["NAXIS2"]
 
 
     # Compute SExtractor catalog for science image.
@@ -250,19 +285,146 @@ def gainMatchScienceAndReferenceImages(filename_sci_image,
     ref_x_vals = []
     ref_y_vals = []
     ref_flux_vals = []
+    ref_mag_vals = []
     for i in range(num_rows_ref):
         ref_x = ref_vals[i][0]
         ref_y = ref_vals[i][1]
         ref_flux = ref_vals[i][2]
+        ref_mag = ref_vals[i][3]
         ref_x_vals.append(ref_x)
         ref_y_vals.append(ref_y)
         ref_flux_vals.append(ref_flux)
+        ref_mag_vals.append(ref_mag)
+
+    nrefcat = num_rows_ref
+
+    xsci_val = np.array(ref_x_vals)
+    ysci_val = np.array(ref_y_vals)
+    magref_val = np.array(ref_mag_vals)
+
+    magref_val += magzpref
 
 
-    # If possible, cross-match sources from ref and sci PSF catalogs and return matched
+    #-----------------------------------------------------------------
+    # Filter ref-catalog sources to retain subset of point sources for
+    # use in gain-matching below.
+
+    if verbose:
+        print("{}: filtering {} ref-image catalog sources to support gain-matching...".format(iam,nrefcat))
+
+    idxref_val = np.where((magref_val >= magrefthresmin) & (magref_val <= magrefthresmax))
+
+    xref_val = xsci_val[idxref_val]
+    yref_val = ysci_val[idxref_val]
+    magreffilt_val = magref_val[idxref_val]
+    fluxref_val = 10**(0.4 * (magzpref - magreffilt_val))
+    nrefcat = len(xref_val)
+
+    if verbose:
+        print("$iam: number of ref-image catalog sources after filtering to support gain-matching: $nrefcat"\
+            .format(iam,nrefcat))
+
+    if nrefcat == 0:
+        print("{}: === Warning: no ref-image catalog sources remain after filtering to support gain-matching; continuing..."\
+            .format(iam))
+
+
+    #-----------------------------------------------------------------
+    # For gain-matching, keep only ref-catalog sources that have no
+    # other ref-catalog source within a box of side length 2*refexclbox
+    # pixels. Also re-filter using brighter mag cutoff and only keep
+    # sources at distance > edgebuffer pixels from edges.
+
+    xrefkeep = []
+    yrefkeep = []
+    magrefkeep = []
+    fluxrefkeep = []
+
+    idxkeep_val = np.array(range(nrefcat))
+    xrefkeep_val = np.array(xref_val)
+    yrefkeep_val = np.array(yref_val)
+    fluxrefkeep_val = np.array(fluxref_val)
+
+    nrefcatn = 0
+
+    for i in range(nrefcat):
+
+        mi = magreffilt_val[i]
+        xi = xref_val[i]
+        yi = yref_val[i]
+
+        if (mi <= refmagkeep) &&
+            (xi > edgebuffer) &&
+            (xi < (naxis1 - edgebuffer - 1)) &&
+            (yi > edgebuffer) &&
+            (yi < (naxis2 - edgebuffer - 1)):
+
+            my $fi = $fluxref_val->at($i);
+
+            my $idxkeepn_val = $idxkeep_val->where($idxkeep_val != $i);
+            my $xrefn_val = $xref_val->index($idxkeepn_val);
+            my $yrefn_val = $yref_val->index($idxkeepn_val);
+
+            my $ninsidebox = (which((abs($xrefn_val - $xi) <= $refexclbox) &
+                                    (abs($yrefn_val - $yi) <= $refexclbox)))->nelem;
+
+            if ! $ninsidebox:
+                $xrefkeep[$nrefcatn] = $xi;
+                $yrefkeep[$nrefcatn] = $yi;
+                $magrefkeep[$nrefcatn] = $mi;
+                $fluxrefkeep[$nrefcatn] = $fi;
+
+
+                $nrefcatn++;
+
+
+
+
+
+
+  if( $nrefcatn ) {
+    $xrefkeep_val = PDL->new(@xrefkeep);
+    $yrefkeep_val = PDL->new(@yrefkeep);
+    $fluxrefkeep_val = PDL->new(@fluxrefkeep);
+  }
+
+  if( $verbose ) {
+    print "$iam: number of ref-image catalog sources retained following " .
+          "removal of those with close neighbors for gain-matching: " .
+          "$nrefcatn\n";
+  }
+  \1
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+    # If possible, cross-match sources from ref and sci catalogs and return matched
     # sci-catalog fluxes for use in gain-matching.
 
     scalefac = 1.0
+
+    if verbose:
+        print("$iam: default scale factor for gain-matching sci and ref images = {}".format(iam,scalefac))
+
+
+    # Initialize final RMSs of ref to sci source separations along each axis
+    # [pixels] in case num sci or ref catalog sources is zero.
+
+    dxrmsfin = 0.05
+    dyrmsfin = 0.05
 
     if num_rows_sci > 0 and num_rows_ref > 0:
 
@@ -277,57 +439,52 @@ def gainMatchScienceAndReferenceImages(filename_sci_image,
 
 
 
-    my $dscirefnear_val = PDL->new(@$dscirefnear);
-    my $fluxscinearest_val = PDL->new(@$fluxscinearest);
+        dscirefnear_val = np.array(dscirefnear)
+        fluxscinearest_val = np.array(fluxscinearest)
 
-    if( $nmtchsciref >= $numsrcgmatchmin ) {
-
-      # sci-cat fluxes != -999 are those that match ref-catalog sources.
-      my $idxgood_val = which($fluxscinearest_val > 0);
-
-      my $medradsep = ($dscirefnear_val->index($idxgood_val))->median;
+        if nmtchsciref >= numsrcgmatchmin:
 
 
-      $flxrat_val = PDL->new(($fluxrefkeep_val->index($idxgood_val)) /
-                             ($fluxscinearest_val->index($idxgood_val)));
+            # sci-cat fluxes != -999 are those that match ref-catalog sources.
 
-      $scalefac = $flxrat_val->median;
+            idxgood_val = np.where(fluxscinearest_val > 0)
 
-      $dxrmsfin = $dxrms;
-      $dyrmsfin = $dyrms;
+            medradsep = np.median(dscirefnear_val[idxgood_val])
 
-      if( $verbose ) {
-        print "$iam: median separation of $nmtchsciref sci to filtered " .
-              "ref-catalog matches = $medradsep pixels; initial match " .
-              "radius was $radscirefmatch pixels\n";
-        print "$iam: final scale factor for gain-matching sci and ref " .
-              "images based on PSF-fit flux ratios = $scalefac\n";
-        print "$iam: final RMSs along axes to use: dxrms, dyrms = " .
-              "$dxrmsfin, $dyrmsfin pixels\n";
-      }
 
-    } else {
-      print "$iam: === Warning: number of matched sci and (filtered) ref " .
-            "PSF-catalog sources (nmtchsciref) is below threshold of " .
-            "$numsrcgmatchmin\n";
-      print "$iam: === Warning: gain-matching science and reference image " .
-            "pixels using matched PSF-fit fluxes not possible; using their " .
-            "image-based MAGZP values...\n";
-      print "$iam: === Warning: furthermore, assuming default RMSs for axial ".
-            "separations (~ registration errors) of dxrms, dyrms = " .
-            "$dxrmsfin, $dyrmsfin pixels\n";
-    }
+            flxrat_val = fluxrefkeep_val[idxgood_val] / fluxscinearest_val[idxgood_val]
 
-  } else {
-    print "$iam: === Warning: input number of sci or (filtered) ref " .
-          "PSF-catalog sources is zero\n";
-    print "$iam: === Warning: gain-matching science and reference image " .
-          "pixels using matched PSF-fit fluxes not possible; using their " .
-          "image-based MAGZP values...\n";
-    print "$iam: === Warning: furthermore, assuming default RMSs for axial ".
-          "separations (~ registration errors) of dxrms, dyrms = " .
-          "$dxrmsfin, $dyrmsfin pixels\n";
-  }
+            scalefac = np.median(flxrat_val)
+
+            dxrmsfin = dxrms
+            dyrmsfin = dyrms
+
+            if verbose:
+                print("{}: median separation of {} sci to filtered ref-catalog matches = {} pixels; initial match radius was {} pixels"\
+                    .format(iam,nmtchsciref,medradsep,radscirefmatch))
+                print("{}: final scale factor for gain-matching sci and ref images based on flux ratios = {} "\
+                    .format(iam,scalefac))
+                print("{}: final RMSs along axes to use: dxrms, dyrms = {}, {} pixels"\
+                    .format(iam,dxrmsfin,dyrmsfin))
+
+
+        else:
+            print("{}: === Warning: number of matched sci and (filtered) ref catalog sources (nmtchsciref) is below threshold of {}"\
+                .format(iam,numsrcgmatchmin))
+            print("{}: === Warning: gain-matching science and reference image pixels using matched fluxes not possible; using their image-based MAGZP values..."\
+                .format(iam))
+            print("{}: === Warning: furthermore, assuming default RMSs for axial separations (~ registration errors) of dxrms, dyrms = {}, {} pixels"\
+                .format(iam,dxrmsfin,dyrmsfin))
+
+
+    else:
+        print("{}: === Warning: input number of sci or (filtered) ref catalog sources is zero"\
+            .format(iam))
+        print("{}: === Warning: gain-matching science and reference image pixels using matched fluxes not possible; using their image-based MAGZP values..."\
+            .format(iam))
+        print("{}: === Warning: furthermore, assuming default RMSs for axial separations (~ registration errors) of dxrms, dyrms = {}, {} pixels"\
+            .format(iam,dxrmsfin,dyrmsfin))
+
 
 
 
@@ -348,9 +505,9 @@ def gainMatchScienceAndReferenceImages(filename_sci_image,
 
 
 #---------------------------------------------------------------------
-# cross-match sources from ref and sci PSF catalogs and return matched
+# cross-match sources from ref and sci catalogs and return matched
 # sci-catalog fluxes for use in gain-matching. Also return array storing
-# radial separations of all matches satisfying $radscirefmatch and RMSs
+# radial separations of all matches satisfying radscirefmatch and RMSs
 # of separations along each axis.
 
 def SourceMatchRefSci(xf_val,
@@ -428,9 +585,9 @@ def SourceMatchRefSci(xf_val,
         dyrms = np.sqrt(np.mean(mdynear_val * mdynear_val))
 
     if verbose > 0:
-        print("iam: SourceMatchRefSci: number of matches = {}\n".format(nmtch))
-        print("iam: SourceMatchRefSci: DxRMS = {} pixels\n".format(dxrms))
-        print("iam: SourceMatchRefSci: DyRMS = {} pixels\n".format(dyrms))
+        print("iam: SourceMatchRefSci: number of matches = {}".format(nmtch))
+        print("iam: SourceMatchRefSci: DxRMS = {} pixels".format(dxrms))
+        print("iam: SourceMatchRefSci: DyRMS = {} pixels".format(dyrms))
 
 
     return mdnear,mfluxsci,nmtch,dxrms,dyrms
