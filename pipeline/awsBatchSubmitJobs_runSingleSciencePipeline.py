@@ -544,6 +544,14 @@ if __name__ == '__main__':
     scalefacref = 1. / scalefac
 
 
+    # Code-timing benchmark.
+
+    end_time_benchmark = time.time()
+    print("Elapsed time in seconds after running gainMatchScienceAndReferenceImages =",
+        end_time_benchmark - start_time_benchmark)
+    start_time_benchmark = end_time_benchmark
+
+
     #################################################################################################################
     # The image data in science_image_filename and sci_fits_file_with_pv FITS files are the same, only the
     # represensation of geometric distortion in the FITS headers are different (sip versus pv).
