@@ -247,7 +247,7 @@ def gainMatchScienceAndReferenceImages(filename_sci_image,
 
     # Compute SExtractor catalog for science image.
 
-    filename_scigainmatchsexcat_catalog = sci_image_filename.replace(".fits","_scigainmatchsexcat.txt")
+    filename_scigainmatchsexcat_catalog = filename_sci_image.replace(".fits","_scigainmatchsexcat.txt")
 
     sextractor_gainmatch_dict["sextractor_detection_image".lower()] = "None"
     sextractor_gainmatch_dict["sextractor_input_image".lower()] = filename_sci_image
@@ -262,7 +262,7 @@ def gainMatchScienceAndReferenceImages(filename_sci_image,
 
     # Compute SExtractor catalog for reference image.
 
-    filename_refgainmatchsexcat_catalog = ref_image_filename.replace(".fits","_refgainmatchsexcat.txt")
+    filename_refgainmatchsexcat_catalog = filename_ref_image.replace(".fits","_refgainmatchsexcat.txt")
 
     sextractor_gainmatch_dict["sextractor_detection_image".lower()] = "None"
     sextractor_gainmatch_dict["sextractor_input_image".lower()] = filename_ref_image
