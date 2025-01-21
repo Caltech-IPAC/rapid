@@ -394,7 +394,7 @@ def gainMatchScienceAndReferenceImages(filename_sci_image,
             insidebox = np.where((np.abs(xrefn_val - xi) <= refexclbox) &
                                  (np.abs(yrefn_val - yi) <= refexclbox))
 
-             ninsidebox = len(insidebox[0])
+            ninsidebox = len(insidebox[0])
             if ninsidebox == 0:
                 xrefkeep.append(xi)
                 yrefkeep.append(yi)
