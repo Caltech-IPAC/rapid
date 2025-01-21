@@ -539,8 +539,8 @@ if __name__ == '__main__':
     scalefac = dfis.gainMatchScienceAndReferenceImages(filename_bkg_subbed_science_image,
                                                        reformatted_science_uncert_image_filename,
                                                        output_resampled_reference_image,
-                                                       filename_ref_uncert,
-                                                       output_resampled_reference_uncert_image)
+                                                       output_resampled_reference_uncert_image,
+                                                       sextractor_gainmatch_dict)
     scalefacref = 1. / scalefac
 
 
