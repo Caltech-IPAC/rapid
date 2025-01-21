@@ -157,6 +157,13 @@ def gainMatchScienceAndReferenceImages(filename_sci_image,
                                        filename_ref_uncert,
                                        sextractor_gainmatch_dict):
 
+    # Print diagnostics:
+
+    print(" Sub gainMatchScienceAndReferenceImages: filename_sci_image =",filename_sci_image)
+    print(" Sub gainMatchScienceAndReferenceImages: filename_sci_uncert =",filename_sci_uncert)
+    print(" Sub gainMatchScienceAndReferenceImages: filename_ref_image =",filename_ref_image)
+    print(" Sub gainMatchScienceAndReferenceImages: filename_ref_uncert =",filename_ref_uncert)
+
 
     # Initialize inputs.
 
@@ -195,7 +202,9 @@ def gainMatchScienceAndReferenceImages(filename_sci_image,
 
     magzpref = 0.0
 
-
+    # All the same ZPTMAG for F184 Troxel OpenUniverse sims.
+    # [root@a837726ee330 tmp]# imheaders -i Roman_TDS_simple_model_F184_11864_3_lite_reformatted.fits | grep ZP
+    # ZPTMAG  =   18.824125825690057
 
 
 
