@@ -378,10 +378,10 @@ def gainMatchScienceAndReferenceImages(filename_sci_image,
         xi = xref_val[i]
         yi = yref_val[i]
 
-        if (mi <= refmagkeep) and
-            (xi > edgebuffer) and
-            (xi < (naxis1 - edgebuffer - 1)) and
-            (yi > edgebuffer) and
+        if (mi <= refmagkeep) and\
+            (xi > edgebuffer) and\
+            (xi < (naxis1 - edgebuffer - 1)) and\
+            (yi > edgebuffer) and\
             (yi < (naxis2 - edgebuffer - 1)):
 
             fi = fluxref_val[i]
