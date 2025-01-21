@@ -166,8 +166,9 @@ def gainMatchScienceAndReferenceImages(filename_sci_image,
     params_file = "/code/cdf/rapidSexParamsGainMatch.inp"
     filter_conv_file = "/code/cdf/rapidSexGainMatchFilter.conv"
     classifier_nnw_file = "/code/cdf/rapidSexGainMatchStarGalaxyClassifier.nnw"
-    params_to_get_vals = ["XWIN_IMAGE","YWIN_IMAGE","FLUX_APER_6","MAG_APER_6"]
-
+    params_to_get_vals_scicat = ["XWIN_IMAGE","YWIN_IMAGE","FLUX_APER_6"]
+    params_to_get_vals_refcat = ["XWIN_IMAGE","YWIN_IMAGE","FLUX_APER_6","MAG_APER_6",
+                                 "CLASS_STAR","ISOAREAF_IMAGE","AWIN_WORLD","BWIN_WORLD"]
 
 
     # Thresholds are used to filter input ref-image catalog to
@@ -187,7 +188,13 @@ def gainMatchScienceAndReferenceImages(filename_sci_image,
 
 
     # TODO: Read MAGZP from FITS header of reference image.
+    # (FWIW, for the science image, this is ZPTMAG in Troxel OpenUniverse sims.)
+    # Keep magzpref = 0.0 until we implement photometric calibration of reference images.
+
+    magzp_keyword = "ZPTMAG"
+
     magzpref = 0.0
+
 
 
 
@@ -213,7 +220,11 @@ def gainMatchScienceAndReferenceImages(filename_sci_image,
     radscirefmatch 1.0
 
 
+    # Other filtering on SExtractor parameters as described in Masci et al.'s iPTF image-differencing paper.
 
+    min_class_star_thresh = 0.5
+    max_isoareaf_image_thresh = 100
+    max_awin_to_bwin_world_ratio_thresh = 1.3
 
 
     # Read in keyword values from FITS header science image.
@@ -257,12 +268,13 @@ def gainMatchScienceAndReferenceImages(filename_sci_image,
 
     # Parse XWIN_IMAGE,YWIN_IMAGE,FLUX_APER_6 (14-pixel diameter) from SExtractor catalog for science image.
 
-    sci_vals = util.parse_ascii_text_sextrator_catalog(filename_scigainmatchsexcat_catalog,params_file,params_to_get_vals)
+    sci_vals = util.parse_ascii_text_sextrator_catalog(filename_scigainmatchsexcat_catalog,params_file,params_to_get_vals_scicat)
 
 
-    # Parse XWIN_IMAGE,YWIN_IMAGE,FLUX_APER_6 (14-pixel diameter) from SExtractor catalog for reference image.
+    # Parse XWIN_IMAGE,YWIN_IMAGE,FLUX_APER_6 (14-pixel diameter),CLASS_STAR,ISOAREAF_IMAGE,AWIN_WORLD,BWIN_WORLD
+    # from SExtractor catalog for reference image.
 
-    ref_vals = util.parse_ascii_text_sextrator_catalog(filename_scigainmatchsexcat_catalog,params_file,params_to_get_vals)
+    ref_vals = util.parse_ascii_text_sextrator_catalog(filename_scigainmatchsexcat_catalog,params_file,params_to_get_vals_refcat)
 
 
     # Convert returned catalog values to 1-D lists.
@@ -286,21 +298,34 @@ def gainMatchScienceAndReferenceImages(filename_sci_image,
     ref_y_vals = []
     ref_flux_vals = []
     ref_mag_vals = []
+    ref_class_star_vals = []
+    ref_isoareaf_image_vals = []
+    ref_awin_to_bwin_world_ratio_vals = []
     for i in range(num_rows_ref):
         ref_x = ref_vals[i][0]
         ref_y = ref_vals[i][1]
         ref_flux = ref_vals[i][2]
         ref_mag = ref_vals[i][3]
+        ref_class_star = ref_vals[i][4]
+        ref_isoareaf_image = ref_vals[i][5]
+        ref_awin_world = ref_vals[i][6]
+        ref_bwin_world = ref_vals[i][7]
         ref_x_vals.append(ref_x)
         ref_y_vals.append(ref_y)
         ref_flux_vals.append(ref_flux)
         ref_mag_vals.append(ref_mag)
+        ref_class_star_vals.append(ref_class_star)
+        ref_isoareaf_image_vals.append(ref_isoareaf_image)
+        ref_awin_to_bwin_world_ratio_vals.append(ref_awin_world / ref_bwin_world)
 
     nrefcat = num_rows_ref
 
     xsci_val = np.array(ref_x_vals)
     ysci_val = np.array(ref_y_vals)
     magref_val = np.array(ref_mag_vals)
+    classstarref_val = np.array(ref_class_star_vals)
+    isoareafimageref_val = np.array(ref_isoareaf_image_vals)
+    awintobwinworldratioref_val = np.array(ref_awin_to_bwin_world_ratio_vals)
 
     magref_val += magzpref
 
@@ -312,7 +337,10 @@ def gainMatchScienceAndReferenceImages(filename_sci_image,
     if verbose:
         print("{}: filtering {} ref-image catalog sources to support gain-matching...".format(iam,nrefcat))
 
-    idxref_val = np.where((magref_val >= magrefthresmin) & (magref_val <= magrefthresmax))
+    idxref_val = np.where((magref_val >= magrefthresmin) & (magref_val <= magrefthresmax) &\
+                          (classstarref_val >= min_class_star_thresh) &\
+                          (isoareafimageref_val <= max_isoareaf_image_thresh) &\
+                          (awintobwinworldratioref_val <= max_awin_to_bwin_world_ratio_thresh))
 
     xref_val = xsci_val[idxref_val]
     yref_val = ysci_val[idxref_val]
@@ -327,23 +355,6 @@ def gainMatchScienceAndReferenceImages(filename_sci_image,
     if nrefcat == 0:
         s = "{}: === Warning: no ref-image catalog sources remain after filtering to support gain-matching; continuing..."
         print(s.format(iam))
-
-
-
-
-
-
-
-
-
-    # TODO: Need to do other filtering on SExtractor parameters as described in Masci et al.'s iPTF image-differencing paper.
-
-
-
-
-
-
-
 
 
     #-----------------------------------------------------------------
@@ -443,7 +454,6 @@ def gainMatchScienceAndReferenceImages(filename_sci_image,
 
             medradsep = np.median(dscirefnear_val[idxgood_val])
 
-
             flxrat_val = fluxrefkeep_val[idxgood_val] / fluxscinearest_val[idxgood_val]
 
             scalefac = np.median(flxrat_val)
@@ -484,12 +494,7 @@ def gainMatchScienceAndReferenceImages(filename_sci_image,
         print(s3.format(iam,dxrmsfin,dyrmsfin))
 
 
-
-
-
-#   This is a work in progress.
-
-    return
+    return scalefac
 
 
 #---------------------------------------------------------------------
