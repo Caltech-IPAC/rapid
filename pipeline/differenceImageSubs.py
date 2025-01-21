@@ -206,18 +206,18 @@ def gainMatchScienceAndReferenceImages(filename_sci_image,
     # other ref-catalog source within a box of side length 2*refexclbox
     # pixels. Also re-filter by keeping sources with mag <= refmagkeep
     # and that fall at distance > edgebuffer pixels from any sci image edge.
-    refexclbox 10.5
-    refmagkeep 18.0
-    edgebuffer 100
+    refexclbox = 10.5
+    refmagkeep = 18.0
+    edgebuffer = 100
 
     # Minimum number of filtered-ref to sci catalog matches above which to
     # proceed with flux-ratio'ing to compute relative gain-match factor
-    numsrcgmatchmin 20
+    numsrcgmatchmin = 20
 
     # Match radius (pixels) to associate filtered ref-image catalog sources to sci-image
     # catalog for purpose of gain-matching and estimating global RMS errors
     # along X and Y axes to quantify overall registration accuracy.
-    radscirefmatch 1.0
+    radscirefmatch = 1.0
 
 
     # Other filtering on SExtractor parameters as described in Masci et al.'s iPTF image-differencing paper.
