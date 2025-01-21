@@ -531,6 +531,20 @@ if __name__ == '__main__':
     start_time_benchmark = end_time_benchmark
 
 
+    ######################################################################################
+    # Gain-match science and reference images by generating SExtractor catalogs for each
+    # and then computing scale factor.  To apply, multiply reference iamge by scalefacref.
+    ######################################################################################
+
+    scalefac = dfis.gainMatchScienceAndReferenceImages(filename_bkg_subbed_science_image,
+                                                       reformatted_science_uncert_image_filename,
+                                                       output_resampled_reference_image,
+                                                       filename_ref_uncert,
+                                                       output_resampled_reference_uncert_image)
+    scalefacref = 1. / scalefac
+
+
+    #################################################################################################################
     # The image data in science_image_filename and sci_fits_file_with_pv FITS files are the same, only the
     # represensation of geometric distortion in the FITS headers are different (sip versus pv).
     #
@@ -539,6 +553,7 @@ if __name__ == '__main__':
     #                    <NewSigmaMode> <RefSigmaMode> <AstUncertX> <AstUncertY> <DiffImage> <DiffPSF> <ScorrImage>
     #
     # Assume top-level directory of rapid git repo is mapped to /code inside Docker container.
+    #################################################################################################################
 
 
     python_cmd = '/usr/bin/python3'
