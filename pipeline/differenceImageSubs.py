@@ -294,9 +294,9 @@ def gainMatchScienceAndReferenceImages(filename_sci_image,
     sci_y_vals = []
     sci_flux_vals = []
     for i in range(num_rows_sci):
-        sci_x = sci_vals[i][0]
-        sci_y = sci_vals[i][1]
-        sci_flux = sci_vals[i][2]
+        sci_x = float(sci_vals[i][0])
+        sci_y = float(sci_vals[i][1])
+        sci_flux = float(sci_vals[i][2])
         sci_x_vals.append(sci_x)
         sci_y_vals.append(sci_y)
         sci_flux_vals.append(sci_flux)
@@ -311,14 +311,14 @@ def gainMatchScienceAndReferenceImages(filename_sci_image,
     ref_isoareaf_image_vals = []
     ref_awin_to_bwin_world_ratio_vals = []
     for i in range(num_rows_ref):
-        ref_x = ref_vals[i][0]
-        ref_y = ref_vals[i][1]
-        ref_flux = ref_vals[i][2]
-        ref_mag = ref_vals[i][3]
-        ref_class_star = ref_vals[i][4]
-        ref_isoareaf_image = ref_vals[i][5]
-        ref_awin_world = ref_vals[i][6]
-        ref_bwin_world = ref_vals[i][7]
+        ref_x = float(ref_vals[i][0])
+        ref_y = float(ref_vals[i][1])
+        ref_flux = float(ref_vals[i][2])
+        ref_mag = float(ref_vals[i][3])
+        ref_class_star = float(ref_vals[i][4])
+        ref_isoareaf_image = float(ref_vals[i][5])
+        ref_awin_world = float(ref_vals[i][6])
+        ref_bwin_world = float(ref_vals[i][7])
         ref_x_vals.append(ref_x)
         ref_y_vals.append(ref_y)
         ref_flux_vals.append(ref_flux)
