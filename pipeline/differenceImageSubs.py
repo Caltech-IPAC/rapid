@@ -177,8 +177,8 @@ def gainMatchScienceAndReferenceImages(filename_sci_image,
     # magrefthresmax 19.5
 
     # TODO: The following are for instrumental magnitudes.
-    magrefthresmin 1.0
-    magrefthresmax 5.5
+    magrefthresmin = 1.0
+    magrefthresmax = 5.5
 
 
 
