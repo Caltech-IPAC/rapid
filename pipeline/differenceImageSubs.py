@@ -180,12 +180,12 @@ def gainMatchScienceAndReferenceImages(filename_sci_image,
 
     # Thresholds are used to filter input ref-image catalog to
     # support gain-matching with sci-image
-    # magrefthresmin 15.0
-    # magrefthresmax 19.5
+    # magrefthresmin = 15.0
+    # magrefthresmax = 19.5
 
     # TODO: The following are for instrumental magnitudes.
-    magrefthresmin = 1.0
-    magrefthresmax = 5.5
+    magrefthresmin = -6.0
+    magrefthresmax = -1.5
 
 
 
