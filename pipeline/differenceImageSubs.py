@@ -159,7 +159,9 @@ def gainMatchScienceAndReferenceImages(s3_client,
                                        filename_sci_uncert,
                                        filename_ref_image,
                                        filename_ref_uncert,
+                                       gainmatch_dict,
                                        sextractor_gainmatch_dict):
+
 
     # Print diagnostics:
 
@@ -171,9 +173,9 @@ def gainMatchScienceAndReferenceImages(s3_client,
 
     # Initialize inputs.
 
-    verbose = 1
-    upload_intermediate_products = True
     iam = "Sub gainMatchScienceAndReferenceImages"
+    verbose = int(gainmatch_dict['verbose'])
+    upload_intermediate_products = eval(gainmatch_dict['upload_intermediate_products'])
 
     params_file = "/code/cdf/rapidSexParamsGainMatch.inp"
     filter_conv_file = "/code/cdf/rapidSexGainMatchFilter.conv"
@@ -184,42 +186,55 @@ def gainMatchScienceAndReferenceImages(s3_client,
 
 
     # Thresholds are used to filter input ref-image catalog to
-    # support gain-matching with sci-image
-    # magrefthresmin = 15.0
-    # magrefthresmax = 19.5
+    # support gain-matching with sci-image catalog.
 
-    # TODO: The following are for instrumental magnitudes.
-    magrefthresmin = -6.0
-    magrefthresmax = -1.5
+    magrefthresmin = float(gainmatch_dict['magrefthresmin'])
+    magrefthresmax = float(gainmatch_dict['magrefthresmax'])
 
-
-
-
+    print(" magrefthresmin =",magrefthresmin)
+    print(" magrefthresmax =",magrefthresmax)
 
 
     # Keep only filtered ref-catalog sources that have no
     # other ref-catalog source within a box of side length 2*refexclbox
     # pixels. Also re-filter by keeping sources with mag <= refmagkeep
     # and that fall at distance > edgebuffer pixels from any sci image edge.
-    refexclbox = 10.5
-    refmagkeep = 18.0
-    edgebuffer = 100
+
+    refexclbox = float(gainmatch_dict['refexclbox'])
+    refmagkeep = float(gainmatch_dict['refmagkeep'])
+    edgebuffer = int(gainmatch_dict['edgebuffer'])
+
+    print(" refexclbox =",refexclbox)
+    print(" refmagkeep =",refmagkeep)
+    print(" edgebuffer =",edgebuffer)
+
 
     # Minimum number of filtered-ref to sci catalog matches above which to
-    # proceed with flux-ratio'ing to compute relative gain-match factor
-    numsrcgmatchmin = 20
+    # proceed with flux-ratio'ing to compute relative gain-match factor.
+
+    numsrcgmatchmin = int(gainmatch_dict['numsrcgmatchmin'])
+
+    print(" numsrcgmatchmin =",numsrcgmatchmin)
+
 
     # Match radius (pixels) to associate filtered ref-image catalog sources to sci-image
     # catalog for purpose of gain-matching and estimating global RMS errors
     # along X and Y axes to quantify overall registration accuracy.
-    radscirefmatch = 1.0
+
+    radscirefmatch = float(gainmatch_dict['radscirefmatch'])
+
+    print(" radscirefmatch =",radscirefmatch)
 
 
     # Other filtering on SExtractor parameters as described in Masci et al.'s iPTF image-differencing paper.
 
-    min_class_star_thresh = 0.5
-    max_isoareaf_image_thresh = 100
-    max_awin_to_bwin_world_ratio_thresh = 1.3
+    min_class_star_thresh = float(gainmatch_dict['min_class_star_thresh'])
+    max_isoareaf_image_thresh = int(gainmatch_dict['max_isoareaf_image_thresh'])
+    max_awin_to_bwin_world_ratio_thresh = float(gainmatch_dict['max_awin_to_bwin_world_ratio_thresh'])
+
+    print(" min_class_star_thresh =",min_class_star_thresh)
+    print(" max_isoareaf_image_thresh =",max_isoareaf_image_thresh)
+    print(" max_awin_to_bwin_world_ratio_thresh =",max_awin_to_bwin_world_ratio_thresh)
 
 
     # Read in keyword values from FITS header science image.
