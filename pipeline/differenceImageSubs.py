@@ -143,15 +143,19 @@ def compute_diffimage_uncertainty(sca_gain,
     hdu_unc.writeto(diffimage_unc_filename,overwrite=True,checksum=True)
 
 
-######################################################################################
+############################################################################################
 # Gain-match science and reference images by generating SExtractor catalogs for each.
 # Assumptions:
 # 1. Input reference image is resampled into distortion grid science image (or vice versa).
 # 2. Distortion given by PV representation.
 # 3. Both input images have been locally background-subtracted.
-######################################################################################
+############################################################################################
 
-def gainMatchScienceAndReferenceImages(filename_sci_image,
+def gainMatchScienceAndReferenceImages(s3_client,
+                                       product_s3_bucket,
+                                       jid,
+                                       job_proc_date,
+                                       filename_sci_image,
                                        filename_sci_uncert,
                                        filename_ref_image,
                                        filename_ref_uncert,
@@ -168,6 +172,7 @@ def gainMatchScienceAndReferenceImages(filename_sci_image,
     # Initialize inputs.
 
     verbose = 1
+    upload_intermediate_products = True
     iam = "Sub gainMatchScienceAndReferenceImages"
 
     params_file = "/code/cdf/rapidSexParamsGainMatch.inp"
@@ -186,25 +191,6 @@ def gainMatchScienceAndReferenceImages(filename_sci_image,
     # TODO: The following are for instrumental magnitudes.
     magrefthresmin = -6.0
     magrefthresmax = -1.5
-
-
-
-
-
-
-
-
-    # TODO: Read MAGZP from FITS header of reference image.
-    # (FWIW, for the science image, this is ZPTMAG in Troxel OpenUniverse sims.)
-    # Keep magzpref = 0.0 until we implement photometric calibration of reference images.
-
-    magzp_keyword = "ZPTMAG"
-
-    magzpref = 0.0
-
-    # All the same ZPTMAG for F184 Troxel OpenUniverse sims.
-    # [root@a837726ee330 tmp]# imheaders -i Roman_TDS_simple_model_F184_11864_3_lite_reformatted.fits | grep ZP
-    # ZPTMAG  =   18.824125825690057
 
 
 
@@ -245,6 +231,30 @@ def gainMatchScienceAndReferenceImages(filename_sci_image,
     naxis2 = hdr_sci["NAXIS2"]
 
 
+
+
+
+
+
+
+    # TODO: Read MAGZP from FITS header of reference image and science image
+    # (FWIW, for the science image, this is ZPTMAG in Troxel OpenUniverse sims.)
+    # All the same ZPTMAG for F184 Troxel OpenUniverse sims.
+    # For example: imheaders -i Roman_TDS_simple_model_F184_11864_3_lite_reformatted.fits | grep ZP
+    # ZPTMAG  =   18.824125825690057
+
+    magzpsci_keyword = "ZPTMAG"
+
+    # Keep magzpref = 0.0 and magzpsci = 0.0 until we implement photometric calibration of reference images.
+    magzpsci = 0.0
+    magzpref = 0.0
+
+
+
+
+
+
+
     # Compute SExtractor catalog for science image.
 
     filename_scigainmatchsexcat_catalog = filename_sci_image.replace(".fits","_scigainmatchsexcat.txt")
@@ -273,6 +283,26 @@ def gainMatchScienceAndReferenceImages(filename_sci_image,
     sextractor_gainmatch_dict["sextractor_CATALOG_NAME".lower()] = filename_refgainmatchsexcat_catalog
     sextractor_cmd = util.build_sextractor_command_line_args(sextractor_gainmatch_dict)
     exitcode_from_sextractor = util.execute_command(sextractor_cmd)
+
+
+    # Upload SExtractor catalogs for science and reference images to S3 bucket.
+
+    if upload_intermediate_products:
+
+        scigainmatchsexcat_catalog_s3_bucket_object_name = job_proc_date + "/jid" + str(jid) + "/" +\
+                                                           filename_scigainmatchsexcat_catalog
+
+        refgainmatchsexcat_catalog_s3_bucket_object_name = job_proc_date + "/jid" + str(jid) + "/" +\
+                                                           filename_refgainmatchsexcat_catalog
+
+
+        filenames = [filename_scigainmatchsexcat_catalog,
+                     filename_refgainmatchsexcat_catalog]
+
+        objectnames = [scigainmatchsexcat_catalog_s3_bucket_object_name,
+                       refgainmatchsexcat_catalog_s3_bucket_object_name]
+
+        util.upload_files_to_s3_bucket(s3_client,product_s3_bucket,filenames,objectnames)
 
 
     # Parse XWIN_IMAGE,YWIN_IMAGE,FLUX_APER_6 (14-pixel diameter) from SExtractor catalog for science image.
@@ -424,13 +454,17 @@ def gainMatchScienceAndReferenceImages(filename_sci_image,
         print(s.format(iam,nrefcatn))
 
 
-    # If possible, cross-match sources from ref and sci catalogs and return matched
-    # sci-catalog fluxes for use in gain-matching.
+    #-----------------------------------------------------------------
+    # Compute gain (throughput) factor between science and reference images,
+    # if possible, by cross-matching sources from ref and sci catalogs and
+    # returning matched sci-catalog fluxes to compute flux ratio.
+    # Default to use global image-based MAGZP values if this cannot be computed.
 
-    scalefac = 1.0
+    scalefac = 10**(0.4*(magzpref - magzpsci))
 
     if verbose:
-        print("{}: default scale factor for gain-matching sci and ref images = {}".format(iam,scalefac))
+        s = "{}: default scale factor for gain-matching sci and ref images based on global image MAGZP values = {}"
+        print(s.format(iam,scalefac))
 
 
     # Initialize final RMSs of ref to sci source separations along each axis
