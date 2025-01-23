@@ -536,7 +536,11 @@ if __name__ == '__main__':
     # and then computing scale factor.  To apply, multiply reference iamge by scalefacref.
     ######################################################################################
 
-    scalefac = dfis.gainMatchScienceAndReferenceImages(filename_bkg_subbed_science_image,
+    scalefac = dfis.gainMatchScienceAndReferenceImages(s3_client,
+                                                       product_s3_bucket,
+                                                       jid,
+                                                       job_proc_date,
+                                                       filename_bkg_subbed_science_image,
                                                        reformatted_science_uncert_image_filename,
                                                        output_resampled_reference_image,
                                                        output_resampled_reference_uncert_image,
