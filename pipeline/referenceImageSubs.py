@@ -232,6 +232,8 @@ def generateReferenceImage(s3_client,
         print("Successfully uploaded {} to s3://{}/{}"\
             .format(awaicgen_output_mosaic_cov_map_file,product_s3_bucket,awaicgen_output_mosaic_cov_map_s3_bucket_object_name))
 
+    uploaded_to_bucket = True
+
     try:
         response = s3_client.upload_file(awaicgen_output_mosaic_uncert_image_file,
                                          product_s3_bucket,
