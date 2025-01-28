@@ -412,6 +412,11 @@ while True:
                     ra4_diffimage = product_config_input['ZOGY']['ra4']
                     dec4_diffimage = product_config_input['ZOGY']['dec4']
 
+                    fid_diffimage = product_config_input['ZOGY']['fid']
+                    sca_diffimage = product_config_input['ZOGY']['sca']
+                    nsexcatsources_diffimage = product_config_input['ZOGY']['nsexcatsources']
+                    scalefacref_diffimage = product_config_input['ZOGY']['scalefacref']
+
                     checksum_diffimage = product_config_input['ZOGY']['zogy_output_diffimage_file_checksum']
                     filename_diffimage = product_config_input['ZOGY']['zogy_output_diffimage_file']
                     status_diffimage = product_config_input['ZOGY']['zogy_output_diffimage_file_status']
@@ -460,19 +465,27 @@ while True:
                         exit(dbh.exit_code)
 
 
-                    # Touch done file.
+                    # Insert record in DiffImMeta database table.
 
-                    touch_cmd = ['touch', done_filename]
-                    exitcode_from_touch = plsubs.execute_command(touch_cmd)
+                    dbh.register_diffimmeta(pid,fid_diffimage,sca_diffimage,field,hp6,hp9,nsexcatsources_diffimage,scalefacref)
+
+                    if dbh.exit_code >= 64:
+                        exit(dbh.exit_code)
 
 
-                    # Upload done file to S3 bucket.
+        # Touch done file.
 
-                    product_s3_bucket = product_s3_bucket_base
-                    s3_object_name_done_filename = datearg + "/jid" + str(jid) + "/" + done_filename
-                    filenames = [done_filename]
-                    objectnames = [s3_object_name_done_filename]
-                    plsubs.upload_files_to_s3_bucket(s3_client,product_s3_bucket,filenames,objectnames)
+        touch_cmd = ['touch', done_filename]
+        exitcode_from_touch = plsubs.execute_command(touch_cmd)
+
+
+        # Upload done file to S3 bucket.
+
+        product_s3_bucket = product_s3_bucket_base
+        s3_object_name_done_filename = datearg + "/jid" + str(jid) + "/" + done_filename
+        filenames = [done_filename]
+        objectnames = [s3_object_name_done_filename]
+        plsubs.upload_files_to_s3_bucket(s3_client,product_s3_bucket,filenames,objectnames)
 
 
         # Close database connection.
@@ -501,7 +514,7 @@ while True:
 
     if istop == 1:
         print("Terminating gracefully now...")
-        exitcode =7
+        exitcode = 7
         exit(exitcode)
 
     i += 1
