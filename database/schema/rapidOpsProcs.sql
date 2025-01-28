@@ -1681,3 +1681,87 @@ create function updatePSF (
     end;
 
 $$ language plpgsql;
+
+
+-- Insert a new record into or update an existing record in the DiffImMeta table.
+--
+create function registerDiffImMeta (
+    pid_                 integer,
+    fid_                 smallint,
+    sca_                 smallint,
+    field_               integer,
+    hp6_                 integer,
+    hp9_                 integer,
+    nsexcatsources_      integer,
+    scalefacref_         real
+)
+    returns void as $$
+
+    declare
+
+        pid__    integer;
+
+    begin
+
+
+        -- Insert or update record, as appropriate.
+
+        select pid
+        into pid__
+        from DiffImMeta
+        where pid = pid_;
+
+        if not found then
+
+
+            -- Insert DiffImMeta record.
+
+            begin
+
+                insert into DiffImMeta
+                (pid,
+                 fid,
+                 sca,
+                 field,
+                 hp6,
+                 hp9,
+                 nsexcatsources,
+                 scalefacref
+                )
+                values
+                (pid_,
+                 fid_,
+                 sca_,
+                 field_,
+                 hp6_,
+                 hp9_,
+                 nsexcatsources_,
+                 scalefacref_
+                );
+                exception
+                    when no_data_found then
+                        raise exception
+                            '*** Error in registerDiffImMeta: DiffImMeta record for pid=% not inserted.', pid_;
+
+            end;
+
+        else
+
+
+            -- Update DiffImMeta record.
+
+            update DiffImMeta
+            set fid = fid_,
+                sca = sca_,
+                field = field_,
+                hp6 = hp6_,
+                hp9 = hp9_,
+                nsexcatsources = nsexcatsources_,
+                scalefacref = scalefacref_
+            where pid = pid_;
+
+        end if;
+
+    end;
+
+$$ language plpgsql;

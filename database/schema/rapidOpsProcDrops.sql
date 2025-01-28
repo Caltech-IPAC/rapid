@@ -252,3 +252,15 @@ DROP FUNCTION updatePSF (
     status_   smallint,
     version_  smallint
 );
+
+
+DROP FUNCTION registerDiffImMeta (
+    pid_                 integer,
+    fid_                 smallint,
+    sca_                 smallint,
+    field_               integer,
+    hp6_                 integer,
+    hp9_                 integer,
+    nsexcatsources_      integer,
+    scalefacref_         real
+);

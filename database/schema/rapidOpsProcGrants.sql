@@ -252,3 +252,15 @@ grant EXECUTE on FUNCTION updatePSF (
     status_   smallint,
     version_  smallint
 ) to rapidporole;
+
+
+grant EXECUTE on FUNCTION registerDiffImMeta (
+    pid_                 integer,
+    fid_                 smallint,
+    sca_                 smallint,
+    field_               integer,
+    hp6_                 integer,
+    hp9_                 integer,
+    nsexcatsources_      integer,
+    scalefacref_         real
+) to rapidporole;
