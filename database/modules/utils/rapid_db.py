@@ -1114,6 +1114,7 @@ class RAPIDDB:
         print('----> radius_of_initial_cone_search = {}'.format(radius_of_initial_cone_search))
 
         rep = {"TEMPLATE_RID": str(rid)}
+
         rep["TEMPLATE_FID"] = str(fid)
         rep["TEMPLATE_MJDOBS"] = str(mjdobs)
         rep["TEMPLATE_RA0"] = str(field_ra0)
@@ -1255,6 +1256,7 @@ class RAPIDDB:
         print('----> fid = {}'.format(fid))
 
         rep = {"TEMPLATE_FIELD": str(field)}
+
         rep["TEMPLATE_FID"] = str(fid)
 
         rep = dict((re.escape(k), v) for k, v in rep.items())
@@ -1577,6 +1579,7 @@ class RAPIDDB:
         print('----> fid = {}'.format(fid))
 
         rep = {"TEMPLATE_SCA": str(sca)}
+
         rep["TEMPLATE_FID"] = str(fid)
 
         rep = dict((re.escape(k), v) for k, v in rep.items())
@@ -1995,6 +1998,79 @@ class RAPIDDB:
             self.rfcatid = None
             self.svid = None
             print("*** Error: Could not register RefImCatalogs record; returning...")
+            self.exit_code = 67
+            return
+
+        if self.exit_code == 0:
+            self.conn.commit()           # Commit database transaction
+
+
+########################################################################################################
+
+    def register_diffimmeta(self,pid,fid,sca,field,hp6,hp9,nsexcatsources,scalefacref):
+
+        '''
+        Insert or update record in DiffImMeta database table.
+        '''
+
+        self.exit_code = 0
+
+
+        # Define query template.
+
+        query_template =\
+            "select * from registerDiffImMeta(" +\
+            "cast(TEMPLATE_PID as integer)," +\
+            "cast(TEMPLATE_FID as smallint)," +\
+            "cast(TEMPLATE_SCA as smallint)," +\
+            "cast(TEMPLATE_FIELD AS integer)," +\
+            "cast(TEMPLATE_HP6 AS integer)," +\
+            "cast(TEMPLATE_HP9 AS integer)," +\
+            "cast(TEMPLATE_NSEXCATSOURCES AS integer)," +\
+            "cast(TEMPLATE_SCALEFACREF AS real));"
+
+
+        # Query database.
+
+        print('----> pid = {}'.format(pid))
+        print('----> fid = {}'.format(fid))
+        print('----> sca = {}'.format(sca))
+        print('----> field = {}'.format(field))
+        print('----> hp6 = {}'.format(hp6))
+        print('----> hp9 = {}'.format(hp9))
+        print('----> nsexcatsources = {}'.format(nsexcatsources))
+        print('----> scalefacref = {}'.format(scalefacref))
+
+        rep = {"TEMPLATE_PID": str(pid)}
+
+        rep["TEMPLATE_FID"] = str(fid)
+        rep["TEMPLATE_SCA"] = str(sca)
+        rep["TEMPLATE_FIELD"] = str(field)
+        rep["TEMPLATE_HP6"] = str(hp6)
+        rep["TEMPLATE_HP9"] = str(hp9)
+        rep["TEMPLATE_NSEXCATSOURCES"] = str(nsexcatsources)
+        rep["TEMPLATE_SCALEFACREF"] = str(scalefacref)
+
+        rep = dict((re.escape(k), v) for k, v in rep.items())
+        pattern = re.compile("|".join(rep.keys()))
+        query = pattern.sub(lambda m: rep[re.escape(m.group(0))], query_template)
+
+        print('query = {}'.format(query))
+
+
+        # Execute query.
+
+        try:
+            self.cur.execute(query)
+
+            try:
+                for record in self.cur:
+                    print(record)
+            except:
+                    print("Nothing returned from database stored function; continuing...")
+
+        except (Exception, psycopg2.DatabaseError) as error:
+            print('*** Error inserting or updating L2FileMeta record ({}); skipping...'.format(error))
             self.exit_code = 67
             return
 
