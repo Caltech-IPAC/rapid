@@ -527,7 +527,10 @@ if __name__ == '__main__':
         # L2FileMeta table does NOT join with the L2Files table, in order to optimize query speed).
 
         radius_of_initial_cone_search = 0.18
-        overlapping_images = dbh.get_overlapping_l2files(rid,fid,ra0_field,dec0_field,
+        overlapping_images = dbh.get_overlapping_l2files(rid,
+                                                         fid,
+                                                         mjdobs,
+                                                         ra0_field,dec0_field,
                                                          ra1_field,dec1_field,
                                                          ra2_field,dec2_field,
                                                          ra3_field,dec3_field,

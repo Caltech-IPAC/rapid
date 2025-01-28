@@ -1048,7 +1048,10 @@ class RAPIDDB:
 
 ########################################################################################################
 
-    def get_overlapping_l2files(self,rid,fid,
+    def get_overlapping_l2files(self,
+                                rid,
+                                fid,
+                                mjdobs,
                                 field_ra0,field_dec0,
                                 field_ra1,field_dec1,
                                 field_ra2,field_dec2,
@@ -1058,7 +1061,8 @@ class RAPIDDB:
 
         '''
         Query database for RIDs and distances from tile center for all science images that
-        overlap the sky tile associated with the input science image and its filter.
+        overlap the sky tile associated with the input science image and its filter and
+        that were acquired before the input science image.
         Returned list is ordered by distance from tile center.
         '''
 
@@ -1078,11 +1082,27 @@ class RAPIDDB:
             "from L2FileMeta " +\
             "where fid = TEMPLATE_FID " +\
             "and q3c_radial_query(ra0, dec0, cast(TEMPLATE_RA0 as double precision), cast(TEMPLATE_DEC0 as double precision), cast(TEMPLATE_RADIUS as double precision)) " +\
-            "and (q3c_poly_query(ra1, dec1, array[cast(TEMPLATE_RA1 as double precision), cast(TEMPLATE_DEC1 as double precision),cast(TEMPLATE_RA2 as double precision), cast(TEMPLATE_DEC2 as double precision),cast(TEMPLATE_RA3 as double precision), cast(TEMPLATE_DEC3 as double precision),cast(TEMPLATE_RA4 as double precision), cast(TEMPLATE_DEC4 as double precision)]) " +\
-            "or q3c_poly_query(ra2, dec2, array[cast(TEMPLATE_RA1 as double precision), cast(TEMPLATE_DEC1 as double precision),cast(TEMPLATE_RA2 as double precision), cast(TEMPLATE_DEC2 as double precision),cast(TEMPLATE_RA3 as double precision), cast(TEMPLATE_DEC3 as double precision),cast(TEMPLATE_RA4 as double precision), cast(TEMPLATE_DEC4 as double precision)]) " +\
-            "or q3c_poly_query(ra3, dec3, array[cast(TEMPLATE_RA1 as double precision), cast(TEMPLATE_DEC1 as double precision),cast(TEMPLATE_RA2 as double precision), cast(TEMPLATE_DEC2 as double precision),cast(TEMPLATE_RA3 as double precision), cast(TEMPLATE_DEC3 as double precision),cast(TEMPLATE_RA4 as double precision), cast(TEMPLATE_DEC4 as double precision)]) " +\
-            "or q3c_poly_query(ra4, dec4, array[cast(TEMPLATE_RA1 as double precision), cast(TEMPLATE_DEC1 as double precision),cast(TEMPLATE_RA2 as double precision), cast(TEMPLATE_DEC2 as double precision),cast(TEMPLATE_RA3 as double precision), cast(TEMPLATE_DEC3 as double precision),cast(TEMPLATE_RA4 as double precision), cast(TEMPLATE_DEC4 as double precision)]) " +\
-            "or q3c_poly_query(ra0, dec0, array[cast(TEMPLATE_RA1 as double precision), cast(TEMPLATE_DEC1 as double precision),cast(TEMPLATE_RA2 as double precision), cast(TEMPLATE_DEC2 as double precision),cast(TEMPLATE_RA3 as double precision), cast(TEMPLATE_DEC3 as double precision),cast(TEMPLATE_RA4 as double precision), cast(TEMPLATE_DEC4 as double precision)])) " +\
+            "and (q3c_poly_query(ra1, dec1, array[cast(TEMPLATE_RA1 as double precision), cast(TEMPLATE_DEC1 as double precision)," +\
+                                                 "cast(TEMPLATE_RA2 as double precision), cast(TEMPLATE_DEC2 as double precision)," +\
+                                                 "cast(TEMPLATE_RA3 as double precision), cast(TEMPLATE_DEC3 as double precision)," +\
+                                                 "cast(TEMPLATE_RA4 as double precision), cast(TEMPLATE_DEC4 as double precision)]) " +\
+            "or q3c_poly_query(ra2, dec2, array[cast(TEMPLATE_RA1 as double precision), cast(TEMPLATE_DEC1 as double precision)," +\
+                                               "cast(TEMPLATE_RA2 as double precision), cast(TEMPLATE_DEC2 as double precision)," +\
+                                               "cast(TEMPLATE_RA3 as double precision), cast(TEMPLATE_DEC3 as double precision)," +\
+                                               "cast(TEMPLATE_RA4 as double precision), cast(TEMPLATE_DEC4 as double precision)]) " +\
+            "or q3c_poly_query(ra3, dec3, array[cast(TEMPLATE_RA1 as double precision), cast(TEMPLATE_DEC1 as double precision)," +\
+                                               "cast(TEMPLATE_RA2 as double precision), cast(TEMPLATE_DEC2 as double precision)," +\
+                                               "cast(TEMPLATE_RA3 as double precision), cast(TEMPLATE_DEC3 as double precision)," +\
+                                               "cast(TEMPLATE_RA4 as double precision), cast(TEMPLATE_DEC4 as double precision)]) " +\
+            "or q3c_poly_query(ra4, dec4, array[cast(TEMPLATE_RA1 as double precision), cast(TEMPLATE_DEC1 as double precision)," +\
+                                               "cast(TEMPLATE_RA2 as double precision), cast(TEMPLATE_DEC2 as double precision)," +\
+                                               "cast(TEMPLATE_RA3 as double precision), cast(TEMPLATE_DEC3 as double precision)," +\
+                                               "cast(TEMPLATE_RA4 as double precision), cast(TEMPLATE_DEC4 as double precision)]) " +\
+            "or q3c_poly_query(ra0, dec0, array[cast(TEMPLATE_RA1 as double precision), cast(TEMPLATE_DEC1 as double precision)," +\
+                                               "cast(TEMPLATE_RA2 as double precision), cast(TEMPLATE_DEC2 as double precision)," +\
+                                               "cast(TEMPLATE_RA3 as double precision), cast(TEMPLATE_DEC3 as double precision)," +\
+                                               "cast(TEMPLATE_RA4 as double precision), cast(TEMPLATE_DEC4 as double precision)])) " +\
+            "and mjdobs < TEMPLATE_MJDOBS " +\
             "and rid != TEMPLATE_RID " +\
             "order by dist; "
 
@@ -1095,6 +1115,7 @@ class RAPIDDB:
 
         rep = {"TEMPLATE_RID": str(rid)}
         rep["TEMPLATE_FID"] = str(fid)
+        rep["TEMPLATE_MJDOBS"] = str(mjdobs)
         rep["TEMPLATE_RA0"] = str(field_ra0)
         rep["TEMPLATE_DEC0"] = str(field_dec0)
         rep["TEMPLATE_RA1"] = str(field_ra1)
