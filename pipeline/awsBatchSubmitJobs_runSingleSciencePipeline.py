@@ -645,15 +645,26 @@ if __name__ == '__main__':
     # image, then use to perform aperture phot on difference image to generate
     # raw ascii catalog file.
 
+    sextractor_diffimage_paramsfile = "/code/cdf/rapidSexParamsDiffImage.inp";
+
     sextractor_diffimage_dict["sextractor_detection_image".lower()] = filename_scorrimage_masked
     sextractor_diffimage_dict["sextractor_input_image".lower()] = filename_diffimage_masked
     sextractor_diffimage_dict["sextractor_WEIGHT_IMAGE".lower()] = filename_weight_image
-    sextractor_diffimage_dict["sextractor_PARAMETERS_NAME".lower()] = "/code/cdf/rapidSexParamsDiffImage.inp"
+    sextractor_diffimage_dict["sextractor_PARAMETERS_NAME".lower()] = sextractor_diffimage_paramsfile
     sextractor_diffimage_dict["sextractor_FILTER_NAME".lower()] = "/code/cdf/rapidSexDiffImageFilter.conv"
     sextractor_diffimage_dict["sextractor_STARNNW_NAME".lower()] = "/code/cdf/rapidSexDiffImageStarGalaxyClassifier.nnw"
     sextractor_diffimage_dict["sextractor_CATALOG_NAME".lower()] = filename_diffimage_sextractor_catalog
     sextractor_cmd = util.build_sextractor_command_line_args(sextractor_diffimage_dict)
     exitcode_from_sextractor = util.execute_command(sextractor_cmd)
+
+    params_to_get = ["XWIN_IMAGE","YWIN_IMAGE","FLUX_APER_6","MAG_APER_6",
+                     "CLASS_STAR","ISOAREAF_IMAGE","AWIN_WORLD","BWIN_WORLD"]
+
+    vals_diffimage = util.parse_ascii_text_sextrator_catalog(filename_diffimage_sextractor_catalog,
+                                                             sextractor_diffimage_paramsfile,
+                                                             params_to_get)
+
+    nsexcatsources_diffimage = len(vals_diffimage)
 
 
     # Code-timing benchmark.
@@ -746,6 +757,11 @@ if __name__ == '__main__':
     product_config['ZOGY']['dec3'] = str(dec3_sciimage)
     product_config['ZOGY']['ra4'] = str(ra4_sciimage)
     product_config['ZOGY']['dec4'] = str(dec4_sciimage)
+
+    product_config['ZOGY']['fid'] = str(fid)
+    product_config['ZOGY']['sca'] = str(sca)
+    product_config['ZOGY']['nsexcatsources'] = str(nsexcatsources_diffimage)
+    product_config['ZOGY']['scalefacref'] = str(scalefacref)
 
 
     # Write product config file for job.
