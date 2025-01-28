@@ -888,3 +888,36 @@ CREATE INDEX psfs_sca_idx ON psfs (sca);
 CREATE INDEX psfs_status_idx ON psfs (status);
 CREATE INDEX psfs_vbest_idx ON psfs (vbest);
 
+
+-----------------------------
+-- TABLE: DiffImMeta
+-----------------------------
+
+SET default_tablespace = pipeline_data_01;
+
+CREATE TABLE diffimmeta (
+    pid integer NOT NULL,
+    nsexcatsources integer NOT NULL,         -- Number of records in DiffImage SExtractor catalog.
+    scalefacref real NOT NULL,               -- Gain-matching scale factor for reference image.
+    field integer NOT NULL,                  -- Roman tessellation index for RA_TARG, DEC_TARG
+    hp6 integer NOT NULL,                    -- Level-6 healpix index (NESTED) for (ra0,dec0)
+    hp9 integer NOT NULL,                    -- Level-9 healpix index (NESTED) for (ra0,dec0)
+    fid smallint NOT NULL,
+    sca smallint NOT NULL
+);
+
+ALTER TABLE diffimmeta OWNER TO rapidadminrole;
+
+SET default_tablespace = pipeline_indx_01;
+
+ALTER TABLE ONLY diffimmeta ADD CONSTRAINT diffimmeta_pkey PRIMARY KEY (pid);
+
+ALTER TABLE ONLY diffimmeta ADD CONSTRAINT diffimmeta_pid_fk FOREIGN KEY (pid) REFERENCES diffimages(pid);
+ALTER TABLE ONLY diffimmeta ADD CONSTRAINT diffimmeta_fid_fk FOREIGN KEY (fid) REFERENCES filters(fid);
+ALTER TABLE ONLY diffimmeta ADD CONSTRAINT diffimmeta_sca_fk FOREIGN KEY (sca) REFERENCES scas(sca);
+
+CREATE INDEX diffimmeta_field_idx ON l2files (field);
+CREATE INDEX diffimmeta_hp6_idx ON diffimmeta (hp6);
+CREATE INDEX diffimmeta_hp9_idx ON diffimmeta (hp9);
+CREATE INDEX diffimmeta_fid_idx ON diffimmeta (fid);
+CREATE INDEX diffimmeta_sca_idx ON diffimmeta (sca);

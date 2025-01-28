@@ -465,3 +465,23 @@ GRANT INSERT,UPDATE,SELECT,REFERENCES ON TABLE psfs TO rapidporole;
 
 REVOKE ALL ON SEQUENCE psfs_psfid_seq FROM rapidporole;
 GRANT USAGE ON SEQUENCE psfs_psfid_seq TO rapidporole;
+
+
+-------------------
+-- DiffImMeta table
+-------------------
+
+-- rapidreadrole
+
+REVOKE ALL ON TABLE diffimmeta FROM rapidreadrole;
+GRANT SELECT ON TABLE diffimmeta TO GROUP rapidreadrole;
+
+-- rapidadminrole
+
+REVOKE ALL ON TABLE diffimmeta FROM rapidadminrole;
+GRANT ALL ON TABLE diffimmeta TO GROUP rapidadminrole;
+
+-- rapidporole
+
+REVOKE ALL ON TABLE diffimmeta FROM rapidporole;
+GRANT INSERT,UPDATE,SELECT,REFERENCES ON TABLE diffimmeta TO rapidporole;

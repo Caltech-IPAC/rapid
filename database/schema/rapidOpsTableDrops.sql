@@ -8,6 +8,13 @@
 
 
 -------------------
+-- DiffImMeta table
+-------------------
+
+DROP TABLE diffimmeta;
+
+
+-------------------
 -- L2FileMeta table
 -------------------
 
