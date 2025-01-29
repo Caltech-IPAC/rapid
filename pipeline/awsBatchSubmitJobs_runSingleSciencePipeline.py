@@ -768,8 +768,8 @@ if __name__ == '__main__':
     product_config['ZOGY']['ra4'] = str(ra4_sciimage)
     product_config['ZOGY']['dec4'] = str(dec4_sciimage)
 
-    product_config['ZOGY']['fid'] = str(fid)
-    product_config['ZOGY']['sca'] = str(sca)
+    product_config['ZOGY']['fid'] = str(fid_sciimage)
+    product_config['ZOGY']['sca'] = str(sca_sciimage)
     product_config['ZOGY']['nsexcatsources'] = str(nsexcatsources_diffimage)
     product_config['ZOGY']['scalefacref'] = str(scalefacref)
 
