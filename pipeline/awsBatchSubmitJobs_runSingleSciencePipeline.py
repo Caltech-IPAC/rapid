@@ -550,6 +550,12 @@ if __name__ == '__main__':
     scalefacref = 1. / scalefac
 
 
+    # Compute resampled gain-matched reference image.
+
+    output_resampled_gainmatched_reference_image = input_reference_image.replace(".fits","_gainmatched.fits")
+    util.scale_image_data(output_resampled_reference_image,scalefacref,output_resampled_gainmatched_reference_image)
+
+
     # Code-timing benchmark.
 
     end_time_benchmark = time.time()
@@ -579,7 +585,7 @@ if __name__ == '__main__':
     zogy_cmd = [python_cmd,
                 zogy_code,
                 filename_bkg_subbed_science_image,
-                output_resampled_reference_image,
+                output_resampled_gainmatched_reference_image,
                 filename_psf,
                 filename_refimage_psf,
                 reformatted_science_uncert_image_filename,
@@ -632,7 +638,7 @@ if __name__ == '__main__':
     filename_diffimage_unc_masked = 'diffimage_uncert_masked.fits'
     dfis.compute_diffimage_uncertainty(sca_gain,
                                        reformatted_science_image_filename,
-                                       output_resampled_reference_image,
+                                       output_resampled_gainmatched_reference_image,
                                        output_resampled_reference_cov_map,
                                        filename_diffimage_masked,
                                        filename_diffimage_unc_masked)
@@ -693,20 +699,25 @@ if __name__ == '__main__':
     s3_object_name_diffpsf = job_proc_date + "/jid" + str(jid) + "/" + filename_diffpsf
     s3_object_name_scorrimage = job_proc_date + "/jid" + str(jid) + "/" + filename_scorrimage_masked
     s3_object_name_bkg_subbed_science_image = job_proc_date + "/jid" + str(jid) + "/" + filename_bkg_subbed_science_image
+    s3_object_name_output_resampled_gainmatched_reference_image = job_proc_date + "/jid" + str(jid) + "/" + \
+                                                                  output_resampled_gainmatched_reference_image
+
 
     filenames = [filename_diffimage_masked,
                  filename_diffimage_unc_masked,
                  filename_diffimage_sextractor_catalog,
                  filename_diffpsf,
                  filename_scorrimage_masked,
-                 filename_bkg_subbed_science_image]
+                 filename_bkg_subbed_science_image,
+                 output_resampled_gainmatched_reference_image]
 
     objectnames = [s3_object_name_diffimage,
                    s3_object_name_diffimage_unc,
                    s3_object_name_diffimage_catalog,
                    s3_object_name_diffpsf,
                    s3_object_name_scorrimage,
-                   s3_object_name_bkg_subbed_science_image]
+                   s3_object_name_bkg_subbed_science_image,
+                   s3_object_name_output_resampled_gainmatched_reference_image]
 
     util.upload_files_to_s3_bucket(s3_client,product_s3_bucket,filenames,objectnames)
 
@@ -780,7 +791,7 @@ if __name__ == '__main__':
         product_config.write(product_configfile)
 
 
-    # Upload producy config file for job, along with associated file(s) if any, to S3 bucket.
+    # Upload product config file for job, along with associated file(s) if any, to S3 bucket.
 
     uploaded_to_bucket = True
 
