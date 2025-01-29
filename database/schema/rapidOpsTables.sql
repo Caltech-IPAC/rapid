@@ -254,7 +254,8 @@ CREATE TABLE l2filemeta (
     hp6 integer NOT NULL,               -- Level-6 healpix index (NESTED) for (ra0,dec0)
     hp9 integer NOT NULL,               -- Level-9 healpix index (NESTED) for (ra0,dec0)
     fid smallint NOT NULL,
-    sca smallint NOT NULL
+    sca smallint NOT NULL,
+    mjdobs double precision NOT NULL
 );
 
 ALTER TABLE l2filemeta OWNER TO rapidadminrole;
