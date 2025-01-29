@@ -552,7 +552,7 @@ if __name__ == '__main__':
 
     # Compute resampled gain-matched reference image.
 
-    output_resampled_gainmatched_reference_image = input_reference_image.replace(".fits","_gainmatched.fits")
+    output_resampled_gainmatched_reference_image = output_resampled_reference_image.replace(".fits","_gainmatched.fits")
     util.scale_image_data(output_resampled_reference_image,scalefacref,output_resampled_gainmatched_reference_image)
 
 
