@@ -660,6 +660,29 @@ def convert_from_sip_to_pv(input_fits_file_with_sip,hdu_index,output_fits_file_w
 
 
 #-------------------------------------------------------------------
+# Scale image data in input FITS file and write new output FITS file.
+
+def scale_image_data(input_fits_file,scale_factor,output_fits_file):
+    '''
+    Scale image data in input FITS file and write new output FITS file.
+    Assume image data are in PRIMARY HDU.
+    '''
+
+    hdul = fits.open(input_fits_file)
+
+    data = hdul[0].data
+
+    np_data = np.array(data)
+    scaled_data = np_data * scale_factor
+
+    hdul[0].data = scaled_data
+
+    new_hdu = fits.PrimaryHDU(data=hdul[0].data,header=hdul[0].header)
+
+    new_hdu.writeto(output_fits_file,overwrite=True,checksum=True)
+
+
+#-------------------------------------------------------------------
 # Resample reference image and its coverage map and uncertainty image,
 # with either no distortion or sip distortion to the reference frame
 # of thescience FITS file with sip distortion.
