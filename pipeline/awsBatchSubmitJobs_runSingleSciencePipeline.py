@@ -663,8 +663,7 @@ if __name__ == '__main__':
     sextractor_cmd = util.build_sextractor_command_line_args(sextractor_diffimage_dict)
     exitcode_from_sextractor = util.execute_command(sextractor_cmd)
 
-    params_to_get = ["XWIN_IMAGE","YWIN_IMAGE","FLUX_APER_6","MAG_APER_6",
-                     "CLASS_STAR","ISOAREAF_IMAGE","AWIN_WORLD","BWIN_WORLD"]
+    params_to_get = ["XWIN_IMAGE","YWIN_IMAGE","FLUX_APER_6"]
 
     vals_diffimage = util.parse_ascii_text_sextrator_catalog(filename_diffimage_sextractor_catalog,
                                                              sextractor_diffimage_paramsfile,
