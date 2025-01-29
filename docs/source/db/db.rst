@@ -66,9 +66,10 @@ Sky-Position Queries Using Q3C Library Functions
 ************************************
 
 The L2FileMeta and DiffImages database tables store the image centers
-(ra0, dec0) and their four corners (rai, deci, i=1,...,4).  Database
-queries involving Q3C functions like the following can find all images that overlap a given
-image, such as the one with rid = 152336 (rid = L2File primary key), where the (ra, dec) values
+(ra0, dec0) and their four corners (rai, deci, i=1,...,4).
+Database queries involving Q3C functions like the following can find all images that
+overlap a given image and acquired before the image of interest,
+such as the one with rid = 152336 (rid = L2File primary key), where the (ra, dec) values
 below are for that image's center and four corners:
 
 .. code-block::
