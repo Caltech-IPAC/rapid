@@ -467,7 +467,7 @@ while True:
 
                     # Insert record in DiffImMeta database table.
 
-                    dbh.register_diffimmeta(pid,fid_diffimage,sca_diffimage,field,hp6,hp9,nsexcatsources_diffimage,scalefacref)
+                    dbh.register_diffimmeta(pid,fid_diffimage,sca_diffimage,field,hp6,hp9,nsexcatsources_diffimage,scalefacref_diffimage)
 
                     if dbh.exit_code >= 64:
                         exit(dbh.exit_code)
