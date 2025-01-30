@@ -23,6 +23,7 @@ RUN yum -y install atlas-devel
 RUN yum -y install postgresql
 RUN yum -y install unzip
 RUN yum -y install git
+RUN yum -y install sqlite
 
 # Install AWS CLI
 
