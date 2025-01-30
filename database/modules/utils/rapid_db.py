@@ -2027,7 +2027,7 @@ class RAPIDDB:
             "cast(TEMPLATE_HP6 AS integer)," +\
             "cast(TEMPLATE_HP9 AS integer)," +\
             "cast(TEMPLATE_NSEXCATSOURCES AS integer)," +\
-            "cast(TEMPLATE_SCALEFACREF AS real));"
+            "cast(TEMPLATE_REALSCALEFACREF AS real));"
 
 
         # Query database.
@@ -2049,7 +2049,7 @@ class RAPIDDB:
         rep["TEMPLATE_HP6"] = str(hp6)
         rep["TEMPLATE_HP9"] = str(hp9)
         rep["TEMPLATE_NSEXCATSOURCES"] = str(nsexcatsources)
-        rep["TEMPLATE_SCALEFACREF"] = str(scalefacref)
+        rep["TEMPLATE_REALSCALEFACREF"] = str(scalefacref)
 
         rep = dict((re.escape(k), v) for k, v in rep.items())
         pattern = re.compile("|".join(rep.keys()))

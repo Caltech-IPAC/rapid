@@ -27,6 +27,7 @@ print("swvers =", swvers)
 print("cfg_filename_only =", cfg_filename_only)
 
 
+rfid = None
 istop = 0
 
 def signal_handler(signum, frame):

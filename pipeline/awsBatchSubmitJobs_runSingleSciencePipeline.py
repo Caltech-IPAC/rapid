@@ -262,6 +262,7 @@ if __name__ == '__main__':
         s3_full_name_reference_image = config_input['REF_IMAGE']['filename']
         awaicgen_output_mosaic_image_file,subdirs,downloaded_from_bucket = util.download_file_from_s3_bucket(s3_client,s3_full_name_reference_image)
 
+
         # For now, require the filename derived from the database record is same as in job configuration file under AWAICGEN block.
 
         if awaicgen_output_mosaic_image_file != awaicgen_dict["awaicgen_output_mosaic_image_file"]:
