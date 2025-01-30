@@ -302,6 +302,8 @@ def submit_job_to_aws_batch(proc_date,
 
     job_name = job_name_base + proc_date + "_jid" + str(jid)
 
+    print("Submitting job to AWS Batch...")
+
     response = client.submit_job(
         jobName=job_name,
         jobQueue=job_queue,
