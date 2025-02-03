@@ -1,3 +1,4 @@
+import os
 import database.modules.utils.rapid_db as db
 
 swname = "awsBatchSubmitJobs_launchSciencePipelinesForExposure.py"
