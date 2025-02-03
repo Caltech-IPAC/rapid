@@ -1,5 +1,7 @@
 import os
+
 import database.modules.utils.rapid_db as db
+import modules.utils.rapid_pipeline_subs as util
 
 swname = "awsBatchSubmitJobs_launchSciencePipelinesForExposure.py"
 swvers = "1.0"
@@ -38,14 +40,34 @@ if __name__ == '__main__':
 
     recs = dbh.get_l2files_records_for_expid(expid)
 
+    if dbh.exit_code >= 64:
+        print("*** Error from {}; quitting ".format(swname))
+        exit(dbh.exit_code)
+
+
+    # Launch pipeline instances via AWS Batch.
+
     for rec in recs:
         rid = rec[0]
         sca = rec[1]
         print("rid, sca =",rid,sca)
 
-    if dbh.exit_code >= 64:
-        print("*** Error from {}; quitting ".format(swname))
-        exit(dbh.exit_code)
+
+        # Load RID into the environment.
+
+        os.environ['RID'] = rid
+
+
+        # Launch single pipeline instance.
+
+
+        python_cmd = 'python3'
+        launch_single_pipeline_instance_code = '/code/pipeline/awsBatchSubmitJobs_launchSingleSciencePipeline.py'
+
+        launch_cmd = [python_cmd,
+                      launch_single_pipeline_instance_code]
+
+        exitcode_from_launch_cmd = util.execute_command(launch_cmd)
 
 
     # Close database connection.
@@ -55,3 +77,11 @@ if __name__ == '__main__':
     if dbh.exit_code >= 64:
         exit(dbh.exit_code)
 
+
+    # Termination.
+
+    terminating_exitcode = 0
+
+    print("terminating_exitcode =",terminating_exitcode)
+
+    exit(terminating_exitcode)
