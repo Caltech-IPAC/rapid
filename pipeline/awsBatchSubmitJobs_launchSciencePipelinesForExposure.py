@@ -53,9 +53,10 @@ if __name__ == '__main__':
         print("rid, sca =",rid,sca)
 
 
-        # Load RID into the environment.  Quotes around string required.
+        # Load RID into the environment.
+        # Database query record has numbers converted to values.
 
-        os.environ['RID'] = "'" + rid + "'"
+        os.environ['RID'] = str(rid)
 
 
         # Launch single pipeline instance.
