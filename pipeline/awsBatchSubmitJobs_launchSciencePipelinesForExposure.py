@@ -53,9 +53,9 @@ if __name__ == '__main__':
         print("rid, sca =",rid,sca)
 
 
-        # Load RID into the environment.
+        # Load RID into the environment.  Quotes around string required.
 
-        os.environ['RID'] = rid
+        os.environ['RID'] = "'" + rid + "'"
 
 
         # Launch single pipeline instance.
