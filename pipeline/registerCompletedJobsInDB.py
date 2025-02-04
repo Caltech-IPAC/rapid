@@ -278,7 +278,7 @@ while True:
 
         for product_bucket_object in product_bucket.objects.filter(Prefix=job_prefix):
 
-            print("------------->",product_bucket_object)
+            print("------==------->",product_bucket_object)
 
 
             # Download product config file, in order to read the MD5 checksum of the reference image.
@@ -382,6 +382,9 @@ while True:
 
             # Difference image.
 
+            print("===> zogy_output_diffimage_file =",zogy_output_diffimage_file)
+            print("===> product_bucket_object.key =",product_bucket_object.key)
+
             if zogy_output_diffimage_file in product_bucket_object.key:
 
                 print("Found in difference image in S3 product bucket: {}".format(zogy_output_diffimage_file))
@@ -396,14 +399,13 @@ while True:
 
                 if zogy_output_diffimage_file_checksum != 'Not found':
 
-                    zogy_output_diffimage_file = product_config_input['ZOGY']['zogy_output_diffimage_file']
-
                     rid_diffimage = product_config_input['ZOGY']['rid']
                     ppid_diffimage = product_config_input['ZOGY']['ppid']
 
-                    if rfid is None:
-                        rfid_diffimage = product_config_input['ZOGY']['rfid']
-                    else:
+
+                    rfid_diffimage = product_config_input['ZOGY']['rfid']
+
+                    if rfid_diffimage == "None":
                         rfid_diffimage = rfid
 
                     ra0_diffimage = product_config_input['ZOGY']['ra0']
