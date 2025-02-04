@@ -1405,7 +1405,7 @@ class RAPIDDB:
         record = self.cur.fetchone()
 
         if record is not None:
-            print("*** Messagge: Successfully executed stored funtion endJob; returning...")
+            print("*** Message: Successfully executed stored funtion endJob; returning...")
         else:
             jid = None
             print("*** Error: Could not execute stored funtion endJob; returning...")
