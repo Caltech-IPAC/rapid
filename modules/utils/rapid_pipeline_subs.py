@@ -72,7 +72,7 @@ def upload_files_to_s3_bucket(s3_client,s3_bucket_name,filenames,s3_object_names
             break
 
         if uploaded_to_bucket:
-            print("Successfully uploaded {} to s3://{}/{}"\
+            print("upload_files_to_s3_bucket: Successfully uploaded {} to s3://{}/{}"\
                 .format(filename,s3_bucket_name,s3_object_name))
 
     return uploaded_to_bucket
@@ -94,7 +94,7 @@ def download_file_from_s3_bucket(s3_client,s3_full_name):
     try:
         s3_bucket_name = string_match.group(1)
         s3_object_name = string_match.group(2)
-        print("s3_bucket_name = {}, s3_s3_object_name = {}".\
+        print("download_file_from_s3_bucket: s3_bucket_name = {}, s3_object_name = {}".\
             format(s3_bucket_name,s3_object_name))
 
     except:
@@ -106,7 +106,7 @@ def download_file_from_s3_bucket(s3_client,s3_full_name):
     try:
         subdirs = string_match2.group(1)
         filename = string_match2.group(2)
-        print("filename = {}".format(filename))
+        print("download_file_from_s3_bucket: filename = {}".format(filename))
 
     except:
         print("*** Error: Could not parse s3_object_name; quitting...")
@@ -117,7 +117,7 @@ def download_file_from_s3_bucket(s3_client,s3_full_name):
 
     downloaded_from_bucket = True
 
-    print("Attempting to download s3://{}/{} into {}...".format(s3_bucket_name,s3_object_name,filename))
+    print("download_file_from_s3_bucket: Attempting to download s3://{}/{} into {}...".format(s3_bucket_name,s3_object_name,filename))
 
     try:
         response = s3_client.download_file(s3_bucket_name,s3_object_name,filename)

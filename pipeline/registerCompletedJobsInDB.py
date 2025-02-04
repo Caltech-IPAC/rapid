@@ -172,6 +172,8 @@ while True:
 
     for jid,log_fname in zip(jids,log_filenames):
 
+        print("\nStart of loop: jid, log_fname =",jid,log_fname)
+
 
         # Check whether done file exists in S3 bucket for job, and skip if it exists.
         # This is done by attempting to download the done file.  Regardless the sub
@@ -270,7 +272,7 @@ while True:
 
         product_bucket = s3_resource.Bucket(product_s3_bucket_base)
 
-        job_prefix = datearg + '/jid' + str(jid)
+        job_prefix = datearg + '/jid' + str(jid) + '/'
 
         print("job_prefix =",job_prefix)
 
