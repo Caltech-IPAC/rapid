@@ -166,7 +166,9 @@ while True:
         exit(dbh.exit_code)
 
 
+    #####################################################################
     # Loop over jobs for a given processing date.
+    #####################################################################
 
     for jid,log_fname in zip(jids,log_filenames):
 
@@ -489,12 +491,16 @@ while True:
         plsubs.upload_files_to_s3_bucket(s3_client,product_s3_bucket,filenames,objectnames)
 
 
-        # Close database connection.
+    #####################################################################
+    # Done with loop over jobs for a given processing date.
+    #####################################################################
 
-        dbh.close()
+    # Close database connection.
 
-        if dbh.exit_code >= 64:
-            exit(dbh.exit_code)
+    dbh.close()
+
+    if dbh.exit_code >= 64:
+        exit(dbh.exit_code)
 
 
     # Test code.
