@@ -8,6 +8,13 @@
 
 
 -------------------
+-- RefImMeta table
+-------------------
+
+DROP TABLE refimmeta;
+
+
+-------------------
 -- DiffImMeta table
 -------------------
 

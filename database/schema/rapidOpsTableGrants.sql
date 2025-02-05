@@ -485,3 +485,23 @@ GRANT ALL ON TABLE diffimmeta TO GROUP rapidadminrole;
 
 REVOKE ALL ON TABLE diffimmeta FROM rapidporole;
 GRANT INSERT,UPDATE,SELECT,REFERENCES ON TABLE diffimmeta TO rapidporole;
+
+
+-------------------
+-- RefImMeta table
+-------------------
+
+-- rapidreadrole
+
+REVOKE ALL ON TABLE refimmeta FROM rapidreadrole;
+GRANT SELECT ON TABLE refimmeta TO GROUP rapidreadrole;
+
+-- rapidadminrole
+
+REVOKE ALL ON TABLE refimmeta FROM rapidadminrole;
+GRANT ALL ON TABLE refimmeta TO GROUP rapidadminrole;
+
+-- rapidporole
+
+REVOKE ALL ON TABLE refimmeta FROM rapidporole;
+GRANT INSERT,UPDATE,SELECT,REFERENCES ON TABLE refimmeta TO rapidporole;

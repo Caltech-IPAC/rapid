@@ -922,3 +922,47 @@ CREATE INDEX diffimmeta_hp6_idx ON diffimmeta (hp6);
 CREATE INDEX diffimmeta_hp9_idx ON diffimmeta (hp9);
 CREATE INDEX diffimmeta_fid_idx ON diffimmeta (fid);
 CREATE INDEX diffimmeta_sca_idx ON diffimmeta (sca);
+
+
+-----------------------------
+-- TABLE: RefImMeta
+-----------------------------
+
+SET default_tablespace = pipeline_data_01;
+
+CREATE TABLE refimmeta (
+    rfid integer NOT NULL,            -- Primary key
+    field integer NOT NULL,           -- Roman tessellation index for (ra0,dec0)
+    hp6 integer NOT NULL,             -- Level-6 healpix index (NESTED) for (ra0,dec0)
+    hp9 integer NOT NULL,             -- Level-9 healpix index (NESTED) for (ra0,dec0)
+    fid smallint NOT NULL,            -- Foreign key from Filters table
+    nframes smallint NOT NULL,        -- Number of images in stack
+    npixsat integer NOT NULL,         -- Number of saturated pixels in reference-image
+    npixnan integer NOT NULL,         -- Number of NaN pixels in reference-image
+    gmean real NOT NULL,              -- Global reference-image pixel mean [DN]
+    gmedian real NOT NULL,            -- Global reference-image pixel median [DN]
+    gstddev real NOT NULL,            -- Global reference-image pixel standard deviation [DN]
+    gpctdif real NOT NULL,            -- Global robust reference-image pixel spread [DN]
+    gmin real NOT NULL,               -- Global minimum reference-image pixel value [DN]
+    gmax real NOT NULL,               -- Global maximum reference-image pixel value [DN]
+    medncov real NOT NULL,            -- Median pixel depth-of-coverage
+    medpixunc real NOT NULL,          -- Median of reference-image pixel uncertainties [DN]
+    fwhmmedpix real NOT NULL,         -- Median of FWHM_IMAGE values in reference-image SExtractor catalog [pixels]
+    fwhmminpix real NOT NULL,         -- Minimum of FWHM_IMAGE values in reference-image SExtractor catalog [pixels]
+    fwhmmaxpix real NOT NULL,         -- Maximum of FWHM_IMAGE values in reference-image SExtractor catalog [pixels]
+    nsexcatsources integer NOT NULL   -- Number of sources in reference-image SExtractor catalog
+);
+
+ALTER TABLE refimmeta OWNER TO rapidadminrole;
+
+SET default_tablespace = pipeline_indx_01;
+
+ALTER TABLE ONLY refimmeta ADD CONSTRAINT refimmeta_pkey PRIMARY KEY (rfid);
+
+ALTER TABLE ONLY refimmeta ADD CONSTRAINT refimmeta_rfid_fk FOREIGN KEY (rfid) REFERENCES refimages(rfid);
+ALTER TABLE ONLY refimmeta ADD CONSTRAINT refimmeta_fid_fk FOREIGN KEY (fid) REFERENCES filters(fid);
+
+CREATE INDEX refimmeta_field_idx ON refimmeta (field);
+CREATE INDEX refimmeta_hp6_idx ON refimmeta (hp6);
+CREATE INDEX refimmeta_hp9_idx ON refimmeta (hp9);
+CREATE INDEX refimmeta_fid_idx ON refimmeta (fid);
