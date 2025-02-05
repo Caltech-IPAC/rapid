@@ -145,6 +145,9 @@ def generateReferenceImage(s3_client,
                break
 
 
+    n_images_to_coadd = n
+
+
     # Write list of reference-image science input filenames for awaicgen.
 
     awaicgen_input_images_list_file = awaicgen_dict["awaicgen_input_images_list_file"]
@@ -263,15 +266,16 @@ def generateReferenceImage(s3_client,
     # Return metadata about reference image that was generated.
 
     generateReferenceImage_return_list = []
+
     generateReferenceImage_return_list.append(infobits_refimage)
     generateReferenceImage_return_list.append(checksum_refimage)
-
     generateReferenceImage_return_list.append(awaicgen_output_mosaic_image_file)
     generateReferenceImage_return_list.append(awaicgen_output_mosaic_cov_map_file)
     generateReferenceImage_return_list.append(awaicgen_output_mosaic_uncert_image_file)
     generateReferenceImage_return_list.append(awaicgen_output_mosaic_image_s3_bucket_object_name)
     generateReferenceImage_return_list.append(awaicgen_output_mosaic_cov_map_s3_bucket_object_name)
     generateReferenceImage_return_list.append(awaicgen_output_mosaic_uncert_image_s3_bucket_object_name)
+    generateReferenceImage_return_list.append(n_images_to_coadd)
 
     return generateReferenceImage_return_list
 
