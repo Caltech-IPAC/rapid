@@ -166,10 +166,11 @@ def compute_clip_corr(n_sigma):
     return corr_fact
 
 
-def avg_data_with_clipping(input_filename,n_sigma = 3.0,hdu_index = 0):
+def data_statistics_with_clipping(input_filename,n_sigma = 3.0,hdu_index = 0,satlev = 50000):
 
     """
-    Statistics with outlier rejection (n-sigma data-trimming), ignoring NaNs, across all data array dimensions.
+    Compute statistics, with n-sigma outlier rejection for avg,std,cnt,
+    ignoring NaNs, across all data array dimensions.
     Assumes the 2D image data are in the specified HDU of the FITS file.
     """
 
@@ -181,6 +182,10 @@ def avg_data_with_clipping(input_filename,n_sigma = 3.0,hdu_index = 0):
 
     a = np.array(data_array)
 
+    datamin = np.nanmin(a)
+    datamax = np.nanmax(a)
+    nancount = np.isnan(a).sum()
+    satcount = np.greater_equal(a,satlev).sum()
     med = np.nanmedian(a)
     p16 = np.nanpercentile(a,16)
     p84 = np.nanpercentile(a,84)
@@ -196,7 +201,7 @@ def avg_data_with_clipping(input_filename,n_sigma = 3.0,hdu_index = 0):
     std = ma.getdata(mx.std()) * sqrtcf
     cnt = ma.getdata(mx.count())
 
-    return avg,std,cnt
+    return avg,std,cnt,sigma,datamin,datamax,nancount,satcount
 
 
 #-------------------------------------------------------------------
