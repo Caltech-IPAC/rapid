@@ -1765,3 +1765,136 @@ create function registerDiffImMeta (
     end;
 
 $$ language plpgsql;
+
+
+-- Insert a new record into or update an existing record in the RefImMeta table.
+--
+create function registerRefImMeta (
+    rfid_                integer,
+    fid_                 smallint,
+    sca_                 smallint,
+    field_               integer,
+    hp6_                 integer,
+    hp9_                 integer,
+    nframes_             smallint,
+    npixsat_             integer,
+    npixnan_             integer,
+    gmean_               real,
+    gmedian_             real,
+    gstddev_             real,
+    gpctdif_             real,
+    gmin_                real,
+    gmax_                real,
+    medncov_             real,
+    medpixunc_           real,
+    fwhmmedpix_          real,
+    fwhmminpix_          real,
+    fwhmmaxpix_          real,
+    nsexcatsources_      integer
+)
+    returns void as $$
+
+    declare
+
+        rfid__    integer;
+
+    begin
+
+
+        -- Insert or update record, as appropriate.
+
+        select rfid
+        into rfid__
+        from RefImMeta
+        where rfid = rfid_;
+
+        if not found then
+
+
+            -- Insert RefImMeta record.
+
+            begin
+
+                insert into RefImMeta
+                (rfid,
+                 fid,
+                 field,
+                 hp6,
+                 hp9,
+                 nframes,
+                 npixsat,
+                 npixnan,
+                 gmean,
+                 gmedian,
+                 gstddev,
+                 gpctdif,
+                 gmin,
+                 gmax,
+                 medncov,
+                 medpixunc,
+                 fwhmmedpix,
+                 fwhmminpix,
+                 fwhmmaxpix,
+                 nsexcatsources
+                )
+                values
+                (rfid_,
+                 fid_,
+                 field_,
+                 hp6_,
+                 hp9_,
+                 nframes_,
+                 npixsat_,
+                 npixnan_,
+                 gmean_,
+                 gmedian_,
+                 gstddev_,
+                 gpctdif_,
+                 gmin_,
+                 gmax_,
+                 medncov_,
+                 medpixunc_,
+                 fwhmmedpix_,
+                 fwhmminpix_,
+                 fwhmmaxpix_,
+                 nsexcatsources_
+                );
+                exception
+                    when no_data_found then
+                        raise exception
+                            '*** Error in registerRefImMeta: RefImMeta record for rfid=% not inserted.', rfid_;
+
+            end;
+
+        else
+
+
+            -- Update RefImMeta record.
+
+            update RefImMeta
+            set fid = fid_,
+                field = field_,
+                hp6 = hp6_,
+                hp9 = hp9_,
+                nframes = nframes_,
+                npixsat = npixsat_,
+                npixnan = npixnan_,
+                gmean = gmean_,
+                gmedian = gmedian_,
+                gstddev = gstddev_,
+                gpctdif = gpctdif_,
+                gmin = gmin_,
+                gmax = gmax_,
+                medncov = medncov_,
+                medpixunc = medpixunc_,
+                fwhmmedpix = fwhmmedpix_,
+                fwhmminpix = fwhmminpix_,
+                fwhmmaxpix = fwhmmaxpix_,
+                nsexcatsources = nsexcatsources_
+            where rfid = rfid_;
+
+        end if;
+
+    end;
+
+$$ language plpgsql;

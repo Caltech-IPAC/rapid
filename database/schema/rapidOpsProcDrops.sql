@@ -264,3 +264,28 @@ DROP FUNCTION registerDiffImMeta (
     nsexcatsources_      integer,
     scalefacref_         real
 );
+
+
+DROP FUNCTION registerRefImMeta (
+    rfid_                integer,
+    fid_                 smallint,
+    sca_                 smallint,
+    field_               integer,
+    hp6_                 integer,
+    hp9_                 integer,
+    nframes_             smallint,
+    npixsat_             integer,
+    npixnan_             integer,
+    gmean_               real,
+    gmedian_             real,
+    gstddev_             real,
+    gpctdif_             real,
+    gmin_                real,
+    gmax_                real,
+    medncov_             real,
+    medpixunc_           real,
+    fwhmmedpix_          real,
+    fwhmminpix_          real,
+    fwhmmaxpix_          real,
+    nsexcatsources_      integer
+);
