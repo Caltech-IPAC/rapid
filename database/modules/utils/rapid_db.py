@@ -2070,7 +2070,7 @@ class RAPIDDB:
                     print("Nothing returned from database stored function; continuing...")
 
         except (Exception, psycopg2.DatabaseError) as error:
-            print('*** Error inserting or updating L2FileMeta record ({}); skipping...'.format(error))
+            print('*** Error inserting or updating DiffImMeta record ({}); skipping...'.format(error))
             self.exit_code = 67
             return
 
@@ -2122,3 +2122,4 @@ class RAPIDDB:
             return
 
         return records
+
