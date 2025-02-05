@@ -115,7 +115,15 @@ def compute_diffimage_uncertainty(sca_gain,
 
     n_sigma = 3.0
     hdu_num = 0
-    avg_dif_img,std_dif_img,cnt_dif_img = util.avg_data_with_clipping(diffimage_filename,n_sigma,hdu_num)
+
+    avg_dif_img,\
+    std_dif_img,\
+    cnt_dif_img,\
+    gpctdif_dif_img,\
+    gmin_dif_img,\
+    gmax_dif_img,\
+    npixnan_dif_img,\
+    npixsat_dif_img = util.fits_data_statistics_with_clipping(diffimage_filename,n_sigma,hdu_num)
 
     hdul_sci = fits.open(science_image_filename)
     hdr_sci = hdul_sci[0].header
