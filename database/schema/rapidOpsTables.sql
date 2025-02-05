@@ -917,7 +917,7 @@ ALTER TABLE ONLY diffimmeta ADD CONSTRAINT diffimmeta_pid_fk FOREIGN KEY (pid) R
 ALTER TABLE ONLY diffimmeta ADD CONSTRAINT diffimmeta_fid_fk FOREIGN KEY (fid) REFERENCES filters(fid);
 ALTER TABLE ONLY diffimmeta ADD CONSTRAINT diffimmeta_sca_fk FOREIGN KEY (sca) REFERENCES scas(sca);
 
-CREATE INDEX diffimmeta_field_idx ON l2files (field);
+CREATE INDEX diffimmeta_field_idx ON diffimmeta (field);
 CREATE INDEX diffimmeta_hp6_idx ON diffimmeta (hp6);
 CREATE INDEX diffimmeta_hp9_idx ON diffimmeta (hp9);
 CREATE INDEX diffimmeta_fid_idx ON diffimmeta (fid);
