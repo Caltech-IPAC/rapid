@@ -117,6 +117,7 @@ refimage_psf_filename = config_input['JOB_PARAMS']['refimage_psf_filename']
 sca_gain = float(config_input['INSTRUMENT']['sca_gain'])
 
 ppid = int(config_input['SCI_IMAGE']['ppid'])
+saturation_level_sciimage = config_input['SCI_IMAGE']['saturation_level']
 
 ppid_refimage = int(config_input['REF_IMAGE']['ppid_refimage'])
 max_n_images_to_coadd = int(config_input['REF_IMAGE']['max_n_images_to_coadd'])
@@ -646,6 +647,7 @@ if __name__ == '__main__':
     job_config['SCI_IMAGE'] = {}
 
     job_config['SCI_IMAGE']['ppid'] = str(ppid)
+    job_config['SCI_IMAGE']['saturation_level'] = str(saturation_level_sciimage)
     job_config['SCI_IMAGE']['rid'] = str(rid)
     job_config['SCI_IMAGE']['sca'] = str(sca)
     job_config['SCI_IMAGE']['fid'] = str(fid)
