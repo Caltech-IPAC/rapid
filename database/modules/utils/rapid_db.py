@@ -2123,3 +2123,117 @@ class RAPIDDB:
 
         return records
 
+
+########################################################################################################
+
+    def register_refimmeta(self,
+                           rfid,
+                           fid,
+                           field,
+                           hp6,
+                           hp9,
+                           nframes,
+                           npixsat,
+                           npixnan,
+                           gmean,
+                           gmedian,
+                           gstddev,
+                           gpctdif,
+                           gmin,
+                           gmax,
+                           medncov,
+                           medpixunc,
+                           fwhmmedpix,
+                           fwhmminpix,
+                           fwhmmaxpix,
+                           nsexcatsources):
+
+        '''
+        Insert or update record in RefImMeta database table.
+        '''
+
+        self.exit_code = 0
+
+
+        # Define query template.
+
+        query_template =\
+            "select * from registerRefImMeta(" +\
+            "cast(TEMPLATE_RFID as integer)," +\
+            "cast(TEMPLATE_FID as smallint)," +\
+            "cast(TEMPLATE_FIELD AS integer)," +\
+            "cast(TEMPLATE_HP6 AS integer)," +\
+            "cast(TEMPLATE_HP9 AS integer)," +\
+            "cast(TEMPLATE_NFRAMES AS smallint)," +\
+            "cast(TEMPLATE_NPIXSAT AS integer)," +\
+            "cast(TEMPLATE_NPIXNAN AS integer)," +\
+            "cast(TEMPLATE_GMEAN AS real)," +\
+            "cast(TEMPLATE_GMEDIAN AS real)," +\
+            "cast(TEMPLATE_GSTDDEV AS real)," +\
+            "cast(TEMPLATE_GPCTDIF AS real)," +\
+            "cast(TEMPLATE_GMIN AS real)," +\
+            "cast(TEMPLATE_GMAX AS real)," +\
+            "cast(TEMPLATE_MEDNCOV AS real)," +\
+            "cast(TEMPLATE_MEDPIXUNC AS real)," +\
+            "cast(TEMPLATE_FWHMMEDPIX AS real)," +\
+            "cast(TEMPLATE_FWHMMINPIX AS real)," +\
+            "cast(TEMPLATE_FWHMMAXPIX AS real)," +\
+            "cast(TEMPLATE_NSEXCATSOURCES AS integer));"
+
+
+        # Query database.
+
+        print('----> rfid = {}'.format(rfid))
+        print('----> fid = {}'.format(fid))
+        print('----> field = {}'.format(field))
+        print('----> hp6 = {}'.format(hp6))
+        print('----> hp9 = {}'.format(hp9))
+        print('----> nsexcatsources = {}'.format(nsexcatsources))
+
+        rep = {"TEMPLATE_RFID": str(rfid)}
+
+        rep["TEMPLATE_FID"] = str(fid)
+        rep["TEMPLATE_FIELD"] = str(field)
+        rep["TEMPLATE_HP6"] = str(hp6)
+        rep["TEMPLATE_HP9"] = str(hp9)
+        rep["TEMPLATE_NFRAMES"] = str(nframes)
+        rep["TEMPLATE_NPIXSAT"] = str(npixsat)
+        rep["TEMPLATE_NPIXNAN"] = str(npixnan)
+        rep["TEMPLATE_GMEAN"] = str(gmean)
+        rep["TEMPLATE_GMEDIAN"] = str(gmedian)
+        rep["TEMPLATE_GSTDDEV"] = str(gstddev)
+        rep["TEMPLATE_GPCTDIF"] = str(gpctdif)
+        rep["TEMPLATE_GMIN"] = str(gmin)
+        rep["TEMPLATE_GMAX"] = str(gmax)
+        rep["TEMPLATE_MEDNCOV"] = str(medncov)
+        rep["TEMPLATE_MEDPIXUNC"] = str(medpixunc)
+        rep["TEMPLATE_FWHMMEDPIX"] = str(fwhmmedpix)
+        rep["TEMPLATE_FWHMMINPIX"] = str(fwhmminpix)
+        rep["TEMPLATE_FWHMMAXPIX"] = str(fwhmmaxpix)
+        rep["TEMPLATE_NSEXCATSOURCES"] = str(nsexcatsources)
+
+        rep = dict((re.escape(k), v) for k, v in rep.items())
+        pattern = re.compile("|".join(rep.keys()))
+        query = pattern.sub(lambda m: rep[re.escape(m.group(0))], query_template)
+
+        print('query = {}'.format(query))
+
+
+        # Execute query.
+
+        try:
+            self.cur.execute(query)
+
+            try:
+                for record in self.cur:
+                    print(record)
+            except:
+                    print("Nothing returned from database stored function; continuing...")
+
+        except (Exception, psycopg2.DatabaseError) as error:
+            print('*** Error inserting or updating RefImMeta record ({}); skipping...'.format(error))
+            self.exit_code = 67
+            return
+
+        if self.exit_code == 0:
+            self.conn.commit()           # Commit database transaction
