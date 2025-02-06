@@ -119,6 +119,7 @@ def compute_diffimage_uncertainty(sca_gain,
     avg_dif_img,\
     std_dif_img,\
     cnt_dif_img,\
+    med_dif_img,\
     gpctdif_dif_img,\
     gmin_dif_img,\
     gmax_dif_img,\

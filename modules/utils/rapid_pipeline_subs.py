@@ -166,7 +166,7 @@ def compute_clip_corr(n_sigma):
     return corr_fact
 
 
-def fits_data_statistics_with_clipping(input_filename,n_sigma = 3.0,hdu_index = 0,satlev = 50000):
+def fits_data_statistics_with_clipping(input_filename,n_sigma = 3.0,hdu_index = 0,satlev = 50000.0):
 
     """
     Compute statistics, with n-sigma outlier rejection for avg,std,cnt,
@@ -201,7 +201,7 @@ def fits_data_statistics_with_clipping(input_filename,n_sigma = 3.0,hdu_index = 
     std = ma.getdata(mx.std()) * sqrtcf
     cnt = ma.getdata(mx.count())
 
-    return avg,std,cnt,sigma,datamin,datamax,nancount,satcount
+    return avg,std,cnt,med,sigma,datamin,datamax,nancount,satcount
 
 
 #-------------------------------------------------------------------
