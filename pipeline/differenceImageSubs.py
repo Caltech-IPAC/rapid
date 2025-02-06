@@ -120,7 +120,7 @@ def compute_diffimage_uncertainty(sca_gain,
     std_dif_img,\
     cnt_dif_img,\
     med_dif_img,\
-    gpctdif_dif_img,\
+    datascale_dif_img,\
     gmin_dif_img,\
     gmax_dif_img,\
     npixnan_dif_img,\
