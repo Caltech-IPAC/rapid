@@ -377,10 +377,31 @@ if __name__ == '__main__':
         n_sigma = 3.0
         hdu_index = 0
 
+
+
+
+
+
+
+
+        # TODO:  The following is incorrect, but used as a stopgap for now:
+        # # Need to standardize the exposure time of a reference image,
+        # and make sure it is properly scaled to the science image
+        # prior to difference imaging, and also use it to compute saturation_level_refimage_rate.
+        saturation_level_refimage_rate = saturation_level_refimage / exptime_sciimage
+
+
+
+
+
+
+
+
+
         stats_refimage = util.fits_data_statistics_with_clipping(awaicgen_output_mosaic_image_file,\
                                                                  n_sigma,\
                                                                  hdu_index,\
-                                                                 saturation_level_refimage)
+                                                                 saturation_level_refimage_rate)
 
         avg_refimage = stats_refimage["clippedavg"]
         std_refimage = stats_refimage["clippedstd"]
@@ -669,7 +690,7 @@ if __name__ == '__main__':
 
     #################################################################################################################
     # The image data in science_image_filename and sci_fits_file_with_pv FITS files are the same, only the
-    # represensation of geometric distortion in the FITS headers are different (sip versus pv).
+    # representation of geometric distortion in the FITS headers are different (sip versus pv).
     #
     # ZOGY only cares about the image data, not what is in the FITS headers.
     # Usage: python py_zogy.py <NewImage> <RefImage> <NewPSF> <RefPSF> <NewSigmaImage> <RefSigmaImage>
