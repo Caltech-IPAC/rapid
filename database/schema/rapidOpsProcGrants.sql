@@ -269,7 +269,6 @@ grant EXECUTE on FUNCTION registerDiffImMeta (
 grant EXECUTE on FUNCTION registerRefImMeta (
     rfid_                integer,
     fid_                 smallint,
-    sca_                 smallint,
     field_               integer,
     hp6_                 integer,
     hp9_                 integer,
@@ -278,7 +277,7 @@ grant EXECUTE on FUNCTION registerRefImMeta (
     npixnan_             integer,
     clmean_              real,
     clstddev_            real,
-    clnoutliers          integer,
+    clnoutliers_         integer,
     gmedian_             real,
     datascale_           real,
     gmin_                real,

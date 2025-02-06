@@ -1772,7 +1772,6 @@ $$ language plpgsql;
 create function registerRefImMeta (
     rfid_                integer,
     fid_                 smallint,
-    sca_                 smallint,
     field_               integer,
     hp6_                 integer,
     hp9_                 integer,
@@ -1781,7 +1780,7 @@ create function registerRefImMeta (
     npixnan_             integer,
     clmean_              real,
     clstddev_            real,
-    clnoutliers          integer,
+    clnoutliers_          integer,
     gmedian_             real,
     datascale_           real,
     gmin_                real,
