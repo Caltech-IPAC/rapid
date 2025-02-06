@@ -380,6 +380,64 @@ while True:
                     print("svid =",svid)
 
 
+
+                    nframes = product_config_input['REF_IMAGE']['nframes']
+                    npixsat = product_config_input['REF_IMAGE']['npixsat']
+                    npixnan = product_config_input['REF_IMAGE']['npixnan']
+                    clmean = product_config_input['REF_IMAGE']['clmean']
+                    clstddev = product_config_input['REF_IMAGE']['clstddev']
+                    clnoutliers = product_config_input['REF_IMAGE']['clnoutliers']
+                    gmedian = product_config_input['REF_IMAGE']['gmedian']
+                    datascale = product_config_input['REF_IMAGE']['datascale']
+                    gmin = product_config_input['REF_IMAGE']['gmin']
+                    gmax = product_config_input['REF_IMAGE']['gmax']
+                    medncov = product_config_input['REF_IMAGE']['medncov']
+                    medpixunc = product_config_input['REF_IMAGE']['medpixunc']
+                    fwhmmedpix = product_config_input['REF_IMAGE']['fwhmmedpix']
+                    fwhmminpix = product_config_input['REF_IMAGE']['fwhmminpix']
+                    fwhmmaxpix = product_config_input['REF_IMAGE']['fwhmmaxpix']
+                    nsexcatsources = product_config_input['REF_IMAGE']['nsexcatsources']
+
+
+
+                    # Insert record in RefImMeta database table.
+
+                    dbh.register_refimmeta(rfid,
+                                           fid,
+                                           field,
+                                           hp6,
+                                           hp9,
+                                           nframes,
+                                           npixsat,
+                                           npixnan,
+                                           clmean,
+                                           clstddev,
+                                           clnoutliers,
+                                           gmedian,
+                                           datascale,
+                                           gmin,
+                                           gmax,
+                                           medncov,
+                                           medpixunc,
+                                           fwhmmedpix,
+                                           fwhmminpix,
+                                           fwhmmaxpix,
+                                           nsexcatsources)
+
+
+
+                    if dbh.exit_code >= 64:
+                        exit(dbh.exit_code)
+
+
+
+
+
+
+
+
+
+
             # Difference image.
 
             print("===> zogy_output_diffimage_file =",zogy_output_diffimage_file)
