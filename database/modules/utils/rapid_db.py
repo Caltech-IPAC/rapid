@@ -2135,9 +2135,10 @@ class RAPIDDB:
                            nframes,
                            npixsat,
                            npixnan,
-                           gmean,
+                           clmean,
+                           clstddev,
+                           clnoutliers,
                            gmedian,
-                           gstddev,
                            datascale,
                            gmin,
                            gmax,
@@ -2167,9 +2168,10 @@ class RAPIDDB:
             "cast(TEMPLATE_NFRAMES AS smallint)," +\
             "cast(TEMPLATE_NPIXSAT AS integer)," +\
             "cast(TEMPLATE_NPIXNAN AS integer)," +\
-            "cast(TEMPLATE_GMEAN AS real)," +\
+            "cast(TEMPLATE_CLMEAN AS real)," +\
+            "cast(TEMPLATE_CLSTDDEV AS real)," +\
+            "cast(TEMPLATE_CLNOUTLIERS AS integer)," +\
             "cast(TEMPLATE_GMEDIAN AS real)," +\
-            "cast(TEMPLATE_GSTDDEV AS real)," +\
             "cast(TEMPLATE_DATASCALE AS real)," +\
             "cast(TEMPLATE_GMIN AS real)," +\
             "cast(TEMPLATE_GMAX AS real)," +\
@@ -2191,9 +2193,10 @@ class RAPIDDB:
         print('----> nframes = {}'.format(nframes))
         print('----> npixsat = {}'.format(npixsat))
         print('----> npixnan = {}'.format(npixnan))
-        print('----> gmean = {}'.format(gmean))
+        print('----> clmean = {}'.format(clmean))
+        print('----> clstddev = {}'.format(clstddev))
+        print('----> clnoutliers = {}'.format(clnoutliers))
         print('----> gmedian = {}'.format(gmedian))
-        print('----> gstddev = {}'.format(gstddev))
         print('----> datascale = {}'.format(datascale))
         print('----> gmin = {}'.format(gmin))
         print('----> gmax = {}'.format(gmax))
@@ -2213,9 +2216,10 @@ class RAPIDDB:
         rep["TEMPLATE_NFRAMES"] = str(nframes)
         rep["TEMPLATE_NPIXSAT"] = str(npixsat)
         rep["TEMPLATE_NPIXNAN"] = str(npixnan)
-        rep["TEMPLATE_GMEAN"] = str(gmean)
+        rep["TEMPLATE_CLMEAN"] = str(clmean)
+        rep["TEMPLATE_CLSTDDEV"] = str(clstddev)
+        rep["TEMPLATE_CLNOUTLIERS"] = str(clnoutliers)
         rep["TEMPLATE_GMEDIAN"] = str(gmedian)
-        rep["TEMPLATE_GSTDDEV"] = str(gstddev)
         rep["TEMPLATE_DATASCALE"] = str(datascale)
         rep["TEMPLATE_GMIN"] = str(gmin)
         rep["TEMPLATE_GMAX"] = str(gmax)
