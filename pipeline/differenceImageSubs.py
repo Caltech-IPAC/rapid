@@ -19,10 +19,11 @@ import modules.utils.rapid_pipeline_subs as util
 # Normalize by exposure time.
 #
 # Inputs are:
-# 1. A single gunzipped Troxel OpenUniverse simulated image (as
+# 1. Filename of a single gunzipped Troxel OpenUniverse simulated image (as
 #    read directly from the S3 bucket where it is stored), and
 # 2. SCA gain.
 # 3. EXPTIME
+# 4. Data-clipped-image mean
 
 def reformat_troxel_fits_file_and_compute_uncertainty_image_via_simple_model(input_filename,sca_gain,clipped_image_mean):
 
@@ -116,15 +117,11 @@ def compute_diffimage_uncertainty(sca_gain,
     n_sigma = 3.0
     hdu_num = 0
 
-    avg_dif_img,\
-    std_dif_img,\
-    cnt_dif_img,\
-    med_dif_img,\
-    datascale_dif_img,\
-    gmin_dif_img,\
-    gmax_dif_img,\
-    npixnan_dif_img,\
-    npixsat_dif_img = util.fits_data_statistics_with_clipping(diffimage_filename,n_sigma,hdu_num)
+    stats = util.fits_data_statistics_with_clipping(diffimage_filename,n_sigma,hdu_num)
+
+    avg_dif_img = stats["clippedavg"]
+    std_dif_img = stats["clippedstd"]
+    cnt_dif_img = stats["nkept"]
 
     hdul_sci = fits.open(science_image_filename)
     hdr_sci = hdul_sci[0].header
