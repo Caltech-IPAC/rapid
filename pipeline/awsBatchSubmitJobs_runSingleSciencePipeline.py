@@ -152,7 +152,7 @@ if __name__ == '__main__':
     sca_gain = float(config_input['INSTRUMENT']['sca_gain'])
 
     ppid_sciimage = int(config_input['SCI_IMAGE']['ppid'])
-
+    saturation_level_sciimage = float(config_input['SCI_IMAGE']['saturation_level'])
     rid_sciimage = int(config_input['SCI_IMAGE']['rid'])
     sca_sciimage = int(config_input['SCI_IMAGE']['sca'])
     fid_sciimage = int(config_input['SCI_IMAGE']['fid'])
@@ -230,6 +230,8 @@ if __name__ == '__main__':
     sextractor_gainmatch_dict = config_input['SEXTRACTOR_GAINMATCH']
 
     print("max_n_images_to_coadd =", max_n_images_to_coadd)
+
+    saturation_level_refimage = float(sextractor_refimage_dict["sextractor_SATUR_LEVEL".lower()])
 
 
     # Download gzipped science image from S3 bucket.
@@ -316,6 +318,24 @@ if __name__ == '__main__':
         awaicgen_output_mosaic_image_s3_bucket_object_name = generateReferenceImage_return_list[5]
         awaicgen_output_mosaic_cov_map_s3_bucket_object_name = generateReferenceImage_return_list[6]
         awaicgen_output_mosaic_uncert_image_s3_bucket_object_name = generateReferenceImage_return_list[7]
+        nframes = generateReferenceImage_return_list[8]
+
+
+        # Compute required statistics for reference-image depth-of-coverage image and uncertainty image.
+
+        n_sigma = 3.0
+        hdu_index = 0
+
+        stats_covimage = util.fits_data_statistics_with_clipping(awaicgen_output_mosaic_cov_map_file,\
+                                                                 n_sigma,\
+                                                                 hdu_index)
+        medncov = stats_covimage["gmed"]
+
+
+        stats_uncimage = util.fits_data_statistics_with_clipping(awaicgen_output_mosaic_uncert_image_file,\
+                                                                 n_sigma,\
+                                                                 hdu_index)
+        medpixunc = stats_uncimage["gmed"]
 
 
         # Generate reference-image catalog.
@@ -331,6 +351,47 @@ if __name__ == '__main__':
         checksum_refimage_catalog = generateReferenceImageCatalog_return_list[0]
         filename_refimage_catalog = generateReferenceImageCatalog_return_list[1]
         refimage_catalog_s3_bucket_object_name = generateReferenceImageCatalog_return_list[2]
+
+
+        # Compute additional quantities needed for later populating refimmeta table in RAPID operations database.
+
+        sextractor_refimage_paramsfile = "/code/cdf/rapidSexParamsRefImage.inp";
+        params_to_get_refimage = ["FWHM_IMAGE"]
+
+        vals_refimage = util.parse_ascii_text_sextrator_catalog(filename_refimage_catalog,
+                                                                sextractor_refimage_paramsfile,
+                                                                params_to_get_refimage)
+
+        nsexcatsources_refimage = len(vals_refimage)
+
+        vals_fwhm = []
+        for val in vals_refimage:
+            vals_fwhm.append(val[0])
+
+        np_vals_fwhm = np.array(vals_fwhm)
+
+        fwhmminpix = np.nanmin(np_vals_fwhm)
+        fwhmmaxpix = np.nanmax(np_vals_fwhm)
+        fwhmmedpix = np.nanmedian(np_vals_fwhm)
+
+        n_sigma = 3.0
+        hdu_index = 0
+
+        stats_refimage = util.fits_data_statistics_with_clipping(awaicgen_output_mosaic_image_file,\
+                                                                 n_sigma,\
+                                                                 hdu_index,\
+                                                                 saturation_level_refimage)
+
+        avg_refimage = stats_refimage["clippedavg"]
+        std_refimage = stats_refimage["clippedstd"]
+        cnt_refimage = stats_refimage["nkept"]
+        noutliers_refimage = stats_refimage["noutliers"]
+        gmed_refimage = stats_refimage["gmed"]
+        datascale_refimage = stats_refimage["gsigma"]
+        gmin_refimage = stats_refimage["gdatamin"]
+        gmax_refimage = stats_refimage["gdatamax"]
+        npixsat_refimage = stats_refimage["satcount"]
+        npixnan_refimage = stats_refimage["nancount"]
 
 
     # Code-timing benchmark.
@@ -381,6 +442,23 @@ if __name__ == '__main__':
         product_config['REF_IMAGE']['sextractor_refimage_catalog_cattype'] = str(1)
         product_config['REF_IMAGE']['sextractor_refimage_catalog_status'] = str(1)
 
+        product_config['REF_IMAGE']['nframes'] = str(nframes)
+        product_config['REF_IMAGE']['npixsat'] = str(npixsat_refimage)
+        product_config['REF_IMAGE']['npixnan'] = str(npixnan_refimage)
+        product_config['REF_IMAGE']['clmean'] = str(avg_refimage)
+        product_config['REF_IMAGE']['clstddev'] = str(std_refimage)
+        product_config['REF_IMAGE']['clnoutliers'] = str(noutliers_refimage)
+        product_config['REF_IMAGE']['gmedian'] = str(gmed_refimage)
+        product_config['REF_IMAGE']['datascale'] = str(datascale_refimage)
+        product_config['REF_IMAGE']['gmin'] = str(gmin_refimage)
+        product_config['REF_IMAGE']['gmax'] = str(gmax_refimage)
+        product_config['REF_IMAGE']['medncov'] = str(medncov)
+        product_config['REF_IMAGE']['medpixunc'] = str(medpixunc)
+        product_config['REF_IMAGE']['fwhmmedpix'] = str(fwhmmedpix)
+        product_config['REF_IMAGE']['fwhmminpix'] = str(fwhmminpix)
+        product_config['REF_IMAGE']['fwhmmaxpix'] = str(fwhmmaxpix)
+        product_config['REF_IMAGE']['nsexcatsources'] = str(nsexcatsources_refimage)
+
 
     # Unzip the science image gzipped file.
 
@@ -393,7 +471,14 @@ if __name__ == '__main__':
     # Compute image statistics for image resizing.
 
     n_sigma = 3.0
-    avg_sci_img,std_sci_img,cnt_sci_img = util.avg_data_with_clipping(science_image_filename,n_sigma,1)
+    hdu_index = 1
+
+    stats_sci_img = util.fits_data_statistics_with_clipping(science_image_filename,\
+                                                            n_sigma,\
+                                                            hdu_index,\
+                                                            saturation_level_sciimage)
+
+    avg_sci_img = stats_sci_img["clippedavg"]
 
 
     # Reformat the Troxel OpenUniverse simulated image FITS file
@@ -474,8 +559,25 @@ if __name__ == '__main__':
     # Compute image statistics for ZOGY.
 
     n_sigma = 3.0
-    avg_sci_img,std_sci_img,cnt_sci_img = util.avg_data_with_clipping(reformatted_science_image_filename,n_sigma)
-    avg_ref_img,std_ref_img,cnt_ref_img = util.avg_data_with_clipping(output_resampled_reference_image,n_sigma)
+    hdu_index = 0
+
+    stats_sci_img = util.fits_data_statistics_with_clipping(reformatted_science_image_filename,\
+                                                            n_sigma,\
+                                                            hdu_index,\
+                                                            saturation_level_sciimage)
+
+    avg_sci_img = stats_sci_img["clippedavg"]
+    std_sci_img = stats_sci_img["clippedstd"]
+    cnt_sci_img = stats_sci_img["nkept"]
+
+    stats_ref_img = util.fits_data_statistics_with_clipping(output_resampled_reference_image,\
+                                                            n_sigma,\
+                                                            hdu_index,\
+                                                            saturation_level_refimage)
+
+    avg_ref_img = stats_ref_img["clippedavg"]
+    std_ref_img = stats_ref_img["clippedstd"]
+    cnt_ref_img = stats_ref_img["nkept"]
 
     print("avg_sci_img,std_sci_img,cnt_sci_img =",avg_sci_img,std_sci_img,cnt_sci_img)
     print("avg_ref_img,std_ref_img,cnt_ref_img =",avg_ref_img,std_ref_img,cnt_ref_img)
@@ -664,11 +766,11 @@ if __name__ == '__main__':
     sextractor_cmd = util.build_sextractor_command_line_args(sextractor_diffimage_dict)
     exitcode_from_sextractor = util.execute_command(sextractor_cmd)
 
-    params_to_get = ["XWIN_IMAGE","YWIN_IMAGE","FLUX_APER_6"]
+    params_to_get_diffimage = ["XWIN_IMAGE","YWIN_IMAGE","FLUX_APER_6"]
 
     vals_diffimage = util.parse_ascii_text_sextrator_catalog(filename_diffimage_sextractor_catalog,
                                                              sextractor_diffimage_paramsfile,
-                                                             params_to_get)
+                                                             params_to_get_diffimage)
 
     nsexcatsources_diffimage = len(vals_diffimage)
 
@@ -725,7 +827,7 @@ if __name__ == '__main__':
     # Get listing of working directory as a diagnostic.
 
     ls_cmd = ['ls','-ltr']
-    exitcode_from_ls = util.execute_command(ls_cmd)
+    exitcode_from_ls = util.O(ls_cmd)
 
 
     # Define ZOGY dictionary in config-file dictionary for products.
