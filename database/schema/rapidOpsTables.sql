@@ -939,14 +939,15 @@ CREATE TABLE refimmeta (
     nframes smallint NOT NULL,        -- Number of images in stack
     npixsat integer NOT NULL,         -- Number of saturated pixels in reference-image
     npixnan integer NOT NULL,         -- Number of NaN pixels in reference-image
-    gmean real NOT NULL,              -- Global reference-image pixel mean [DN]
-    gmedian real NOT NULL,            -- Global reference-image pixel median [DN]
-    gstddev real NOT NULL,            -- Global reference-image pixel standard deviation [DN]
-    datascale real NOT NULL,          -- Global robust reference-image pixel spread [DN]
-    gmin real NOT NULL,               -- Global minimum reference-image pixel value [DN]
-    gmax real NOT NULL,               -- Global maximum reference-image pixel value [DN]
-    medncov real NOT NULL,            -- Median pixel depth-of-coverage
-    medpixunc real NOT NULL,          -- Median of reference-image pixel uncertainties [DN]
+    clmean real NOT NULL,             -- Image pixel mean after data clipping
+    clstddev real NOT NULL,           -- Image pixel standard deviation after data clipping and reinflating
+    clnoutliers integer NOT NULL,     -- Number of image pixels discarded in data clipping
+    gmedian real NOT NULL,            -- Global image pixel median
+    datascale real NOT NULL,          -- Global robust image pixel spread = 0.5*(p84-p16)
+    gmin real NOT NULL,               -- Global minimum image pixel value
+    gmax real NOT NULL,               -- Global maximum image pixel value
+    medncov real NOT NULL,            -- Median of corresponding depth-of-coverage image
+    medpixunc real NOT NULL,          -- Median of corresponding uncertainty image
     fwhmmedpix real NOT NULL,         -- Median of FWHM_IMAGE values in reference-image SExtractor catalog [pixels]
     fwhmminpix real NOT NULL,         -- Minimum of FWHM_IMAGE values in reference-image SExtractor catalog [pixels]
     fwhmmaxpix real NOT NULL,         -- Maximum of FWHM_IMAGE values in reference-image SExtractor catalog [pixels]
