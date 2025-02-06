@@ -181,7 +181,9 @@ def fits_data_statistics_with_clipping(input_filename,n_sigma = 3.0,hdu_index = 
     sqrtcf = np.sqrt(cf)
 
     a = np.array(data_array)
-    pixcount = len(a)
+
+    image_size = np.shape(a)
+    pixcount = image_size[0] * image_size[1]
 
     datamin = np.nanmin(a)
     datamax = np.nanmax(a)
@@ -217,6 +219,7 @@ def fits_data_statistics_with_clipping(input_filename,n_sigma = 3.0,hdu_index = 
     stats["gdatamax"] = datamax
     stats["satcount"] = satcount
     stats["nancount"] = nancount
+    stats["pixcount"] = pixcount
 
     return stats
 
