@@ -169,7 +169,7 @@ def compute_clip_corr(n_sigma):
 def fits_data_statistics_with_clipping(input_filename,n_sigma = 3.0,hdu_index = 0,satlev = 50000.0):
 
     """
-    Compute statistics, with n-sigma outlier rejection for avg,std,cnt,
+    Compute statistics, with n-sigma outlier rejection for avg,std,nkept,noutliers
     ignoring NaNs, across all data array dimensions.
     Assumes the 2D image data are in the specified HDU of the FITS file.
     """
@@ -181,6 +181,7 @@ def fits_data_statistics_with_clipping(input_filename,n_sigma = 3.0,hdu_index = 
     sqrtcf = np.sqrt(cf)
 
     a = np.array(data_array)
+    pixcount = len(a)
 
     datamin = np.nanmin(a)
     datamax = np.nanmax(a)
@@ -199,9 +200,25 @@ def fits_data_statistics_with_clipping(input_filename,n_sigma = 3.0,hdu_index = 
     mx = ma.masked_array(a, mask)
     avg = ma.getdata(mx.mean())
     std = ma.getdata(mx.std()) * sqrtcf
-    cnt = ma.getdata(mx.count())
+    nkept = ma.getdata(mx.count())
+    noutliers = pixcount - nancount - nkept
 
-    return avg,std,cnt,med,sigma,datamin,datamax,nancount,satcount
+    # Return data dictionary to simplify interface.
+
+    stats = {}
+
+    stats["clippedavg"] = avg
+    stats["clippedstd"] = std
+    stats["nkept"] = nkept
+    stats["noutliers"] = noutliers
+    stats["gmed"] = med
+    stats["gsigma"] = sigma
+    stats["gdatamin"] = datamin
+    stats["gdatamax"] = datamax
+    stats["satcount"] = satcount
+    stats["nancount"] = nancount
+
+    return stats
 
 
 #-------------------------------------------------------------------
