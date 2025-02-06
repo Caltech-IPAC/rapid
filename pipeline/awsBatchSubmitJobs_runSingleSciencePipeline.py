@@ -366,7 +366,7 @@ if __name__ == '__main__':
 
         vals_fwhm = []
         for val in vals_refimage:
-            vals_fwhm.append(val[0])
+            vals_fwhm.append(float(val[0]))
 
         np_vals_fwhm = np.array(vals_fwhm)
 
