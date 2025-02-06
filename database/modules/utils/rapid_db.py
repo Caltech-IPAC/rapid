@@ -2138,7 +2138,7 @@ class RAPIDDB:
                            gmean,
                            gmedian,
                            gstddev,
-                           gpctdif,
+                           datascale,
                            gmin,
                            gmax,
                            medncov,
@@ -2170,7 +2170,7 @@ class RAPIDDB:
             "cast(TEMPLATE_GMEAN AS real)," +\
             "cast(TEMPLATE_GMEDIAN AS real)," +\
             "cast(TEMPLATE_GSTDDEV AS real)," +\
-            "cast(TEMPLATE_GPCTDIF AS real)," +\
+            "cast(TEMPLATE_DATASCALE AS real)," +\
             "cast(TEMPLATE_GMIN AS real)," +\
             "cast(TEMPLATE_GMAX AS real)," +\
             "cast(TEMPLATE_MEDNCOV AS real)," +\
@@ -2194,7 +2194,7 @@ class RAPIDDB:
         print('----> gmean = {}'.format(gmean))
         print('----> gmedian = {}'.format(gmedian))
         print('----> gstddev = {}'.format(gstddev))
-        print('----> gpctdif = {}'.format(gpctdif))
+        print('----> datascale = {}'.format(datascale))
         print('----> gmin = {}'.format(gmin))
         print('----> gmax = {}'.format(gmax))
         print('----> medncov = {}'.format(medncov))
@@ -2216,7 +2216,7 @@ class RAPIDDB:
         rep["TEMPLATE_GMEAN"] = str(gmean)
         rep["TEMPLATE_GMEDIAN"] = str(gmedian)
         rep["TEMPLATE_GSTDDEV"] = str(gstddev)
-        rep["TEMPLATE_GPCTDIF"] = str(gpctdif)
+        rep["TEMPLATE_DATASCALE"] = str(datascale)
         rep["TEMPLATE_GMIN"] = str(gmin)
         rep["TEMPLATE_GMAX"] = str(gmax)
         rep["TEMPLATE_MEDNCOV"] = str(medncov)
