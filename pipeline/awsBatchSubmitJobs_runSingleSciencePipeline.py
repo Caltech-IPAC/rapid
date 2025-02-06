@@ -827,7 +827,7 @@ if __name__ == '__main__':
     # Get listing of working directory as a diagnostic.
 
     ls_cmd = ['ls','-ltr']
-    exitcode_from_ls = util.O(ls_cmd)
+    exitcode_from_ls = util.execute_command(ls_cmd)
 
 
     # Define ZOGY dictionary in config-file dictionary for products.
