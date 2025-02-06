@@ -942,7 +942,7 @@ CREATE TABLE refimmeta (
     gmean real NOT NULL,              -- Global reference-image pixel mean [DN]
     gmedian real NOT NULL,            -- Global reference-image pixel median [DN]
     gstddev real NOT NULL,            -- Global reference-image pixel standard deviation [DN]
-    gpctdif real NOT NULL,            -- Global robust reference-image pixel spread [DN]
+    datascale real NOT NULL,          -- Global robust reference-image pixel spread [DN]
     gmin real NOT NULL,               -- Global minimum reference-image pixel value [DN]
     gmax real NOT NULL,               -- Global maximum reference-image pixel value [DN]
     medncov real NOT NULL,            -- Median pixel depth-of-coverage

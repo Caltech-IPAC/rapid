@@ -279,7 +279,7 @@ DROP FUNCTION registerRefImMeta (
     gmean_               real,
     gmedian_             real,
     gstddev_             real,
-    gpctdif_             real,
+    datascale_           real,
     gmin_                real,
     gmax_                real,
     medncov_             real,
