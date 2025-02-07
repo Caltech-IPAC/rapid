@@ -230,7 +230,7 @@ while True:
 
         # If job failed, skip to next job.
 
-        if job_exitcode >= 64:
+        if int(job_exitcode) >= 64:
             continue
 
 
