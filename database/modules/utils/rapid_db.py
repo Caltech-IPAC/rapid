@@ -2255,3 +2255,50 @@ class RAPIDDB:
 
         if self.exit_code == 0:
             self.conn.commit()           # Commit database transaction
+
+
+########################################################################################################
+
+    def get_l2files_records_for_datetime_range(self,startdatetiime,enddatetime):
+
+        '''
+        Query database for all L2Files records associated with the given observation datetime range.
+        '''
+
+        self.exit_code = 0
+
+
+        # Define query.
+
+        query = "select rid,sca,fid,mjdobs from L2Files where dateobs >= '" +\
+                startdatetiime + "' and dateobs <= '" + enddatetime + "';"
+
+
+        # Query database.
+
+        print('query = {}'.format(query))
+
+
+        # Execute query.
+
+        try:
+            self.cur.execute(query)
+
+            try:
+                records = []
+                nrecs = 0
+                for record in self.cur:
+                    records.append(record)
+                    nrecs += 1
+
+                print("nrecs =",nrecs)
+
+            except:
+                    print("Nothing returned from database query; continuing...")
+
+        except (Exception, psycopg2.DatabaseError) as error:
+            print('*** Error getting all L2Files records for given exposure ID ({}); skipping...'.format(error))
+            self.exit_code = 67
+            return
+
+        return records
