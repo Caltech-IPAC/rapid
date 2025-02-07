@@ -222,6 +222,7 @@ CREATE INDEX l2files_infobits_idx ON l2files (infobits);
 CREATE INDEX l2files_status_idx ON l2files (status);
 CREATE INDEX l2files_vbest_idx ON l2files (vbest);
 CREATE INDEX l2files_mjdobs_idx ON l2files (mjdobs);
+CREATE INDEX l2files_dateobs_idx ON l2files (dateobs);
 
 -- Q3C indexing will speed up ad-hoc cone searches on (ra, dec).
 
