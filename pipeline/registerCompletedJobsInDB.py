@@ -174,6 +174,9 @@ while True:
 
         print("\nStart of loop: jid, log_fname =",jid,log_fname)
 
+        job_exitcode = 64
+        aws_batch_job_id = 'not_found'
+
 
         # Check whether done file exists in S3 bucket for job, and skip if it exists.
         # This is done by attempting to download the done file.  Regardless the sub
@@ -196,42 +199,6 @@ while True:
         response = s3_client.download_file(job_logs_s3_bucket_base,s3_bucket_object_name,log_fname)
 
         print("response =",response)
-
-
-        # Grep log file for aws_batch_job_id and terminating_exitcode.
-
-        job_exitcode = 64
-        aws_batch_job_id = 'not_found'
-
-        file = open(log_fname, "r")
-        search_string1 = "aws_batch_job_id"
-        search_string2 = "terminating_exitcode"
-
-        for line in file:
-            if re.search(search_string1, line):
-                line = line.rstrip("\n")
-                print(line)
-                tokens = re.split(r'\s*=\s*',line)
-                aws_batch_job_id = tokens[1]
-            elif re.search(search_string2, line):
-                line = line.rstrip("\n")
-                print(line)
-                tokens = re.split(r'\s*=\s*',line)
-                job_exitcode = tokens[1]
-
-
-        # Update Jobs record.
-
-        dbh.end_job(jid,job_exitcode,aws_batch_job_id)
-
-        if dbh.exit_code >= 64:
-            exit(dbh.exit_code)
-
-
-        # If job failed, skip to next job.
-
-        if int(job_exitcode) >= 64:
-            continue
 
 
         # Download job config file, in order to harvest some of its metadata.
@@ -260,6 +227,54 @@ while True:
         dec0 = float(job_config_input['SKY_TILE']['dec0'])
 
         print("rtid,ra0,dec0 =",rtid,ra0,dec0 )
+
+
+        # If rfid_str == "None" and not enough inputs to make a
+        # reference image, then set job_exitcode = 33 and skip to
+        # next job after updating Jobs database record.
+
+        rfid_str = job_config_input['REF_IMAGE']['rfid']
+        n_images_to_coadd = job_config_input['REF_IMAGE']['n_images_to_coadd']
+
+        if rfid_str == "None":
+            if n_images_to_coadd == 0:
+                job_exitcode = 33
+
+
+        # Grep log file for aws_batch_job_id and terminating_exitcode.
+
+        file = open(log_fname, "r")
+        search_string1 = "aws_batch_job_id"
+        search_string2 = "terminating_exitcode"
+
+        for line in file:
+            if re.search(search_string1, line):
+                line = line.rstrip("\n")
+                print(line)
+                tokens = re.split(r'\s*=\s*',line)
+                aws_batch_job_id = tokens[1]
+            elif re.search(search_string2, line):
+                line = line.rstrip("\n")
+                print(line)
+                tokens = re.split(r'\s*=\s*',line)
+                job_exitcode = tokens[1]
+
+
+        # Update Jobs record.
+
+        dbh.end_job(jid,job_exitcode,aws_batch_job_id)
+
+        if dbh.exit_code >= 64:
+            exit(dbh.exit_code)
+
+
+        # If job failed, or not enough inputs to generate a reference image when required, skip to next job.
+
+        if int(job_exitcode) == 33:
+            continue
+
+        if int(job_exitcode) >= 64:
+            continue
 
 
         # Compute level-6 healpix index (NESTED pixel ordering).
@@ -319,7 +334,7 @@ while True:
                 try:
                     rfid_str = product_config_input['REF_IMAGE']['rfid']
                 except:
-                    rfid_str == 'Not found'
+                    rfid_str = 'Not found'
 
                 if rfid_str == 'None':
                     rfid = None
