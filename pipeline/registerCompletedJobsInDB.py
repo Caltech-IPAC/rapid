@@ -234,7 +234,7 @@ while True:
         # next job after updating Jobs database record.
 
         rfid_str = job_config_input['REF_IMAGE']['rfid']
-        n_images_to_coadd = job_config_input['REF_IMAGE']['n_images_to_coadd']
+        n_images_to_coadd = int(job_config_input['REF_IMAGE']['n_images_to_coadd'])
 
         if rfid_str == "None":
             if n_images_to_coadd == 0:
