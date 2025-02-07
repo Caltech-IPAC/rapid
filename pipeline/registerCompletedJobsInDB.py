@@ -228,6 +228,12 @@ while True:
             exit(dbh.exit_code)
 
 
+        # If job failed, skip to next job.
+
+        if job_exitcode >= 64:
+            continue
+
+
         # Download job config file, in order to harvest some of its metadata.
 
         job_config_ini_filename = job_config_filename_base + str(jid) + ".ini"
