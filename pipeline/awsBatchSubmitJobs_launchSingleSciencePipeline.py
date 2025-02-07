@@ -512,6 +512,7 @@ if __name__ == '__main__':
         input_images_csv_filename = "None"
         input_images_csv_file = "None"
         input_images_csv_file_s3_bucket_object_name = "None"
+        n_images_to_coadd = -1
 
     else:
         filename_refimage = "None"
@@ -542,6 +543,8 @@ if __name__ == '__main__':
 
         if dbh.exit_code >= 64:
             exit(dbh.exit_code)
+
+        n_images_to_coadd = len(overlapping_images)
 
 
         # For each overlapping image, query L2Files database table for
@@ -690,6 +693,7 @@ if __name__ == '__main__':
 
     job_config['REF_IMAGE']['ppid'] = str(ppid_refimage)
     job_config['REF_IMAGE']['max_n_images_to_coadd'] = str(max_n_images_to_coadd)
+    job_config['REF_IMAGE']['n_images_to_coadd'] = str(n_images_to_coadd)
     job_config['REF_IMAGE']['rfid'] = str(rfid)
     job_config['REF_IMAGE']['filename'] = filename_refimage
     job_config['REF_IMAGE']['infobits'] = str(infobits_refimage)
