@@ -236,6 +236,9 @@ while True:
         rfid_str = job_config_input['REF_IMAGE']['rfid']
         n_images_to_coadd = int(job_config_input['REF_IMAGE']['n_images_to_coadd'])
 
+        print("rfid_str =",rfid_str)
+        print("n_images_to_coadd =",n_images_to_coadd)
+
         if rfid_str == "None":
             if n_images_to_coadd == 0:
                 job_exitcode = 33
