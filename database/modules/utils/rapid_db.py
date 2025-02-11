@@ -1364,7 +1364,7 @@ class RAPIDDB:
 
 ########################################################################################################
 
-    def end_job(self,jid,job_exitcode,aws_batch_job_id):
+    def end_job(self,jid,job_exitcode,aws_batch_job_id,ended=None):
 
         '''
         Register exitcode and end timestamp in Jobs database table.  Return void.
@@ -1375,11 +1375,22 @@ class RAPIDDB:
 
         # Define query template.
 
-        query_template =\
-            "select from endJob(" +\
-            "cast(TEMPLATE_JID as integer)," +\
-            "cast(TEMPLATE_EXITCODE as smallint)," +\
-            "cast('TEMPLATE_AWSBATJOBID' as varchar(64)));"
+        if ended is None:
+
+            query_template =\
+                "select from endJob(" +\
+                "cast(TEMPLATE_JID as integer)," +\
+                "cast(TEMPLATE_EXITCODE as smallint)," +\
+                "cast('TEMPLATE_AWSBATJOBID' as varchar(64)));"
+
+        else:
+
+            query_template =\
+                "select from endJob(" +\
+                "cast(TEMPLATE_JID as integer)," +\
+                "cast(TEMPLATE_EXITCODE as smallint)," +\
+                "cast('TEMPLATE_AWSBATJOBID' as varchar(64)),"
+                "cast('TEMPLATE_ENDED' as datetime));"
 
 
         # Query database.
@@ -1394,6 +1405,10 @@ class RAPIDDB:
                "TEMPLATE_EXITCODE": job_exitcode_str}
 
         rep["TEMPLATE_AWSBATJOBID"] = aws_batch_job_id
+
+        if ended is not None:
+            rep["TEMPLATE_ENDED"] = ended
+
 
         rep = dict((re.escape(k), v) for k, v in rep.items())
         pattern = re.compile("|".join(rep.keys()))
