@@ -15,6 +15,18 @@ debug = True
 rtd = 180.0 / math.pi
 dtr = 1.0 / rtd
 
+from dateutil import tz
+
+to_zone = tz.gettz('America/Los_Angeles')
+
+from datetime import datetime, timezone
+
+
+def utc_to_local(utc_dt):
+    """Converts a UTC datetime object to local time."""
+
+    return utc_dt.replace(tzinfo=timezone.utc).astimezone(tz=to_zone)
+
 
 def execute_command(code_to_execute_args):
 
@@ -42,6 +54,85 @@ def execute_command(code_to_execute_args):
     print("code_to_execute_stderr (should be empty since STDERR is combined with STDOUT) =\n",code_to_execute_stderr)
 
     return returncode
+
+
+def execute_command_and_return_stdout(code_to_execute_args):
+
+    '''
+    Execute a command with options.
+    '''
+
+    print("execute_command: code_to_execute_args =",code_to_execute_args)
+
+
+    # Execute code_to_execute.  Not that STDERR and STDOUT are merged into the same data stream.
+    # AWS Batch runs Python 3.9.  According to https://docs.python.org/3.9/library/subprocess.html#subprocess.run,
+    # if you wish to capture and combine both streams into one, use stdout=PIPE and stderr=STDOUT instead of capture_output.
+    # capture_output=False is the default.
+
+    code_to_execute_object = subprocess.run(code_to_execute_args,text=True,stdout=subprocess.PIPE,stderr=subprocess.STDOUT)
+
+    returncode = code_to_execute_object.returncode
+    print("returncode =",returncode)
+
+    code_to_execute_stdout = code_to_execute_object.stdout
+    print("code_to_execute_stdout =\n",code_to_execute_stdout)
+
+    code_to_execute_stderr = code_to_execute_object.stderr
+    print("code_to_execute_stderr (should be empty since STDERR is combined with STDOUT) =\n",code_to_execute_stderr)
+
+    return returncode,code_to_execute_stdout
+
+
+def get_datetime_of_last_file_written_to_bucket(path):
+
+    print("====================== Start sub get_datetime_of_last_file_written_to_bucket")
+    print("S3 bucket path =",path)
+
+    cmd = ['aws','s3','ls','--recursive',path]
+    exitcode,listing = execute_command_and_return_stdout(cmd)
+
+    print("exitcode =",exitcode)
+
+    file_datetime = []
+    file_dict = {}
+    for line in listing.split('\n'):
+        line = line.strip()
+        if line != "":
+            print(line)
+            a = line.split()
+            my_date = a[0]
+            my_time = a[1]
+            my_datetime = my_date + " " + my_time
+            file_datetime.append(my_datetime)
+            print(my_date,my_time)
+            file_dict[my_datetime] = a[3]
+
+    s = sorted([datetime.strptime(dt, "%Y-%m-%d %H:%M:%S") for dt in file_datetime])
+
+    print("After sorting...")
+
+    for line in s:
+        my_datetime = str(line)
+        print(line,file_dict[my_datetime])
+
+    n = len(s)
+    i = n - 1
+    last_datetime = str(s[i])
+    last_file = file_dict[str(s[i])]
+
+    print("Last datetime =",last_datetime)
+    print("Last file written to S3 bucket =",last_file)
+
+    local_time = utc_to_local(s[i])
+
+    proc_date = local_time.strftime('%Y%m%d')
+
+    print("Local time:", local_time)
+    print("Proc date:",proc_date)
+    print("====================== End sub get_datetime_of_last_file_written_to_bucket")
+
+    return local_time,last_file
 
 
 def upload_files_to_s3_bucket(s3_client,s3_bucket_name,filenames,s3_object_names):
