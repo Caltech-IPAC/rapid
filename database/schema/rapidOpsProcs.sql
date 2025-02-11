@@ -1203,7 +1203,6 @@ create function endJob (
     jid_             integer,
     exitcode_        smallint,
     awsbatchjobid_   varchar(64)
-
 )
     returns void as $$
 
@@ -1231,6 +1230,59 @@ create function endJob (
         begin
 
             ended_ = now();
+            elapsed_ := ended_ - started_;
+
+            update Jobs
+            set ended = ended_,
+                elapsed = elapsed_,
+                exitcode = exitcode_,
+                awsbatchjobid = awsbatchjobid_,
+                status = 1
+            where jid = jid_;
+            exception --------> Required for turning entire block into a transaction.
+                when no_data_found then
+                    raise exception
+                        '*** Error in endJob: Cannot update Jobs record for jid=%', jid_;
+        end;
+
+    end;
+
+$$ language plpgsql;
+
+
+-- Overloaded version with additional timestamp input argument.
+-- Registers information about a completed job in the Jobs table.
+--
+create function endJob (
+    jid_             integer,
+    exitcode_        smallint,
+    awsbatchjobid_   varchar(64),
+    ended_           timestamp
+)
+    returns void as $$
+
+    declare
+
+    started_ timestamp;
+    elapsed_ interval;
+
+    begin
+
+         begin
+
+            select started
+            into strict started_
+            from Jobs
+            where jid = jid_;
+            exception
+                when no_data_found then
+                    raise exception
+                        '*** Error in endJob: Jobs record jid=% not found.', jid_;
+
+        end;
+
+        begin
+
             elapsed_ := ended_ - started_;
 
             update Jobs

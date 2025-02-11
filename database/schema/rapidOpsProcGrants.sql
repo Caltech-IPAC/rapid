@@ -203,6 +203,17 @@ grant EXECUTE on FUNCTION endJob (
 ) to rapidporole;
 
 
+-- Overloaded version with additional timestamp input argument.
+-- Registers information about a completed job in the Jobs table.
+--
+grant EXECUTE on FUNCTION endJob (
+    jid_             integer,
+    exitcode_        smallint,
+    awsbatchjobid_   varchar(64),
+    ended_           timestamp
+) to rapidporole;
+
+
 grant EXECUTE on FUNCTION getLatestSwVersion (
 ) to rapidporole;
 
