@@ -264,7 +264,7 @@ while True:
 
         # Get datetime of when last file was written to product bucket.  This will be ended in the Jobs database record.
 
-        product_bucket_path = "s3://" + product_s3_bucket_base + "/" + datearg + '/jid' + str(jid) + "/
+        product_bucket_path = "s3://" + product_s3_bucket_base + "/" + datearg + '/jid' + str(jid) + "/"
         ended_dt,last_file_written_to_bucket = plsubs.get_datetime_of_last_file_written_to_bucket(product_bucket_path)
 
         ended = str(ended_dt)
