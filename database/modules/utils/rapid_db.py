@@ -1390,7 +1390,7 @@ class RAPIDDB:
                 "cast(TEMPLATE_JID as integer)," +\
                 "cast(TEMPLATE_EXITCODE as smallint)," +\
                 "cast('TEMPLATE_AWSBATJOBID' as varchar(64)),"+\
-                "cast('TEMPLATE_ENDED' as datetime));"
+                "cast('TEMPLATE_ENDED' as timestamp));"
 
 
         # Query database.
