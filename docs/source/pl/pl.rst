@@ -169,10 +169,33 @@ Also below are a 7Kx7K-pixel reference image and its associated coverage map, re
 Image Differencing
 ************************************
 
-For each image-differencing operation, image resampling is necessary.
+
+An implementation of the ZOGY algorithm will be used for image differencing in the RAPID pipeline.  ZOGY requires
+the input images to be gain-matched and resampled to the same frame of reference in terms of pixel scale,
+position, and orientation.  The input science image can be arbitrarily rotated on the sky, whereas the
+input reference image is constructed to be north up (zero degrees rotation on the sky).
+Image resampling is therefore necessary.
 ``SWarp`` can be used to resample the reference image into the distorted grid of the science image.
 In cases where the reference image consists of too few coadded inputs for undersampling to be resolved, it may be
 necessary to instead use ``awaicgen`` to resample the science image into the undistorted grid of the reference image
 (``awaicgen`` does not produce coadds mapped into distorted grids).
 
 
+
+Point Spread Functions (PSFs)
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+PSFs are required by the ZOGY algorithm.  In fact, it requires the PSF of input science image
+and the PSF of the reference image.
+
+Reference images are averages of arbitrarily rotated input images from different SCAs for the same filter.
+Therefore, the reference-image PSF should be axially symmetric, the average of all 18 SCAs in a given filter, and
+PSF values should depend only on the radius from the PSF center.  The reference-image PSF should be renormalized.
+This approach sidesteps the inherent trickiness of determining whether a PSF should be flipped before applying.
+(Is the WCS of the reference image configured to view the image from inside or outside the celestial sphere?
+What about the PSF?  It is difficult to know whether you got it correct, since the smeared data are so featureless).
+Averaging over all pixels at the same radial distance from the reference-image PSF center is robust and a reliable
+compromise to a solution in which only one science-image PSF and only one referenced-image is provided to the
+ZOGY software for image differencing.  If the science image and reference image are segmented, then appropriately
+different PSFs can be supplied as inputs, but this will require more computing and will complicate the RAPID pipeline,
+so it should be deferred until later (if ever implemented at all).
