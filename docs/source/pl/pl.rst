@@ -171,9 +171,10 @@ Image Differencing
 
 
 An implementation of the ZOGY algorithm will be used for image differencing in the RAPID pipeline.  ZOGY requires
-the input images to be gain-matched and resampled to the same frame of reference in terms of pixel scale,
+the input images to be gain-matched and resampled to the same grid frame of reference in terms of pixel scale,
 position, and orientation.  The input science image can be arbitrarily rotated on the sky, whereas the
-input reference image is constructed to be north up (zero degrees rotation on the sky).
+input reference image is constructed to be north up (zero degrees rotation on the sky), and centered on
+the closest predefined field (associated with the relevant Roman tessellation index).
 Image resampling is therefore necessary.
 ``SWarp`` can be used to resample the reference image into the distorted grid of the science image.
 In cases where the reference image consists of too few coadded inputs for undersampling to be resolved, it may be
@@ -198,4 +199,10 @@ Averaging over all pixels at the same radial distance from the reference-image P
 compromise to a solution in which only one science-image PSF and only one referenced-image is provided to the
 ZOGY software for image differencing.  If the science image and reference image are segmented, then appropriately
 different PSFs can be supplied as inputs, but this will require more computing and will complicate the RAPID pipeline,
-so it should be deferred until later (if ever implemented at all).
+so it will be deferred until later (if ever implemented at all).
+
+Depending on the survey strategies, the utilization averaged, symmetric PSFs may not work well in some cases.
+Especially for the Galactic Bulge, where campaigns will be composed of many sequenced images with only small
+dithers at the same orientation.  The simplest possible alternative to the aforementioned general PSF approach
+is to average the PSFs using the same set of rotations and SCAs used by the reference image.  This will be
+considered as a possible upgrade to the RAPID pipeline, if resources allow.
