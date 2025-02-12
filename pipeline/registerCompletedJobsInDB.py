@@ -262,6 +262,7 @@ while True:
                 tokens = re.split(r'\s*=\s*',line)
                 job_exitcode = tokens[1]
 
+
         # Get datetime of when last file was written to product bucket.  This will be ended in the Jobs database record.
 
         product_bucket_path = "s3://" + product_s3_bucket_base + "/" + datearg + '/jid' + str(jid) + "/"
@@ -597,6 +598,17 @@ while True:
 
     if dbh.exit_code >= 64:
         exit(dbh.exit_code)
+
+
+
+
+
+    # Do not iterate, after all.
+
+    break
+
+
+
 
 
     # Test code.
