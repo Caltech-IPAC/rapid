@@ -6,6 +6,7 @@ import configparser
 import boto3
 import re
 import healpy as hp
+import numpy as np
 
 import modules.utils.rapid_pipeline_subs as plsubs
 import database.modules.utils.rapid_db as db
@@ -263,15 +264,48 @@ while True:
                 job_exitcode = tokens[1]
 
 
-        # Get datetime of when last file was written to product bucket.  This will be ended in the Jobs database record.
+        # Download product config file, in order to harvest some of its metadata.
+
+        product_config_ini_filename = product_config_filename_base + str(jid) + ".ini"
+
+        s3_bucket_object_name = datearg + '/' + product_config_ini_filename
+
+        print("Downloading s3://{}/{} into {}...".format(product_s3_bucket_base,s3_bucket_object_name,product_config_ini_filename))
+
+        response = s3_client.download_file(product_s3_bucket_base,s3_bucket_object_name,product_config_ini_filename)
+
+        print("response =",response)
+
+
+        # Read input parameters from product config .ini file.
+
+        product_config_input_filename = product_config_ini_filename
+        product_config_input = configparser.ConfigParser()
+        product_config_input.read(product_config_input_filename)
+
+
+        # Get the timestamps of when the job started and ended on the AWS Batch machine,
+        # which have already been converted to Pacific Time.
+        # In the Jobs record of the RAPID pipeline operations database, we will use for
+        # job started the time the pipeline instance was launched (which was when the
+        # Jobs record was initially inserted).
+
+        started = product_config_input['JOB_PARAMS']['job_started']
+        ended = product_config_input['JOB_PARAMS']['job_ended']
+
+
+        # Get datetime of when last file was written to product bucket.
+        # This will be very close to ended in the Jobs database record.
+        # It is only retrieved here and now as a sanity check.
+        # Later this can be optional to make this script run faster.
 
         product_bucket_path = "s3://" + product_s3_bucket_base + "/" + datearg + '/jid' + str(jid) + "/"
         ended_dt,last_file_written_to_bucket = plsubs.get_datetime_of_last_file_written_to_bucket(product_bucket_path)
 
-        ended = str(ended_dt)
+        ended_str = str(ended_dt)
 
         print("last_file_written_to_bucket =",last_file_written_to_bucket)
-        print("ended =",ended)
+        print("ended =",ended_str)
 
 
         # Update Jobs record.
@@ -314,26 +348,6 @@ while True:
         for product_bucket_object in product_bucket.objects.filter(Prefix=job_prefix):
 
             print("------==------->",product_bucket_object)
-
-
-            # Download product config file, in order to read the MD5 checksum of the reference image.
-
-            product_config_ini_filename = product_config_filename_base + str(jid) + ".ini"
-
-            s3_bucket_object_name = datearg + '/' + product_config_ini_filename
-
-            print("Downloading s3://{}/{} into {}...".format(product_s3_bucket_base,s3_bucket_object_name,product_config_ini_filename))
-
-            response = s3_client.download_file(product_s3_bucket_base,s3_bucket_object_name,product_config_ini_filename)
-
-            print("response =",response)
-
-
-            # Read input parameters from product config .ini file.
-
-            product_config_input_filename = product_config_ini_filename
-            product_config_input = configparser.ConfigParser()
-            product_config_input.read(product_config_input_filename)
 
 
             # Reference image.
@@ -432,7 +446,60 @@ while True:
                     fwhmminpix = product_config_input['REF_IMAGE']['fwhmminpix']
                     fwhmmaxpix = product_config_input['REF_IMAGE']['fwhmmaxpix']
                     nsexcatsources = product_config_input['REF_IMAGE']['nsexcatsources']
+                    input_images_csv_name_for_download = product_config_input['REF_IMAGE']['input_images_csv_name_for_download']
 
+
+                    # Parse CSV file containing list of reference-image input files and associated data.
+                    # Compute mininmum and maximum MJDOBS for the RefImMeta database table.
+                    # Example: input_images_csv_name_for_download = s3://rapid-pipeline-files/20250214/input_images_for_refimage_jid1.csv
+
+                    filename_match = re.match(r"s3://(.+?)/(.+)", input_images_csv_name_for_download)
+
+                    try:
+                        input_images_csv_file_s3_bucket_name = filename_match.group(1)
+                        input_images_csv_file_s3_bucket_object_name = filename_match.group(2)
+                        print("input_images_csv_file_s3_bucket_name = {}, input_images_csv_file_s3_bucket_object_name = {}".\
+                            format(input_images_csv_file_s3_bucket_name,input_images_csv_file_s3_bucket_object_name))
+
+                    except:
+                        print("*** Error: Could not parse refimage_input_s3_full_name; quitting...")
+                        exit(64)
+
+                    filename_match2 = re.match(r"s3://.+?/(.+)", input_images_csv_file_s3_bucket_object_name)
+
+                    try:
+                        input_images_csv_filename = filename_match2.group(1)
+                        print("input_images_csv_filename = {}".format(input_images_csv_filename))
+
+                    except:
+                        print("*** Error: Could not parse refimage_input_s3_full_name; quitting...")
+                        exit(64)
+
+                    print("Downloading s3://{}/{} into {}...".\
+                        format(input_images_csv_file_s3_bucket_name,input_images_csv_file_s3_bucket_object_name,input_images_csv_filename))
+
+                    response = s3_client.download_file(input_images_csv_file_s3_bucket_name,
+                                                       input_images_csv_file_s3_bucket_object_name,
+                                                       input_images_csv_filename)
+
+                    print("response =",response)
+
+                    refimage_input_mjdobs = []
+
+                    with open(input_images_csv_filename, newline='') as csvfile:
+
+                        refimage_inputs_reader = csv.reader(csvfile, delimiter=',')
+
+                        for row in refimage_inputs_reader:
+                            mjdobs = row[15]                                                   # TODO
+                            refimage_input_mjdobs.append(mjdobs)
+
+                    mjdobs_np = np.array(refimage_input_mjdobs)
+                    mjdobs_min = min(mjdobs_np)
+                    mjdobs_max = max(mjdobs_np)
+
+                    print("mjdobs_min =",mjdobs_min)
+                    print("mjdobs_max =,",mjdobs_max)
 
 
                     # Insert record in RefImMeta database table.
@@ -443,6 +510,8 @@ while True:
                                            hp6,
                                            hp9,
                                            nframes,
+                                           mjdobsmin,
+                                           mjdobsmax,
                                            npixsat,
                                            npixnan,
                                            clmean,
