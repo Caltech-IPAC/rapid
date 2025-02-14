@@ -484,17 +484,25 @@ while True:
 
                     print("response =",response)
 
-                    refimage_input_mjdobs = []
+                    refimage_input_mjdobs_list = []
 
                     with open(input_images_csv_filename, newline='') as csvfile:
 
                         refimage_inputs_reader = csv.reader(csvfile, delimiter=',')
 
                         for row in refimage_inputs_reader:
-                            mjdobs = row[15]                                                   # TODO
-                            refimage_input_mjdobs.append(mjdobs)
+                            refim_input_rid = row[0]
+                            refimage_input_mjdobs = row[15]                                                   # TODO
+                            refimage_input_mjdobs_list.append(refimage_input_mjdobs)
 
-                    mjdobs_np = np.array(refimage_input_mjdobs)
+
+                            # Insert record in RefImMeta database table for each input image.
+
+                            dbh.register_refimimage(rfid,refim_input_rid)
+
+
+
+                    mjdobs_np = np.array(refimage_input_mjdobs_list)
                     mjdobs_min = min(mjdobs_np)
                     mjdobs_max = max(mjdobs_np)
 
@@ -510,8 +518,8 @@ while True:
                                            hp6,
                                            hp9,
                                            nframes,
-                                           mjdobsmin,
-                                           mjdobsmax,
+                                           mjdobs_min,
+                                           mjdobs_max,
                                            npixsat,
                                            npixnan,
                                            clmean,
