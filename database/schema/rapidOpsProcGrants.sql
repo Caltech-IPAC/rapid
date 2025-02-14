@@ -284,6 +284,8 @@ grant EXECUTE on FUNCTION registerRefImMeta (
     hp6_                 integer,
     hp9_                 integer,
     nframes_             smallint,
+    mjdobsmin_           double precision,
+    mjdobsmax_           double precision,
     npixsat_             integer,
     npixnan_             integer,
     clmean_              real,

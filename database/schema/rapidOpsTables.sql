@@ -932,27 +932,29 @@ CREATE INDEX diffimmeta_sca_idx ON diffimmeta (sca);
 SET default_tablespace = pipeline_data_01;
 
 CREATE TABLE refimmeta (
-    rfid integer NOT NULL,            -- Primary key
-    field integer NOT NULL,           -- Roman tessellation index for (ra0,dec0)
-    hp6 integer NOT NULL,             -- Level-6 healpix index (NESTED) for (ra0,dec0)
-    hp9 integer NOT NULL,             -- Level-9 healpix index (NESTED) for (ra0,dec0)
-    fid smallint NOT NULL,            -- Foreign key from Filters table
-    nframes smallint NOT NULL,        -- Number of images in stack
-    npixsat integer NOT NULL,         -- Number of saturated pixels in reference-image
-    npixnan integer NOT NULL,         -- Number of NaN pixels in reference-image
-    clmean real NOT NULL,             -- Image pixel mean after data clipping
-    clstddev real NOT NULL,           -- Image pixel standard deviation after data clipping and reinflating
-    clnoutliers integer NOT NULL,     -- Number of image pixels discarded in data clipping
-    gmedian real NOT NULL,            -- Global image pixel median
-    datascale real NOT NULL,          -- Global robust image pixel spread = 0.5*(p84-p16)
-    gmin real NOT NULL,               -- Global minimum image pixel value
-    gmax real NOT NULL,               -- Global maximum image pixel value
-    medncov real NOT NULL,            -- Median of corresponding depth-of-coverage image
-    medpixunc real NOT NULL,          -- Median of corresponding uncertainty image
-    fwhmmedpix real NOT NULL,         -- Median of FWHM_IMAGE values in reference-image SExtractor catalog [pixels]
-    fwhmminpix real NOT NULL,         -- Minimum of FWHM_IMAGE values in reference-image SExtractor catalog [pixels]
-    fwhmmaxpix real NOT NULL,         -- Maximum of FWHM_IMAGE values in reference-image SExtractor catalog [pixels]
-    nsexcatsources integer NOT NULL   -- Number of sources in reference-image SExtractor catalog
+    rfid integer NOT NULL,                 -- Primary key
+    field integer NOT NULL,                -- Roman tessellation index for (ra0,dec0)
+    hp6 integer NOT NULL,                  -- Level-6 healpix index (NESTED) for (ra0,dec0)
+    hp9 integer NOT NULL,                  -- Level-9 healpix index (NESTED) for (ra0,dec0)
+    fid smallint NOT NULL,                 -- Foreign key from Filters table
+    nframes smallint NOT NULL,             -- Number of images in stack
+    mjdobsmin double precision NOT NULL,   -- Minimum MDJ of input images in stack
+    mjdobsmax double precision NOT NULL,   -- Maximum MDJ of input images in stack
+    npixsat integer NOT NULL,              -- Number of saturated pixels in reference-image
+    npixnan integer NOT NULL,              -- Number of NaN pixels in reference-image
+    clmean real NOT NULL,                  -- Image pixel mean after data clipping
+    clstddev real NOT NULL,                -- Image pixel standard deviation after data clipping and reinflating
+    clnoutliers integer NOT NULL,          -- Number of image pixels discarded in data clipping
+    gmedian real NOT NULL,                 -- Global image pixel median
+    datascale real NOT NULL,               -- Global robust image pixel spread = 0.5*(p84-p16)
+    gmin real NOT NULL,                    -- Global minimum image pixel value
+    gmax real NOT NULL,                    -- Global maximum image pixel value
+    medncov real NOT NULL,                 -- Median of corresponding depth-of-coverage image
+    medpixunc real NOT NULL,               -- Median of corresponding uncertainty image
+    fwhmmedpix real NOT NULL,              -- Median of FWHM_IMAGE values in reference-image SExtractor catalog [pixels]
+    fwhmminpix real NOT NULL,              -- Minimum of FWHM_IMAGE values in reference-image SExtractor catalog [pixels]
+    fwhmmaxpix real NOT NULL,              -- Maximum of FWHM_IMAGE values in reference-image SExtractor catalog [pixels]
+    nsexcatsources integer NOT NULL        -- Number of sources in reference-image SExtractor catalog
 );
 
 ALTER TABLE refimmeta OWNER TO rapidadminrole;
