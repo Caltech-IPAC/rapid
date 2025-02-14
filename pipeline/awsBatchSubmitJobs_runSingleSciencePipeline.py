@@ -4,8 +4,11 @@ import boto3
 from botocore.exceptions import ClientError
 from astropy.io import fits
 import numpy as np
-from datetime import datetime
+from datetime import datetime, timezone
+from dateutil import tz
 import time
+
+to_zone = tz.gettz('America/Los_Angeles')
 
 import modules.utils.rapid_pipeline_subs as util
 import database.modules.utils.rapid_db as db
@@ -29,10 +32,11 @@ print("aws_batch_job_id =", aws_batch_job_id)
 
 datetime_utc_now = datetime.utcnow()
 proc_utc_datetime = datetime_utc_now.strftime('%Y-%m-%dT%H:%M:%SZ')
-datetime_now = datetime.utcnow()
-proc_datetime = datetime_now.strftime('%Y-%m-%dT%H:%M:%S PT')
+datetime_pt_now = datetime_utc_now.replace(tzinfo=timezone.utc).astimezone(tz=to_zone)
+proc_pt_datetime_started = datetime_pt_now.strftime('%Y-%m-%dT%H:%M:%S PT')
 
-print("proc_datetime =",proc_datetime)
+print("proc_utc_datetime =",proc_utc_datetime)
+print("proc_pt_datetime_started =",proc_pt_datetime_started)
 
 
 # JOBPROCDATE of pipeline job.
@@ -438,6 +442,8 @@ if __name__ == '__main__':
     product_config['JOB_PARAMS']['jid'] = str(jid)
     product_config['JOB_PARAMS']['job_proc_date'] = job_proc_date
     product_config['JOB_PARAMS']['verbose'] = str(verbose)
+    product_config['JOB_PARAMS']['job_started'] = str(proc_pt_datetime_started)
+
 
     if rfid is None:
 
@@ -451,6 +457,7 @@ if __name__ == '__main__':
         mosaic_cov_map_name_for_db_record = "s3://{}/{}".format(product_s3_bucket,awaicgen_output_mosaic_cov_map_s3_bucket_object_name)
         mosaic_uncert_image_name_for_db_record = "s3://{}/{}".format(product_s3_bucket,awaicgen_output_mosaic_uncert_image_s3_bucket_object_name)
         refimage_catalog_name_for_db_record = "s3://{}/{}".format(product_s3_bucket,refimage_catalog_s3_bucket_object_name)
+        input_images_csv_name_for_download = "s3://{}/{}".format(job_info_s3_bucket,input_images_csv_file_s3_bucket_object_name)
 
         product_config['REF_IMAGE']['awaicgen_output_mosaic_image_file'] = mosaic_image_name_for_db_record
         product_config['REF_IMAGE']['awaicgen_output_mosaic_cov_map_file'] = mosaic_cov_map_name_for_db_record
@@ -479,6 +486,7 @@ if __name__ == '__main__':
         product_config['REF_IMAGE']['fwhmminpix'] = str(fwhmminpix)
         product_config['REF_IMAGE']['fwhmmaxpix'] = str(fwhmmaxpix)
         product_config['REF_IMAGE']['nsexcatsources'] = str(nsexcatsources_refimage)
+        product_config['REF_IMAGE']['input_images_csv_name_for_download'] = input_images_csv_name_for_download
 
 
     # Unzip the science image gzipped file.
@@ -896,6 +904,18 @@ if __name__ == '__main__':
     product_config['ZOGY']['sca'] = str(sca_sciimage)
     product_config['ZOGY']['nsexcatsources'] = str(nsexcatsources_diffimage)
     product_config['ZOGY']['scalefacref'] = str(scalefacref)
+
+
+    # Get timestamp job ended in Pacific Time for Jobs database record later.
+
+    datetime_utc_now = datetime.utcnow()
+    proc_utc_datetime = datetime_utc_now.strftime('%Y-%m-%dT%H:%M:%SZ')
+    datetime_pt_now = datetime_utc_now.replace(tzinfo=timezone.utc).astimezone(tz=to_zone)
+    proc_pt_datetime_ended = datetime_pt_now.strftime('%Y-%m-%dT%H:%M:%S PT')
+
+    print("proc_pt_datetime_ended =",proc_pt_datetime_ended)
+
+    product_config['JOB_PARAMS']['job_ended'] = str(proc_pt_datetime_ended)
 
 
     # Write product config file for job.
