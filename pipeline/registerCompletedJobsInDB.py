@@ -480,17 +480,17 @@ while True:
                             format(input_images_csv_file_s3_bucket_name,input_images_csv_file_s3_bucket_object_name))
 
                     except:
-                        print("*** Error: Could not parse refimage_input_s3_full_name; quitting...")
+                        print("*** Error: Could not parse input_images_csv_name_for_download; quitting...")
                         exit(64)
 
-                    filename_match2 = re.match(r"s3://.+?/(.+)", input_images_csv_file_s3_bucket_object_name)
+                    filename_match2 = re.match(r".+?/(.+)", input_images_csv_file_s3_bucket_object_name)
 
                     try:
                         input_images_csv_filename = filename_match2.group(1)
                         print("input_images_csv_filename = {}".format(input_images_csv_filename))
 
                     except:
-                        print("*** Error: Could not parse refimage_input_s3_full_name; quitting...")
+                        print("*** Error: Could not parse input_images_csv_file_s3_bucket_object_name; quitting...")
                         exit(64)
 
                     print("Downloading s3://{}/{} into {}...".\
