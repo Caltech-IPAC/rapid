@@ -2148,6 +2148,8 @@ class RAPIDDB:
                            hp6,
                            hp9,
                            nframes,
+                           mjdobsmin,
+                           mjdobsmax,
                            npixsat,
                            npixnan,
                            clmean,
@@ -2181,6 +2183,8 @@ class RAPIDDB:
             "cast(TEMPLATE_HP6 AS integer)," +\
             "cast(TEMPLATE_HP9 AS integer)," +\
             "cast(TEMPLATE_NFRAMES AS smallint)," +\
+            "cast(TEMPLATE_MJDOBSMIN AS double precision)," +\
+            "cast(TEMPLATE_MJDOBSMAX AS double precision)," +\
             "cast(TEMPLATE_NPIXSAT AS integer)," +\
             "cast(TEMPLATE_NPIXNAN AS integer)," +\
             "cast(TEMPLATE_CLMEAN AS real)," +\
@@ -2206,6 +2210,8 @@ class RAPIDDB:
         print('----> hp6 = {}'.format(hp6))
         print('----> hp9 = {}'.format(hp9))
         print('----> nframes = {}'.format(nframes))
+        print('----> mjdobsmin = {}'.format(mjdobsmin))
+        print('----> mjdobsmax = {}'.format(mjdobsmax))
         print('----> npixsat = {}'.format(npixsat))
         print('----> npixnan = {}'.format(npixnan))
         print('----> clmean = {}'.format(clmean))
@@ -2229,6 +2235,8 @@ class RAPIDDB:
         rep["TEMPLATE_HP6"] = str(hp6)
         rep["TEMPLATE_HP9"] = str(hp9)
         rep["TEMPLATE_NFRAMES"] = str(nframes)
+        rep["TEMPLATE_MJDOBSMIN"] = str(mjdobsmin)
+        rep["TEMPLATE_MJDOBSMAX"] = str(mjdobsmax)
         rep["TEMPLATE_NPIXSAT"] = str(npixsat)
         rep["TEMPLATE_NPIXNAN"] = str(npixnan)
         rep["TEMPLATE_CLMEAN"] = str(clmean)
