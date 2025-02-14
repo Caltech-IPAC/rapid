@@ -7,6 +7,7 @@ import boto3
 import re
 import healpy as hp
 import numpy as np
+import csv
 
 import modules.utils.rapid_pipeline_subs as plsubs
 import database.modules.utils.rapid_db as db
