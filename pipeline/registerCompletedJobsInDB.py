@@ -290,8 +290,26 @@ while True:
         # job started the time the pipeline instance was launched (which was when the
         # Jobs record was initially inserted).
 
-        started = product_config_input['JOB_PARAMS']['job_started']
-        ended = product_config_input['JOB_PARAMS']['job_ended']
+        job_started = product_config_input['JOB_PARAMS']['job_started']
+        job_ended = product_config_input['JOB_PARAMS']['job_ended']
+
+        print("job_started =",job_started)
+        print("job_ended =",job_ended)
+
+        string_match = re.match(r"(.+?)T(.+?) PT", job_ended)
+
+        try:
+            ended_date = string_match.group(1)
+            ended_time = string_match.group(2)
+            print("ended = {} {}".format(ended_date,ended_time))
+
+        except:
+            print("*** Error: Could not parse proc_pt_datetime_ended; quitting...")
+            exit(64)
+
+        ended = ended_date + " " + ended_time
+
+        print("For Jobs records: ended =",ended)
 
 
         # Get datetime of when last file was written to product bucket.
@@ -305,7 +323,7 @@ while True:
         ended_str = str(ended_dt)
 
         print("last_file_written_to_bucket =",last_file_written_to_bucket)
-        print("ended =",ended_str)
+        print("From S3 bucket listing: ended_str =",ended_str)
 
 
         # Update Jobs record.
