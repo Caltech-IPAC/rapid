@@ -186,7 +186,7 @@ necessary to instead use ``awaicgen`` to resample the science image into the und
 Point Spread Functions (PSFs)
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-PSFs are required by the ZOGY algorithm.  In fact, it requires the PSF of input science image
+PSFs are required by the ZOGY algorithm.  In fact, it requires both the PSF of input science image
 and the PSF of the reference image.
 
 Reference images are averages of arbitrarily rotated input images from different SCAs for the same filter.
