@@ -206,3 +206,13 @@ Especially for the Galactic Bulge, where campaigns will be composed of many sequ
 dithers at the same orientation.  The simplest possible alternative to the aforementioned general PSF approach
 is to average the PSFs using the same set of rotations and SCAs used by the reference image.  This will be
 considered as a possible upgrade to the RAPID pipeline, if resources allow.
+
+
+Science Pipeline Flowchart
+**************************
+
+Here is a flowchart of the RAPID science pipeline:
+
+.. image:: science_pipeline_flowchart.png
+
+The pipeline is coded in Python and C, and runs inside the RAPID-pipeline docker container, in which all required software is preinstalled.
