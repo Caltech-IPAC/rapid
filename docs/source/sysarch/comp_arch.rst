@@ -21,7 +21,7 @@ Here is a more detailed flowchart of the RAPID computing architecture:
 
 .. image:: computing_architecture.png
 
-In this view, parallel processing on a massive scale is facilitated by the AWS Batch Service.
+Parallel processing on a massive scale is facilitated by the AWS Batch Service.
 
 Database interactions are done only during intial pipeline launching and final data aggregation stages,
 before and after pipeline instances are executed under the AWS Batch Service.  This ensures scalability
