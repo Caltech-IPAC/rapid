@@ -2294,7 +2294,7 @@ class RAPIDDB:
         # Define query.
 
         query = "select rid,sca,fid,mjdobs from L2Files where dateobs >= '" +\
-                startdatetiime + "' and dateobs <= '" + enddatetime + "';"
+                startdatetiime + "' and dateobs < '" + enddatetime + "';"
 
 
         # Query database.
