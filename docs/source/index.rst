@@ -89,6 +89,14 @@ RAPID Pipeline Design
 
    pl/pl.rst
 
+RAPID Computing Architecture
+************************************
+
+.. toctree::
+   :maxdepth: 2
+
+   sysarch/comp_arch.rst
+
 RAPID Pipeline Development Notes
 ************************************
 
