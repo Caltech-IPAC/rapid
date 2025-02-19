@@ -26,7 +26,7 @@ def kona(input_files,mpc_local=None,median_jd=None,mpc_save=None,logger=None):
     if mpc_local is not None and os.path.exists(mpc_local):
         #in the case that a file with the MPC orbits moved to a central date is provided, read that
         logger.info(f"Reading state file: {mpc_local:s}")
-        mpc_states=kete.SimultaneousStates.load(mpc_local).states
+        mpc_states=kete.SimultaneousStates.load_parquet(mpc_local).states
     else:
         #if not, pull a new file from MPC
         logger.info("Fetching orbits from MPC")
@@ -46,7 +46,7 @@ def kona(input_files,mpc_local=None,median_jd=None,mpc_save=None,logger=None):
         logger.info(f"Saving MPC state file: {mpc_save:s}")
         if os.path.exists(mpc_save):
             logger.warn(f"{mpc_save:s} path exists: overwriting")
-        kete.SimultaneousStates(mpc_states_local).save(mpc_save)
+        kete.SimultaneousStates(mpc_states_local).save_parquet(mpc_save)
 
     if type(input_files) is str:
         input_files=input_files.split(',')
@@ -136,9 +136,9 @@ class helpExit(click.Command):
  
 @click.command(no_args_is_help=True,cls=helpExit)
 @click.option("--input_file",help="<input image ASDF file to run KONA on>",required=True)
-@click.option("--mpc_local",help="[full path to file holding the MPC orbit file propagated to a median JD]",required=False,default=None)
+@click.option("--mpc_local",help="[full path to parquet file holding the MPC orbit file propagated to a median JD]",required=False,default=None)
 @click.option("--median_jd",help="[median Julian Date to advance the MPC orbit file to]",required=False,default=None,type=float)
-@click.option("--mpc_save",help="[full path to outpu file to store the MPC orbit states after moving to median_jd]",required=False,default=None)
+@click.option("--mpc_save",help="[full path to parquet output file to store the MPC orbit states after moving to median_jd]",required=False,default=None)
 def bespoke_kona(input_file,mpc_local,median_jd,mpc_save):
     logger=init_log()
     logger.info("command echo:")
