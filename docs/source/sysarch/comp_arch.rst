@@ -43,7 +43,7 @@ Here is a histogram of the job execution times:
 
 .. image:: rapid_job_elapsed_vs_time_1dhist.png
 
-Here is 2-D histogram of the job execution times versus number of input frames for the reference image that was generated:
+Here is a 2-D histogram of the job execution times versus number of input frames for the reference image that was generated:
 
 .. image:: rapid_job_elapsed_vs_nframes_2dhist.png
 
