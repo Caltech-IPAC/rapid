@@ -59,4 +59,4 @@ User must construct URL, knowing the filename in advance, such as::
     https://rapid-product-files.s3.us-west-2.amazonaws.com/20250218/jid1022/awaicgen_output_mosaic_cov_map.fits
 
 For a listing of the available files,
-see :doc:`this text file <rapid-product-files_20250218.txt>`.
+download :download:`this text file <rapid-product-files_20250218.txt>`.
