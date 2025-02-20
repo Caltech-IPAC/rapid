@@ -97,6 +97,14 @@ RAPID Computing Architecture
 
    sysarch/comp_arch.rst
 
+RAPID Pipeline Products
+************************************
+
+.. toctree::
+   :maxdepth: 1
+
+   prod/products.rst
+
 RAPID Pipeline Development Notes
 ************************************
 

@@ -1,7 +1,8 @@
 RAPID Pipeline Products
 ####################################################
 
-The products processed on any given date (<yyyymmdd> Pacific Time) will be located in the RAPID-product S3 bucket with said date prefix::
+The products processed on any given date (``<yyyymmdd>`` Pacific Time) will be located in
+the RAPID-product S3 bucket with the processing date as a prefix::
 
     aws s3 ls --recursive s3://rapid-product-files/<yyyymmdd>
 
@@ -12,6 +13,8 @@ For example, for 20250218:
 By way of example, here are the available products for one job (jid=999)::
 
     aws s3 ls --recursive s3://rapid-product-files/20250218/jid999
+
+Note that there is one science image differenced per job.
 
 The associated product config output file is::
 
