@@ -19,11 +19,11 @@ aws s3 ls  --recursive s3://rapid-product-files/20250218/product_config_jid999.i
 
 This is parsed for metadata to load into the RAPID operations database after the processing.
 
-Input and intermediate files for debugging and final products are listed in the table below.
+Input and intermediate files for debugging and final products are listed in the table below:
 
-===================                                             =========================================================================================
+==============================================================  =========================================================================================
 Filename                                                        Description
-===================                                             =========================================================================================
+==============================================================  =========================================================================================
 Roman_TDS_simple_model_F184_1851_10_lite.fits.gz                Input science image (gzipped)
 Roman_TDS_simple_model_F184_1851_10_lite_reformatted.fits       Reformated: Image data are contained in the PRIMARY header and resize to 4089x4089
 Roman_TDS_simple_model_F184_1851_10_lite_reformatted_unc.fits   Associated uncertainty image computed via simple model (photon noise only)
@@ -45,5 +45,5 @@ diffpsf.fits                                                    ZOGY output PSF
 scorrimage_masked.fits                                          ZOGY output SCORR image with NaNs in zero-coverage pixels
 diffimage_masked.txt                                            SourceExtractor catalog from difference image
 diffimage_jid999.done                                           Done file indicating product metadata for job ingested into RAPID operations database
-===================                                             =========================================================================================
+==============================================================  =========================================================================================
 
