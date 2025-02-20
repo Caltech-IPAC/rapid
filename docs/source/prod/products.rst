@@ -50,3 +50,17 @@ diffimage_masked.txt                                            SourceExtractor 
 diffimage_jid999.done                                           Done file indicating product metadata for job ingested into RAPID operations database
 ==============================================================  =========================================================================================
 
+
+Public Access
+***************
+
+User must construct URL, knowing the filename in advance, such as::
+
+    https://rapid-product-files.s3.us-west-2.amazonaws.com/20250218/jid1022/awaicgen_output_mosaic_cov_map.fits
+
+Here is a listing of the available files::
+
+.. toctree::
+   :maxdepth: 1
+
+   rapid-product-files_20250218.txt
