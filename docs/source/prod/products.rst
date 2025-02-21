@@ -18,7 +18,7 @@ Note that there is one science image differenced per job.
 
 The associated product config output file is::
 
-aws s3 ls  --recursive s3://rapid-product-files/20250218/product_config_jid999.ini
+    aws s3 ls  --recursive s3://rapid-product-files/20250218/product_config_jid999.ini
 
 This is parsed for metadata to load into the RAPID operations database after the processing.
 
