@@ -6,11 +6,11 @@ the RAPID-product S3 bucket with the processing date as a prefix::
 
     aws s3 ls --recursive s3://rapid-product-files/<yyyymmdd>
 
-For example, for 20250218:
+For example, this command covers all jobs under processing date ``20250218``::
 
     aws s3 ls --recursive s3://rapid-product-files/20250218
 
-By way of example, here are the available products for one job (jid=999)::
+Here are the available products for just one job (``jid=999``) under that processing date::
 
     aws s3 ls --recursive s3://rapid-product-files/20250218/jid999
 
@@ -22,7 +22,9 @@ aws s3 ls  --recursive s3://rapid-product-files/20250218/product_config_jid999.i
 
 This is parsed for metadata to load into the RAPID operations database after the processing.
 
-Input and intermediate files for debugging and final products are listed in the table below:
+The input and intermediate files for debugging and final products are listed in the table below.
+The product filenames are canonical and predictable (they are the same from
+one science-image case to the next).
 
 ==============================================================  =========================================================================================
 Filename                                                        Description
@@ -63,6 +65,3 @@ For a listing of the available product files,
 download :download:`this text file <rapid-product-files_20250218.txt>`.
 
 A simple Python script can be written to parse the listing and generate ``wget`` or ``curl`` download commands.
-
-
-:doc:`View product listing <rapid-product-files_20250218.txt>`
