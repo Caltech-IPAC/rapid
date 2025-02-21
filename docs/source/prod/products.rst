@@ -54,9 +54,15 @@ diffimage_jid999.done                                           Done file indica
 Public Access
 ***************
 
-User must construct URL, knowing the filename in advance, such as::
+To download a RAPID pipeline product, the
+user must construct a URL, knowing the filename in advance, like the following::
 
     https://rapid-product-files.s3.us-west-2.amazonaws.com/20250218/jid1022/awaicgen_output_mosaic_cov_map.fits
 
-For a listing of the available files,
+For a listing of the available product files,
 download :download:`this text file <rapid-product-files_20250218.txt>`.
+
+A simple Python script can be written to parse the listing and generate ``wget`` or ``curl`` download commands.
+
+
+:doc:`View product listing <rapid-product-files_20250218.txt>`
