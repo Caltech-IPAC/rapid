@@ -10,6 +10,7 @@ RUN pip install boto3
 RUN pip install pyfftw
 RUN pip install sympy
 RUN pip install sip_tpv
+RUN pip install photutils
 
 RUN yum -y install gcc
 RUN yum -y install g++
