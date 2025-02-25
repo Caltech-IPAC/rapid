@@ -151,21 +151,14 @@ launched, as shown in the instructions below, and the latter is tied
 to how the infrastructure software in
 RAPID project's Docker image has been pre-installed.
 
-0. Install ``docker`` and create Docker image if not already done;
-   otherwise, skip to next step:
+1. Install ``docker`` and create Docker image if not already done
+   (otherwise, skip to step 2):
 
-   * See :doc:`Install Docker on EC2 instance </install/docker>`
+   * How to :doc:`install Docker on EC2 instance </install/docker>`
 
-   * See :doc:`Create Docker image </install/docker_image>`
+   * How to :doc:`create Docker image </install/docker_image>`
 
-
-.. toctree::
-   :maxdepth: 3
-
-   docker.rst
-   docker_image.rst
-
-1. Ssh into the EC2 instance, and launch the Docker container with the
+2. Ssh into the EC2 instance, and launch the Docker container with the
    following commands:
 
 .. code-block::
@@ -182,7 +175,7 @@ in the ``docker run -v`` command option.
 Therefore, the C-code build only needs to be done once, and this will
 be persisted even after exiting the container.
 
-2. Run the build script inside the container:
+3. Run the build script inside the container:
 
 .. code-block::
 
