@@ -32,6 +32,7 @@ release = '0.1'
 # ones.
 extensions = [
     'sphinx_rtd_theme',
+    'sphinx.ext.intersphinx',
 ]
 
 # Add any paths that contain templates here, relative to this directory.

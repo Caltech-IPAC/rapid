@@ -154,6 +154,11 @@ RAPID project's Docker image has been pre-installed.
 0. Install ``docker`` and create Docker image if not already done;
    otherwise, skip to next step:
 
+   * See :doc:`Install Docker on EC2 instance </install/docker>`
+
+   * See :doc:`Create Docker image </install/docker_image>`
+
+
 .. toctree::
    :maxdepth: 3
 
