@@ -3,6 +3,8 @@ import configparser
 import boto3
 from botocore.exceptions import ClientError
 from astropy.io import fits
+from astropy.io import ascii
+from astropy.table import Table
 import numpy as np
 from datetime import datetime, timezone
 from dateutil import tz
@@ -231,6 +233,7 @@ if __name__ == '__main__':
     sextractor_refimage_dict = config_input['SEXTRACTOR_REFIMAGE']
     bkgest_dict = config_input['BKGEST']
     gainmatch_dict = config_input['GAINMATCH']
+    psfcat_diffimage_dict = config_input['PSFCAT_DIFFIMAGE']
     sextractor_gainmatch_dict = config_input['SEXTRACTOR_GAINMATCH']
 
     print("max_n_images_to_coadd =", max_n_images_to_coadd)
@@ -812,6 +815,86 @@ if __name__ == '__main__':
     start_time_benchmark = end_time_benchmark
 
 
+    # Generate PSF-fit catalog for difference image using photutils.  No background subtraction is done.
+
+    n_clip_sigma = float(psfcat_diffimage_dict["n_clip_sigma"])
+    n_thresh_sigma = float(psfcat_diffimage_dict["n_thresh_sigma"])
+
+    fwhm = float(psfcat_diffimage_dict["fwhm"])
+    fit_shape_str = psfcat_diffimage_dict["fit_shape"]
+    fit_shape = tuple(int(x) for x in fit_shape_str.replace("(","").replace(")","").replace(" ", "").split(','))
+    aperture_radius = float(psfcat_diffimage_dict["aperture_radius"])
+
+
+    input_img_filename = psfcat_diffimage_dict["input_img_filename"]
+    input_unc_filename = psfcat_diffimage_dict["input_unc_filename"]
+    input_psf_filename = psfcat_diffimage_dict["input_psf_filename"]
+    output_psfcat_filename = psfcat_diffimage_dict["output_psfcat_filename"]
+
+    phot,finder_results = util.compute_diffimage_psf_catalog(n_clip_sigma,
+                                                            n_thresh_sigma,
+                                                            fwhm,
+                                                            fit_shape,
+                                                            aperture_radius,
+                                                            input_img_filename,
+                                                            input_unc_filename,
+                                                            input_psf_filename)
+
+
+    # Output psf-fit catalog is an astropy table with the PSF-fitting results.
+
+    # Output columns are documentated at
+    # https://photutils.readthedocs.io/en/latest/api/photutils.psf.PSFPhotometry.html
+
+    phot['x_init'].info.format = '.4f'
+    phot['y_init'].info.format = '.4f'
+    phot['flux_init'].info.format = '.6f'
+    phot['x_fit'].info.format = '.4f'
+    phot['y_fit'].info.format = '.4f'
+    phot['flux_fit'].info.format = '.6f'
+    phot['x_err'].info.format = '.4f'
+    phot['y_err'].info.format = '.4f'
+    phot['flux_err'].info.format = '.5f'
+    phot['qfit'].info.format = '.4f'
+    phot['cfit'].info.format = '.4f'
+
+    print(phot[('id', 'x_fit', 'y_fit', 'flux_fit','x_err', 'y_err', 'flux_err', 'npixfit', 'qfit', 'cfit', 'flags')])
+
+
+    # Further details about the PSF fitting can be obtained from attributes on the PSFPhotometry instance.
+    # For example, the results from the finder instance called during PSF fitting can be accessed using the
+    # finder_results attribute (the finder returns an astropy table).
+
+    finder_results['xcentroid'].info.format = '.4f'
+    finder_results['ycentroid'].info.format = '.4f'
+    finder_results['sharpness'].info.format = '.6f'
+    finder_results['peak'].info.format = '.4f'
+    finder_results['flux'].info.format = '.6f'
+    finder_results['mag'].info.format = '.6f'
+    finder_results['daofind_mag'].info.format = '.6f'
+    finder_results['roundness1'].info.format = '.6f'
+    finder_results['roundness2'].info.format = '.6f'
+
+    print(finder_results)
+
+
+    # Write combined entire PSF-fit catalog in astropy table.
+
+    print("output_psfcat_filename = ", output_psfcat_filename)
+
+    catalog = phot | finder_results
+
+    ascii.write(catalog, output_psfcat_filename, overwrite=True)
+
+
+    # Code-timing benchmark.
+
+    end_time_benchmark = time.time()
+    print("Elapsed time in seconds after generating PSF-fit catalog on difference image =",
+        end_time_benchmark - start_time_benchmark)
+    start_time_benchmark = end_time_benchmark
+
+
     # Compute MD5 checksum of masked difference image.
 
     print("Computing checksum of ",filename_diffimage_masked)
@@ -832,7 +915,7 @@ if __name__ == '__main__':
     s3_object_name_bkg_subbed_science_image = job_proc_date + "/jid" + str(jid) + "/" + filename_bkg_subbed_science_image
     s3_object_name_output_resampled_gainmatched_reference_image = job_proc_date + "/jid" + str(jid) + "/" + \
                                                                   output_resampled_gainmatched_reference_image
-
+    s3_object_name_output_psfcat_filename = job_proc_date + "/jid" + str(jid) + "/" + output_psfcat_filename
 
     filenames = [filename_diffimage_masked,
                  filename_diffimage_unc_masked,
@@ -840,7 +923,8 @@ if __name__ == '__main__':
                  filename_diffpsf,
                  filename_scorrimage_masked,
                  filename_bkg_subbed_science_image,
-                 output_resampled_gainmatched_reference_image]
+                 output_resampled_gainmatched_reference_image,
+                 output_psfcat_filename]
 
     objectnames = [s3_object_name_diffimage,
                    s3_object_name_diffimage_unc,
@@ -848,7 +932,8 @@ if __name__ == '__main__':
                    s3_object_name_diffpsf,
                    s3_object_name_scorrimage,
                    s3_object_name_bkg_subbed_science_image,
-                   s3_object_name_output_resampled_gainmatched_reference_image]
+                   s3_object_name_output_resampled_gainmatched_reference_image,
+                   s3_object_name_output_psfcat_filename]
 
     util.upload_files_to_s3_bucket(s3_client,product_s3_bucket,filenames,objectnames)
 
