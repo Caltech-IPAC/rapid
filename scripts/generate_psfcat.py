@@ -1,4 +1,6 @@
 import modules.utils.rapid_pipeline_subs as util
+from astropy.io import ascii
+from astropy.table import Table
 
 
 if __name__ == '__main__':
@@ -14,6 +16,9 @@ if __name__ == '__main__':
     input_img_filename = "diffimage_masked.fits"
     input_unc_filename = "diffimage_uncert_masked.fits"
     input_psf_filename = "diffpsf.fits"
+    output_psfcat_filename = "diffimage_masked_psfcat.txt"
+
+    print("output_psfcat_filename = ", output_psfcat_filename)
 
 
     # Compute PSF catalog for difference image.  No background subtraction is done.
@@ -39,12 +44,15 @@ if __name__ == '__main__':
     # phot.keys() = ['id', 'group_id', 'group_size', 'local_bkg', 'x_init', 'y_init', 'flux_init', 'x_fit', 'y_fit', 'flux_fit', 'x_err', 'y_err', 'flux_err', 'npixfit', 'qfit', 'cfit', 'flags']
 
 
+    phot['x_init'].info.format = '.4f'
+    phot['y_init'].info.format = '.4f'
+    phot['flux_init'].info.format = '.6f'
     phot['x_fit'].info.format = '.4f'
     phot['y_fit'].info.format = '.4f'
-    phot['flux_fit'].info.format = '.4f'
+    phot['flux_fit'].info.format = '.6f'
     phot['x_err'].info.format = '.4f'
     phot['y_err'].info.format = '.4f'
-    phot['flux_err'].info.format = '.4f'
+    phot['flux_err'].info.format = '.5f'
     phot['qfit'].info.format = '.4f'
     phot['cfit'].info.format = '.4f'
 
@@ -62,10 +70,22 @@ if __name__ == '__main__':
     finder_results['ycentroid'].info.format = '.4f'
     finder_results['sharpness'].info.format = '.6f'
     finder_results['peak'].info.format = '.4f'
-    finder_results['flux'].info.format = '.4f'
-    finder_results['mag'].info.format = '.4f'
-    finder_results['daofind_mag'].info.format = '.4f'
+    finder_results['flux'].info.format = '.6f'
+    finder_results['mag'].info.format = '.6f'
+    finder_results['daofind_mag'].info.format = '.6f'
     finder_results['roundness1'].info.format = '.6f'
     finder_results['roundness2'].info.format = '.6f'
 
     print(finder_results)
+
+
+    # Write combined entire PSF-fit catalog in astropy table.
+
+    catalog = phot | finder_results
+
+    ascii.write(catalog, output_psfcat_filename, overwrite=True)
+
+
+    # Terminate.
+
+    exit(0)
