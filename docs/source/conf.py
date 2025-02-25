@@ -33,6 +33,10 @@ release = '0.1'
 extensions = [
     'sphinx_rtd_theme',
     'sphinx.ext.intersphinx',
+    'sphinx.ext.imgmath',
+    'sphinx.ext.mathjax',
+    'sphinx.ext.viewcode',
+    'sphinx.ext.githubpages',
 ]
 
 # Add any paths that contain templates here, relative to this directory.
