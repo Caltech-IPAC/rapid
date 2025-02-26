@@ -11,7 +11,7 @@ from botocore.exceptions import ClientError
 from modules.sip_tpv.sip_tpv.sip_to_pv import sip_to_pv
 
 from photutils.detection import DAOStarFinder
-from photutils.psf import PSFPhotometry,ImagePSF
+from photutils.psf import PSFPhotometry,ImagePSF,IterativePSFPhotometry
 
 import matplotlib.pyplot as plt
 
@@ -1404,7 +1404,25 @@ def compute_diffimage_psf_catalog(n_clip_sigma,
     # Initialize the DAOStarFinder and PSFPhotometry class instances.
 
     finder = DAOStarFinder(threshold, fwhm)
-    psfphot = PSFPhotometry(psf_model=psf_model,fit_shape=fit_shape,finder=finder,aperture_radius=aperture_radius)
+
+    finder_attributes = finder.__dict__.keys()
+
+    print("finder_attributes =",finder_attributes)
+
+
+    # iterative_flag must be false for pipeline, but can be True temporarily for experiments.
+    # Default fitter_maxiters=100 iterations seems to add artifacts to the residual image.
+
+    iterative_flag = False
+
+    if not iterative_flag:
+        psfphot = PSFPhotometry(psf_model=psf_model,fit_shape=fit_shape,finder=finder,aperture_radius=aperture_radius)
+    else:
+        psfphot = IterativePSFPhotometry(psf_model=psf_model,fit_shape=fit_shape,finder=finder,aperture_radius=aperture_radius)
+
+    psfphot_attributes = psfphot.__dict__.keys()
+
+    print("psfphot_attributes =",psfphot_attributes)
 
 
     # Call PSFPhotometry class instance on the data array to do the PSF-fitting to the image data.
@@ -1412,6 +1430,19 @@ def compute_diffimage_psf_catalog(n_clip_sigma,
     phot = psfphot(data=data_image,error=data_uncert)
 
 
-    # Return photometry catalog and addition finder results.
+    # Make residual image.
 
-    return phot,psfphot.finder_results
+    resid = psfphot.make_residual_image(data_image)
+
+    psfcat_residual_filename = input_img_filename.replace(".fits","_psfcat_residual.fits")
+
+    print("psfcat_residual_filename =",psfcat_residual_filename)
+
+    new_hdu = fits.PrimaryHDU(data=resid.astype(np.float32))
+
+    new_hdu.writeto(psfcat_residual_filename,overwrite=True,checksum=True)
+
+
+    # Return photometry catalog.
+
+    return phot

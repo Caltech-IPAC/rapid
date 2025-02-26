@@ -8,9 +8,9 @@ if __name__ == '__main__':
     n_clip_sigma = 3.0             # For data clipping.
     n_thresh_sigma = 5             # For threshold computation.
 
-    fwhm = 2.0
-    fit_shape = (11, 11)
-    aperture_radius = 4
+    fwhm = 4.0
+    fit_shape = (17, 17)
+    aperture_radius = 8
 
 
     input_img_filename = "diffimage_masked.fits"
@@ -23,14 +23,14 @@ if __name__ == '__main__':
 
     # Compute PSF catalog for difference image.  No background subtraction is done.
 
-    phot,finder_results = util.compute_diffimage_psf_catalog(n_clip_sigma,
-                                                            n_thresh_sigma,
-                                                            fwhm,
-                                                            fit_shape,
-                                                            aperture_radius,
-                                                            input_img_filename,
-                                                            input_unc_filename,
-                                                            input_psf_filename)
+    phot = util.compute_diffimage_psf_catalog(n_clip_sigma,
+                                              n_thresh_sigma,
+                                              fwhm,
+                                              fit_shape,
+                                              aperture_radius,
+                                              input_img_filename,
+                                              input_unc_filename,
+                                              input_psf_filename)
 
 
 
@@ -58,32 +58,10 @@ if __name__ == '__main__':
 
     print(phot[('id', 'x_fit', 'y_fit', 'flux_fit','x_err', 'y_err', 'flux_err', 'npixfit', 'qfit', 'cfit', 'flags')])
 
-    # Further details about the PSF fitting can be obtained from attributes on the PSFPhotometry instance.
-    # For example, the results from the finder instance called during PSF fitting can be accessed using the
-    # finder_results attribute (the finder returns an astropy table).
 
-    finder_results_keys = finder_results.keys()
+    # Write PSF-fit catalog in astropy table to text file.
 
-    print("finder_results_keys =",finder_results_keys)
-
-    finder_results['xcentroid'].info.format = '.4f'
-    finder_results['ycentroid'].info.format = '.4f'
-    finder_results['sharpness'].info.format = '.6f'
-    finder_results['peak'].info.format = '.4f'
-    finder_results['flux'].info.format = '.6f'
-    finder_results['mag'].info.format = '.6f'
-    finder_results['daofind_mag'].info.format = '.6f'
-    finder_results['roundness1'].info.format = '.6f'
-    finder_results['roundness2'].info.format = '.6f'
-
-    print(finder_results)
-
-
-    # Write combined entire PSF-fit catalog in astropy table.
-
-    catalog = phot | finder_results
-
-    ascii.write(catalog, output_psfcat_filename, overwrite=True)
+    ascii.write(phot, output_psfcat_filename, overwrite=True)
 
 
     # Terminate.
