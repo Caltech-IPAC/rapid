@@ -711,7 +711,7 @@ if __name__ == '__main__':
     #################################################################################################################
 
 
-    python_cmd = '/usr/bin/python3'
+    python_cmd = '/usr/bin/python3.11'
     zogy_code = '/code/modules/zogy/v21Aug2018/py_zogy.py'
     filename_diffimage = 'diffimage.fits'
     filename_diffpsf = 'diffpsf.fits'

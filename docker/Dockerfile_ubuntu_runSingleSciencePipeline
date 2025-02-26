@@ -1,16 +1,35 @@
 FROM redhat/ubi9
 
-RUN yum install -y pip
+# Install packages in Python 3.9 (/usr/bin/python3)
 
+RUN yum install -y pip
+RUN pip install --upgrade pip
 RUN pip install --upgrade numpy
 RUN pip install --upgrade astropy
 RUN pip install --upgrade psycopg2-binary
-RUN pip install healpy
-RUN pip install boto3
-RUN pip install pyfftw
-RUN pip install sympy
-RUN pip install sip_tpv
-RUN pip install photutils
+RUN pip install --upgrade healpy
+RUN pip install --upgrade boto3
+RUN pip install --upgrade pyfftw
+RUN pip install --upgrade sympy
+RUN pip install --upgrade sip_tpv
+RUN pip install --upgrade photutils
+
+# Install Python 3.11 with packages (/usr/bin/python3.11)
+
+RUN dnf install python3.11
+RUN python3.11 -m ensurepip
+RUN python3.11 -m pip install --upgrade pip
+RUN python3.11 -m pip install --upgrade numpy
+RUN python3.11 -m pip install --upgrade astropy
+RUN python3.11 -m pip install --upgrade psycopg2-binary
+RUN python3.11 -m pip install --upgrade healpy
+RUN python3.11 -m pip install --upgrade boto3
+RUN python3.11 -m pip install --upgrade pyfftw
+RUN python3.11 -m pip install --upgrade sympy
+RUN python3.11 -m pip install --upgrade sip_tpv
+RUN python3.11 -m pip install --upgrade photutils
+
+# Install commands and tools.
 
 RUN yum -y install gcc
 RUN yum -y install g++
@@ -38,7 +57,6 @@ RUN cd /tmp && \
 # Install ps command.
 
 RUN yum -y install procps
-
 
 # Checkout RAPID git repo.
 
