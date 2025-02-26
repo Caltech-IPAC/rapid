@@ -47,7 +47,7 @@ Running RAPID Pipeline under AWS Batch
 
 The two latter ones are only needed if your EC2 instance is to have an EBS volume attached.
 
-Your EC2 instance should have a large enough book-disk volume as docker build requires a lot of space; at least 32 GB is recommended.
+Your EC2 instance should have a large enough book-disk volume as ``docker build`` requires a lot of space; at least 32 GB is recommended.
 
 2. Check your source-code changes into the RAPID git repo.
 
@@ -91,7 +91,7 @@ thus reclaiming disk space:
    meaning the expected disk space will not be reclaimed,
    unless all containers running the Docker image ``rapid_science_pipeline:1.0`` are stopped!
 
-Here is how to get a listing of your docker images:
+Here is how to get a listing of your Docker images:
 
 .. code-block::
 
