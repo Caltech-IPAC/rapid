@@ -32,7 +32,7 @@ logfile="rapid_pipeline_job_${JOBPROCDATE}_jid${RAPID_JOB_ID}_log.txt"
 echo "logfile = $logfile"
 
 echo "Executing /usr/bin/python3.11 /code/pipeline/awsBatchSubmitJobs_runSingleSciencePipeline.py >& $logfile"
-/usr/bin/python3 /code/pipeline/awsBatchSubmitJobs_runSingleSciencePipeline.py >& $logfile
+/usr/bin/python3.11 /code/pipeline/awsBatchSubmitJobs_runSingleSciencePipeline.py >& $logfile
 
 exitcode=$?
 
