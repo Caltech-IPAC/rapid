@@ -832,13 +832,13 @@ if __name__ == '__main__':
     output_psfcat_filename = psfcat_diffimage_dict["output_psfcat_filename"]
 
     phot,finder_results = util.compute_diffimage_psf_catalog(n_clip_sigma,
-                                                            n_thresh_sigma,
-                                                            fwhm,
-                                                            fit_shape,
-                                                            aperture_radius,
-                                                            input_img_filename,
-                                                            input_unc_filename,
-                                                            input_psf_filename)
+                                                             n_thresh_sigma,
+                                                             fwhm,
+                                                             fit_shape,
+                                                             aperture_radius,
+                                                             input_img_filename,
+                                                             input_unc_filename,
+                                                             input_psf_filename)
 
 
     # Output psf-fit catalog is an astropy table with the PSF-fitting results.
