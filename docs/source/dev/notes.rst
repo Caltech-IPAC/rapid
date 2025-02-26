@@ -181,9 +181,11 @@ Since this Docker image contains the ENTRYPOINT instruction, you must override i
    cd /tmp
    export ROMANTESSELLATIONDBNAME=/work/roman_tessellation_nside512.db
    export RID=172211
-   python3 /code/pipeline/awsBatchSubmitJobs_launchSingleSciencePipeline.py
+   python3.11 /code/pipeline/awsBatchSubmitJobs_launchSingleSciencePipeline.py
 
    exit
+
+Python 3.11 is required and it is installed inside the Docker image (/usr/bin/python3.11).
 
 After the AWS Batch job finishes, there are files written to S3 buckets that can be examined:
 

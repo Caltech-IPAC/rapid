@@ -18,13 +18,13 @@ Install Docker on Ubuntu EC2 instance
 
    sudo apt-get update
 
-3. Install docker:
+3. Install Docker service:
 
 .. code-block::
 
    sudo apt-get install docker.io -y
 
-4. Start docker service:
+4. Start Docker service:
 
 .. code-block::
 
