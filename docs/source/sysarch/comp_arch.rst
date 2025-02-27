@@ -70,4 +70,4 @@ For example, here is a SourceExtractor catalog made from the difference image fo
 
     20250218/jid999/diffimage_masked.txt
 
-A separate page describes all available :doc:`RAPID-pipeline products </prod/products>.`
+A separate page describes all available :doc:`RAPID-pipeline products </prod/products>`.
