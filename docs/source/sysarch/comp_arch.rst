@@ -11,21 +11,33 @@ Here is a high-level flowchart of the RAPID system architecture:
 
 Everything is done in the AWS cloud, and is accessible via a laptop with Internet connection.
 
-The database server is a very inexpensive t2.micro AWS machine, which runs 24 hours a day, seven days a week.
-A more powerful machine is utilized to launch RAPID pipeline instances, which is only activated as needed in order to save money.
+The database server is a very inexpensive ``t2.micro`` AWS machine,
+which runs 24 hours a day, seven days a week.
+A more powerful multi-core, high-memory machine can be utilized to execute RAPID pipeline instances,
+which would only be activated as needed in order to save money.  This is just one way the
+RAPID pipelines could be run in parallel; the next section explains another way, which has
+been demonstrated to be a very feasible methodology indeed.
+
+Our strategy for software interactions with the SQL database is that queries are executed only during
+initial pipeline launching and final data aggregation stages, before and after pipeline instances are
+executed separately on multiple CPU cores.  This ensures scalability
+of the RAPID-pipeline computing system.
+
 
 Computing Architecture
 **************************
 
-Here is a more detailed flowchart of the RAPID computing architecture:
+Here is a another flowchart of the RAPID computing architecture, which details how
+parallel processing of the data is done on multiple machines, which is has proven
+to be a very viable and practical approach from our extensive testing thus far:
 
 .. image:: computing_architecture.png
 
 Parallel processing on a massive scale is facilitated by the AWS Batch Service.
 
-Database interactions are done only during intial pipeline launching and final data aggregation stages,
-before and after pipeline instances are executed under the AWS Batch Service.  This ensures scalability
-of the RAPID-pipeline computing system.
+Database interactions with a PostgreSQL database are done only during initial pipeline launching
+and final data aggregation stages, before and after pipeline instances are executed under the
+AWS Batch Service.  This ensures scalability of the RAPID-pipeline computing system.
 
 
 Pipeline Performance
