@@ -69,8 +69,7 @@ if __name__ == '__main__':
 
         # Launch single pipeline instance.
 
-
-        python_cmd = 'python3'
+        python_cmd = 'python3.11'
         launch_single_pipeline_instance_code = '/code/pipeline/awsBatchSubmitJobs_launchSingleSciencePipeline.py'
 
         launch_cmd = [python_cmd,
