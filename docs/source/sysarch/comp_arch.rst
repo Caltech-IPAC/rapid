@@ -66,6 +66,8 @@ The products from this test run are in the following S3 bucket::
 
     aws s3 ls --recursive s3://rapid-product-files/20250218
 
-For example, here is a SourceExtractor catalog from the difference image for one job (jid=999)::
+For example, here is a SourceExtractor catalog made from the difference image for one job (jid=999)::
 
     20250218/jid999/diffimage_masked.txt
+
+A separate page documents all available :doc:`RAPID-pipeline products </prod/products>.`
