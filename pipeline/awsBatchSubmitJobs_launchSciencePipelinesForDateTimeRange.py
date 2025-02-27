@@ -1,4 +1,9 @@
 import os
+from datetime import datetime, timezone
+from dateutil import tz
+import time
+
+to_zone = tz.gettz('America/Los_Angeles')
 
 import database.modules.utils.rapid_db as db
 import modules.utils.rapid_pipeline_subs as util
@@ -8,6 +13,22 @@ swvers = "1.0"
 
 print("swname =", swname)
 print("swvers =", swvers)
+
+
+# Compute start time for benchmark.
+
+start_time_benchmark = time.time()
+
+
+# Compute processing datetime (UT) and processing datetime (Pacific time).
+
+datetime_utc_now = datetime.utcnow()
+proc_utc_datetime = datetime_utc_now.strftime('%Y-%m-%dT%H:%M:%SZ')
+datetime_pt_now = datetime_utc_now.replace(tzinfo=timezone.utc).astimezone(tz=to_zone)
+proc_pt_datetime_started = datetime_pt_now.strftime('%Y-%m-%dT%H:%M:%S PT')
+
+print("proc_utc_datetime =",proc_utc_datetime)
+print("proc_pt_datetime_started =",proc_pt_datetime_started)
 
 
 # Inputs are observaton start and end datetimes of exposures to be processed.
@@ -84,6 +105,14 @@ if __name__ == '__main__':
 
     if dbh.exit_code >= 64:
         exit(dbh.exit_code)
+
+
+    # Code-timing benchmark.
+
+    end_time_benchmark = time.time()
+    print("Elapsed time in seconds to launch pipelines =",
+        end_time_benchmark - start_time_benchmark)
+    start_time_benchmark = end_time_benchmark
 
 
     # Termination.
