@@ -17,17 +17,18 @@ Pipeline, under development at IPAC/Caltech.
 Running the latest RAPID Pipeline
 *************************************
 
-A docker image has been pre-built from a recent git-clone of the RAPID Github
-repository (2/26/25).
-This docker image offers the convenience of having the RAPID
+A Docker image has been pre-built from a recent git-clone of the RAPID Github
+repository (2/27/25).
+This Docker image offers the convenience of having the RAPID
 pipeline already installed and ready to run.  It is publicly available from
 
 .. code-block::
 
    public.ecr.aws/y9b1s7h8/rapid_science_pipeline:latest
 
-You can use it to docker-run a container and from within execute
-code for image-differencing, etc., using a docker-run command like the
+It is currently 3.34GB in size, and requires sufficient disk space on the target machine.
+It can be used to ``docker-run`` a container and from within execute
+code for image-differencing, etc., using a ``docker-run`` command like the
 following (note that an entry point to bash is required for interactive use
 and to inhibit running the automated pipeline):
 
@@ -36,16 +37,16 @@ and to inhibit running the automated pipeline):
    docker run -it --entrypoint bash --name my_test -v /home/ubuntu/work/test_20241206:/work public.ecr.aws/y9b1s7h8/rapid_science_pipeline:latest
 
 
-The Docker file used to generate this docker image is
+The Docker file used to generate this Docker image is
 
 .. code-block::
 
    rapid/docker/Dockerfile_ubuntu_runSingleSciencePipeline
 
-in the RAPID git repo.  The docker image self-contains a
+in the RAPID git repo.  The Docker image self-contains a
 RAPID git-clone in the /code directory (no volume binding to an
 external filesystem containing the RAPID git repo is necessary).  The
-docker image also contains a
+Docker image also contains a
 C-code build of the RAPID software stack with the following run-time environment:
 
 .. code-block::
