@@ -16,6 +16,7 @@ if __name__ == '__main__':
     input_img_filename = "diffimage_masked.fits"
     input_unc_filename = "diffimage_uncert_masked.fits"
     input_psf_filename = "diffpsf.fits"
+    output_psfcat_residual_filename = "diffimage_masked_psfcat_residual.fits"
     output_psfcat_filename = "diffimage_masked_psfcat.txt"
 
     print("output_psfcat_filename = ", output_psfcat_filename)
@@ -30,8 +31,8 @@ if __name__ == '__main__':
                                               aperture_radius,
                                               input_img_filename,
                                               input_unc_filename,
-                                              input_psf_filename)
-
+                                              input_psf_filename,
+                                              output_psfcat_residual_filename)
 
 
     # Output catalog is an astropy table with the PSF-fitting results.

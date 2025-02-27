@@ -1302,7 +1302,8 @@ def compute_diffimage_psf_catalog(n_clip_sigma,
                                   aperture_radius,
                                   input_img_filename,
                                   input_unc_filename,
-                                  input_psf_filename):
+                                  input_psf_filename,
+                                  output_psfcat_residual_filename):
 
     '''
     Method compute_diffimage_psf_catalog
@@ -1334,6 +1335,7 @@ def compute_diffimage_psf_catalog(n_clip_sigma,
     print("input_img_filename =",input_img_filename)
     print("input_unc_filename =",input_unc_filename)
     print("input_psf_filename =",input_psf_filename)
+    print("output_psfcat_residual_filename =",output_psfcat_residual_filename)
 
     hdu_index = 0
     saturation_level_image_rate = 999999
@@ -1434,13 +1436,9 @@ def compute_diffimage_psf_catalog(n_clip_sigma,
 
     resid = psfphot.make_residual_image(data_image)
 
-    psfcat_residual_filename = input_img_filename.replace(".fits","_psfcat_residual.fits")
-
-    print("psfcat_residual_filename =",psfcat_residual_filename)
-
     new_hdu = fits.PrimaryHDU(data=resid.astype(np.float32))
 
-    new_hdu.writeto(psfcat_residual_filename,overwrite=True,checksum=True)
+    new_hdu.writeto(output_psfcat_residual_filename,overwrite=True,checksum=True)
 
 
     # Return photometry catalog.

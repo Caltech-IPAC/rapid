@@ -830,6 +830,7 @@ if __name__ == '__main__':
     input_unc_filename = psfcat_diffimage_dict["input_unc_filename"]
     input_psf_filename = psfcat_diffimage_dict["input_psf_filename"]
     output_psfcat_filename = psfcat_diffimage_dict["output_psfcat_filename"]
+    output_psfcat_residual_filename = psfcat_diffimage_dict["output_psfcat_residual_filename"]
 
     phot = util.compute_diffimage_psf_catalog(n_clip_sigma,
                                               n_thresh_sigma,
@@ -838,7 +839,8 @@ if __name__ == '__main__':
                                               aperture_radius,
                                               input_img_filename,
                                               input_unc_filename,
-                                              input_psf_filename)
+                                              input_psf_filename,
+                                              output_psfcat_residual_filename)
 
 
     # Output psf-fit catalog is an astropy table with the PSF-fitting results.
@@ -897,6 +899,7 @@ if __name__ == '__main__':
     s3_object_name_output_resampled_gainmatched_reference_image = job_proc_date + "/jid" + str(jid) + "/" + \
                                                                   output_resampled_gainmatched_reference_image
     s3_object_name_output_psfcat_filename = job_proc_date + "/jid" + str(jid) + "/" + output_psfcat_filename
+    s3_object_name_output_psfcat_residual_filename = job_proc_date + "/jid" + str(jid) + "/" + output_psfcat_residual_filename
 
     filenames = [filename_diffimage_masked,
                  filename_diffimage_unc_masked,
@@ -905,7 +908,8 @@ if __name__ == '__main__':
                  filename_scorrimage_masked,
                  filename_bkg_subbed_science_image,
                  output_resampled_gainmatched_reference_image,
-                 output_psfcat_filename]
+                 output_psfcat_filename,
+                 output_psfcat_residual_filename]
 
     objectnames = [s3_object_name_diffimage,
                    s3_object_name_diffimage_unc,
@@ -914,7 +918,8 @@ if __name__ == '__main__':
                    s3_object_name_scorrimage,
                    s3_object_name_bkg_subbed_science_image,
                    s3_object_name_output_resampled_gainmatched_reference_image,
-                   s3_object_name_output_psfcat_filename]
+                   s3_object_name_output_psfcat_filename,
+                   s3_object_name_output_psfcat_residual_filename]
 
     util.upload_files_to_s3_bucket(s3_client,product_s3_bucket,filenames,objectnames)
 
