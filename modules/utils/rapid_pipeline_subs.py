@@ -1434,11 +1434,12 @@ def compute_diffimage_psf_catalog(n_clip_sigma,
 
     # Make residual image.
 
-    resid = psfphot.make_residual_image(data_image)
-
-    new_hdu = fits.PrimaryHDU(data=resid.astype(np.float32))
-
-    new_hdu.writeto(output_psfcat_residual_filename,overwrite=True,checksum=True)
+    try:
+        resid = psfphot.make_residual_image(data_image)
+        new_hdu = fits.PrimaryHDU(data=resid.astype(np.float32))
+        new_hdu.writeto(output_psfcat_residual_filename,overwrite=True,checksum=True)
+    except:
+        print("*** Warning: Could not make residual image (perhaps no sources were detected); continuing...")
 
 
     # Return photometry catalog.
