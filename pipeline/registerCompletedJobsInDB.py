@@ -368,12 +368,17 @@ while True:
             exit(dbh.exit_code)
 
 
-        # If job failed, or not enough inputs to generate a reference image when required, skip to next job.
+        # If job failed, or not enough inputs to generate a reference image when required,
+        # then touch done file and skip to next job.
 
         if int(job_exitcode) == 33:
+            touch_cmd = ['touch', done_filename]
+            exitcode_from_touch = plsubs.execute_command(touch_cmd)
             continue
 
         if int(job_exitcode) >= 64:
+            touch_cmd = ['touch', done_filename]
+            exitcode_from_touch = plsubs.execute_command(touch_cmd)
             continue
 
 
