@@ -1,6 +1,5 @@
 import sys
 import os
-import time
 import signal
 import configparser
 import boto3
@@ -9,6 +8,11 @@ import re
 import healpy as hp
 import numpy as np
 import csv
+from datetime import datetime, timezone
+from dateutil import tz
+import time
+
+to_zone = tz.gettz('America/Los_Angeles')
 
 import modules.utils.rapid_pipeline_subs as plsubs
 import database.modules.utils.rapid_db as db
@@ -30,7 +34,24 @@ print("swvers =", swvers)
 print("cfg_filename_only =", cfg_filename_only)
 
 
-rfid = None
+# Compute start time for benchmark.
+
+start_time_benchmark = time.time()
+
+
+# Compute processing datetime (UT) and processing datetime (Pacific time).
+
+datetime_utc_now = datetime.utcnow()
+proc_utc_datetime = datetime_utc_now.strftime('%Y-%m-%dT%H:%M:%SZ')
+datetime_pt_now = datetime_utc_now.replace(tzinfo=timezone.utc).astimezone(tz=to_zone)
+proc_pt_datetime_started = datetime_pt_now.strftime('%Y-%m-%dT%H:%M:%S PT')
+
+print("proc_utc_datetime =",proc_utc_datetime)
+print("proc_pt_datetime_started =",proc_pt_datetime_started)
+
+
+# Initialize handler.
+
 istop = 0
 
 def signal_handler(signum, frame):
@@ -744,6 +765,22 @@ while True:
     print("i = ",i)
 
 
+    #
+    # End of open loop (but we are not iterating because of break above).
+    #
+
+
+# Code-timing benchmark.
+
+end_time_benchmark = time.time()
+print("Elapsed time in seconds to launch pipelines =",
+    end_time_benchmark - start_time_benchmark)
+start_time_benchmark = end_time_benchmark
+
+
 # Termination.
 
+print("Terminating: exitcode =",exitcode)
+
 exit(exitcode)
+
