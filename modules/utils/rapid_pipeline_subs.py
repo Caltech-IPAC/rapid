@@ -1418,7 +1418,12 @@ def compute_diffimage_psf_catalog(n_clip_sigma,
     iterative_flag = False
 
     if not iterative_flag:
-        psfphot = PSFPhotometry(psf_model=psf_model,fit_shape=fit_shape,finder=finder,aperture_radius=aperture_radius)
+        try:
+            psfphot = PSFPhotometry(psf_model=psf_model,fit_shape=fit_shape,finder=finder,aperture_radius=aperture_radius)
+            psfcat_flag = True
+        except:
+            print("*** Warning: Could not make psf-fit catalog (perhaps no sources were detected); continuing...")
+            psfcat_flag = False
     else:
         psfphot = IterativePSFPhotometry(psf_model=psf_model,fit_shape=fit_shape,finder=finder,aperture_radius=aperture_radius)
 
@@ -1434,14 +1439,15 @@ def compute_diffimage_psf_catalog(n_clip_sigma,
 
     # Make residual image.
 
-    try:
-        resid = psfphot.make_residual_image(data_image)
-        new_hdu = fits.PrimaryHDU(data=resid.astype(np.float32))
-        new_hdu.writeto(output_psfcat_residual_filename,overwrite=True,checksum=True)
-    except:
-        print("*** Warning: Could not make residual image (perhaps no sources were detected); continuing...")
+    if psfcat_flag:
+        try:
+            resid = psfphot.make_residual_image(data_image)
+            new_hdu = fits.PrimaryHDU(data=resid.astype(np.float32))
+            new_hdu.writeto(output_psfcat_residual_filename,overwrite=True,checksum=True)
+        except:
+            print("*** Warning: Could not make residual image (perhaps no sources were detected); continuing...")
 
 
     # Return photometry catalog.
 
-    return phot
+    return psfcat_flag,phot

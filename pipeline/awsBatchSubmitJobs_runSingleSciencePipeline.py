@@ -832,42 +832,43 @@ if __name__ == '__main__':
     output_psfcat_filename = psfcat_diffimage_dict["output_psfcat_filename"]
     output_psfcat_residual_filename = psfcat_diffimage_dict["output_psfcat_residual_filename"]
 
-    phot = util.compute_diffimage_psf_catalog(n_clip_sigma,
-                                              n_thresh_sigma,
-                                              fwhm,
-                                              fit_shape,
-                                              aperture_radius,
-                                              input_img_filename,
-                                              input_unc_filename,
-                                              input_psf_filename,
-                                              output_psfcat_residual_filename)
+    psfcat_flag,phot = util.compute_diffimage_psf_catalog(n_clip_sigma,
+                                                          n_thresh_sigma,
+                                                          fwhm,
+                                                          fit_shape,
+                                                          aperture_radius,
+                                                          input_img_filename,
+                                                          input_unc_filename,
+                                                          input_psf_filename,
+                                                          output_psfcat_residual_filename)
+
+    if psfcat_flag:
 
 
-    # Output psf-fit catalog is an astropy table with the PSF-fitting results.
+        # Output psf-fit catalog is an astropy table with the PSF-fitting results.
+        # Output columns are documentated at
+        # https://photutils.readthedocs.io/en/latest/api/photutils.psf.PSFPhotometry.html
 
-    # Output columns are documentated at
-    # https://photutils.readthedocs.io/en/latest/api/photutils.psf.PSFPhotometry.html
+        phot['x_init'].info.format = '.4f'
+        phot['y_init'].info.format = '.4f'
+        phot['flux_init'].info.format = '.6f'
+        phot['x_fit'].info.format = '.4f'
+        phot['y_fit'].info.format = '.4f'
+        phot['flux_fit'].info.format = '.6f'
+        phot['x_err'].info.format = '.4f'
+        phot['y_err'].info.format = '.4f'
+        phot['flux_err'].info.format = '.5f'
+        phot['qfit'].info.format = '.4f'
+        phot['cfit'].info.format = '.4f'
 
-    phot['x_init'].info.format = '.4f'
-    phot['y_init'].info.format = '.4f'
-    phot['flux_init'].info.format = '.6f'
-    phot['x_fit'].info.format = '.4f'
-    phot['y_fit'].info.format = '.4f'
-    phot['flux_fit'].info.format = '.6f'
-    phot['x_err'].info.format = '.4f'
-    phot['y_err'].info.format = '.4f'
-    phot['flux_err'].info.format = '.5f'
-    phot['qfit'].info.format = '.4f'
-    phot['cfit'].info.format = '.4f'
-
-    print(phot[('id', 'x_fit', 'y_fit', 'flux_fit','x_err', 'y_err', 'flux_err', 'npixfit', 'qfit', 'cfit', 'flags')])
+        print(phot[('id', 'x_fit', 'y_fit', 'flux_fit','x_err', 'y_err', 'flux_err', 'npixfit', 'qfit', 'cfit', 'flags')])
 
 
-    # Write PSF-fit catalog in astropy table to text file.
+        # Write PSF-fit catalog in astropy table to text file.
 
-    print("output_psfcat_filename = ", output_psfcat_filename)
+        print("output_psfcat_filename = ", output_psfcat_filename)
 
-    ascii.write(phot, output_psfcat_filename, overwrite=True)
+        ascii.write(phot, output_psfcat_filename, overwrite=True)
 
 
     # Code-timing benchmark.
