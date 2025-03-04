@@ -50,6 +50,24 @@ print("proc_utc_datetime =",proc_utc_datetime)
 print("proc_pt_datetime_started =",proc_pt_datetime_started)
 
 
+# Touch done file.  Upload done file to S3 bucket.
+
+def write_done_file(done_filename,product_s3_bucket_base,datearg,jid,s3_client):
+
+    touch_cmd = ['touch', done_filename]
+    exitcode_from_touch = plsubs.execute_command(touch_cmd)
+
+    product_s3_bucket = product_s3_bucket_base
+    s3_object_name_done_filename = datearg + "/jid" + str(jid) + "/" + done_filename
+    filenames = [done_filename]
+    objectnames = [s3_object_name_done_filename]
+    plsubs.upload_files_to_s3_bucket(s3_client,product_s3_bucket,filenames,objectnames)
+
+
+#########################
+# MAIN PROGRAM
+#########################
+
 # Initialize handler.
 
 istop = 0
@@ -372,13 +390,11 @@ while True:
         # then touch done file and skip to next job.
 
         if int(job_exitcode) == 33:
-            touch_cmd = ['touch', done_filename]
-            exitcode_from_touch = plsubs.execute_command(touch_cmd)
+            write_done_file(done_filename,product_s3_bucket_base,datearg,jid,s3_client)
             continue
 
         if int(job_exitcode) >= 64:
-            touch_cmd = ['touch', done_filename]
-            exitcode_from_touch = plsubs.execute_command(touch_cmd)
+            write_done_file(done_filename,product_s3_bucket_base,datearg,jid,s3_client)
             continue
 
 
@@ -593,17 +609,8 @@ while True:
                                            fwhmmaxpix,
                                            nsexcatsources)
 
-
-
                     if dbh.exit_code >= 64:
                         exit(dbh.exit_code)
-
-
-
-
-
-
-
 
 
 
@@ -707,24 +714,14 @@ while True:
                         exit(dbh.exit_code)
 
 
-        # Touch done file.
+        # Touch done file.  Upload done file to S3 bucket.
 
-        touch_cmd = ['touch', done_filename]
-        exitcode_from_touch = plsubs.execute_command(touch_cmd)
-
-
-        # Upload done file to S3 bucket.
-
-        product_s3_bucket = product_s3_bucket_base
-        s3_object_name_done_filename = datearg + "/jid" + str(jid) + "/" + done_filename
-        filenames = [done_filename]
-        objectnames = [s3_object_name_done_filename]
-        plsubs.upload_files_to_s3_bucket(s3_client,product_s3_bucket,filenames,objectnames)
+        write_done_file(done_filename,product_s3_bucket_base,datearg,jid,s3_client)
 
 
-    #####################################################################
-    # Done with loop over jobs for a given processing date.
-    #####################################################################
+        #####################################################################
+        # Done with loop over jobs for a given processing date.
+        #####################################################################
 
     # Close database connection.
 
