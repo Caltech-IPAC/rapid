@@ -49,6 +49,8 @@ diffimage_uncert_masked.fits                                    ZOGY output unce
 diffpsf.fits                                                    ZOGY output PSF
 scorrimage_masked.fits                                          ZOGY output SCORR image with NaNs in zero-coverage pixels
 diffimage_masked.txt                                            SourceExtractor catalog from difference image
+diffimage_masked_psfcat.txt                                     PhotUtils PSF-fit catalog from difference image (noniterative)
+diffimage_masked_psfcat_residual.fits                           PhotUtils residual image
 diffimage_jid999.done                                           Done file indicating product metadata for job ingested into RAPID operations database
 ==============================================================  =========================================================================================
 
