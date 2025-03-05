@@ -326,6 +326,7 @@ if __name__ == '__main__':
         awaicgen_output_mosaic_cov_map_s3_bucket_object_name = generateReferenceImage_return_list[6]
         awaicgen_output_mosaic_uncert_image_s3_bucket_object_name = generateReferenceImage_return_list[7]
         nframes = generateReferenceImage_return_list[8]
+        refimage_input_filenames = generateReferenceImage_return_list[9]
 
 
         # Compute required statistics for reference-image depth-of-coverage image and uncertainty image.
@@ -490,6 +491,39 @@ if __name__ == '__main__':
         product_config['REF_IMAGE']['fwhmmaxpix'] = str(fwhmmaxpix)
         product_config['REF_IMAGE']['nsexcatsources'] = str(nsexcatsources_refimage)
         product_config['REF_IMAGE']['input_images_csv_name_for_download'] = input_images_csv_name_for_download
+
+
+        # Add informational FITS keywords to reference-image header.
+
+        rfis.addKeywordsToReferenceImageHeader(awaicgen_output_mosaic_image_file,
+                                               field_sciimage,
+                                               fid_sciimage,
+                                               nframes,
+                                               refimage_input_filenames)
+
+
+        # Upload reference-image file to S3 bucket.
+
+        uploaded_to_bucket = True
+
+        try:
+            response = s3_client.upload_file(awaicgen_output_mosaic_image_file,
+                                             product_s3_bucket,
+                                             awaicgen_output_mosaic_image_s3_bucket_object_name)
+
+            print("response =",response)
+
+        except ClientError as e:
+            print("*** Error: Failed to upload {} to s3://{}/{}"\
+                .format(awaicgen_output_mosaic_image_file,product_s3_bucket,awaicgen_output_mosaic_image_s3_bucket_object_name))
+            uploaded_to_bucket = False
+
+        if uploaded_to_bucket:
+            print("Successfully uploaded {} to s3://{}/{}"\
+                .format(awaicgen_output_mosaic_image_file,product_s3_bucket,awaicgen_output_mosaic_image_s3_bucket_object_name))
+
+
+
 
 
     # Unzip the science image gzipped file.

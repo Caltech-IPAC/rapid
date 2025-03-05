@@ -197,25 +197,8 @@ def generateReferenceImage(s3_client,
     exitcode_from_awaicgen = util.execute_command(awaicgen_cmd)
 
 
-    # Upload reference-image products to S3 bucket.
-
-    uploaded_to_bucket = True
-
-    try:
-        response = s3_client.upload_file(awaicgen_output_mosaic_image_file,
-                                         product_s3_bucket,
-                                         awaicgen_output_mosaic_image_s3_bucket_object_name)
-
-        print("response =",response)
-
-    except ClientError as e:
-        print("*** Error: Failed to upload {} to s3://{}/{}"\
-            .format(awaicgen_output_mosaic_image_file,product_s3_bucket,awaicgen_output_mosaic_image_s3_bucket_object_name))
-        uploaded_to_bucket = False
-
-    if uploaded_to_bucket:
-        print("Successfully uploaded {} to s3://{}/{}"\
-            .format(awaicgen_output_mosaic_image_file,product_s3_bucket,awaicgen_output_mosaic_image_s3_bucket_object_name))
+    # Upload ancillary reference-image products to S3 bucket.  Do not upload the reference image itself
+    # until later, after informational keywords have been added to the FITS header.
 
     uploaded_to_bucket = True
 
@@ -276,6 +259,7 @@ def generateReferenceImage(s3_client,
     generateReferenceImage_return_list.append(awaicgen_output_mosaic_cov_map_s3_bucket_object_name)
     generateReferenceImage_return_list.append(awaicgen_output_mosaic_uncert_image_s3_bucket_object_name)
     generateReferenceImage_return_list.append(n_images_to_coadd)
+    generateReferenceImage_return_list.append(refimage_input_filenames)
 
     return generateReferenceImage_return_list
 
@@ -348,3 +332,43 @@ def generateReferenceImageCatalog(s3_client,
     generateReferenceImageCatalog_return_list.append(refimage_sextractor_catalog_s3_bucket_object_name)
 
     return generateReferenceImageCatalog_return_list
+
+
+#####################################################################################
+# Add informational FITS keywords to reference-image header.
+#####################################################################################
+
+def addKeywordsToReferenceImageHeader(reference_image_filename,
+                                      field,
+                                      fid,
+                                      nframes,
+                                      refimage_input_filenames):
+
+    hdu_index = 0
+
+    hdul = fits.open(reference_image_filename)
+
+    hdr = hdul[hdu_index].header
+
+    data = hdul[hdu_index].data
+
+    hdul.close()
+
+    hdr["FIELD"] = str(field)
+    hdr["FID"] = str(fid)
+    hdr["NFRAMES"] = str(nframes)
+
+    i = 0
+    for fn in refimage_input_filenames:
+        i = i + 1
+        zero_padding = ""
+        if i < 10:
+            zero_padding = "00"
+        elif i < 100:
+            zero_padding = "0"
+        kw = "INFIL" + zero_padding + str(i)
+        hdr[kw] = fn
+
+    np_data = np.array(data)
+    new_hdu = fits.PrimaryHDU(header=hdr,data=np_data.astype(np.float32))
+    new_hdu.writeto(reference_image_filename,overwrite=True,checksum=True)
