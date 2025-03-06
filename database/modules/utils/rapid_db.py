@@ -2341,7 +2341,7 @@ class RAPIDDB:
         # Define query template.
 
         query_template =\
-            "select filter from Filters where rid=TEMPLATE_FID;"
+            "select filter from Filters where fid=TEMPLATE_FID;"
 
 
         # Query database.
