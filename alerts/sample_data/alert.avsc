@@ -1,0 +1,12 @@
+{
+	"namespace": "rapid",
+	"name": "alert",
+	"doc": "RAPID avro alert schema",
+    "version": "X.Y",
+    "type": "record",
+	"fields": [
+		{"name": "alertId", "type": "string", "doc": "Unique alert identifer"},
+        {"name": "SExtractorSourceSingle", "type": "rapid.SExtractorSourceSingle", "doc": "Single SExtractor source."},
+        {"name": "SExtractorSourceArray", "type": [{"type": "array", "items": "rapid.SExtractorSourceSingle"},"null"], "doc": "Array of SExtractor sources."}
+     ]
+}
