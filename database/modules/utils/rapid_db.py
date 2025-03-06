@@ -2325,3 +2325,53 @@ class RAPIDDB:
             return
 
         return records
+
+
+########################################################################################################
+
+    def get_exposure_filter(self,fid):
+
+        '''
+        Get record from Filters database table for given fid.
+        '''
+
+        self.exit_code = 0
+
+
+        # Define query template.
+
+        query_template =\
+            "select filter from Filters where rid=TEMPLATE_FID;"
+
+
+        # Query database.
+
+        print('----> fid = {}'.format(fid))
+
+        fid_str = str(fid)
+
+        rep = {"TEMPLATE_FID": fid_str}
+
+        rep = dict((re.escape(k), v) for k, v in rep.items())
+        pattern = re.compile("|".join(rep.keys()))
+        query = pattern.sub(lambda m: rep[re.escape(m.group(0))], query_template)
+
+        print('query = {}'.format(query))
+
+
+        # Execute query.
+
+        self.cur.execute(query)
+        record = self.cur.fetchone()
+
+        if record is not None:
+            exposure_filter = record[0]
+
+        else:
+            exposure_filter = None
+
+            print("*** Error: Could not get Filters database record; returning...")
+            self.exit_code = 67
+
+
+        return exposure_filter

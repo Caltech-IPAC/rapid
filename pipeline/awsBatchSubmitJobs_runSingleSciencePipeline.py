@@ -162,6 +162,7 @@ if __name__ == '__main__':
     rid_sciimage = int(config_input['SCI_IMAGE']['rid'])
     sca_sciimage = int(config_input['SCI_IMAGE']['sca'])
     fid_sciimage = int(config_input['SCI_IMAGE']['fid'])
+    filter_sciimage = int(config_input['SCI_IMAGE']['filter'])
     s3_full_name_science_image = config_input['SCI_IMAGE']['s3_full_name_science_image']
     expid_sciimage = int(config_input['SCI_IMAGE']['expid'])
     field_sciimage = int(config_input['SCI_IMAGE']['field'])
@@ -494,12 +495,16 @@ if __name__ == '__main__':
 
 
         # Add informational FITS keywords to reference-image header.
+        # Return cov5percent to be propagated to operations database.
 
-        rfis.addKeywordsToReferenceImageHeader(awaicgen_output_mosaic_image_file,
-                                               field_sciimage,
-                                               fid_sciimage,
-                                               nframes,
-                                               refimage_input_filenames)
+        cov5percent = rfis.addKeywordsToReferenceImageHeader(awaicgen_output_mosaic_image_file,
+                                                             field_sciimage,
+                                                             fid_sciimage,
+                                                             filter_sciimage,
+                                                             nframes,
+                                                             refimage_input_filenames)
+
+        product_config['REF_IMAGE']['cov5percent'] = str(cov5percent)
 
 
         # Upload reference-image file to S3 bucket.
@@ -521,9 +526,6 @@ if __name__ == '__main__':
         if uploaded_to_bucket:
             print("Successfully uploaded {} to s3://{}/{}"\
                 .format(awaicgen_output_mosaic_image_file,product_s3_bucket,awaicgen_output_mosaic_image_s3_bucket_object_name))
-
-
-
 
 
     # Unzip the science image gzipped file.

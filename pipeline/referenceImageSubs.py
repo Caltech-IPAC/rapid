@@ -341,6 +341,7 @@ def generateReferenceImageCatalog(s3_client,
 def addKeywordsToReferenceImageHeader(reference_image_filename,
                                       field,
                                       fid,
+                                      exposure_filter,
                                       nframes,
                                       refimage_input_filenames):
 
@@ -354,9 +355,36 @@ def addKeywordsToReferenceImageHeader(reference_image_filename,
 
     hdul.close()
 
+
+    # cov5percent is an absolute quality-assurance metric for reference images equal to a
+    # percentage of the sum of the limited coverage of all pixels in an image, where the
+    # limited coverage is all coverage and any coverage greater than 5 that is reset to 5
+    # for scoring purposes, relative to 5 times the total number of pixels in the image.
+
+    pixel_coverage_limit = 5
+    a = np.array(data)
+    image_size = np.shape(a)
+    pixcount = image_size[0] * image_size[1]
+    b = np.where(a > pixel_coverage_limit,pixel_coverage_limit,a)
+    c = np.sum(b)
+    cov5percent = c / (pixel_coverage_limit * pixcount) * 100
+
+    print("pixel_coverage_limit =",pixel_coverage_limit)
+    print("c =",c)
+    print("pixcount =",pixcount)
+    print("cov5percent =",cov5percent)
+
+
+    # Add keywords to header.
+
     hdr["FIELD"] = str(field)
     hdr["FID"] = str(fid)
+    hdr["FILTER"] = exposure_filter
+    hdr["COV5PERC"] = str(cov5percent)
     hdr["NFRAMES"] = str(nframes)
+
+
+    # Add keywords for reference-image input filenames.
 
     i = 0
     for fn in refimage_input_filenames:
@@ -369,6 +397,14 @@ def addKeywordsToReferenceImageHeader(reference_image_filename,
         kw = "INFIL" + zero_padding + str(i)
         hdr[kw] = fn
 
+
+    # Rewrite reference-image FITS file.
+
     np_data = np.array(data)
     new_hdu = fits.PrimaryHDU(header=hdr,data=np_data.astype(np.float32))
     new_hdu.writeto(reference_image_filename,overwrite=True,checksum=True)
+
+
+    # Return cov5percent to be propagated to operations database.
+
+    return cov5percent

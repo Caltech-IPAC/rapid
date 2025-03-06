@@ -366,6 +366,7 @@ if __name__ == '__main__':
     # Query database for associated L2FileMeta record.
 
     sca,fid,ra0,dec0,ra1,dec1,ra2,dec2,ra3,dec3,ra4,dec4 = dbh.get_l2filemeta_record(rid)
+    exposure_filter = dbh.get_exposure_filter(fid)
 
     if dbh.exit_code >= 64:
         print("*** Error from {}; quitting ".format(swname))
@@ -655,6 +656,7 @@ if __name__ == '__main__':
     job_config['SCI_IMAGE']['rid'] = str(rid)
     job_config['SCI_IMAGE']['sca'] = str(sca)
     job_config['SCI_IMAGE']['fid'] = str(fid)
+    job_config['SCI_IMAGE']['filter'] = str(exposure_filter)
 
     job_config['SCI_IMAGE']['s3_full_name_science_image'] = s3_full_name_science_image
     job_config['SCI_IMAGE']['expid'] = str(expid)
