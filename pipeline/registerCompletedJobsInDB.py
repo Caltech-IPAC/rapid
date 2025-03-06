@@ -516,6 +516,7 @@ if __name__ == '__main__':
                         datascale = product_config_input['REF_IMAGE']['datascale']
                         gmin = product_config_input['REF_IMAGE']['gmin']
                         gmax = product_config_input['REF_IMAGE']['gmax']
+                        cov5percent = product_config_input['REF_IMAGE']['cov5percent']
                         medncov = product_config_input['REF_IMAGE']['medncov']
                         medpixunc = product_config_input['REF_IMAGE']['medpixunc']
                         fwhmmedpix = product_config_input['REF_IMAGE']['fwhmmedpix']
@@ -605,6 +606,7 @@ if __name__ == '__main__':
                                                datascale,
                                                gmin,
                                                gmax,
+                                               cov5percent
                                                medncov,
                                                medpixunc,
                                                fwhmmedpix,
