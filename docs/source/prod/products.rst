@@ -125,3 +125,11 @@ various useful metadata contained therein::
     CHECKSUM= 'W4EBa2B9Y2BAa2B9'   / HDU checksum updated 2025-03-06T18:13:46
     DATASUM = '2030501515'         / data unit checksum updated 2025-03-06T18:13:46
     END
+
+The quality-assurance metric ``cov5percent``, given by FITS keyword ``COV5PERC``,
+is an absolute quantifier for the aggregate areal-depth coverage of a reference image at a
+reference depth of 5, corresponding to a coadd depth of at least 5 input images.
+It is computed from the reference-image coverage map.
+It is defined as a percentage of the sum of the limited coverage of all pixels in an image,
+where the limited coverage is all coverage and any coverage greater than 5 that is reset to 5
+for scoring purposes, relative to 5 times the total number of pixels in the image.
