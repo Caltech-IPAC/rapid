@@ -342,6 +342,7 @@ def addKeywordsToReferenceImageHeader(reference_image_filename,
                                       field,
                                       fid,
                                       exposure_filter,
+                                      cov5percent,
                                       nframes,
                                       refimage_input_filenames):
 
@@ -354,25 +355,6 @@ def addKeywordsToReferenceImageHeader(reference_image_filename,
     data = hdul[hdu_index].data
 
     hdul.close()
-
-
-    # cov5percent is an absolute quality-assurance metric for reference images equal to a
-    # percentage of the sum of the limited coverage of all pixels in an image, where the
-    # limited coverage is all coverage and any coverage greater than 5 that is reset to 5
-    # for scoring purposes, relative to 5 times the total number of pixels in the image.
-
-    pixel_coverage_limit = 5
-    a = np.array(data)
-    image_size = np.shape(a)
-    pixcount = image_size[0] * image_size[1]
-    b = np.where(a > pixel_coverage_limit,pixel_coverage_limit,a)
-    c = np.sum(b)
-    cov5percent = c / (pixel_coverage_limit * pixcount) * 100
-
-    print("pixel_coverage_limit =",pixel_coverage_limit)
-    print("c =",c)
-    print("pixcount =",pixcount)
-    print("cov5percent =",cov5percent)
 
 
     # Add keywords to header.
@@ -404,7 +386,46 @@ def addKeywordsToReferenceImageHeader(reference_image_filename,
     new_hdu = fits.PrimaryHDU(header=hdr,data=np_data.astype(np.float32))
     new_hdu.writeto(reference_image_filename,overwrite=True,checksum=True)
 
+    return
 
-    # Return cov5percent to be propagated to operations database.
+
+#####################################################################################
+# Compute cov5percent from the reference-image coverage map.
+# cov5percent is an absolute quality-assurance metric for reference images equal to a
+# percentage of the sum of the limited coverage of all pixels in an image, where the
+# limited coverage is all coverage and any coverage greater than 5 that is reset to 5
+# for scoring purposes, relative to 5 times the total number of pixels in the image.
+#####################################################################################
+
+def compute_cov5percent(reference_cov_map_filename):
+
+
+    # Read reference-image coverage map.
+
+    hdu_index = 0
+    hdul = fits.open(reference_cov_map_filename)
+    hdr = hdul[hdu_index].header
+    data = hdul[hdu_index].data
+    hdul.close()
+
+
+    # Compute cov5percent from reference-image coverage map.
+
+    pixel_coverage_limit = 5
+    a = np.array(data)
+    image_size = np.shape(a)
+    pixcount = image_size[0] * image_size[1]
+    b = np.where(a > pixel_coverage_limit,pixel_coverage_limit,a)
+    c = np.sum(b)
+    cov5percent = c / (pixel_coverage_limit * pixcount) * 100
+
+    print("pixel_coverage_limit =",pixel_coverage_limit)
+    print("c =",c)
+    print("pixcount =",pixcount)
+    print("cov5percent =",cov5percent)
+
+
+    # Return cov5percent to be propagated to reference-image FITS header
+    # and operations database.
 
     return cov5percent
