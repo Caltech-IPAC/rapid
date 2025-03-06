@@ -162,7 +162,7 @@ if __name__ == '__main__':
     rid_sciimage = int(config_input['SCI_IMAGE']['rid'])
     sca_sciimage = int(config_input['SCI_IMAGE']['sca'])
     fid_sciimage = int(config_input['SCI_IMAGE']['fid'])
-    filter_sciimage = int(config_input['SCI_IMAGE']['filter'])
+    filter_sciimage = config_input['SCI_IMAGE']['filter']
     s3_full_name_science_image = config_input['SCI_IMAGE']['s3_full_name_science_image']
     expid_sciimage = int(config_input['SCI_IMAGE']['expid'])
     field_sciimage = int(config_input['SCI_IMAGE']['field'])
