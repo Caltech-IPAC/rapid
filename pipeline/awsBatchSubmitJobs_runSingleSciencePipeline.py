@@ -329,6 +329,8 @@ if __name__ == '__main__':
         nframes = generateReferenceImage_return_list[8]
         refimage_input_filenames = generateReferenceImage_return_list[9]
 
+        cov5percent = rfis.compute_cov5percent(awaicgen_output_mosaic_cov_map_file)
+
 
         # Compute required statistics for reference-image depth-of-coverage image and uncertainty image.
 
@@ -485,6 +487,7 @@ if __name__ == '__main__':
         product_config['REF_IMAGE']['datascale'] = str(datascale_refimage)
         product_config['REF_IMAGE']['gmin'] = str(gmin_refimage)
         product_config['REF_IMAGE']['gmax'] = str(gmax_refimage)
+        product_config['REF_IMAGE']['cov5percent'] = str(cov5percent)
         product_config['REF_IMAGE']['medncov'] = str(medncov)
         product_config['REF_IMAGE']['medpixunc'] = str(medpixunc)
         product_config['REF_IMAGE']['fwhmmedpix'] = str(fwhmmedpix)
@@ -495,16 +498,15 @@ if __name__ == '__main__':
 
 
         # Add informational FITS keywords to reference-image header.
-        # Return cov5percent to be propagated to operations database.
 
-        cov5percent = rfis.addKeywordsToReferenceImageHeader(awaicgen_output_mosaic_image_file,
-                                                             field_sciimage,
-                                                             fid_sciimage,
-                                                             filter_sciimage,
-                                                             nframes,
-                                                             refimage_input_filenames)
+        rfis.addKeywordsToReferenceImageHeader(awaicgen_output_mosaic_image_file,
+                                               field_sciimage,
+                                               fid_sciimage,
+                                               filter_sciimage,
+                                               cov5percent,
+                                               nframes,
+                                               refimage_input_filenames)
 
-        product_config['REF_IMAGE']['cov5percent'] = str(cov5percent)
 
 
         # Upload reference-image file to S3 bucket.
