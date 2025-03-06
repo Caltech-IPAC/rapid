@@ -1,6 +1,9 @@
 RAPID Pipeline Products
 ####################################################
 
+Overview
+***********
+
 The products processed on any given date (``<yyyymmdd>`` Pacific Time) will be located in
 the RAPID-product S3 bucket with the processing date as a prefix::
 
@@ -67,3 +70,58 @@ For a listing of the available product files,
 download :download:`this text file <rapid-product-files_20250304.txt>`.
 
 A simple Python script can be written to parse the listing and generate ``wget`` or ``curl`` download commands.
+
+
+Example Reference-Image FITS Header
+************************************
+
+This section lists an example reference-image FITS header to expose the user to the
+various useful metadata contained therein::
+
+
+    Image_file = awaicgen_output_mosaic_image.fits
+    Date_time = Thu Mar 06 10:23:38 PST 2025
+
+    HDU number = 1
+
+    SIMPLE  =                    T / conforms to FITS standard
+    BITPIX  =                  -32 / array data type
+    NAXIS   =                    2 / number of array dimensions
+    NAXIS1  =                 7000
+    NAXIS2  =                 7000
+    COMMENT   FITS (Flexible Image Transport System) format is defined in 'Astronomy
+    COMMENT   and Astrophysics', volume 376, page 359; bibcode: 2001A&A...376..359H
+    CRVAL1  =            11.067073 / RA at CRPIX1,CRPIX2, J2000.0 (deg)
+    CRVAL2  =           -43.804490 / Dec at CRPIX1,CRPIX2, J2000.0 (deg)
+    EQUINOX =               2000.0 / Equinox of WCS, (year)
+    CTYPE1  = 'RA---TAN'           / Projection type for axis 1
+    CTYPE2  = 'DEC--TAN'           / Projection type for axis 2
+    CRPIX1  =          3500.500000 / Axis 1 reference pixel at CRVAL1,CRVAL2
+    CRPIX2  =          3500.500000 / Axis 2 reference pixel at CRVAL1,CRVAL2
+    CDELT1  =  -0.0000305555549858 / Axis 1 scale at CRPIX1,CRPIX2 (deg/pix)
+    CDELT2  =   0.0000305555549858 / Axis 2 scale at CRPIX1,CRPIX2 (deg/pix)
+    CROTA2  =             0.000000 / Image twist: +axis2 W of N, J2000.0 (deg)
+    BITMASK =                    0 / Fatal bitstring mask template
+    HISTORY A generic WISE Astronomical Image Coadder, v5.2
+    HISTORY Frank J. Masci, fmasci@caltech.edu
+    DATE    = '2025-03-06T18:13:23' / file creation date (YYYY-MM-DDThh:mm:ss UT)
+    FIELD   = '5321355 '
+    FID     = '1       '
+    FILTER  = 'F184    '
+    COV5PERC= '58.828037'
+    NFRAMES = '12      '
+    INFIL001= 'Roman_TDS_simple_model_F184_702_8_lite.fits.gz'
+    INFIL002= 'Roman_TDS_simple_model_F184_707_1_lite.fits.gz'
+    INFIL003= 'Roman_TDS_simple_model_F184_1476_14_lite.fits.gz'
+    INFIL004= 'Roman_TDS_simple_model_F184_317_9_lite.fits.gz'
+    INFIL005= 'Roman_TDS_simple_model_F184_327_15_lite.fits.gz'
+    INFIL006= 'Roman_TDS_simple_model_F184_322_3_lite.fits.gz'
+    INFIL007= 'Roman_TDS_simple_model_F184_322_2_lite.fits.gz'
+    INFIL008= 'Roman_TDS_simple_model_F184_1087_7_lite.fits.gz'
+    INFIL009= 'Roman_TDS_simple_model_F184_327_14_lite.fits.gz'
+    INFIL010= 'Roman_TDS_simple_model_F184_1481_16_lite.fits.gz'
+    INFIL011= 'Roman_TDS_simple_model_F184_1476_11_lite.fits.gz'
+    INFIL012= 'Roman_TDS_simple_model_F184_1087_8_lite.fits.gz'
+    CHECKSUM= 'W4EBa2B9Y2BAa2B9'   / HDU checksum updated 2025-03-06T18:13:46
+    DATASUM = '2030501515'         / data unit checksum updated 2025-03-06T18:13:46
+    END
