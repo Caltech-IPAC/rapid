@@ -606,7 +606,7 @@ if __name__ == '__main__':
                                                datascale,
                                                gmin,
                                                gmax,
-                                               cov5percent
+                                               cov5percent,
                                                medncov,
                                                medpixunc,
                                                fwhmmedpix,
