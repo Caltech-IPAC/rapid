@@ -2159,6 +2159,7 @@ class RAPIDDB:
                            datascale,
                            gmin,
                            gmax,
+                           cov5percent,
                            medncov,
                            medpixunc,
                            fwhmmedpix,
@@ -2194,6 +2195,7 @@ class RAPIDDB:
             "cast(TEMPLATE_DATASCALE AS real)," +\
             "cast(TEMPLATE_GMIN AS real)," +\
             "cast(TEMPLATE_GMAX AS real)," +\
+            "cast(TEMPLATE_COV5PERCENT AS real)," +\
             "cast(TEMPLATE_MEDNCOV AS real)," +\
             "cast(TEMPLATE_MEDPIXUNC AS real)," +\
             "cast(TEMPLATE_FWHMMEDPIX AS real)," +\
@@ -2221,6 +2223,7 @@ class RAPIDDB:
         print('----> datascale = {}'.format(datascale))
         print('----> gmin = {}'.format(gmin))
         print('----> gmax = {}'.format(gmax))
+        print('----> cov5percent = {}'.format(cov5percent))
         print('----> medncov = {}'.format(medncov))
         print('----> medpixunc = {}'.format(medpixunc))
         print('----> fwhmmedpix = {}'.format(fwhmmedpix))
@@ -2246,6 +2249,7 @@ class RAPIDDB:
         rep["TEMPLATE_DATASCALE"] = str(datascale)
         rep["TEMPLATE_GMIN"] = str(gmin)
         rep["TEMPLATE_GMAX"] = str(gmax)
+        rep["TEMPLATE_COV5PERCENT"] = str(cov5percent)
         rep["TEMPLATE_MEDNCOV"] = str(medncov)
         rep["TEMPLATE_MEDPIXUNC"] = str(medpixunc)
         rep["TEMPLATE_FWHMMEDPIX"] = str(fwhmmedpix)
