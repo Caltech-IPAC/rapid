@@ -949,6 +949,7 @@ CREATE TABLE refimmeta (
     datascale real NOT NULL,               -- Global robust image pixel spread = 0.5*(p84-p16)
     gmin real NOT NULL,                    -- Global minimum image pixel value
     gmax real NOT NULL,                    -- Global maximum image pixel value
+    cov5percent real NOT NULL,             -- QA metric to measure coverage depth of at least 5
     medncov real NOT NULL,                 -- Median of corresponding depth-of-coverage image
     medpixunc real NOT NULL,               -- Median of corresponding uncertainty image
     fwhmmedpix real NOT NULL,              -- Median of FWHM_IMAGE values in reference-image SExtractor catalog [pixels]

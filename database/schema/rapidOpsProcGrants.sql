@@ -295,6 +295,7 @@ grant EXECUTE on FUNCTION registerRefImMeta (
     datascale_           real,
     gmin_                real,
     gmax_                real,
+    cov5percent_         real,
     medncov_             real,
     medpixunc_           real,
     fwhmmedpix_          real,
