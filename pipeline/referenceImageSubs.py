@@ -176,6 +176,38 @@ def generateReferenceImage(s3_client,
     f.close()
 
 
+    # Optionally upload reformatted awaicgen input image and uncertainty files to S3 bucket for off-line analysis.
+
+    upload_inputs = True
+
+    if upload_inputs:
+
+        files_to_upload = refimage_input_filenames_reformatted +\
+                          refimage_input_filenames_reformatted_unc +\
+                          [awaicgen_input_images_list_file,awaicgen_input_uncert_list_file]
+
+        for fname in files_to_upload:
+            s3_bucket_object_name = job_proc_date + "/jid" + str(jid) + "/refiminputs/" + fname
+
+            uploaded_to_bucket = True
+
+            try:
+                response = s3_client.upload_file(fname,
+                                                 product_s3_bucket,
+                                                 s3_bucket_object_name)
+
+                print("response =",response)
+
+            except ClientError as e:
+                print("*** Error: Failed to upload {} to s3://{}/{}"\
+                    .format(fname,product_s3_bucket,s3_bucket_object_name))
+                uploaded_to_bucket = False
+
+            if uploaded_to_bucket:
+                print("Successfully uploaded {} to s3://{}/{}"\
+                    .format(fname,product_s3_bucket,s3_bucket_object_name))
+
+
     # Set filenames and S3 object names for reference-image products.
 
     awaicgen_output_mosaic_image_file = awaicgen_dict["awaicgen_output_mosaic_image_file"]
