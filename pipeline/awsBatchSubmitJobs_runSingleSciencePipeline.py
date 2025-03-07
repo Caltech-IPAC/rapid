@@ -497,7 +497,7 @@ if __name__ == '__main__':
         product_config['REF_IMAGE']['input_images_csv_name_for_download'] = input_images_csv_name_for_download
 
 
-        # Add informational FITS keywords to reference-image header.
+        # Add informational FITS keywords to header of reference image.
 
         rfis.addKeywordsToReferenceImageHeader(awaicgen_output_mosaic_image_file,
                                                field_sciimage,
@@ -507,6 +507,16 @@ if __name__ == '__main__':
                                                nframes,
                                                refimage_input_filenames)
 
+
+        # Also, add same informational FITS keywords to header of reference-image uncertainty image.
+
+        rfis.addKeywordsToReferenceImageHeader(awaicgen_output_mosaic_uncert_image_file,
+                                               field_sciimage,
+                                               fid_sciimage,
+                                               filter_sciimage,
+                                               cov5percent,
+                                               nframes,
+                                               refimage_input_filenames)
 
 
         # Upload reference-image file to S3 bucket.
