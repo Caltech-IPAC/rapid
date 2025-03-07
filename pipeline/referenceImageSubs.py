@@ -359,6 +359,7 @@ def addKeywordsToReferenceImageHeader(reference_image_filename,
 
     # Add keywords to header.
 
+    hdr["BUNIT"] = "DN/s"
     hdr["FIELD"] = str(field)
     hdr["FID"] = str(fid)
     hdr["FILTER"] = exposure_filter
