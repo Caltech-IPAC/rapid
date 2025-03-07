@@ -938,10 +938,10 @@ CREATE TABLE refimmeta (
     hp9 integer NOT NULL,                  -- Level-9 healpix index (NESTED) for (ra0,dec0)
     fid smallint NOT NULL,                 -- Foreign key from Filters table
     nframes smallint NOT NULL,             -- Number of images in stack
-    mjdobsmin double precision NOT NULL,   -- Minimum MDJ of input images in stack
-    mjdobsmax double precision NOT NULL,   -- Maximum MDJ of input images in stack
-    npixsat integer NOT NULL,              -- Number of saturated pixels in reference-image
-    npixnan integer NOT NULL,              -- Number of NaN pixels in reference-image
+    mjdobsmin double precision NOT NULL,   -- Minimum MJD of input images in stack
+    mjdobsmax double precision NOT NULL,   -- Maximum MJD of input images in stack
+    npixsat integer NOT NULL,              -- Number of saturated pixels in reference image
+    npixnan integer NOT NULL,              -- Number of NaN pixels in reference image
     clmean real NOT NULL,                  -- Image pixel mean after data clipping
     clstddev real NOT NULL,                -- Image pixel standard deviation after data clipping and reinflating
     clnoutliers integer NOT NULL,          -- Number of image pixels discarded in data clipping
