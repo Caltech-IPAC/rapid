@@ -385,9 +385,6 @@ if __name__ == '__main__':
         fwhmmaxpix = np.nanmax(np_vals_fwhm)
         fwhmmedpix = np.nanmedian(np_vals_fwhm)
 
-        n_sigma = 3.0
-        hdu_index = 0
-
 
 
 
@@ -396,9 +393,10 @@ if __name__ == '__main__':
 
 
         # TODO:  The following is incorrect, but used as a stopgap for now:
-        # # Need to standardize the exposure time of a reference image,
+        # Need to standardize the exposure time of a reference image,
         # and make sure it is properly scaled to the science image
         # prior to difference imaging, and also use it to compute saturation_level_refimage_rate.
+
         saturation_level_refimage_rate = saturation_level_refimage / exptime_sciimage
 
 
@@ -408,6 +406,8 @@ if __name__ == '__main__':
 
 
 
+        n_sigma = 3.0
+        hdu_index = 0
 
         stats_refimage = util.fits_data_statistics_with_clipping(awaicgen_output_mosaic_image_file,\
                                                                  n_sigma,\
