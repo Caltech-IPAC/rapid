@@ -137,13 +137,13 @@ The RefImMeta database table stores various QA measures for reference images.
 +--------------------+-----------------------------------------------------------------------------------+
 | medpixunc          | Median of corresponding uncertainty image) [DN/s]                                 |
 +--------------------+-----------------------------------------------------------------------------------+
-| fwhmmedpix         | Median of FWHM_IMAGE values in reference-image SourceExtractor catalog [pixels]   |
+| fwhmmedpix         | Median of FWHM_IMAGE values in RefImage SourceExtractor catalog [pixels]          |
 +--------------------+-----------------------------------------------------------------------------------+
-| fwhmminpix         | Minimum of FWHM_IMAGE values in reference-image SourceExtractor catalog [pixels]  |
+| fwhmminpix         | Minimum of FWHM_IMAGE values in RefImage SourceExtractor catalog [pixels]         |
 +--------------------+-----------------------------------------------------------------------------------+
-| fwhmmaxpix         | Maximum of FWHM_IMAGE values in reference-image SourceExtractor catalog [pixels]  |
+| fwhmmaxpix         | Maximum of FWHM_IMAGE values in RefImage SourceExtractor catalog [pixels]         |
 +--------------------+-----------------------------------------------------------------------------------+
-| nsexcatsources     | Number of sources in reference-image SourceExtractor catalog                      |
+| nsexcatsources     | Number of sources in RefImage SourceExtractor catalog                             |
 +--------------------+-----------------------------------------------------------------------------------+
 
 The quality-assurance metric ``cov5percent``, given by FITS keyword ``COV5PERC``,
