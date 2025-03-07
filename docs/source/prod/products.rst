@@ -133,3 +133,11 @@ It is computed from the reference-image coverage map.
 It is defined as a percentage of the sum of the limited coverage of all pixels in an image,
 where the limited coverage is all coverage and any coverage greater than 5 that is reset to 5
 for scoring purposes, relative to 5 times the total number of pixels in the image.
+
+Here is a histogram of cov5percent for our current set of 1696 reference images:
+
+.. image:: rapid_refimmeta_cov5percent_1dhist.png
+
+Here is a histogram of the number of input frames for our current set of 1696 reference images:
+
+.. image:: rapid_refimmeta_nframes_1dhist.png
