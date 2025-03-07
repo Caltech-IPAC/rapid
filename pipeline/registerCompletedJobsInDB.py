@@ -176,6 +176,9 @@ if __name__ == '__main__':
 
             input_file = logs_bucket_object.key
 
+            if datearg not in input_file:
+                continue
+
             filename_match = re.match(r"(\d\d\d\d\d\d\d\d)/(.+jid(\d+)_log\.txt)",input_file)
 
             try:
