@@ -73,7 +73,7 @@ A simple Python script can be written to parse the listing and generate ``wget``
 
 
 Example Reference-Image FITS Header
-************************************
+******************************************
 
 This section lists an example reference-image FITS header to expose the user to the
 various useful metadata contained therein::
@@ -126,6 +126,19 @@ various useful metadata contained therein::
     DATASUM = '2030501515'         / data unit checksum updated 2025-03-06T18:13:46
     END
 
+
+Analysis of Reference Images
+************************************
+
+The number of input frames that went into computing a reference image
+is an important attribute of a reference image.  This is listed in the
+reference-image FITS header, given by FITS keyword ``NFRAMES``, along
+with the filenames of the particular input images used (``INFIL###``).
+
+Here is a histogram of the number of input frames for our current set of 1696 reference images:
+
+.. image:: rapid_refimmeta_nframes_1dhist.png
+
 The quality-assurance metric ``cov5percent``, given by FITS keyword ``COV5PERC``,
 is an absolute quantifier for the aggregate areal-depth coverage of a reference image at a
 reference depth of 5, corresponding to a coadd depth of at least 5 input images.
@@ -137,7 +150,3 @@ for scoring purposes, relative to 5 times the total number of pixels in the imag
 Here is a histogram of cov5percent for our current set of 1696 reference images:
 
 .. image:: rapid_refimmeta_cov5percent_1dhist.png
-
-Here is a histogram of the number of input frames for our current set of 1696 reference images:
-
-.. image:: rapid_refimmeta_nframes_1dhist.png
