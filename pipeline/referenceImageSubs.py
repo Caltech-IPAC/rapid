@@ -188,8 +188,6 @@ def generateReferenceImage(s3_client,
     awaicgen_output_mosaic_uncert_image_s3_bucket_object_name = job_proc_date + "/jid" + str(jid) + "/" +\
         awaicgen_dict["awaicgen_output_mosaic_uncert_image_file"]
 
-    awaicgen_dict["awaicgen_output_mosaic_image_file"] = awaicgen_output_mosaic_image_file
-
 
     # Execute awaicgen to generate reference image.
 
