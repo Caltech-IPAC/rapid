@@ -540,6 +540,27 @@ if __name__ == '__main__':
                 .format(awaicgen_output_mosaic_image_file,product_s3_bucket,awaicgen_output_mosaic_image_s3_bucket_object_name))
 
 
+        # Upload reference-image uncertainty file to S3 bucket.
+
+        uploaded_to_bucket = True
+
+        try:
+            response = s3_client.upload_file(awaicgen_output_mosaic_uncert_image_file,
+                                             product_s3_bucket,
+                                             awaicgen_output_mosaic_uncert_image_s3_bucket_object_name)
+
+            print("response =",response)
+
+        except ClientError as e:
+            print("*** Error: Failed to upload {} to s3://{}/{}"\
+                .format(awaicgen_output_mosaic_uncert_image_file,product_s3_bucket,awaicgen_output_mosaic_uncert_image_s3_bucket_object_name))
+            uploaded_to_bucket = False
+
+        if uploaded_to_bucket:
+            print("Successfully uploaded {} to s3://{}/{}"\
+                .format(awaicgen_output_mosaic_uncert_image_file,product_s3_bucket,awaicgen_output_mosaic_uncert_image_s3_bucket_object_name))
+
+
     # Unzip the science image gzipped file.
 
     gunzip_cmd = ['gunzip', science_image_filename_gz]

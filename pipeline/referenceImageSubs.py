@@ -195,8 +195,8 @@ def generateReferenceImage(s3_client,
     exitcode_from_awaicgen = util.execute_command(awaicgen_cmd)
 
 
-    # Upload ancillary reference-image products to S3 bucket.  Do not upload the reference image itself
-    # until later, after informational keywords have been added to the FITS header.
+    # Upload ancillary reference-image products to S3 bucket.  Do not upload the reference image file and
+    # reference-image uncertainty file until later, after informational keywords have been added to the FITS header.
 
     uploaded_to_bucket = True
 
@@ -215,24 +215,6 @@ def generateReferenceImage(s3_client,
     if uploaded_to_bucket:
         print("Successfully uploaded {} to s3://{}/{}"\
             .format(awaicgen_output_mosaic_cov_map_file,product_s3_bucket,awaicgen_output_mosaic_cov_map_s3_bucket_object_name))
-
-    uploaded_to_bucket = True
-
-    try:
-        response = s3_client.upload_file(awaicgen_output_mosaic_uncert_image_file,
-                                         product_s3_bucket,
-                                         awaicgen_output_mosaic_uncert_image_s3_bucket_object_name)
-
-        print("response =",response)
-
-    except ClientError as e:
-        print("*** Error: Failed to upload {} to s3://{}/{}"\
-            .format(awaicgen_output_mosaic_uncert_image_file,product_s3_bucket,awaicgen_output_mosaic_uncert_image_s3_bucket_object_name))
-        uploaded_to_bucket = False
-
-    if uploaded_to_bucket:
-        print("Successfully uploaded {} to s3://{}/{}"\
-            .format(awaicgen_output_mosaic_uncert_image_file,product_s3_bucket,awaicgen_output_mosaic_uncert_image_s3_bucket_object_name))
 
 
     # Compute MD5 checksum of reference image.
