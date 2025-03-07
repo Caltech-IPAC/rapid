@@ -97,3 +97,66 @@ Once the relevant rids are found, the filenames can be looked up as follows:
     from l2files
     where rid in (152336, 232345, 172211)
     order by rid;
+
+
+Reference-Image QA
+************************************
+
+The RefImMeta database table stores various QA measures for reference images.
+
++--------------------+-----------------------------------------------------------------------------------+
+| Database column    | Definition                                                                        |
++====================+===================================================================================+
+| nframes            | Number of input images in coadd stack                                             |
++--------------------+-----------------------------------------------------------------------------------+
+| mjdobsmin          | Minimum MJD of input images in stack                                              |
++--------------------+-----------------------------------------------------------------------------------+
+| mjdobsmax          | Maximum MJD of input images in stack                                              |
++--------------------+-----------------------------------------------------------------------------------+
+| npixsat            | Number of saturated pixels in reference image                                     |
++--------------------+-----------------------------------------------------------------------------------+
+| npixnan            | Number of NaN pixels in reference image                                           |
++--------------------+-----------------------------------------------------------------------------------+
+| clmean             | Image pixel mean after 3-sigma data clipping [DN/s]                               |
++--------------------+-----------------------------------------------------------------------------------+
+| clstddev           | Image pixel standard deviation after 3-sigma data clipping and reinflating [DN/s] |
++--------------------+-----------------------------------------------------------------------------------+
+| clnoutliers        | Number of image pixels discarded in 3-sigma data clipping                         |
++--------------------+-----------------------------------------------------------------------------------+
+| gmedian            | Global image pixel median [DN/s]                                                  |
++--------------------+-----------------------------------------------------------------------------------+
+| datascale          | Global robust image pixel spread = 0.5*(p84-p16) [DN/s]                           |
++--------------------+-----------------------------------------------------------------------------------+
+| gmin               | Global minimum image pixel value [DN/s]                                           |
++--------------------+-----------------------------------------------------------------------------------+
+| gmax               | Global maximum image pixel value [DN/s]                                           |
++--------------------+-----------------------------------------------------------------------------------+
+| cov5percent        | QA metric to measure coverage depth of at least 5 [percentage]                    |
++--------------------+-----------------------------------------------------------------------------------+
+| medncov            | Median of corresponding depth-of-coverage image [count]                           |
++--------------------+-----------------------------------------------------------------------------------+
+| medpixunc          | Median of corresponding uncertainty image) [DN/s]                                 |
++--------------------+-----------------------------------------------------------------------------------+
+| fwhmmedpix         | Median of FWHM_IMAGE values in reference-image SourceExtractor catalog [pixels]   |
++--------------------+-----------------------------------------------------------------------------------+
+| fwhmminpix         | Minimum of FWHM_IMAGE values in reference-image SourceExtractor catalog [pixels]  |
++--------------------+-----------------------------------------------------------------------------------+
+| fwhmmaxpix         | Maximum of FWHM_IMAGE values in reference-image SourceExtractor catalog [pixels]  |
++--------------------+-----------------------------------------------------------------------------------+
+| nsexcatsources     | Number of sources in reference-image SourceExtractor catalog                      |
++--------------------+-----------------------------------------------------------------------------------+
+
+The quality-assurance metric ``cov5percent``, given by FITS keyword ``COV5PERC``,
+is an absolute quantifier for the aggregate areal-depth coverage of a reference image at a
+reference depth of 5, corresponding to a coadd depth of at least 5 input images.
+It is computed from the reference-image coverage map.
+It is defined as a percentage of the sum of the limited coverage of all pixels in an image,
+where the limited coverage is all coverage and any coverage greater than 5 that is reset to 5
+for scoring purposes, relative to 5 times the total number of pixels in the image.
+
+
+
+
+
+
+
