@@ -9,19 +9,19 @@ the RAPID-product S3 bucket with the processing date as a prefix::
 
     aws s3 ls --recursive s3://rapid-product-files/<yyyymmdd>
 
-For example, this command covers all jobs under processing date ``20250304``::
+For example, this command covers all jobs under processing date ``20250314``::
 
-    aws s3 ls --recursive s3://rapid-product-files/20250304
+    aws s3 ls --recursive s3://rapid-product-files/20250314
 
 Here are the available products for just one job (``jid=999``) under that processing date::
 
-    aws s3 ls --recursive s3://rapid-product-files/20250304/jid999
+    aws s3 ls --recursive s3://rapid-product-files/20250314/jid999
 
 Note that there is one science image differenced per job.
 
 The associated product config output file is::
 
-    aws s3 ls  --recursive s3://rapid-product-files/20250304/product_config_jid999.ini
+    aws s3 ls  --recursive s3://rapid-product-files/20250314/product_config_jid999.ini
 
 This is parsed for metadata to load into the RAPID operations database after the processing.
 
@@ -64,10 +64,10 @@ Public Access
 To download a RAPID pipeline product, the
 user must construct a URL, knowing the filename in advance, like the following::
 
-    https://rapid-product-files.s3.us-west-2.amazonaws.com/20250304/jid1022/awaicgen_output_mosaic_cov_map.fits
+    https://rapid-product-files.s3.us-west-2.amazonaws.com/20250314/jid1022/awaicgen_output_mosaic_cov_map.fits
 
 For a listing of the available product files,
-download :download:`this text file <rapid-product-files_20250304.txt>`.
+download :download:`this text file <rapid-product-files_20250314.txt>`.
 
 A simple Python script can be written to parse the listing and generate ``wget`` or ``curl`` download commands.
 
@@ -80,7 +80,7 @@ various useful metadata contained therein::
 
 
     Image_file = awaicgen_output_mosaic_image.fits
-    Date_time = Thu Mar 06 10:23:38 PST 2025
+    Date_time = Fri Mar 14 12:33:45 PDT 2025
 
     HDU number = 1
 
@@ -104,7 +104,8 @@ various useful metadata contained therein::
     BITMASK =                    0 / Fatal bitstring mask template
     HISTORY A generic WISE Astronomical Image Coadder, v5.2
     HISTORY Frank J. Masci, fmasci@caltech.edu
-    DATE    = '2025-03-06T18:13:23' / file creation date (YYYY-MM-DDThh:mm:ss UT)
+    DATE    = '2025-03-07T18:42:06' / file creation date (YYYY-MM-DDThh:mm:ss UT)
+    BUNIT   = 'DN/s    '
     FIELD   = '5321355 '
     FID     = '1       '
     FILTER  = 'F184    '
@@ -122,8 +123,8 @@ various useful metadata contained therein::
     INFIL010= 'Roman_TDS_simple_model_F184_1481_16_lite.fits.gz'
     INFIL011= 'Roman_TDS_simple_model_F184_1476_11_lite.fits.gz'
     INFIL012= 'Roman_TDS_simple_model_F184_1087_8_lite.fits.gz'
-    CHECKSUM= 'W4EBa2B9Y2BAa2B9'   / HDU checksum updated 2025-03-06T18:13:46
-    DATASUM = '2030501515'         / data unit checksum updated 2025-03-06T18:13:46
+    CHECKSUM= 'GJ2aJI0TGI0ZGI0Z'   / HDU checksum updated 2025-03-07T18:42:28
+    DATASUM = '2030501515'         / data unit checksum updated 2025-03-07T18:42:28
     END
 
 
