@@ -14,7 +14,7 @@ Pipeline, under development at IPAC/Caltech.
    Development of source code and documentation is currently ongoing.
 
 
-Running the latest RAPID Pipeline
+Running the Latest RAPID Pipeline
 *************************************
 
 A Docker image has been pre-built from a recent git-clone of the RAPID Github
