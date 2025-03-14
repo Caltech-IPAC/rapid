@@ -177,8 +177,9 @@ def generateReferenceImage(s3_client,
 
 
     # Optionally upload reformatted awaicgen input image and uncertainty files to S3 bucket for off-line analysis.
+    # The upload_inputs flag is only to be set to True temporarily as it increases the number of uploaded files.
 
-    upload_inputs = True
+    upload_inputs = False
 
     if upload_inputs:
 
