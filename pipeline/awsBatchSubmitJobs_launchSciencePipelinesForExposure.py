@@ -45,7 +45,7 @@ if __name__ == '__main__':
 
 
     #
-    # Launch a science pipelines for input exposure ID.
+    # Launch a science pipeline for input exposure ID.
     #
 
 
