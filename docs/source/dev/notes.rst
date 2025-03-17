@@ -290,5 +290,5 @@ Download and examine log file:
    aws s3 cp s3://rapid-pipeline-logs/20250314/rapid_pipeline_job_20250314_jid1_log.txt rapid_pipeline_job_20250314_jid1_log.txt
    cat rapid_pipeline_job_20250314_jid1_log.txt
 
-Last modified: Tue 2025 Mar 17 7:48 a.m.
+Last modified: Tue 2025 Mar 17 7:58 a.m.
 
