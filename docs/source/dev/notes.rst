@@ -156,16 +156,16 @@ Since this Docker image contains the ENTRYPOINT instruction, you must override i
 
 .. code-block::
 
-   mkdir -p /home/ubuntu/work/test_20240923
-   cd /home/ubuntu/work/test_20240923
-   aws s3 cp s3://rapid-pipeline-files/roman_tessellation_nside512.db /home/ubuntu/work/test_20240923/roman_tessellation_nside512.db
+   mkdir -p /home/ubuntu/work/test_20250314
+   cd /home/ubuntu/work/test_20250314
+   aws s3 cp s3://rapid-pipeline-files/roman_tessellation_nside512.db /home/ubuntu/work/test_20250314/roman_tessellation_nside512.db
 
    sudo su
 
    docker stop russ-test-jobsubmit
    docker rm russ-test-jobsubmit
 
-   docker run -it --entrypoint bash --name russ-test-jobsubmit -v /home/ubuntu/work/test_20250317:/work public.ecr.aws/y9b1s7h8/rapid_science_pipeline:latest
+   docker run -it --entrypoint bash --name russ-test-jobsubmit -v /home/ubuntu/work/test_20250314:/work public.ecr.aws/y9b1s7h8/rapid_science_pipeline:latest
 
    export DBPORT=5432
    export DBNAME=rapidopsdb
@@ -198,24 +198,69 @@ After the AWS Batch job finishes, there are files written to S3 buckets that can
 
 .. code-block::
 
-   aws s3 ls --recursive s3://rapid-pipeline-files
+   aws s3 ls --recursive s3://rapid-pipeline-files/20250314/ | grep jid1\\.
 
-   2024-10-28 11:18:38     120092 20241028/input_images_for_refimage_jid1.csv
-   2024-10-28 11:18:38       6025 20241028/job_config_jid1.ini
-   2024-09-03 16:42:56 1535762432 roman_tessellation_nside512.db
-
-.. code-block::
-
-   aws s3 ls --recursive s3://rapid-pipeline-logs
-
-   2024-10-28 11:22:34      17129 20241028/rapid_pipeline_job_20241028_jid1_log.txt
+   2025-03-14 11:22:33       3784 20250314/input_images_for_refimage_jid1.csv
+   2025-03-14 11:22:33      14307 20250314/job_config_jid1.ini
 
 .. code-block::
 
-   aws s3 ls --recursive s3://rapid-product-files
+   aws s3 ls --recursive s3://rapid-pipeline-logs/20250314/ | grep jid1_
 
-   2024-10-28 11:22:29  196004160 20241028/jid1/awaicgen_output_mosaic_cov_map.fits
-   2024-10-28 11:22:26  196004160 20241028/jid1/awaicgen_output_mosaic_image.fits
+   2025-03-14 11:28:38     207277 20250314/rapid_pipeline_job_20250314_jid1_log.txt
+
+.. code-block::
+
+   aws s3 ls --recursive s3://rapid-product-files/20250314/jid1/
+
+...2025-03-14 11:24:03   21813719 20250314/jid1/Roman_TDS_simple_model_F184_1856_2_lite.fits.gz
+...2025-03-14 11:26:59   66888000 20250314/jid1/Roman_TDS_simple_model_F184_1856_2_lite_reformatted.fits
+...2025-03-14 11:27:01   66888000 20250314/jid1/Roman_TDS_simple_model_F184_1856_2_lite_reformatted_pv.fits
+...2025-03-14 11:27:00   66888000 20250314/jid1/Roman_TDS_simple_model_F184_1856_2_lite_reformatted_unc.fits
+...2025-03-14 11:26:14  196004160 20250314/jid1/awaicgen_output_mosaic_cov_map.fits
+...2025-03-14 11:27:03   66890880 20250314/jid1/awaicgen_output_mosaic_cov_map_resampled.fits
+...2025-03-14 11:26:36  196007040 20250314/jid1/awaicgen_output_mosaic_image.fits
+...2025-03-14 11:27:02   66890880 20250314/jid1/awaicgen_output_mosaic_image_resampled.fits
+...2025-03-14 11:28:34  133770240 20250314/jid1/awaicgen_output_mosaic_image_resampled_gainmatched.fits
+...2025-03-14 11:27:17    1248727 20250314/jid1/awaicgen_output_mosaic_image_resampled_refgainmatchsexcat.txt
+...2025-03-14 11:26:30    3465552 20250314/jid1/awaicgen_output_mosaic_refimsexcat.txt
+...2025-03-14 11:26:43  196007040 20250314/jid1/awaicgen_output_mosaic_uncert_image.fits
+...2025-03-14 11:27:04   66890880 20250314/jid1/awaicgen_output_mosaic_uncert_image_resampled.fits
+...2025-03-14 11:28:33   66890880 20250314/jid1/bkg_subbed_science_image.fits
+...2025-03-14 11:27:17     436195 20250314/jid1/bkg_subbed_science_image_scigainmatchsexcat.txt
+...2025-03-14 11:28:30   66890880 20250314/jid1/diffimage_masked.fits
+...2025-03-14 11:28:32     148657 20250314/jid1/diffimage_masked.txt
+...2025-03-14 11:28:36     216901 20250314/jid1/diffimage_masked_psfcat.txt
+...2025-03-14 11:28:36   66885120 20250314/jid1/diffimage_masked_psfcat_residual.fits
+...2025-03-14 11:28:31   66888000 20250314/jid1/diffimage_uncert_masked.fits
+...2025-03-14 11:28:32      28800 20250314/jid1/diffpsf.fits
+...2025-03-14 09:19:39   66853440 20250314/jid1/refiminputs/Roman_TDS_simple_model_F184_1087_7_lite_reformatted.fits
+...2025-03-14 09:19:51   66853440 20250314/jid1/refiminputs/Roman_TDS_simple_model_F184_1087_7_lite_reformatted_unc.fits
+...2025-03-14 09:19:43   66853440 20250314/jid1/refiminputs/Roman_TDS_simple_model_F184_1087_8_lite_reformatted.fits
+...2025-03-14 09:19:56   66853440 20250314/jid1/refiminputs/Roman_TDS_simple_model_F184_1087_8_lite_reformatted_unc.fits
+...2025-03-14 09:19:42   66853440 20250314/jid1/refiminputs/Roman_TDS_simple_model_F184_1476_11_lite_reformatted.fits
+...2025-03-14 09:19:55   66853440 20250314/jid1/refiminputs/Roman_TDS_simple_model_F184_1476_11_lite_reformatted_unc.fits
+...2025-03-14 09:19:34   66853440 20250314/jid1/refiminputs/Roman_TDS_simple_model_F184_1476_14_lite_reformatted.fits
+...2025-03-14 09:19:46   66853440 20250314/jid1/refiminputs/Roman_TDS_simple_model_F184_1476_14_lite_reformatted_unc.fits
+...2025-03-14 09:19:41   66853440 20250314/jid1/refiminputs/Roman_TDS_simple_model_F184_1481_16_lite_reformatted.fits
+...2025-03-14 09:19:54   66853440 20250314/jid1/refiminputs/Roman_TDS_simple_model_F184_1481_16_lite_reformatted_unc.fits
+...2025-03-14 09:19:35   66853440 20250314/jid1/refiminputs/Roman_TDS_simple_model_F184_317_9_lite_reformatted.fits
+...2025-03-14 09:19:47   66853440 20250314/jid1/refiminputs/Roman_TDS_simple_model_F184_317_9_lite_reformatted_unc.fits
+...2025-03-14 09:19:38   66853440 20250314/jid1/refiminputs/Roman_TDS_simple_model_F184_322_2_lite_reformatted.fits
+...2025-03-14 09:19:50   66853440 20250314/jid1/refiminputs/Roman_TDS_simple_model_F184_322_2_lite_reformatted_unc.fits
+...2025-03-14 09:19:37   66853440 20250314/jid1/refiminputs/Roman_TDS_simple_model_F184_322_3_lite_reformatted.fits
+...2025-03-14 09:19:49   66853440 20250314/jid1/refiminputs/Roman_TDS_simple_model_F184_322_3_lite_reformatted_unc.fits
+...2025-03-14 09:19:40   66853440 20250314/jid1/refiminputs/Roman_TDS_simple_model_F184_327_14_lite_reformatted.fits
+...2025-03-14 09:19:53   66853440 20250314/jid1/refiminputs/Roman_TDS_simple_model_F184_327_14_lite_reformatted_unc.fits
+...2025-03-14 09:19:36   66853440 20250314/jid1/refiminputs/Roman_TDS_simple_model_F184_327_15_lite_reformatted.fits
+...2025-03-14 09:19:48   66853440 20250314/jid1/refiminputs/Roman_TDS_simple_model_F184_327_15_lite_reformatted_unc.fits
+...2025-03-14 09:19:31   66853440 20250314/jid1/refiminputs/Roman_TDS_simple_model_F184_702_8_lite_reformatted.fits
+...2025-03-14 09:19:44   66853440 20250314/jid1/refiminputs/Roman_TDS_simple_model_F184_702_8_lite_reformatted_unc.fits
+...2025-03-14 09:19:32   66853440 20250314/jid1/refiminputs/Roman_TDS_simple_model_F184_707_1_lite_reformatted.fits
+...2025-03-14 09:19:45   66853440 20250314/jid1/refiminputs/Roman_TDS_simple_model_F184_707_1_lite_reformatted_unc.fits
+...2025-03-14 09:19:57        682 20250314/jid1/refiminputs/refimage_sci_inputs.txt
+...2025-03-14 09:19:57        730 20250314/jid1/refiminputs/refimage_unc_inputs.txt
+...2025-03-14 11:28:32   66890880 20250314/jid1/scorrimage_masked.fits
 
 The general scheme for how the output files are organized in the S3 buckets is according to
 processing date (Pacific Time) and the associated job ID (the same job ID can exist under
@@ -237,9 +282,8 @@ Download and examine log file:
 
 .. code-block::
 
-   aws s3 ls --recursive s3://rapid-pipeline-logs/20241028
-   aws s3 cp s3://rapid-pipeline-logs/20241028/rapid_pipeline_job_20241028_jid1_log.txt rapid_pipeline_job_20241028_jid1_log.txt
-   cat rapid_pipeline_job_20241028_jid1_log.txt
+   aws s3 cp s3://rapid-pipeline-logs/20250314/rapid_pipeline_job_20250314_jid1_log.txt rapid_pipeline_job_20250314_jid1_log.txt
+   cat rapid_pipeline_job_20250314_jid1_log.txt
 
-Last modified: Tue 2025 Mar 17 7:32 a.m.
+Last modified: Tue 2025 Mar 17 7:45 a.m.
 
