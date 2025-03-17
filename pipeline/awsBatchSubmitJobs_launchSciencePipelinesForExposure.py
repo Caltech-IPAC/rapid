@@ -45,7 +45,7 @@ if __name__ == '__main__':
 
 
     #
-    # Launch a science pipeline for input exposure ID.
+    # Launch all 18 science pipelines for input exposure ID, one per SCA.
     #
 
 
