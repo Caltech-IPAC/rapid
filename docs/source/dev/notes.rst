@@ -91,6 +91,12 @@ thus reclaiming disk space:
    meaning the expected disk space will not be reclaimed,
    unless all containers running the Docker image ``rapid_science_pipeline:1.0`` are stopped!
 
+Here is how to get a listing of your Docker containers that are running:
+
+.. code-block::
+
+   docker ps
+
 Here is how to get a listing of your Docker images:
 
 .. code-block::
