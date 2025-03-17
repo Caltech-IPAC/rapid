@@ -263,9 +263,14 @@ After the AWS Batch job finishes, there are files written to S3 buckets that can
    2025-03-14 11:28:32   66890880 20250314/jid1/scorrimage_masked.fits
 
 The general scheme for how the output files are organized in the S3 buckets is according to
-processing date (Pacific Time) and the associated job ID (the same job ID can exist under
-different processing dates if reprocessing occurred).  The reference-image products from ``awaicgen``
-are given generic filenames in these buckets, and, later, will be renamed to filenames like:
+processing date (Pacific Time) and the associated job ID.  The same job ID can exist under
+different processing dates if reprocessing occurred on different dates (reprocessing on the same date will overwrite products).
+
+The files under ``refiminputs`` are only written if the ``upload_inputs`` flag in the software is set to True.  These are for
+off-line analysis and rerunning awaicgen for experimental and tuning purposes.
+
+The reference-image products from ``awaicgen``
+are initially given generic filenames in these buckets, and, later, will be renamed to filenames like:
 
 .. code-block::
 
