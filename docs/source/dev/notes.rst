@@ -113,7 +113,7 @@ Rebuild the Docker image from scratch:
 
 6. Push Docker image to the Amazon public elastic container registry (ECR):
 
-Note that the RAPID pipeline has already been registered at
+Note that the RAPID-pipeline image has already been registered at
 
 .. code-block::
 
@@ -150,6 +150,7 @@ Tag the Docker image with "latest" and push to ECR with these two commands:
 
 The following shows commands to launch an instance of the RAPID pipeline as AWS Batch job.
 The to-be-run Docker container rapid_science_pipeline:1.0 has /code built in, so there is no need to mount an external volume for /code.
+The container name is arbitrary, and is set to "russ-test-jobsubmit" in the example below.
 Since this Docker image contains the ENTRYPOINT instruction, you must override it  with the ``--entrypoint bash`` option
 (and do not put ``bash`` at the end of the command).
 
@@ -164,7 +165,7 @@ Since this Docker image contains the ENTRYPOINT instruction, you must override i
    docker stop russ-test-jobsubmit
    docker rm russ-test-jobsubmit
 
-   docker run -it --entrypoint bash --name russ-test-jobsubmit -v /home/ubuntu/work/test_20240923:/work rapid_science_pipeline:1.0
+   docker run -it --entrypoint bash --name russ-test-jobsubmit -v /home/ubuntu/work/test_20250317:/work public.ecr.aws/y9b1s7h8/rapid_science_pipeline:latest
 
    export DBPORT=5432
    export DBNAME=rapidopsdb
