@@ -1246,17 +1246,20 @@ class RAPIDDB:
             "from RefImages " +\
             "where vbest > 0 " +\
             "and status > 0 " +\
+            "and ppid = TEMPLATE_PPID " +\
             "and field = TEMPLATE_FIELD " +\
             "and fid = TEMPLATE_FID; "
 
 
         # Formulate query by substituting parameters into query template.
 
+        print('----> ppid = {}'.format(ppid))
         print('----> field = {}'.format(field))
         print('----> fid = {}'.format(fid))
 
-        rep = {"TEMPLATE_FIELD": str(field)}
+        rep = {"TEMPLATE_PPID": str(ppid)}
 
+        rep["TEMPLATE_FIELD"] = str(field)
         rep["TEMPLATE_FID"] = str(fid)
 
         rep = dict((re.escape(k), v) for k, v in rep.items())
@@ -2379,3 +2382,65 @@ class RAPIDDB:
 
 
         return exposure_filter
+
+
+
+
+########################################################################################################
+
+    def get_best_difference_image(self,rid,ppid):
+
+        '''
+        Query DiffImages database table for the best (latest unless version is locked) version of difference image.
+        '''
+
+        self.exit_code = 0
+
+
+        # Define query template.
+
+        query_template =\
+            "select rfid,filename,infobits " +\
+            "from DiffImages " +\
+            "where vbest > 0 " +\
+            "and status > 0 " +\
+            "and field = TEMPLATE_RID " +\
+            "and fid = TEMPLATE_PPID; "
+
+
+        # Formulate query by substituting parameters into query template.
+
+        print('----> rid = {}'.format(rid))
+        print('----> ppid = {}'.format(ppid))
+
+        rep = {"TEMPLATE_RID": str(rid)}
+
+        rep["TEMPLATE_PPID"] = str(ppid)
+
+        rep = dict((re.escape(k), v) for k, v in rep.items())
+        pattern = re.compile("|".join(rep.keys()))
+        query = pattern.sub(lambda m: rep[re.escape(m.group(0))], query_template)
+
+        print('query = {}'.format(query))
+
+
+        # Execute query.
+
+        self.cur.execute(query)
+        record = self.cur.fetchone()
+
+        if record is not None:
+            pid = record[0]
+            filename = record[1]
+            infobits = record[2]
+
+        else:
+            rfid = None
+            filename = None
+            infobits = None
+
+            print("*** Error: Could not get best RefImages database record; continuing...")
+            self.exit_code = 67
+
+
+        return pid,filename,infobits
