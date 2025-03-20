@@ -222,7 +222,6 @@ if __name__ == '__main__':
     db_rec_dict = dbh.get_info_for_job(jid)
     ppid = db_rec_dict["ppid"]
     rid = db_rec_dict["rid"]
-    rfid = db_rec_dict["rfid"]
     expid = db_rec_dict["expid"]
     sca = db_rec_dict["sca"]
     field = db_rec_dict["field"]
