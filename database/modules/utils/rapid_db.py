@@ -1641,7 +1641,7 @@ class RAPIDDB:
         # Define query template.
 
         query_template =\
-            "select ppid,rid,rfid,expid,sca,field,fid,started,ended,status,exitcode " +\
+            "select ppid,rid,expid,sca,field,fid,started,ended,status,exitcode " +\
             "from Jobs " +\
             "where jid = TEMPLATE_JID; "
 
@@ -1669,15 +1669,14 @@ class RAPIDDB:
         if record is not None:
             record_dict["ppid"] = record[0]
             record_dict["rid"] = record[1]
-            record_dict["rfid"] = record[2]
-            record_dict["expid"] = record[3]
-            record_dict["sca"] = record[4]
-            record_dict["field"] = record[5]
-            record_dict["fid"] = record[6]
-            record_dict["started"] = record[7]
-            record_dict["ended"] = record[8]
-            record_dict["status"] = record[9]
-            record_dict["exitcode"] = record[10]
+            record_dict["expid"] = record[2]
+            record_dict["sca"] = record[3]
+            record_dict["field"] = record[4]
+            record_dict["fid"] = record[5]
+            record_dict["started"] = record[6]
+            record_dict["ended"] = record[7]
+            record_dict["status"] = record[8]
+            record_dict["exitcode"] = record[9]
 
         else:
             print("*** Error: Could not get select columns from Jobs database record; returning...")
