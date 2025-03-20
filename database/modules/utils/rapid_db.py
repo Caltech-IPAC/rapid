@@ -1664,25 +1664,27 @@ class RAPIDDB:
         self.cur.execute(query)
         record = self.cur.fetchone()
 
+        record_dict = {}
+
         if record is not None:
-            ppid = record[0]
-            rid = record[1]
-            rfid = record[2]
-            expid = record[3]
-            sca = record[4]
-            field = record[5]
-            fid = record[6]
-            started = record[7]
-            ended = record[8]
-            status = record[9]
-            exitcode = record[10]
+            record_dict["ppid"] = record[0]
+            record_dict["rid"] = record[1]
+            record_dict["rfid"] = record[2]
+            record_dict["expid"] = record[3]
+            record_dict["sca"] = record[4]
+            record_dict["field"] = record[5]
+            record_dict["fid"] = record[6]
+            record_dict["started"] = record[7]
+            record_dict["ended"] = record[8]
+            record_dict["status"] = record[9]
+            record_dict["exitcode"] = record[10]
 
         else:
             print("*** Error: Could not get select columns from Jobs database record; returning...")
             self.exit_code = 67
 
 
-        return record
+        return record_dict
 
 
 ########################################################################################################
