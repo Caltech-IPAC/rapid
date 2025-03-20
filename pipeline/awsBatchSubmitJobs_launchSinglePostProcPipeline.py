@@ -269,7 +269,7 @@ if __name__ == '__main__':
     job_config['JOB_PARAMS']['verbose'] = str(verbose)
     job_config['JOB_PARAMS']['ppid'] = str(ppid)
     job_config['JOB_PARAMS']['rid'] = str(rid)
-    job_config['JOB_PARAMS']['rfid'] = str(rfid)
+    #job_config['JOB_PARAMS']['rfid'] = str(rfid)
     job_config['JOB_PARAMS']['expid'] = str(expid)
     job_config['JOB_PARAMS']['fid'] = str(fid)
     job_config['JOB_PARAMS']['field'] = str(field)
