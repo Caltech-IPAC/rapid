@@ -98,6 +98,26 @@ job_config_ini_file_s3_bucket_object_name = proc_date + "/" + job_config_ini_fil
 job_prefix = proc_date + '/jid' + str(jid) + '/'
 
 
+# Set up AWS Batch.
+
+client = boto3.client('batch')
+
+
+# Define job definition.  Use AWS Batch Console to set this up once.
+
+job_definition = config_input['AWS_BATCH']['postproc_job_definition']
+
+
+# Define job queue.  Use AWS Batch Console to set this up once.
+
+job_queue = config_input['AWS_BATCH']['job_queue']
+
+
+# Define job name.
+
+job_name_base = config_input['AWS_BATCH']['postproc_job_name_base']
+
+
 # Print out basic information for log file.
 
 print("proc_date =",proc_date)
