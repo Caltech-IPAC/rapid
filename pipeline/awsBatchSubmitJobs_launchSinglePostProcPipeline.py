@@ -229,7 +229,7 @@ if __name__ == '__main__':
     started = db_rec_dict["started"]
     ended = db_rec_dict["ended"]
     status = int(db_rec_dict["status"])
-    job_exitcode = int(db_rec_dict["job_exitcode"])
+    job_exitcode = int(db_rec_dict["exitcode"])
 
 
     # Close database connection.
