@@ -19,6 +19,7 @@ import modules.utils.rapid_pipeline_subs as util
 
 swname = "awsBatchSubmitJobs_launchSinglePostProcPipeline.py"
 swvers = "1.0"
+cfg_filename_only = "awsBatchSubmitJobs_launchSingleSciencePipeline.ini"
 
 print("swname =", swname)
 print("swvers =", swvers)
