@@ -80,4 +80,8 @@ ENV PYTHONUNBUFFERED=1
 
 WORKDIR /tmp
 
-ENTRYPOINT ["/code/pipeline/awsBatchSubmitJobs_runSingleSciencePipeline.sh"]
+# Make the entrypoint bash so arbitrary commands can override the default.
+
+ENTRYPOINT ["bash"]
+
+CMD ["/code/pipeline/awsBatchSubmitJobs_runSingleSciencePipeline.sh"]
