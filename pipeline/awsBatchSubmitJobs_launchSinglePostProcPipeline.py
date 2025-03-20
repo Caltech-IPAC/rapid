@@ -93,10 +93,8 @@ job_logs_s3_bucket_base = config_input['JOB_PARAMS']['job_logs_s3_bucket_base']
 product_s3_bucket_base = config_input['JOB_PARAMS']['product_s3_bucket_base']
 job_config_filename_base = config_input['JOB_PARAMS']['job_config_filename_base']
 
-job_config_ini_file_filename = job_config_filename_base + str(jid) + ".ini"
-job_config_ini_file_s3_bucket_object_name = proc_date + "/" + job_config_ini_file_filename
-
 job_prefix = proc_date + '/jid' + str(jid) + '/'
+job_config_filename_suffix = "_postproc"
 
 
 # Set up AWS Batch.
@@ -126,8 +124,6 @@ print("jid =",jid)
 print("job_info_s3_bucket_base =",job_info_s3_bucket_base)
 print("job_logs_s3_bucket_base =",job_logs_s3_bucket_base)
 print("product_s3_bucket_base =",product_s3_bucket_base)
-print("job_config_ini_file_filename =",job_config_ini_file_filename)
-print("job_config_ini_file_s3_bucket_object_name =",job_config_ini_file_s3_bucket_object_name)
 print("job_prefix =",job_prefix)
 
 
@@ -250,10 +246,14 @@ if __name__ == '__main__':
 
     # Populate config-file dictionary for job.
 
-    job_config_ini_file_filename = job_config_filename_base + str(jid) + "_postproc.ini"
+    job_config_ini_file_filename = job_config_filename_base + str(jid) + job_type_suffix + ".ini"
     job_config_ini_file = rapid_work + "/" + job_config_ini_file_filename
     job_info_s3_bucket = job_info_s3_bucket_base
     job_config_ini_file_s3_bucket_object_name = proc_date + "/" + job_config_ini_file_filename
+
+    print("job_config_ini_file_filename =",job_config_ini_file_filename)
+    print("job_config_ini_file_s3_bucket_object_name =",job_config_ini_file_s3_bucket_object_name)
+
 
     job_config = configparser.ConfigParser()
 
