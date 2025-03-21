@@ -239,7 +239,7 @@ if __name__ == '__main__':
     db_diffimages_rec_dict = dbh.get_best_difference_image(rid,ppid)
     pid = db_diffimages_rec_dict["rfid"]
     filename_diffimage = db_diffimages_rec_dict["filename"]
-    infobits_diffimage = db_diffimages_rec_dict["infobits"]
+    infobitssci_diffimage = db_diffimages_rec_dict["infobitssci"]
     rfid_diffimage = db_diffimages_rec_dict["rfid"]
 
 
@@ -302,7 +302,7 @@ if __name__ == '__main__':
     job_config['DIFF_IMAGE'] = {}
     job_config['DIFF_IMAGE']['rfid'] = str(pid)
     job_config['DIFF_IMAGE']['filename'] = str(filename_diffimage)
-    job_config['DIFF_IMAGE']['infobits'] = str(infobits_diffimage)
+    job_config['DIFF_IMAGE']['infobitssci'] = str(infobitssci_diffimage)
 
     job_config['REF_IMAGE'] = {}
     job_config['REF_IMAGE']['rfid'] = str(rfid)
