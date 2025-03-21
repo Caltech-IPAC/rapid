@@ -92,6 +92,8 @@ job_info_s3_bucket_base = config_input['JOB_PARAMS']['job_info_s3_bucket_base']
 job_logs_s3_bucket_base = config_input['JOB_PARAMS']['job_logs_s3_bucket_base']
 product_s3_bucket_base = config_input['JOB_PARAMS']['product_s3_bucket_base']
 job_config_filename_base = config_input['JOB_PARAMS']['job_config_filename_base']
+awaicgen_output_mosaic_image_file = config_input['AWAICGEN']['awaicgen_output_mosaic_image_file']
+zogy_output_diffimage_file = config_input['ZOGY']['zogy_output_diffimage_file']
 
 job_prefix = proc_date + '/jid' + str(jid) + '/'
 job_config_filename_suffix = "_postproc"
@@ -309,6 +311,12 @@ if __name__ == '__main__':
     job_config['REF_IMAGE']['rfid'] = str(rfid)
     job_config['REF_IMAGE']['filename'] = str(filename_refimage)
     job_config['REF_IMAGE']['infobits'] = str(infobits_refimage)
+
+    job_config['AWAICGEN'] = {}
+    job_config['AWAICGEN']['awaicgen_output_mosaic_image_file'] = awaicgen_output_mosaic_image_file
+
+    job_config['ZOGY'] = {}
+    job_config['ZOGY']['zogy_output_diffimage_file'] = zogy_output_diffimage_file
 
 
     # Write output config file for job.

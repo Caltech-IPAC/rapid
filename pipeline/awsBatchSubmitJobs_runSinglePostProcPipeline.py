@@ -7,6 +7,7 @@ after the products have been registered in the RAPID operations database.
 
 import boto3
 import os
+import configparser
 import numpy as np
 from datetime import datetime, timezone
 from dateutil import tz
@@ -102,6 +103,11 @@ print("job_config_ini_file_filename =",job_config_ini_file_filename)
 print("job_config_ini_file_s3_bucket_object_name =",job_config_ini_file_s3_bucket_object_name)
 
 
+
+
+
+
+
 #-------------------------------------------------------------------------------------------------------------
 # Main program.
 #-------------------------------------------------------------------------------------------------------------
@@ -120,6 +126,47 @@ if __name__ == '__main__':
     s3_resource = boto3.resource('s3')
 
 
+    # Download job configuration data file from S3 bucket.
+
+    s3_client = boto3.client('s3')
+
+    print("Downloading s3://{}/{} into {}...".format(job_info_s3_bucket,job_config_ini_file_s3_bucket_object_name,job_config_ini_file_filename))
+
+    response = s3_client.download_file(job_info_s3_bucket,job_config_ini_file_s3_bucket_object_name,job_config_ini_file_filename)
+
+    print("response =",response)
+
+
+    # Read in job configuration parameters from .ini file.
+
+    config_input = configparser.ConfigParser()
+    config_input.read(job_config_ini_file_filename)
+
+    verbose = int(config_input['JOB_PARAMS']['verbose'])
+    debug = int(config_input['JOB_PARAMS']['debug'])
+
+    job_info_s3_bucket_base = config_input['JOB_PARAMS']['job_info_s3_bucket_base']
+    product_s3_bucket_base = config_input['JOB_PARAMS']['product_s3_bucket_base']
+
+
+    ppid = int(config_input['SCI_IMAGE']['ppid'])
+    rid = int(config_input['SCI_IMAGE']['rid'])
+    expid = int(config_input['SCI_IMAGE']['expid'])
+    fid = int(config_input['SCI_IMAGE']['fid'])
+    field = int(config_input['SCI_IMAGE']['field'])
+    sca = int(config_input['SCI_IMAGE']['sca'])
+
+    pid = int(config_input['DIFF_IMAGE']['pid'])
+    filename_diffimage = config_input['DIFF_IMAGE']['filename']
+    infobitssci_diffimage = int(config_input['DIFF_IMAGE']['infobitssci'])
+
+    rfid = int(config_input['REF_IMAGE']['rfid'])
+    filename_diffimage = config_input['REF_IMAGE']['filename']
+    infobits_refimage = int(config_input['REF_IMAGE']['infobits'])
+
+    awaicgen_output_mosaic_image_file = config_input['AWAICGEN']['awaicgen_output_mosaic_image_file']
+
+    zogy_output_diffimage_file = config_input['ZOGY']['zogy_output_diffimage_file']
 
 
     # Inventory products associated with job.
@@ -128,11 +175,23 @@ if __name__ == '__main__':
 
     for product_bucket_object in product_bucket.objects.filter(Prefix=job_prefix):
 
-        print("------==------->",product_bucket_object)
+        print("product_bucket_object.key =",product_bucket_object.key)
 
 
+        # Reference image.
+
+        if awaicgen_output_mosaic_image_file in product_bucket_object.key:
+
+            print("Found in reference image in S3 product bucket: {}".format(awaicgen_output_mosaic_image_file))
 
 
+        # Difference image.
+
+        print("===> zogy_output_diffimage_file =",zogy_output_diffimage_file)
+
+        if zogy_output_diffimage_file in product_bucket_object.key:
+
+            print("Found in difference image in S3 product bucket: {}".format(zogy_output_diffimage_file))
 
 
     # Code-timing benchmark.
