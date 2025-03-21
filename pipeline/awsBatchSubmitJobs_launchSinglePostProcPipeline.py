@@ -240,7 +240,7 @@ if __name__ == '__main__':
     pid = db_diffimages_rec_dict["pid"]
     filename_diffimage = db_diffimages_rec_dict["filename"]
     infobitssci_diffimage = db_diffimages_rec_dict["infobitssci"]
-    rfid_diffimage = db_diffimages_rec_dict["rfid"]
+    rfid = db_diffimages_rec_dict["rfid"]
 
 
     # Query database for the reference image associated with the rfid stored in the
@@ -300,7 +300,7 @@ if __name__ == '__main__':
     job_config['SCI_IMAGE']['sca'] = str(sca)
 
     job_config['DIFF_IMAGE'] = {}
-    job_config['DIFF_IMAGE']['rfid'] = str(pid)
+    job_config['DIFF_IMAGE']['pid'] = str(pid)
     job_config['DIFF_IMAGE']['filename'] = str(filename_diffimage)
     job_config['DIFF_IMAGE']['infobitssci'] = str(infobitssci_diffimage)
 
