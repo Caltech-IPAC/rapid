@@ -2400,7 +2400,7 @@ class RAPIDDB:
         # Define query template.
 
         query_template =\
-            "select rfid,filename,infobitssci " +\
+            "select pid,rfid,filename,infobitssci " +\
             "from DiffImages " +\
             "where vbest > 0 " +\
             "and status > 0 " +\
@@ -2433,8 +2433,9 @@ class RAPIDDB:
 
         if record is not None:
             record_dict["pid"] = record[0]
-            record_dict["filename"] = record[1]
-            record_dict["infobitssci"] = record[2]
+            record_dict["rfid"] = record[1]
+            record_dict["filename"] = record[2]
+            record_dict["infobitssci"] = record[3]
 
         else:
             print("*** Error: Could not get best RefImages database record; continuing...")
