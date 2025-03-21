@@ -237,7 +237,7 @@ if __name__ == '__main__':
     # Query database for pid and rfid.
 
     db_diffimages_rec_dict = dbh.get_best_difference_image(rid,ppid)
-    pid = db_diffimages_rec_dict["rfid"]
+    pid = db_diffimages_rec_dict["pid"]
     filename_diffimage = db_diffimages_rec_dict["filename"]
     infobitssci_diffimage = db_diffimages_rec_dict["infobitssci"]
     rfid_diffimage = db_diffimages_rec_dict["rfid"]
