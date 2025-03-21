@@ -144,10 +144,13 @@ def submit_job_to_aws_batch(proc_date,
     print("job_config_ini_file_filename =",job_config_ini_file_filename)
     print("job_config_ini_file_s3_bucket_object_name =",job_config_ini_file_s3_bucket_object_name)
 
-
     # Submit single job.
 
     job_name = job_name_base + proc_date + "_jid" + str(jid)
+
+    print("job_name =",job_name)
+    print("job_queue =",job_queue)
+    print("job_definition =",job_definition)
 
     print("Submitting job to AWS Batch...")
 
