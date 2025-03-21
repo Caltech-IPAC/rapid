@@ -228,20 +228,27 @@ if __name__ == '__main__':
     job_exitcode = int(db_jobs_rec_dict["exitcode"])
 
 
-    # Query database for rfid.
-
-    db_refimages_rec_dict = dbh.get_best_reference_image(ppid,field,fid)
-    rfid = db_refimages_rec_dict["rfid"]
-    filename_refimage = db_refimages_rec_dict["filename"]
-    infobits_refimage = db_refimages_rec_dict["infobits"]
-
-
-    # Query database for pid.
+    # Because database records are updated only after a large number of science pipeline jobs have been run,
+    # and jobs with the same field are possible, the situation of having multiple versions reference images
+    # for the same field can occur, but only the last reference image registered in the database can be
+    # best.  So we must query the DiffImages record for the rfid associated with the difference image,
+    # and this may not necessarily point to the best version of reference image.
+    #
+    # Query database for pid and rfid.
 
     db_diffimages_rec_dict = dbh.get_best_difference_image(rid,ppid)
     pid = db_diffimages_rec_dict["rfid"]
     filename_diffimage = db_diffimages_rec_dict["filename"]
     infobits_diffimage = db_diffimages_rec_dict["infobits"]
+    rfid_diffimage = db_diffimages_rec_dict["rfid"]
+
+
+    # Query database for the reference image associated with the rfid stored in the
+    # Diffimages database record.  This reference image is not necessarily the best version.
+
+    db_refimages_rec_dict = dbh.get_reference_image(rfid)
+    filename_refimage = db_refimages_rec_dict["filename"]
+    infobits_refimage = db_refimages_rec_dict["infobits"]
 
 
     # Close database connection.
@@ -292,15 +299,15 @@ if __name__ == '__main__':
     job_config['SCI_IMAGE']['field'] = str(field)
     job_config['SCI_IMAGE']['sca'] = str(sca)
 
-    job_config['REF_IMAGE'] = {}
-    job_config['REF_IMAGE']['rfid'] = str(rfid)
-    job_config['REF_IMAGE']['filename'] = str(filename_refimage)
-    job_config['REF_IMAGE']['infobits'] = str(infobits_refimage)
-
     job_config['DIFF_IMAGE'] = {}
     job_config['DIFF_IMAGE']['rfid'] = str(pid)
     job_config['DIFF_IMAGE']['filename'] = str(filename_diffimage)
     job_config['DIFF_IMAGE']['infobits'] = str(infobits_diffimage)
+
+    job_config['REF_IMAGE'] = {}
+    job_config['REF_IMAGE']['rfid'] = str(rfid)
+    job_config['REF_IMAGE']['filename'] = str(filename_refimage)
+    job_config['REF_IMAGE']['infobits'] = str(infobits_refimage)
 
 
     # Write output config file for job.

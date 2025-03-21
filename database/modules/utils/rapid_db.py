@@ -2442,3 +2442,56 @@ class RAPIDDB:
 
 
         return record_dict
+
+
+########################################################################################################
+
+    def get_reference_image(self,rfid):
+
+        '''
+        Query RefImages database table for the reference image specified by the given rfid,
+        which may not necessarily be the best version.
+        '''
+
+        self.exit_code = 0
+
+
+        # Define query template.
+
+        query_template =\
+            "select rfid,filename,infobits " +\
+            "from RefImages " +\
+            "where rfid = TEMPLATE_RFID; "
+
+
+        # Formulate query by substituting parameters into query template.
+
+        print('----> rfid = {}'.format(rfid))
+
+        rep = {"TEMPLATE_RFID": str(rfid)}
+
+        rep = dict((re.escape(k), v) for k, v in rep.items())
+        pattern = re.compile("|".join(rep.keys()))
+        query = pattern.sub(lambda m: rep[re.escape(m.group(0))], query_template)
+
+        print('query = {}'.format(query))
+
+
+        # Execute query.
+
+        self.cur.execute(query)
+        record = self.cur.fetchone()
+
+        record_dict = {}
+
+        if record is not None:
+            record_dict["rfid"] = record[0]
+            record_dict["filename"] = record[1]
+            record_dict["infobits"] = record[2]
+
+        else:
+            print(f"*** Error: Could not get RefImages database record for rfid={rfid}; continuing...")
+            self.exit_code = 67
+
+
+        return record_dict
