@@ -502,7 +502,10 @@ if __name__ == '__main__':
     # A reference image depends only on pipeline number, field, filter, and version.
     # If a reference image does not exist, then aggregate all the inputs required to make one.
 
-    rfid,filename_refimage,infobits_refimage = dbh.get_best_reference_image(ppid_refimage,field,fid)
+    db_refimages_rec_dict = dbh.get_best_reference_image(ppid_refimage,field,fid)
+    rfid = db_refimages_rec_dict["rfid"]
+    filename_refimage = db_refimages_rec_dict["filename"]
+    infobits_refimage = db_refimages_rec_dict["infobits"]
 
     if dbh.exit_code >= 64 and dbh.exit_code != 67:
         print("*** Error from {}; quitting ".format(swname))
