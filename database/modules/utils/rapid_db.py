@@ -2405,7 +2405,7 @@ class RAPIDDB:
             "where vbest > 0 " +\
             "and status > 0 " +\
             "and field = TEMPLATE_RID " +\
-            "and fid = TEMPLATE_PPID; "
+            "and ppid = TEMPLATE_PPID; "
 
 
         # Formulate query by substituting parameters into query template.
