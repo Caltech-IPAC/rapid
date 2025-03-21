@@ -269,7 +269,7 @@ if __name__ == '__main__':
 
     # Populate config-file dictionary for job.
 
-    job_config_ini_file_filename = job_config_filename_base + str(jid) + job_type_suffix + ".ini"
+    job_config_ini_file_filename = job_config_filename_base + str(jid) + job_config_filename_suffix + ".ini"
     job_config_ini_file = rapid_work + "/" + job_config_ini_file_filename
     job_info_s3_bucket = job_info_s3_bucket_base
     job_config_ini_file_s3_bucket_object_name = proc_date + "/" + job_config_ini_file_filename
