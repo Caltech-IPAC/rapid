@@ -2404,7 +2404,7 @@ class RAPIDDB:
             "from DiffImages " +\
             "where vbest > 0 " +\
             "and status > 0 " +\
-            "and field = TEMPLATE_RID " +\
+            "and rid = TEMPLATE_RID " +\
             "and ppid = TEMPLATE_PPID; "
 
 
