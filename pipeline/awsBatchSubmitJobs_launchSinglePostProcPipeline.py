@@ -215,17 +215,33 @@ if __name__ == '__main__':
 
     # Query database for rid.
 
-    db_rec_dict = dbh.get_info_for_job(jid)
-    ppid = db_rec_dict["ppid"]
-    rid = db_rec_dict["rid"]
-    expid = db_rec_dict["expid"]
-    sca = db_rec_dict["sca"]
-    field = db_rec_dict["field"]
-    fid = db_rec_dict["fid"]
-    started = db_rec_dict["started"]
-    ended = db_rec_dict["ended"]
-    status = int(db_rec_dict["status"])
-    job_exitcode = int(db_rec_dict["exitcode"])
+    db_jobs_rec_dict = dbh.get_info_for_job(jid)
+    ppid = db_jobs_rec_dict["ppid"]
+    rid = db_jobs_rec_dict["rid"]
+    expid = db_jobs_rec_dict["expid"]
+    sca = db_jobs_rec_dict["sca"]
+    field = db_jobs_rec_dict["field"]
+    fid = db_jobs_rec_dict["fid"]
+    started = db_jobs_rec_dict["started"]
+    ended = db_jobs_rec_dict["ended"]
+    status = int(db_jobs_rec_dict["status"])
+    job_exitcode = int(db_jobs_rec_dict["exitcode"])
+
+
+    # Query database for rfid.
+
+    db_refimages_rec_dict = dbh.get_best_reference_image(ppid,field,fid)
+    rfid = db_refimages_rec_dict["rfid"]
+    filename_refimage = db_refimages_rec_dict["filename"]
+    infobits_refimage = db_refimages_rec_dict["infobits"]
+
+
+    # Query database for pid.
+
+    db_diffimages_rec_dict = dbh.get_best_difference_image(rid,ppid)
+    pid = db_diffimages_rec_dict["rfid"]
+    filename_diffimage = db_diffimages_rec_dict["filename"]
+    infobits_diffimage = db_diffimages_rec_dict["infobits"]
 
 
     # Close database connection.
@@ -267,13 +283,24 @@ if __name__ == '__main__':
     job_config['JOB_PARAMS']['job_info_s3_bucket_base'] = job_info_s3_bucket_base
     job_config['JOB_PARAMS']['product_s3_bucket_base'] = product_s3_bucket_base
     job_config['JOB_PARAMS']['verbose'] = str(verbose)
-    job_config['JOB_PARAMS']['ppid'] = str(ppid)
-    job_config['JOB_PARAMS']['rid'] = str(rid)
-    #job_config['JOB_PARAMS']['rfid'] = str(rfid)
-    job_config['JOB_PARAMS']['expid'] = str(expid)
-    job_config['JOB_PARAMS']['fid'] = str(fid)
-    job_config['JOB_PARAMS']['field'] = str(field)
-    job_config['JOB_PARAMS']['sca'] = str(sca)
+
+    job_config['SCI_IMAGE'] = {}
+    job_config['SCI_IMAGE']['ppid'] = str(ppid)
+    job_config['SCI_IMAGE']['rid'] = str(rid)
+    job_config['SCI_IMAGE']['expid'] = str(expid)
+    job_config['SCI_IMAGE']['fid'] = str(fid)
+    job_config['SCI_IMAGE']['field'] = str(field)
+    job_config['SCI_IMAGE']['sca'] = str(sca)
+
+    job_config['REF_IMAGE'] = {}
+    job_config['REF_IMAGE']['rfid'] = str(rfid)
+    job_config['REF_IMAGE']['filename'] = str(filename_refimage)
+    job_config['REF_IMAGE']['infobits'] = str(infobits_refimage)
+
+    job_config['DIFF_IMAGE'] = {}
+    job_config['DIFF_IMAGE']['rfid'] = str(pid)
+    job_config['DIFF_IMAGE']['filename'] = str(filename_diffimage)
+    job_config['DIFF_IMAGE']['infobits'] = str(infobits_diffimage)
 
 
     # Write output config file for job.
@@ -316,6 +343,8 @@ if __name__ == '__main__':
     # Launch a post-processing pipeline.
     #
 
+    print(f"Launching AWS Batch post-processing job for jid={jid}, proc_date={proc_date}")
+
     """
     submit_job_to_aws_batch(proc_date,
                             jid,
@@ -325,8 +354,6 @@ if __name__ == '__main__':
                             input_images_csv_filename,
                             input_images_csv_file_s3_bucket_object_name)
     """
-
-    print(f"Launching AWS Batch post-processing job for jid={jid}, proc_date={proc_date}")
 
 
     # Code-timing benchmark.
