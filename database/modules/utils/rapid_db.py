@@ -2429,18 +2429,16 @@ class RAPIDDB:
         self.cur.execute(query)
         record = self.cur.fetchone()
 
+        record_dict = {}
+
         if record is not None:
-            pid = record[0]
-            filename = record[1]
-            infobits = record[2]
+            record_dict["pid"] = record[0]
+            record_dict["filename"] = record[1]
+            record_dict["infobits"] = record[2]
 
         else:
-            rfid = None
-            filename = None
-            infobits = None
-
             print("*** Error: Could not get best RefImages database record; continuing...")
             self.exit_code = 67
 
 
-        return pid,filename,infobits
+        return record_dict
