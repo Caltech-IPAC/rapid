@@ -2400,7 +2400,7 @@ class RAPIDDB:
         # Define query template.
 
         query_template =\
-            "select rfid,filename,infobitsci " +\
+            "select rfid,filename,infobitssci " +\
             "from DiffImages " +\
             "where vbest > 0 " +\
             "and status > 0 " +\
