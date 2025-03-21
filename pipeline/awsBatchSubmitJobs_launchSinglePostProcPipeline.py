@@ -141,8 +141,8 @@ def submit_job_to_aws_batch(proc_date,
     print("proc_date =",proc_date)
     print("jid =",jid)
     print("job_info_s3_bucket =",job_info_s3_bucket)
+    print("job_config_ini_file_filename =",job_config_ini_file_filename)
     print("job_config_ini_file_s3_bucket_object_name =",job_config_ini_file_s3_bucket_object_name)
-    print("input_images_csv_file_s3_bucket_object_name =",input_images_csv_file_s3_bucket_object_name)
 
 
     # Submit single job.
