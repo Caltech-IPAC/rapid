@@ -352,7 +352,6 @@ if __name__ == '__main__':
 
     print(f"Launching AWS Batch post-processing job for jid={jid}, proc_date={proc_date}")
 
-    """
     submit_job_to_aws_batch(proc_date,
                             jid,
                             job_info_s3_bucket,
@@ -360,7 +359,6 @@ if __name__ == '__main__':
                             job_config_ini_file_s3_bucket_object_name,
                             input_images_csv_filename,
                             input_images_csv_file_s3_bucket_object_name)
-    """
 
 
     # Code-timing benchmark.
