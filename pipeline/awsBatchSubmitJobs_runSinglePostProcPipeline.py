@@ -93,26 +93,6 @@ if job_config_ini_file_s3_bucket_object_name is None:
     exit(64)
 
 
-# REFIMAGEINPUTSFILENAME of pipeline job.
-
-input_images_csv_filename = os.getenv('REFIMAGEINPUTSFILENAME')
-
-if input_images_csv_filename is None:
-
-    print("*** Error: Env. var. REFIMAGEINPUTSFILENAME not set; quitting...")
-    exit(64)
-
-
-# REFIMAGEINPUTSOBJNAME of pipeline job.
-
-input_images_csv_file_s3_bucket_object_name = os.getenv('REFIMAGEINPUTSOBJNAME')
-
-if input_images_csv_file_s3_bucket_object_name is None:
-
-    print("*** Error: Env. var. REFIMAGEINPUTSOBJNAME not set; quitting...")
-    exit(64)
-
-
 # Print out basic information for log file.
 
 print("job_proc_date =",job_proc_date)
