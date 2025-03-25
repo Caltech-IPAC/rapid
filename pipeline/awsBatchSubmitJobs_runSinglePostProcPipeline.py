@@ -162,10 +162,12 @@ if __name__ == '__main__':
     pid = int(config_input['DIFF_IMAGE']['pid'])
     s3_full_filename_diffimage = config_input['DIFF_IMAGE']['filename']
     infobitssci_diffimage = int(config_input['DIFF_IMAGE']['infobitssci'])
+    version_diffimage = int(config_input['DIFF_IMAGE']['version'])
 
     rfid = int(config_input['REF_IMAGE']['rfid'])
     s3_full_filename_refimage = config_input['REF_IMAGE']['filename']
     infobits_refimage = int(config_input['REF_IMAGE']['infobits'])
+    version_refimage = int(config_input['REF_IMAGE']['version'])
 
     awaicgen_output_mosaic_image_file = config_input['AWAICGEN']['awaicgen_output_mosaic_image_file']
 
@@ -197,12 +199,13 @@ if __name__ == '__main__':
 
             # Update FITS header of reference image.
 
-            keywords = ['RFID','S3BUCKN','S3OBJPRF','RFFILEN','INFOBITS','PPID']
+            keywords = ['RFID','S3BUCKN','S3OBJPRF','RFFILEN','INFOBITS','RFIMVER','PPID']
             kwdvals = [str(rfid),
                        product_s3_bucket_base,
                        job_prefix,
                        awaicgen_output_mosaic_image_file,
                        str(infobits_refimage),
+                       str(version_refimage),
                        str(ppid)]
             hdu_index = 0
             util.addKeywordsToFITSHeader(awaicgen_output_mosaic_image_file,
@@ -238,12 +241,13 @@ if __name__ == '__main__':
 
             # Update FITS header of difference image.
 
-            keywords = ['PID','S3BUCKN','S3OBJPRF','DIFFILEN','INFOBITS','PPID','RID','EXPID','FID','FIELD']
+            keywords = ['PID','S3BUCKN','S3OBJPRF','DIFFILEN','INFOBITS','DIFIMVER','PPID','RID','EXPID','FID','FIELD']
             kwdvals = [str(pid),
                        product_s3_bucket_base,
                        job_prefix,
                        zogy_output_diffimage_file,
                        str(infobitssci_diffimage),
+                       str(version_diffimage),
                        str(ppid),
                        str(rid),
                        str(expid),

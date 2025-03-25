@@ -242,6 +242,7 @@ if __name__ == '__main__':
     filename_diffimage = db_diffimages_rec_dict["filename"]
     infobitssci_diffimage = db_diffimages_rec_dict["infobitssci"]
     rfid = db_diffimages_rec_dict["rfid"]
+    version_diffimage = db_diffimages_rec_dict["version"]
 
 
     # Query database for the reference image associated with the rfid stored in the
@@ -250,6 +251,7 @@ if __name__ == '__main__':
     db_refimages_rec_dict = dbh.get_reference_image(rfid)
     filename_refimage = db_refimages_rec_dict["filename"]
     infobits_refimage = db_refimages_rec_dict["infobits"]
+    version_refimage = db_refimages_rec_dict["version"]
 
 
     # Close database connection.
@@ -304,11 +306,13 @@ if __name__ == '__main__':
     job_config['DIFF_IMAGE']['pid'] = str(pid)
     job_config['DIFF_IMAGE']['filename'] = str(filename_diffimage)
     job_config['DIFF_IMAGE']['infobitssci'] = str(infobitssci_diffimage)
+    job_config['DIFF_IMAGE']['version'] = str(version_diffimage)
 
     job_config['REF_IMAGE'] = {}
     job_config['REF_IMAGE']['rfid'] = str(rfid)
     job_config['REF_IMAGE']['filename'] = str(filename_refimage)
     job_config['REF_IMAGE']['infobits'] = str(infobits_refimage)
+    job_config['REF_IMAGE']['version'] = str(version_refimage)
 
     job_config['AWAICGEN'] = {}
     job_config['AWAICGEN']['awaicgen_output_mosaic_image_file'] = awaicgen_output_mosaic_image_file
