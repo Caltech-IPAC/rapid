@@ -95,7 +95,6 @@ job_config_filename_base = config_input['JOB_PARAMS']['job_config_filename_base'
 awaicgen_output_mosaic_image_file = config_input['AWAICGEN']['awaicgen_output_mosaic_image_file']
 zogy_output_diffimage_file = config_input['ZOGY']['zogy_output_diffimage_file']
 
-job_prefix = proc_date + '/jid' + str(jid) + '/'
 job_config_filename_suffix = "_postproc"
 
 
@@ -126,7 +125,6 @@ print("jid =",jid)
 print("job_info_s3_bucket_base =",job_info_s3_bucket_base)
 print("job_logs_s3_bucket_base =",job_logs_s3_bucket_base)
 print("product_s3_bucket_base =",product_s3_bucket_base)
-print("job_prefix =",job_prefix)
 
 
 #-------------------------------------------------------------------------------------------------------------

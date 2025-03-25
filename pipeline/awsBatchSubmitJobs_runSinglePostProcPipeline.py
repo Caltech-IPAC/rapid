@@ -93,6 +93,8 @@ if job_config_ini_file_s3_bucket_object_name is None:
     print("*** Error: Env. var. JOBCONFIGOBJNAME not set; quitting...")
     exit(64)
 
+job_prefix = job_proc_date + '/jid' + str(jid) + '/'
+
 
 # Print out basic information for log file.
 
@@ -101,6 +103,7 @@ print("jid =",jid)
 print("job_info_s3_bucket =",job_info_s3_bucket)
 print("job_config_ini_file_filename =",job_config_ini_file_filename)
 print("job_config_ini_file_s3_bucket_object_name =",job_config_ini_file_s3_bucket_object_name)
+print("job_prefix =",job_prefix)
 
 
 
