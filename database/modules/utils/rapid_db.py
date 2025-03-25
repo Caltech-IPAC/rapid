@@ -2438,7 +2438,7 @@ class RAPIDDB:
             record_dict["infobitssci"] = record[3]
 
         else:
-            print("*** Error: Could not get best RefImages database record; continuing...")
+            print("*** Error: Could not get best DiffImages database record; continuing...")
             self.exit_code = 67
 
 
