@@ -1242,7 +1242,7 @@ class RAPIDDB:
         # Define query template.
 
         query_template =\
-            "select rfid,filename,infobits " +\
+            "select rfid,filename,infobits,version " +\
             "from RefImages " +\
             "where vbest > 0 " +\
             "and status > 0 " +\
@@ -1280,6 +1280,7 @@ class RAPIDDB:
             record_dict["rfid"] = record[0]
             record_dict["filename"] = record[1]
             record_dict["infobits"] = record[2]
+            record_dict["version"] = record[3]
 
         else:
             print("*** Message: No best RefImages database record found; continuing...")
@@ -2400,7 +2401,7 @@ class RAPIDDB:
         # Define query template.
 
         query_template =\
-            "select pid,rfid,filename,infobitssci " +\
+            "select pid,rfid,filename,infobitssci,version " +\
             "from DiffImages " +\
             "where vbest > 0 " +\
             "and status > 0 " +\
@@ -2436,6 +2437,7 @@ class RAPIDDB:
             record_dict["rfid"] = record[1]
             record_dict["filename"] = record[2]
             record_dict["infobitssci"] = record[3]
+            record_dict["version"] = record[4]
 
         else:
             print("*** Message: No best DiffImages database record found; continuing...")
@@ -2460,7 +2462,7 @@ class RAPIDDB:
         # Define query template.
 
         query_template =\
-            "select rfid,filename,infobits " +\
+            "select rfid,filename,infobits,version " +\
             "from RefImages " +\
             "where rfid = TEMPLATE_RFID; "
 
@@ -2489,6 +2491,7 @@ class RAPIDDB:
             record_dict["rfid"] = record[0]
             record_dict["filename"] = record[1]
             record_dict["infobits"] = record[2]
+            record_dict["version"] = record[3]
 
         else:
             print(f"*** Message: No RefImages database record found for rfid={rfid}; continuing...")
