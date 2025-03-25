@@ -197,9 +197,11 @@ if __name__ == '__main__':
 
             # Update FITS header of reference image.
 
-            keywords = ['RFID','RFFILEN','INFOBITS','PPID']
+            keywords = ['RFID','S3BUCKN','S3OBJPRF','RFFILEN','INFOBITS','PPID']
             kwdvals = [str(rfid),
-                       s3_full_filename_refimage,
+                       product_s3_bucket_base,
+                       job_prefix,
+                       awaicgen_output_mosaic_image_file,
                        str(infobits_refimage),
                        str(ppid)]
             hdu_index = 0
@@ -236,9 +238,11 @@ if __name__ == '__main__':
 
             # Update FITS header of difference image.
 
-            keywords = ['PID','DIFFILEN','INFOBITS','PPID','RID','EXPID','FID','FIELD']
+            keywords = ['PID','S3BUCKN','S3OBJPRF','DIFFILEN','INFOBITS','PPID','RID','EXPID','FID','FIELD']
             kwdvals = [str(pid),
-                       s3_full_filename_diffimage,
+                       product_s3_bucket_base,
+                       job_prefix,
+                       zogy_output_diffimage_file,
                        str(infobitssci_diffimage),
                        str(ppid),
                        str(rid),
