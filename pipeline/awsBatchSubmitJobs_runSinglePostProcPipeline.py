@@ -191,7 +191,7 @@ if __name__ == '__main__':
             # Download reference image from S3 bucket.
 
             print("s3_full_filename_refimage = ",s3_full_filename_refimage)
-            s3_full_filename_refimage,subdirs_refimage,downloaded_from_bucket = \
+            awaicgen_output_mosaic_image_file,subdirs_refimage,downloaded_from_bucket = \
                 util.download_file_from_s3_bucket(s3_client,s3_full_filename_refimage)
 
 
@@ -213,7 +213,7 @@ if __name__ == '__main__':
             # Upload reference image to S3 bucket.
 
             s3_object_name_refimage = job_proc_date + "/jid" + str(jid) + "/" + awaicgen_output_mosaic_image_file
-            filenames = [zogy_output_refimage_file]
+            filenames = [awaicgen_output_mosaic_image_file]
             objectnames = [s3_object_name_refimage]
             util.upload_files_to_s3_bucket(s3_client,product_s3_bucket_base,filenames,objectnames)
 
@@ -230,12 +230,11 @@ if __name__ == '__main__':
             # Download difference image from S3 bucket.
 
             print("s3_full_filename_diffimage = ",s3_full_filename_diffimage)
-            s3_full_filename_diffimage,subdirs_diffimage,downloaded_from_bucket = \
+            zogy_output_diffimage_file,subdirs_diffimage,downloaded_from_bucket = \
                 util.download_file_from_s3_bucket(s3_client,s3_full_filename_diffimage)
 
 
             # Update FITS header of difference image.
-
 
             keywords = ['PID','DIFFILEN','INFOBITS','PPID','RID','EXPID','FID','FIELD']
             kwdvals = [str(pid),
