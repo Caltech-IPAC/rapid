@@ -1282,8 +1282,8 @@ class RAPIDDB:
             record_dict["infobits"] = record[2]
 
         else:
-            print("*** Error: Could not get best RefImages database record; continuing...")
-            self.exit_code = 67
+            print("*** Message: No best RefImages database record found; continuing...")
+            self.exit_code = 7
 
 
         return record_dict
@@ -2438,8 +2438,8 @@ class RAPIDDB:
             record_dict["infobitssci"] = record[3]
 
         else:
-            print("*** Error: Could not get best DiffImages database record; continuing...")
-            self.exit_code = 67
+            print("*** Message: No best DiffImages database record found; continuing...")
+            self.exit_code = 7
 
 
         return record_dict
@@ -2491,8 +2491,8 @@ class RAPIDDB:
             record_dict["infobits"] = record[2]
 
         else:
-            print(f"*** Error: Could not get RefImages database record for rfid={rfid}; continuing...")
-            self.exit_code = 67
+            print(f"*** Message: No RefImages database record found for rfid={rfid}; continuing...")
+            self.exit_code = 7
 
 
         return record_dict

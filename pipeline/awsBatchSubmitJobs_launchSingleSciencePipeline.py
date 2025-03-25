@@ -503,13 +503,18 @@ if __name__ == '__main__':
     # If a reference image does not exist, then aggregate all the inputs required to make one.
 
     db_refimages_rec_dict = dbh.get_best_reference_image(ppid_refimage,field,fid)
-    rfid = db_refimages_rec_dict["rfid"]
-    filename_refimage = db_refimages_rec_dict["filename"]
-    infobits_refimage = db_refimages_rec_dict["infobits"]
 
-    if dbh.exit_code >= 64 and dbh.exit_code != 67:
+    if dbh.exit_code == 7:
+        print("No database record from dbh.get_best_reference_image called by {}; continuing with rfid = None...".format(swname))
+        rfid = None
+    elif dbh.exit_code >= 64:
         print("*** Error from {}; quitting ".format(swname))
         exit(dbh.exit_code)
+    else:
+        rfid = db_refimages_rec_dict["rfid"]
+        filename_refimage = db_refimages_rec_dict["filename"]
+        infobits_refimage = db_refimages_rec_dict["infobits"]
+
 
     if rfid is not None:
 
