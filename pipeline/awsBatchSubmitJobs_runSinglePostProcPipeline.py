@@ -160,11 +160,11 @@ if __name__ == '__main__':
     sca = int(config_input['SCI_IMAGE']['sca'])
 
     pid = int(config_input['DIFF_IMAGE']['pid'])
-    filename_diffimage = config_input['DIFF_IMAGE']['filename']
+    s3_full_filename_diffimage = config_input['DIFF_IMAGE']['filename']
     infobitssci_diffimage = int(config_input['DIFF_IMAGE']['infobitssci'])
 
     rfid = int(config_input['REF_IMAGE']['rfid'])
-    filename_diffimage = config_input['REF_IMAGE']['filename']
+    s3_full_filename_refimage = config_input['REF_IMAGE']['filename']
     infobits_refimage = int(config_input['REF_IMAGE']['infobits'])
 
     awaicgen_output_mosaic_image_file = config_input['AWAICGEN']['awaicgen_output_mosaic_image_file']
@@ -188,6 +188,36 @@ if __name__ == '__main__':
             print("Found in reference image in S3 product bucket: {}".format(awaicgen_output_mosaic_image_file))
 
 
+            # Download reference image from S3 bucket.
+
+            print("s3_full_filename_refimage = ",s3_full_filename_refimage)
+            s3_full_filename_refimage,subdirs_refimage,downloaded_from_bucket = \
+                util.download_file_from_s3_bucket(s3_client,s3_full_filename_refimage)
+
+
+            # Update FITS header of reference image.
+
+            keywords = ['RFID','RFFILEN','INFOBITS','PPID']
+            kwdvals = [str(rfid),
+                       s3_full_filename_refimage,
+                       str(infobits_refimage),
+                       str(ppid)]
+            hdu_index = 0
+            util.addKeywordsToFITSHeader(awaicgen_output_mosaic_image_file,
+                                         keywords,
+                                         kwdvals,
+                                         hdu_index,
+                                         awaicgen_output_mosaic_image_file)
+
+
+            # Upload reference image to S3 bucket.
+
+            s3_object_name_refimage = job_proc_date + "/jid" + str(jid) + "/" + awaicgen_output_mosaic_image_file
+            filenames = [zogy_output_refimage_file]
+            objectnames = [s3_object_name_refimage]
+            util.upload_files_to_s3_bucket(s3_client,product_s3_bucket_base,filenames,objectnames)
+
+
         # Difference image.
 
         print("===> zogy_output_diffimage_file =",zogy_output_diffimage_file)
@@ -195,6 +225,41 @@ if __name__ == '__main__':
         if zogy_output_diffimage_file in product_bucket_object.key:
 
             print("Found in difference image in S3 product bucket: {}".format(zogy_output_diffimage_file))
+
+
+            # Download difference image from S3 bucket.
+
+            print("s3_full_filename_diffimage = ",s3_full_filename_diffimage)
+            s3_full_filename_diffimage,subdirs_diffimage,downloaded_from_bucket = \
+                util.download_file_from_s3_bucket(s3_client,s3_full_filename_diffimage)
+
+
+            # Update FITS header of difference image.
+
+
+            keywords = ['PID','DIFFILEN','INFOBITS','PPID','RID','EXPID','FID','FIELD']
+            kwdvals = [str(pid),
+                       s3_full_filename_diffimage,
+                       str(infobitssci_diffimage),
+                       str(ppid),
+                       str(rid),
+                       str(expid),
+                       str(fid),
+                       str(field)]
+            hdu_index = 0
+            util.addKeywordsToFITSHeader(zogy_output_diffimage_file,
+                                         keywords,
+                                         kwdvals,
+                                         hdu_index,
+                                         zogy_output_diffimage_file)
+
+
+            # Upload difference image to S3 bucket.
+
+            s3_object_name_diffimage = job_proc_date + "/jid" + str(jid) + "/" + zogy_output_diffimage_file
+            filenames = [zogy_output_diffimage_file]
+            objectnames = [s3_object_name_diffimage]
+            util.upload_files_to_s3_bucket(s3_client,product_s3_bucket_base,filenames,objectnames)
 
 
     # Code-timing benchmark.
