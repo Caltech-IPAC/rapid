@@ -246,13 +246,18 @@ if __name__ == '__main__':
 
             # Store product configuration parameters for reference image.
 
+            s3_object_name_refimage = job_proc_date + "/jid" + str(jid) + "/" + awaicgen_output_mosaic_image_file
+            refimage_filename_for_db_record = "s3://{}/{}".format(product_s3_bucket_base,s3_object_name_refimage)
+
             product_config['REF_IMAGE'] = {}
+            product_config['REF_IMAGE']['rfid'] = str(rfid)
+            product_config['REF_IMAGE']['refimage_filename'] = refimage_filename_for_db_record
+            product_config['REF_IMAGE']['refimage_file_version'] = str(version_refimage)
             product_config['REF_IMAGE']['refimage_file_checksum'] = checksum_refimage
 
 
             # Upload reference image to S3 bucket.
 
-            s3_object_name_refimage = job_proc_date + "/jid" + str(jid) + "/" + awaicgen_output_mosaic_image_file
             filenames = [awaicgen_output_mosaic_image_file]
             objectnames = [s3_object_name_refimage]
             util.upload_files_to_s3_bucket(s3_client,product_s3_bucket_base,filenames,objectnames)
@@ -304,13 +309,18 @@ if __name__ == '__main__':
 
             # Store product configuration parameters for reference image.
 
+            s3_object_name_diffimage = job_proc_date + "/jid" + str(jid) + "/" + zogy_output_diffimage_file
+            diffimage_filename_for_db_record = "s3://{}/{}".format(product_s3_bucket_base,s3_object_name_diffimage)
+
             product_config['DIFF_IMAGE'] = {}
+            product_config['DIFF_IMAGE']['pid'] = str(pid)
+            product_config['DIFF_IMAGE']['diffimage_filename'] = diffimage_filename_for_db_record
+            product_config['DIFF_IMAGE']['diffimage_file_version'] = str(version_diffimage)
             product_config['DIFF_IMAGE']['diffimage_file_checksum'] = checksum_diffimage
 
 
             # Upload difference image to S3 bucket.
 
-            s3_object_name_diffimage = job_proc_date + "/jid" + str(jid) + "/" + zogy_output_diffimage_file
             filenames = [zogy_output_diffimage_file]
             objectnames = [s3_object_name_diffimage]
             util.upload_files_to_s3_bucket(s3_client,product_s3_bucket_base,filenames,objectnames)
