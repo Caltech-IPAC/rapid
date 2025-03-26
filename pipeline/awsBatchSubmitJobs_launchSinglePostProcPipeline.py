@@ -92,6 +92,7 @@ job_info_s3_bucket_base = config_input['JOB_PARAMS']['job_info_s3_bucket_base']
 job_logs_s3_bucket_base = config_input['JOB_PARAMS']['job_logs_s3_bucket_base']
 product_s3_bucket_base = config_input['JOB_PARAMS']['product_s3_bucket_base']
 job_config_filename_base = config_input['JOB_PARAMS']['job_config_filename_base']
+product_config_filename_base = config_input['JOB_PARAMS']['product_config_filename_base']
 awaicgen_output_mosaic_image_file = config_input['AWAICGEN']['awaicgen_output_mosaic_image_file']
 zogy_output_diffimage_file = config_input['ZOGY']['zogy_output_diffimage_file']
 
@@ -292,6 +293,7 @@ if __name__ == '__main__':
 
     job_config['JOB_PARAMS']['job_info_s3_bucket_base'] = job_info_s3_bucket_base
     job_config['JOB_PARAMS']['product_s3_bucket_base'] = product_s3_bucket_base
+    job_config['JOB_PARAMS']['product_config_filename_base'] = product_config_filename_base
     job_config['JOB_PARAMS']['verbose'] = str(verbose)
 
     job_config['SCI_IMAGE'] = {}
