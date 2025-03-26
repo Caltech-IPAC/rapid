@@ -526,6 +526,7 @@ if __name__ == '__main__':
 
     else:
         filename_refimage = "None"
+        infobits_refimage = "None"
         input_images_csv_filename = "input_images_for_refimage_jid"+ str(jid) + ".csv"
         input_images_csv_file = rapid_work + "/" + input_images_csv_filename
         input_images_csv_file_s3_bucket_object_name = proc_date + "/" + input_images_csv_filename
