@@ -95,7 +95,7 @@ job_config_filename_base = config_input['JOB_PARAMS']['job_config_filename_base'
 product_config_filename_base = config_input['JOB_PARAMS']['product_config_filename_base']
 awaicgen_output_mosaic_image_file = config_input['AWAICGEN']['awaicgen_output_mosaic_image_file']
 zogy_output_diffimage_file = config_input['ZOGY']['zogy_output_diffimage_file']
-ppid = int(config_input['POST_PROC']['ppid'])
+ppid_post_proc = int(config_input['POST_PROC']['ppid'])
 
 job_config_filename_suffix = "_postproc"
 
@@ -233,7 +233,7 @@ if __name__ == '__main__':
 
     # Insert or update record in Jobs database table and return job ID.
 
-    jid_post_proc = dbh.start_job(ppid,fid,expid,field,sca,rid)
+    jid_post_proc = dbh.start_job(ppid_post_proc,fid,expid,field,sca,rid)
 
     if dbh.exit_code >= 64:
         exit(dbh.exit_code)
