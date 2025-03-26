@@ -95,6 +95,7 @@ job_config_filename_base = config_input['JOB_PARAMS']['job_config_filename_base'
 product_config_filename_base = config_input['JOB_PARAMS']['product_config_filename_base']
 awaicgen_output_mosaic_image_file = config_input['AWAICGEN']['awaicgen_output_mosaic_image_file']
 zogy_output_diffimage_file = config_input['ZOGY']['zogy_output_diffimage_file']
+ppid = int(config_input['POST_PROC']['ppid'])
 
 job_config_filename_suffix = "_postproc"
 
@@ -230,6 +231,14 @@ if __name__ == '__main__':
     job_exitcode = int(db_jobs_rec_dict["exitcode"])
 
 
+    # Insert or update record in Jobs database table and return job ID.
+
+    jid_post_proc = dbh.start_job(ppid,fid,expid,field,sca,rid)
+
+    if dbh.exit_code >= 64:
+        exit(dbh.exit_code)
+
+
     # Because database records are updated only after a large number of science pipeline jobs have been run,
     # and jobs with the same field are possible, the situation of having multiple versions reference images
     # for the same field can occur, but only the last reference image registered in the database can be
@@ -295,6 +304,7 @@ if __name__ == '__main__':
     job_config['JOB_PARAMS']['product_s3_bucket_base'] = product_s3_bucket_base
     job_config['JOB_PARAMS']['product_config_filename_base'] = product_config_filename_base
     job_config['JOB_PARAMS']['verbose'] = str(verbose)
+    job_config['JOB_PARAMS']['jid_post_proc'] = str(jid_post_proc)
 
     job_config['SCI_IMAGE'] = {}
     job_config['SCI_IMAGE']['ppid'] = str(ppid)
