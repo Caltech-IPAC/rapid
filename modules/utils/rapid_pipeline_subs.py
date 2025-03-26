@@ -1453,7 +1453,6 @@ def compute_diffimage_psf_catalog(n_clip_sigma,
     return psfcat_flag,phot
 
 
-
 #####################################################################################
 # Add informational keywords to FITS header.
 # Assume image data associated with specified HDU is float32.
@@ -1465,6 +1464,7 @@ def addKeywordsToFITSHeader(input_fits_filename,
                             values,
                             hdu_index,
                             output_fits_filename):
+
 
     # Read input FITS file.
 
@@ -1489,6 +1489,9 @@ def addKeywordsToFITSHeader(input_fits_filename,
     np_data = np.array(data)
     new_hdu = fits.PrimaryHDU(header=hdr,data=np_data.astype(np.float32))
     new_hdu.writeto(output_fits_filename,overwrite=True,checksum=True)
+
+
+    # Return nothing.
 
     return
 
