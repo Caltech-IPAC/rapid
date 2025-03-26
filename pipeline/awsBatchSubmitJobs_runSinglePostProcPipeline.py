@@ -148,6 +148,8 @@ if __name__ == '__main__':
     verbose = int(config_input['JOB_PARAMS']['verbose'])
     debug = int(config_input['JOB_PARAMS']['debug'])
 
+    jid_post_proc = config_input['JOB_PARAMS']['jid_post_proc']
+
     job_info_s3_bucket_base = config_input['JOB_PARAMS']['job_info_s3_bucket_base']
     product_s3_bucket_base = config_input['JOB_PARAMS']['product_s3_bucket_base']
 
@@ -192,6 +194,7 @@ if __name__ == '__main__':
     product_config['JOB_PARAMS']['job_proc_date'] = job_proc_date
     product_config['JOB_PARAMS']['verbose'] = str(verbose)
     product_config['JOB_PARAMS']['job_started'] = str(proc_pt_datetime_started)
+    product_config['JOB_PARAMS']['jid_post_proc'] = str(jid_post_proc)
 
 
     # Inventory products associated with job.
@@ -302,7 +305,7 @@ if __name__ == '__main__':
             # Store product configuration parameters for reference image.
 
             product_config['DIFF_IMAGE'] = {}
-            product_config['DIFF_IMAGE']['diffimage_file_checksum'] = checksum_refimage
+            product_config['DIFF_IMAGE']['diffimage_file_checksum'] = checksum_diffimage
 
 
             # Upload difference image to S3 bucket.
