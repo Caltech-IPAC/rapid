@@ -153,8 +153,7 @@ if __name__ == '__main__':
     job_info_s3_bucket_base = config_input['JOB_PARAMS']['job_info_s3_bucket_base']
     product_s3_bucket_base = config_input['JOB_PARAMS']['product_s3_bucket_base']
 
-    product_config_filename_base = config_input['JOB_PARAMS']['product_config_filename_base']
-    product_config_filename_base = "postproc_" + product_config_filename_base
+    postproc_product_config_filename_base = config_input['JOB_PARAMS']['postproc_product_config_filename_base']
 
     ppid = int(config_input['SCI_IMAGE']['ppid'])
     rid = int(config_input['SCI_IMAGE']['rid'])
@@ -180,7 +179,7 @@ if __name__ == '__main__':
 
     # Populate config-file dictionary for products.
 
-    product_config_ini_filename = product_config_filename_base + str(jid) + ".ini"
+    product_config_ini_filename = postproc_product_config_filename_base + str(jid) + ".ini"
     product_config_ini_file_s3_bucket_object_name = job_proc_date + "/" + product_config_ini_filename
 
     product_config = configparser.ConfigParser()

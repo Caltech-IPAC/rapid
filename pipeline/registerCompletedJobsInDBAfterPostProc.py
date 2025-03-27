@@ -96,7 +96,7 @@ debug = int(config_input['JOB_PARAMS']['debug'])
 job_info_s3_bucket_base = config_input['JOB_PARAMS']['job_info_s3_bucket_base']
 job_logs_s3_bucket_base = config_input['JOB_PARAMS']['job_logs_s3_bucket_base']
 product_s3_bucket_base = config_input['JOB_PARAMS']['product_s3_bucket_base']
-job_config_filename_base = config_input['JOB_PARAMS']['job_config_filename_base']
+postproc_job_config_filename_base = config_input['JOB_PARAMS']['postproc_job_config_filename_base']
 product_config_filename_base = config_input['JOB_PARAMS']['product_config_filename_base']
 awaicgen_output_mosaic_image_file = config_input['AWAICGEN']['awaicgen_output_mosaic_image_file']
 zogy_output_diffimage_file = config_input['ZOGY']['zogy_output_diffimage_file']
@@ -209,7 +209,7 @@ if __name__ == '__main__':
 
         # Download job config file, in order to harvest some of its metadata.
 
-        job_config_ini_filename = job_config_filename_base + str(jid) + ".ini"
+        job_config_ini_filename = postproc_job_config_filename_base + str(jid) + ".ini"
 
         s3_bucket_object_name = datearg + '/' + job_config_ini_filename
 
@@ -218,6 +218,115 @@ if __name__ == '__main__':
         response = s3_client.download_file(job_info_s3_bucket_base,s3_bucket_object_name,job_config_ini_filename)
 
         print("response =",response)
+
+
+
+
+
+
+            # Harvest job metadata from job config file
+
+            job_config_input = configparser.ConfigParser()
+            job_config_input.read(job_config_ini_filename)
+
+            fid = int(job_config_input['SCI_IMAGE']['fid'])
+
+            rtid = int(job_config_input['SKY_TILE']['rtid'])
+            field = rtid
+            ra0 = float(job_config_input['SKY_TILE']['ra0'])
+            dec0 = float(job_config_input['SKY_TILE']['dec0'])
+
+            print("rtid,ra0,dec0 =",rtid,ra0,dec0 )
+
+
+            # If rfid_str == "None" and not enough inputs to make a
+            # reference image, then set job_exitcode = 33 and skip to
+            # next job after updating Jobs database record.
+
+            rfid_str = job_config_input['REF_IMAGE']['rfid']
+            n_images_to_coadd = int(job_config_input['REF_IMAGE']['n_images_to_coadd'])
+
+            print("rfid_str =",rfid_str)
+            print("n_images_to_coadd =",n_images_to_coadd)
+
+            if rfid_str == "None":
+                if n_images_to_coadd == 0:
+                    job_exitcode = 33
+
+
+            # Grep log file for aws_batch_job_id and terminating_exitcode.
+
+            file = open(log_fname, "r")
+            search_string1 = "aws_batch_job_id"
+            search_string2 = "terminating_exitcode"
+
+            for line in file:
+                if re.search(search_string1, line):
+                    line = line.rstrip("\n")
+                    print(line)
+                    tokens = re.split(r'\s*=\s*',line)
+                    aws_batch_job_id = tokens[1]
+                elif re.search(search_string2, line):
+                    line = line.rstrip("\n")
+                    print(line)
+                    tokens = re.split(r'\s*=\s*',line)
+                    job_exitcode = tokens[1]
+
+
+            # Try to download product config file, in order to harvest some of its metadata.
+            # This may be unsuccessful if the pipeline failed.
+
+            product_config_ini_filename = product_config_filename_base + str(jid) + ".ini"
+
+            s3_bucket_object_name = datearg + '/' + product_config_ini_filename
+
+            print("Try downloading s3://{}/{} into {}...".format(product_s3_bucket_base,s3_bucket_object_name,product_config_ini_filename))
+
+            try:
+                response = s3_client.download_file(product_s3_bucket_base,s3_bucket_object_name,product_config_ini_filename)
+
+                print("response =",response)
+                downloaded_from_bucket = True
+
+
+                # Read input parameters from product config *.ini file.
+
+                product_config_input_filename = product_config_ini_filename
+                product_config_input = configparser.ConfigParser()
+                product_config_input.read(product_config_input_filename)
+
+
+                # Get the timestamps of when the job started and ended on the AWS Batch machine,
+                # which have already been converted to Pacific Time.
+                # In the Jobs record of the RAPID pipeline operations database, we will use for
+                # job started the time the pipeline instance was launched (which was when the
+                # Jobs record was initially inserted).
+
+                job_started = product_config_input['JOB_PARAMS']['job_started']
+                job_ended = product_config_input['JOB_PARAMS']['job_ended']
+
+                print("job_started =",job_started)
+                print("job_ended =",job_ended)
+
+                string_match = re.match(r"(.+?)T(.+?) PT", job_ended)
+
+                try:
+                    ended_date = string_match.group(1)
+                    ended_time = string_match.group(2)
+                    print("ended = {} {}".format(ended_date,ended_time))
+
+                except:
+                    print("*** Error: Could not parse proc_pt_datetime_ended; quitting...")
+                    exit(64)
+
+                ended = ended_date + " " + ended_time
+
+            except ClientError as e:
+                print("*** Warning: Failed to download {} from s3://{}/{}"\
+                    .format(product_config_ini_filename,product_s3_bucket_base,s3_bucket_object_name))
+                downloaded_from_bucket = False
+
+
 
 
 

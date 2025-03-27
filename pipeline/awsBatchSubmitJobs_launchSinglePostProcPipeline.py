@@ -91,13 +91,11 @@ debug = int(config_input['JOB_PARAMS']['debug'])
 job_info_s3_bucket_base = config_input['JOB_PARAMS']['job_info_s3_bucket_base']
 job_logs_s3_bucket_base = config_input['JOB_PARAMS']['job_logs_s3_bucket_base']
 product_s3_bucket_base = config_input['JOB_PARAMS']['product_s3_bucket_base']
-job_config_filename_base = config_input['JOB_PARAMS']['job_config_filename_base']
-product_config_filename_base = config_input['JOB_PARAMS']['product_config_filename_base']
+postproc_job_config_filename_base = config_input['JOB_PARAMS']['postproc_job_config_filename_base']
+postproc_product_config_filename_base = config_input['JOB_PARAMS']['postproc_product_config_filename_base']
 awaicgen_output_mosaic_image_file = config_input['AWAICGEN']['awaicgen_output_mosaic_image_file']
 zogy_output_diffimage_file = config_input['ZOGY']['zogy_output_diffimage_file']
 ppid_post_proc = int(config_input['POST_PROC']['ppid'])
-
-job_config_filename_suffix = "_postproc"
 
 
 # Set up AWS Batch.
@@ -282,7 +280,7 @@ if __name__ == '__main__':
 
     # Populate config-file dictionary for job.
 
-    job_config_ini_file_filename = job_config_filename_base + str(jid) + job_config_filename_suffix + ".ini"
+    job_config_ini_file_filename = postproc_job_config_filename_base + str(jid) + ".ini"
     job_config_ini_file = rapid_work + "/" + job_config_ini_file_filename
     job_info_s3_bucket = job_info_s3_bucket_base
     job_config_ini_file_s3_bucket_object_name = proc_date + "/" + job_config_ini_file_filename
@@ -302,7 +300,7 @@ if __name__ == '__main__':
 
     job_config['JOB_PARAMS']['job_info_s3_bucket_base'] = job_info_s3_bucket_base
     job_config['JOB_PARAMS']['product_s3_bucket_base'] = product_s3_bucket_base
-    job_config['JOB_PARAMS']['product_config_filename_base'] = product_config_filename_base
+    job_config['JOB_PARAMS']['postproc_product_config_filename_base'] = postproc_product_config_filename_base
     job_config['JOB_PARAMS']['verbose'] = str(verbose)
     job_config['JOB_PARAMS']['jid_post_proc'] = str(jid_post_proc)
 
