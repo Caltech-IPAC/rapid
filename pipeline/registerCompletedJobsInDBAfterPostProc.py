@@ -136,7 +136,7 @@ if __name__ == '__main__':
 
         # Match proc_date/jid S3-object prefixes.
 
-        filename_match = re.match(r"rapid_postproc_job_(\d\d\d\d\d\d\d\d)/(.+jid(\d+)_log\.txt)",input_file)
+        filename_match = re.match(r"(\d\d\d\d\d\d\d\d)/(rapid_postproc_job_.+jid(\d+)_log\.txt)",input_file)
 
         try:
             subdir_only = filename_match.group(1)
