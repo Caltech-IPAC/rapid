@@ -157,13 +157,13 @@ if __name__ == '__main__':
 
         for logs_bucket_object in logs_bucket.objects.all():
 
-            if debug > 0:
-                print(logs_bucket_object.key)
-
             input_file = logs_bucket_object.key
 
             if datearg not in input_file:
                 continue
+
+            if verbose > 0:
+                print(logs_bucket_object.key)
 
             filename_match = re.match(r"(\d\d\d\d\d\d\d\d)/(rapid_pipeline_job_.+jid(\d+)_log\.txt)",input_file)
 
