@@ -231,7 +231,7 @@ if __name__ == '__main__':
 
     # Insert or update record in Jobs database table and return job ID.
 
-    jid_post_proc = dbh.start_job(ppid_post_proc,fid,expid,field,sca,rid)
+    jid_postproc = dbh.start_job(ppid_post_proc,fid,expid,field,sca,rid)
 
     if dbh.exit_code >= 64:
         exit(dbh.exit_code)
@@ -302,7 +302,7 @@ if __name__ == '__main__':
     job_config['JOB_PARAMS']['product_s3_bucket_base'] = product_s3_bucket_base
     job_config['JOB_PARAMS']['postproc_product_config_filename_base'] = postproc_product_config_filename_base
     job_config['JOB_PARAMS']['verbose'] = str(verbose)
-    job_config['JOB_PARAMS']['jid_post_proc'] = str(jid_post_proc)
+    job_config['JOB_PARAMS']['jid_postproc'] = str(jid_postproc)
 
     job_config['SCI_IMAGE'] = {}
     job_config['SCI_IMAGE']['ppid'] = str(ppid)
