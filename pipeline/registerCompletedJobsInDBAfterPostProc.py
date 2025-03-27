@@ -227,7 +227,7 @@ if __name__ == '__main__':
 
         infobitssci = int(job_config_input['DIFF_IMAGE']['infobitssci'])
 
-        infobits = int(job_config_input['SKY_TILE']['infobits'])
+        infobits = int(job_config_input['REF_IMAGE']['infobits'])
 
         print("infobitssci,infobits =",infobitssci,infobits)
 
