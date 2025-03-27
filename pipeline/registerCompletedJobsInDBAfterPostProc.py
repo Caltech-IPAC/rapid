@@ -96,6 +96,7 @@ debug = int(config_input['JOB_PARAMS']['debug'])
 job_info_s3_bucket_base = config_input['JOB_PARAMS']['job_info_s3_bucket_base']
 job_logs_s3_bucket_base = config_input['JOB_PARAMS']['job_logs_s3_bucket_base']
 product_s3_bucket_base = config_input['JOB_PARAMS']['product_s3_bucket_base']
+job_config_filename_base = config_input['JOB_PARAMS']['job_config_filename_base']
 postproc_job_config_filename_base = config_input['JOB_PARAMS']['postproc_job_config_filename_base']
 postproc_product_config_filename_base = config_input['JOB_PARAMS']['postproc_product_config_filename_base']
 awaicgen_output_mosaic_image_file = config_input['AWAICGEN']['awaicgen_output_mosaic_image_file']
@@ -184,11 +185,23 @@ if __name__ == '__main__':
         aws_batch_job_id = 'not_found'
 
 
+        # Check whether science-pipeline done file exists in S3 bucket for job, and skip if it does NOT exist.
+        # This is done by attempting to download the done file.  Regardless the sub
+        # always returns the filename and subdirs by parsing the s3_full_name.
+
+        s3_full_name_done_file = "s3://" + product_s3_bucket_base + "/" + datearg + '/jid' + str(jid) + "/" + job_config_filename_base +  str(jid)  + ".done"
+        done_filename,subdirs_done,downloaded_from_bucket = plsubs.download_file_from_s3_bucket(s3_client,s3_full_name_done_file)
+
+        if not downloaded_from_bucket:
+            print("*** Warning: Science-pipeline done file does NOT exist ({}); skipping...".format(done_filename))
+            continue
+
+
         # Check whether post-processing done file exists in S3 bucket for job, and skip if it exists.
         # This is done by attempting to download the done file.  Regardless the sub
         # always returns the filename and subdirs by parsing the s3_full_name.
 
-        s3_full_name_done_file = "s3://" + product_s3_bucket_base + "/" + datearg + '/jid' + str(jid) + "/postproc_jid" +  str(jid)  + ".done"
+        s3_full_name_done_file = "s3://" + product_s3_bucket_base + "/" + datearg + '/jid' + str(jid) + "/" + postproc_job_config_filename_base +  str(jid)  + ".done"
         done_filename,subdirs_done,downloaded_from_bucket = plsubs.download_file_from_s3_bucket(s3_client,s3_full_name_done_file)
 
         if downloaded_from_bucket:
@@ -280,7 +293,7 @@ if __name__ == '__main__':
             # job started the time the pipeline instance was launched (which was when the
             # Jobs record was initially inserted).
 
-            jid_post_proc = product_config_input['JOB_PARAMS']['jid_post_proc']
+            jid_post_proc = product_config_input['JOB_PARAMS']['jid_postproc']
             job_started = product_config_input['JOB_PARAMS']['job_started']
             job_ended = product_config_input['JOB_PARAMS']['job_ended']
 
