@@ -314,6 +314,47 @@ if __name__ == '__main__':
 
             ended = ended_date + " " + ended_time
 
+
+            # Read in metadate to update checksums.
+
+            rfid = product_config_input['REF_IMAGE']['rfid']
+            refimage_filename = product_config_input['REF_IMAGE']['refimage_filename']
+            refimage_file_version = product_config_input['REF_IMAGE']['refimage_file_version']
+            refimage_file_checksum = product_config_input['REF_IMAGE']['refimage_file_checksum']
+
+            print("rfid =",rfid)
+            print("refimage_filename =",refimage_filename)
+            print("refimage_file_version =",refimage_file_version)
+            print("refimage_file_checksum =",refimage_file_checksum)
+
+            pid = product_config_input['DIFF_IMAGE']['pid']
+            diffimage_filename = product_config_input['DIFF_IMAGE']['diffimage_filename']
+            diffimage_file_version = product_config_input['DIFF_IMAGE']['diffimage_file_version']
+            diffimage_file_checksum = product_config_input['DIFF_IMAGE']['diffimage_file_checksum']
+
+            print("pid =",pid)
+            print("diffimage_filename =",diffimage_filename)
+            print("diffimage_file_version =",diffimage_file_version)
+            print("diffimage_file_checksum =",diffimage_file_checksum)
+
+
+            # Update record in RefImages database table.
+
+            refimage_status = 1
+            dbh.update_refimage(rfid,refimage_filename,refimage_file_checksum,refimage_status,refimage_file_version)
+
+            if dbh.exit_code >= 64:
+                exit(dbh.exit_code)
+
+
+            # Update record in DiffImages database table.
+
+            diffimage_status = 1
+            dbh.update_diffimage(pid,diffimage_filename,diffimage_file_checksum,diffimage_status,diffimage_file_version)
+
+            if dbh.exit_code >= 64:
+                exit(dbh.exit_code)
+
         except ClientError as e:
             print("*** Warning: Failed to download {} from s3://{}/{}"\
                 .format(product_config_ini_filename,product_s3_bucket_base,s3_bucket_object_name))
