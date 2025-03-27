@@ -148,7 +148,7 @@ if __name__ == '__main__':
     verbose = int(config_input['JOB_PARAMS']['verbose'])
     debug = int(config_input['JOB_PARAMS']['debug'])
 
-    jid_post_proc = config_input['JOB_PARAMS']['jid_post_proc']
+    jid_postproc = config_input['JOB_PARAMS']['jid_postproc']
 
     job_info_s3_bucket_base = config_input['JOB_PARAMS']['job_info_s3_bucket_base']
     product_s3_bucket_base = config_input['JOB_PARAMS']['product_s3_bucket_base']
@@ -193,7 +193,7 @@ if __name__ == '__main__':
     product_config['JOB_PARAMS']['job_proc_date'] = job_proc_date
     product_config['JOB_PARAMS']['verbose'] = str(verbose)
     product_config['JOB_PARAMS']['job_started'] = str(proc_pt_datetime_started)
-    product_config['JOB_PARAMS']['jid_postproc'] = str(jid_post_proc)
+    product_config['JOB_PARAMS']['jid_postproc'] = str(jid_postproc)
 
 
     # Inventory products associated with job.
