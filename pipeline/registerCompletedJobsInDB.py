@@ -165,7 +165,7 @@ if __name__ == '__main__':
             if datearg not in input_file:
                 continue
 
-            filename_match = re.match(r"(\d\d\d\d\d\d\d\d)/(.+jid(\d+)_log\.txt)",input_file)
+            filename_match = re.match(r"rapid_pipeline_job_(\d\d\d\d\d\d\d\d)/(.+jid(\d+)_log\.txt)",input_file)
 
             try:
                 subdir_only = filename_match.group(1)
