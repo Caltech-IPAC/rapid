@@ -216,7 +216,7 @@ if __name__ == '__main__':
             # This is done by attempting to download the done file.  Regardless the sub
             # always returns the filename and subdirs by parsing the s3_full_name.
 
-            s3_full_name_done_file = "s3://" + product_s3_bucket_base + "/" + datearg + '/jid' + str(jid) + "/diffimage_jid" +  str(jid)  + ".done"
+            s3_full_name_done_file = "s3://" + product_s3_bucket_base + "/" + datearg + '/jid' + str(jid) + "/" + job_config_filename_base +  str(jid)  + ".done"
             done_filename,subdirs_done,downloaded_from_bucket = plsubs.download_file_from_s3_bucket(s3_client,s3_full_name_done_file)
 
             if downloaded_from_bucket:
