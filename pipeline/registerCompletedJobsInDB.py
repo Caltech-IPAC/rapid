@@ -50,20 +50,6 @@ print("proc_utc_datetime =",proc_utc_datetime)
 print("proc_pt_datetime_started =",proc_pt_datetime_started)
 
 
-# Touch done file.  Upload done file to S3 bucket.
-
-def write_done_file(done_filename,product_s3_bucket_base,datearg,jid,s3_client):
-
-    touch_cmd = ['touch', done_filename]
-    exitcode_from_touch = plsubs.execute_command(touch_cmd)
-
-    product_s3_bucket = product_s3_bucket_base
-    s3_object_name_done_filename = datearg + "/jid" + str(jid) + "/" + done_filename
-    filenames = [done_filename]
-    objectnames = [s3_object_name_done_filename]
-    plsubs.upload_files_to_s3_bucket(s3_client,product_s3_bucket,filenames,objectnames)
-
-
 # Initialize handler.
 
 istop = 0
@@ -396,11 +382,11 @@ if __name__ == '__main__':
             # then touch done file and skip to next job.
 
             if int(job_exitcode) == 33:
-                write_done_file(done_filename,product_s3_bucket_base,datearg,jid,s3_client)
+                plsubs.write_done_file_to_s3_bucket(done_filename,product_s3_bucket_base,datearg,jid,s3_client)
                 continue
 
             if int(job_exitcode) >= 64:
-                write_done_file(done_filename,product_s3_bucket_base,datearg,jid,s3_client)
+                plsubs.write_done_file_to_s3_bucket(done_filename,product_s3_bucket_base,datearg,jid,s3_client)
                 continue
 
 
@@ -724,7 +710,7 @@ if __name__ == '__main__':
 
             # Touch done file.  Upload done file to S3 bucket.
 
-            write_done_file(done_filename,product_s3_bucket_base,datearg,jid,s3_client)
+            plsubs.write_done_file_to_s3_bucket(done_filename,product_s3_bucket_base,datearg,jid,s3_client)
 
 
             #####################################################################

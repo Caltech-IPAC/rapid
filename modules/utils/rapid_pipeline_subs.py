@@ -1495,3 +1495,18 @@ def addKeywordsToFITSHeader(input_fits_filename,
 
     return
 
+
+##################################################################################################
+# Touch done file locally.  Upload done file to S3 bucket.
+##################################################################################################
+
+def write_done_file_to_s3_bucket(done_filename,product_s3_bucket_base,datearg,jid,s3_client):
+
+    touch_cmd = ['touch', done_filename]
+    exitcode_from_touch = execute_command(touch_cmd)
+
+    s3_object_name_done_filename = datearg + "/jid" + str(jid) + "/" + done_filename
+    filenames = [done_filename]
+    objectnames = [s3_object_name_done_filename]
+    upload_files_to_s3_bucket(s3_client,product_s3_bucket_base,filenames,objectnames)
+
