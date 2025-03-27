@@ -211,7 +211,7 @@ def download_file_from_s3_bucket(s3_client,s3_full_name):
         exit(64)
 
 
-    # Download reference-image input from associated S3 bucket.
+    # Download S3 object from associated S3 bucket.
 
     downloaded_from_bucket = True
 
