@@ -125,13 +125,13 @@ if __name__ == '__main__':
 
     for logs_bucket_object in logs_bucket.objects.all():
 
-        if debug > 0:
-            print(logs_bucket_object.key)
-
         input_file = logs_bucket_object.key
 
         if datearg not in input_file:
             continue
+
+        if verbose > 0:
+            print(logs_bucket_object.key)
 
 
         # Match proc_date/jid S3-object prefixes.
