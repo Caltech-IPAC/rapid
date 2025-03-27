@@ -193,7 +193,7 @@ if __name__ == '__main__':
     product_config['JOB_PARAMS']['job_proc_date'] = job_proc_date
     product_config['JOB_PARAMS']['verbose'] = str(verbose)
     product_config['JOB_PARAMS']['job_started'] = str(proc_pt_datetime_started)
-    product_config['JOB_PARAMS']['jid_post_proc'] = str(jid_post_proc)
+    product_config['JOB_PARAMS']['jid_postproc'] = str(jid_post_proc)
 
 
     # Inventory products associated with job.
