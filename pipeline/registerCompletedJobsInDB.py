@@ -260,7 +260,7 @@ if __name__ == '__main__':
             ra0 = float(job_config_input['SKY_TILE']['ra0'])
             dec0 = float(job_config_input['SKY_TILE']['dec0'])
 
-            print("rtid,ra0,dec0 =",rtid,ra0,dec0 )
+            print("rtid,ra0,dec0 =",rtid,ra0,dec0)
 
 
             # If rfid_str == "None" and not enough inputs to make a
