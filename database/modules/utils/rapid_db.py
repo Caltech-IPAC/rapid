@@ -2499,3 +2499,56 @@ class RAPIDDB:
 
 
         return record_dict
+
+
+########################################################################################################
+
+    def get_jids_of_normal_science_pipeline_jobs_for_processing_date(self,proc_date):
+
+        '''
+        Query database for Jobs records that ended on the given processing date
+        and ran normally.
+        '''
+
+        self.exit_code = 0
+
+
+        # Define query.
+
+        query = "select jid from Jobs " +\
+                "where ppid = 15 " +\
+                "and ended >= cast('" + proc_date + "' as date) " +\
+                "and ended < cast('" + proc_date + "' as date) + cast('1 day' as interval) " +\
+                "and status > 0 " +\
+                "and exitcode <= 32;"
+
+
+        # Query database.
+
+        print('query = {}'.format(query))
+
+
+        # Execute query.
+
+        try:
+            self.cur.execute(query)
+
+            try:
+                records = []
+                nrecs = 0
+                for record in self.cur:
+                    jid = record[0]
+                    records.append(jid)
+                    nrecs += 1
+
+                print("nrecs =",nrecs)
+
+            except:
+                    print("Nothing returned from database query; continuing...")
+
+        except (Exception, psycopg2.DatabaseError) as error:
+            print('*** Error getting Jobs records for given processing date {}: {}; skipping...'.format(proc_date,error))
+            self.exit_code = 67
+            return
+
+        return records
