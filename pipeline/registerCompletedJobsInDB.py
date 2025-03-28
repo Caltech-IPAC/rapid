@@ -714,7 +714,7 @@ if __name__ == '__main__':
 
 
             #####################################################################
-            # Done with loop over jobs for a given processing date.
+            # End of loop over jobs for a given processing date.
             #####################################################################
 
 
