@@ -189,8 +189,12 @@ if __name__ == '__main__':
         # This is done by attempting to download the done file.  Regardless the sub
         # always returns the filename and subdirs by parsing the s3_full_name.
 
-        s3_full_name_done_file = "s3://" + product_s3_bucket_base + "/" + datearg + '/jid' + str(jid) + "/" + job_config_filename_base +  str(jid)  + ".done"
-        done_filename,subdirs_done,downloaded_from_bucket = util.download_file_from_s3_bucket(s3_client,s3_full_name_done_file)
+        s3_full_name_science_pipeline_done_file = \
+            "s3://" + product_s3_bucket_base + "/" + datearg + '/jid' + str(jid) + "/" + \
+            job_config_filename_base +  str(jid)  + ".done"
+        science_pipeline_done_filename,subdirs_done,downloaded_from_bucket = \
+            util.download_file_from_s3_bucket(s3_client,
+                                              s3_full_name_science_pipeline_done_file)
 
         if not downloaded_from_bucket:
             print("*** Warning: Science-pipeline done file does NOT exist ({}); skipping...".format(done_filename))
@@ -201,7 +205,9 @@ if __name__ == '__main__':
         # This is done by attempting to download the done file.  Regardless the sub
         # always returns the filename and subdirs by parsing the s3_full_name.
 
-        s3_full_name_done_file = "s3://" + product_s3_bucket_base + "/" + datearg + '/jid' + str(jid) + "/" + postproc_job_config_filename_base +  str(jid)  + ".done"
+        s3_full_name_done_file = \
+            "s3://" + product_s3_bucket_base + "/" + datearg + '/jid' + str(jid) + "/" + \
+            postproc_job_config_filename_base +  str(jid)  + ".done"
         done_filename,subdirs_done,downloaded_from_bucket = util.download_file_from_s3_bucket(s3_client,s3_full_name_done_file)
 
         if downloaded_from_bucket:
@@ -271,7 +277,9 @@ if __name__ == '__main__':
 
         s3_bucket_object_name = datearg + '/' + product_config_ini_filename
 
-        print("Try downloading s3://{}/{} into {}...".format(product_s3_bucket_base,s3_bucket_object_name,product_config_ini_filename))
+        print("Try downloading s3://{}/{} into {}...".format(product_s3_bucket_base,
+                                                             s3_bucket_object_name,
+                                                             product_config_ini_filename))
 
         try:
             response = s3_client.download_file(product_s3_bucket_base,s3_bucket_object_name,product_config_ini_filename)
