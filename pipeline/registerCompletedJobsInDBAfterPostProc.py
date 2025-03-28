@@ -383,8 +383,13 @@ if __name__ == '__main__':
             exit(dbh.exit_code)
 
 
+        # Touch done file.  Upload done file to S3 bucket.
+
+        util.write_done_file_to_s3_bucket(done_filename,product_s3_bucket_base,datearg,jid,s3_client)
+
+
         #####################################################################
-        # Done with loop over jobs for a given processing date.
+        # End of loop over jobs for a given processing date.
         #####################################################################
 
 
