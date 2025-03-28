@@ -1,3 +1,32 @@
+"""
+This script is to be run after the post-processing pipeline,
+in order to update the checksums of the reference-image and
+difference-image products in the RAPID operations database.
+This pipeline is a skeleton for later additional functions,
+such as copying products to other locations, such as MAST.
+
+Input the processing date of interest on the command line
+in the format YYYYMMDD.  The database is queried for
+science-pipeline jobs on that date that ran normally, using
+a query of the following form:
+
+select * from jobs
+where ppid=15
+and ended >= '20250326'
+and ended < '20250326' + '1 day'
+and status > 0
+and exitcode <= 32
+order by ended;
+
+To indicate that post-processing pipeline ran normally, a done file
+is written to the S3 bucket at the location of the products for the job.
+For example:
+
+$ aws s3 ls --recursive  s3://rapid-product-files/20250326/jid1/ | grep postproc
+2025-03-28 08:32:07          0 20250326/jid1/postproc_job_config_jid1.done
+"""
+
+
 import sys
 import os
 import configparser
@@ -116,6 +145,33 @@ if __name__ == '__main__':
     exitcode = 0
 
 
+    # Open database connection.
+
+    dbh = db.RAPIDDB()
+
+    if dbh.exit_code >= 64:
+        exit(dbh.exit_code)
+
+
+    # Query database for Jobs records that ended on the given processing date and ran normally.
+
+    refimage_status = 1
+    db_jids = dbh.get_jids_of_normal_science_pipeline_jobs_for_processing_date(datearg)
+
+    if dbh.exit_code >= 64:
+        exit(dbh.exit_code)
+
+    for dbjid from db_jids:
+        print("dbjid =",dbjid)
+
+
+
+
+# logfile="rapid_pipeline_job_${JOBPROCDATE}_jid${RAPID_JOB_ID}_log.txt"
+
+
+
+
     # Examine log files for given processing date.
 
     logs_bucket = s3_resource.Bucket(job_logs_s3_bucket_base)
@@ -162,15 +218,6 @@ if __name__ == '__main__':
 
     print("End of logs S3 bucket listing...")
     print("njobs = ",njobs)
-
-
-    # Open database connection.
-
-    dbh = db.RAPIDDB()
-
-    if dbh.exit_code >= 64:
-        exit(dbh.exit_code)
-
 
 
     #####################################################################
