@@ -195,6 +195,12 @@ if __name__ == '__main__':
     product_config['JOB_PARAMS']['job_started'] = str(proc_pt_datetime_started)
     product_config['JOB_PARAMS']['jid_postproc'] = str(jid_postproc)
 
+    product_config['REF_IMAGE'] = {}
+    product_config['REF_IMAGE']['rfid'] = "None"
+
+    product_config['DIFF_IMAGE'] = {}
+    product_config['DIFF_IMAGE']['pid'] = "None"
+
 
     # Inventory products associated with job.
 
@@ -248,7 +254,6 @@ if __name__ == '__main__':
             s3_object_name_refimage = job_proc_date + "/jid" + str(jid) + "/" + awaicgen_output_mosaic_image_file
             refimage_filename_for_db_record = "s3://{}/{}".format(product_s3_bucket_base,s3_object_name_refimage)
 
-            product_config['REF_IMAGE'] = {}
             product_config['REF_IMAGE']['rfid'] = str(rfid)
             product_config['REF_IMAGE']['refimage_filename'] = refimage_filename_for_db_record
             product_config['REF_IMAGE']['refimage_file_version'] = str(version_refimage)
@@ -311,7 +316,6 @@ if __name__ == '__main__':
             s3_object_name_diffimage = job_proc_date + "/jid" + str(jid) + "/" + zogy_output_diffimage_file
             diffimage_filename_for_db_record = "s3://{}/{}".format(product_s3_bucket_base,s3_object_name_diffimage)
 
-            product_config['DIFF_IMAGE'] = {}
             product_config['DIFF_IMAGE']['pid'] = str(pid)
             product_config['DIFF_IMAGE']['diffimage_filename'] = diffimage_filename_for_db_record
             product_config['DIFF_IMAGE']['diffimage_file_version'] = str(version_diffimage)
