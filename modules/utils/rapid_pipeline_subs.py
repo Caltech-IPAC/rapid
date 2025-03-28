@@ -1,3 +1,8 @@
+"""
+RAPID Pipeline Subs
+"""
+
+
 import os
 import math
 from astropy.io import fits
