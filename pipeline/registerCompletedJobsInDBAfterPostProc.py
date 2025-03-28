@@ -10,7 +10,7 @@ import time
 
 to_zone = tz.gettz('America/Los_Angeles')
 
-import modules.utils.rapid_pipeline_subs as plsubs
+import modules.utils.rapid_pipeline_subs as util
 import database.modules.utils.rapid_db as db
 
 
@@ -190,7 +190,7 @@ if __name__ == '__main__':
         # always returns the filename and subdirs by parsing the s3_full_name.
 
         s3_full_name_done_file = "s3://" + product_s3_bucket_base + "/" + datearg + '/jid' + str(jid) + "/" + job_config_filename_base +  str(jid)  + ".done"
-        done_filename,subdirs_done,downloaded_from_bucket = plsubs.download_file_from_s3_bucket(s3_client,s3_full_name_done_file)
+        done_filename,subdirs_done,downloaded_from_bucket = util.download_file_from_s3_bucket(s3_client,s3_full_name_done_file)
 
         if not downloaded_from_bucket:
             print("*** Warning: Science-pipeline done file does NOT exist ({}); skipping...".format(done_filename))
@@ -202,7 +202,7 @@ if __name__ == '__main__':
         # always returns the filename and subdirs by parsing the s3_full_name.
 
         s3_full_name_done_file = "s3://" + product_s3_bucket_base + "/" + datearg + '/jid' + str(jid) + "/" + postproc_job_config_filename_base +  str(jid)  + ".done"
-        done_filename,subdirs_done,downloaded_from_bucket = plsubs.download_file_from_s3_bucket(s3_client,s3_full_name_done_file)
+        done_filename,subdirs_done,downloaded_from_bucket = util.download_file_from_s3_bucket(s3_client,s3_full_name_done_file)
 
         if downloaded_from_bucket:
             print("*** Warning: Done file exists ({}); skipping...".format(done_filename))
