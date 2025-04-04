@@ -188,7 +188,6 @@ Since this Docker image contains the ENTRYPOINT instruction, you must override i
    export AWS_DEFAULT_REGION=us-west-2
    export AWS_SECRET_ACCESS_KEY=????
    export AWS_ACCESS_KEY_ID=????
-   export PYTHONUNBUFFERED=1
    export LD_LIBRARY_PATH=/code/c/lib
    export PATH=/code/c/bin:$PATH
    export export RAPID_SW=/code
