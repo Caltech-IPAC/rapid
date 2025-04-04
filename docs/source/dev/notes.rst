@@ -31,8 +31,12 @@ Developer Guidelines
 
 #. Remember to ``git pull`` before any ``git push`` and often, in order to make sure your RAPID git repo is up to date.
 
-Running RAPID Pipeline under AWS Batch
+
+Log into EC2 Instance Machine
 ********************************************
+
+This assumes you have already set up an EC2 instance under the AWS console, and that the EC2 instance is stopped.
+Also, a key pair has been assigned to the EC2 instance, and the private key is installed in a ``.pem`` file on your laptop.
 
 1. Ensure the following environment variables are set on your laptop:
 
@@ -49,9 +53,7 @@ The two latter ones are only needed if your EC2 instance is to have an EBS volum
 
 Your EC2 instance should have a large enough book-disk volume as ``docker build`` requires a lot of space; at least 32 GB is recommended.
 
-2. Check your source-code changes into the RAPID git repo.
-
-3. Ensure python3 is installed on your laptop and start your EC2 instance:
+2. Ensure python3 is installed on your laptop and restart your EC2 instance:
 
 .. code-block::
 
@@ -63,13 +65,20 @@ Here is how to stop your EC2 instance later:
 
    python /source-code/location/rapid/aws/stop_ec2_instance.py
 
-4. Log into your EC2 instance:
+3. Log into your EC2 instance:
 
 .. code-block::
 
    ssh -i ~/.ssh/my_ec2.pem ubuntu@ec2-54-212-213-65.us-west-2.compute.amazonaws.com
 
-5. Under root on your EC2 instance, check out the lastest source code from the RAPID git repo, and then rebuild the Docker image for the RAPID pipeline:
+
+Build Docker Image for RAPID Science Pipeline
+********************************************
+
+Check your latest source-code changes into the RAPID git repo.
+
+Under root on your EC2 instance, check out the latest source code from the RAPID git repo,
+and then build the Docker image for the RAPID pipeline:
 
 .. code-block::
 
@@ -111,7 +120,7 @@ Rebuild the Docker image from scratch:
    docker build --file /home/ubuntu/rapid/docker/Dockerfile_ubuntu_runSingleSciencePipeline --tag rapid_science_pipeline:1.0 .
 
 
-6. Push Docker image to the Amazon public elastic container registry (ECR):
+Push Docker image to the Amazon public elastic container registry (ECR):
 
 Note that the RAPID-pipeline image has already been registered at
 
@@ -148,8 +157,12 @@ Tag the Docker image with "latest" and push to ECR with these two commands:
    docker push public.ecr.aws/y9b1s7h8/rapid_science_pipeline:latest
 
 
-The following shows commands to launch an instance of the RAPID pipeline as AWS Batch job.
-The to-be-run Docker container rapid_science_pipeline:1.0 has /code built in, so there is no need to mount an external volume for /code.
+Running an Instance of the RAPID Science Pipeline under AWS Batch
+********************************************
+
+The following shows commands to launch an instance of the RAPID science pipeline as AWS Batch job.
+The to-be-run-under-AWS-Batch Docker container rapid_science_pipeline:1.0 has /code built in,
+so there is no need to mount an external volume for /code.
 The container name is arbitrary, and is set to "russ-test-jobsubmit" in the example below.
 Since this Docker image contains the ENTRYPOINT instruction, you must override it  with the ``--entrypoint bash`` option
 (and do not put ``bash`` at the end of the command).
