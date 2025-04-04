@@ -91,7 +91,6 @@ For this step, the data to be processed are specified simply by the processing d
 
 .. code-block::
 
-   mkdir -p /home/ubuntu/work/test_20250404
    cd /home/ubuntu/work/test_20250404
 
    sudo su
