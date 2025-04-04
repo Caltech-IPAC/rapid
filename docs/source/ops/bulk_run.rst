@@ -13,5 +13,6 @@ any steps, as a given step relies on all previous steps.
 2. Register pipeline metadata in operations database.
 
 3. Run post-processing pipelines.
+   Relies on updated operations database from step 2.
 
 4. Register pipeline metadata in operations database.
