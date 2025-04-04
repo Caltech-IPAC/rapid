@@ -40,7 +40,7 @@ The container name is arbitrary, and is set to "russ-test-jobsubmit" in the exam
 Since this Docker image contains the ENTRYPOINT instruction, you must override it  with the ``--entrypoint bash`` option
 (and do not put ``bash`` at the end of the command).
 
-The environment variables STARTDATETIME and ENDDATETIME refer to observation datetimes of the data (not processing datetimes).
+The environment variables STARTDATETIME and ENDDATETIME refer to observation datetimes of the data to be processed (different from processing date).
 
 .. code-block::
 
@@ -75,4 +75,4 @@ The environment variables STARTDATETIME and ENDDATETIME refer to observation dat
 
    exit
 
-Manually moniter the AWS Batch console to verify all jobs ran to completion.  This will be automated at some later stage of development.
+Manually monitor the AWS Batch console to verify all jobs ran to completion.  This will be automated at some later stage of development.
