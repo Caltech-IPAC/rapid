@@ -44,7 +44,9 @@ Since this Docker image contains the ENTRYPOINT instruction, you must override i
 Step 1
 =============
 
-The environment variables STARTDATETIME and ENDDATETIME refer to observation datetimes of the data to be processed (different from processing date).
+The data to be processed are specified by the observation datetime range.
+
+The environment variables STARTDATETIME and ENDDATETIME refer to the start and end observation datetimes (different from processing date).
 
 .. code-block::
 
@@ -72,7 +74,8 @@ The environment variables STARTDATETIME and ENDDATETIME refer to observation dat
    export PYTHONUNBUFFERED=1
    export ROMANTESSELLATIONDBNAME=/work/roman_tessellation_nside512.db
 
-   cd /tmp
+   cd /work
+
    export STARTDATETIME="2028-09-07 00:00:00"
    export ENDDATETIME="2028-09-08 08:30:00"
    python3.11 /code/pipeline/awsBatchSubmitJobs_launchSciencePipelinesForDateTimeRange.py >& awsBatchSubmitJobs_launchSciencePipelinesForDateTimeRange.out &
@@ -84,6 +87,7 @@ Manually monitor the AWS Batch console to verify all jobs ran to completion.  Th
 Step 2
 ============
 
+For this step, the data to be processed are specified simply by the processing date as an argument on the command line of the Python script ``registerCompletedJobsInDB.py``.
 
 .. code-block::
 
@@ -109,7 +113,7 @@ Step 2
    export PYTHONPATH=/code
    export PYTHONUNBUFFERED=1
 
-   cd /tmp
+   cd /work
 
    python3.11 $RAPID_SW/pipeline/registerCompletedJobsInDB.py 20250404 >& registerCompletedJobsInDB_20250404.out &
 
