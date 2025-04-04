@@ -40,6 +40,10 @@ The container name is arbitrary, and is set to "russ-test-jobsubmit" in the exam
 Since this Docker image contains the ENTRYPOINT instruction, you must override it  with the ``--entrypoint bash`` option
 (and do not put ``bash`` at the end of the command).
 
+
+Step 1
+=============
+
 The environment variables STARTDATETIME and ENDDATETIME refer to observation datetimes of the data to be processed (different from processing date).
 
 .. code-block::
@@ -73,6 +77,39 @@ The environment variables STARTDATETIME and ENDDATETIME refer to observation dat
    export ENDDATETIME="2028-09-08 08:30:00"
    python3.11 /code/pipeline/awsBatchSubmitJobs_launchSciencePipelinesForDateTimeRange.py >& awsBatchSubmitJobs_launchSciencePipelinesForDateTimeRange.out &
 
-   exit
 
 Manually monitor the AWS Batch console to verify all jobs ran to completion.  This will be automated at some later stage of development.
+
+
+Step 2
+============
+
+
+.. code-block::
+
+   mkdir -p /home/ubuntu/work/test_20250404
+   cd /home/ubuntu/work/test_20250404
+
+   sudo su
+
+   docker run -it --entrypoint bash --name russ-test-jobsubmit -v /home/ubuntu/work/test_20250404:/work public.ecr.aws/y9b1s7h8/rapid_science_pipeline:latest
+
+   export DBPORT=5432
+   export DBNAME=rapidopsdb
+   export DBUSER=rapidporuss
+   export DBSERVER=35.165.53.98
+   export DBPASS="????"
+   export AWS_DEFAULT_REGION=us-west-2
+   export AWS_SECRET_ACCESS_KEY=????
+   export AWS_ACCESS_KEY_ID=????
+   export LD_LIBRARY_PATH=/code/c/lib
+   export PATH=/code/c/bin:$PATH
+   export export RAPID_SW=/code
+   export export RAPID_WORK=/work
+   export PYTHONPATH=/code
+   export PYTHONUNBUFFERED=1
+
+   cd /tmp
+
+   python3.11 $RAPID_SW/pipeline/registerCompletedJobsInDB.py 20250404 >& registerCompletedJobsInDB_20250404.out &
+
