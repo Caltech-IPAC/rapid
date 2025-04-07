@@ -139,7 +139,6 @@ zogy_output_diffimage_file = config_input['ZOGY']['zogy_output_diffimage_file']
 if __name__ == '__main__':
 
 
-    s3_resource = boto3.resource('s3')
     s3_client = boto3.client('s3')
 
     exitcode = 0
@@ -161,62 +160,25 @@ if __name__ == '__main__':
     if dbh.exit_code >= 64:
         exit(dbh.exit_code)
 
-    for dbjid from db_jids:
-        print("dbjid =",dbjid)
-
-
-
-
-# logfile="rapid_pipeline_job_${JOBPROCDATE}_jid${RAPID_JOB_ID}_log.txt"
-
-
-
-
-    # Examine log files for given processing date.
-
-    logs_bucket = s3_resource.Bucket(job_logs_s3_bucket_base)
 
     njobs = 0
     log_filenames = []
     jids = []
 
-    for logs_bucket_object in logs_bucket.objects.all():
+    for db_jid in db_jids:
 
-        input_file = logs_bucket_object.key
+        print("db_jid =",db_jid)
 
-        if datearg not in input_file:
-            continue
+        log_filename_only = "rapid_postproc_job_" + datearg + "_jid" + str(db_jid) + "_log.txt"
 
-        if verbose > 0:
-            print(logs_bucket_object.key)
+        print("log_filename_only =",log_filename_only)
 
+        log_filenames.append(log_filename_only)
+        jids.append(db_jid)
 
-        # Match proc_date/jid S3-object prefixes.
-
-        filename_match = re.match(r"(\d\d\d\d\d\d\d\d)/(rapid_postproc_job_.+jid(\d+)_log\.txt)",input_file)
-
-        try:
-            subdir_only = filename_match.group(1)
-            filename_only = filename_match.group(2)
-            jid = filename_match.group(3)
-
-            if subdir_only == datearg:
-
-                print("-----0-----> subdir_only =",subdir_only)
-                print("-----1-----> filename_only =",filename_only)
-                print("-----2-----> jid =",jid)
-
-                log_filenames.append(filename_only)
-                jids.append(jid)
-
-                njobs += 1
-
-        except:
-            if debug > 0:
-                print("-----2-----> No match in",input_file)
+        njobs += 1
 
 
-    print("End of logs S3 bucket listing...")
     print("njobs = ",njobs)
 
 
