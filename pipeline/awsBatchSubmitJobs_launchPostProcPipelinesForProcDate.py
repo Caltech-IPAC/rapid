@@ -94,8 +94,8 @@ if __name__ == '__main__':
 
     # Launch pipeline instances via AWS Batch.
 
-    for rec in recs:
-        jid = rec[0]
+    for jid in recs:
+
         print("jid =",jid)
 
 
