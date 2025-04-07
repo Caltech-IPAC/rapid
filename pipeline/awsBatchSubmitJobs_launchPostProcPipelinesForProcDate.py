@@ -1,8 +1,11 @@
 """
 This script launches many instances of the RAPID post-processing pipeline.
-It is assumed that RAPID science pipelines for a given processing date
-have already run.  Input the processing date for this script, and it will
-query the Jobs database table for all of those jobs that ran normally,
+It is assumed that many instances of the RAPID science pipeline for a
+given processing date have already been run, AND the metadata from these jobs
+have already been registered in the Jobs table of the operations database.
+
+Input the processing date for this script, and it will query the
+Jobs database table for all of those jobs that ran normally,
 using a database query like the following:
 
 select * from jobs
