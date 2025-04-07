@@ -102,7 +102,7 @@ This is executed inside a container with the same environment as defined for Ste
 
    cd /work
 
-   python3.11 $RAPID_SW/pipeline/registerCompletedJobsInDB.py 20250404 >& registerCompletedJobsInDB_20250404.out &
+   python3.11 /code/pipeline/registerCompletedJobsInDB.py 20250404 >& registerCompletedJobsInDB_20250404.out &
 
 
 Step 3
