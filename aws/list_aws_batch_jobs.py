@@ -46,11 +46,6 @@ job_status_choices = ['SUBMITTED','PENDING','RUNNABLE','STARTING','RUNNING','SUC
 
 job_status_to_list = os.getenv('JOBSTATUS')
 
-if job_status_to_list is None:
-
-    print("*** Error: Env. var. JOBSTATUS not set (either science or postproc); quitting...")
-    exit(64)
-
 flag = False
 
 for choice in job_status_choices:
@@ -60,10 +55,8 @@ for choice in job_status_choices:
         break
 
 if not flag:
-
-    print(f"*** Error: Env. var. JOBSTATUS not one of the choices ({job_status_to_list}); quitting...")
-    exit(64)
-
+    job_status_to_list = "ALL"
+    print(f"*** Message: Env. var. JOBSTATUS not one of the singular choices ({job_status_to_list}), so list all possibilities {job_status_choices}; continuing...")
 
 # JOBPROCDATE of pipeline job.
 
@@ -186,7 +179,12 @@ Response Syntax:
 
 page = 1
 njobs_total = 0
-njobs_with_specified_status = 0
+if job_status_to_list != "ALL":
+    njobs_with_specified_status = 0
+else:
+    njobs_vs_status = {}
+    for job_status in job_status_choices:
+        njobs_vs_status[job_status] = 0
 
 job_name_wildcard = job_name_base + '*'
 
@@ -207,8 +205,11 @@ for job in response['jobSummaryList']:
     if proc_date is None or proc_date in job_name:
         job_status = job['status']
         print("job_name,job_status =",job_name,job_status)
-        if job_status == job_status_to_list:
+        if job_status_to_list != "ALL" and job_status == job_status_to_list:
             njobs_with_specified_status += 1
+        else:
+            njobs_vs_status[job_status] += 1
+
         njobs_total += 1
 
 next_token = response['nextToken']
@@ -237,8 +238,10 @@ while True:
         if proc_date is None or proc_date in job_name:
             job_status = job['status']
             print("job_name,job_status =",job_name,job_status)
-            if job_status == job_status_to_list:
+            if job_status_to_list != "ALL" and job_status == job_status_to_list:
                 njobs_with_specified_status += 1
+            else:
+                njobs_vs_status[job_status] += 1
             njobs_total += 1
 
     # print("response = ",response)
@@ -254,8 +257,12 @@ while True:
         break
 
 print("njobs_total =",njobs_total)
-print("njobs_with_specified_status =",njobs_with_specified_status)
-
+print("job_status_to_list =",job_status_to_list)
+if job_status_to_list != "ALL":
+    print(f"njobs_{job_status} = {njobs_with_specified_status}")
+else:
+    for job_status in job_status_choices:
+        print(f"njobs_{job_status} = {njobs_vs_status[job_status]}")
 
 # Terminate.
 
