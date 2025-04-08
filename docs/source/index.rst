@@ -18,7 +18,7 @@ Running the Latest RAPID Pipeline
 *************************************
 
 A Docker image has been pre-built from a recent git-clone of the RAPID Github
-repository (4/4/25).
+repository (4/8/25).
 This Docker image offers the convenience of having the RAPID
 pipeline already installed and ready to run.  It is publicly available from
 
@@ -97,6 +97,14 @@ RAPID Computing Architecture
    :maxdepth: 2
 
    sysarch/comp_arch.rst
+
+RAPID Pipeline Execution
+************************************
+
+.. toctree::
+   :maxdepth: 2
+
+   ops/bulk_run.rst
 
 RAPID Pipeline Products
 ************************************
