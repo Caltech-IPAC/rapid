@@ -46,6 +46,8 @@ Since this Docker image contains the ENTRYPOINT instruction, you must override i
 Step 1
 =============
 
+Log into EC2 instance and, from root account (``sudo su``), perform Steps 1 through 4.
+
 Launch AWS Batch jobs for the RAPID science pipeline.
 
 The data to be processed are specified by the observation datetime range.
@@ -54,11 +56,11 @@ start and end observation datetimes (different from processing date).
 
 .. code-block::
 
+   sudo su
+
    mkdir -p /home/ubuntu/work/test_20250404
    cd /home/ubuntu/work/test_20250404
    aws s3 cp s3://rapid-pipeline-files/roman_tessellation_nside512.db /home/ubuntu/work/test_20250404/roman_tessellation_nside512.db
-
-   sudo su
 
    docker run -it --entrypoint bash --name russ-test-jobsubmit -v /home/ubuntu/work/test_20250404:/work public.ecr.aws/y9b1s7h8/rapid_science_pipeline:latest
 
