@@ -36,8 +36,10 @@ The following shows commands to launch instances of the RAPID science pipeline a
 for a given range of observation dates.  It is assumed that all AWS Batch jobs will finish under
 the same processing date.  In the example below, it is assumed the processing date is April 4, 2025 (``20250404``).
 
-The to-be-run-under-AWS-Batch Docker container rapid_science_pipeline:1.0 has /code built in,
-so there is no need to mount an external volume for /code.
+The to-be-run-under-AWS-Batch Docker container rapid_science_pipeline:latest
+self-contains a
+RAPID git-clone in the /code directory, so no volume binding to an
+external filesystem containing the RAPID git repo is necessary.
 The container name is arbitrary, and is set to "russ-test-jobsubmit" in the example below.
 Since this Docker image contains the ENTRYPOINT instruction, you must override it  with the ``--entrypoint bash`` option
 (and do not put ``bash`` at the end of the command).
