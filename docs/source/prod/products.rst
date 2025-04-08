@@ -9,19 +9,19 @@ the RAPID-product S3 bucket with the processing date as a prefix::
 
     aws s3 ls --recursive s3://rapid-product-files/<yyyymmdd>
 
-For example, this command covers all jobs under processing date ``20250314``::
+For example, this command covers all jobs under processing date ``20250404``::
 
-    aws s3 ls --recursive s3://rapid-product-files/20250314
+    aws s3 ls --recursive s3://rapid-product-files/20250404
 
 Here are the available products for just one job (``jid=999``) under that processing date::
 
-    aws s3 ls --recursive s3://rapid-product-files/20250314/jid999
+    aws s3 ls --recursive s3://rapid-product-files/20250404/jid999
 
 Note that there is one science image differenced per job.
 
 The associated product config output file is::
 
-    aws s3 ls  --recursive s3://rapid-product-files/20250314/product_config_jid999.ini
+    aws s3 ls  --recursive s3://rapid-product-files/20250404/product_config_jid999.ini
 
 This is parsed for metadata to load into the RAPID operations database after the processing.
 
@@ -54,7 +54,8 @@ scorrimage_masked.fits                                          ZOGY output SCOR
 diffimage_masked.txt                                            SourceExtractor catalog from difference image
 diffimage_masked_psfcat.txt                                     PhotUtils PSF-fit catalog from difference image (noniterative)
 diffimage_masked_psfcat_residual.fits                           PhotUtils residual image
-diffimage_jid999.done                                           Done file indicating product metadata for job ingested into RAPID operations database
+job_config_jid999.done                                          Indicates metadata from science pipeline ingested into RAPID operations database
+postproc_job_config_jid999.done                                 Indicates metadata from post-processing pipeline ingested into RAPID operations database
 ==============================================================  =========================================================================================
 
 
@@ -64,10 +65,10 @@ Public Access
 To download a RAPID pipeline product, the
 user must construct a URL, knowing the filename in advance, like the following::
 
-    https://rapid-product-files.s3.us-west-2.amazonaws.com/20250314/jid1022/awaicgen_output_mosaic_cov_map.fits
+    https://rapid-product-files.s3.us-west-2.amazonaws.com/20250404/jid1022/awaicgen_output_mosaic_cov_map.fits
 
 For a listing of the available product files,
-download :download:`this text file <rapid-product-files_20250314.txt>`.
+download :download:`this text file <rapid-product-files_20250404.txt>`.
 
 A simple Python script can be written to parse the listing and generate ``wget`` or ``curl`` download commands.
 
