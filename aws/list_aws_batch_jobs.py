@@ -70,9 +70,12 @@ if not flag:
 proc_date = os.getenv('JOBPROCDATE')
 
 if proc_date is None:
+    print("*** Message: Env. var. JOBPROCDATE not set, so will list jobs for processing dates; continuing...")
+else:
+    print(f"*** Message: Env. var. JOBPROCDATE is set, so will list jobs for {proc_date}; continuing...")
 
-    print("*** Error: Env. var. JOBPROCDATE not set; quitting...")
-    exit(64)
+
+# RAPID_SW is /code inside container, but full path outside.
 
 rapid_sw = os.getenv('RAPID_SW')
 
@@ -201,7 +204,7 @@ response = client.list_jobs(jobQueue=job_queue,
 
 for job in response['jobSummaryList']:
     job_name = job['jobName']
-    if proc_date in job_name:
+    if proc_date is None or proc_date in job_name:
         job_status = job['status']
         print("job_name,job_status =",job_name,job_status)
         if job_status == job_status_to_list:
@@ -231,7 +234,7 @@ while True:
 
     for job in response['jobSummaryList']:
         job_name = job['jobName']
-        if proc_date in job_name:
+        if proc_date is None or proc_date in job_name:
             job_status = job['status']
             print("job_name,job_status =",job_name,job_status)
             if job_status == job_status_to_list:
