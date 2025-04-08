@@ -1,4 +1,4 @@
-RAPID-Pipeline Bulk Run
+RAPID Pipeline Execution
 ####################################################
 
 Overview
