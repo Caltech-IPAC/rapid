@@ -134,11 +134,10 @@ else:
 # Print parameters.
 
 print("job_name_base =",job_name_base)
+print("job_type =",job_type)
 print("job_queue =",job_queue)
 print("job_definition =",job_definition)
-
-
-
+print("job_name_base =",job_name_base)
 
 
 # Get Batch.Client object.
@@ -186,13 +185,15 @@ page = 1
 njobs = 0
 nsucceeded = 0
 
+job_name_wildcard = job_name_base + '*'
+
 response = client.list_jobs(jobQueue=job_queue,
                             maxResults=100,
                             filters=[
                                         {
                                             'name': 'JOB_NAME',
                                             'values': [
-                                                          job_name_base + '*',
+                                                          job_name_wildcard,
                                                       ]
                                         },
                                    ],
@@ -222,7 +223,7 @@ while True:
                                              {
                                                  'name': 'JOB_NAME',
                                                  'values': [
-                                                               job_name_base + '*',
+                                                               job_name_wildcard,
                                                            ]
                                              },
                                         ],
