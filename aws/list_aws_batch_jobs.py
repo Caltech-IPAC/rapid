@@ -185,8 +185,8 @@ Response Syntax:
 """
 
 page = 1
-njobs = 0
-nsucceeded = 0
+njobs_total = 0
+njobs_with_specified_status = 0
 
 job_name_wildcard = job_name_base + '*'
 
@@ -208,8 +208,8 @@ for job in response['jobSummaryList']:
         job_status = job['status']
         print("job_name,job_status =",job_name,job_status)
         if job_status == job_status_to_list:
-            nsucceeded += 1
-        njobs += 1
+            njobs_with_specified_status += 1
+        njobs_total += 1
 
 next_token = response['nextToken']
 
@@ -238,8 +238,8 @@ while True:
             job_status = job['status']
             print("job_name,job_status =",job_name,job_status)
             if job_status == job_status_to_list:
-                nsucceeded += 1
-            njobs += 1
+                njobs_with_specified_status += 1
+            njobs_total += 1
 
     # print("response = ",response)
     # print("next_token = ",next_token)
@@ -253,8 +253,8 @@ while True:
     except:
         break
 
-print("njobs =",njobs)
-print("nsucceeded =",nsucceeded)
+print("njobs_total =",njobs_total)
+print("njobs_with_specified_status =",njobs_with_specified_status)
 
 
 # Terminate.
