@@ -802,15 +802,18 @@ CREATE INDEX refimimages_rfid_idx ON refimimages (rfid);
 
 -----------------------------
 -- TABLE: SOCProcs
+--
+-- Tracks periodic, discrete deliveries of exposure data from the SOC.
 -----------------------------
 
 SET default_tablespace = pipeline_data_01;
 
 CREATE TABLE socprocs (
-    did integer NOT NULL,                                        -- Primary key
+    did integer NOT NULL,                                          -- Primary key
     datedeliv timestamp without time zone NOT NULL,
+    mjdobsmin double precision NOT NULL,                           -- Minimum MJD of exposure data in this delivery
+    mjdobsmax double precision NOT NULL,                           -- Maximum MJD of exposure data in this delivery
     filename character varying(255),
-    filesize integer,
     status smallint DEFAULT 0 NOT NULL,
     checksum character varying(32),
     created timestamp without time zone DEFAULT now() NOT NULL
@@ -836,6 +839,8 @@ ALTER TABLE ONLY socprocs ADD CONSTRAINT socprocs_pkey PRIMARY KEY (did);
 ALTER TABLE ONLY socprocs ADD CONSTRAINT socprocspk UNIQUE (datedeliv);
 
 CREATE INDEX socprocs_datedeliv_idx ON socprocs (datedeliv);
+CREATE INDEX socprocs_mjdobsmin_idx ON socprocs (mjdobsmin);
+CREATE INDEX socprocs_mjdobsmax_idx ON socprocs (mjdobsmax);
 CREATE INDEX socprocs_filename_idx ON socprocs (filename);
 CREATE INDEX socprocs_status_idx ON socprocs (status);
 CREATE INDEX socprocs_created_idx ON socprocs (created);
