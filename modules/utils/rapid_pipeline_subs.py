@@ -1515,3 +1515,41 @@ def write_done_file_to_s3_bucket(done_filename,product_s3_bucket_base,datearg,ji
     objectnames = [s3_object_name_done_filename]
     upload_files_to_s3_bucket(s3_client,product_s3_bucket_base,filenames,objectnames)
 
+
+##################################################################################################
+# List AWS Batch jobs for given jobName, which can end with a wildcard ("*").
+# The client.list_jobs method must be called the first time without the nextToken parameter.
+##################################################################################################
+
+def list_aws_batch_jobs(batch_client,next_token,job_queue,job_name_wildcard):
+
+    if next_token is None:
+
+        response = batch_client.list_jobs(jobQueue=job_queue,
+                                          maxResults=100,
+                                          filters=[
+                                                      {
+                                                          'name': 'JOB_NAME',
+                                                          'values': [
+                                                                        job_name_wildcard,
+                                                                    ]
+                                                      },
+                                                ],
+                                         )
+
+    else:
+
+        response = batch_client.list_jobs(jobQueue=job_queue,
+                                          maxResults=100,
+                                          nextToken=next_token,
+                                          filters=[
+                                                      {
+                                                          'name': 'JOB_NAME',
+                                                          'values': [
+                                                                        job_name_wildcard,
+                                                                    ]
+                                                      },
+                                                ],
+                                         )
+
+    return response
