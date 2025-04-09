@@ -240,6 +240,8 @@ DROP FUNCTION registerRefImImage (
 
 DROP FUNCTION addSOCProc (
     datedeliv_            timestamp,
+    mjdobsmin_            double precision,
+    mjdobsmax_            double precision,
     filename_             character varying(255),
     checksum_             character varying(32),
     status_               smallint

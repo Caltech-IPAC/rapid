@@ -1476,6 +1476,8 @@ $$ language plpgsql;
 --
 create function addSOCProc (
     datedeliv_            timestamp,
+    mjdobsmin_            double precision,
+    mjdobsmax_            double precision,
     filename_             character varying(255),
     checksum_             character varying(32),
     status_               smallint
@@ -1508,12 +1510,16 @@ create function addSOCProc (
 
                 insert into SOCProcs
                 (datedeliv,
+                 mjdobsmin,
+                 mjdobsmax,
                  filename,
                  checksum,
                  status
                 )
                 values
                 (datedeliv_,
+                 mjdobsmin_,
+                 mjdobsmax_,
                  filename_,
                  checksum_,
                  status_
@@ -1533,6 +1539,8 @@ create function addSOCProc (
 
             update SOCProcs
             set datedeliv = datedeliv_,
+                mjdobsmin = mjdobsmin_,
+                mjdobsmax = mjdobsmax_,
                 filename = filename_,
                 checksum = checksum_,
                 status = status_,
