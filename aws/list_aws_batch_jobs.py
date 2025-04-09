@@ -3,6 +3,9 @@ import time
 import boto3
 import configparser
 
+import modules.utils.rapid_pipeline_subs as util
+
+
 swname = "list_aws_batch_jobs.py"
 swvers = "1.0"
 cfg_filename_only = "awsBatchSubmitJobs_launchSingleSciencePipeline.ini"
@@ -188,17 +191,12 @@ else:
 
 job_name_wildcard = job_name_base + '*'
 
-response = client.list_jobs(jobQueue=job_queue,
-                            maxResults=100,
-                            filters=[
-                                        {
-                                            'name': 'JOB_NAME',
-                                            'values': [
-                                                          job_name_wildcard,
-                                                      ]
-                                        },
-                                   ],
-                               )
+
+# Set next_token = None the first time util.list_aws_batch_jobs
+# is called, so that proper behavior is handled by the method.
+
+next_token = None
+response = util.list_aws_batch_jobs(client,next_token,job_queue,job_name_wildcard)
 
 for job in response['jobSummaryList']:
     job_name = job['jobName']
@@ -220,18 +218,7 @@ page += 1
 
 while True:
 
-    response = client.list_jobs(jobQueue=job_queue,
-                                maxResults=100,
-                                nextToken=next_token,
-                                filters=[
-                                             {
-                                                 'name': 'JOB_NAME',
-                                                 'values': [
-                                                               job_name_wildcard,
-                                                           ]
-                                             },
-                                        ],
-                               )
+    response = util.list_aws_batch_jobs(client,next_token,job_queue,job_name_wildcard)
 
     for job in response['jobSummaryList']:
         job_name = job['jobName']
