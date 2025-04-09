@@ -59,7 +59,7 @@ Here is a 2-D histogram of the job execution times versus number of input frames
 
 .. image:: rapid_job_elapsed_vs_nframes_2dhist.png
 
-It is obvious from the figure that the execution times have a contribution that is proporational
+It is obvious from the figure that the execution times have a contribution that is proportional
 to the number of reference-image inputs.
 
 The products from this test run are in the following S3 bucket::
