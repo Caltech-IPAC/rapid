@@ -26,8 +26,9 @@ The associated product config output file is::
 This is parsed for metadata to load into the RAPID operations database after the processing.
 
 The input and intermediate files for debugging and final products are listed in the table below.
-The product filenames are canonical and predictable (they are the same from
-one science-image case to the next).
+The input filenames are unique.
+The product filenames are canonical and predictable: they are the same from
+one science-image case to the next.
 
 ==============================================================  =========================================================================================
 Filename                                                        Description
@@ -77,11 +78,13 @@ Example Reference-Image FITS Header
 ******************************************
 
 This section lists an example reference-image FITS header to expose the user to the
-various useful metadata contained therein::
+various useful metadata contained therein.  The keywords near the end of the listing
+are operations database IDs written to the FITS header by the RAPID post-processing pipeline.
 
+.. code-block::
 
     Image_file = awaicgen_output_mosaic_image.fits
-    Date_time = Fri Mar 14 12:33:45 PDT 2025
+    Date_time = Wed Apr 09 05:02:28 PDT 2025
 
     HDU number = 1
 
@@ -92,8 +95,8 @@ various useful metadata contained therein::
     NAXIS2  =                 7000
     COMMENT   FITS (Flexible Image Transport System) format is defined in 'Astronomy
     COMMENT   and Astrophysics', volume 376, page 359; bibcode: 2001A&A...376..359H
-    CRVAL1  =            11.067073 / RA at CRPIX1,CRPIX2, J2000.0 (deg)
-    CRVAL2  =           -43.804490 / Dec at CRPIX1,CRPIX2, J2000.0 (deg)
+    CRVAL1  =            10.490798 / RA at CRPIX1,CRPIX2, J2000.0 (deg)
+    CRVAL2  =           -44.102325 / Dec at CRPIX1,CRPIX2, J2000.0 (deg)
     EQUINOX =               2000.0 / Equinox of WCS, (year)
     CTYPE1  = 'RA---TAN'           / Projection type for axis 1
     CTYPE2  = 'DEC--TAN'           / Projection type for axis 2
@@ -105,28 +108,52 @@ various useful metadata contained therein::
     BITMASK =                    0 / Fatal bitstring mask template
     HISTORY A generic WISE Astronomical Image Coadder, v5.2
     HISTORY Frank J. Masci, fmasci@caltech.edu
-    DATE    = '2025-03-07T18:42:06' / file creation date (YYYY-MM-DDThh:mm:ss UT)
+    DATE    = '2025-04-04T15:03:21' / file creation date (YYYY-MM-DDThh:mm:ss UT)
     BUNIT   = 'DN/s    '
-    FIELD   = '5321355 '
+    FIELD   = '5333132 '
     FID     = '1       '
     FILTER  = 'F184    '
-    COV5PERC= '58.828037'
-    NFRAMES = '12      '
-    INFIL001= 'Roman_TDS_simple_model_F184_702_8_lite.fits.gz'
-    INFIL002= 'Roman_TDS_simple_model_F184_707_1_lite.fits.gz'
-    INFIL003= 'Roman_TDS_simple_model_F184_1476_14_lite.fits.gz'
-    INFIL004= 'Roman_TDS_simple_model_F184_317_9_lite.fits.gz'
-    INFIL005= 'Roman_TDS_simple_model_F184_327_15_lite.fits.gz'
-    INFIL006= 'Roman_TDS_simple_model_F184_322_3_lite.fits.gz'
-    INFIL007= 'Roman_TDS_simple_model_F184_322_2_lite.fits.gz'
-    INFIL008= 'Roman_TDS_simple_model_F184_1087_7_lite.fits.gz'
-    INFIL009= 'Roman_TDS_simple_model_F184_327_14_lite.fits.gz'
-    INFIL010= 'Roman_TDS_simple_model_F184_1481_16_lite.fits.gz'
-    INFIL011= 'Roman_TDS_simple_model_F184_1476_11_lite.fits.gz'
-    INFIL012= 'Roman_TDS_simple_model_F184_1087_8_lite.fits.gz'
-    CHECKSUM= 'GJ2aJI0TGI0ZGI0Z'   / HDU checksum updated 2025-03-07T18:42:28
-    DATASUM = '2030501515'         / data unit checksum updated 2025-03-07T18:42:28
+    COV5PERC= '51.334797'
+    NFRAMES = '11      '
+    INFIL001= 'Roman_TDS_simple_model_F184_1086_18_lite.fits.gz'
+    INFIL002= 'Roman_TDS_simple_model_F184_1846_12_lite.fits.gz'
+    INFIL003= 'Roman_TDS_simple_model_F184_312_4_lite.fits.gz'
+    INFIL004= 'Roman_TDS_simple_model_F184_1466_15_lite.fits.gz'
+    INFIL005= 'Roman_TDS_simple_model_F184_1471_13_lite.fits.gz'
+    INFIL006= 'Roman_TDS_simple_model_F184_1466_14_lite.fits.gz'
+    INFIL007= 'Roman_TDS_simple_model_F184_317_10_lite.fits.gz'
+    INFIL008= 'Roman_TDS_simple_model_F184_1466_11_lite.fits.gz'
+    INFIL009= 'Roman_TDS_simple_model_F184_317_13_lite.fits.gz'
+    INFIL010= 'Roman_TDS_simple_model_F184_1466_12_lite.fits.gz'
+    INFIL011= 'Roman_TDS_simple_model_F184_312_1_lite.fits.gz'
+    CHECKSUM= '3aE5AZC53aC5AWC5'   / HDU checksum updated 2025-04-07T17:20:20
+    DATASUM = '1546664296'         / data unit checksum updated 2025-04-07T17:20:20
+    RFID    = '17030   '
+    S3BUCKN = 'rapid-product-files'
+    S3OBJPRF= '20250404/jid999/'
+    RFFILEN = 'awaicgen_output_mosaic_image.fits'
+    INFOBITS= '0       '
+    RFIMVER = '16      '
+    PPID    = '15      '
     END
+
+
+================  =========================================================================================
+FITS Keyword      Definition
+================  =========================================================================================
+RFID              Unique database ID for RefImages table in RAPID operations database
+RFIMVER           Version number of reference image in record of RefImages table.
+PPID              Unique database ID for Pipelines table in RAPID operations database
+S3BUCKN           S3 bucket where reference image is stored
+S3OBJPRF          S3 object prefix where reference image is stored
+RFFILEN           Filename of reference image in S3 bucket
+INFOBITS          Bit-wise FLAGS for special conditions about reference image (TBD)
+================  =========================================================================================
+
+Here is an image-view of the above-mentioned reference image.  Note the areas of uneven coverage,
+including two blue patches representing NaNs (pixels storing not a number).
+
+.. image:: s3_rapid-product-files_20250404_jid999_awaicgen_output_mosaic_image.png
 
 
 Analysis of Reference Images
