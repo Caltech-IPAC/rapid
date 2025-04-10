@@ -9,6 +9,17 @@ from concurrent.futures import ProcessPoolExecutor, as_completed
 
 import modules.utils.rapid_pipeline_subs as util
 
+
+rapid_sw = os.getenv('RAPID_SW')
+
+if rapid_sw is None:
+
+    print("*** Error: Env. var. RAPID_SW not set; quitting...")
+    exit(64)
+
+print("rapid_sw =",rapid_sw)
+
+
 def run_script(myid):
 
     """
@@ -20,7 +31,7 @@ def run_script(myid):
     os.environ['MYID'] = str(myid)
 
     python_cmd = 'python'
-    launch_single_instance_code = '/Users/laher/git/rapid/scripts/printenv_myid.py'
+    launch_single_instance_code = rapid_sw + '/scripts/printenv_myid.py'
 
     launch_cmd = [python_cmd,
                   launch_single_instance_code]
