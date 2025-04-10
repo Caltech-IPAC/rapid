@@ -30,7 +30,7 @@ def run_script(myid):
 
     os.environ['MYID'] = str(myid)
 
-    python_cmd = 'python'
+    python_cmd = 'python3'
     launch_single_instance_code = rapid_sw + '/scripts/printenv_myid.py'
 
     launch_cmd = [python_cmd,
