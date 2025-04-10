@@ -137,7 +137,6 @@ if __name__ == '__main__':
 
     # Open loop.
 
-    s3_resource = boto3.resource('s3')
     s3_client = boto3.client('s3')
 
     exitcode = 0
@@ -147,57 +146,41 @@ if __name__ == '__main__':
     while True:
 
 
-        # Examine log files for given processing date.
-
-        logs_bucket = s3_resource.Bucket(job_logs_s3_bucket_base)
-
-        njobs = 0
-        log_filenames = []
-        jids = []
-
-        for logs_bucket_object in logs_bucket.objects.all():
-
-            input_file = logs_bucket_object.key
-
-            if datearg not in input_file:
-                continue
-
-            if verbose > 0:
-                print(logs_bucket_object.key)
-
-            filename_match = re.match(r"(\d\d\d\d\d\d\d\d)/(rapid_pipeline_job_.+jid(\d+)_log\.txt)",input_file)
-
-            try:
-                subdir_only = filename_match.group(1)
-                filename_only = filename_match.group(2)
-                jid = filename_match.group(3)
-
-                if subdir_only == datearg:
-
-                    print("-----0-----> subdir_only =",subdir_only)
-                    print("-----1-----> filename_only =",filename_only)
-                    print("-----2-----> jid =",jid)
-
-                    log_filenames.append(filename_only)
-                    jids.append(jid)
-
-                    njobs += 1
-
-            except:
-                if debug > 0:
-                    print("-----2-----> No match in",input_file)
-
-
-        print("End of logs S3 bucket listing...")
-        print("njobs = ",njobs)
-
-
         # Open database connection.
 
         dbh = db.RAPIDDB()
 
         if dbh.exit_code >= 64:
             exit(dbh.exit_code)
+
+
+        # Query database for Jobs records that ended on the given processing date and ran normally.
+
+        db_jids = dbh.get_jids_of_unclosedout_science_pipeline_jobs_for_processing_date(datearg)
+
+        if dbh.exit_code >= 64:
+            exit(dbh.exit_code)
+
+
+        njobs = 0
+        log_filenames = []
+        jids = []
+
+        for db_jid in db_jids:
+
+            print("db_jid =",db_jid)
+
+            log_filename_only = "rapid_pipeline_job_" + datearg + "_jid" + str(db_jid) + "_log.txt"
+
+            print("log_filename_only =",log_filename_only)
+
+            log_filenames.append(log_filename_only)
+            jids.append(db_jid)
+
+            njobs += 1
+
+
+        print("njobs = ",njobs)
 
 
         #####################################################################
