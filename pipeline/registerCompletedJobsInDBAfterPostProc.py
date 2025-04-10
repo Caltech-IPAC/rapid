@@ -154,7 +154,6 @@ if __name__ == '__main__':
 
     # Query database for Jobs records that ended on the given processing date and ran normally.
 
-    refimage_status = 1
     db_jids = dbh.get_jids_of_normal_science_pipeline_jobs_for_processing_date(datearg)
 
     if dbh.exit_code >= 64:
