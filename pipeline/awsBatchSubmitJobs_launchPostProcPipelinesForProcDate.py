@@ -75,20 +75,20 @@ def run_script(jid):
     """
 
 
-        # Load RAPID_JOB_ID into the environment.
+    # Load RAPID_JOB_ID into the environment.
 
-        os.environ['RAPID_JOB_ID'] = str(jid)
+    os.environ['RAPID_JOB_ID'] = str(jid)
 
 
-        # Launch single pipeline from within Docker container.
+    # Launch single pipeline from within Docker container.
 
-        python_cmd = 'python3.11'
-        launch_single_pipeline_instance_code = '/code/pipeline/awsBatchSubmitJobs_launchSinglePostProcPipeline.py'
+    python_cmd = 'python3.11'
+    launch_single_pipeline_instance_code = '/code/pipeline/awsBatchSubmitJobs_launchSinglePostProcPipeline.py'
 
-        launch_cmd = [python_cmd,
-                      launch_single_pipeline_instance_code]
+    launch_cmd = [python_cmd,
+                  launch_single_pipeline_instance_code]
 
-        exitcode_from_launch_cmd = util.execute_command(launch_cmd)
+    exitcode_from_launch_cmd = util.execute_command(launch_cmd)
 
 
 def launch_parallel_processes(jids, num_cores=None):

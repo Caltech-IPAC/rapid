@@ -66,20 +66,20 @@ def run_script(rid):
     """
 
 
-        # Load RID into the environment.
+    # Load RID into the environment.
 
-        os.environ['RID'] = str(rid)
+    os.environ['RID'] = str(rid)
 
 
-        # Launch single pipeline from within Docker container.
+    # Launch single pipeline from within Docker container.
 
-        python_cmd = 'python3.11'
-        launch_single_pipeline_instance_code = '/code/pipeline/awsBatchSubmitJobs_launchSingleSciencePipeline.py'
+    python_cmd = 'python3.11'
+    launch_single_pipeline_instance_code = '/code/pipeline/awsBatchSubmitJobs_launchSingleSciencePipeline.py'
 
-        launch_cmd = [python_cmd,
-                      launch_single_pipeline_instance_code]
+    launch_cmd = [python_cmd,
+                  launch_single_pipeline_instance_code]
 
-        exitcode_from_launch_cmd = util.execute_command(launch_cmd)
+    exitcode_from_launch_cmd = util.execute_command(launch_cmd)
 
 
 def launch_parallel_processes(rids, num_cores=None):
