@@ -49,6 +49,12 @@ if enddatetime is None:
     exit(64)
 
 
+# Print parameters.
+
+print("startdatetime =",startdatetime)
+print("enddatetime =",enddatetime)
+
+
 if __name__ == '__main__':
 
 
