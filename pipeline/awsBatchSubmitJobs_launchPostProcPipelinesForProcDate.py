@@ -20,6 +20,7 @@ import os
 from datetime import datetime, timezone
 from dateutil import tz
 import time
+from concurrent.futures import ProcessPoolExecutor, as_completed
 
 to_zone = tz.gettz('America/Los_Angeles')
 
@@ -64,6 +65,53 @@ if proc_date is None:
 print("proc_date =",proc_date)
 
 
+# Custom methods for parallel processing, taking advantage of multiple cores on the job-launcher machine.
+
+def run_script(jid):
+
+    """
+    Load unique value of jid into the environment variable RAPID_JOB_ID.
+    Launch single instance of script with given environment-variable setting for RAPID_JOB_ID.
+    """
+
+
+        # Load RAPID_JOB_ID into the environment.
+
+        os.environ['RAPID_JOB_ID'] = str(jid)
+
+
+        # Launch single pipeline from within Docker container.
+
+        python_cmd = 'python3.11'
+        launch_single_pipeline_instance_code = '/code/pipeline/awsBatchSubmitJobs_launchSinglePostProcPipeline.py'
+
+        launch_cmd = [python_cmd,
+                      launch_single_pipeline_instance_code]
+
+        exitcode_from_launch_cmd = util.execute_command(launch_cmd)
+
+
+def launch_parallel_processes(jids, num_cores=None):
+
+    if num_cores is None:
+        num_cores = os.cpu_count()  # Use all available cores if not specified
+
+    print("num_cores =",num_cores)
+
+    with ProcessPoolExecutor(max_workers=num_cores) as executor:
+        # Submit all tasks to the executor and store the futures in a list
+        futures = [executor.submit(run_script,jid) for jid in jids]
+
+        # Iterate over completed futures and update progress
+        for i, future in enumerate(as_completed(futures)):
+            index = futures.index(future)  # Find the original index/order of the completed future
+            print(f"Completed: {i+1} processes, lastly for index={index}")
+
+
+#################
+# Main program.
+#################
+
 if __name__ == '__main__':
 
 
@@ -92,27 +140,20 @@ if __name__ == '__main__':
         exit(dbh.exit_code)
 
 
-    # Launch pipeline instances via AWS Batch.
+    # Launch pipeline instances to be run under AWS Batch.
+
+    jid_list = []
 
     for jid in recs:
+
+        jid_list.append(jid)
 
         print("jid =",jid)
 
 
-        # Load RAPID_JOB_ID into the environment.
+    # The job launching is done in parallel, taking advantage of multiple cores on the job-launcher machine.
 
-        os.environ['RAPID_JOB_ID'] = str(jid)
-
-
-        # Launch single pipeline from within Docker container.
-
-        python_cmd = 'python3.11'
-        launch_single_pipeline_instance_code = '/code/pipeline/awsBatchSubmitJobs_launchSinglePostProcPipeline.py'
-
-        launch_cmd = [python_cmd,
-                      launch_single_pipeline_instance_code]
-
-        exitcode_from_launch_cmd = util.execute_command(launch_cmd)
+    launch_parallel_processes(jid_list)
 
 
     # Close database connection.

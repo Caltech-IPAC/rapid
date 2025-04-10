@@ -2,6 +2,7 @@ import os
 from datetime import datetime, timezone
 from dateutil import tz
 import time
+from concurrent.futures import ProcessPoolExecutor, as_completed
 
 to_zone = tz.gettz('America/Los_Angeles')
 
@@ -55,6 +56,53 @@ print("startdatetime =",startdatetime)
 print("enddatetime =",enddatetime)
 
 
+# Custom methods for parallel processing, taking advantage of multiple cores on the job-launcher machine.
+
+def run_script(rid):
+
+    """
+    Load unique value of rid into the environment variable RID.
+    Launch single instance of script with given environment-variable setting for RID.
+    """
+
+
+        # Load RID into the environment.
+
+        os.environ['RID'] = str(rid)
+
+
+        # Launch single pipeline from within Docker container.
+
+        python_cmd = 'python3.11'
+        launch_single_pipeline_instance_code = '/code/pipeline/awsBatchSubmitJobs_launchSingleSciencePipeline.py'
+
+        launch_cmd = [python_cmd,
+                      launch_single_pipeline_instance_code]
+
+        exitcode_from_launch_cmd = util.execute_command(launch_cmd)
+
+
+def launch_parallel_processes(rids, num_cores=None):
+
+    if num_cores is None:
+        num_cores = os.cpu_count()  # Use all available cores if not specified
+
+    print("num_cores =",num_cores)
+
+    with ProcessPoolExecutor(max_workers=num_cores) as executor:
+        # Submit all tasks to the executor and store the futures in a list
+        futures = [executor.submit(run_script,rid) for rid in rids]
+
+        # Iterate over completed futures and update progress
+        for i, future in enumerate(as_completed(futures)):
+            index = futures.index(future)  # Find the original index/order of the completed future
+            print(f"Completed: {i+1} processes, lastly for index={index}")
+
+
+#################
+# Main program.
+#################
+
 if __name__ == '__main__':
 
 
@@ -80,29 +128,23 @@ if __name__ == '__main__':
         exit(dbh.exit_code)
 
 
-    # Launch pipeline instances via AWS Batch.
+    # Launch pipeline instances to be run under AWS Batch.
+
+    rid_list = []
 
     for rec in recs:
+
         rid = rec[0]
         sca = rec[1]
+
+        rid_list.append(rid)
+
         print("rid, sca =",rid,sca)
 
 
-        # Load RID into the environment.
-        # Database query record has numbers converted to values.
+    # The job launching is done in parallel, taking advantage of multiple cores on the job-launcher machine.
 
-        os.environ['RID'] = str(rid)
-
-
-        # Launch single pipeline instance.
-
-        python_cmd = 'python3.11'
-        launch_single_pipeline_instance_code = '/code/pipeline/awsBatchSubmitJobs_launchSingleSciencePipeline.py'
-
-        launch_cmd = [python_cmd,
-                      launch_single_pipeline_instance_code]
-
-        exitcode_from_launch_cmd = util.execute_command(launch_cmd)
+    launch_parallel_processes(rid_list)
 
 
     # Close database connection.
