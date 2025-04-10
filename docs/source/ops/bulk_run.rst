@@ -145,3 +145,9 @@ This is executed inside a container with the same environment as defined for Ste
 
    python3.11 /code/pipeline/registerCompletedJobsInDBAfterPostProc.py 20250404 >& registerCompletedJobsInDBAfterPostProc_20250404.out &
 
+
+Performance
+********************************************
+
+On an 8-core job-launcher machine, it take 1344 seconds
+to launch 2069 rapid-science-pipeline jobs with 8-core multithreading.
