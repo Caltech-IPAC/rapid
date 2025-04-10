@@ -137,6 +137,7 @@ if __name__ == '__main__':
 
     # Open loop.
 
+    s3_resource = boto3.resource('s3')
     s3_client = boto3.client('s3')
 
     exitcode = 0
