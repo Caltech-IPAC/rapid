@@ -149,5 +149,5 @@ This is executed inside a container with the same environment as defined for Ste
 Performance
 ********************************************
 
-On an 8-core job-launcher machine, it take 1344 seconds
+On an 8-core job-launcher machine, it takes 1344 seconds
 to launch 2069 rapid-science-pipeline jobs with 8-core multithreading.
