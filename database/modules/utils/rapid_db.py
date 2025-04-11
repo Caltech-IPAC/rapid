@@ -2601,11 +2601,11 @@ class RAPIDDB:
 
 ########################################################################################################
 
-    def get_unclosedout_science_pipeline_jobs_for_processing_date(self,proc_date):
+    def get_unclosedout_jobs_for_processing_date(self,ppid,proc_date):
 
         '''
-        Query database for science-pipeline Jobs records that were started on the given
-        processing date, but not yet closed out by finalizing ended, elapsed, exitcode and status.
+        Query database for Jobs records that were started on the given processing date,
+        but not yet closed out by finalizing ended, elapsed, exitcode and status.
         .
         '''
 
@@ -2615,7 +2615,7 @@ class RAPIDDB:
         # Define query.
 
         query = "select jid,awsbatchjobid from Jobs " +\
-                "where ppid = 15 " +\
+                "where ppid = " + str(ppid) + " " +\
                 "and started >= cast('" + proc_date + "' as timestamp) " +\
                 "and started < cast('" + proc_date + "' as timestamp) + cast('1 day' as interval) " +\
                 "and status = 0 " +\
@@ -2646,7 +2646,7 @@ class RAPIDDB:
                     print("Nothing returned from database query; continuing...")
 
         except (Exception, psycopg2.DatabaseError) as error:
-            print('*** Error getting unclosedout science-pipeline Jobs records for given processing date {}: {}; skipping...'.format(proc_date,error))
+            print('*** Error getting unclosedout Jobs records for given ppid={} and processing date {}: {}; skipping...'.format(ppid,proc_date,error))
             self.exit_code = 67
             return
 
