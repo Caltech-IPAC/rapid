@@ -5,9 +5,10 @@ import subprocess
 import re
 import math
 import configparser
-from datetime import datetime, timezone
 from botocore.exceptions import ClientError
+from datetime import datetime, timezone
 from dateutil import tz
+import time
 
 to_zone = tz.gettz('America/Los_Angeles')
 
@@ -24,6 +25,25 @@ print("swname =", swname)
 print("swvers =", swvers)
 
 
+# Compute start time for benchmark.
+
+start_time_benchmark = time.time()
+
+
+# Compute processing datetime (UT) and processing datetime (Pacific time).
+
+datetime_utc_now = datetime.utcnow()
+proc_utc_datetime = datetime_utc_now.strftime('%Y-%m-%dT%H:%M:%SZ')
+datetime_pt_now = datetime_utc_now.replace(tzinfo=timezone.utc).astimezone(tz=to_zone)
+proc_pt_datetime_started = datetime_pt_now.strftime('%Y-%m-%dT%H:%M:%S PT')
+proc_date = datetime_pt_now.strftime('%Y%m%d')
+
+print("proc_utc_datetime =",proc_utc_datetime)
+print("proc_pt_datetime_started =",proc_pt_datetime_started)
+# Processing date is always in Pacific time zone.
+print("proc_date =",proc_date)
+
+
 # RID of input file, read from environment variable RID.
 
 rid = os.getenv('RID')
@@ -32,21 +52,6 @@ if rid is None:
 
     print("*** Error: Env. var. RID not set; quitting...")
     exit(64)
-
-
-# Compute processing datetime (UT) and processing date (Pacific time).
-
-datetime_utc_now = datetime.utcnow()
-proc_utc_datetime = datetime_utc_now.strftime('%Y-%m-%dT%H:%M:%SZ')
-
-
-def utc_to_local(utc_dt):
-    """Converts a UTC datetime object to local time."""
-
-    return utc_dt.replace(tzinfo=timezone.utc).astimezone(tz=to_zone)
-
-local_time = utc_to_local(datetime_utc_now)
-proc_date = local_time.strftime('%Y%m%d')
 
 
 # Ensure sqlite database that defines the Roman sky tessellation is available.
@@ -346,6 +351,11 @@ def submit_job_to_aws_batch(proc_date,
 
     print("response =",response)
 
+    aws_batch_job_id = response['jobId']
+
+
+    return aws_batch_job_id
+
 
 if __name__ == '__main__':
 
@@ -623,14 +633,6 @@ if __name__ == '__main__':
         f.close()
 
 
-    # Close database connection.
-
-    dbh.close()
-
-    if dbh.exit_code >= 64:
-        exit(dbh.exit_code)
-
-
     # Populate config-file dictionary for job.
 
     job_config_ini_file_filename = job_config_filename_base + str(jid) + ".ini"
@@ -805,10 +807,43 @@ if __name__ == '__main__':
                 .format(input_images_csv_file,job_info_s3_bucket,input_images_csv_file_s3_bucket_object_name))
 
 
-    submit_job_to_aws_batch(proc_date,
-                            jid,
-                            job_info_s3_bucket,
-                            job_config_ini_file_filename,
-                            job_config_ini_file_s3_bucket_object_name,
-                            input_images_csv_filename,
-                            input_images_csv_file_s3_bucket_object_name)
+    aws_batch_job_id = submit_job_to_aws_batch(proc_date,
+                                               jid,
+                                               job_info_s3_bucket,
+                                               job_config_ini_file_filename,
+                                               job_config_ini_file_s3_bucket_object_name,
+                                               input_images_csv_filename,
+                                               input_images_csv_file_s3_bucket_object_name)
+
+
+    # Update record in Jobs database table with aws_batch_job_id.
+
+    jid = dbh.update_job_with_aws_batch_job_id(jid,aws_batch_job_id)
+
+    if dbh.exit_code >= 64:
+        exit(dbh.exit_code)
+
+
+    # Close database connection.
+
+    dbh.close()
+
+    if dbh.exit_code >= 64:
+        exit(dbh.exit_code)
+
+
+    # Code-timing benchmark.
+
+    end_time_benchmark = time.time()
+    print("Elapsed time in seconds to launch single pipeline =",
+        end_time_benchmark - start_time_benchmark)
+    start_time_benchmark = end_time_benchmark
+
+
+    # Termination.
+
+    terminating_exitcode = 0
+
+    print("terminating_exitcode =",terminating_exitcode)
+
+    exit(terminating_exitcode)
