@@ -1448,7 +1448,7 @@ class RAPIDDB:
 
         # Define query.
 
-        query = "update Jobs set awsbatchjobid = " + str(aws_batch_job_id) + " where jid = " + str(jid) + ";"
+        query = "update Jobs set awsbatchjobid = '" + str(aws_batch_job_id) + "' where jid = " + str(jid) + ";"
 
 
         # Query database.
