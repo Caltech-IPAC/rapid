@@ -167,27 +167,48 @@ signal.signal(signal.SIGINT, signal_handler)
 signal.signal(signal.SIGQUIT, signal_handler)
 
 
+#-------------------------------------------------------------------------------------------------------------
+# Method to wait until common set of AWS Batch jobs have finished.
+#-------------------------------------------------------------------------------------------------------------
 
-
-
-
-
-
-def wait_until_aws_batch_jobs_finished(job_type,proc_date,config_input):
+def wait_until_aws_batch_jobs_finished(job_type,proc_date,config_input,dbh):
 
     """"
     Wait until AWS Batch jobs of a given job type and processing date have finished.
     """
 
+    print("Parameter values from method wait_until_aws_batch_jobs_finished:")
+    print("job_type =",job_type)
+    print("proc_date =",proc_date)
+
+    if job_type == "science":
+        ppid = 15
+    elif job_type == "postproc":
+        ppid = 17
+    else:
+        print(f"Job type undefined ({job_type}); quitting")
+        exit(64)
+
+    print("ppid =",ppid)
+
+
+    # Query database for Jobs records that are unclosed out on the given processing date.
+
+    jobs_records = dbh.get_unclosedout_jobs_for_processing_date(self,ppid,proc_date)(ppid,proc_date)
+
+    if dbh.exit_code >= 64:
+        exit(dbh.exit_code)
+
+    njobs_total = len(jobs_records)
+    print("njobs_total =",njobs_total)
+
+    if njobs_total == 0:
+        return
+
 
     # Initialize iteration number.
 
     iter = 0
-
-
-    # Set this parameter as fixed for the VPO.
-
-    job_status_to_list = "ALL"
 
 
     # Define job definition.
@@ -217,12 +238,8 @@ def wait_until_aws_batch_jobs_finished(job_type,proc_date,config_input):
         exit(64)
 
 
-    # Print parameters.
+    # Print more parameters.
 
-    print("Parameter values from method wait_until_aws_batch_jobs_finished:")
-    print("job_type =",job_type)
-    print("proc_date =",proc_date)
-    print("job_status_to_list =",job_status_to_list)
     print("job_name_base =",job_name_base)
     print("job_type =",job_type)
     print("job_queue =",job_queue)
@@ -236,81 +253,28 @@ def wait_until_aws_batch_jobs_finished(job_type,proc_date,config_input):
 
     while True:
 
-        # Get list of jobs.
-        # The client.list_jobs method must be called the first time without the nextToken parameter.
+        # Get description of jobs.
 
-        page = 1
-        njobs_total = 0
-        if job_status_to_list != "ALL":
-            njobs_with_specified_status = 0
-        else:
-            njobs_vs_status = {}
-            for job_status in job_status_choices:
-                njobs_vs_status[job_status] = 0
+        n_succeeded = 0
+        n_failed = 0
 
-        job_name_wildcard = job_name_base + '*'
+        for jobs_record in jobs_records:
 
+            jid = jobs_record[0]
+            awsbatchjobid = jobs_record[1]
 
-        # Set next_token = None the first time util.list_aws_batch_jobs
-        # is called, so that proper behavior is handled by the method.
+            response = client.describe_jobs(jobs=[awsbatchjobid,])
 
-        next_token = None
-        response = util.list_aws_batch_jobs(client,next_token,job_queue,job_name_wildcard)
+            job_status = response['jobs'][0]['status']
 
-        for job in response['jobSummaryList']:
-            job_name = job['jobName']
-            if proc_date is None or proc_date in job_name:
-                job_status = job['status']
-                print("job_name,job_status =",job_name,job_status)
-                if job_status_to_list != "ALL" and job_status == job_status_to_list:
-                    njobs_with_specified_status += 1
-                else:
-                    njobs_vs_status[job_status] += 1
+            if job_status == "SUCCEEDED":
+                n_succeeded += 1
+            elif job_status == "FAILED":
+                n_failed += 1
 
-                njobs_total += 1
+        njobs_succeeded_failed = n_succeeded + n_failed
 
-        next_token = response['nextToken']
-
-        print("page = ",page)
-
-        page += 1
-
-        while True:
-
-            response = util.list_aws_batch_jobs(client,next_token,job_queue,job_name_wildcard)
-
-            for job in response['jobSummaryList']:
-                job_name = job['jobName']
-                if proc_date is None or proc_date in job_name:
-                    job_status = job['status']
-                    print("job_name,job_status =",job_name,job_status)
-                    if job_status_to_list != "ALL" and job_status == job_status_to_list:
-                        njobs_with_specified_status += 1
-                    else:
-                        njobs_vs_status[job_status] += 1
-                    njobs_total += 1
-
-            # print("response = ",response)
-            # print("next_token = ",next_token)
-
-            print("page = ",page)
-
-            page += 1
-
-            try:
-                next_token = response['nextToken']
-            except:
-                break
-
-        print("njobs_total =",njobs_total)
-        print("job_status_to_list =",job_status_to_list)
-        if job_status_to_list != "ALL":
-            print(f"njobs_{job_status} = {njobs_with_specified_status}")
-        else:
-            for job_status in job_status_choices:
-                print(f"njobs_{job_status} = {njobs_vs_status[job_status]}")
-
-        njobs_succeeded_failed = njobs_vs_status["SUCCEEDED"] + njobs_vs_status["FAILED"]
+        print("njobs_succeeded_failed =",njobs_succeeded_failed)
 
         if njobs_total == njobs_succeeded_failed:
             break
@@ -320,10 +284,6 @@ def wait_until_aws_batch_jobs_finished(job_type,proc_date,config_input):
         time.sleep(30)
 
     return
-
-
-
-
 
 
 #-------------------------------------------------------------------------------------------------------------
@@ -394,6 +354,14 @@ if __name__ == '__main__':
         exitcode_from_launch_science_pipelines_cmd = util.execute_command(launch_science_pipelines_cmd)
 
 
+        # Code-timing benchmark.
+
+        end_time_benchmark = time.time()
+        print("Elapsed time in seconds after launching science pipelines =",
+            end_time_benchmark - start_time_benchmark)
+        start_time_benchmark = end_time_benchmark
+
+
         # Wait for all science pipelines to complete under AWS Batch.
 
         job_type = "science"
@@ -405,6 +373,14 @@ if __name__ == '__main__':
         print(f"Okay, all AWS Batch jobs have finished for job_type={job_type}, proc_date={proc_date}...")
 
 
+        # Code-timing benchmark.
+
+        end_time_benchmark = time.time()
+        print("Elapsed time in seconds after waiting for science-pipeline AWS Batch jobs to finish =",
+            end_time_benchmark - start_time_benchmark)
+        start_time_benchmark = end_time_benchmark
+
+
         # Register metadata from science pipelines into operations database.
 
         register_science_pipeline_jobs_cmd = [python_cmd,
@@ -412,6 +388,14 @@ if __name__ == '__main__':
                                               proc_date]
 
         exitcode_from_register_science_pipeline_jobs_cmd = util.execute_command(register_science_pipeline_jobs_cmd)
+
+
+        # Code-timing benchmark.
+
+        end_time_benchmark = time.time()
+        print("Elapsed time in seconds after registering science-pipeline metadata into operations database =",
+            end_time_benchmark - start_time_benchmark)
+        start_time_benchmark = end_time_benchmark
 
 
         # Launch post-processing pipelines.
@@ -426,6 +410,14 @@ if __name__ == '__main__':
         exitcode_from_launch_postproc_pipelines_cmd = util.execute_command(launch_postproc_pipelines_cmd)
 
 
+        # Code-timing benchmark.
+
+        end_time_benchmark = time.time()
+        print("Elapsed time in seconds after launching postproc pipelines =",
+            end_time_benchmark - start_time_benchmark)
+        start_time_benchmark = end_time_benchmark
+
+
         # Wait for all post-processing pipelines to complete under AWS Batch.
 
         job_type = "postproc"
@@ -437,6 +429,14 @@ if __name__ == '__main__':
         print(f"Okay, all AWS Batch jobs have finished for job_type={job_type}, proc_date={proc_date}...")
 
 
+        # Code-timing benchmark.
+
+        end_time_benchmark = time.time()
+        print("Elapsed time in seconds after waiting for postproc-pipeline AWS Batch jobs to finish =",
+            end_time_benchmark - start_time_benchmark)
+        start_time_benchmark = end_time_benchmark
+
+
         # Register metadata from post-processing pipelines into operations database.
 
         register_postproc_pipeline_jobs_cmd = [python_cmd,
@@ -446,10 +446,18 @@ if __name__ == '__main__':
         exitcode_from_register_postproc_pipeline_jobs_cmd = util.execute_command(register_postproc_pipeline_jobs_cmd)
 
 
+        # Code-timing benchmark.
+
+        end_time_benchmark = time.time()
+        print("Elapsed time in seconds after registering postproc-pipeline metadata into operations database =",
+            end_time_benchmark - start_time_benchmark)
+        start_time_benchmark = end_time_benchmark
+
+
         # Break out of open loop if running the VPO for just one specific processing date.
 
         if datearg is not None:
-            print(f"Terminating since this VPO run is just for one specific processing date: datearg={datearg}...")
+            print(f"Terminating normally since this VPO run is just for one specific processing date: datearg={datearg}...")
             break
 
 
