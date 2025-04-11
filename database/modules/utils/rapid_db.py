@@ -1437,6 +1437,51 @@ class RAPIDDB:
 
 ########################################################################################################
 
+    def update_job_with_aws_batch_job_id(self,jid,aws_batch_job_id):
+
+        '''
+        Update awsbatchjobid in Jobs database record.
+        '''
+
+        self.exit_code = 0
+
+
+        # Define query.
+
+        query = "update Jobs set awsbatchjobid = " + str(aws_batch_job_id) + " where jid = " + str(jid) + ";"
+
+
+        # Query database.
+
+        print('----> jid = {}'.format(jid))
+        print('----> awsbatchjobid = {}'.format(aws_batch_job_id))
+
+        print('query = {}'.format(query))
+
+
+        # Execute query.
+
+        try:
+            self.cur.execute(query)
+
+            try:
+                records = []
+                for record in self.cur:
+                    records.append(record)
+            except:
+                    print("Nothing returned from database query; continuing...")
+
+        except (Exception, psycopg2.DatabaseError) as error:
+            print('*** Error updating Jobs record ({}); skipping...'.format(error))
+            self.exit_code = 67
+            return
+
+        if self.exit_code == 0:
+            self.conn.commit()           # Commit database transaction
+
+
+########################################################################################################
+
     def add_refimage(self,ppid,field,fid,hp6,hp9,infobits,status,filename,checksum):
 
         '''
