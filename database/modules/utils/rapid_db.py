@@ -2601,7 +2601,7 @@ class RAPIDDB:
 
 ########################################################################################################
 
-    def get_jids_of_unclosedout_science_pipeline_jobs_for_processing_date(self,proc_date):
+    def get_unclosedout_science_pipeline_jobs_for_processing_date(self,proc_date):
 
         '''
         Query database for science-pipeline Jobs records that were started on the given
@@ -2614,7 +2614,7 @@ class RAPIDDB:
 
         # Define query.
 
-        query = "select jid from Jobs " +\
+        query = "select jid,awsbatchjobid from Jobs " +\
                 "where ppid = 15 " +\
                 "and started >= cast('" + proc_date + "' as timestamp) " +\
                 "and started < cast('" + proc_date + "' as timestamp) + cast('1 day' as interval) " +\
@@ -2637,8 +2637,7 @@ class RAPIDDB:
                 records = []
                 nrecs = 0
                 for record in self.cur:
-                    jid = record[0]
-                    records.append(jid)
+                    records.append(record)
                     nrecs += 1
 
                 print("nrecs =",nrecs)
@@ -2647,7 +2646,7 @@ class RAPIDDB:
                     print("Nothing returned from database query; continuing...")
 
         except (Exception, psycopg2.DatabaseError) as error:
-            print('*** Error getting Jobs records for given processing date {}: {}; skipping...'.format(proc_date,error))
+            print('*** Error getting unclosedout science-pipeline Jobs records for given processing date {}: {}; skipping...'.format(proc_date,error))
             self.exit_code = 67
             return
 
