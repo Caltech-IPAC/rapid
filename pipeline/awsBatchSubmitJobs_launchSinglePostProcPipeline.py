@@ -1,6 +1,7 @@
 """
 The purpose of the post-processing pipeline is to add database IDs
-to products already made by the science pipeline.  This is run only
+to products already made by the science pipeline, and update the
+checksums of the modified products in the database, etc.  This is run only
 after the products have been registered in the RAPID operations database.
 """
 
@@ -41,7 +42,8 @@ print("proc_utc_datetime =",proc_utc_datetime)
 print("proc_pt_datetime_started =",proc_pt_datetime_started)
 
 
-# JOBPROCDATE of pipeline job.
+# JOBPROCDATE of pipeline job.  This is input here as an environment variable because
+# the script could be used to post-process products created on any earlier processing date.
 
 proc_date = os.getenv('JOBPROCDATE')
 
@@ -131,7 +133,6 @@ print("product_s3_bucket_base =",product_s3_bucket_base)
 # Method to submit a job to AWS Batch.
 #-------------------------------------------------------------------------------------------------------------
 
-
 def submit_job_to_aws_batch(proc_date,
                             jid,
                             job_info_s3_bucket,
@@ -186,11 +187,15 @@ def submit_job_to_aws_batch(proc_date,
 
     print("response =",response)
 
+    aws_batch_job_id = response['jobId']
+
+
+    return aws_batch_job_id
+
 
 #-------------------------------------------------------------------------------------------------------------
 # Main program.
 #-------------------------------------------------------------------------------------------------------------
-
 
 if __name__ == '__main__':
 
@@ -260,14 +265,6 @@ if __name__ == '__main__':
     filename_refimage = db_refimages_rec_dict["filename"]
     infobits_refimage = db_refimages_rec_dict["infobits"]
     version_refimage = db_refimages_rec_dict["version"]
-
-
-    # Close database connection.
-
-    dbh.close()
-
-    if dbh.exit_code >= 64:
-        exit(dbh.exit_code)
 
 
     # Do not launch AWS Batch job only if status != 1 and job_exitcode >= 64.
@@ -373,11 +370,27 @@ if __name__ == '__main__':
 
     print(f"Launching AWS Batch post-processing job for jid={jid}, proc_date={proc_date}")
 
-    submit_job_to_aws_batch(proc_date,
-                            jid,
-                            job_info_s3_bucket,
-                            job_config_ini_file_filename,
-                            job_config_ini_file_s3_bucket_object_name)
+    aws_batch_job_id = submit_job_to_aws_batch(proc_date,
+                                               jid,
+                                               job_info_s3_bucket,
+                                               job_config_ini_file_filename,
+                                               job_config_ini_file_s3_bucket_object_name)
+
+
+    # Update record in Jobs database table with aws_batch_job_id.
+
+    jid = dbh.update_job_with_aws_batch_job_id(jid,aws_batch_job_id)
+
+    if dbh.exit_code >= 64:
+        exit(dbh.exit_code)
+
+
+    # Close database connection.
+
+    dbh.close()
+
+    if dbh.exit_code >= 64:
+        exit(dbh.exit_code)
 
 
     # Code-timing benchmark.
