@@ -642,7 +642,7 @@ def run_single_core_job(dbh,jid,log_fname):
     print("\End of run_single_core_job: jid, log_fname =",jid,log_fname)
 
 
-def launch_parallel_processes(dbh,jids,log_filenames,num_cores=None):
+def execute_parallel_processes(dbh,jids,log_filenames,num_cores=None):
 
     if num_cores is None:
         num_cores = os.cpu_count()  # Use all available cores if not specified
@@ -716,11 +716,12 @@ if __name__ == '__main__':
 
 
         #####################################################################
-        # Launch jobs for all jids on a given processing date.
-        # The job launching is done in parallel, taking advantage of multiple cores on the job-launcher machine.
+        # Execute job-closeout tasks for all science-pipeline jobs with jids on a
+        # given processing date.  The execution for each job is done in parallel,
+        # taking advantage of multiple cores on the job-launcher machine.
         #####################################################################
 
-        launch_parallel_processes(dbh,jids,log_filenames)
+        execute_parallel_processes(dbh,jids,log_filenames)
 
 
         # Close database connection.
