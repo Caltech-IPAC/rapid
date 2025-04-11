@@ -290,6 +290,10 @@ for key in config_input['SEXTRACTOR_GAINMATCH'].keys():
     sextractor_gainmatch_dict[key] = config_input['SEXTRACTOR_GAINMATCH'][key]
 
 
+#-------------------------------------------------------------------------------------------------------------
+# Method to submit a job to AWS Batch.
+#-------------------------------------------------------------------------------------------------------------
+
 def submit_job_to_aws_batch(proc_date,
                             jid,
                             job_info_s3_bucket,
@@ -356,6 +360,10 @@ def submit_job_to_aws_batch(proc_date,
 
     return aws_batch_job_id
 
+
+#-------------------------------------------------------------------------------------------------------------
+# Main program.
+#-------------------------------------------------------------------------------------------------------------
 
 if __name__ == '__main__':
 
