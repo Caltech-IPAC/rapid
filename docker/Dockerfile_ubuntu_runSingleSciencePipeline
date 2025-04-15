@@ -1,5 +1,21 @@
 FROM redhat/ubi9
 
+# Install commands and tools.
+
+RUN yum -y install gcc
+RUN yum -y install g++
+RUN yum -y install gfortran
+RUN yum -y install autoconf
+RUN yum -y install automake
+RUN yum -y install libtool
+RUN yum -y install zlib-devel
+RUN yum -y install atlas
+RUN yum -y install atlas-devel
+RUN yum -y install postgresql
+RUN yum -y install unzip
+RUN yum -y install git
+RUN yum -y install sqlite
+
 # Install packages in Python 3.9 (/usr/bin/python3)
 
 RUN yum install -y pip
@@ -32,22 +48,6 @@ RUN python3.11 -m pip install --upgrade sip_tpv
 RUN python3.11 -m pip install --upgrade photutils
 RUN python3.11 -m pip install --upgrade matplotlib
 RUN python3.11 -m pip install --upgrade sfft
-
-# Install commands and tools.
-
-RUN yum -y install gcc
-RUN yum -y install g++
-RUN yum -y install gfortran
-RUN yum -y install autoconf
-RUN yum -y install automake
-RUN yum -y install libtool
-RUN yum -y install zlib-devel
-RUN yum -y install atlas
-RUN yum -y install atlas-devel
-RUN yum -y install postgresql
-RUN yum -y install unzip
-RUN yum -y install git
-RUN yum -y install sqlite
 
 # Install AWS CLI
 
