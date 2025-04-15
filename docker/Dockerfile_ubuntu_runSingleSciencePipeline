@@ -47,7 +47,16 @@ RUN python3.11 -m pip install --upgrade sympy
 RUN python3.11 -m pip install --upgrade sip_tpv
 RUN python3.11 -m pip install --upgrade photutils
 RUN python3.11 -m pip install --upgrade matplotlib
-RUN python3.11 -m pip install --upgrade sfft
+
+
+# Cannot install sfft in Python 3.11 because of following error:
+# Failed to build scikit-image
+# ERROR: Failed to build installable wheels for some pyproject.toml based projects (scikit-image)
+# The command '/bin/sh -c python3.11 -m pip install --upgrade sfft' returned a non-zero code: 1
+# For now, the plan is to run sfft under Python 3.9
+
+#RUN python3.11 -m pip install --upgrade sfft
+
 
 # Install AWS CLI
 
