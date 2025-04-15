@@ -150,7 +150,7 @@ def run_single_core_job(dbh,jid,log_fname):
 
     if downloaded_from_bucket:
         print("*** Warning: Done file exists ({}); skipping...".format(done_filename))
-        continue
+        return
 
 
     # Download log file from S3 bucket.
