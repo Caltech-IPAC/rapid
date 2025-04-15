@@ -689,7 +689,9 @@ if __name__ == '__main__':
         # Query database for Jobs records that ended on the given processing date and ran normally.
 
         ppid = 15
-        db_jids = dbh.get_unclosedout_jobs_for_processing_date(ppid,datearg)
+        jobs_records = dbh.get_unclosedout_jobs_for_processing_date(ppid,datearg)
+
+
 
         if dbh.exit_code >= 64:
             exit(dbh.exit_code)
@@ -699,7 +701,10 @@ if __name__ == '__main__':
         log_filenames = []
         jids = []
 
-        for db_jid in db_jids:
+        for jobs_record in jobs_records:
+
+            db_jid = jobs_record[0]
+            awsbatchjobid = jobs_record[1]
 
             print("db_jid =",db_jid)
 
