@@ -10,6 +10,8 @@ from concurrent.futures import ProcessPoolExecutor, as_completed
 import modules.utils.rapid_pipeline_subs as util
 
 
+code_name = "asdf"
+
 rapid_sw = os.getenv('RAPID_SW')
 
 if rapid_sw is None:
@@ -20,13 +22,14 @@ if rapid_sw is None:
 print("rapid_sw =",rapid_sw)
 
 
-def run_script(myid):
+def run_script(code_name,myid):
 
     """
     Load unique value of MYID into the environment.
     Launch single instance of script with given setting for MYID.
     """
 
+    print("====> code_name,myid =",code_name,myid)
 
     os.environ['MYID'] = str(myid)
 
@@ -39,7 +42,7 @@ def run_script(myid):
     exitcode_from_launch_cmd = util.execute_command(launch_cmd)
 
 
-def launch_parallel_processes(myids, num_cores=None):
+def launch_parallel_processes(code_name,myids, num_cores=None):
 
     if num_cores is None:
         num_cores = os.cpu_count()  # Use all available cores if not specified
@@ -48,7 +51,7 @@ def launch_parallel_processes(myids, num_cores=None):
 
     with ProcessPoolExecutor(max_workers=num_cores) as executor:
         # Submit all tasks to the executor and store the futures in a list
-        futures = [executor.submit(run_script,myid) for myid in myids]
+        futures = [executor.submit(run_script,code_name,myid) for myid in myids]
 
         # Iterate over completed futures and update progress
         for i, future in enumerate(as_completed(futures)):
@@ -64,4 +67,4 @@ if __name__ == '__main__':
         myid_list.append(myid)
         print("i,myid =",i,myid)
 
-    launch_parallel_processes(myid_list)
+    launch_parallel_processes(code_name,myid_list)
