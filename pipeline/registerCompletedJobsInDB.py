@@ -688,7 +688,8 @@ if __name__ == '__main__':
 
         # Query database for Jobs records that ended on the given processing date and ran normally.
 
-        db_jids = dbh.get_jids_of_unclosedout_science_pipeline_jobs_for_processing_date(datearg)
+        ppid = 15
+        db_jids = dbh.get_unclosedout_jobs_for_processing_date(ppid,datearg)
 
         if dbh.exit_code >= 64:
             exit(dbh.exit_code)
