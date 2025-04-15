@@ -312,11 +312,11 @@ def run_single_core_job(dbh,jid,log_fname):
 
     if int(job_exitcode) == 33:
         util.write_done_file_to_s3_bucket(done_filename,product_s3_bucket_base,datearg,jid,s3_client)
-        continue
+        return
 
     if int(job_exitcode) >= 64:
         util.write_done_file_to_s3_bucket(done_filename,product_s3_bucket_base,datearg,jid,s3_client)
-        continue
+        return
 
 
     # Compute level-6 healpix index (NESTED pixel ordering).
