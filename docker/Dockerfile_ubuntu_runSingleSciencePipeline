@@ -14,6 +14,7 @@ RUN pip install --upgrade sympy
 RUN pip install --upgrade sip_tpv
 RUN pip install --upgrade photutils
 RUN pip install --upgrade matplotlib
+RUN pip install --upgrade sfft
 
 # Install Python 3.11 with packages (/usr/bin/python3.11)
 
@@ -30,6 +31,7 @@ RUN python3.11 -m pip install --upgrade sympy
 RUN python3.11 -m pip install --upgrade sip_tpv
 RUN python3.11 -m pip install --upgrade photutils
 RUN python3.11 -m pip install --upgrade matplotlib
+RUN python3.11 -m pip install --upgrade sfft
 
 # Install commands and tools.
 
