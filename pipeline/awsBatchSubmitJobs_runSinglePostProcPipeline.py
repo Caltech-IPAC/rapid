@@ -367,7 +367,7 @@ if __name__ == '__main__':
     # Code-timing benchmark.
 
     end_time_benchmark = time.time()
-    print("Elapsed time in seconds to launch pipelines =",
+    print("Elapsed time in seconds after uploading products at pipeline end =",
         end_time_benchmark - start_time_benchmark)
     start_time_benchmark = end_time_benchmark
 
