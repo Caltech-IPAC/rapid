@@ -158,6 +158,9 @@ for i in range(num_cores):
 
 def run_single_core_job(jids,log_fnames,index_thread):
 
+    dbh = dbh_list[index_thread]
+    print(f"\nStart of run_single_core_job: index_thread={index_thread}")
+
     for index_job in range(len(jids)):
 
         index_core = index_job % num_cores
@@ -167,9 +170,7 @@ def run_single_core_job(jids,log_fnames,index_thread):
         jid = jids[index_job]
         log_fname = log_fnames[index_job]
 
-        dbh = dbh_list[index_core]
-
-        print("\nStart of run_single_core_job: index_job,jid,log_fname =",index_job,jid,log_fname)
+        print("Loop start: index_job,jid,log_fname =",index_job,jid,log_fname)
 
         job_exitcode = 64
         aws_batch_job_id = 'not_found'
@@ -673,7 +674,9 @@ def run_single_core_job(jids,log_fnames,index_thread):
 
         util.write_done_file_to_s3_bucket(done_filename,product_s3_bucket_base,datearg,jid,s3_client)
 
-        print("\End of run_single_core_job: jid, log_fname =",jid,log_fname)
+        print("\Loop end: done_filename,product_s3_bucket_base,datearg,jid =",done_filename,product_s3_bucket_base,datearg,jid)
+
+    print(f"\nEnd of run_single_core_job: index_thread={index_thread}")
 
 
 def execute_parallel_processes(jids,log_filenames,num_cores=None):
