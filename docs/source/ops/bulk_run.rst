@@ -175,7 +175,7 @@ Step 3
 On an 8-core job-launcher machine, it takes 1051 seconds
 to launch 1989 RAPID-post-processing-pipeline jobs with 8-core multiprocessing.
 
-The 1989 RAPID-science-pipeline jobs take less than 60 seconds to run in parallel under AWS batch.
+The 1989 RAPID-post-processing-pipeline jobs take less than 60 seconds to run in parallel under AWS batch.
 AWS batch is configured to have up to 1000 jobs running in parallel, and this can be easily increased as needed.
 
 Step 4
