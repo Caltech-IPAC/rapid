@@ -146,6 +146,8 @@ for i in range(num_cores):
 
     dbh = db.RAPIDDB()
 
+    print("i,dbh =",i,dbh)
+
     if dbh.exit_code >= 64:
         exit(dbh.exit_code)
 
@@ -158,8 +160,9 @@ for i in range(num_cores):
 
 def run_single_core_job(jids,log_fnames,index_thread):
 
+    global dbh_list
     dbh = dbh_list[index_thread]
-    print(f"\nStart of run_single_core_job: index_thread={index_thread}")
+    print(f"\nStart of run_single_core_job: index_thread={index_thread}, dbh={dbh}")
 
     for index_job in range(len(jids)):
 
