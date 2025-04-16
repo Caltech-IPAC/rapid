@@ -106,7 +106,7 @@ This is executed inside a container with the same environment as defined for Ste
 
    cd /work
 
-   python3.11 /code/pipeline/registerCompletedJobsInDB.py 20250404 >& registerCompletedJobsInDB_20250404.out &
+   python3.11 /code/pipeline/parallelRegisterCompletedJobsInDB.py 20250404 >& parallelRegisterCompletedJobsInDB_20250404.out &
 
 
 Step 3
@@ -149,5 +149,34 @@ This is executed inside a container with the same environment as defined for Ste
 Performance
 ********************************************
 
+Step 1
+^^^^^^
+
 On an 8-core job-launcher machine, it takes 1344 seconds
-to launch 2069 rapid-science-pipeline jobs with 8-core multithreading.
+to launch 2069 RAPID-science-pipeline jobs with 8-core multithreading.
+
+The 2069 RAPID-science-pipeline jobs take 340 seconds on average to run in parallel under AWS batch.
+AWS batch is configured to have up to 1000 jobs running in parallel, and this can be easily increased as needed.
+There were 80 failed pipelines because there were no prior observations for which to generate reference images.
+
+Step 2
+^^^^^^
+
+On an 8-core job-launcher machine, it takes 462 seconds
+to register database records for 2069 RAPID-science-pipeline jobs with 8-core multithreading.
+
+Step 3
+^^^^^^
+
+On an 8-core job-launcher machine, it takes 1051 seconds
+to launch 1989 RAPID-post-processing-pipeline jobs with 8-core multithreading.
+
+The 1989 RAPID-science-pipeline jobs take less than 60 seconds to run in parallel under AWS batch.
+AWS batch is configured to have up to 1000 jobs running in parallel, and this can be easily increased as needed.
+
+Step 4
+^^^^^^
+
+It takes 476 seconds to register database records for 1989 RAPID-post-processing-pipeline jobs running as a single-thread process.
+
+
