@@ -164,6 +164,7 @@ Step 2
 
 On an 8-core job-launcher machine, it takes 462 seconds
 to register database records for 2069 RAPID-science-pipeline jobs with 8-core multithreading.
+
 Records are inserted and/or updated in the Jobs, DiffImages, DiffImMeta, RefImages, RefImCatalogs, RefImMeta, and RefImImages database tables.
 
 Step 3
@@ -179,6 +180,7 @@ Step 4
 ============
 
 It takes 476 seconds to register database records for 1989 RAPID-post-processing-pipeline jobs running as a single-thread process.
-Records are inserted and/or updated in the Jobs, DiffImages, and RefImages database tables.
+
+Records are updated in the Jobs, DiffImages, and RefImages database tables.
 
 
