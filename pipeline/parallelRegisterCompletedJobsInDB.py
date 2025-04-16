@@ -19,6 +19,7 @@ from datetime import datetime, timezone
 from dateutil import tz
 import time
 from concurrent.futures import ProcessPoolExecutor, as_completed
+import fcntl
 
 to_zone = tz.gettz('America/Los_Angeles')
 
@@ -141,6 +142,7 @@ signal.signal(signal.SIGQUIT, signal_handler)
 num_cores = os.cpu_count()
 
 dbh_list = []
+dbh_in_use = []
 
 for i in range(num_cores):
 
@@ -150,19 +152,59 @@ for i in range(num_cores):
         exit(dbh.exit_code)
 
     dbh_list.append(dbh)
+    dbh_in_use.append(False)
+
+lock_file_path = 'my_lock_file.lock'
 
 
 #-------------------------------------------------------------------------------------------------------------
 # Custom methods for parallel processing, taking advantage of multiple cores on the job-launcher machine.
 #-------------------------------------------------------------------------------------------------------------
 
+def acquire_lock(file_path):
+    """Acquires an exclusive lock on the given file."""
+    file_descriptor = open(file_path, 'w')
+    try:
+        fcntl.flock(file_descriptor, fcntl.LOCK_EX)
+        return file_descriptor
+    except OSError:
+        file_descriptor.close()
+        return None
+
+def release_lock(file_descriptor):
+    """Releases the exclusive lock on the given file."""
+    fcntl.flock(file_descriptor, fcntl.LOCK_UN)
+    file_descriptor.close()
+
+i
 def run_single_core_job(jids,log_fnames,index_job):
 
     jid = jids[index_job]
     log_fname = log_fnames[index_job]
 
-    index_core = index_job % num_cores
-    dbh = dbh_list[index_core]
+
+    # Acquire file lock in order to get next available database handle.
+
+    while True:
+        lock = acquire_lock(lock_file_path)
+        if lock:
+            try:
+                print("Lock acquired. Performing critical operations...")
+                for i in range(num_cores):
+                    if not dbh_in_use[i]:
+                        index_thread = i
+                        dbh = dbh_list[index_thread]
+                        dbh_in_use[index_thread] = True
+
+            finally:
+                release_lock(lock)
+                print("Lock released.")
+                break
+
+        else:
+            print("Failed to acquire lock. Another process may be holding it. Wait 1 second and try again...")
+            time.sleep(1)
+
 
     print("\nStart of run_single_core_job: index_job,jid,log_fname =",index_job,jid,log_fname)
 
@@ -668,7 +710,13 @@ def run_single_core_job(jids,log_fnames,index_job):
 
     util.write_done_file_to_s3_bucket(done_filename,product_s3_bucket_base,datearg,jid,s3_client)
 
+
+    # Release database handle.
+
+    dbh_in_use[index_thread] = False
+
     print("\End of run_single_core_job: jid, log_fname =",jid,log_fname)
+
 
 
 def execute_parallel_processes(jids,log_filenames,num_cores=None):
