@@ -158,11 +158,11 @@ signal.signal(signal.SIGQUIT, signal_handler)
 
 def run_single_core_job(jids,log_fnames,index_job):
 
-    index_core = index_job % num_cores
+    jid = jids[index_job]
+    log_fname = log_fnames[index_job]
 
+    index_core = index_job % num_cores
     dbh = dbh_list[index_core]
-    jid = jids[index_core]
-    log_fname = log_fnames[index_core]
 
     print("\nStart of run_single_core_job: index_job,jid,log_fname =",index_job,jid,log_fname)
 
