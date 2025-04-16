@@ -150,7 +150,7 @@ Performance
 ********************************************
 
 Step 1
-^^^^^^
+============
 
 On an 8-core job-launcher machine, it takes 1344 seconds
 to launch 2069 RAPID-science-pipeline jobs with 8-core multithreading.
@@ -160,13 +160,13 @@ AWS batch is configured to have up to 1000 jobs running in parallel, and this ca
 There were 80 failed pipelines because there were no prior observations for which to generate reference images.
 
 Step 2
-^^^^^^
+============
 
 On an 8-core job-launcher machine, it takes 462 seconds
 to register database records for 2069 RAPID-science-pipeline jobs with 8-core multithreading.
 
 Step 3
-^^^^^^
+============
 
 On an 8-core job-launcher machine, it takes 1051 seconds
 to launch 1989 RAPID-post-processing-pipeline jobs with 8-core multithreading.
@@ -175,7 +175,7 @@ The 1989 RAPID-science-pipeline jobs take less than 60 seconds to run in paralle
 AWS batch is configured to have up to 1000 jobs running in parallel, and this can be easily increased as needed.
 
 Step 4
-^^^^^^
+============
 
 It takes 476 seconds to register database records for 1989 RAPID-post-processing-pipeline jobs running as a single-thread process.
 
