@@ -138,18 +138,18 @@ signal.signal(signal.SIGQUIT, signal_handler)
 
 # Open database connections for parallel access.
 
-    num_cores = os.cpu_count()
+num_cores = os.cpu_count()
 
-    dbh_list = []
+dbh_list = []
 
-    for i in range(num_cores):
+for i in range(num_cores):
 
-        dbh = db.RAPIDDB()
+    dbh = db.RAPIDDB()
 
-        if dbh.exit_code >= 64:
-            exit(dbh.exit_code)
+    if dbh.exit_code >= 64:
+        exit(dbh.exit_code)
 
-        dbh_list.append(dbh)
+    dbh_list.append(dbh)
 
 
 #-------------------------------------------------------------------------------------------------------------
