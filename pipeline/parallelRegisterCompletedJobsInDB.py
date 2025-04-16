@@ -195,6 +195,8 @@ def run_single_core_job(jids,log_fnames,index_job):
                         index_thread = i
                         dbh = dbh_list[index_thread]
                         dbh_in_use[index_thread] = True
+                        print(f"Acquired database handle for index_thread={index_thread}")
+                        break
 
             finally:
                 release_lock(lock)
@@ -714,6 +716,8 @@ def run_single_core_job(jids,log_fnames,index_job):
     # Release database handle.
 
     dbh_in_use[index_thread] = False
+    dbh = None
+    print(f"Released database handle for index_thread={index_thread}")
 
     print("\End of run_single_core_job: jid, log_fname =",jid,log_fname)
 
