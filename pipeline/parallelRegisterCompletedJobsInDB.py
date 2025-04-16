@@ -1,3 +1,10 @@
+"""
+This is a separate version of registerCompletedJobsInDB.py that
+registers database records in parallel according to number of
+available cores on the job-launcher machine.
+"""
+
+
 import sys
 import os
 import signal
@@ -25,7 +32,7 @@ level9 = 9
 nside9 = 2**level9
 
 
-swname = "registerCompletedJobInDB.py"
+swname = "parallelRegisterCompletedJobsInDB.py"
 swvers = "1.0"
 cfg_filename_only = "awsBatchSubmitJobs_launchSingleSciencePipeline.ini"
 
@@ -713,11 +720,8 @@ if __name__ == '__main__':
         ppid = 15
         jobs_records = dbh.get_unclosedout_jobs_for_processing_date(ppid,datearg)
 
-
-
         if dbh.exit_code >= 64:
             exit(dbh.exit_code)
-
 
         njobs = 0
         log_filenames = []
@@ -743,11 +747,11 @@ if __name__ == '__main__':
         print("njobs = ",njobs)
 
 
-        #####################################################################
+        ############################################################################
         # Execute job-closeout tasks for all science-pipeline jobs with jids on a
         # given processing date.  The execution for each job is done in parallel,
         # taking advantage of multiple cores on the job-launcher machine.
-        #####################################################################
+        ############################################################################
 
         execute_parallel_processes(jids,log_filenames)
 
@@ -758,6 +762,8 @@ if __name__ == '__main__':
 
         if dbh.exit_code >= 64:
             exit(dbh.exit_code)
+
+
 
 
 
