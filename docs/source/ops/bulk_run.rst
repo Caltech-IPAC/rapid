@@ -152,7 +152,7 @@ Performance
 Step 1
 ============
 
-On an 8-core job-launcher machine, it takes 1344 seconds
+On an 8-core job-launcher machine (``t3.2xlarge`` EC2 instance), it takes 1344 seconds
 to launch 2069 RAPID-science-pipeline jobs with 8-core multiprocessing.
 
 The 2069 RAPID-science-pipeline jobs take 340 seconds on average to run in parallel under AWS batch.
@@ -166,6 +166,8 @@ On an 8-core job-launcher machine, it takes 462 seconds
 to register database records for 2069 RAPID-science-pipeline jobs with 8-core multiprocessing.
 
 Records are inserted and/or updated in the Jobs, DiffImages, DiffImMeta, RefImages, RefImCatalogs, RefImMeta, and RefImImages database tables.
+
+For development, the RAPID operations database is deployed on a ``t2.micro`` EC2 machine.
 
 Step 3
 ============
