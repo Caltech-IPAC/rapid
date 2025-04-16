@@ -680,7 +680,7 @@ def execute_parallel_processes(jids,log_filenames,num_cores=None):
 
     with ProcessPoolExecutor(max_workers=num_cores) as executor:
         # Submit all tasks to the executor and store the futures in a list
-        futures = [executor.submit(run_single_core_job,jids,log_fnames,job_index) for job_index in range(len(jids))]
+        futures = [executor.submit(run_single_core_job,jids,log_filenames,job_index) for job_index in range(len(jids))]
 
         # Iterate over completed futures and update progress
         for i, future in enumerate(as_completed(futures)):
