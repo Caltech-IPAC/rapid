@@ -190,7 +190,7 @@ def run_single_core_job(jids,log_fnames,index_thread):
 
         if downloaded_from_bucket:
             print("*** Warning: Done file exists ({}); skipping...".format(done_filename))
-            return
+            continue
 
 
         # Download log file from S3 bucket.
@@ -344,7 +344,8 @@ def run_single_core_job(jids,log_fnames,index_thread):
         dbh.end_job(jid,job_exitcode,aws_batch_job_id,ended)
 
         if dbh.exit_code >= 64:
-            print("dbh.end_job returned exit code greater than or equal to 64; quitting...    jid,job_exitcode,aws_batch_job_id,ended =",jid,job_exitcode,aws_batch_job_id,ended)
+            print(f"*** Error: dbh.end_job returned exit code greater than or equal to 64" +\
+                   "(jid={jid},job_exitcode={job_exitcode},aws_batch_job_id={aws_batch_job_id},ended={ended}); quitting...")
             exit(dbh.exit_code)
 
 
@@ -353,11 +354,11 @@ def run_single_core_job(jids,log_fnames,index_thread):
 
         if int(job_exitcode) == 33:
             util.write_done_file_to_s3_bucket(done_filename,product_s3_bucket_base,datearg,jid,s3_client)
-            return
+            continue
 
         if int(job_exitcode) >= 64:
             util.write_done_file_to_s3_bucket(done_filename,product_s3_bucket_base,datearg,jid,s3_client)
-            return
+            continue
 
 
         # Compute level-6 healpix index (NESTED pixel ordering).
@@ -680,7 +681,7 @@ def run_single_core_job(jids,log_fnames,index_thread):
 
         util.write_done_file_to_s3_bucket(done_filename,product_s3_bucket_base,datearg,jid,s3_client)
 
-        print("\Loop end: done_filename,product_s3_bucket_base,datearg,jid =",done_filename,product_s3_bucket_base,datearg,jid)
+        print("Loop end: done_filename,product_s3_bucket_base,datearg,jid =",done_filename,product_s3_bucket_base,datearg,jid)
 
     print(f"\nEnd of run_single_core_job: index_thread={index_thread}")
 
