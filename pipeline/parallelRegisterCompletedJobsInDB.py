@@ -344,6 +344,7 @@ def run_single_core_job(jids,log_fnames,index_thread):
         dbh.end_job(jid,job_exitcode,aws_batch_job_id,ended)
 
         if dbh.exit_code >= 64:
+            print("dbh.end_job returned exit code greater than or equal to 64; quitting...    jid,job_exitcode,aws_batch_job_id,ended =",jid,job_exitcode,aws_batch_job_id,ended)
             exit(dbh.exit_code)
 
 
