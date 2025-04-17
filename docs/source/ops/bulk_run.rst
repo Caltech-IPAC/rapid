@@ -54,7 +54,7 @@ Launch AWS Batch jobs for the RAPID science pipeline.
 
 The data to be processed are specified by the observation datetime range.
 The environment variables STARTDATETIME and ENDDATETIME refer to the
-start and end observation datetimes (different from processing date).
+start and end observation datetimes (an observation date is distinctly different from a processing date).
 
 .. code-block::
 
