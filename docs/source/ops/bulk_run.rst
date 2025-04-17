@@ -165,9 +165,11 @@ Step 2
 On an 8-core job-launcher machine, it takes 415 seconds
 to register database records for 2069 RAPID-science-pipeline jobs with 8-core multiprocessing.
 
-Records are inserted and/or updated in the Jobs, DiffImages, DiffImMeta, RefImages, RefImCatalogs, RefImMeta, and RefImImages database tables.
+Records are inserted and/or updated in the Jobs, DiffImages, DiffImMeta, RefImages, RefImCatalogs,
+RefImMeta, and RefImImages database tables.
 
-For development, the RAPID operations database is deployed on a ``t2.micro`` EC2 machine.
+For development, the RAPID operations database is deployed on a ``t2.micro`` EC2 machine,
+which has only one virtual core (1 vCPU).
 
 Step 3
 ============
