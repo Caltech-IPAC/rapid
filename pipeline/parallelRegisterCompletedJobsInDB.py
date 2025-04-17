@@ -158,11 +158,15 @@ for i in range(num_cores):
 
 def run_single_core_job(jids,log_fnames,index_thread):
 
+    njobs = len(jids)
+
+    print("index_thread,njobs =",index_thread,njobs)
+
     dbh = dbh_list[index_thread]
 
     print(f"\nStart of run_single_core_job: index_thread={index_thread}, dbh={dbh}")
 
-    for index_job in range(len(jids)):
+    for index_job in range(njobs):
 
         index_core = index_job % num_cores
         if index_thread != index_core:
