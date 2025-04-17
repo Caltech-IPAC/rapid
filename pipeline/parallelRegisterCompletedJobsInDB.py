@@ -136,13 +136,29 @@ signal.signal(signal.SIGINT, signal_handler)
 signal.signal(signal.SIGQUIT, signal_handler)
 
 
+# Open database connections for parallel access.
+
+num_cores = os.cpu_count()
+
+dbh_list = []
+
+for i in range(num_cores):
+
+    dbh = db.RAPIDDB()
+
+    if dbh.exit_code >= 64:
+        exit(dbh.exit_code)
+
+    dbh_list.append(dbh)
+
+
 #-------------------------------------------------------------------------------------------------------------
 # Custom methods for parallel processing, taking advantage of multiple cores on the job-launcher machine.
 #-------------------------------------------------------------------------------------------------------------
 
 def run_single_core_job(jids,log_fnames,index_thread):
 
-    dbh = db.RAPIDDB()
+    dbh = dbh_list[index_thread]
 
     print(f"\nStart of run_single_core_job: index_thread={index_thread}, dbh={dbh}")
 
