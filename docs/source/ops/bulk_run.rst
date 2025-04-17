@@ -162,7 +162,7 @@ There were 80 failed pipelines because there were no prior observations for whic
 Step 2
 ============
 
-On an 8-core job-launcher machine, it takes 462 seconds
+On an 8-core job-launcher machine, it takes 415 seconds
 to register database records for 2069 RAPID-science-pipeline jobs with 8-core multiprocessing.
 
 Records are inserted and/or updated in the Jobs, DiffImages, DiffImMeta, RefImages, RefImCatalogs, RefImMeta, and RefImImages database tables.
