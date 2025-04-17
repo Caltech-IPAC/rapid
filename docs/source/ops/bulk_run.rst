@@ -48,6 +48,8 @@ Since this Docker image contains the ENTRYPOINT instruction, you must override i
 Step 1
 =============
 
+Assume we process the data on April 4, 2025 (``20250404``).  This is the processing date.
+
 Log into EC2 instance and, from root account (``sudo su``), perform Steps 1 through 4.
 
 Launch AWS Batch jobs for the RAPID science pipeline.
@@ -91,6 +93,9 @@ start and end observation datetimes (an observation date is distinctly different
 
 Manually monitor the AWS Batch console to verify all jobs ran to completion.
 This will be automated at some later stage of development.
+
+RAPID products are organized in an S3 bucket according to the :doc:`processing date </prod/products>`.
+The same processing date is a required input parameter in Step 2.
 
 
 Step 2
