@@ -64,7 +64,7 @@ def py_zogy(Nf, Rf, P_Nf, P_Rf, S_Nf, S_Rf, SN, SR, dx=0.25, dy=0.25):
 	#       slice(N.shape[1]//2 - P_N_small.shape[1]//2,
 	#             N.shape[1]//2 + P_N_small.shape[1]//2 + 1)]
 	idx0 = slice((N.shape[0]+1)//2 - P_N_small.shape[0]//2, (N.shape[0]+1)//2 + P_N_small.shape[0]//2 + 1)
-    idx1 = slice((N.shape[1]+1)//2 - P_N_small.shape[1]//2, (N.shape[0]+1)//2 + P_N_small.shape[1]//2 + 1)
+	idx1 = slice((N.shape[1]+1)//2 - P_N_small.shape[1]//2, (N.shape[0]+1)//2 + P_N_small.shape[1]//2 + 1)
 	P_N[idx0,idx1] = P_N_small
 	P_R[idx0,idx1] = P_R_small
 
