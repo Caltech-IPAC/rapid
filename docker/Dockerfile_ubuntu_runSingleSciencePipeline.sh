@@ -1,7 +1,5 @@
 #!/bin/bash -x
 
-sudo su
-
 cd /home/ubuntu/rapid
 git pull
 docker system prune -a -f
