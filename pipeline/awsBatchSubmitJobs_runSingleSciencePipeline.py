@@ -1000,12 +1000,6 @@ if __name__ == '__main__':
     util.upload_files_to_s3_bucket(s3_client,product_s3_bucket,filenames,objectnames)
 
 
-    # Get listing of working directory as a diagnostic.
-
-    ls_cmd = ['ls','-ltr']
-    exitcode_from_ls = util.execute_command(ls_cmd)
-
-
     # Define ZOGY dictionary in config-file dictionary for products.
 
     product_config['ZOGY'] = {}
@@ -1051,6 +1045,58 @@ if __name__ == '__main__':
     product_config['ZOGY']['sca'] = str(sca_sciimage)
     product_config['ZOGY']['nsexcatsources'] = str(nsexcatsources_diffimage)
     product_config['ZOGY']['scalefacref'] = str(scalefacref)
+
+
+    # Code-timing benchmark.
+
+    end_time_benchmark = time.time()
+    print("Elapsed time in seconds after uploading main products to s3 bucket =",
+        end_time_benchmark - start_time_benchmark)
+    start_time_benchmark = end_time_benchmark
+
+
+    #################################################################################################################
+    # Optionally run SFFT to generate an alternate difference image and catalog.
+    # Filenames for the SExtractor segmented maps are provided, and, if they do not exist, they will be generated.
+    # Output files (constructed by the script, but not provided as input:
+    #    sfftdiffimage_masked.fits
+    #    sfftsoln.fits
+    #################################################################################################################
+
+    run_sfft = True
+
+    if run_sfft:
+
+        # Cannot run under python3.11 because scikit-learn fails to install.
+        python_cmd = '/usr/bin/python3'
+        sfft_code = '/code/modules/sfft/sfft_rapid.py'
+        filename_scisegm = 'sfftscisegm.fits'
+        filename_refsegm = 'sfftrefsegm.fits'
+        filename_sfftdiffimage = 'sfftdiffimage_masked.fits'
+        filename_sfftsoln = 'sfftsoln.fits'
+
+        sfft_cmd = [python_cmd,
+                    sfft_code,
+                    filename_bkg_subbed_science_image,
+                    output_resampled_gainmatched_reference_image,
+                    filename_scisegm,
+                    filename_refsegm]
+
+        exitcode_from_sfft = util.execute_command(sfft_cmd)
+
+
+        # Code-timing benchmark.
+
+        end_time_benchmark = time.time()
+        print("Elapsed time in seconds after running SFFT =",
+            end_time_benchmark - start_time_benchmark)
+        start_time_benchmark = end_time_benchmark
+
+
+    # Get listing of working directory as a diagnostic.
+
+    ls_cmd = ['ls','-ltr']
+    exitcode_from_ls = util.execute_command(ls_cmd)
 
 
     # Get timestamp job ended in Pacific Time for Jobs database record later.
