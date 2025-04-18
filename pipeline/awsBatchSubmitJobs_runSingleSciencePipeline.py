@@ -1050,7 +1050,7 @@ if __name__ == '__main__':
     # Code-timing benchmark.
 
     end_time_benchmark = time.time()
-    print("Elapsed time in seconds after uploading main products to s3 bucket =",
+    print("Elapsed time in seconds after uploading main products to S3 bucket =",
         end_time_benchmark - start_time_benchmark)
     start_time_benchmark = end_time_benchmark
 
@@ -1070,25 +1070,43 @@ if __name__ == '__main__':
         # Cannot run under python3.11 because scikit-learn fails to install.
         python_cmd = '/usr/bin/python3'
         sfft_code = '/code/modules/sfft/sfft_rapid.py'
+        filename_scifile = filename_bkg_subbed_science_image
+        filename_reffile = output_resampled_gainmatched_reference_image
         filename_scisegm = 'sfftscisegm.fits'
         filename_refsegm = 'sfftrefsegm.fits'
         filename_sfftdiffimage = 'sfftdiffimage_masked.fits'
         filename_sfftsoln = 'sfftsoln.fits'
 
+        # A quirk in the software requires prepended "./" to input filenames.
         sfft_cmd = [python_cmd,
                     sfft_code,
-                    filename_bkg_subbed_science_image,
-                    output_resampled_gainmatched_reference_image,
+                    "./" + filename_scifile,
+                    "./" + filename_reffile,
                     filename_scisegm,
                     filename_refsegm]
 
         exitcode_from_sfft = util.execute_command(sfft_cmd)
 
 
+        # Upload SFFT-product FITS files to product S3 bucket.
+
+        product_s3_bucket = product_s3_bucket_base
+        s3_object_name_sfftdiffimage = job_proc_date + "/jid" + str(jid) + "/" + filename_sfftdiffimage
+        s3_object_name_sfftsoln = job_proc_date + "/jid" + str(jid) + "/" + filename_sfftsoln
+
+        filenames = [filename_sfftdiffimage,
+                     filename_sfftsoln]
+
+        objectnames = [s3_object_name_sfftdiffimage,
+                       s3_object_name_sfftsoln]
+
+        util.upload_files_to_s3_bucket(s3_client,product_s3_bucket,filenames,objectnames)
+
+
         # Code-timing benchmark.
 
         end_time_benchmark = time.time()
-        print("Elapsed time in seconds after running SFFT =",
+        print("Elapsed time in seconds after running SFFT and uploading products to S3 bucket =",
             end_time_benchmark - start_time_benchmark)
         start_time_benchmark = end_time_benchmark
 
