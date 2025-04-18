@@ -805,7 +805,7 @@ def scale_image_data(input_fits_file,scale_factor,output_fits_file):
 
     hdul[0].data = scaled_data
 
-    new_hdu = fits.PrimaryHDU(data=hdul[0].data,header=hdul[0].header)
+    new_hdu = fits.PrimaryHDU(data=hdul[0].data.astype(np.float32),header=hdul[0].header)
 
     new_hdu.writeto(output_fits_file,overwrite=True,checksum=True)
 
