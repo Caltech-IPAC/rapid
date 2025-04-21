@@ -157,7 +157,7 @@ Performance
 Step 1
 ============
 
-On an 8-core job-launcher machine (``t3.2xlarge`` EC2 instance), it takes 1344 seconds
+On an 8-core job-launcher machine (``t3.2xlarge`` EC2 instance), it takes 1256 seconds
 to launch 2069 RAPID-science-pipeline jobs with 8-core multiprocessing.
 
 The 2069 RAPID-science-pipeline jobs take 340 seconds on average to run in parallel under AWS batch.
