@@ -154,14 +154,18 @@ This is executed inside a container with the same environment as defined for Ste
 Performance
 ********************************************
 
+The AWS Batch jobs are configured to each require a machine with 4 vCPUs, 16 GB of memory, and 20 GB of disk space.
+AWS Batch for the RAPID pipeline is configured to have up to 1000 jobs running in parallel,
+and this can be easily increased as needed; however, the number of parallel jobs is contingent
+upon the AWS Batch machine availability, which can vary with load from competing AWS customers external to the RAPID project.
+
 Step 1
 ============
 
-On an 8-core job-launcher machine (``t3.2xlarge`` EC2 instance), it takes 1256 seconds
+On an 8-core job-launcher machine (``t3.2xlarge`` EC2 instance), it takes 1183 seconds
 to launch 2069 RAPID-science-pipeline jobs with 8-core multiprocessing.
 
-The 2069 RAPID-science-pipeline jobs take 340 seconds on average to run in parallel under AWS batch.
-AWS batch is configured to have up to 1000 jobs running in parallel, and this can be easily increased as needed.
+The 2069 RAPID-science-pipeline jobs take 340 seconds on average to run in parallel under AWS Batch.
 There were 80 failed pipelines because there were no prior observations for which to generate reference images.
 
 Step 2
@@ -182,8 +186,7 @@ Step 3
 On an 8-core job-launcher machine, it takes 1051 seconds
 to launch 1989 RAPID-post-processing-pipeline jobs with 8-core multiprocessing.
 
-The 1989 RAPID-post-processing-pipeline jobs take less than 60 seconds to run in parallel under AWS batch.
-AWS batch is configured to have up to 1000 jobs running in parallel, and this can be easily increased as needed.
+The 1989 RAPID-post-processing-pipeline jobs take less than 60 seconds to run in parallel under AWS Batch.
 
 Step 4
 ============
