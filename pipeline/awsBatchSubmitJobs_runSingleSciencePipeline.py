@@ -832,7 +832,7 @@ if __name__ == '__main__':
     # Code-timing benchmark.
 
     end_time_benchmark = time.time()
-    print("Elapsed time in seconds after masking difference image =",
+    print("Elapsed time in seconds after masking ZOGY difference image =",
         end_time_benchmark - start_time_benchmark)
     start_time_benchmark = end_time_benchmark
 
@@ -875,11 +875,13 @@ if __name__ == '__main__':
 
     nsexcatsources_diffimage = len(vals_diffimage)
 
+    print("nsexcatsources_diffimage =",nsexcatsources_diffimage)
+
 
     # Code-timing benchmark.
 
     end_time_benchmark = time.time()
-    print("Elapsed time in seconds after running SExtractor on difference image =",
+    print("Elapsed time in seconds after running SExtractor on ZOGY difference image =",
         end_time_benchmark - start_time_benchmark)
     start_time_benchmark = end_time_benchmark
 
@@ -949,7 +951,7 @@ if __name__ == '__main__':
     # Code-timing benchmark.
 
     end_time_benchmark = time.time()
-    print("Elapsed time in seconds after generating PSF-fit catalog on difference image =",
+    print("Elapsed time in seconds after generating PSF-fit catalog on ZOGY difference image =",
         end_time_benchmark - start_time_benchmark)
     start_time_benchmark = end_time_benchmark
 
@@ -1088,17 +1090,80 @@ if __name__ == '__main__':
         exitcode_from_sfft = util.execute_command(sfft_cmd)
 
 
+        # Code-timing benchmark.
+
+        end_time_benchmark = time.time()
+        print("Elapsed time in seconds after running SFFT =",
+            end_time_benchmark - start_time_benchmark)
+        start_time_benchmark = end_time_benchmark
+
+
+        # Generate SFFT diffimage uncertainty image, which will be the weight image for sextractor_WEIGHT_IMAGE.
+
+        filename_sfftdiffimage_unc = 'sfftdiffimage_uncert_masked.fits'
+        dfis.compute_diffimage_uncertainty(sca_gain,
+                                           reformatted_science_image_filename,
+                                           output_resampled_gainmatched_reference_image,
+                                           output_resampled_reference_cov_map,
+                                           filename_sfftdiffimage,
+                                           filename_sfftdiffimage_unc)
+        filename_weight_image = filename_sfftdiffimage_unc
+        filename_sfftdiffimage_sextractor_catalog = filename_sfftdiffimage.replace(".fits",".txt")
+
+
+        # Compute SExtractor catalog for masked difference image.
+        # Execute SExtractor to first detect candidates on Scorr (S/N) match-filter
+        # image, then use to perform aperture phot on difference image to generate
+        # raw ascii catalog file.
+
+        sextractor_diffimage_paramsfile = "/code/cdf/rapidSexParamsDiffImage.inp";
+
+        sextractor_diffimage_dict["sextractor_detection_image".lower()] = filename_sfftdiffimage
+        sextractor_diffimage_dict["sextractor_input_image".lower()] = filename_sfftdiffimage
+        sextractor_diffimage_dict["sextractor_WEIGHT_IMAGE".lower()] = filename_weight_image
+        sextractor_diffimage_dict["sextractor_PARAMETERS_NAME".lower()] = sextractor_diffimage_paramsfile
+        sextractor_diffimage_dict["sextractor_FILTER_NAME".lower()] = "/code/cdf/rapidSexDiffImageFilter.conv"
+        sextractor_diffimage_dict["sextractor_STARNNW_NAME".lower()] = "/code/cdf/rapidSexDiffImageStarGalaxyClassifier.nnw"
+        sextractor_diffimage_dict["sextractor_CATALOG_NAME".lower()] = filename_sfftdiffimage_sextractor_catalog
+        sextractor_cmd = util.build_sextractor_command_line_args(sextractor_diffimage_dict)
+        exitcode_from_sextractor = util.execute_command(sextractor_cmd)
+
+        params_to_get_diffimage = ["XWIN_IMAGE","YWIN_IMAGE","FLUX_APER_6"]
+
+        vals_sfftdiffimage = util.parse_ascii_text_sextrator_catalog(filename_sfftdiffimage_sextractor_catalog,
+                                                                     sextractor_diffimage_paramsfile,
+                                                                     params_to_get_diffimage)
+
+        nsexcatsources_sfftdiffimage = len(vals_sfftdiffimage)
+
+        print("nsexcatsources_sfftdiffimage =",nsexcatsources_sfftdiffimage)
+
+
+        # Code-timing benchmark.
+
+        end_time_benchmark = time.time()
+        print("Elapsed time in seconds after running SExtractor on SFFT difference image =",
+            end_time_benchmark - start_time_benchmark)
+        start_time_benchmark = end_time_benchmark
+
+
         # Upload SFFT-product FITS files to product S3 bucket.
 
         product_s3_bucket = product_s3_bucket_base
         s3_object_name_sfftdiffimage = job_proc_date + "/jid" + str(jid) + "/" + filename_sfftdiffimage
         s3_object_name_sfftsoln = job_proc_date + "/jid" + str(jid) + "/" + filename_sfftsoln
+        s3_object_name_sfftdiffimage_unc = job_proc_date + "/jid" + str(jid) + "/" + filename_sfftdiffimage_unc
+        s3_object_name_sfftdiffimage_catalog = job_proc_date + "/jid" + str(jid) + "/" + filename_sfftdiffimage_sextractor_catalog
 
         filenames = [filename_sfftdiffimage,
-                     filename_sfftsoln]
+                     filename_sfftsoln,
+                     ilename_sfftdiffimage_unc,
+                     filename_sfftdiffimage_sextractor_catalog]
 
         objectnames = [s3_object_name_sfftdiffimage,
-                       s3_object_name_sfftsoln]
+                       s3_object_name_sfftsoln,
+                       s3_object_name_sfftdiffimage_unc,
+                       s3_object_name_sfftdiffimage_catalog]
 
         util.upload_files_to_s3_bucket(s3_client,product_s3_bucket,filenames,objectnames)
 
@@ -1106,7 +1171,7 @@ if __name__ == '__main__':
         # Code-timing benchmark.
 
         end_time_benchmark = time.time()
-        print("Elapsed time in seconds after running SFFT and uploading products to S3 bucket =",
+        print("Elapsed time in seconds after uploading SFFT products to S3 bucket =",
             end_time_benchmark - start_time_benchmark)
         start_time_benchmark = end_time_benchmark
 
