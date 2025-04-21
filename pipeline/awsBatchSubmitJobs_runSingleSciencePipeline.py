@@ -1157,7 +1157,7 @@ if __name__ == '__main__':
 
         filenames = [filename_sfftdiffimage,
                      filename_sfftsoln,
-                     ilename_sfftdiffimage_unc,
+                     filename_sfftdiffimage_unc,
                      filename_sfftdiffimage_sextractor_catalog]
 
         objectnames = [s3_object_name_sfftdiffimage,
