@@ -1,6 +1,7 @@
 #!/bin/bash -x
 
 
+#####################################################################################
 # This script is used to build the RAPID-pipeline Docker image,
 # and propagate it to the AWS Elatstic Container Registry (ECR).
 #
@@ -8,9 +9,11 @@
 # 1. Log into EC2 instance.
 # 2. Sudo to root with the following command:
 #        sudo su
-# 3. Execute the following command:
-#        docker/Dockerfile_ubuntu_runSingleSciencePipeline.sh
-# The build output is captured automatically in the build.out local file.
+# 3. Execute the following command in the background:
+#        docker/Dockerfile_ubuntu_runSingleSciencePipeline.sh &
+# The build output is captured automatically in the build.out local file:
+#        tail -f build.out
+#####################################################################################
 
 cd /home/ubuntu/rapid
 git pull
