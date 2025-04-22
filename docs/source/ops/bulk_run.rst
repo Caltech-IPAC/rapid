@@ -165,8 +165,20 @@ Step 1
 On an 8-core job-launcher machine (``t3.2xlarge`` EC2 instance), it takes 1183 seconds
 to launch 2069 RAPID-science-pipeline jobs with 8-core multiprocessing.
 
-The 2069 RAPID-science-pipeline jobs take 340 seconds on average to run in parallel under AWS Batch.
+The 2069 RAPID-science-pipeline jobs take 520 seconds on average to run in parallel under AWS Batch, once
+the job has actually started on the AWS Batch machine.  There can, however, be significant time spent waiting
+in the AWS Batch queue, as illustrated by the histogram below.  Also, the pipeline itself running on an AWS Batch machine
+takes longer than the reported elapsed times last month because now the pipeline computes difference images and catalogs
+for both ZOGY and SFFT.
 There were 80 failed pipelines because there were no prior observations for which to generate reference images.
+
+Here is a histogram of the job execution times, measured from pipeline launch to pipeline finish:
+
+.. image:: rapid_job_launch_to_finish_elapsed_time_1dhist.png
+
+In theory, an AWS Batch machine with 4 vCPUs is a scarcer resource than those with only one vCPU that were being
+used in pipeline testing last month, hence the longer waits in the AWS Batch queue for available machines.
+
 
 Step 2
 ============
