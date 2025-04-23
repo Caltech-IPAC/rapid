@@ -301,6 +301,19 @@ def run_single_core_job(jids,log_fnames,index_thread):
             print("job_started =",job_started)
             print("job_ended =",job_ended)
 
+            string_match = re.match(r"(.+?)T(.+?) PT", job_started)
+
+            try:
+                started_date = string_match.group(1)
+                started_time = string_match.group(2)
+                print("started = {} {}".format(started_date,started_time))
+
+            except:
+                print("*** Error: Could not parse job_started; quitting...")
+                exit(64)
+
+            started = started_date + " " + started_time
+
             string_match = re.match(r"(.+?)T(.+?) PT", job_ended)
 
             try:
@@ -309,7 +322,7 @@ def run_single_core_job(jids,log_fnames,index_thread):
                 print("ended = {} {}".format(ended_date,ended_time))
 
             except:
-                print("*** Error: Could not parse proc_pt_datetime_ended; quitting...")
+                print("*** Error: Could not parse job_ended; quitting...")
                 exit(64)
 
             ended = ended_date + " " + ended_time
@@ -336,12 +349,12 @@ def run_single_core_job(jids,log_fnames,index_thread):
         if not downloaded_from_bucket:
             ended = ended_str
 
-        print("For Jobs records: ended =",ended)
+        print("For Jobs records: started,ended =",started,ended)
 
 
         # Update Jobs record.
 
-        dbh.end_job(jid,job_exitcode,aws_batch_job_id,ended)
+        dbh.end_job(jid,job_exitcode,aws_batch_job_id,started,ended)
 
         if dbh.exit_code >= 64:
             print(f"*** Error: dbh.end_job returned exit code greater than or equal to 64" +\
