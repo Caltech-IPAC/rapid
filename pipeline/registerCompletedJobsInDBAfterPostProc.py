@@ -305,9 +305,6 @@ if __name__ == '__main__':
 
             # Get the timestamps of when the job started and ended on the AWS Batch machine,
             # which have already been converted to Pacific Time.
-            # In the Jobs record of the RAPID pipeline operations database, we will use for
-            # job started the time the pipeline instance was launched (which was when the
-            # Jobs record was initially inserted).
 
             jid_post_proc = product_config_input['JOB_PARAMS']['jid_postproc']
             job_started = product_config_input['JOB_PARAMS']['job_started']
@@ -317,6 +314,19 @@ if __name__ == '__main__':
             print("job_started =",job_started)
             print("job_ended =",job_ended)
 
+            string_match = re.match(r"(.+?)T(.+?) PT", job_started)
+
+            try:
+                started_date = string_match.group(1)
+                started_time = string_match.group(2)
+                print("started = {} {}".format(started_date,started_time))
+
+            except:
+                print("*** Error: Could not parse job_started; quitting...")
+                exit(64)
+
+            started = started_date + " " + started_time
+
             string_match = re.match(r"(.+?)T(.+?) PT", job_ended)
 
             try:
@@ -325,7 +335,7 @@ if __name__ == '__main__':
                 print("ended = {} {}".format(ended_date,ended_time))
 
             except:
-                print("*** Error: Could not parse proc_pt_datetime_ended; quitting...")
+                print("*** Error: Could not parse job_ended; quitting...")
                 exit(64)
 
             ended = ended_date + " " + ended_time
@@ -391,9 +401,9 @@ if __name__ == '__main__':
 
         # Update Jobs record.
 
-        print("For Jobs record: ended =",ended)
+        print("For Jobs record: started,ended =",started,ended)
 
-        dbh.end_job(jid_post_proc,job_exitcode,aws_batch_job_id,ended)
+        dbh.end_job(jid_post_proc,job_exitcode,aws_batch_job_id,started,ended)
 
         if dbh.exit_code >= 64:
             exit(dbh.exit_code)
