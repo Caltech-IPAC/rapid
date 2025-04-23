@@ -312,9 +312,6 @@ if __name__ == '__main__':
 
                 # Get the timestamps of when the job started and ended on the AWS Batch machine,
                 # which have already been converted to Pacific Time.
-                # In the Jobs record of the RAPID pipeline operations database, we will use for
-                # job started the time the pipeline instance was launched (which was when the
-                # Jobs record was initially inserted).
 
                 job_started = product_config_input['JOB_PARAMS']['job_started']
                 job_ended = product_config_input['JOB_PARAMS']['job_ended']
