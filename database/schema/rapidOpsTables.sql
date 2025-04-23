@@ -675,6 +675,8 @@ CREATE TABLE jobs (
     fid smallint,
     rid integer,
     machine smallint,
+    launched timestamp,
+    qwaited interval,
     started timestamp,
     ended timestamp,
     elapsed interval,
