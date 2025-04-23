@@ -203,13 +203,14 @@ DROP FUNCTION endJob (
 );
 
 
--- Overloaded version with additional timestamp input argument.
+-- Overloaded version with additional timestamp input arguments.
 -- Registers information about a completed job in the Jobs table.
 --
 DROP FUNCTION endJob (
     jid_             integer,
     exitcode_        smallint,
     awsbatchjobid_   varchar(64),
+    started_         timestamp,
     ended_           timestamp
 );
 

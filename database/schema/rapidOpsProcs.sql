@@ -1155,7 +1155,7 @@ create function startJob (
                  rid,
                  machine,
                  slurm,
-                 started)
+                 launched)
                 values
                 (ppid_,
                  expid_,
@@ -1181,7 +1181,7 @@ create function startJob (
             update Jobs
             set machine = machine_,
                 slurm = slurm_,
-                started = now(),
+                launched = now(),
                 ended = null,
                 elapsed = null,
                 exitcode = null,
@@ -1250,28 +1250,30 @@ create function endJob (
 $$ language plpgsql;
 
 
--- Overloaded version with additional timestamp input argument.
+-- Overloaded version with additional timestamp input arguments.
 -- Registers information about a completed job in the Jobs table.
 --
 create function endJob (
     jid_             integer,
     exitcode_        smallint,
     awsbatchjobid_   varchar(64),
+    started_         timestamp,
     ended_           timestamp
 )
     returns void as $$
 
     declare
 
-    started_ timestamp;
+    launched_ timestamp;
     elapsed_ interval;
+    qwaited_ interval;
 
     begin
 
          begin
 
-            select started
-            into strict started_
+            select launched
+            into strict launched_
             from Jobs
             where jid = jid_;
             exception
@@ -1283,10 +1285,13 @@ create function endJob (
 
         begin
 
+            qwaited_ := started_ - launched_;
             elapsed_ := ended_ - started_;
 
             update Jobs
-            set ended = ended_,
+            set started = started_,
+                qwaited = qwaited_,
+                ended = ended_,
                 elapsed = elapsed_,
                 exitcode = exitcode_,
                 awsbatchjobid = awsbatchjobid_,

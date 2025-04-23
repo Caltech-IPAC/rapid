@@ -203,13 +203,14 @@ grant EXECUTE on FUNCTION endJob (
 ) to rapidporole;
 
 
--- Overloaded version with additional timestamp input argument.
+-- Overloaded version with additional timestamp input arguments.
 -- Registers information about a completed job in the Jobs table.
 --
 grant EXECUTE on FUNCTION endJob (
     jid_             integer,
     exitcode_        smallint,
     awsbatchjobid_   varchar(64),
+    started_         timestamp,
     ended_           timestamp
 ) to rapidporole;
 
