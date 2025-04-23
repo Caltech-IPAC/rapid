@@ -1366,7 +1366,7 @@ class RAPIDDB:
 
 ########################################################################################################
 
-    def end_job(self,jid,job_exitcode,aws_batch_job_id,ended=None):
+    def end_job(self,jid,job_exitcode,aws_batch_job_id,started,ended=None):
 
         '''
         Register exitcode and end timestamp in Jobs database table.  Return void.
@@ -1392,6 +1392,7 @@ class RAPIDDB:
                 "cast(TEMPLATE_JID as integer)," +\
                 "cast(TEMPLATE_EXITCODE as smallint)," +\
                 "cast('TEMPLATE_AWSBATJOBID' as varchar(64)),"+\
+                "cast('TEMPLATE_STARTED' as timestamp),"+\
                 "cast('TEMPLATE_ENDED' as timestamp));"
 
 
@@ -1409,6 +1410,7 @@ class RAPIDDB:
         rep["TEMPLATE_AWSBATJOBID"] = aws_batch_job_id
 
         if ended is not None:
+            rep["TEMPLATE_STARTED"] = started
             rep["TEMPLATE_ENDED"] = ended
 
 
