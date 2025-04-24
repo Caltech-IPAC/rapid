@@ -2680,8 +2680,8 @@ class RAPIDDB:
                 "and a.fid = b.fid " +\
                 "and b.status > 0 " +\
                 "and b.vbest > 0 " +\
-                "and cov5percent > " + str(cov5percent) + " " +\
-                "and nframes > " + str(nframes) + " " +\
+                "and cov5percent >= " + str(cov5percent) + " " +\
+                "and nframes >= " + str(nframes) + " " +\
                 "and a.dateobs >= '" + startdatetiime + "' " +\
                 "and a.dateobs < '" + enddatetime + "' " +\
                 "order by a.mjdobs,a.sca;"
