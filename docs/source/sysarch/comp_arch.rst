@@ -51,6 +51,12 @@ The elapsed execution time for a RAPID pipeline job was measured
 from the time it was launched to the time it finished running on an AWS Batch machine, of course, after writing
 the pipeline products to the output S3 bucket.
 
+
+.. warning::
+    The performance results below are obsolete, but kept for historical reasons.
+    The latest performance result can be found :doc:`here </ops/bulk_run>`.
+
+
 Here is a histogram of the job execution times:
 
 .. image:: rapid_job_elapsed_vs_time_1dhist.png
