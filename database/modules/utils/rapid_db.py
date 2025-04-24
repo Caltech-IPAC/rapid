@@ -2375,7 +2375,7 @@ class RAPIDDB:
                     print("Nothing returned from database query; continuing...")
 
         except (Exception, psycopg2.DatabaseError) as error:
-            print('*** Error getting all L2Files records for given exposure ID ({}); skipping...'.format(error))
+            print('*** Error getting all L2Files records for given dateobs range ({}); skipping...'.format(error))
             self.exit_code = 67
             return
 
@@ -2649,6 +2649,68 @@ class RAPIDDB:
 
         except (Exception, psycopg2.DatabaseError) as error:
             print('*** Error getting unclosedout Jobs records for given ppid={} and processing date {}: {}; skipping...'.format(ppid,proc_date,error))
+            self.exit_code = 67
+            return
+
+        return records
+
+
+########################################################################################################
+
+    def get_l2files_records_for_datetime_range_and_superior_reference_images(self,
+                                                                             startdatetiime,
+                                                                             enddatetime,
+                                                                             nframes,
+                                                                             cov5percent):
+
+        '''
+        Query database for all L2Files records associated with the given observation datetime range
+        and superior reference images as defined by the input criteria nframes and cov5percent.
+        '''
+
+        self.exit_code = 0
+
+
+        # Define query.
+
+        query = "select a.rid,a.sca,a.fid,a.mjdobs " +\
+                "from L2Files a, RefImages b, RefImMeta c " +\
+                "where a.field = b.field " +\
+                "and b.rfid = c.rfid " +\
+                "and a.fid = b.fid " +\
+                "and b.status > 0 " +\
+                "and b.vbest > 0 " +\
+                "and cov5percent > " + str(cov5percent) + " " +\
+                "and nframes > " + str(nframes) + " " +\
+                "and a.dateobs >= '" + startdatetiime + "' " +\
+                "and a.dateobs < '" + enddatetime + "' " +\
+                "order by a.mjdobs,a.sca;"
+
+
+        # Query database.
+
+        print('query = {}'.format(query))
+
+
+        # Execute query.
+
+        try:
+            self.cur.execute(query)
+
+            try:
+                records = []
+                nrecs = 0
+                for record in self.cur:
+                    records.append(record)
+                    nrecs += 1
+
+                print("nrecs =",nrecs)
+
+            except:
+                    print("Nothing returned from database query; continuing...")
+
+        except (Exception, psycopg2.DatabaseError) as error:
+            print('*** Error getting all L2Files records for given dateobs range, nframes, and cov5percent ({}); skipping...'.format(error))
             self.exit_code = 67
             return
 
