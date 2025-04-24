@@ -159,25 +159,34 @@ AWS Batch for the RAPID pipeline is configured to have up to 1000 jobs running i
 and this can be easily increased as needed; however, the number of parallel jobs is contingent
 upon the AWS Batch machine availability, which can vary with load from competing AWS customers external to the RAPID project.
 
+The addition of SFFT image differencing to the science pipeline raised the machine memory requirement from 8 GB to 16 GB,
+and also increased the pipeline execution time by about 3 minutes.
+
 Step 1
 ============
 
 On an 8-core job-launcher machine (``t3.2xlarge`` EC2 instance), it takes 1183 seconds
 to launch 2069 RAPID-science-pipeline jobs with 8-core multiprocessing.
 
-The 2069 RAPID-science-pipeline jobs take 520 seconds on average to run in parallel under AWS Batch, once
+The 2069 RAPID-science-pipeline jobs take 480 seconds on average to run in parallel under AWS Batch, once
 the job has actually started on the AWS Batch machine.  There can, however, be significant time spent waiting
 in the AWS Batch queue, as illustrated by the histogram below.  Also, the pipeline itself running on an AWS Batch machine
 takes longer than the reported elapsed times last month because now the pipeline computes difference images and catalogs
 for both ZOGY and SFFT.
 There were 80 failed pipelines because there were no prior observations for which to generate reference images.
 
-Here is a histogram of the job execution times, measured from pipeline launch to pipeline finish:
+Here is a histogram of the AWS Batch queue wait times for an available AWS Batch machine on which to run a pipeline job:
 
-.. image:: rapid_job_launch_to_finish_elapsed_time_1dhist.png
+.. image:: queue_wait_times.png
 
-In theory, an AWS Batch machine with 4 vCPUs is a scarcer resource than those with only one vCPU that were being
-used in pipeline testing last month, hence the longer waits in the AWS Batch queue for available machines.
+In theory, an AWS Batch machine with 4 vCPUs and 16 GB of memory is a scarcer resource than those with
+only one vCPU and 8 GB of memory that were being used in pipeline testing last month.
+That, along with potential competition from AWS customers external to the RAPID project, may explain
+the relatively longer wait times in the AWS Batch queue for available machines.
+
+Here is a histogram of the job execution times, measured from pipeline start to pipeline finish on an AWS Batch machine:
+
+.. image:: pipeline_execution_times.png
 
 
 Step 2
