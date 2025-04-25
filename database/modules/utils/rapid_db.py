@@ -2606,8 +2606,8 @@ class RAPIDDB:
     def get_unclosedout_jobs_for_processing_date(self,ppid,proc_date):
 
         '''
-        Query database for Jobs records that were started on the given processing date,
-        but not yet closed out by finalizing ended, elapsed, exitcode and status.
+        Query database for Jobs records that were launched on the given processing date,
+        but not yet closed out by finalizing started, ended, elapsed, exitcode and status.
         .
         '''
 
@@ -2618,8 +2618,8 @@ class RAPIDDB:
 
         query = "select jid,awsbatchjobid from Jobs " +\
                 "where ppid = " + str(ppid) + " " +\
-                "and started >= cast('" + proc_date + "' as timestamp) " +\
-                "and started < cast('" + proc_date + "' as timestamp) + cast('1 day' as interval) " +\
+                "and launched >= cast('" + proc_date + "' as timestamp) " +\
+                "and launched < cast('" + proc_date + "' as timestamp) + cast('1 day' as interval) " +\
                 "and status = 0 " +\
                 "and ended is null " +\
                 "and exitcode is null;"
