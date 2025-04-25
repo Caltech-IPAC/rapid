@@ -9,19 +9,19 @@ the RAPID-product S3 bucket with the processing date as a prefix::
 
     aws s3 ls --recursive s3://rapid-product-files/<yyyymmdd>
 
-For example, this command covers all jobs under processing date ``20250404``::
+For example, this command covers all jobs under processing date ``20250421``::
 
-    aws s3 ls --recursive s3://rapid-product-files/20250404
+    aws s3 ls --recursive s3://rapid-product-files/20250421
 
 Here are the available products for just one job (``jid=999``) under that processing date::
 
-    aws s3 ls --recursive s3://rapid-product-files/20250404/jid999
+    aws s3 ls --recursive s3://rapid-product-files/20250421/jid999
 
 Note that there is one science image differenced per job.
 
 The associated product config output file is::
 
-    aws s3 ls  --recursive s3://rapid-product-files/20250404/product_config_jid999.ini
+    aws s3 ls  --recursive s3://rapid-product-files/20250421/product_config_jid999.ini
 
 This is parsed for metadata to load into the RAPID operations database after the processing.
 
@@ -66,10 +66,10 @@ Public Access
 To download a RAPID pipeline product, the
 user must construct a URL, knowing the filename in advance, like the following::
 
-    https://rapid-product-files.s3.us-west-2.amazonaws.com/20250404/jid1022/awaicgen_output_mosaic_cov_map.fits
+    https://rapid-product-files.s3.us-west-2.amazonaws.com/20250421/jid1022/awaicgen_output_mosaic_cov_map.fits
 
 For a listing of the available product files,
-download :download:`this text file <rapid-product-files_20250404.txt>`.
+download :download:`this text file <rapid-product-files_20250421.txt>`.
 
 A simple Python script can be written to parse the listing and generate ``wget`` or ``curl`` download commands.
 
@@ -130,7 +130,7 @@ are operations database IDs written to the FITS header by the RAPID post-process
     DATASUM = '1546664296'         / data unit checksum updated 2025-04-07T17:20:20
     RFID    = '17030   '
     S3BUCKN = 'rapid-product-files'
-    S3OBJPRF= '20250404/jid999/'
+    S3OBJPRF= '20250421/jid999/'
     RFFILEN = 'awaicgen_output_mosaic_image.fits'
     INFOBITS= '0       '
     RFIMVER = '16      '
@@ -153,7 +153,7 @@ INFOBITS          Bit-wise FLAGS for special conditions about reference image (T
 Here is an image-view of the above-mentioned reference image.  Note the areas of uneven coverage,
 including two blue patches representing NaNs (pixels storing not a number).
 
-.. image:: s3_rapid-product-files_20250404_jid999_awaicgen_output_mosaic_image.png
+.. image:: s3_rapid-product-files_20250421_jid999_awaicgen_output_mosaic_image.png
 
 
 Analysis of Reference Images
