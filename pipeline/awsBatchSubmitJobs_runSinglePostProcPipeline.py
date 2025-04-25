@@ -384,6 +384,8 @@ if __name__ == '__main__':
     if (terminating_exitcode >= 64):
         aws_batch_exitcode = terminating_exitcode
 
+    print("aws_batch_exitcode =",aws_batch_exitcode)
+
     exit(aws_batch_exitcode)
 
 

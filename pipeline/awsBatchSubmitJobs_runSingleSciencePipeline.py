@@ -1252,9 +1252,11 @@ if __name__ == '__main__':
 
     # AWS Batch job should be successful whenever terminating_exitcode < 64.
 
-    aws_batch_exitcode = 0
+    aws_batch_job_exitcode = 0
 
     if (terminating_exitcode >= 64):
-        aws_batch_exitcode = terminating_exitcode
+        aws_batch_job_exitcode = terminating_exitcode
 
-    exit(aws_batch_exitcode)
+    print("aws_batch_job_exitcode =",aws_batch_job_exitcode)
+
+    exit(aws_batch_job_exitcode)
