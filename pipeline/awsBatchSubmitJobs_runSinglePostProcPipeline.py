@@ -376,6 +376,14 @@ if __name__ == '__main__':
 
     print("terminating_exitcode =",terminating_exitcode)
 
-    exit(terminating_exitcode)
+
+    # AWS Batch job should be successful whenever terminating_exitcode < 64.
+
+    aws_batch_exitcode = 0
+
+    if (terminating_exitcode >= 64):
+        aws_batch_exitcode = terminating_exitcode
+
+    exit(aws_batch_exitcode)
 
 
