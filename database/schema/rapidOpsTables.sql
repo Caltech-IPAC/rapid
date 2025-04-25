@@ -978,3 +978,5 @@ CREATE INDEX refimmeta_field_idx ON refimmeta (field);
 CREATE INDEX refimmeta_hp6_idx ON refimmeta (hp6);
 CREATE INDEX refimmeta_hp9_idx ON refimmeta (hp9);
 CREATE INDEX refimmeta_fid_idx ON refimmeta (fid);
+CREATE INDEX refimmeta_nframes_idx ON refimmeta (nframes);
+CREATE INDEX refimmeta_cov5percent_idx ON refimmeta (cov5percent);
