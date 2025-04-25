@@ -110,6 +110,7 @@ CREATE INDEX exposures_exptime_idx ON exposures (exptime);
 CREATE INDEX exposures_mjdobs_idx ON exposures (mjdobs);
 CREATE INDEX exposures_status_idx ON exposures (status);
 CREATE INDEX exposures_infobits_idx ON exposures (infobits);
+CREATE INDEX exposures_dateobs_idx ON exposures (dateobs);
 
 
 -----------------------------
