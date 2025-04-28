@@ -14,8 +14,11 @@ Pipeline Software
 +-----------------+----------------------------------------------------------+-------+
 | QA system       | Continue improving and refining.                         | Basic |
 +-----------------+----------------------------------------------------------+-------+
-| Parallel DB     | Modify registerCompletedJobsInDB.py to                   | No    |
+| Parallel DB     | Modify registerCompletedJobsInDB.py to                   | Yes   |
 | record insert   | register database records in parallel.                   |       |
++-----------------+----------------------------------------------------------+-------+
+| Solar system    | Joe Masiero's code needs to be integrated                | No    |
+| Objects         | into the science pipeline.                               |       |
 +-----------------+----------------------------------------------------------+-------+
 
 
@@ -33,4 +36,5 @@ Operations Database
 | Database        | Need to select a powerful enough EC2 machine that runs   | No    |
 | for pipeline    | 24/7 (consider cost), and set up PostgreSQL database on  |       |
 | operations      | it for pipeline operations.  Must have multiple cores.   |       |
+|                 | Cost it out on AWS.                                      |       |
 +-----------------+----------------------------------------------------------+-------+
