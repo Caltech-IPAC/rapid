@@ -1182,8 +1182,10 @@ create function startJob (
             set machine = machine_,
                 slurm = slurm_,
                 launched = now(),
+                started = null,
                 ended = null,
                 elapsed = null,
+                qwaited = null,
                 exitcode = null,
                 status = 0
             where jid = jid_;
