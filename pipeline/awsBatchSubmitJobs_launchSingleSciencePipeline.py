@@ -527,7 +527,7 @@ if __name__ == '__main__':
     if dbh.exit_code == 7:
         print("No database record from dbh.get_best_reference_image for ppid={} called by {}; continuing with rfid = None...".format(ppid_refimage,swname))
 
-        db_refimages_rec_dict = dbh.get_best_reference_image(ppid_refimage,field,fid)
+        db_refimages_rec_dict = dbh.get_best_reference_image(ppid,field,fid)
 
     if dbh.exit_code == 7:
         print("No database record from dbh.get_best_reference_image for ppid={} called by {}; continuing with rfid = None...".format(ppid,swname))
