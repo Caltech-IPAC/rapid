@@ -476,7 +476,7 @@ def run_single_core_job(jids,log_fnames,index_thread):
                     svid = dbh.svid
 
                     f.write(f"rfcatid = {rfcatid}")
-                    f.write(f"svid = {svid)")
+                    f.write(f"svid = {svid}")
 
                     nframes = product_config_input['REF_IMAGE']['nframes']
                     npixsat = product_config_input['REF_IMAGE']['npixsat']
