@@ -1,4 +1,4 @@
-RAPIDRAPID Pipeline Development Testing
+RAPID Pipeline Testing
 ####################################################
 
 The tests described below are organized by processing date.

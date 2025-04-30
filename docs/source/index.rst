@@ -114,7 +114,7 @@ RAPID Pipeline Products
 
    prod/products.rst
 
-RAPID Pipeline Development Notes
+RAPID Pipeline Development
 ************************************
 
 .. toctree::
