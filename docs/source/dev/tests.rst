@@ -1,4 +1,4 @@
-RAPID Tests Conducted For Development
+RAPIDRAPID Pipeline Development Testing
 ####################################################
 
 The tests described below are organized by processing date.
@@ -72,3 +72,31 @@ Here is a histogram of the AWS Batch queue wait times for an available AWS Batch
 Here is a histogram of the job execution times, measured from pipeline start to pipeline finish on an AWS Batch machine:
 
 .. image:: science_pipeline_execution_times20250428.png
+
+
+4/29/2025
+************************************
+
+Standard large test run (5222 exposure-SCAs),
+with all reference images cleared from database
+(``status=0`` for ``vbest>0``).  AWS Batch machines for science-pipeline jobs
+have 2 vCPUs and 16 GB memory.
+
+.. code-block::
+
+    export STARTDATETIME="2028-09-08 04:00:00"
+    export ENDDATETIME="2028-09-08 08:30:00"
+    python3.11 /code/pipeline/awsBatchSubmitJobs_launchSciencePipelinesForDateTimeRange.py >& awsBatchSubmitJobs_launchSciencePipelinesForDateTimeRange_jid_ge_2_le_90.out &
+
+There were 115 jobs that failed due to the following AWS Batch error:
+Timeout waiting for network interface provisioning to complete.  Need
+to reconfigure the job definition to have retry attempts.
+
+.. code-block::
+
+    rapidopsdb=> select exitcode,count(*) from jobs where ppid=15 and cast(launched as date) = '20250429' group by exitcode order by exitcode;
+    exitcode | count
+   ----------+-------
+           0 |  5107
+             |   115
+    (2 rows)
