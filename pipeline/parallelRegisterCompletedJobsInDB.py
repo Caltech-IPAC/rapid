@@ -168,7 +168,7 @@ def run_single_core_job(jids,log_fnames,index_thread):
         fh = open(thread_work_file, 'w', encoding="utf-8")
     except:
         print(f"*** Error: Could not open output file {thread_work_file}; quitting...")
-        exit(64(
+        exit(64)
 
     dbh = dbh_list[index_thread]
 
