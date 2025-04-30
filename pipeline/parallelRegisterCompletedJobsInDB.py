@@ -162,9 +162,13 @@ def run_single_core_job(jids,log_fnames,index_thread):
 
     print("index_thread,njobs =",index_thread,njobs)
 
+    thread_work_file = "parallelRegisterCompletedJobsInDB_thread" + index_thread + "_log.txt"
+    f = open(thread_work_file, 'w', encoding="utf-8")
+
+
     dbh = dbh_list[index_thread]
 
-    print(f"\nStart of run_single_core_job: index_thread={index_thread}, dbh={dbh}")
+    f.write(f"\nStart of run_single_core_job: index_thread={index_thread}, dbh={dbh}")
 
     for index_job in range(njobs):
 
@@ -175,7 +179,7 @@ def run_single_core_job(jids,log_fnames,index_thread):
         jid = jids[index_job]
         log_fname = log_fnames[index_job]
 
-        print("Loop start: index_job,jid,log_fname =",index_job,jid,log_fname)
+        f.write(f"Loop start: index_job,jid,log_fname = {index_job},{jid},{log_fname}")
 
         job_exitcode = 64
         aws_batch_job_id = 'not_found'
@@ -189,7 +193,7 @@ def run_single_core_job(jids,log_fnames,index_thread):
         done_filename,subdirs_done,downloaded_from_bucket = util.download_file_from_s3_bucket(s3_client,s3_full_name_done_file)
 
         if downloaded_from_bucket:
-            print("*** Warning: Done file exists ({}); skipping...".format(done_filename))
+            f.write("*** Warning: Done file exists ({}); skipping...".format(done_filename))
             continue
 
 
@@ -197,11 +201,11 @@ def run_single_core_job(jids,log_fnames,index_thread):
 
         s3_bucket_object_name = datearg + '/' + log_fname
 
-        print("Downloading s3://{}/{} into {}...".format(job_logs_s3_bucket_base,s3_bucket_object_name,log_fname))
+        f.write("Downloading s3://{}/{} into {}...".format(job_logs_s3_bucket_base,s3_bucket_object_name,log_fname))
 
         response = s3_client.download_file(job_logs_s3_bucket_base,s3_bucket_object_name,log_fname)
 
-        print("response =",response)
+        f.write(f"response = {response}")
 
 
         # Download job config file, in order to harvest some of its metadata.
@@ -210,11 +214,11 @@ def run_single_core_job(jids,log_fnames,index_thread):
 
         s3_bucket_object_name = datearg + '/' + job_config_ini_filename
 
-        print("Downloading s3://{}/{} into {}...".format(job_info_s3_bucket_base,s3_bucket_object_name,job_config_ini_filename))
+        f.write("Downloading s3://{}/{} into {}...".format(job_info_s3_bucket_base,s3_bucket_object_name,job_config_ini_filename))
 
         response = s3_client.download_file(job_info_s3_bucket_base,s3_bucket_object_name,job_config_ini_filename)
 
-        print("response =",response)
+        f.write(f"response = {response}")
 
 
         # Harvest job metadata from job config file
@@ -229,7 +233,7 @@ def run_single_core_job(jids,log_fnames,index_thread):
         ra0 = float(job_config_input['SKY_TILE']['ra0'])
         dec0 = float(job_config_input['SKY_TILE']['dec0'])
 
-        print("rtid,ra0,dec0 =",rtid,ra0,dec0)
+        f.write(f"rtid,ra0,dec0 = {rtid},{ra0},{dec0}")
 
 
         # If rfid_str == "None" and not enough inputs to make a
@@ -239,8 +243,8 @@ def run_single_core_job(jids,log_fnames,index_thread):
         rfid_str = job_config_input['REF_IMAGE']['rfid']
         n_images_to_coadd = int(job_config_input['REF_IMAGE']['n_images_to_coadd'])
 
-        print("rfid_str =",rfid_str)
-        print("n_images_to_coadd =",n_images_to_coadd)
+        f.write(f"rfid_str = {rfid_str}")
+        f.write(f"n_images_to_coadd = {n_images_to_coadd}")
 
         if rfid_str == "None":
             if n_images_to_coadd == 0:
@@ -256,12 +260,12 @@ def run_single_core_job(jids,log_fnames,index_thread):
         for line in file:
             if re.search(search_string1, line):
                 line = line.rstrip("\n")
-                print(line)
+                f.write(line)
                 tokens = re.split(r'\s*=\s*',line)
                 aws_batch_job_id = tokens[1]
             elif re.search(search_string2, line):
                 line = line.rstrip("\n")
-                print(line)
+                f.write(line)
                 tokens = re.split(r'\s*=\s*',line)
                 job_exitcode = tokens[1]
 
@@ -273,12 +277,12 @@ def run_single_core_job(jids,log_fnames,index_thread):
 
         s3_bucket_object_name = datearg + '/' + product_config_ini_filename
 
-        print("Try downloading s3://{}/{} into {}...".format(product_s3_bucket_base,s3_bucket_object_name,product_config_ini_filename))
+        f.write("Try downloading s3://{}/{} into {}...".format(product_s3_bucket_base,s3_bucket_object_name,product_config_ini_filename))
 
         try:
             response = s3_client.download_file(product_s3_bucket_base,s3_bucket_object_name,product_config_ini_filename)
 
-            print("response =",response)
+            f.write(f"response = {response}")
             downloaded_from_bucket = True
 
 
@@ -295,18 +299,18 @@ def run_single_core_job(jids,log_fnames,index_thread):
             job_started = product_config_input['JOB_PARAMS']['job_started']
             job_ended = product_config_input['JOB_PARAMS']['job_ended']
 
-            print("job_started =",job_started)
-            print("job_ended =",job_ended)
+            f.write(f"job_started = {job_started}")
+            f.write(f"job_ended = {job_ended}")
 
             string_match = re.match(r"(.+?)T(.+?) PT", job_started)
 
             try:
                 started_date = string_match.group(1)
                 started_time = string_match.group(2)
-                print("started = {} {}".format(started_date,started_time))
+                f.write("started = {} {}".format(started_date,started_time))
 
             except:
-                print("*** Error: Could not parse job_started; quitting...")
+                f.write("*** Error: Could not parse job_started; quitting...")
                 exit(64)
 
             started = started_date + " " + started_time
@@ -316,16 +320,16 @@ def run_single_core_job(jids,log_fnames,index_thread):
             try:
                 ended_date = string_match.group(1)
                 ended_time = string_match.group(2)
-                print("ended = {} {}".format(ended_date,ended_time))
+                f.write("ended = {} {}".format(ended_date,ended_time))
 
             except:
-                print("*** Error: Could not parse job_ended; quitting...")
+                f.write("*** Error: Could not parse job_ended; quitting...")
                 exit(64)
 
             ended = ended_date + " " + ended_time
 
         except ClientError as e:
-            print("*** Warning: Failed to download {} from s3://{}/{}"\
+            f.write("*** Warning: Failed to download {} from s3://{}/{}"\
                 .format(product_config_ini_filename,product_s3_bucket_base,s3_bucket_object_name))
             downloaded_from_bucket = False
 
@@ -340,13 +344,13 @@ def run_single_core_job(jids,log_fnames,index_thread):
 
         ended_str = str(ended_dt)
 
-        print("last_file_written_to_bucket =",last_file_written_to_bucket)
-        print("From S3 bucket listing: ended_str =",ended_str)
+        f.write(f"last_file_written_to_bucket = {last_file_written_to_bucket}")
+        f.write(f"From S3 bucket listing: ended_str = {ended_str}")
 
         if not downloaded_from_bucket:
             ended = ended_str
 
-        print("For Jobs records: started,ended =",started,ended)
+        f.write(f"For Jobs records: started,ended = {started},{ended}")
 
 
         # Update Jobs record.
@@ -354,7 +358,7 @@ def run_single_core_job(jids,log_fnames,index_thread):
         dbh.end_job(jid,job_exitcode,aws_batch_job_id,started,ended)
 
         if dbh.exit_code >= 64:
-            print(f"*** Error: dbh.end_job returned exit code greater than or equal to 64" +\
+            f.write(f"*** Error: dbh.end_job returned exit code greater than or equal to 64" +\
                    "(jid={jid},job_exitcode={job_exitcode},aws_batch_job_id={aws_batch_job_id},ended={ended}); quitting...")
             exit(dbh.exit_code)
 
@@ -380,7 +384,7 @@ def run_single_core_job(jids,log_fnames,index_thread):
 
         hp9 = hp.ang2pix(nside9,ra0,dec0,nest=True,lonlat=True)
 
-        print("hp6,hp9 =",hp6,hp9)
+        f.write(f"hp6,hp9 = {hp6},{hp9}")
 
 
         # Inventory products associated with job.
@@ -389,18 +393,18 @@ def run_single_core_job(jids,log_fnames,index_thread):
 
         job_prefix = datearg + '/jid' + str(jid) + '/'
 
-        print("job_prefix =",job_prefix)
+        f.write(f"job_prefix = {job_prefix}")
 
         for product_bucket_object in product_bucket.objects.filter(Prefix=job_prefix):
 
-            print("------==------->",product_bucket_object)
+            f.write(f"------==-------> {product_bucket_object}")
 
 
             # Reference image.
 
             if awaicgen_output_mosaic_image_file in product_bucket_object.key:
 
-                print("Found in reference image in S3 product bucket: {}".format(awaicgen_output_mosaic_image_file))
+                f.write("Found in reference image in S3 product bucket: {}".format(awaicgen_output_mosaic_image_file))
 
 
                 # Harvest select product metadata from product config file
@@ -431,8 +435,8 @@ def run_single_core_job(jids,log_fnames,index_thread):
                     rfid = dbh.rfid
                     version_refimage = dbh.version
 
-                    print("rfid =",rfid)
-                    print("version_refimage =",version_refimage)
+                    f.write(f"rfid = {rfid}")
+                    f.write(f"version_refimage = {version_refimage}")
 
 
                     # Finalize record in RefImages database table, (in order to set vbest = 1 for current record).
@@ -471,8 +475,8 @@ def run_single_core_job(jids,log_fnames,index_thread):
                     rfcatid = dbh.rfcatid
                     svid = dbh.svid
 
-                    print("rfcatid =",rfcatid)
-                    print("svid =",svid)
+                    f.write(f"rfcatid = {rfcatid}")
+                    f.write(f"svid = {svid)")
 
                     nframes = product_config_input['REF_IMAGE']['nframes']
                     npixsat = product_config_input['REF_IMAGE']['npixsat']
@@ -503,31 +507,31 @@ def run_single_core_job(jids,log_fnames,index_thread):
                     try:
                         input_images_csv_file_s3_bucket_name = filename_match.group(1)
                         input_images_csv_file_s3_bucket_object_name = filename_match.group(2)
-                        print("input_images_csv_file_s3_bucket_name = {}, input_images_csv_file_s3_bucket_object_name = {}".\
+                        f.write("input_images_csv_file_s3_bucket_name = {}, input_images_csv_file_s3_bucket_object_name = {}".\
                             format(input_images_csv_file_s3_bucket_name,input_images_csv_file_s3_bucket_object_name))
 
                     except:
-                        print("*** Error: Could not parse input_images_csv_name_for_download; quitting...")
+                        f.write("*** Error: Could not parse input_images_csv_name_for_download; quitting...")
                         exit(64)
 
                     filename_match2 = re.match(r".+?/(.+)", input_images_csv_file_s3_bucket_object_name)
 
                     try:
                         input_images_csv_filename = filename_match2.group(1)
-                        print("input_images_csv_filename = {}".format(input_images_csv_filename))
+                        f.write("input_images_csv_filename = {}".format(input_images_csv_filename))
 
                     except:
-                        print("*** Error: Could not parse input_images_csv_file_s3_bucket_object_name; quitting...")
+                        f.write("*** Error: Could not parse input_images_csv_file_s3_bucket_object_name; quitting...")
                         exit(64)
 
-                    print("Downloading s3://{}/{} into {}...".\
+                    f.write("Downloading s3://{}/{} into {}...".\
                         format(input_images_csv_file_s3_bucket_name,input_images_csv_file_s3_bucket_object_name,input_images_csv_filename))
 
                     response = s3_client.download_file(input_images_csv_file_s3_bucket_name,
                                                        input_images_csv_file_s3_bucket_object_name,
                                                        input_images_csv_filename)
 
-                    print("response =",response)
+                    f.write(f"response = {response}")
 
                     refimage_input_mjdobs_list = []
 
@@ -551,8 +555,8 @@ def run_single_core_job(jids,log_fnames,index_thread):
                     mjdobs_min = min(mjdobs_np)
                     mjdobs_max = max(mjdobs_np)
 
-                    print("mjdobs_min =",mjdobs_min)
-                    print("mjdobs_max =,",mjdobs_max)
+                    f.write(f"mjdobs_min = {mjdobs_min}")
+                    f.write(f"mjdobs_max = {mjdobs_max}")
 
 
                     # Insert record in RefImMeta database table.
@@ -589,12 +593,12 @@ def run_single_core_job(jids,log_fnames,index_thread):
 
             # Difference image.
 
-            print("===> zogy_output_diffimage_file =",zogy_output_diffimage_file)
-            print("===> product_bucket_object.key =",product_bucket_object.key)
+            f.write(f"===> zogy_output_diffimage_file = {zogy_output_diffimage_file}")
+            f.write(f"===> product_bucket_object.key = {product_bucket_object.key}")
 
             if zogy_output_diffimage_file in product_bucket_object.key:
 
-                print("Found in difference image in S3 product bucket: {}".format(zogy_output_diffimage_file))
+                f.write("Found in difference image in S3 product bucket: {}".format(zogy_output_diffimage_file))
 
 
                 # Harvest select product metadata from product config file
@@ -666,8 +670,8 @@ def run_single_core_job(jids,log_fnames,index_thread):
                     pid = dbh.pid
                     version_diffimage = dbh.version
 
-                    print("pid =",pid)
-                    print("version_diffimage =",version_diffimage)
+                    f.write(f"pid = {pid}")
+                    f.write(f"version_diffimage = {version_diffimage}")
 
 
                     # Finalize record in DiffImages database table, (in order to set vbest = 1 for current record).
@@ -691,9 +695,11 @@ def run_single_core_job(jids,log_fnames,index_thread):
 
         util.write_done_file_to_s3_bucket(done_filename,product_s3_bucket_base,datearg,jid,s3_client)
 
-        print("Loop end: done_filename,product_s3_bucket_base,datearg,jid =",done_filename,product_s3_bucket_base,datearg,jid)
+        f.write(f"Loop end: done_filename,product_s3_bucket_base,datearg,jid = {done_filename},{product_s3_bucket_base},{datearg},{jid}")
 
-    print(f"\nEnd of run_single_core_job: index_thread={index_thread}")
+    f.write(f"\nEnd of run_single_core_job: index_thread={index_thread}")
+
+    f.close()
 
 
 def execute_parallel_processes(jids,log_filenames,num_cores=None):
