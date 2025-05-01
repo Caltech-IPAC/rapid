@@ -91,6 +91,9 @@ Here is a histogram of the job execution times, measured from pipeline start to 
 
 .. image:: science_pipeline_execution_times20250428.png
 
+These job elapsed times include additional time for reference-image generation, which would not be needed if reference images
+already existed for the fields covered by the input exposure-SCA images of the standard test.
+
 
 4/29/2025
 ************************************
