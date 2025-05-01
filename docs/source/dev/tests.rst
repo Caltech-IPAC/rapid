@@ -6,21 +6,24 @@ The tests described below are organized by processing date.
 Here is Perl code (``elapsed.pl``) to query the operations database
 for science-pipeline performance results::
 
-    $procdate = '20250428';
-    $starthourorigin = 680.59027777777777777777;
+    use strict;
+    my $starthourorigin;
+
+    my $procdate = '20250430';
 
     print"count,nframes,startedhours,elapsedseconds\n";
 
+    my $q;
     $q="select nframes,extract(day from started) * 24.0 + extract(hour from started) + ".
-       "extract(minute from started)/60.0 + extract(second from started)/3600.0-".
-       $starthourorigin." as startedhours, extract(hour from elapsed)*3600 + ".
+       "extract(minute from started)/60.0 + extract(second from started)/3600.0 ".
+       "as startedhours, extract(hour from elapsed)*3600 + ".
        "extract(minute from elapsed)*60 + extract(second from elapsed) as elapsedseconds ".
        "from jobs a, diffimages b, diffimmeta c, refimmeta d ".
        "where a.rid=b.rid and a.ppid=15 and b.pid=c.pid and b.vbest>0 and b.rfid=d.rfid ".
        "and exitcode=0 and cast(launched as date) ='".$procdate."' order by started; ";
 
-    @op=`psql -h 35.165.53.98 -d rapidopsdb -p 5432 -U rapidporuss -c \"$q\"`;
-    $i=0;
+    my @op=`psql -h 35.165.53.98 -d rapidopsdb -p 5432 -U rapidporuss -c \"$q\"`;
+    my $i=0;
     shift @op;
     shift @op;
     foreach my $op (@op) {
@@ -28,9 +31,13 @@ for science-pipeline performance results::
         chomp $op;
         $op =~ s/^\s+|\s+$//g;
         my (@f) = split(/\s*\|\s*/, $op);
-        $nframes = $f[0];
-        $startedhours = $f[1];
-        $elapsedtimeseconds = $f[2];
+        my $nframes = $f[0];
+        my $startedhours = $f[1];
+        my $elapsedtimeseconds = $f[2];
+        if ($i==0) {
+            $starthourorigin = $startedhours;
+        }
+        $startedhours = $startedhours - $starthourorigin;
         $i++;
         print"$i,$nframes,$startedhours,$elapsedtimeseconds\n";
     }
@@ -120,7 +127,7 @@ AWS Batch machines for science-pipeline jobs have 2 vCPUs and 16 GB memory.
     export COV5PERCENT=60
     python3.11 /code/pipeline/awsBatchSubmitJobs_launchSciencePipelinesForDateTimeRangeAndSuperiorRefImages.py >& awsBatchSubmitJobs_launchSciencePipelinesForDateTimeRangeAndSuperiorRefImages.out &
 
-After reconfiguring the AWS Batch science-pipeline job definition to attempt to run a job three times, all jobs successfully ran:
+After reconfiguring the AWS Batch science-pipeline job definition to attempt to run a job 3 times, if necessary, all jobs successfully ran:
 
 .. code-block::
 
