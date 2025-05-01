@@ -3,6 +3,14 @@ RAPID Pipeline Testing
 
 The tests described below are organized by processing date.
 
+OpenUniverse simulated data are used, which cover the following observation range::
+
+    rapidopsdb=> select min(dateobs),max(dateobs) from l2files;
+               min           |          max
+    -------------------------+------------------------
+     2028-08-17 00:30:48.096 | 2032-11-27 01:23:22.56
+    (1 row)
+
 Here is Perl code (``elapsed.pl``) to query the operations database
 for science-pipeline performance results::
 
