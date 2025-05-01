@@ -77,20 +77,22 @@ Here is a histogram of the job execution times, measured from pipeline start to 
 4/29/2025
 ************************************
 
-Standard large test run (5222 exposure-SCAs),
-with all reference images cleared from database
-(``status=0`` for ``vbest>0``).  AWS Batch machines for science-pipeline jobs
-have 2 vCPUs and 16 GB memory.
+New large test run of select 5222 exposure-SCAs acquired 6 months after the data from the standard test,
+using a subset of the reference images existing in the database that were generated on 4/28/2025.  The exposure-SCAs all
+are associated with fields having reference images that were made from at least 10 input images and have ``cov5percent >= 60%``.
+AWS Batch machines for science-pipeline jobs have 2 vCPUs and 16 GB memory.
 
 .. code-block::
 
-    export STARTDATETIME="2028-09-08 04:00:00"
-    export ENDDATETIME="2028-09-08 08:30:00"
-    python3.11 /code/pipeline/awsBatchSubmitJobs_launchSciencePipelinesForDateTimeRange.py >& awsBatchSubmitJobs_launchSciencePipelinesForDateTimeRange_jid_ge_2_le_90.out &
+export STARTDATETIME="2029-03-15 00:00:00"
+export ENDDATETIME="2029-07-15 00:00:00"
+export NFRAMES=10
+export COV5PERCENT=60
+python3.11 /code/pipeline/awsBatchSubmitJobs_launchSciencePipelinesForDateTimeRangeAndSuperiorRefImages.py >& awsBatchSubmitJobs_launchSciencePipelinesForDateTimeRangeAndSuperiorRefImages.out &
 
 There were 115 jobs that failed due to the following AWS Batch error:
-Timeout waiting for network interface provisioning to complete.  Need
-to reconfigure the job definition to have retry attempts.
+Timeout waiting for network interface provisioning to complete.
+Need to reconfigure the job definition to have retry attempts.
 
 .. code-block::
 
@@ -100,3 +102,30 @@ to reconfigure the job definition to have retry attempts.
            0 |  5107
              |   115
     (2 rows)
+
+
+4/30/2025
+************************************
+
+New large test run of select 5222 exposure-SCAs acquired 6 months after the data from the standard test,
+using a subset of the reference images existing in the database that were generated on 4/28/2025.  The exposure-SCAs all
+are associated with fields having reference images that were made from at least 10 input images and have ``cov5percent >= 60%``.
+AWS Batch machines for science-pipeline jobs have 2 vCPUs and 16 GB memory.
+
+.. code-block::
+
+export STARTDATETIME="2029-03-15 00:00:00"
+export ENDDATETIME="2029-07-15 00:00:00"
+export NFRAMES=10
+export COV5PERCENT=60
+python3.11 /code/pipeline/awsBatchSubmitJobs_launchSciencePipelinesForDateTimeRangeAndSuperiorRefImages.py >& awsBatchSubmitJobs_launchSciencePipelinesForDateTimeRangeAndSuperiorRefImages.out &
+
+After reconfiguring the AWS Batch science-pipeline job definition to attempt to run a job three times, all jobs successfully ran:
+
+.. code-block::
+
+    rapidopsdb=> select exitcode,count(*) from jobs where ppid=15 and cast(launched as date) = '20250430' group by exitcode order by exitcode;
+     exitcode | count
+    ----------+-------
+            0 |  5222
+    (1 row)
