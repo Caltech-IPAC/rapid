@@ -84,14 +84,14 @@ AWS Batch machines for science-pipeline jobs have 2 vCPUs and 16 GB memory.
 
 .. code-block::
 
-export STARTDATETIME="2029-03-15 00:00:00"
-export ENDDATETIME="2029-07-15 00:00:00"
-export NFRAMES=10
-export COV5PERCENT=60
-python3.11 /code/pipeline/awsBatchSubmitJobs_launchSciencePipelinesForDateTimeRangeAndSuperiorRefImages.py >& awsBatchSubmitJobs_launchSciencePipelinesForDateTimeRangeAndSuperiorRefImages.out &
+    export STARTDATETIME="2029-03-15 00:00:00"
+    export ENDDATETIME="2029-07-15 00:00:00"
+    export NFRAMES=10
+    export COV5PERCENT=60
+    python3.11 /code/pipeline/awsBatchSubmitJobs_launchSciencePipelinesForDateTimeRangeAndSuperiorRefImages.py >& awsBatchSubmitJobs_launchSciencePipelinesForDateTimeRangeAndSuperiorRefImages.out &
 
 There were 115 jobs that failed due to the following AWS Batch error:
-Timeout waiting for network interface provisioning to complete.
+``Timeout waiting for network interface provisioning to complete``.
 Need to reconfigure the job definition to have retry attempts.
 
 .. code-block::
