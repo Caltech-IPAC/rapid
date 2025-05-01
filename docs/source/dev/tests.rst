@@ -81,7 +81,6 @@ did not produce results, and 33 jobs had no reference images.
            33 |    80
     (3 rows)
 
-
 Here is a histogram of the AWS Batch queue wait times for an available AWS Batch machine on which to run a pipeline job:
 
 .. image:: science_pipeline_queue_wait_times_20250428.png
@@ -89,7 +88,7 @@ Here is a histogram of the AWS Batch queue wait times for an available AWS Batch
 
 Here is a histogram of the job execution times, measured from pipeline start to pipeline finish on an AWS Batch machine:
 
-.. image:: science_pipeline_execution_times20250428.png
+.. image:: science_pipeline_execution_times_20250428.png
 
 These job elapsed times include additional time for reference-image generation, which would not be needed if reference images
 already existed for the fields covered by the input exposure-SCA images of the standard test.
@@ -150,3 +149,12 @@ After reconfiguring the AWS Batch science-pipeline job definition to attempt to 
     ----------+-------
             0 |  5222
     (1 row)
+
+Here is a histogram of the AWS Batch queue wait times for an available AWS Batch machine on which to run a pipeline job:
+
+.. image:: science_pipeline_queue_wait_times_20250430.png
+
+
+Here is a histogram of the job execution times, measured from pipeline start to pipeline finish on an AWS Batch machine:
+
+.. image:: science_pipeline_execution_times_20250430.png
