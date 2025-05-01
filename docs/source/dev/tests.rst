@@ -109,16 +109,16 @@ Need to reconfigure the job definition to have retry attempts.
 
 New large test run of select 5222 exposure-SCAs acquired 6 months after the data from the standard test,
 using a subset of the reference images existing in the database that were generated on 4/28/2025.  The exposure-SCAs all
-are associated with fields having reference images that were made from at least 10 input images and have ``cov5percent >= 60%``.
+are associated with fields having reference images that have ``nframes >= 10`` and ``cov5percent >= 60%``.
 AWS Batch machines for science-pipeline jobs have 2 vCPUs and 16 GB memory.
 
 .. code-block::
 
-export STARTDATETIME="2029-03-15 00:00:00"
-export ENDDATETIME="2029-07-15 00:00:00"
-export NFRAMES=10
-export COV5PERCENT=60
-python3.11 /code/pipeline/awsBatchSubmitJobs_launchSciencePipelinesForDateTimeRangeAndSuperiorRefImages.py >& awsBatchSubmitJobs_launchSciencePipelinesForDateTimeRangeAndSuperiorRefImages.out &
+    export STARTDATETIME="2029-03-15 00:00:00"
+    export ENDDATETIME="2029-07-15 00:00:00"
+    export NFRAMES=10
+    export COV5PERCENT=60
+    python3.11 /code/pipeline/awsBatchSubmitJobs_launchSciencePipelinesForDateTimeRangeAndSuperiorRefImages.py >& awsBatchSubmitJobs_launchSciencePipelinesForDateTimeRangeAndSuperiorRefImages.out &
 
 After reconfiguring the AWS Batch science-pipeline job definition to attempt to run a job three times, all jobs successfully ran:
 
