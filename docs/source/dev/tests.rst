@@ -158,3 +158,7 @@ Here is a histogram of the AWS Batch queue wait times for an available AWS Batch
 Here is a histogram of the job execution times, measured from pipeline start to pipeline finish on an AWS Batch machine:
 
 .. image:: science_pipeline_execution_times_20250430.png
+
+The mode of the histogram indicates the job elapsed times are approximately 3 minutes shorter than
+those from the 4/28/2025 test, which is expected since all reference images needed for this test
+are already available and none had to be generated on the fly.
