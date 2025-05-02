@@ -16,16 +16,21 @@ Login with your IPAC credentials (not sure whether VPN must be running).
 Developer Guidelines
 ************************************
 
-#. Set up your text editor to clip trailing spaces when saving source-code file (e.g., BBEdit has a preference that does this).
+#. Set up your text editor to clip trailing spaces when saving source-code file
+   (e.g., BBEdit has a setting that does this).
+
+#. Ensure no tab characters are used for indentation in your Python code; use spaces always
+   (e.g., BBEdit has a setting that does this).
 
 #. Think strategically when pushing a source-code file to the git repo whether a simple git diff between revisions
    will allow a clear and unambiguous indication of the code changes.  For example, numerous stylistic changes can
    hide substantive changes that affect code behavior and should be deferred to a separate revision.
 
 #. Before checking into the git repo modifications to someone else's source code,
-   let that person know what to expect (and assure there is a sufficient level of trust beforehand).
+   let that person know what to expect (and assure there is the expected level of trust beforehand).
 
-#. Always test code changes before the code is put into operations; the development is not done until the code changes have been tested.
+#. Always test code changes before the code is put into operations; the development is not done until
+   the code changes have been tested.
 
 #. Include a sufficiency of comments in your source code!
 
