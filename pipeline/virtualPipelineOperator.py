@@ -257,6 +257,7 @@ def wait_until_aws_batch_jobs_finished(job_type,proc_date,config_input,dbh):
 
         n_succeeded = 0
         n_failed = 0
+        n_checked = 0
 
         jids_list = []
         awsbatchjobids_list = []
@@ -278,6 +279,10 @@ def wait_until_aws_batch_jobs_finished(job_type,proc_date,config_input,dbh):
 
             job_status = response['jobs'][0]['status']
 
+            print("job_status =",job_status)
+
+            n_checked += 1
+
             if job_status == "SUCCEEDED":
                 n_succeeded += 1
             elif job_status == "FAILED":
@@ -285,6 +290,7 @@ def wait_until_aws_batch_jobs_finished(job_type,proc_date,config_input,dbh):
 
         njobs_succeeded_failed = n_succeeded + n_failed
 
+        print(f"n_checked = {n_checked}")
         print("njobs_succeeded_failed =",njobs_succeeded_failed)
 
         if njobs_total == njobs_succeeded_failed:
