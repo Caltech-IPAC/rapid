@@ -270,12 +270,12 @@ def wait_until_aws_batch_jobs_finished(job_type,proc_date,config_input,dbh):
             jids_list.append(jid)
             awsbatchjobids_list.append(awsbatchjobid)
 
-            print(f"Calling client.describe_jobs for jobs={awsbatchjobids_list}")
+            print(f"Calling client.describe_jobs for jobs={awsbatchjobid}")
 
             response = client.describe_jobs(jobs=[awsbatchjobid,])
 
-            #if n_checked < 5:
-            #    print(f"response={response}")
+            if n_checked < 5:
+                print(f"response={response}")
 
 
             job_status = response['jobs'][0]['status']
