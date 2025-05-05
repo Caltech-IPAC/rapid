@@ -258,13 +258,27 @@ def wait_until_aws_batch_jobs_finished(job_type,proc_date,config_input,dbh):
         n_succeeded = 0
         n_failed = 0
 
+        jids_list = []
+        awsbatchjobids_list = []
+
         for jobs_record in jobs_records:
 
             jid = jobs_record[0]
             awsbatchjobid = jobs_record[1]
 
-            response = client.describe_jobs(jobs=[awsbatchjobid,])
+            jids_list.append(jid)
+            awsbatchjobids_list.append(awsbatchjobid)
 
+        print(f"Calling client.describe_jobs for jobs={awsbatchjobids_list}")
+
+        response = client.describe_jobs(jobs=awsbatchjobids_list)
+
+        print(f"response={response}")
+
+        exit(0)
+
+
+        """
             job_status = response['jobs'][0]['status']
 
             if job_status == "SUCCEEDED":
@@ -282,6 +296,7 @@ def wait_until_aws_batch_jobs_finished(job_type,proc_date,config_input,dbh):
         iter += 1
         print(f"From method wait_until_aws_batch_jobs_finished after iteration iter={iter}: Sleeping 30 seconds...")
         time.sleep(30)
+    """
 
     return
 
