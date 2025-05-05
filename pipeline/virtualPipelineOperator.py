@@ -293,6 +293,15 @@ def wait_until_aws_batch_jobs_finished(job_type,proc_date,config_input,dbh):
 if __name__ == '__main__':
 
 
+    # Open database connection.
+
+    dbh = db.RAPIDDB()
+
+    if dbh.exit_code >= 64:
+        exit(dbh.exit_code)
+
+
+
     # Open loop.
 
     s3_client = boto3.client('s3')
@@ -321,24 +330,6 @@ if __name__ == '__main__':
             proc_date = datearg
 
 
-        """
-        # Open database connection.
-
-        dbh = db.RAPIDDB()
-
-        if dbh.exit_code >= 64:
-            exit(dbh.exit_code)
-
-
-
-
-        # Close database connection.
-
-        dbh.close()
-
-        if dbh.exit_code >= 64:
-            exit(dbh.exit_code)
-        """
 
 
         # Launch science pipelines.
@@ -368,7 +359,7 @@ if __name__ == '__main__':
 
         print(f"Waiting until AWS Batch jobs have finished for job_type={job_type}, proc_date={proc_date}...")
 
-        wait_until_aws_batch_jobs_finished(job_type,proc_date,config_input)
+        wait_until_aws_batch_jobs_finished(job_type,proc_date,config_input,dbh)
 
         print(f"Okay, all AWS Batch jobs have finished for job_type={job_type}, proc_date={proc_date}...")
 
@@ -430,7 +421,7 @@ if __name__ == '__main__':
 
         print(f"Waiting until AWS Batch jobs have finished for job_type={job_type}, proc_date={proc_date}...")
 
-        wait_until_aws_batch_jobs_finished(job_type,proc_date,config_input)
+        wait_until_aws_batch_jobs_finished(job_type,proc_date,config_input,dbh)
 
         print(f"Okay, all AWS Batch jobs have finished for job_type={job_type}, proc_date={proc_date}...")
 
@@ -495,6 +486,16 @@ if __name__ == '__main__':
         #
         # End of open loop (but we are not iterating because of break above).
         #
+
+
+
+
+    # Close database connection.
+
+    dbh.close()
+
+    if dbh.exit_code >= 64:
+        exit(dbh.exit_code)
 
 
     # Code-timing benchmark.
