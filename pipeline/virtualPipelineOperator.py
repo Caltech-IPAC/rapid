@@ -264,7 +264,8 @@ def wait_until_aws_batch_jobs_finished(job_type,proc_date,config_input,dbh):
             jid = jobs_record[0]
             awsbatchjobid = jobs_record[1]
 
-            print(f"Calling client.describe_jobs for jobs={awsbatchjobid}, n_checked={n_checked}")
+            if njobs_total < 3000 or n_checked % 100 = 0:
+                print(f"Calling client.describe_jobs for jobs={awsbatchjobid}, n_checked={n_checked}")
 
             response = client.describe_jobs(jobs=[awsbatchjobid,])
 
@@ -275,7 +276,8 @@ def wait_until_aws_batch_jobs_finished(job_type,proc_date,config_input,dbh):
 
             job_status = response['jobs'][0]['status']
 
-            print("job_status =",job_status)
+            if njobs_total < 3000 or n_checked % 100 = 0:
+                print("job_status =",job_status)
 
             if job_status == "SUCCEEDED":
                 n_succeeded += 1
@@ -291,7 +293,8 @@ def wait_until_aws_batch_jobs_finished(job_type,proc_date,config_input,dbh):
             break
 
         iter += 1
-        print(f"From method wait_until_aws_batch_jobs_finished after iteration iter={iter}: Sleeping 60 seconds...")
+        print(f"From method wait_until_aws_batch_jobs_finished after iteration iter={iter}: " +\
+               "Sleeping 60 seconds and then will check again...")
         time.sleep(60)
 
     return
@@ -302,15 +305,6 @@ def wait_until_aws_batch_jobs_finished(job_type,proc_date,config_input,dbh):
 #-------------------------------------------------------------------------------------------------------------
 
 if __name__ == '__main__':
-
-
-    # Open database connection.
-
-    dbh = db.RAPIDDB()
-
-    if dbh.exit_code >= 64:
-        exit(dbh.exit_code)
-
 
 
     # Open loop.
@@ -341,6 +335,12 @@ if __name__ == '__main__':
             proc_date = datearg
 
 
+        # Open database connection.
+
+        dbh = db.RAPIDDB()
+
+        if dbh.exit_code >= 64:
+            exit(dbh.exit_code)
 
 
         # Launch science pipelines.
@@ -456,6 +456,14 @@ if __name__ == '__main__':
         start_time_benchmark = end_time_benchmark
 
 
+        # Close database connection.
+
+        dbh.close()
+
+        if dbh.exit_code >= 64:
+            exit(dbh.exit_code)
+
+
         # Break out of open loop if running the VPO for just one specific processing date.
 
         if datearg is not None:
@@ -493,14 +501,6 @@ if __name__ == '__main__':
         #
 
 
-
-
-    # Close database connection.
-
-    dbh.close()
-
-    if dbh.exit_code >= 64:
-        exit(dbh.exit_code)
 
 
     # Code-timing benchmark.
