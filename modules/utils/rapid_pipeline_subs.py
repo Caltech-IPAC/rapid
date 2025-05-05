@@ -40,7 +40,7 @@ def utc_to_local(utc_dt):
     return utc_dt.replace(tzinfo=timezone.utc).astimezone(tz=to_zone)
 
 
-def execute_command(code_to_execute_args):
+def execute_command(code_to_execute_args,fname_out=None):
 
     '''
     Execute a command with options.
@@ -61,6 +61,15 @@ def execute_command(code_to_execute_args):
 
     code_to_execute_stdout = code_to_execute_object.stdout
     print("code_to_execute_stdout =\n",code_to_execute_stdout)
+
+    if fname_out is not None:
+
+        try:
+            fh = open(fname_out, 'w', encoding="utf-8")
+            fh.write(code_to_execute_stdout)
+            fh.close()
+        except:
+            print(f"*** Warning from method execute_command: Could not open output file {fname_out}; quitting...")
 
     code_to_execute_stderr = code_to_execute_object.stderr
     print("code_to_execute_stderr (should be empty since STDERR is combined with STDOUT) =\n",code_to_execute_stderr)
