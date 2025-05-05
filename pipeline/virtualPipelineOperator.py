@@ -300,8 +300,7 @@ def wait_until_aws_batch_jobs_finished(job_type,proc_date,config_input,dbh):
 
         iter += 1
         print(f"From method wait_until_aws_batch_jobs_finished after iteration iter={iter}: Sleeping 60 seconds...")
-        time.sleep(3
-        60)
+        time.sleep(60)
 
     return
 
