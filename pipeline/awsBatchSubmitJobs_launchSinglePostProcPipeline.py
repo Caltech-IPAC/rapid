@@ -3,6 +3,11 @@ The purpose of the post-processing pipeline is to add database IDs
 to products already made by the science pipeline, and update the
 checksums of the modified products in the database, etc.  This is run only
 after the products have been registered in the RAPID operations database.
+
+Science pipelines that ran earlier as a prerequisite have a distinct pipeline ID (ppid=15).
+Post-processing pipelines launched by this script have a different pipeline ID (ppid=17).
+Thus, the Jobs database table has separate records for a science pipeline versus its
+associated post-processing pipeline for the same exposure-SCA image (indexed by rid).
 """
 
 
@@ -379,7 +384,7 @@ if __name__ == '__main__':
 
     # Update record in Jobs database table with aws_batch_job_id.
 
-    jid = dbh.update_job_with_aws_batch_job_id(jid,aws_batch_job_id)
+    jid = dbh.update_job_with_aws_batch_job_id(jid_postproc,aws_batch_job_id)
 
     if dbh.exit_code >= 64:
         exit(dbh.exit_code)
