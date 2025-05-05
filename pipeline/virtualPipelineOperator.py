@@ -285,7 +285,6 @@ def wait_until_aws_batch_jobs_finished(job_type,proc_date,config_input,dbh):
 
         njobs_succeeded_failed = n_succeeded + n_failed
 
-        print(f"n_checked = {n_checked}")
         print("njobs_succeeded_failed =",njobs_succeeded_failed)
 
         if njobs_total == njobs_succeeded_failed:
@@ -374,12 +373,6 @@ if __name__ == '__main__':
         wait_until_aws_batch_jobs_finished(job_type,proc_date,config_input,dbh)
 
         print(f"Okay, all AWS Batch jobs have finished for job_type={job_type}, proc_date={proc_date}...")
-
-        break
-
-
-
-
 
 
         # Code-timing benchmark.
