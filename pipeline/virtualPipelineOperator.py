@@ -31,7 +31,7 @@ cfg_filename_only = "awsBatchSubmitJobs_launchSingleSciencePipeline.ini"
 python_cmd = '/usr/bin/python3.11'
 launch_science_pipelines_code = '/code/pipeline/awsBatchSubmitJobs_launchSciencePipelinesForDateTimeRange.py'
 register_science_pipeline_jobs_code = '/code/pipeline/parallelRegisterCompletedJobsInDB.py'
-launch_postproc_pipelines_code = 'awsBatchSubmitJobs_launchPostProcPipelinesForProcDate.py'
+launch_postproc_pipelines_code = '/code/pipeline/awsBatchSubmitJobs_launchPostProcPipelinesForProcDate.py'
 register_postproc_pipeline_jobs_code = '/code/pipeline/parallelRegisterCompletedJobsInDBAfterPostProc.py'
 
 
