@@ -194,7 +194,7 @@ def wait_until_aws_batch_jobs_finished(job_type,proc_date,config_input,dbh):
 
     # Query database for Jobs records that are unclosed out on the given processing date.
 
-    jobs_records = dbh.get_unclosedout_jobs_for_processing_date(self,ppid,proc_date)(ppid,proc_date)
+    jobs_records = dbh.get_unclosedout_jobs_for_processing_date(ppid,proc_date)
 
     if dbh.exit_code >= 64:
         exit(dbh.exit_code)
