@@ -274,7 +274,8 @@ def wait_until_aws_batch_jobs_finished(job_type,proc_date,config_input,dbh):
 
             response = client.describe_jobs(jobs=[awsbatchjobid,])
 
-            print(f"response={response}")
+            if n_checked < 5:
+                print(f"response={response}")
 
 
             job_status = response['jobs'][0]['status']
@@ -287,6 +288,7 @@ def wait_until_aws_batch_jobs_finished(job_type,proc_date,config_input,dbh):
                 n_succeeded += 1
             elif job_status == "FAILED":
                 n_failed += 1
+                break
 
         njobs_succeeded_failed = n_succeeded + n_failed
 
@@ -297,8 +299,9 @@ def wait_until_aws_batch_jobs_finished(job_type,proc_date,config_input,dbh):
             break
 
         iter += 1
-        print(f"From method wait_until_aws_batch_jobs_finished after iteration iter={iter}: Sleeping 30 seconds...")
-        time.sleep(30)
+        print(f"From method wait_until_aws_batch_jobs_finished after iteration iter={iter}: Sleeping 60 seconds...")
+        time.sleep(3
+        60)
 
     return
 
