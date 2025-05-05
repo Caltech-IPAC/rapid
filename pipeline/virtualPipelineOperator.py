@@ -277,12 +277,11 @@ def wait_until_aws_batch_jobs_finished(job_type,proc_date,config_input,dbh):
             if n_checked < 5:
                 print(f"response={response}")
 
+            n_checked += 1
 
             job_status = response['jobs'][0]['status']
 
-            print("job_status =",job_status)
-
-            n_checked += 1
+            print("n_checked,job_status =",n_checked,job_status)
 
             if job_status == "SUCCEEDED":
                 n_succeeded += 1
