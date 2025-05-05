@@ -93,6 +93,38 @@ Here is a histogram of the job execution times, measured from pipeline start to 
 These job elapsed times include additional time for reference-image generation, which would not be needed if reference images
 already existed for the fields covered by the input exposure-SCA images of the standard test.
 
+The standard test generated 1696 reference images total, for 4 different filters and a variety of fields.  The number of fields
+for each of the filter IDs included is listed as follows:
+
+.. code-block::
+
+    rapidopsdb=> select fid,count(*) from refimages where vbest>0 group by fid order by fid;
+     fid | count
+    -----+-------
+       1 |   806
+       2 |   812
+       3 |    48
+       4 |    30
+    (4 rows)
+
+Here are all of the filter IDs versus filter names included in the entire simulated data set
+(of which a tiny subset is covered by the standard test):
+
+.. code-block::
+
+    rapidopsdb=> select * from filters order by fid;
+     fid | filter
+    -----+--------
+       1 | F184
+       2 | H158
+       3 | J129
+       4 | K213
+       5 | R062
+       6 | Y106
+       7 | Z087
+       8 | W146
+    (8 rows)
+
 
 4/29/2025
 ************************************
