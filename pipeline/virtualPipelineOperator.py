@@ -274,8 +274,8 @@ def wait_until_aws_batch_jobs_finished(job_type,proc_date,config_input,dbh):
 
             response = client.describe_jobs(jobs=[awsbatchjobid,])
 
-            if n_checked < 5:
-                print(f"response={response}")
+            #if n_checked < 5:
+            #    print(f"response={response}")
 
 
             job_status = response['jobs'][0]['status']
