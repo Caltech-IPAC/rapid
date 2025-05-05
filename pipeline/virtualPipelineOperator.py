@@ -350,10 +350,11 @@ if __name__ == '__main__':
         os.environ['STARTDATETIME'] = startdatetime
         os.environ['ENDDATETIME'] = enddatetime
 
+        fname_out = launch_science_pipelines_code.replace(".py","_" + proc_date + ".out")
         launch_science_pipelines_cmd = [python_cmd,
                                         launch_science_pipelines_code]
 
-        #exitcode_from_launch_science_pipelines_cmd = util.execute_command(launch_science_pipelines_cmd)
+        #exitcode_from_launch_science_pipelines_cmd = util.execute_command(launch_science_pipelines_cmd,fname_out)
 
 
         # Code-timing benchmark.
@@ -385,11 +386,12 @@ if __name__ == '__main__':
 
         # Register metadata from science pipelines into operations database.
 
+        fname_out = register_science_pipeline_jobs_code.replace(".py","_" + proc_date + ".out")
         register_science_pipeline_jobs_cmd = [python_cmd,
                                               register_science_pipeline_jobs_code,
                                               proc_date]
 
-        exitcode_from_register_science_pipeline_jobs_cmd = util.execute_command(register_science_pipeline_jobs_cmd)
+        exitcode_from_register_science_pipeline_jobs_cmd = util.execute_command(register_science_pipeline_jobs_cmd,fname_out)
 
 
         # Code-timing benchmark.
@@ -406,10 +408,11 @@ if __name__ == '__main__':
 
         os.environ['JOBPROCDATE'] = proc_date
 
+        fname_out = launch_postproc_pipelines_code.replace(".py","_" + proc_date + ".out")
         launch_postproc_pipelines_cmd = [python_cmd,
                                         launch_postproc_pipelines_code]
 
-        exitcode_from_launch_postproc_pipelines_cmd = util.execute_command(launch_postproc_pipelines_cmd)
+        exitcode_from_launch_postproc_pipelines_cmd = util.execute_command(launch_postproc_pipelines_cmd,fname_out)
 
 
         # Code-timing benchmark.
@@ -441,6 +444,7 @@ if __name__ == '__main__':
 
         # Register metadata from post-processing pipelines into operations database.
 
+        fname_out = register_postproc_pipeline_jobs_code.replace(".py","_" + proc_date + ".out")
         register_postproc_pipeline_jobs_cmd = [python_cmd,
                                               register_postproc_pipeline_jobs_code,
                                               proc_date]
