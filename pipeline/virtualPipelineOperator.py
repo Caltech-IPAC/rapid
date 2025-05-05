@@ -351,7 +351,7 @@ if __name__ == '__main__':
         launch_science_pipelines_cmd = [python_cmd,
                                         launch_science_pipelines_code]
 
-        exitcode_from_launch_science_pipelines_cmd = util.execute_command(launch_science_pipelines_cmd)
+        #exitcode_from_launch_science_pipelines_cmd = util.execute_command(launch_science_pipelines_cmd)
 
 
         # Code-timing benchmark.
@@ -371,6 +371,12 @@ if __name__ == '__main__':
         wait_until_aws_batch_jobs_finished(job_type,proc_date,config_input)
 
         print(f"Okay, all AWS Batch jobs have finished for job_type={job_type}, proc_date={proc_date}...")
+
+        break
+
+
+
+
 
 
         # Code-timing benchmark.
