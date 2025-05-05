@@ -264,7 +264,7 @@ def wait_until_aws_batch_jobs_finished(job_type,proc_date,config_input,dbh):
             jid = jobs_record[0]
             awsbatchjobid = jobs_record[1]
 
-            if njobs_total < 3000 or n_checked % 100 = 0:
+            if njobs_total < 3000 or n_checked % 100 == 0:
                 print(f"Calling client.describe_jobs for jobs={awsbatchjobid}, n_checked={n_checked}")
 
             response = client.describe_jobs(jobs=[awsbatchjobid,])
@@ -276,7 +276,7 @@ def wait_until_aws_batch_jobs_finished(job_type,proc_date,config_input,dbh):
 
             job_status = response['jobs'][0]['status']
 
-            if njobs_total < 3000 or n_checked % 100 = 0:
+            if njobs_total < 3000 or n_checked % 100 == 0:
                 print("job_status =",job_status)
 
             if job_status == "SUCCEEDED":
@@ -391,7 +391,7 @@ if __name__ == '__main__':
                                               register_science_pipeline_jobs_code,
                                               proc_date]
 
-        exitcode_from_register_science_pipeline_jobs_cmd = util.execute_command(register_science_pipeline_jobs_cmd,fname_out)
+        #exitcode_from_register_science_pipeline_jobs_cmd = util.execute_command(register_science_pipeline_jobs_cmd,fname_out)
 
 
         # Code-timing benchmark.
@@ -449,7 +449,7 @@ if __name__ == '__main__':
                                               register_postproc_pipeline_jobs_code,
                                               proc_date]
 
-        exitcode_from_register_postproc_pipeline_jobs_cmd = util.execute_command(register_postproc_pipeline_jobs_cmd)
+        exitcode_from_register_postproc_pipeline_jobs_cmd = util.execute_command(register_postproc_pipeline_jobs_cmd,fname_out)
 
 
         # Code-timing benchmark.
