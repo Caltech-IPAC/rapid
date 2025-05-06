@@ -161,6 +161,21 @@ awaicgen_output_mosaic_image_file = config_input['AWAICGEN']['awaicgen_output_mo
 zogy_output_diffimage_file = config_input['ZOGY']['zogy_output_diffimage_file']
 
 
+# Print variables.
+
+print("verbose =",verbose)
+print("debug =",debug)
+print("job_info_s3_bucket_base =",job_info_s3_bucket_base)
+print("job_logs_s3_bucket_base =",job_logs_s3_bucket_base)
+print("product_s3_bucket_base =",product_s3_bucket_base)
+print("job_config_filename_base =",job_config_filename_base)
+print("product_config_filename_base =",product_config_filename_base)
+print("awaicgen_output_mosaic_image_file =",awaicgen_output_mosaic_image_file)
+print("zogy_output_diffimage_file =",zogy_output_diffimage_file)
+print("startdatetime =",startdatetime)
+print("enddatetime =",enddatetime)
+
+
 # Set signal hander.
 
 signal.signal(signal.SIGINT, signal_handler)
@@ -283,6 +298,11 @@ def wait_until_aws_batch_jobs_finished(job_type,proc_date,config_input,dbh):
                 n_succeeded += 1
             elif job_status == "FAILED":
                 n_failed += 1
+            elif job_status == "RUNNABLE":
+                break
+            elif job_status == "STARTING":
+                break
+            elif job_status == "RUNNING":
                 break
 
         njobs_succeeded_failed = n_succeeded + n_failed
@@ -351,11 +371,11 @@ if __name__ == '__main__':
         os.environ['STARTDATETIME'] = startdatetime
         os.environ['ENDDATETIME'] = enddatetime
 
-        fname_out = launch_science_pipelines_code.replace(".py","_" + proc_date + ".out")
+        fname_out = "launch_science_pipelines_code" + "_" + proc_date + ".out"
         launch_science_pipelines_cmd = [python_cmd,
                                         launch_science_pipelines_code]
 
-        exitcode_from_launch_science_pipelines_cmd = util.execute_command(launch_science_pipelines_cmd,fname_out)
+        #exitcode_from_launch_science_pipelines_cmd = util.execute_command(launch_science_pipelines_cmd,fname_out)
 
 
         # Code-timing benchmark.
@@ -387,7 +407,7 @@ if __name__ == '__main__':
 
         # Register metadata from science pipelines into operations database.
 
-        fname_out = register_science_pipeline_jobs_code.replace(".py","_" + proc_date + ".out")
+        fname_out = "register_science_pipeline_jobs_code" + "_" + proc_date + ".out"
         register_science_pipeline_jobs_cmd = [python_cmd,
                                               register_science_pipeline_jobs_code,
                                               proc_date]
@@ -409,7 +429,7 @@ if __name__ == '__main__':
 
         os.environ['JOBPROCDATE'] = proc_date
 
-        fname_out = launch_postproc_pipelines_code.replace(".py","_" + proc_date + ".out")
+        fname_out = "launch_postproc_pipelines_code" + "_" + proc_date + ".out"
         launch_postproc_pipelines_cmd = [python_cmd,
                                         launch_postproc_pipelines_code]
 
@@ -445,7 +465,7 @@ if __name__ == '__main__':
 
         # Register metadata from post-processing pipelines into operations database.
 
-        fname_out = register_postproc_pipeline_jobs_code.replace(".py","_" + proc_date + ".out")
+        fname_out = "register_postproc_pipeline_jobs_code" + "_" + proc_date + ".out"
         register_postproc_pipeline_jobs_cmd = [python_cmd,
                                               register_postproc_pipeline_jobs_code,
                                               proc_date]
