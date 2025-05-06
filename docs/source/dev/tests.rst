@@ -279,6 +279,9 @@ Here is a histogram of the science-pipeline job execution times, measured from p
 
 .. image:: science_pipeline_execution_times_20250505.png
 
+The mode of the histogram indicates the job elapsed times are approximately 3 minutes shorter than
+those from the 4/28/2025 test, which is expected since all reference images needed for this test
+are already available and none had to be generated on the fly.
 
 Other key timing benchmarks for this test, which were done on an 8-core job-launcher machine (``t3.2xlarge`` EC2 instance)
 with 8-core multiprocessing:
@@ -297,7 +300,16 @@ The numbers of reference images per filter ID that were actually used in this te
 
 .. code-block::
 
-    rapidopsdb=> select a.fid,count(*) from refimages a, refimmeta b where a.rfid = b.rfid and vbest>0 and nframes >= 10 and cov5percent >= 60 group by a.fid order by a.fid;
+    rapidopsdb=> select a.fid,count(*)
+                 from RefImages a, RefImMeta b
+                 where a.rfid = b.rfid
+                 and status > 0
+                 and vbest > 0
+                 and nframes >= 10
+                 and cov5percent >= 60
+                 group by a.fid
+                 order by a.fid;
+
      fid | count
     -----+-------
        1 |   196
