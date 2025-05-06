@@ -317,6 +317,7 @@ if __name__ == '__main__':
 
     while True:
 
+
         # Get current date and time.
 
         datetime_utc_now = datetime.utcnow()
@@ -354,7 +355,7 @@ if __name__ == '__main__':
         launch_science_pipelines_cmd = [python_cmd,
                                         launch_science_pipelines_code]
 
-        #exitcode_from_launch_science_pipelines_cmd = util.execute_command(launch_science_pipelines_cmd,fname_out)
+        exitcode_from_launch_science_pipelines_cmd = util.execute_command(launch_science_pipelines_cmd,fname_out)
 
 
         # Code-timing benchmark.
@@ -391,7 +392,7 @@ if __name__ == '__main__':
                                               register_science_pipeline_jobs_code,
                                               proc_date]
 
-        #exitcode_from_register_science_pipeline_jobs_cmd = util.execute_command(register_science_pipeline_jobs_cmd,fname_out)
+        exitcode_from_register_science_pipeline_jobs_cmd = util.execute_command(register_science_pipeline_jobs_cmd,fname_out)
 
 
         # Code-timing benchmark.
