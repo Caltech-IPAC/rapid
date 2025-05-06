@@ -50,6 +50,7 @@ print("register_postproc_pipeline_jobs_code =", register_postproc_pipeline_jobs_
 # Compute start time for benchmark.
 
 start_time_benchmark = time.time()
+start_time_benchmark_at_start = start_time_benchmark
 
 
 # Compute processing datetime (UT) and processing datetime (Pacific time).
@@ -375,7 +376,7 @@ if __name__ == '__main__':
         launch_science_pipelines_cmd = [python_cmd,
                                         launch_science_pipelines_code]
 
-        #exitcode_from_launch_science_pipelines_cmd = util.execute_command(launch_science_pipelines_cmd,fname_out)
+        ashexitcode_from_launch_science_pipelines_cmd = util.execute_command(launch_science_pipelines_cmd,fname_out)
 
 
         # Code-timing benchmark.
@@ -532,8 +533,7 @@ if __name__ == '__main__':
 
     end_time_benchmark = time.time()
     print("Elapsed time in seconds to run VPO =",
-        end_time_benchmark - start_time_benchmark)
-    start_time_benchmark = end_time_benchmark
+        end_time_benchmark - start_time_benchmark_at_start)
 
 
     # Termination.
