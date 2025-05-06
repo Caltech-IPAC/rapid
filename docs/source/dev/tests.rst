@@ -150,7 +150,7 @@ Need to reconfigure the job definition to have retry attempts.
 
     rapidopsdb=> select exitcode,count(*) from jobs where ppid=15 and cast(launched as date) = '20250429' group by exitcode order by exitcode;
     exitcode | count
-   ----------+-------
+    ---------+-------
            0 |  5107
              |   115
     (2 rows)
@@ -159,7 +159,7 @@ Need to reconfigure the job definition to have retry attempts.
 4/30/2025
 ************************************
 
-Rerun of 4/29/2025 large test on select 5222 exposure-SCAs acquired 6 months after the data from the standard test,
+Rerun of 4/29/2025 large test on select 5,222 exposure-SCAs acquired 6 months after the data from the standard test,
 using a subset of the reference images existing in the database that were generated on 4/28/2025.  The exposure-SCAs
 are all associated with fields having reference images that have ``nframes >= 10`` and ``cov5percent >= 60%``.
 AWS Batch machines for science-pipeline jobs have 2 vCPUs and 16 GB memory.
@@ -194,3 +194,114 @@ Here is a histogram of the job execution times, measured from pipeline start to 
 The mode of the histogram indicates the job elapsed times are approximately 3 minutes shorter than
 those from the 4/28/2025 test, which is expected since all reference images needed for this test
 are already available and none had to be generated on the fly.
+
+This test utilized a fraction of the reference images that were previously generated in the standard test.
+The numbers of reference images per filter ID that were actually used in this test are listed as follows:
+
+.. code-block::
+
+    rapidopsdb=> select a.fid,count(*) from refimages a, refimmeta b where a.rfid = b.rfid and vbest>0 and nframes >= 10 and cov5percent >= 60 group by a.fid order by a.fid;
+     fid | count
+    -----+-------
+       1 |   196
+       2 |   189
+       3 |     5
+       4 |     7
+    (4 rows)
+
+
+5/5/2025
+************************************
+
+New large test on select 10,859 exposure-SCAs acquired many months after the data from the standard test,
+using a subset of the reference images existing in the database that were generated on 4/28/2025.  The exposure-SCAs
+are all associated with fields having reference images that have ``nframes >= 10`` and ``cov5percent >= 60%``.
+AWS Batch machines for science-pipeline jobs have 2 vCPUs and 16 GB memory.
+
+.. code-block::
+
+    export STARTDATETIME="2029-07-15 00:00:00"
+    export ENDDATETIME="2030-03-15 00:00:00"
+    export NFRAMES=10
+    export COV5PERCENT=60
+    python3.11 /code/pipeline/awsBatchSubmitJobs_launchSciencePipelinesForDateTimeRangeAndSuperiorRefImages.py >& awsBatchSubmitJobs_launchSciencePipelinesForDateTimeRangeAndSuperiorRefImages.out &
+
+Here is how the number of exposure-SCAs in this test are selected, utilizing the myriad of metadata in the RAPID operations database:
+
+.. code-block::
+
+    rapidopsdb=> select count(*)
+                 from L2Files a, RefImages b, RefImMeta c
+                 where a.field = b.field
+                 and b.rfid = c.rfid
+                 and a.fid = b.fid
+                 and b.status > 0
+                 and b.vbest > 0
+                 and cov5percent >= 60
+                 and nframes >= 10
+                 and a.dateobs > '2029-07-15 00:00:00'
+                 and a.dateobs < '2030-03-15 00:00:00';
+
+     count
+    -------
+     10859
+    (1 row)
+
+
+All jobs for both the science pipeline and the post-processing pipeline successfully ran:
+
+.. code-block::
+
+    rapidopsdb=> select ppid,exitcode,count(*) from jobs where cast(launched as date) = '20250505' group by ppid, exitcode order by ppid, exitcode;
+     ppid | exitcode | count
+    ------+----------+-------
+       15 |        0 | 10859
+       17 |        0 | 10859
+    (2 rows)
+
+The expected number of difference images where generated:
+
+.. code-block::
+
+    rapidopsdb=> select count(*) from diffimages where created >= '20250505' and vbest>0;
+     count
+    -------
+     10859
+    (1 row)
+
+
+Here is a histogram of the AWS Batch queue wait times for an available AWS Batch machine on which to run a science-pipeline job:
+
+.. image:: science_pipeline_queue_wait_times_20250505.png
+
+
+Here is a histogram of the science-pipeline job execution times, measured from pipeline start to pipeline finish on an AWS Batch machine:
+
+.. image:: science_pipeline_execution_times_20250505.png
+
+
+Other key timing benchmarks for this test, which were done on an 8-core job-launcher machine (``t3.2xlarge`` EC2 instance)
+with 8-core multiprocessing:
+
+=======================================================    ==========================
+Task                                                        Elapsed time in seconds
+=======================================================    ==========================
+Launch science pipelines                                    6029
+Register Jobs records for post-processing pipelines         2067
+Launch post-processing pipelines                            5967
+Register Jobs records for post-processing pipelines         343
+=======================================================    ==========================
+
+This test utilized a fraction of the reference images that were previously generated in the standard test.
+The numbers of reference images per filter ID that were actually used in this test are listed as follows:
+
+.. code-block::
+
+    rapidopsdb=> select a.fid,count(*) from refimages a, refimmeta b where a.rfid = b.rfid and vbest>0 and nframes >= 10 and cov5percent >= 60 group by a.fid order by a.fid;
+     fid | count
+    -----+-------
+       1 |   196
+       2 |   189
+       3 |     5
+       4 |     7
+    (4 rows)
