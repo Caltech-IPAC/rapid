@@ -64,7 +64,7 @@ have 2 vCPUs and 16 GB memory.
 
 .. code-block::
 
-    export STARTDATETIME="2028-09-08 04:00:00"
+    export STARTDATETIME="2028-09-07 00:00:00"
     export ENDDATETIME="2028-09-08 08:30:00"
     python3.11 /code/pipeline/awsBatchSubmitJobs_launchSciencePipelinesForDateTimeRange.py >& awsBatchSubmitJobs_launchSciencePipelinesForDateTimeRange_jid_ge_2_le_90.out &
 
