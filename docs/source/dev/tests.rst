@@ -1,6 +1,9 @@
 RAPID Pipeline Testing
 ####################################################
 
+Overview
+************************************
+
 The tests described below are organized by processing date.
 
 OpenUniverse simulated data are used, which cover the following observation range::
@@ -22,7 +25,9 @@ Test                       No. of images  No. of ref. images made  Start obs. da
 5/6/2025                          4,858              3,884         2028-09-08 08:30:00  2028-09-12 00:00:00  All images in obs. range
 =========================  =============  =======================  ===================  ===================  =====================================
 
-In the above table, superior reference images are defined as having ``nframes >= 10`` and ``cov5percent >= 60%``.
+In the above table, superior reference images are defined as having ``nframes >= 10`` and ``cov5percent >= 60%``.  In other words, superior
+reference images have at least 10 frames stacked somewhere in the field, although the overlap will vary, and 60% or more of the reference-image pixels
+have a coverage depth of at least 5 frames.
 
 Here is Perl code (``elapsed.pl``) to query the operations database
 for science-pipeline performance results::
