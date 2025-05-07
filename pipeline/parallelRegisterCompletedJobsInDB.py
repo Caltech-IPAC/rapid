@@ -162,7 +162,7 @@ def run_single_core_job(jids,log_fnames,index_thread):
 
     print("index_thread,njobs =",index_thread,njobs)
 
-    thread_work_file = swname.replace(".py","_thread") + str(index_thread) + "_log.txt"
+    thread_work_file = swname.replace(".py","_thread") + str(index_thread) + ".out"
 
     try:
         fh = open(thread_work_file, 'w', encoding="utf-8")
