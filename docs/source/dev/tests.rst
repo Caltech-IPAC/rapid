@@ -425,3 +425,25 @@ Here is a look-up table all of the filter IDs versus filter names included in th
        8 | W146
     (8 rows)
 
+
+Here is a histogram of the AWS Batch queue wait times for an available AWS Batch machine on which to run a pipeline job:
+
+.. image:: science_pipeline_queue_wait_times_20250506.png
+
+Here is a histogram of the job execution times, measured from pipeline start to pipeline finish on an AWS Batch machine:
+
+.. image:: science_pipeline_execution_times_20250506.png
+
+Here is a 2-D histogram of the job execution times versus number of input frames in making reference images on the fly in this test:
+
+.. image:: sci_pipe_exec_times_vs_nframes_20250506.png
+
+Here is a histogram of ``nframes`` for all reference images made in this test:
+
+.. image:: sci_pipe_exec_times_vs_nframes_20250506.png
+
+Here is a histogram of ``cov5percent`` for all reference images made in this test:
+
+.. image:: sci_pipe_cov5percent_20250506.png
+
+
