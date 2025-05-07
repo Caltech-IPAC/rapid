@@ -376,7 +376,7 @@ if __name__ == '__main__':
         launch_science_pipelines_cmd = [python_cmd,
                                         launch_science_pipelines_code]
 
-        ashexitcode_from_launch_science_pipelines_cmd = util.execute_command(launch_science_pipelines_cmd,fname_out)
+        exitcode_from_launch_science_pipelines_cmd = util.execute_command(launch_science_pipelines_cmd,fname_out)
 
 
         # Code-timing benchmark.
