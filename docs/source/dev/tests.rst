@@ -440,7 +440,7 @@ Here is a 2-D histogram of the job execution times versus number of input frames
 
 Here is a histogram of ``nframes`` for all reference images made in this test:
 
-.. image:: sci_pipe_exec_times_vs_nframes_20250506.png
+.. image:: sci_pipe_nframes_20250506.png
 
 Here is a histogram of ``cov5percent`` for all reference images made in this test:
 
