@@ -243,6 +243,7 @@ while True:
     except:
         break
 
+print("job_type =",job_type)
 print("njobs_total =",njobs_total)
 print("job_status_to_list =",job_status_to_list)
 if job_status_to_list != "ALL":
