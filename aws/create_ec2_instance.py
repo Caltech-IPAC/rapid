@@ -114,7 +114,7 @@ def create_instance_with_eip(ec2_client,
         ]
 
 
-    # BlockDeviceMappings configuration
+    # BlockDeviceMappings configuration.
     block_device_mappings = [
         {
             'DeviceName': '/dev/sda1',                    # Root device
@@ -180,6 +180,34 @@ def create_instance_with_eip(ec2_client,
 
 
     if running_flag:
+
+
+        # Try to get boot-disk volume ID and then tag it with unique machine name.
+        try:
+
+            response = ec2_client.describe_instances(
+                InstanceIds=[
+                    instance_id
+                ]
+            )
+
+            print("response = ",response)
+
+            volume_id = response['Reservations'][0]['Instances'][0]['BlockDeviceMappings'][0]['Ebs']['VolumeId']
+            print("volume_id =",volume_id)
+
+            response = ec2_client.create_tags(
+                Resources=[volume_id],
+                Tags=[
+                    {
+                        'Key': 'Name',
+                        'Value': unique_machine_name
+                    },
+                ]
+            )
+
+        except:
+            pass
 
 
         # Associate the Elastic IP with the EC2 instance.
