@@ -248,7 +248,7 @@ if __name__ == '__main__':
         Domain='vpc',
         TagSpecifications=[
             {
-                'ResourceType': 'elastic-ip'
+                'ResourceType': 'elastic-ip',
                 'Tags': [
                     {
                         'Key': 'Name',
