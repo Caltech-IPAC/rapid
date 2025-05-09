@@ -34,7 +34,7 @@ boot_disk_volume_size = 128                            # Size in GB
 
 aws_access_key_id = os.getenv('AWS_ACCESS_KEY_ID')
 aws_secret_access_key = os.getenv('AWS_SECRET_ACCESS_KEY')
-aws_unique_machine_name = os.getenv('AWS_UNIQUE_MACHINE_NAME)
+aws_unique_machine_name = os.getenv('AWS_UNIQUE_MACHINE_NAME')
 aws_ami_id = os.getenv('AWS_AMI_ID')
 aws_instance_type = os.getenv('AWS_INSTANCE_TYPE')
 aws_subnet_id = os.getenv('AWS_SUBNET_ID')
