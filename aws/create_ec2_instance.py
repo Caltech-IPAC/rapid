@@ -229,26 +229,40 @@ def create_instance_with_eip(ec2_client,
 if __name__ == '__main__':
 
 
-    # Get EC2 client.
-    ec2_client = boto3.client('ec2')
-
-
-    # Allocate the Elastic IP.
-    response = ec2_client.allocate_address(Domain='vpc')
-    print(f"From allocate_address: response={response}")
-    allocation_id = response['AllocationId']
-    public_ip = response['PublicIp']
-
-
     # Print inputs.
     print("unique_machine_name =",unique_machine_name)
     print("ami_id =",ami_id)
     print("instance_type =",instance_type)
     print("subnet_id =",subnet_id)
     print("security_group_id =",security_group_id)
-    print("allocation_id =",allocation_id)
     print("key_pair_name =",key_pair_name)
     print("boot_disk_volume_size =",boot_disk_volume_size)
+
+
+    # Get EC2 client.
+    ec2_client = boto3.client('ec2')
+
+
+    # Allocate the Elastic IP.
+    response = ec2_client.allocate_address(
+        Domain='vpc',
+        TagSpecifications=[
+            {
+                'ResourceType': 'elastic-ip'
+                'Tags': [
+                    {
+                        'Key': 'Name',
+                        'Value': unique_machine_name
+                    },
+                ]
+            },
+        ]
+    )
+    print(f"From allocate_address: response={response}")
+    allocation_id = response['AllocationId']
+    public_ip = response['PublicIp']
+    print("allocation_id =",allocation_id)
+    print("public_ip =",public_ip)
 
 
     # Create a new EC2 instance and associate the Elastic IP address.
