@@ -21,7 +21,7 @@ print(user)
 
 # Default settings.
 
-unique_machine_name = user . str(date_int)
+unique_machine_name = user + str(date_int)
 ami_id = "ami-04dd23e62ed049936"                       # This is Streetfighter's AMI ID
 instance_type = "t3.2xlarge"                           # This is Streetfighter's instance type
 subnet_id = "subnet-018a469dbf588b7cd"                 # This is Streetfighter's subnet ID
