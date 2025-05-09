@@ -140,6 +140,7 @@ def create_instance_with_eip(ec2_client,
         TagSpecifications = tag_specifications,
         InstanceInitiatedShutdownBehavior='stop'
     )
+    print("instance_response =",instance_response)
     instance_id = instance_response['Instances'][0]['InstanceId']
     print(f"Launched instance with ID: {instance_id}")
 
@@ -152,7 +153,7 @@ def create_instance_with_eip(ec2_client,
 
         print("Check whether EC2 instance is in running state...")
 
-        response = ec2.describe_instance_status(
+        response = ec2_client.describe_instance_status(
             InstanceIds=[
                 instance_id,
             ],
