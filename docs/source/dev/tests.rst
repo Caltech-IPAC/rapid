@@ -166,7 +166,7 @@ Here are all of the filter IDs versus filter names included in the entire OpenUn
 4/29/2025
 ************************************
 
-New large test on select 5222 exposure-SCAs acquired 6 months after the data from the standard test,
+New large test on selectly chosen 5222 exposure-SCAs acquired 6 months after the data from the standard test,
 using a subset of the reference images existing in the database that were generated on 4/28/2025.  The exposure-SCAs
 are all associated with fields having reference images that have ``nframes >= 10`` and ``cov5percent >= 60%``.
 AWS Batch machines for science-pipeline jobs have 2 vCPUs and 16 GB memory.
@@ -196,7 +196,7 @@ Need to reconfigure the job definition to have retry attempts.
 4/30/2025
 ************************************
 
-Rerun of 4/29/2025 large test on select 5,222 exposure-SCAs acquired 6 months after the data from the standard test,
+Rerun of 4/29/2025 large test on selectively chosen 5,222 exposure-SCAs acquired 6 months after the data from the standard test,
 using a subset of the reference images existing in the database that were generated on 4/28/2025.  The exposure-SCAs
 are all associated with fields having reference images that have ``nframes >= 10`` and ``cov5percent >= 60%``.
 AWS Batch machines for science-pipeline jobs have 2 vCPUs and 16 GB memory.
