@@ -14,6 +14,23 @@ OpenUniverse simulated data are used, which cover the following observation rang
      2028-08-17 00:30:48.096 | 2032-11-27 01:23:22.56
     (1 row)
 
+Look-up table all of the filter IDs versus filter names included in the entire OpenUniverse simulated data set:
+
+.. code-block::
+
+    rapidopsdb=> select * from filters order by fid;
+     fid | filter
+    -----+--------
+       1 | F184
+       2 | H158
+       3 | J129
+       4 | K213
+       5 | R062
+       6 | Y106
+       7 | Z087
+       8 | W146
+    (8 rows)
+
 Summary of successful tests conducted thus far:
 
 =========================  =============  =======================  ===================  ===================  =====================================
@@ -233,7 +250,7 @@ The numbers of reference images per filter ID that were actually used in this te
 5/5/2025
 ************************************
 
-New large test on select 10,859 exposure-SCAs acquired many months after the data from the standard test,
+New large test on selectively chosen 10,859 exposure-SCAs acquired many months after the data from the standard test,
 using a subset of the reference images existing in the database that were generated on 4/28/2025.  The exposure-SCAs
 are all associated with fields having reference images that have ``nframes >= 10`` and ``cov5percent >= 60%``.
 AWS Batch machines for science-pipeline jobs have 2 vCPUs and 16 GB memory.
@@ -411,24 +428,6 @@ of reference images broken down by filter ID:
        7 |   808
     (7 rows)
 
-Here is a look-up table all of the filter IDs versus filter names included in the entire OpenUniverse simulated data set:
-
-.. code-block::
-
-    rapidopsdb=> select * from filters order by fid;
-     fid | filter
-    -----+--------
-       1 | F184
-       2 | H158
-       3 | J129
-       4 | K213
-       5 | R062
-       6 | Y106
-       7 | Z087
-       8 | W146
-    (8 rows)
-
-
 Here is a histogram of the AWS Batch queue wait times for an available AWS Batch machine on which to run a pipeline job:
 
 .. image:: science_pipeline_queue_wait_times_20250506.png
@@ -467,9 +466,11 @@ AWS Batch machines for science-pipeline jobs have 2 vCPUs and 16 GB memory.
     python3.11 /code/pipeline/virtualPipelineOperator.py 20250508 >& virtualPipelineOperator_20250508.out &
 
 
+Here is a summary of the pipeline exit codes after the test:
+
 .. code-block::
 
-    select ppid,exitcode,count(*) from jobs where cast(launched as date) = '20250508' group by ppid, exitcode order by ppid, exitcode;
+    rapidopsdb=> select ppid,exitcode,count(*) from jobs where cast(launched as date) = '20250508' group by ppid, exitcode order by ppid, exitcode;
      ppid | exitcode | count
     ------+----------+-------
        15 |        0 |  2924
@@ -494,7 +495,7 @@ for each of the filter IDs included is listed as follows:
 
 .. code-block::
 
-    select fid,count(*) from refimages where vbest>0 and created >= '20250508' group by fid order by fid;
+    rapidopsdb=> select fid,count(*) from refimages where vbest>0 and created >= '20250508' group by fid order by fid;
 
      fid | count
     -----+-------
@@ -509,7 +510,7 @@ of reference images broken down by filter ID:
 
 .. code-block::
 
-    select fid,count(*) from refimages where vbest>0 group by fid order by fid;
+    rapidopsdb=> select fid,count(*) from refimages where vbest>0 group by fid order by fid;
 
     fid | count
     -----+-------
@@ -522,21 +523,84 @@ of reference images broken down by filter ID:
        7 |   808
     (7 rows)
 
-Here is a look-up table all of the filter IDs versus filter names included in the entire OpenUniverse simulated data set:
+
+5/10/2025
+************************************
+
+Test to process 13,850 exposure-SCA images, all in the observation date/time ranges given below, making
+reference images on the fly as needed.
+The observation date/time range is relatively early in the available range of the OpenUniverse simulated images.
+This test exercised, for the second time, the new Virtual Pipeline Operator (VPO) running in single-processing-date mode,
+only this test processed the largest number of images to date in a single run.  Input images from filter IDs 1-7 in approximately
+equal numbers were processed by this test.
+AWS Batch machines for science-pipeline jobs have 2 vCPUs and 16 GB memory.
+
 
 .. code-block::
 
-    rapidopsdb=> select * from filters order by fid;
-     fid | filter
-    -----+--------
-       1 | F184
-       2 | H158
-       3 | J129
-       4 | K213
-       5 | R062
-       6 | Y106
-       7 | Z087
-       8 | W146
-    (8 rows)
+    export STARTDATETIME="2028-09-15 00:00:00"
+    export ENDDATETIME="2028-09-25 00:00:00"
+
+    python3.11 /code/pipeline/virtualPipelineOperator.py 20250510 >& virtualPipelineOperator_20250510.out &
 
 
+Here is a summary of the pipeline exit codes after the test (which are not unexpected):
+
+.. code-block::
+
+    rapidopsdb=> select ppid,exitcode,count(*) from jobs where cast(launched as date) = '20250510' group by ppid, exitcode order by ppid, exitcode;
+     ppid | exitcode | count
+    ------+----------+-------
+       15 |        0 | 13506
+       15 |        4 |    15
+       15 |       33 |   329
+       17 |        0 | 13521
+    (4 rows)
+
+
+=======================================================    ==========================
+Pipeline condition at termination                           Exitcode
+=======================================================    ==========================
+Normal                                                         0
+SFFT failed due to singular matrix                             4
+Reference image not available and could not be made           33
+=======================================================    ==========================
+
+Pipeline exit codes in the 0-31 range are considered normal, in the 32-63 range a warning, and 64 or greater an error.
+Even though SFFT might have failed, a difference image is still generated by ZOGY.
+
+This test generated 4,876 new reference images, for all the aforementioned seven filters and a variety of fields.  The number of fields
+for each of the filter IDs included is listed as follows:
+
+.. code-block::
+
+    rapidopsdb=> select fid,count(*) from refimages where vbest>0 and created >= '20250510' group by fid order by fid;
+
+     fid | count
+    -----+-------
+       1 |   533
+       2 |   523
+       3 |   816
+       4 |   523
+       5 |   825
+       6 |   825
+       7 |   831
+    (7 rows)
+
+These reference images, plus those generated by previous tests, give the following total numbers
+of reference images broken down by filter ID:
+
+.. code-block::
+
+    rapidopsdb=> select fid,count(*) from refimages where vbest>0 group by fid order by fid;
+
+     fid | count
+    -----+-------
+       1 |  1822
+       2 |  1830
+       3 |  1656
+       4 |  1828
+       5 |  1646
+       6 |  1646
+       7 |  1639
+    (7 rows)
