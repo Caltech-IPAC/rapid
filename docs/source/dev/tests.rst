@@ -323,14 +323,14 @@ are already available and none had to be generated on the fly.
 Other key timing benchmarks for this test, which were done on an 8-core job-launcher machine (``t3.2xlarge`` EC2 instance)
 with 8-core multiprocessing:
 
-=======================================================    ==========================
-Task                                                        Elapsed time in seconds
-=======================================================    ==========================
-Launch science pipelines                                    6,029
-Register Jobs records for science pipelines                 2,067
-Launch post-processing pipelines                            5,967
-Register Jobs records for post-processing pipelines          343
-=======================================================    ==========================
+===================================================================    ==========================
+Task                                                                   Elapsed time in seconds
+===================================================================    ==========================
+Launch science pipelines                                               6,029
+Register Jobs, Diffimages, RefImages records for science pipelines     2,067
+Launch post-processing pipelines                                       5,967
+Register Jobs records for post-processing pipelines                      343
+===================================================================    ==========================
 
 This test utilized a fraction of the reference images that were previously generated in the standard test.
 The numbers of reference images per filter ID that were actually used in this test are listed as follows:
@@ -608,11 +608,11 @@ of reference images broken down by filter ID:
 Other key timing benchmarks for this test, which were done on an 8-core job-launcher machine (``t3.2xlarge`` EC2 instance)
 with 8-core multiprocessing:
 
-=======================================================    ==========================
-Task                                                        Elapsed time in seconds
-=======================================================    ==========================
-Launch science pipelines                                    7,747
-Register Jobs records for science pipelines                 2,545
-Launch post-processing pipelines                            7,667
-Register Jobs records for post-processing pipelines           420
-=======================================================    ==========================
+===================================================================    ==========================
+Task                                                                   Elapsed time in seconds
+===================================================================    ==========================
+Launch science pipelines                                               7,747
+Register Jobs, Diffimages, RefImages records for science pipelines     2,545
+Launch post-processing pipelines                                       7,667
+Register Jobs records for post-processing pipelines                    420
+===================================================================    ==========================
