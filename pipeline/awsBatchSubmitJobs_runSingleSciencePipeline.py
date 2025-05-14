@@ -1088,7 +1088,11 @@ if __name__ == '__main__':
                     "./" + filename_reffile,
                     filename_scisegm,
                     filename_refsegm,
-                    "--crossconv"]
+                    "--crossconv",
+                    "--scipsf",
+                    filename_psf,
+                    "--refpsf",
+                    filename_refimage_psf]
 
         exitcode_from_sfft = util.execute_command(sfft_cmd)
 
