@@ -33,16 +33,17 @@ Look-up table all of the filter IDs versus filter names included in the entire O
 
 Summary of successful tests conducted thus far:
 
-=========================  =============  =======================  ===================  ===================  =====================================
+=========================  =============  =======================  ===================  ===================  =============================================================================
 Test                       No. of images  No. of ref. images made  Start obs. datetime  End obs. datetime    Description
-=========================  =============  =======================  ===================  ===================  =====================================
+=========================  =============  =======================  ===================  ===================  =============================================================================
 4/28/2025 "standard test"         2,069              1,696         2028-09-07 00:00:00  2028-09-08 08:30:00  All images in obs. range
 4/30/2025                         5,222              None          2029-03-15 00:00:00  2029-07-15 00:00:00  Only fields with superior ref. images
 5/5/2025                         10,859              None          2029-07-15 00:00:00  2030-03-15 00:00:00  Only fields with superior ref. images
 5/6/2025                          4,858              3,884         2028-09-08 08:30:00  2028-09-12 00:00:00  All images in obs. range
 5/8/2025                          3,020              1,500         2028-09-12 00:00:00  2028-09-15 00:00:00  All images in obs. range
 5/10/2025                        13,850              4,876         2028-09-15 00:00:00  2028-09-25 00:00:00  All images in obs. range
-=========================  =============  =======================  ===================  ===================  =====================================
+5/14/2025                         2,069              None          2028-09-07 00:00:00  2028-09-08 08:30:00  Repeat standard test with SFFT --crossconv flag.  Use existing ref. images.
+=========================  =============  =======================  ===================  ===================  =============================================================================
 
 In the above table, superior reference images are defined as having ``nframes >= 10`` and ``cov5percent >= 60%``.  In other words, superior
 reference images have at least 10 frames stacked somewhere in the field, although the overlap will vary, and 60% or more of the reference-image pixels
@@ -616,3 +617,13 @@ Register Jobs, Diffimages, RefImages records for science pipelines     2,545
 Launch post-processing pipelines                                       7,667
 Register Jobs records for post-processing pipelines                    420
 ===================================================================    ==========================
+
+
+
+
+5/10/2025
+************************************
+
+Same as 4/28/2025 standard test, except that SFFT was run with the ``--crossconv`` flag.  No new reference images
+are made, as they already exist.  The resulting decorrelated difference-image file, dcdiff.fits, is copied to the
+S3 product bucket, along with the other products.
