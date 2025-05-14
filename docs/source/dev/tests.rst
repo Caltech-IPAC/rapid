@@ -42,7 +42,7 @@ Test                       No. of images  No. of ref. images made  Start obs. da
 5/6/2025                          4,858              3,884         2028-09-08 08:30:00  2028-09-12 00:00:00  All images in obs. range
 5/8/2025                          3,020              1,500         2028-09-12 00:00:00  2028-09-15 00:00:00  All images in obs. range
 5/10/2025                        13,850              4,876         2028-09-15 00:00:00  2028-09-25 00:00:00  All images in obs. range
-5/14/2025                         2,069              None          2028-09-07 00:00:00  2028-09-08 08:30:00  Repeat standard test with SFFT ``--crossconv flag``.  Use existing ref. images.
+5/14/2025                         2,069              None          2028-09-07 00:00:00  2028-09-08 08:30:00  Repeat standard test with SFFT ``--crossconv`` flag.  Use existing ref. images.
 =========================  =============  =======================  ===================  ===================  ================================================================================
 
 In the above table, superior reference images are defined as having ``nframes >= 10`` and ``cov5percent >= 60%``.  In other words, superior
