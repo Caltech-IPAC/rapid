@@ -1086,7 +1086,7 @@ if __name__ == '__main__':
             filename_sfftdiffimage = 'sfftdiffimage_masked.fits'
 
         filename_sfftsoln = 'sfftsoln.fits'
-        filename_dcdiff = 'dcdiff.fits'
+        filename_dcdiff = 'ssfftdiffimage_dconv_masked.fits'
 
         # A quirk in the software requires prepended "./" to input filenames.
         sfft_cmd = [python_cmd,
