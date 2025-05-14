@@ -1082,10 +1082,11 @@ if __name__ == '__main__':
 
         if crossconv_flag:
             filename_sfftdiffimage = 'sfftdiffimage_cconv_masked.fits'
+            filename_sfftsoln = 'sfftsoln_cconv.fits'
         else:
             filename_sfftdiffimage = 'sfftdiffimage_masked.fits'
+            filename_sfftsoln = 'sfftsoln.fits'
 
-        filename_sfftsoln = 'sfftsoln.fits'
         filename_dcdiff = 'ssfftdiffimage_dconv_masked.fits'
 
         # A quirk in the software requires prepended "./" to input filenames.
