@@ -1079,6 +1079,7 @@ if __name__ == '__main__':
         filename_refsegm = 'sfftrefsegm.fits'
         filename_sfftdiffimage = 'sfftdiffimage_masked.fits'
         filename_sfftsoln = 'sfftsoln.fits'
+        filename_dcdiff = 'dcdiff.fits'
 
         # A quirk in the software requires prepended "./" to input filenames.
         sfft_cmd = [python_cmd,
@@ -1086,7 +1087,8 @@ if __name__ == '__main__':
                     "./" + filename_scifile,
                     "./" + filename_reffile,
                     filename_scisegm,
-                    filename_refsegm]
+                    filename_refsegm,
+                    "--crossconv"]
 
         exitcode_from_sfft = util.execute_command(sfft_cmd)
 
@@ -1157,16 +1159,19 @@ if __name__ == '__main__':
             product_s3_bucket = product_s3_bucket_base
             s3_object_name_sfftdiffimage = job_proc_date + "/jid" + str(jid) + "/" + filename_sfftdiffimage
             s3_object_name_sfftsoln = job_proc_date + "/jid" + str(jid) + "/" + filename_sfftsoln
+            s3_object_name_dcdiff = job_proc_date + "/jid" + str(jid) + "/" + filename_dcdiff
             s3_object_name_sfftdiffimage_unc = job_proc_date + "/jid" + str(jid) + "/" + filename_sfftdiffimage_unc
             s3_object_name_sfftdiffimage_catalog = job_proc_date + "/jid" + str(jid) + "/" + filename_sfftdiffimage_sextractor_catalog
 
             filenames = [filename_sfftdiffimage,
                          filename_sfftsoln,
+                         filename_dcdiff,
                          filename_sfftdiffimage_unc,
                          filename_sfftdiffimage_sextractor_catalog]
 
             objectnames = [s3_object_name_sfftdiffimage,
                            s3_object_name_sfftsoln,
+                           s3_object_name_dcdiff,
                            s3_object_name_sfftdiffimage_unc,
                            s3_object_name_sfftdiffimage_catalog]
 
