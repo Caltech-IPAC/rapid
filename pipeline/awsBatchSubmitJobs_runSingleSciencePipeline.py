@@ -18,6 +18,7 @@ import pipeline.referenceImageSubs as rfis
 import pipeline.differenceImageSubs as dfis
 
 start_time_benchmark = time.time()
+start_time_benchmark_at_start = start_time_benchmark
 
 
 swname = "awsBatchSubmitJobs_runSingleSciencePipeline.py"
@@ -1258,6 +1259,13 @@ if __name__ == '__main__':
     print("Elapsed time in seconds after uploading products at pipeline end =",
         end_time_benchmark - start_time_benchmark)
     start_time_benchmark = end_time_benchmark
+
+
+    # Code-timing benchmark overall.
+
+    end_time_benchmark = time.time()
+    print("Elapsed time in seconds to run one instance of science pipeline =",
+        end_time_benchmark - start_time_benchmark_at_start)
 
 
     # Termination.
