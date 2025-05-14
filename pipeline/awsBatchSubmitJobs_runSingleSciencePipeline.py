@@ -1077,7 +1077,14 @@ if __name__ == '__main__':
         filename_reffile = output_resampled_gainmatched_reference_image
         filename_scisegm = 'sfftscisegm.fits'
         filename_refsegm = 'sfftrefsegm.fits'
-        filename_sfftdiffimage = 'sfftdiffimage_masked.fits'
+
+        crossconv_flag = True
+
+        if crossconv_flag:
+            filename_sfftdiffimage = 'sfftdiffimage_cconv_masked.fits'
+        else:
+            filename_sfftdiffimage = 'sfftdiffimage_masked.fits'
+
         filename_sfftsoln = 'sfftsoln.fits'
         filename_dcdiff = 'dcdiff.fits'
 
@@ -1087,12 +1094,14 @@ if __name__ == '__main__':
                     "./" + filename_scifile,
                     "./" + filename_reffile,
                     filename_scisegm,
-                    filename_refsegm,
-                    "--crossconv",
-                    "--scipsf",
-                    filename_psf,
-                    "--refpsf",
-                    filename_refimage_psf]
+                    filename_refsegm]
+
+        if crossconv_flag:
+            sfft_cmd.append("--crossconv")
+            sfft_cmd.append("--scipsf")
+            sfft_cmd.append(filename_psf)
+            sfft_cmd.append("--refpsf")
+            sfft_cmd.append(filename_refimage_psf)
 
         exitcode_from_sfft = util.execute_command(sfft_cmd)
 
