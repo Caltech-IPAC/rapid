@@ -42,6 +42,16 @@ for my_bucket_input_object in my_bucket_input.objects.all():
 
 for input_fits_file in input_fits_files:
 
+
+    # Download file from input S3 bucket to local machine.
+
+    s3_object_input_fits_file = "s3://" + bucket_name_input + "/" + input_fits_file
+    download_cmd = ['aws','s3','cp',s3_object_input_fits_file]
+    exitcode_from_gunzip = util.execute_command(download_cmd)
+
+
+    # Create output FITS filename for working directory.
+
     output_fits_file = input_fits_file.replace("_lvl02","").replace("rimtimsim/","rimtimsim_lite/")\
         .replace("_field03_rampfitted_exposureno","").replace("sim.fits","lite.fits")
 
