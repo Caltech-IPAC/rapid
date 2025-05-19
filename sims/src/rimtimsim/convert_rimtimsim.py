@@ -46,13 +46,13 @@ for my_bucket_input_object in my_bucket_input.objects.all():
             subdir_only = filename_match.group(1)
             only_fname_input = filename_match.group(2)
             print("-----0-----> subdir_only =",subdir_only)
-            print("-----1-----> only_gzfname_input =",only_fname_input)
+            print("-----1-----> only_fname_input =",only_fname_input)
 
         except:
             print("-----2-----> No match in",fname_input)
             continue
 
-            input_fits_files.append(only_fname_input)
+        input_fits_files.append(only_fname_input)
 
 
 for input_fits_file in input_fits_files:
