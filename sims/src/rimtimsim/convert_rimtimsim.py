@@ -15,13 +15,14 @@ rimtimsim_lite/rimtimsim_WFI_F087_SCA02_000017675_lite.fits
 from astropy.io import fits
 import numpy as np
 import boto3
+import re
 
 import modules.utils.rapid_pipeline_subs as util
 
 
 bucket_name_input = "rimtimsim-250513"
 bucket_name_output = "rimtimsim-250513-lite"
-
+input_subdir = "simulated_image_data"
 
 # Parse input files in input S3 bucket.
 
@@ -37,7 +38,21 @@ for my_bucket_input_object in my_bucket_input.objects.all():
 
     fname_input = my_bucket_input_object.key
 
-    input_fits_files.append(fname_input)
+    if input_subdir in fname_input:
+
+        filename_match = re.match(r"(.+)/(.+\.fits)",fname_input)
+
+        try:
+            subdir_only = filename_match.group(1)
+            only_fname_input = filename_match.group(2)
+            print("-----0-----> subdir_only =",subdir_only)
+            print("-----1-----> only_gzfname_input =",only_fname_input)
+
+        except:
+            print("-----2-----> No match in",fname_input)
+            continue
+
+            input_fits_files.append(only_fname_input)
 
 
 for input_fits_file in input_fits_files:
@@ -45,7 +60,7 @@ for input_fits_file in input_fits_files:
 
     # Download file from input S3 bucket to local machine.
 
-    s3_object_input_fits_file = "s3://" + bucket_name_input + "/" + input_fits_file
+    s3_object_input_fits_file = "s3://" + bucket_name_input + "/" + input_subdir + "/" + input_fits_file
     download_cmd = ['aws','s3','cp',s3_object_input_fits_file]
     exitcode_from_gunzip = util.execute_command(download_cmd)
 
