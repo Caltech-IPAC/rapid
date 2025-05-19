@@ -13,10 +13,32 @@ rimtimsim_lite/rimtimsim_WFI_F087_SCA02_000017675_lite.fits
 """
 
 from astropy.io import fits
-import glob
 import numpy as np
+import boto3
 
-input_fits_files = glob.glob("rimtimsim/rim*.fits")
+import modules.utils.rapid_pipeline_subs as util
+
+
+bucket_name_input = "rimtimsim-250513"
+bucket_name_output = "rimtimsim-250513-lite"
+
+
+# Parse input files in input S3 bucket.
+
+s3_resource = boto3.resource('s3')
+
+my_bucket_input = s3_resource.Bucket(bucket_name_input)
+
+input_fits_files = []
+
+for my_bucket_input_object in my_bucket_input.objects.all():
+
+    #print(my_bucket_input_object.key)
+
+    fname_input = my_bucket_input_object.key
+
+    input_fits_files.append(fname_input)
+
 
 for input_fits_file in input_fits_files:
 
@@ -45,20 +67,46 @@ for input_fits_file in input_fits_files:
     print("input_fits_file =",input_fits_file)
     print("output_fits_file =",output_fits_file)
 
+
     # Replace primary HDU with empty image data
     hdul[0] = fits.PrimaryHDU(header=hdr,data=None)
 
+
     # Discard uncertainty-image HDU.
     del hdul[1]
+
 
     # Create a new ImageHDU with image data
     np_data = np.array(data)
     new_hdu = fits.ImageHDU(header=hdr,data=np_data.astype(np.float32))
 
+
     # Append the new HDU to the HDU list
     hdul.append(new_hdu)
 
+
     # Write output FITS file.
     hdul.writeto(output_fits_file,overwrite=True,checksum=True)
+
+
+    # Gzip the output FITS file.
+
+    gunzip_cmd = ['gzip', output_fits_file]
+    exitcode_from_gunzip = util.execute_command(gunzip_cmd)
+
+
+    # Upload gzipped file to output S3 bucket.
+
+    s3_client = boto3.resource('s3')
+
+    gzipped_output_fits_file = output_fits_file + ".gz"
+
+    s3_object_name_ = gzipped_output_fits_file
+
+    filenames = [gzipped_output_fits_file]
+
+    objectnames = [s3_object_name]
+
+    util.upload_files_to_s3_bucket(s3_client,bucket_name_output,filenames,objectnames)
 
 
