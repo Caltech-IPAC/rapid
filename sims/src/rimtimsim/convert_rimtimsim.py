@@ -61,7 +61,7 @@ for input_fits_file in input_fits_files:
     # Download file from input S3 bucket to local machine.
 
     s3_object_input_fits_file = "s3://" + bucket_name_input + "/" + input_subdir + "/" + input_fits_file
-    download_cmd = ['aws','s3','cp',s3_object_input_fits_file]
+    download_cmd = ['aws','s3','cp',s3_object_input_fits_file,input_fits_file]
     exitcode_from_gunzip = util.execute_command(download_cmd)
 
 
