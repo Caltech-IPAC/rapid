@@ -198,7 +198,7 @@ echo Exit code from $DB_BUILD_BASE/bin/psql -h localhost -d $DB_ACTUAL_DBNAME -p
 #
 
 echo CREATE USER $DB_USER_APOLLO CONNECTION LIMIT -1 ENCRYPTED PASSWORD \'$DB_USER_APOLLO_PW\'\; > users.sql
-echo GRANT rapidporole to $DB_USER_APOLLO; >> users.sql
+echo GRANT rapidporole to $DB_USER_APOLLO\; >> users.sql
 
 $DB_BUILD_BASE/bin/psql -h localhost -d $DB_ACTUAL_DBNAME -p $PGPORT -U $USER -f users.sql >& users.out
 
