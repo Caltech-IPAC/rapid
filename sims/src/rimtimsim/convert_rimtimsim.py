@@ -126,7 +126,7 @@ for input_fits_file in input_fits_files:
 
     gzipped_output_fits_file = output_fits_file + ".gz"
 
-    s3_object_name_ = gzipped_output_fits_file
+    s3_object_name = gzipped_output_fits_file
 
     filenames = [gzipped_output_fits_file]
 
