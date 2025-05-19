@@ -122,7 +122,7 @@ for input_fits_file in input_fits_files:
 
     # Upload gzipped file to output S3 bucket.
 
-    s3_client = boto3.resource('s3')
+    s3_client = boto3.client('s3')
 
     gzipped_output_fits_file = output_fits_file + ".gz"
 
