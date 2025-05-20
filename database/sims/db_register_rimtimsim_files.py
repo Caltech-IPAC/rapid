@@ -206,7 +206,7 @@ def register_exposure(dbh,header,expid,fid):
     return expid,fid
 
 
-def register_l2file(dbh,header,wcs,subdir_only,file,expid,fid):
+def register_l2file(dbh,header,wcs,file,expid,fid):
 
     #print("header =",header)
 
@@ -374,7 +374,7 @@ def register_l2file(dbh,header,wcs,subdir_only,file,expid,fid):
         print("*** Error: Unexpected value for checksum =",checksum)
         exit(0)
 
-    filename = "s3://" + bucket_name_input + "/" + subdir_only + "/" + file
+    filename = "s3://" + bucket_name_input + "/" + file
     infobits = 0
     status = 0         # Keep status = 0 until vbest is updated in a later step.
 
@@ -506,11 +506,41 @@ def register_files():
     dbh = db.RAPIDDB()
 
 
+    # Loop over subdirs and copy 18 files from S3 bucket with one copy command.
+
+    nfiles = 0
+
     for input_fits_file in input_fits_files:
 
         print("input_fits_file =",input_fits_file)
 
+        # Download file from input S3 bucket to local machine.
 
+        s3_object_input_fits_file = "s3://" + bucket_name_input + "/" + input_subdir + "/" + input_fits_file
+        download_cmd = ['aws','s3','cp',s3_object_input_fits_file,input_fits_file]
+        exitcode_from_gunzip = util.execute_command(download_cmd)
+
+
+        # Register metadata in database.
+
+        header = get_fits_header(input_fits_file)
+        expid,fid = register_exposure(dbh,header,expid,fid)
+
+        wcs = WCS(header)
+
+        rid,version,filename,checksum = register_l2file(dbh,header,wcs,input_fits_file,expid,fid)
+
+        finalize_l2file(dbh,rid,version,filename,checksum)     # Keep same filename and version for now.
+
+        compute_and_register_l2filemeta(dbh,header,wcs,rid,fid)
+
+
+        # Clean up work directory.
+
+        rm_cmd = ['rm','-f',subdir_work + "/" + input_fits_file]
+        exitcode_from_rm = util.execute_command(rm_cmd)
+
+        nfiles += 1
 
 
     # Close database connection.
@@ -519,57 +549,6 @@ def register_files():
 
 
     return
-
-
-
-
-
-    # Loop over subdirs and copy 18 files from S3 bucket with one copy command.
-
-    nfiles = 0
-
-    for subdir_only in files_input.keys():
-
-        print("subdir_only =",subdir_only)
-
-        # Check disk space.
-
-        cmd = "df -h " + subdir_work
-        execute_command(cmd,no_check=True)
-
-        # Copy 18 input files from input S3 bucket to local machine.
-
-        cmd = "aws s3 cp --quiet --recursive s3://" + bucket_name_input + "/" + subdir_only + " " + subdir_work
-        execute_command(cmd)
-
-
-        # Loop over 18 input files in given exposure.
-
-        expid = None
-        fid = None
-
-        for file in files_input[subdir_only]:
-
-            print("file =",file)
-            header = get_fits_header(file)
-            if expid is None:
-                expid,fid = register_exposure(dbh,header,expid,fid)
-
-            wcs = WCS(header)
-
-            rid,version,filename,checksum = register_l2file(dbh,header,wcs,subdir_only,file,expid,fid)
-
-            finalize_l2file(dbh,rid,version,filename,checksum)     # Keep same filename and version for now.
-
-            compute_and_register_l2filemeta(dbh,header,wcs,rid,fid)
-
-
-        # Clean up work directory.
-
-        cmd = "rm -rf " + subdir_work + "/*fits.gz"
-        execute_command(cmd)
-
-        nfiles += 1
 
 
     print("nfiles =",nfiles)
