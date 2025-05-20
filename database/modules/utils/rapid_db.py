@@ -94,6 +94,7 @@ class RAPIDDB:
         dbpass = os.getenv('DBPASS')
         dbserver = os.getenv('DBSERVER')
 
+        print("dbserver,dbname,dbport,dbuser =",dbserver,dbname,dbport,dbuser)
 
         # Connect to database
 
