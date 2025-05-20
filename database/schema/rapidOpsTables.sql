@@ -166,10 +166,10 @@ CREATE TABLE l2files (
     equinox real NOT NULL,                               -- FITS-header keyword: EQUINOX
     ra double precision NOT NULL,                        -- FITS-header keyword: RA_TARG
     dec double precision NOT NULL,                       -- FITS-header keyword: DEC_TARG
-    paobsy real NOT NULL,                                -- FITS-header keyword: PA_OBSY
-    pafpa real NOT NULL,                                 -- FITS-header keyword: PA_FPA
-    zptmag real NOT NULL,                                -- FITS-header keyword: ZPTMAG
-    skymean real NOT NULL,                               -- FITS-header keyword: SKY-MEAN
+    paobsy real,                                         -- FITS-header keyword: PA_OBSY
+    pafpa real,                                          -- FITS-header keyword: PA_FPA
+    zptmag real,                                         -- FITS-header keyword: ZPTMAG
+    skymean real,                                        -- FITS-header keyword: SKY-MEAN
     created timestamp without time zone                  -- Timestamp of database record INSERT or last UPDATE
         DEFAULT now() NOT NULL,
     CONSTRAINT l2files_vbest_check CHECK ((vbest = ANY (ARRAY[0, 1, 2]))),
