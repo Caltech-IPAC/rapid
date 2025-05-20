@@ -109,7 +109,8 @@ DROP FUNCTION registerL2FileMeta (
     y_                   double precision,
     z_                   double precision,
     hp6_                 integer,
-    hp9_                 integer
+    hp9_                 integer,
+    mjdobs_              double precision
 );
 
 

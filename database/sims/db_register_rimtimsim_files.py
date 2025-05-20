@@ -465,6 +465,9 @@ def compute_and_register_l2filemeta(dbh,header,wcs,rid,fid):
     key = "DETECTOR"
     sca = get_keyword_value(header,key).replace("SCA0","")
 
+    key = "MJD-OBS"
+    mjdobs = get_keyword_value(header,key)
+
     sky0 = compute_center_sky_position(header,wcs)
     sky1,sky2,sky3,sky4 = compute_corner_sky_positions(header,wcs)
 
@@ -494,7 +497,7 @@ def compute_and_register_l2filemeta(dbh,header,wcs,rid,fid):
 
     # Register record in database.
 
-    dbh.register_l2filemeta(rid,ra0,dec0,ra1,dec1,ra2,dec2,ra3,dec3,ra4,dec4,x,y,z,hp6,hp9,fid,sca)
+    dbh.register_l2filemeta(rid,ra0,dec0,ra1,dec1,ra2,dec2,ra3,dec3,ra4,dec4,x,y,z,hp6,hp9,fid,sca,mjdobs)
 
 
 def register_files():

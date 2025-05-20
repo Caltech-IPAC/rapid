@@ -391,7 +391,8 @@ create function registerL2FileMeta (
     y_                   double precision,
     z_                   double precision,
     hp6_                 integer,
-    hp9_                 integer
+    hp9_                 integer,
+    mjdobs_              double precision
 )
     returns void as $$
 
@@ -434,7 +435,8 @@ create function registerL2FileMeta (
                  y,
                  z,
                  hp6,
-                 hp9
+                 hp9,
+                 mjdobs
                 )
                 values
                 (rid_,
@@ -454,7 +456,8 @@ create function registerL2FileMeta (
                  y_,
                  z_,
                  hp6_,
-                 hp9_
+                 hp9_,
+                 mjdobs_
                 );
                 exception
                     when no_data_found then
@@ -485,7 +488,8 @@ create function registerL2FileMeta (
                 y = y_,
                 z = z_,
                 hp6 = hp6_,
-                hp9 = hp9_
+                hp9 = hp9_,
+                mjdobs = mjdobs_
             where rid = rid_;
 
         end if;
