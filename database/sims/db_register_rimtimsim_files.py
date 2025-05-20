@@ -209,7 +209,7 @@ def register_exposure(dbh,header):
 
     if "087" in filter:
         filter = "Z087"
-    if "213" in filter:
+    elif "213" in filter:
         filter = "K213"
     else:
         print(f"filter = {filter} not handled; quitting....")
