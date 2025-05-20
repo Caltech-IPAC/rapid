@@ -256,8 +256,8 @@ def register_l2file(dbh,header,wcs,file,expid,fid):
     key = "CRVAL2"
     dec = get_keyword_value(header,key)
 
-    key = "SCA_NUM"
-    sca = get_keyword_value(header,key)
+    key = "DETECTOR"
+    sca = get_keyword_value(header,key).replace("SCA0","")
 
     key = "CRVAL1"
     crval1 = get_keyword_value(header,key)
@@ -462,8 +462,8 @@ def finalize_l2file(dbh,rid,version,filename,checksum):
 
 def compute_and_register_l2filemeta(dbh,header,wcs,rid,fid):
 
-    key = "SCA_NUM"
-    sca = get_keyword_value(header,key)
+    key = "DETECTOR"
+    sca = get_keyword_value(header,key).replace("SCA0","")
 
     sky0 = compute_center_sky_position(header,wcs)
     sky1,sky2,sky3,sky4 = compute_corner_sky_positions(header,wcs)
