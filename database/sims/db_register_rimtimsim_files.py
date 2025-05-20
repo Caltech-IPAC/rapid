@@ -132,7 +132,7 @@ def get_fits_header(file):
     return header
 
 
-def register_exposure(dbh,header,fid):
+def register_exposure(dbh,header):
 
     key = "DATE-OBS"
     try:
@@ -524,7 +524,7 @@ def register_files():
         # Register metadata in database.
 
         header = get_fits_header(input_fits_file)
-        expid,fid = register_exposure(dbh,header,fid)
+        expid,fid = register_exposure(dbh,header)
 
         wcs = WCS(header)
 
