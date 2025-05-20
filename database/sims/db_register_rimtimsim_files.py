@@ -205,7 +205,7 @@ def register_exposure(dbh,header):
        7 | Z087
        8 | W146
     (8 rows)
-    """"
+    """
 
     if "087" in filter:
         filter = "Z087"
