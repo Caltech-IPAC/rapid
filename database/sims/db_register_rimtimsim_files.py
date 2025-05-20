@@ -190,6 +190,32 @@ def register_exposure(dbh,header):
     field = roman_tessellation_db.rtid
 
 
+    """
+    Special handling of filter in rimtimsim images.
+
+    rimtimsimdb=> select * from filters;
+     fid | filter
+    -----+--------
+       1 | F184
+       2 | H158
+       3 | J129
+       4 | K213
+       5 | R062
+       6 | Y106
+       7 | Z087
+       8 | W146
+    (8 rows)
+    """"
+
+    if "087" in filter:
+        filter = "Z087"
+    if "213" in filter:
+        filter = "K213"
+    else:
+        print(f"filter = {filter} not handled; quitting....")
+        exit(64)
+
+
     # Insert or update record in Exposures database table.
 
     print("dateobs,mjdobs,field,hp6,hp9,filter,exptime,infobits,status = ",\
@@ -220,9 +246,6 @@ def register_l2file(dbh,header,wcs,file,expid,fid):
 
     key = "MJD-OBS"
     mjdobs = get_keyword_value(header,key)
-
-    key = "FILTER"
-    filter = get_keyword_value(header,key)
 
     key = "EXPTIME"
     exptime = get_keyword_value(header,key)
