@@ -487,7 +487,7 @@ def register_files():
 
         fname_input = my_bucket_input_object.key
 
-        if input_subdir in fname_input:
+        if fname_input:
 
             filename_match = re.match(r"(.+\.fits\.gz)",fname_input)
 
