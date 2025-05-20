@@ -158,13 +158,13 @@ def register_exposure(dbh,header):
     except:
         return
 
-    key = "RA_TARG"
+    key = "CRVAL1"
     try:
         ra = header[key]
     except:
         return
 
-    key = "DEC_TARG"
+    key = "CRVAL2"
     try:
         dec = header[key]
     except:
@@ -191,6 +191,9 @@ def register_exposure(dbh,header):
 
 
     # Insert or update record in Exposures database table.
+
+    print("dateobs,mjdobs,field,hp6,hp9,filter,exptime,infobits,status = ",\
+        dateobs,mjdobs,field,hp6,hp9,filter,exptime,infobits,status)
 
     dbh.add_exposure(dateobs,mjdobs,field,hp6,hp9,filter,exptime,infobits,status)
 
@@ -224,10 +227,10 @@ def register_l2file(dbh,header,wcs,file,expid,fid):
     key = "EXPTIME"
     exptime = get_keyword_value(header,key)
 
-    key = "RA_TARG"
+    key = "CRVAL1"
     ra = get_keyword_value(header,key)
 
-    key = "DEC_TARG"
+    key = "CRVAL2"
     dec = get_keyword_value(header,key)
 
     key = "SCA_NUM"
@@ -506,7 +509,7 @@ def register_files():
     dbh = db.RAPIDDB()
 
 
-    # Loop over subdirs and copy 18 files from S3 bucket with one copy command.
+    # Loop over files from S3 bucket with one copy command.
 
     nfiles = 0
 
