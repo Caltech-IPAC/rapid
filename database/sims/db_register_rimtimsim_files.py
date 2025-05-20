@@ -492,7 +492,7 @@ def register_files():
             filename_match = re.match(r"(.+\.fits\.gz)",fname_input)
 
             try:
-                only_fname_input = filename_match.group(2)
+                only_fname_input = filename_match.group(1)
                 print("-----1-----> only_fname_input =",only_fname_input)
 
             except:
