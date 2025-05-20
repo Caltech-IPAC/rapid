@@ -96,6 +96,7 @@ class RAPIDDB:
 
         print("dbserver,dbname,dbport,dbuser =",dbserver,dbname,dbport,dbuser)
 
+
         # Connect to database
 
         try:
