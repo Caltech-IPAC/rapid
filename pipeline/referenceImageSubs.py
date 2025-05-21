@@ -67,15 +67,29 @@ def generateReferenceImage(s3_client,
                 print("*** Error: Could not parse refimage_input_s3_full_name; quitting...")
                 exit(64)
 
-            filename_match2 = re.match(r".+?/(.+)", refimage_input_s3_object_name)                 # TODO
+            if "/" in refimage_input_s3_object_name:
 
-            try:
-                refimage_input_filename = filename_match2.group(1)
-                print("refimage_input_filename = {}".format(refimage_input_filename))
+                filename_match2 = re.match(r".+?/(.+)", refimage_input_s3_object_name)                 # TODO
 
-            except:
-                print("*** Error: Could not parse refimage_input_s3_object_name; quitting...")
-                exit(64)
+                try:
+                    refimage_input_filename = filename_match2.group(1)
+                    print("refimage_input_filename = {}".format(refimage_input_filename))
+
+                except:
+                    print("*** Error: Could not parse refimage_input_s3_object_name; quitting...")
+                    exit(64)
+
+            else:
+
+                filename_match2 = re.match(r"(.+)", refimage_input_s3_object_name)                 # TODO
+
+                try:
+                    refimage_input_filename = filename_match2.group(1)
+                    print("refimage_input_filename = {}".format(refimage_input_filename))
+
+                except:
+                    print("*** Error: Could not parse refimage_input_s3_object_name; quitting...")
+                    exit(64)
 
             refimage_input_filenames.append(refimage_input_filename)
 
