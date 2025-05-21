@@ -14,7 +14,10 @@ OpenUniverse simulated data are used, which cover the following observation rang
      2028-08-17 00:30:48.096 | 2032-11-27 01:23:22.56
     (1 row)
 
-Look-up table all of the filter IDs versus filter names included in the entire OpenUniverse simulated data set:
+All 18 SCAs are included in the OpenUniverse simulated-image dataset.
+
+Look-up table all of the filter IDs versus filter names included in the entire OpenUniverse dataset, except
+that fid=8 (W146) is not included:
 
 .. code-block::
 
@@ -145,7 +148,7 @@ for each of the filter IDs included is listed as follows:
        4 |    30
     (4 rows)
 
-Here are all of the filter IDs versus filter names included in the entire OpenUniverse simulated data set
+Here are all of the filter IDs versus filter names included in the entire OpenUniverse simulated dataset
 (of which a tiny subset is covered by the standard test):
 
 .. code-block::
