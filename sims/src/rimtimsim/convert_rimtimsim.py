@@ -1,7 +1,7 @@
 """
 Reformat rimtimsim FITS files:
 1. Remove CDELT1 and CDELT2 keywords
-2. Change PC1_1 to CD1_1, ets.
+2. Change PC1_1 to CD1_1, etc.
 3. Put image data in second HDU with copy of primary header
 4. Add MJD-OBS from TSTART converted to MJD
 5. Copy EXPOSURE to EXPTIME
@@ -11,6 +11,7 @@ to
 rimtimsim_lite/rimtimsim_WFI_F087_SCA02_000017675_lite.fits
 7. Discard uncertainty HDU
 8. Add SIP distortion keywords with zero values.
+9. Modify CTYPE1 and CTYPE2 keyword values from TAN to TAN-SIP.
 """
 
 from astropy.io import fits
@@ -79,7 +80,7 @@ for input_fits_file in input_fits_files:
     data = hdul[0].data
 
 
-    # Remove CDELT1,2 keywords.
+    # Remove CDELT1 and CDELT2 keywords.
 
     hdr.remove('CDELT1', remove_all=True)
     hdr.remove('CDELT2', remove_all=True)
@@ -107,6 +108,12 @@ for input_fits_file in input_fits_files:
 
     print("input_fits_file =",input_fits_file)
     print("output_fits_file =",output_fits_file)
+
+
+    # Modify CTYPE1 and CTYPE2 keyword values from TAN to TAN-SIP.
+
+    hdr["CTYPE1"] = "RA---TAN-SIP"
+    hdr["CTYPE2"] = "DEC--TAN-SIP"
 
 
     # Add SIP distortion keywords with zero values.
