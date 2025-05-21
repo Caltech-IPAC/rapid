@@ -41,3 +41,7 @@ Operations Database
 | operations      | it for pipeline operations.  Must have multiple cores.   |       |
 |                 | Cost it out on AWS.                                      |       |
 +-----------------+----------------------------------------------------------+-------+
+| New Fields      | Nice to have would be a Fields table indexed by field    | No    |
+| table           | that has (ra,dec) of center and 4 corners of tile.       |       |
+|                 | Get data from our SQLite Roman tesselation database.     |       |
++-----------------+----------------------------------------------------------+-------+
