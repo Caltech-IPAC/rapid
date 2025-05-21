@@ -25,6 +25,8 @@ import modules.utils.rapid_pipeline_subs as util
 bucket_name_input = "rimtimsim-250513"
 bucket_name_output = "rimtimsim-250513-lite"
 input_subdir = "simulated_image_data"
+subdir_work = "/work"
+
 
 # Parse input files in input S3 bucket.
 
@@ -191,6 +193,15 @@ for input_fits_file in input_fits_files:
     objectnames = [s3_object_name]
 
     util.upload_files_to_s3_bucket(s3_client,bucket_name_output,filenames,objectnames)
+
+
+    # Clean up work directory.
+
+    rm_cmd = ['rm','-f',subdir_work + "/" + input_fits_file]
+    exitcode_from_rm = util.execute_command(rm_cmd)
+
+    rm_cmd = ['rm','-f',subdir_work + "/" + output_fits_file]
+    exitcode_from_rm = util.execute_command(rm_cmd)
 
 
 # Termination.
