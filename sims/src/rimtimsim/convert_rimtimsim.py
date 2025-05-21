@@ -70,21 +70,36 @@ for input_fits_file in input_fits_files:
     output_fits_file = input_fits_file.replace("_lvl02","").replace("rimtimsim/","rimtimsim_lite/")\
         .replace("_field03_rampfitted_exposureno","").replace("sim.fits","lite.fits")
 
+
+    # Read input FITS file.
+
     hdul = fits.open(input_fits_file)
     hdr = hdul[0].header
     data = hdul[0].data
 
+
+    # Remove CDELT1,2 keywords.
+
     hdr.remove('CDELT1', remove_all=True)
     hdr.remove('CDELT2', remove_all=True)
+
+
+    # Add MJD-OBS keyword, derived from existing TSTART keyword.
 
     obsjd = hdr["TSTART"]
     obsmjd = obsjd - 2400000.5
     hdr["MJD-OBS"] = obsmjd
 
+
+    # Rename PCi_j keywords to CDi_j keywords.
+
     hdr.rename_keyword('PC1_1', 'CD1_1', force=False)
     hdr.rename_keyword('PC1_2', 'CD1_2', force=False)
     hdr.rename_keyword('PC2_1', 'CD2_1', force=False)
     hdr.rename_keyword('PC2_2', 'CD2_2', force=False)
+
+
+    # Add EXPTIME keyword, passed from EXPOSURE keyword,
 
     exptime = hdr["EXPOSURE"]
     hdr["EXPTIME"] = exptime
@@ -93,24 +108,59 @@ for input_fits_file in input_fits_files:
     print("output_fits_file =",output_fits_file)
 
 
+    # Add SIP distortion keywords with zero values.
+
+    hdr["A_ORDER"] = 4
+    hdr["A_0_2"] = 0.0
+    hdr["A_0_3"] = 0.0
+    hdr["A_0_4"] = 0.0
+    hdr["A_1_1"] = 0.0
+    hdr["A_1_2"] = 0.0
+    hdr["A_1_3"] = 0.0
+    hdr["A_2_0"] = 0.0
+    hdr["A_2_1"] = 0.0
+    hdr["A_2_2"] = 0.0
+    hdr["A_3_0"] = 0.0
+    hdr["A_3_1"] = 0.0
+    hdr["A_4_0"] = 0.0
+    hdr["B_ORDER"] = 4
+    hdr["B_0_2"] = 0.0
+    hdr["B_0_3"] = 0.0
+    hdr["B_0_4"] = 0.0
+    hdr["B_1_1"] = 0.0
+    hdr["B_1_2"] = 0.0
+    hdr["B_1_3"] = 0.0
+    hdr["B_2_0"] = 0.0
+    hdr["B_2_1"] = 0.0
+    hdr["B_2_2"] = 0.0
+    hdr["B_3_0"] = 0.0
+    hdr["B_3_1"] = 0.0
+    hdr["B_4_0"] = 0.0
+
+
     # Replace primary HDU with empty image data
+
     hdul[0] = fits.PrimaryHDU(header=hdr,data=None)
 
 
     # Discard uncertainty-image HDU.
+
     del hdul[1]
 
 
     # Create a new ImageHDU with image data
+
     np_data = np.array(data)
     new_hdu = fits.ImageHDU(header=hdr,data=np_data.astype(np.float32))
 
 
     # Append the new HDU to the HDU list
+
     hdul.append(new_hdu)
 
 
     # Write output FITS file.
+
     hdul.writeto(output_fits_file,overwrite=True,checksum=True)
 
 
@@ -133,5 +183,10 @@ for input_fits_file in input_fits_files:
     objectnames = [s3_object_name]
 
     util.upload_files_to_s3_bucket(s3_client,bucket_name_output,filenames,objectnames)
+
+
+# Termination.
+
+exit(0)
 
 
