@@ -20,6 +20,9 @@ Pipeline Software
 | Solar system    | Joe Masiero's code needs to be integrated                | No    |
 | Objects         | into the science pipeline.                               |       |
 +-----------------+----------------------------------------------------------+-------+
+| SFFT crossconv  | Propagate from configuration file.                       | No    |
+| flag            |                                                          |       |
++-----------------+----------------------------------------------------------+-------+
 
 
 
