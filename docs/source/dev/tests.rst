@@ -42,7 +42,7 @@ Test                       No. of images  No. of ref. images made  Start obs. da
 4/28/2025 "standard test"         2,069              1,696         2028-09-07 00:00:00  2028-09-08 08:30:00  All images in obs. range
 4/30/2025                         5,222              None          2029-03-15 00:00:00  2029-07-15 00:00:00  Only fields with superior ref. images
 5/5/2025                         10,859              None          2029-07-15 00:00:00  2030-03-15 00:00:00  Only fields with superior ref. images
-5/6/2025                          4,858              3,884         2028-09-08 08:30:00  2028-09-12 00:00:00  All images in obs. range
+5/6/2025                          4,858              3,995         2028-09-08 08:30:00  2028-09-12 00:00:00  All images in obs. range
 5/8/2025                          3,020              1,500         2028-09-12 00:00:00  2028-09-15 00:00:00  All images in obs. range
 5/10/2025                        13,850              4,876         2028-09-15 00:00:00  2028-09-25 00:00:00  All images in obs. range
 5/14/2025                         2,069              None          2028-09-07 00:00:00  2028-09-08 08:30:00  Repeat standard test with SFFT ``--crossconv`` flag.  Use existing ref. images.
@@ -406,11 +406,11 @@ for each of the filter IDs included is listed as follows:
     rapidopsdb=> select fid,count(*) from refimages where vbest>0 and created >= '20250506' group by fid order by fid;
      fid | count
     -----+-------
-       3 |   742
-       4 |   759
-       5 |   796
-       6 |   802
-       7 |   785
+       3 |   765
+       4 |   780
+       5 |   821
+       6 |   821
+       7 |   808
     (5 rows)
 
 
