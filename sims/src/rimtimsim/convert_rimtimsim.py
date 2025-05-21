@@ -10,6 +10,7 @@ rimtimsim/rimtimsim_WFI_lvl02_F087_SCA02_field03_rampfitted_exposureno_000017675
 to
 rimtimsim_lite/rimtimsim_WFI_F087_SCA02_000017675_lite.fits
 7. Discard uncertainty HDU
+8. Add SIP distortion keywords with zero values.
 """
 
 from astropy.io import fits
