@@ -288,7 +288,7 @@ if __name__ == '__main__':
                     job_exitcode = tokens[1]
                 elif re.search(search_string3, line):
                     line = line.rstrip("\n")
-                    fh.write(line)
+                    print(line)
                     tokens = re.split(r'\s*=\s*',line)
                     started_str = tokens[1].replace(" PT","")
 
