@@ -283,28 +283,33 @@ def wait_until_aws_batch_jobs_finished(job_type,proc_date,config_input,dbh):
             if njobs_total < 3000 or n_checked % 100 == 0:
                 print(f"Calling client.describe_jobs for jobs={awsbatchjobid}, n_checked={n_checked}")
 
-            response = client.describe_jobs(jobs=[awsbatchjobid,])
+            try:
+                response = client.describe_jobs(jobs=[awsbatchjobid,])
 
-            if n_checked < 5:
-                print(f"response={response}")
+                if n_checked < 5:
+                    print(f"response={response}")
 
-            n_checked += 1
+                n_checked += 1
 
-            job_status = response['jobs'][0]['status']
+                job_status = response['jobs'][0]['status']
 
-            if njobs_total < 3000 or n_checked % 100 == 0:
-                print("job_status =",job_status)
+                if njobs_total < 3000 or n_checked % 100 == 0:
+                    print("job_status =",job_status)
 
-            if job_status == "SUCCEEDED":
-                n_succeeded += 1
-            elif job_status == "FAILED":
-                n_failed += 1
-            elif job_status == "RUNNABLE":
-                break
-            elif job_status == "STARTING":
-                break
-            elif job_status == "RUNNING":
-                break
+                if job_status == "SUCCEEDED":
+                    n_succeeded += 1
+                elif job_status == "FAILED":
+                    n_failed += 1
+                elif job_status == "RUNNABLE":
+                    break
+                elif job_status == "STARTING":
+                    break
+                elif job_status == "RUNNING":
+                    break
+
+            except Exception as error:
+                print('*** Error running client.describe_jobs ({}); continuing...'.format(error))
+
 
         njobs_succeeded_failed = n_succeeded + n_failed
 
