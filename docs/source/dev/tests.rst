@@ -8,6 +8,15 @@ The tests described below are organized by processing date.
 
 On any given date will be a test involving either OpenUniverse or RimTimSim simulated data.
 
+A separate PostgreSQL database has been set up for each different simulated dataset:
+
+===============      ===================
+Dataset                Database name
+===============      ===================
+OpenUniverse           rapidopsdb
+RimTimSim              rimtimsim
+===============      ===================
+
 Tests
 ************************************
 
