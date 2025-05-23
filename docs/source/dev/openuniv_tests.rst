@@ -1,0 +1,631 @@
+Testing with OpenUniverse Simulated Data
+####################################################
+
+Overview
+************************************
+
+The tests described below are organized by processing date.
+
+OpenUniverse simulated data are used, which cover the following observation range::
+
+    rapidopsdb=> select min(dateobs),max(dateobs) from l2files;
+               min           |          max
+    -------------------------+------------------------
+     2028-08-17 00:30:48.096 | 2032-11-27 01:23:22.56
+    (1 row)
+
+All 18 SCAs are included in the OpenUniverse simulated-image dataset.
+
+Look-up table all of the filter IDs versus filter names included in the entire OpenUniverse dataset, except
+that fid=8 (W146) is not included:
+
+.. code-block::
+
+    rapidopsdb=> select * from filters order by fid;
+     fid | filter
+    -----+--------
+       1 | F184
+       2 | H158
+       3 | J129
+       4 | K213
+       5 | R062
+       6 | Y106
+       7 | Z087
+       8 | W146
+    (8 rows)
+
+Summary of successful tests conducted thus far:
+
+=========================  =============  =======================  ===================  ===================  ================================================================================
+Test                       No. of images  No. of ref. images made  Start obs. datetime  End obs. datetime    Description
+=========================  =============  =======================  ===================  ===================  ================================================================================
+4/28/2025 "standard test"         2,069              1,696         2028-09-07 00:00:00  2028-09-08 08:30:00  All images in obs. range
+4/30/2025                         5,222              None          2029-03-15 00:00:00  2029-07-15 00:00:00  Only fields with superior ref. images
+5/5/2025                         10,859              None          2029-07-15 00:00:00  2030-03-15 00:00:00  Only fields with superior ref. images
+5/6/2025                          4,858              3,995         2028-09-08 08:30:00  2028-09-12 00:00:00  All images in obs. range
+5/8/2025                          3,020              1,500         2028-09-12 00:00:00  2028-09-15 00:00:00  All images in obs. range
+5/10/2025                        13,850              4,876         2028-09-15 00:00:00  2028-09-25 00:00:00  All images in obs. range
+5/14/2025                         2,069              None          2028-09-07 00:00:00  2028-09-08 08:30:00  Repeat standard test with SFFT ``--crossconv`` flag.  Use existing ref. images.
+=========================  =============  =======================  ===================  ===================  ================================================================================
+
+In the above table, superior reference images are defined as having ``nframes >= 10`` and ``cov5percent >= 60%``.  In other words, superior
+reference images have at least 10 frames stacked somewhere in the field, although the overlap will vary, and 60% or more of the reference-image pixels
+have a coverage depth of at least 5 frames.
+
+Here is Perl code (``elapsed.pl``) to query the operations database
+for science-pipeline performance results::
+
+    use strict;
+    my $starthourorigin;
+
+    my $procdate = '20250430';
+
+    print"count,nframes,startedhours,elapsedseconds\n";
+
+    my $q;
+    $q="select nframes,extract(day from started) * 24.0 + extract(hour from started) + ".
+       "extract(minute from started)/60.0 + extract(second from started)/3600.0 ".
+       "as startedhours, extract(hour from elapsed)*3600 + ".
+       "extract(minute from elapsed)*60 + extract(second from elapsed) as elapsedseconds ".
+       "from jobs a, diffimages b, diffimmeta c, refimmeta d ".
+       "where a.rid=b.rid and a.ppid=15 and b.pid=c.pid and b.vbest>0 and b.rfid=d.rfid ".
+       "and exitcode=0 and cast(launched as date) ='".$procdate."' order by started; ";
+
+    my @op=`psql -h 35.165.53.98 -d rapidopsdb -p 5432 -U rapidporuss -c \"$q\"`;
+    my $i=0;
+    shift @op;
+    shift @op;
+    foreach my $op (@op) {
+        if ($op =~ /row/) { last; }
+        chomp $op;
+        $op =~ s/^\s+|\s+$//g;
+        my (@f) = split(/\s*\|\s*/, $op);
+        my $nframes = $f[0];
+        my $startedhours = $f[1];
+        my $elapsedtimeseconds = $f[2];
+        if ($i==0) {
+            $starthourorigin = $startedhours;
+        }
+        $startedhours = $startedhours - $starthourorigin;
+        $i++;
+        print"$i,$nframes,$startedhours,$elapsedtimeseconds\n";
+    }
+
+
+4/28/2025
+************************************
+
+The following test is hereby know as the "standard test".
+The standard test processes 2,069 exposure-SCAs
+with all reference images cleared from database
+(``status=0`` for ``vbest>0``).
+Thus, the science pipeline generates new reference images on the fly.
+AWS Batch machines for science-pipeline jobs
+have 2 vCPUs and 16 GB memory.
+
+.. code-block::
+
+    export STARTDATETIME="2028-09-07 00:00:00"
+    export ENDDATETIME="2028-09-08 08:30:00"
+    python3.11 /code/pipeline/awsBatchSubmitJobs_launchSciencePipelinesForDateTimeRange.py >& awsBatchSubmitJobs_launchSciencePipelinesForDateTimeRange.out &
+
+Two jobs had empty reference images in difference-image regions, so ``SFFT``
+did not produce results, and 33 jobs had no reference images.
+
+.. code-block::
+
+    rapidopsdb=> select exitcode,count(*) from jobs where ppid=15 and cast(launched as date) = '20250428' group by exitcode order by exitcode;
+     exitcode | count
+    ----------+-------
+            0 |  1987
+            4 |     2
+           33 |    80
+    (3 rows)
+
+Here is a histogram of the AWS Batch queue wait times for an available AWS Batch machine on which to run a pipeline job:
+
+.. image:: science_pipeline_queue_wait_times_20250428.png
+
+
+Here is a histogram of the job execution times, measured from pipeline start to pipeline finish on an AWS Batch machine:
+
+.. image:: science_pipeline_execution_times_20250428.png
+
+These job elapsed times include additional time for reference-image generation, which would not be needed if reference images
+already existed for the fields covered by the input exposure-SCA images of the standard test.
+
+The standard test generated 1,696 reference images total, for 4 different filters and a variety of fields.  The number of fields
+for each of the filter IDs included is listed as follows:
+
+.. code-block::
+
+    rapidopsdb=> select fid,count(*) from refimages where vbest>0 group by fid order by fid;
+     fid | count
+    -----+-------
+       1 |   806
+       2 |   812
+       3 |    48
+       4 |    30
+    (4 rows)
+
+Here are all of the filter IDs versus filter names included in the entire OpenUniverse simulated dataset
+(of which a tiny subset is covered by the standard test):
+
+.. code-block::
+
+    rapidopsdb=> select * from filters order by fid;
+     fid | filter
+    -----+--------
+       1 | F184
+       2 | H158
+       3 | J129
+       4 | K213
+       5 | R062
+       6 | Y106
+       7 | Z087
+       8 | W146
+    (8 rows)
+
+
+4/29/2025
+************************************
+
+New large test on selectly chosen 5222 exposure-SCAs acquired 6 months after the data from the standard test,
+using a subset of the reference images existing in the database that were generated on 4/28/2025.  The exposure-SCAs
+are all associated with fields having reference images that have ``nframes >= 10`` and ``cov5percent >= 60%``.
+AWS Batch machines for science-pipeline jobs have 2 vCPUs and 16 GB memory.
+
+.. code-block::
+
+    export STARTDATETIME="2029-03-15 00:00:00"
+    export ENDDATETIME="2029-07-15 00:00:00"
+    export NFRAMES=10
+    export COV5PERCENT=60
+    python3.11 /code/pipeline/awsBatchSubmitJobs_launchSciencePipelinesForDateTimeRangeAndSuperiorRefImages.py >& awsBatchSubmitJobs_launchSciencePipelinesForDateTimeRangeAndSuperiorRefImages.out &
+
+There were 115 jobs that failed due to the following AWS Batch error:
+``Timeout waiting for network interface provisioning to complete``.
+Need to reconfigure the job definition to have retry attempts.
+
+.. code-block::
+
+    rapidopsdb=> select exitcode,count(*) from jobs where ppid=15 and cast(launched as date) = '20250429' group by exitcode order by exitcode;
+    exitcode | count
+    ---------+-------
+           0 |  5107
+             |   115
+    (2 rows)
+
+
+4/30/2025
+************************************
+
+Rerun of 4/29/2025 large test on selectively chosen 5,222 exposure-SCAs acquired 6 months after the data from the standard test,
+using a subset of the reference images existing in the database that were generated on 4/28/2025.  The exposure-SCAs
+are all associated with fields having reference images that have ``nframes >= 10`` and ``cov5percent >= 60%``.
+AWS Batch machines for science-pipeline jobs have 2 vCPUs and 16 GB memory.
+
+.. code-block::
+
+    export STARTDATETIME="2029-03-15 00:00:00"
+    export ENDDATETIME="2029-07-15 00:00:00"
+    export NFRAMES=10
+    export COV5PERCENT=60
+    python3.11 /code/pipeline/awsBatchSubmitJobs_launchSciencePipelinesForDateTimeRangeAndSuperiorRefImages.py >& awsBatchSubmitJobs_launchSciencePipelinesForDateTimeRangeAndSuperiorRefImages.out &
+
+After reconfiguring the AWS Batch science-pipeline job definition to attempt to run a job 3 times, if necessary, all jobs successfully ran:
+
+.. code-block::
+
+    rapidopsdb=> select exitcode,count(*) from jobs where ppid=15 and cast(launched as date) = '20250430' group by exitcode order by exitcode;
+     exitcode | count
+    ----------+-------
+            0 |  5222
+    (1 row)
+
+Here is a histogram of the AWS Batch queue wait times for an available AWS Batch machine on which to run a pipeline job:
+
+.. image:: science_pipeline_queue_wait_times_20250430.png
+
+
+Here is a histogram of the job execution times, measured from pipeline start to pipeline finish on an AWS Batch machine:
+
+.. image:: science_pipeline_execution_times_20250430.png
+
+The mode of the histogram indicates the job elapsed times are approximately 3 minutes shorter than
+those from the 4/28/2025 test, which is expected since all reference images needed for this test
+are already available and none had to be generated on the fly.
+
+This test utilized a fraction of the reference images that were previously generated in the standard test.
+The numbers of reference images per filter ID that were actually used in this test are listed as follows:
+
+.. code-block::
+
+    rapidopsdb=> select a.fid,count(*) from refimages a, refimmeta b where a.rfid = b.rfid and vbest>0 and nframes >= 10 and cov5percent >= 60 group by a.fid order by a.fid;
+     fid | count
+    -----+-------
+       1 |   196
+       2 |   189
+       3 |     5
+       4 |     7
+    (4 rows)
+
+
+5/5/2025
+************************************
+
+New large test on selectively chosen 10,859 exposure-SCAs acquired many months after the data from the standard test,
+using a subset of the reference images existing in the database that were generated on 4/28/2025.  The exposure-SCAs
+are all associated with fields having reference images that have ``nframes >= 10`` and ``cov5percent >= 60%``.
+AWS Batch machines for science-pipeline jobs have 2 vCPUs and 16 GB memory.
+
+.. code-block::
+
+    export STARTDATETIME="2029-07-15 00:00:00"
+    export ENDDATETIME="2030-03-15 00:00:00"
+    export NFRAMES=10
+    export COV5PERCENT=60
+    python3.11 /code/pipeline/awsBatchSubmitJobs_launchSciencePipelinesForDateTimeRangeAndSuperiorRefImages.py >& awsBatchSubmitJobs_launchSciencePipelinesForDateTimeRangeAndSuperiorRefImages.out &
+
+Here is how the number of exposure-SCAs in this test are selected, utilizing the myriad of metadata in the RAPID operations database:
+
+.. code-block::
+
+    rapidopsdb=> select count(*)
+                 from L2Files a, RefImages b, RefImMeta c
+                 where a.field = b.field
+                 and b.rfid = c.rfid
+                 and a.fid = b.fid
+                 and b.status > 0
+                 and b.vbest > 0
+                 and cov5percent >= 60
+                 and nframes >= 10
+                 and a.dateobs > '2029-07-15 00:00:00'
+                 and a.dateobs < '2030-03-15 00:00:00';
+
+     count
+    -------
+     10859
+    (1 row)
+
+
+All jobs for both the science pipeline and the post-processing pipeline successfully ran:
+
+.. code-block::
+
+    rapidopsdb=> select ppid,exitcode,count(*) from jobs where cast(launched as date) = '20250505' group by ppid, exitcode order by ppid, exitcode;
+     ppid | exitcode | count
+    ------+----------+-------
+       15 |        0 | 10859
+       17 |        0 | 10859
+    (2 rows)
+
+The expected number of difference images where generated:
+
+.. code-block::
+
+    rapidopsdb=> select count(*) from diffimages where created >= '20250505' and vbest>0;
+     count
+    -------
+     10859
+    (1 row)
+
+
+Here is a histogram of the AWS Batch queue wait times for an available AWS Batch machine on which to run a science-pipeline job:
+
+.. image:: science_pipeline_queue_wait_times_20250505.png
+
+
+Here is a histogram of the science-pipeline job execution times, measured from pipeline start to pipeline finish on an AWS Batch machine:
+
+.. image:: science_pipeline_execution_times_20250505.png
+
+The mode of the histogram indicates the job elapsed times are approximately 3 minutes shorter than
+those from the 4/28/2025 test, which is expected since all reference images needed for this test
+are already available and none had to be generated on the fly.
+
+Other key timing benchmarks for this test, which were done on an 8-core job-launcher machine (``t3.2xlarge`` EC2 instance)
+with 8-core multiprocessing:
+
+===================================================================    ==========================
+Task                                                                   Elapsed time in seconds
+===================================================================    ==========================
+Launch science pipelines                                               6,029
+Register Jobs, Diffimages, RefImages records for science pipelines     2,067
+Launch post-processing pipelines                                       5,967
+Register Jobs records for post-processing pipelines                      343
+===================================================================    ==========================
+
+This test utilized a fraction of the reference images that were previously generated in the standard test.
+The numbers of reference images per filter ID that were actually used in this test are listed as follows:
+
+.. code-block::
+
+    rapidopsdb=> select a.fid,count(*)
+                 from RefImages a, RefImMeta b
+                 where a.rfid = b.rfid
+                 and status > 0
+                 and vbest > 0
+                 and nframes >= 10
+                 and cov5percent >= 60
+                 group by a.fid
+                 order by a.fid;
+
+     fid | count
+    -----+-------
+       1 |   196
+       2 |   189
+       3 |     5
+       4 |     7
+    (4 rows)
+
+
+5/6/2025
+************************************
+
+Test to process 4,858 exposure-SCAs, all in the observation date/time ranges given below, making
+reference images on the fly as needed.
+The observation date/time range is relatively early in the available range of the OpenUniverse simulated images.
+This test includes filters that are not well covered by the 4/28/2025 test.
+AWS Batch machines for science-pipeline jobs have 2 vCPUs and 16 GB memory.
+
+.. code-block::
+
+    export STARTDATETIME="2028-09-08 08:30:00"
+    export ENDDATETIME="2028-09-12 00:00:00"
+
+    python3.11 /code/pipeline/awsBatchSubmitJobs_launchSciencePipelinesForDateTimeRange.py >& awsBatchSubmitJobs_launchSciencePipelinesForDateTimeRange_20250506.out &
+
+.. code-block::
+
+    rapidopsdb=> select ppid,exitcode,count(*) from jobs where ppid=15 and cast(launched as date) = '20250506' group by ppid, exitcode order by ppid, exitcode;
+     ppid | exitcode | count
+    ------+----------+-------
+       15 |        0 |  4701
+       15 |        4 |     3
+       15 |       33 |   154
+    (3 rows)
+
+
+=======================================================    ==========================
+Pipeline condition at termination                           Exitcode
+=======================================================    ==========================
+Normal                                                         0
+SFFT failed due to singular matrix                             4
+Reference image not available and could not be made           33
+=======================================================    ==========================
+
+Pipeline exit codes in the 0-31 range are considered normal, in the 32-63 range a warning, and 64 or greater an error.
+Even though SFFT might have failed, a difference image is still generated by ZOGY.
+
+This test generated 3,884 new reference images, for 5 different filters and a variety of fields.  The number of fields
+for each of the filter IDs included is listed as follows:
+
+.. code-block::
+
+    rapidopsdb=> select fid,count(*) from refimages where vbest>0 and created >= '20250506' group by fid order by fid;
+     fid | count
+    -----+-------
+       3 |   765
+       4 |   780
+       5 |   821
+       6 |   821
+       7 |   808
+    (5 rows)
+
+
+These reference images, plus those generated by the standard test on 4/28/2025, give the following total numbers
+of reference images broken down by filter ID:
+
+.. code-block::
+
+    rapidopsdb=> select fid,count(*) from refimages where vbest>0 group by fid order by fid;
+    (7 rows)
+     fid | count
+    -----+-------
+       1 |   806
+       2 |   812
+       3 |   813
+       4 |   810
+       5 |   821
+       6 |   821
+       7 |   808
+    (7 rows)
+
+Here is a histogram of the AWS Batch queue wait times for an available AWS Batch machine on which to run a pipeline job:
+
+.. image:: science_pipeline_queue_wait_times_20250506.png
+
+Here is a histogram of the job execution times, measured from pipeline start to pipeline finish on an AWS Batch machine:
+
+.. image:: science_pipeline_execution_times_20250506.png
+
+Here is a 2-D histogram of the job execution times versus number of input frames in making reference images on the fly in this test:
+
+.. image:: sci_pipe_exec_times_vs_nframes_20250506.png
+
+Here is a histogram of ``nframes`` for all reference images made in this test:
+
+.. image:: sci_pipe_nframes_20250506.png
+
+Here is a histogram of ``cov5percent`` for all reference images made in this test:
+
+.. image:: sci_pipe_cov5percent_20250506.png
+
+
+5/8/2025
+************************************
+
+Test to process 3,020 exposure-SCAs, all in the observation date/time ranges given below, making
+reference images on the fly as needed.
+The observation date/time range is relatively early in the available range of the OpenUniverse simulated images.
+This test exercised the new Virtual Pipeline Operator (VPO) running in single-processing-date mode.
+AWS Batch machines for science-pipeline jobs have 2 vCPUs and 16 GB memory.
+
+.. code-block::
+
+    export STARTDATETIME="2028-09-12 00:00:00"
+    export ENDDATETIME="2028-09-15 00:00:00"
+
+    python3.11 /code/pipeline/virtualPipelineOperator.py 20250508 >& virtualPipelineOperator_20250508.out &
+
+
+Here is a summary of the pipeline exit codes after the test:
+
+.. code-block::
+
+    rapidopsdb=> select ppid,exitcode,count(*) from jobs where cast(launched as date) = '20250508' group by ppid, exitcode order by ppid, exitcode;
+     ppid | exitcode | count
+    ------+----------+-------
+       15 |        0 |  2924
+       15 |       33 |    96
+       17 |        0 |  2924
+    (3 rows)
+
+
+=======================================================    ==========================
+Pipeline condition at termination                           Exitcode
+=======================================================    ==========================
+Normal                                                         0
+SFFT failed due to singular matrix                             4
+Reference image not available and could not be made           33
+=======================================================    ==========================
+
+Pipeline exit codes in the 0-31 range are considered normal, in the 32-63 range a warning, and 64 or greater an error.
+Even though SFFT might have failed, a difference image is still generated by ZOGY.
+
+This test generated 1,500 new reference images, for 4 different filters and a variety of fields.  The number of fields
+for each of the filter IDs included is listed as follows:
+
+.. code-block::
+
+    rapidopsdb=> select fid,count(*) from refimages where vbest>0 and created >= '20250508' group by fid order by fid;
+
+     fid | count
+    -----+-------
+       1 |   483
+       2 |   495
+       3 |    27
+       4 |   495
+    (4 rows)
+
+These reference images, plus those generated by previous tests, give the following total numbers
+of reference images broken down by filter ID:
+
+.. code-block::
+
+    rapidopsdb=> select fid,count(*) from refimages where vbest>0 group by fid order by fid;
+
+    fid | count
+    -----+-------
+       1 |  1289
+       2 |  1307
+       3 |   840
+       4 |  1305
+       5 |   821
+       6 |   821
+       7 |   808
+    (7 rows)
+
+
+5/10/2025
+************************************
+
+Test to process 13,850 exposure-SCA images, all in the observation date/time ranges given below, making
+reference images on the fly as needed.
+The observation date/time range is relatively early in the available range of the OpenUniverse simulated images.
+This test exercised, for the second time, the new Virtual Pipeline Operator (VPO) running in single-processing-date mode,
+only this test processed the largest number of images to date in a single run.  Input images from filter IDs 1-7 in approximately
+equal numbers were processed by this test.
+AWS Batch machines for science-pipeline jobs have 2 vCPUs and 16 GB memory.
+
+
+.. code-block::
+
+    export STARTDATETIME="2028-09-15 00:00:00"
+    export ENDDATETIME="2028-09-25 00:00:00"
+
+    python3.11 /code/pipeline/virtualPipelineOperator.py 20250510 >& virtualPipelineOperator_20250510.out &
+
+
+Here is a summary of the pipeline exit codes after the test (which are not unexpected):
+
+.. code-block::
+
+    rapidopsdb=> select ppid,exitcode,count(*) from jobs where cast(launched as date) = '20250510' group by ppid, exitcode order by ppid, exitcode;
+     ppid | exitcode | count
+    ------+----------+-------
+       15 |        0 | 13506
+       15 |        4 |    15
+       15 |       33 |   329
+       17 |        0 | 13521
+    (4 rows)
+
+
+=======================================================    ==========================
+Pipeline condition at termination                           Exitcode
+=======================================================    ==========================
+Normal                                                         0
+SFFT failed due to singular matrix                             4
+Reference image not available and could not be made           33
+=======================================================    ==========================
+
+Pipeline exit codes in the 0-31 range are considered normal, in the 32-63 range a warning, and 64 or greater an error.
+Even though SFFT might have failed, a difference image is still generated by ZOGY.
+
+This test generated 4,876 new reference images, for all the aforementioned seven filters and a variety of fields.  The number of fields
+for each of the filter IDs included is listed as follows:
+
+.. code-block::
+
+    rapidopsdb=> select fid,count(*) from refimages where vbest>0 and created >= '20250510' group by fid order by fid;
+
+     fid | count
+    -----+-------
+       1 |   533
+       2 |   523
+       3 |   816
+       4 |   523
+       5 |   825
+       6 |   825
+       7 |   831
+    (7 rows)
+
+These reference images, plus those generated by previous tests, give the following total numbers
+of reference images broken down by filter ID:
+
+.. code-block::
+
+    rapidopsdb=> select fid,count(*) from refimages where vbest>0 group by fid order by fid;
+
+     fid | count
+    -----+-------
+       1 |  1822
+       2 |  1830
+       3 |  1656
+       4 |  1828
+       5 |  1646
+       6 |  1646
+       7 |  1639
+    (7 rows)
+
+Other key timing benchmarks for this test, which were done on an 8-core job-launcher machine (``t3.2xlarge`` EC2 instance)
+with 8-core multiprocessing:
+
+===================================================================    ==========================
+Task                                                                   Elapsed time in seconds
+===================================================================    ==========================
+Launch science pipelines                                               7,747
+Register Jobs, Diffimages, RefImages records for science pipelines     2,545
+Launch post-processing pipelines                                       7,667
+Register Jobs records for post-processing pipelines                    420
+===================================================================    ==========================
+
+
+5/14/2025
+************************************
+
+Same as 4/28/2025 standard test, except that SFFT was run with the ``--crossconv`` flag.  No new reference images
+are made, as they already exist.  The resulting SFFT difference image, ``sfftdiffimage_cconv_masked.fits``, and
+SFFT decorrelated difference image, ``sfftdiffimage_dconv_masked.fits``, are copied to the
+S3 product bucket, along with the other products.
