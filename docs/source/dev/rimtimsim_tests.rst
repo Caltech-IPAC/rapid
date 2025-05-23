@@ -47,6 +47,8 @@ Look-up table all of the filter IDs versus filter names included in the database
 5/23/2025
 ************************************
 
+Only ZOGY difference images were made in this test.
+
 Processing started at a later observation time than the very beginning to reserve some prior image frames for making reference images::
 
     export STARTDATETIME="2027-02-27 00:00:00"
