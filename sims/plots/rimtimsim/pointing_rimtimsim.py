@@ -22,6 +22,8 @@ dec3_list = []
 ra4_list = []
 dec4_list = []
 
+i = 0
+
 for fits_file in fits_files:
 
     hdul = fits.open(fits_file)
@@ -30,6 +32,10 @@ for fits_file in fits_files:
 
     crpix1 = hdr["CRPIX1"]
     crpix2 = hdr["CRPIX2"]
+
+    # Overide existing crpix1,2 = 2044.0 because these appear to be in error.
+    #crpix1 = 2044.5
+    #crpix2 = 2044.5
 
     crval1 = hdr["CRVAL1"]
     crval2 = hdr["CRVAL2"]
@@ -78,9 +84,12 @@ for fits_file in fits_files:
     ra4_list.append(ra4)
     dec4_list.append(dec4)
 
-    print(fits_file,crval1,crval2,naxis1,naxis2,round(crota2,3))
+    print(fits_file,crval1,crval2,naxis1,naxis2,round(crota2,7))
 
+    i += 1
 
+#    if i >= 2:
+#        break
 
 delra = (max(crval1_list) - min(crval1_list)) * 3600.0
 deldec = (max(crval2_list) - min(crval2_list)) * 3600.0
