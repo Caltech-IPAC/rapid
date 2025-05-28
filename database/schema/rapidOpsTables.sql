@@ -657,12 +657,12 @@ SET default_tablespace = pipeline_data_01;
 
 CREATE TABLE jobs (
     jid integer NOT NULL,
+    rid integer,
+    fid smallint,
     ppid smallint NOT NULL,
     expid integer,
     sca smallint,
     field integer,
-    fid smallint,
-    rid integer,
     machine smallint,
     launched timestamp,
     qwaited interval,
