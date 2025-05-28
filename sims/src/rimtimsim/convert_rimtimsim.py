@@ -82,6 +82,17 @@ for input_fits_file in input_fits_files:
     data = hdul[0].data
 
 
+    # Transpose data, to correct WCS.
+
+    transpose_data = np.transpose(data)
+
+
+    # Modify CRPIX1,2 to image center.
+
+    hdr["CRPIX1"] = 2044.5
+    hdr["CRPIX2"] = 2044.5
+
+
     # Remove CDELT1 and CDELT2 keywords.
 
     hdr.remove('CDELT1', remove_all=True)
@@ -160,7 +171,7 @@ for input_fits_file in input_fits_files:
 
     # Create a new ImageHDU with image data
 
-    np_data = np.array(data)
+    np_data = np.array(transpose_data)
     new_hdu = fits.ImageHDU(header=hdr,data=np_data.astype(np.float32))
 
 
