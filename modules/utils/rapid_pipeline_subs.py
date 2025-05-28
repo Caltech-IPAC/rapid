@@ -1574,3 +1574,99 @@ def list_aws_batch_jobs(batch_client,next_token,job_queue,job_name_wildcard):
                                          )
 
     return response
+
+
+##################################################################################################
+# Replace NaNs with saturation level rate in image, if any, of specified FITS file.
+##################################################################################################
+
+def replace_nans_with_sat_val_rate(fits_file,sat_val_rate):
+
+    print(f"Replacing NaNs with sat_val_rate = {sat_val_rate} in image, if any, of FITS file = {fits_file}")
+
+
+    # Read input FITS file.
+
+    hdul = fits.open(fits_file)
+    hdr = hdul[0].header
+    data = hdul[0].data
+    data_array = np.array(data)
+
+
+    # Replace NaNs in image with saturation value, if there are any.
+
+    nan_mask = np.isnan(data_array)
+    nan_count = nan_mask.sum()
+
+    print(f"nan_count = {nan_count}")
+
+    if np.any(nan_mask):
+        row_indices, col_indices = np.where(nan_mask)
+        new_image_array = np.where(nan_mask,sat_val_rate,data_array)
+
+
+        # Replace primary HDU with new image data
+
+        hdul[0] = fits.PrimaryHDU(header=hdr,data=new_image_array)
+
+
+        # Write output FITS file.
+
+        hdul.writeto(fits_file,overwrite=True,checksum=True)
+
+
+        # Return row and columns indices of NaNs.
+
+        return row_indices,col_indices
+
+
+    # Return None if there are no NaNs.
+
+    return None
+
+
+##################################################################################################
+# Restore NaNs in image, if any, of specified FITS file, at specified pixel locations.
+##################################################################################################
+
+def restore_nans(fits_file,nan_indices):
+
+    if nan_indices:
+
+        print(f"Restoring NaNs in image of FITS file = {fits_file}")
+
+        row_indices, col_indices = nan_indices
+
+
+        # Read input FITS file.
+
+        hdul = fits.open(fits_file)
+        hdr = hdul[0].header
+        data = hdul[0].data
+
+
+        # Put NaNs back into image,
+
+        num_nans = len(row_indices)
+
+        for idx in range(num_nans):
+            i = row_indices[idx]
+            j = col_indices[idx]
+            data[i][j] = np.nan
+
+        new_image_array = np.array(data)
+
+
+        # Replace primary HDU with new image data
+
+        hdul[0] = fits.PrimaryHDU(header=hdr,data=new_image_array)
+
+
+        # Write output FITS file.
+
+        hdul.writeto(fits_file,overwrite=True,checksum=True)
+
+
+    # Return
+
+    return None
