@@ -12,6 +12,8 @@ rimtimsim_lite/rimtimsim_WFI_F087_SCA02_000017675_lite.fits
 7. Discard uncertainty HDU
 8. Add SIP distortion keywords with zero values.
 9. Modify CTYPE1 and CTYPE2 keyword values from TAN to TAN-SIP.
+10. Modify CRPIX1 and CRPIX2 keyword values to the coordinates of the image center.
+11. Transpose image data to correct WCS (original simulated data are incorrect).
 """
 
 from astropy.io import fits
