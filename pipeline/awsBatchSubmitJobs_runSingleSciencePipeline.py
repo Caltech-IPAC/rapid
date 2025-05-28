@@ -769,6 +769,13 @@ if __name__ == '__main__':
     start_time_benchmark = end_time_benchmark
 
 
+    # Replace NaNs, if any, in ZOGY input images.  Use the same saturation level rate since they are gain-matched.
+
+    saturation_value_rate_sciimage = saturation_level_sciimage / exptime_sciimage
+    nan_indices_sciimage = replace_nans_with_sat_val_rate(filename_bkg_subbed_science_image,saturation_value_rate_sciimage)
+    nan_indices_refimage = replace_nans_with_sat_val_rate(output_resampled_gainmatched_reference_image,saturation_value_rate_sciimage)
+
+
     #################################################################################################################
     # The image data in science_image_filename and sci_fits_file_with_pv FITS files are the same, only the
     # representation of geometric distortion in the FITS headers are different (sip versus pv).
@@ -828,6 +835,21 @@ if __name__ == '__main__':
                                                                 output_resampled_reference_cov_map,
                                                                 filename_scorrimage_masked,
                                                                 post_zogy_keep_diffimg_lower_cov_map_thresh)
+
+
+    # Restore NaNs that were masked prior to executing ZOGY.
+
+    if nan_indices_sciimage:
+        restore_nans(filename_diffimage_masked,nan_indices_sciimage)
+
+    if nan_indices_refimage:
+        restore_nans(filename_diffimage_masked,nan_indices_refimage)
+
+    if nan_indices_sciimage:
+        restore_nans(filename_scorrimage_masked,nan_indices_sciimage)
+
+    if nan_indices_refimage:
+        restore_nans(filename_scorrimage_masked,nan_indices_refimage)
 
 
     # Code-timing benchmark.
