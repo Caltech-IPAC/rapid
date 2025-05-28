@@ -772,8 +772,8 @@ if __name__ == '__main__':
     # Replace NaNs, if any, in ZOGY input images.  Use the same saturation level rate since they are gain-matched.
 
     saturation_value_rate_sciimage = saturation_level_sciimage / exptime_sciimage
-    nan_indices_sciimage = replace_nans_with_sat_val_rate(filename_bkg_subbed_science_image,saturation_value_rate_sciimage)
-    nan_indices_refimage = replace_nans_with_sat_val_rate(output_resampled_gainmatched_reference_image,saturation_value_rate_sciimage)
+    nan_indices_sciimage = util.replace_nans_with_sat_val_rate(filename_bkg_subbed_science_image,saturation_value_rate_sciimage)
+    nan_indices_refimage = util.replace_nans_with_sat_val_rate(output_resampled_gainmatched_reference_image,saturation_value_rate_sciimage)
 
 
     #################################################################################################################
@@ -840,16 +840,16 @@ if __name__ == '__main__':
     # Restore NaNs that were masked prior to executing ZOGY.
 
     if nan_indices_sciimage:
-        restore_nans(filename_diffimage_masked,nan_indices_sciimage)
+        util.restore_nans(filename_diffimage_masked,nan_indices_sciimage)
 
     if nan_indices_refimage:
-        restore_nans(filename_diffimage_masked,nan_indices_refimage)
+        util.restore_nans(filename_diffimage_masked,nan_indices_refimage)
 
     if nan_indices_sciimage:
-        restore_nans(filename_scorrimage_masked,nan_indices_sciimage)
+        util.restore_nans(filename_scorrimage_masked,nan_indices_sciimage)
 
     if nan_indices_refimage:
-        restore_nans(filename_scorrimage_masked,nan_indices_refimage)
+        util.restore_nans(filename_scorrimage_masked,nan_indices_refimage)
 
 
     # Code-timing benchmark.
