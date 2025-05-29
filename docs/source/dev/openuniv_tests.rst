@@ -34,6 +34,14 @@ Look-up table all of the filter IDs versus filter names included in the database
        8 | W146
     (8 rows)
 
+
+Here is a 2-D histogram of numbers ofOpenUniverse exposure-SCA images versus sky position for the F184 filter:
+
+.. image:: F184_colormap.png
+
+All filters are covered uniformly in the OpenUniverse dataset, so the above figure is indicative of any of the available filters.
+
+
 Summary of successful tests conducted thus far:
 
 =========================  =============  =======================  ===================  ===================  ================================================================================
