@@ -742,18 +742,21 @@ if __name__ == '__main__':
     # and then computing scale factor.  To apply, multiply reference iamge by scalefacref.
     ######################################################################################
 
-    scalefac,dxrmsfin,dyrmsfin = dfis.gainMatchScienceAndReferenceImages(s3_client,
-                                                                         product_s3_bucket,
-                                                                         jid,
-                                                                         job_proc_date,
-                                                                         filename_bkg_subbed_science_image,
-                                                                         reformatted_science_uncert_image_filename,
-                                                                         output_resampled_reference_image,
-                                                                         output_resampled_reference_uncert_image,
-                                                                         gainmatch_dict,
-                                                                         sextractor_gainmatch_dict,
-                                                                         astrometric_uncert_x,
-                                                                         astrometric_uncert_y)
+    scalefac,dxrmsfin,dyrmsfin,dxmedianfin,dymedianfin = dfis.gainMatchScienceAndReferenceImages(s3_client,
+                                                                                                 product_s3_bucket,
+                                                                                                 jid,
+                                                                                                 job_proc_date,
+                                                                                                 filename_bkg_subbed_science_image,
+                                                                                                 reformatted_science_uncert_image_filename,
+                                                                                                 output_resampled_reference_image,
+                                                                                                 output_resampled_reference_uncert_image,
+                                                                                                 gainmatch_dict,
+                                                                                                 sextractor_gainmatch_dict,
+                                                                                                 astrometric_uncert_x,
+                                                                                                 astrometric_uncert_y)
+
+    print("scalefac,dxrmsfin,dyrmsfin,dxmedianfin,dymedianfin =",scalefac,dxrmsfin,dyrmsfin,dxmedianfin,dymedianfin)
+
     scalefacref = 1. / scalefac
 
 

@@ -495,17 +495,19 @@ def gainMatchScienceAndReferenceImages(s3_client,
 
     dxrmsfin = astrometric_uncert_x
     dyrmsfin = astrometric_uncert_y
+    dxmedianfin = 0.0
+    dymedianfin = 0.0
 
     if num_rows_sci > 0 and nrefcatn > 0:
 
-        dscirefnear, fluxscinearest, nmtchsciref, dxrms, dyrms = SourceMatchRefSci(sci_x_vals,
-                                                                                   sci_y_vals,
-                                                                                   xrefkeep_val,
-                                                                                   yrefkeep_val,
-                                                                                   sci_flux_vals,
-                                                                                   nrefcatn,
-                                                                                   radscirefmatch,
-                                                                                   verbose)
+        dscirefnear,fluxscinearest,nmtchsciref,dxrms,dyrms,dxmedian,dymedian = SourceMatchRefSci(sci_x_vals,
+                                                                                                 sci_y_vals,
+                                                                                                 xrefkeep_val,
+                                                                                                 yrefkeep_val,
+                                                                                                 sci_flux_vals,
+                                                                                                 nrefcatn,
+                                                                                                 radscirefmatch,
+                                                                                                 verbose)
 
 
         dscirefnear_val = np.array(dscirefnear)
@@ -526,6 +528,8 @@ def gainMatchScienceAndReferenceImages(s3_client,
 
             dxrmsfin = dxrms
             dyrmsfin = dyrms
+            dxmedianfin = dxmedian
+            dymedianfin = dymedian
 
             if verbose:
                 s = "{}: median separation of {} sci to filtered ref-catalog matches = {} pixels; " +\
@@ -560,7 +564,7 @@ def gainMatchScienceAndReferenceImages(s3_client,
         print(s3.format(iam,dxrmsfin,dyrmsfin))
 
 
-    return scalefac,dxrmsfin,dyrmsfin
+    return scalefac,dxrmsfin,dyrmsfin,dxmedianfin,dymedianfin
 
 
 #---------------------------------------------------------------------
@@ -635,13 +639,17 @@ def SourceMatchRefSci(xf_val,
 
     dxrms = 0.0
     dyrms = 0.0
+    dxmedian = 0.0
+    dymedian = 0.0
 
     if nmtch >= 3:
         mdxnear_val = np.array(mdxnear)
         dxrms = np.sqrt(np.mean(mdxnear_val * mdxnear_val))
+        dxmedian = np.median(mdxnear_val)
 
         mdynear_val = np.array(mdynear)
         dyrms = np.sqrt(np.mean(mdynear_val * mdynear_val))
+        dymedian = np.median(mdynear_val)
 
     if verbose > 0:
         print("iam: SourceMatchRefSci: number of matches = {}".format(nmtch))
@@ -649,4 +657,4 @@ def SourceMatchRefSci(xf_val,
         print("iam: SourceMatchRefSci: DyRMS = {} pixels".format(dyrms))
 
 
-    return mdnear,mfluxsci,nmtch,dxrms,dyrms
+    return mdnear,mfluxsci,nmtch,dxrms,dyrms,dxmedian,dymedian
