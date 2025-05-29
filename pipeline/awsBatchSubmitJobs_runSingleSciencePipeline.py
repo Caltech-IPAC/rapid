@@ -742,16 +742,18 @@ if __name__ == '__main__':
     # and then computing scale factor.  To apply, multiply reference iamge by scalefacref.
     ######################################################################################
 
-    scalefac = dfis.gainMatchScienceAndReferenceImages(s3_client,
-                                                       product_s3_bucket,
-                                                       jid,
-                                                       job_proc_date,
-                                                       filename_bkg_subbed_science_image,
-                                                       reformatted_science_uncert_image_filename,
-                                                       output_resampled_reference_image,
-                                                       output_resampled_reference_uncert_image,
-                                                       gainmatch_dict,
-                                                       sextractor_gainmatch_dict)
+    scalefac,dxrmsfin,dyrmsfin = dfis.gainMatchScienceAndReferenceImages(s3_client,
+                                                                         product_s3_bucket,
+                                                                         jid,
+                                                                         job_proc_date,
+                                                                         filename_bkg_subbed_science_image,
+                                                                         reformatted_science_uncert_image_filename,
+                                                                         output_resampled_reference_image,
+                                                                         output_resampled_reference_uncert_image,
+                                                                         gainmatch_dict,
+                                                                         sextractor_gainmatch_dict,
+                                                                         astrometric_uncert_x,
+                                                                         astrometric_uncert_y)
     scalefacref = 1. / scalefac
 
 
@@ -804,8 +806,8 @@ if __name__ == '__main__':
                 output_resampled_reference_uncert_image,
                 str(std_sci_img),
                 str(std_ref_img),
-                str(astrometric_uncert_x),
-                str(astrometric_uncert_y),
+                str(dxrmsfin),
+                str(dyrmsfin),
                 filename_diffimage,
                 filename_diffpsf,
                 filename_scorrimage]

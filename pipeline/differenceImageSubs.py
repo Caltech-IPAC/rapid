@@ -166,7 +166,9 @@ def gainMatchScienceAndReferenceImages(s3_client,
                                        filename_ref_image,
                                        filename_ref_uncert,
                                        gainmatch_dict,
-                                       sextractor_gainmatch_dict):
+                                       sextractor_gainmatch_dict,
+                                       astrometric_uncert_x,
+                                       astrometric_uncert_y):
 
 
     # Print diagnostics:
@@ -491,8 +493,8 @@ def gainMatchScienceAndReferenceImages(s3_client,
     # Initialize final RMSs of ref to sci source separations along each axis
     # [pixels] in case num sci or ref catalog sources is zero.
 
-    dxrmsfin = 0.05
-    dyrmsfin = 0.05
+    dxrmsfin = astrometric_uncert_x
+    dyrmsfin = astrometric_uncert_y
 
     if num_rows_sci > 0 and nrefcatn > 0:
 
@@ -558,7 +560,7 @@ def gainMatchScienceAndReferenceImages(s3_client,
         print(s3.format(iam,dxrmsfin,dyrmsfin))
 
 
-    return scalefac
+    return scalefac,dxrmsfin,dyrmsfin
 
 
 #---------------------------------------------------------------------
