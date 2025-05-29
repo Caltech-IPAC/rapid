@@ -781,6 +781,11 @@ if __name__ == '__main__':
     nan_indices_refimage = util.replace_nans_with_sat_val_rate(output_resampled_gainmatched_reference_image,saturation_value_rate_sciimage)
 
 
+    # Apply subpixel orthogonal offsets to ZOGY input reference image.
+
+    util.apply_subpixel_orthogonal_offsets(output_resampled_gainmatched_reference_image,dxmedianfin,dymedianfin)
+
+
     #################################################################################################################
     # The image data in science_image_filename and sci_fits_file_with_pv FITS files are the same, only the
     # representation of geometric distortion in the FITS headers are different (sip versus pv).
