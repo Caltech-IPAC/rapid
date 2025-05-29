@@ -1791,7 +1791,7 @@ def transpose_image_data(fits_file,output_fits_file=None):
     data = hdul[0].data
 
 
-    # Transpose data, to correct WCS.
+    # Transpose the image data.
 
     transpose_data = np.transpose(data)
 
