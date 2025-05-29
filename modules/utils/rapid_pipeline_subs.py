@@ -1670,3 +1670,108 @@ def restore_nans(fits_file,nan_indices):
     # Return
 
     return None
+
+
+#####################################################################################################
+# Apply subpixel orthogonal offsets to image by upsampling image, shifting in x and y in subpixels,
+# and then downsampling image.
+# Assume there are no NaNs in the input image (as special handling would need to be included).
+# Offsets dx and dy are in units of input pixels.
+# Positive offsets shift image left and down w.r.t. image-viewing screen.
+#####################################################################################################
+
+def apply_subpixel_orthogonal_offsets(fits_file,dx,dy,output_fits_file=None):
+
+    if abs(dx) > 0.15 or abs(dy) > 0.15:
+
+        print(f"Applying subpixel offsets dx = {dx}, dy = {dy} to FITS file = {fits_file}")
+
+
+        # Read input FITS file.
+
+        hdul = fits.open(fits_file)
+        hdr = hdul[0].header
+        data = hdul[0].data
+        data_array = np.array(data)
+
+
+        # Make correction to CRPIX1 and CRPIX2.
+
+        crpix1 = hdr["CRPIX1"]
+        crpix2 = hdr["CRPIX2"]
+        hdr["CRPIX1"] = crpix1 - dx
+        hdr["CRPIX2"] = crpix2 - dy
+
+
+        # Get image size.
+
+        naxis1 = hdr["NAXIS1"]
+        naxis2 = hdr["NAXIS2"]
+
+
+        # Upsample image by factor of four.
+
+        scale_factor = 4
+
+
+        # Compute nearest integer pixel offsets in upsampled image.
+
+        x_arr = np.array([dx])
+        x_rint = np.rint(x_arr)
+        x_offset = int(x_rint * scale_factor)
+
+        y_arr = np.array([dy])
+        y_rint = np.rint(y_arr)
+        y_offset = int(y_rint * scale_factor)
+
+
+        # Upsample image.
+
+        sfsq = scale_factor ** 2
+        new_naxis1 = scale_factor * naxis1
+        new_naxis2 = scale_factor * naxis2
+
+        up_data = np.empty(shape=(new_naxis1, new_naxis2))
+
+        for i in range(naxis2):
+            for j in range(naxis1):
+                ii_s = i * scale_factor
+                jj_s = j * scale_factor
+                ii_e = ii_s + scale_factor
+                jj_e = jj_s + scale_factor
+                up_data[ii_s:ii_e,jj_s:jj_e] = data_array[i][j] / sfsq
+
+
+        # Apply the subpixel offsets and then downsample image.
+
+        dn_data = np.zeros(shape=(naxis1, naxis2))
+        for i in range(naxis2):
+            for j in range(naxis1):
+                ii_s = max(0,i * scale_factor + x_offset)
+                jj_s = max(0,j * scale_factor + y_offset)
+                ii_e = min(new_naxis2,ii_s + scale_factor)
+                jj_e = min(new_naxis1,jj_s + scale_factor)
+                dn_data[i][j] = np.sum(up_data[ii_s:ii_e,jj_s:jj_e])
+
+
+        # Create a new primary HDU with the new image data
+
+        np_data = np.array(dn_data)
+
+        hdul[0] = fits.PrimaryHDU(header=hdr,data=np_data)
+
+
+        # Write output FITS file.
+
+        if output_fits_file is None:
+            output_fits_file = fits_file
+            print(f"Overwriting input FITS file = {output_fits_file}")
+        else:
+            print(f"Writing new FITS file = {output_fits_file}")
+
+        hdul.writeto(output_fits_file,overwrite=True,checksum=True)
+
+
+    # Return None implicitly.
+
+    return
