@@ -1781,7 +1781,7 @@ def apply_subpixel_orthogonal_offsets(fits_file,dx,dy,output_fits_file=None):
 # Transpose the FITS image data.
 #####################################################################################################
 
-def transpose_image_data(fits_file,dx,dy,output_fits_file=None):
+def transpose_image_data(fits_file,output_fits_file=None):
 
 
     # Read input FITS file.
