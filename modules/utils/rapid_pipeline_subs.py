@@ -1775,3 +1775,49 @@ def apply_subpixel_orthogonal_offsets(fits_file,dx,dy,output_fits_file=None):
     # Return None implicitly.
 
     return
+
+
+#####################################################################################################
+# Transpose the FITS image data.
+#####################################################################################################
+
+def transpose_image_data(fits_file,dx,dy,output_fits_file=None):
+
+
+    # Read input FITS file.
+
+    hdul = fits.open(fits_file)
+    hdr = hdul[0].header
+    data = hdul[0].data
+
+
+    # Transpose data, to correct WCS.
+
+    transpose_data = np.transpose(data)
+
+
+    # Create a new primary HDU with the new image data
+
+    np_data = np.array(transpose_data)
+
+    hdul[0] = fits.PrimaryHDU(header=hdr,data=np_data)
+
+
+    # Write output FITS file.
+
+    if output_fits_file is None:
+        output_fits_file = fits_file
+        print(f"Overwriting input FITS file = {output_fits_file}")
+    else:
+        print(f"Writing new FITS file = {output_fits_file}")
+
+    hdul.writeto(output_fits_file,overwrite=True,checksum=True)
+
+
+    # Return None implicitly.
+
+    return
+
+
+
+
