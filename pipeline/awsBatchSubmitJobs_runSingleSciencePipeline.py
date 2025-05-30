@@ -793,6 +793,14 @@ if __name__ == '__main__':
         util.transpose_image_data(filename_psf)
 
 
+    # Code-timing benchmark.
+
+    end_time_benchmark = time.time()
+    print("Elapsed time in seconds after replacing NaNs, applying image offsets, etc. =",
+        end_time_benchmark - start_time_benchmark)
+    start_time_benchmark = end_time_benchmark
+
+
     #################################################################################################################
     # The image data in science_image_filename and sci_fits_file_with_pv FITS files are the same, only the
     # representation of geometric distortion in the FITS headers are different (sip versus pv).
