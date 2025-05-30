@@ -4,13 +4,13 @@ Testing with RimTimSim Simulated Data
 Overview
 ************************************
 
-Robby Wilson's simulated data, hereby referred to as RimTimSim data.
+Robby Wilson's simulated data, hereby referred to as RimTimSim data, are describe here.
 These are images of dense stellar fields.
 It is a small dataset with just 263 images total (details below).
 
 The tests described below are organized by processing date.
 
-RimTimSim simulated data are used, which cover the following observation range::
+The RimTimSim simulated-image dataset covers the following observation range::
 
     rimtimsimdb=> select min(dateobs),max(dateobs) from l2files;
                min           |          max
@@ -18,7 +18,7 @@ RimTimSim simulated data are used, which cover the following observation range::
      2027-02-14 06:02:26.719 | 2027-04-24 21:17:51.141
     (1 row)
 
-Only one field is covered by the RimTimSim simulated-image dataset::
+Only one field is covered by the RimTimSim dataset::
 
     rimtimsimdb=> select distinct field from l2files;
       field
@@ -26,7 +26,7 @@ Only one field is covered by the RimTimSim simulated-image dataset::
      4682737
     (1 row)
 
-Also, only one SCA and two filters are included in the RimTimSim simulated-image dataset::
+Also, only one SCA and two filters are included in the RimTimSim dataset::
 
     rimtimsimdb=> select sca,fid,count(*) from l2files group by sca,fid order by sca,fid;
      sca | fid | count
@@ -35,7 +35,7 @@ Also, only one SCA and two filters are included in the RimTimSim simulated-image
        2 |   7 |   132
     (2 rows)
 
-Look-up table all of the filter IDs versus filter names included in the database:
+Look-up table all of the filter IDs versus Roman Space Telescope filter names included in the database:
 
 .. code-block::
 
@@ -65,13 +65,17 @@ The following improvements have been implemented:
 Only ZOGY difference-image products were made in this test.
 NaNs were removed from the ZOGY inputs prior to ZOGY execution, and then restored in the ZOGY outputs (this is a new
 requirement due to the presence of NaNs in the rimtimsim dataset).
-Initially, only one image was processed for each of the two filters, in order to make the two required reference images
-that are needed to process the remaining images (jids 1 and 3).  The reference images were made on the day before the
-date of this test.
+
+Initially, only one image was processed for each of the two filters (jids 1 and 3),
+in order to make the two required reference images for the single field associated with two filters in the RimTimSim datase.
+The reference images were made on the day before the date of this test.
+These reference images were made beforehand to avoid needlessly having redundant reference images made when
+processing the remaining images en masse in parallel.
 For the jid=1 instance, PSF-fit catalog generation took 488 seconds (nsources=27420), and reference-image generation took 426 seconds (nframes=23),
 comprising the majority of the run time.  The total run time of the jid=1 instance was 1038 seconds.
 
-Processing started at a later observation time than the very beginning to reserve some prior image frames for making reference images::
+Processing was started for a later observation time than the very beginning,
+in order to reserve some prior image frames for making reference images::
 
     export STARTDATETIME="2027-02-27 00:00:00"
     export ENDDATETIME="2027-04-25 00:00:00"
@@ -80,11 +84,11 @@ Numbers of exposure-SCA images processed for each available filter (fid = 4 and 
 
 .. code-block::
 
-    rimtimsimdb=> select count(*) from l2files where dateobs >= '20270227' group by fid order by fid;
-     count
-    -------
-       108
-       107
+    rimtimsimdb=> select fid,count(*) from l2files where dateobs >= '20270227' group by fid order by fid;
+      fid | count
+     -----+-------
+        4 |    108
+        7 |    107
     (2 rows)
 
 
