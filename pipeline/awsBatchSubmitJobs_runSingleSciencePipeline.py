@@ -1095,6 +1095,10 @@ if __name__ == '__main__':
     product_config['ZOGY']['sca'] = str(sca_sciimage)
     product_config['ZOGY']['nsexcatsources'] = str(nsexcatsources_diffimage)
     product_config['ZOGY']['scalefacref'] = str(scalefacref)
+    product_config['ZOGY']['dxrmsfin'] = str(dxrmsfin)
+    product_config['ZOGY']['dyrmsfin'] = str(dyrmsfin)
+    product_config['ZOGY']['dxmedianfin'] = str(dxmedianfin)
+    product_config['ZOGY']['dymedianfin'] = str(dymedianfin)
 
 
     # Code-timing benchmark.
