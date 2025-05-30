@@ -4,7 +4,7 @@ Testing with RimTimSim Simulated Data
 Overview
 ************************************
 
-Robby Wilson's simulated data, hereby referred to as RimTimSim data, are describe here.
+Robby Wilson's simulated-image data, hereby referred to as RimTimSim data, are describe here.
 These are images of dense stellar fields.
 It is a small dataset with just 263 images total (details below).
 
