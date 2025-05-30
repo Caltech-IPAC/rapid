@@ -14,7 +14,7 @@ A separate PostgreSQL database has been set up for each different simulated data
 Dataset                Database name
 ===============      ===================
 OpenUniverse           rapidopsdb
-RimTimSim              rimtimsim
+RimTimSim              rimtimsimdb
 ===============      ===================
 
 Tests
