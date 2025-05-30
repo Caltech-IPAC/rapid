@@ -1718,13 +1718,15 @@ def apply_subpixel_orthogonal_offsets(fits_file,dx,dy,output_fits_file=None):
 
         # Compute nearest integer pixel offsets in upsampled image.
 
-        x_arr = np.array([dx])
+        x_arr = np.array([dx * scale_factor])
         x_rint = np.rint(x_arr)
-        x_offset = int(x_rint * scale_factor)
+        x_offset = int(x_rint)
 
-        y_arr = np.array([dy])
+        y_arr = np.array([dy * scale_factor])
         y_rint = np.rint(y_arr)
-        y_offset = int(y_rint * scale_factor)
+        y_offset = int(y_rint)
+
+        print("Upsampled image x and y offsets =",x_offset,y_offset)
 
 
         # Upsample image.
