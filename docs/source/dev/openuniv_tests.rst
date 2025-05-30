@@ -17,7 +17,7 @@ OpenUniverse simulated data are used, which cover the following observation rang
 All 18 SCAs are included in the OpenUniverse simulated-image dataset.
 There are 7 filters covered by the OpenUniverse dataset (fid=8 or W146 is not included).
 
-Look-up table all of the filter IDs versus filter names included in the database:
+Look-up table all of the filter IDs versus Roman Space Telescope filter names included in the database:
 
 .. code-block::
 
