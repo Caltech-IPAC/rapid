@@ -1682,7 +1682,9 @@ def restore_nans(fits_file,nan_indices):
 
 def apply_subpixel_orthogonal_offsets(fits_file,dx,dy,output_fits_file=None):
 
-    if (abs(dx) > 0.15 and abs(dx) < 5.0) or (abs(dy) > 0.15 and abs(dy) < 5.0):
+    print(f"Sub apply_subpixel_orthogonal_offsets: dx = {dx}, dy = {dy} fits_file = {fits_file}")
+
+    if (abs(dx) > 0.1 and abs(dx) < 5.0) or (abs(dy) > 0.1 and abs(dy) < 5.0):
 
         print(f"Applying subpixel offsets dx = {dx}, dy = {dy} to FITS file = {fits_file}")
 
@@ -1709,9 +1711,9 @@ def apply_subpixel_orthogonal_offsets(fits_file,dx,dy,output_fits_file=None):
         naxis2 = hdr["NAXIS2"]
 
 
-        # Upsample image by factor of four.
+        # Upsample image by factor of six.
 
-        scale_factor = 4
+        scale_factor = 6
 
 
         # Compute nearest integer pixel offsets in upsampled image.
