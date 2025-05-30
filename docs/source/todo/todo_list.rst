@@ -23,6 +23,9 @@ Pipeline Software
 | SFFT crossconv  | Propagate from configuration file.                       | No    |
 | flag            |                                                          |       |
 +-----------------+----------------------------------------------------------+-------+
+| FILEDATE        | Added FILEDATE to headers of all FITS-file products.     | No    |
+| needed          |                                                          |       |
++-----------------+----------------------------------------------------------+-------+
 
 
 
