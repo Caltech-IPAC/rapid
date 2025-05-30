@@ -1117,7 +1117,7 @@ if __name__ == '__main__':
     #    sfftsoln.fits
     #################################################################################################################
 
-    run_sfft = True
+    run_sfft = False
 
     # Always leave as True, and can only be reset to False if and only if SFFT runs and fails.
     run_sfft_was_successful = True
