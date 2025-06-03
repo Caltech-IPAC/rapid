@@ -645,6 +645,10 @@ def run_single_core_job(jids,log_fnames,index_thread):
                     sca_diffimage = product_config_input['ZOGY']['sca']
                     nsexcatsources_diffimage = product_config_input['ZOGY']['nsexcatsources']
                     scalefacref_diffimage = product_config_input['ZOGY']['scalefacref']
+                    dxrmsfin_diffimage = product_config_input['ZOGY']['dxrmsfin']
+                    dyrmsfin_diffimage = product_config_input['ZOGY']['dyrmsfin']
+                    dxmedianfin_diffimage = product_config_input['ZOGY']['dxmedianfin']
+                    dymedianfin_diffimage = product_config_input['ZOGY']['dymedianfin']
 
                     checksum_diffimage = product_config_input['ZOGY']['zogy_output_diffimage_file_checksum']
                     filename_diffimage = product_config_input['ZOGY']['zogy_output_diffimage_file']
@@ -696,7 +700,18 @@ def run_single_core_job(jids,log_fnames,index_thread):
 
                     # Insert record in DiffImMeta database table.
 
-                    dbh.register_diffimmeta(pid,fid_diffimage,sca_diffimage,field,hp6,hp9,nsexcatsources_diffimage,scalefacref_diffimage)
+                    dbh.register_diffimmeta(pid,
+                                            fid_diffimage,
+                                            sca_diffimage,
+                                            field,
+                                            hp6,
+                                            hp9,
+                                            nsexcatsources_diffimage,
+                                            scalefacref_diffimage,
+                                            dxrmsfin_diffimage,
+                                            dyrmsfin_diffimage,
+                                            dxmedianfin_diffimage,
+                                            dymedianfin_diffimage)
 
                     if dbh.exit_code >= 64:
                         exit(dbh.exit_code)
