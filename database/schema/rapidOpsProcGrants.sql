@@ -277,7 +277,11 @@ grant EXECUTE on FUNCTION registerDiffImMeta (
     hp6_                 integer,
     hp9_                 integer,
     nsexcatsources_      integer,
-    scalefacref_         real
+    scalefacref_         real,
+    dxrmsfin_            real,
+    dyrmsfin_            real,
+    dxmedianfin_         real,
+    dymedianfin_         real
 ) to rapidporole;
 
 

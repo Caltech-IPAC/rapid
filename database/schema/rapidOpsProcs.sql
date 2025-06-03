@@ -1764,7 +1764,11 @@ create function registerDiffImMeta (
     hp6_                 integer,
     hp9_                 integer,
     nsexcatsources_      integer,
-    scalefacref_         real
+    scalefacref_         real,
+    dxrmsfin_            real,
+    dyrmsfin_            real,
+    dxmedianfin_         real,
+    dymedianfin_         real
 )
     returns void as $$
 
@@ -1797,7 +1801,11 @@ create function registerDiffImMeta (
                  hp6,
                  hp9,
                  nsexcatsources,
-                 scalefacref
+                 scalefacref,
+                 dxrmsfin,
+                 dyrmsfin,
+                 dxmedianfin,
+                 dymedianfin
                 )
                 values
                 (pid_,
@@ -1807,7 +1815,11 @@ create function registerDiffImMeta (
                  hp6_,
                  hp9_,
                  nsexcatsources_,
-                 scalefacref_
+                 scalefacref_,
+                 dxrmsfin_,
+                 dyrmsfin_,
+                 dxmedianfin_,
+                 dymedianfin_
                 );
                 exception
                     when no_data_found then
@@ -1828,7 +1840,11 @@ create function registerDiffImMeta (
                 hp6 = hp6_,
                 hp9 = hp9_,
                 nsexcatsources = nsexcatsources_,
-                scalefacref = scalefacref_
+                scalefacref = scalefacref_,
+                dxrmsfin = dxrmsfin_,
+                dyrmsfin = dyrmsfin_,
+                dxmedianfin = dxmedianfin_,
+                dymedianfin = dymedianfin_
             where pid = pid_;
 
         end if;
