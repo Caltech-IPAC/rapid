@@ -897,6 +897,10 @@ CREATE TABLE diffimmeta (
     pid integer NOT NULL,
     nsexcatsources integer NOT NULL,         -- Number of records in DiffImage SExtractor catalog.
     scalefacref real NOT NULL,               -- Gain-matching scale factor for reference image.
+    dxrmsfin real NOT NULL,                  -- Gain-matching x astrometric uncertainty (final).
+    dyrmsfin real NOT NULL,                  -- Gain-matching y astrometric uncertainty (final).
+    dxmedianfin real NOT NULL,               -- Gain-matching dx astrometric median offset (final).
+    dymedianfin real NOT NULL,               -- Gain-matching dy astrometric median offset (final).
     field integer NOT NULL,                  -- Roman tessellation index for RA_TARG, DEC_TARG
     hp6 integer NOT NULL,                    -- Level-6 healpix index (NESTED) for (ra0,dec0)
     hp9 integer NOT NULL,                    -- Level-9 healpix index (NESTED) for (ra0,dec0)
