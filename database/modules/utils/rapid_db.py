@@ -2077,7 +2077,19 @@ class RAPIDDB:
 
 ########################################################################################################
 
-    def register_diffimmeta(self,pid,fid,sca,field,hp6,hp9,nsexcatsources,scalefacref):
+    def register_diffimmeta(self,
+                            pid,
+                            fid,
+                            sca,
+                            field,
+                            hp6,
+                            hp9,
+                            nsexcatsources,
+                            scalefacref,
+                            dxrmsfin,
+                            dyrmsfin,
+                            dxmedianfin,
+                            dymedianfin):
 
         '''
         Insert or update record in DiffImMeta database table.
@@ -2097,7 +2109,11 @@ class RAPIDDB:
             "cast(TEMPLATE_HP6 AS integer)," +\
             "cast(TEMPLATE_HP9 AS integer)," +\
             "cast(TEMPLATE_NSEXCATSOURCES AS integer)," +\
-            "cast(TEMPLATE_REALSCALEFACREF AS real));"
+            "cast(TEMPLATE_SCALEFACREF AS real),"
+            "cast(TEMPLATE_DXRMSFIN AS real),"
+            "cast(TEMPLATE_DYRMSFIN AS real),"
+            "cast(TEMPLATE_DXMEDIANFIN AS real),"
+            "cast(TEMPLATE_DYMEDIANFIN AS real));"
 
 
         # Query database.
@@ -2110,6 +2126,10 @@ class RAPIDDB:
         print('----> hp9 = {}'.format(hp9))
         print('----> nsexcatsources = {}'.format(nsexcatsources))
         print('----> scalefacref = {}'.format(scalefacref))
+        print('----> dxrmsfin = {}'.format(dxrmsfin))
+        print('----> dyrmsfin = {}'.format(dyrmsfin))
+        print('----> dxmedianfin = {}'.format(dxmedianfin))
+        print('----> dymedianfin = {}'.format(dymedianfin))
 
         rep = {"TEMPLATE_PID": str(pid)}
 
@@ -2119,7 +2139,11 @@ class RAPIDDB:
         rep["TEMPLATE_HP6"] = str(hp6)
         rep["TEMPLATE_HP9"] = str(hp9)
         rep["TEMPLATE_NSEXCATSOURCES"] = str(nsexcatsources)
-        rep["TEMPLATE_REALSCALEFACREF"] = str(scalefacref)
+        rep["TEMPLATE_SCALEFACREF"] = str(scalefacref)
+        rep["TEMPLATE_DXRMSFIN"] = str(dxrmsfin)
+        rep["TEMPLATE_DYRMSFIN"] = str(dyrmsfin)
+        rep["TEMPLATE_DXMEDIANFIN"] = str(dxmedianfin)
+        rep["TEMPLATE_DYMEDIANFIN"] = str(dymedianfin)
 
         rep = dict((re.escape(k), v) for k, v in rep.items())
         pattern = re.compile("|".join(rep.keys()))
