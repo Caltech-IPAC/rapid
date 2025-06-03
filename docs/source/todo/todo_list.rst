@@ -26,6 +26,10 @@ Pipeline Software
 | FILEDATE        | Added FILEDATE to headers of all FITS-file products.     | No    |
 | needed          |                                                          |       |
 +-----------------+----------------------------------------------------------+-------+
+| Position        | Offset in x and y the reprojected reference image        | Yes   |
+| refinement      | prior to image differencings, based on the median        |       |
+| needed          | delta x and y cross-matched isolated sources             |       |
++-----------------+----------------------------------------------------------+-------+
 
 
 
@@ -47,4 +51,8 @@ Operations Database
 | New Fields      | Nice to have would be a Fields table indexed by field    | No    |
 | table           | that has (ra,dec) of center and 4 corners of tile.       |       |
 |                 | Get data from our SQLite Roman tesselation database.     |       |
++-----------------+----------------------------------------------------------+-------+
+| New columns in  | dxrmsfin,dyrmsfin,dxmedianfin,dymedianfin                | No    |
+| DiffImMeta      |                                                          |       |
+| table           |                                                          |       |
 +-----------------+----------------------------------------------------------+-------+
