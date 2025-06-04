@@ -55,6 +55,8 @@ for i in range(6291458):
     dec4_field = roman_tessellation_db.dec4
 
 
+    # Write sky positions to output file for ingesting into PostgreSQL database.
+
     fh.write(f"{ra1_field}\t{dec1_field}\t{ra2_field}\t{dec2_field}\t{ra3_field}\t{dec3_field}\t{ra4_field}\t{dec4_field}\t{ra0_field}\t{dec0_field}\n")
 
 
