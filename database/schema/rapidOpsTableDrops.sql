@@ -152,3 +152,10 @@ DROP SEQUENCE socprocs_did_seq;
 
 CREATE TABLE psfs;
 DROP SEQUENCE psfs_psfid_seq;
+
+
+-------------------
+-- Fields table
+-------------------
+
+DROP TABLE fields;

@@ -973,3 +973,45 @@ CREATE INDEX refimmeta_hp9_idx ON refimmeta (hp9);
 CREATE INDEX refimmeta_fid_idx ON refimmeta (fid);
 CREATE INDEX refimmeta_nframes_idx ON refimmeta (nframes);
 CREATE INDEX refimmeta_cov5percent_idx ON refimmeta (cov5percent);
+
+
+-----------------------------
+-- TABLE: Fields
+-----------------------------
+
+SET default_tablespace = pipeline_data_01;
+
+CREATE TABLE fields (
+    field integer NOT NULL,
+    ra1 double precision NOT NULL,
+    dec1 double precision NOT NULL,
+    ra2 double precision NOT NULL,
+    dec2 double precision NOT NULL,
+    ra3 double precision NOT NULL,
+    dec3 double precision NOT NULL,
+    ra4 double precision NOT NULL,
+    dec4 double precision NOT NULL,
+    ra0 double precision NOT NULL,
+    dec0 double precision NOT NULL,
+    CONSTRAINT fields_ra1_check CHECK (((ra1 >= 0.0) AND (ra1 < 360.0))),
+    CONSTRAINT fields_dec1_check CHECK (((dec1 >= -90.0) AND (dec1 <= 90.0))),
+    CONSTRAINT fields_ra2_check CHECK (((ra2 >= 0.0) AND (ra2 < 360.0))),
+    CONSTRAINT fields_dec2_check CHECK (((dec2 >= -90.0) AND (dec2 <= 90.0))),
+    CONSTRAINT fields_ra3_check CHECK (((ra3 >= 0.0) AND (ra3 < 360.0))),
+    CONSTRAINT fields_dec3_check CHECK (((dec3 >= -90.0) AND (dec3 <= 90.0))),
+    CONSTRAINT fields_ra4_check CHECK (((ra4 >= 0.0) AND (ra4 < 360.0))),
+    CONSTRAINT fields_dec4_check CHECK (((dec4 >= -90.0) AND (dec4 <= 90.0))),
+    CONSTRAINT fields_ra0_check CHECK (((ra0 >= 0.0) AND (ra0 < 360.0))),
+    CONSTRAINT fields_dec0_check CHECK (((dec0 >= -90.0) AND (dec0 <= 90.0)))
+);
+
+ALTER TABLE fields OWNER TO rapidadminrole;
+
+SET default_tablespace = pipeline_indx_01;
+
+CREATE index fields_field_idx on fields(field);
+
+CREATE INDEX fields_radec_idx ON fields (q3c_ang2ipix(ra0, dec0));
+CLUSTER fields_radec_idx ON fields;
+ANALYZE fields;
+
