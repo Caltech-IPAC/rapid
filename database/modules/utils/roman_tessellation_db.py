@@ -2,6 +2,7 @@ import os
 import re
 import sqlite3
 
+
 class RomanTessellationNSIDE512:
 
     """
@@ -20,10 +21,11 @@ class RomanTessellationNSIDE512:
         69 = Query returned unexpected results (e.g., None)
     """
 
-    def __init__(self):
+    def __init__(self,debug=0):
 
         self.exit_code = 0
         self.conn = None
+        self.debug = debug
 
 
         # Get database connection parameters from environment.
@@ -105,7 +107,8 @@ class RomanTessellationNSIDE512:
         pattern = re.compile("|".join(rep.keys()))
         query = pattern.sub(lambda m: rep[re.escape(m.group(0))], query_template)
 
-        print('query = {}'.format(query))
+        if self.debug > 0:
+            print('query = {}'.format(query))
 
 
         # Execute query.
@@ -153,7 +156,8 @@ class RomanTessellationNSIDE512:
         pattern = re.compile("|".join(rep.keys()))
         query = pattern.sub(lambda m: rep[re.escape(m.group(0))], query_template)
 
-        print('query = {}'.format(query))
+        if self.debug > 0:
+            print('query = {}'.format(query))
 
 
         # Execute query.
@@ -204,7 +208,8 @@ class RomanTessellationNSIDE512:
         pattern = re.compile("|".join(rep.keys()))
         query = pattern.sub(lambda m: rep[re.escape(m.group(0))], query_template)
 
-        print('query = {}'.format(query))
+        if self.debug > 0:
+            print('query = {}'.format(query))
 
 
         # Execute query.
