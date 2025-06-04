@@ -10,7 +10,7 @@ min(rtid)|max(rtid)
 import os
 import database.modules.utils.roman_tessellation_db as sqlite
 
-swname = "compute-fields.py"
+swname = "compute_fields.py"
 swvers = "1.0"
 
 
@@ -25,7 +25,7 @@ if roman_tessellation_dbname is None:
 
 roman_tessellation_db = sqlite.RomanTessellationNSIDE512()
 
-output_file = swname.replace(".py",".out")
+output_file = swname.replace(".py",".dat")
 
 try:
     fh = open(output_file, 'w', encoding="utf-8")
