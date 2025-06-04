@@ -26,9 +26,17 @@ Pipeline Software
 | FILEDATE        | Added FILEDATE to headers of all FITS-file products.     | No    |
 | needed          |                                                          |       |
 +-----------------+----------------------------------------------------------+-------+
-| Position        | Offset in x and y the reprojected reference image        | Yes   |
-| refinement      | prior to image differencings, based on the median        |       |
-| needed          | delta x and y cross-matched isolated sources             |       |
+| Position        | Compute median offset in delta x and y from sci/ref      | Yes   |
+| refinement      | cross-matched isolated sources.  Use to do orthogonal    |       |
+| for ZOGY        | subpixel-shifting of reference image data prior to ZOGY. |       |
++-----------------+----------------------------------------------------------+-------+
+| Astrometric     | Compute RMS delta x and y from sci/ref                   | Yes   |
+| error           | cross-matched isolated sources to feed as ZOGY input     |       |
+| for ZOGY        |                                                          |       |
++-----------------+----------------------------------------------------------+-------+
+| Gain-           | Compute image-data gain-match scale factor from sci/ref  | Yes   |
+| matching        | cross-matched isolated sources to scale reference image  |       |
+| for ZOGY        | data prior to ZOGY.                                      |       |
 +-----------------+----------------------------------------------------------+-------+
 
 
@@ -52,7 +60,7 @@ Operations Database
 | table           | that has (ra,dec) of center and 4 corners of tile.       |       |
 |                 | Get data from our SQLite Roman tesselation database.     |       |
 +-----------------+----------------------------------------------------------+-------+
-| New columns in  | dxrmsfin,dyrmsfin,dxmedianfin,dymedianfin                | No    |
+| New columns in  | dxrmsfin,dyrmsfin,dxmedianfin,dymedianfin                | Yes   |
 | DiffImMeta      |                                                          |       |
 | table           |                                                          |       |
 +-----------------+----------------------------------------------------------+-------+
