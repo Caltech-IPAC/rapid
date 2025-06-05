@@ -66,6 +66,39 @@ for i in range(6291458):
     dec4 = roman_tessellation_db.dec4
 
 
+    # Need to massage ra for database constraints.
+
+    if ra0 < 0.0:
+        ra0 += 360.0
+
+    if ra1 < 0.0:
+        ra1 += 360.0
+
+    if ra2 < 0.0:
+        ra2 += 360.0
+
+    if ra3 < 0.0:
+        ra3 += 360.0
+
+    if ra4 < 0.0:
+        ra4 += 360.0
+
+    if ra0 >= 360.0:
+        ra0 -= 360.0
+
+    if ra1 >= 360.0:
+        ra1 -= 360.0
+
+    if ra2 >= 360.0:
+        ra2 -= 360.0
+
+    if ra3 >= 360.0:
+        ra3 -= 360.0
+
+    if ra4 >= 360.0:
+        ra4 -= 360.0
+
+
     # Compute level-6 healpix index (NESTED pixel ordering).
 
     hp6 = hp.ang2pix(nside6,ra0,dec0,nest=True,lonlat=True)
