@@ -8,10 +8,18 @@ min(rtid)|max(rtid)
 
 """
 import os
+import healpy as hp
+
 import database.modules.utils.roman_tessellation_db as sqlite
 
 swname = "compute_fields.py"
 swvers = "1.0"
+
+level6 = 6
+nside6 = 2**level6
+
+level9 = 9
+nside9 = 2**level9
 
 
 # Ensure sqlite database that defines the Roman sky tessellation is available.
@@ -36,28 +44,41 @@ except:
 
 for i in range(6291458):
 
+
+    # Field number is a one-based index.
+
     field = i + 1
 
 
     # Get sky positions of center and four corners of sky tile.
 
     roman_tessellation_db.get_center_sky_position(field)
-    ra0_field = roman_tessellation_db.ra0
-    dec0_field = roman_tessellation_db.dec0
+    ra0 = roman_tessellation_db.ra0
+    dec0 = roman_tessellation_db.dec0
     roman_tessellation_db.get_corner_sky_positions(field)
-    ra1_field = roman_tessellation_db.ra1
-    dec1_field = roman_tessellation_db.dec1
-    ra2_field = roman_tessellation_db.ra2
-    dec2_field = roman_tessellation_db.dec2
-    ra3_field = roman_tessellation_db.ra3
-    dec3_field = roman_tessellation_db.dec3
-    ra4_field = roman_tessellation_db.ra4
-    dec4_field = roman_tessellation_db.dec4
+    ra1 = roman_tessellation_db.ra1
+    dec1 = roman_tessellation_db.dec1
+    ra2 = roman_tessellation_db.ra2
+    dec2 = roman_tessellation_db.dec2
+    ra3 = roman_tessellation_db.ra3
+    dec3 = roman_tessellation_db.dec3
+    ra4 = roman_tessellation_db.ra4
+    dec4 = roman_tessellation_db.dec4
+
+
+    # Compute level-6 healpix index (NESTED pixel ordering).
+
+    hp6 = hp.ang2pix(nside6,ra0,dec0,nest=True,lonlat=True)
+
+
+    # Compute level-9 healpix index (NESTED pixel ordering).
+
+    hp9 = hp.ang2pix(nside9,ra0,dec0,nest=True,lonlat=True)
 
 
     # Write sky positions to output file for ingesting into PostgreSQL database.
 
-    fh.write(f"{ra1_field}\t{dec1_field}\t{ra2_field}\t{dec2_field}\t{ra3_field}\t{dec3_field}\t{ra4_field}\t{dec4_field}\t{ra0_field}\t{dec0_field}\n")
+    fh.write(f"{field}\t{hp6}\t{hp9}\t{ra1}\t{dec1}\t{ra2}\t{dec2}\t{ra3}\t{dec3}\t{ra4}\t{dec4}\t{ra0}\t{dec0}\n")
 
 
 fh.close()
