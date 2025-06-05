@@ -982,16 +982,18 @@ CREATE INDEX refimmeta_cov5percent_idx ON refimmeta (cov5percent);
 SET default_tablespace = pipeline_data_01;
 
 CREATE TABLE fields (
-    field integer NOT NULL,
-    ra1 double precision NOT NULL,
+    field integer NOT NULL,                -- Roman tessellation index for (ra0,dec0)
+    hp6 integer NOT NULL,                  -- Level-6 healpix index (NESTED) for (ra0,dec0)
+    hp9 integer NOT NULL,                  -- Level-9 healpix index (NESTED) for (ra0,dec0)
+    ra1 double precision NOT NULL,         -- Lower-left corner of field
     dec1 double precision NOT NULL,
-    ra2 double precision NOT NULL,
+    ra2 double precision NOT NULL,         -- Lower-right corner of field
     dec2 double precision NOT NULL,
-    ra3 double precision NOT NULL,
+    ra3 double precision NOT NULL,         -- Upper-right corner of field
     dec3 double precision NOT NULL,
-    ra4 double precision NOT NULL,
+    ra4 double precision NOT NULL,         -- Upper-left corner of field
     dec4 double precision NOT NULL,
-    ra0 double precision NOT NULL,
+    ra0 double precision NOT NULL,         -- Center of field
     dec0 double precision NOT NULL,
     CONSTRAINT fields_ra1_check CHECK (((ra1 >= 0.0) AND (ra1 < 360.0))),
     CONSTRAINT fields_dec1_check CHECK (((dec1 >= -90.0) AND (dec1 <= 90.0))),
