@@ -20,10 +20,10 @@ Pipeline Software
 | Solar system    | Joe Masiero's code needs to be integrated                | No    |
 | Objects         | into the science pipeline.                               |       |
 +-----------------+----------------------------------------------------------+-------+
-| SFFT crossconv  | Propagate from configuration file.                       | No    |
+| SFFT crossconv  | Propagate from configuration file.                       | Yes   |
 | flag            |                                                          |       |
 +-----------------+----------------------------------------------------------+-------+
-| FILEDATE        | Added FILEDATE to headers of all FITS-file products.     | No    |
+| FILEDATE        | Update DATE value in header of all FITS-file products.   | Yes   |
 | needed          |                                                          |       |
 +-----------------+----------------------------------------------------------+-------+
 | Position        | Compute median offset in delta x and y from sci/ref      | Yes   |
