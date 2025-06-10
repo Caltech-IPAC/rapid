@@ -289,6 +289,8 @@ for key in config_input['SEXTRACTOR_GAINMATCH'].keys():
     #print('Input SEXTRACTOR_GAINMATCH: key, value =',key,config_input['SEXTRACTOR_GAINMATCH'][key])
     sextractor_gainmatch_dict[key] = config_input['SEXTRACTOR_GAINMATCH'][key]
 
+sfft_dict = config_input['SFFT']
+
 
 #-------------------------------------------------------------------------------------------------------------
 # Method to submit a job to AWS Batch.
@@ -747,6 +749,7 @@ if __name__ == '__main__':
     zogy_dict["s3_full_name_psf"] = s3_full_name_psf
 
     job_config['ZOGY'] = zogy_dict
+    job_config['SFFT'] = sfft_dict
 
     job_config['AWAICGEN'] = awaicgen_dict
     job_config['SWARP'] = swarp_dict
