@@ -237,6 +237,7 @@ if __name__ == '__main__':
     gainmatch_dict = config_input['GAINMATCH']
     psfcat_diffimage_dict = config_input['PSFCAT_DIFFIMAGE']
     sextractor_gainmatch_dict = config_input['SEXTRACTOR_GAINMATCH']
+    sfft_dict = config_input['SFFT']
 
     print("max_n_images_to_coadd =", max_n_images_to_coadd)
 
@@ -1117,7 +1118,7 @@ if __name__ == '__main__':
     #    sfftsoln.fits
     #################################################################################################################
 
-    run_sfft = False
+    run_sfft = eval(sfft_dict['run_sfft'])
 
     # Always leave as True, and can only be reset to False if and only if SFFT runs and fails.
     run_sfft_was_successful = True
@@ -1132,7 +1133,7 @@ if __name__ == '__main__':
         filename_scisegm = 'sfftscisegm.fits'
         filename_refsegm = 'sfftrefsegm.fits'
 
-        crossconv_flag = True
+        crossconv_flag = eval(sfft_dict['crossconv_flag'])
 
         if crossconv_flag:
             filename_sfftdiffimage = 'sfftdiffimage_cconv_masked.fits'
