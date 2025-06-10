@@ -227,14 +227,15 @@ if __name__ == '__main__':
 
             # Update FITS header of reference image.
 
-            keywords = ['RFID','S3BUCKN','S3OBJPRF','RFFILEN','INFOBITS','RFIMVER','PPID']
+            keywords = ['RFID','S3BUCKN','S3OBJPRF','RFFILEN','INFOBITS','RFIMVER','PPID','DATE']
             kwdvals = [str(rfid),
                        product_s3_bucket_base,
                        job_prefix,
                        awaicgen_output_mosaic_image_file,
                        str(infobits_refimage),
                        str(version_refimage),
-                       str(ppid)]
+                       str(ppid),
+                       proc_utc_datetime]
             hdu_index = 0
             util.addKeywordsToFITSHeader(awaicgen_output_mosaic_image_file,
                                          keywords,
@@ -285,7 +286,7 @@ if __name__ == '__main__':
 
             # Update FITS header of difference image.
 
-            keywords = ['PID','S3BUCKN','S3OBJPRF','DIFFILEN','INFOBITS','DIFIMVER','PPID','RID','EXPID','FID','FIELD']
+            keywords = ['PID','S3BUCKN','S3OBJPRF','DIFFILEN','INFOBITS','DIFIMVER','PPID','RID','EXPID','FID','FIELD','DATE']
             kwdvals = [str(pid),
                        product_s3_bucket_base,
                        job_prefix,
@@ -296,7 +297,8 @@ if __name__ == '__main__':
                        str(rid),
                        str(expid),
                        str(fid),
-                       str(field)]
+                       str(field),
+                       proc_utc_datetime]
             hdu_index = 0
             util.addKeywordsToFITSHeader(zogy_output_diffimage_file,
                                          keywords,
