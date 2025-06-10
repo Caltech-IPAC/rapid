@@ -155,6 +155,28 @@ where the limited coverage is all coverage and any coverage greater than 5 that 
 for scoring purposes, relative to 5 times the total number of pixels in the image.
 
 
+Difference-Image QA
+************************************
+
+The DiffImMeta database table stores various QA measures for difference images.
+
++--------------------+-------------------------------------------------------------------------------------------+
+| Database column    | Definition                                                                                |
++====================+===========================================================================================+
+| nsxcatsources      | Number of SourceExtractor sources in difference-image catalog                             |
++--------------------+-------------------------------------------------------------------------------------------+
+| scalefacref        | Gain-matching image-data scale factor for reference image w.r.t. science image            |
++--------------------+-------------------------------------------------------------------------------------------+
+| dxrmsfin           | Final RMS of matched-isolated-source separations along x axis, fed to ZOGY [pixels]       |
++--------------------+-------------------------------------------------------------------------------------------+
+| dyrmsfin           | Final RMS of matched-isolated-source separations along y axis, fed to ZOGY [pixels]       |
++--------------------+-------------------------------------------------------------------------------------------+
+| dxmedianfin        | Final median of matched-isolated-source separations along x axis [pixels],                |
+|                    | Used to orthogonally subpixel offset reference-image data for ZOGY alignment              |
++--------------------+-------------------------------------------------------------------------------------------+
+| dymedianfin        | Final median of matched-isolated-source separations along y axis [pixels],                |
+|                    | Used to orthogonally subpixel offset reference-image data for ZOGY alignment              |
++--------------------+-------------------------------------------------------------------------------------------+
 
 
 
