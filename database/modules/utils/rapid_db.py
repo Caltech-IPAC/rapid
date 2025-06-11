@@ -2130,10 +2130,10 @@ class RAPIDDB:
             "cast(TEMPLATE_HP6 AS integer)," +\
             "cast(TEMPLATE_HP9 AS integer)," +\
             "cast(TEMPLATE_NSEXCATSOURCES AS integer)," +\
-            "cast(TEMPLATE_SCALEFACREF AS real),"
-            "cast(TEMPLATE_DXRMSFIN AS real),"
-            "cast(TEMPLATE_DYRMSFIN AS real),"
-            "cast(TEMPLATE_DXMEDIANFIN AS real),"
+            "cast(TEMPLATE_SCALEFACREF AS real)," +\
+            "cast(TEMPLATE_DXRMSFIN AS real)," +\
+            "cast(TEMPLATE_DYRMSFIN AS real)," +\
+            "cast(TEMPLATE_DXMEDIANFIN AS real)," +\
             "cast(TEMPLATE_DYMEDIANFIN AS real));"
 
 
