@@ -1106,9 +1106,29 @@ class RAPIDDB:
                                                "cast(TEMPLATE_RA2 as double precision), cast(TEMPLATE_DEC2 as double precision)," +\
                                                "cast(TEMPLATE_RA3 as double precision), cast(TEMPLATE_DEC3 as double precision)," +\
                                                "cast(TEMPLATE_RA4 as double precision), cast(TEMPLATE_DEC4 as double precision)])) " +\
-            "and mjdobs < TEMPLATE_MJDOBS " +\
+            "and mjdobs >= TEMPLATE_STARTMJDOBS " +\
+            "and mjdobs < TEMPLATE_ENDMJDOBS " +\
             "and rid != TEMPLATE_RID " +\
             "order by dist; "
+
+
+        # Special logic for generating reference image from inputs observed within a certain observation date range.
+
+        special_run_flag_str = os.getenv('SPECIALRUNFLAG')
+
+        if special_run_flag_str is None:
+
+            print("*** Error: Env. var. SPECIALRUNFLAG not set; quitting...")
+            exit(64)
+
+        special_run_flag = eval(special_run_flag_str)
+
+        if special_run_flag:
+            start_mjdobs = 63400.0
+            end_mjdobs = 99999.0
+        else:
+            start_mjdobs = 0.0
+            end_mjdobs = mjdobs
 
 
         # Formulate query by substituting parameters into query template.
@@ -1120,7 +1140,8 @@ class RAPIDDB:
         rep = {"TEMPLATE_RID": str(rid)}
 
         rep["TEMPLATE_FID"] = str(fid)
-        rep["TEMPLATE_MJDOBS"] = str(mjdobs)
+        rep["TEMPLATE_STARTMJDOBS"] = str(start_mjdobs)
+        rep["TEMPLATE_ENDMJDOBS"] = str(end_mjdobs)
         rep["TEMPLATE_RA0"] = str(field_ra0)
         rep["TEMPLATE_DEC0"] = str(field_dec0)
         rep["TEMPLATE_RA1"] = str(field_ra1)
