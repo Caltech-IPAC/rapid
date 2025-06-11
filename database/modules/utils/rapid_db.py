@@ -2365,7 +2365,7 @@ class RAPIDDB:
 
 ########################################################################################################
 
-    def get_l2files_records_for_datetime_range(self,startdatetiime,enddatetime):
+    def get_l2files_records_for_datetime_range(self,startdatetime,enddatetime):
 
         '''
         Query database for all L2Files records associated with the given observation datetime range.
@@ -2377,7 +2377,7 @@ class RAPIDDB:
         # Define query.
 
         query = "select rid,sca,fid,mjdobs from L2Files where dateobs >= '" +\
-                startdatetiime + "' and dateobs < '" + enddatetime + "' order by mjdobs;"
+                startdatetime + "' and dateobs < '" + enddatetime + "' order by mjdobs;"
 
 
         # Query database.
@@ -2686,7 +2686,7 @@ class RAPIDDB:
 ########################################################################################################
 
     def get_l2files_records_for_datetime_range_and_superior_reference_images(self,
-                                                                             startdatetiime,
+                                                                             startdatetime,
                                                                              enddatetime,
                                                                              nframes,
                                                                              cov5percent):
@@ -2710,7 +2710,7 @@ class RAPIDDB:
                 "and b.vbest > 0 " +\
                 "and cov5percent >= " + str(cov5percent) + " " +\
                 "and nframes >= " + str(nframes) + " " +\
-                "and a.dateobs >= '" + startdatetiime + "' " +\
+                "and a.dateobs >= '" + startdatetime + "' " +\
                 "and a.dateobs < '" + enddatetime + "' " +\
                 "order by a.mjdobs,a.sca;"
 
@@ -2739,6 +2739,106 @@ class RAPIDDB:
 
         except (Exception, psycopg2.DatabaseError) as error:
             print('*** Error getting all L2Files records for given dateobs range, nframes, and cov5percent ({}); skipping...'.format(error))
+            self.exit_code = 67
+            return
+
+        return records
+
+
+########################################################################################################
+
+    def get_field_fid_nframes_records_for_mjdobs_range(self,start_refimage_mjdobs,end_refimage_mjdobs,min_refimage_nframes):
+
+        '''
+        Query database for all field/filter/nframes combinations in reference-image window with
+        minimum number of frames in coadd stack.
+        '''
+
+        self.exit_code = 0
+
+
+        # Define query.
+
+        query =\
+            f"select field,fid,count(*) from l2files where mjdobs >= {start_refimage_mjdobs} " +\
+            f"and mjdobs < {end_refimage_mjdobs} group by field,fid having " +\
+            f"count(*) >= {min_refimage_nframes} order by field,fid;"
+
+        print('query = {}'.format(query))
+
+
+        # Execute query.
+
+        try:
+            self.cur.execute(query)
+
+            try:
+                records = []
+                nrecs = 0
+                for record in self.cur:
+                    records.append(record)
+                    nrecs += 1
+
+                print("nrecs =",nrecs)
+
+            except:
+                    print("Nothing returned from database query; continuing...")
+
+        except (Exception, psycopg2.DatabaseError) as error:
+            print('*** Error executing get_field_fid_nframes_records_for_mjdobs_range ({}); skipping...'.format(error))
+            self.exit_code = 67
+            return
+
+        return records
+
+
+
+########################################################################################################
+
+    def get_l2files_records_for_datetime_range_field_fid(self,startdatetime,enddatetime,field,fid):
+
+        '''
+        Query database for all L2Files records associated with the given observation datetime range.
+        '''
+
+        self.exit_code = 0
+
+
+        # Define query.
+
+        query =\
+            f"select rid,sca,field,fid,mjdobs from L2Files " +\
+            f"where dateobs >= '{startdatetime}' " +\
+            f"and dateobs < '{enddatetime}' " +
+            f"and field = '{field}' " +
+            f"and fid = '{fid}' " +
+            f"order by mjdobs,sca;"
+
+
+        # Query database.
+
+        print('query = {}'.format(query))
+
+
+        # Execute query.
+
+        try:
+            self.cur.execute(query)
+
+            try:
+                records = []
+                nrecs = 0
+                for record in self.cur:
+                    records.append(record)
+                    nrecs += 1
+
+                print("nrecs =",nrecs)
+
+            except:
+                    print("Nothing returned from database query; continuing...")
+
+        except (Exception, psycopg2.DatabaseError) as error:
+            print('*** Error getting all L2Files records for given dateobs range ({}); skipping...'.format(error))
             self.exit_code = 67
             return
 
