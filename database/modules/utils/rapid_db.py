@@ -1129,15 +1129,15 @@ class RAPIDDB:
 
             if start_refimage_mjdobs is None:
 
-            print("*** Error: Env. var. STARTREFIMMJDOBS not set; quitting...")
-            exit(64)
+                print("*** Error: Env. var. STARTREFIMMJDOBS not set; quitting...")
+                exit(64)
 
             end_refimage_mjdobs = os.getenv('ENDREFIMMJDOBS')
 
             if end_refimage_mjdobs is None:
 
-            print("*** Error: Env. var. ENDREFIMMJDOBS not set; quitting...")
-            exit(64)
+                print("*** Error: Env. var. ENDREFIMMJDOBS not set; quitting...")
+                exit(64)
 
             start_mjdobs = start_refimage_mjdobs
             end_mjdobs = end_refimage_mjdobs
