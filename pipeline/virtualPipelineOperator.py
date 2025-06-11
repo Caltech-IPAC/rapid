@@ -144,6 +144,28 @@ if enddatetime is None:
     print("*** Error: Env. var. ENDDATETIME not set; quitting...")
     exit(64)
 
+special_run_flag_str = os.getenv('SPECIALRUNFLAG')
+
+if special_run_flag_str is None:
+
+    print("*** Error: Env. var. SPECIALRUNFLAG not set; quitting...")
+    exit(64)
+
+special_run_flag = eval(special_run_flag_str)
+
+if special_run_flag:
+
+    launch_science_pipelines_code_from_env = os.getenv('LAUNCHSCIENCEPIPELINESCODE')
+
+    if launch_science_pipelines_code_from_env is None:
+
+        print("*** Error: Env. var. LAUNCHSCIENCEPIPELINESCODE not set; quitting...")
+        exit(64)
+
+    else:
+
+        launch_science_pipelines_code = launch_science_pipelines_code_from_env
+
 
 # Read input parameters from .ini file.
 
