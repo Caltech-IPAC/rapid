@@ -1124,8 +1124,23 @@ class RAPIDDB:
         special_run_flag = eval(special_run_flag_str)
 
         if special_run_flag:
-            start_mjdobs = 63400.0
-            end_mjdobs = 99999.0
+
+            start_refimage_mjdobs = os.getenv('STARTREFIMMJDOBS')
+
+            if start_refimage_mjdobs is None:
+
+            print("*** Error: Env. var. STARTREFIMMJDOBS not set; quitting...")
+            exit(64)
+
+            end_refimage_mjdobs = os.getenv('ENDREFIMMJDOBS')
+
+            if end_refimage_mjdobs is None:
+
+            print("*** Error: Env. var. ENDREFIMMJDOBS not set; quitting...")
+            exit(64)
+
+            start_mjdobs = start_refimage_mjdobs
+            end_mjdobs = end_refimage_mjdobs
         else:
             start_mjdobs = 0.0
             end_mjdobs = mjdobs
