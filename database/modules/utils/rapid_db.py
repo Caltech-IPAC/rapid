@@ -2830,9 +2830,9 @@ class RAPIDDB:
         query =\
             f"select rid,sca,field,fid,mjdobs from L2Files " +\
             f"where dateobs >= '{startdatetime}' " +\
-            f"and dateobs < '{enddatetime}' " +
-            f"and field = {field} " +
-            f"and fid = {fid} " +
+            f"and dateobs < '{enddatetime}' " +\
+            f"and field = {field} " +\
+            f"and fid = {fid} " +\
             f"order by mjdobs,sca;"
 
 
