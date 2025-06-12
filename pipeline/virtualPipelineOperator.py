@@ -41,10 +41,6 @@ print("swname =", swname)
 print("swvers =", swvers)
 print("cfg_filename_only =", cfg_filename_only)
 print("python_cmd =", python_cmd)
-print("launch_science_pipelines_code =", launch_science_pipelines_code)
-print("register_science_pipeline_jobs_code =", register_science_pipeline_jobs_code)
-print("launch_postproc_pipelines_code =", launch_postproc_pipelines_code)
-print("register_postproc_pipeline_jobs_code =", register_postproc_pipeline_jobs_code)
 
 
 # Compute start time for benchmark.
@@ -197,6 +193,11 @@ print("awaicgen_output_mosaic_image_file =",awaicgen_output_mosaic_image_file)
 print("zogy_output_diffimage_file =",zogy_output_diffimage_file)
 print("startdatetime =",startdatetime)
 print("enddatetime =",enddatetime)
+print("special_run_flag =",special_run_flag)
+print("launch_science_pipelines_code =", launch_science_pipelines_code)
+print("register_science_pipeline_jobs_code =", register_science_pipeline_jobs_code)
+print("launch_postproc_pipelines_code =", launch_postproc_pipelines_code)
+print("register_postproc_pipeline_jobs_code =", register_postproc_pipeline_jobs_code)
 
 
 # Set signal hander.
