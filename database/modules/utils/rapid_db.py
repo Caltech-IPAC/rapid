@@ -2145,7 +2145,7 @@ class RAPIDDB:
             "cast(TEMPLATE_HP6 AS integer)," +\
             "cast(TEMPLATE_HP9 AS integer)," +\
             "cast(TEMPLATE_NSEXCATSOURCES AS integer)," +\
-            "cast(TEMPLATE_SCALEFACREF AS real)," +\
+            "cast(TEMPLATE_REFSCALEFAC AS real)," +\
             "cast(TEMPLATE_DXRMSFIN AS real)," +\
             "cast(TEMPLATE_DYRMSFIN AS real)," +\
             "cast(TEMPLATE_DXMEDIANFIN AS real)," +\
@@ -2175,7 +2175,7 @@ class RAPIDDB:
         rep["TEMPLATE_HP6"] = str(hp6)
         rep["TEMPLATE_HP9"] = str(hp9)
         rep["TEMPLATE_NSEXCATSOURCES"] = str(nsexcatsources)
-        rep["TEMPLATE_SCALEFACREF"] = str(scalefacref)
+        rep["TEMPLATE_REFSCALEFAC"] = str(scalefacref)
         rep["TEMPLATE_DXRMSFIN"] = str(dxrmsfin)
         rep["TEMPLATE_DYRMSFIN"] = str(dyrmsfin)
         rep["TEMPLATE_DXMEDIANFIN"] = str(dxmedianfin)
