@@ -637,3 +637,56 @@ Same as 4/28/2025 standard test, except that SFFT was run with the ``--crossconv
 are made, as they already exist.  The resulting SFFT difference image, ``sfftdiffimage_cconv_masked.fits``, and
 SFFT decorrelated difference image, ``sfftdiffimage_dconv_masked.fits``, are copied to the
 S3 product bucket, along with the other products.
+
+
+6/12/2025
+************************************
+
+Test to process 3,545 exposure-SCAs, all in the observation date/time ranges given below,
+making reference images on the fly as needed.
+The reference images are special in that their input frames are selected from the observation window
+63,400 < MJD < 99,9999, which is later than the observation range of the test.
+The test covers only those field/filter combinations in which reference images can be made that have 6 input frames or more,
+which resulted in 79 reference images.
+The observation date/time range of the science images processed in this test is relatively early
+in the available range of the OpenUniverse simulated images, but covers more than a year.
+This test covers all seven filters included in the OpenUniverse dataset.
+AWS Batch machines for science-pipeline jobs have 2 vCPUs and 16 GB memory.
+A special pipeline-launch script is utilized.
+
+For efficiency, the test is processed in two stages.
+In the first stage, only one representative science image per field/filter combination
+is processed to initially make the needed reference image for the other science images
+with the same field and filter.
+In the second stage, all other science images are processed (i.e., except the representative science images).
+The representative science image is the first in a time-ordered, SCA-ordered list for a given field and filter
+that is returned from a database query.
+
+Only ZOGY difference-image products were made in this test.
+
+
+.. code-block::
+
+    export STARTDATETIME="2028-09-07 00:00:00"
+    export ENDDATETIME="2029-09-20 00:00:00"
+    export DBNAME=specialdb
+    export STARTREFIMMJDOBS=63400
+    export ENDREFIMMJDOBS=99999
+    export MINREFIMNFRAMES=6
+    export SPECIALRUNFLAG=True
+    export LAUNCHSCIENCEPIPELINESCODE=/code/pipeline/launchSciencePipelinesForDateTimeRangeWithRefImageWindow.py
+    export DRYRUN=False
+    export MAKEREFIMAGESFLAG=True
+    python3.11 /code/pipeline/virtualPipelineOperator.py 20250612 >& virtualPipelineOperator_20250612.out &
+    export MAKEREFIMAGESFLAG=False
+    python3.11 /code/pipeline/virtualPipelineOperator.py 20250612 >& virtualPipelineOperator_20250612_2.out &
+
+
+.. code-block::
+
+    db=> select ppid,exitcode,count(*) from jobs where cast(launched as date) = '20250612' group by ppid, exitcode order by ppid, exitcode;
+     ppid | exitcode | count
+    ------+----------+-------
+       15 |        0 |  3545
+       17 |        0 |  3545
+    (2 rows)
