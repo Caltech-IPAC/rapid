@@ -180,6 +180,7 @@ if __name__ == '__main__':
     if dbh.exit_code >= 64:
         exit(dbh.exit_code)
 
+
     # Query database for all field/filter/nframes combinations in reference-image window with
     # minimum number of frames in coadd stack.
 
