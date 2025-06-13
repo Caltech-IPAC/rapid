@@ -649,9 +649,8 @@ The reference images are special in that their input frames are selected from th
 The test covers only those field/filter combinations in which reference images can be made that have 6 input frames or more,
 which resulted in 79 reference images.
 The observation date/time range of the science images processed in this test is relatively early
-in the available range of the OpenUniverse simulated images, but covers more than a year.
+in the available range of the OpenUniverse simulated images, but spans more than a year.
 This test covers all seven filters included in the OpenUniverse dataset.
-AWS Batch machines for science-pipeline jobs have 2 vCPUs and 16 GB memory.
 A special pipeline-launch script is utilized.
 
 For efficiency, the test is processed in two stages.
