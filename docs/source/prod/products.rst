@@ -149,7 +149,7 @@ are operations database IDs written to the FITS header by the RAPID post-process
     DATASUM = '1546664296'         / data unit checksum updated 2025-04-07T17:20:20
     RFID    = '17030   '
     S3BUCKN = 'rapid-product-files'
-    S3OBJPRF= '20250428/jid999/'
+    S3OBJPRF= '20250404/jid999/'
     RFFILEN = 'awaicgen_output_mosaic_image.fits'
     INFOBITS= '0       '
     RFIMVER = '16      '
@@ -172,7 +172,7 @@ INFOBITS          Bit-wise FLAGS for special conditions about reference image (T
 Here is an image-view of the above-mentioned reference image.  Note the areas of uneven coverage,
 including two blue patches representing NaNs (pixels storing not a number).
 
-.. image:: s3_rapid-product-files_20250428_jid999_awaicgen_output_mosaic_image.png
+.. image:: s3_rapid-product-files_20250404_jid999_awaicgen_output_mosaic_image.png
 
 
 Analysis of Reference Images
