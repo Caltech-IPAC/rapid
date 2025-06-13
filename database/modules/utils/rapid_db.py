@@ -1113,24 +1113,11 @@ class RAPIDDB:
 
 
         # Special logic for generating reference image from inputs observed within a certain observation date range.
+        # If STARTREFIMMJDOBS is set, then so must ENDREFIMMJDOBS.
 
-        special_run_flag_str = os.getenv('SPECIALRUNFLAG')
+        start_refimage_mjdobs = os.getenv('STARTREFIMMJDOBS')
 
-        if special_run_flag_str is None:
-
-            print("*** Error: Env. var. SPECIALRUNFLAG not set; quitting...")
-            exit(64)
-
-        special_run_flag = eval(special_run_flag_str)
-
-        if special_run_flag:
-
-            start_refimage_mjdobs = os.getenv('STARTREFIMMJDOBS')
-
-            if start_refimage_mjdobs is None:
-
-                print("*** Error: Env. var. STARTREFIMMJDOBS not set; quitting...")
-                exit(64)
+        if start_refimage_mjdobs is not None:
 
             end_refimage_mjdobs = os.getenv('ENDREFIMMJDOBS')
 
