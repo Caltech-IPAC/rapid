@@ -663,12 +663,11 @@ that is returned from a database query.
 
 Only ZOGY difference-image products were made in this test.
 
-
 .. code-block::
 
+    export DBNAME=specialdb
     export STARTDATETIME="2028-09-07 00:00:00"
     export ENDDATETIME="2029-09-20 00:00:00"
-    export DBNAME=specialdb
     export STARTREFIMMJDOBS=63400
     export ENDREFIMMJDOBS=99999
     export MINREFIMNFRAMES=6
@@ -689,3 +688,25 @@ Only ZOGY difference-image products were made in this test.
        15 |        0 |  3545
        17 |        0 |  3545
     (2 rows)
+
+
+6/13/2025
+************************************
+
+Test to process 2,783 exposure-SCAs, all in the observation date/time ranges given below,
+which spans the observing year after that of the 20250612 test,
+utilizing the same reference images made for the 20250612 test.
+
+Improvements and additional automation made to the VPO simplify the required run-time parameters, listed below.
+
+.. code-block::
+
+    export DBNAME=specialdb
+    export STARTDATETIME="2029-09-20 00:00:00"
+    export ENDDATETIME="2030-09-20 00:00:00"
+    export STARTREFIMMJDOBS=63400
+    export ENDREFIMMJDOBS=99999
+    export MINREFIMNFRAMES=6
+
+    python3.11 /code/pipeline/virtualPipelineOperator.py 20250612 >& virtualPipelineOperator_20250612.out &
+
