@@ -397,63 +397,63 @@ if __name__ == '__main__':
             os.environ['DRYRUN'] = "False"
 
 
-....        # Launch science pipelines.
-....        #
-....        # Load environment variables STARTDATETIME and ENDDATETIME to specify observation datetimes.
+            # Launch science pipelines.
+            #
+            # Load environment variables STARTDATETIME and ENDDATETIME to specify observation datetimes.
 
-....        os.environ['STARTDATETIME'] = startdatetime
-....        os.environ['ENDDATETIME'] = enddatetime
+            os.environ['STARTDATETIME'] = startdatetime
+            os.environ['ENDDATETIME'] = enddatetime
 
-....        fname_out = "launch_science_pipelines_code" + "_" + stage_label + "_" + proc_date + ".out"
-....        launch_science_pipelines_cmd = [python_cmd,
-....                                        launch_science_pipelines_code]
+            fname_out = "launch_science_pipelines_code" + "_" + stage_label + "_" + proc_date + ".out"
+            launch_science_pipelines_cmd = [python_cmd,
+                                            launch_science_pipelines_code]
 
-....        exitcode_from_launch_science_pipelines_cmd = util.execute_command(launch_science_pipelines_cmd,fname_out)
-
-
-....        # Code-timing benchmark.
-
-....        end_time_benchmark = time.time()
-....        print("Elapsed time in seconds after launching science pipelines =",
-....            end_time_benchmark - start_time_benchmark)
-....        start_time_benchmark = end_time_benchmark
+            exitcode_from_launch_science_pipelines_cmd = util.execute_command(launch_science_pipelines_cmd,fname_out)
 
 
-....        # Wait for all science pipelines to complete under AWS Batch.
+            # Code-timing benchmark.
 
-....        job_type = "science"
-
-....        print(f"Waiting until AWS Batch jobs have finished for job_type={job_type}, proc_date={proc_date}, stage_label={stage_label}...")
-
-....        wait_until_aws_batch_jobs_finished(job_type,proc_date,config_input,dbh)
-
-....        print(f"Okay, all AWS Batch jobs have finished for job_type={job_type}, proc_date={proc_date}, stage_label={stage_label}...")
+            end_time_benchmark = time.time()
+            print("Elapsed time in seconds after launching science pipelines =",
+                end_time_benchmark - start_time_benchmark)
+            start_time_benchmark = end_time_benchmark
 
 
-....        # Code-timing benchmark.
+            # Wait for all science pipelines to complete under AWS Batch.
 
-....        end_time_benchmark = time.time()
-....        print("Elapsed time in seconds after waiting for science-pipeline AWS Batch jobs to finish =",
-....            end_time_benchmark - start_time_benchmark)
-....        start_time_benchmark = end_time_benchmark
+            job_type = "science"
 
+            print(f"Waiting until AWS Batch jobs have finished for job_type={job_type}, proc_date={proc_date}, stage_label={stage_label}...")
 
-....        # Register metadata from science pipelines into operations database.
+            wait_until_aws_batch_jobs_finished(job_type,proc_date,config_input,dbh)
 
-....        fname_out = "register_science_pipeline_jobs_code" + "_" + stage_label + "_" + proc_date + ".out"
-....        register_science_pipeline_jobs_cmd = [python_cmd,
-....                                              register_science_pipeline_jobs_code,
-....                                              proc_date]
-
-....        exitcode_from_register_science_pipeline_jobs_cmd = util.execute_command(register_science_pipeline_jobs_cmd,fname_out)
+            print(f"Okay, all AWS Batch jobs have finished for job_type={job_type}, proc_date={proc_date}, stage_label={stage_label}...")
 
 
-....        # Code-timing benchmark.
+            # Code-timing benchmark.
 
-....        end_time_benchmark = time.time()
-....        print("Elapsed time in seconds after registering science-pipeline metadata into operations database =",
-....            end_time_benchmark - start_time_benchmark)
-....        start_time_benchmark = end_time_benchmark
+            end_time_benchmark = time.time()
+            print("Elapsed time in seconds after waiting for science-pipeline AWS Batch jobs to finish =",
+                end_time_benchmark - start_time_benchmark)
+            start_time_benchmark = end_time_benchmark
+
+
+            # Register metadata from science pipelines into operations database.
+
+            fname_out = "register_science_pipeline_jobs_code" + "_" + stage_label + "_" + proc_date + ".out"
+            register_science_pipeline_jobs_cmd = [python_cmd,
+                                                  register_science_pipeline_jobs_code,
+                                                  proc_date]
+
+            exitcode_from_register_science_pipeline_jobs_cmd = util.execute_command(register_science_pipeline_jobs_cmd,fname_out)
+
+
+            # Code-timing benchmark.
+
+            end_time_benchmark = time.time()
+            print("Elapsed time in seconds after registering science-pipeline metadata into operations database =",
+                end_time_benchmark - start_time_benchmark)
+            start_time_benchmark = end_time_benchmark
 
 
         # Launch post-processing pipelines.
