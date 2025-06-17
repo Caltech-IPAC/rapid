@@ -14,7 +14,30 @@ OpenUniverse simulated data are used, which cover the following observation rang
      2028-08-17 00:30:48.096 | 2032-11-27 01:23:22.56
     (1 row)
 
-All 18 SCAs are included in the OpenUniverse simulated-image dataset.
+The last exposure containing injected transients has ``DATE-OBS = 2030-08-15 01:23:31.2``.
+There is a gap in the dataset for ``MJD-OBS`` from 62,728 to 63,550 days, and subsequently a later
+"post-survey" exposure set consisting of 1,155 exposures devoid of transients (starting with
+``DATE-OBS = 2032-11-14 00:30:48.096``)::
+
+
+    select fid,count(*)
+    from exposures
+    where dateobs>='2032-11-14'
+    group by fid
+    order by fid;
+
+     fid | count
+    -----+-------
+       1 |   165
+       2 |   165
+       3 |   165
+       4 |   165
+       5 |   165
+       6 |   165
+       7 |   165
+    (7 rows)
+
+All 18 SCAs are included per exposure in the OpenUniverse simulated-image dataset.
 There are 7 filters covered by the OpenUniverse dataset (fid=8 or W146 is not included).
 
 Look-up table all of the filter IDs versus Roman Space Telescope filter names included in the database:
