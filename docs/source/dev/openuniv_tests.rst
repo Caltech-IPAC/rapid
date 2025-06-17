@@ -733,3 +733,48 @@ Improvements and additional automation made to the VPO simplify the required run
 
     python3.11 /code/pipeline/virtualPipelineOperator.py 20250612 >& virtualPipelineOperator_20250612.out &
 
+
+6/17/2025
+************************************
+
+Test to process 547 exposure-SCAs, all in the observation date/time ranges given below (spanning 21 days),
+making reference images on the fly as needed (in order to test the VPO's special logic
+for making reference images).
+
+The observation date/time range of the science images processed in this test covers the earliest
+range of the OpenUniverse simulated images, all filters, not covered in the two previous tests.
+
+For efficiency, the test is processed in two stages.
+In the first stage, only one representative science image per field/filter combination
+is processed to initially make the needed reference image for the other science images
+with the same field and filter.
+In the second stage, all other science images are processed (i.e., except the representative science images).
+The representative science image is the first in a time-ordered, SCA-ordered list for a given field and filter
+that is returned from a database query.
+
+Only ZOGY difference-image products were made in this test.
+
+.. code-block::
+
+    export DBNAME=specialdb
+    export STARTDATETIME="2028-08-17 00:00:00"
+    export ENDDATETIME="2028-09-07 00:00:00"
+    export STARTREFIMMJDOBS=63400
+    export ENDREFIMMJDOBS=99999
+    export MINREFIMNFRAMES=6
+    export SPECIALRUNFLAG=True
+    export LAUNCHSCIENCEPIPELINESCODE=/code/pipeline/launchSciencePipelinesForDateTimeRangeWithRefImageWindow.py
+    export DRYRUN=False
+    export MAKEREFIMAGESFLAG=True
+    python3.11 /code/pipeline/virtualPipelineOperator.py 20250612 >& virtualPipelineOperator_20250612.out &
+    export MAKEREFIMAGESFLAG=False
+    python3.11 /code/pipeline/virtualPipelineOperator.py 20250612 >& virtualPipelineOperator_20250612_2.out &
+
+.. code-block::
+
+    specialdb=> select ppid,exitcode,count(*) from jobs where cast(launched as date) = '20250617' group by ppid, exitcode order by ppid, exitcode;
+     ppid | exitcode | count
+    ------+----------+-------
+       15 |        0 |   547
+       17 |        0 |   547
+    (2 rows)
