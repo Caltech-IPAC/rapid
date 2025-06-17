@@ -379,7 +379,6 @@ if __name__ == '__main__':
         # from a database query for a given field and filter for the observation time
         # range of interest.
 
-
         make_refimages_flags = ["True","False"]
         stage_labels = {"True":"StageOne","False":"StageTwo"}
 
