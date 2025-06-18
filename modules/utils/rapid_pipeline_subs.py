@@ -1832,7 +1832,7 @@ def transpose_image_data(fits_file,output_fits_file=None):
 
 def naive_difference_image(fits_file_sci,fits_file_ref,output_fits_file):
 
-    print(f"Naive image-differencing: {fits_file_sci} minus {fits_file_ref}")
+    print(f"Compute naive image difference: {fits_file_sci} minus {fits_file_ref}")
 
 
     # Read input FITS files.
