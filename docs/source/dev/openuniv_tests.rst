@@ -17,7 +17,7 @@ OpenUniverse simulated data are used, which cover the following observation rang
 The last exposure containing injected transients has ``DATE-OBS = 2030-08-15 01:23:31.2``.
 There is a gap in the dataset for ``MJD-OBS`` from 62,728 to 63,550 days, and subsequently a later
 "post-survey" exposure set consisting of 1,155 exposures devoid of transients (starting with
-``DATE-OBS = 2032-11-14 00:30:48.096``)::
+``DATE-OBS = 2032-11-14 00:30:48.096``).  Here is a breakdown by filter of the transient-free, post-survey exposures::
 
     select fid,count(*)
     from exposures
