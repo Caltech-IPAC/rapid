@@ -1826,4 +1826,46 @@ def transpose_image_data(fits_file,output_fits_file=None):
 
 
 
+#####################################################################################################
+# Subtract reference image from science image.
+#####################################################################################################
+
+def naive_difference_image(fits_file_sci,fits_file_ref,output_fits_file):
+
+    print(f"Naive image-differencing: {fits_file_sci} minus {fits_file_ref}")
+
+
+    # Read input FITS files.
+
+    hdul_sci = fits.open(fits_file_sci)
+    hdr_sci = hdul_sci[0].header
+    data_sci = hdul_sci[0].data
+
+    hdul_ref = fits.open(fits_file_ref)
+    hdr_ref = hdul_ref[0].header
+    data_ref = hdul_ref[0].data
+
+
+    # Subtract the image data.
+
+    diff_data = np.array(data_sci) - np.array(data_ref)
+
+
+    # Create a new primary HDU with the new image data
+
+    hdul[0] = fits.PrimaryHDU(header=hdr,data=diff_data)
+
+
+    # Write output FITS file.
+
+    print(f"Writing new naive difference-image FITS file = {output_fits_file}")
+
+    hdul.writeto(output_fits_file,overwrite=True,checksum=True)
+
+
+    # Return None implicitly.
+
+    return
+
+
 
