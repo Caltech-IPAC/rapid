@@ -169,7 +169,7 @@ if __name__ == '__main__':
 
 
     #
-    # Launch a science pipelines for exposures/scas in input observation datetime range.
+    # Launch science pipelines for exposures/SCAs in input observation datetime range.
     #
 
 
