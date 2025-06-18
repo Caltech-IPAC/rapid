@@ -291,6 +291,8 @@ for key in config_input['SEXTRACTOR_GAINMATCH'].keys():
 
 sfft_dict = config_input['SFFT']
 
+naive_diffimage_dict = config_input['NAIVE_DIFFIMAGE']
+
 
 #-------------------------------------------------------------------------------------------------------------
 # Method to submit a job to AWS Batch.
@@ -750,6 +752,7 @@ if __name__ == '__main__':
 
     job_config['ZOGY'] = zogy_dict
     job_config['SFFT'] = sfft_dict
+    job_config['NAIVE_DIFFIMAGE'] = naive_diffimage_dict
 
     job_config['AWAICGEN'] = awaicgen_dict
     job_config['SWARP'] = swarp_dict
