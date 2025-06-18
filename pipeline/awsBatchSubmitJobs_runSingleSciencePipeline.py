@@ -238,6 +238,7 @@ if __name__ == '__main__':
     psfcat_diffimage_dict = config_input['PSFCAT_DIFFIMAGE']
     sextractor_gainmatch_dict = config_input['SEXTRACTOR_GAINMATCH']
     sfft_dict = config_input['SFFT']
+    naive_diffimage_dict = config_input['NAIVE_DIFFIMAGE']
 
     print("max_n_images_to_coadd =", max_n_images_to_coadd)
 
@@ -1253,6 +1254,62 @@ if __name__ == '__main__':
             print("Elapsed time in seconds after uploading SFFT products to S3 bucket =",
                 end_time_benchmark - start_time_benchmark)
             start_time_benchmark = end_time_benchmark
+
+
+
+    #################################################################################################################
+    # Compute naive image difference.
+    #################################################################################################################
+
+
+    naive_diffimage_flag = eval(naive_diffimage_dict['naive_diffimage_flag'])
+
+    if naive_diffimage_flag:
+
+        filename_naive_diffimage = "naive_diffimage.fits"
+
+        compute_naive_difference_image(filename_bkg_subbed_science_image,
+                                       output_resampled_gainmatched_reference_image,
+                                       filename_naive_diffimage)
+
+
+        # Mask naive difference image with output_resampled_reference_cov_map.
+
+        filename_naive_diffimage_masked = naive_diffimage_dict['naive_output_diffimage_file']
+
+        dfis.mask_difference_image_with_resampled_reference_cov_map(filename_naive_diffimage,
+                                                                    output_resampled_reference_cov_map,
+                                                                    filename_naive_diffimage_masked,
+                                                                    post_zogy_keep_diffimg_lower_cov_map_thresh)
+
+
+        # Restore NaNs that were masked prior to executing ZOGY.
+
+        if nan_indices_sciimage:
+            util.restore_nans(filename_naive_diffimage_masked,nan_indices_sciimage)
+
+        if nan_indices_refimage:
+            util.restore_nans(filename_naive_diffimage_masked,nan_indices_refimage)
+
+
+        # Upload naive-diffimage-product FITS file to product S3 bucket.
+
+        product_s3_bucket = product_s3_bucket_base
+        s3_object_name_naive_diffimage_masked = job_proc_date + "/jid" + str(jid) + "/" + filename_naive_diffimage_masked
+
+        filenames = [filename_naive_diffimage_masked]
+
+        objectnames = [s3_object_name_naive_diffimage_masked]
+
+        util.upload_files_to_s3_bucket(s3_client,product_s3_bucket,filenames,objectnames)
+
+
+        # Code-timing benchmark.
+
+        end_time_benchmark = time.time()
+        print("Elapsed time in seconds after computing naive image difference =",
+            end_time_benchmark - start_time_benchmark)
+        start_time_benchmark = end_time_benchmark
 
 
     # Get listing of working directory as a diagnostic.
