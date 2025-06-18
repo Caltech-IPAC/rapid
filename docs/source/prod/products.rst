@@ -61,6 +61,7 @@ jid999/sfftdiffimage_masked.fits                                SFFT output diff
 sfftdiffimage_masked.txt                                        SourceExtractor catalog from SFFT difference image
 sfftdiffimage_uncert_masked.fits                                SFFT output uncertainty difference image with NaNs in zero-coverage pixels
 sfftsoln.fits                                                   SFFT matching-kernel solution file
+naive_diffimage_masked.fits                                     Naive output difference image with NaNs in zero-coverage pixels
 ==============================================================  ===========================================================================================
 
 
