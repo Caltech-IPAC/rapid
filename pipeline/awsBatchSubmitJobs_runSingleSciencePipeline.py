@@ -1256,11 +1256,9 @@ if __name__ == '__main__':
             start_time_benchmark = end_time_benchmark
 
 
-
     #################################################################################################################
     # Compute naive image difference.
     #################################################################################################################
-
 
     naive_diffimage_flag = eval(naive_diffimage_dict['naive_diffimage_flag'])
 
