@@ -1853,7 +1853,7 @@ def compute_naive_difference_image(fits_file_sci,fits_file_ref,output_fits_file)
 
     # Create a new primary HDU with the new image data
 
-    hdul[0] = fits.PrimaryHDU(header=hdr,data=diff_data)
+    hdul[0] = fits.PrimaryHDU(header=hdr_sci,data=diff_data)
 
 
     # Write output FITS file.
