@@ -1268,9 +1268,9 @@ if __name__ == '__main__':
 
         filename_naive_diffimage = "naive_diffimage.fits"
 
-        compute_naive_difference_image(filename_bkg_subbed_science_image,
-                                       output_resampled_gainmatched_reference_image,
-                                       filename_naive_diffimage)
+        util.compute_naive_difference_image(filename_bkg_subbed_science_image,
+                                            output_resampled_gainmatched_reference_image,
+                                            filename_naive_diffimage)
 
 
         # Mask naive difference image with output_resampled_reference_cov_map.
