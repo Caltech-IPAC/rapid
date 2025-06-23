@@ -58,11 +58,11 @@ diffimage_masked_psfcat_residual.fits                           PhotUtils residu
 job_config_jid999.done                                          Indicates metadata from science pipeline ingested into RAPID operations database
 postproc_job_config_jid999.done                                 Indicates metadata from post-processing pipeline ingested into RAPID operations database
 sfftdiffimage_masked.fits                                       SFFT difference image with NaNs in zero-coverage pixels when not run the ``--crossconv`` flag
-sfftdiffimage_cconv_masked.fits                                 SFFT difference image when SFFT was run with the ``--crossconv`` flag
+sfftdiffimage_dconv_masked.fits                                 SFFT decorrelated difference image (SFFT via ``--crossconv`` flag).  Akin to ZOGY difference image.
+sfftdiffimage_cconv_masked.fits                                 SFFT cross-convolved difference image (SFFT via ``--crossconv`` flag).  Akin to ZOGY SCORR image.
 sfftdiffimage_masked.txt                                        SourceExtractor catalog from SFFT difference image
 sfftdiffimage_uncert_masked.fits                                SFFT uncertainty difference image with NaNs in zero-coverage pixels
 sfftsoln.fits                                                   SFFT matching-kernel solution file
-sfftdiffimage_dconv_masked.fits                                 SFFT decorrelated difference image when SFFT was run with the ``--crossconv`` flag
 naive_diffimage_masked.fits                                     Naive output difference image with NaNs in zero-coverage pixels
 ==============================================================  ====================================================================================================
 
