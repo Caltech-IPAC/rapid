@@ -659,7 +659,7 @@ Register Jobs records for post-processing pipelines                    420
 ************************************
 
 Same as 4/28/2025 standard test, except that SFFT was run with the ``--crossconv`` flag.  No new reference images
-are made, as they already exist.  The resulting SFFT difference image, ``sfftdiffimage_cconv_masked.fits``, and
+were made, as they already exist.  The resulting SFFT difference image, ``sfftdiffimage_cconv_masked.fits``, and the
 SFFT decorrelated difference image, ``sfftdiffimage_dconv_masked.fits``, are copied to the
 S3 product bucket, along with the other products.
 
@@ -774,4 +774,36 @@ Only ZOGY difference-image products were made in this test.
     ------+----------+-------
        15 |        0 |   547
        17 |        0 |   547
+    (2 rows)
+
+
+6/20/2025
+************************************
+
+Same as the combined 6/12/2025, 6/13/2025, and 6/17/2025 tests, except that, in addition to the ZOGY
+difference-image products, the SFFT difference-image products were also made.
+Note that SFFT was run with the ``--crossconv`` flag.
+No new reference images were made, as they already exist.
+The resulting SFFT difference image, ``sfftdiffimage_cconv_masked.fits``, and the
+SFFT decorrelated difference image, ``sfftdiffimage_dconv_masked.fits``, are copied to the
+S3 product bucket, along with the other products.
+
+.. code-block::
+
+    export DBNAME=specialdb
+    export STARTDATETIME="2028-08-17 00:00:00"
+    export ENDDATETIME="2030-09-20 00:00:00"
+    export STARTREFIMMJDOBS=63400
+    export ENDREFIMMJDOBS=99999
+    export MINREFIMNFRAMES=6
+
+    python3.11 /code/pipeline/virtualPipelineOperator.py 20250620 >& virtualPipelineOperator_20250620.out &
+
+.. code-block::
+
+    specialdb=> select ppid,exitcode,count(*) from jobs where cast(launched as date) = '20250620' group by ppid, exitcode order by ppid, exitcode;
+     ppid | exitcode | count
+    ------+----------+-------
+       15 |        0 |  6875
+       17 |        0 |  6875
     (2 rows)
