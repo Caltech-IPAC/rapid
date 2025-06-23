@@ -789,6 +789,8 @@ The resulting SFFT difference image, ``sfftdiffimage_cconv_masked.fits``, and th
 SFFT decorrelated difference image, ``sfftdiffimage_dconv_masked.fits``, are copied to the
 S3 product bucket, along with the other products.
 
+Naive image-differencing was also done (simple science minus reference image), and the product is ``naive_diffimage_masked.fits``.
+
 .. code-block::
 
     export DBNAME=specialdb
