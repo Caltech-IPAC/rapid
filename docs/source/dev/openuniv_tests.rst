@@ -66,9 +66,9 @@ All filters are covered uniformly in the OpenUniverse dataset, so the above figu
 
 Summary of successful tests conducted thus far:
 
-=========================  =============  =======================  ===================  ===================  ================================================================================
+=========================  =============  =======================  ===================  ===================  ============================================================================================
 Test                       No. of images  No. of ref. images made  Start obs. datetime  End obs. datetime    Description
-=========================  =============  =======================  ===================  ===================  ================================================================================
+=========================  =============  =======================  ===================  ===================  ============================================================================================
 4/28/2025 "standard test"         2,069              1,696         2028-09-07 00:00:00  2028-09-08 08:30:00  All images in obs. range
 4/30/2025                         5,222              None          2029-03-15 00:00:00  2029-07-15 00:00:00  Only fields with superior ref. images
 5/5/2025                         10,859              None          2029-07-15 00:00:00  2030-03-15 00:00:00  Only fields with superior ref. images
@@ -79,7 +79,8 @@ Test                       No. of images  No. of ref. images made  Start obs. da
 6/12/2025                         3,545                 79         2028-09-07 00:00:00  2029-09-20 00:00:00  Only ZOGY difference-image products were made
 6/13/2025                         2,783              None          2029-09-20 00:00:00  2030-09-20 00:00:00  Only ZOGY difference-image products were made
 6/17/2025                           547              None          2028-08-17 00:00:00  2028-09-07 00:00:00  Only ZOGY difference-image products were made
-=========================  =============  =======================  ===================  ===================  ================================================================================
+6/20/2025                         6,875              None          2028-08-17 00:00:00  2030-09-20 00:00:00  Both ZOGY and SFFT difference-image products were made.  Ran SFFT with ``--crossconv`` flag.
+=========================  =============  =======================  ===================  ===================  ============================================================================================
 
 In the above table, superior reference images are defined as having ``nframes >= 10`` and ``cov5percent >= 60%``.  In other words, superior
 reference images have at least 10 frames stacked somewhere in the field, although the overlap will vary, and 60% or more of the reference-image pixels
