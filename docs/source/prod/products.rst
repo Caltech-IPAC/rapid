@@ -30,9 +30,9 @@ The input filenames are unique.
 The product filenames are canonical and predictable: they are the same from
 one science-image case to the next.
 
-==============================================================  ===========================================================================================
+==============================================================  ====================================================================================================
 Filename                                                        Description
-==============================================================  ===========================================================================================
+==============================================================  ====================================================================================================
 Roman_TDS_simple_model_F184_1851_10_lite.fits.gz                Input science image (gzipped)
 Roman_TDS_simple_model_F184_1851_10_lite_reformatted.fits       Reformated: Image data are contained in the PRIMARY header and resize to 4089x4089
 Roman_TDS_simple_model_F184_1851_10_lite_reformatted_unc.fits   Associated uncertainty image computed via simple model (photon noise only)
@@ -48,23 +48,23 @@ bkg_subbed_science_image.fits                                   Science image, b
 awaicgen_output_mosaic_image_resampled_gainmatched.fits         Gain-matched reference image, background subtracted, directory input to ZOGY
 awaicgen_output_mosaic_image_resampled_refgainmatchsexcat.txt   SourceExtractor catalog from reference image for gain-matching purposes
 bkg_subbed_science_image_scigainmatchsexcat.txt                 SourceExtractor catalog from science image for gain-matching purposes
-diffimage_masked.fits                                           ZOGY output difference image with NaNs in zero-coverage pixels
-diffimage_uncert_masked.fits                                    ZOGY output uncertainty difference image with NaNs in zero-coverage pixels
-diffpsf.fits                                                    ZOGY output PSF
-scorrimage_masked.fits                                          ZOGY output SCORR image with NaNs in zero-coverage pixels
+diffimage_masked.fits                                           ZOGY difference image with NaNs in zero-coverage pixels
+diffimage_uncert_masked.fits                                    ZOGY uncertainty difference image with NaNs in zero-coverage pixels
+diffpsf.fits                                                    ZOGY difference-image PSF
+scorrimage_masked.fits                                          ZOGY SCORR image with NaNs in zero-coverage pixels
 diffimage_masked.txt                                            SourceExtractor catalog from ZOGY difference image
 diffimage_masked_psfcat.txt                                     PhotUtils PSF-fit catalog from ZOGY difference image (noniterative)
 diffimage_masked_psfcat_residual.fits                           PhotUtils residual image
 job_config_jid999.done                                          Indicates metadata from science pipeline ingested into RAPID operations database
 postproc_job_config_jid999.done                                 Indicates metadata from post-processing pipeline ingested into RAPID operations database
-jid999/sfftdiffimage_masked.fits                                SFFT output difference image with NaNs in zero-coverage pixels
-sfftdiffimage_masked.txt                                        SourceExtractor catalog from SFFT difference image
-sfftdiffimage_uncert_masked.fits                                SFFT output uncertainty difference image with NaNs in zero-coverage pixels
-sfftsoln.fits                                                   SFFT matching-kernel solution file
+sfftdiffimage_masked.fits                                       SFFT difference image with NaNs in zero-coverage pixels when not run the ``--crossconv`` flag
 sfftdiffimage_cconv_masked.fits                                 SFFT difference image when SFFT was run with the ``--crossconv`` flag
+sfftdiffimage_masked.txt                                        SourceExtractor catalog from SFFT difference image
+sfftdiffimage_uncert_masked.fits                                SFFT uncertainty difference image with NaNs in zero-coverage pixels
+sfftsoln.fits                                                   SFFT matching-kernel solution file
 sfftdiffimage_dconv_masked.fits                                 SFFT decorrelated difference image when SFFT was run with the ``--crossconv`` flag
 naive_diffimage_masked.fits                                     Naive output difference image with NaNs in zero-coverage pixels
-==============================================================  ===========================================================================================
+==============================================================  ====================================================================================================
 
 
 Public Access
