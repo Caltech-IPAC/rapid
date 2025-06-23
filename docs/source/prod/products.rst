@@ -97,6 +97,8 @@ For listings of the available product files, download the following text files:
 
 :download:`rapid-product-files_20250617.txt <rapid-product-files_20250617.txt>`
 
+:download:`rapid-product-files_20250620.txt <rapid-product-files_20250620.txt>`
+
 A simple Python script can be written to parse the listing and generate ``wget`` or ``curl`` download commands.
 
 
