@@ -101,6 +101,10 @@ For listings of the available product files, download the following text files:
 
 A simple Python script can be written to parse the listing and generate ``wget`` or ``curl`` download commands.
 
+The pipeline log files are also publicly accessible.  Here is a template that corresponds to the above example::
+
+    https://rapid-pipeline-logs.s3.us-west-2.amazonaws.com/20250428/rapid_pipeline_job_20250428_jid1022_log.txt
+
 
 Example Reference-Image FITS Header
 ******************************************
