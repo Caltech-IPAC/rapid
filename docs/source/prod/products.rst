@@ -101,7 +101,8 @@ For listings of the available product files, download the following text files:
 
 A simple Python script can be written to parse the listing and generate ``wget`` or ``curl`` download commands.
 
-The pipeline log files are also publicly accessible.  Here is a template that corresponds to the above example::
+The pipeline log files are also publicly accessible.  There is a log file for each science image processed.
+Here is a template for the log-file URL that corresponds to the above example::
 
     https://rapid-pipeline-logs.s3.us-west-2.amazonaws.com/20250428/rapid_pipeline_job_20250428_jid1022_log.txt
 
