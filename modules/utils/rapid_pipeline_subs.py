@@ -1270,7 +1270,7 @@ def smooth_image_by_local_clipped_averaging(nx,ny,data,x_window = 3,y_window = 3
     return smooth_image
 
 
-def parse_ascii_text_sextrator_catalog(catalog_filename,params_filename,params_to_parse):
+def parse_ascii_text_sextractor_catalog(catalog_filename,params_filename,params_to_parse):
 
     '''
     Method to parse ASCII text SExtractor catalog for select columns (no row filtering done here).

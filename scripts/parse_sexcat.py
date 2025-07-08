@@ -7,7 +7,7 @@ paramsfile="/Users/laher/git/rapid/cdf/rapidSexParamsGainMatch.inp";
 params_to_get = ["XWIN_IMAGE","YWIN_IMAGE","FLUX_APER_6","MAG_APER_6",
                  "CLASS_STAR","ISOAREAF_IMAGE","AWIN_WORLD","BWIN_WORLD"]
 
-vals = util.parse_ascii_text_sextrator_catalog(datafile,paramsfile,params_to_get)
+vals = util.parse_ascii_text_sextractor_catalog(datafile,paramsfile,params_to_get)
 
 test_val = vals[2][3]
 print("vals[2][3] =",test_val)

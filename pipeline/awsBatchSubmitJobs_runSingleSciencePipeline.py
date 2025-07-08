@@ -372,9 +372,9 @@ if __name__ == '__main__':
         sextractor_refimage_paramsfile = "/code/cdf/rapidSexParamsRefImage.inp";
         params_to_get_refimage = ["FWHM_IMAGE"]
 
-        vals_refimage = util.parse_ascii_text_sextrator_catalog(filename_refimage_catalog,
-                                                                sextractor_refimage_paramsfile,
-                                                                params_to_get_refimage)
+        vals_refimage = util.parse_ascii_text_sextractor_catalog(filename_refimage_catalog,
+                                                                 sextractor_refimage_paramsfile,
+                                                                 params_to_get_refimage)
 
         nsexcatsources_refimage = len(vals_refimage)
 
@@ -741,7 +741,7 @@ if __name__ == '__main__':
 
     ######################################################################################
     # Gain-match science and reference images by generating SExtractor catalogs for each
-    # and then computing scale factor.  To apply, multiply reference iamge by scalefacref.
+    # and then computing scale factor.  To apply, multiply reference image by scalefacref.
     ######################################################################################
 
     scalefac,dxrmsfin,dyrmsfin,dxmedianfin,dymedianfin = dfis.gainMatchScienceAndReferenceImages(s3_client,
@@ -919,9 +919,9 @@ if __name__ == '__main__':
 
     params_to_get_diffimage = ["XWIN_IMAGE","YWIN_IMAGE","FLUX_APER_6"]
 
-    vals_diffimage = util.parse_ascii_text_sextrator_catalog(filename_diffimage_sextractor_catalog,
-                                                             sextractor_diffimage_paramsfile,
-                                                             params_to_get_diffimage)
+    vals_diffimage = util.parse_ascii_text_sextractor_catalog(filename_diffimage_sextractor_catalog,
+                                                              sextractor_diffimage_paramsfile,
+                                                              params_to_get_diffimage)
 
     nsexcatsources_diffimage = len(vals_diffimage)
 
@@ -1207,9 +1207,9 @@ if __name__ == '__main__':
 
             params_to_get_diffimage = ["XWIN_IMAGE","YWIN_IMAGE","FLUX_APER_6"]
 
-            vals_sfftdiffimage = util.parse_ascii_text_sextrator_catalog(filename_sfftdiffimage_sextractor_catalog,
-                                                                         sextractor_diffimage_paramsfile,
-                                                                         params_to_get_diffimage)
+            vals_sfftdiffimage = util.parse_ascii_text_sextractor_catalog(filename_sfftdiffimage_sextractor_catalog,
+                                                                          sextractor_diffimage_paramsfile,
+                                                                          params_to_get_diffimage)
 
             nsexcatsources_sfftdiffimage = len(vals_sfftdiffimage)
 

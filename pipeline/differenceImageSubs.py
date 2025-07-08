@@ -330,13 +330,13 @@ def gainMatchScienceAndReferenceImages(s3_client,
 
     # Parse XWIN_IMAGE,YWIN_IMAGE,FLUX_APER_6 (14-pixel diameter) from SExtractor catalog for science image.
 
-    sci_vals = util.parse_ascii_text_sextrator_catalog(filename_scigainmatchsexcat_catalog,params_file,params_to_get_vals_scicat)
+    sci_vals = util.parse_ascii_text_sextractor_catalog(filename_scigainmatchsexcat_catalog,params_file,params_to_get_vals_scicat)
 
 
     # Parse XWIN_IMAGE,YWIN_IMAGE,FLUX_APER_6 (14-pixel diameter),CLASS_STAR,ISOAREAF_IMAGE,AWIN_WORLD,BWIN_WORLD
     # from SExtractor catalog for reference image.
 
-    ref_vals = util.parse_ascii_text_sextrator_catalog(filename_refgainmatchsexcat_catalog,params_file,params_to_get_vals_refcat)
+    ref_vals = util.parse_ascii_text_sextractor_catalog(filename_refgainmatchsexcat_catalog,params_file,params_to_get_vals_refcat)
 
 
     # Convert returned catalog values to 1-D lists.
