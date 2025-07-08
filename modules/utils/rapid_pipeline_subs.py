@@ -1407,7 +1407,7 @@ def compute_diffimage_psf_catalog(n_clip_sigma,
     # x_0 and y_0 is zero-based pixel index coordinates of PSF center.
 
     x_0 = (naxis1 - 1) / 2
-    y_0 = (naxis1 - 1) / 2
+    y_0 = (naxis2 - 1) / 2
 
     print("x_0,y_0 =", x_0,y_0)
     print("Type of x_0,y_0 =", type(x_0),type(y_0))
