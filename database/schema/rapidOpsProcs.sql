@@ -1191,6 +1191,7 @@ create function startJob (
                 elapsed = null,
                 qwaited = null,
                 exitcode = null,
+                awsbatchjobid = null,
                 status = 0
             where jid = jid_;
 
