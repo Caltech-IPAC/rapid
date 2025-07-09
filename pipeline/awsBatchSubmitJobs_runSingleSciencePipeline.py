@@ -953,24 +953,26 @@ if __name__ == '__main__':
     output_psfcat_filename = psfcat_diffimage_dict["output_psfcat_filename"]
     output_psfcat_residual_filename = psfcat_diffimage_dict["output_psfcat_residual_filename"]
 
-    psfcat_flag,phot = util.compute_diffimage_psf_catalog(n_clip_sigma,
-                                                          n_thresh_sigma,
-                                                          fwhm,
-                                                          fit_shape,
-                                                          aperture_radius,
-                                                          input_img_filename,
-                                                          input_unc_filename,
-                                                          input_psf_filename,
-                                                          output_psfcat_residual_filename)
+    psfcat_flag,phot,finder = util.compute_diffimage_psf_catalog(n_clip_sigma,
+                                                                 n_thresh_sigma,
+                                                                 fwhm,
+                                                                 fit_shape,
+                                                                 aperture_radius,
+                                                                 input_img_filename,
+                                                                 input_unc_filename,
+                                                                 input_psf_filename,
+                                                                 output_psfcat_residual_filename)
 
     print("psfcat_flag =",psfcat_flag)
 
     if psfcat_flag:
 
 
-        # Output psf-fit catalog is an astropy table with the PSF-fitting results.
+        # Output psf-fit catalog is an PSFPhotometry astropy table with the PSF-fitting results
+        # merged with the DAOStarFinder astropy table.
         # Output columns are documentated at
         # https://photutils.readthedocs.io/en/latest/api/photutils.psf.PSFPhotometry.html
+        # https://photutils.readthedocs.io/en/stable/api/photutils.detection.DAOStarFinder.html
 
         try:
             phot['x_init'].info.format = '.4f'
@@ -987,12 +989,14 @@ if __name__ == '__main__':
 
             print(phot[('id', 'x_fit', 'y_fit', 'flux_fit','x_err', 'y_err', 'flux_err', 'npixfit', 'qfit', 'cfit', 'flags')])
 
+            merged_table = join(phot, finder, keys='id')
+
 
             # Write PSF-fit catalog in astropy table to text file.
 
             print("output_psfcat_filename = ", output_psfcat_filename)
 
-            ascii.write(phot, output_psfcat_filename, overwrite=True)
+            ascii.write(merged_table, output_psfcat_filename, overwrite=True)
 
         except:
             pass
