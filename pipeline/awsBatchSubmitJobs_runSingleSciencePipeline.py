@@ -951,6 +951,7 @@ if __name__ == '__main__':
     input_unc_filename = psfcat_diffimage_dict["input_unc_filename"]
     input_psf_filename = psfcat_diffimage_dict["input_psf_filename"]
     output_psfcat_filename = psfcat_diffimage_dict["output_psfcat_filename"]
+    output_psfcat_finder_filename = psfcat_diffimage_dict["output_psfcat_finder_filename"]
     output_psfcat_residual_filename = psfcat_diffimage_dict["output_psfcat_residual_filename"]
 
     psfcat_flag,phot,finder = util.compute_diffimage_psf_catalog(n_clip_sigma,
@@ -989,17 +990,24 @@ if __name__ == '__main__':
 
             print(phot[('id', 'x_fit', 'y_fit', 'flux_fit','x_err', 'y_err', 'flux_err', 'npixfit', 'qfit', 'cfit', 'flags')])
 
-            merged_table = join(phot, finder, keys='id')
 
-
-            # Write PSF-fit catalog in astropy table to text file.
+            # Write PSF-fit photometry catalog in astropy table to text file.
 
             print("output_psfcat_filename = ", output_psfcat_filename)
 
-            ascii.write(merged_table, output_psfcat_filename, overwrite=True)
+            ascii.write(phot, output_psfcat_filename, overwrite=True)
+
+
+            # Write PSF-fit finder catalog in astropy table to text file.
+
+            print("output_psfcat_finder_filename = ", output_psfcat_finder_filename)
+            if finder is not None:
+                ascii.write(finder, output_psfcat_finder_filename, overwrite=True)
+            else:
+                print("*** Message: DAOStarFinder catalog is empty; continuing...")
 
         except:
-            pass
+            print("*** Exception thrown writing PSF-fit PSFPhotometry and DAOStarFinder catalogs to local disk; continuing...")
 
 
     # Code-timing benchmark.
@@ -1031,6 +1039,7 @@ if __name__ == '__main__':
     s3_object_name_output_resampled_gainmatched_reference_image = job_proc_date + "/jid" + str(jid) + "/" + \
                                                                   output_resampled_gainmatched_reference_image
     s3_object_name_output_psfcat_filename = job_proc_date + "/jid" + str(jid) + "/" + output_psfcat_filename
+    s3_object_name_output_psfcat_finder_filename = job_proc_date + "/jid" + str(jid) + "/" + output_psfcat_finder_filename
     s3_object_name_output_psfcat_residual_filename = job_proc_date + "/jid" + str(jid) + "/" + output_psfcat_residual_filename
 
     filenames = [filename_diffimage_masked,
@@ -1041,6 +1050,7 @@ if __name__ == '__main__':
                  filename_bkg_subbed_science_image,
                  output_resampled_gainmatched_reference_image,
                  output_psfcat_filename,
+                 output_psfcat_finder_filename,
                  output_psfcat_residual_filename]
 
     objectnames = [s3_object_name_diffimage,
@@ -1051,6 +1061,7 @@ if __name__ == '__main__':
                    s3_object_name_bkg_subbed_science_image,
                    s3_object_name_output_resampled_gainmatched_reference_image,
                    s3_object_name_output_psfcat_filename,
+                   s3_object_name_output_psfcat_finder_filename,
                    s3_object_name_output_psfcat_residual_filename]
 
     util.upload_files_to_s3_bucket(s3_client,product_s3_bucket,filenames,objectnames)
