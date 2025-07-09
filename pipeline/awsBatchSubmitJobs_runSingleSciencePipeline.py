@@ -954,15 +954,15 @@ if __name__ == '__main__':
     output_psfcat_finder_filename = psfcat_diffimage_dict["output_psfcat_finder_filename"]
     output_psfcat_residual_filename = psfcat_diffimage_dict["output_psfcat_residual_filename"]
 
-    psfcat_flag,phot,finder = util.compute_diffimage_psf_catalog(n_clip_sigma,
-                                                                 n_thresh_sigma,
-                                                                 fwhm,
-                                                                 fit_shape,
-                                                                 aperture_radius,
-                                                                 input_img_filename,
-                                                                 input_unc_filename,
-                                                                 input_psf_filename,
-                                                                 output_psfcat_residual_filename)
+    psfcat_flag,phot = util.compute_diffimage_psf_catalog(n_clip_sigma,
+                                                          n_thresh_sigma,
+                                                          fwhm,
+                                                          fit_shape,
+                                                          aperture_radius,
+                                                          input_img_filename,
+                                                          input_unc_filename,
+                                                          input_psf_filename,
+                                                          output_psfcat_residual_filename)
 
     print("psfcat_flag =",psfcat_flag)
 
@@ -1001,10 +1001,8 @@ if __name__ == '__main__':
             # Write PSF-fit finder catalog in astropy table to text file.
 
             print("output_psfcat_finder_filename = ", output_psfcat_finder_filename)
-            if finder is not None:
-                ascii.write(finder, output_psfcat_finder_filename, overwrite=True)
-            else:
-                print("*** Message: DAOStarFinder catalog is empty; continuing...")
+
+            ascii.write(phot.finder_results, output_psfcat_finder_filename, overwrite=True)
 
         except:
             print("*** Exception thrown writing PSF-fit PSFPhotometry and DAOStarFinder catalogs to local disk; continuing...")

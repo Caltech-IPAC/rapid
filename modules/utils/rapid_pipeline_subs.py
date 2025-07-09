@@ -1476,7 +1476,7 @@ def compute_diffimage_psf_catalog(n_clip_sigma,
 
     # Return photometry and finder catalogs.
 
-    return psfcat_flag,phot,finder
+    return psfcat_flag,phot
 
 
 #####################################################################################
