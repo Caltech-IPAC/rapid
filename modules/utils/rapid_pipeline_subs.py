@@ -1474,9 +1474,9 @@ def compute_diffimage_psf_catalog(n_clip_sigma,
             print("*** Warning: Could not make residual image (perhaps no sources were detected); continuing...")
 
 
-    # Return photometry catalog.
+    # Return photometry and finder catalogs.
 
-    return psfcat_flag,phot
+    return psfcat_flag,phot,finder
 
 
 #####################################################################################
