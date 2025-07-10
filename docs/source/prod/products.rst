@@ -30,6 +30,12 @@ The input filenames are unique.
 The product filenames are canonical and predictable: they are the same from
 one science-image case to the next.
 
+.. warning::
+    Not all products listed below may be available for a given processing date.
+    It depends on the particular test associated with that date.
+    Also, some products were newly added later.
+
+
 ==============================================================  ====================================================================================================
 Filename                                                        Description
 ==============================================================  ====================================================================================================
@@ -53,7 +59,8 @@ diffimage_uncert_masked.fits                                    ZOGY uncertainty
 diffpsf.fits                                                    ZOGY difference-image PSF
 scorrimage_masked.fits                                          ZOGY SCORR image with NaNs in zero-coverage pixels
 diffimage_masked.txt                                            SourceExtractor catalog from ZOGY difference image
-diffimage_masked_psfcat.txt                                     PhotUtils PSF-fit catalog from ZOGY difference image (noniterative)
+diffimage_masked_psfcat.txt                                     PhotUtils PSF-fit photometry catalog from ZOGY difference image (noniterative)
+diffimage_masked_psfcat_finder.txt                              PhotUtils PSF-fit star-finder catalog from ZOGY difference image (noniterative)
 diffimage_masked_psfcat_residual.fits                           PhotUtils residual image
 job_config_jid999.done                                          Indicates metadata from science pipeline ingested into RAPID operations database
 postproc_job_config_jid999.done                                 Indicates metadata from post-processing pipeline ingested into RAPID operations database
@@ -98,6 +105,8 @@ For listings of the available product files, download the following text files:
 :download:`rapid-product-files_20250617.txt <rapid-product-files_20250617.txt>`
 
 :download:`rapid-product-files_20250620.txt <rapid-product-files_20250620.txt>`
+
+:download:`rapid-product-files_20250710.txt <rapid-product-files_20250710.txt>`
 
 A simple Python script can be written to parse the listing and generate ``wget`` or ``curl`` download commands.
 
