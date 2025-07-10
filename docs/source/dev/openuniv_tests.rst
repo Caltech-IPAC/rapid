@@ -80,6 +80,7 @@ Test                       No. of images  No. of ref. images made  Start obs. da
 6/13/2025                         2,783              None          2029-09-20 00:00:00  2030-09-20 00:00:00  Only ZOGY difference-image products were made
 6/17/2025                           547              None          2028-08-17 00:00:00  2028-09-07 00:00:00  Only ZOGY difference-image products were made
 6/20/2025                         6,875              None          2028-08-17 00:00:00  2030-09-20 00:00:00  Both ZOGY and SFFT difference-image products were made.  Ran SFFT with ``--crossconv`` flag.
+7/10/2025                         6,875              None          2028-08-17 00:00:00  2030-09-20 00:00:00  Like the 6/20/2025 test with new PhotUtils PSF-fit star-finder catalog in separate file.
 =========================  =============  =======================  ===================  ===================  ============================================================================================
 
 In the above table, superior reference images are defined as having ``nframes >= 10`` and ``cov5percent >= 60%``.  In other words, superior
@@ -810,3 +811,11 @@ Naive image-differencing was also done (simple science minus reference image), a
        15 |        0 |  6875
        17 |        0 |  6875
     (2 rows)
+
+
+7/10/2025
+************************************
+
+A repeat of the 6/20/2025 test, but with new PhotUtils PSF-fit star-finder catalog from ZOGY difference image (noniterative),
+stored in a separate file called ``diffimage_masked_psfcat_finder.txt``.
+
