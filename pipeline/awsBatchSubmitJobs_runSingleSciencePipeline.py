@@ -384,10 +384,18 @@ if __name__ == '__main__':
 
         np_vals_fwhm = np.array(vals_fwhm)
 
-        fwhmminpix = np.nanmin(np_vals_fwhm)
-        fwhmmaxpix = np.nanmax(np_vals_fwhm)
-        fwhmmedpix = np.nanmedian(np_vals_fwhm)
+        fwhm_ref_minpix = np.nanmin(np_vals_fwhm)
+        fwhm_ref_maxpix = np.nanmax(np_vals_fwhm)
+        fwhm_ref_medpix = np.nanmedian(np_vals_fwhm)
 
+
+        print("fwhm_ref_medpix,fwhm_ref_minpix,fwhm_ref_maxpix =",fwhm_ref_medpix,fwhm_ref_minpix,fwhm_ref_maxpix)
+
+        fwhm_ref = fwhm_ref_medpix
+        if fwhm_ref < 0.0:
+            fwhm_ref = 2.0
+
+        print("fwhm_ref =",fwhm_ref)
 
 
 
@@ -493,9 +501,9 @@ if __name__ == '__main__':
         product_config['REF_IMAGE']['cov5percent'] = str(cov5percent)
         product_config['REF_IMAGE']['medncov'] = str(medncov)
         product_config['REF_IMAGE']['medpixunc'] = str(medpixunc)
-        product_config['REF_IMAGE']['fwhmmedpix'] = str(fwhmmedpix)
-        product_config['REF_IMAGE']['fwhmminpix'] = str(fwhmminpix)
-        product_config['REF_IMAGE']['fwhmmaxpix'] = str(fwhmmaxpix)
+        product_config['REF_IMAGE']['fwhmmedpix'] = str(fwhm_ref_medpix)
+        product_config['REF_IMAGE']['fwhmminpix'] = str(fwhm_ref_minpix)
+        product_config['REF_IMAGE']['fwhmmaxpix'] = str(fwhm_ref_maxpix)
         product_config['REF_IMAGE']['nsexcatsources'] = str(nsexcatsources_refimage)
         product_config['REF_IMAGE']['input_images_csv_name_for_download'] = input_images_csv_name_for_download
 
@@ -598,6 +606,59 @@ if __name__ == '__main__':
                                                                                   avg_sci_img,
                                                                                   reformatted_science_image_filename,
                                                                                   reformatted_science_uncert_image_filename)
+
+
+
+
+
+
+
+
+    # Generate science-image catalog.
+
+    filename_sciimage_catalog = reformatted_science_image_filename.replace(".fits","_secat.txt")
+
+    util.generateScienceImageCatalog(reformatted_science_image_filename,
+                                     reformatted_science_uncert_image_filename,
+                                     cfg_path,
+                                     sextractor_sciimage_dict,
+                                     filename_sciimage_catalog)
+
+
+    # Compute additional quantities needed for the science-image PSF.
+
+    sextractor_sciimage_paramsfile = cfg_path + "/srcExtractParamsSciImage.inp";
+    params_to_get_sciimage = ["FWHM_IMAGE"]
+
+    vals_sciimage = util.parse_ascii_text_sextractor_catalog(filename_sciimage_catalog,
+                                                             sextractor_sciimage_paramsfile,
+                                                             params_to_get_sciimage)
+
+    nsexcatsources_sciimage = len(vals_sciimage)
+
+    fwhm_sci_vals = []
+    for val in vals_sciimage:
+        fwhm_sci_vals.append(float(val[0]))
+
+    np_fwhm_sci_vals = np.array(fwhm_sci_vals)
+
+    fwhm_sci_minpix = np.nanmin(np_fwhm_sci_vals)
+    fwhm_sci_maxpix = np.nanmax(np_fwhm_sci_vals)
+    fwhm_sci_medpix = np.nanmedian(np_fwhm_sci_vals)
+
+    print("fwhm_sci_medpix,fwhm_sci_minpix,fwhm_sci_maxpix =",fwhm_sci_medpix,fwhm_sci_minpix,fwhm_sci_maxpix)
+
+    fwhm_sci = fwhm_sci_medpix
+    if fwhm_sci < 0.0:
+        fwhm_sci = 2.0
+
+    print("fwhm_sci =",fwhm_sci)
+
+
+
+
+
+
 
 
     # Swarp the reference image and associated uncertainty image into the distortion frame of the science image.
@@ -759,6 +820,8 @@ if __name__ == '__main__':
                                                                                                  output_resampled_reference_uncert_image,
                                                                                                  gainmatch_dict,
                                                                                                  sextractor_gainmatch_dict,
+                                                                                                 fwhm_sci,
+                                                                                                 fwhm_ref,
                                                                                                  astrometric_uncert_x,
                                                                                                  astrometric_uncert_y)
 
