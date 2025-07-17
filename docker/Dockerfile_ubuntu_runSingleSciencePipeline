@@ -32,7 +32,8 @@ RUN pip install --upgrade photutils
 RUN pip install --upgrade matplotlib
 RUN pip install --upgrade sfft
 RUN pip install --upgrade galsim
-RUN pip install --upgrade romanisim
+# Error installing romanisim...
+#RUN pip install --upgrade romanisim
 
 
 # Install Python 3.11 with packages (/usr/bin/python3.11)
