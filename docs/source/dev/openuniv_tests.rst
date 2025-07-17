@@ -819,3 +819,17 @@ Naive image-differencing was also done (simple science minus reference image), a
 A repeat of the 6/20/2025 test, but with new PhotUtils PSF-fit star-finder catalog from ZOGY difference image (noniterative),
 stored in a separate file called ``diffimage_masked_psfcat_finder.txt``.
 
+
+
+
+
+
+Pipeline Improvements After 7/10/2025 Testing
+************************************************
+
+===============   =========================================================================================
+Date              Software modification
+===============   =========================================================================================
+7/17/2025         Input correct FWHMs when generating gain-matching SExtractor catalogs
+7/17/2025         Switched around "cconv" versus "dconv" SFFT filenames in ``crossconv_flag`` logic
+===============   =========================================================================================
