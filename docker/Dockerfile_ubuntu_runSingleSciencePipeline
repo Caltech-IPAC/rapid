@@ -31,6 +31,9 @@ RUN pip install --upgrade sip_tpv
 RUN pip install --upgrade photutils
 RUN pip install --upgrade matplotlib
 RUN pip install --upgrade sfft
+RUN pip install --upgrade galsim
+RUN pip install --upgrade romanisim
+
 
 # Install Python 3.11 with packages (/usr/bin/python3.11)
 
@@ -47,6 +50,8 @@ RUN python3.11 -m pip install --upgrade sympy
 RUN python3.11 -m pip install --upgrade sip_tpv
 RUN python3.11 -m pip install --upgrade photutils
 RUN python3.11 -m pip install --upgrade matplotlib
+RUN python3.11 -m pip install --upgrade galsim
+RUN python3.11 -m pip install --upgrade romanisim
 
 
 # Cannot install sfft in Python 3.11 because of following error:
