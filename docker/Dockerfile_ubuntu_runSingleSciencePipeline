@@ -19,7 +19,7 @@ RUN yum -y install sqlite
 # Remove requests from RPM package to allow
 # romanisim to install under Python 3.9
 
-RUN yum remove python3-requests
+RUN yum -y remove python3-requests
 
 # Install packages in Python 3.9 (/usr/bin/python3)
 
