@@ -16,6 +16,11 @@ RUN yum -y install unzip
 RUN yum -y install git
 RUN yum -y install sqlite
 
+# Remove requests from RPM package to allow
+# romanisim to install under Python 3.9
+
+RUN yum remove python3-requests
+
 # Install packages in Python 3.9 (/usr/bin/python3)
 
 RUN yum install -y pip
@@ -32,8 +37,7 @@ RUN pip install --upgrade photutils
 RUN pip install --upgrade matplotlib
 RUN pip install --upgrade sfft
 RUN pip install --upgrade galsim
-# Error installing romanisim...
-#RUN pip install --upgrade romanisim
+RUN pip install --upgrade romanisim
 
 
 # Install Python 3.11 with packages (/usr/bin/python3.11)
