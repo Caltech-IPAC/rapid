@@ -590,9 +590,14 @@ if __name__ == '__main__':
     # Compute uncertainty image via simple model (photon noise only).
     # Resize images to 4089x4089 (odd number of pixels on each side).
 
-    reformatted_science_image_filename,\
-        reformatted_science_uncert_image_filename =\
-        dfis.reformat_troxel_fits_file_and_compute_uncertainty_image_via_simple_model(science_image_filename,sca_gain,avg_sci_img)
+    reformatted_science_image_filename = science_image_filename.replace(".fits","_reformatted.fits")
+    reformatted_science_uncert_image_filename = science_image_filename.replace(".fits","_reformatted_unc.fits")
+
+    dfis.reformat_troxel_fits_file_and_compute_uncertainty_image_via_simple_model(science_image_filename,
+                                                                                  sca_gain,
+                                                                                  avg_sci_img,
+                                                                                  reformatted_science_image_filename,
+                                                                                  reformatted_science_uncert_image_filename)
 
 
     # Swarp the reference image and associated uncertainty image into the distortion frame of the science image.

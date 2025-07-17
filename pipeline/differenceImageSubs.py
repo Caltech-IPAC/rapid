@@ -25,15 +25,16 @@ import modules.utils.rapid_pipeline_subs as util
 # 3. EXPTIME
 # 4. Data-clipped-image mean
 
-def reformat_troxel_fits_file_and_compute_uncertainty_image_via_simple_model(input_filename,sca_gain,clipped_image_mean):
+def reformat_troxel_fits_file_and_compute_uncertainty_image_via_simple_model(input_filename,
+                                                                             sca_gain,
+                                                                             clipped_image_mean,
+                                                                             fname_output,
+                                                                             fname_output_unc):
 
 
     # Reformat the FITS file so that the image data are contained in the PRIMARY header.
     # Also, compute via a simple model the uncertainty image from the science image,
     # assuming some value for the SCA gain (electrons/ADU), which is unavailable for Roman WFI.
-
-    fname_output = input_filename.replace(".fits","_reformatted.fits")
-    fname_output_unc = input_filename.replace(".fits","_reformatted_unc.fits")
 
     hdul = fits.open(input_filename)
     hdr = hdul[1].header
