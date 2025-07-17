@@ -1155,13 +1155,13 @@ if __name__ == '__main__':
         crossconv_flag = eval(sfft_dict['crossconv_flag'])
 
         if crossconv_flag:
-            filename_sfftdiffimage = 'sfftdiffimage_cconv_masked.fits'
+            filename_sfftdiffimage = 'sfftdiffimage_dconv_masked.fits'
             filename_sfftsoln = 'sfftsoln_cconv.fits'
         else:
             filename_sfftdiffimage = 'sfftdiffimage_masked.fits'
             filename_sfftsoln = 'sfftsoln.fits'
 
-        filename_dcdiff = 'sfftdiffimage_dconv_masked.fits'
+        filename_cconvdiff = 'sfftdiffimage_cconv_masked.fits'
 
         # A quirk in the software requires prepended "./" to input filenames.
         sfft_cmd = [python_cmd,
@@ -1206,14 +1206,18 @@ if __name__ == '__main__':
             filename_sfftdiffimage_sextractor_catalog = filename_sfftdiffimage.replace(".fits",".txt")
 
 
-            # Compute SExtractor catalog for masked difference image.
-            # Execute SExtractor to first detect candidates on Scorr (S/N) match-filter
-            # image, then use to perform aperture phot on difference image to generate
-            # raw ascii catalog file.
+            # Compute raw-ascii SExtractor catalog for SFFT masked difference image.
+            # If the SFFT crossconv flag is set, then execute SExtractor to detect candidates
+            # on the cross-convolved image and analyze detections on the deconvolved image.
+
+            if crossconv_flag:
+                filename_detection_image = filename_cconvdiff
+            else:
+                filename_detection_image = filename_sfftdiffimage
 
             sextractor_diffimage_paramsfile = "/code/cdf/rapidSexParamsDiffImage.inp";
 
-            sextractor_diffimage_dict["sextractor_detection_image".lower()] = filename_sfftdiffimage
+            sextractor_diffimage_dict["sextractor_detection_image".lower()] = filename_detection_image
             sextractor_diffimage_dict["sextractor_input_image".lower()] = filename_sfftdiffimage
             sextractor_diffimage_dict["sextractor_WEIGHT_IMAGE".lower()] = filename_weight_image
             sextractor_diffimage_dict["sextractor_PARAMETERS_NAME".lower()] = sextractor_diffimage_paramsfile
@@ -1247,19 +1251,19 @@ if __name__ == '__main__':
             product_s3_bucket = product_s3_bucket_base
             s3_object_name_sfftdiffimage = job_proc_date + "/jid" + str(jid) + "/" + filename_sfftdiffimage
             s3_object_name_sfftsoln = job_proc_date + "/jid" + str(jid) + "/" + filename_sfftsoln
-            s3_object_name_dcdiff = job_proc_date + "/jid" + str(jid) + "/" + filename_dcdiff
+            s3_object_name_cconvdiff = job_proc_date + "/jid" + str(jid) + "/" + filename_cconvdiff
             s3_object_name_sfftdiffimage_unc = job_proc_date + "/jid" + str(jid) + "/" + filename_sfftdiffimage_unc
             s3_object_name_sfftdiffimage_catalog = job_proc_date + "/jid" + str(jid) + "/" + filename_sfftdiffimage_sextractor_catalog
 
             filenames = [filename_sfftdiffimage,
                          filename_sfftsoln,
-                         filename_dcdiff,
+                         filename_cconvdiff,
                          filename_sfftdiffimage_unc,
                          filename_sfftdiffimage_sextractor_catalog]
 
             objectnames = [s3_object_name_sfftdiffimage,
                            s3_object_name_sfftsoln,
-                           s3_object_name_dcdiff,
+                           s3_object_name_cconvdiff,
                            s3_object_name_sfftdiffimage_unc,
                            s3_object_name_sfftdiffimage_catalog]
 
