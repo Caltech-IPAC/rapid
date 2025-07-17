@@ -168,6 +168,8 @@ def gainMatchScienceAndReferenceImages(s3_client,
                                        filename_ref_uncert,
                                        gainmatch_dict,
                                        sextractor_gainmatch_dict,
+                                       fwhm_sci,
+                                       fwhm_ref,
                                        astrometric_uncert_x,
                                        astrometric_uncert_y):
 
@@ -290,6 +292,7 @@ def gainMatchScienceAndReferenceImages(s3_client,
     sextractor_gainmatch_dict["sextractor_FILTER_NAME".lower()] = filter_conv_file
     sextractor_gainmatch_dict["sextractor_STARNNW_NAME".lower()] = classifier_nnw_file
     sextractor_gainmatch_dict["sextractor_CATALOG_NAME".lower()] = filename_scigainmatchsexcat_catalog
+    sextractor_gainmatch_dict["sextractor_SEEING_FWHM".lower()] = str(fwhm_sci)
     sextractor_cmd = util.build_sextractor_command_line_args(sextractor_gainmatch_dict)
     exitcode_from_sextractor = util.execute_command(sextractor_cmd)
 
@@ -305,6 +308,7 @@ def gainMatchScienceAndReferenceImages(s3_client,
     sextractor_gainmatch_dict["sextractor_FILTER_NAME".lower()] = filter_conv_file
     sextractor_gainmatch_dict["sextractor_STARNNW_NAME".lower()] = classifier_nnw_file
     sextractor_gainmatch_dict["sextractor_CATALOG_NAME".lower()] = filename_refgainmatchsexcat_catalog
+    sextractor_gainmatch_dict["sextractor_SEEING_FWHM".lower()] = str(fwhm_ref)
     sextractor_cmd = util.build_sextractor_command_line_args(sextractor_gainmatch_dict)
     exitcode_from_sextractor = util.execute_command(sextractor_cmd)
 
