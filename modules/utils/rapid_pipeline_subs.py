@@ -1894,4 +1894,31 @@ def compute_naive_difference_image(fits_file_sci,fits_file_ref,output_fits_file)
     return
 
 
+#####################################################################################
+# Generate science-image catalog.
+#####################################################################################
+
+def generateScienceImageCatalog(filename_sciimage_image,
+                                filename_sciimage_uncert,
+                                cfg_path,
+                                sextractor_sciimage_dict,
+                                filename_sciimage_catalog):
+
+
+    # Compute SExtractor catalog for science image.
+
+    sextractor_sciimage_dict["sextractor_detection_image".lower()] = "None"
+    sextractor_sciimage_dict["sextractor_input_image".lower()] = filename_sciimage_image
+    sextractor_sciimage_dict["sextractor_WEIGHT_IMAGE".lower()] = filename_sciimage_uncert
+    sextractor_sciimage_dict["sextractor_PARAMETERS_NAME".lower()] = cfg_path + "/rapidSexParamsSciImage.inp"
+    sextractor_sciimage_dict["sextractor_FILTER_NAME".lower()] = cfg_path + "/rapidSexSciImageFilter.conv"
+    sextractor_sciimage_dict["sextractor_STARNNW_NAME".lower()] = cfg_path + "/rapidSexSciImageStarGalaxyClassifier.nnw"
+    sextractor_sciimage_dict["sextractor_CATALOG_NAME".lower()] = filename_sciimage_catalog
+    sextractor_cmd = build_sextractor_command_line_args(sextractor_sciimage_dict)
+    exitcode_from_sextractor = execute_command(sextractor_cmd)
+
+
+    return
+
+
 
