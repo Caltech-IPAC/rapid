@@ -310,6 +310,17 @@ if __name__ == '__main__':
 
         print("response =",response)
 
+        filename_refimage_catalog = awaicgen_output_mosaic_image_file.replace("image.fits","refimsexcat.txt")
+        refimage_catalog_s3_bucket_object_name =  subdirs + "/" + filename_refimage_catalog
+
+        print("Downloading s3://{}/{} into {}...".\
+            format(product_s3_bucket,refimage_catalog_s3_bucket_object_name,filename_refimage_catalog))
+
+        response = s3_client.download_file(product_s3_bucket,refimage_catalog_s3_bucket_object_name,filename_refimage_catalog)
+
+        print("response =",response)
+
+
     else:
 
 
@@ -372,37 +383,6 @@ if __name__ == '__main__':
         refimage_catalog_s3_bucket_object_name = generateReferenceImageCatalog_return_list[2]
 
 
-        # Compute additional quantities needed for later populating refimmeta table in RAPID operations database.
-
-        sextractor_refimage_paramsfile = cfg_path + "/rapidSexParamsRefImage.inp";
-        params_to_get_refimage = ["FWHM_IMAGE"]
-
-        vals_refimage = util.parse_ascii_text_sextractor_catalog(filename_refimage_catalog,
-                                                                 sextractor_refimage_paramsfile,
-                                                                 params_to_get_refimage)
-
-        nsexcatsources_refimage = len(vals_refimage)
-
-        vals_fwhm = []
-        for val in vals_refimage:
-            vals_fwhm.append(float(val[0]))
-
-        np_vals_fwhm = np.array(vals_fwhm)
-
-        fwhm_ref_minpix = np.nanmin(np_vals_fwhm)
-        fwhm_ref_maxpix = np.nanmax(np_vals_fwhm)
-        fwhm_ref_medpix = np.nanmedian(np_vals_fwhm)
-
-
-        print("fwhm_ref_medpix,fwhm_ref_minpix,fwhm_ref_maxpix =",fwhm_ref_medpix,fwhm_ref_minpix,fwhm_ref_maxpix)
-
-        fwhm_ref = fwhm_ref_medpix
-        if fwhm_ref < 0.0:
-            fwhm_ref = 2.0
-
-        print("fwhm_ref =",fwhm_ref)
-
-
 
 
 
@@ -440,6 +420,40 @@ if __name__ == '__main__':
         gmax_refimage = stats_refimage["gdatamax"]
         npixsat_refimage = stats_refimage["satcount"]
         npixnan_refimage = stats_refimage["nancount"]
+
+
+
+
+
+    # Compute additional quantities needed for later.
+
+    sextractor_refimage_paramsfile = cfg_path + "/rapidSexParamsRefImage.inp";
+    params_to_get_refimage = ["FWHM_IMAGE"]
+
+    vals_refimage = util.parse_ascii_text_sextractor_catalog(filename_refimage_catalog,
+                                                             sextractor_refimage_paramsfile,
+                                                             params_to_get_refimage)
+
+    nsexcatsources_refimage = len(vals_refimage)
+
+    vals_fwhm = []
+    for val in vals_refimage:
+        vals_fwhm.append(float(val[0]))
+
+    np_vals_fwhm = np.array(vals_fwhm)
+
+    fwhm_ref_minpix = np.nanmin(np_vals_fwhm)
+    fwhm_ref_maxpix = np.nanmax(np_vals_fwhm)
+    fwhm_ref_medpix = np.nanmedian(np_vals_fwhm)
+
+
+    print("fwhm_ref_medpix,fwhm_ref_minpix,fwhm_ref_maxpix =",fwhm_ref_medpix,fwhm_ref_minpix,fwhm_ref_maxpix)
+
+    fwhm_ref = fwhm_ref_medpix
+    if fwhm_ref < 0.0:
+        fwhm_ref = 2.0
+
+    print("fwhm_ref =",fwhm_ref)
 
 
     # Code-timing benchmark.
