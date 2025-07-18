@@ -24,6 +24,10 @@ start_time_benchmark_at_start = start_time_benchmark
 swname = "awsBatchSubmitJobs_runSingleSciencePipeline.py"
 swvers = "1.0"
 
+rapid_sw = "/code"
+cfg_path = rapid_sw + "/cdf"
+
+
 print("swname =", swname)
 print("swvers =", swvers)
 
@@ -370,7 +374,7 @@ if __name__ == '__main__':
 
         # Compute additional quantities needed for later populating refimmeta table in RAPID operations database.
 
-        sextractor_refimage_paramsfile = "/code/cdf/rapidSexParamsRefImage.inp";
+        sextractor_refimage_paramsfile = cfg_path + "/rapidSexParamsRefImage.inp";
         params_to_get_refimage = ["FWHM_IMAGE"]
 
         vals_refimage = util.parse_ascii_text_sextractor_catalog(filename_refimage_catalog,
@@ -623,7 +627,7 @@ if __name__ == '__main__':
         injection_mag_max = fake_sources_dict['mag_max']
 
         python_cmd = '/usr/bin/python3.11'
-        fake_sources_code = '/code/modules/fake_src/rapid_source_injections.py'
+        fake_sources_code = rapid_sw + '/modules/fake_src/rapid_source_injections.py'
 
         fake_sources_cmd = [python_cmd,
                             fake_sources_code,
@@ -680,7 +684,7 @@ if __name__ == '__main__':
 
     # Compute additional quantities needed for the science-image PSF.
 
-    sextractor_sciimage_paramsfile = cfg_path + "/srcExtractParamsSciImage.inp";
+    sextractor_sciimage_paramsfile = cfg_path + "/rapidSexParamsSciImage.inp";
     params_to_get_sciimage = ["FWHM_IMAGE"]
 
     vals_sciimage = util.parse_ascii_text_sextractor_catalog(filename_sciimage_catalog,
@@ -824,8 +828,8 @@ if __name__ == '__main__':
     # Subtract background from science image.  Since the reference image has been swarped,
     # it already has the background subtracted.
 
-    bkgest_code = '/code/c/bin/bkgest'
-    bkgest_include_dir = '/code/c/include'
+    bkgest_code = rapid_sw + '/c/bin/bkgest'
+    bkgest_include_dir = rapid_sw + '/c/include'
     filename_bkg_subbed_science_image = 'bkg_subbed_science_image.fits'
     filename_global_clippedmean_sciimage_tbl = 'global_clippedmean_science_image.tbl'
 
@@ -937,7 +941,7 @@ if __name__ == '__main__':
 
 
     python_cmd = '/usr/bin/python3.11'
-    zogy_code = '/code/modules/zogy/v21Aug2018/py_zogy.py'
+    zogy_code = rapid_sw + '/modules/zogy/v21Aug2018/py_zogy.py'
     filename_diffimage = 'diffimage.fits'
     filename_diffpsf = 'diffpsf.fits'
     filename_scorrimage = 'scorrimage.fits'
@@ -1026,14 +1030,14 @@ if __name__ == '__main__':
     # image, then use to perform aperture phot on difference image to generate
     # raw ascii catalog file.
 
-    sextractor_diffimage_paramsfile = "/code/cdf/rapidSexParamsDiffImage.inp";
+    sextractor_diffimage_paramsfile = cfg_path + "/rapidSexParamsDiffImage.inp";
 
     sextractor_diffimage_dict["sextractor_detection_image".lower()] = filename_scorrimage_masked
     sextractor_diffimage_dict["sextractor_input_image".lower()] = filename_diffimage_masked
     sextractor_diffimage_dict["sextractor_WEIGHT_IMAGE".lower()] = filename_weight_image
     sextractor_diffimage_dict["sextractor_PARAMETERS_NAME".lower()] = sextractor_diffimage_paramsfile
-    sextractor_diffimage_dict["sextractor_FILTER_NAME".lower()] = "/code/cdf/rapidSexDiffImageFilter.conv"
-    sextractor_diffimage_dict["sextractor_STARNNW_NAME".lower()] = "/code/cdf/rapidSexDiffImageStarGalaxyClassifier.nnw"
+    sextractor_diffimage_dict["sextractor_FILTER_NAME".lower()] = cfg_path + "/rapidSexDiffImageFilter.conv"
+    sextractor_diffimage_dict["sextractor_STARNNW_NAME".lower()] = cfg_path + "/rapidSexDiffImageStarGalaxyClassifier.nnw"
     sextractor_diffimage_dict["sextractor_CATALOG_NAME".lower()] = filename_diffimage_sextractor_catalog
     sextractor_cmd = util.build_sextractor_command_line_args(sextractor_diffimage_dict)
     exitcode_from_sextractor = util.execute_command(sextractor_cmd)
@@ -1262,7 +1266,7 @@ if __name__ == '__main__':
 
         # Cannot run under python3.11 because scikit-learn fails to install.
         python_cmd = '/usr/bin/python3'
-        sfft_code = '/code/modules/sfft/sfft_rapid.py'
+        sfft_code = rapid_sw + '/modules/sfft/sfft_rapid.py'
         filename_scifile = filename_bkg_subbed_science_image
         filename_reffile = output_resampled_gainmatched_reference_image
         filename_scisegm = 'sfftscisegm.fits'
@@ -1331,14 +1335,14 @@ if __name__ == '__main__':
             else:
                 filename_detection_image = filename_sfftdiffimage
 
-            sextractor_diffimage_paramsfile = "/code/cdf/rapidSexParamsDiffImage.inp";
+            sextractor_diffimage_paramsfile = cfg_path + "/rapidSexParamsDiffImage.inp";
 
             sextractor_diffimage_dict["sextractor_detection_image".lower()] = filename_detection_image
             sextractor_diffimage_dict["sextractor_input_image".lower()] = filename_sfftdiffimage
             sextractor_diffimage_dict["sextractor_WEIGHT_IMAGE".lower()] = filename_weight_image
             sextractor_diffimage_dict["sextractor_PARAMETERS_NAME".lower()] = sextractor_diffimage_paramsfile
-            sextractor_diffimage_dict["sextractor_FILTER_NAME".lower()] = "/code/cdf/rapidSexDiffImageFilter.conv"
-            sextractor_diffimage_dict["sextractor_STARNNW_NAME".lower()] = "/code/cdf/rapidSexDiffImageStarGalaxyClassifier.nnw"
+            sextractor_diffimage_dict["sextractor_FILTER_NAME".lower()] = cfg_path + "/rapidSexDiffImageFilter.conv"
+            sextractor_diffimage_dict["sextractor_STARNNW_NAME".lower()] = cfg_path + "/rapidSexDiffImageStarGalaxyClassifier.nnw"
             sextractor_diffimage_dict["sextractor_CATALOG_NAME".lower()] = filename_sfftdiffimage_sextractor_catalog
             sextractor_cmd = util.build_sextractor_command_line_args(sextractor_diffimage_dict)
             exitcode_from_sextractor = util.execute_command(sextractor_cmd)
