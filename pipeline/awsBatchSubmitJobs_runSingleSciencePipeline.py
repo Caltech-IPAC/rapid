@@ -239,6 +239,7 @@ if __name__ == '__main__':
     sextractor_gainmatch_dict = config_input['SEXTRACTOR_GAINMATCH']
     sfft_dict = config_input['SFFT']
     naive_diffimage_dict = config_input['NAIVE_DIFFIMAGE']
+    fake_sources_dict = config_input['FAKE_SOURCES']
 
     print("max_n_images_to_coadd =", max_n_images_to_coadd)
 
@@ -610,6 +611,58 @@ if __name__ == '__main__':
 
 
 
+    # Optionally inject fake sources.
+
+    inject_fake_sources_flag = eval(fake_sources_dict['inject_fake_sources_flag'])
+
+    if inject_fake_sources_flag:
+
+        sci_ext = fake_sources_dict['sci_ext']
+        num_injections = fake_sources_dict['num_injections']
+        injection_mag_min = fake_sources_dict['mag_min']
+        injection_mag_max = fake_sources_dict['mag_max']
+
+        python_cmd = '/usr/bin/python3.11'
+        fake_sources_code = '/code/modules/fake_src/rapid_source_injections.py'
+
+        fake_sources_cmd = [python_cmd,
+                            fake_sources_code,
+                            '--sci_ext',
+                            sci_ext,
+                            '--num_injections',
+                            num_injections,
+                            '--mag_min',
+                            injection_mag_min,
+                            '--mag_max',
+                            injection_mag_max,
+                            reformatted_science_image_filename]
+
+        exitcode_from_fake_sources = util.execute_command(fake_sources_cmd)
+
+        filename_image_without_fake_sources = reformatted_science_image_filename
+        filename_image_with_fake_sources = reformatted_science_image_filename.replace(".fits","_inject.fits")
+        filename_injection_catalog = reformatted_science_image_filename.replace(".fits","_inject.txt")
+
+
+        # Upload intermediate FITS files to product S3 bucket for diagnostic purposes.
+        # (The image with fake sources is uploaded downstream in the pipeline.)
+
+        product_s3_bucket = product_s3_bucket_base
+        s3_object_name_reformatted_science_image_filename = job_proc_date + "/jid" + str(jid) + "/" + reformatted_science_image_filename
+        s3_object_name_injection_catalog = job_proc_date + "/jid" + str(jid) + "/" + filename_injection_catalog
+
+        filenames = [reformatted_science_image_filename,
+                     filename_injection_catalog]
+
+        objectnames = [s3_object_name_reformatted_science_image_filename,
+                       s3_object_name_injection_catalog]
+
+        util.upload_files_to_s3_bucket(s3_client,product_s3_bucket,filenames,objectnames)
+
+
+        # Propagate the science image with fake sources through the pipeline.
+
+        reformatted_science_image_filename = filename_image_with_fake_sources
 
 
 
