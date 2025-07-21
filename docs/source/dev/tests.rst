@@ -31,7 +31,7 @@ Pipeline Improvements Pertinent To Testing Timeline
 ===============   ========================================================================================================================
 Date              Software modification
 ===============   ========================================================================================================================
-5/14/2025       SFFT can be run with the --crossconv flag.
+5/14/2025         SFFT can be run with the --crossconv flag.
 5/30/2025         Feed ZOGY computed astrometric uncertainties computed from gain-matching, instead of fixed value 0.01 pixels.
 5/30/2025         Shift the gain-matched reference image that is fed to ZOGY by subpixel x and y offsets computed from gain-matching.
 6/20/2025         Output new naive image-differencing product (naive_diffimage_masked.fits)
