@@ -1536,6 +1536,41 @@ def addKeywordsToFITSHeader(input_fits_filename,
     return
 
 
+#####################################################################################
+# Add history lines to FITS header.
+#####################################################################################
+
+def addHistoryLinesToFITSHeader(fits_filename,
+                                messages,
+                                hdu_index):
+
+
+    # Open the FITS file in update mode.
+
+    hdul = fits.open(fits_filename, mode='update')
+
+
+    # Access the header of the desired HDU.
+
+    header = hdul[hdu_index].header
+
+
+    # Add a history lines
+
+    for message in messages:
+        header.add_history(message)
+
+
+    # Save the changes and close the file.
+
+    hdul.close()
+
+
+    # Return nothing.
+
+    return
+
+
 ##################################################################################################
 # Touch done file locally.  Upload done file to S3 bucket.
 ##################################################################################################
