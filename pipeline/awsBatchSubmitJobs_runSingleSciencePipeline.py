@@ -1000,6 +1000,7 @@ if __name__ == '__main__':
         kwdvals = [num_injections,
                    injection_mag_min,
                    injection_mag_max]
+
         util.addKeywordsToFITSHeader(filename_diffimage,
                                      keywords,
                                      kwdvals,
@@ -1361,11 +1362,24 @@ if __name__ == '__main__':
                 kwdvals = [num_injections,
                            injection_mag_min,
                            injection_mag_max]
+
                 util.addKeywordsToFITSHeader(filename_sfftdiffimage,
                                              keywords,
                                              kwdvals,
                                              hdu_index,
                                              filename_sfftdiffimage)
+
+                if crossconv_flag:
+
+                    util.addHistoryLinesToFITSHeader(filename_cconvdiff,
+                                                     ["Fake sources were injected into science image."],
+                                                     hdu_index)
+
+                    util.addKeywordsToFITSHeader(filename_cconvdiff,
+                                                 keywords,
+                                                 kwdvals,
+                                                 hdu_index,
+                                                 filename_cconvdiff)
 
 
             # Generate SFFT diffimage uncertainty image, which will be the weight image for sextractor_WEIGHT_IMAGE.
@@ -1481,6 +1495,7 @@ if __name__ == '__main__':
             kwdvals = [num_injections,
                        injection_mag_min,
                        injection_mag_max]
+
             util.addKeywordsToFITSHeader(filename_naive_diffimage,
                                          keywords,
                                          kwdvals,
