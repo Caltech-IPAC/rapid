@@ -1468,16 +1468,16 @@ if __name__ == '__main__':
 
         # Generate naive diffimage uncertainty image, which will be the weight image for sextractor_WEIGHT_IMAGE.
 
-        filename_naivediffimage_unc = filename_naive_diffimage_masked.replace("masked.fits","uncert_masked.fits")
+        filename_naive_diffimage_unc = filename_naive_diffimage_masked.replace("masked.fits","uncert_masked.fits")
 
         dfis.compute_diffimage_uncertainty(sca_gain,
                                            reformatted_science_image_filename,
                                            output_resampled_gainmatched_reference_image,
                                            output_resampled_reference_cov_map,
                                            filename_naive_diffimage_masked,
-                                           filename_naivediffimage_unc)
-        filename_weight_image = filename_naivediffimage_unc
-        filename_naivediffimage_sextractor_catalog = filename_naive_diffimage_masked.replace(".fits",".txt")
+                                           filename_naive_diffimage_unc)
+        filename_weight_image = filename_naive_diffimage_unc
+        filename_naive_diffimage_sextractor_catalog = filename_naive_diffimage_masked.replace(".fits",".txt")
 
 
         # Compute SExtractor catalog for masked difference image and generate raw ascii catalog file.
@@ -1490,19 +1490,34 @@ if __name__ == '__main__':
         sextractor_diffimage_dict["sextractor_PARAMETERS_NAME".lower()] = sextractor_diffimage_paramsfile
         sextractor_diffimage_dict["sextractor_FILTER_NAME".lower()] = cfg_path + "/rapidSexDiffImageFilter.conv"
         sextractor_diffimage_dict["sextractor_STARNNW_NAME".lower()] = cfg_path + "/rapidSexDiffImageStarGalaxyClassifier.nnw"
-        sextractor_diffimage_dict["sextractor_CATALOG_NAME".lower()] = filename_naivediffimage_sextractor_catalog
+        sextractor_diffimage_dict["sextractor_CATALOG_NAME".lower()] = filename_naive_diffimage_sextractor_catalog
         sextractor_cmd = util.build_sextractor_command_line_args(sextractor_diffimage_dict)
         exitcode_from_sextractor = util.execute_command(sextractor_cmd)
 
         params_to_get_diffimage = ["XWIN_IMAGE","YWIN_IMAGE","FLUX_APER_6"]
 
-        vals_naivediffimage = util.parse_ascii_text_sextractor_catalog(filename_naivediffimage_sextractor_catalog,
+        vals_naive_diffimage = util.parse_ascii_text_sextractor_catalog(filename_naive_diffimage_sextractor_catalog,
                                                                       sextractor_diffimage_paramsfile,
                                                                       params_to_get_diffimage)
 
-        nsexcatsources_naivediffimage = len(vals_naivediffimage)
+        nsexcatsources_naive_diffimage = len(vals_naive_diffimage)
 
-        print("nsexcatsources_naivediffimage =",nsexcatsources_naivediffimage)
+        print("nsexcatsources_naive_diffimage =",nsexcatsources_naive_diffimage)
+
+
+        # Upload additional naive-diffimage-product FITS files to product S3 bucket.
+
+        product_s3_bucket = product_s3_bucket_base
+        s3_object_name_naive_diffimage_unc = job_proc_date + "/jid" + str(jid) + "/" + filename_naive_diffimage_unc
+        s3_object_name_naive_diffimage_sextractor_catalog = job_proc_date + "/jid" + str(jid) + "/" + filename_naive_diffimage_sextractor_catalog
+
+        filenames = [filename_naive_diffimage_unc,
+                     filename_naive_diffimage_sextractor_catalog]
+
+        objectnames = [s3_object_name_naive_diffimage_unc,
+                       s3_object_name_naive_diffimage_sextractor_catalog]
+
+        util.upload_files_to_s3_bucket(s3_client,product_s3_bucket,filenames,objectnames)
 
 
         # Code-timing benchmark.
