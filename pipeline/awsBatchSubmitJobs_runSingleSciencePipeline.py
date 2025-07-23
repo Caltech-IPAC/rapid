@@ -987,6 +987,26 @@ if __name__ == '__main__':
     start_time_benchmark = end_time_benchmark
 
 
+    # Update FITS header with info about fake sources injected, if any.
+
+    if inject_fake_sources_flag:
+
+        hdu_index = 0
+        util.addHistoryLinesToFITSHeader(filename_diffimage,
+                                         ["Fake sources were injected into science image."],
+                                         hdu_index)
+
+        keywords = ['NINJECT','MNMAGINJ','MXMAGINJ']
+        kwdvals = [num_injections,
+                   injection_mag_min,
+                   injection_mag_max]
+        util.addKeywordsToFITSHeader(filename_diffimage,
+                                     keywords,
+                                     kwdvals,
+                                     hdu_index,
+                                     filename_diffimage)
+
+
     # Mask difference image with output_resampled_reference_cov_map.
 
     filename_diffimage_masked = zogy_output_diffimage_file                     # Nominally diffimage_masked.fits
@@ -1327,6 +1347,27 @@ if __name__ == '__main__':
 
         if run_sfft_was_successful:
 
+
+            # Update FITS header with info about fake sources injected, if any.
+
+            if inject_fake_sources_flag:
+
+                hdu_index = 0
+                util.addHistoryLinesToFITSHeader(filename_sfftdiffimage,
+                                                 ["Fake sources were injected into science image."],
+                                                 hdu_index)
+
+                keywords = ['NINJECT','MNMAGINJ','MXMAGINJ']
+                kwdvals = [num_injections,
+                           injection_mag_min,
+                           injection_mag_max]
+                util.addKeywordsToFITSHeader(filename_sfftdiffimage,
+                                             keywords,
+                                             kwdvals,
+                                             hdu_index,
+                                             filename_sfftdiffimage)
+
+
             # Generate SFFT diffimage uncertainty image, which will be the weight image for sextractor_WEIGHT_IMAGE.
 
             filename_sfftdiffimage_unc = 'sfftdiffimage_uncert_masked.fits'
@@ -1425,6 +1466,26 @@ if __name__ == '__main__':
         util.compute_naive_difference_image(filename_bkg_subbed_science_image,
                                             output_resampled_gainmatched_reference_image,
                                             filename_naive_diffimage)
+
+
+        # Update FITS header about fake sources injected, if any.
+
+        if inject_fake_sources_flag:
+
+            hdu_index = 0
+            util.addHistoryLinesToFITSHeader(filename_naive_diffimage,
+                                             ["Fake sources were injected into science image."],
+                                             hdu_index)
+
+            keywords = ['NINJECT','MNMAGINJ','MXMAGINJ']
+            kwdvals = [num_injections,
+                       injection_mag_min,
+                       injection_mag_max]
+            util.addKeywordsToFITSHeader(filename_naive_diffimage,
+                                         keywords,
+                                         kwdvals,
+                                         hdu_index,
+                                         filename_naive_diffimage)
 
 
         # Mask naive difference image with output_resampled_reference_cov_map.
