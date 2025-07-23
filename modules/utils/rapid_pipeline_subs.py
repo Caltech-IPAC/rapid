@@ -1521,7 +1521,14 @@ def addKeywordsToFITSHeader(input_fits_filename,
 
     for key,val in zip(keywords,values):
 
-        hdr[key] = str(val)
+        if str(val).isdigit():
+            hdr[key] = int(str(val))
+        else:
+
+            try:
+                hdr[key] = float(str(val))
+            except:
+                hdr[key] = str(val)
 
 
     # Write output FITS file.
