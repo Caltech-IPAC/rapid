@@ -111,7 +111,7 @@ def mask_difference_image_with_resampled_reference_cov_map(input_filename,mask_f
 def compute_diffimage_uncertainty(sca_gain,
                                   science_image_filename,
                                   reference_image_filename,
-                                  refiamge_cov_map_filename,
+                                  refimage_cov_map_filename,
                                   diffimage_filename,
                                   diffimage_unc_filename):
 
@@ -136,7 +136,7 @@ def compute_diffimage_uncertainty(sca_gain,
     np_data_ref = np.array(data_ref)
     pos_np_data_ref = np.abs(np_data_ref)
 
-    hdul_cov = fits.open(refiamge_cov_map_filename)
+    hdul_cov = fits.open(refimage_cov_map_filename)
     hdr_cov = hdul_cov[0].header
     data_cov = hdul_cov[0].data
     np_data_cov = np.array(data_cov)
