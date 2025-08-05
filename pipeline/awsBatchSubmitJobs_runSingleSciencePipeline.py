@@ -161,6 +161,7 @@ if __name__ == '__main__':
     product_config_filename_base = config_input['JOB_PARAMS']['product_config_filename_base']
 
     sca_gain = float(config_input['INSTRUMENT']['sca_gain'])
+    sca_readout_noise = float(config_input['INSTRUMENT']['sca_readout_noise'])
 
     ppid_sciimage = int(config_input['SCI_IMAGE']['ppid'])
     saturation_level_sciimage = float(config_input['SCI_IMAGE']['saturation_level'])
@@ -335,6 +336,7 @@ if __name__ == '__main__':
                                                                          awaicgen_dict,
                                                                          max_n_images_to_coadd,
                                                                          sca_gain,
+                                                                         sca_readout_noise,
                                                                          product_s3_bucket)
 
         infobits_refimage = generateReferenceImage_return_list[0]
@@ -622,6 +624,7 @@ if __name__ == '__main__':
 
     dfis.reformat_troxel_fits_file_and_compute_uncertainty_image_via_simple_model(science_image_filename,
                                                                                   sca_gain,
+                                                                                  sca_readout_noise,
                                                                                   avg_sci_img,
                                                                                   reformatted_science_image_filename,
                                                                                   reformatted_science_uncert_image_filename)
@@ -1054,6 +1057,7 @@ if __name__ == '__main__':
                                        reformatted_science_image_filename,
                                        output_resampled_gainmatched_reference_image,
                                        output_resampled_reference_cov_map,
+                                       post_zogy_keep_diffimg_lower_cov_map_thresh,
                                        filename_diffimage_masked,
                                        filename_diffimage_unc_masked)
     filename_weight_image = filename_diffimage_unc_masked
@@ -1389,6 +1393,7 @@ if __name__ == '__main__':
                                                reformatted_science_image_filename,
                                                output_resampled_gainmatched_reference_image,
                                                output_resampled_reference_cov_map,
+                                               post_zogy_keep_diffimg_lower_cov_map_thresh,
                                                filename_sfftdiffimage,
                                                filename_sfftdiffimage_unc)
             filename_weight_image = filename_sfftdiffimage_unc
@@ -1550,6 +1555,7 @@ if __name__ == '__main__':
                                            reformatted_science_image_filename,
                                            output_resampled_gainmatched_reference_image,
                                            output_resampled_reference_cov_map,
+                                           post_zogy_keep_diffimg_lower_cov_map_thresh,
                                            filename_naive_diffimage_masked,
                                            filename_naive_diffimage_unc)
         filename_weight_image = filename_naive_diffimage_unc
