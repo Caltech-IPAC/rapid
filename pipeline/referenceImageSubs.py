@@ -25,6 +25,7 @@ def generateReferenceImage(s3_client,
                            awaicgen_dict,
                            max_n_images_to_coadd,
                            sca_gain,
+                           sca_readout_noise,
                            product_s3_bucket):
 
 
@@ -139,8 +140,8 @@ def generateReferenceImage(s3_client,
 
             # Ensure data are positive for uncertainty calculations.
 
-            pos_data_norm = np.abs(data_norm)
-            data_unc = np.sqrt(pos_data_norm / sca_gain)
+            pos_data = np.abs(np.array(data))
+            data_unc = np.sqrt(pos_data / sca_gain + sca_readout_noise ** 2) / exptime
 
             hdu_unc = fits.PrimaryHDU(header=hdr,data=data_unc)
             hdu_list_unc = []
