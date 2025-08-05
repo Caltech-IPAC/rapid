@@ -27,6 +27,7 @@ import modules.utils.rapid_pipeline_subs as util
 
 def reformat_troxel_fits_file_and_compute_uncertainty_image_via_simple_model(input_filename,
                                                                              sca_gain,
+                                                                             sca_readout_noise,
                                                                              clipped_image_mean,
                                                                              fname_output,
                                                                              fname_output_unc):
@@ -60,8 +61,8 @@ def reformat_troxel_fits_file_and_compute_uncertainty_image_via_simple_model(inp
 
     # Ensure data are positive for uncertainty calculations.
 
-    pos_np_data_norm = np.abs(new_np_data_norm)
-    data_unc = np.sqrt(pos_np_data_norm / sca_gain)
+    pos_np_data = np.abs(new_np_data)
+    data_unc = np.sqrt(pos_np_data / sca_gain + sca_readout_noise ** 2) / exptime
 
     hdu_unc = fits.PrimaryHDU(header=hdr,data=data_unc.astype(np.float32))
     hdu_list_unc = []
@@ -112,6 +113,7 @@ def compute_diffimage_uncertainty(sca_gain,
                                   science_image_filename,
                                   reference_image_filename,
                                   refimage_cov_map_filename,
+                                  post_zogy_keep_diffimg_lower_cov_map_thresh,
                                   diffimage_filename,
                                   diffimage_unc_filename):
 
@@ -140,7 +142,7 @@ def compute_diffimage_uncertainty(sca_gain,
     hdr_cov = hdul_cov[0].header
     data_cov = hdul_cov[0].data
     np_data_cov = np.array(data_cov)
-    pos_np_data_cov = np.where(np_data_cov >= 0.5,np_data_cov,np.nan)
+    pos_np_data_cov = np.where(np_data_cov >= post_zogy_keep_diffimg_lower_cov_map_thresh,np_data_cov,np.nan)
 
     hdu_list_unc = []
     data_unc = np.sqrt(pos_np_data_sci / sca_gain + pos_np_data_ref / (sca_gain * pos_np_data_cov) + std_dif_img * std_dif_img)
