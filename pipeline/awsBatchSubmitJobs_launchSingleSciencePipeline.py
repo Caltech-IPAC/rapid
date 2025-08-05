@@ -120,6 +120,7 @@ refimage_psf_s3_bucket_dir = config_input['JOB_PARAMS']['refimage_psf_s3_bucket_
 refimage_psf_filename = config_input['JOB_PARAMS']['refimage_psf_filename']
 
 sca_gain = float(config_input['INSTRUMENT']['sca_gain'])
+sca_readout_noise = float(config_input['INSTRUMENT']['sca_readout_noise'])
 
 ppid = int(config_input['SCI_IMAGE']['ppid'])
 saturation_level_sciimage = config_input['SCI_IMAGE']['saturation_level']
@@ -679,6 +680,7 @@ if __name__ == '__main__':
     job_config['INSTRUMENT'] = {}
 
     job_config['INSTRUMENT']['sca_gain'] = str(sca_gain)
+    job_config['INSTRUMENT']['sca_readout_noise'] = str(sca_readout_noise)
 
     job_config['SCI_IMAGE'] = {}
 
