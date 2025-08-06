@@ -6,6 +6,8 @@ RAPID Pipeline Subs
 import os
 import math
 from astropy.io import fits
+from astropy.wcs import WCS
+from astropy.coordinates import SkyCoord
 import re
 import subprocess
 import numpy as np
@@ -1963,4 +1965,36 @@ def generateScienceImageCatalog(filename_sciimage_image,
     return
 
 
+#####################################################################################
+# Compute sky coordinates for given pixel coordinates.
+#####################################################################################
+
+def computeSkyCoordsFromPixelCoords(filename_sciimage_image,x_list,y_list):
+
+
+    # Get WCS of science-image FITS file.
+
+    hdul = fits.open(filename_sciimage_image)
+    hdr = hdul[0].header
+    data = hdul[0].data
+
+    w = WCS(hdr) # Initialize WCS object from FITS header
+
+    hdul.close()
+
+    ra = []
+    dec =[]
+
+    for x,y in zip(x_list,y_list):
+
+        celestial_coords = w.pixel_to_world(x,y)
+
+        r = celestial_coords.ra.deg
+        d = celestial_coords.dec.deg
+
+        ra.append(r)
+        dec.append(d)
+
+
+    return ra,dec
 
