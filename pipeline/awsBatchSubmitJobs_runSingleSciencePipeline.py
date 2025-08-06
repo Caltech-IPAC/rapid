@@ -1172,9 +1172,9 @@ if __name__ == '__main__':
 
             # Compute sky coordinates for given pixel coordinates.
 
-            ra,dec = computeSkyCoordsFromPixelCoords(filename_bkg_subbed_science_image,
-                                                     list(phot['x_fit']),
-                                                     list(phot['y_fit']))
+            ra,dec = util.computeSkyCoordsFromPixelCoords(filename_bkg_subbed_science_image,
+                                                          list(phot['x_fit']),
+                                                          list(phot['y_fit']))
 
             phot['x_fit'].info.format = '.4f'
             phot['y_fit'].info.format = '.4f'
