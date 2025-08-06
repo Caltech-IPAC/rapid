@@ -1197,8 +1197,8 @@ if __name__ == '__main__':
 
             ascii.write(psfphot.finder_results, output_psfcat_finder_filename, overwrite=True)
 
-        except:
-            print("*** Exception thrown writing PSF-fit PSFPhotometry and DAOStarFinder catalogs to local disk; continuing...")
+        except Exception as e:
+            print(f"PSF-fit PSFPhotometry and DAOStarFinder catalogs: An unexpected error occurred: {e}")
 
 
     # Code-timing benchmark.
