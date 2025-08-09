@@ -2866,3 +2866,62 @@ class RAPIDDB:
             return
 
         return records
+
+
+
+
+########################################################################################################
+
+    def get_l2file_wcs(self,rid):
+
+        '''
+        Query select WCS columns in L2Files database table for given RID.
+        '''
+
+        self.exit_code = 0
+
+
+        # Define query template.
+
+        query_template =\
+            "select crval1,crval2,crpix1,crpix2,cd11,cd12,cd21,cd22 " +\
+            "from L2Files " +\
+            "where rid = TEMPLATE_RID; "
+
+
+        # Formulate query by substituting parameters into query template.
+
+        print('----> rid = {}'.format(rid))
+
+        rep = {"TEMPLATE_RID": str(rid)}
+
+        rep = dict((re.escape(k), v) for k, v in rep.items())
+        pattern = re.compile("|".join(rep.keys()))
+        query = pattern.sub(lambda m: rep[re.escape(m.group(0))], query_template)
+
+        print('query = {}'.format(query))
+
+
+        # Execute query.
+
+        self.cur.execute(query)
+        record = self.cur.fetchone()
+
+        record_dict = {}
+
+        if record is not None:
+            record_dict["crval1"] = record[0]
+            record_dict["crval2"] = record[1]
+            record_dict["crpix1"] = record[2]
+            record_dict["crpix2"] = record[3]
+            record_dict["cd11"] = record[4]
+            record_dict["cd12"] = record[5]
+            record_dict["cd21"] = record[6]
+            record_dict["cd22"] = record[7]
+
+        else:
+            print("*** Error: Could not get select WCS columns from L2Files database record; returning...")
+            self.exit_code = 67
+
+
+        return record_dict
