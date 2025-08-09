@@ -395,6 +395,36 @@ def tan_proj(x,y,crpix1,crpix2,crval1,crval2,cdelt1,cdelt2,crota2):
     return (lon,lat)
 
 
+def tan_proj2(x,y,crpix1,crpix2,crval1,crval2,cd1_1,cd1_2,cd2_1,cd2_2):
+
+    #print("crpix1,crpix2,crval1,crval2,cd1_1,cd1_2,cd2_1,cd2_2 =",crpix1,crpix2,crval1,crval2,cd1_1,cd1_2,cd2_1,cd2_2)
+
+    glong  = crval1
+    glat   = crval2
+
+    fsamp = x - crpix1
+    fline = y - crpix2
+
+    xx = -(cd1_1 * fsamp + cd1_2 * fline) * dtr
+    yy = -(cd2_1 * fsamp + cd2_2 * fline) * dtr
+
+    delta = math.atan(math.sqrt( xx * xx + yy * yy ))
+
+    if (xx == 0.0) and (yy == 0.0): yy = 1.0
+    beta = math.atan2(-xx, yy)
+    glatr = glat * dtr
+    glongr = glong * dtr
+    lat = math.asin(-math.sin(delta) * math.cos(beta) * math.cos(glatr) + math.cos(delta) * math.sin(glatr))
+    xxx = math.sin(glatr) * math.sin(delta) * math.cos(beta) + math.cos(glatr) * math.cos(delta)
+    yyy = math.sin(delta) * math.sin(beta)
+    lon = glongr + math.atan2(yyy, xxx)
+
+    lat = lat * rtd
+    lon = lon * rtd
+
+    return (lon,lat)
+
+
 #-------------------------------------------------------------------
 # Given (x, y, z) on the unit sphere, compute (R.A., Dec.).
 
