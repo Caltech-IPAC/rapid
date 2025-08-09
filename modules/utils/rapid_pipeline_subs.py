@@ -355,6 +355,7 @@ def fits_data_statistics_with_clipping(input_filename,n_sigma = 3.0,hdu_index = 
 #-------------------------------------------------------------------
 # Given pixel location (x, y) on a tangent plane, compute the corresponding
 # sky position (R.A., Dec.), neglecting geometric distortion.
+# Requires one-based pixel coordinates (both x,y and crpix1,crpix2).
 
 def tan_proj(x,y,crpix1,crpix2,crval1,crval2,cdelt1,cdelt2,crota2):
 
@@ -394,6 +395,8 @@ def tan_proj(x,y,crpix1,crpix2,crval1,crval2,cdelt1,cdelt2,crota2):
 
     return (lon,lat)
 
+
+# Requires one-based pixel coordinates (both x,y and crpix1,crpix2).
 
 def tan_proj2(x,y,crpix1,crpix2,crval1,crval2,cd1_1,cd1_2,cd2_1,cd2_2):
 
