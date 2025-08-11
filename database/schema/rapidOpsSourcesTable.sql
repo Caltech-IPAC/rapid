@@ -22,7 +22,7 @@ SET default_tablespace = pipeline_data_01;
 -- No records are directly inserted into the prototype table.
 
 CREATE TABLE sources (
-    sid integer NOT NULL,                      -- Database unique primary key
+    sid bigint NOT NULL,                       -- Database unique primary key
     id integer NOT NULL,                       -- Non-unique id column in photutils psf-fit catalog file in S3 bucket
     pid integer NOT NULL,                      -- DiffImages primary key
     ra double precision NOT NULL,              -- RA corresponding to (xfit,yfit)
