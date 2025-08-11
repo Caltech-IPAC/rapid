@@ -184,7 +184,7 @@ Source Matching
 ************************************
 
 Three basic PostgreSQL tables are used for source matching psf-fit catalogs
-made from the ZOGY difference images:
+made by the Python photutils package from the ZOGY difference images:
 
 * Sources
 * Merges
