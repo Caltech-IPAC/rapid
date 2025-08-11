@@ -180,5 +180,35 @@ The DiffImMeta database table stores various QA measures for difference images.
 
 
 
+Source Matching
+************************************
 
+Three basic PostgreSQL tables are used for source matching psf-fit catalogs
+made from the ZOGY difference images:
+
+* Sources
+* Merges
+* AstroObjects
+
+A diagram of the source-matching database-table schema is given as follows:
+
+.. image:: source_matching.png
+
+Sources tables are created for each exposure ID and SCA number.
+Thus the partitioning scheme for sources is by time.
+Data for all 18 SCAs can be loaded into the database in parallel for a given exposure ID.
+Data are loaded into the Sources tables in observation-date-time order
+(although this is not strictly required).
+
+AstroObjects tables are created for each Roman-tessellation sky tile.
+Merges tables are also created for each Roman-tessellation sky tile.
+Thus the partitioning scheme for astronomical objects and associated cross-matching with
+sources (merges) is by sky position.
+
+Sources and AstroObjects tables are cross matched for the appropriate partitions,
+in observation-date-time order, using the join function from the Q3C PostgreSQL-extension,
+and records in the associated Merges tables are populated.
+
+.. note::
+   Sources that are NOT matched become new records in the AstroObjects tables.
 
