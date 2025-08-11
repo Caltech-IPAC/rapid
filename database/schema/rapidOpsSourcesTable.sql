@@ -173,9 +173,9 @@ CREATE TABLE astroobjects (
     dec0 double precision NOT NULL,             -- Dec corresponding to initial sky position
     mag0 real NOT NULL,                         -- Instrumental magnitude of initial sky position
     meanra double precision NOT NULL,           -- Mean RA
-    stdevra double precision NOT NULL,          -- Standard deviation of RA
+    stdevra real NOT NULL,                      -- Standard deviation of RA
     meandec double precision NOT NULL,          -- Mean Dec
-    stdevdec double precision NOT NULL,         -- Standard deviation of Dec
+    stdevdec real NOT NULL,                     -- Standard deviation of Dec
     meanmag real NOT NULL,                      -- Mean instrumental magnitude
     stdevmag real NOT NULL,                     -- Standard deviation of instrumental magnitude
     nsources smallint NOT NULL,                 -- Total number of sources (all filters)
