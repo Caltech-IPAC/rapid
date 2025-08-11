@@ -16,7 +16,7 @@ SET default_tablespace = pipeline_data_01;
 -- https://photutils.readthedocs.io/en/stable/api/photutils.psf.PSFPhotometry.html#photutils.psf.PSFPhotometry
 -- https://photutils.readthedocs.io/en/stable/api/photutils.detection.DAOStarFinder.html#photutils.detection.DAOStarFinder
 
--- Prototype table for creating like-tables.
+-- Prototype sources table for creating like-tables, one for each combination of expid and sca.
 -- Like-tables are NOT inherited from the prototype table
 -- (and therefore terminology like "parent" and/or "child" is avoided in this schema).
 -- No records are directly inserted into the prototype table.
@@ -24,6 +24,7 @@ SET default_tablespace = pipeline_data_01;
 CREATE TABLE sources (
     sid integer NOT NULL,                      -- Database unique primary key
     id integer NOT NULL,                       -- Non-unique id column in photutils psf-fit catalog file in S3 bucket
+    pid integer NOT NULL,                      -- DiffImages primary key
     ra double precision NOT NULL,              -- RA corresponding to (xfit,yfit)
     dec double precision NOT NULL,             -- Dec corresponding to (xfit,yfit)
     xfit real NOT NULL,                        -- PSF-fit x position
@@ -44,9 +45,10 @@ CREATE TABLE sources (
     field integer NOT NULL,                    -- Roman tessellation index for (ra,dec)
     hp6 integer NOT NULL,                      -- Level-6 healpix index (NESTED) for (ra,dec)
     hp9 integer NOT NULL,                      -- Level-9 healpix index (NESTED) for (ra,dec)
+    expid integer NOT NULL,                    -- Exposures primary key
     fid smallint NOT NULL,                     -- Filter ID
     sca smallint NOT NULL,                     -- SCA number (1...18)
-    mjdobs double precision NOT NULL          -- MJD OBS of exposure
+    mjdobs double precision NOT NULL           -- MJD OBS of exposure
 );
 
 ALTER TABLE sources OWNER TO rapidadminrole;
@@ -66,67 +68,71 @@ SET default_tablespace = pipeline_indx_01;
 
 ALTER TABLE ONLY sources ADD CONSTRAINT sources_pkey PRIMARY KEY (sid);
 
-ALTER TABLE sources SET UNLOGGED;
+ALTER TABLE ONLY sources ADD CONSTRAINT sourcespk UNIQUE (pid, id);
 
-CREATE INDEX sources_fid_idx ON sources (fid);
+ALTER TABLE ONLY sources ADD CONSTRAINT sources_pid_fk FOREIGN KEY (pid) REFERENCES diffimages(pid);
+
+CREATE INDEX sources_expid_idx ON sources (expid);
+CREATE INDEX sources_sca_idx ON sources (sca);
 CREATE INDEX sources_field_idx ON sources (field);
-CREATE index sources_sca_idx ON sources (sca);
 CREATE INDEX sources_mjdobs_idx ON sources (mjdobs);
+
+ALTER TABLE sources SET UNLOGGED;
 
 
 ------------------------------------------------------------
 -- A python script will create tables like the sources prototype table,
 -- which is not the same thing as inheriting the prototype table.
--- Like-table names will be sources_<expid>
+-- Like-table names will be sources_<expid>_<sca>
 
 -- Below are all the steps to be executed by the Python script for each new like-table
 
 -- SET default_tablespace = pipeline_data_01;
--- CREATE TABLE sources_1 (LIKE sources INCLUDING DEFAULTS INCLUDING CONSTRAINTS);
--- ALTER TABLE sources_1 SET UNLOGGED;
+-- CREATE TABLE sources_1_18 (LIKE sources INCLUDING DEFAULTS INCLUDING CONSTRAINTS);
+-- ALTER TABLE sources_1_18 SET UNLOGGED;
 
 -- Data-loading step:
 -- Data is loaded into the table here...
 
--- CREATE INDEX sources_1_fid_idx ON sources_1 (fid);
--- CREATE INDEX sources_1_field_idx ON sources_1 (field);
--- CREATE INDEX sources_1_sca_idx ON sources_1 (sca);
--- CREATE INDEX sources_1_mjdobs_idx ON sources_1 (mjdobs);
+-- CREATE INDEX sources_1_18_expid_idx ON sources_1_18 (expid);
+-- CREATE INDEX sources_1_18_sca_idx ON sources_1_18 (sca);
+-- CREATE INDEX sources_1_18_field_idx ON sources_1_18 (field);
+-- CREATE INDEX sources_1_18_mjdobs_idx ON sources_1_18 (mjdobs);
 
 -- The following is not automatically created for the like-table just
 -- because sid is a primary key in the prototype table.
--- CREATE INDEX sid_1_sid_idx ON sources_1 (sid);
+-- CREATE INDEX sid_1_sid_idx ON sources_1_18 (sid);
 
--- ALTER TABLE ONLY sources_1 ADD CONSTRAINT sourcespk_1 UNIQUE (ra, dec);
+-- ALTER TABLE ONLY sources_1_18 ADD CONSTRAINT sourcespk_1 UNIQUE (ra, dec);
 
--- CREATE INDEX sources_1_radec_idx ON sources_1 (q3c_ang2ipix(ra, dec));
--- CLUSTER sources_1_radec_idx ON sources_1;
--- ANALYZE sources_1;
+-- CREATE INDEX sources_1_18_radec_idx ON sources_1_18 (q3c_ang2ipix(ra, dec));
+-- CLUSTER sources_1_18_radec_idx ON sources_1_18;
+-- ANALYZE sources_1_18;
 
--- ALTER TABLE sources_1 SET LOGGED;
+-- ALTER TABLE sources_1_18 SET LOGGED;
 
 -- Grants for rapidreadrole
--- REVOKE ALL ON TABLE sources_1 FROM rapidreadrole;
--- GRANT SELECT ON TABLE sources_1 TO GROUP rapidreadrole;
--- REVOKE ALL ON SEQUENCE sources_1_sid_seq FROM rapidreadrole;
+-- REVOKE ALL ON TABLE sources_1_18 FROM rapidreadrole;
+-- GRANT SELECT ON TABLE sources_1_18 TO GROUP rapidreadrole;
+-- REVOKE ALL ON SEQUENCE sources_1_18_sid_seq FROM rapidreadrole;
 
 --Grants for rapidadminrole
--- REVOKE ALL ON TABLE sources_1 FROM rapidadminrole;
--- GRANT ALL ON TABLE sources_1 TO GROUP rapidadminrole;
--- REVOKE ALL ON SEQUENCE sources_1_sid_seq FROM rapidadminrole;
--- GRANT ALL ON SEQUENCE sources_1_sid_seq TO GROUP rapidadminrole;
+-- REVOKE ALL ON TABLE sources_1_18 FROM rapidadminrole;
+-- GRANT ALL ON TABLE sources_1_18 TO GROUP rapidadminrole;
+-- REVOKE ALL ON SEQUENCE sources_1_18_sid_seq FROM rapidadminrole;
+-- GRANT ALL ON SEQUENCE sources_1_18_sid_seq TO GROUP rapidadminrole;
 
 -- Grants for rapidporole
--- REVOKE ALL ON TABLE sources_1 FROM rapidporole;
--- GRANT INSERT,UPDATE,SELECT,DELETE,TRUNCATE,TRIGGER,REFERENCES ON TABLE sources_1 TO rapidporole;
--- REVOKE ALL ON SEQUENCE sources_1_sid_seq FROM rapidporole;
--- GRANT USAGE ON SEQUENCE sources_1_sid_seq TO rapidporole;
+-- REVOKE ALL ON TABLE sources_1_18 FROM rapidporole;
+-- GRANT INSERT,UPDATE,SELECT,DELETE,TRUNCATE,TRIGGER,REFERENCES ON TABLE sources_1_18 TO rapidporole;
+-- REVOKE ALL ON SEQUENCE sources_1_18_sid_seq FROM rapidporole;
+-- GRANT USAGE ON SEQUENCE sources_1_18_sid_seq TO rapidporole;
 
 -- Matching all sources by position between catalogs for two different observation times,
 -- using a Q3C-library function (executed after 2 like-tables are available for cross matching):
 -- E.g.,
 -- SELECT a.sid,b.sid
--- FROM sources_1 AS a, sources_2 AS b
+-- FROM sources_1_18 AS a, sources_2 AS b
 -- WHERE q3c_join(a.ra, a.dec, b.ra, b.dec, 0.000277778)
 -- AND a.sca = 18;
 -- This query returns ALL pairs within the search cone, not just the nearest neighbors.
