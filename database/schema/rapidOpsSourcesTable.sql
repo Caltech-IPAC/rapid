@@ -260,7 +260,7 @@ CREATE INDEX astroobjects_nsources_idx ON astroobjects (nsources);
 -- FROM astroobjects_1 AS a, sources_1_18 AS b
 -- WHERE q3c_join(a.ra0, a.dec0, b.ra, b.dec, 0.000277778)
 -- This query returns ALL pairs within the search cone, not just the nearest neighbors.
--- The results of this source matching can be stored in the astroobjects_1 table or parquet file.
+-- The results of this source matching can be stored in the merges_1 table or parquet file.
 
 -- Cone-searching query (used to build a light curve for a specified sky position ra_, dec_):
 -- E.g.,
