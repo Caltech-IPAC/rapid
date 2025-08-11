@@ -80,12 +80,14 @@ CREATE INDEX sources_mjdobs_idx ON sources (mjdobs);
 ALTER TABLE sources SET UNLOGGED;
 
 
+
 ------------------------------------------------------------
 -- A python script will create tables like the sources prototype table,
 -- which is not the same thing as inheriting the prototype table.
--- Like-table names will be sources_<expid>_<sca>
+-- Like-table names will be sources_<expid>_<sca>.
+-- Thus the partitioning scheme for sources is by time.
 
--- Below are all the steps to be executed by the Python script for each new like-table
+-- Below are all the steps to be executed by the Python script for each new like-table:
 
 -- SET default_tablespace = pipeline_data_01;
 -- CREATE TABLE sources_1_18 (LIKE sources INCLUDING DEFAULTS INCLUDING CONSTRAINTS);
@@ -94,6 +96,7 @@ ALTER TABLE sources SET UNLOGGED;
 -- Data-loading step:
 -- Data is loaded into the table here...
 
+-- SET default_tablespace = pipeline_indx_01;
 -- CREATE INDEX sources_1_18_expid_idx ON sources_1_18 (expid);
 -- CREATE INDEX sources_1_18_sca_idx ON sources_1_18 (sca);
 -- CREATE INDEX sources_1_18_field_idx ON sources_1_18 (field);
@@ -101,7 +104,7 @@ ALTER TABLE sources SET UNLOGGED;
 
 -- The following is not automatically created for the like-table just
 -- because sid is a primary key in the prototype table.
--- CREATE INDEX sid_1_sid_idx ON sources_1_18 (sid);
+-- CREATE INDEX sources_1_18_sid_idx ON sources_1_18 (sid);
 
 -- ALTER TABLE ONLY sources_1_18 ADD CONSTRAINT sourcespk_1 UNIQUE (ra, dec);
 
@@ -114,29 +117,22 @@ ALTER TABLE sources SET UNLOGGED;
 -- Grants for rapidreadrole
 -- REVOKE ALL ON TABLE sources_1_18 FROM rapidreadrole;
 -- GRANT SELECT ON TABLE sources_1_18 TO GROUP rapidreadrole;
--- REVOKE ALL ON SEQUENCE sources_1_18_sid_seq FROM rapidreadrole;
 
---Grants for rapidadminrole
+-- Grants for rapidadminrole
 -- REVOKE ALL ON TABLE sources_1_18 FROM rapidadminrole;
 -- GRANT ALL ON TABLE sources_1_18 TO GROUP rapidadminrole;
--- REVOKE ALL ON SEQUENCE sources_1_18_sid_seq FROM rapidadminrole;
--- GRANT ALL ON SEQUENCE sources_1_18_sid_seq TO GROUP rapidadminrole;
 
 -- Grants for rapidporole
 -- REVOKE ALL ON TABLE sources_1_18 FROM rapidporole;
 -- GRANT INSERT,UPDATE,SELECT,DELETE,TRUNCATE,TRIGGER,REFERENCES ON TABLE sources_1_18 TO rapidporole;
--- REVOKE ALL ON SEQUENCE sources_1_18_sid_seq FROM rapidporole;
--- GRANT USAGE ON SEQUENCE sources_1_18_sid_seq TO rapidporole;
 
 -- Matching all sources by position between catalogs for two different observation times,
 -- using a Q3C-library function (executed after 2 like-tables are available for cross matching):
 -- E.g.,
 -- SELECT a.sid,b.sid
--- FROM sources_1_18 AS a, sources_2 AS b
+-- FROM sources_1_18 AS a, sources_2_17 AS b
 -- WHERE q3c_join(a.ra, a.dec, b.ra, b.dec, 0.000277778)
--- AND a.sca = 18;
 -- This query returns ALL pairs within the search cone, not just the nearest neighbors.
--- The results of this source matching can be stored in a TBD matches_1_2 table or parquet file.
 
 -- Cone-searching query (used to build a light curve for a specified sky position ra_, dec_):
 -- E.g.,
@@ -145,4 +141,131 @@ ALTER TABLE sources SET UNLOGGED;
 -- WHERE q3c_radial_query(ra, dec, ra_, dec_, radius_)
 -- ORDER by dist;
 
+
+-----------------------------
+-- TABLE: Merges
+-----------------------------
+
+SET default_tablespace = pipeline_data_01;
+
+CREATE TABLE merges (
+    aid bigint NOT NULL,
+    sid bigint NOT NULL
+);
+
+ALTER TABLE sources OWNER TO rapidadminrole;
+
+SET default_tablespace = pipeline_indx_01;
+
+CREATE INDEX merges_aid_idx ON merges USING btree (aid);
+CREATE INDEX merges_sid_idx ON merges USING btree (sid);
+
+
+-----------------------------
+-- TABLE: AstroObjects
+-----------------------------
+
+SET default_tablespace = pipeline_data_01;
+
+CREATE TABLE astroobjects (
+    aid bigint NOT NULL,
+    ra0 double precision NOT NULL,              -- RA corresponding to initial sky position
+    dec0 double precision NOT NULL,             -- Dec corresponding to initial sky position
+    mag0 real NOT NULL,                         -- Instrumental magnitude of initial sky position
+    meanra double precision NOT NULL,           -- Mean RA
+    stdevra double precision NOT NULL,          -- Standard deviation of RA
+    meandec double precision NOT NULL,          -- Mean Dec
+    stdevdec double precision NOT NULL,         -- Standard deviation of Dec
+    meanmag real NOT NULL,                      -- Mean instrumental magnitude
+    stdevmag real NOT NULL,                     -- Standard deviation of instrumental magnitude
+    nsources smallint NOT NULL,                 -- Total number of sources (all filters)
+    field integer NOT NULL,                     -- Roman tessellation index for (ra,dec)
+    hp6 integer NOT NULL,                       -- Level-6 healpix index (NESTED) for (ra,dec)
+    hp9 integer NOT NULL,                       -- Level-9 healpix index (NESTED) for (ra,dec)
+);
+
+ALTER TABLE astroobjects OWNER TO rapidadminrole;
+
+CREATE SEQUENCE astroobjects_aid_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MAXVALUE
+    NO MINVALUE
+    CACHE 1;
+
+ALTER SEQUENCE astroobjects_aid_seq OWNER TO rapidadminrole;
+
+ALTER TABLE astroobjects ALTER COLUMN aid SET DEFAULT nextval('astroobjects_aid_seq'::regclass);
+
+SET default_tablespace = pipeline_indx_01;
+
+ALTER TABLE ONLY astroobjects ADD CONSTRAINT astroobjects_pkey PRIMARY KEY (aid);
+
+CREATE INDEX astroobjects_field_idx ON astroobjects (field);
+CREATE INDEX astroobjects_nsources_idx ON astroobjects (nsources);
+
+
+
+------------------------------------------------------------
+-- A python script will create tables like the merges and astroobjects prototype tables,
+-- which is not the same thing as inheriting the respective prototype table.
+-- Like-table names will be merges_<field> and astroobjects_<field>.
+-- Thus the partitioning scheme for merges and astroobjects is by sky position.
+
+-- Below are all the steps to be executed by the Python script for each new
+-- respective like-table:
+
+-- SET default_tablespace = pipeline_data_01;
+-- CREATE TABLE merges_1 (LIKE sources INCLUDING DEFAULTS INCLUDING CONSTRAINTS);
+-- CREATE TABLE astroobjects_1 (LIKE sources INCLUDING DEFAULTS INCLUDING CONSTRAINTS);
+
+-- SET default_tablespace = pipeline_indx_01;
+-- CREATE INDEX merges_1_aid_idx ON merges_1 USING btree (aid);
+-- CREATE INDEX merges_1_sid_idx ON merges_1 USING btree (sid);
+-- CREATE INDEX astroobjects_1_field_idx ON astroobjects_1 (field);
+-- CREATE INDEX astroobjects_1_nsources_idx ON astroobjects_1 (nsources);
+
+-- The following is not automatically created for the astroobjects like-table just
+-- because aid is a primary key in the astroobjects prototype table.
+-- CREATE INDEX astroobjects_1_aid_idx ON astroobjects_18 (aid);
+
+-- ALTER TABLE ONLY astroobjects_1 ADD CONSTRAINT astroobjectspk_1 UNIQUE (ra0, dec0);
+
+-- CREATE INDEX astroobjects_1_radec_idx ON astroobjects_1 (q3c_ang2ipix(ra0, dec0));
+-- CLUSTER astroobjects_1_radec_idx ON astroobjects_1;
+-- ANALYZE astroobjects_1;
+
+-- Grants for rapidreadrole
+-- REVOKE ALL ON TABLE merges_1 FROM rapidreadrole;
+-- GRANT SELECT ON TABLE merges_1 TO GROUP rapidreadrole;
+-- REVOKE ALL ON TABLE astroobjects_1 FROM rapidreadrole;
+-- GRANT SELECT ON TABLE astroobjects_1 TO GROUP rapidreadrole;
+
+--Grants for rapidadminrole
+-- REVOKE ALL ON TABLE merges_1 FROM rapidadminrole;
+-- GRANT ALL ON TABLE merges_1 TO GROUP rapidadminrole;
+-- REVOKE ALL ON TABLE astroobjects_1 FROM rapidadminrole;
+-- GRANT ALL ON TABLE astroobjects_1 TO GROUP rapidadminrole;
+
+-- Grants for rapidporole
+-- REVOKE ALL ON TABLE merges_1 FROM rapidporole;
+-- GRANT INSERT,UPDATE,SELECT,DELETE,TRUNCATE,TRIGGER,REFERENCES ON TABLE merges_1 TO rapidporole;
+-- REVOKE ALL ON TABLE astroobjects_1 FROM rapidporole;
+-- GRANT INSERT,UPDATE,SELECT,DELETE,TRUNCATE,TRIGGER,REFERENCES ON TABLE astroobjects_1 TO rapidporole;
+
+-- Matching all sources catalog by position to astroobjects catalog,
+-- using a Q3C-library function:
+-- E.g.,
+-- SELECT a.aid,b.sid
+-- FROM astroobjects_1 AS a, sources_1_18 AS b
+-- WHERE q3c_join(a.ra0, a.dec0, b.ra, b.dec, 0.000277778)
+-- This query returns ALL pairs within the search cone, not just the nearest neighbors.
+-- The results of this source matching can be stored in the astroobjects_1 table or parquet file.
+
+-- Cone-searching query (used to build a light curve for a specified sky position ra_, dec_):
+-- E.g.,
+-- SELECT aid, ra0, dec0, mag0, cast(q3c_dist(ra0, dec0, ra_, dec_) * 3600.0 as real) as dist
+-- FROM astroobjects_1
+-- WHERE q3c_radial_query(ra0, dec0, ra_, dec_, radius_)
+-- ORDER by dist;
 
