@@ -194,11 +194,10 @@ A diagram of the source-matching database-table schema is given as follows:
 
 .. image:: source_matching.png
 
-Sources tables are created for each exposure ID and SCA number.
+A sources table is created for each exposure.
 Thus the partitioning scheme for sources is by time.
-Data for all 18 SCAs can be loaded into the database in parallel for a given exposure ID.
-Data are loaded into the Sources tables in observation-date-time order
-(although this is not strictly required).
+Data are loaded into the Sources tables in parallel processes that are not
+in observation-date-time order.
 
 AstroObjects tables are created for each Roman-tessellation sky tile.
 Merges tables are also created for each Roman-tessellation sky tile.
