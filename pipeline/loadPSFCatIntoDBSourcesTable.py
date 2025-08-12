@@ -270,7 +270,7 @@ if __name__ == '__main__':
             for x in x_list:
 
                 # x,y,crpix1,crpix2 must be zero-based.
-                ra,dec = util.tan_proj2(x,y,crpix1-1,crpix2-1,crval1,crval2,cd1_1,cd1_2,cd2_1,cd2_2)
+                ra,dec = util.tan_proj2(x,y,crpix1-1,crpix2-1,crval1,crval2,cd11,cd12,cd21,cd22)
 
                 roman_tessellation_db.get_rtid(ra,dec)
                 rtid = str(roman_tessellation_db.rtid)
