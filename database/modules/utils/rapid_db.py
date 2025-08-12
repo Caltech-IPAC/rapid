@@ -2870,10 +2870,10 @@ class RAPIDDB:
 
 ########################################################################################################
 
-    def get_l2file_wcs(self,rid):
+    def get_l2file_info_for_sources(self,rid):
 
         '''
-        Query select WCS columns in L2Files database table for given RID.
+        Query select columns in L2Files database table for given RID.
         '''
 
         self.exit_code = 0
@@ -2882,7 +2882,8 @@ class RAPIDDB:
         # Define query template.
 
         query_template =\
-            "select crval1,crval2,crpix1,crpix2,cd11,cd12,cd21,cd22 " +\
+            "select crval1,crval2,crpix1,crpix2,cd11,cd12,cd21,cd22, " +\
+            "expid,sca,fid,field,hp6,hp9,mjdobs " +\
             "from L2Files " +\
             "where rid = TEMPLATE_RID; "
 
@@ -2916,9 +2917,17 @@ class RAPIDDB:
             record_dict["cd12"] = record[5]
             record_dict["cd21"] = record[6]
             record_dict["cd22"] = record[7]
+            record_dict["expid"] = record[8]
+            record_dict["sca"] = record[9]
+            record_dict["fid"] = record[10]
+            record_dict["field"] = record[11]
+            record_dict["hp6"] = record[12]
+            record_dict["hp9"] = record[13]
+            record_dict["mjdobs"] = record[14]
 
         else:
-            print("*** Error: Could not get select WCS columns from L2Files database record; returning...")
+            print("*** Error from get_l2file_recs_for_sources: " +
+                  "Could not get select columns from L2Files database record; returning...")
             self.exit_code = 67
 
 
