@@ -275,7 +275,7 @@ if __name__ == '__main__':
                 roman_tessellation_db.get_rtid(ra,dec)
                 rtid = str(roman_tessellation_db.rtid)
 
-                rtid_dict['rtid'] = 1
+                rtid_dict[rtid] = 1
 
         keys_view = rtid_dict.keys()
         print(keys_view)
