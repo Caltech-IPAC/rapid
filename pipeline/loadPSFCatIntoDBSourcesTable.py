@@ -252,7 +252,7 @@ if __name__ == '__main__':
         hp9 = l2file_dict["hp9"]
         mjdobs = l2file_dict["mjdobs"]
 
-        diffimage_dict = get_best_difference_image(rid,ppid)
+        diffimage_dict = dbh.get_best_difference_image(rid,ppid)
 
         pid = diffimage_dict['pid']
 
@@ -261,8 +261,13 @@ if __name__ == '__main__':
 
         rtid_dict = {}
 
-        for y in range(0,naxis2,500):
-            for x in range(0,naxis1,500):
+        x_list = [*range(0,naxis1,500)]
+        y_list = [*range(0,naxis2,500)]
+        x_list.append(naxis1)
+        y_list.append(naxis1)
+
+        for y in y_list:
+            for x in x_list:
 
                 # x,y,crpix1,crpix2 must be zero-based.
                 ra,dec = util.tan_proj2(x,y,crpix1-1,crpix2-1,crval1,crval2,cd1_1,cd1_2,cd2_1,cd2_2)
