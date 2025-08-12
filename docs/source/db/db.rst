@@ -197,7 +197,10 @@ A diagram of the source-matching database-table schema is given as follows:
 A sources table is created for each processing date and SCA.
 Thus the partitioning scheme for sources is by time and chip number.
 This design strikes a balance between partitioning for parallel processing
-and non-proliferation of sources tables.
+and non-proliferation of sources tables.  It is anticipated that most of
+sources to be matched are spurious, and so this partitioning scheme will
+have to be reassessed after the actual number of sources involved can be
+better estimated.
 Data are loaded into the Sources tables in parallel processes that are not
 necessarily in observation-date-time order.
 
