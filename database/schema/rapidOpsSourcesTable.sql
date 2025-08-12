@@ -84,53 +84,53 @@ ALTER TABLE sources SET UNLOGGED;
 ------------------------------------------------------------
 -- A python script will create tables like the sources prototype table,
 -- which is not the same thing as inheriting the prototype table.
--- Like-table names will be sources_<expid>_<sca>.
--- Thus the partitioning scheme for sources is by time.
+-- Like-table names will be sources_<processing date: yyyymmdd>_<sca>.
+-- Thus the partitioning scheme for sources is by time and chip number.
 
 -- Below are all the steps to be executed by the Python script for each new like-table:
 
 -- SET default_tablespace = pipeline_data_01;
--- CREATE TABLE sources_1_18 (LIKE sources INCLUDING DEFAULTS INCLUDING CONSTRAINTS);
--- ALTER TABLE sources_1_18 SET UNLOGGED;
+-- CREATE TABLE sources_20250811_18 (LIKE sources INCLUDING DEFAULTS INCLUDING CONSTRAINTS);
+-- ALTER TABLE sources_20250811_18 SET UNLOGGED;
 
 -- Data-loading step:
 -- Data is loaded into the table here...
 
 -- SET default_tablespace = pipeline_indx_01;
--- CREATE INDEX sources_1_18_expid_idx ON sources_1_18 (expid);
--- CREATE INDEX sources_1_18_sca_idx ON sources_1_18 (sca);
--- CREATE INDEX sources_1_18_field_idx ON sources_1_18 (field);
--- CREATE INDEX sources_1_18_mjdobs_idx ON sources_1_18 (mjdobs);
+-- CREATE INDEX sources_20250811_18_expid_idx ON sources_20250811_18 (expid);
+-- CREATE INDEX sources_20250811_18_sca_idx ON sources_20250811_18 (sca);
+-- CREATE INDEX sources_20250811_18_field_idx ON sources_20250811_18 (field);
+-- CREATE INDEX sources_20250811_18_mjdobs_idx ON sources_20250811_18 (mjdobs);
 
 -- The following is not automatically created for the like-table just
 -- because sid is a primary key in the prototype table.
--- CREATE INDEX sources_1_18_sid_idx ON sources_1_18 (sid);
+-- CREATE INDEX sources_20250811_18_sid_idx ON sources_20250811_18 (sid);
 
--- ALTER TABLE ONLY sources_1_18 ADD CONSTRAINT sourcespk_1 UNIQUE (ra, dec);
+-- ALTER TABLE ONLY sources_20250811_18 ADD CONSTRAINT sourcespk_1 UNIQUE (ra, dec);
 
--- CREATE INDEX sources_1_18_radec_idx ON sources_1_18 (q3c_ang2ipix(ra, dec));
--- CLUSTER sources_1_18_radec_idx ON sources_1_18;
--- ANALYZE sources_1_18;
+-- CREATE INDEX sources_20250811_18_radec_idx ON sources_20250811_18 (q3c_ang2ipix(ra, dec));
+-- CLUSTER sources_20250811_18_radec_idx ON sources_20250811_18;
+-- ANALYZE sources_20250811_18;
 
--- ALTER TABLE sources_1_18 SET LOGGED;
+-- ALTER TABLE sources_20250811_18 SET LOGGED;
 
 -- Grants for rapidreadrole
--- REVOKE ALL ON TABLE sources_1_18 FROM rapidreadrole;
--- GRANT SELECT ON TABLE sources_1_18 TO GROUP rapidreadrole;
+-- REVOKE ALL ON TABLE sources_20250811_18 FROM rapidreadrole;
+-- GRANT SELECT ON TABLE sources_20250811_18 TO GROUP rapidreadrole;
 
 -- Grants for rapidadminrole
--- REVOKE ALL ON TABLE sources_1_18 FROM rapidadminrole;
--- GRANT ALL ON TABLE sources_1_18 TO GROUP rapidadminrole;
+-- REVOKE ALL ON TABLE sources_20250811_18 FROM rapidadminrole;
+-- GRANT ALL ON TABLE sources_20250811_18 TO GROUP rapidadminrole;
 
 -- Grants for rapidporole
--- REVOKE ALL ON TABLE sources_1_18 FROM rapidporole;
--- GRANT INSERT,UPDATE,SELECT,DELETE,TRUNCATE,TRIGGER,REFERENCES ON TABLE sources_1_18 TO rapidporole;
+-- REVOKE ALL ON TABLE sources_20250811_18 FROM rapidporole;
+-- GRANT INSERT,UPDATE,SELECT,DELETE,TRUNCATE,TRIGGER,REFERENCES ON TABLE sources_20250811_18 TO rapidporole;
 
 -- Matching all sources by position between catalogs for two different observation times,
 -- using a Q3C-library function (executed after 2 like-tables are available for cross matching):
 -- E.g.,
 -- SELECT a.sid,b.sid
--- FROM sources_1_18 AS a, sources_2_17 AS b
+-- FROM sources_20250811_18 AS a, sources_2_17 AS b
 -- WHERE q3c_join(a.ra, a.dec, b.ra, b.dec, 0.000277778)
 -- This query returns ALL pairs within the search cone, not just the nearest neighbors.
 
@@ -257,7 +257,7 @@ CREATE INDEX astroobjects_nsources_idx ON astroobjects (nsources);
 -- using a Q3C-library function:
 -- E.g.,
 -- SELECT a.aid,b.sid
--- FROM astroobjects_1 AS a, sources_1_18 AS b
+-- FROM astroobjects_1 AS a, sources_20250811_18 AS b
 -- WHERE q3c_join(a.ra0, a.dec0, b.ra, b.dec, 0.000277778)
 -- This query returns ALL pairs within the search cone, not just the nearest neighbors.
 -- The results of this source matching can be stored in the merges_1 table or parquet file.
