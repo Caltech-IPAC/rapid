@@ -1442,7 +1442,7 @@ if __name__ == '__main__':
 
             sextractor_diffimage_dict["sextractor_detection_image".lower()] = filename_detection_image
             sextractor_diffimage_dict["sextractor_input_image".lower()] = filename_sfftdiffimage
-            # Override the config-file parameter sextractor_WEIGHT_TYPE for ZOGY masked-difference-image catalog.
+            # Override the config-file parameter sextractor_WEIGHT_TYPE for SFFT masked-difference-image catalog.
             sextractor_diffimage_dict["sextractor_WEIGHT_TYPE".lower()] = "NONE,MAP_RMS"
             sextractor_diffimage_dict["sextractor_WEIGHT_IMAGE".lower()] = filename_weight_image
             sextractor_diffimage_dict["sextractor_PARAMETERS_NAME".lower()] = sextractor_diffimage_paramsfile
