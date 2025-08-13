@@ -624,8 +624,8 @@ if __name__ == '__main__':
             vbest_refimage_input= image_info[8]
             version_refimage_input= image_info[9]
 
-            if status_refimage_input== 0: continue             # Omit if status = 0
-            if vbest_refimage_input== 0: continue              # Omit if not the best version
+            if status_refimage_input == 0: continue             # Omit if status = 0
+            if vbest_refimage_input == 0: continue              # Omit if not the best version
 
             csv_record = str(rid_refimage_input) + "," +\
                          str(ra0_refimage_input) + "," +\
