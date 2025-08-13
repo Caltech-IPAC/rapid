@@ -1117,7 +1117,7 @@ if __name__ == '__main__':
     start_time_benchmark = end_time_benchmark
 
 
-    # Generate PSF-fit catalog for difference image using photutils.  No background subtraction is done.
+    # Generate PSF-fit catalog for ZOGY difference image using photutils.  No background subtraction is done.
 
     n_clip_sigma = float(psfcat_diffimage_dict["n_clip_sigma"])
     n_thresh_sigma = float(psfcat_diffimage_dict["n_thresh_sigma"])
@@ -1128,12 +1128,12 @@ if __name__ == '__main__':
     aperture_radius = float(psfcat_diffimage_dict["aperture_radius"])
 
 
-    input_img_filename = psfcat_diffimage_dict["input_img_filename"]
-    input_unc_filename = psfcat_diffimage_dict["input_unc_filename"]
-    input_psf_filename = psfcat_diffimage_dict["input_psf_filename"]
-    output_psfcat_filename = psfcat_diffimage_dict["output_psfcat_filename"]
-    output_psfcat_finder_filename = psfcat_diffimage_dict["output_psfcat_finder_filename"]
-    output_psfcat_residual_filename = psfcat_diffimage_dict["output_psfcat_residual_filename"]
+    input_img_filename = psfcat_diffimage_dict["input_zogy_img_filename"]
+    input_unc_filename = psfcat_diffimage_dict["input_zogy_unc_filename"]
+    input_psf_filename = psfcat_diffimage_dict["input_zogy_psf_filename"]
+    output_psfcat_filename = psfcat_diffimage_dict["output_zogy_psfcat_filename"]
+    output_psfcat_finder_filename = psfcat_diffimage_dict["output_zogy_psfcat_finder_filename"]
+    output_psfcat_residual_filename = psfcat_diffimage_dict["output_zogy_psfcat_residual_filename"]
 
     psfcat_flag,phot,psfphot = util.compute_diffimage_psf_catalog(n_clip_sigma,
                                                                   n_thresh_sigma,
@@ -1481,6 +1481,98 @@ if __name__ == '__main__':
             start_time_benchmark = end_time_benchmark
 
 
+            # Generate PSF-fit catalog for SFFT difference image using photutils.  No background subtraction is done.
+
+            n_clip_sigma = float(psfcat_diffimage_dict["n_clip_sigma"])
+            n_thresh_sigma = float(psfcat_diffimage_dict["n_thresh_sigma"])
+
+            fwhm = float(psfcat_diffimage_dict["fwhm"])
+            fit_shape_str = psfcat_diffimage_dict["fit_shape"]
+            fit_shape = tuple(int(x) for x in fit_shape_str.replace("(","").replace(")","").replace(" ", "").split(','))
+            aperture_radius = float(psfcat_diffimage_dict["aperture_radius"])
+
+
+            input_img_filename = filename_sfftdiffimage
+            input_unc_filename = filename_sfftdiffimage_unc
+            input_psf_filename = filename_refimage_psf
+            output_psfcat_filename = psfcat_diffimage_dict["output_sfft_psfcat_filename"]
+            output_psfcat_finder_filename = psfcat_diffimage_dict["output_sfft_psfcat_finder_filename"]
+            output_psfcat_residual_filename = psfcat_diffimage_dict["output_sfft_psfcat_residual_filename"]
+
+            psfcat_flag,phot,psfphot = util.compute_diffimage_psf_catalog(n_clip_sigma,
+                                                                          n_thresh_sigma,
+                                                                          fwhm,
+                                                                          fit_shape,
+                                                                          aperture_radius,
+                                                                          input_img_filename,
+                                                                          input_unc_filename,
+                                                                          input_psf_filename,
+                                                                          output_psfcat_residual_filename)
+
+            print("psfcat_flag =",psfcat_flag)
+
+            if psfcat_flag:
+
+
+                # Output psf-fit catalog is an PSFPhotometry astropy table with the PSF-fitting results
+                # merged with the DAOStarFinder astropy table.
+                # Output columns are documentated at
+                # https://photutils.readthedocs.io/en/latest/api/photutils.psf.PSFPhotometry.html
+                # https://photutils.readthedocs.io/en/stable/api/photutils.detection.DAOStarFinder.html
+
+                try:
+                    phot['x_init'].info.format = '.4f'
+                    phot['y_init'].info.format = '.4f'
+                    phot['flux_init'].info.format = '.6f'
+                    phot['flux_fit'].info.format = '.6f'
+                    phot['x_err'].info.format = '.4f'
+                    phot['y_err'].info.format = '.4f'
+                    phot['flux_err'].info.format = '.5f'
+                    phot['qfit'].info.format = '.4f'
+                    phot['cfit'].info.format = '.4f'
+
+                    print(phot[('id', 'x_fit', 'y_fit', 'flux_fit','x_err', 'y_err', 'flux_err', 'npixfit', 'qfit', 'cfit', 'flags')])
+
+
+                    # Compute sky coordinates for given pixel coordinates.
+
+                    ra,dec = util.computeSkyCoordsFromPixelCoords(filename_bkg_subbed_science_image,
+                                                                  list(phot['x_fit']),
+                                                                  list(phot['y_fit']))
+
+                    phot['x_fit'].info.format = '.4f'
+                    phot['y_fit'].info.format = '.4f'
+                    phot.add_column(ra, name='ra')
+                    phot.add_column(dec, name='dec')
+                    phot['ra'].info.format = '.6f'
+                    phot['dec'].info.format = '.6f'
+
+
+                    # Write PSF-fit photometry catalog in astropy table to text file.
+
+                    print("output_psfcat_filename = ", output_psfcat_filename)
+
+                    ascii.write(phot, output_psfcat_filename, overwrite=True)
+
+
+                    # Write PSF-fit finder catalog in astropy table to text file.
+
+                    print("output_psfcat_finder_filename = ", output_psfcat_finder_filename)
+
+                    ascii.write(psfphot.finder_results, output_psfcat_finder_filename, overwrite=True)
+
+                except Exception as e:
+                    print(f"PSF-fit PSFPhotometry and DAOStarFinder catalogs: An unexpected error occurred: {e}")
+
+
+            # Code-timing benchmark.
+
+            end_time_benchmark = time.time()
+            print("Elapsed time in seconds after generating PSF-fit catalog on SFFT difference image =",
+                end_time_benchmark - start_time_benchmark)
+            start_time_benchmark = end_time_benchmark
+
+
             # Upload SFFT-product FITS files to product S3 bucket.
 
             product_s3_bucket = product_s3_bucket_base
@@ -1489,18 +1581,27 @@ if __name__ == '__main__':
             s3_object_name_cconvdiff = job_proc_date + "/jid" + str(jid) + "/" + filename_cconvdiff
             s3_object_name_sfftdiffimage_unc = job_proc_date + "/jid" + str(jid) + "/" + filename_sfftdiffimage_unc
             s3_object_name_sfftdiffimage_catalog = job_proc_date + "/jid" + str(jid) + "/" + filename_sfftdiffimage_sextractor_catalog
+            s3_object_name_output_psfcat_filename = job_proc_date + "/jid" + str(jid) + "/" + output_psfcat_filename
+            s3_object_name_output_psfcat_finder_filename = job_proc_date + "/jid" + str(jid) + "/" + output_psfcat_finder_filename
+            s3_object_name_output_psfcat_residual_filename = job_proc_date + "/jid" + str(jid) + "/" + output_psfcat_residual_filename
 
             filenames = [filename_sfftdiffimage,
                          filename_sfftsoln,
                          filename_cconvdiff,
                          filename_sfftdiffimage_unc,
-                         filename_sfftdiffimage_sextractor_catalog]
+                         filename_sfftdiffimage_sextractor_catalog,
+                         output_psfcat_filename,
+                         output_psfcat_finder_filename,
+                         output_psfcat_residual_filename]
 
             objectnames = [s3_object_name_sfftdiffimage,
                            s3_object_name_sfftsoln,
                            s3_object_name_cconvdiff,
                            s3_object_name_sfftdiffimage_unc,
-                           s3_object_name_sfftdiffimage_catalog]
+                           s3_object_name_sfftdiffimage_catalog,
+                           s3_object_name_output_psfcat_filename,
+                           s3_object_name_output_psfcat_finder_filename,
+                           s3_object_name_output_psfcat_residual_filename]
 
             util.upload_files_to_s3_bucket(s3_client,product_s3_bucket,filenames,objectnames)
 
