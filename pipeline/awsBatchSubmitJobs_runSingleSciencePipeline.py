@@ -614,20 +614,7 @@ if __name__ == '__main__':
     avg_sci_img = stats_sci_img["clippedavg"]
 
 
-    # Reformat the Troxel OpenUniverse simulated image FITS file
-    # so that the image data are contained in the PRIMARY header.
-    # Compute uncertainty image via simple model (photon noise only).
-    # Resize images to 4089x4089 (odd number of pixels on each side).
 
-    reformatted_science_image_filename = science_image_filename.replace(".fits","_reformatted.fits")
-    reformatted_science_uncert_image_filename = science_image_filename.replace(".fits","_reformatted_unc.fits")
-
-    dfis.reformat_troxel_fits_file_and_compute_uncertainty_image_via_simple_model(science_image_filename,
-                                                                                  sca_gain,
-                                                                                  sca_readout_noise,
-                                                                                  avg_sci_img,
-                                                                                  reformatted_science_image_filename,
-                                                                                  reformatted_science_uncert_image_filename)
 
 
 
@@ -656,26 +643,26 @@ if __name__ == '__main__':
                             injection_mag_min,
                             '--mag_max',
                             injection_mag_max,
-                            reformatted_science_image_filename]
+                            science_image_filename]
 
         exitcode_from_fake_sources = util.execute_command(fake_sources_cmd)
 
-        filename_image_without_fake_sources = reformatted_science_image_filename
-        filename_image_with_fake_sources = reformatted_science_image_filename.replace(".fits","_inject.fits")
-        filename_injection_catalog = reformatted_science_image_filename.replace(".fits","_inject.txt")
+        filename_image_without_fake_sources = science_image_filename
+        filename_image_with_fake_sources = science_image_filename.replace(".fits","_inject.fits")
+        filename_injection_catalog = science_image_filename.replace(".fits","_inject.txt")
 
 
         # Upload intermediate FITS files to product S3 bucket for diagnostic purposes.
         # (The image with fake sources is uploaded downstream in the pipeline.)
 
         product_s3_bucket = product_s3_bucket_base
-        s3_object_name_reformatted_science_image_filename = job_proc_date + "/jid" + str(jid) + "/" + reformatted_science_image_filename
+        s3_object_name_science_image_filename = job_proc_date + "/jid" + str(jid) + "/" + science_image_filename
         s3_object_name_injection_catalog = job_proc_date + "/jid" + str(jid) + "/" + filename_injection_catalog
 
-        filenames = [reformatted_science_image_filename,
+        filenames = [science_image_filename,
                      filename_injection_catalog]
 
-        objectnames = [s3_object_name_reformatted_science_image_filename,
+        objectnames = [s3_object_name_science_image_filename,
                        s3_object_name_injection_catalog]
 
         util.upload_files_to_s3_bucket(s3_client,product_s3_bucket,filenames,objectnames)
@@ -683,7 +670,28 @@ if __name__ == '__main__':
 
         # Propagate the science image with fake sources through the pipeline.
 
-        reformatted_science_image_filename = filename_image_with_fake_sources
+        science_image_filename = filename_image_with_fake_sources
+
+
+
+
+
+
+    # Reformat the Troxel OpenUniverse simulated image FITS file
+    # so that the image data are contained in the PRIMARY header.
+    # Compute uncertainty image via simple model (photon noise only).
+    # Resize images to 4089x4089 (odd number of pixels on each side).
+
+    reformatted_science_image_filename = science_image_filename.replace(".fits","_reformatted.fits")
+    reformatted_science_uncert_image_filename = science_image_filename.replace(".fits","_reformatted_unc.fits")
+
+    dfis.reformat_troxel_fits_file_and_compute_uncertainty_image_via_simple_model(science_image_filename,
+                                                                                  sca_gain,
+                                                                                  sca_readout_noise,
+                                                                                  avg_sci_img,
+                                                                                  reformatted_science_image_filename,
+                                                                                  reformatted_science_uncert_image_filename)
+
 
 
 
