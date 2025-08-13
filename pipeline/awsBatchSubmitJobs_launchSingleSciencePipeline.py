@@ -571,6 +571,9 @@ if __name__ == '__main__':
         #
         # NOTE: The returned list includes all versions, and regardless of status (the query of the
         # L2FileMeta table does NOT join with the L2Files table, in order to optimize query speed).
+        #
+        # If environment variables STARTREFIMMJDOBS and ENDREFIMMJDOBS are set, these will be
+        # will be included as qualifiers in the following database query.
 
         radius_of_initial_cone_search = 0.18
         overlapping_images = dbh.get_overlapping_l2files(rid,
