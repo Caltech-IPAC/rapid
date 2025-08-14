@@ -43,7 +43,7 @@ Roman_TDS_simple_model_F184_1851_10_lite.fits.gz                Input science im
 Roman_TDS_simple_model_F184_1851_10_lite_reformatted.fits       Reformated: Image data are contained in the PRIMARY header and resize to 4089x4089
 Roman_TDS_simple_model_F184_1851_10_lite_reformatted_unc.fits   Associated uncertainty image computed via simple model (photon noise only)
 Roman_TDS_simple_model_F184_1851_10_lite_reformatted_pv.fits    Reformatted science image with PV distortion
-Roman_TDS_simple_model_Y106_124_5_lite_reformatted_inject.txt   Fake-source-injection truth list, if enabled
+Roman_TDS_simple_model_Y106_124_5_lite_inject.txt               Fake-source-injection truth list, if enabled
 awaicgen_output_mosaic_image.fits                               Reference image
 awaicgen_output_mosaic_cov_map.fits                             Coverage map for reference image
 awaicgen_output_mosaic_uncert_image.fits                        Uncertainty image for reference image
