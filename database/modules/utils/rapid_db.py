@@ -2815,7 +2815,6 @@ class RAPIDDB:
         return records
 
 
-
 ########################################################################################################
 
     def get_l2files_records_for_datetime_range_field_fid(self,startdatetime,enddatetime,field,fid):
@@ -2932,3 +2931,47 @@ class RAPIDDB:
 
 
         return record_dict
+
+
+########################################################################################################
+
+    def execute_sql_queries(self,sql_queries):
+
+        '''
+        Execute list of SQL queries and commit transaction.
+        '''
+
+        self.exit_code = 0
+
+
+        for query in sql_queries:
+
+            print('query = {}'.format(query))
+
+
+            # Execute query.
+
+            try:
+                self.cur.execute(query)
+
+                try:
+                    records = []
+                    nrecs = 0
+                    for record in self.cur:
+                        records.append(record)
+                        nrecs += 1
+
+                    print("nrecs =",nrecs)
+
+                except:
+                        print("Nothing returned from database query; continuing...")
+
+            except (Exception, psycopg2.DatabaseError) as error:
+                print('*** Error getting all L2Files records for given dateobs range ({}); skipping...'.format(error))
+                self.exit_code = 67
+                return
+
+        if self.exit_code == 0:
+            self.conn.commit()           # Commit database transaction
+
+        return records
