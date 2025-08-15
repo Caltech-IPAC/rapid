@@ -13,3 +13,18 @@
 
 DROP TABLE sources;
 DROP SEQUENCE sources_sid_seq;
+
+
+-------------------
+-- AstroObjects table
+-------------------
+
+DROP TABLE astroobjects;
+DROP SEQUENCE astroobjects_aid_seq;
+
+
+-------------------
+-- Merges table
+-------------------
+
+DROP TABLE merges;
