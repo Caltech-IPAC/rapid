@@ -1,9 +1,9 @@
+import boto3
 import os
 import numpy as np
 import configparser
 from astropy.table import QTable
 from astropy.table import QTable, join
-from astropy import units as u
 from datetime import datetime, timezone
 from dateutil import tz
 import time
@@ -99,8 +99,8 @@ product_s3_bucket_base = config_input['JOB_PARAMS']['product_s3_bucket_base']
 job_config_filename_base = config_input['JOB_PARAMS']['job_config_filename_base']
 product_config_filename_base = config_input['JOB_PARAMS']['product_config_filename_base']
 
-output_psfcat_filename = str(config_input['PSFCAT_DIFFIMAGE']['output_psfcat_filename'])
-output_psfcat_finder_filename = str(config_input['PSFCAT_DIFFIMAGE']['output_psfcat_finder_filename'])
+output_psfcat_filename = str(config_input['PSFCAT_DIFFIMAGE']['output_zogy_psfcat_filename'])
+output_psfcat_finder_filename = str(config_input['PSFCAT_DIFFIMAGE']['output_zogy_psfcat_finder_filename'])
 
 naxis1 = int(config_input['INSTRUMENT']['naxis1_sciimage'])
 naxis2 = int(config_input['INSTRUMENT']['naxis2_sciimage'])
@@ -108,73 +108,238 @@ naxis2 = int(config_input['INSTRUMENT']['naxis2_sciimage'])
 ppid = int(config_input['SCI_IMAGE']['ppid'])
 
 
+# Open database connections for parallel access.
+
+num_cores = os.cpu_count()
+
+dbh_list = []
+
+for i in range(num_cores):
+
+    dbh = db.RAPIDDB()
+
+    if dbh.exit_code >= 64:
+        exit(dbh.exit_code)
+
+    dbh_list.append(dbh)
 
 
+# Get S3 client.
+
+s3_client = boto3.client('s3')
 
 
-
-
-
-
-
+#-------------------------------------------------------------------------------------------------------------
 # Custom methods for parallel processing, taking advantage of multiple cores on the job-launcher machine.
+#-------------------------------------------------------------------------------------------------------------
 
-def run_script(jid):
+def run_single_core_job(jids,overlapping_fields_list,meta_list,index_thread):
 
-    """
-    Load unique value of jid into the environment variable RAPID_JOB_ID.
-    Launch single instance of script with given environment-variable setting for RAPID_JOB_ID.
-    """
+    njobs = len(jids)
 
+    print("index_thread,njobs =",index_thread,njobs)
 
+    thread_work_file = swname.replace(".py","_thread") + str(index_thread) + ".out"
 
-    psfcat_qtable = QTable.read(output_psfcat_filename,format='ascii')
-    psfcat_finder_qtable = QTable.read(output_psfcat_finder_filename,format='ascii')
+    try:
+        fh = open(thread_work_file, 'w', encoding="utf-8")
+    except:
+        print(f"*** Error: Could not open output file {thread_work_file}; quitting...")
+        exit(64)
 
-    # Inner join on 'id'
+    dbh = dbh_list[index_thread]
 
-    joined_table_inner = join(psfcat_qtable, psfcat_finder_qtable, keys='id', join_type='inner')
-    print("Inner Join:")
-    print(joined_table_inner)
+    fh.write(f"\nStart of run_single_core_job: index_thread={index_thread}, dbh={dbh}\n")
 
-    nrows = len(joined_table_inner)
-    print("nrows =",nrows)
+    for index_job in range(njobs):
 
+        index_core = index_job % num_cores
+        if index_thread != index_core:
+            continue
 
-    for row in joined_table_inner:
-        id = row['id']
-        ra = row['ra']
-        dec = row['dec']
-        fluxfit = row['flux_fit']
-        roundness1 = row['roundness1']
+        jid = jids[index_job]
+        overlapping_fields = overlapping_fields_list[index_job]
+        meta_dict = meta_list[index_job]
 
-        print(id,ra,dec,fluxfit,roundness1)
+        jid_from_dict = meta_dict["jid"]
 
+        if jid != jid_from_dict:
+            fh.write(f"*** Error: jid is not equal to jid from meta dictionary; quitting...")
+            exit(64)
 
+        expid = meta_dict["expid"]
+        sca = meta_dict["sca"]
+        fid = meta_dict["fid"]
+        field = meta_dict["field"]
+        hp6 = meta_dict["hp6"]
+        hp9 = meta_dict["hp9"]
+        mjdobs = meta_dict["mjdobs"]
+        pid = meta_dict["mjdobs"]
 
-
-    #    print OUT "COPY objects_$j (ra,\"dec\",mag,sigx,sigy,ang,chipid,field) FROM stdin;\n";
-
-
-
-
-    # Load RAPID_JOB_ID into the environment.
-
-    os.environ['RAPID_JOB_ID'] = str(jid)
-
-
-    # Launch single pipeline from within Docker container.
-
-    python_cmd = 'python3.11'
-    launch_single_pipeline_instance_code = '/code/pipeline/awsBatchSubmitJobs_launchSinglePostProcPipeline.py'
-
-    launch_cmd = [python_cmd,
-                  launch_single_pipeline_instance_code]
-
-    exitcode_from_launch_cmd = util.execute_command(launch_cmd)
+        fh.write(f"Loop start: index_job,jid,overlapping_fields = {index_job},{jid},{overlapping_fields}\n")
 
 
-def launch_parallel_processes(jids, num_cores=None):
+        # Check whether done file exists in S3 bucket for job, and skip if it exists.
+        # This is done by attempting to download the done file.  Regardless the sub
+        # always returns the filename and subdirs by parsing the s3_full_name.
+
+        s3_full_name_done_file = "s3://" + product_s3_bucket_base + "/" + proc_date + '/jid' + str(jid) + "/source_dbload_jid" +  str(jid)  + ".done"
+        done_filename,subdirs_done,downloaded_from_bucket = util.download_file_from_s3_bucket(s3_client,s3_full_name_done_file)
+
+        if downloaded_from_bucket:
+            fh.write("*** Warning: Done file exists ({}); skipping...\n".format(done_filename))
+            continue
+
+
+        # Download ZOGY-difference-image PSF-fit catalog file from S3 bucket.
+
+        s3_full_name_psfcat_file = "s3://" + product_s3_bucket_base + "/" + proc_date + '/jid' + str(jid) + "/" +  output_psfcat_filename
+        ret_filename,subdirs_done,downloaded_from_bucket = util.download_file_from_s3_bucket(s3_client,s3_full_name_psfcat_file)
+
+        if not downloaded_from_bucket:
+            fh.write("*** Warning: PSF-fit catalog file does not exist ({}); skipping...\n".format(done_filename))
+            continue
+
+
+        # Download ZOGY-difference-image PSF-fit finder catalog file from S3 bucket.
+
+        s3_full_name_psfcat_finder_file = "s3://" + product_s3_bucket_base + "/" + proc_date + '/jid' + str(jid) + "/" +  output_psfcat_finder_filename
+        ret_filename,subdirs_done,downloaded_from_bucket = util.download_file_from_s3_bucket(s3_client,s3_full_name_psfcat_finder_file)
+
+        if not downloaded_from_bucket:
+            fh.write("*** Warning: PSF-fit finder catalog file does not exist ({}); skipping...\n".format(done_filename))
+            continue
+
+
+        # Join catalogs and extract columns for sources database tables.
+
+        psfcat_qtable = QTable.read(output_psfcat_filename,format='ascii')
+        psfcat_finder_qtable = QTable.read(output_psfcat_finder_filename,format='ascii')
+
+        joined_table_inner = join(psfcat_qtable, psfcat_finder_qtable, keys='id', join_type='inner')
+
+        nrows = len(joined_table_inner)
+        fh.write("nrows in PSF-fit catalog =",nrows)
+
+
+        # Define columns to be populated in sources tables.
+
+        cols = []
+        cols.append(id)
+        cols.append(pid)
+        cols.append(ra)
+        cols.append(dec)
+        cols.append(xfit)
+        cols.append(yfit)
+        cols.append(fluxfit)
+        cols.append(xerr)
+        cols.append(yerr)
+        cols.append(fluxerr)
+        cols.append(npixfit)
+        cols.append(qfit)
+        cols.append(cfit)
+        cols.append(flags)
+        cols.append(sharpness)
+        cols.append(roundness1)
+        cols.append(roundness2)
+        cols.append(npix)
+        cols.append(peak)
+        cols.append(field)
+        cols.append(hp6)
+        cols.append(hp9)
+        cols.append(expid)
+        cols.append(fid)
+        cols.append(sca)
+        cols.append(mjdobs)
+
+        cols_comma_separated_string = ", ".join(cols)
+        fh.write(f"Sources columns: {cols_comma_separated_string)")
+
+
+        # Here are what the columns in the photutils catalogs are called:
+        # Main: id group_id group_size local_bkg x_init y_init flux_init x_fit y_fit flux_fit x_err y_err flux_err npixfit qfit cfit flags ra dec
+        # Finder: id xcentroid ycentroid sharpness roundness1 roundness2 npix peak flux mag daofind_mag
+        # Note that some catalog-column names have underscores that need to be dealt with specially
+        # because the database columns do not have underscores.
+        #
+        # Prepare records into sources database tables.
+
+        sources_table = f"sources_{proc_date}_{sca}"
+        sources_table_file = f"sources_{proc_date}_{sca}_{jid}" + ".txt"
+
+        with open(sources_table_file, "w") as csv_fh:
+
+            for row in joined_table_inner:
+                nums = ""
+                for col in cols:
+
+                    cat_col = col
+
+                    if cat_col == 'xfit':
+                        cat_col = 'x_fit'
+                    elif cat_col == 'yfit':
+                        cat_col = 'y_fit'
+                    elif cat_col == 'fluxfit':
+                        cat_col = 'flux_fit'
+                    elif cat_col == 'xerr':
+                        cat_col = 'x_err'
+                    elif cat_col == 'xerr':
+                        cat_col = 'x_err'
+                    elif cat_col == 'xerr':
+                        cat_col = 'x_err'
+
+                    num = row[cat_col]
+
+                    if cat_col == 'pid':
+                        num = pid
+                    elif cat_col == 'field':
+                        num = field
+                    elif cat_col == 'hp6':
+                        num = hp6
+                    elif cat_col == 'hp9':
+                        num = hp9
+                    elif cat_col == 'expid':
+                        num = expid
+                    elif cat_col == 'fid':
+                        num = fid
+                    elif cat_col == 'sca':
+                        num = sca
+                    elif cat_col == 'mjdobs':
+                        num = mjdobs
+
+                    nums = nums + num + ","
+
+                # Slice the string to get all but the last character, then add the newline character
+                new_character = "\n"
+                line_to_write_to_file = nums[:-1] + new_character
+
+                csv_fh.write(line_to_write_to_file)
+
+
+        # Load records into sources database tables.
+
+        sql_queries = []
+        sql_query = "COPY " + sources_table + f" ({cols_comma_separated_string}) FROM " + sources_table_file + " WITH FORMAT CSV;\n"
+        sql_queries.append(sql_query)
+        dbh.execute_sql_queries(sql_queries)
+
+
+        # Touch done file.  Upload done file to S3 bucket.
+
+        util.write_done_file_to_s3_bucket(done_filename,product_s3_bucket_base,proc_date,jid,s3_client)
+
+        fh.write(f"Loop end: done_filename,product_s3_bucket_base,proc_date,jid = {done_filename},{product_s3_bucket_base},{proc_date},{jid}\n")
+
+
+        # End of loop over job ID.
+
+
+    fh.write(f"\nEnd of run_single_core_job: index_thread={index_thread}\n")
+
+    fh.close()
+
+
+def execute_parallel_processes(jids,rtids_list,meta_list,num_cores=None):
 
     if num_cores is None:
         num_cores = os.cpu_count()  # Use all available cores if not specified
@@ -183,7 +348,7 @@ def launch_parallel_processes(jids, num_cores=None):
 
     with ProcessPoolExecutor(max_workers=num_cores) as executor:
         # Submit all tasks to the executor and store the futures in a list
-        futures = [executor.submit(run_script,jid) for jid in jids]
+        futures = [executor.submit(run_single_core_job,jids,rtids_list,meta_list,thread_index) for thread_index in range(num_cores)]
 
         # Iterate over completed futures and update progress
         for i, future in enumerate(as_completed(futures)):
@@ -199,7 +364,7 @@ if __name__ == '__main__':
 
 
     #
-    # Launch RAPID post-processing pipelines
+    # Launch parallel tasks to load sources database tables
     # for all RAPID science pipelines that already
     # ran on a given processing date.
     #
@@ -215,7 +380,7 @@ if __name__ == '__main__':
 
     # Query database for all normal RAPID science-pipeline Jobs records
     # that are associated with the given processing date.
-    # recs list is [jid,expid,sca,fid,field,rid].
+    # Returns a list of job IDs.
 
     recs = dbh.get_jids_of_normal_science_pipeline_jobs_for_processing_date(proc_date)
 
@@ -224,9 +389,11 @@ if __name__ == '__main__':
         exit(dbh.exit_code)
 
 
-    # Launch pipeline instances to be run under AWS Batch.
+    # Launch multi-processing for loading sources database tables.
 
     jid_list = []
+    overlapping_fields_list = []
+    meta_list = []
 
     for jid in recs:
 
@@ -257,7 +424,24 @@ if __name__ == '__main__':
         pid = diffimage_dict['pid']
 
 
-        # Get field numbers (rtids) of sky tile containing sky position in image.
+        # Load Sources record metadata into a dictionary that can be appended to a list,
+        # and then unpacked later.
+
+        meta_dict = {}
+
+        meta_dict["jid"] = jid
+        meta_dict["expid"] = expid
+        meta_dict["sca"] = sca
+        meta_dict["fid"] = fid
+        meta_dict["field"] = field
+        meta_dict["hp6"] = hp6
+        meta_dict["hp9"] = hp9
+        meta_dict["mjdobs"] = mjdobs
+        meta_dict["mjdobs"] = pid
+
+
+        # Get field numbers (rtids) of all sky tiles containing sky positions
+        # in given science image associated with job ID.
 
         rtid_dict = {}
 
@@ -278,20 +462,102 @@ if __name__ == '__main__':
                 rtid_dict[rtid] = 1
 
         keys_view = rtid_dict.keys()
-        print(keys_view)
-
-        exit(0)
-
+        print("fields overlapping image =",keys_view)
 
         jid_list.append(jid)
+        overlapping_fields_list.append(keys_view)
+        meta_list.append(meta_dict)
 
         print("jid =",jid)
 
 
+    # Code-timing benchmark.
 
-    # The job launching is done in parallel, taking advantage of multiple cores on the job-launcher machine.
+    end_time_benchmark = time.time()
+    print("Elapsed time in seconds to collect inputs =",
+        end_time_benchmark - start_time_benchmark)
+    start_time_benchmark = end_time_benchmark
 
-    launch_parallel_processes(jid_list)
+
+    # Create sources database tables for all 18 SCAs.
+
+    print("Creating sources database tables for all 18 SCAs...")
+
+    sql_queries = []
+    sql_queries.append("SET default_tablespace = pipeline_data_01;")
+
+    for i in range(18):
+
+        sca = i + 1
+
+        sql_queries.append(f"CREATE TABLE sources_{proc_date}_{sca} (LIKE sources INCLUDING DEFAULTS INCLUDING CONSTRAINTS);")
+        sql_queries.append(f"ALTER TABLE sources_{proc_date}_{sca} SET UNLOGGED;")
+
+    dbh.execute_sql_queries(sql_queries)
+
+
+    # Code-timing benchmark.
+
+    end_time_benchmark = time.time()
+    print("Elapsed time in seconds to create sources database tables for all 18 SCAs =",
+        end_time_benchmark - start_time_benchmark)
+    start_time_benchmark = end_time_benchmark
+
+
+    ################################################################################
+    # Execute sources-table-loading tasks for all science-pipeline jobs with jids on
+    # a given processing date.  The execution is done in parallel, with the number
+    # of parallel threads equal to the number of cores on the job-launcher machine.
+    ################################################################################
+
+    execute_parallel_processes(jid_list,rtids_list,meta_list,num_cores)
+
+
+    # Code-timing benchmark.
+
+    end_time_benchmark = time.time()
+    print("Elapsed time in seconds to load all sources database tables =",
+        end_time_benchmark - start_time_benchmark)
+    start_time_benchmark = end_time_benchmark
+
+
+    # Index, cluster, and apply grants to sources database tables for all 18 SCAs.
+
+    print("Indexing, clustering, and applying grantes to sources database tables for all 18 SCAs...")
+
+    sql_queries = []
+    sql_queries.append("SET default_tablespace = pipeline_indx_01;")
+
+    for i in range(18):
+
+        sca = i + 1
+
+        sql_queries.append(f"CREATE INDEX sources_{proc_date}_{sca}_expid_idx ON sources_{proc_date}_{sca} (expid);")
+        sql_queries.append(f"CREATE INDEX sources_{proc_date}_{sca}_sca_idx ON sources_{proc_date}_{sca} (sca);")
+        sql_queries.append(f"CREATE INDEX sources_{proc_date}_{sca}_field_idx ON sources_{proc_date}_{sca} (field);")
+        sql_queries.append(f"CREATE INDEX sources_{proc_date}_{sca}_mjdobs_idx ON sources_{proc_date}_{sca} (mjdobs);")
+        sql_queries.append(f"CREATE INDEX sources_{proc_date}_{sca}_sid_idx ON sources_{proc_date}_{sca} (sid);")
+        sql_queries.append(f"ALTER TABLE ONLY sources_{proc_date}_{sca} ADD CONSTRAINT sourcespk__{proc_date}_{sca} UNIQUE (ra, dec);")
+        sql_queries.append(f"CREATE INDEX sources_{proc_date}_{sca}_radec_idx ON sources_{proc_date}_{sca} (q3c_ang2ipix(ra, dec));")
+        sql_queries.append(f"CLUSTER sources_{proc_date}_{sca}_radec_idx ON sources_{proc_date}_{sca};")
+        sql_queries.append(f"ANALYZE sources_{proc_date}_{sca};")
+        sql_queries.append(f"ALTER TABLE sources_{proc_date}_{sca} SET LOGGED;")
+        sql_queries.append(f"REVOKE ALL ON TABLE sources_{proc_date}_{sca} FROM rapidreadrole;")
+        sql_queries.append(f"GRANT SELECT ON TABLE sources_{proc_date}_{sca} TO GROUP rapidreadrole;")
+        sql_queries.append(f"REVOKE ALL ON TABLE sources_{proc_date}_{sca} FROM rapidadminrole;")
+        sql_queries.append(f"GRANT ALL ON TABLE sources_{proc_date}_{sca} TO GROUP rapidadminrole;")
+        sql_queries.append(f"REVOKE ALL ON TABLE sources_{proc_date}_{sca} FROM rapidporole;")
+        sql_queries.append(f"GRANT INSERT,UPDATE,SELECT,DELETE,TRUNCATE,TRIGGER,REFERENCES ON TABLE sources_{proc_date}_{sca} TO rapidporole;")
+
+    dbh.execute_sql_queries(sql_queries)
+
+
+    # Code-timing benchmark.
+
+    end_time_benchmark = time.time()
+    print("Elapsed time in seconds to index, cluster, and apply grants to sources database tables for all {sca} SCAs =",
+        end_time_benchmark - start_time_benchmark)
+    start_time_benchmark = end_time_benchmark
 
 
     # Close database connection.
@@ -300,14 +566,6 @@ if __name__ == '__main__':
 
     if dbh.exit_code >= 64:
         exit(dbh.exit_code)
-
-
-    # Code-timing benchmark.
-
-    end_time_benchmark = time.time()
-    print("Elapsed time in seconds to launch all pipelines =",
-        end_time_benchmark - start_time_benchmark)
-    start_time_benchmark = end_time_benchmark
 
 
     # Termination.
