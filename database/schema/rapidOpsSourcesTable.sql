@@ -72,6 +72,7 @@ ALTER TABLE ONLY sources ADD CONSTRAINT sourcespk UNIQUE (pid, id);
 
 ALTER TABLE ONLY sources ADD CONSTRAINT sources_pid_fk FOREIGN KEY (pid) REFERENCES diffimages(pid);
 
+CREATE INDEX sources_pid_idx ON sources (pid);
 CREATE INDEX sources_expid_idx ON sources (expid);
 CREATE INDEX sources_sca_idx ON sources (sca);
 CREATE INDEX sources_field_idx ON sources (field);
@@ -84,6 +85,7 @@ ALTER TABLE sources SET UNLOGGED;
 -- A python script will create tables like the sources prototype table,
 -- which is not the same thing as inheriting the prototype table.
 -- Like-table names will be sources_<processing date: yyyymmdd>_<sca>.
+-- The processing date is in Pacific time.
 -- Thus the partitioning scheme for sources is by time and chip number.
 
 -- Below are all the steps to be executed by the Python script for each new like-table:
@@ -96,6 +98,7 @@ ALTER TABLE sources SET UNLOGGED;
 -- Data is loaded into the table here...
 
 -- SET default_tablespace = pipeline_indx_01;
+-- CREATE INDEX sources_20250811_18_pid_idx ON sources_20250811_18 (pid);
 -- CREATE INDEX sources_20250811_18_expid_idx ON sources_20250811_18 (expid);
 -- CREATE INDEX sources_20250811_18_sca_idx ON sources_20250811_18 (sca);
 -- CREATE INDEX sources_20250811_18_field_idx ON sources_20250811_18 (field);
