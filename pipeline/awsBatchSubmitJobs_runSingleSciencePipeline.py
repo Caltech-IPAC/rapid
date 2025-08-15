@@ -971,6 +971,14 @@ if __name__ == '__main__':
     filename_diffpsf = 'diffpsf.fits'
     filename_scorrimage = 'scorrimage.fits'
 
+
+
+    # 2025-08-15 Jacob's recommendation for the next Big Run.
+    dxrmsfin = 0.0
+    dyrmsfin = 0.0
+
+
+
     zogy_cmd = [python_cmd,
                 zogy_code,
                 filename_bkg_subbed_science_image,
