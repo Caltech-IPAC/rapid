@@ -180,7 +180,7 @@ CREATE TABLE astroobjects (
     nsources smallint NOT NULL,                 -- Total number of sources (all filters)
     field integer NOT NULL,                     -- Roman tessellation index for (ra,dec)
     hp6 integer NOT NULL,                       -- Level-6 healpix index (NESTED) for (ra,dec)
-    hp9 integer NOT NULL,                       -- Level-9 healpix index (NESTED) for (ra,dec)
+    hp9 integer NOT NULL                        -- Level-9 healpix index (NESTED) for (ra,dec)
 );
 
 ALTER TABLE astroobjects OWNER TO rapidadminrole;
