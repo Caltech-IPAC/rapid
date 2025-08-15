@@ -79,8 +79,6 @@ GRANT USAGE ON SEQUENCE astroobjects_aid_seq TO rapidporole;
 REVOKE ALL ON TABLE merges FROM rapidreadrole;
 GRANT SELECT ON TABLE merges TO GROUP rapidreadrole;
 
-REVOKE ALL ON SEQUENCE merges_aid_seq FROM rapidreadrole;
-
 -- rapidadminrole
 
 REVOKE ALL ON TABLE merges FROM rapidadminrole;
