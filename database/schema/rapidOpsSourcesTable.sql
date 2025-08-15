@@ -80,7 +80,6 @@ CREATE INDEX sources_mjdobs_idx ON sources (mjdobs);
 ALTER TABLE sources SET UNLOGGED;
 
 
-
 ------------------------------------------------------------
 -- A python script will create tables like the sources prototype table,
 -- which is not the same thing as inheriting the prototype table.
@@ -203,7 +202,6 @@ ALTER TABLE ONLY astroobjects ADD CONSTRAINT astroobjects_pkey PRIMARY KEY (aid)
 
 CREATE INDEX astroobjects_field_idx ON astroobjects (field);
 CREATE INDEX astroobjects_nsources_idx ON astroobjects (nsources);
-
 
 
 ------------------------------------------------------------
