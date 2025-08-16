@@ -1445,6 +1445,35 @@ if __name__ == '__main__':
             filename_sfftdiffimage_sextractor_catalog = filename_sfftdiffimage.replace(".fits",".txt")
 
 
+            # Upload SFFT-product FITS files to product S3 bucket.
+
+            product_s3_bucket = product_s3_bucket_base
+            s3_object_name_sfftdiffimage = job_proc_date + "/jid" + str(jid) + "/" + filename_sfftdiffimage
+            s3_object_name_sfftsoln = job_proc_date + "/jid" + str(jid) + "/" + filename_sfftsoln
+            s3_object_name_cconvdiff = job_proc_date + "/jid" + str(jid) + "/" + filename_cconvdiff
+            s3_object_name_sfftdiffimage_unc = job_proc_date + "/jid" + str(jid) + "/" + filename_sfftdiffimage_unc
+
+            filenames = [filename_sfftdiffimage,
+                         filename_sfftsoln,
+                         filename_cconvdiff,
+                         filename_sfftdiffimage_unc]
+
+            objectnames = [s3_object_name_sfftdiffimage,
+                           s3_object_name_sfftsoln,
+                           s3_object_name_cconvdiff,
+                           s3_object_name_sfftdiffimage_unc]
+
+            util.upload_files_to_s3_bucket(s3_client,product_s3_bucket,filenames,objectnames)
+
+
+            # Code-timing benchmark.
+
+            end_time_benchmark = time.time()
+            print("Elapsed time in seconds after uploading SFFT difference image to S3 bucket =",
+                end_time_benchmark - start_time_benchmark)
+            start_time_benchmark = end_time_benchmark
+
+
             # Compute raw-ascii SExtractor catalog for SFFT masked difference image.
             # If the SFFT crossconv flag is set, then execute SExtractor to detect candidates
             # on the cross-convolved image and analyze detections on the deconvolved image.
@@ -1493,6 +1522,26 @@ if __name__ == '__main__':
 
             end_time_benchmark = time.time()
             print("Elapsed time in seconds after running SExtractor on SFFT difference image =",
+                end_time_benchmark - start_time_benchmark)
+            start_time_benchmark = end_time_benchmark
+
+
+            # Upload SFFT-product FITS files to product S3 bucket.
+
+            product_s3_bucket = product_s3_bucket_base
+            s3_object_name_sfftdiffimage_catalog = job_proc_date + "/jid" + str(jid) + "/" + filename_sfftdiffimage_sextractor_catalog
+
+            filenames = [filename_sfftdiffimage_sextractor_catalog]
+
+            objectnames = [s3_object_name_sfftdiffimage_catalog]
+
+            util.upload_files_to_s3_bucket(s3_client,product_s3_bucket,filenames,objectnames)
+
+
+            # Code-timing benchmark.
+
+            end_time_benchmark = time.time()
+            print("Elapsed time in seconds after uploading SFFT-diffimage SExtractor catalog to S3 bucket =",
                 end_time_benchmark - start_time_benchmark)
             start_time_benchmark = end_time_benchmark
 
@@ -1592,30 +1641,15 @@ if __name__ == '__main__':
             # Upload SFFT-product FITS files to product S3 bucket.
 
             product_s3_bucket = product_s3_bucket_base
-            s3_object_name_sfftdiffimage = job_proc_date + "/jid" + str(jid) + "/" + filename_sfftdiffimage
-            s3_object_name_sfftsoln = job_proc_date + "/jid" + str(jid) + "/" + filename_sfftsoln
-            s3_object_name_cconvdiff = job_proc_date + "/jid" + str(jid) + "/" + filename_cconvdiff
-            s3_object_name_sfftdiffimage_unc = job_proc_date + "/jid" + str(jid) + "/" + filename_sfftdiffimage_unc
-            s3_object_name_sfftdiffimage_catalog = job_proc_date + "/jid" + str(jid) + "/" + filename_sfftdiffimage_sextractor_catalog
             s3_object_name_output_psfcat_filename = job_proc_date + "/jid" + str(jid) + "/" + output_psfcat_filename
             s3_object_name_output_psfcat_finder_filename = job_proc_date + "/jid" + str(jid) + "/" + output_psfcat_finder_filename
             s3_object_name_output_psfcat_residual_filename = job_proc_date + "/jid" + str(jid) + "/" + output_psfcat_residual_filename
 
-            filenames = [filename_sfftdiffimage,
-                         filename_sfftsoln,
-                         filename_cconvdiff,
-                         filename_sfftdiffimage_unc,
-                         filename_sfftdiffimage_sextractor_catalog,
-                         output_psfcat_filename,
+            filenames = [output_psfcat_filename,
                          output_psfcat_finder_filename,
                          output_psfcat_residual_filename]
 
-            objectnames = [s3_object_name_sfftdiffimage,
-                           s3_object_name_sfftsoln,
-                           s3_object_name_cconvdiff,
-                           s3_object_name_sfftdiffimage_unc,
-                           s3_object_name_sfftdiffimage_catalog,
-                           s3_object_name_output_psfcat_filename,
+            objectnames = [s3_object_name_output_psfcat_filename,
                            s3_object_name_output_psfcat_finder_filename,
                            s3_object_name_output_psfcat_residual_filename]
 
@@ -1625,7 +1659,7 @@ if __name__ == '__main__':
             # Code-timing benchmark.
 
             end_time_benchmark = time.time()
-            print("Elapsed time in seconds after uploading SFFT products to S3 bucket =",
+            print("Elapsed time in seconds after uploading SFFT-diffimage PSF-fit catalogs to S3 bucket =",
                 end_time_benchmark - start_time_benchmark)
             start_time_benchmark = end_time_benchmark
 
