@@ -1499,6 +1499,7 @@ def compute_diffimage_psf_catalog(n_clip_sigma,
         except:
             print("*** Warning: Could not make psf-fit catalog (perhaps no sources were detected); continuing...")
             psfcat_flag = False
+            psfphot = None
     else:
         psfphot = IterativePSFPhotometry(psf_model=psf_model,fit_shape=fit_shape,finder=finder,aperture_radius=aperture_radius)
 
@@ -1514,6 +1515,7 @@ def compute_diffimage_psf_catalog(n_clip_sigma,
     except:
         print("*** Warning: Exception thrown calling PSFPhotometry class instance on the data array to do the PSF-fitting to the image data; continuing...")
         psfcat_flag = False
+        phot = None
 
 
     # Make residual image.
