@@ -910,6 +910,14 @@ create function updateRefImage (
             and vBest in (1, 2);
 
             if (currentvBest_ = 1) then -- vBest is not locked
+
+                -- Select the record and acquire a FOR UPDATE lock
+                select vBest
+                into currentVBest_
+                from RefImages
+                where rfid = rfid__
+                FOR UPDATE;
+
                 update RefImages
                 set vBest = 0
                 where rfid = rfid__;
@@ -928,6 +936,13 @@ create function updateRefImage (
         else
             vBest_ := 1;
         end if;
+
+        -- Select the record and acquire a FOR UPDATE lock
+        select vBest
+        into currentVBest_
+        from RefImages
+        where rfid = rfid_
+        FOR UPDATE;
 
         update RefImages
         set filename = filename_,
