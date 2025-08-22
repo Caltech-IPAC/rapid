@@ -2967,7 +2967,7 @@ class RAPIDDB:
                         print("Nothing returned from database query; continuing...")
 
             except (Exception, psycopg2.DatabaseError) as error:
-                print('*** Error getting all L2Files records for given dateobs range ({}); skipping...'.format(error))
+                print('*** Error executing query ({query}); skipping...'.format(error))
                 self.exit_code = 67
                 return
 
