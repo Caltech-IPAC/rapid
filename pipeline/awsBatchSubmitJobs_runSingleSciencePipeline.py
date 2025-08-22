@@ -673,6 +673,12 @@ if __name__ == '__main__':
         science_image_filename = filename_image_with_fake_sources
 
 
+        # Code-timing benchmark.
+
+        end_time_benchmark = time.time()
+        print("Elapsed time in seconds after injecting fake sources =",end_time_benchmark - start_time_benchmark)
+        start_time_benchmark = end_time_benchmark
+
 
 
 
@@ -737,10 +743,11 @@ if __name__ == '__main__':
     print("fwhm_sci =",fwhm_sci)
 
 
+    # Code-timing benchmark.
 
-
-
-
+    end_time_benchmark = time.time()
+    print("Elapsed time in seconds after generating science-image catalog =",end_time_benchmark - start_time_benchmark)
+    start_time_benchmark = end_time_benchmark
 
 
     # Swarp the reference image and associated uncertainty image into the distortion frame of the science image.
