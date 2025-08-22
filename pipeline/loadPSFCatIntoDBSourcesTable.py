@@ -483,9 +483,9 @@ if __name__ == '__main__':
     start_time_benchmark = end_time_benchmark
 
 
-    # Create sources database tables for all 18 SCAs.
+    # Create sources database tables for all SCAs associated with processing date.
 
-    print("Creating sources database tables for all 18 SCAs...")
+    print("Creating sources database tables for all SCAs associated with processing date...")
 
     sql_queries = []
     sql_queries.append("SET default_tablespace = pipeline_data_01;")
@@ -505,7 +505,7 @@ if __name__ == '__main__':
     # Code-timing benchmark.
 
     end_time_benchmark = time.time()
-    print("Elapsed time in seconds to create sources database tables for all 18 SCAs =",
+    print("Elapsed time in seconds to create sources database tables for all SCAs associated with processing date =",
         end_time_benchmark - start_time_benchmark)
     start_time_benchmark = end_time_benchmark
 
@@ -516,7 +516,7 @@ if __name__ == '__main__':
     # of parallel threads equal to the number of cores on the job-launcher machine.
     ################################################################################
 
-    execute_parallel_processes(jid_list,rtids_list,meta_list,num_cores)
+    execute_parallel_processes(jid_list,overlapping_fields_list,meta_list,num_cores)
 
 
     # Code-timing benchmark.
@@ -527,9 +527,9 @@ if __name__ == '__main__':
     start_time_benchmark = end_time_benchmark
 
 
-    # Index, cluster, and apply grants to sources database tables for all 18 SCAs.
+    # Index, cluster, and apply grants to sources database tables for all SCAs associated with processing date.
 
-    print("Indexing, clustering, and applying grantes to sources database tables for all 18 SCAs...")
+    print("Indexing, clustering, and applying grantes to sources database tables for all SCAs associated with processing date...")
 
     sql_queries = []
     sql_queries.append("SET default_tablespace = pipeline_indx_01;")
@@ -560,7 +560,7 @@ if __name__ == '__main__':
     # Code-timing benchmark.
 
     end_time_benchmark = time.time()
-    print("Elapsed time in seconds to index, cluster, and apply grants to sources database tables for all {sca} SCAs =",
+    print("Elapsed time in seconds to index, cluster, and apply grants to sources database tables for all SCAs associated with processing date =",
         end_time_benchmark - start_time_benchmark)
     start_time_benchmark = end_time_benchmark
 
