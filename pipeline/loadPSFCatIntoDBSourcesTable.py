@@ -394,6 +394,8 @@ if __name__ == '__main__':
     jid_list = []
     overlapping_fields_list = []
     meta_list = []
+    scas_dict = {}
+
 
     for jid in recs:
 
@@ -422,6 +424,8 @@ if __name__ == '__main__':
         diffimage_dict = dbh.get_best_difference_image(rid,ppid)
 
         pid = diffimage_dict['pid']
+
+        scas_dict[sca] = 1
 
 
         # Load Sources record metadata into a dictionary that can be appended to a list,
@@ -486,12 +490,14 @@ if __name__ == '__main__':
     sql_queries = []
     sql_queries.append("SET default_tablespace = pipeline_data_01;")
 
-    for i in range(18):
+    scas_list = scas_dict.keys()
 
-        sca = i + 1
+    for sca in scas_list:
 
-        sql_queries.append(f"CREATE TABLE sources_{proc_date}_{sca} (LIKE sources INCLUDING DEFAULTS INCLUDING CONSTRAINTS);")
-        sql_queries.append(f"ALTER TABLE sources_{proc_date}_{sca} SET UNLOGGED;")
+        tablename = f"sources_{proc_date}_{sca}"
+
+        sql_queries.append(f"CREATE TABLE {tablename} (LIKE sources INCLUDING DEFAULTS INCLUDING CONSTRAINTS);")
+        sql_queries.append(f"ALTER TABLE {tablename} SET UNLOGGED;")
 
     dbh.execute_sql_queries(sql_queries)
 
@@ -528,9 +534,7 @@ if __name__ == '__main__':
     sql_queries = []
     sql_queries.append("SET default_tablespace = pipeline_indx_01;")
 
-    for i in range(18):
-
-        sca = i + 1
+    for sca in scas_list:
 
         sql_queries.append(f"CREATE INDEX sources_{proc_date}_{sca}_pid_idx ON sources_{proc_date}_{sca} (pid);")
         sql_queries.append(f"CREATE INDEX sources_{proc_date}_{sca}_expid_idx ON sources_{proc_date}_{sca} (expid);")
