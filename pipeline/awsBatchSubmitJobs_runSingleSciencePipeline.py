@@ -868,8 +868,8 @@ if __name__ == '__main__':
 
     bkgest_code = rapid_sw + '/c/bin/bkgest'
     bkgest_include_dir = rapid_sw + '/c/include'
-    filename_bkg_subbed_science_image = 'bkg_subbed_science_image.fits'
-    filename_global_clippedmean_sciimage_tbl = 'global_clippedmean_science_image.tbl'
+    filename_bkg_subbed_science_image = bkgest_dict["filename_bkg_subbed_science_image"]
+    filename_global_clippedmean_sciimage_tbl = bkgest_dict["filename_global_clippedmean_sciimage_tbl"]
 
     bkgest_cmd = [bkgest_code,
                   '-i',
@@ -1664,14 +1664,17 @@ if __name__ == '__main__':
             s3_object_name_output_psfcat_filename = job_proc_date + "/jid" + str(jid) + "/" + output_psfcat_filename
             s3_object_name_output_psfcat_finder_filename = job_proc_date + "/jid" + str(jid) + "/" + output_psfcat_finder_filename
             s3_object_name_output_psfcat_residual_filename = job_proc_date + "/jid" + str(jid) + "/" + output_psfcat_residual_filename
+            s3_object_name_refimage_psf = job_proc_date + "/jid" + str(jid) + "/" + filename_refimage_psf
 
             filenames = [output_psfcat_filename,
                          output_psfcat_finder_filename,
-                         output_psfcat_residual_filename]
+                         output_psfcat_residual_filename,
+                         filename_refimage_psf]
 
             objectnames = [s3_object_name_output_psfcat_filename,
                            s3_object_name_output_psfcat_finder_filename,
-                           s3_object_name_output_psfcat_residual_filename]
+                           s3_object_name_output_psfcat_residual_filename,
+                           s3_object_name_refimage_psf]
 
             util.upload_files_to_s3_bucket(s3_client,product_s3_bucket,filenames,objectnames)
 
