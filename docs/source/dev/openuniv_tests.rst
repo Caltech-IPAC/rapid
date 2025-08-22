@@ -81,6 +81,7 @@ Test                       No. of images  No. of ref. images made  Start obs. da
 6/17/2025                           547              None          2028-08-17 00:00:00  2028-09-07 00:00:00  Only ZOGY difference-image products were made
 6/20/2025                         6,875              None          2028-08-17 00:00:00  2030-09-20 00:00:00  Both ZOGY and SFFT difference-image products were made.  Ran SFFT with ``--crossconv`` flag.
 7/10/2025                         6,875              None          2028-08-17 00:00:00  2030-09-20 00:00:00  Like the 6/20/2025 test with new PhotUtils PSF-fit star-finder catalog in separate file.
+8/17/2025                         6,875                79          2028-08-17 00:00:00  2030-09-20 00:00:00  Similar to the 7/10/2025 test, with several exceptions (see below for details).
 =========================  =============  =======================  ===================  ===================  ============================================================================================
 
 In the above table, superior reference images are defined as having ``nframes >= 10`` and ``cov5percent >= 60%``.  In other words, superior
@@ -818,3 +819,50 @@ Naive image-differencing was also done (simple science minus reference image), a
 
 A repeat of the 6/20/2025 test, but with new PhotUtils PSF-fit star-finder catalog from ZOGY difference image (noniterative),
 stored in a separate file called ``diffimage_masked_psfcat_finder.txt``.
+
+
+8/17/2025
+************************************
+
+Similar to the 7/10/2025 test, with the following exceptions:
+
+* Made correction to uncertainty-image formula.
+* New PSF-fit catalog for SFFT difference image.
+* Fake-source injection was turned on.
+* Changed [FAKE_SOURCES] num_injections = 100, mag_min = 21.0, mag_max = 28.0.
+* Changed [PSFCAT_DIFFIMAGE] fwhm = 2.0.
+* Changed [SEXTRACTOR_DIFFIMAGE] FILTER_THRESH = 3.0, DEBLEND_NTHRESH = 32, WEIGHT_TYPE = "NONE,MAP_RMS", FILTER = "N" (last two parameters are overrided in code for ZOGY and SFFT SExtractor catalogs).
+* Fed ZOGY dxrmsfin = 0.0, dyrmsfin = 0.0 for comparison with SFFT.
+
+Covers 6,875 science images.
+New reference images were made with corrected uncertainties (79 total).
+
+Note that SFFT was run with the ``--crossconv`` flag, as was done for the 6/20/25 and 7/10/25 tests,
+but in those previous tests, the convolved and deconvolved SFFT difference images had their roles
+mistakenly swapped (in terms of being fed to SExtractor downstream).
+The resulting deconvolved SFFT difference image, ``sfftdiffimage_dconv_masked.fits``, and the
+SFFT convolved difference image, ``sfftdiffimage_cconv_masked.fits``, are copied to the
+S3 product bucket, along with the other products.
+
+Naive image-differencing was also done (simple science minus reference image), and the product is ``naive_diffimage_masked.fits``.
+A new capability is computing an SExtractor catalog for the naive difference image, which is called ``naive_diffimage_masked.txt``.
+
+.. code-block::
+
+    export DBNAME=fakesourcesdb
+    export STARTDATETIME="2028-08-17 00:00:00"
+    export ENDDATETIME="2030-09-20 00:00:00"
+    export STARTREFIMMJDOBS=63400
+    export ENDREFIMMJDOBS=99999
+    export MINREFIMNFRAMES=6
+
+    python3.11 /code/pipeline/virtualPipelineOperator.py 20250817 >& virtualPipelineOperator_20250817.out &
+
+.. code-block::
+
+    specialdb=> select ppid,exitcode,count(*) from jobs where cast(launched as date) = '20250817' group by ppid, exitcode order by ppid, exitcode;
+     ppid | exitcode | count
+    ------+----------+-------
+       15 |        0 |  6875
+       17 |        0 |  6875
+    (2 rows)
