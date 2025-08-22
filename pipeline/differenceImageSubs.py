@@ -142,7 +142,8 @@ def compute_diffimage_uncertainty(sca_gain,
     hdr_cov = hdul_cov[0].header
     data_cov = hdul_cov[0].data
     np_data_cov = np.array(data_cov)
-    pos_np_data_cov = np.where(np_data_cov >= post_zogy_keep_diffimg_lower_cov_map_thresh,np_data_cov,np.nan)
+    # Replace below-threshold values with 1.0 instead of NaN, so photutils doesn't croak.
+    pos_np_data_cov = np.where(np_data_cov >= post_zogy_keep_diffimg_lower_cov_map_thresh,np_data_cov,1.0)
 
     hdu_list_unc = []
     data_unc = np.sqrt(pos_np_data_sci / sca_gain + pos_np_data_ref / (sca_gain * pos_np_data_cov) + std_dif_img * std_dif_img)
