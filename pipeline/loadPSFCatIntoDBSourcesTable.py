@@ -253,7 +253,7 @@ def run_single_core_job(jids,overlapping_fields_list,meta_list,index_thread):
         cols.append(mjdobs)
 
         cols_comma_separated_string = ", ".join(cols)
-        fh.write(f"Sources columns: {cols_comma_separated_string)")
+        fh.write(f"Sources columns: {cols_comma_separated_string}")
 
 
         # Here are what the columns in the photutils catalogs are called:
