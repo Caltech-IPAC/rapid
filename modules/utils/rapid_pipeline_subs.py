@@ -1480,7 +1480,7 @@ def compute_diffimage_psf_catalog(n_clip_sigma,
 
     # Initialize the DAOStarFinder and PSFPhotometry class instances.
 
-    finder = DAOStarFinder(threshold, fwhm)
+    finder = DAOStarFinder(threshold,fwhm,filter_non_finite=True)
 
     finder_attributes = finder.__dict__.keys()
 
