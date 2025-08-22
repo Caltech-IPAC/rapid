@@ -1,3 +1,9 @@
+################################################################
+# output_diffimage_file_infobits:
+# BIT 0, No photutils catalog for ZOGY was made.
+# BIT 1, No photutils catalog for SFFT was made.
+################################################################
+
 import os
 import configparser
 import boto3
@@ -978,6 +984,7 @@ if __name__ == '__main__':
     filename_diffpsf = 'diffpsf.fits'
     filename_scorrimage = 'scorrimage.fits'
 
+    output_diffimage_file_infobits = 0
 
 
     # 2025-08-15 Jacob's recommendation for the next Big Run.
@@ -1170,8 +1177,11 @@ if __name__ == '__main__':
 
     print("psfcat_flag =",psfcat_flag)
 
-    if psfcat_flag:
+    if not psfcat_flag:
 
+        output_diffimage_file_infobits |= 2**0
+
+    else:
 
         # Output psf-fit catalog is an PSFPhotometry astropy table with the PSF-fitting results
         # merged with the DAOStarFinder astropy table.
@@ -1304,7 +1314,6 @@ if __name__ == '__main__':
     product_config['ZOGY']['zogy_output_diffpsf_file'] = zogy_diffpsf_name_for_db_record
     product_config['ZOGY']['zogy_output_scorrimage_file'] = zogy_scorrimage_name_for_db_record
     product_config['ZOGY']['zogy_output_diffimage_file_status'] = str(1)
-    product_config['ZOGY']['zogy_output_diffimage_file_infobits'] = str(0)                                        # TODO
 
 
     # The following sky positions are correct for the difference image
@@ -1583,8 +1592,12 @@ if __name__ == '__main__':
 
             print("psfcat_flag =",psfcat_flag)
 
-            if psfcat_flag:
 
+        if not psfcat_flag:
+
+            output_diffimage_file_infobits |= 2**1
+
+        else:
 
                 # Output psf-fit catalog is an PSFPhotometry astropy table with the PSF-fitting results
                 # merged with the DAOStarFinder astropy table.
@@ -1825,6 +1838,7 @@ if __name__ == '__main__':
     print("proc_pt_datetime_ended =",proc_pt_datetime_ended)
 
     product_config['JOB_PARAMS']['job_ended'] = str(proc_pt_datetime_ended)
+    product_config['ZOGY']['zogy_output_diffimage_file_infobits'] = str(output_diffimage_file_infobits)      # TODO
 
 
     # Write product config file for job.
