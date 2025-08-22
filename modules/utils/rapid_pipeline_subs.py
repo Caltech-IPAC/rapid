@@ -1511,12 +1511,12 @@ def compute_diffimage_psf_catalog(n_clip_sigma,
     # Call PSFPhotometry class instance on the data array to do the PSF-fitting to the image data.
 
     try:
-        phot = psfphot(data=data_image,error=data_uncert,filter_non_finite=True)
-    except:
-        print("*** Warning: Exception thrown calling PSFPhotometry class instance on the data array to do the PSF-fitting to the image data; continuing...")
+        phot = psfphot(data=data_image,error=data_uncert)
+    except Exception as e:
+        # Handle the exception and print its message
+        print("*** Warning: Exception thrown calling PSFPhotometry class instance:", e)
         psfcat_flag = False
         phot = None
-
 
     # Make residual image.
 
