@@ -496,6 +496,7 @@ if __name__ == '__main__':
 
         tablename = f"sources_{proc_date}_{sca}"
 
+        sql_queries.append(f"SELECT to_regclass('public.{tablename}') IS NOT NULL;")
         sql_queries.append(f"CREATE TABLE {tablename} (LIKE sources INCLUDING DEFAULTS INCLUDING CONSTRAINTS);")
         sql_queries.append(f"ALTER TABLE {tablename} SET UNLOGGED;")
 
@@ -536,13 +537,13 @@ if __name__ == '__main__':
 
     for sca in scas_list:
 
+        sql_queries.append(f"ALTER TABLE ONLY sources_{proc_date}_{sca} ADD CONSTRAINT sourcespk_{proc_date}_{sca} UNIQUE (ra, dec);")
         sql_queries.append(f"CREATE INDEX sources_{proc_date}_{sca}_pid_idx ON sources_{proc_date}_{sca} (pid);")
         sql_queries.append(f"CREATE INDEX sources_{proc_date}_{sca}_expid_idx ON sources_{proc_date}_{sca} (expid);")
         sql_queries.append(f"CREATE INDEX sources_{proc_date}_{sca}_sca_idx ON sources_{proc_date}_{sca} (sca);")
         sql_queries.append(f"CREATE INDEX sources_{proc_date}_{sca}_field_idx ON sources_{proc_date}_{sca} (field);")
         sql_queries.append(f"CREATE INDEX sources_{proc_date}_{sca}_mjdobs_idx ON sources_{proc_date}_{sca} (mjdobs);")
         sql_queries.append(f"CREATE INDEX sources_{proc_date}_{sca}_sid_idx ON sources_{proc_date}_{sca} (sid);")
-        sql_queries.append(f"ALTER TABLE ONLY sources_{proc_date}_{sca} ADD CONSTRAINT sourcespk__{proc_date}_{sca} UNIQUE (ra, dec);")
         sql_queries.append(f"CREATE INDEX sources_{proc_date}_{sca}_radec_idx ON sources_{proc_date}_{sca} (q3c_ang2ipix(ra, dec));")
         sql_queries.append(f"CLUSTER sources_{proc_date}_{sca}_radec_idx ON sources_{proc_date}_{sca};")
         sql_queries.append(f"ANALYZE sources_{proc_date}_{sca};")
