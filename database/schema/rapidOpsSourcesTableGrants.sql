@@ -12,6 +12,8 @@
 -------------------
 
 GRANT CREATE ON SCHEMA public TO rapidporuss;
+GRANT CREATE ON TABLESPACE pipeline_data_01 TO rapidporuss;
+GRANT CREATE ON TABLESPACE pipeline_indx_01 TO rapidporuss;
 
 
 -------------------
