@@ -1593,11 +1593,11 @@ if __name__ == '__main__':
             print("psfcat_flag =",psfcat_flag)
 
 
-        if not psfcat_flag:
+            if not psfcat_flag:
 
-            output_diffimage_file_infobits |= 2**1
+                output_diffimage_file_infobits |= 2**1
 
-        else:
+            else:
 
                 # Output psf-fit catalog is an PSFPhotometry astropy table with the PSF-fitting results
                 # merged with the DAOStarFinder astropy table.
