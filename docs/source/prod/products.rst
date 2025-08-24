@@ -62,7 +62,7 @@ scorrimage_masked.fits                                          ZOGY SCORR image
 diffimage_masked.txt                                            SourceExtractor catalog from ZOGY difference image
 diffimage_masked_psfcat.txt                                     PhotUtils PSF-fit photometry catalog from ZOGY difference image (noniterative)
 diffimage_masked_psfcat_finder.txt                              PhotUtils PSF-fit star-finder catalog from ZOGY difference image (noniterative)
-diffimage_masked_psfcat_residual.fits                           PhotUtils residual image
+diffimage_masked_psfcat_residual.fits                           PhotUtils residual image from ZOGY difference image (noniterative)
 job_config_jid999.done                                          Indicates metadata from science pipeline ingested into RAPID operations database
 postproc_job_config_jid999.done                                 Indicates metadata from post-processing pipeline ingested into RAPID operations database
 sfftdiffimage_masked.fits                                       SFFT difference image with NaNs in zero-coverage pixels when not run the ``--crossconv`` flag
@@ -71,6 +71,9 @@ sfftdiffimage_cconv_masked.fits                                 SFFT cross-convo
 sfftdiffimage_masked.txt                                        SourceExtractor catalog from SFFT difference image
 sfftdiffimage_uncert_masked.fits                                SFFT uncertainty difference image with NaNs in zero-coverage pixels
 sfftsoln.fits                                                   SFFT matching-kernel solution file
+sfftdiffimage_masked_psfcat.txt                                 PhotUtils PSF-fit photometry catalog from SFFT difference image (noniterative)
+sfftdiffimage_masked_psfcat_finder.txt                          PhotUtils PSF-fit star-finder catalog from SFFT difference image (noniterative)
+sfftdiffimage_masked_psfcat_residual.fits                       PhotUtils residual image from SFFT difference image (noniterative)
 naive_diffimage_masked.fits                                     Naive output difference image with NaNs in zero-coverage pixels
 naive_diffimage_masked.txt                                      SourceExtractor catalog from naive difference image
 ==============================================================  ====================================================================================================
