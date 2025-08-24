@@ -28,6 +28,8 @@ Astronomical Data Processing
 +-----------------+----------------------------------------------------------+
 | RAPID           | Roman Alerts Promptly from Image Differencing            |
 +-----------------+----------------------------------------------------------+
+| VPO             | Virtual Pipeline Operator                                |
++-----------------+----------------------------------------------------------+
 
 
 Roman Space Telescope
