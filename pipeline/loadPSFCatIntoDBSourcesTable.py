@@ -196,8 +196,12 @@ def run_single_core_job(jids,overlapping_fields_list,meta_list,index_thread):
         s3_full_name_psfcat_file = "s3://" + product_s3_bucket_base + "/" + proc_date + '/jid' + str(jid) + "/" +  output_psfcat_filename
         ret_filename,subdirs_done,downloaded_from_bucket = util.download_file_from_s3_bucket(s3_client,s3_full_name_psfcat_file)
 
+        if output_psfcat_filename != ret_filename:
+            fh.write(f"*** Error: {output_psfcat_filename} is not equal to {ret_filename} from download_file_from_s3_bucket; quitting...")
+            exit(64)
+
         if not downloaded_from_bucket:
-            fh.write("*** Warning: PSF-fit catalog file does not exist ({}); skipping...\n".format(done_filename))
+            fh.write("*** Warning: PSF-fit catalog file does not exist ({}); skipping...\n".format(output_psfcat_filename))
             continue
 
 
@@ -206,8 +210,12 @@ def run_single_core_job(jids,overlapping_fields_list,meta_list,index_thread):
         s3_full_name_psfcat_finder_file = "s3://" + product_s3_bucket_base + "/" + proc_date + '/jid' + str(jid) + "/" +  output_psfcat_finder_filename
         ret_filename,subdirs_done,downloaded_from_bucket = util.download_file_from_s3_bucket(s3_client,s3_full_name_psfcat_finder_file)
 
+        if output_psfcat_finder_filename != ret_filename:
+            fh.write(f"*** Error: {output_psfcat_finder_filename} is not equal to {ret_filename} from download_file_from_s3_bucket; quitting...")
+            exit(64)
+
         if not downloaded_from_bucket:
-            fh.write("*** Warning: PSF-fit finder catalog file does not exist ({}); skipping...\n".format(done_filename))
+            fh.write("*** Warning: PSF-fit finder catalog file does not exist ({}); skipping...\n".format(output_psfcat_finder_filename))
             continue
 
 
@@ -265,7 +273,7 @@ def run_single_core_job(jids,overlapping_fields_list,meta_list,index_thread):
         # Prepare records into sources database tables.
 
         sources_table = f"sources_{proc_date}_{sca}"
-        sources_table_file = f"sources_{proc_date}_{sca}_{jid}" + ".txt"
+        sources_table_file = f"sources_{proc_date}_{sca}_{jid}" + ".csv"
 
         with open(sources_table_file, "w") as csv_fh:
 
