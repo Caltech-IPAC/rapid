@@ -866,3 +866,35 @@ A new capability is computing an SExtractor catalog for the naive difference ima
        15 |        0 |  6875
        17 |        0 |  6875
     (2 rows)
+
+The VPO clocked 3.24 hours to run the entire test.
+As shown in the table below, executing SFFT and injecting fake sources are the dominant contributors
+to running a pipeline instance.
+
+==============================================================  =====================
+Pipeline step                                                   Execution time (sec)
+==============================================================  =====================
+Downloading science image                                       0.8654611110687256
+Downloading or generating reference image                       2.840893030166626
+Injecting fake sources                                          51.10436201095581
+Generating science-image catalog                                3.029279947280884
+Swarping images                                                 8.826584577560425
+Running bkgest on science image                                 13.459786415100098
+Running gainmatchscienceandreferenceimages                      5.845502138137817
+Replacing nans, applying image offsets, etc.                    0.10127377510070801
+Running zogy                                                    39.043646574020386
+Masking zogy difference image                                   0.5791904926300049
+Running sextractor on zogy difference image                     3.9012269973754883
+Generating psf-fit catalog on zogy difference image             15.24788522720337
+Uploading main products to s3 bucket                            4.4298553466796875
+Running sfft                                                    291.79859495162964
+Uploading sfft difference image to s3 bucket                    5.317773818969727
+Running sextractor on sfft difference image                     1.4420087337493896
+Uploading sfft-diffimage sextractor catalog to s3 bucket        0.1093904972076416
+Generating psf-fit catalog on sfft difference image             12.091290950775146
+Uploading sfft-diffimage psf-fit catalogs to s3 bucket          0.8009676933288574
+Computing naive image difference                                1.2115743160247803
+Running sextractor on naive difference image                    4.671598672866821
+Uploading products at pipeline end                              0.03326869010925293
+Total time to run one instance of science pipeline              466.75143003463745
+==============================================================  =====================
