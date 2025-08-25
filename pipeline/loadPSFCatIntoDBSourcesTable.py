@@ -507,6 +507,7 @@ if __name__ == '__main__':
         sql_queries.append(f"SELECT to_regclass('public.{tablename}') IS NOT NULL;")
         sql_queries.append(f"CREATE TABLE {tablename} (LIKE sources INCLUDING DEFAULTS INCLUDING CONSTRAINTS);")
         sql_queries.append(f"ALTER TABLE {tablename} SET UNLOGGED;")
+        sql_queries.append(f"ALTER TABLE {tablename} INHERIT sources;")
 
     dbh.execute_sql_queries(sql_queries)
 
