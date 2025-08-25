@@ -7,19 +7,25 @@
 --------------------------------------------------------------------------------------------------------------------------
 
 
+
+
+----------------------------------------------------------------------------------------------------------
+----------------------------------------------------------------------------------------------------------
+----------------------------------------------------------------------------------------------------------
+-- Parent sources table for creating child tables, one for each combination of processing date and sca.
+-- Inheritance, for sources child tables only, is needed because a given source ID looked up in the
+-- merges table (see below) cannot be easily traced to the child table in which it is stored.
+-- No records are directly inserted into the parent table.
+--
+
+-- https://photutils.readthedocs.io/en/stable/api/photutils.psf.PSFPhotometry.html#photutils.psf.PSFPhotometry
+-- https://photutils.readthedocs.io/en/stable/api/photutils.detection.DAOStarFinder.html#photutils.detection.DAOStarFinder
+
 -----------------------------
 -- TABLE: Sources
 -----------------------------
 
 SET default_tablespace = pipeline_data_01;
-
--- https://photutils.readthedocs.io/en/stable/api/photutils.psf.PSFPhotometry.html#photutils.psf.PSFPhotometry
--- https://photutils.readthedocs.io/en/stable/api/photutils.detection.DAOStarFinder.html#photutils.detection.DAOStarFinder
-
--- Prototype sources table for creating like-tables, one for each combination of expid and sca.
--- Like-tables are NOT inherited from the prototype table
--- (and therefore terminology like "parent" and/or "child" is avoided in this schema).
--- No records are directly inserted into the prototype table.
 
 CREATE TABLE sources (
     sid bigint NOT NULL,                       -- Database unique primary key
@@ -82,17 +88,17 @@ ALTER TABLE sources SET UNLOGGED;
 
 
 ------------------------------------------------------------
--- A python script will create tables like the sources prototype table,
--- which is not the same thing as inheriting the prototype table.
--- Like-table names will be sources_<processing date: yyyymmdd>_<sca>.
+-- A python script will create child tables like the parent sources table.
+-- Child-table names will be sources_<processing date: yyyymmdd>_<sca>.
 -- The processing date is in Pacific time.
 -- Thus the partitioning scheme for sources is by time and chip number.
 
--- Below are all the steps to be executed by the Python script for each new like-table:
+-- Below are all the steps to be executed by the Python script for each new child table:
 
 -- SET default_tablespace = pipeline_data_01;
 -- CREATE TABLE sources_20250811_18 (LIKE sources INCLUDING DEFAULTS INCLUDING CONSTRAINTS);
 -- ALTER TABLE sources_20250811_18 SET UNLOGGED;
+-- ALTER TABLE sources_20250811_18 INHERIT sources;
 
 -- Data-loading step:
 -- Data is loaded into the table here...
@@ -104,7 +110,7 @@ ALTER TABLE sources SET UNLOGGED;
 -- CREATE INDEX sources_20250811_18_field_idx ON sources_20250811_18 (field);
 -- CREATE INDEX sources_20250811_18_mjdobs_idx ON sources_20250811_18 (mjdobs);
 
--- The following is not automatically created for the like-table just
+-- The following is not automatically created for the child table just
 -- because sid is a primary key in the prototype table.
 -- CREATE INDEX sources_20250811_18_sid_idx ON sources_20250811_18 (sid);
 
@@ -129,7 +135,7 @@ ALTER TABLE sources SET UNLOGGED;
 -- GRANT INSERT,UPDATE,SELECT,DELETE,TRUNCATE,TRIGGER,REFERENCES ON TABLE sources_20250811_18 TO rapidporole;
 
 -- Matching all sources by position between catalogs for two different observation times,
--- using a Q3C-library function (executed after 2 like-tables are available for cross matching):
+-- using a Q3C-library function (executed after 2 child tables are available for cross matching):
 -- E.g.,
 -- SELECT a.sid,b.sid
 -- FROM sources_20250811_18 AS a, sources_2_17 AS b
@@ -142,7 +148,18 @@ ALTER TABLE sources SET UNLOGGED;
 -- FROM Objects_1
 -- WHERE q3c_radial_query(ra, dec, ra_, dec_, radius_)
 -- ORDER by dist;
+------------------------------------------------------------
 
+
+
+
+----------------------------------------------------------------------------------------------------------
+----------------------------------------------------------------------------------------------------------
+----------------------------------------------------------------------------------------------------------
+-- Prototype merges and astroobjects tables for creating like-tables, one for each sky tile (a.k.a field).
+-- Like-tables are NOT inherited from the prototype table
+-- (and therefore terminology like "parent" and/or "child" is avoided for these tables).
+-- No records are directly inserted into the prototype tables.
 
 -----------------------------
 -- TABLE: Merges
@@ -269,4 +286,5 @@ CREATE INDEX astroobjects_nsources_idx ON astroobjects (nsources);
 -- FROM astroobjects_1
 -- WHERE q3c_radial_query(ra0, dec0, ra_, dec_, radius_)
 -- ORDER by dist;
+------------------------------------------------------------
 
