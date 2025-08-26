@@ -2967,7 +2967,7 @@ class RAPIDDB:
                         print("Nothing returned from database query; continuing...")
 
             except (Exception, psycopg2.DatabaseError) as error:
-                print('*** Error executing query ({query}); skipping...'.format(error))
+                print(f"*** Error executing query ({query}): {error}; quitting...")
                 self.exit_code = 67
                 return
 
