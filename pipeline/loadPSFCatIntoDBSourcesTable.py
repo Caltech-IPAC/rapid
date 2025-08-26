@@ -539,7 +539,7 @@ if __name__ == '__main__':
 
     # Index, cluster, and apply grants to sources database tables for all SCAs associated with processing date.
 
-    print("Indexing, clustering, and applying grantes to sources database tables for all SCAs associated with processing date...")
+    print("Indexing, clustering, and applying grants to sources database tables for all SCAs associated with processing date...")
 
     sql_queries = []
     sql_queries.append("SET default_tablespace = pipeline_indx_01;")
