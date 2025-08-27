@@ -57,7 +57,10 @@ CREATE TABLE sources (
     mjdobs double precision NOT NULL           -- MJD OBS of exposure
 );
 
-ALTER TABLE sources OWNER TO rapidadminrole;
+
+# Sources table must be owned by rapidporole for inheritance.
+#ALTER TABLE sources OWNER TO rapidadminrole;
+ALTER TABLE sources OWNER TO rapidporole;
 
 CREATE SEQUENCE sources_sid_seq
     START WITH 1
