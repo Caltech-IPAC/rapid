@@ -110,7 +110,8 @@ ppid = int(config_input['SCI_IMAGE']['ppid'])
 
 # Open database connections for parallel access.
 
-num_cores = os.cpu_count()
+#num_cores = os.cpu_count()
+num_cores = 1
 
 dbh_list = []
 
@@ -164,7 +165,7 @@ def run_single_core_job(jids,overlapping_fields_list,meta_list,index_thread):
         jid_from_dict = meta_dict["jid"]
 
         if jid != jid_from_dict:
-            fh.write(f"*** Error: jid is not equal to jid from meta dictionary; quitting...")
+            fh.write(f"*** Error: jid is not equal to jid from meta dictionary; quitting...\n")
             exit(64)
 
         expid = meta_dict["expid"]
@@ -227,7 +228,7 @@ def run_single_core_job(jids,overlapping_fields_list,meta_list,index_thread):
         joined_table_inner = join(psfcat_qtable, psfcat_finder_qtable, keys='id', join_type='inner')
 
         nrows = len(joined_table_inner)
-        fh.write("nrows in PSF-fit catalog =",nrows)
+        fh.write(f"nrows in PSF-fit catalog = {nrows}\n")
 
 
         # Define columns to be populated in sources tables.
@@ -356,7 +357,7 @@ def execute_parallel_processes(jids,rtids_list,meta_list,num_cores=None):
 
     with ProcessPoolExecutor(max_workers=num_cores) as executor:
         # Submit all tasks to the executor and store the futures in a list
-        futures = [executor.submit(run_single_core_job,jids,rtids_list,meta_list,thread_index) for thread_index in range(num_cores)]
+        futures = [executor.submit(para) for thread_index in range(num_cores)]
 
         # Iterate over completed futures and update progress
         for i, future in enumerate(as_completed(futures)):
@@ -526,8 +527,10 @@ if __name__ == '__main__':
     # of parallel threads equal to the number of cores on the job-launcher machine.
     ################################################################################
 
-    execute_parallel_processes(jid_list,overlapping_fields_list,meta_list,num_cores)
-
+    if num_cores > 1:
+        execute_parallel_processes(jid_list,overlapping_fields_list,meta_list,num_cores)
+    else:
+        run_single_core_job(jid_list,overlapping_fields_list,meta_list,0)
 
     # Code-timing benchmark.
 
