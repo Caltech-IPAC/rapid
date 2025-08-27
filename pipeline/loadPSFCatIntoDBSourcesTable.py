@@ -300,21 +300,21 @@ def run_single_core_job(jids,overlapping_fields_list,meta_list,index_thread):
                     num = str(row[cat_col])
 
                     if cat_col == 'pid':
-                        num = pid
+                        num = str(pid)
                     elif cat_col == 'field':
-                        num = field
+                        num = str(field)
                     elif cat_col == 'hp6':
-                        num = hp6
+                        num = str(hp6)
                     elif cat_col == 'hp9':
-                        num = hp9
+                        num = str(hp9)
                     elif cat_col == 'expid':
-                        num = expid
+                        num = str(expid)
                     elif cat_col == 'fid':
-                        num = fid
+                        num = str(fid)
                     elif cat_col == 'sca':
-                        num = sca
+                        num = str(sca)
                     elif cat_col == 'mjdobs':
-                        num = mjdobs
+                        num = str(mjdobs)
 
                     nums = nums + num + ","
 
