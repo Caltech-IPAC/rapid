@@ -297,6 +297,23 @@ def run_single_core_job(jids,overlapping_fields_list,meta_list,index_thread):
                     elif cat_col == 'fluxerr':
                         cat_col = 'flux_err'
 
+                    if cat_col == 'pid':
+                        continue
+                    if cat_col == 'field':
+                        continue
+                    if cat_col == 'hp6':
+                        continue
+                    if cat_col == 'hp9':
+                        continue
+                    if cat_col == 'expid':
+                        continue
+                    if cat_col == 'fid':
+                        continue
+                    if cat_col == 'sca':
+                        continue
+                    if cat_col == 'mjdobs':
+                        continue
+
                     num = str(row[cat_col])
                     nums = nums + num + ","
 
