@@ -235,7 +235,6 @@ def run_single_core_job(jids,overlapping_fields_list,meta_list,index_thread):
 
         cols = []
         cols.append(str("id"))
-        cols.append(str("pid"))
         cols.append(str("ra"))
         cols.append(str("dec"))
         cols.append(str("xfit"))
@@ -253,6 +252,7 @@ def run_single_core_job(jids,overlapping_fields_list,meta_list,index_thread):
         cols.append(str("roundness2"))
         cols.append(str("npix"))
         cols.append(str("peak"))
+        cols.append(str("pid"))
         cols.append(str("field"))
         cols.append(str("hp6"))
         cols.append(str("hp9"))
@@ -298,25 +298,24 @@ def run_single_core_job(jids,overlapping_fields_list,meta_list,index_thread):
                         cat_col = 'x_err'
 
                     num = str(row[cat_col])
-
-                    if cat_col == 'pid':
-                        num = str(pid)
-                    elif cat_col == 'field':
-                        num = str(field)
-                    elif cat_col == 'hp6':
-                        num = str(hp6)
-                    elif cat_col == 'hp9':
-                        num = str(hp9)
-                    elif cat_col == 'expid':
-                        num = str(expid)
-                    elif cat_col == 'fid':
-                        num = str(fid)
-                    elif cat_col == 'sca':
-                        num = str(sca)
-                    elif cat_col == 'mjdobs':
-                        num = str(mjdobs)
-
                     nums = nums + num + ","
+
+                num = str(pid)
+                nums = nums + num + ","
+                num = str(field)
+                nums = nums + num + ","
+                num = str(hp6)
+                nums = nums + num + ","
+                num = str(hp9)
+                nums = nums + num + ","
+                num = str(expid)
+                nums = nums + num + ","
+                num = str(fid)
+                nums = nums + num + ","
+                num = str(sca)
+                nums = nums + num + ","
+                num = str(mjdobs)
+                nums = nums + num + ","
 
                 # Slice the string to get all but the last character, then add the newline character
                 new_character = "\n"
