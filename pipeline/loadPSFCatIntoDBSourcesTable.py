@@ -297,7 +297,7 @@ def run_single_core_job(jids,overlapping_fields_list,meta_list,index_thread):
                     elif cat_col == 'xerr':
                         cat_col = 'x_err'
 
-                    num = row[cat_col]
+                    num = str(row[cat_col])
 
                     if cat_col == 'pid':
                         num = pid
