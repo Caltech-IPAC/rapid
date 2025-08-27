@@ -292,10 +292,10 @@ def run_single_core_job(jids,overlapping_fields_list,meta_list,index_thread):
                         cat_col = 'flux_fit'
                     elif cat_col == 'xerr':
                         cat_col = 'x_err'
-                    elif cat_col == 'xerr':
-                        cat_col = 'x_err'
-                    elif cat_col == 'xerr':
-                        cat_col = 'x_err'
+                    elif cat_col == 'yerr':
+                        cat_col = 'y_err'
+                    elif cat_col == 'fluxerr':
+                        cat_col = 'flux_err'
 
                     num = str(row[cat_col])
                     nums = nums + num + ","
