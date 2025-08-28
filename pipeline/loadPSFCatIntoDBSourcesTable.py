@@ -194,7 +194,7 @@ def run_single_core_job(jids,overlapping_fields_list,meta_list,index_thread):
 
         # Download ZOGY-difference-image PSF-fit catalog file from S3 bucket.
 
-        output_psfcat_filename_for_jid = output_psfcat_filename.replace(".txt",f"_jid{}jid.txt")
+        output_psfcat_filename_for_jid = output_psfcat_filename.replace(".txt",f"_jid{jid}.txt")
 
         s3_full_name_psfcat_file = "s3://" + product_s3_bucket_base + "/" + proc_date + '/jid' + str(jid) + "/" +  output_psfcat_filename
         ret_filename,subdirs_done,downloaded_from_bucket = util.download_file_from_s3_bucket(s3_client,
@@ -208,7 +208,7 @@ def run_single_core_job(jids,overlapping_fields_list,meta_list,index_thread):
 
         # Download ZOGY-difference-image PSF-fit finder catalog file from S3 bucket.
 
-        output_psfcat_finder_filename_for_jid = output_psfcat_finder_filename.replace(".txt",f"_jid{}jid.txt")
+        output_psfcat_finder_filename_for_jid = output_psfcat_finder_filename.replace(".txt",f"_jid{jid}.txt")
 
         s3_full_name_psfcat_finder_file = "s3://" + product_s3_bucket_base + "/" + proc_date + '/jid' + str(jid) + "/" +  output_psfcat_finder_filename
         ret_filename,subdirs_done,downloaded_from_bucket = util.download_file_from_s3_bucket(s3_client,
