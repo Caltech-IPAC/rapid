@@ -117,8 +117,6 @@ ALTER TABLE sources SET UNLOGGED;
 -- because sid is a primary key in the prototype table.
 -- CREATE INDEX sources_20250811_18_sid_idx ON sources_20250811_18 (sid);
 
--- ALTER TABLE ONLY sources_20250811_18 ADD CONSTRAINT sourcespk_1 UNIQUE (ra, dec);
-
 -- CREATE INDEX sources_20250811_18_radec_idx ON sources_20250811_18 (q3c_ang2ipix(ra, dec));
 -- CLUSTER sources_20250811_18_radec_idx ON sources_20250811_18;
 -- ANALYZE sources_20250811_18;
