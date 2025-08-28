@@ -110,8 +110,7 @@ ppid = int(config_input['SCI_IMAGE']['ppid'])
 
 # Open database connections for parallel access.
 
-#num_cores = os.cpu_count()
-num_cores = 1
+num_cores = os.cpu_count()
 
 dbh_list = []
 
@@ -372,7 +371,7 @@ def execute_parallel_processes(jids,rtids_list,meta_list,num_cores=None):
 
     with ProcessPoolExecutor(max_workers=num_cores) as executor:
         # Submit all tasks to the executor and store the futures in a list
-        futures = [executor.submit(para) for thread_index in range(num_cores)]
+        futures = [executor.submit(run_single_core_job,jids,rtids_list,meta_list,thread_index) for thread_index in range(num_cores)]
 
         # Iterate over completed futures and update progress
         for i, future in enumerate(as_completed(futures)):
@@ -545,7 +544,8 @@ if __name__ == '__main__':
     if num_cores > 1:
         execute_parallel_processes(jid_list,overlapping_fields_list,meta_list,num_cores)
     else:
-        run_single_core_job(jid_list,overlapping_fields_list,meta_list,0)
+        thread_index = 0
+        run_single_core_job(jid_list,overlapping_fields_list,meta_list,thread_index)
 
     # Code-timing benchmark.
 
@@ -564,7 +564,6 @@ if __name__ == '__main__':
 
     for sca in scas_list:
 
-        sql_queries.append(f"ALTER TABLE ONLY sources_{proc_date}_{sca} ADD CONSTRAINT sourcespk_{proc_date}_{sca} UNIQUE (ra, dec);")
         sql_queries.append(f"CREATE INDEX sources_{proc_date}_{sca}_pid_idx ON sources_{proc_date}_{sca} (pid);")
         sql_queries.append(f"CREATE INDEX sources_{proc_date}_{sca}_expid_idx ON sources_{proc_date}_{sca} (expid);")
         sql_queries.append(f"CREATE INDEX sources_{proc_date}_{sca}_sca_idx ON sources_{proc_date}_{sca} (sca);")
