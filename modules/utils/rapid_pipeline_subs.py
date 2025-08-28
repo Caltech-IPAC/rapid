@@ -214,34 +214,35 @@ def download_file_from_s3_bucket(s3_client,s3_full_name,outputfile=None):
         print("*** Error: Could not parse s3_full_name; quitting...")
         exit(64)
 
-    if outputfile is None:
 
-        if "/" in s3_object_name:
-            string_match2 = re.match(r"(.+)/(.+)", s3_object_name)                 # TODO
+    if "/" in s3_object_name:
+        string_match2 = re.match(r"(.+)/(.+)", s3_object_name)                 # TODO
 
-            try:
-                subdirs = string_match2.group(1)
-                filename = string_match2.group(2)
-                print("download_file_from_s3_bucket: filename = {}".format(filename))
+        try:
+            subdirs = string_match2.group(1)
+            filename = string_match2.group(2)
+            print("download_file_from_s3_bucket: filename = {}".format(filename))
 
-            except:
-                print("*** Error: Could not parse s3_object_name (with subdirs); quitting...")
-                exit(64)
-        else:
-            string_match2 = re.match(r"(.+)", s3_object_name)                 # TODO
-
-            try:
-                subdirs = None
-                filename = string_match2.group(1)
-
-            except:
-                print("*** Error: Could not parse s3_object_name (without subdirs); quitting...")
-                exit(64)
-
+        except:
+            print("*** Error: Could not parse s3_object_name (with subdirs); quitting...")
+            exit(64)
     else:
+        string_match2 = re.match(r"(.+)", s3_object_name)                 # TODO
+
+        try:
+            subdirs = None
+            filename = string_match2.group(1)
+            print("download_file_from_s3_bucket: filename = {}".format(filename))
+
+        except:
+            print("*** Error: Could not parse s3_object_name (without subdirs); quitting...")
+            exit(64)
+
+
+    if outputfile is not None:
         filename = outputfile
 
-    print("download_file_from_s3_bucket: filename = {}".format(filename))
+    print("download_file_from_s3_bucket: output filename = {}".format(filename))
 
 
     # Download S3 object from associated S3 bucket.
