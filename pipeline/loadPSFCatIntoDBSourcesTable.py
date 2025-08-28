@@ -130,6 +130,42 @@ for i in range(num_cores):
 s3_client = boto3.client('s3')
 
 
+# Define columns to be populated in sources tables.
+
+cols = []
+cols.append("id")
+cols.append("ra")
+cols.append("dec")
+cols.append("xfit")
+cols.append("yfit")
+cols.append("fluxfit")
+cols.append("xerr")
+cols.append("yerr")
+cols.append("fluxerr")
+cols.append("npixfit")
+cols.append("qfit")
+cols.append("cfit")
+cols.append("flags")
+cols.append("sharpness")
+cols.append("roundness1")
+cols.append("roundness2")
+cols.append("npix")
+cols.append("peak")
+cols.append("pid")
+cols.append("field")
+cols.append("hp6")
+cols.append("hp9")
+cols.append("expid")
+cols.append("fid")
+cols.append("sca")
+cols.append("mjdobs")
+
+cols_comma_separated_string = ", ".join(cols)
+columns = tuple(cols)
+
+print(f"Sources columns: {cols_comma_separated_string}")
+
+
 #-------------------------------------------------------------------------------------------------------------
 # Custom methods for parallel processing, taking advantage of multiple cores on the job-launcher machine.
 #-------------------------------------------------------------------------------------------------------------
@@ -231,40 +267,6 @@ def run_single_core_job(jids,overlapping_fields_list,meta_list,index_thread):
         fh.write(f"nrows in PSF-fit catalog = {nrows}\n")
 
 
-        # Define columns to be populated in sources tables.
-
-        cols = []
-        cols.append(str("id"))
-        cols.append(str("ra"))
-        cols.append(str("dec"))
-        cols.append(str("xfit"))
-        cols.append(str("yfit"))
-        cols.append(str("fluxfit"))
-        cols.append(str("xerr"))
-        cols.append(str("yerr"))
-        cols.append(str("fluxerr"))
-        cols.append(str("npixfit"))
-        cols.append(str("qfit"))
-        cols.append(str("cfit"))
-        cols.append(str("flags"))
-        cols.append(str("sharpness"))
-        cols.append(str("roundness1"))
-        cols.append(str("roundness2"))
-        cols.append(str("npix"))
-        cols.append(str("peak"))
-        cols.append(str("pid"))
-        cols.append(str("field"))
-        cols.append(str("hp6"))
-        cols.append(str("hp9"))
-        cols.append(str("expid"))
-        cols.append(str("fid"))
-        cols.append(str("sca"))
-        cols.append(str("mjdobs"))
-
-        cols_comma_separated_string = ", ".join(cols)
-        fh.write(f"Sources columns: {cols_comma_separated_string}")
-
-
         # Here are what the columns in the photutils catalogs are called:
         # Main: id group_id group_size local_bkg x_init y_init flux_init x_fit y_fit flux_fit x_err y_err flux_err npixfit qfit cfit flags ra dec
         # Finder: id xcentroid ycentroid sharpness roundness1 roundness2 npix peak flux mag daofind_mag
@@ -343,10 +345,7 @@ def run_single_core_job(jids,overlapping_fields_list,meta_list,index_thread):
 
         # Load records into sources database tables.
 
-        sql_queries = []
-        sql_query = "\\COPY " + sources_table + f" ({cols_comma_separated_string}) FROM '" + sources_table_file + "' WITH (FORMAT CSV);\n"
-        sql_queries.append(sql_query)
-        dbh.execute_sql_queries(sql_queries)
+        dbh.copy_sources_data_from_file_into_database(sources_table_file,sources_table,columns)
 
 
         # Touch done file.  Upload done file to S3 bucket.
@@ -594,12 +593,18 @@ if __name__ == '__main__':
     start_time_benchmark = end_time_benchmark
 
 
-    # Close database connection.
+    # Close database connections.
 
     dbh.close()
 
     if dbh.exit_code >= 64:
         exit(dbh.exit_code)
+
+    for tdfh in dbh_list:
+        tdfh.close()
+
+        if tdbh.exit_code >= 64:
+            exit(tdbh.exit_code)
 
 
     # Termination.
