@@ -200,21 +200,21 @@ def download_file_from_s3_bucket(s3_client,s3_full_name,outputfile=None):
     and will be parsed for the s3 bucket name, object name, and filename.  Return filename, s3_subdirs, and boolean if successful.
     '''
 
+    # Parse full name.
+
+    string_match = re.match(r"s3://(.+?)/(.+)", s3_full_name)              # TODO
+
+    try:
+        s3_bucket_name = string_match.group(1)
+        s3_object_name = string_match.group(2)
+        print("download_file_from_s3_bucket: s3_bucket_name = {}, s3_object_name = {}".\
+            format(s3_bucket_name,s3_object_name))
+
+    except:
+        print("*** Error: Could not parse s3_full_name; quitting...")
+        exit(64)
+
     if outputfile is None:
-
-        # Parse full name.
-
-        string_match = re.match(r"s3://(.+?)/(.+)", s3_full_name)              # TODO
-
-        try:
-            s3_bucket_name = string_match.group(1)
-            s3_object_name = string_match.group(2)
-            print("download_file_from_s3_bucket: s3_bucket_name = {}, s3_object_name = {}".\
-                format(s3_bucket_name,s3_object_name))
-
-        except:
-            print("*** Error: Could not parse s3_full_name; quitting...")
-            exit(64)
 
         if "/" in s3_object_name:
             string_match2 = re.match(r"(.+)/(.+)", s3_object_name)                 # TODO
@@ -233,7 +233,6 @@ def download_file_from_s3_bucket(s3_client,s3_full_name,outputfile=None):
             try:
                 subdirs = None
                 filename = string_match2.group(1)
-                print("download_file_from_s3_bucket: filename = {}".format(filename))
 
             except:
                 print("*** Error: Could not parse s3_object_name (without subdirs); quitting...")
@@ -241,6 +240,8 @@ def download_file_from_s3_bucket(s3_client,s3_full_name,outputfile=None):
 
     else:
         filename = outputfile
+
+    print("download_file_from_s3_bucket: filename = {}".format(filename))
 
 
     # Download S3 object from associated S3 bucket.
