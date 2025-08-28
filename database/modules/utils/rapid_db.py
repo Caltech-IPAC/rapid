@@ -2975,3 +2975,38 @@ class RAPIDDB:
             self.conn.commit()           # Commit database transaction
 
         return records
+
+
+########################################################################################################
+
+    def copy_sources_data_from_file_into_database(self,csv_file_path,table_name,columns):
+
+        '''
+        Copy sources data from file into sources child database table.
+        '''
+
+        self.exit_code = 0
+
+        separator = ","
+        null_string = "\\N" # Default for PostgreSQL COPY
+
+        print('csv_file_path = {}'.format(csv_file_path))
+        print('table_name = {}'.format(table_name))
+
+
+        # Open the CSV file in read mode
+
+        try:
+
+            with open(csv_file_path, 'r') as f:
+
+                self.cur.copy_from(f, table_name, sep=separator, null=null_string, columns=columns)
+
+            self.conn.commit()           # Commit database transaction
+
+        except (Exception, psycopg2.DatabaseError) as error:
+            print('*** Error sources data from file ({}) into sources child database table ({}); skipping...'.format(csv_file_path,table_name))
+            self.exit_code = 67
+            return
+
+        return None
