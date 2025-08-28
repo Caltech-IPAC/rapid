@@ -466,7 +466,7 @@ if __name__ == '__main__':
         meta_dict["hp6"] = hp6
         meta_dict["hp9"] = hp9
         meta_dict["mjdobs"] = mjdobs
-        meta_dict["mjdobs"] = pid
+        meta_dict["pid"] = pid
 
 
         # Get field numbers (rtids) of all sky tiles containing sky positions
