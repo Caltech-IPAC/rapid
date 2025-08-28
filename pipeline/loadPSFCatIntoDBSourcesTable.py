@@ -599,8 +599,8 @@ if __name__ == '__main__':
     if dbh.exit_code >= 64:
         exit(dbh.exit_code)
 
-    for tdfh in dbh_list:
-        tdfh.close()
+    for tdbh in dbh_list:
+        tdbh.close()
 
         if tdbh.exit_code >= 64:
             exit(tdbh.exit_code)
