@@ -175,7 +175,7 @@ def run_single_core_job(jids,overlapping_fields_list,meta_list,index_thread):
         hp6 = meta_dict["hp6"]
         hp9 = meta_dict["hp9"]
         mjdobs = meta_dict["mjdobs"]
-        pid = meta_dict["mjdobs"]
+        pid = meta_dict["pid"]
 
         fh.write(f"Loop start: index_job,jid,overlapping_fields = {index_job},{jid},{overlapping_fields}\n")
 
@@ -344,7 +344,7 @@ def run_single_core_job(jids,overlapping_fields_list,meta_list,index_thread):
         # Load records into sources database tables.
 
         sql_queries = []
-        sql_query = "COPY " + sources_table + f" ({cols_comma_separated_string}) FROM '" + sources_table_file + "' WITH (FORMAT CSV);\n"
+        sql_query = "\\COPY " + sources_table + f" ({cols_comma_separated_string}) FROM '" + sources_table_file + "' WITH (FORMAT CSV);\n"
         sql_queries.append(sql_query)
         dbh.execute_sql_queries(sql_queries)
 
