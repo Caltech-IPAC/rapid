@@ -3010,3 +3010,100 @@ class RAPIDDB:
             return
 
         return None
+
+
+########################################################################################################
+
+    def add_astro_object(self,ra0,dec0,mag0,meanra,stdevra,meandec,stdevdec,meanmag,stdevmag,nsources,field,hp6,hp9):
+
+        '''
+        Add record to AstroObjects database table.
+        '''
+
+        self.exit_code = 0
+
+
+        # Define query template.
+
+        query_template =\
+            "select aid from addAstroObjects(" +\
+            "cast('TEMPLATE_RA0' as double precision)," +\
+            "cast('TEMPLATE_DEC0' as double precision)," +\
+            "cast('TEMPLATE_MAG0' as real)," +\
+            "cast('TEMPLATE_MEANRA' as double precision)," +\
+            "cast('TEMPLATE_STDEVRA' as real)," +\
+            "cast('TEMPLATE_MEANDEC' as double precision)," +\
+            "cast('TEMPLATE_STDEVDEC' as real)," +\
+            "cast('TEMPLATE_MEANMAG' as real)," +\
+            "cast('TEMPLATE_STDEVMAG' as real)," +\
+            "cast('TEMPLATE_NSOURCES' as smallint)," +\
+            "cast('TEMPLATE_FIELD' as integer)," +\
+            "cast('TEMPLATE_HP6' as integer)," +\
+            "cast('TEMPLATE_HP9' as integer)) as aid;"
+
+
+        # Query database.
+
+        print(f"----> ra0 = {ra0}")
+        print(f"----> dec0 = {dec0}")
+        print(f"----> mag0 = {mag0}")
+        print(f"----> meanra = {meanra}")
+        print(f"----> stdevra = {stdevra}")
+        print(f"----> meandec = {meandec}")
+        print(f"----> stdevdec = {stdevdec}")
+        print(f"----> meanmag = {meanmag}")
+        print(f"----> stdevmag = {stdevmag}")
+        print(f"----> nsources = {nsources}")
+        print(f"----> field = {field}")
+        print(f"----> hp6 = {hp6}")
+        print(f"----> hp9 = {hp9}")
+
+        ra0_str = str(ra0)
+        dec0_str = str(dec0)
+        mag0_str = str(mag0)
+        meanra_str = str(meanra)
+        stdevra_str = str(stdevra)
+        meandec_str = str(meandec)
+        stdevdec_str = str(stdevdec)
+        meanmag_str = str(meanmag)
+        stdevmag_str = str(stdevmag)
+        nsources_str = str(nsources)
+        field_str = str(field)
+        hp6_str = str(hp6)
+        hp9_str = str(hp9)
+
+        rep = {"TEMPLATE_FIELD": field_str,
+               "TEMPLATE_HP6": hp6_str,
+               "TEMPLATE_HP9": hp9_str}
+
+        rep["TEMPLATE_RA0"] = ra0_str
+        rep["TEMPLATE_DEC0"] = dec0_str
+        rep["TEMPLATE_MAG0"] = mag0_str
+        rep["TEMPLATE_MEANRA"] = meanra_str
+        rep["TEMPLATE_STDEVRA"] = stdevra_str
+        rep["TEMPLATE_MEANDEC"] = meandec_str
+        rep["TEMPLATE_STDEVDEC"] = stdevdec_str
+        rep["TEMPLATE_MEANMAG"] = meanmag_str
+        rep["TEMPLATE_STDEVMAG"] = stdevmag_str
+        rep["TEMPLATE_NSOURCES"] = nsources_str
+
+        rep = dict((re.escape(k), v) for k, v in rep.items())
+        pattern = re.compile("|".join(rep.keys()))
+        query = pattern.sub(lambda m: rep[re.escape(m.group(0))], query_template)
+
+        print('query = {}'.format(query))
+
+        self.cur.execute(query)
+        record = self.cur.fetchone()
+
+        if record is not None:
+            aid = record[0]
+        else:
+            print("*** Error: Could not insert AstroObjects record; returning...")
+            self.exit_code = 67
+            return
+
+        if self.exit_code == 0:
+            self.conn.commit()           # Commit database transaction
+
+        return aid
