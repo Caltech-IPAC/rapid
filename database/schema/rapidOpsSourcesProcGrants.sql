@@ -22,3 +22,9 @@ grant EXECUTE on FUNCTION addAstroObjects (
     hp6_                  integer,
     hp9_                  integer
 ) to rapidporole;
+
+
+grant EXECUTE on FUNCTION registerMerge (
+    aid_ integer,
+    sid_ integer
+) to rapidporole;

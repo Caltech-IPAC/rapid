@@ -78,5 +78,47 @@ create function addAstroObjects (
 $$ language plpgsql;
 
 
+-- Insert a new record into the Merges table, if record is not found.
+--
+create function registerMerge (
+    aid_ integer,
+    sid_ integer
+)
+    returns void as $$
+
+    declare
+
+        aid__  integer;
+
+    begin
+
+        select aid
+        into aid__
+        from Merges
+        where aid = aid_
+        and sid = sid_;
+
+        if not found then
+
+            begin
+
+                insert into Merges
+                (aid, sid)
+                values
+                (aid_, sid_);
+                exception
+                    when no_data_found then
+                        raise exception
+                            '*** Error in registerMerge: Merges record for aid=%, sid=% not inserted.', aid_, sid_;
+
+            end;
+
+        end if;
+
+    end;
+
+$$ language plpgsql;
+
+
 
 

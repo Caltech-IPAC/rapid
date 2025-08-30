@@ -22,3 +22,9 @@ DROP FUNCTION addAstroObjects (
     hp6_                  integer,
     hp9_                  integer
 );
+
+
+DROP FUNCTION registerMerge (
+    aid_ integer,
+    sid_ integer
+);
