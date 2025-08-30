@@ -3107,3 +3107,59 @@ class RAPIDDB:
             self.conn.commit()           # Commit database transaction
 
         return aid
+
+
+########################################################################################################
+
+    def register_merge(self,aid,sid):
+
+        '''
+        Insert record in Merges database table.
+        '''
+
+        self.exit_code = 0
+
+
+        # Define query template.
+
+        query_template =\
+            "select * from registerMerge(" +\
+            "cast(TEMPLATE_AID as integer)," +\
+            "cast(TEMPLATE_SID AS integer));"
+
+
+        # Query database.
+
+        print('----> aid = {}'.format(aid))
+        print('----> sid = {}'.format(sid))
+
+        rep = {"TEMPLATE_AID": str(aid)}
+
+        rep["TEMPLATE_SID"] = str(sid)
+
+
+        rep = dict((re.escape(k), v) for k, v in rep.items())
+        pattern = re.compile("|".join(rep.keys()))
+        query = pattern.sub(lambda m: rep[re.escape(m.group(0))], query_template)
+
+        print('query = {}'.format(query))
+
+
+        # Execute query.
+
+        try:
+            self.cur.execute(query)
+
+            try:
+                for record in self.cur:
+                    print(record)
+            except:
+                    print("Nothing returned from database stored function; continuing...")
+
+        except (Exception, psycopg2.DatabaseError) as error:
+            print('*** Error inserting Merges record ({}); skipping...'.format(error))
+            self.exit_code = 67
+            return
+
+        if self.exit_code == 0:
+            self.conn.commit()           # Commit database transaction
