@@ -1961,7 +1961,7 @@ class RAPIDDB:
                     print("Nothing returned from database stored function; continuing...")
 
         except (Exception, psycopg2.DatabaseError) as error:
-            print('*** Error inserting or updating RefImImages record ({}); skipping...'.format(error))
+            print('*** Error inserting RefImImages record ({}); skipping...'.format(error))
             self.exit_code = 67
             return
 
