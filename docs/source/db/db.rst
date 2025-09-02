@@ -186,21 +186,25 @@ Source Matching
 Three basic PostgreSQL tables are used for source matching psf-fit catalogs
 made by the Python photutils package from the ZOGY difference images:
 
-* Sources
-* Merges
-* AstroObjects
+* Sources (extracted/selected from catalogs)
+* AstroObjects (astronomical objects for which time-dependent sources form light curves)
+* Merges (associations between Sources and AstroObjects)
 
 A diagram of the source-matching database-table schema is given as follows:
 
 .. image:: source_matching.png
 
 As indicated in the diagram, there will be several Sources tables
-named differently (according to the indicated parameters).
+named differently (according to the specified parameters).
 Same for Merges and AstroObjects tables.
 This is to partition the data into manageable chunks.
 The partitioning schemes for these tables are discussed below in more detail.
 
-Database-table inheritance is or can be used to tie child tables to the parent table.
+The parent or prototype tables will have the generic names: Sources, Merges, and AstroObjects.
+No actual records will stored here.
+
+Database-table inheritance is or can be used to tie child tables, which store the actual records,
+to the parent table.
 At this time, only the Sources tables utilize inheritance.  This is because the source ID
 in the Merges table can be most easily associated with a record in the correct child-table name
 by querying the Sources parent table.
@@ -218,7 +222,7 @@ necessarily in observation-date-time order.
 AstroObjects tables are created for each Roman-tessellation sky tile.
 Merges tables are also created for each Roman-tessellation sky tile.
 Thus the partitioning scheme for astronomical objects and associated cross-matching with
-sources (merges) is by sky position.
+sources (via Merges tables) are by sky position.
 
 Sources and AstroObjects tables are cross-matched for the appropriate partitions,
 in observation-date-time order, using the join function from the Q3C PostgreSQL-extension,
@@ -231,3 +235,7 @@ A given Sources child table can contain records for different fields, filters, a
 Therefore, for bootstrapping records in the AstroObjects tables, a given Sources child table
 will have to be cross-matched with itself, as well as with other Sources child tables
 with the same processing date (all SCAs).
+
+Source matching will be done in parallel by field and possibly fid.  Thus multiple cores
+on the database-server machine will be utilized, and scaling up the architecture is possible
+by moving the database server to a machine with more cores and memory (if it can be afforded).
