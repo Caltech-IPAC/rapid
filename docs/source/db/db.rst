@@ -194,10 +194,21 @@ A diagram of the source-matching database-table schema is given as follows:
 
 .. image:: source_matching.png
 
-A sources table is created for each processing date and SCA.
+As indicated in the diagram, there will be several Sources tables
+named differently (according to the indicated parameters).
+Same for Merges and AstroObjects tables.
+This is to partition the data into manageable chunks.
+The partitioning scheme for these tables are discussed below in more detail.
+
+Database-table inheritance is or can be used to tie child tables to the parent table.
+At this time, only the Sources tables utilize inheritance.  This is because the source ID
+in the Merges table can be most easily associated with a record in the correct child-table name
+by querying the Sources parent table.
+
+A Sources child table is created for each processing date and SCA.
 Thus the partitioning scheme for sources is by time and chip number.
 This design strikes a balance between partitioning for parallel processing
-and non-proliferation of sources tables.  It is anticipated that most of
+and non-proliferation of Sources tables.  It is anticipated that most of
 sources to be matched are spurious, and so this partitioning scheme will
 have to be reassessed after the actual number of sources involved can be
 better estimated.
@@ -209,10 +220,13 @@ Merges tables are also created for each Roman-tessellation sky tile.
 Thus the partitioning scheme for astronomical objects and associated cross-matching with
 sources (merges) is by sky position.
 
-Sources and AstroObjects tables are cross matched for the appropriate partitions,
+Sources and AstroObjects tables are cross-matched for the appropriate partitions,
 in observation-date-time order, using the join function from the Q3C PostgreSQL-extension,
 and records in the associated Merges tables are populated.
 
 .. note::
    Sources that are NOT matched become new records in the AstroObjects tables.
 
+A given Sources child table can contain records for different fields, filters, and exposures.
+Therefore, it will have to be cross-matched with itself, as well as with other Sources child
+tables with the same processing date (all SCAs).
