@@ -1575,7 +1575,7 @@ if __name__ == '__main__':
 
             input_img_filename = filename_sfftdiffimage
             input_unc_filename = filename_sfftdiffimage_unc
-            input_psf_filename = filename_refimage_psf
+            input_psf_filename = filename_refimage_psf                                                      # TODO
             output_psfcat_filename = psfcat_diffimage_dict["output_sfft_psfcat_filename"]
             output_psfcat_finder_filename = psfcat_diffimage_dict["output_sfft_psfcat_finder_filename"]
             output_psfcat_residual_filename = psfcat_diffimage_dict["output_sfft_psfcat_residual_filename"]
