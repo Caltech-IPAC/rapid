@@ -225,7 +225,7 @@ Thus the partitioning scheme for astronomical objects and associated cross-match
 sources (via Merges tables) are by sky position.
 
 Sources and AstroObjects tables are cross-matched for the appropriate partitions,
-in observation-date-time order, using the join function from the Q3C PostgreSQL-extension,
+in processing-date-time order, using the join function from the Q3C-library PostgreSQL extension,
 and records in the associated Merges tables are populated.
 
 .. note::
