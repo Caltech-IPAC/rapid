@@ -198,7 +198,7 @@ As indicated in the diagram, there will be several Sources tables
 named differently (according to the indicated parameters).
 Same for Merges and AstroObjects tables.
 This is to partition the data into manageable chunks.
-The partitioning scheme for these tables are discussed below in more detail.
+The partitioning schemes for these tables are discussed below in more detail.
 
 Database-table inheritance is or can be used to tie child tables to the parent table.
 At this time, only the Sources tables utilize inheritance.  This is because the source ID
@@ -228,5 +228,6 @@ and records in the associated Merges tables are populated.
    Sources that are NOT matched become new records in the AstroObjects tables.
 
 A given Sources child table can contain records for different fields, filters, and exposures.
-Therefore, it will have to be cross-matched with itself, as well as with other Sources child
-tables with the same processing date (all SCAs).
+Therefore, for bootstrapping records in the AstroObjects tables, a given Sources child table
+will have to be cross-matched with itself, as well as with other Sources child tables
+with the same processing date (all SCAs).
