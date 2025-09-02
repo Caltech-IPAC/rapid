@@ -172,10 +172,10 @@ The DiffImMeta database table stores various QA measures for difference images.
 | dyrmsfin           | Final RMS of matched-isolated-source separations along y axis, fed to ZOGY [pixels]       |
 +--------------------+-------------------------------------------------------------------------------------------+
 | dxmedianfin        | Final median of matched-isolated-source separations along x axis [pixels],                |
-|                    | used to orthogonally subpixel offset reference-image data for ZOGY alignment              |
+|                    | used to orthogonally subpixel offset reference-image data for difference-image alignment  |
 +--------------------+-------------------------------------------------------------------------------------------+
 | dymedianfin        | Final median of matched-isolated-source separations along y axis [pixels],                |
-|                    | used to orthogonally subpixel offset reference-image data for ZOGY alignment              |
+|                    | used to orthogonally subpixel offset reference-image data for difference-image alignment  |
 +--------------------+-------------------------------------------------------------------------------------------+
 
 
