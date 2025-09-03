@@ -2958,6 +2958,8 @@ class RAPIDDB:
                     records = []
                     nrecs = 0
                     for record in self.cur:
+                        if nrecs == 0:
+                            print("From execute_sql_queries: record =",record)
                         records.append(record)
                         nrecs += 1
 
