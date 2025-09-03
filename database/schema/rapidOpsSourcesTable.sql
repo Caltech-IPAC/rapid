@@ -246,7 +246,7 @@ CREATE INDEX astroobjects_nsources_idx ON astroobjects (nsources);
 
 -- The following is not automatically created for the astroobjects like-table just
 -- because aid is a primary key in the astroobjects prototype table.
--- CREATE INDEX astroobjects_1_aid_idx ON astroobjects_18 (aid);
+-- CREATE INDEX astroobjects_1_aid_idx ON astroobjects_1 (aid);
 
 -- ALTER TABLE ONLY astroobjects_1 ADD CONSTRAINT astroobjectspk_1 UNIQUE (ra0, dec0);
 
@@ -260,7 +260,7 @@ CREATE INDEX astroobjects_nsources_idx ON astroobjects (nsources);
 -- REVOKE ALL ON TABLE astroobjects_1 FROM rapidreadrole;
 -- GRANT SELECT ON TABLE astroobjects_1 TO GROUP rapidreadrole;
 
---Grants for rapidadminrole
+-- Grants for rapidadminrole
 -- REVOKE ALL ON TABLE merges_1 FROM rapidadminrole;
 -- GRANT ALL ON TABLE merges_1 TO GROUP rapidadminrole;
 -- REVOKE ALL ON TABLE astroobjects_1 FROM rapidadminrole;
