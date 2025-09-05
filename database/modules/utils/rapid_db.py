@@ -3196,19 +3196,19 @@ class RAPIDDB:
             f"             hp9" +\
             f"            )" +\
             f"            values" +\
-            f"            ({ra0}" +\
-            f"             {dec0}" +\
-            f"             {mag0}" +\
-            f"             {meanra}" +\
-            f"             {stdevra}" +\
-            f"             {meandec}" +\
-            f"             {stdevdec}" +\
-            f"             {meanmag}" +\
-            f"             {stdevmag}" +\
-            f"             {nsources}" +\
-            f"             {field}" +\
-            f"             {hp6}" +\
-            f"             {hp9})" +\
+            f"            ({str(ra0)}" +\
+            f"             {str(dec0)}" +\
+            f"             {str(mag0)}" +\
+            f"             {str(meanra)}" +\
+            f"             {str(stdevra)}" +\
+            f"             {str(meandec)}" +\
+            f"             {str(stdevdec)}" +\
+            f"             {str(meanmag)}" +\
+            f"             {str(stdevmag)}" +\
+            f"             {str(nsources)}" +\
+            f"             {str(field)}" +\
+            f"             {str(hp6)}" +\
+            f"             {str(hp9)})" +\
             f"             RETURNING aid;"
 
         print('query = {}'.format(query))
@@ -3249,8 +3249,8 @@ class RAPIDDB:
             f"             sid" +\
             f"            )" +\
             f"            values" +\
-            f"            ({aid}," +\
-            f"             {sid})" +\
+            f"            ({str(aid)}," +\
+            f"             {str(sid)})" +\
             f"             RETURNING aid;"
 
         print('query = {}'.format(query))
