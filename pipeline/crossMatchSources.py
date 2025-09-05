@@ -157,11 +157,17 @@ print(f"AstroObjects columns: {cols_comma_separated_string}")
 # Custom methods for parallel processing, taking advantage of multiple cores on the job-launcher machine.
 #-------------------------------------------------------------------------------------------------------------
 
-def run_single_core_job(jids,overlapping_fields_list,meta_list,index_thread):
+def run_single_core_job(scas,fields,meta_list,index_thread):
 
-    njobs = len(jids)
+    '''
+    The current list of fields does NOT necessarily include ALL adjacent fields, so that
+    source-matching near field boundaries may not pick up all potential light-curve data points.
+    This will be rectified later.
+    '''
 
-    print("index_thread,njobs =",index_thread,njobs)
+    nfields = len(fields)
+
+    print("index_thread,nfields =",index_thread,nfields)
 
     thread_work_file = swname.replace(".py","_thread") + str(index_thread) + ".out"
 
@@ -175,174 +181,35 @@ def run_single_core_job(jids,overlapping_fields_list,meta_list,index_thread):
 
     fh.write(f"\nStart of run_single_core_job: index_thread={index_thread}, dbh={dbh}\n")
 
-    for index_job in range(njobs):
+    for index_field in range(nfields):
 
-        index_core = index_job % num_cores
+        index_core = index_field % num_cores
         if index_thread != index_core:
             continue
 
-        jid = jids[index_job]
-        overlapping_fields = overlapping_fields_list[index_job]
-        meta_dict = meta_list[index_job]
-
-        jid_from_dict = meta_dict["jid"]
-
-        if jid != jid_from_dict:
-            fh.write(f"*** Error: jid is not equal to jid from meta dictionary; quitting...\n")
-            exit(64)
-
-        expid = meta_dict["expid"]
-        sca = meta_dict["sca"]
-        fid = meta_dict["fid"]
-        field = meta_dict["field"]
-        hp6 = meta_dict["hp6"]
-        hp9 = meta_dict["hp9"]
-        mjdobs = meta_dict["mjdobs"]
-        pid = meta_dict["pid"]
-
-        fh.write(f"Loop start: index_job,jid,overlapping_fields = {index_job},{jid},{overlapping_fields}\n")
+        field = fields[index_job]
 
 
-        # Check whether done file exists in S3 bucket for job, and skip if it exists.
-        # This is done by attempting to download the done file.  Regardless the sub
-        # always returns the filename and subdirs by parsing the s3_full_name.
-
-        s3_full_name_done_file = "s3://" + product_s3_bucket_base + "/" + proc_date + '/jid' + str(jid) + "/source_dbload_jid" +  str(jid)  + ".done"
-        done_filename,subdirs_done,downloaded_from_bucket = util.download_file_from_s3_bucket(s3_client,s3_full_name_done_file)
-
-        if downloaded_from_bucket:
-            fh.write("*** Warning: Done file exists ({}); skipping...\n".format(done_filename))
-            continue
+        fh.write(f"Loop start: index_job,field = {index_job},{field}\n")
 
 
-        # Download ZOGY-difference-image PSF-fit catalog file from S3 bucket.
-
-        output_psfcat_filename_for_jid = output_psfcat_filename.replace(".txt",f"_jid{jid}.txt")
-
-        s3_full_name_psfcat_file = "s3://" + product_s3_bucket_base + "/" + proc_date + '/jid' + str(jid) + "/" +  output_psfcat_filename
-        ret_filename,subdirs_done,downloaded_from_bucket = util.download_file_from_s3_bucket(s3_client,
-                                                                                             s3_full_name_psfcat_file,
-                                                                                             output_psfcat_filename_for_jid)
-
-        if not downloaded_from_bucket:
-            fh.write("*** Warning: PSF-fit catalog file does not exist ({}); skipping...\n".format(output_psfcat_filename))
-            continue
+        # For a given field pertinent to this parallel process, loop over all SCAs
+        # and perform source-matching:
+        # 1. Cross-match each source with the AstroObjects_<field> table.
+        # 2. If there is no match, then create a new AstroObjects_<field> record.
+        # 3. Register a Merges_<field> record.
 
 
-        # Download ZOGY-difference-image PSF-fit finder catalog file from S3 bucket.
-
-        output_psfcat_finder_filename_for_jid = output_psfcat_finder_filename.replace(".txt",f"_jid{jid}.txt")
-
-        s3_full_name_psfcat_finder_file = "s3://" + product_s3_bucket_base + "/" + proc_date + '/jid' + str(jid) + "/" +  output_psfcat_finder_filename
-        ret_filename,subdirs_done,downloaded_from_bucket = util.download_file_from_s3_bucket(s3_client,
-                                                                                             s3_full_name_psfcat_finder_file,
-                                                                                             output_psfcat_finder_filename_for_jid)
-
-        if not downloaded_from_bucket:
-            fh.write("*** Warning: PSF-fit finder catalog file does not exist ({}); skipping...\n".format(output_psfcat_finder_filename))
-            continue
 
 
-        # Join catalogs and extract columns for sources database tables.
-
-        psfcat_qtable = QTable.read(output_psfcat_filename_for_jid,format='ascii')
-        psfcat_finder_qtable = QTable.read(output_psfcat_finder_filename_for_jid,format='ascii')
-
-        joined_table_inner = join(psfcat_qtable, psfcat_finder_qtable, keys='id', join_type='inner')
-
-        nrows = len(joined_table_inner)
-        fh.write(f"nrows in PSF-fit catalog = {nrows}\n")
 
 
-        # Here are what the columns in the photutils catalogs are called:
-        # Main: id group_id group_size local_bkg x_init y_init flux_init x_fit y_fit flux_fit x_err y_err flux_err npixfit qfit cfit flags ra dec
-        # Finder: id xcentroid ycentroid sharpness roundness1 roundness2 npix peak flux mag daofind_mag
-        # Note that some catalog-column names have underscores that need to be dealt with specially
-        # because the database columns do not have underscores.
-        #
-        # Prepare records into sources database tables.
-
-        sources_table = f"sources_{proc_date}_{sca}"
-        sources_table_file = f"sources_{proc_date}_{sca}_{jid}" + ".csv"
-
-        with open(sources_table_file, "w") as csv_fh:
-
-            for row in joined_table_inner:
-                nums = ""
-                for col in cols:
-
-                    cat_col = col
-
-                    if cat_col == 'xfit':
-                        cat_col = 'x_fit'
-                    elif cat_col == 'yfit':
-                        cat_col = 'y_fit'
-                    elif cat_col == 'fluxfit':
-                        cat_col = 'flux_fit'
-                    elif cat_col == 'xerr':
-                        cat_col = 'x_err'
-                    elif cat_col == 'yerr':
-                        cat_col = 'y_err'
-                    elif cat_col == 'fluxerr':
-                        cat_col = 'flux_err'
-
-                    if cat_col == 'pid':
-                        continue
-                    if cat_col == 'field':
-                        continue
-                    if cat_col == 'hp6':
-                        continue
-                    if cat_col == 'hp9':
-                        continue
-                    if cat_col == 'expid':
-                        continue
-                    if cat_col == 'fid':
-                        continue
-                    if cat_col == 'sca':
-                        continue
-                    if cat_col == 'mjdobs':
-                        continue
-
-                    num = str(row[cat_col])
-                    nums = nums + num + ","
-
-                num = str(pid)
-                nums = nums + num + ","
-                num = str(field)
-                nums = nums + num + ","
-                num = str(hp6)
-                nums = nums + num + ","
-                num = str(hp9)
-                nums = nums + num + ","
-                num = str(expid)
-                nums = nums + num + ","
-                num = str(fid)
-                nums = nums + num + ","
-                num = str(sca)
-                nums = nums + num + ","
-                num = str(mjdobs)
-                nums = nums + num + ","
-
-                # Slice the string to get all but the last character, then add the newline character
-                new_character = "\n"
-                line_to_write_to_file = nums[:-1] + new_character
-
-                csv_fh.write(line_to_write_to_file)
 
 
-        # Load records into sources database tables.
 
-        dbh.copy_sources_data_from_file_into_database(sources_table_file,sources_table,columns)
+        # End of loop over field.
 
-
-        # Touch done file.  Upload done file to S3 bucket.
-
-        util.write_done_file_to_s3_bucket(done_filename,product_s3_bucket_base,proc_date,jid,s3_client)
-
-        fh.write(f"Loop end: done_filename,product_s3_bucket_base,proc_date,jid = {done_filename},{product_s3_bucket_base},{proc_date},{jid}\n")
-
-
-        # End of loop over job ID.
+        fh.write(f"Loop end: index_job,field = {index_job},{field}\n")
 
 
     fh.write(f"\nEnd of run_single_core_job: index_thread={index_thread}\n")
@@ -350,7 +217,7 @@ def run_single_core_job(jids,overlapping_fields_list,meta_list,index_thread):
     fh.close()
 
 
-def execute_parallel_processes(jids,rtids_list,meta_list,num_cores=None):
+def execute_parallel_processes(scas_list,fields_list,num_cores=None):
 
     if num_cores is None:
         num_cores = os.cpu_count()  # Use all available cores if not specified
@@ -359,7 +226,7 @@ def execute_parallel_processes(jids,rtids_list,meta_list,num_cores=None):
 
     with ProcessPoolExecutor(max_workers=num_cores) as executor:
         # Submit all tasks to the executor and store the futures in a list
-        futures = [executor.submit(run_single_core_job,jids,rtids_list,meta_list,thread_index) for thread_index in range(num_cores)]
+        futures = [executor.submit(run_single_core_job,scas_list,fields_list,thread_index) for thread_index in range(num_cores)]
 
         # Iterate over completed futures and update progress
         for i, future in enumerate(as_completed(futures)):
@@ -420,11 +287,8 @@ if __name__ == '__main__':
             field = record[0]
             fields_dict[field] = 1
 
-
-
     scas_list = scas_dict.keys()
     fields_list = fields_dict.keys()
-
 
     nscas = len(scas_list)
     nfields = len(fields_list)
@@ -432,108 +296,6 @@ if __name__ == '__main__':
     print("scas_list =",scas_list)
     print("fields_list =",fields_list)
     print("nscas,nfields =",nscas,nfields)
-
-    exit(0);
-
-
-    # Query database for all normal RAPID science-pipeline Jobs records
-    # that are associated with the given processing date.
-    # Returns a list of job IDs.
-
-    recs = dbh.get_jids_of_normal_science_pipeline_jobs_for_processing_date(proc_date)
-
-    if dbh.exit_code >= 64:
-        print("*** Error from {}; quitting ".format(swname))
-        exit(dbh.exit_code)
-
-
-    # Launch multi-processing for loading sources database tables.
-
-    jid_list = []
-    overlapping_fields_list = []
-    meta_list = []
-    scas_dict = {}
-    fields_dict = {}
-
-    for jid in recs:
-
-        job_dict = dbh.get_info_for_job(jid)
-
-        rid = job_dict["rid"]
-
-        l2file_dict = dbh.get_l2file_info_for_sources(rid)
-
-        crval1 = l2file_dict['crval1']
-        crval2 = l2file_dict['crval2']
-        crpix1 = l2file_dict['crpix1']
-        crpix2 = l2file_dict['crpix2']
-        cd11 = l2file_dict['cd11']
-        cd12 = l2file_dict['cd12']
-        cd21 = l2file_dict['cd21']
-        cd22 = l2file_dict['cd22']
-        expid = l2file_dict["expid"]
-        sca = l2file_dict["sca"]
-        fid = l2file_dict["fid"]
-        field = l2file_dict["field"]
-        hp6 = l2file_dict["hp6"]
-        hp9 = l2file_dict["hp9"]
-        mjdobs = l2file_dict["mjdobs"]
-
-        diffimage_dict = dbh.get_best_difference_image(rid,ppid)
-
-        pid = diffimage_dict['pid']
-
-        scas_dict[sca] = 1
-        fields_dict[field] = 1
-
-
-        # Load Sources record metadata into a dictionary that can be appended to a list,
-        # and then unpacked later.
-
-        meta_dict = {}
-
-        meta_dict["jid"] = jid
-        meta_dict["expid"] = expid
-        meta_dict["sca"] = sca
-        meta_dict["fid"] = fid
-        meta_dict["field"] = field
-        meta_dict["hp6"] = hp6
-        meta_dict["hp9"] = hp9
-        meta_dict["mjdobs"] = mjdobs
-        meta_dict["pid"] = pid
-
-
-        # Get field numbers (rtids) of all sky tiles containing sky positions
-        # in given science image associated with job ID.
-
-        rtid_dict = {}
-
-        x_list = [*range(0,naxis1,500)]
-        y_list = [*range(0,naxis2,500)]
-        x_list.append(naxis1)
-        y_list.append(naxis1)
-
-        for y in y_list:
-            for x in x_list:
-
-                # x,y,crpix1,crpix2 must be zero-based.
-                ra,dec = util.tan_proj2(x,y,crpix1-1,crpix2-1,crval1,crval2,cd11,cd12,cd21,cd22)
-
-                roman_tessellation_db.get_rtid(ra,dec)
-                rtid = str(roman_tessellation_db.rtid)
-
-                rtid_dict[rtid] = 1
-
-        keys_view = rtid_dict.keys()
-        print("fields overlapping image =",keys_view)
-
-        jid_list.append(jid)
-        overlapping_fields_list.append(keys_view)
-        meta_list.append(meta_dict)
-
-        print("jid =",jid)
-
-    scas_list = scas_dict.keys()
 
 
     # Code-timing benchmark.
@@ -544,11 +306,27 @@ if __name__ == '__main__':
     start_time_benchmark = end_time_benchmark
 
 
+    # Assume astoobjects_<field> and merges_field database tables are created in tandem,
+    # so we only need to test for the existence of the former table.
+
+    already_made_dict = {}
+
+    for field in fields_list:
+
+        tablename1 = f"astroobjects_{field}"
+
+        sql_queries = []
+        sql_queries.append(f"SELECT to_regclass('public.{tablename1}') IS NOT NULL;")
+        records = dbh.execute_sql_queries(sql_queries)
+
+        table_exists_flag = records[0][0]
+
+        already_made_dict[field] = table_exists_flag
+
+
     # Create astroobjects and merges database tables for all fields associated with processing date.
 
     print("Creating astroobjects and merges database tables for all fields associated with processing date...")
-
-    already_made = False
 
     sql_queries = []
     sql_queries.append("SET default_tablespace = pipeline_data_01;")
@@ -556,6 +334,11 @@ if __name__ == '__main__':
     fields_list = fields_dict.keys()
 
     for field in fields_list:
+
+        table_exists_flag = already_made_dict[field]
+
+        if table_exists_flag is True:
+            continue
 
         tablename1 = f"astroobjects_{field}"
 
@@ -566,44 +349,45 @@ if __name__ == '__main__':
 
     dbh.execute_sql_queries(sql_queries)
 
-    if not already_made:
 
-        print("Creating indexes and grants on astroobjects and merges database tables for all fields associated with processing date...")
+    # Create indexes and grants on astroobjects and merges database tables for all fields associated with processing date.
 
-        sql_queries = []
-        sql_queries.append("SET default_tablespace = pipeline_indx_01;")
+    print("Creating indexes and grants on astroobjects and merges database tables for all fields associated with processing date...")
 
-        fields_list = fields_dict.keys()
+    sql_queries = []
+    sql_queries.append("SET default_tablespace = pipeline_indx_01;")
 
-        for field in fields_list:
+    fields_list = fields_dict.keys()
 
-            tablename1 = f"astroobjects_{field}"
+    for field in fields_list:
 
-            tablename2 = f"merges_{field}"
+        tablename1 = f"astroobjects_{field}"
 
-            sql_queries.append(f"CREATE INDEX {tablename1}_field_idx ON {tablename1} (field);")
-            sql_queries.append(f"CREATE INDEX {tablename1}_nsources_idx ON {tablename1} (nsources);")
-            sql_queries.append(f"CREATE INDEX {tablename1}_aid_idx ON {tablename1} (aid);")
-            sql_queries.append(f"ALTER TABLE ONLY {tablename1} ADD CONSTRAINT astroobjectspk_1 UNIQUE (ra0, dec0);")
-            sql_queries.append(f"CREATE INDEX {tablename1}_radec_idx ON {tablename1} (q3c_ang2ipix(ra0, dec0));")
-            sql_queries.append(f"CLUSTER {tablename1}_radec_idx ON {tablename1};")
-            sql_queries.append(f"ANALYZE {tablename1};")
-            sql_queries.append(f"CREATE INDEX {tablename2}_aid_idx ON {tablename2} USING btree (aid);")
-            sql_queries.append(f"CREATE INDEX {tablename2}_sid_idx ON {tablename2} USING btree (sid);")
-            sql_queries.append(f"REVOKE ALL ON TABLE {tablename1} FROM rapidreadrole;")
-            sql_queries.append(f"GRANT SELECT ON TABLE {tablename1} TO GROUP rapidreadrole;")
-            sql_queries.append(f"REVOKE ALL ON TABLE {tablename2} FROM rapidreadrole;")
-            sql_queries.append(f"GRANT SELECT ON TABLE {tablename2} TO GROUP rapidreadrole;")
-            sql_queries.append(f"REVOKE ALL ON TABLE {tablename1} FROM rapidadminrole;")
-            sql_queries.append(f"GRANT ALL ON TABLE {tablename1} TO GROUP rapidadminrole;")
-            sql_queries.append(f"REVOKE ALL ON TABLE {tablename2} FROM rapidadminrole;")
-            sql_queries.append(f"GRANT ALL ON TABLE {tablename2} TO GROUP rapidadminrole;")
-            sql_queries.append(f"REVOKE ALL ON TABLE {tablename1} FROM rapidporole;")
-            sql_queries.append(f"GRANT INSERT,UPDATE,SELECT,DELETE,TRUNCATE,TRIGGER,REFERENCES ON TABLE {tablename1} TO rapidporole;")
-            sql_queries.append(f"REVOKE ALL ON TABLE {tablename2} FROM rapidporole;")
-            sql_queries.append(f"GRANT INSERT,UPDATE,SELECT,DELETE,TRUNCATE,TRIGGER,REFERENCES ON TABLE {tablename2} TO rapidporole;")
+        tablename2 = f"merges_{field}"
 
-        dbh.execute_sql_queries(sql_queries)
+        sql_queries.append(f"CREATE INDEX {tablename1}_field_idx ON {tablename1} (field);")
+        sql_queries.append(f"CREATE INDEX {tablename1}_nsources_idx ON {tablename1} (nsources);")
+        sql_queries.append(f"CREATE INDEX {tablename1}_aid_idx ON {tablename1} (aid);")
+        sql_queries.append(f"ALTER TABLE ONLY {tablename1} ADD CONSTRAINT astroobjectspk_1 UNIQUE (ra0, dec0);")
+        sql_queries.append(f"CREATE INDEX {tablename1}_radec_idx ON {tablename1} (q3c_ang2ipix(ra0, dec0));")
+        sql_queries.append(f"CLUSTER {tablename1}_radec_idx ON {tablename1};")
+        sql_queries.append(f"ANALYZE {tablename1};")
+        sql_queries.append(f"CREATE INDEX {tablename2}_aid_idx ON {tablename2} USING btree (aid);")
+        sql_queries.append(f"CREATE INDEX {tablename2}_sid_idx ON {tablename2} USING btree (sid);")
+        sql_queries.append(f"REVOKE ALL ON TABLE {tablename1} FROM rapidreadrole;")
+        sql_queries.append(f"GRANT SELECT ON TABLE {tablename1} TO GROUP rapidreadrole;")
+        sql_queries.append(f"REVOKE ALL ON TABLE {tablename2} FROM rapidreadrole;")
+        sql_queries.append(f"GRANT SELECT ON TABLE {tablename2} TO GROUP rapidreadrole;")
+        sql_queries.append(f"REVOKE ALL ON TABLE {tablename1} FROM rapidadminrole;")
+        sql_queries.append(f"GRANT ALL ON TABLE {tablename1} TO GROUP rapidadminrole;")
+        sql_queries.append(f"REVOKE ALL ON TABLE {tablename2} FROM rapidadminrole;")
+        sql_queries.append(f"GRANT ALL ON TABLE {tablename2} TO GROUP rapidadminrole;")
+        sql_queries.append(f"REVOKE ALL ON TABLE {tablename1} FROM rapidporole;")
+        sql_queries.append(f"GRANT INSERT,UPDATE,SELECT,DELETE,TRUNCATE,TRIGGER,REFERENCES ON TABLE {tablename1} TO rapidporole;")
+        sql_queries.append(f"REVOKE ALL ON TABLE {tablename2} FROM rapidporole;")
+        sql_queries.append(f"GRANT INSERT,UPDATE,SELECT,DELETE,TRUNCATE,TRIGGER,REFERENCES ON TABLE {tablename2} TO rapidporole;")
+
+    dbh.execute_sql_queries(sql_queries)
 
 
     # Code-timing benchmark.
@@ -622,10 +406,10 @@ if __name__ == '__main__':
     ################################################################################
 
     if num_cores > 1:
-        execute_parallel_processes(jid_list,overlapping_fields_list,meta_list,num_cores)
+        execute_parallel_processes(scas_list,fields_list,num_cores)
     else:
         thread_index = 0
-        run_single_core_job(jid_list,overlapping_fields_list,meta_list,thread_index)
+        run_single_core_job(scas_list,fields_list,thread_index)
 
 
     # Code-timing benchmark.
@@ -636,14 +420,12 @@ if __name__ == '__main__':
     start_time_benchmark = end_time_benchmark
 
 
-    # Create astroobjects and merges database tables for all fields associated with processing date.
+    # Recluster and reanalyze astroobjects database tables for all fields associated with processing date.
 
     print("Reclustering and reanalyzing astroobjects database tables for all fields associated with processing date...")
 
     sql_queries = []
     sql_queries.append("SET default_tablespace = pipeline_indx_01;")
-
-    fields_list = fields_dict.keys()
 
     for field in fields_list:
 
