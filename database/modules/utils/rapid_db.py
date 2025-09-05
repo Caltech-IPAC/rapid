@@ -3168,3 +3168,107 @@ class RAPIDDB:
 
         if self.exit_code == 0:
             self.conn.commit()           # Commit database transaction
+
+
+########################################################################################################
+
+    def add_astro_object_to_field(self,tablename,ra0,dec0,mag0,meanra,stdevra,meandec,stdevdec,meanmag,stdevmag,nsources,field,hp6,hp9):
+
+        self.exit_code = 0
+
+
+        # Define query.
+
+        query =\
+            f"insert into {tablename}" +\
+            f"            (ra0," +\
+            f"             dec0," +\
+            f"             mag0," +\
+            f"             meanra," +\
+            f"             stdevra," +\
+            f"             meandec," +\
+            f"             stdevdec," +\
+            f"             meanmag," +\
+            f"             stdevmag," +\
+            f"             nsources," +\
+            f"             field," +\
+            f"             hp6," +\
+            f"             hp9" +\
+            f"            )" +\
+            f"            values" +\
+            f"            ({ra0}" +\
+            f"             {dec0}" +\
+            f"             {mag0}" +\
+            f"             {meanra}" +\
+            f"             {stdevra}" +\
+            f"             {meandec}" +\
+            f"             {stdevdec}" +\
+            f"             {meanmag}" +\
+            f"             {stdevmag}" +\
+            f"             {nsources}" +\
+            f"             {field}" +\
+            f"             {hp6}" +\
+            f"             {hp9})" +\
+            f"             RETURNING aid;"
+
+        print('query = {}'.format(query))
+
+
+        # Execute query.
+
+        try:
+
+        self.cur.execute(query)
+        record = self.cur.fetchone()
+
+        if record is not None:
+            aid = record[0]
+        else:
+            print('*** Error inserting record into {}; skipping...'.format(tablename))
+            self.exit_code = 67
+            return
+
+        if self.exit_code == 0:
+            self.conn.commit()           # Commit database transaction
+
+        return aid
+
+
+########################################################################################################
+
+    def add_merge_to_field(self,tablename,aid,sid):
+
+        self.exit_code = 0
+
+
+        # Define query.
+
+        query =\
+            f"insert into {tablename}" +\
+            f"            (aid," +\
+            f"             sid" +\
+            f"            )" +\
+            f"            values" +\
+            f"            ({aid}," +\
+            f"             {sid})" +\
+            f"             RETURNING aid;"
+
+        print('query = {}'.format(query))
+
+
+        # Execute query.
+
+        try:
+
+        self.cur.execute(query)
+        record = self.cur.fetchone()
+
+        if record is not None:
+            aid = record[0]
+        else:
+            print('*** Error inserting record into {}; skipping...'.format(tablename))
+            self.exit_code = 67
+            return
+
+        if self.exit_code == 0:
+            self.conn.commit()           # Commit database transaction
