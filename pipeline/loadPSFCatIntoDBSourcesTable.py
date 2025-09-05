@@ -1,6 +1,7 @@
 import boto3
 import os
 import numpy as np
+import healpy as hp
 import configparser
 from astropy.table import QTable
 from astropy.table import QTable, join
@@ -13,6 +14,13 @@ to_zone = tz.gettz('America/Los_Angeles')
 import database.modules.utils.rapid_db as db
 import modules.utils.rapid_pipeline_subs as util
 import database.modules.utils.roman_tessellation_db as sqlite
+
+level6 = 6
+nside6 = 2**level6
+
+level9 = 9
+nside9 = 2**level9
+
 
 swname = "loadPSFCatIntoDBSourcesTable.py"
 swvers = "1.0"
@@ -212,6 +220,7 @@ def run_single_core_job(jids,overlapping_fields_list,meta_list,index_thread):
         mjdobs = meta_dict["mjdobs"]
         pid = meta_dict["pid"]
 
+
         fh.write(f"Loop start: index_job,jid,overlapping_fields = {index_job},{jid},{overlapping_fields}\n")
 
 
@@ -317,6 +326,17 @@ def run_single_core_job(jids,overlapping_fields_list,meta_list,index_thread):
 
                     num = str(row[cat_col])
                     nums = nums + num + ","
+
+
+                # The field,hp6,hp9 indexes must be overridden with
+                # the actual ra,dec position of the source.
+
+                ra = float(row["ra"])
+                dec = float(row["dec"])
+                roman_tessellation_db.get_rtid(ra,dec)
+                field = roman_tessellation_db.rtid
+                hp6 = hp.ang2pix(nside6,ra,dec,nest=True,lonlat=True)
+                hp9 = hp.ang2pix(nside9,ra,dec,nest=True,lonlat=True)
 
                 num = str(pid)
                 nums = nums + num + ","
