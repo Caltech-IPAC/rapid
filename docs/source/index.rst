@@ -123,6 +123,14 @@ RAPID Pipeline Development
    dev/notes.rst
    dev/tests.rst
 
+RAPID Archive Deliveries
+************************************
+
+.. toctree::
+   :maxdepth: 1
+
+   archive/archive.rst
+
 Acronyms
 ************************************
 
