@@ -2976,6 +2976,9 @@ class RAPIDDB:
         if self.exit_code == 0:
             self.conn.commit()           # Commit database transaction
 
+
+        # Return records for the last query executed.  This is done for convenience and code is not generalized.
+
         return records
 
 
