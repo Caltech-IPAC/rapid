@@ -404,7 +404,7 @@ if __name__ == '__main__':
         sql_queries = []
         sql_queries.append(f"SELECT to_regclass('public.{tablename}') IS NOT NULL;")
         records = dbh.execute_sql_queries(sql_queries)
-        if records[0] == 'f':
+        if records[0] is not True:
             continue
 
         scas_dict[sca] = 1
@@ -413,8 +413,8 @@ if __name__ == '__main__':
         sql_queries.append(f"select distinct field from {tablename};")
         records = dbh.execute_sql_queries(sql_queries)
 
-        for field in records:
-
+        for record in records:
+            field = record[0]
             fields_dict[field] = 1
 
 
