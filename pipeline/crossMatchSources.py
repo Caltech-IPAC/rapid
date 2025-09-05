@@ -389,14 +389,16 @@ if __name__ == '__main__':
         exit(dbh.exit_code)
 
 
-    # Query for unique SCAs that have sources tables associated with processing date.
+    # Query for unique SCAs that have sources tables associated with processing date
+    # (cannot always assume there will be 18).
     # Query the sources tables for list of unique fields.
 
     scas_dict = {}
     fields_dict = {}
 
-    for sca in scas_list:
+    for i in range(18):
 
+        sca = i + 1
         tablename = f"sources_{proc_date}_{sca}"
 
         sql_queries = []
