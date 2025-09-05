@@ -402,16 +402,16 @@ if __name__ == '__main__':
         tablename = f"sources_{proc_date}_{sca}"
 
         sql_queries = []
-        records = sql_queries.append(f"SELECT to_regclass('public.{tablename}') IS NOT NULL;")
-        dbh.execute_sql_queries(sql_queries)
+        sql_queries.append(f"SELECT to_regclass('public.{tablename}') IS NOT NULL;")
+        records = dbh.execute_sql_queries(sql_queries)
         if records[0] == 'f':
             continue
 
         scas_dict[sca] = 1
 
         sql_queries = []
-        records = sql_queries.append(f"select distinct field from {tablename};")
-        dbh.execute_sql_queries(sql_queries)
+        sql_queries.append(f"select distinct field from {tablename};")
+        records = dbh.execute_sql_queries(sql_queries)
 
         for field in records:
 
@@ -558,9 +558,6 @@ if __name__ == '__main__':
 
         tablename2 = f"merges_{field}"
 
-        records = sql_queries.append(f"SELECT to_regclass('public.{tablename1}') IS NOT NULL;")
-        if records[0] == 't':
-            already_made = True
         sql_queries.append(f"CREATE TABLE {tablename1} (LIKE astroobjects INCLUDING DEFAULTS INCLUDING CONSTRAINTS);")
         sql_queries.append(f"CREATE TABLE {tablename2} (LIKE merges INCLUDING DEFAULTS INCLUDING CONSTRAINTS);")
 
