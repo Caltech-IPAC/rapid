@@ -173,7 +173,7 @@ CREATE TABLE merges (
     sid bigint NOT NULL
 );
 
-ALTER TABLE sources OWNER TO rapidadminrole;
+ALTER TABLE merges OWNER TO rapidadminrole;
 
 SET default_tablespace = pipeline_indx_01;
 
