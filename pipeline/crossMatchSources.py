@@ -404,7 +404,10 @@ if __name__ == '__main__':
         sql_queries = []
         sql_queries.append(f"SELECT to_regclass('public.{tablename}') IS NOT NULL;")
         records = dbh.execute_sql_queries(sql_queries)
-        if records[0] is not True:
+
+        table_exists_flag = records[0][0]
+
+        if table_exists_flag is not True:
             continue
 
         scas_dict[sca] = 1
