@@ -253,9 +253,9 @@ def run_single_core_job(scas,fields,index_thread):
             for sid in sids_list:
 
                 try:
-                    if sid_dict[sid] == 1:
-                        continue
+                    test = sid_dict[sid]     # KeyError will be raised if sid not in dictionary.
                 except:
+
 
                     # Source was not matched, so create AstroObjects_<field> record and then Merges_<field> record.
 
@@ -273,6 +273,10 @@ def run_single_core_job(scas,fields,index_thread):
                         source_hp6 = record[3]
                         source_hp9 = record[4]
                         source_flux = record[5]
+
+                        if field != source_field:
+                            print(f"*** Error: field ({field}) not equal to source_field ({source_field}); quitting...")
+                            exit(64)
 
                         source_mag = -2.5 * np.log10(source_flux)
 
@@ -299,8 +303,8 @@ def run_single_core_job(scas,fields,index_thread):
                                                         stdevmag,
                                                         nsources,
                                                         field,
-                                                        hp6,
-                                                        hp9)
+                                                        source_hp6,
+                                                        source_hp9)
 
                     dbh.add_merge_to_field(merges_tablename,aid,sid)
 
