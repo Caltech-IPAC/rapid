@@ -3242,14 +3242,9 @@ class RAPIDDB:
         # Define query.
 
         query =\
-            f"insert into {tablename}" +\
-            f"            (aid," +\
-            f"             sid" +\
-            f"            )" +\
-            f"            values" +\
-            f"            ({str(aid)}," +\
-            f"             {str(sid)})" +\
-            f"             RETURNING aid;"
+            f"select aid,sid from {tablename} " +\
+            f"where aid = {aid} " +\
+            f"and sid = {sid};"
 
         print('query = {}'.format(query))
 
@@ -3257,14 +3252,40 @@ class RAPIDDB:
         # Execute query.
 
         self.cur.execute(query)
-        record = self.cur.fetchone()
 
-        if record is not None:
-            aid = record[0]
-        else:
-            print('*** Error inserting record into {}; skipping...'.format(tablename))
-            self.exit_code = 67
-            return
+        try:
+            record = self.cur.fetchone()
+            record_exists = True
+        except:
+            print(f"Nothing returned from database query ({query}); continuing...")
 
-        if self.exit_code == 0:
-            self.conn.commit()           # Commit database transaction
+
+        if not record_exists:
+
+
+            # Define query.
+
+            query =\
+                f"insert into {tablename}" +\
+                f"            (aid," +\
+                f"             sid" +\
+                f"            )" +\
+                f"            values" +\
+                f"            ({str(aid)}," +\
+                f"             {str(sid)})"
+
+            print('query = {}'.format(query))
+
+
+            # Execute query.
+
+            self.cur.execute(query)
+
+            try:
+                record = self.cur.fetchone()
+            except:
+                print(f"Nothing returned from database query ({query}); continuing...")
+
+
+            if self.exit_code == 0:
+                self.conn.commit()           # Commit database transaction
