@@ -385,8 +385,8 @@ if __name__ == '__main__':
             field = record[0]
             fields_dict[field] = 1
 
-    scas_list = scas_dict.keys()
-    fields_list = fields_dict.keys()
+    scas_list = list(scas_dict.keys())
+    fields_list = list(fields_dict.keys())
 
     nscas = len(scas_list)
     nfields = len(fields_list)
