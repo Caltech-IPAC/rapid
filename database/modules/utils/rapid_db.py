@@ -3196,18 +3196,18 @@ class RAPIDDB:
             f"             hp9" +\
             f"            )" +\
             f"            values" +\
-            f"            ({str(ra0)}" +\
-            f"             {str(dec0)}" +\
-            f"             {str(mag0)}" +\
-            f"             {str(meanra)}" +\
-            f"             {str(stdevra)}" +\
-            f"             {str(meandec)}" +\
-            f"             {str(stdevdec)}" +\
-            f"             {str(meanmag)}" +\
-            f"             {str(stdevmag)}" +\
-            f"             {str(nsources)}" +\
-            f"             {str(field)}" +\
-            f"             {str(hp6)}" +\
+            f"            ({str(ra0)}," +\
+            f"             {str(dec0)}," +\
+            f"             {str(mag0)}," +\
+            f"             {str(meanra)}," +\
+            f"             {str(stdevra)}," +\
+            f"             {str(meandec)}," +\
+            f"             {str(stdevdec)}," +\
+            f"             {str(meanmag)}," +\
+            f"             {str(stdevmag)}," +\
+            f"             {str(nsources)}," +\
+            f"             {str(field)}," +\
+            f"             {str(hp6)}," +\
             f"             {str(hp9)})" +\
             f"             RETURNING aid;"
 
