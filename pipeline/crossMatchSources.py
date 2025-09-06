@@ -209,7 +209,7 @@ def run_single_core_job(scas,fields,index_thread):
 
             query = f"SELECT a.sid,b.aid FROM {sources_tablename} AS a, " +\
                 f"{astroobjects_tablename} AS b WHERE q3c_join(a.ra, a.dec, b.ra0, b.dec0, {match_radius}) " +\
-                f"AND field = {field};"
+                f"AND a.field = {field};"
 
             sql_queries = []
             sql_queries.append(query)
