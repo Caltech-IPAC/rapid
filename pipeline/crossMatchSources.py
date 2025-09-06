@@ -157,7 +157,7 @@ print(f"AstroObjects columns: {cols_comma_separated_string}")
 # Custom methods for parallel processing, taking advantage of multiple cores on the job-launcher machine.
 #-------------------------------------------------------------------------------------------------------------
 
-def run_single_core_job(scas,fields,meta_list,index_thread):
+def run_single_core_job(scas,fields,index_thread):
 
     '''
     The current list of fields does NOT necessarily include ALL adjacent fields, so that
