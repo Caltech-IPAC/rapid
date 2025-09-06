@@ -3216,8 +3216,6 @@ class RAPIDDB:
 
         # Execute query.
 
-        try:
-
         self.cur.execute(query)
         record = self.cur.fetchone()
 
@@ -3257,8 +3255,6 @@ class RAPIDDB:
 
 
         # Execute query.
-
-        try:
 
         self.cur.execute(query)
         record = self.cur.fetchone()
