@@ -254,7 +254,7 @@ def run_single_core_job(scas,fields,index_thread):
 
                 try:
                     test = sid_dict[sid]     # KeyError will be raised if sid not in dictionary.
-                except:
+                except KeyError:
 
 
                     # Source was not matched, so create AstroObjects_<field> record and then Merges_<field> record.
