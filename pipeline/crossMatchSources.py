@@ -274,7 +274,7 @@ def run_single_core_job(scas,fields,meta_list,index_thread):
                         source_hp9 = record[4]
                         source_flux = record[5]
 
-                        source_mag = -2.5 * np.log10(source_flux);
+                        source_mag = -2.5 * np.log10(source_flux)
 
 
                     # For now, set the lightcurve statistics to zero.              # TODO
@@ -300,7 +300,7 @@ def run_single_core_job(scas,fields,meta_list,index_thread):
                                                         nsources,
                                                         field,
                                                         hp6,
-                                                        hp9):
+                                                        hp9)
 
                     dbh.add_merge_to_field(merges_tablename,aid,sid)
 
