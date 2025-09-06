@@ -190,7 +190,7 @@ def run_single_core_job(scas,fields,index_thread):
         field = fields[index_field]
 
 
-        fh.write(f"Loop start: index_job,field = {index_job},{field}\n")
+        fh.write(f"Loop start: index_field,field = {index_field},{field}\n")
 
 
         # For a given field pertinent to this parallel process, loop over all SCAs
@@ -307,7 +307,7 @@ def run_single_core_job(scas,fields,index_thread):
 
         # End of loop over field.
 
-        fh.write(f"Loop end: index_job,field = {index_job},{field}\n")
+        fh.write(f"Loop end: index_field,field = {index_field},{field}\n")
 
 
     fh.write(f"\nEnd of run_single_core_job: index_thread={index_thread}\n")
