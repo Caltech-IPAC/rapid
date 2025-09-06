@@ -2,8 +2,6 @@ import boto3
 import os
 import numpy as np
 import configparser
-from astropy.table import QTable
-from astropy.table import QTable, join
 from datetime import datetime, timezone
 from dateutil import tz
 import time
@@ -107,6 +105,8 @@ naxis2 = int(config_input['INSTRUMENT']['naxis2_sciimage'])
 
 ppid = int(config_input['SCI_IMAGE']['ppid'])
 
+match_radius = float(config_input['SOURCE_MATCHING']['match_radius'])
+
 
 # Open database connections for parallel access.
 
@@ -162,7 +162,7 @@ def run_single_core_job(scas,fields,meta_list,index_thread):
     '''
     The current list of fields does NOT necessarily include ALL adjacent fields, so that
     source-matching near field boundaries may not pick up all potential light-curve data points.
-    This will be rectified later.
+    This will be rectified later.  TODO
     '''
 
     nfields = len(fields)
@@ -199,12 +199,110 @@ def run_single_core_job(scas,fields,meta_list,index_thread):
         # 2. If there is no match, then create a new AstroObjects_<field> record.
         # 3. Register a Merges_<field> record.
 
+        astroobjects_tablename = f"astroobjects_{field}"
+        merges_tablename = f"merges_{field}"
+
+        for sca_index in range(18):
+
+            sca = sca_index + 1
+            sources_tablename = f"sources_{proc_date}_{sca}"
+
+            query = f"SELECT a.sid,b.aid FROM {sources_tablename} AS a, " +\
+                f"{astroobjects_tablename} AS b WHERE q3c_join(a.ra, a.dec, b.ra0, b.dec0, {match_radius}) " +\
+                f"AND field = {field};"
+
+            sql_queries = []
+            sql_queries.append(query)
+            records = dbh.execute_sql_queries(sql_queries)
+
+            sid_dict = {}
+
+            # For the sources that were matched, create Merges_<field> record.
+
+            for record in records:
+
+                sid = record[2]
+                aid = record[3]
+
+                sid_dict[sid] = 1
+
+                dbh.add_merge_to_field(merges_tablename,aid,sid)
 
 
+            # Query for all sources for the field of interest in Sources_<proc_date>_<sca> and load into memory.
+            # Find those sources that were not matched.
 
 
+            query = f"SELECT sid FROM {sources_tablename} WHERE field = {field};"
+
+            sql_queries = []
+            sql_queries.append(query)
+            records = dbh.execute_sql_queries(sql_queries)
+
+            sids_list = []
 
 
+            # For the sources that were not matched for the field of interest,
+            # create AstroObjects_<field> record and then Merges_<field> record.
+
+            for record in records:
+
+                sid = record[0]
+                sids_list.append(sid)
+
+            for sid in sids_list:
+
+                try:
+                    if sid_dict[sid] == 1:
+                        continue
+                except:
+
+                    # Source was not matched, so create AstroObjects_<field> record and then Merges_<field> record.
+
+                    query = f"SELECT ra,dec,field,hp6,hp9,fluxfit FROM {sources_tablename} WHERE sid = {sid};"
+
+                    sql_queries = []
+                    sql_queries.append(query)
+                    records = dbh.execute_sql_queries(sql_queries)
+
+                    for record in records:
+
+                        source_ra = record[0]
+                        source_dec = record[1]
+                        source_field = record[2]
+                        source_hp6 = record[3]
+                        source_hp9 = record[4]
+                        source_flux = record[5]
+
+                        source_mag = -2.5 * np.log10(source_flux);
+
+
+                    # For now, set the lightcurve statistics to zero.              # TODO
+
+                    meanra = 0
+                    stdevra = 0
+                    meandec = 0
+                    stdevdec = 0
+                    meanmag = 0
+                    stdevmag = 0
+                    nsources = 0
+
+                    aid = dbh.add_astro_object_to_field(astroobjects_tablename,
+                                                        source_ra,
+                                                        source_dec,
+                                                        source_mag,
+                                                        meanra,
+                                                        stdevra,
+                                                        meandec,
+                                                        stdevdec,
+                                                        meanmag,
+                                                        stdevmag,
+                                                        nsources,
+                                                        field,
+                                                        hp6,
+                                                        hp9):
+
+                    dbh.add_merge_to_field(merges_tablename,aid,sid)
 
 
         # End of loop over field.
