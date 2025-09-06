@@ -187,7 +187,7 @@ def run_single_core_job(scas,fields,index_thread):
         if index_thread != index_core:
             continue
 
-        field = fields[index_job]
+        field = fields[index_field]
 
 
         fh.write(f"Loop start: index_job,field = {index_job},{field}\n")
@@ -429,7 +429,6 @@ if __name__ == '__main__':
     sql_queries = []
     sql_queries.append("SET default_tablespace = pipeline_data_01;")
 
-    fields_list = fields_dict.keys()
 
     for field in fields_list:
 
@@ -455,9 +454,12 @@ if __name__ == '__main__':
     sql_queries = []
     sql_queries.append("SET default_tablespace = pipeline_indx_01;")
 
-    fields_list = fields_dict.keys()
-
     for field in fields_list:
+
+        table_exists_flag = already_made_dict[field]
+
+        if table_exists_flag is True:
+            continue
 
         tablename1 = f"astroobjects_{field}"
 
