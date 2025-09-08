@@ -470,7 +470,7 @@ if __name__ == '__main__':
         sql_queries.append(f"CREATE INDEX {tablename1}_field_idx ON {tablename1} (field);")
         sql_queries.append(f"CREATE INDEX {tablename1}_nsources_idx ON {tablename1} (nsources);")
         sql_queries.append(f"CREATE INDEX {tablename1}_aid_idx ON {tablename1} (aid);")
-        sql_queries.append(f"ALTER TABLE ONLY {tablename1} ADD CONSTRAINT astroobjectspk_{field} UNIQUE (ra0, dec0);")
+        #sql_queries.append(f"ALTER TABLE ONLY {tablename1} ADD CONSTRAINT astroobjectspk_{field} UNIQUE (ra0, dec0);")       # TODO
         sql_queries.append(f"CREATE INDEX {tablename1}_radec_idx ON {tablename1} (q3c_ang2ipix(ra0, dec0));")
         sql_queries.append(f"CREATE INDEX {tablename2}_aid_idx ON {tablename2} USING btree (aid);")
         sql_queries.append(f"CREATE INDEX {tablename2}_sid_idx ON {tablename2} USING btree (sid);")
