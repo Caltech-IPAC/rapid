@@ -34,6 +34,7 @@ print("cfg_filename_only =", cfg_filename_only)
 # Compute start time for benchmark.
 
 start_time_benchmark = time.time()
+start_time_benchmark_at_start = start_time_benchmark
 
 
 # Compute processing datetime (UT) and processing datetime (Pacific time).
@@ -610,6 +611,13 @@ if __name__ == '__main__':
     print("Elapsed time in seconds to index, cluster, and apply grants to sources database tables for all SCAs associated with processing date =",
         end_time_benchmark - start_time_benchmark)
     start_time_benchmark = end_time_benchmark
+
+
+    # Code-timing benchmark overall.
+
+    end_time_benchmark = time.time()
+    print(f"Elapsed time in seconds to load all sources into database for {proc_date} =",
+        end_time_benchmark - start_time_benchmark_at_start)
 
 
     # Close database connections.
