@@ -3237,6 +3237,7 @@ class RAPIDDB:
     def add_merge_to_field(self,tablename,aid,sid):
 
         self.exit_code = 0
+        record_exists = False
 
 
         # Define query.
@@ -3255,7 +3256,9 @@ class RAPIDDB:
 
         try:
             record = self.cur.fetchone()
-            record_exists = True
+            print(f"Record from querying {tablename} = {record}; continuing...")
+            if record is not None:
+                record_exists = True
         except:
             print(f"Nothing returned from database query ({query}); continuing...")
 
