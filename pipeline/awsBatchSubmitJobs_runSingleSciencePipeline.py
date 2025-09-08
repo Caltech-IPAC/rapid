@@ -1213,8 +1213,6 @@ if __name__ == '__main__':
             phot['y_fit'].info.format = '.4f'
             phot.add_column(ra, name='ra')
             phot.add_column(dec, name='dec')
-            phot['ra'].info.format = '.6f'
-            phot['dec'].info.format = '.6f'
 
 
             # Write PSF-fit photometry catalog in astropy table to text file.
@@ -1629,8 +1627,6 @@ if __name__ == '__main__':
                     phot['y_fit'].info.format = '.4f'
                     phot.add_column(ra, name='ra')
                     phot.add_column(dec, name='dec')
-                    phot['ra'].info.format = '.6f'
-                    phot['dec'].info.format = '.6f'
 
 
                     # Write PSF-fit photometry catalog in astropy table to text file.
