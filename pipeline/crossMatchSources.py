@@ -472,7 +472,7 @@ if __name__ == '__main__':
         sql_queries.append(f"CREATE INDEX {tablename1}_aid_idx ON {tablename1} (aid);")
         sql_queries.append(f"ALTER TABLE ONLY {tablename1} ADD CONSTRAINT astroobjectspk_{field} UNIQUE (ra0, dec0);")
         sql_queries.append(f"CREATE INDEX {tablename1}_radec_idx ON {tablename1} (q3c_ang2ipix(ra0, dec0));")
-         sql_queries.append(f"CREATE INDEX {tablename2}_aid_idx ON {tablename2} USING btree (aid);")
+        sql_queries.append(f"CREATE INDEX {tablename2}_aid_idx ON {tablename2} USING btree (aid);")
         sql_queries.append(f"CREATE INDEX {tablename2}_sid_idx ON {tablename2} USING btree (sid);")
         sql_queries.append(f"REVOKE ALL ON TABLE {tablename1} FROM rapidreadrole;")
         sql_queries.append(f"GRANT SELECT ON TABLE {tablename1} TO GROUP rapidreadrole;")
