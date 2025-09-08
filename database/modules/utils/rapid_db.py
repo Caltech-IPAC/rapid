@@ -3275,7 +3275,7 @@ class RAPIDDB:
                 f"            )" +\
                 f"            values" +\
                 f"            ({str(aid)}," +\
-                f"             {str(sid)})"
+                f"             {str(sid)});"
 
             print('query = {}'.format(query))
 

@@ -472,7 +472,7 @@ if __name__ == '__main__':
         sql_queries.append(f"CREATE INDEX {tablename1}_aid_idx ON {tablename1} (aid);")
         sql_queries.append(f"ALTER TABLE ONLY {tablename1} ADD CONSTRAINT astroobjectspk_{field} UNIQUE (ra0, dec0);")
         sql_queries.append(f"CREATE INDEX {tablename1}_radec_idx ON {tablename1} (q3c_ang2ipix(ra0, dec0));")
-        sql_queries.append(f"CREATE INDEX {tablename2}_aid_idx ON {tablename2} USING btree (aid);")
+         sql_queries.append(f"CREATE INDEX {tablename2}_aid_idx ON {tablename2} USING btree (aid);")
         sql_queries.append(f"CREATE INDEX {tablename2}_sid_idx ON {tablename2} USING btree (sid);")
         sql_queries.append(f"REVOKE ALL ON TABLE {tablename1} FROM rapidreadrole;")
         sql_queries.append(f"GRANT SELECT ON TABLE {tablename1} TO GROUP rapidreadrole;")
@@ -524,7 +524,7 @@ if __name__ == '__main__':
 
     # Cluster and analyze astroobjects database tables for all fields associated with processing date.
 
-    print("Reclustering and reanalyzing astroobjects database tables for all fields associated with processing date...")
+    print("Clustering and analyzing astroobjects database tables for all fields associated with processing date...")
 
     sql_queries = []
     sql_queries.append("SET default_tablespace = pipeline_indx_01;")
@@ -535,7 +535,7 @@ if __name__ == '__main__':
 
         tablename2 = f"merges_{field}"
 
-        sql_queries.append(f"CLUSTER {tablename1}_radec_idx ON {tablename};")
+        sql_queries.append(f"CLUSTER {tablename1}_radec_idx ON {tablename1};")
         sql_queries.append(f"ANALYZE {tablename1};")
         sql_queries.append(f"ALTER TABLE {tablename1} SET LOGGED;")
         sql_queries.append(f"ALTER TABLE {tablename2} SET LOGGED;")
