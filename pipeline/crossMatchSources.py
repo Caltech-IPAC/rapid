@@ -24,6 +24,7 @@ print("cfg_filename_only =", cfg_filename_only)
 # Compute start time for benchmark.
 
 start_time_benchmark = time.time()
+start_time_benchmark_at_start = start_time_benchmark
 
 
 # Compute processing datetime (UT) and processing datetime (Pacific time).
@@ -112,6 +113,7 @@ match_radius = float(config_input['SOURCE_MATCHING']['match_radius'])
 
 num_cores = os.cpu_count()
 #num_cores = 1
+print("num_cores =",num_cores)
 
 dbh_list = []
 
@@ -468,7 +470,7 @@ if __name__ == '__main__':
         sql_queries.append(f"CREATE INDEX {tablename1}_field_idx ON {tablename1} (field);")
         sql_queries.append(f"CREATE INDEX {tablename1}_nsources_idx ON {tablename1} (nsources);")
         sql_queries.append(f"CREATE INDEX {tablename1}_aid_idx ON {tablename1} (aid);")
-        sql_queries.append(f"ALTER TABLE ONLY {tablename1} ADD CONSTRAINT astroobjectspk_1 UNIQUE (ra0, dec0);")
+        sql_queries.append(f"ALTER TABLE ONLY {tablename1} ADD CONSTRAINT {tablename1} UNIQUE (ra0, dec0);")
         sql_queries.append(f"CREATE INDEX {tablename1}_radec_idx ON {tablename1} (q3c_ang2ipix(ra0, dec0));")
         sql_queries.append(f"CLUSTER {tablename1}_radec_idx ON {tablename1};")
         sql_queries.append(f"ANALYZE {tablename1};")
@@ -531,11 +533,14 @@ if __name__ == '__main__':
 
     for field in fields_list:
 
-        tablename = f"astroobjects_{field}"
+        tablename1 = f"astroobjects_{field}"
 
-        sql_queries.append(f"CLUSTER {tablename}_radec_idx ON {tablename};")
-        sql_queries.append(f"ANALYZE {tablename};")
-        sql_queries.append(f"ALTER TABLE {tablename} SET LOGGED;")
+        tablename2 = f"merges_{field}"
+
+        sql_queries.append(f"CLUSTER {tablename1}_radec_idx ON {tablename};")
+        sql_queries.append(f"ANALYZE {tablename1};")
+        sql_queries.append(f"ALTER TABLE {tablename1} SET LOGGED;")
+        sql_queries.append(f"ALTER TABLE {tablename2} SET LOGGED;")
 
     dbh.execute_sql_queries(sql_queries)
 
@@ -546,6 +551,13 @@ if __name__ == '__main__':
     print("Elapsed time in seconds to recluster and reanalyze astroobjects database tables =",
         end_time_benchmark - start_time_benchmark)
     start_time_benchmark = end_time_benchmark
+
+
+    # Code-timing benchmark overall.
+
+    end_time_benchmark = time.time()
+    print(f"Elapsed time in seconds to cross-match all sources for {proc_date} =",
+        end_time_benchmark - start_time_benchmark_at_start)
 
 
     # Close database connections.
