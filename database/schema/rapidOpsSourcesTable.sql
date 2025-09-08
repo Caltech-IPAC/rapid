@@ -31,6 +31,7 @@ CREATE TABLE sources (
     sid bigint NOT NULL,                       -- Database unique primary key
     id integer NOT NULL,                       -- Non-unique id column in photutils psf-fit catalog file in S3 bucket
     pid integer NOT NULL,                      -- DiffImages primary key
+    isdiffpos boolean NOT NULL,                -- t = positive difference, f = negative difference
     ra double precision NOT NULL,              -- RA corresponding to (xfit,yfit)
     dec double precision NOT NULL,             -- Dec corresponding to (xfit,yfit)
     xfit real NOT NULL,                        -- PSF-fit x position
