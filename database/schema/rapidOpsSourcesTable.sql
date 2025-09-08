@@ -145,7 +145,7 @@ ALTER TABLE sources SET UNLOGGED;
 
 -- Cone-searching query (used to build a light curve for a specified sky position ra_, dec_):
 -- E.g.,
--- SELECT cast('1' as smallint) as time, id, ra, dec, mag, cast(q3c_dist(ra, dec, ra_, dec_) * 3600.0 as real) as dist
+-- SELECT cast('1' as smallint) as time, id, ra, dec, flux, cast(q3c_dist(ra, dec, ra_, dec_) * 3600.0 as real) as dist
 -- FROM Objects_1
 -- WHERE q3c_radial_query(ra, dec, ra_, dec_, radius_)
 -- ORDER by dist;
@@ -191,13 +191,13 @@ CREATE TABLE astroobjects (
     aid bigint NOT NULL,
     ra0 double precision NOT NULL,              -- RA corresponding to initial sky position
     dec0 double precision NOT NULL,             -- Dec corresponding to initial sky position
-    mag0 real NOT NULL,                         -- Instrumental magnitude of initial sky position
+    flux0 real NOT NULL,                        -- Flux of initial sky position
     meanra double precision NOT NULL,           -- Mean RA
     stdevra real NOT NULL,                      -- Standard deviation of RA
     meandec double precision NOT NULL,          -- Mean Dec
     stdevdec real NOT NULL,                     -- Standard deviation of Dec
-    meanmag real NOT NULL,                      -- Mean instrumental magnitude
-    stdevmag real NOT NULL,                     -- Standard deviation of instrumental magnitude
+    meanflux real NOT NULL,                     -- Mean flux
+    stdevflux real NOT NULL,                    -- Standard deviation of flux
     nsources smallint NOT NULL,                 -- Total number of sources (all filters)
     field integer NOT NULL,                     -- Roman tessellation index for (ra,dec)
     hp6 integer NOT NULL,                       -- Level-6 healpix index (NESTED) for (ra,dec)
@@ -283,7 +283,7 @@ CREATE INDEX astroobjects_nsources_idx ON astroobjects (nsources);
 
 -- Cone-searching query (used to build a light curve for a specified sky position ra_, dec_):
 -- E.g.,
--- SELECT aid, ra0, dec0, mag0, cast(q3c_dist(ra0, dec0, ra_, dec_) * 3600.0 as real) as dist
+-- SELECT aid, ra0, dec0, flux0, cast(q3c_dist(ra0, dec0, ra_, dec_) * 3600.0 as real) as dist
 -- FROM astroobjects_1
 -- WHERE q3c_radial_query(ra0, dec0, ra_, dec_, radius_)
 -- ORDER by dist;
