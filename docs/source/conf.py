@@ -19,7 +19,7 @@ import sphinx_rtd_theme
 # -- Project information -----------------------------------------------------
 
 project = 'Caltech-IPAC-RAPID'
-copyright = '2024, Ben Rusholme, Schuyler Van Dyk, Mansi Kasliwal, Lin Yan, Ashish Mahabal, Roberta Paladini, Joe Masiero, Jacob Jenson, and Russ Laher'
+copyright = '2025, Ben Rusholme, Schuyler Van Dyk, Mansi Kasliwal, Lin Yan, Ashish Mahabal, Roberta Paladini, Joe Masiero, Jacob Jenson, and Russ Laher'
 author = 'Ben Rusholme, Schuyler Van Dyk, Mansi Kasliwal, Lin Yan, Ashish Mahabal, Roberta Paladini, Joe Masiero, Jacob Jenson, and Russ Laher'
 
 # The full version, including alpha/beta/rc tags
