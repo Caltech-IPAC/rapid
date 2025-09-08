@@ -221,8 +221,8 @@ def run_single_core_job(scas,fields,index_thread):
 
             for record in records:
 
-                sid = record[2]
-                aid = record[3]
+                sid = record[0]
+                aid = record[1]
 
                 sid_dict[sid] = 1
 
