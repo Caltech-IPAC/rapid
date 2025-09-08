@@ -110,8 +110,8 @@ match_radius = float(config_input['SOURCE_MATCHING']['match_radius'])
 
 # Open database connections for parallel access.
 
-#num_cores = os.cpu_count()
-num_cores = 1
+num_cores = os.cpu_count()
+#num_cores = 1
 
 dbh_list = []
 
@@ -486,6 +486,8 @@ if __name__ == '__main__':
         sql_queries.append(f"GRANT INSERT,UPDATE,SELECT,DELETE,TRUNCATE,TRIGGER,REFERENCES ON TABLE {tablename1} TO rapidporole;")
         sql_queries.append(f"REVOKE ALL ON TABLE {tablename2} FROM rapidporole;")
         sql_queries.append(f"GRANT INSERT,UPDATE,SELECT,DELETE,TRUNCATE,TRIGGER,REFERENCES ON TABLE {tablename2} TO rapidporole;")
+        sql_queries.append(f"ALTER TABLE {tablename1} SET UNLOGGED;")
+        sql_queries.append(f"ALTER TABLE {tablename2} SET UNLOGGED;")
 
     dbh.execute_sql_queries(sql_queries)
 
@@ -533,6 +535,7 @@ if __name__ == '__main__':
 
         sql_queries.append(f"CLUSTER {tablename}_radec_idx ON {tablename};")
         sql_queries.append(f"ANALYZE {tablename};")
+        sql_queries.append(f"ALTER TABLE {tablename} SET LOGGED;")
 
     dbh.execute_sql_queries(sql_queries)
 
