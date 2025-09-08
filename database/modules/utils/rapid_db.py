@@ -3019,7 +3019,7 @@ class RAPIDDB:
 
 ########################################################################################################
 
-    def add_astro_object(self,ra0,dec0,mag0,meanra,stdevra,meandec,stdevdec,meanmag,stdevmag,nsources,field,hp6,hp9):
+    def add_astro_object(self,ra0,dec0,flux0,meanra,stdevra,meandec,stdevdec,meanflux,stdevflux,nsources,field,hp6,hp9):
 
         '''
         Add record to AstroObjects database table.
@@ -3034,13 +3034,13 @@ class RAPIDDB:
             "select aid from addAstroObjects(" +\
             "cast('TEMPLATE_RA0' as double precision)," +\
             "cast('TEMPLATE_DEC0' as double precision)," +\
-            "cast('TEMPLATE_MAG0' as real)," +\
+            "cast('TEMPLATE_FLUX0' as real)," +\
             "cast('TEMPLATE_MEANRA' as double precision)," +\
             "cast('TEMPLATE_STDEVRA' as real)," +\
             "cast('TEMPLATE_MEANDEC' as double precision)," +\
             "cast('TEMPLATE_STDEVDEC' as real)," +\
-            "cast('TEMPLATE_MEANMAG' as real)," +\
-            "cast('TEMPLATE_STDEVMAG' as real)," +\
+            "cast('TEMPLATE_MEANFLUX' as real)," +\
+            "cast('TEMPLATE_STDEVFLUX' as real)," +\
             "cast('TEMPLATE_NSOURCES' as smallint)," +\
             "cast('TEMPLATE_FIELD' as integer)," +\
             "cast('TEMPLATE_HP6' as integer)," +\
@@ -3051,13 +3051,13 @@ class RAPIDDB:
 
         print(f"----> ra0 = {ra0}")
         print(f"----> dec0 = {dec0}")
-        print(f"----> mag0 = {mag0}")
+        print(f"----> flux0 = {flux0}")
         print(f"----> meanra = {meanra}")
         print(f"----> stdevra = {stdevra}")
         print(f"----> meandec = {meandec}")
         print(f"----> stdevdec = {stdevdec}")
-        print(f"----> meanmag = {meanmag}")
-        print(f"----> stdevmag = {stdevmag}")
+        print(f"----> meanflux = {meanflux}")
+        print(f"----> stdevflux = {stdevflux}")
         print(f"----> nsources = {nsources}")
         print(f"----> field = {field}")
         print(f"----> hp6 = {hp6}")
@@ -3065,13 +3065,13 @@ class RAPIDDB:
 
         ra0_str = str(ra0)
         dec0_str = str(dec0)
-        mag0_str = str(mag0)
+        flux0_str = str(flux0)
         meanra_str = str(meanra)
         stdevra_str = str(stdevra)
         meandec_str = str(meandec)
         stdevdec_str = str(stdevdec)
-        meanmag_str = str(meanmag)
-        stdevmag_str = str(stdevmag)
+        meanflux_str = str(meanflux)
+        stdevflux_str = str(stdevflux)
         nsources_str = str(nsources)
         field_str = str(field)
         hp6_str = str(hp6)
@@ -3083,13 +3083,13 @@ class RAPIDDB:
 
         rep["TEMPLATE_RA0"] = ra0_str
         rep["TEMPLATE_DEC0"] = dec0_str
-        rep["TEMPLATE_MAG0"] = mag0_str
+        rep["TEMPLATE_FLUX0"] = flux0_str
         rep["TEMPLATE_MEANRA"] = meanra_str
         rep["TEMPLATE_STDEVRA"] = stdevra_str
         rep["TEMPLATE_MEANDEC"] = meandec_str
         rep["TEMPLATE_STDEVDEC"] = stdevdec_str
-        rep["TEMPLATE_MEANMAG"] = meanmag_str
-        rep["TEMPLATE_STDEVMAG"] = stdevmag_str
+        rep["TEMPLATE_MEANFLUX"] = meanflux_str
+        rep["TEMPLATE_STDEVFLUX"] = stdevflux_str
         rep["TEMPLATE_NSOURCES"] = nsources_str
 
         rep = dict((re.escape(k), v) for k, v in rep.items())
@@ -3172,7 +3172,7 @@ class RAPIDDB:
 
 ########################################################################################################
 
-    def add_astro_object_to_field(self,tablename,ra0,dec0,mag0,meanra,stdevra,meandec,stdevdec,meanmag,stdevmag,nsources,field,hp6,hp9):
+    def add_astro_object_to_field(self,tablename,ra0,dec0,flux0,meanra,stdevra,meandec,stdevdec,meanflux,stdevflux,nsources,field,hp6,hp9):
 
         self.exit_code = 0
 
@@ -3183,13 +3183,13 @@ class RAPIDDB:
             f"insert into {tablename}" +\
             f"            (ra0," +\
             f"             dec0," +\
-            f"             mag0," +\
+            f"             flux0," +\
             f"             meanra," +\
             f"             stdevra," +\
             f"             meandec," +\
             f"             stdevdec," +\
-            f"             meanmag," +\
-            f"             stdevmag," +\
+            f"             meanflux," +\
+            f"             stdevflux," +\
             f"             nsources," +\
             f"             field," +\
             f"             hp6," +\
@@ -3198,13 +3198,13 @@ class RAPIDDB:
             f"            values" +\
             f"            ({str(ra0)}," +\
             f"             {str(dec0)}," +\
-            f"             {str(mag0)}," +\
+            f"             {str(flux0)}," +\
             f"             {str(meanra)}," +\
             f"             {str(stdevra)}," +\
             f"             {str(meandec)}," +\
             f"             {str(stdevdec)}," +\
-            f"             {str(meanmag)}," +\
-            f"             {str(stdevmag)}," +\
+            f"             {str(meanflux)}," +\
+            f"             {str(stdevflux)}," +\
             f"             {str(nsources)}," +\
             f"             {str(field)}," +\
             f"             {str(hp6)}," +\

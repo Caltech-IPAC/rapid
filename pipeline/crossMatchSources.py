@@ -276,8 +276,6 @@ def run_single_core_job(scas,fields,index_thread):
                             print(f"*** Error: field ({field}) not equal to source_field ({source_field}); quitting...")
                             exit(64)
 
-                        source_mag = -2.5 * np.log10(source_flux)
-
 
                     # For now, set the lightcurve statistics to zero.              # TODO
 
@@ -285,20 +283,20 @@ def run_single_core_job(scas,fields,index_thread):
                     stdevra = 0
                     meandec = 0
                     stdevdec = 0
-                    meanmag = 0
-                    stdevmag = 0
+                    meanflux = 0
+                    stdevflux = 0
                     nsources = 0
 
                     aid = dbh.add_astro_object_to_field(astroobjects_tablename,
                                                         source_ra,
                                                         source_dec,
-                                                        source_mag,
+                                                        source_flux,
                                                         meanra,
                                                         stdevra,
                                                         meandec,
                                                         stdevdec,
-                                                        meanmag,
-                                                        stdevmag,
+                                                        meanflux,
+                                                        stdevflux,
                                                         nsources,
                                                         field,
                                                         source_hp6,
