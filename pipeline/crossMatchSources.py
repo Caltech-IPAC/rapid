@@ -252,9 +252,7 @@ def run_single_core_job(scas,fields,index_thread):
 
             for sid in sids_list:
 
-                if sid in sid_dict:
-                    test = sid_dict[sid]
-                else:
+                if sid not in sid_dict:
 
 
                     # Source was not matched, so create AstroObjects_<field> record and then Merges_<field> record.
