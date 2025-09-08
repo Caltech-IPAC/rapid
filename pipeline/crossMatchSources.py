@@ -275,7 +275,7 @@ def run_single_core_job(scas,fields,index_thread):
                         source_flux = record[5]
 
                         if field != source_field:
-                            print(f"*** Error: field ({field}) not equal to source_field ({source_field}); quitting...")
+                            fh.write(f"*** Error: field ({field}) not equal to source_field ({source_field}); quitting...")
                             exit(64)
 
 
