@@ -204,9 +204,8 @@ def run_single_core_job(scas,fields,index_thread):
         astroobjects_tablename = f"astroobjects_{field}"
         merges_tablename = f"merges_{field}"
 
-        for sca_index in range(18):
+        for sca in scas:
 
-            sca = sca_index + 1
             sources_tablename = f"sources_{proc_date}_{sca}"
 
             query = f"SELECT a.sid,b.aid FROM {sources_tablename} AS a, " +\
@@ -218,6 +217,12 @@ def run_single_core_job(scas,fields,index_thread):
             records = dbh.execute_sql_queries(sql_queries)
 
             sid_dict = {}
+
+            nrecs = len(records)
+
+            if nrecs == 0:
+                continue
+
 
             # For the sources that were matched, create Merges_<field> record.
 
@@ -276,7 +281,8 @@ def run_single_core_job(scas,fields,index_thread):
 
                         if field != source_field:
                             fh.write(f"*** Error: field ({field}) not equal to source_field ({source_field}); quitting...")
-                            exit(64)
+                            print(f"*** Error: field ({field}) not equal to source_field ({source_field}); quitting...")
+                            raise Exception(f"*** Error: field ({field}) not equal to source_field ({source_field}); quitting...")
 
 
                     # For now, set the lightcurve statistics to zero.              # TODO
@@ -316,6 +322,10 @@ def run_single_core_job(scas,fields,index_thread):
 
     fh.close()
 
+    message = f"Finish normally for index_thread = {index_thread}"
+
+    return message
+
 
 def execute_parallel_processes(scas_list,fields_list,num_cores=None):
 
@@ -332,6 +342,13 @@ def execute_parallel_processes(scas_list,fields_list,num_cores=None):
         for i, future in enumerate(as_completed(futures)):
             index = futures.index(future)  # Find the original index/order of the completed future
             print(f"Completed: {i+1} processes, lastly for index={index}")
+
+    for future in futures:
+        index = futures.index(future)
+        try:
+            print(future.result())
+        except Exception as e:
+            print(f"*** Error in thread index {index} = {e}")
 
 
 #################
