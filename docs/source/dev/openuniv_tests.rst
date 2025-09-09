@@ -834,8 +834,14 @@ Similar to the 7/10/2025 test, with the following exceptions:
 * Changed [SEXTRACTOR_DIFFIMAGE] FILTER_THRESH = 3.0, DEBLEND_NTHRESH = 32, WEIGHT_TYPE = "NONE,MAP_RMS", FILTER = "N" (last two parameters are overrided in code for ZOGY and SFFT SExtractor catalogs).
 * Fed ZOGY dxrmsfin = 0.0, dyrmsfin = 0.0 for comparison with SFFT.
 
-Covers 6,875 science images.
+Covers 6,875 science images.  All science images in the 8/23 run had 100 fake sources injected per science image.
+This is in addition to the fake sources that are already included in the OpenUniverse simulation set.
+
 New reference images were made with corrected uncertainties (79 total).
+The reference images are special in that their input frames are selected
+from the observation window 63,400 < MJD < 99,9999, which is later than the observation range of the test.
+The test covers only those field/filter combinations in which reference images can be made that have 6 input frames or more,
+which resulted in 79 reference images.
 
 Note that SFFT was run with the ``--crossconv`` flag, as was done for the 6/20/25 and 7/10/25 tests,
 but in those previous tests, the convolved and deconvolved SFFT difference images had their roles
@@ -882,19 +888,37 @@ Swarping images                                                 8.826
 Running bkgest on science image                                 13.459
 Running gainmatchscienceandreferenceimages                      5.845
 Replacing nans, applying image offsets, etc.                    0.101
-Running zogy                                                    39.043
-Masking zogy difference image                                   0.579
-Running sextractor on zogy difference image                     3.901
-Generating psf-fit catalog on zogy difference image             15.247
+Running ZOGY                                                    39.043
+Masking ZOGY difference image                                   0.579
+Running sextractor on ZOGY difference image                     3.901
+Generating psf-fit catalog on ZOGY difference image             15.247
 Uploading main products to s3 bucket                            4.429
-Running sfft                                                    291.798
-Uploading sfft difference image to s3 bucket                    5.317
-Running sextractor on sfft difference image                     1.442
-Uploading sfft-diffimage sextractor catalog to s3 bucket        0.109
-Generating psf-fit catalog on sfft difference image             12.091
-Uploading sfft-diffimage psf-fit catalogs to s3 bucket          0.800
+Running SFFT                                                    291.798
+Uploading SFFT difference image to s3 bucket                    5.317
+Running sextractor on SFFT difference image                     1.442
+Uploading SFFT-diffimage sextractor catalog to s3 bucket        0.109
+Generating psf-fit catalog on SFFT difference image             12.091
+Uploading SFFT-diffimage psf-fit catalogs to s3 bucket          0.800
 Computing naive image difference                                1.211
 Running sextractor on naive difference image                    4.671
 Uploading products at pipeline end                              0.033
 Total time to run one instance of science pipeline              466.751
 ==============================================================  =====================
+
+
+Typically only 1-4 science images in an exposure were processed in the 5,538 exposures covered by this test.
+Here is a breakdown of the number of science images processed per filter in this test:
+
+.. code-block::
+
+    fakesourcesdb=> select fid,count(*) from diffimages where vbest>0 and status>0 and created >= '2025-08-23' group by fid;
+     fid | count
+    -----+-------
+       7 |   770
+       1 |   770
+       5 |  1142
+       4 |  1140
+       2 |  1142
+       6 |  1141
+       3 |   770
+    (7 rows)
