@@ -874,8 +874,9 @@ A new capability is computing an SExtractor catalog for the naive difference ima
     (2 rows)
 
 The VPO clocked 3.24 hours to run the entire test (all 6,875 science images).
-As shown in the table below, executing SFFT, executing AWAICGEN for reference-image generation,
-and injecting fake sources are the dominant contributors to running a pipeline instance.
+As shown in the table below for a particular pipeline instance, executing SFFT,
+executing AWAICGEN for reference-image generation, and injecting fake sources
+are the dominant factors affecting pipeline performance.
 
 ==============================================================  =====================
 Pipeline step                                                   Execution time (sec)
@@ -902,7 +903,7 @@ Uploading SFFT-diffimage psf-fit catalogs to s3 bucket          0.800
 Computing naive image difference                                1.211
 Running sextractor on naive difference image                    4.671
 Uploading products at pipeline end                              0.033
-Total time to run one instance of science pipeline              466.751
+Total time to run one instance of science pipeline              593.158
 ==============================================================  =====================
 
 Typically only 1-4 science images in an exposure were processed in the 5,538 exposures covered by this test.
