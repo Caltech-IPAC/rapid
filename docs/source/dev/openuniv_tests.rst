@@ -874,14 +874,14 @@ A new capability is computing an SExtractor catalog for the naive difference ima
     (2 rows)
 
 The VPO clocked 3.24 hours to run the entire test (all 6,875 science images).
-As shown in the table below, executing SFFT and injecting fake sources are the dominant contributors
-to running a pipeline instance.
+As shown in the table below, executing SFFT, executing AWAICGEN for reference-image generation,
+and injecting fake sources are the dominant contributors to running a pipeline instance.
 
 ==============================================================  =====================
 Pipeline step                                                   Execution time (sec)
 ==============================================================  =====================
 Downloading science image                                       0.865
-Downloading or generating reference image                       129.247 (9 input frames)
+Downloading or generating reference image  (9 input frames)     129.247
 Injecting fake sources                                          51.104
 Generating science-image catalog                                3.029
 Swarping images                                                 8.826
