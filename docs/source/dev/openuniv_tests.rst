@@ -881,7 +881,7 @@ to running a pipeline instance.
 Pipeline step                                                   Execution time (sec)
 ==============================================================  =====================
 Downloading science image                                       0.865
-Downloading or generating reference image                       2.840
+Downloading or generating reference image                       129.247 (9 input frames)
 Injecting fake sources                                          51.104
 Generating science-image catalog                                3.029
 Swarping images                                                 8.826
@@ -904,7 +904,6 @@ Running sextractor on naive difference image                    4.671
 Uploading products at pipeline end                              0.033
 Total time to run one instance of science pipeline              466.751
 ==============================================================  =====================
-
 
 Typically only 1-4 science images in an exposure were processed in the 5,538 exposures covered by this test.
 Here is a breakdown of the number of science images processed per filter in this test:
