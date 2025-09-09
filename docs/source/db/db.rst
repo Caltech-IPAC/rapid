@@ -183,8 +183,9 @@ The DiffImMeta database table stores various QA measures for difference images.
 Source Matching
 ************************************
 
-Three basic PostgreSQL tables are used for source matching psf-fit catalogs
-made by the Python photutils package from the ZOGY difference images:
+Three basic PostgreSQL tables are used for source matching PSF-fit catalogs
+made by the Python photutils package from the ZOGY difference images (until
+a final decision on which image-differencing method is best):
 
 * Sources (extracted/selected from catalogs)
 * AstroObjects (astronomical objects for which time-dependent sources form light curves)
@@ -239,3 +240,8 @@ with the same processing date (all SCAs).
 Source matching will be done in parallel by field and possibly fid.  Thus multiple cores
 on the database-server machine will be utilized, and scaling up the architecture is possible
 by moving the database server to a machine with more cores and memory (if it can be afforded).
+
+So far, the RAPID pipeline makes PSF-fit catalogs only for positive difference images (i,e, "science image
+minus reference image").  In the near future, it will be extended to negative difference images.
+The Source database table has the boolean ``isdiffpos`` column to indicate for a given source
+from which type of source extraction it originated.
