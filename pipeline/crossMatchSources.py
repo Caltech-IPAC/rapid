@@ -218,11 +218,6 @@ def run_single_core_job(scas,fields,index_thread):
 
             sid_dict = {}
 
-            nrecs = len(records)
-
-            if nrecs == 0:
-                continue
-
 
             # For the sources that were matched, create Merges_<field> record.
 
