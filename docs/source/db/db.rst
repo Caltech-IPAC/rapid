@@ -243,5 +243,5 @@ by moving the database server to a machine with more cores and memory (if it can
 
 So far, the RAPID pipeline makes PSF-fit catalogs only for positive difference images (i,e, "science image
 minus reference image").  In the near future, it will be extended to negative difference images.
-The Source database table has the boolean ``isdiffpos`` column to indicate for a given source
+The Sources database table has the boolean ``isdiffpos`` column to indicate for a given source
 from which type of source extraction it originated.
