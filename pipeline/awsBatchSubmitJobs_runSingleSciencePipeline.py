@@ -1072,6 +1072,15 @@ if __name__ == '__main__':
         util.restore_nans(filename_scorrimage_masked,nan_indices_refimage)
 
 
+    # Compute negative ZOGY difference and scorr images.
+
+    filename_diffimage_masked_negative = filename_diffimage_masked.replace(".fits","_negative.fits")
+    util.scale_image_data(filename_diffimage_masked,-1.0,filename_diffimage_masked_negative)
+
+    filename_scorrimage_masked_negative = filename_scorrimage_masked.replace(".fits","_negative.fits")
+    util.scale_image_data(filename_scorrimage_masked,-1.0,filename_scorrimage_masked_negative)
+
+
     # Code-timing benchmark.
 
     end_time_benchmark = time.time()
@@ -1082,7 +1091,8 @@ if __name__ == '__main__':
 
     # Generate diffimage uncertainty image, which will be the weight image for sextractor_WEIGHT_IMAGE.
 
-    filename_diffimage_unc_masked = 'diffimage_uncert_masked.fits'
+    filename_diffimage_unc_masked = filename_diffimage_masked.replace("masked.fits","uncert_masked.fits")
+
     dfis.compute_diffimage_uncertainty(sca_gain,
                                        reformatted_science_image_filename,
                                        output_resampled_gainmatched_reference_image,
@@ -1090,21 +1100,22 @@ if __name__ == '__main__':
                                        post_zogy_keep_diffimg_lower_cov_map_thresh,
                                        filename_diffimage_masked,
                                        filename_diffimage_unc_masked)
+
     filename_weight_image = filename_diffimage_unc_masked
-    filename_diffimage_sextractor_catalog = filename_diffimage_masked.replace(".fits",".txt")
 
 
-    # Store SExtractor diffimage parameters to be overridden.
+    # Store SExtractor diffimage parameters to be overridden and reverted to afterwards.
     save_weight_type = sextractor_diffimage_dict["sextractor_WEIGHT_TYPE".lower()]
     save_filter = sextractor_diffimage_dict["sextractor_FILTER".lower()]
 
 
-    # Compute SExtractor catalog for ZOGY masked difference image.
+    # Compute SExtractor catalog for positive ZOGY masked difference image.
     # Execute SExtractor to first detect candidates on Scorr (S/N) match-filter
     # image, then use to perform aperture phot on difference image to generate
     # raw ascii catalog file.
 
     sextractor_diffimage_paramsfile = cfg_path + "/rapidSexParamsDiffImage.inp";
+    filename_diffimage_sextractor_catalog = filename_diffimage_masked.replace(".fits",".txt")
 
     sextractor_diffimage_dict["sextractor_detection_image".lower()] = filename_scorrimage_masked
     sextractor_diffimage_dict["sextractor_input_image".lower()] = filename_diffimage_masked
@@ -1126,7 +1137,7 @@ if __name__ == '__main__':
     sextractor_diffimage_dict["sextractor_FILTER".lower()] = save_filter
 
 
-    # Parse SExtractor catalog for ZOGY masked difference image.
+    # Parse SExtractor catalog for positive ZOGY masked difference image.
 
     params_to_get_diffimage = ["XWIN_IMAGE","YWIN_IMAGE","FLUX_APER_6"]
 
@@ -1142,12 +1153,61 @@ if __name__ == '__main__':
     # Code-timing benchmark.
 
     end_time_benchmark = time.time()
-    print("Elapsed time in seconds after running SExtractor on ZOGY difference image =",
+    print("Elapsed time in seconds after running SExtractor on positive ZOGY difference image =",
         end_time_benchmark - start_time_benchmark)
     start_time_benchmark = end_time_benchmark
 
 
-    # Generate PSF-fit catalog for ZOGY difference image using photutils.  No background subtraction is done.
+    # Compute SExtractor catalog for negative ZOGY masked difference image.
+    # Execute SExtractor to first detect candidates on Scorr (S/N) match-filter
+    # image, then use to perform aperture phot on difference image to generate
+    # raw ascii catalog file.
+
+    sextractor_diffimage_paramsfile = cfg_path + "/rapidSexParamsDiffImage.inp";
+    filename_diffimage_sextractor_catalog_negative = filename_diffimage_masked_negative.replace(".fits",".txt")
+
+    sextractor_diffimage_dict["sextractor_detection_image".lower()] = filename_scorrimage_masked_negative
+    sextractor_diffimage_dict["sextractor_input_image".lower()] = filename_diffimage_masked_negative
+    # Override the config-file parameter sextractor_WEIGHT_TYPE for ZOGY masked-difference-image catalog.
+    sextractor_diffimage_dict["sextractor_WEIGHT_TYPE".lower()] = "NONE,MAP_RMS"
+    sextractor_diffimage_dict["sextractor_WEIGHT_IMAGE".lower()] = filename_weight_image
+    sextractor_diffimage_dict["sextractor_PARAMETERS_NAME".lower()] = sextractor_diffimage_paramsfile
+    # Override the config-file parameter sextractor_FILTER for ZOGY masked-difference-image catalog.
+    sextractor_diffimage_dict["sextractor_FILTER".lower()] = "N"
+    sextractor_diffimage_dict["sextractor_FILTER_NAME".lower()] = cfg_path + "/rapidSexDiffImageFilter.conv"
+    sextractor_diffimage_dict["sextractor_STARNNW_NAME".lower()] = cfg_path + "/rapidSexDiffImageStarGalaxyClassifier.nnw"
+    sextractor_diffimage_dict["sextractor_CATALOG_NAME".lower()] = filename_diffimage_sextractor_catalog_negative
+    sextractor_cmd = util.build_sextractor_command_line_args(sextractor_diffimage_dict)
+    exitcode_from_sextractor = util.execute_command(sextractor_cmd)
+
+
+    # Revert overridden SExtractor diffimage parameters.
+    sextractor_diffimage_dict["sextractor_WEIGHT_TYPE".lower()] = save_weight_type
+    sextractor_diffimage_dict["sextractor_FILTER".lower()] = save_filter
+
+
+    # Parse SExtractor catalog for negative ZOGY masked difference image.
+
+    params_to_get_diffimage = ["XWIN_IMAGE","YWIN_IMAGE","FLUX_APER_6"]
+
+    vals_diffimage_negative = util.parse_ascii_text_sextractor_catalog(filename_diffimage_sextractor_catalog_negative,
+                                                              sextractor_diffimage_paramsfile,
+                                                              params_to_get_diffimage)
+
+    nsexcatsources_diffimage_negative = len(vals_diffimage_negative)
+
+    print("nsexcatsources_diffimage_negative =",nsexcatsources_diffimage_negative)
+
+
+    # Code-timing benchmark.
+
+    end_time_benchmark = time.time()
+    print("Elapsed time in seconds after running SExtractor on negative ZOGY difference image =",
+        end_time_benchmark - start_time_benchmark)
+    start_time_benchmark = end_time_benchmark
+
+
+    # Generate PSF-fit catalog for positive ZOGY difference image using photutils.  No background subtraction is done.
 
     n_clip_sigma = float(psfcat_diffimage_dict["n_clip_sigma"])
     n_thresh_sigma = float(psfcat_diffimage_dict["n_thresh_sigma"])
@@ -1157,10 +1217,9 @@ if __name__ == '__main__':
     fit_shape = tuple(int(x) for x in fit_shape_str.replace("(","").replace(")","").replace(" ", "").split(','))
     aperture_radius = float(psfcat_diffimage_dict["aperture_radius"])
 
-
-    input_img_filename = psfcat_diffimage_dict["input_zogy_img_filename"]
-    input_unc_filename = psfcat_diffimage_dict["input_zogy_unc_filename"]
-    input_psf_filename = psfcat_diffimage_dict["input_zogy_psf_filename"]
+    input_img_filename = filename_diffimage_masked
+    input_unc_filename = filename_diffimage_unc_masked
+    input_psf_filename = filename_diffpsf
     output_psfcat_filename = psfcat_diffimage_dict["output_zogy_psfcat_filename"]
     output_psfcat_finder_filename = psfcat_diffimage_dict["output_zogy_psfcat_finder_filename"]
     output_psfcat_residual_filename = psfcat_diffimage_dict["output_zogy_psfcat_residual_filename"]
@@ -1235,7 +1294,99 @@ if __name__ == '__main__':
     # Code-timing benchmark.
 
     end_time_benchmark = time.time()
-    print("Elapsed time in seconds after generating PSF-fit catalog on ZOGY difference image =",
+    print("Elapsed time in seconds after generating PSF-fit catalog on positive ZOGY difference image =",
+        end_time_benchmark - start_time_benchmark)
+    start_time_benchmark = end_time_benchmark
+
+
+    # Generate PSF-fit catalog for negative ZOGY difference image using photutils.  No background subtraction is done.
+
+    n_clip_sigma = float(psfcat_diffimage_dict["n_clip_sigma"])
+    n_thresh_sigma = float(psfcat_diffimage_dict["n_thresh_sigma"])
+
+    fwhm = float(psfcat_diffimage_dict["fwhm"])
+    fit_shape_str = psfcat_diffimage_dict["fit_shape"]
+    fit_shape = tuple(int(x) for x in fit_shape_str.replace("(","").replace(")","").replace(" ", "").split(','))
+    aperture_radius = float(psfcat_diffimage_dict["aperture_radius"])
+
+    input_img_filename = filename_diffimage_masked_negative
+    input_unc_filename = filename_diffimage_unc_masked
+    input_psf_filename = filename_diffpsf
+    output_psfcat_filename_negative = psfcat_diffimage_dict["output_zogy_psfcat_filename"].replace(".txt","_negative.txt")
+    output_psfcat_finder_filename_negative = psfcat_diffimage_dict["output_zogy_psfcat_finder_filename"].replace(".txt","_negative.txt")
+    output_psfcat_residual_filename_negative = psfcat_diffimage_dict["output_zogy_psfcat_residual_filename"].replace(".fits","_negative.fits")
+
+    psfcat_flag,phot,psfphot = util.compute_diffimage_psf_catalog(n_clip_sigma,
+                                                                  n_thresh_sigma,
+                                                                  fwhm,
+                                                                  fit_shape,
+                                                                  aperture_radius,
+                                                                  input_img_filename,
+                                                                  input_unc_filename,
+                                                                  input_psf_filename,
+                                                                  output_psfcat_residual_filename_negative)
+
+    print("psfcat_flag =",psfcat_flag)
+
+    if not psfcat_flag:
+
+        output_diffimage_file_infobits |= 2**0
+
+    else:
+
+        # Output psf-fit catalog is an PSFPhotometry astropy table with the PSF-fitting results
+        # merged with the DAOStarFinder astropy table.
+        # Output columns are documentated at
+        # https://photutils.readthedocs.io/en/latest/api/photutils.psf.PSFPhotometry.html
+        # https://photutils.readthedocs.io/en/stable/api/photutils.detection.DAOStarFinder.html
+
+        try:
+            phot['x_init'].info.format = '.4f'
+            phot['y_init'].info.format = '.4f'
+            phot['flux_init'].info.format = '.6f'
+            phot['flux_fit'].info.format = '.6f'
+            phot['x_err'].info.format = '.4f'
+            phot['y_err'].info.format = '.4f'
+            phot['flux_err'].info.format = '.5f'
+            phot['qfit'].info.format = '.4f'
+            phot['cfit'].info.format = '.4f'
+
+            print(phot[('id', 'x_fit', 'y_fit', 'flux_fit','x_err', 'y_err', 'flux_err', 'npixfit', 'qfit', 'cfit', 'flags')])
+
+
+            # Compute sky coordinates for given pixel coordinates.
+
+            ra,dec = util.computeSkyCoordsFromPixelCoords(filename_bkg_subbed_science_image,
+                                                          list(phot['x_fit']),
+                                                          list(phot['y_fit']))
+
+            phot['x_fit'].info.format = '.4f'
+            phot['y_fit'].info.format = '.4f'
+            phot.add_column(ra, name='ra')
+            phot.add_column(dec, name='dec')
+
+
+            # Write PSF-fit photometry catalog in astropy table to text file.
+
+            print("output_psfcat_filename_negative = ", output_psfcat_filename_negative)
+
+            ascii.write(phot, output_psfcat_filename_negative, overwrite=True)
+
+
+            # Write PSF-fit finder catalog in astropy table to text file.
+
+            print("output_psfcat_finder_filename_negative = ", output_psfcat_finder_filename_negative)
+
+            ascii.write(psfphot.finder_results, output_psfcat_finder_filename_negative, overwrite=True)
+
+        except Exception as e:
+            print(f"PSF-fit PSFPhotometry and DAOStarFinder catalogs: An unexpected error occurred: {e}")
+
+
+    # Code-timing benchmark.
+
+    end_time_benchmark = time.time()
+    print("Elapsed time in seconds after generating PSF-fit catalog on negative ZOGY difference image =",
         end_time_benchmark - start_time_benchmark)
     start_time_benchmark = end_time_benchmark
 
@@ -1253,7 +1404,7 @@ if __name__ == '__main__':
 
     product_s3_bucket = product_s3_bucket_base
     s3_object_name_diffimage = job_proc_date + "/jid" + str(jid) + "/" + filename_diffimage_masked
-    s3_object_name_diffimage_unc = job_proc_date + "/jid" + str(jid) + "/" + filename_diffimage_unc_masked
+    s3_object_name_diffimage_unc_masked = job_proc_date + "/jid" + str(jid) + "/" + filename_diffimage_unc_masked
     s3_object_name_diffimage_catalog = job_proc_date + "/jid" + str(jid) + "/" + filename_diffimage_sextractor_catalog
     s3_object_name_diffpsf = job_proc_date + "/jid" + str(jid) + "/" + filename_diffpsf
     s3_object_name_scorrimage = job_proc_date + "/jid" + str(jid) + "/" + filename_scorrimage_masked
@@ -1264,6 +1415,13 @@ if __name__ == '__main__':
     s3_object_name_output_psfcat_finder_filename = job_proc_date + "/jid" + str(jid) + "/" + output_psfcat_finder_filename
     s3_object_name_output_psfcat_residual_filename = job_proc_date + "/jid" + str(jid) + "/" + output_psfcat_residual_filename
 
+    s3_object_name_diffimage_negative = job_proc_date + "/jid" + str(jid) + "/" + filename_diffimage_masked_negative
+    s3_object_name_diffimage_catalog_negative = job_proc_date + "/jid" + str(jid) + "/" + filename_diffimage_sextractor_catalog_negative
+    s3_object_name_scorrimage_negative = job_proc_date + "/jid" + str(jid) + "/" + filename_scorrimage_masked_negative
+    s3_object_name_output_psfcat_filename_negative = job_proc_date + "/jid" + str(jid) + "/" + output_psfcat_filename_negative
+    s3_object_name_output_psfcat_finder_filename_negative = job_proc_date + "/jid" + str(jid) + "/" + output_psfcat_finder_filename_negative
+    s3_object_name_output_psfcat_residual_filename_negative = job_proc_date + "/jid" + str(jid) + "/" + output_psfcat_residual_filename_negative
+
     filenames = [filename_diffimage_masked,
                  filename_diffimage_unc_masked,
                  filename_diffimage_sextractor_catalog,
@@ -1273,10 +1431,16 @@ if __name__ == '__main__':
                  output_resampled_gainmatched_reference_image,
                  output_psfcat_filename,
                  output_psfcat_finder_filename,
-                 output_psfcat_residual_filename]
+                 output_psfcat_residual_filename,
+                 s3_object_name_diffimage_negative,
+                 s3_object_name_diffimage_catalog_negative,
+                 s3_object_name_scorrimage_negative,
+                 s3_object_name_output_psfcat_filename_negative,
+                 s3_object_name_output_psfcat_finder_filename_negative,
+                 s3_object_name_output_psfcat_residual_filename_negative]
 
     objectnames = [s3_object_name_diffimage,
-                   s3_object_name_diffimage_unc,
+                   s3_object_name_diffimage_unc_masked,
                    s3_object_name_diffimage_catalog,
                    s3_object_name_diffpsf,
                    s3_object_name_scorrimage,
@@ -1284,7 +1448,13 @@ if __name__ == '__main__':
                    s3_object_name_output_resampled_gainmatched_reference_image,
                    s3_object_name_output_psfcat_filename,
                    s3_object_name_output_psfcat_finder_filename,
-                   s3_object_name_output_psfcat_residual_filename]
+                   s3_object_name_output_psfcat_residual_filename
+                   filename_diffimage_masked_negative,
+                   filename_diffimage_sextractor_catalog_negative,
+                   filename_scorrimage_masked_negative,
+                   output_psfcat_filename_negative,
+                   output_psfcat_finder_filename_negative,
+                   output_psfcat_residual_filename_negative]
 
     util.upload_files_to_s3_bucket(s3_client,product_s3_bucket,filenames,objectnames)
 
@@ -1445,18 +1615,28 @@ if __name__ == '__main__':
                                                  filename_cconvdiff)
 
 
+            # Compute negative SFFT difference and cconv images.
+
+            filename_sfftdiffimage_negative = filename_sfftdiffimage.replace(".fits","_negative.fits")
+            util.scale_image_data(filename_sfftdiffimage,-1.0,filename_sfftdiffimage_negative)
+
+            filename_cconvdiff_negative = filename_cconvdiff.replace(".fits","_negative.fits")
+            util.scale_image_data(filename_cconvdiff,-1.0,filename_cconvdiff_negative)
+
+
             # Generate SFFT diffimage uncertainty image, which will be the weight image for sextractor_WEIGHT_IMAGE.
 
-            filename_sfftdiffimage_unc = 'sfftdiffimage_uncert_masked.fits'
+            filename_sfftdiffimage_unc_masked = 'sfftdiffimage_uncert_masked.fits'
+
             dfis.compute_diffimage_uncertainty(sca_gain,
                                                reformatted_science_image_filename,
                                                output_resampled_gainmatched_reference_image,
                                                output_resampled_reference_cov_map,
                                                post_zogy_keep_diffimg_lower_cov_map_thresh,
                                                filename_sfftdiffimage,
-                                               filename_sfftdiffimage_unc)
-            filename_weight_image = filename_sfftdiffimage_unc
-            filename_sfftdiffimage_sextractor_catalog = filename_sfftdiffimage.replace(".fits",".txt")
+                                               filename_sfftdiffimage_unc_masked)
+
+            filename_weight_image = filename_sfftdiffimage_unc_masked
 
 
             # Upload SFFT-product FITS files to product S3 bucket.
@@ -1465,17 +1645,23 @@ if __name__ == '__main__':
             s3_object_name_sfftdiffimage = job_proc_date + "/jid" + str(jid) + "/" + filename_sfftdiffimage
             s3_object_name_sfftsoln = job_proc_date + "/jid" + str(jid) + "/" + filename_sfftsoln
             s3_object_name_cconvdiff = job_proc_date + "/jid" + str(jid) + "/" + filename_cconvdiff
-            s3_object_name_sfftdiffimage_unc = job_proc_date + "/jid" + str(jid) + "/" + filename_sfftdiffimage_unc
+            s3_object_name_sfftdiffimage_unc_masked = job_proc_date + "/jid" + str(jid) + "/" + filename_sfftdiffimage_unc_masked
+            s3_object_name_sfftdiffimage_negative = job_proc_date + "/jid" + str(jid) + "/" + filename_sfftdiffimage_negative
+            s3_object_name_cconvdiff_negative = job_proc_date + "/jid" + str(jid) + "/" + filename_cconvdiff_negative
 
             filenames = [filename_sfftdiffimage,
                          filename_sfftsoln,
                          filename_cconvdiff,
-                         filename_sfftdiffimage_unc]
+                         filename_sfftdiffimage_unc_masked,
+                         filename_sfftdiffimage_negative,
+                         filename_cconvdiff_negative]
 
             objectnames = [s3_object_name_sfftdiffimage,
                            s3_object_name_sfftsoln,
                            s3_object_name_cconvdiff,
-                           s3_object_name_sfftdiffimage_unc]
+                           s3_object_name_sfftdiffimage_unc_masked,
+                           s3_object_name_sfftdiffimage_negative,
+                           s3_object_name_cconvdiff_negative]
 
             util.upload_files_to_s3_bucket(s3_client,product_s3_bucket,filenames,objectnames)
 
@@ -1488,7 +1674,7 @@ if __name__ == '__main__':
             start_time_benchmark = end_time_benchmark
 
 
-            # Compute raw-ascii SExtractor catalog for SFFT masked difference image.
+            # Compute raw-ascii SExtractor catalog for positive SFFT masked difference image.
             # If the SFFT crossconv flag is set, then execute SExtractor to detect candidates
             # on the cross-convolved image and analyze detections on the deconvolved image.
 
@@ -1519,7 +1705,7 @@ if __name__ == '__main__':
             sextractor_diffimage_dict["sextractor_FILTER".lower()] = save_filter
 
 
-            # Parse SExtractor catalog for SFFT masked difference image.
+            # Parse SExtractor catalog for positive SFFT masked difference image.
 
             params_to_get_diffimage = ["XWIN_IMAGE","YWIN_IMAGE","FLUX_APER_6"]
 
@@ -1535,7 +1721,60 @@ if __name__ == '__main__':
             # Code-timing benchmark.
 
             end_time_benchmark = time.time()
-            print("Elapsed time in seconds after running SExtractor on SFFT difference image =",
+            print("Elapsed time in seconds after running SExtractor on positive SFFT difference images =",
+                end_time_benchmark - start_time_benchmark)
+            start_time_benchmark = end_time_benchmark
+
+
+            # Compute raw-ascii SExtractor catalog for negative SFFT masked difference image.
+            # If the SFFT crossconv flag is set, then execute SExtractor to detect candidates
+            # on the cross-convolved image and analyze detections on the deconvolved image.
+
+            if crossconv_flag:
+                filename_detection_image_negative = filename_cconvdiff_negative
+            else:
+                filename_detection_image_negative = filename_sfftdiffimage_negative
+
+            sextractor_diffimage_paramsfile = cfg_path + "/rapidSexParamsDiffImage.inp";
+            filename_sfftdiffimage_sextractor_catalog = filename_sfftdiffimage_negative.replace(".fits",".txt")
+
+            sextractor_diffimage_dict["sextractor_detection_image".lower()] = filename_detection_image_negative
+            sextractor_diffimage_dict["sextractor_input_image".lower()] = filename_sfftdiffimage_negative
+            # Override the config-file parameter sextractor_WEIGHT_TYPE for SFFT masked-difference-image catalog.
+            sextractor_diffimage_dict["sextractor_WEIGHT_TYPE".lower()] = "NONE,MAP_RMS"
+            sextractor_diffimage_dict["sextractor_WEIGHT_IMAGE".lower()] = filename_weight_image
+            sextractor_diffimage_dict["sextractor_PARAMETERS_NAME".lower()] = sextractor_diffimage_paramsfile
+            # Override the config-file parameter sextractor_FILTER for SFFT masked-difference-image catalog.
+            sextractor_diffimage_dict["sextractor_FILTER".lower()] = "N"
+            sextractor_diffimage_dict["sextractor_FILTER_NAME".lower()] = cfg_path + "/rapidSexDiffImageFilter.conv"
+            sextractor_diffimage_dict["sextractor_STARNNW_NAME".lower()] = cfg_path + "/rapidSexDiffImageStarGalaxyClassifier.nnw"
+            sextractor_diffimage_dict["sextractor_CATALOG_NAME".lower()] = filename_sfftdiffimage_sextractor_catalog_negative
+            sextractor_cmd = util.build_sextractor_command_line_args(sextractor_diffimage_dict)
+            exitcode_from_sextractor = util.execute_command(sextractor_cmd)
+
+
+            # Revert overridden SExtractor diffimage parameters.
+            sextractor_diffimage_dict["sextractor_WEIGHT_TYPE".lower()] = save_weight_type
+            sextractor_diffimage_dict["sextractor_FILTER".lower()] = save_filter
+
+
+            # Parse SExtractor catalog for negative SFFT masked difference image.
+
+            params_to_get_diffimage = ["XWIN_IMAGE","YWIN_IMAGE","FLUX_APER_6"]
+
+            vals_sfftdiffimage_negative = util.parse_ascii_text_sextractor_catalog(filename_sfftdiffimage_sextractor_catalog_negative,
+                                                                          sextractor_diffimage_paramsfile,
+                                                                          params_to_get_diffimage)
+
+            nsexcatsources_sfftdiffimage_negative = len(vals_sfftdiffimage_negative)
+
+            print("nsexcatsources_sfftdiffimage_negative =",nsexcatsources_sfftdiffimage_negative)
+
+
+            # Code-timing benchmark.
+
+            end_time_benchmark = time.time()
+            print("Elapsed time in seconds after running SExtractor on negative SFFT difference images =",
                 end_time_benchmark - start_time_benchmark)
             start_time_benchmark = end_time_benchmark
 
@@ -1544,10 +1783,13 @@ if __name__ == '__main__':
 
             product_s3_bucket = product_s3_bucket_base
             s3_object_name_sfftdiffimage_catalog = job_proc_date + "/jid" + str(jid) + "/" + filename_sfftdiffimage_sextractor_catalog
+            s3_object_name_sfftdiffimage_catalog_negative = job_proc_date + "/jid" + str(jid) + "/" + filename_sfftdiffimage_sextractor_catalog_negative
 
-            filenames = [filename_sfftdiffimage_sextractor_catalog]
+            filenames = [filename_sfftdiffimage_sextractor_catalog,
+                         filename_sfftdiffimage_sextractor_catalog_negative]
 
-            objectnames = [s3_object_name_sfftdiffimage_catalog]
+            objectnames = [s3_object_name_sfftdiffimage_catalog,
+                           s3_object_name_sfftdiffimage_catalog_negative]
 
             util.upload_files_to_s3_bucket(s3_client,product_s3_bucket,filenames,objectnames)
 
@@ -1555,12 +1797,12 @@ if __name__ == '__main__':
             # Code-timing benchmark.
 
             end_time_benchmark = time.time()
-            print("Elapsed time in seconds after uploading SFFT-diffimage SExtractor catalog to S3 bucket =",
+            print("Elapsed time in seconds after uploading SFFT-diffimage SExtractor catalogs to S3 bucket =",
                 end_time_benchmark - start_time_benchmark)
             start_time_benchmark = end_time_benchmark
 
 
-            # Generate PSF-fit catalog for SFFT difference image using photutils.  No background subtraction is done.
+            # Generate PSF-fit catalog for positive SFFT difference image using photutils.  No background subtraction is done.
 
             n_clip_sigma = float(psfcat_diffimage_dict["n_clip_sigma"])
             n_thresh_sigma = float(psfcat_diffimage_dict["n_thresh_sigma"])
@@ -1572,7 +1814,7 @@ if __name__ == '__main__':
 
 
             input_img_filename = filename_sfftdiffimage
-            input_unc_filename = filename_sfftdiffimage_unc
+            input_unc_filename = filename_sfftdiffimage_unc_masked
             input_psf_filename = filename_refimage_psf                                                      # TODO
             output_psfcat_filename = psfcat_diffimage_dict["output_sfft_psfcat_filename"]
             output_psfcat_finder_filename = psfcat_diffimage_dict["output_sfft_psfcat_finder_filename"]
@@ -1643,13 +1885,107 @@ if __name__ == '__main__':
                     ascii.write(psfphot.finder_results, output_psfcat_finder_filename, overwrite=True)
 
                 except Exception as e:
-                    print(f"PSF-fit PSFPhotometry and DAOStarFinder catalogs: An unexpected error occurred: {e}")
+                    print(f"PSF-fit PSFPhotometry and DAOStarFinder catalogs (positive SFFT difference image): An unexpected error occurred: {e}")
 
 
             # Code-timing benchmark.
 
             end_time_benchmark = time.time()
-            print("Elapsed time in seconds after generating PSF-fit catalog on SFFT difference image =",
+            print("Elapsed time in seconds after generating PSF-fit catalog on positive SFFT difference image =",
+                end_time_benchmark - start_time_benchmark)
+            start_time_benchmark = end_time_benchmark
+
+
+            # Generate PSF-fit catalog for negative SFFT difference image using photutils.  No background subtraction is done.
+
+            n_clip_sigma = float(psfcat_diffimage_dict["n_clip_sigma"])
+            n_thresh_sigma = float(psfcat_diffimage_dict["n_thresh_sigma"])
+
+            fwhm = float(psfcat_diffimage_dict["fwhm"])
+            fit_shape_str = psfcat_diffimage_dict["fit_shape"]
+            fit_shape = tuple(int(x) for x in fit_shape_str.replace("(","").replace(")","").replace(" ", "").split(','))
+            aperture_radius = float(psfcat_diffimage_dict["aperture_radius"])
+
+
+            input_img_filename = filename_sfftdiffimage_negative
+            input_unc_filename = filename_sfftdiffimage_unc_masked
+            input_psf_filename = filename_refimage_psf                                                      # TODO
+            output_psfcat_filename_negative = psfcat_diffimage_dict["output_sfft_psfcat_filename"].replace(".txt","_negative.txt")
+            output_psfcat_finder_filename_negative = psfcat_diffimage_dict["output_sfft_psfcat_finder_filename"].replace(".txt","_negative.txt")
+            output_psfcat_residual_filename_negative = psfcat_diffimage_dict["output_sfft_psfcat_residual_filename"].replace(".fits","_negative.fits")
+
+            psfcat_flag,phot,psfphot = util.compute_diffimage_psf_catalog(n_clip_sigma,
+                                                                          n_thresh_sigma,
+                                                                          fwhm,
+                                                                          fit_shape,
+                                                                          aperture_radius,
+                                                                          input_img_filename,
+                                                                          input_unc_filename,
+                                                                          input_psf_filename,
+                                                                          output_psfcat_residual_filename_negative)
+
+            print("psfcat_flag =",psfcat_flag)
+
+
+            if not psfcat_flag:
+
+                output_diffimage_file_infobits |= 2**1
+
+            else:
+
+                # Output psf-fit catalog is an PSFPhotometry astropy table with the PSF-fitting results
+                # merged with the DAOStarFinder astropy table.
+                # Output columns are documentated at
+                # https://photutils.readthedocs.io/en/latest/api/photutils.psf.PSFPhotometry.html
+                # https://photutils.readthedocs.io/en/stable/api/photutils.detection.DAOStarFinder.html
+
+                try:
+                    phot['x_init'].info.format = '.4f'
+                    phot['y_init'].info.format = '.4f'
+                    phot['flux_init'].info.format = '.6f'
+                    phot['flux_fit'].info.format = '.6f'
+                    phot['x_err'].info.format = '.4f'
+                    phot['y_err'].info.format = '.4f'
+                    phot['flux_err'].info.format = '.5f'
+                    phot['qfit'].info.format = '.4f'
+                    phot['cfit'].info.format = '.4f'
+
+                    print(phot[('id', 'x_fit', 'y_fit', 'flux_fit','x_err', 'y_err', 'flux_err', 'npixfit', 'qfit', 'cfit', 'flags')])
+
+
+                    # Compute sky coordinates for given pixel coordinates.
+
+                    ra,dec = util.computeSkyCoordsFromPixelCoords(filename_bkg_subbed_science_image,
+                                                                  list(phot['x_fit']),
+                                                                  list(phot['y_fit']))
+
+                    phot['x_fit'].info.format = '.4f'
+                    phot['y_fit'].info.format = '.4f'
+                    phot.add_column(ra, name='ra')
+                    phot.add_column(dec, name='dec')
+
+
+                    # Write PSF-fit photometry catalog in astropy table to text file.
+
+                    print("output_psfcat_filename_negative = ", output_psfcat_filename_negative)
+
+                    ascii.write(phot, output_psfcat_filename_negative, overwrite=True)
+
+
+                    # Write PSF-fit finder catalog in astropy table to text file.
+
+                    print("output_psfcat_finder_filename_negative = ", output_psfcat_finder_filename_negative)
+
+                    ascii.write(psfphot.finder_results, output_psfcat_finder_filename_negative, overwrite=True)
+
+                except Exception as e:
+                    print(f"PSF-fit PSFPhotometry and DAOStarFinder catalogs (negative SFFT difference image): An unexpected error occurred: {e}")
+
+
+            # Code-timing benchmark.
+
+            end_time_benchmark = time.time()
+            print("Elapsed time in seconds after generating PSF-fit catalog on negative SFFT difference image =",
                 end_time_benchmark - start_time_benchmark)
             start_time_benchmark = end_time_benchmark
 
@@ -1661,16 +1997,25 @@ if __name__ == '__main__':
             s3_object_name_output_psfcat_finder_filename = job_proc_date + "/jid" + str(jid) + "/" + output_psfcat_finder_filename
             s3_object_name_output_psfcat_residual_filename = job_proc_date + "/jid" + str(jid) + "/" + output_psfcat_residual_filename
             s3_object_name_refimage_psf = job_proc_date + "/jid" + str(jid) + "/" + filename_refimage_psf
+            s3_object_name_output_psfcat_filename_negative = job_proc_date + "/jid" + str(jid) + "/" + output_psfcat_filename_negative
+            s3_object_name_output_psfcat_finder_filename_negative = job_proc_date + "/jid" + str(jid) + "/" + output_psfcat_finder_filename_negative
+            s3_object_name_output_psfcat_residual_filename_negative = job_proc_date + "/jid" + str(jid) + "/" + output_psfcat_residual_filename_negative
 
             filenames = [output_psfcat_filename,
                          output_psfcat_finder_filename,
                          output_psfcat_residual_filename,
-                         filename_refimage_psf]
+                         filename_refimage_psf,
+                         output_psfcat_filename_negative,
+                         output_psfcat_finder_filename_negative,
+                         output_psfcat_residual_filename_negative]
 
             objectnames = [s3_object_name_output_psfcat_filename,
                            s3_object_name_output_psfcat_finder_filename,
                            s3_object_name_output_psfcat_residual_filename,
-                           s3_object_name_refimage_psf]
+                           s3_object_name_refimage_psf,
+                           s3_object_name_output_psfcat_filename_negative,
+                           s3_object_name_output_psfcat_finder_filename_negative,
+                           s3_object_name_output_psfcat_residual_filename_negative]
 
             util.upload_files_to_s3_bucket(s3_client,product_s3_bucket,filenames,objectnames)
 
@@ -1738,14 +2083,23 @@ if __name__ == '__main__':
             util.restore_nans(filename_naive_diffimage_masked,nan_indices_refimage)
 
 
+        # Compute negative naive difference image.
+
+        filename_naive_diffimage_masked_negative = filename_naive_diffimage_masked.replace(".fits","_negative.fits")
+        util.scale_image_data(filename_naive_diffimage_masked,-1.0,filename_naive_diffimage_masked_negative)
+
+
         # Upload naive-diffimage-product FITS file to product S3 bucket.
 
         product_s3_bucket = product_s3_bucket_base
         s3_object_name_naive_diffimage_masked = job_proc_date + "/jid" + str(jid) + "/" + filename_naive_diffimage_masked
+        s3_object_name_naive_diffimage_masked_negative = job_proc_date + "/jid" + str(jid) + "/" + filename_naive_diffimage_masked_negative
 
-        filenames = [filename_naive_diffimage_masked]
+        filenames = [filename_naive_diffimage_masked,
+                     filename_naive_diffimage_masked_negative]
 
-        objectnames = [s3_object_name_naive_diffimage_masked]
+        objectnames = [s3_object_name_naive_diffimage_masked,
+                       s3_object_name_naive_diffimage_masked_negative]
 
         util.upload_files_to_s3_bucket(s3_client,product_s3_bucket,filenames,objectnames)
 
@@ -1753,14 +2107,14 @@ if __name__ == '__main__':
         # Code-timing benchmark.
 
         end_time_benchmark = time.time()
-        print("Elapsed time in seconds after computing naive image difference =",
+        print("Elapsed time in seconds after computing naive difference images =",
             end_time_benchmark - start_time_benchmark)
         start_time_benchmark = end_time_benchmark
 
 
         # Generate naive diffimage uncertainty image, which will be the weight image for sextractor_WEIGHT_IMAGE.
 
-        filename_naive_diffimage_unc = filename_naive_diffimage_masked.replace("masked.fits","uncert_masked.fits")
+        filename_naive_diffimage_unc_masked = filename_naive_diffimage_masked.replace("masked.fits","uncert_masked.fits")
 
         dfis.compute_diffimage_uncertainty(sca_gain,
                                            reformatted_science_image_filename,
@@ -1768,14 +2122,15 @@ if __name__ == '__main__':
                                            output_resampled_reference_cov_map,
                                            post_zogy_keep_diffimg_lower_cov_map_thresh,
                                            filename_naive_diffimage_masked,
-                                           filename_naive_diffimage_unc)
-        filename_weight_image = filename_naive_diffimage_unc
-        filename_naive_diffimage_sextractor_catalog = filename_naive_diffimage_masked.replace(".fits",".txt")
+                                           filename_naive_diffimage_unc_masked)
+
+        filename_weight_image = filename_naive_diffimage_unc_masked
 
 
-        # Compute SExtractor catalog for masked difference image and generate raw ascii catalog file.
+        # Compute SExtractor catalog for positive naive difference image and generate raw ascii catalog file.
 
         sextractor_diffimage_paramsfile = cfg_path + "/rapidSexParamsDiffImage.inp";
+        filename_naive_diffimage_sextractor_catalog = filename_naive_diffimage_masked.replace(".fits",".txt")
 
         sextractor_diffimage_dict["sextractor_detection_image".lower()] = filename_naive_diffimage_masked
         sextractor_diffimage_dict["sextractor_input_image".lower()] = filename_naive_diffimage_masked
@@ -1798,17 +2153,62 @@ if __name__ == '__main__':
         print("nsexcatsources_naive_diffimage =",nsexcatsources_naive_diffimage)
 
 
+        # Code-timing benchmark.
+
+        end_time_benchmark = time.time()
+        print("Elapsed time in seconds after running SExtractor on positive naive difference image =",
+            end_time_benchmark - start_time_benchmark)
+        start_time_benchmark = end_time_benchmark
+
+
+        # Compute SExtractor catalog for negative naive difference image and generate raw ascii catalog file.
+
+        sextractor_diffimage_paramsfile = cfg_path + "/rapidSexParamsDiffImage.inp";
+        filename_naive_diffimage_sextractor_catalog_negative = filename_naive_diffimage_masked_negative.replace(".fits",".txt")
+
+        sextractor_diffimage_dict["sextractor_detection_image".lower()] = filename_naive_diffimage_masked_negative
+        sextractor_diffimage_dict["sextractor_input_image".lower()] = filename_naive_diffimage_masked_negative
+        sextractor_diffimage_dict["sextractor_WEIGHT_IMAGE".lower()] = filename_weight_image
+        sextractor_diffimage_dict["sextractor_PARAMETERS_NAME".lower()] = sextractor_diffimage_paramsfile
+        sextractor_diffimage_dict["sextractor_FILTER_NAME".lower()] = cfg_path + "/rapidSexDiffImageFilter.conv"
+        sextractor_diffimage_dict["sextractor_STARNNW_NAME".lower()] = cfg_path + "/rapidSexDiffImageStarGalaxyClassifier.nnw"
+        sextractor_diffimage_dict["sextractor_CATALOG_NAME".lower()] = filename_naive_diffimage_sextractor_catalog_negative
+        sextractor_cmd = util.build_sextractor_command_line_args(sextractor_diffimage_dict)
+        exitcode_from_sextractor = util.execute_command(sextractor_cmd)
+
+        params_to_get_diffimage = ["XWIN_IMAGE","YWIN_IMAGE","FLUX_APER_6"]
+
+        vals_naive_diffimage_negative = util.parse_ascii_text_sextractor_catalog(filename_naive_diffimage_sextractor_catalog_negative,
+                                                                      sextractor_diffimage_paramsfile,
+                                                                      params_to_get_diffimage)
+
+        nsexcatsources_naive_diffimage_negative = len(vals_naive_diffimage_negative)
+
+        print("nsexcatsources_naive_diffimage_negative =",nsexcatsources_naive_diffimage_negative)
+
+
+        # Code-timing benchmark.
+
+        end_time_benchmark = time.time()
+        print("Elapsed time in seconds after running SExtractor on negative naive difference image =",
+            end_time_benchmark - start_time_benchmark)
+        start_time_benchmark = end_time_benchmark
+
+
         # Upload additional naive-diffimage-product FITS files to product S3 bucket.
 
         product_s3_bucket = product_s3_bucket_base
-        s3_object_name_naive_diffimage_unc = job_proc_date + "/jid" + str(jid) + "/" + filename_naive_diffimage_unc
+        s3_object_name_naive_diffimage_unc_masked = job_proc_date + "/jid" + str(jid) + "/" + filename_naive_diffimage_unc_masked
         s3_object_name_naive_diffimage_sextractor_catalog = job_proc_date + "/jid" + str(jid) + "/" + filename_naive_diffimage_sextractor_catalog
+        s3_object_name_naive_diffimage_sextractor_catalog_negative = job_proc_date + "/jid" + str(jid) + "/" + filename_naive_diffimage_sextractor_catalog_negative
 
-        filenames = [filename_naive_diffimage_unc,
-                     filename_naive_diffimage_sextractor_catalog]
+        filenames = [filename_naive_diffimage_unc_masked,
+                     filename_naive_diffimage_sextractor_catalog,
+                     filename_naive_diffimage_sextractor_catalog_negative]
 
-        objectnames = [s3_object_name_naive_diffimage_unc,
-                       s3_object_name_naive_diffimage_sextractor_catalog]
+        objectnames = [s3_object_name_naive_diffimage_unc_masked,
+                       s3_object_name_naive_diffimage_sextractor_catalog,
+                       s3_object_name_naive_diffimage_sextractor_catalog_negative]
 
         util.upload_files_to_s3_bucket(s3_client,product_s3_bucket,filenames,objectnames)
 
@@ -1816,7 +2216,214 @@ if __name__ == '__main__':
         # Code-timing benchmark.
 
         end_time_benchmark = time.time()
-        print("Elapsed time in seconds after running SExtractor on naive difference image =",
+        print("Elapsed time in seconds after uploading SExtractor catalogs for naive difference images =",
+            end_time_benchmark - start_time_benchmark)
+        start_time_benchmark = end_time_benchmark
+
+
+        # Generate PSF-fit catalog for positive naive difference image using photutils.  No background subtraction is done.
+
+        n_clip_sigma = float(psfcat_diffimage_dict["n_clip_sigma"])
+        n_thresh_sigma = float(psfcat_diffimage_dict["n_thresh_sigma"])
+
+        fwhm = float(psfcat_diffimage_dict["fwhm"])
+        fit_shape_str = psfcat_diffimage_dict["fit_shape"]
+        fit_shape = tuple(int(x) for x in fit_shape_str.replace("(","").replace(")","").replace(" ", "").split(','))
+        aperture_radius = float(psfcat_diffimage_dict["aperture_radius"])
+
+
+        input_img_filename = filename_naive_diffimage_masked
+        input_unc_filename = filename_naive_diffimage_unc_masked
+        input_psf_filename = filename_refimage_psf                                                      # TODO
+        output_psfcat_filename = psfcat_diffimage_dict["output_naive_psfcat_filename"]
+        output_psfcat_finder_filename = psfcat_diffimage_dict["output_naive_psfcat_finder_filename"]
+        output_psfcat_residual_filename = psfcat_diffimage_dict["output_naive_psfcat_residual_filename"]
+
+        psfcat_flag,phot,psfphot = util.compute_diffimage_psf_catalog(n_clip_sigma,
+                                                                      n_thresh_sigma,
+                                                                      fwhm,
+                                                                      fit_shape,
+                                                                      aperture_radius,
+                                                                      input_img_filename,
+                                                                      input_unc_filename,
+                                                                      input_psf_filename,
+                                                                      output_psfcat_residual_filename)
+
+        print("psfcat_flag =",psfcat_flag)
+
+
+        if not psfcat_flag:
+
+            output_diffimage_file_infobits |= 2**1
+
+        else:
+
+            # Output psf-fit catalog is an PSFPhotometry astropy table with the PSF-fitting results
+            # merged with the DAOStarFinder astropy table.
+            # Output columns are documentated at
+            # https://photutils.readthedocs.io/en/latest/api/photutils.psf.PSFPhotometry.html
+            # https://photutils.readthedocs.io/en/stable/api/photutils.detection.DAOStarFinder.html
+
+            try:
+                phot['x_init'].info.format = '.4f'
+                phot['y_init'].info.format = '.4f'
+                phot['flux_init'].info.format = '.6f'
+                phot['flux_fit'].info.format = '.6f'
+                phot['x_err'].info.format = '.4f'
+                phot['y_err'].info.format = '.4f'
+                phot['flux_err'].info.format = '.5f'
+                phot['qfit'].info.format = '.4f'
+                phot['cfit'].info.format = '.4f'
+
+                print(phot[('id', 'x_fit', 'y_fit', 'flux_fit','x_err', 'y_err', 'flux_err', 'npixfit', 'qfit', 'cfit', 'flags')])
+
+
+                # Compute sky coordinates for given pixel coordinates.
+
+                ra,dec = util.computeSkyCoordsFromPixelCoords(filename_bkg_subbed_science_image,
+                                                              list(phot['x_fit']),
+                                                              list(phot['y_fit']))
+
+                phot['x_fit'].info.format = '.4f'
+                phot['y_fit'].info.format = '.4f'
+                phot.add_column(ra, name='ra')
+                phot.add_column(dec, name='dec')
+
+
+                # Write PSF-fit photometry catalog in astropy table to text file.
+
+                print("output_psfcat_filename = ", output_psfcat_filename)
+
+                ascii.write(phot, output_psfcat_filename, overwrite=True)
+
+
+                # Write PSF-fit finder catalog in astropy table to text file.
+
+                print("output_psfcat_finder_filename = ", output_psfcat_finder_filename)
+
+                ascii.write(psfphot.finder_results, output_psfcat_finder_filename, overwrite=True)
+
+            except Exception as e:
+                print(f"PSF-fit PSFPhotometry and DAOStarFinder catalogs (positive naive difference image): An unexpected error occurred: {e}")
+
+
+        # Generate PSF-fit catalog for negative naive difference image using photutils.  No background subtraction is done.
+
+        n_clip_sigma = float(psfcat_diffimage_dict["n_clip_sigma"])
+        n_thresh_sigma = float(psfcat_diffimage_dict["n_thresh_sigma"])
+
+        fwhm = float(psfcat_diffimage_dict["fwhm"])
+        fit_shape_str = psfcat_diffimage_dict["fit_shape"]
+        fit_shape = tuple(int(x) for x in fit_shape_str.replace("(","").replace(")","").replace(" ", "").split(','))
+        aperture_radius = float(psfcat_diffimage_dict["aperture_radius"])
+
+
+        input_img_filename = filename_naive_diffimage_masked_negative
+        input_unc_filename = filename_naive_diffimage_unc_masked
+        input_psf_filename = filename_refimage_psf                                                      # TODO
+        output_psfcat_filename_negative = psfcat_diffimage_dict["output_naive_psfcat_filename"].replace(".txt","_negative.txt")
+        output_psfcat_finder_filename_negative = psfcat_diffimage_dict["output_naive_psfcat_finder_filename"].replace(".txt","_negative.txt")
+        output_psfcat_residual_filename_negative = psfcat_diffimage_dict["output_naive_psfcat_residual_filename"].replace(".fits","_negative.fits")
+
+        psfcat_flag,phot,psfphot = util.compute_diffimage_psf_catalog(n_clip_sigma,
+                                                                      n_thresh_sigma,
+                                                                      fwhm,
+                                                                      fit_shape,
+                                                                      aperture_radius,
+                                                                      input_img_filename,
+                                                                      input_unc_filename,
+                                                                      input_psf_filename,
+                                                                      output_psfcat_residual_filename_negative)
+
+        print("psfcat_flag =",psfcat_flag)
+
+
+        if not psfcat_flag:
+
+            output_diffimage_file_infobits |= 2**1
+
+        else:
+
+            # Output psf-fit catalog is an PSFPhotometry astropy table with the PSF-fitting results
+            # merged with the DAOStarFinder astropy table.
+            # Output columns are documentated at
+            # https://photutils.readthedocs.io/en/latest/api/photutils.psf.PSFPhotometry.html
+            # https://photutils.readthedocs.io/en/stable/api/photutils.detection.DAOStarFinder.html
+
+            try:
+                phot['x_init'].info.format = '.4f'
+                phot['y_init'].info.format = '.4f'
+                phot['flux_init'].info.format = '.6f'
+                phot['flux_fit'].info.format = '.6f'
+                phot['x_err'].info.format = '.4f'
+                phot['y_err'].info.format = '.4f'
+                phot['flux_err'].info.format = '.5f'
+                phot['qfit'].info.format = '.4f'
+                phot['cfit'].info.format = '.4f'
+
+                print(phot[('id', 'x_fit', 'y_fit', 'flux_fit','x_err', 'y_err', 'flux_err', 'npixfit', 'qfit', 'cfit', 'flags')])
+
+
+                # Compute sky coordinates for given pixel coordinates.
+
+                ra,dec = util.computeSkyCoordsFromPixelCoords(filename_bkg_subbed_science_image,
+                                                              list(phot['x_fit']),
+                                                              list(phot['y_fit']))
+
+                phot['x_fit'].info.format = '.4f'
+                phot['y_fit'].info.format = '.4f'
+                phot.add_column(ra, name='ra')
+                phot.add_column(dec, name='dec')
+
+
+                # Write PSF-fit photometry catalog in astropy table to text file.
+
+                print("output_psfcat_filename_negative = ", output_psfcat_filename_negative)
+
+                ascii.write(phot, output_psfcat_filename_negative, overwrite=True)
+
+
+                # Write PSF-fit finder catalog in astropy table to text file.
+
+                print("output_psfcat_finder_filename_negative = ", output_psfcat_finder_filename_negative)
+
+                ascii.write(psfphot.finder_results, output_psfcat_finder_filename_negative, overwrite=True)
+
+            except Exception as e:
+                print(f"PSF-fit PSFPhotometry and DAOStarFinder catalogs (negative naive difference image): An unexpected error occurred: {e}")
+
+
+            # Upload naive PSF-fit catalogs for naive difference images to product S3 bucket.
+
+            product_s3_bucket = product_s3_bucket_base
+            s3_object_name_output_psfcat_filename = job_proc_date + "/jid" + str(jid) + "/" + output_psfcat_filename
+            s3_object_name_output_psfcat_finder_filename = job_proc_date + "/jid" + str(jid) + "/" + output_psfcat_finder_filename
+            s3_object_name_output_psfcat_residual_filename = job_proc_date + "/jid" + str(jid) + "/" + output_psfcat_residual_filename
+            s3_object_name_output_psfcat_filename_negative = job_proc_date + "/jid" + str(jid) + "/" + output_psfcat_filename_negative
+            s3_object_name_output_psfcat_finder_filename_negative = job_proc_date + "/jid" + str(jid) + "/" + output_psfcat_finder_filename_negative
+            s3_object_name_output_psfcat_residual_filename_negative = job_proc_date + "/jid" + str(jid) + "/" + output_psfcat_residual_filename_negative
+
+            filenames = [output_psfcat_filename,
+                         output_psfcat_finder_filename,
+                         output_psfcat_residual_filename,
+                         output_psfcat_filename_negative,
+                         output_psfcat_finder_filename_negative,
+                         output_psfcat_residual_filename_negative]
+
+            objectnames = [s3_object_name_output_psfcat_filename,
+                           s3_object_name_output_psfcat_finder_filename,
+                           s3_object_name_output_psfcat_residual_filename,
+                           s3_object_name_output_psfcat_filename_negative,
+                           s3_object_name_output_psfcat_finder_filename_negative,
+                           s3_object_name_output_psfcat_residual_filename_negative]
+
+            util.upload_files_to_s3_bucket(s3_client,product_s3_bucket,filenames,objectnames)
+
+
+        # Code-timing benchmark.
+
+        end_time_benchmark = time.time()
+        print("Elapsed time in seconds after uploading PSF-fit catalogs for naive difference images =",
             end_time_benchmark - start_time_benchmark)
         start_time_benchmark = end_time_benchmark
 
