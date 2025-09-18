@@ -310,7 +310,8 @@ class RomanTessellationNSIDE512:
                     records.append(record)
                     nrecs += 1
 
-                print("nrecs =",nrecs)
+                if self.debug > 0:
+                    print("nrecs =",nrecs)
 
             except:
                 print("*** Error: Unexpected query return value in sub roman_tessellation_db.get_sky_tiles_in_dec_bin; returning None...")
@@ -394,7 +395,8 @@ class RomanTessellationNSIDE512:
                 print("rtid =",rtid)
 
             for i in range(nrecords):
-                print("records[i][0] =",records[i][0])
+                if self.debug > 0:
+                    print("records[i][0] =",records[i][0])
                 if rtid == records[i][0]:
                     if self.debug > 0:
                         print(f"Found record at i = {i}")
@@ -422,7 +424,8 @@ class RomanTessellationNSIDE512:
                 rtids_list.append(an_rtid_above)
             else:
 
-                print("Above: ramin,ramax =",ramin,ramax)
+                if self.debug > 0:
+                    print("Above: ramin,ramax =",ramin,ramax)
 
                 self.get_corner_sky_positions(an_rtid_above)
 
@@ -476,7 +479,8 @@ class RomanTessellationNSIDE512:
                 rtids_list.append(an_rtid_below)
             else:
 
-                print("Below: ramin,ramax =",ramin,ramax)
+                if self.debug > 0:
+                    print("Below: ramin,ramax =",ramin,ramax)
 
                 self.get_corner_sky_positions(an_rtid_below)
 
