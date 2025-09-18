@@ -1842,7 +1842,7 @@ def apply_subpixel_orthogonal_offsets(fits_file,dx,dy,output_fits_file=None):
         new_naxis1 = scale_factor * naxis1
         new_naxis2 = scale_factor * naxis2
 
-        up_data = np.empty(shape=(new_naxis1, new_naxis2))
+        up_data = np.empty(shape=(new_naxis2, new_naxis1))
 
         for i in range(naxis2):
             for j in range(naxis1):
@@ -1855,7 +1855,7 @@ def apply_subpixel_orthogonal_offsets(fits_file,dx,dy,output_fits_file=None):
 
         # Apply the subpixel offsets and then downsample image.
 
-        dn_data = np.zeros(shape=(naxis1, naxis2))
+        dn_data = np.zeros(shape=(naxis2, naxis1))
         for i in range(naxis2):
             for j in range(naxis1):
                 ii_s = max(0,i * scale_factor + y_offset)
