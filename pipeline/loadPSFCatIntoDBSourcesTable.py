@@ -160,6 +160,7 @@ cols.append("roundness2")
 cols.append("npix")
 cols.append("peak")
 cols.append("pid")
+cols.append("isdiffpos")
 cols.append("field")
 cols.append("hp6")
 cols.append("hp9")
@@ -178,7 +179,18 @@ print(f"Sources columns: {cols_comma_separated_string}")
 # Custom methods for parallel processing, taking advantage of multiple cores on the job-launcher machine.
 #-------------------------------------------------------------------------------------------------------------
 
-def run_single_core_job(jids,overlapping_fields_list,meta_list,index_thread):
+def run_single_core_job(jids,overlapping_fields_list,meta_list,negative_diffimg_flag,index_thread):
+
+    print("negative_diffimg_flag =",negative_diffimg_flag)
+
+    if negative_diffimg_flag:
+        isposdiff = "'f'"
+        output_psfcat_filename_to_use = output_psfcat_filename.replace(".txt","_negative.txt")
+        output_psfcat_finder_filename_to_use = output_psfcat_finder_filename.replace(".txt","_negative.txt")
+    else:
+        isposdiff = "'t'"
+        output_psfcat_filename_to_use = output_psfcat_filename
+        output_psfcat_finder_filename_to_use = output_psfcat_finder_filename
 
     njobs = len(jids)
 
@@ -239,29 +251,29 @@ def run_single_core_job(jids,overlapping_fields_list,meta_list,index_thread):
 
         # Download ZOGY-difference-image PSF-fit catalog file from S3 bucket.
 
-        output_psfcat_filename_for_jid = output_psfcat_filename.replace(".txt",f"_jid{jid}.txt")
+        output_psfcat_filename_for_jid = output_psfcat_filename_to_use.replace(".txt",f"_jid{jid}.txt")
 
-        s3_full_name_psfcat_file = "s3://" + product_s3_bucket_base + "/" + proc_date + '/jid' + str(jid) + "/" +  output_psfcat_filename
+        s3_full_name_psfcat_file = "s3://" + product_s3_bucket_base + "/" + proc_date + '/jid' + str(jid) + "/" +  output_psfcat_filename_to_use
         ret_filename,subdirs_done,downloaded_from_bucket = util.download_file_from_s3_bucket(s3_client,
                                                                                              s3_full_name_psfcat_file,
                                                                                              output_psfcat_filename_for_jid)
 
         if not downloaded_from_bucket:
-            fh.write("*** Warning: PSF-fit catalog file does not exist ({}); skipping...\n".format(output_psfcat_filename))
+            fh.write("*** Warning: PSF-fit catalog file does not exist ({}); skipping...\n".format(output_psfcat_filename_to_use))
             continue
 
 
         # Download ZOGY-difference-image PSF-fit finder catalog file from S3 bucket.
 
-        output_psfcat_finder_filename_for_jid = output_psfcat_finder_filename.replace(".txt",f"_jid{jid}.txt")
+        output_psfcat_finder_filename_for_jid = output_psfcat_finder_filename_to_use.replace(".txt",f"_jid{jid}.txt")
 
-        s3_full_name_psfcat_finder_file = "s3://" + product_s3_bucket_base + "/" + proc_date + '/jid' + str(jid) + "/" +  output_psfcat_finder_filename
+        s3_full_name_psfcat_finder_file = "s3://" + product_s3_bucket_base + "/" + proc_date + '/jid' + str(jid) + "/" +  output_psfcat_finder_filename_to_use
         ret_filename,subdirs_done,downloaded_from_bucket = util.download_file_from_s3_bucket(s3_client,
                                                                                              s3_full_name_psfcat_finder_file,
                                                                                              output_psfcat_finder_filename_for_jid)
 
         if not downloaded_from_bucket:
-            fh.write("*** Warning: PSF-fit finder catalog file does not exist ({}); skipping...\n".format(output_psfcat_finder_filename))
+            fh.write("*** Warning: PSF-fit finder catalog file does not exist ({}); skipping...\n".format(output_psfcat_finder_filename_to_use))
             continue
 
 
@@ -310,6 +322,8 @@ def run_single_core_job(jids,overlapping_fields_list,meta_list,index_thread):
 
                     if cat_col == 'pid':
                         continue
+                    if cat_col == 'isdiffpos':
+                        continue
                     if cat_col == 'field':
                         continue
                     if cat_col == 'hp6':
@@ -340,6 +354,8 @@ def run_single_core_job(jids,overlapping_fields_list,meta_list,index_thread):
                 hp9 = hp.ang2pix(nside9,ra,dec,nest=True,lonlat=True)
 
                 num = str(pid)
+                nums = nums + num + ","
+                num = str(isdiffpos)
                 nums = nums + num + ","
                 num = str(field)
                 nums = nums + num + ","
@@ -383,7 +399,7 @@ def run_single_core_job(jids,overlapping_fields_list,meta_list,index_thread):
     fh.close()
 
 
-def execute_parallel_processes(jids,rtids_list,meta_list,num_cores=None):
+def execute_parallel_processes(jids,rtids_list,meta_list,negative_diffimg_flag,num_cores=None):
 
     if num_cores is None:
         num_cores = os.cpu_count()  # Use all available cores if not specified
@@ -392,7 +408,7 @@ def execute_parallel_processes(jids,rtids_list,meta_list,num_cores=None):
 
     with ProcessPoolExecutor(max_workers=num_cores) as executor:
         # Submit all tasks to the executor and store the futures in a list
-        futures = [executor.submit(run_single_core_job,jids,rtids_list,meta_list,thread_index) for thread_index in range(num_cores)]
+        futures = [executor.submit(run_single_core_job,jids,rtids_list,meta_list,negative_diffimg_flag,thread_index) for thread_index in range(num_cores)]
 
         # Iterate over completed futures and update progress
         for i, future in enumerate(as_completed(futures)):
@@ -560,13 +576,21 @@ if __name__ == '__main__':
     # Execute sources-table-loading tasks for all science-pipeline jobs with jids on
     # a given processing date.  The execution is done in parallel, with the number
     # of parallel threads equal to the number of cores on the job-launcher machine.
+    # First do for sources from positive difference images, and then from negative.
     ################################################################################
 
     if num_cores > 1:
-        execute_parallel_processes(jid_list,overlapping_fields_list,meta_list,num_cores)
+        negative_diffimg_flag = False
+        execute_parallel_processes(jid_list,overlapping_fields_list,meta_list,negative_diffimg_flag,num_cores)
+        negative_diffimg_flag = True
+        execute_parallel_processes(jid_list,overlapping_fields_list,meta_list,negative_diffimg_flag,num_cores)
     else:
         thread_index = 0
-        run_single_core_job(jid_list,overlapping_fields_list,meta_list,thread_index)
+        negative_diffimg_flag = False
+        run_single_core_job(jid_list,overlapping_fields_list,meta_list,negative_diffimg_flag,thread_index)
+        negative_diffimg_flag = True
+        run_single_core_job(jid_list,overlapping_fields_list,meta_list,negative_diffimg_flag,thread_index)
+
 
     # Code-timing benchmark.
 
