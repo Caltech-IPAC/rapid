@@ -35,6 +35,13 @@ one science-image case to the next.
     It depends on the particular test associated with that date.
     Also, some products were newly added later.
 
+There are difference-image products from three different methods: ZOGY, SFFT with cross-convolution,
+and naive (simple science image minus reference image).
+
+.. note::
+   Product filenames that do not include the suffix "_negative" are for positive difference images ("science image minus reference image").
+   Product filenames that include the suffix "_negative" are for negative difference images ("reference image minus science image").
+
 
 ==============================================================  ====================================================================================================
 Filename                                                        Description
@@ -55,27 +62,32 @@ bkg_subbed_science_image.fits                                   Science image, b
 awaicgen_output_mosaic_image_resampled_gainmatched.fits         Gain-matched reference image, background subtracted, directory input to ZOGY
 awaicgen_output_mosaic_image_resampled_refgainmatchsexcat.txt   SourceExtractor catalog from reference image for gain-matching purposes
 bkg_subbed_science_image_scigainmatchsexcat.txt                 SourceExtractor catalog from science image for gain-matching purposes
-diffimage_masked.fits                                           ZOGY difference image with NaNs in zero-coverage pixels
-diffimage_uncert_masked.fits                                    ZOGY uncertainty difference image with NaNs in zero-coverage pixels
+diffimage_masked.fits                                           ZOGY positive difference image with NaNs in zero-coverage pixels
+diffimage_uncert_masked.fits                                    Uncertainty image for ZOGY positive difference image with NaNs in zero-coverage pixels
 diffpsf.fits                                                    ZOGY difference-image PSF
 scorrimage_masked.fits                                          ZOGY SCORR image with NaNs in zero-coverage pixels
-diffimage_masked.txt                                            SourceExtractor catalog from ZOGY difference image
-diffimage_masked_psfcat.txt                                     PhotUtils PSF-fit photometry catalog from ZOGY difference image (noniterative)
-diffimage_masked_psfcat_finder.txt                              PhotUtils PSF-fit star-finder catalog from ZOGY difference image (noniterative)
-diffimage_masked_psfcat_residual.fits                           PhotUtils residual image from ZOGY difference image (noniterative)
+diffimage_masked.txt                                            SourceExtractor catalog from ZOGY positive difference image
+diffimage_masked_psfcat.txt                                     PhotUtils PSF-fit photometry catalog from ZOGY positive difference image (noniterative)
+diffimage_masked_psfcat_finder.txt                              PhotUtils PSF-fit star-finder catalog from ZOGY positive difference image (noniterative)
+diffimage_masked_psfcat_residual.fits                           PhotUtils residual image from ZOGY positive difference image (noniterative)
 job_config_jid999.done                                          Indicates metadata from science pipeline ingested into RAPID operations database
 postproc_job_config_jid999.done                                 Indicates metadata from post-processing pipeline ingested into RAPID operations database
-sfftdiffimage_masked.fits                                       SFFT difference image with NaNs in zero-coverage pixels when not run the ``--crossconv`` flag
-sfftdiffimage_dconv_masked.fits                                 SFFT decorrelated difference image (SFFT via ``--crossconv`` flag).  Akin to ZOGY difference image.
-sfftdiffimage_cconv_masked.fits                                 SFFT cross-convolved difference image (SFFT via ``--crossconv`` flag).  Akin to ZOGY SCORR image.
-sfftdiffimage_masked.txt                                        SourceExtractor catalog from SFFT difference image
-sfftdiffimage_uncert_masked.fits                                SFFT uncertainty difference image with NaNs in zero-coverage pixels
+sfftdiffimage_masked.fits                                       SFFT positive difference image with NaNs in zero-coverage pixels when not run the ``--crossconv`` flag
+sfftdiffimage_dconv_masked.fits                                 SFFT decorrelated positive difference image (SFFT via ``--crossconv`` flag).  Akin to ZOGY positive difference image.
+sfftdiffimage_cconv_masked.fits                                 SFFT cross-convolved positive difference image (SFFT via ``--crossconv`` flag).  Akin to ZOGY SCORR image.
+sfftdiffimage_masked.txt                                        SourceExtractor catalog from SFFT positive difference image
+sfftdiffimage_uncert_masked.fits                                Uncertainty image for SFFT positive difference image with NaNs in zero-coverage pixels
 sfftsoln.fits                                                   SFFT matching-kernel solution file
-sfftdiffimage_masked_psfcat.txt                                 PhotUtils PSF-fit photometry catalog from SFFT difference image (noniterative)
-sfftdiffimage_masked_psfcat_finder.txt                          PhotUtils PSF-fit star-finder catalog from SFFT difference image (noniterative)
-sfftdiffimage_masked_psfcat_residual.fits                       PhotUtils residual image from SFFT difference image (noniterative)
-naive_diffimage_masked.fits                                     Naive output difference image with NaNs in zero-coverage pixels
-naive_diffimage_masked.txt                                      SourceExtractor catalog from naive difference image
+sfftdiffimage_masked_psfcat.txt                                 PhotUtils PSF-fit photometry catalog from SFFT positive difference image (noniterative)
+sfftdiffimage_masked_psfcat_finder.txt                          PhotUtils PSF-fit star-finder catalog from SFFT positive difference image (noniterative)
+sfftdiffimage_masked_psfcat_residual.fits                       PhotUtils residual image from SFFT positive difference image (noniterative)
+naive_diffimage_masked.fits                                     Naive output positive difference image with NaNs in zero-coverage pixels
+naive_diffimage_masked.txt                                      SourceExtractor catalog from naive positive difference image
+naive_masked_psfcat.txt                                         PhotUtils PSF-fit photometry catalog from naive positive difference image (noniterative)
+naive_diffimage_uncert_masked.fits                              Uncertainty image for naive positive difference image with NaNs in zero-coverage pixels
+naive_masked_psfcat_finder.txt                                  PhotUtils PSF-fit star-finder catalog from naive positive difference image (noniterative)
+naive_masked_psfcat_residual.fits                               PhotUtils residual image from naive positive difference image (noniterative)
+"_negative.fits" and "_negative.txt"                            Corresponding products for negative difference images
 ==============================================================  ====================================================================================================
 
 
