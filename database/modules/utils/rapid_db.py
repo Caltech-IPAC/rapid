@@ -2935,7 +2935,7 @@ class RAPIDDB:
 
 ########################################################################################################
 
-    def execute_sql_queries(self,sql_queries):
+    def execute_sql_queries(self,sql_queries,debug=1):
 
         '''
         Execute list of SQL queries and commit transaction.
@@ -2946,7 +2946,8 @@ class RAPIDDB:
 
         for query in sql_queries:
 
-            print('query = {}'.format(query))
+            if debug == 1:
+                print('query = {}'.format(query))
 
 
             # Execute query.
@@ -2958,12 +2959,14 @@ class RAPIDDB:
                     records = []
                     nrecs = 0
                     for record in self.cur:
-                        if nrecs == 0:
-                            print("From execute_sql_queries: record =",record)
+                        if nrecs == 0:            # Print first record returned as a sanity check.
+                            if debug == 1:
+                                print("From execute_sql_queries: record =",record)
                         records.append(record)
                         nrecs += 1
 
-                    print("nrecs =",nrecs)
+                    if debug == 1:
+                        print("nrecs =",nrecs)
 
                 except:
                         print("Nothing returned from database query; continuing...")
@@ -3172,7 +3175,7 @@ class RAPIDDB:
 
 ########################################################################################################
 
-    def add_astro_object_to_field(self,tablename,ra0,dec0,flux0,meanra,stdevra,meandec,stdevdec,meanflux,stdevflux,nsources,field,hp6,hp9):
+    def add_astro_object_to_field(self,tablename,ra0,dec0,flux0,meanra,stdevra,meandec,stdevdec,meanflux,stdevflux,nsources,field,hp6,hp9,debug=0):
 
         self.exit_code = 0
 
@@ -3211,7 +3214,8 @@ class RAPIDDB:
             f"             {str(hp9)})" +\
             f"             RETURNING aid;"
 
-        print('query = {}'.format(query))
+        if debug == 1:
+            print('query = {}'.format(query))
 
 
         # Execute query.
@@ -3234,7 +3238,7 @@ class RAPIDDB:
 
 ########################################################################################################
 
-    def add_merge_to_field(self,tablename,aid,sid):
+    def add_merge_to_field(self,tablename,aid,sid,debug=0):
 
         self.exit_code = 0
         record_exists = False
@@ -3247,7 +3251,8 @@ class RAPIDDB:
             f"where aid = {aid} " +\
             f"and sid = {sid};"
 
-        print('query = {}'.format(query))
+        if debug == 1:
+            print('query = {}'.format(query))
 
 
         # Execute query.
@@ -3256,11 +3261,13 @@ class RAPIDDB:
 
         try:
             record = self.cur.fetchone()
-            print(f"Record from querying {tablename} = {record}; continuing...")
+            if debug == 1:
+                print(f"Record from querying {tablename} = {record}; continuing...")
             if record is not None:
                 record_exists = True
         except:
-            print(f"Nothing returned from database query ({query}); continuing...")
+            if debug == 1:
+                print(f"Nothing returned from database query ({query}); continuing...")
 
 
         if not record_exists:
@@ -3277,7 +3284,8 @@ class RAPIDDB:
                 f"            ({str(aid)}," +\
                 f"             {str(sid)});"
 
-            print('query = {}'.format(query))
+            if debug == 1:
+                print('query = {}'.format(query))
 
 
             # Execute query.
@@ -3287,8 +3295,8 @@ class RAPIDDB:
             try:
                 record = self.cur.fetchone()
             except:
-                print(f"Nothing returned from database query ({query}); continuing...")
-
+                if debug == 1:
+                    print(f"Nothing returned from database query ({query}); continuing...")
 
             if self.exit_code == 0:
                 self.conn.commit()           # Commit database transaction
