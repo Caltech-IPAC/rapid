@@ -1448,7 +1448,7 @@ if __name__ == '__main__':
                    s3_object_name_output_resampled_gainmatched_reference_image,
                    s3_object_name_output_psfcat_filename,
                    s3_object_name_output_psfcat_finder_filename,
-                   s3_object_name_output_psfcat_residual_filename
+                   s3_object_name_output_psfcat_residual_filename,
                    filename_diffimage_masked_negative,
                    filename_diffimage_sextractor_catalog_negative,
                    filename_scorrimage_masked_negative,
