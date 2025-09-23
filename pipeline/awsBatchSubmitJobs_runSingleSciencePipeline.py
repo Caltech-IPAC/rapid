@@ -599,12 +599,17 @@ if __name__ == '__main__':
                 .format(awaicgen_output_mosaic_uncert_image_file,product_s3_bucket,awaicgen_output_mosaic_uncert_image_s3_bucket_object_name))
 
 
-    # Unzip the science image gzipped file.
-
-    gunzip_cmd = ['gunzip', science_image_filename_gz]
-    exitcode_from_gunzip = util.execute_command(gunzip_cmd)
+    # Unzip the science image gzipped file if it does not already exist.
 
     science_image_filename = science_image_filename_gz.replace(".fits.gz",".fits")
+
+    if os.path.exists(science_image_filename):
+        print(f"The file '{science_image_filename}' exists.")
+    else:
+        print(f"The file '{science_image_filename}' does not exist.")
+
+        gunzip_cmd = ['gunzip', science_image_filename_gz]
+        exitcode_from_gunzip = util.execute_command(gunzip_cmd)
 
 
     # Compute image statistics for image resizing.
