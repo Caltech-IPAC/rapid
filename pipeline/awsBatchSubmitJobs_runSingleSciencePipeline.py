@@ -1742,7 +1742,7 @@ if __name__ == '__main__':
                 filename_detection_image_negative = filename_sfftdiffimage_negative
 
             sextractor_diffimage_paramsfile = cfg_path + "/rapidSexParamsDiffImage.inp";
-            filename_sfftdiffimage_sextractor_catalog = filename_sfftdiffimage_negative.replace(".fits",".txt")
+            filename_sfftdiffimage_sextractor_catalog_negative = filename_sfftdiffimage_negative.replace(".fits",".txt")
 
             sextractor_diffimage_dict["sextractor_detection_image".lower()] = filename_detection_image_negative
             sextractor_diffimage_dict["sextractor_input_image".lower()] = filename_sfftdiffimage_negative
