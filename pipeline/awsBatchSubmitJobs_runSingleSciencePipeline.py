@@ -1432,12 +1432,12 @@ if __name__ == '__main__':
                  output_psfcat_filename,
                  output_psfcat_finder_filename,
                  output_psfcat_residual_filename,
-                 s3_object_name_diffimage_negative,
-                 s3_object_name_diffimage_catalog_negative,
-                 s3_object_name_scorrimage_negative,
-                 s3_object_name_output_psfcat_filename_negative,
-                 s3_object_name_output_psfcat_finder_filename_negative,
-                 s3_object_name_output_psfcat_residual_filename_negative]
+                 filename_diffimage_masked_negative,
+                 filename_diffimage_sextractor_catalog_negative,
+                 filename_scorrimage_masked_negative,
+                 output_psfcat_filename_negative,
+                 output_psfcat_finder_filename_negative,
+                 output_psfcat_residual_filename_negative]
 
     objectnames = [s3_object_name_diffimage,
                    s3_object_name_diffimage_unc_masked,
@@ -1449,12 +1449,12 @@ if __name__ == '__main__':
                    s3_object_name_output_psfcat_filename,
                    s3_object_name_output_psfcat_finder_filename,
                    s3_object_name_output_psfcat_residual_filename,
-                   filename_diffimage_masked_negative,
-                   filename_diffimage_sextractor_catalog_negative,
-                   filename_scorrimage_masked_negative,
-                   output_psfcat_filename_negative,
-                   output_psfcat_finder_filename_negative,
-                   output_psfcat_residual_filename_negative]
+                   s3_object_name_diffimage_negative,
+                   s3_object_name_diffimage_catalog_negative,
+                   s3_object_name_scorrimage_negative,
+                   s3_object_name_output_psfcat_filename_negative,
+                   s3_object_name_output_psfcat_finder_filename_negative,
+                   s3_object_name_output_psfcat_residual_filename_negative]
 
     util.upload_files_to_s3_bucket(s3_client,product_s3_bucket,filenames,objectnames)
 
@@ -1684,6 +1684,7 @@ if __name__ == '__main__':
                 filename_detection_image = filename_sfftdiffimage
 
             sextractor_diffimage_paramsfile = cfg_path + "/rapidSexParamsDiffImage.inp";
+            filename_sfftdiffimage_sextractor_catalog = filename_detection_image.replace(".fits",".txt")
 
             sextractor_diffimage_dict["sextractor_detection_image".lower()] = filename_detection_image
             sextractor_diffimage_dict["sextractor_input_image".lower()] = filename_sfftdiffimage
