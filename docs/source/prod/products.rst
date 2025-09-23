@@ -43,9 +43,9 @@ and naive (simple science image minus reference image).
    Product filenames that include the suffix "_negative" are for negative difference images ("reference image minus science image").
 
 
-==============================================================  ====================================================================================================
+==============================================================  =======================================================================================================================
 Filename                                                        Description
-==============================================================  ====================================================================================================
+==============================================================  =======================================================================================================================
 Roman_TDS_simple_model_F184_1851_10_lite.fits.gz                Input science image (gzipped)
 Roman_TDS_simple_model_F184_1851_10_lite_reformatted.fits       Reformated: Image data are contained in the PRIMARY header and resize to 4089x4089
 Roman_TDS_simple_model_F184_1851_10_lite_reformatted_unc.fits   Associated uncertainty image computed via simple model (photon noise only)
@@ -72,7 +72,7 @@ diffimage_masked_psfcat_finder.txt                              PhotUtils PSF-fi
 diffimage_masked_psfcat_residual.fits                           PhotUtils residual image from ZOGY positive difference image (noniterative)
 job_config_jid999.done                                          Indicates metadata from science pipeline ingested into RAPID operations database
 postproc_job_config_jid999.done                                 Indicates metadata from post-processing pipeline ingested into RAPID operations database
-sfftdiffimage_masked.fits                                       SFFT positive difference image with NaNs in zero-coverage pixels when not run the ``--crossconv`` flag
+sfftdiffimage_masked.fits                                       SFFT positive difference image (when SFFT is not run with the ``--crossconv`` flag), with NaNs in zero-coverage pixels
 sfftdiffimage_dconv_masked.fits                                 SFFT decorrelated positive difference image (SFFT via ``--crossconv`` flag).  Akin to ZOGY positive difference image.
 sfftdiffimage_cconv_masked.fits                                 SFFT cross-convolved positive difference image (SFFT via ``--crossconv`` flag).  Akin to ZOGY SCORR image.
 sfftdiffimage_masked.txt                                        SourceExtractor catalog from SFFT positive difference image
@@ -88,7 +88,7 @@ naive_diffimage_uncert_masked.fits                              Uncertainty imag
 naive_masked_psfcat_finder.txt                                  PhotUtils PSF-fit star-finder catalog from naive positive difference image (noniterative)
 naive_masked_psfcat_residual.fits                               PhotUtils residual image from naive positive difference image (noniterative)
 "_negative.fits" and "_negative.txt"                            Corresponding products for negative difference images
-==============================================================  ====================================================================================================
+==============================================================  =======================================================================================================================
 
 
 Public Access
