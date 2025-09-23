@@ -21,6 +21,11 @@ print("swvers =", swvers)
 print("cfg_filename_only =", cfg_filename_only)
 
 
+# Set debug = 1 here to get debug messages for creating and setting up Merges and AstroObjects tables.
+
+debug = 1
+
+
 # Compute start time for benchmark.
 
 start_time_benchmark = time.time()
@@ -167,6 +172,11 @@ def run_single_core_job(scas,fields,index_thread):
     This will be rectified later.  TODO
     '''
 
+    # Set thread_debug = 0 here to severly limit the amount of information logged for runs
+    # that are anything but short tests.
+
+    thread_debug = 0
+
     nfields = len(fields)
 
     print("index_thread,nfields =",index_thread,nfields)
@@ -214,7 +224,7 @@ def run_single_core_job(scas,fields,index_thread):
 
             sql_queries = []
             sql_queries.append(query)
-            records = dbh.execute_sql_queries(sql_queries)
+            records = dbh.execute_sql_queries(sql_queries,thread_debug)
 
             sid_dict = {}
 
@@ -239,7 +249,7 @@ def run_single_core_job(scas,fields,index_thread):
 
             sql_queries = []
             sql_queries.append(query)
-            records = dbh.execute_sql_queries(sql_queries)
+            records = dbh.execute_sql_queries(sql_queries,thread_debug)
 
             sids_list = []
 
@@ -263,7 +273,7 @@ def run_single_core_job(scas,fields,index_thread):
 
                     sql_queries = []
                     sql_queries.append(query)
-                    records = dbh.execute_sql_queries(sql_queries)
+                    records = dbh.execute_sql_queries(sql_queries,thread_debug)
 
                     for record in records:
 
@@ -303,9 +313,10 @@ def run_single_core_job(scas,fields,index_thread):
                                                         nsources,
                                                         field,
                                                         source_hp6,
-                                                        source_hp9)
+                                                        source_hp9,
+                                                        thread_debug)
 
-                    dbh.add_merge_to_field(merges_tablename,aid,sid)
+                    dbh.add_merge_to_field(merges_tablename,aid,sid,thread_debug)
 
 
         # End of loop over field.
@@ -382,7 +393,7 @@ if __name__ == '__main__':
 
         sql_queries = []
         sql_queries.append(f"SELECT to_regclass('public.{tablename}') IS NOT NULL;")
-        records = dbh.execute_sql_queries(sql_queries)
+        records = dbh.execute_sql_queries(sql_queries,debug)
 
         table_exists_flag = records[0][0]
 
@@ -393,7 +404,7 @@ if __name__ == '__main__':
 
         sql_queries = []
         sql_queries.append(f"select distinct field from {tablename};")
-        records = dbh.execute_sql_queries(sql_queries)
+        records = dbh.execute_sql_queries(sql_queries,debug)
 
         for record in records:
             field = record[0]
@@ -429,7 +440,7 @@ if __name__ == '__main__':
 
         sql_queries = []
         sql_queries.append(f"SELECT to_regclass('public.{tablename1}') IS NOT NULL;")
-        records = dbh.execute_sql_queries(sql_queries)
+        records = dbh.execute_sql_queries(sql_queries,debug)
 
         table_exists_flag = records[0][0]
 
@@ -458,7 +469,7 @@ if __name__ == '__main__':
         sql_queries.append(f"CREATE TABLE {tablename1} (LIKE astroobjects INCLUDING DEFAULTS INCLUDING CONSTRAINTS);")
         sql_queries.append(f"CREATE TABLE {tablename2} (LIKE merges INCLUDING DEFAULTS INCLUDING CONSTRAINTS);")
 
-    dbh.execute_sql_queries(sql_queries)
+    dbh.execute_sql_queries(sql_queries,debug)
 
 
     # Create indexes and grants on astroobjects and merges database tables for all fields associated with processing date.
@@ -501,7 +512,7 @@ if __name__ == '__main__':
         sql_queries.append(f"ALTER TABLE {tablename1} SET UNLOGGED;")
         sql_queries.append(f"ALTER TABLE {tablename2} SET UNLOGGED;")
 
-    dbh.execute_sql_queries(sql_queries)
+    dbh.execute_sql_queries(sql_queries,debug)
 
 
     # Code-timing benchmark.
@@ -552,7 +563,7 @@ if __name__ == '__main__':
         sql_queries.append(f"ALTER TABLE {tablename1} SET LOGGED;")
         sql_queries.append(f"ALTER TABLE {tablename2} SET LOGGED;")
 
-    dbh.execute_sql_queries(sql_queries)
+    dbh.execute_sql_queries(sql_queries,debug)
 
 
     # Code-timing benchmark.
