@@ -235,7 +235,7 @@ if __name__ == '__main__':
     astrometric_uncert_y = float(config_input['ZOGY']['astrometric_uncert_y'])
     zogy_output_diffimage_file = config_input['ZOGY']['zogy_output_diffimage_file']
     post_zogy_keep_diffimg_lower_cov_map_thresh = float(config_input['ZOGY']['post_zogy_keep_diffimg_lower_cov_map_thresh'])
-    s3_full_name_psf = config_input['ZOGY']['s3_full_name_psf']
+    s3_full_name_sciimage_psf = config_input['ZOGY']['s3_full_name_sciimage_psf']
 
     awaicgen_dict = config_input['AWAICGEN']
 
@@ -855,10 +855,10 @@ if __name__ == '__main__':
 
     # Download PSFs from S3 bucket.
 
-    filename_psf,subdirs_psf,downloaded_from_bucket = util.download_file_from_s3_bucket(s3_client,s3_full_name_psf)
+    filename_sciimage_psf,subdirs_psf,downloaded_from_bucket = util.download_file_from_s3_bucket(s3_client,s3_full_name_sciimage_psf)
 
-    print("s3_full_name_psf = ",s3_full_name_psf)
-    print("filename_psf = ",filename_psf)
+    print("s3_full_name_sciimage_psf = ",s3_full_name_sciimage_psf)
+    print("filename_sciimage_psf = ",filename_sciimage_psf)
 
     refimage_psf_filename = refimage_psf_filename.replace("FID",str(fid_sciimage))
     s3_full_name_refimage_psf = "s3://" + job_info_s3_bucket + "/" + refimage_psf_s3_bucket_dir + "/" + refimage_psf_filename
@@ -870,10 +870,10 @@ if __name__ == '__main__':
 
     # Normalize the science PSF.
 
-    filename_psf_normalized = filename_psf.replace(".fits","_normalized.fits")
+    filename_sciimage_psf_normalized = filename_sciimage_psf.replace(".fits","_normalized.fits")
 
     hdu_index = 0
-    util.normalize_image(filename_psf,hdu_index,filename_psf_normalized)
+    util.normalize_image(filename_sciimage_psf,hdu_index,filename_sciimage_psf_normalized)
 
 
     # Subtract background from science image.  Since the reference image has been swarped,
@@ -968,7 +968,7 @@ if __name__ == '__main__':
 
     if "rimtimsim" in science_image_filename:
 
-        util.transpose_image_data(filename_psf_normalized)
+        util.transpose_image_data(filename_sciimage_psf_normalized)
 
 
     # Code-timing benchmark.
@@ -1010,7 +1010,7 @@ if __name__ == '__main__':
                 zogy_code,
                 filename_bkg_subbed_science_image,
                 output_resampled_gainmatched_reference_image,
-                filename_psf_normalized,
+                filename_sciimage_psf_normalized,
                 filename_refimage_psf,
                 reformatted_science_uncert_image_filename,
                 output_resampled_reference_uncert_image,
@@ -1575,7 +1575,7 @@ if __name__ == '__main__':
         if crossconv_flag:
             sfft_cmd.append("--crossconv")
             sfft_cmd.append("--scipsf")
-            sfft_cmd.append(filename_psf_normalized)
+            sfft_cmd.append(filename_sciimage_psf_normalized)
             sfft_cmd.append("--refpsf")
             sfft_cmd.append(filename_refimage_psf)
 

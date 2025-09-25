@@ -399,7 +399,7 @@ if __name__ == '__main__':
 
     # Query PSFs database table for the best version of PSF, required by ZOGY.
 
-    psfid,s3_full_name_psf = dbh.get_best_psf(sca,fid)
+    psfid,s3_full_name_sciimage_psf = dbh.get_best_psf(sca,fid)
 
     if dbh.exit_code >= 64:
         print("*** Error from {}; quitting ".format(swname))
@@ -754,7 +754,7 @@ if __name__ == '__main__':
     job_config['REF_IMAGE']['dec4'] = str(dec4_refimage)
 
     zogy_dict["psfid"] = str(psfid)
-    zogy_dict["s3_full_name_psf"] = s3_full_name_psf
+    zogy_dict["s3_full_name_sciimage_psf"] = s3_full_name_sciimage_psf
 
     job_config['ZOGY'] = zogy_dict
     job_config['SFFT'] = sfft_dict
