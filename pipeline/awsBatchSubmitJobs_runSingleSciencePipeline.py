@@ -868,6 +868,14 @@ if __name__ == '__main__':
     print("filename_refimage_psf = ",filename_refimage_psf)
 
 
+    # Normalize the science PSF.
+
+    filename_psf_normalized = filename_psf.replace(".fits","_normalized.fits")
+
+    hdu_index = 0
+    util.normalize_image(filename_psf,hdu_index,filename_psf_normalized)
+
+
     # Subtract background from science image.  Since the reference image has been swarped,
     # it already has the background subtracted.
 
@@ -960,7 +968,7 @@ if __name__ == '__main__':
 
     if "rimtimsim" in science_image_filename:
 
-        util.transpose_image_data(filename_psf)
+        util.transpose_image_data(filename_psf_normalized)
 
 
     # Code-timing benchmark.
@@ -1002,7 +1010,7 @@ if __name__ == '__main__':
                 zogy_code,
                 filename_bkg_subbed_science_image,
                 output_resampled_gainmatched_reference_image,
-                filename_psf,
+                filename_psf_normalized,
                 filename_refimage_psf,
                 reformatted_science_uncert_image_filename,
                 output_resampled_reference_uncert_image,
@@ -1567,7 +1575,7 @@ if __name__ == '__main__':
         if crossconv_flag:
             sfft_cmd.append("--crossconv")
             sfft_cmd.append("--scipsf")
-            sfft_cmd.append(filename_psf)
+            sfft_cmd.append(filename_psf_normalized)
             sfft_cmd.append("--refpsf")
             sfft_cmd.append(filename_refimage_psf)
 
