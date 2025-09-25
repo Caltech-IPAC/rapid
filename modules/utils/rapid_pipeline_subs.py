@@ -2043,3 +2043,57 @@ def computeSkyCoordsFromPixelCoords(filename_sciimage_image,x_list,y_list):
 
     return ra,dec
 
+
+
+
+#####################################################################################################
+# Normalize the FITS image data.
+#####################################################################################################
+
+def normalize_image(fits_file,hdu_index,output_fits_file=None):
+
+    print(f"Normalizing image in input FITS file = {fits_file}")
+
+
+    # Read input FITS file.
+
+    hdul = fits.open(fits_file)
+    hdr = hdul[hdu_index].header
+    data = hdul[hdu_index].data
+
+
+    # Normalize the image.
+
+    data_output = np.array(data)
+    global_sum = np.sum(data_output)
+    data_output /= global_sum
+
+    final_sum = np.sum(data_output)
+    print("Method normalize_image: final_sum =",final_sum)
+
+    hdr["NRMLZSUM"] = (final_sum, "Image sum after normalizing")
+
+
+    # Create a new primary HDU with the new image data
+
+    np_data = np.array(data_output)
+
+    hdul[hdu_index] = fits.PrimaryHDU(header=hdr,data=np_data)
+
+
+    # Write output FITS file.
+
+    if output_fits_file is None:
+        output_fits_file = fits_file
+        print(f"Overwriting input FITS file = {output_fits_file}")
+    else:
+        print(f"Writing new FITS file = {output_fits_file}")
+
+    hdul.writeto(output_fits_file,overwrite=True,checksum=True)
+
+    hdul.close()
+
+
+    # Return None implicitly.
+
+    return
