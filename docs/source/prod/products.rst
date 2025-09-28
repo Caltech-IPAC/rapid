@@ -127,6 +127,8 @@ For listings of the available product files, download the following text files:
 
 :download:`rapid-product-files_20250823.txt <rapid-product-files_20250823.txt>`
 
+:download:`rapid-product-files_20250927.txt <rapid-product-files_20250927.txt>`
+
 A simple Python script can be written to parse the listing and generate ``wget`` or ``curl`` download commands.
 
 The pipeline log files are also publicly accessible.  There is a log file for each science image processed.
