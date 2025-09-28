@@ -41,6 +41,11 @@ Date              Software modification
 7/18/2025         Added new capability of fake-source injection
 7/23/2025         Added computation of naive-difference-image SExtractor catalog (``naive_diffimage_masked.txt``)
 8/15/2025         Changes 8/17/25 test (Big Run).  Made correction to uncertainty-image formula.  New PSF-fit catalog for SFFT difference image. Changed [FAKE_SOURCES] num_injections = 100, mag_min = 21.0, mag_max = 28.0.  Changed [PSFCAT_DIFFIMAGE] fwhm = 2.0. Changed [SEXTRACTOR_DIFFIMAGE] FILTER_THRESH = 3.0, DEBLEND_NTHRESH = 32, WEIGHT_TYPE = "NONE,MAP_RMS", FILTER = "N" (last two parameters are overrided in code for ZOGY and SFFT SExtractor catalogs). Fed ZOGY dxrmsfin = 0.0, dyrmsfin = 0.0.
+9/8/2025          Modified to not limit the precision of (ra, dec) in PSF-fit catalogs.
+9/16/2025         Added code to generate naive-difference-image PSF-fit catalogs.  Added code to generate SExtractor catalogs and PSF-fit catalogs for negative difference images (ZOGY, SFFT, naive).
+9/17/2025         Modified to feed sca_gain * exptime_sciimage as gain to method pipeline.differenceImageSubs.compute_diffimage_uncertainty.
+9/17/2025         Fixed bug: x and y subpixels offsets were swapped (adversely affected inputs to ZOGY, SFFT, and naive image-differencing).
+9/25/2025         Added new method normalize_image to normalize science-image PSFs (required by ZOGY).
 ===============   ==========================================================================================================================================================================================================================================================================================================================================================================================================================================================================================================
 
 
