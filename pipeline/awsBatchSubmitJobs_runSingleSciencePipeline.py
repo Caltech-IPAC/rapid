@@ -2321,6 +2321,14 @@ if __name__ == '__main__':
                 print(f"PSF-fit PSFPhotometry and DAOStarFinder catalogs (positive naive difference image): An unexpected error occurred: {e}")
 
 
+            # Code-timing benchmark.
+
+            end_time_benchmark = time.time()
+            print("Elapsed time in seconds after generating PSF-fit catalog on positive naive difference image =",
+                end_time_benchmark - start_time_benchmark)
+            start_time_benchmark = end_time_benchmark
+
+
         # Generate PSF-fit catalog for negative naive difference image using photutils.  No background subtraction is done.
 
         n_clip_sigma = float(psfcat_diffimage_dict["n_clip_sigma"])
@@ -2405,6 +2413,14 @@ if __name__ == '__main__':
 
             except Exception as e:
                 print(f"PSF-fit PSFPhotometry and DAOStarFinder catalogs (negative naive difference image): An unexpected error occurred: {e}")
+
+
+            # Code-timing benchmark.
+
+            end_time_benchmark = time.time()
+            print("Elapsed time in seconds after generating PSF-fit catalog on negative naive difference image =",
+                end_time_benchmark - start_time_benchmark)
+            start_time_benchmark = end_time_benchmark
 
 
             # Upload naive PSF-fit catalogs for naive difference images to product S3 bucket.
