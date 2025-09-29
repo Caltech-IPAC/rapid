@@ -189,10 +189,12 @@ def run_single_core_job(jids,overlapping_fields_list,meta_list,negative_diffimg_
         isdiffpos = "'f'"
         output_psfcat_filename_to_use = output_psfcat_filename.replace(".txt","_negative.txt")
         output_psfcat_finder_filename_to_use = output_psfcat_finder_filename.replace(".txt","_negative.txt")
+        done_suffix = "_negative"
     else:
         isdiffpos = "'t'"
         output_psfcat_filename_to_use = output_psfcat_filename
         output_psfcat_finder_filename_to_use = output_psfcat_finder_filename
+        done_suffix = ""
 
     njobs = len(jids)
 
@@ -243,7 +245,7 @@ def run_single_core_job(jids,overlapping_fields_list,meta_list,negative_diffimg_
         # This is done by attempting to download the done file.  Regardless the sub
         # always returns the filename and subdirs by parsing the s3_full_name.
 
-        s3_full_name_done_file = "s3://" + product_s3_bucket_base + "/" + proc_date + '/jid' + str(jid) + "/source_dbload_jid" +  str(jid)  + ".done"
+        s3_full_name_done_file = "s3://" + product_s3_bucket_base + "/" + proc_date + '/jid' + str(jid) + "/source_dbload" + done_suffix + "_jid" +  str(jid)  + ".done"
         done_filename,subdirs_done,downloaded_from_bucket = util.download_file_from_s3_bucket(s3_client,s3_full_name_done_file)
 
         if downloaded_from_bucket:
