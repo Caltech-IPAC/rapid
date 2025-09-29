@@ -1013,7 +1013,7 @@ Computing naive difference images                                     2.212
 Running SExtractor on positive naive difference image                 4.273
 Running SExtractor on negative naive difference image                 1.662
 Uploading SExtractor catalogs for naive difference images             0.941
-Running and uploading PSF-fit catalogs for naive difference images   26.879
+Running/uploading PSF-fit catalogs for naive difference images       26.879
 Uploading products at pipeline end                                    0.037
 Total time to run one instance of science pipeline                  666.143
 ==============================================================  =====================
