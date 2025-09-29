@@ -978,7 +978,8 @@ A new capability is computing an SExtractor catalog for the naive difference ima
        17 |        0 |  6875
     (2 rows)
 
-The VPO clocked 3.55 hours to run the entire test (all 6,875 science images).
+The VPO clocked 3.55 hours to run the entire test (all 6,875 science images),
+with parallel processing (up to 1000 machines with 1 machine per science image).
 As shown in the table below for a particular pipeline instance, executing SFFT,
 executing AWAICGEN for reference-image generation, and injecting fake sources
 are the dominant factors affecting pipeline performance.
