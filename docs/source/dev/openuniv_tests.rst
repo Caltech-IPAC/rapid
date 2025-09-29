@@ -866,7 +866,7 @@ A new capability is computing an SExtractor catalog for the naive difference ima
 
 .. code-block::
 
-    specialdb=> select ppid,exitcode,count(*) from jobs where cast(launched as date) = '20250823' group by ppid, exitcode order by ppid, exitcode;
+    fakesourcesdb=> select ppid,exitcode,count(*) from jobs where cast(launched as date) = '20250823' group by ppid, exitcode order by ppid, exitcode;
      ppid | exitcode | count
     ------+----------+-------
        15 |        0 |  6875
@@ -912,6 +912,118 @@ Here is a breakdown of the number of science images processed per filter in this
 .. code-block::
 
     fakesourcesdb=> select fid,count(*) from diffimages where vbest>0 and status>0 and created >= '2025-08-23' group by fid;
+     fid | count
+    -----+-------
+       7 |   770
+       1 |   770
+       5 |  1142
+       4 |  1140
+       2 |  1142
+       6 |  1141
+       3 |   770
+    (7 rows)
+
+
+9/27/2025
+************************************
+
+Similar to the 8/23/2025 test, with the following bug fixes and additions:
+
+    * Modified to not limit the precision of (ra, dec) in PSF-fit catalogs.
+    * Added code to generate naive-difference-image PSF-fit catalogs.
+    * Added code to generate SExtractor catalogs and PSF-fit catalogs for negative difference images (ZOGY, SFFT, naive).
+    * Modified to feed sca_gain * exptime_sciimage as gain to method pipeline.differenceImageSubs.compute_diffimage_uncertainty.
+    * Fixed bug: x and y subpixels offsets were swapped (adversely affected inputs to ZOGY, SFFT, and naive image-differencing).
+    * Added new method normalize_image to normalize science-image PSFs (required by ZOGY).
+
+The above additions cause more product files to be generated
+(namely, separate catalog files for negative difference images, with suffix "_negative" embedded in the filename).
+
+Covers 6,875 science images.  All science images in the 9/27 run had 100 fake sources injected per science image.
+This is in addition to the fake sources that are already included in the OpenUniverse simulation set.
+
+New reference images were made with corrected uncertainties (79 total).
+The reference images are special in that their input frames are selected
+from the observation window 63,400 < MJD < 99,9999, which is later than the observation range of the test.
+The test covers only those field/filter combinations in which reference images can be made that have 6 input frames or more,
+which resulted in 79 reference images.
+
+Note that SFFT was run with the ``--crossconv`` flag, as was done for the 8/23/25 test,
+but in those previous tests, the convolved and deconvolved SFFT difference images had their roles
+mistakenly swapped (in terms of being fed to SExtractor downstream).
+The resulting SFFT deconvolved difference image, ``sfftdiffimage_dconv_masked.fits``, and the
+SFFT convolved difference image, ``sfftdiffimage_cconv_masked.fits``, are copied to the
+S3 product bucket, along with the other products.
+
+Naive image-differencing was also done (simple science minus reference image), and the product is ``naive_diffimage_masked.fits``.
+A new capability is computing an SExtractor catalog for the naive difference image, which is called ``naive_diffimage_masked.txt``.
+
+.. code-block::
+
+    export DBNAME=fakesourcesdb
+    export STARTDATETIME="2028-08-17 00:00:00"
+    export ENDDATETIME="2030-09-20 00:00:00"
+    export STARTREFIMMJDOBS=63400
+    export ENDREFIMMJDOBS=99999
+    export MINREFIMNFRAMES=6
+
+    python3.11 /code/pipeline/virtualPipelineOperator.py 20250927 >& virtualPipelineOperator_20250927.out &
+
+.. code-block::
+
+    fakesourcesdb=> select ppid,exitcode,count(*) from jobs where cast(launched as date) = '20250927' group by ppid, exitcode order by ppid, exitcode;
+     ppid | exitcode | count
+    ------+----------+-------
+       15 |        0 |  6875
+       17 |        0 |  6875
+    (2 rows)
+
+The VPO clocked 3.55 hours to run the entire test (all 6,875 science images).
+As shown in the table below for a particular pipeline instance, executing SFFT,
+executing AWAICGEN for reference-image generation, and injecting fake sources
+are the dominant factors affecting pipeline performance.
+
+==============================================================  =====================
+Pipeline step                                                   Execution time (sec)
+==============================================================  =====================
+Downloading science image                                             0.910
+Downloading or generating reference image                           128.579
+Injecting fake sources                                               57.766
+Generating science-image catalog                                      2.757
+Swarping images                                                       9.153
+Running bkgest on science image                                      14.381
+Running gainMatchScienceAndReferenceImages                            6.114
+Replacing NaNs, applying image offsets, etc.                          0.105
+Running ZOGY                                                         39.384
+Masking ZOGY difference image                                         0.951
+Running SExtractor on positive ZOGY difference image                  3.823
+Running SExtractor on negative ZOGY difference image                  1.599
+Generating PSF-fit catalog on positive ZOGY difference image         15.176
+Generating PSF-fit catalog on negative ZOGY difference image          9.631
+Uploading main products to S3 bucket                                  7.981
+Running SFFT                                                        295.983
+Uploading SFFT difference image to S3 bucket                          7.481
+Running SExtractor on positive SFFT difference images                 1.424
+Running SExtractor on negative SFFT difference images                 1.448
+Uploading SFFT-diffimage SExtractor catalogs to S3 bucket             0.196
+Generating PSF-fit catalog on positive SFFT difference image         12.655
+Generating PSF-fit catalog on negative SFFT difference image         11.014
+Uploading SFFT-diffimage PSF-fit catalogs to S3 bucket                1.626
+Computing naive difference images                                     2.212
+Running SExtractor on positive naive difference image                 4.273
+Running SExtractor on negative naive difference image                 1.662
+Uploading SExtractor catalogs for naive difference images             0.941
+Running and uploading PSF-fit catalogs for naive difference images   26.879
+Uploading products at pipeline end                                    0.037
+Total time to run one instance of science pipeline                  666.143
+==============================================================  =====================
+
+Typically only 1-4 science images in an exposure were processed in the 5,538 exposures covered by this test.
+Here is a breakdown of the number of science images processed per filter in this test:
+
+.. code-block::
+
+    fakesourcesdb=> select fid,count(*) from diffimages where vbest>0 and status>0 and created >= '2025-09-27' group by fid;
      fid | count
     -----+-------
        7 |   770
