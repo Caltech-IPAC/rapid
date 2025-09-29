@@ -932,7 +932,7 @@ Similar to the 8/23/2025 test, with the following bug fixes and additions:
     * Modified to not limit the precision of (ra, dec) in PSF-fit catalogs.
     * Added code to generate naive-difference-image PSF-fit catalogs.
     * Added code to generate SExtractor catalogs and PSF-fit catalogs for negative difference images (ZOGY, SFFT, naive).
-    * Modified to feed sca_gain * exptime_sciimage as gain to method pipeline.differenceImageSubs.compute_diffimage_uncertainty.
+    * Modified to feed sca_gain * exptime_sciimage as gain to method compute_diffimage_uncertainty.
     * Fixed bug: x and y subpixels offsets were swapped (adversely affected inputs to ZOGY, SFFT, and naive image-differencing).
     * Added new method normalize_image to normalize science-image PSFs (required by ZOGY).
 
