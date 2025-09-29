@@ -121,6 +121,8 @@ ppid = int(config_input['SCI_IMAGE']['ppid'])
 
 num_cores = os.cpu_count()
 
+print("num_cores =",num_cores)
+
 dbh_list = []
 
 for i in range(num_cores):
@@ -184,11 +186,11 @@ def run_single_core_job(jids,overlapping_fields_list,meta_list,negative_diffimg_
     print("negative_diffimg_flag =",negative_diffimg_flag)
 
     if negative_diffimg_flag:
-        isposdiff = "'f'"
+        isdiffpos = "'f'"
         output_psfcat_filename_to_use = output_psfcat_filename.replace(".txt","_negative.txt")
         output_psfcat_finder_filename_to_use = output_psfcat_finder_filename.replace(".txt","_negative.txt")
     else:
-        isposdiff = "'t'"
+        isdiffpos = "'t'"
         output_psfcat_filename_to_use = output_psfcat_filename
         output_psfcat_finder_filename_to_use = output_psfcat_finder_filename
 
@@ -398,6 +400,12 @@ def run_single_core_job(jids,overlapping_fields_list,meta_list,negative_diffimg_
 
     fh.close()
 
+    message = f"Finish normally for index_thread = {index_thread}"
+
+    return message
+
+
+
 
 def execute_parallel_processes(jids,rtids_list,meta_list,negative_diffimg_flag,num_cores=None):
 
@@ -414,6 +422,13 @@ def execute_parallel_processes(jids,rtids_list,meta_list,negative_diffimg_flag,n
         for i, future in enumerate(as_completed(futures)):
             index = futures.index(future)  # Find the original index/order of the completed future
             print(f"Completed: {i+1} processes, lastly for index={index}")
+
+    for future in futures:
+        index = futures.index(future)
+        try:
+            print(future.result())
+        except Exception as e:
+            print(f"*** Error in thread index {index} = {e}")
 
 
 #################
@@ -618,7 +633,7 @@ if __name__ == '__main__':
         sql_queries.append(f"CREATE INDEX sources_{proc_date}_{sca}_radec_idx ON sources_{proc_date}_{sca} (q3c_ang2ipix(ra, dec));")
         sql_queries.append(f"CLUSTER sources_{proc_date}_{sca}_radec_idx ON sources_{proc_date}_{sca};")
         sql_queries.append(f"ANALYZE sources_{proc_date}_{sca};")
-        sql_queries.append(f"ALTER TABLE sources_{proc_date}_{sca} SET LOGGED;")
+        #sql_queries.append(f"ALTER TABLE sources_{proc_date}_{sca} SET LOGGED;")                  # For speed, do not log.
         sql_queries.append(f"REVOKE ALL ON TABLE sources_{proc_date}_{sca} FROM rapidreadrole;")
         sql_queries.append(f"GRANT SELECT ON TABLE sources_{proc_date}_{sca} TO GROUP rapidreadrole;")
         sql_queries.append(f"REVOKE ALL ON TABLE sources_{proc_date}_{sca} FROM rapidadminrole;")
