@@ -3015,7 +3015,7 @@ class RAPIDDB:
         except (Exception, psycopg2.DatabaseError) as error:
             print('*** Error sources data from file ({}) into sources child database table ({}); skipping...'.format(csv_file_path,table_name))
             self.exit_code = 67
-            return
+            exit(self.exit_code)
 
         return None
 
