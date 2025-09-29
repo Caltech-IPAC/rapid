@@ -186,12 +186,12 @@ def run_single_core_job(jids,overlapping_fields_list,meta_list,negative_diffimg_
     print("negative_diffimg_flag =",negative_diffimg_flag)
 
     if negative_diffimg_flag:
-        isdiffpos = "'f'"
+        isdiffpos = "false"
         output_psfcat_filename_to_use = output_psfcat_filename.replace(".txt","_negative.txt")
         output_psfcat_finder_filename_to_use = output_psfcat_finder_filename.replace(".txt","_negative.txt")
         done_suffix = "_negative"
     else:
-        isdiffpos = "'t'"
+        isdiffpos = "true"
         output_psfcat_filename_to_use = output_psfcat_filename
         output_psfcat_finder_filename_to_use = output_psfcat_finder_filename
         done_suffix = ""
