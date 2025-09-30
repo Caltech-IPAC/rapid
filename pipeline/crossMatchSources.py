@@ -172,6 +172,12 @@ def run_single_core_job(scas,fields,index_thread):
     This will be rectified later.  TODO
     '''
 
+
+    # Compute thread start time for code-timing benchmark.
+
+    thread_start_time_benchmark = time.time()
+
+
     # Set thread_debug = 0 here to severly limit the amount of information logged for runs
     # that are anything but short tests.
 
@@ -226,10 +232,18 @@ def run_single_core_job(scas,fields,index_thread):
             sql_queries.append(query)
             records = dbh.execute_sql_queries(sql_queries,thread_debug)
 
-            sid_dict = {}
+
+            # Code-timing benchmark.
+
+            thread_end_time_benchmark = time.time()
+            fh.write(f"Elapsed time in seconds to cross-match {sources_tablename} and {astroobjects_tablename} database tables =",
+                thread_end_time_benchmark - thread_start_time_benchmark)
+            thread_start_time_benchmark = thread_end_time_benchmark
 
 
             # For the sources that were matched, create Merges_<field> record.
+
+            sid_dict = {}
 
             for record in records:
 
@@ -241,9 +255,16 @@ def run_single_core_job(scas,fields,index_thread):
                 dbh.add_merge_to_field(merges_tablename,aid,sid)
 
 
+            # Code-timing benchmark.
+
+            thread_end_time_benchmark = time.time()
+            fh.write(f"Elapsed time in seconds to insert {merges_tablename} database records for matched sources =",
+                thread_end_time_benchmark - thread_start_time_benchmark)
+            thread_start_time_benchmark = thread_end_time_benchmark
+
+
             # Query for all sources for the field of interest in Sources_<proc_date>_<sca> and load into memory.
             # Find those sources that were not matched.
-
 
             query = f"SELECT sid FROM {sources_tablename} WHERE field = {field};"
 
@@ -319,7 +340,20 @@ def run_single_core_job(scas,fields,index_thread):
                     dbh.add_merge_to_field(merges_tablename,aid,sid,thread_debug)
 
 
-        # End of loop over field.
+            # Code-timing benchmark.
+
+            thread_end_time_benchmark = time.time()
+            fh.write(f"Elapsed time in seconds to insert {merges_tablename} and {astroobjects_tablename} database records for unmatched sources =",
+                thread_end_time_benchmark - thread_start_time_benchmark)
+            thread_start_time_benchmark = thread_end_time_benchmark
+
+
+            # End of loop over scas.
+
+            fh.write(f"Loop end: index_field,field,sca = {index_field},{field},{sca}\n")
+
+
+        # End of loop over fields.
 
         fh.write(f"Loop end: index_field,field = {index_field},{field}\n")
 
@@ -429,7 +463,7 @@ if __name__ == '__main__':
     start_time_benchmark = end_time_benchmark
 
 
-    # Assume astoobjects_<field> and merges_field database tables are created in tandem,
+    # Assume astoobjects_<field> and merges_<field> database tables are created in tandem,
     # so we only need to test for the existence of the former table.
 
     already_made_dict = {}
