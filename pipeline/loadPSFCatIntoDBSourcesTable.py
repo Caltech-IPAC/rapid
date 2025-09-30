@@ -183,6 +183,9 @@ print(f"Sources columns: {cols_comma_separated_string}")
 
 def run_single_core_job(jids,overlapping_fields_list,meta_list,negative_diffimg_flag,index_thread):
 
+
+    # Handle sources from positive versus negative difference images.
+
     print("negative_diffimg_flag =",negative_diffimg_flag)
 
     if negative_diffimg_flag:
