@@ -236,8 +236,8 @@ def run_single_core_job(scas,fields,index_thread):
             # Code-timing benchmark.
 
             thread_end_time_benchmark = time.time()
-            fh.write(f"Elapsed time in seconds to cross-match {sources_tablename} and {astroobjects_tablename} database tables =",
-                thread_end_time_benchmark - thread_start_time_benchmark)
+            diff_time_benchmark = thread_end_time_benchmark - thread_start_time_benchmark
+            fh.write(f"Elapsed time in seconds to cross-match {sources_tablename} and {astroobjects_tablename} database tables = {diff_time_benchmark}")
             thread_start_time_benchmark = thread_end_time_benchmark
 
 
@@ -258,8 +258,8 @@ def run_single_core_job(scas,fields,index_thread):
             # Code-timing benchmark.
 
             thread_end_time_benchmark = time.time()
-            fh.write(f"Elapsed time in seconds to insert {merges_tablename} database records for matched sources =",
-                thread_end_time_benchmark - thread_start_time_benchmark)
+            diff_time_benchmark = thread_end_time_benchmark - thread_start_time_benchmark
+            fh.write(f"Elapsed time in seconds to insert {merges_tablename} database records for matched sources = {diff_time_benchmark}")
             thread_start_time_benchmark = thread_end_time_benchmark
 
 
@@ -343,8 +343,8 @@ def run_single_core_job(scas,fields,index_thread):
             # Code-timing benchmark.
 
             thread_end_time_benchmark = time.time()
-            fh.write(f"Elapsed time in seconds to insert {merges_tablename} and {astroobjects_tablename} database records for unmatched sources =",
-                thread_end_time_benchmark - thread_start_time_benchmark)
+            diff_time_benchmark = thread_end_time_benchmark - thread_start_time_benchmark
+            fh.write(f"Elapsed time in seconds to insert {merges_tablename} and {astroobjects_tablename} database records for unmatched sources = {diff_time_benchmark}")
             thread_start_time_benchmark = thread_end_time_benchmark
 
 
