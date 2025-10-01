@@ -97,35 +97,9 @@ Public Access
 To download a RAPID pipeline product, the
 user must construct a URL, knowing the filename in advance, like the following::
 
-    https://rapid-product-files.s3.us-west-2.amazonaws.com/20250428/jid1022/awaicgen_output_mosaic_cov_map.fits
+    https://rapid-product-files.s3.us-west-2.amazonaws.com/20250927/jid90828/awaicgen_output_mosaic_cov_map.fits
 
-For listings of the available product files, download the following text files:
-
-:download:`rapid-product-files_20250428.txt <rapid-product-files_20250428.txt>`
-
-:download:`rapid-product-files_20250430.txt <rapid-product-files_20250430.txt>`
-
-:download:`rapid-product-files_20250505.txt <rapid-product-files_20250505.txt>`
-
-:download:`rapid-product-files_20250506.txt <rapid-product-files_20250506.txt>`
-
-:download:`rapid-product-files_20250508.txt <rapid-product-files_20250508.txt>`
-
-:download:`rapid-product-files_20250510.txt <rapid-product-files_20250510.txt>`
-
-:download:`rapid-product-files_20250514.txt <rapid-product-files_20250514.txt>`
-
-:download:`rapid-product-files_20250612.txt <rapid-product-files_20250612.txt>`
-
-:download:`rapid-product-files_20250613.txt <rapid-product-files_20250613.txt>`
-
-:download:`rapid-product-files_20250617.txt <rapid-product-files_20250617.txt>`
-
-:download:`rapid-product-files_20250620.txt <rapid-product-files_20250620.txt>`
-
-:download:`rapid-product-files_20250710.txt <rapid-product-files_20250710.txt>`
-
-:download:`rapid-product-files_20250823.txt <rapid-product-files_20250823.txt>`
+For a listing of the latest product files, download the following text file:
 
 :download:`rapid-product-files_20250927.txt <rapid-product-files_20250927.txt>`
 
@@ -134,7 +108,7 @@ A simple Python script can be written to parse the listing and generate ``wget``
 The pipeline log files are also publicly accessible.  There is a log file for each science image processed.
 Here is a template for the log-file URL that corresponds to the above example::
 
-    https://rapid-pipeline-logs.s3.us-west-2.amazonaws.com/20250428/rapid_pipeline_job_20250428_jid1022_log.txt
+    https://rapid-pipeline-logs.s3.us-west-2.amazonaws.com/20250927/rapid_pipeline_job_20250927_jid90828_log.txt
 
 
 Example Reference-Image FITS Header
