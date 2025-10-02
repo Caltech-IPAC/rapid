@@ -1,8 +1,12 @@
-################################################################
+###############################################################################
 # output_diffimage_file_infobits:
-# BIT 0, No photutils catalog for ZOGY was made.
-# BIT 1, No photutils catalog for SFFT was made.
-################################################################
+# BIT 0, No photutils catalog for ZOGY positive difference image was made.
+# BIT 1, No photutils catalog for ZOGY negative difference image was made.
+# BIT 2, No photutils catalog for SFFT positive difference image was made.
+# BIT 3, No photutils catalog for SFFT negative difference image was made.
+# BIT 4, No photutils catalog for naive positive difference image was made.
+# BIT 5, No photutils catalog for naive negative difference image was made.
+###############################################################################
 
 import os
 import configparser
@@ -1343,7 +1347,7 @@ if __name__ == '__main__':
 
     if not psfcat_flag:
 
-        output_diffimage_file_infobits |= 2**0
+        output_diffimage_file_infobits |= 2**1
 
     else:
 
@@ -1849,7 +1853,7 @@ if __name__ == '__main__':
 
             if not psfcat_flag:
 
-                output_diffimage_file_infobits |= 2**1
+                output_diffimage_file_infobits |= 2**2
 
             else:
 
@@ -1943,7 +1947,7 @@ if __name__ == '__main__':
 
             if not psfcat_flag:
 
-                output_diffimage_file_infobits |= 2**1
+                output_diffimage_file_infobits |= 2**3
 
             else:
 
@@ -2268,7 +2272,7 @@ if __name__ == '__main__':
 
         if not psfcat_flag:
 
-            output_diffimage_file_infobits |= 2**1
+            output_diffimage_file_infobits |= 2**4
 
         else:
 
@@ -2362,7 +2366,7 @@ if __name__ == '__main__':
 
         if not psfcat_flag:
 
-            output_diffimage_file_infobits |= 2**1
+            output_diffimage_file_infobits |= 2**5
 
         else:
 
