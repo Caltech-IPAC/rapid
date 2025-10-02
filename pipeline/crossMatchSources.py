@@ -142,13 +142,13 @@ s3_client = boto3.client('s3')
 cols = []
 cols.append("ra0")
 cols.append("dec0")
-cols.append("mag0")
+cols.append("flux0")
 cols.append("meanra")
 cols.append("stdefra")
 cols.append("meandec")
 cols.append("stdevdec")
-cols.append("meanmag")
-cols.append("stdevmag")
+cols.append("meanflux")
+cols.append("stdevflux")
 cols.append("nsources")
 cols.append("field")
 cols.append("hp6")
@@ -167,9 +167,11 @@ print(f"AstroObjects columns: {cols_comma_separated_string}")
 def run_single_core_job(scas,fields,index_thread):
 
     '''
+    The current list of fields includes all fields that a science image may overlap, as found
+    by querying for distinct fields all the sources child tables that are to be cross-matched.
     The current list of fields does NOT necessarily include ALL adjacent fields, so that
-    source-matching near field boundaries may not pick up all potential light-curve data points.
-    This will be rectified later.  TODO
+    source-matching near field boundaries may not pick up all potential light-curve data points
+    that are on the other side of a field boundary.  This may be rectified later.  TODO
     '''
 
 
