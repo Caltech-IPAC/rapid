@@ -1035,3 +1035,12 @@ Here is a breakdown of the number of science images processed per filter in this
        6 |  1141
        3 |   770
     (7 rows)
+
+
+The PSF-fit catalogs made by the Python photutils package from the ZOGY difference images,
+both positive and negative, were loaded into Sources child PostgreSQL database tables.
+The elapsed time to load all sources into the database was 14.7 minutes with 8 parallel processes.
+
+Cross-matching the sources, resulting in records loaded into the Merges_<field> and
+AstroObjects_<fields> database tables, for all fields of the sources, was done.
+The elapsed time to cross-match all sources was 3.1 hours with 8 parallel processes.
