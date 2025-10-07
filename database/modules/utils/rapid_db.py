@@ -456,7 +456,7 @@ class RAPIDDB:
                 for record in self.cur:
                     print(record)
             except:
-                    print("Nothing returned from database stored function; continuing...")
+                print("Nothing returned from database stored function; continuing...")
 
         except (Exception, psycopg2.DatabaseError) as error:
             print('*** Error updating L2Files record ({}); skipping...'.format(error))
@@ -549,7 +549,7 @@ class RAPIDDB:
                 for record in self.cur:
                     print(record)
             except:
-                    print("Nothing returned from database stored function; continuing...")
+                print("Nothing returned from database stored function; continuing...")
 
         except (Exception, psycopg2.DatabaseError) as error:
             print('*** Error inserting or updating L2FileMeta record ({}); skipping...'.format(error))
@@ -596,7 +596,7 @@ class RAPIDDB:
                 print("nrecs =",nrecs)
 
             except:
-                    print("Nothing returned from database query; continuing...")
+                print("Nothing returned from database query; continuing...")
 
         except (Exception, psycopg2.DatabaseError) as error:
             print('*** Error getting all L2FileMeta records ({}); skipping...'.format(error))
@@ -640,7 +640,7 @@ class RAPIDDB:
                 for record in self.cur:
                     records.append(record)
             except:
-                    print("Nothing returned from database query; continuing...")
+                print("Nothing returned from database query; continuing...")
 
         except (Exception, psycopg2.DatabaseError) as error:
             print('*** Error updating L2FileMeta record ({}); skipping...'.format(error))
@@ -687,7 +687,7 @@ class RAPIDDB:
                 print("nrecs =",nrecs)
 
             except:
-                    print("Nothing returned from database query; continuing...")
+                print("Nothing returned from database query; continuing...")
 
         except (Exception, psycopg2.DatabaseError) as error:
             print('*** Error getting all L2Files records ({}); skipping...'.format(error))
@@ -732,7 +732,7 @@ class RAPIDDB:
                 for record in self.cur:
                     records.append(record)
             except:
-                    print("Nothing returned from database query; continuing...")
+                print("Nothing returned from database query; continuing...")
 
         except (Exception, psycopg2.DatabaseError) as error:
             print('*** Error updating L2FileMeta record ({}); skipping...'.format(error))
@@ -775,7 +775,7 @@ class RAPIDDB:
                 for record in self.cur:
                     records.append(record)
             except:
-                    print("Nothing returned from database query; continuing...")
+                print("Nothing returned from database query; continuing...")
 
         except (Exception, psycopg2.DatabaseError) as error:
             print('*** Error updating L2FileMeta record ({}); skipping...'.format(error))
@@ -822,7 +822,7 @@ class RAPIDDB:
                 print("nrecs =",nrecs)
 
             except:
-                    print("Nothing returned from database query; continuing...")
+                print("Nothing returned from database query; continuing...")
 
         except (Exception, psycopg2.DatabaseError) as error:
             print('*** Error getting all L2Files records ({}); skipping...'.format(error))
@@ -871,7 +871,7 @@ class RAPIDDB:
                 for record in self.cur:
                     records.append(record)
             except:
-                    print("Nothing returned from database query; continuing...")
+                print("Nothing returned from database query; continuing...")
 
         except (Exception, psycopg2.DatabaseError) as error:
             print('*** Error updating L2Files record ({}); skipping...'.format(error))
@@ -920,7 +920,7 @@ class RAPIDDB:
                 print("nrecs =",nrecs)
 
             except:
-                    print("Nothing returned from database query; continuing...")
+                print("Nothing returned from database query; continuing...")
 
         except (Exception, psycopg2.DatabaseError) as error:
             print('*** Error getting all Exposures records ({}); skipping...'.format(error))
@@ -969,7 +969,7 @@ class RAPIDDB:
                 for record in self.cur:
                     records.append(record)
             except:
-                    print("Nothing returned from database query; continuing...")
+                print("Nothing returned from database query; continuing...")
 
         except (Exception, psycopg2.DatabaseError) as error:
             print('*** Error updating Exposures record ({}); skipping...'.format(error))
@@ -1178,7 +1178,7 @@ class RAPIDDB:
                 print("nrecs =",nrecs)
 
             except:
-                    print("Nothing returned from database query; continuing...")
+                print("Nothing returned from database query; continuing...")
 
         except (Exception, psycopg2.DatabaseError) as error:
             print('*** Error from database method RAPIDDB.get_overlapping_l2files ({}); skipping...'.format(error))
@@ -1498,7 +1498,7 @@ class RAPIDDB:
                 for record in self.cur:
                     records.append(record)
             except:
-                    print("Nothing returned from database query; continuing...")
+                print("Nothing returned from database query; continuing...")
 
         except (Exception, psycopg2.DatabaseError) as error:
             print('*** Error updating Jobs record ({}); skipping...'.format(error))
@@ -1631,7 +1631,7 @@ class RAPIDDB:
                 for record in self.cur:
                     print(record)
             except:
-                    print("Nothing returned from database stored function; continuing...")
+                print("Nothing returned from database stored function; continuing...")
 
         except (Exception, psycopg2.DatabaseError) as error:
             print('*** Error updating RefImages record ({}); skipping...'.format(error))
@@ -1902,7 +1902,7 @@ class RAPIDDB:
                 for record in self.cur:
                     print(record)
             except:
-                    print("Nothing returned from database stored function; continuing...")
+                print("Nothing returned from database stored function; continuing...")
 
         except (Exception, psycopg2.DatabaseError) as error:
             print('*** Error updating DiffImages record ({}); skipping...'.format(error))
@@ -1958,7 +1958,7 @@ class RAPIDDB:
                 for record in self.cur:
                     print(record)
             except:
-                    print("Nothing returned from database stored function; continuing...")
+                print("Nothing returned from database stored function; continuing...")
 
         except (Exception, psycopg2.DatabaseError) as error:
             print('*** Error inserting RefImImages record ({}); skipping...'.format(error))
@@ -2005,7 +2005,7 @@ class RAPIDDB:
                 print("nrecs =",nrecs)
 
             except:
-                    print("Nothing returned from database query; continuing...")
+                print("Nothing returned from database query; continuing...")
 
         except (Exception, psycopg2.DatabaseError) as error:
             print('*** Error getting all distinct fid, sca pairs in PSFs database table ({}); skipping...'.format(error))
@@ -2184,7 +2184,7 @@ class RAPIDDB:
                 for record in self.cur:
                     print(record)
             except:
-                    print("Nothing returned from database stored function; continuing...")
+                print("Nothing returned from database stored function; continuing...")
 
         except (Exception, psycopg2.DatabaseError) as error:
             print('*** Error inserting or updating DiffImMeta record ({}); skipping...'.format(error))
@@ -2231,7 +2231,7 @@ class RAPIDDB:
                 print("nrecs =",nrecs)
 
             except:
-                    print("Nothing returned from database query; continuing...")
+                print("Nothing returned from database query; continuing...")
 
         except (Exception, psycopg2.DatabaseError) as error:
             print('*** Error getting all L2Files records for given exposure ID ({}); skipping...'.format(error))
@@ -2375,7 +2375,7 @@ class RAPIDDB:
                 for record in self.cur:
                     print(record)
             except:
-                    print("Nothing returned from database stored function; continuing...")
+                print("Nothing returned from database stored function; continuing...")
 
         except (Exception, psycopg2.DatabaseError) as error:
             print('*** Error inserting or updating RefImMeta record ({}); skipping...'.format(error))
@@ -2423,7 +2423,7 @@ class RAPIDDB:
                 print("nrecs =",nrecs)
 
             except:
-                    print("Nothing returned from database query; continuing...")
+                print("Nothing returned from database query; continuing...")
 
         except (Exception, psycopg2.DatabaseError) as error:
             print('*** Error getting all L2Files records for given dateobs range ({}); skipping...'.format(error))
@@ -2642,7 +2642,7 @@ class RAPIDDB:
                 print("nrecs =",nrecs)
 
             except:
-                    print("Nothing returned from database query; continuing...")
+                print("Nothing returned from database query; continuing...")
 
         except (Exception, psycopg2.DatabaseError) as error:
             print('*** Error getting Jobs records for given processing date {}: {}; skipping...'.format(proc_date,error))
@@ -2696,7 +2696,7 @@ class RAPIDDB:
                 print("nrecs =",nrecs)
 
             except:
-                    print("Nothing returned from database query; continuing...")
+                print("Nothing returned from database query; continuing...")
 
         except (Exception, psycopg2.DatabaseError) as error:
             print('*** Error getting unclosedout Jobs records for given ppid={} and processing date {}: {}; skipping...'.format(ppid,proc_date,error))
@@ -2758,7 +2758,7 @@ class RAPIDDB:
                 print("nrecs =",nrecs)
 
             except:
-                    print("Nothing returned from database query; continuing...")
+                print("Nothing returned from database query; continuing...")
 
         except (Exception, psycopg2.DatabaseError) as error:
             print('*** Error getting all L2Files records for given dateobs range, nframes, and cov5percent ({}); skipping...'.format(error))
@@ -2805,7 +2805,7 @@ class RAPIDDB:
                 print("nrecs =",nrecs)
 
             except:
-                    print("Nothing returned from database query; continuing...")
+                print("Nothing returned from database query; continuing...")
 
         except (Exception, psycopg2.DatabaseError) as error:
             print('*** Error executing get_field_fid_nframes_records_for_mjdobs_range ({}); skipping...'.format(error))
@@ -2857,7 +2857,7 @@ class RAPIDDB:
                 print("nrecs =",nrecs)
 
             except:
-                    print("Nothing returned from database query; continuing...")
+                print("Nothing returned from database query; continuing...")
 
         except (Exception, psycopg2.DatabaseError) as error:
             print('*** Error getting all L2Files records for given dateobs range ({}); skipping...'.format(error))
@@ -2969,7 +2969,7 @@ class RAPIDDB:
                         print("nrecs =",nrecs)
 
                 except:
-                        print("Nothing returned from database query; continuing...")
+                    print("Nothing returned from database query; continuing...")
 
             except (Exception, psycopg2.DatabaseError) as error:
                 print(f"*** Error executing query ({query}): {error}; quitting...")
@@ -3162,7 +3162,7 @@ class RAPIDDB:
                 for record in self.cur:
                     print(record)
             except:
-                    print("Nothing returned from database stored function; continuing...")
+                print("Nothing returned from database stored function; continuing...")
 
         except (Exception, psycopg2.DatabaseError) as error:
             print('*** Error inserting Merges record ({}); skipping...'.format(error))
@@ -3300,3 +3300,43 @@ class RAPIDDB:
 
             if self.exit_code == 0:
                 self.conn.commit()           # Commit database transaction
+
+
+########################################################################################################
+
+    def delete_merge_from_field(self,tablename,sid,debug=0):
+
+        self.exit_code = 0
+        record_exists = False
+
+
+        # Define query.
+
+        query = f"DELETE FROM {tablename} WHERE sid = {sid} RETURNING aid;"
+
+        if debug == 1:
+            print('query = {}'.format(query))
+
+
+        # Execute query.
+
+        try:
+            self.cur.execute(query)
+
+            try:
+                for record in self.cur:
+                    if debug == 1:
+                        print(f"{tablename} record for sid={sid}, aid={aid} deleted...")
+            except:
+                if debug == 1:
+                    print("Nothing returned from database stored function; continuing...")
+
+        except (Exception, psycopg2.DatabaseError) as error:
+            print(f'*** Error deleting {tablename} record ({}); skipping...'.format(error))
+            self.exit_code = 67
+            return
+
+        if self.exit_code == 0:
+            self.conn.commit()           # Commit database transaction
+
+
