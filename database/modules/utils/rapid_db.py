@@ -3307,12 +3307,11 @@ class RAPIDDB:
     def delete_merge_from_field(self,tablename,sid,debug=0):
 
         self.exit_code = 0
-        record_exists = False
 
 
         # Define query.
 
-        query = f"DELETE FROM {tablename} WHERE sid = {sid} RETURNING aid;"
+        query = f"DELETE FROM {tablename} WHERE sid = {sid};"
 
         if debug == 1:
             print('query = {}'.format(query))
@@ -3323,13 +3322,9 @@ class RAPIDDB:
         try:
             self.cur.execute(query)
 
-            try:
-                for record in self.cur:
-                    if debug == 1:
-                        print(f"{tablename} record for sid={sid}, aid={aid} deleted...")
-            except:
-                if debug == 1:
-                    print("Nothing returned from database stored function; continuing...")
+            if debug == 1:
+                rows_affected = self.cur.rowcount
+                print(f"Deleted: {rows_affected}")
 
         except (Exception, psycopg2.DatabaseError) as error:
             print(f'*** Error deleting {tablename} record ({}); skipping...'.format(error))
