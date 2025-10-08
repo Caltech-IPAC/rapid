@@ -472,19 +472,40 @@ def convert_xyz_to_radec(x,y,z):
 
 def compute_xyz(ra,dec):
 
-    alpha = math.radians(ra);
-    delta = math.radians(dec);
+    alpha = math.radians(ra)
+    delta = math.radians(dec)
 
-    cosalpha = math.cos(alpha);
-    sinalpha = math.sin(alpha);
-    cosdelta = math.cos(delta);
-    sindelta = math.sin(delta);
+    cosalpha = math.cos(alpha)
+    sinalpha = math.sin(alpha)
+    cosdelta = math.cos(delta)
+    sindelta = math.sin(delta)
 
-    x = cosdelta * cosalpha;
-    y = cosdelta * sinalpha;
-    z = sindelta;
+    x = cosdelta * cosalpha
+    y = cosdelta * sinalpha
+    z = sindelta
 
     return x,y,z
+
+
+#------------------------------------------
+# Subroutine to compute angular separation,
+# in degrees, for any two sky positions.
+
+sub compute_angular_separation(ara, adec, bra, bdec):
+
+
+   # Get Cartesian representation.
+
+   ax,ay,az = compute_xyz(ara, adec)
+   bx,by,bz = compute_xyz(bra, bdec)
+
+   dx = bx - ax
+   dy = by - ay
+   dz = bz - az
+
+   ang_sep = rtd * 2.0 * math.asin(0.5 * math.sqrt(dx * dx + dy * dy + dz * dz))
+
+   return ang_sep
 
 
 #-------------------------------------------------------------------
