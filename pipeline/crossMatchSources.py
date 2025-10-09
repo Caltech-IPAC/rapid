@@ -715,6 +715,7 @@ if __name__ == '__main__':
 
         sql_queries.append(f"CLUSTER {tablename1}_radec_idx ON {tablename1};")
         sql_queries.append(f"ANALYZE {tablename1};")
+        sql_queries.append(f"ANALYZE {tablename2};")
         #sql_queries.append(f"ALTER TABLE {tablename1} SET LOGGED;")                # For speed, do not log.
         #sql_queries.append(f"ALTER TABLE {tablename2} SET LOGGED;")
 
