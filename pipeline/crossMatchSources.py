@@ -12,6 +12,7 @@ import database.modules.utils.rapid_db as db
 import modules.utils.rapid_pipeline_subs as util
 import database.modules.utils.roman_tessellation_db as sqlite
 
+
 swname = "crossMatchSources.py"
 swvers = "1.0"
 cfg_filename_only = "awsBatchSubmitJobs_launchSingleSciencePipeline.ini"
@@ -169,9 +170,9 @@ def run_single_core_job(scas,fields,index_thread):
     '''
     The current list of fields includes all fields that a science image may overlap, as found
     by querying for distinct fields all the sources child tables that are to be cross-matched.
-    The current list of fields does NOT necessarily include ALL adjacent fields, so that
-    source-matching near field boundaries may not pick up all potential light-curve data points
-    that are on the other side of a field boundary.  This may be rectified later.  TODO
+    Cross-matching between sources in adjacent fields is done after populating the pertinent
+    AstroObjects_<field> database table, since field boundaries are infinitesimally thin lines
+    (they have no thickness), and the match radius can extend across them.
     '''
 
 
@@ -215,9 +216,9 @@ def run_single_core_job(scas,fields,index_thread):
 
         # For a given field pertinent to this parallel process, loop over all SCAs
         # and perform source-matching:
-        # 1. Cross-match each source with the AstroObjects_<field> table.
+        # 1. Cross-match each source in the field with the AstroObjects_<field> table.
         # 2. If there is no match, then create a new AstroObjects_<field> record.
-        # 3. Register a Merges_<field> record.
+        # 3. Register a Merges_<field> record to associate astroobject with source
 
         astroobjects_tablename = f"astroobjects_{field}"
         merges_tablename = f"merges_{field}"
@@ -353,6 +354,124 @@ def run_single_core_job(scas,fields,index_thread):
             # End of loop over scas.
 
             fh.write(f"Loop end: index_field,field,sca = {index_field},{field},{sca}\n")
+
+
+        # Finally, cross-match the current AstroObjects_<field> table with sources in all adjacent fields.
+        # Field boundaries are infinitesimally thin lines, and the match radius can extend across them.
+
+        fh.write(f"Loop start for adjacent fields (rtid is equivalent to field number): index_field,field = {index_field},{field}\n")
+
+        rtid = field
+        rtids_list = roman_tessellation_db.get_all_neighboring_rtids(rtid)
+
+
+        # If away from poles, a sky tile will have 8 adjacent fields,
+        # and this can be exploited to speed up the cross-matching.
+
+        n_adjacent_fields = len(rtids_list)
+
+        if n_adjacent_fields == 8:
+
+
+            # Get sky positions of center and four corners of sky tile.
+
+            roman_tessellation_db.get_center_sky_position(rtid)
+            ra0_field = roman_tessellation_db.ra0
+            dec0_field = roman_tessellation_db.dec0
+            roman_tessellation_db.get_corner_sky_positions(rtid)
+            ra1_field = roman_tessellation_db.ra1
+            dec1_field = roman_tessellation_db.dec1
+            ra2_field = roman_tessellation_db.ra2
+            dec2_field = roman_tessellation_db.dec2
+            ra3_field = roman_tessellation_db.ra3
+            dec3_field = roman_tessellation_db.dec3
+            ra4_field = roman_tessellation_db.ra4
+            dec4_field = roman_tessellation_db.dec4
+
+
+            # Compute angular separation, in degrees, between field center and corner.
+            # Use this with some margin to compute a radius of inclusion for cross-matching.
+            # The tiles are not necessarily square or even rectangular, so choose maximum separation.
+
+            ang_sep1 = util.compute_angular_separation(ra0_field, dec0_field, ra1_field, dec1_field)
+            ang_sep2 = util.compute_angular_separation(ra0_field, dec0_field, ra2_field, dec2_field)
+            ang_sep3 = util.compute_angular_separation(ra0_field, dec0_field, ra3_field, dec3_field)
+            ang_sep4 = util.compute_angular_separation(ra0_field, dec0_field, ra4_field, dec4_field)
+
+            ang_sep = max(ang_sep1,ang_sep2,ang_sep3,ang_sep4)
+
+
+            # Augment the angular separation with the match radius.
+
+            ang_sep += match_radius
+
+
+        # Loop over adjacent fields and perform cross-matching.
+
+        for rtid in rtids_list:
+            adjacent_field = rtid
+            fh.write(f"Cross-matching field = {field} with adjacent field = {adjacent_field}\n")
+
+
+            # For a given field pertinent to this parallel process, loop over all SCAs
+            # and perform source-matching:
+            # 1. Cross-match each source in an adjacent field with the AstroObjects_<field> table.
+            # 2. Speed it up by restricting cross-matching within the inclusion radius.
+            # 3. Register Merges_<field> records for cross-matches.
+
+            astroobjects_tablename = f"astroobjects_{field}"
+            merges_tablename = f"merges_{field}"
+
+            for sca in scas:
+
+                sources_tablename = f"sources_{proc_date}_{sca}"
+
+                if n_adjacent_fields == 8:
+
+                    query = f"SELECT a.sid,b.aid " +\
+                        f"FROM {sources_tablename} AS a, " +\
+                        f"{astroobjects_tablename} AS b " +\
+                        f"WHERE q3c_radial_query(a.ra, a.dec, {ra0_field}, {dec0_field}, {ang_sep}) " +\
+                        f"AND q3c_join(a.ra, a.dec, b.ra0, b.dec0, {match_radius}) " +\
+                        f"AND a.field = {adjacent_field};"
+
+                else:
+
+                    query = f"SELECT a.sid,b.aid " +\
+                        f"FROM {sources_tablename} AS a, " +\
+                        f"{astroobjects_tablename} AS b " +\
+                        f"WHERE q3c_join(a.ra, a.dec, b.ra0, b.dec0, {match_radius}) " +\
+                        f"AND a.field = {adjacent_field};"
+
+                sql_queries = []
+                sql_queries.append(query)
+                records = dbh.execute_sql_queries(sql_queries,thread_debug)
+
+
+                # Code-timing benchmark.
+
+                thread_end_time_benchmark = time.time()
+                diff_time_benchmark = thread_end_time_benchmark - thread_start_time_benchmark
+                fh.write(f"Elapsed time in seconds to cross-match adjacent {sources_tablename} and {astroobjects_tablename} database tables = {diff_time_benchmark}\n")
+                thread_start_time_benchmark = thread_end_time_benchmark
+
+
+                # For the sources that were matched, create Merges_<field> record.
+
+                for record in records:
+
+                    sid = record[0]
+                    aid = record[1]
+
+                    dbh.add_merge_to_field(merges_tablename,aid,sid)
+
+
+                # Code-timing benchmark.
+
+                thread_end_time_benchmark = time.time()
+                diff_time_benchmark = thread_end_time_benchmark - thread_start_time_benchmark
+                fh.write(f"Elapsed time in seconds to insert {merges_tablename} database records for adjacent matched sources = {diff_time_benchmark}\n")
+                thread_start_time_benchmark = thread_end_time_benchmark
 
 
         # End of loop over fields.
