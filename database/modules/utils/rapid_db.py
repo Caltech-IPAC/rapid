@@ -3327,7 +3327,7 @@ class RAPIDDB:
                 print(f"Deleted: {rows_affected}")
 
         except (Exception, psycopg2.DatabaseError) as error:
-            print(f'*** Error deleting {tablename} record ({}); skipping...'.format(error))
+            print(f'*** Error deleting {tablename} record (error={error}); skipping...')
             self.exit_code = 67
             return
 
