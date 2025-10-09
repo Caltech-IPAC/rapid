@@ -491,7 +491,7 @@ def compute_xyz(ra,dec):
 # Subroutine to compute angular separation,
 # in degrees, for any two sky positions.
 
-sub compute_angular_separation(ara, adec, bra, bdec):
+def compute_angular_separation(ara, adec, bra, bdec):
 
 
    # Get Cartesian representation.
