@@ -335,7 +335,7 @@ if __name__ == '__main__':
     # Code-timing benchmark.
 
     end_time_benchmark = time.time()
-    print("Elapsed time in seconds to delete not-best merges database records =",
+    print("Elapsed time in seconds to complete parallel processing =",
         end_time_benchmark - start_time_benchmark)
     start_time_benchmark = end_time_benchmark
 
