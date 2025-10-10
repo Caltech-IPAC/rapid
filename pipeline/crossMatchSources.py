@@ -165,14 +165,14 @@ print(f"AstroObjects columns: {cols_comma_separated_string}")
 # Custom methods for parallel processing, taking advantage of multiple cores on the job-launcher machine.
 #-------------------------------------------------------------------------------------------------------------
 
-def run_single_core_job(scas,fields,index_thread):
+def run_single_core_job_stage_1_crossmatching(scas,fields,index_thread):
 
     '''
     The current list of fields includes all fields that a science image may overlap, as found
     by querying for distinct fields all the sources child tables that are to be cross-matched.
-    Cross-matching between sources in adjacent fields is done after populating the pertinent
-    AstroObjects_<field> database table, since field boundaries are infinitesimally thin lines
-    (they have no thickness), and the match radius can extend across them.
+    The cross-matching between sources in adjacent fields done here in stage 1 includes
+    populating the pertinent AstroObjects_<field> and Merges_<field> database tables within
+    field boundaries).  Cross-matching sources across adjacent field boundaries is done in stage 2.
     '''
 
 
@@ -190,7 +190,7 @@ def run_single_core_job(scas,fields,index_thread):
 
     print("index_thread,nfields =",index_thread,nfields)
 
-    thread_work_file = swname.replace(".py","_thread") + str(index_thread) + ".out"
+    thread_work_file = swname.replace(".py","stage_1_thread") + str(index_thread) + ".out"
 
     try:
         fh = open(thread_work_file, 'w', encoding="utf-8")
@@ -356,7 +356,68 @@ def run_single_core_job(scas,fields,index_thread):
             fh.write(f"Loop end: index_field,field,sca = {index_field},{field},{sca}\n")
 
 
-        # Finally, cross-match the current AstroObjects_<field> table with sources in all adjacent fields.
+        # End of loop over fields.
+
+        fh.write(f"Loop end: index_field,field = {index_field},{field}\n")
+
+
+    fh.write(f"\nEnd of run_single_core_job: index_thread={index_thread}\n")
+
+    fh.close()
+
+    message = f"Finish normally for index_thread = {index_thread}"
+
+    return message
+
+
+def run_single_core_job_stage_2_crossmatching(scas,fields,index_thread):
+
+    '''
+    The current list of fields includes all fields that a science image may overlap, as found
+    by querying for distinct fields all the sources child tables that are to be cross-matched.
+    Cross-matching between sources in adjacent fields is done after stage 1 (populating the
+    pertinent AstroObjects_<field> and Merges_<field> database tables within field boundaries).
+    Field boundaries are infinitesimally thin lines (with no thickness), and the match radius
+    can extend across them.
+    '''
+
+
+    # Compute thread start time for code-timing benchmark.
+
+    thread_start_time_benchmark = time.time()
+
+
+    # Set thread_debug = 0 here to severly limit the amount of information logged for runs
+    # that are anything but short tests.
+
+    thread_debug = 0
+
+    nfields = len(fields)
+
+    print("index_thread,nfields =",index_thread,nfields)
+
+    thread_work_file = swname.replace(".py","stage_2_thread") + str(index_thread) + ".out"
+
+    try:
+        fh = open(thread_work_file, 'w', encoding="utf-8")
+    except:
+        print(f"*** Error: Could not open output file {thread_work_file}; quitting...")
+        exit(64)
+
+    dbh = dbh_list[index_thread]
+
+    fh.write(f"\nStart of run_single_core_job: index_thread={index_thread}, dbh={dbh}\n")
+
+    for index_field in range(nfields):
+
+        index_core = index_field % num_cores
+        if index_thread != index_core:
+            continue
+
+        field = fields[index_field]
+
+
+        # Cross-match the current AstroObjects_<field> table with sources in all adjacent fields.
         # Field boundaries are infinitesimally thin lines, and the match radius can extend across them.
 
         fh.write(f"Loop start for adjacent fields (rtid is equivalent to field number): index_field,field = {index_field},{field}\n")
@@ -474,6 +535,11 @@ def run_single_core_job(scas,fields,index_thread):
                 thread_start_time_benchmark = thread_end_time_benchmark
 
 
+                # End of loop over scas.
+
+                fh.write(f"Loop end: index_field,field,sca = {index_field},{field},{sca}\n")
+
+
         # End of loop over fields.
 
         fh.write(f"Loop end: index_field,field = {index_field},{field}\n")
@@ -488,7 +554,7 @@ def run_single_core_job(scas,fields,index_thread):
     return message
 
 
-def execute_parallel_processes(scas_list,fields_list,num_cores=None):
+def execute_parallel_processes_stage_1_crossmatching(scas_list,fields_list,num_cores=None):
 
     if num_cores is None:
         num_cores = os.cpu_count()  # Use all available cores if not specified
@@ -497,7 +563,31 @@ def execute_parallel_processes(scas_list,fields_list,num_cores=None):
 
     with ProcessPoolExecutor(max_workers=num_cores) as executor:
         # Submit all tasks to the executor and store the futures in a list
-        futures = [executor.submit(run_single_core_job,scas_list,fields_list,thread_index) for thread_index in range(num_cores)]
+        futures = [executor.submit(run_single_core_job_stage_1_crossmatching,scas_list,fields_list,thread_index) for thread_index in range(num_cores)]
+
+        # Iterate over completed futures and update progress
+        for i, future in enumerate(as_completed(futures)):
+            index = futures.index(future)  # Find the original index/order of the completed future
+            print(f"Completed: {i+1} processes, lastly for index={index}")
+
+    for future in futures:
+        index = futures.index(future)
+        try:
+            print(future.result())
+        except Exception as e:
+            print(f"*** Error in thread index {index} = {e}")
+
+
+def execute_parallel_processes_stage_2_crossmatching(scas_list,fields_list,num_cores=None):
+
+    if num_cores is None:
+        num_cores = os.cpu_count()  # Use all available cores if not specified
+
+    print("num_cores =",num_cores)
+
+    with ProcessPoolExecutor(max_workers=num_cores) as executor:
+        # Submit all tasks to the executor and store the futures in a list
+        futures = [executor.submit(run_single_core_job_stage_2_crossmatching,scas_list,fields_list,thread_index) for thread_index in range(num_cores)]
 
         # Iterate over completed futures and update progress
         for i, future in enumerate(as_completed(futures)):
@@ -678,24 +768,27 @@ if __name__ == '__main__':
     start_time_benchmark = end_time_benchmark
 
 
-    ################################################################################
-    # Execute source-matching tasks for all science-pipeline jobs with jids on
-    # a given processing date.  The execution is done for fields in parallel, with
-    # the number of parallel threads equal to the number of cores on the
-    # job-launcher machine.
-    ################################################################################
+    #########################################################################################
+    # Execute stage-1 source-matching tasks, which includes cross-matching sources and
+    # astroobjects within field boundaries, making new merges records for sources that
+    # matched and making new astroobjects and merges records for sources that did not match.
+    # It is assumed that the sources child database tables have already been loaded for
+    # all science-pipeline jobs on the specified processing date.
+    # The execution is done for fields in parallel, with the number of parallel threads
+    # equal to the number of cores on the job-launcher machine.
+    #########################################################################################
 
     if num_cores > 1:
-        execute_parallel_processes(scas_list,fields_list,num_cores)
+        execute_parallel_processes_stage_1_crossmatching(scas_list,fields_list,num_cores)
     else:
         thread_index = 0
-        run_single_core_job(scas_list,fields_list,thread_index)
+        run_single_core_job_stage_1_crossmatching(scas_list,fields_list,thread_index)
 
 
     # Code-timing benchmark.
 
     end_time_benchmark = time.time()
-    print("Elapsed time in seconds to load astroobjects and merges database tables for all fields associated with processing date =",
+    print("Elapsed time in seconds to load astroobjects and merges database tables within field boundaries =",
         end_time_benchmark - start_time_benchmark)
     start_time_benchmark = end_time_benchmark
 
@@ -726,6 +819,31 @@ if __name__ == '__main__':
 
     end_time_benchmark = time.time()
     print("Elapsed time in seconds to recluster and reanalyze astroobjects database tables =",
+        end_time_benchmark - start_time_benchmark)
+    start_time_benchmark = end_time_benchmark
+
+
+    #####################################################################################
+    # Execute stage-2 source-matching tasks, which includes cross-matching sources
+    # and astroobjects across adjacent field boundaries and making new merges records
+    # for sources that matched.
+    # It is assumed that the sources child database tables have already been loaded for
+    # all science-pipeline jobs on the specified processing date.
+    # The execution is done for fields in parallel, with the number of parallel threads
+    # equal to the number of cores on the job-launcher machine.
+    #####################################################################################
+
+    if num_cores > 1:
+        execute_parallel_processes_stage_2_crossmatching(scas_list,fields_list,num_cores)
+    else:
+        thread_index = 0
+        run_single_core_job_stage_2_crossmatching(scas_list,fields_list,thread_index)
+
+
+    # Code-timing benchmark.
+
+    end_time_benchmark = time.time()
+    print("Elapsed time in seconds to load merges database tables across field boundaries =",
         end_time_benchmark - start_time_benchmark)
     start_time_benchmark = end_time_benchmark
 
