@@ -270,7 +270,7 @@ def run_single_core_job(fields,index_thread):
             filtered_decs_list =[]
             filtered_fluxes_list =[]
 
-            for sid,pid,ra,dec,flux in zip(sids_list,ras_list,decs_list,fluxes_list):
+            for sid,pid,ra,dec,flux in zip(sids_list,pids_list,ras_list,decs_list,fluxes_list):
 
                 vbest = vbest_dict[pid]
 
