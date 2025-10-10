@@ -172,7 +172,7 @@ def run_single_core_job(fields,index_thread):
         fh.write(f"Loop start: index_field,field = {index_field},{field}\n")
 
         merges_tablename = f"merges_{field}"
-        astroobjects_tablename = f"merges_{field}"
+        astroobjects_tablename = f"astroobjects_{field}"
 
 
         query = f"SELECT a.aid,a.sid,b.pid,b.ra,b.dec,b.fluxfit FROM {merges_tablename} AS a, " +\
