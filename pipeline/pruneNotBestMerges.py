@@ -308,7 +308,7 @@ if __name__ == '__main__':
 
     fields_list = []
     for record in records:
-        field = record[0]
+        field = record[0].replace("merges_","")
         fields_list.append(field)
 
 
