@@ -164,7 +164,7 @@ class RAPIDDB:
 def vacuum_analyze_table(self,tablename):
     old_isolation_level = self.conn.isolation_level
     self.conn.set_isolation_level(psycopg2.extensions.ISOLATION_LEVEL_AUTOCOMMIT)
-    query = f"VACUUM ANALYZE {tablename};")
+    query = f"VACUUM ANALYZE {tablename};"
     self._doQuery(query)
     self.conn.set_isolation_level(old_isolation_level)
 
