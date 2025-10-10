@@ -156,7 +156,7 @@ class RAPIDDB:
         # This is a protected, internal method.
         # It handles the low-level details of executing the query.
         self.cur.execute(query)
-        return cursor.fetchall()
+        return self.cur.fetchall()
 
 
 ########################################################################################################
