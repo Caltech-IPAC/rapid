@@ -3339,7 +3339,8 @@ class RAPIDDB:
 
 ########################################################################################################
 
-    def update_astroobject_statistics(astroobjects_tablename,
+    def update_astroobject_statistics(self,
+                                      astroobjects_tablename,
                                       aid,
                                       meanra,
                                       stdra,
