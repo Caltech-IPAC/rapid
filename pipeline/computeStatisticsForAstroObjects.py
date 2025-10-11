@@ -426,13 +426,13 @@ if __name__ == '__main__':
     start_time_benchmark = end_time_benchmark
 
 
-    # Vacuum and analyze merges database tables for all fields.
+    # Vacuum and analyze astroobjects database tables for all fields.
 
     print("Vacuuming and analyzing merges database tables for all fields...")
 
     for field in fields_list:
 
-        tablename = f"merges_{field}"
+        tablename = f"astroobjects_{field}"
 
         dbh.vacuum_analyze_table(tablename)
 
