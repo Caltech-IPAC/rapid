@@ -162,7 +162,7 @@ class RAPIDDB:
 
         try:
             records = self.cur.fetchall()
-        else:
+        except:
             records = None
 
         return records
