@@ -1044,6 +1044,15 @@ There were 13,767,979 Sources records loaded into the PostgreSQL database.
 
 Cross-matching the sources, resulting in records loaded into the Merges_<field> and
 AstroObjects_<fields> database tables, for all fields of the sources, was done.
-The elapsed time to cross-match all sources was 3.1 hours with 8 parallel processes.
-There were 3,269,268 AstroObjects records and 58,897,567 Merges records loaded
-into the PostgreSQL database.
+The elapsed time to cross-match all sources was 3.5 hours with 8 parallel processes.
+This includes cross-matching across field boundaries for sources near field edges.
+A match radius of 0.1 arcsec (a Roman WFI pixel) was used.
+There were 3,269,268 AstroObjects records and 58,913,016 Merges records loaded
+into the PostgreSQL database.  Of those merges (a.k.a. lightcurve data points), 15,449 merges
+resulted from cross-matching across field boundaries (i.e., the match radius can extend
+across a field boundary), which is an increase of 0.02623% in terms of number of merges.
+
+The lightcurve statistics stored in the AstroObjects_<fields> database tables are updated after the
+cross-matching.  This is done as a separate process.
+The AstroObjects_<fields> database tables are explicitly vacuumed and analyzed at the end of this process.
+For this test, all of this took 11 minutes.
