@@ -233,15 +233,30 @@ and records in the associated Merges tables are populated.
    Sources that are NOT matched become new records in the AstroObjects tables.
 
 A given Sources child table can contain records for different fields, filters, and exposures.
-Therefore, for bootstrapping records in the AstroObjects tables, a given Sources child table
-will have to be cross-matched with itself, as well as with other Sources child tables
-with the same processing date (all SCAs).
 
 Source matching will be done in parallel by field and possibly fid.  Thus multiple cores
 on the database-server machine will be utilized, and scaling up the architecture is possible
 by moving the database server to a machine with more cores and memory (if it can be afforded).
 
-So far, the RAPID pipeline makes PSF-fit catalogs only for positive difference images (i,e, "science image
-minus reference image").  In the near future, it will be extended to negative difference images.
+The RAPID pipeline makes PSF-fit catalogs for both positive difference images (i,e, "science image
+minus reference image") and negative difference image (i,e, "reference image minus science image").
 The Sources database table has the boolean ``isdiffpos`` column to indicate for a given source
 from which type of source extraction it originated.
+
+Cross-matching the sources results in records loaded into the Merges_<field> and
+AstroObjects_<fields> database tables.  For the 2025-09-27 test, this took 3.5 hours with 8 parallel processes.
+This includes cross-matching across field boundaries for sources near field edges.
+A match radius of 0.1 arcsec (a Roman WFI pixel) was used.
+For the 2025-09-27 test, there were 3,269,268 AstroObjects records and 58,913,016 Merges records loaded
+into the PostgreSQL database.  Of those merges (a.k.a. lightcurve data points), 15,449 merges
+resulted from cross-matching across field boundaries (i.e., the match radius can extend
+across a field boundary), which is an increase of 0.02623% in terms of number of merges.
+
+The lightcurve statistics stored in the AstroObjects_<fields> database tables are updated after the
+cross-matching.  This is done as a separate process.
+The AstroObjects_<fields> database tables are explicitly vacuumed and analyzed at the end of this process.
+For the 2025-09-27 test, all of this took 11 minutes.
+
+Because reprocessing results in new product versions (usually latest is best), there is a
+separate process that removes not-best lightcurve data points from the Merges_<field> database tables,
+and then explicitly vacuums and analyzes these database tables.
