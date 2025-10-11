@@ -155,8 +155,17 @@ class RAPIDDB:
     def _doQuery(self, query):
         # This is a protected, internal method.
         # It handles the low-level details of executing the query.
+
+        print('query = {}'.format(query))
+
         self.cur.execute(query)
-        return self.cur.fetchall()
+
+        try:
+            records = self.cur.fetchall()
+        else:
+            records = None
+
+        return records
 
 
 ########################################################################################################
