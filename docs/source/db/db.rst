@@ -227,14 +227,13 @@ sources (via Merges tables) are by sky position.
 
 Sources and AstroObjects tables are cross-matched for the appropriate partitions,
 in processing-date-time order, using the join function from the Q3C-library PostgreSQL extension,
-and records in the associated Merges tables are populated.
+and records in the associated Merges tables are then populated.
+A given Sources child table can contain records for different fields, filters, and exposures.
 
 .. note::
    Sources that are NOT matched become new records in the AstroObjects tables.
 
-A given Sources child table can contain records for different fields, filters, and exposures.
-
-Source matching will be done in parallel by field and possibly fid.  Thus multiple cores
+Source matching will be done in parallel by field.  Thus multiple cores
 on the database-server machine will be utilized, and scaling up the architecture is possible
 by moving the database server to a machine with more cores and memory (if it can be afforded).
 
