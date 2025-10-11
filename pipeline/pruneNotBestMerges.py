@@ -348,9 +348,7 @@ if __name__ == '__main__':
 
         tablename = f"merges_{field}"
 
-        sql_queries = []
-        sql_queries.append(f"VACUUM ANALYZE {tablename};")
-        dbh.execute_sql_queries(sql_queries,debug)
+        dbh.vacuum_analyze_table(tablename)
 
 
     # Code-timing benchmark.
