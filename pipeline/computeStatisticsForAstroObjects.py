@@ -428,7 +428,7 @@ if __name__ == '__main__':
 
     # Vacuum and analyze astroobjects database tables for all fields.
 
-    print("Vacuuming and analyzing merges database tables for all fields...")
+    print("Vacuuming and analyzing astroobjects database tables for all fields...")
 
     for field in fields_list:
 
@@ -440,7 +440,7 @@ if __name__ == '__main__':
     # Code-timing benchmark.
 
     end_time_benchmark = time.time()
-    print("Elapsed time in seconds to vacuum and analyze all merges database tables =",
+    print("Elapsed time in seconds to vacuum and analyze all astroobjects database tables =",
         end_time_benchmark - start_time_benchmark)
     start_time_benchmark = end_time_benchmark
 
