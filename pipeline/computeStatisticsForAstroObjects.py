@@ -115,8 +115,8 @@ s3_client = boto3.client('s3')
 def run_single_core_job(fields,index_thread):
 
     '''
-    Remove records from Merges_<field> database tables associated with sources that are no longer best
-    (vbest=0 in associated Diffimages table).
+    Update lightcurve statistics in AstroObjects_<field> database tables, omitting sources that
+    are associated with not-best difference images.
     '''
 
 
@@ -376,8 +376,7 @@ if __name__ == '__main__':
 
 
     '''
-    Launch parallel tasks to delete not-best Merges database records for all fields
-    (for which merges tables exist).
+    Launch parallel tasks to update lightcurve statistics in AstroObjects_<field> database tables.
     '''
 
 
