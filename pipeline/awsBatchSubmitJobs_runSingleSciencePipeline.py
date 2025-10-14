@@ -235,11 +235,13 @@ if __name__ == '__main__':
     ra4_refimage = float(config_input['REF_IMAGE']['ra4'])
     dec4_refimage = float(config_input['REF_IMAGE']['dec4'])
 
-    astrometric_uncert_x = float(config_input['ZOGY']['astrometric_uncert_x'])
-    astrometric_uncert_y = float(config_input['ZOGY']['astrometric_uncert_y'])
-    zogy_output_diffimage_file = config_input['ZOGY']['zogy_output_diffimage_file']
-    post_zogy_keep_diffimg_lower_cov_map_thresh = float(config_input['ZOGY']['post_zogy_keep_diffimg_lower_cov_map_thresh'])
-    s3_full_name_sciimage_psf = config_input['ZOGY']['s3_full_name_sciimage_psf']
+
+    zogy_dict = config_input['ZOGY']
+
+    astrometric_uncert_x = float(zogy_dict['astrometric_uncert_x'])
+    astrometric_uncert_y = float(zogy_dict['astrometric_uncert_y'])
+    post_zogy_keep_diffimg_lower_cov_map_thresh = float(zogy_dict['post_zogy_keep_diffimg_lower_cov_map_thresh'])
+    s3_full_name_sciimage_psf = zogy_dict['s3_full_name_sciimage_psf']
 
     awaicgen_dict = config_input['AWAICGEN']
 
@@ -997,11 +999,12 @@ if __name__ == '__main__':
 
     python_cmd = '/usr/bin/python3.11'
     zogy_code = rapid_sw + '/modules/zogy/v21Aug2018/py_zogy.py'
-    filename_diffimage = 'diffimage.fits'
-    filename_diffpsf = 'diffpsf.fits'
-    filename_scorrimage = 'scorrimage.fits'
+    filename_diffimage = zogy_dict['zogy_output_diffimage_file']
+    filename_diffpsf = zogy_dict['zogy_output_diffpsf_file']
+    filename_scorrimage = zogy_dict['zogy_output_scorrimage_file']
 
     output_diffimage_file_infobits = 0
+
 
 
     # 2025-08-15 Jacob's recommendation for the next Big Run.
@@ -1060,8 +1063,8 @@ if __name__ == '__main__':
 
     # Mask difference image with output_resampled_reference_cov_map.
 
-    filename_diffimage_masked = zogy_output_diffimage_file                     # Nominally diffimage_masked.fits
-    filename_scorrimage_masked = 'scorrimage_masked.fits'
+    filename_diffimage_masked = filename_diffimage.replace(".fits","_masked.fits")
+    filename_scorrimage_masked = filename_scorrimage.replace(".fits","_masked.fits")
 
     dfis.mask_difference_image_with_resampled_reference_cov_map(filename_diffimage,
                                                                 output_resampled_reference_cov_map,
@@ -1074,7 +1077,8 @@ if __name__ == '__main__':
                                                                 post_zogy_keep_diffimg_lower_cov_map_thresh)
 
 
-    # Restore NaNs that were masked prior to executing ZOGY.
+    # Restore NaNs to the ZOGY output files that were masked prior to executing ZOGY,
+    # both from science and reference images.
 
     if nan_indices_sciimage:
         util.restore_nans(filename_diffimage_masked,nan_indices_sciimage)
