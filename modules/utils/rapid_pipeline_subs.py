@@ -17,9 +17,6 @@ from botocore.exceptions import ClientError
 
 from modules.sip_tpv.sip_tpv.sip_to_pv import sip_to_pv
 
-from photutils.detection import DAOStarFinder
-from photutils.psf import PSFPhotometry,ImagePSF,IterativePSFPhotometry
-
 import matplotlib.pyplot as plt
 
 plot_flag = False
@@ -1421,6 +1418,10 @@ def compute_diffimage_psf_catalog(n_clip_sigma,
 
     Odd numbers for NAXIS1 and NAXIS2 is a required assumption for input PSF.
     '''
+
+
+    from photutils.detection import DAOStarFinder
+    from photutils.psf import PSFPhotometry,ImagePSF,IterativePSFPhotometry
 
 
     print ("n_thresh_sigma =",n_thresh_sigma)
