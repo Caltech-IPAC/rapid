@@ -1,68 +1,161 @@
-import modules.utils.rapid_pipeline_subs as util
+import os
+import configparser
 from astropy.io import ascii
 from astropy.table import Table
 
 
+swname = "generate_psfcat.py"
+swvers = "1.0"
+cfg_filename_only = "awsBatchSubmitJobs_launchSingleSciencePipeline.ini"
+
+
+print("swname =", swname)
+print("swvers =", swvers)
+
+rapid_sw = os.getenv('RAPID_SW')
+
+if rapid_sw is None:
+
+    print("*** Error: Env. var. RAPID_SW not set; quitting...")
+    exit(64)
+
+rapid_work = os.getenv('RAPID_WORK')
+
+if rapid_work is None:
+
+    print("*** Error: Env. var. RAPID_WORK not set; quitting...")
+    exit(64)
+
+cfg_path = rapid_sw + "/cdf"
+
+print("rapid_sw =",rapid_sw)
+print("cfg_path =",cfg_path)
+
+
+# Read input parameters from .ini file.
+
+config_input_filename = cfg_path + "/" + cfg_filename_only
+config_input = configparser.ConfigParser()
+config_input.read(config_input_filename)
+
+bkgest_dict = config_input['BKGEST']
+zogy_dict = config_input['ZOGY']
+psfcat_diffimage_dict = config_input['PSFCAT_DIFFIMAGE']
+
+
+
+import modules.utils.rapid_pipeline_subs as util
+
+
 if __name__ == '__main__':
 
-    n_clip_sigma = 3.0             # For data clipping.
-    n_thresh_sigma = 5             # For threshold computation.
+    output_diffimage_file_infobits = 0
 
-    fwhm = 4.0
-    fit_shape = (17, 17)
-    aperture_radius = 8
+    n_clip_sigma = float(psfcat_diffimage_dict["n_clip_sigma"])
+    n_thresh_sigma = float(psfcat_diffimage_dict["n_thresh_sigma"])
 
+    fwhm = float(psfcat_diffimage_dict["fwhm"])
+    # Override value.
+    fwhm=1.45
 
-    input_img_filename = "diffimage_masked.fits"
-    input_unc_filename = "diffimage_uncert_masked.fits"
-    input_psf_filename = "diffpsf.fits"
-    output_psfcat_residual_filename = "diffimage_masked_psfcat_residual.fits"
-    output_psfcat_filename = "diffimage_masked_psfcat.txt"
+    fit_shape_str = psfcat_diffimage_dict["fit_shape"]
+    fit_shape = tuple(int(x) for x in fit_shape_str.replace("(","").replace(")","").replace(" ", "").split(','))
+    aperture_radius = float(psfcat_diffimage_dict["aperture_radius"])
+
+    filename_bkg_subbed_science_image = bkgest_dict["filename_bkg_subbed_science_image"]
+
+    filename_diffimage = zogy_dict['zogy_output_diffimage_file']
+    filename_diffpsf = zogy_dict['zogy_output_diffpsf_file']
+    filename_diffimage_masked = filename_diffimage.replace(".fits","_masked.fits")
+    filename_diffimage_unc_masked = filename_diffimage_masked.replace("masked.fits","uncert_masked.fits")
+
+    input_img_filename = filename_diffimage_masked
+    input_unc_filename = filename_diffimage_unc_masked
+    input_psf_filename = filename_diffpsf
+
+    output_psfcat_filename = psfcat_diffimage_dict["output_zogy_psfcat_filename"]
+    output_psfcat_finder_filename = psfcat_diffimage_dict["output_zogy_psfcat_finder_filename"]
+    output_psfcat_residual_filename = psfcat_diffimage_dict["output_zogy_psfcat_residual_filename"]
+
 
     print("output_psfcat_filename = ", output_psfcat_filename)
 
 
     # Compute PSF catalog for difference image.  No background subtraction is done.
 
-    phot = util.compute_diffimage_psf_catalog(n_clip_sigma,
-                                              n_thresh_sigma,
-                                              fwhm,
-                                              fit_shape,
-                                              aperture_radius,
-                                              input_img_filename,
-                                              input_unc_filename,
-                                              input_psf_filename,
-                                              output_psfcat_residual_filename)
+    psfcat_flag,phot,psfphot = util.compute_diffimage_psf_catalog(n_clip_sigma,
+                                                                  n_thresh_sigma,
+                                                                  fwhm,
+                                                                  fit_shape,
+                                                                  aperture_radius,
+                                                                  input_img_filename,
+                                                                  input_unc_filename,
+                                                                  input_psf_filename,
+                                                                  output_psfcat_residual_filename)
 
 
-    # Output catalog is an astropy table with the PSF-fitting results.
+    print("psfcat_flag =",psfcat_flag)
 
-    # Output columns are documentated at
-    # https://photutils.readthedocs.io/en/latest/api/photutils.psf.PSFPhotometry.html
+    if not psfcat_flag:
 
-    keys = phot.keys()
-    print("phot.keys() =",keys)
-    # phot.keys() = ['id', 'group_id', 'group_size', 'local_bkg', 'x_init', 'y_init', 'flux_init', 'x_fit', 'y_fit', 'flux_fit', 'x_err', 'y_err', 'flux_err', 'npixfit', 'qfit', 'cfit', 'flags']
+        output_diffimage_file_infobits |= 2**0
 
+    else:
 
-    phot['x_init'].info.format = '.4f'
-    phot['y_init'].info.format = '.4f'
-    phot['flux_init'].info.format = '.6f'
-    phot['x_fit'].info.format = '.4f'
-    phot['y_fit'].info.format = '.4f'
-    phot['flux_fit'].info.format = '.6f'
-    phot['x_err'].info.format = '.4f'
-    phot['y_err'].info.format = '.4f'
-    phot['flux_err'].info.format = '.5f'
-    phot['qfit'].info.format = '.4f'
-    phot['cfit'].info.format = '.4f'
+        # Output psf-fit catalog is an PSFPhotometry astropy table with the PSF-fitting results
+        # merged with the DAOStarFinder astropy table.
+        # Output columns are documentated at
+        # https://photutils.readthedocs.io/en/latest/api/photutils.psf.PSFPhotometry.html
+        # https://photutils.readthedocs.io/en/stable/api/photutils.detection.DAOStarFinder.html
 
-    print(phot[('id', 'x_fit', 'y_fit', 'flux_fit','x_err', 'y_err', 'flux_err', 'npixfit', 'qfit', 'cfit', 'flags')])
+        keys = phot.keys()
+        print("phot.keys() =",keys)
+        # phot.keys() = ['id', 'group_id', 'group_size', 'local_bkg', 'x_init', 'y_init', 'flux_init', 'x_fit', 'y_fit', 'flux_fit', 'x_err', 'y_err', 'flux_err', 'npixfit', 'qfit', 'cfit', 'flags']
 
 
-    # Write PSF-fit catalog in astropy table to text file.
+        try:
+            phot['x_init'].info.format = '.4f'
+            phot['y_init'].info.format = '.4f'
+            phot['flux_init'].info.format = '.6f'
+            phot['flux_fit'].info.format = '.6f'
+            phot['x_err'].info.format = '.4f'
+            phot['y_err'].info.format = '.4f'
+            phot['flux_err'].info.format = '.5f'
+            phot['qfit'].info.format = '.4f'
+            phot['cfit'].info.format = '.4f'
 
-    ascii.write(phot, output_psfcat_filename, overwrite=True)
+            print(phot[('id', 'x_fit', 'y_fit', 'flux_fit','x_err', 'y_err', 'flux_err', 'npixfit', 'qfit', 'cfit', 'flags')])
+
+
+            # Compute sky coordinates for given pixel coordinates.
+
+            ra,dec = util.computeSkyCoordsFromPixelCoords(filename_bkg_subbed_science_image,
+                                                          list(phot['x_fit']),
+                                                          list(phot['y_fit']))
+
+            phot['x_fit'].info.format = '.4f'
+            phot['y_fit'].info.format = '.4f'
+            phot.add_column(ra, name='ra')
+            phot.add_column(dec, name='dec')
+
+
+            # Write PSF-fit photometry catalog in astropy table to text file.
+
+            print("output_psfcat_filename = ", output_psfcat_filename)
+
+            ascii.write(phot, output_psfcat_filename, overwrite=True)
+
+
+            # Write PSF-fit finder catalog in astropy table to text file.
+
+            print("output_psfcat_finder_filename = ", output_psfcat_finder_filename)
+
+            ascii.write(psfphot.finder_results, output_psfcat_finder_filename, overwrite=True)
+
+        except Exception as e:
+            print(f"PSF-fit PSFPhotometry and DAOStarFinder catalogs: An unexpected error occurred: {e}")
+
+    print("output_diffimage_file_infobits = ",output_diffimage_file_infobits)
 
 
     # Terminate.
