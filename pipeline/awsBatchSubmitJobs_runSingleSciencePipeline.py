@@ -1442,6 +1442,11 @@ if __name__ == '__main__':
     s3_object_name_output_psfcat_filename_negative = job_proc_date + "/jid" + str(jid) + "/" + output_psfcat_filename_negative
     s3_object_name_output_psfcat_finder_filename_negative = job_proc_date + "/jid" + str(jid) + "/" + output_psfcat_finder_filename_negative
     s3_object_name_output_psfcat_residual_filename_negative = job_proc_date + "/jid" + str(jid) + "/" + output_psfcat_residual_filename_negative
+    s3_object_name_sciimage_psf_normalized = job_proc_date + "/jid" + str(jid) + "/" + filename_sciimage_psf_normalized
+    s3_object_name_refimage_psf = job_proc_date + "/jid" + str(jid) + "/" + filename_refimage_psf
+
+
+
 
     filenames = [filename_diffimage_masked,
                  filename_diffimage_unc_masked,
@@ -1458,7 +1463,9 @@ if __name__ == '__main__':
                  filename_scorrimage_masked_negative,
                  output_psfcat_filename_negative,
                  output_psfcat_finder_filename_negative,
-                 output_psfcat_residual_filename_negative]
+                 output_psfcat_residual_filename_negative,
+                 filename_sciimage_psf_normalized,
+                 filename_refimage_psf]
 
     objectnames = [s3_object_name_diffimage,
                    s3_object_name_diffimage_unc_masked,
@@ -1475,7 +1482,9 @@ if __name__ == '__main__':
                    s3_object_name_scorrimage_negative,
                    s3_object_name_output_psfcat_filename_negative,
                    s3_object_name_output_psfcat_finder_filename_negative,
-                   s3_object_name_output_psfcat_residual_filename_negative]
+                   s3_object_name_output_psfcat_residual_filename_negative,
+                   s3_object_name_sciimage_psf_normalized,
+                   s3_object_name_refimage_psf]
 
     util.upload_files_to_s3_bucket(s3_client,product_s3_bucket,filenames,objectnames)
 
