@@ -56,7 +56,7 @@ if __name__ == '__main__':
 
     fwhm = float(psfcat_diffimage_dict["fwhm"])
     # Override value.
-    fwhm=1.45
+    fwhm=1.0
 
     fit_shape_str = psfcat_diffimage_dict["fit_shape"]
     fit_shape = tuple(int(x) for x in fit_shape_str.replace("(","").replace(")","").replace(" ", "").split(','))
