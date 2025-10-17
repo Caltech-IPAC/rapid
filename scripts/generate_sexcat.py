@@ -63,26 +63,31 @@ if __name__ == '__main__':
 
 
     # Override SExtractor parameters in input config file (awsBatchSubmitJobs_launchSingleSciencePipeline.ini).
+    # ZTF uses DEBLEND_NTHRESH=4, DEBLEND_MINCONT=0.005, DETECT_MINAREA=1.
 
     #sextractor_diffimage_dict["sextractor_DEBLEND_NTHRESH".lower()] = str(32)     # Objects: detected 974      / sextracted 864
     sextractor_diffimage_dict["sextractor_DEBLEND_NTHRESH".lower()] = str(4)      # Objects: detected 855      / sextracted 794
 
     # With DEBLEND_NTHRESH = 32
-    #sextractor_diffimage_dict["sextractor_DEBLEND_MINCONT".lower()] = str(0.005)   # Objects: detected 974      / sextracted 864
     #sextractor_diffimage_dict["sextractor_DEBLEND_MINCONT".lower()] = str(0.001)   # Objects: detected 995      / sextracted 883
+    #sextractor_diffimage_dict["sextractor_DEBLEND_MINCONT".lower()] = str(0.005)   # Objects: detected 974      / sextracted 864
     #sextractor_diffimage_dict["sextractor_DEBLEND_MINCONT".lower()] = str(0.01)    # Objects: detected 946      / sextracted 851
 
     # With DEBLEND_NTHRESH = 4
-    sextractor_diffimage_dict["sextractor_DEBLEND_MINCONT".lower()] = str(0.005)   # Objects: detected 855      / sextracted 794
     #sextractor_diffimage_dict["sextractor_DEBLEND_MINCONT".lower()] = str(0.001)   # Objects: detected 863      / sextracted 798
+    sextractor_diffimage_dict["sextractor_DEBLEND_MINCONT".lower()] = str(0.005)    # Objects: detected 855      / sextracted 794
     #sextractor_diffimage_dict["sextractor_DEBLEND_MINCONT".lower()] = str(0.01)    # Objects: detected 847      / sextracted 788
 
 
+    #sextractor_diffimage_dict["sextractor_DETECT_MINAREA".lower()] = str(5)         # Objects: detected 377      / sextracted 351
+    #sextractor_diffimage_dict["sextractor_DETECT_MINAREA".lower()] = str(2)         # Objects: detected 875      / sextracted 799
+    sextractor_diffimage_dict["sextractor_DETECT_MINAREA".lower()] = str(1)         # Objects: detected 1609     / sextracted 1403
+
+
     # What was learned:
-    # Increasing DEBLEND_NTHRESH increases number of detections (stronger effect).
-    # Decreasing DEBLEND_MINCONT increases number of detections (weaker effect).
-
-
+    # Decreasing DETECT_MINAREA increases number of detections (strong effect; huge difference between values 1 and 2 [pixels])
+    # Increasing DEBLEND_NTHRESH increases number of detections (moderate effect).
+    # Decreasing DEBLEND_MINCONT increases number of detections (weak but noticible effect).
 
 
     # Compute SExtractor catalog for positive ZOGY masked difference image.
