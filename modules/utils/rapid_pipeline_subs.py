@@ -1396,7 +1396,12 @@ def compute_diffimage_psf_catalog(n_clip_sigma,
                                   input_img_filename,
                                   input_unc_filename,
                                   input_psf_filename,
-                                  output_psfcat_residual_filename):
+                                  output_psfcat_residual_filename,
+                                  sharplo=0.2,
+                                  sharphi=1.0,
+                                  roundlo=-1.0,
+                                  roundhi=1.0,
+                                  min_separation=0.0):
 
     '''
     Method compute_diffimage_psf_catalog
@@ -1427,6 +1432,12 @@ def compute_diffimage_psf_catalog(n_clip_sigma,
     print ("n_thresh_sigma =",n_thresh_sigma)
     print ("n_clip_sigma =",n_clip_sigma)
     print ("fwhm =",fwhm)
+    print ("sharplo =",sharplo)
+    print ("sharphi =",sharphi)
+    print ("roundlo =",roundlo)
+    print ("roundhi =",roundhi)
+    print ("min_separation =",min_separation)
+
     print ("fit_shape =",fit_shape)
     print ("aperture_radius =",aperture_radius)
     print("input_img_filename =",input_img_filename)
@@ -1508,7 +1519,13 @@ def compute_diffimage_psf_catalog(n_clip_sigma,
 
     # Initialize the DAOStarFinder and PSFPhotometry class instances.
 
-    finder = DAOStarFinder(threshold, fwhm)
+    finder = DAOStarFinder(threshold=threshold,
+                           fwhm=fwhm,
+                           sharplo=sharplo,
+                           sharphi=sharphi,
+                           roundlo=roundlo,
+                           roundhi=roundhi,
+                           min_separation=min_separation)
 
     finder_attributes = finder.__dict__.keys()
 
