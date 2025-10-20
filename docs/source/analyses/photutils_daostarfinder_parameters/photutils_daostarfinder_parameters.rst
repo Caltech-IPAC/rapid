@@ -67,6 +67,10 @@ In matching within 1.5 pixels, there were 59 matches between SExtractor source p
 PhotUtils DAOStarFinder Input-Parameter Variation
 ************************************
 
+In all cases below, the input threshold is 5 times the clipped standard deviation
+of the ZOGY difference image (multiplied by a Gaussian correction factor to account for the data clipping).
+This is the same threshold that was used in the 20250927 test.
+
 ===== ==== ======= ======= ======= ======= ======= =========== =============================
 Cases fwhm sharplo sharphi roundlo roundhi min_sep num_sources num_matches_with_fake_sources
 ===== ==== ======= ======= ======= ======= ======= =========== =============================
