@@ -27,7 +27,8 @@ ZOGY difference-image products are used.  Here is how to download the input file
 Analysis Software
 ************************************
 
-The following scripts are used to generate catalogs from the above inputs and make plots:
+The following scripts are used to generate catalogs
+from the above inputs and make plots (offline, on my laptop):
 
 .. code-block::
 
