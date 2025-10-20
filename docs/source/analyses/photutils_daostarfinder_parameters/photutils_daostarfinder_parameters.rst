@@ -78,8 +78,8 @@ Cases fwhm sharplo sharphi roundlo roundhi min_sep num_sources num_matches_with_
 6     2.0  -1.0    10.0    -2.0    2.0     1.0     3381        82
 7     1.4  0.2     1.0     -1.0    1.0     0.0     1466        72
 8     1.4  -1.0    10.0    -1.0    1.0     0.0     1886        77
-9     1.0  0.2     1.0     -1.0    1.0     0.0     1466        72
-10    1.0  -1.0    10.0    -1.0    1.0     0.0     1886        74
+9     1.0  0.2     1.0     -1.0    1.0     0.0     1707        72
+10    1.0  -1.0    10.0    -1.0    1.0     0.0     1936        74
 ===== ==== ======= ======= ======= ======= ======= =========== =============================
 
 Case #6 gave the largest number of PhotoUtils PSF-fit catalog sources and also the largest number of matches (82).
