@@ -68,7 +68,10 @@ PhotUtils DAOStarFinder Input-Parameter Variation
 ************************************
 
 In all cases below, the input threshold is 5 times the clipped standard deviation
-of the ZOGY difference image (multiplied by a Gaussian correction factor to account for the data clipping).
+of the ZOGY difference image (multiplied by a Gaussian correction factor to account for the data clipping)::
+
+    threshold = 0.2488752235542349
+
 This is the same threshold that was used in the 20250927 test.
 
 ===== ==== ======= ======= ======= ======= ======= =========== =============================
