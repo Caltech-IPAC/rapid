@@ -30,6 +30,7 @@ Analysis Software
 The following scripts are used to generate catalogs from the above inputs and make plots:
 
 .. code-block::
+
     scripts/generate_sexcat.py
     scripts/generate_psfcat.py
     scripts/plot_detections.py
