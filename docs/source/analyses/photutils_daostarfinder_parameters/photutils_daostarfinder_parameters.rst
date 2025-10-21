@@ -74,6 +74,8 @@ of the ZOGY difference image (multiplied by a Gaussian correction factor to acco
 
 This is the same threshold that was used in the 9/27/2025 test.
 
+Case #1 defines the parameters that were used in the 9/27/2025 test.
+
 ===== ==== ======= ======= ======= ======= ======= =========== =============================
 Cases fwhm sharplo sharphi roundlo roundhi min_sep num_sources num_matches_with_fake_sources
 ===== ==== ======= ======= ======= ======= ======= =========== =============================
