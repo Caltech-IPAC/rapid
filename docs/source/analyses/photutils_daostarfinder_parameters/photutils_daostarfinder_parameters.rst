@@ -70,9 +70,9 @@ PhotUtils DAOStarFinder Input-Parameter Variation
 In all cases below, the input threshold is 5 times the clipped standard deviation
 of the ZOGY difference image (multiplied by a Gaussian correction factor to account for the data clipping)::
 
-    threshold = 0.2488752235542349
+    threshold = 0.2488752235542349 DN/s
 
-This is the same threshold that was used in the 20250927 test.
+This is the same threshold that was used in the 9/27/2025 test.
 
 ===== ==== ======= ======= ======= ======= ======= =========== =============================
 Cases fwhm sharplo sharphi roundlo roundhi min_sep num_sources num_matches_with_fake_sources
@@ -89,7 +89,8 @@ Cases fwhm sharplo sharphi roundlo roundhi min_sep num_sources num_matches_with_
 10    1.0  -1.0    10.0    -1.0    1.0     0.0     1936        74
 ===== ==== ======= ======= ======= ======= ======= =========== =============================
 
-Case #6 gave the largest number of PhotoUtils PSF-fit catalog sources and also the largest number of matches (82).
+Case #6 gave the largest number of PhotoUtils PSF-fit catalog sources and also
+the largest number of fake-source matches (82) within 1.5 pixels.
 
 Plots for all of these cases are given below.
 
