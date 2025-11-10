@@ -7,13 +7,13 @@ Overview
 
 The analysis described below is for the purpose of understanding
 the effects of varying PhotUtils DAOStarFinder input parameters.
-This is a systematic study with 1000 independent samples.
+This is a systematic study with 1000 independent samples as input.
 
 
 Input Difference Image
 ************************************
 
-One thousand ZOGY difference-image products are used.  Here is an example of how to download the input files needed for a single sample:
+One thousand sets of ZOGY difference-image products are used.  Here is an example of how to download the input files needed for a single sample:
 
 .. code-block::
 
@@ -60,6 +60,9 @@ FILTER                 "N"                     Do not apply filter for detection
 
 The ZOGY scorr image is used for detection, and the difference image for analysis.
 
+Fake sources were injected into the input image before ZOGY.  100 fake sources were injected.
+In matching within 1.5 pixels, there were on average 62.23 matches between SExtractor source positions and fake source positions.
+
 Statistical results:
 
 ================================= ======================== ===============================================================================
@@ -73,9 +76,6 @@ avg_numpy_ns_true                 62.23                    Average number of cat
 std_numpy_ns_true=                11.50                    Standard deviation of corresponding average
 margin_of_error_ns_true           0.71                     Uncertainty of corresponding average (95% confidence level)
 ================================= ======================== ===============================================================================
-
-Fake sources were injected into the input image before ZOGY.  100 fake sources were injected.
-In matching within 1.5 pixels, there were on average 62.23 matches between SExtractor source positions and fake source positions.
 
 .. note::
     The ``XWIN_IMAGE, YWIN_IMAGE`` pixel coordinates are one-based indices, while the pixel coordinates
@@ -94,7 +94,7 @@ This is the same threshold sigma that was used in the 9/27/2025 test.
 
 Case #1 defines the parameters that were used in the 9/27/2025 test.
 
-Statistical results for sample size = 1000.
+Statistical results for sample size = 1000.  The same inputs were used as for the above SExtractor baseline.
 
 ===== ==== ======= ======= ======= ======= ======= =============================== ==========================================================
 Cases fwhm sharplo sharphi roundlo roundhi min_sep num_sources (std,unc)           num_matches_with_fake_sources (std,unc)
