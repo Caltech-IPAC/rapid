@@ -55,8 +55,37 @@ if __name__ == '__main__':
     n_thresh_sigma = float(psfcat_diffimage_dict["n_thresh_sigma"])
 
     fwhm = float(psfcat_diffimage_dict["fwhm"])
-    # Override value.
-    fwhm=1.0
+
+    # Override values.
+
+    fwhm = float(os.getenv('FWHM'))
+    if fwhm is None:
+        fwhm = 2.0
+    sharplo = float(os.getenv('SHARPLO'))
+    if sharplo is None:
+        sharplo = -1.0
+    sharphi = float(os.getenv('SHARPHI'))
+    if sharphi is None:
+        sharphi = 10.0
+    roundlo = float(os.getenv('ROUNDLO'))
+    if roundlo is None:
+        roundlo = -2.0
+    roundhi = float(os.getenv('ROUNDHI'))
+    if roundhi is None:
+        roundhi = 2.0
+    min_separation = float(os.getenv('MINSEP'))
+    if min_separation is None:
+        min_separation = 1.0          # pixels
+
+
+    # Tried widening the allowed range of [sharplo,sharphi] from [0.2,1.0] to [-1.0,10.0], and
+    # this increased the number of detections from 1707 to 1936 (for fwhm = 1.0), and to 1886 (for fwhm = 1.4).
+
+
+    # What was learned:
+    # fwhm=1.4 gives the highest number PhotUtils extracted sources matching injected fake sources
+    # (77 out of 100 using 1.5-pixel match radius, and [sharphi,sharplo]=-1.0,10.0).
+
 
     fit_shape_str = psfcat_diffimage_dict["fit_shape"]
     fit_shape = tuple(int(x) for x in fit_shape_str.replace("(","").replace(")","").replace(" ", "").split(','))
@@ -91,7 +120,12 @@ if __name__ == '__main__':
                                                                   input_img_filename,
                                                                   input_unc_filename,
                                                                   input_psf_filename,
-                                                                  output_psfcat_residual_filename)
+                                                                  output_psfcat_residual_filename,
+                                                                  sharplo=sharplo,
+                                                                  sharphi=sharphi,
+                                                                  roundlo=roundlo,
+                                                                  roundhi=roundhi,
+                                                                  min_separation=min_separation)
 
 
     print("psfcat_flag =",psfcat_flag)

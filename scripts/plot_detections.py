@@ -7,14 +7,21 @@ from astropy.table import Table
 import modules.utils.rapid_pipeline_subs as util
 
 
-# Input SExtractor and PhotoUtils-finder catalog filenames, along with fake sources injected.
+# Input SExtractor and PhotUtils-finder catalog filenames, along with fake sources injected.
 
-filename_diffimage_sextractor_catalog = "diffimage_masked.txt"
+filename_diffimage_sextractor_catalog = os.getenv('INPUTSECCATFNAME')
+if filename_diffimage_sextractor_catalog is None:
+    #filename_diffimage_sextractor_catalog = "diffimage_masked_with_ztf_config.txt"
+    filename_diffimage_sextractor_catalog = "diffimage_masked_original.txt"
+print(f"filename_diffimage_sextractor_catalog = {filename_diffimage_sextractor_catalog}")
 
 output_psfcat_filename = "diffimage_masked_psfcat.txt"
 output_psfcat_finder_filename = "diffimage_masked_psfcat_finder.txt"
 
-fake_sources_filename = "Roman_TDS_simple_model_Y106_124_5_lite_inject.txt"
+fake_sources_filename = os.getenv('INJECTFILE')
+if fake_sources_filename is None:
+    fake_sources_filename = "Roman_TDS_simple_model_Y106_124_5_lite_inject.txt"
+print(f"fake_sources_filename = {fake_sources_filename}")
 
 
 # Define environment.
@@ -145,6 +152,8 @@ np_false = 0
 ns_true_np_false = 0
 ns_false_np_true = 0
 for xf,yf in zip(x_fakesrc,y_fakesrc):
+
+    # SExtractor
     idxs = 999999
     dmins = 999999.9
     i = 0
@@ -154,6 +163,8 @@ for xf,yf in zip(x_fakesrc,y_fakesrc):
             dmins = d
             idxs = i
         i += 1
+
+    # PhotUtils
     idxp = 999999
     dminp = 999999.9
     i = 0
@@ -206,12 +217,52 @@ plt.xlabel("X (pixels)")
 plt.ylabel("Y (pixels)")
 plt.title("Scatter Plot of SExtractor (blue) vs. PhotUtils (red) vs. Fake Sources (cyan)")
 
-fwhm = 1.0
 
-plt.suptitle(f"SExtector set up like ZTF and PhotUtils with fwhm={fwhm}")
+nsources = npsfcatsources_diffimage
+if nsources is None:
+    nsources = 3381
+fwhm = float(os.getenv('FWHM'))
+if fwhm is None:
+    fwhm = 2.0
+sharplo = float(os.getenv('SHARPLO'))
+if sharplo is None:
+    sharplo = -1.0
+sharphi = float(os.getenv('SHARPHI'))
+if sharphi is None:
+    sharphi = 10.0
+roundlo = float(os.getenv('ROUNDLO'))
+if roundlo is None:
+    roundlo = -2.0
+roundhi = float(os.getenv('ROUNDHI'))
+if roundhi is None:
+    roundhi = 2.0
+min_separation = float(os.getenv('MINSEP'))
+if min_separation is None:
+    min_separation = 1.0          # pixels
+
+
+plt.suptitle(f"SExtractor set up like ZTF: nsexcatsources_diffimage={nsexcatsources_diffimage}")
+#plt.text(-100, -100, f'Photutils: ', bbox=dict(facecolor='lightblue', alpha=0.7, pad=5))
+plt.figtext(0.05,
+            0.93,
+            f'Photutils: fwhm={fwhm},nsources={nsources},sharplo={sharplo},sharphi={sharphi},roundlo={roundlo},roundhi={roundhi},min_sep={min_separation}',
+            bbox=dict(facecolor='lightblue', alpha=0.7, pad=2))
 
 # Output plot to PNG file.
-plt.savefig(f'sex_vs_psf_fwhm={fwhm}.png')
+plt.savefig(f'sex_vs_psf_fwhm={fwhm}_sharplo={sharplo}_sharphi={sharphi}_roundlo={roundlo}_roundhi={roundhi}_min_sep={min_separation}.png')
 
-# Display the plot
-plt.show()
+# Display the plot.
+plot_flag = os.getenv('DISPLAYPLOT')
+if plot_flag is None:
+    plot_flag = True
+print("plot_flag =",plot_flag)
+if plot_flag == "True":
+    plt.show()
+
+with open('results_sexcat.txt', 'w') as f:
+    f.write(f'{nsexcatsources_diffimage}\n')
+    f.write(f'{ns_true}\n')
+
+with open('results_psfcat.txt', 'w') as f:
+    f.write(f'{npsfcatsources_diffimage}\n')
+    f.write(f'{np_true}\n')

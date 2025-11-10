@@ -63,7 +63,7 @@ if __name__ == '__main__':
 
 
     # Override SExtractor parameters in input config file (awsBatchSubmitJobs_launchSingleSciencePipeline.ini).
-    # ZTF uses DEBLEND_NTHRESH=4, DEBLEND_MINCONT=0.005, DETECT_MINAREA=1.
+    # ZTF uses DEBLEND_NTHRESH=4, DEBLEND_MINCONT=0.005, DETECT_MINAREA=1, DETECT_THRESH = 5.0, ANALYSIS_THRESH = 5.0
 
     #sextractor_diffimage_dict["sextractor_DEBLEND_NTHRESH".lower()] = str(32)     # Objects: detected 974      / sextracted 864
     sextractor_diffimage_dict["sextractor_DEBLEND_NTHRESH".lower()] = str(4)      # Objects: detected 855      / sextracted 794
@@ -82,6 +82,13 @@ if __name__ == '__main__':
     #sextractor_diffimage_dict["sextractor_DETECT_MINAREA".lower()] = str(5)         # Objects: detected 377      / sextracted 351
     #sextractor_diffimage_dict["sextractor_DETECT_MINAREA".lower()] = str(2)         # Objects: detected 875      / sextracted 799
     sextractor_diffimage_dict["sextractor_DETECT_MINAREA".lower()] = str(1)         # Objects: detected 1609     / sextracted 1403
+
+
+
+
+    sextractor_diffimage_dict["sextractor_DETECT_THRESH".lower()] = str(5.0)
+    sextractor_diffimage_dict["sextractor_ANALYSIS_THRESH".lower()] = str(5.0)
+
 
 
     # What was learned:
