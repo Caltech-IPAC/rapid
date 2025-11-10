@@ -92,8 +92,7 @@ of the ZOGY difference image (multiplied by a Gaussian correction factor to acco
 
 This is the same threshold sigma that was used in the 9/27/2025 test.
 
-Case #1 defines the parameters that were used in the 9/27/2025 test, except that now min_separation = 1.0 pixel,
-in order to prevent detections on the same pixel.
+Case #1 defines the parameters that were used in the 9/27/2025 test.
 
 Statistical results for sample size = 1000.  The same inputs were used as for the above SExtractor baseline.
 
