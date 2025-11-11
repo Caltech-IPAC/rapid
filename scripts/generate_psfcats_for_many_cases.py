@@ -16,7 +16,7 @@ import time
 start_time_benchmark_at_start = time.time()
 
 input_file = "diffimage_masked.fits"
-filename_diffimage_sextractor_catalog = "diffimage_masked_with_ztf_config.txt"
+filename_diffimage_sextractor_catalog = "diffimage_masked_with_alice2_config.txt"
 
 
 # Cases: fwhm,sharplo,sharphi,roundlo,roundhi,min_separation.
@@ -107,6 +107,9 @@ for directory_path in directory_paths:
             os.environ['MINSEP'] = str(min_separation)
             os.environ['INPUTSEXCATFNAME'] = filename_diffimage_sextractor_catalog
 
+
+            '''
+            # No need to regenerate PhotUtils catalogs for comparison with Alice's SExtractor configuration.
             try:
                 code_to_execute_object = subprocess.run(['python', '/Users/laher/git/rapid/scripts/generate_psfcat.py'], capture_output=True, text=True, check=True)
 
@@ -128,6 +131,40 @@ for directory_path in directory_paths:
                     f.write("None\n")
                 else:
                     f.write(code_to_execute_stderr)
+            '''
+
+
+
+            # Temporarily rename catalogs having suffix with case number names to canonical names,
+            # so that plot_detections.py can find them.
+
+            old_path = "diffimage_masked_psfcat.txt"
+            new_path = old_path.replace(".txt",f"_case{case}.txt")
+            if  os.path.exists(new_path):
+                try:
+                    os.rename(new_path, old_path)
+                    print(f"File '{new_path}' renamed to '{old_path}'")
+                except FileNotFoundError:
+                    print(f"Error: Source file '{new_path}' to be renamed not found.")
+                    exit(64)
+                except Exception as e:
+                    print(f"A renaming error occurred: {e}")
+                    exit(64)
+
+            old_path = "diffimage_masked_psfcat_finder.txt"
+            new_path = old_path.replace(".txt",f"_case{case}.txt")
+            if  os.path.exists(new_path):
+                try:
+                    os.rename(new_path, old_path)
+                    print(f"File '{new_path}' renamed to '{old_path}'")
+                except FileNotFoundError:
+                    print(f"Error: Source file '{new_path}' to be renamed not found.")
+                    exit(64)
+                except Exception as e:
+                    print(f"A renaming error occurred: {e}")
+                    exit(64)
+
+
 
 
             try:
@@ -177,7 +214,6 @@ for directory_path in directory_paths:
                     print(f"Error: Source file '{old_path}' to be renamed not found.")
                 except Exception as e:
                     print(f"A renaming error occurred: {e}")
-
 
             try:
                 results_psfcat = 'results_psfcat.txt'
