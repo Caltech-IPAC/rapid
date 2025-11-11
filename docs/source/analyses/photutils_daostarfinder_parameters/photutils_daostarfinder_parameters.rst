@@ -44,38 +44,54 @@ The following scripts are used to download the input data, generate catalogs, an
 SExtractor Baseline for Comparison
 ************************************
 
-The SExtractor configuration is similar to ZTF:
+Three SExtractor configurations were tested.
 
-===============      ===================      =====================================================================
-Parameter                Value                 Description
-===============      ===================      =====================================================================
-DEBLEND_NTHRESH           4                    Number of deblending sub-thresholds
-DEBLEND_MINCONT           0.005                Minimum contrast parameter for deblending
-DETECT_MINAREA            1                    Minimum number of pixels above threshold
-DETECT_THRESH             5.0                  Detection threshold in absolute DN (weight image not used; see below)
-ANALYSIS_THRESH           5.0                  Analysis threshold in number of sigmas
-WEIGHT_TYPE            "NONE,MAP_RMS"          Do not use weight image for detection
-FILTER                 "N"                     Do not apply filter for detection
-===============      ===================      =====================================================================
+The first SExtractor configuration below is similar to ZTF.  The others were determined by Alice Ciobanu in experiments with OpenUniverse simulated images.
+
+===============      ===================      ===================      ======================      ==================================================================
+Configuraton              ZTF                      A1                       A2                     Description
+===============      ===================      ===================      ======================      ==================================================================
+DEBLEND_NTHRESH           4                        4                        4                      Number of deblending sub-thresholds
+DEBLEND_MINCONT           0.005                    0.005                    0.005                  Minimum contrast parameter for deblending
+DETECT_MINAREA            1                        5                        5                      Minimum number of pixels above threshold
+DETECT_THRESH             5.0                      2.5                      2.5                    Detection threshold in **absolute DN** if weight image not used
+ANALYSIS_THRESH           5.0                      2.5                      2.5                    Analysis threshold in number of sigmas
+WEIGHT_TYPE            "NONE,MAP_RMS"           "NONE,MAP_RMS"          "BACKGROUND,MAP_RMS"       Do not use weight image for detection
+FILTER                 "N"                      "N"                     "N"                        Do not apply filter for detection
+===============      ===================      ===================      ======================      ==================================================================
 
 The ZOGY scorr image is used for detection, and the difference image for analysis.
 
 Fake sources were injected into the input image before ZOGY.  100 fake sources were injected.
-In matching within 1.5 pixels, there were on average 62.23 matches between SExtractor source positions and fake source positions.
+In matching within 1.5 pixels for the SExtractor ZTF baseline,
+there were on average 62.23 matches between extracted source positions and fake source positions.
 
 Statistical results:
 
-================================= ======================== ===============================================================================
-Statistic                         Output value             Description
-================================= ======================== ===============================================================================
-sample_size                       1000                     Number of ZOGY difference-image cases studied
-avg_numpy_nsources_sexcat         2011.55                  Average number of SExtractor sources analyzed
-std_numpy_nsources_sexcat         1038.24                  Standard deviation of corresponding average
-margin_of_error_nsources_sexcat   64.35                    Uncertainty of corresponding average (95% confidence level)
-avg_numpy_ns_true                 62.23                    Average number of catalog matches with fake-source positions (1.5-pixel radius)
-std_numpy_ns_true=                11.50                    Standard deviation of corresponding average
-margin_of_error_ns_true           0.71                     Uncertainty of corresponding average (95% confidence level)
-================================= ======================== ===============================================================================
+================================= ======================== ======================== ======================== ===============================================================================
+Statistic                         ZTF                      A1                       A2                       Description
+================================= ======================== ======================== ======================== ===============================================================================
+sample_size                       1000                     1000                     1000                     Number of ZOGY difference-image cases studied
+avg_numpy_nsources_sexcat         2011.55                  1866.39                  1835.53                  Average number of SExtractor sources analyzed
+std_numpy_nsources_sexcat         1038.24                  969.97                   942.60                   Standard deviation of corresponding average
+margin_of_error_nsources_sexcat   64.35                    60.12                    61.51                    Uncertainty of corresponding average (95% confidence level)
+avg_numpy_ns_true                 62.23                    61.492                   62.23                    Average number of catalog matches with fake-source positions (1.5-pixel radius)
+std_numpy_ns_true=                11.503                   11.328                   11.335                   Standard deviation of corresponding average
+margin_of_error_ns_true           0.713                    0.702                    0.703                    Uncertainty of corresponding average (95% confidence level)
+================================= ======================== ======================== ======================== ===============================================================================
+
+
+Statistical results:
+sample_size=1000
+avg_numpy_nsources_sexcat=1866.391
+std_numpy_nsources_sexcat=969.9681067535159
+margin_of_error_nsources_sexcat=60.11924611122424
+avg_numpy_ns_true=61.492
+std_numpy_ns_true=11.328192088766857
+margin_of_error_ns_true=0.7021286199391106
+
+
+
 
 .. note::
     The ``XWIN_IMAGE, YWIN_IMAGE`` pixel coordinates are one-based indices, while the pixel coordinates
@@ -94,7 +110,7 @@ This is the same threshold sigma that was used in the 9/27/2025 test.
 
 Case #1 defines the parameters that were used in the 9/27/2025 test.
 
-Statistical results for sample size = 1000.  The same inputs were used as for the above SExtractor baseline.
+Statistical results for sample size = 1000.  The same inputs were used as for the above SExtractor ZTF baseline.
 
 ===== ==== ======= ======= ======= ======= ======= =============================== ==========================================================
 Cases fwhm sharplo sharphi roundlo roundhi min_sep num_sources (std,unc)           num_matches_with_fake_sources (std,unc)
