@@ -7,7 +7,7 @@ import time
 start_time_benchmark_at_start = time.time()
 
 filename_diffimage_sextractor_catalog = 'diffimage_masked.txt'
-catalog_suffix = "_with_ztf_config.txt"
+catalog_suffix = "_with_alice2_config.txt"
 
 
 # Get a list of entries in the current directory
@@ -67,14 +67,6 @@ for directory_path in directory_paths:
 
         old_path = filename_diffimage_sextractor_catalog
         if  os.path.exists(old_path):
-
-
-            # Temporary code to clean up filenaming mistakes.
-            try:
-                remove_path = old_path.replace(".txt","_with_ztf_config")
-                os.remove(remove_path)
-            except Exception as e:
-                pass
 
 
             # Code to rename catalog with custom suffix.
