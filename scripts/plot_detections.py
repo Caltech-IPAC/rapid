@@ -9,9 +9,8 @@ import modules.utils.rapid_pipeline_subs as util
 
 # Input SExtractor and PhotUtils-finder catalog filenames, along with fake sources injected.
 
-filename_diffimage_sextractor_catalog = os.getenv('INPUTSECCATFNAME')
+filename_diffimage_sextractor_catalog = os.getenv('INPUTSEXCATFNAME')
 if filename_diffimage_sextractor_catalog is None:
-    #filename_diffimage_sextractor_catalog = "diffimage_masked_with_ztf_config.txt"
     filename_diffimage_sextractor_catalog = "diffimage_masked_original.txt"
 print(f"filename_diffimage_sextractor_catalog = {filename_diffimage_sextractor_catalog}")
 
