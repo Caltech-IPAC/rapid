@@ -88,7 +88,7 @@ if __name__ == '__main__':
 
     sextractor_diffimage_dict["sextractor_DETECT_THRESH".lower()] = str(5.0)
     sextractor_diffimage_dict["sextractor_ANALYSIS_THRESH".lower()] = str(5.0)
-
+    sextractor_diffimage_dict["sextractor_WEIGHT_TYPE".lower()] = "NONE,MAP_RMS"
 
 
 
@@ -100,14 +100,15 @@ if __name__ == '__main__':
 
 
 
-    # Alice's configuration.
+    # Alice's and Lynn's configuration.
     sextractor_diffimage_dict["sextractor_DEBLEND_NTHRESH".lower()] = str(4)
     sextractor_diffimage_dict["sextractor_DEBLEND_MINCONT".lower()] = str(0.005)
-    sextractor_diffimage_dict["sextractor_DETECT_MINAREA".lower()] = str(5)
+    sextractor_diffimage_dict["sextractor_DETECT_MINAREA".lower()] = str(4)
     sextractor_diffimage_dict["sextractor_DETECT_THRESH".lower()] = str(2.5)
     sextractor_diffimage_dict["sextractor_ANALYSIS_THRESH".lower()] = str(2.5)
+    sextractor_diffimage_dict["sextractor_WEIGHT_TYPE".lower()] = "NONE,MAP_RMS"
 
-
+    '''
     # Alice's configuration #2.
     sextractor_diffimage_dict["sextractor_DEBLEND_NTHRESH".lower()] = str(4)
     sextractor_diffimage_dict["sextractor_DEBLEND_MINCONT".lower()] = str(0.005)
@@ -115,7 +116,7 @@ if __name__ == '__main__':
     sextractor_diffimage_dict["sextractor_DETECT_THRESH".lower()] = str(2.5)
     sextractor_diffimage_dict["sextractor_ANALYSIS_THRESH".lower()] = str(2.5)
     sextractor_diffimage_dict["sextractor_WEIGHT_TYPE".lower()] = "BACKGROUND,MAP_RMS"
-
+    '''
 
     # Compute SExtractor catalog for positive ZOGY masked difference image.
     # Execute SExtractor to first detect candidates on Scorr (S/N) match-filter
@@ -128,7 +129,7 @@ if __name__ == '__main__':
     sextractor_diffimage_dict["sextractor_detection_image".lower()] = filename_scorrimage_masked
     sextractor_diffimage_dict["sextractor_input_image".lower()] = filename_diffimage_masked
     # Override the config-file parameter sextractor_WEIGHT_TYPE for ZOGY masked-difference-image catalog.
-    #sextractor_diffimage_dict["sextractor_WEIGHT_TYPE".lower()] = "NONE,MAP_RMS"                                 # Comment out for Alice's configuration #2.
+    #sextractor_diffimage_dict["sextractor_WEIGHT_TYPE".lower()] = "NONE,MAP_RMS"                                 # Comment out for Alice's configurations.
     sextractor_diffimage_dict["sextractor_WEIGHT_IMAGE".lower()] = filename_weight_image
     sextractor_diffimage_dict["sextractor_PARAMETERS_NAME".lower()] = sextractor_diffimage_paramsfile
     # Override the config-file parameter sextractor_FILTER for ZOGY masked-difference-image catalog.
