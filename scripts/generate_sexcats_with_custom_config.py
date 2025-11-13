@@ -7,7 +7,7 @@ import time
 start_time_benchmark_at_start = time.time()
 
 filename_diffimage_sextractor_catalog = 'diffimage_masked.txt'
-catalog_suffix = "_with_alice2_config.txt"
+catalog_suffix = "_with_alice_config.txt"
 
 
 # Get a list of entries in the current directory
