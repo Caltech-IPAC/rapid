@@ -7,12 +7,22 @@ from astropy.table import Table
 import modules.utils.rapid_pipeline_subs as util
 
 
+# Define match_radius_pixels for matching catalog sources with fake-source positions.
+
+match_radius_pixels = 1.0
+
+
 # Input SExtractor and PhotUtils-finder catalog filenames, along with fake sources injected.
 
 filename_diffimage_sextractor_catalog = os.getenv('INPUTSEXCATFNAME')
 if filename_diffimage_sextractor_catalog is None:
     filename_diffimage_sextractor_catalog = "diffimage_masked_original.txt"
 print(f"filename_diffimage_sextractor_catalog = {filename_diffimage_sextractor_catalog}")
+
+catalog_suffix = os.getenv('SEXCATSUFFIX')
+if catalog_suffix is None:
+    print("*** Error: catalog_suffix is None; quitting...")
+    exit(64)
 
 output_psfcat_filename = "diffimage_masked_psfcat.txt"
 output_psfcat_finder_filename = "diffimage_masked_psfcat_finder.txt"
@@ -142,7 +152,6 @@ y3 = np.array(y_fakesrc)
 
 # Count numbers of fake sources matched to SExtractor and PhotUtils.
 
-match_radius_pixels = 1.5
 j = 0
 ns_true = 0
 ns_false = 0
@@ -219,7 +228,12 @@ plt.title("Scatter Plot of SExtractor (blue) vs. PhotUtils (red) vs. Fake Source
 
 nsources = npsfcatsources_diffimage
 if nsources is None:
-    nsources = 3381
+    print("*** Error: nsources is None; quitting...")
+    exit(64)
+case = os.getenv('CASENUM')
+if case is None:
+    print("*** Error: case number is None; quitting...")
+    exit(64)
 fwhm = float(os.getenv('FWHM'))
 if fwhm is None:
     fwhm = 2.0
@@ -258,10 +272,32 @@ print("plot_flag =",plot_flag)
 if plot_flag == "True":
     plt.show()
 
-with open('results_sexcat.txt', 'w') as f:
+results_sexcat = "results_sexcat" + f"{catalog_suffix}"
+with open(results_sexcat, 'w') as f:
     f.write(f'{nsexcatsources_diffimage}\n')
     f.write(f'{ns_true}\n')
 
-with open('results_psfcat.txt', 'w') as f:
+results_psfcat = f"results_psfcat_case{case}.txt"
+with open(results_psfcat, 'w') as f:
     f.write(f'{npsfcatsources_diffimage}\n')
     f.write(f'{np_true}\n')
+
+
+# Temporary code to clean up obsolete/mistaken filenames.
+try:
+    remove_path = f"results_sexcat.txt"
+    os.remove(remove_path)
+except Exception as e:
+    pass
+try:
+    remove_path = f"results_psfcat.txt"
+    os.remove(remove_path)
+except Exception as e:
+    pass
+
+case_as_float = case + ".0"
+try:
+    remove_path = f"results_psfcat_case{case_as_float}.txt"
+    os.remove(remove_path)
+except Exception as e:
+    pass
