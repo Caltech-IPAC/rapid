@@ -1,7 +1,10 @@
 #########################################################
 # Generate PhotUtils catalogs for many different cases,
 # for a multitude of ZOGY difference image to get
-# statistically meaningful results.
+# statistically meaningful results.  Compare with results
+# from a single SExtractor case (assuming these
+# catalogs have been previously generated and exist under
+# job-ID subdirectories in the working directory).
 #
 # To be run outside container, after running related
 # scripts/generate_sexcats_with_custom_config.py
@@ -16,11 +19,12 @@ import time
 start_time_benchmark_at_start = time.time()
 
 input_file = "diffimage_masked.fits"
-filename_diffimage_sextractor_catalog = "diffimage_masked_with_alice2_config.txt"
+catalog_suffix = "_with_ztf_config.txt"
+filename_diffimage_sextractor_catalog = "diffimage_masked" + f"{catalog_suffix}"
+os.environ['SEXCATSUFFIX'] = f"{catalog_suffix}"
 
 
 # Cases: fwhm,sharplo,sharphi,roundlo,roundhi,min_separation.
-
 
 cases_dict = {}
 cases_dict[0]=[2.0,0.2,1.0,-1.0,1.0,0.0]
@@ -73,7 +77,7 @@ for directory_path in directory_paths:
     else:
         print(f"Directory '{specific_directory_path}' does not exist or is not a directory.")
 
-    if  os.path.exists(input_file) and os.path.exists(filename_diffimage_sextractor_catalog):
+    if os.path.exists(input_file) and os.path.exists(filename_diffimage_sextractor_catalog):
         # and (directory_path == "jid1456" or directory_path == "jid503"):
 
         for test_file in folder_contents:
@@ -107,68 +111,70 @@ for directory_path in directory_paths:
             os.environ['MINSEP'] = str(min_separation)
             os.environ['INPUTSEXCATFNAME'] = filename_diffimage_sextractor_catalog
 
-
-            '''
-            # No need to regenerate PhotUtils catalogs for comparison with Alice's SExtractor configuration.
-            try:
-                code_to_execute_object = subprocess.run(['python', '/Users/laher/git/rapid/scripts/generate_psfcat.py'], capture_output=True, text=True, check=True)
-
-                code_to_execute_stdout = code_to_execute_object.stdout
-
-                code_to_execute_stderr = code_to_execute_object.stderr
-
-            except subprocess.CalledProcessError as e:
-                print(f"Error executing command: {e}")
-                print(f"Stderr: {e.stderr}")
-
-            output_file = f"generate_psfcat_case{case}.out"
-
-            with open(output_file, "w") as f:
-                f.write("STDOUT:\n")
-                f.write(code_to_execute_stdout)
-                f.write("STDERR:\n")
-                if code_to_execute_stderr == "" or code_to_execute_stderr is None:
-                    f.write("None\n")
-                else:
-                    f.write(code_to_execute_stderr)
-            '''
-
-
-
-            # Temporarily rename catalogs having suffix with case number names to canonical names,
-            # so that plot_detections.py can find them.
-
             old_path = "diffimage_masked_psfcat.txt"
             new_path = old_path.replace(".txt",f"_case{case}.txt")
-            if  os.path.exists(new_path):
+            if not os.path.exists(new_path):
+                print("Generating PhotUtils catalog...")
                 try:
-                    os.rename(new_path, old_path)
-                    print(f"File '{new_path}' renamed to '{old_path}'")
-                except FileNotFoundError:
-                    print(f"Error: Source file '{new_path}' to be renamed not found.")
-                    exit(64)
-                except Exception as e:
-                    print(f"A renaming error occurred: {e}")
-                    exit(64)
+                    code_to_execute_object = subprocess.run(['python', '/Users/laher/git/rapid/scripts/generate_psfcat.py'], capture_output=True, text=True, check=True)
 
-            old_path = "diffimage_masked_psfcat_finder.txt"
-            new_path = old_path.replace(".txt",f"_case{case}.txt")
-            if  os.path.exists(new_path):
-                try:
-                    os.rename(new_path, old_path)
-                    print(f"File '{new_path}' renamed to '{old_path}'")
-                except FileNotFoundError:
-                    print(f"Error: Source file '{new_path}' to be renamed not found.")
-                    exit(64)
-                except Exception as e:
-                    print(f"A renaming error occurred: {e}")
-                    exit(64)
+                    returncode = code_to_execute_object.returncode
+                    print("returncode =",returncode)
+
+                    code_to_execute_stdout = code_to_execute_object.stdout
+
+                    code_to_execute_stderr = code_to_execute_object.stderr
+
+                except subprocess.CalledProcessError as e:
+                    print(f"Error executing command: {e}")
+                    print(f"Stderr: {e.stderr}")
+
+                output_file = f"generate_psfcat_case{case}.out"
+
+                with open(output_file, "w") as f:
+                    f.write("STDOUT:\n")
+                    f.write(code_to_execute_stdout)
+                    f.write("STDERR:\n")
+                    if code_to_execute_stderr == "" or code_to_execute_stderr is None:
+                        f.write("None\n")
+                    else:
+                        f.write(code_to_execute_stderr)
 
 
+                # Rename catalogs with canonical names to have suffix with case number,
+                # so that a downstream process does not overwrite them.
 
+                old_path = "diffimage_masked_psfcat.txt"
+                if  os.path.exists(old_path):
+                    new_path = old_path.replace(".txt",f"_case{case}.txt")
+                    try:
+                        os.rename(old_path, new_path)
+                        print(f"File '{old_path}' renamed to '{new_path}'")
+                    except FileNotFoundError:
+                        print(f"Error: Source file '{old_path}' to be renamed not found.")
+                    except Exception as e:
+                        print(f"A renaming error occurred: {e}")
+
+                old_path = "diffimage_masked_psfcat_finder.txt"
+                if  os.path.exists(old_path):
+                    new_path = old_path.replace(".txt",f"_case{case}.txt")
+                    try:
+                        os.rename(old_path, new_path)
+                        print(f"File '{old_path}' renamed to '{new_path}'")
+                    except FileNotFoundError:
+                        print(f"Error: Source file '{old_path}' to be renamed not found.")
+                    except Exception as e:
+                        print(f"A renaming error occurred: {e}")
+
+
+            # Perform source matching and scoring.
 
             try:
+                print("Performing source matching and scoring...")
                 code_to_execute_object = subprocess.run(['python', '/Users/laher/git/rapid/scripts/plot_detections.py'], capture_output=True, text=True, check=True)
+
+                returncode = code_to_execute_object.returncode
+                print("returncode =",returncode)
 
                 code_to_execute_stdout = code_to_execute_object.stdout
 
@@ -190,33 +196,10 @@ for directory_path in directory_paths:
                     f.write(code_to_execute_stderr)
 
 
-            # Rename catalogs with canonical names to have suffix with case number,
-            # so that a downstream process does not overwrite them.
-
-            old_path = "diffimage_masked_psfcat.txt"
-            if  os.path.exists(old_path):
-                new_path = old_path.replace(".txt",f"_case{case}.txt")
-                try:
-                    os.rename(old_path, new_path)
-                    print(f"File '{old_path}' renamed to '{new_path}'")
-                except FileNotFoundError:
-                    print(f"Error: Source file '{old_path}' to be renamed not found.")
-                except Exception as e:
-                    print(f"A renaming error occurred: {e}")
-
-            old_path = "diffimage_masked_psfcat_finder.txt"
-            if  os.path.exists(old_path):
-                new_path = old_path.replace(".txt",f"_case{case}.txt")
-                try:
-                    os.rename(old_path, new_path)
-                    print(f"File '{old_path}' renamed to '{new_path}'")
-                except FileNotFoundError:
-                    print(f"Error: Source file '{old_path}' to be renamed not found.")
-                except Exception as e:
-                    print(f"A renaming error occurred: {e}")
+            # Aggregate results from PhotUtils-catalog analysis.
 
             try:
-                results_psfcat = 'results_psfcat.txt'
+                results_psfcat = f"results_psfcat_case{case}.txt"
 
                 with open(results_psfcat, "r") as file:
                     lines = file.readlines()
@@ -240,8 +223,10 @@ for directory_path in directory_paths:
             # End of cases loop.
 
 
+        # Aggregate results from SExtractor-catalog analysis.
+
         try:
-            results_sexcat = 'results_sexcat.txt'
+            results_sexcat = "results_sexcat" + f"{catalog_suffix}"
             with open(results_sexcat, "r") as file:
                 lines = file.readlines()
                 line = lines[0]
