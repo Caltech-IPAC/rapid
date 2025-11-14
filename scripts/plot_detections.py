@@ -23,9 +23,13 @@ catalog_suffix = os.getenv('SEXCATSUFFIX')
 if catalog_suffix is None:
     print("*** Error: catalog_suffix is None; quitting...")
     exit(64)
+case = os.getenv('CASENUM')
+if case is None:
+    print("*** Error: case number is None; quitting...")
+    exit(64)
 
-output_psfcat_filename = "diffimage_masked_psfcat.txt"
-output_psfcat_finder_filename = "diffimage_masked_psfcat_finder.txt"
+output_psfcat_filename = f"diffimage_masked_psfcat_case{case}.txt"
+output_psfcat_finder_filename = f"diffimage_masked_psfcat_finder_case{case}.txt"
 
 fake_sources_filename = os.getenv('INJECTFILE')
 if fake_sources_filename is None:
@@ -138,8 +142,8 @@ y_fakesrc = []
 i = 0
 for line in fake_sources_from_file:
     #print("line =",line)
-    x_pix = float(line[0]) + 1                # One-based pixel coordinates.
-    y_pix = float(line[1]) + 1
+    x_pix = float(line[0])                    # Already one-based pixel coordinates.
+    y_pix = float(line[1])
     flux = float(line[2])
     x_fakesrc.append(x_pix)
     y_fakesrc.append(y_pix)
@@ -229,10 +233,6 @@ plt.title("Scatter Plot of SExtractor (blue) vs. PhotUtils (red) vs. Fake Source
 nsources = npsfcatsources_diffimage
 if nsources is None:
     print("*** Error: nsources is None; quitting...")
-    exit(64)
-case = os.getenv('CASENUM')
-if case is None:
-    print("*** Error: case number is None; quitting...")
     exit(64)
 fwhm = float(os.getenv('FWHM'))
 if fwhm is None:
