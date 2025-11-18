@@ -208,3 +208,11 @@ Here we describe the steps to evaluate the pipeline and calculate each term of t
    detection method, or specific parameter settings) that maximizes the FOM is judged to be better performing.
 
 .. _noise pixels: https://web.ipac.caltech.edu/staff/fmasci/home/mystats/noisepix_specs.pdf
+
+Evaluation of Pipeline Test runs
+**********************************************
+
+.. toctree::
+    :maxdepth: 2
+    
+    openuniv_eval.rst
