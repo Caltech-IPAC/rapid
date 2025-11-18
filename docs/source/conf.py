@@ -19,8 +19,8 @@ import sphinx_rtd_theme
 # -- Project information -----------------------------------------------------
 
 project = 'Caltech-IPAC-RAPID'
-copyright = '2025, Ben Rusholme, Schuyler Van Dyk, Mansi Kasliwal, Lin Yan, Ashish Mahabal, Roberta Paladini, Joe Masiero, Jacob Jenson, Amalia Rivera, Ryan Lau, and Russ Laher'
-author = 'Ben Rusholme, Schuyler Van Dyk, Mansi Kasliwal, Lin Yan, Ashish Mahabal, Roberta Paladini, Joe Masiero, Jacob Jenson, Amalia Rivera, Ryan Lau, and Russ Laher'
+copyright = '2025, Ben Rusholme, Schuyler Van Dyk, Mansi Kasliwal, Lin Yan, Ashish Mahabal, Roberta Paladini, Joe Masiero, Jacob Jencson, Amalia Rivera, Ryan Lau, and Russ Laher'
+author = 'Ben Rusholme, Schuyler Van Dyk, Mansi Kasliwal, Lin Yan, Ashish Mahabal, Roberta Paladini, Joe Masiero, Jacob Jencson, Amalia Rivera, Ryan Lau, and Russ Laher'
 
 # The full version, including alpha/beta/rc tags
 release = '0.1'
@@ -34,7 +34,7 @@ release = '0.1'
 extensions = [
     'sphinx_rtd_theme',
     'sphinx.ext.intersphinx',
-    'sphinx.ext.imgmath',
+#    'sphinx.ext.imgmath',
     'sphinx.ext.mathjax',
     'sphinx.ext.viewcode',
     'sphinx.ext.githubpages',
