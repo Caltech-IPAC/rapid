@@ -30,6 +30,9 @@ RUN pip install --upgrade astropy
 RUN pip install --upgrade psycopg2-binary
 RUN pip install --upgrade healpy
 RUN pip install --upgrade boto3
+
+RUN yum -y remove setuptools
+
 RUN pip install --upgrade pyfftw
 RUN pip install --upgrade sympy
 RUN pip install --upgrade sip_tpv
