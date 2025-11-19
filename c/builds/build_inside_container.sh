@@ -230,7 +230,7 @@ rm -rf sextractor-2.28.2
 tar -xvf sextractor-2.28.2.tar
 cd sextractor-2.28.2
 ./autogen.sh
-./configure CPPFLAGS=-I${RAPID_SW}/c/common/fftw/include LDFLAGS=-L${RAPID_SW}/c/common/fftw/lib --enable-openblas --enable-static --prefix=${RAPID_SW}/c --with-fftw-libdir=${RAPID_SW}/c/common/fftw/lib --with-fftw-incdir=${RAPID_SW}/c/common/fftw/include --with-openblas-incdir=/opt/homebrew/opt/openblas/include --with-openblas-libdir=/opt/homebrew/opt/openblas/lib --enable-threads=8 --with-cfitsio-libdir=${RAPID_SW}/c/lib --with-cfitsio-incdir=${RAPID_SW}/c/include/cfitsio
+./configure CPPFLAGS=-I${RAPID_SW}/c/common/fftw/include LDFLAGS=-L${RAPID_SW}/c/common/fftw/lib --enable-static --prefix=${RAPID_SW}/c --with-fftw-libdir=${RAPID_SW}/c/common/fftw/lib --with-fftw-incdir=${RAPID_SW}/c/common/fftw/include --with-atlas-libdir=/usr/lib64/atlas --with-atlas-incdir=/usr/include --enable-threads=8 CFLAGS='-g -O2 -fcommon'   --with-cfitsio-libdir=${RAPID_SW}/c/lib --with-cfitsio-incdir=${RAPID_SW}/c/include/cfitsio
 make
 make install
 echo " "
