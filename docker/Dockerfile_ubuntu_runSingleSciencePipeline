@@ -16,6 +16,7 @@ RUN yum -y install unzip
 RUN yum -y install git
 RUN yum -y install sqlite
 RUN yum -y install diffutils
+RUN yum -y install which
 
 # Remove requests from RPM package to allow
 # romanisim to install under Python 3.9
