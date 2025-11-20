@@ -85,8 +85,7 @@ installed under the following paths:
    /source-code/location/rapid/c/common/fftw/include
 
 
-   To run a binary executable, the run-time environment must be set up with the library path,
-   as follows:
+To run a binary executable, the run-time environment must be set up with the library path, as follows:
 
 .. code-block::
 
