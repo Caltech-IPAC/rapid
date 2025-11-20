@@ -84,7 +84,16 @@ installed under the following paths:
    /source-code/location/rapid/c/common/fftw/lib
    /source-code/location/rapid/c/common/fftw/include
 
+
+   To run a binary executable, the run-time environment must be set up with the library path,
+   as follows:
+
+.. code-block::
+
+   export DYLD_LIBRARY_PATH=/Users/laher/git/rapid/c/lib
+
 .. warning::
+
     ``SExtractor`` is built from the source code in this build script.  If it fails,
     an alternate, easier method is to simply
 
