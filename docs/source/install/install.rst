@@ -18,12 +18,11 @@ there are separate build scripts referred to below.
 The build commands below can be repeated safely as the build scripts
 remove prior build/install files before proceeding.
 
-A build takes about 15 minutes, with most of time spent on the GSL and
+A build can take as little as 15 minutes, with most of that time spent on the GSL and
 FFTW libraries.
 
 Building C code on Mac laptop
 ************************************
-
 
 The script to build on a Mac laptop the C software system for the RAPID pipeline is
 
@@ -31,9 +30,7 @@ The script to build on a Mac laptop the C software system for the RAPID pipeline
 
    /source-code/location/rapid/c/builds/build_laptop.csh
 
-This script is has been tested on a Mac laptop running macOS Montery.
-
-1. Prerequisites for the atlas-library build in the build script (you may need to install brew on your Mac laptop):
+1. Prerequisites for the build script (you may need to install brew on your Mac laptop):
 
 .. code-block::
 
@@ -41,8 +38,10 @@ This script is has been tested on a Mac laptop running macOS Montery.
    brew install autoconf
    brew install automake
    brew install libtool
+   brew install openblas
 
-2. Modify the following line in the build script to configure the environment within the script, setting the absolute path of the rapid git repo:
+2. Modify the following line in the build script to configure the environment within the script,
+   setting the absolute path of the rapid git repo:
 
 .. code-block::
 
@@ -54,7 +53,14 @@ This script is has been tested on a Mac laptop running macOS Montery.
 
 .. code-block::
 
-   setenv PATH /bin:/usr/local/bin:/usr/bin:/usr/sbin:/sbin:/opt/X11/bin
+   setenv PATH /opt/homebrew/bin:/bin:/usr/local/bin:/usr/bin:/usr/sbin:/sbin:/opt/X11/bin
+
+   You may also have to make the following symlink if the build script complains
+   that it cannot find libtoolize:
+
+.. code-block::
+
+   sudo ln -s /opt/homebrew/bin/glibtoolize /opt/homebrew/bin/libtoolize
 
 4. Run the build script:
 
@@ -63,8 +69,7 @@ This script is has been tested on a Mac laptop running macOS Montery.
    cd /source-code/location/rapid/c/builds
    ./build_laptop.csh >& build_laptop.out &
 
-The script may take some time to finish as building the atlas library
-(perhaps 12 hours or more), which is needed by sextractor, is part of the process.
+The script may take some time to finish (minutes or hours depending on the Mac laptop).
 
 The binary executables, libraries, and include files are
 installed under the following paths:
@@ -80,20 +85,23 @@ installed under the following paths:
    /source-code/location/rapid/c/common/fftw/include
 
 .. warning::
-    The sextractor configure script made by autogen.sh in the build
-    script initially did
-    not work on the Mac laptop used to test the build script.  To fix
-    the problem, a hacked version of the sextractor configure script
-    is copied into the sextractor build directory and rerun as part of
-    the build process.
+    ``SExtractor`` is built from the source code in this build script.  If it fails,
+    an alternate, easier method is to simply
 
-    Users may wish to comment out this portion in the sextractor
-    section of the build script in order to experiment with whether
-    the problem is indeed experienced particularly on their Mac laptop.
+    .. code-block::
 
-.. warning::
-    This build script worked on a Mac laptop running macOS Monterey with a 2.9 GHz Dual-Core Intel Core i5 processor.
-    It has not been fully tested for the new processor chips, like the Apple M3 Max.
+        brew install sex
+
+.. note::
+    This build script worked successfully on a Mac laptop running macOS Monterey
+    with a 2.9 GHz Dual-Core Intel Core i5 processor in a previous revision where
+    the ``atlas`` library was required (commit 6ff4b9a2c8f796695bd9a6f7230defd85fbd32d7).
+    It was recently tested on a Mac laptop with M3 Max chip running macOS Sequoia 15.6.1,
+    and all binary executables were successfully built. (The atlas library failed to build, but the
+    current revision of this build script uses the ``openblas`` library instead.  The build
+    commands for the ``atlas`` library are retained in the script because it may work on some
+    laptops, and it is good to keep options open.).
+
 
 Building C code on Linux machine
 ************************************
