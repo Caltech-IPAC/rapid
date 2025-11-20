@@ -11,7 +11,7 @@ This is a systematic study with 1000 independent samples as input.
 These results can be compared with the three SExtractor input configurations that are documented below.
 
 
-Input Difference Image
+Input Difference Images
 ************************************
 
 One thousand sets of ZOGY difference-image products are used.
