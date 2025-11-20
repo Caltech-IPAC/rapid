@@ -11,7 +11,7 @@
 #--------Configure build environment--------------------------
 setenv RAPID_SW /Users/laher/git/rapid
 # A well-defined path is essential.
-setenv PATH /bin:/usr/local/bin:/usr/bin:/usr/sbin:/sbin:/opt/X11/bin
+setenv PATH /opt/homebrew/bin:/bin:/usr/local/bin:/usr/bin:/usr/sbin:/sbin:/opt/X11/bin
 
 #--------Remove old and make new delivery directories--------------------------
 cd ${RAPID_SW}/c
@@ -90,13 +90,13 @@ echo "--->Finished building wcstools."
 
 #--------Build awaicgen binary---------------------
 echo " "
-echo "--->Building awaicgen, version 5.2 ..."
+echo "--->Building awaicgen, version 5.3 ..."
 cd ${RAPID_SW}/c/common/awaicgen
-rm -rf awaicgen-5.2
-tar -xvf awaicgen-5.2.tar
-cd ${RAPID_SW}/c/common/awaicgen/awaicgen-5.2/libtwoplane
+rm -rf awaicgen-5.3
+tar -xvf awaicgen-5.3.tar
+cd ${RAPID_SW}/c/common/awaicgen/awaicgen-5.3/libtwoplane
 make
-cd ${RAPID_SW}/c/common/awaicgen/awaicgen-5.2
+cd ${RAPID_SW}/c/common/awaicgen/awaicgen-5.3
 make
 cp -p awaicgen ${RAPID_SW}/c/bin
 echo " "
@@ -227,15 +227,13 @@ echo "--->Finished building atlas library."
 
 #--------Build sextractor binary---------------------
 echo " "
-echo "--->Building sextractor, version 2.25.0 ..."
+echo "--->Building sextractor, version 2.28.2 ..."
 cd ${RAPID_SW}/c/common/sextractor
-rm -rf sextractor-2.25.0
-tar -xvf sextractor-2.25.0.tar
-cd sextractor-2.25.0
+rm -rf sextractor-2.28.2
+tar -xvf sextractor-2.28.2.tar
+cd sextractor-2.28.2
 ./autogen.sh
-./configure CPPFLAGS=-I${RAPID_SW}/c/common/fftw/include:${RAPID_SW}/c/atlas/include LDFLAGS=-L${RAPID_SW}/c/common/fftw/lib:${RAPID_SW}/c/atlas/lib --enable-static --prefix=${RAPID_SW}/c --with-fftw-libdir=${RAPID_SW}/c/common/fftw/lib --with-fftw-incdir=${RAPID_SW}/c/common/fftw/include --with-atlas-libdir=${RAPID_SW}/c/atlas/lib --with-atlas-incdir=${RAPID_SW}/c/atlas/include --enable-threads=4
-cp -p ../configure_hacked configure
-./configure CPPFLAGS=-I${RAPID_SW}/c/common/fftw/include:${RAPID_SW}/c/atlas/include LDFLAGS=-L${RAPID_SW}/c/common/fftw/lib:${RAPID_SW}/c/atlas/lib --enable-static --prefix=${RAPID_SW}/c --with-fftw-libdir=${RAPID_SW}/c/common/fftw/lib --with-fftw-incdir=${RAPID_SW}/c/common/fftw/include --with-atlas-libdir=${RAPID_SW}/c/atlas/lib --with-atlas-incdir=${RAPID_SW}/c/atlas/include --enable-threads=4
+./configure CPPFLAGS=-I${RAPID_SW}/c/common/fftw/include LDFLAGS=-L${RAPID_SW}/c/common/fftw/lib --enable-openblas --enable-static --prefix=${RAPID_SW}/c --with-fftw-libdir=${RAPID_SW}/c/common/fftw/lib --with-fftw-incdir=${RAPID_SW}/c/common/fftw/include --with-openblas-incdir=/opt/homebrew/opt/openblas/include --with-openblas-libdir=/opt/homebrew/opt/openblas/lib --enable-threads=8 --with-cfitsio-libdir=${RAPID_SW}/c/lib --with-cfitsio-incdir=${RAPID_SW}/c/include/cfitsio
 make
 make install
 echo " "
@@ -249,3 +247,13 @@ make clean
 make
 echo " "
 echo "--->Finished building computeOverlapArea module."
+
+
+#--------Build bkgest module-------------------
+echo " "
+echo "--->Building bkgest module ..."
+cd ${RAPID_SW}/c/src/bkgest
+make clean
+make
+echo " "
+echo "--->Finished building bkgest module."
