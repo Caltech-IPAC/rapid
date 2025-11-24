@@ -11,7 +11,7 @@ This is a systematic study with 1000 independent samples as input.
 These results can be compared with the three SExtractor input configurations that are documented below.
 
 
-Input Difference Image
+Input Difference Images
 ************************************
 
 One thousand sets of ZOGY difference-image products are used.
@@ -53,17 +53,17 @@ Three SExtractor configurations were tested.
 
 The first SExtractor configuration below is similar to ZTF.  The others were determined by Alice Ciobanu and Lynn Yan in experiments with OpenUniverse simulated images.
 
-===============      ===================      ===================      ======================      ==================================================================
+===============      ===================      ===================      ======================      =======================================================================
 Configuraton              ZTF                      AL1                      A2                     Description
-===============      ===================      ===================      ======================      ==================================================================
+===============      ===================      ===================      ======================      =======================================================================
 DEBLEND_NTHRESH           4                        4                        4                      Number of deblending sub-thresholds
 DEBLEND_MINCONT           0.005                    0.005                    0.005                  Minimum contrast parameter for deblending
 DETECT_MINAREA            1                        4                        5                      Minimum number of pixels above threshold
-DETECT_THRESH             5.0                      2.5                      2.5                    Detection threshold in **absolute DN** if weight image not used
+DETECT_THRESH             5.0                      2.5                      2.5                    Detection threshold in **absolute DN/s** if weight image not used
 ANALYSIS_THRESH           5.0                      2.5                      2.5                    Analysis threshold in number of sigmas
 WEIGHT_TYPE            "NONE,MAP_RMS"           "NONE,MAP_RMS"          "BACKGROUND,MAP_RMS"       Do not use weight image for detection
 FILTER                 "N"                      "N"                     "N"                        Do not apply filter for detection
-===============      ===================      ===================      ======================      ==================================================================
+===============      ===================      ===================      ======================      =======================================================================
 
 The ZOGY scorr image is used for detection, and the difference image for analysis.
 

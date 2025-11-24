@@ -15,6 +15,9 @@ RUN yum -y install postgresql
 RUN yum -y install unzip
 RUN yum -y install git
 RUN yum -y install sqlite
+RUN yum -y install diffutils
+RUN yum -y install which
+RUN yum -y install file
 
 # Remove requests from RPM package to allow
 # romanisim to install under Python 3.9
@@ -30,7 +33,7 @@ RUN pip install --upgrade astropy
 RUN pip install --upgrade psycopg2-binary
 RUN pip install --upgrade healpy
 RUN pip install --upgrade boto3
-RUN pip install --upgrade pyfftw
+RUN pip install --upgrade --ignore-installed pyfftw
 RUN pip install --upgrade sympy
 RUN pip install --upgrade sip_tpv
 RUN pip install --upgrade photutils
