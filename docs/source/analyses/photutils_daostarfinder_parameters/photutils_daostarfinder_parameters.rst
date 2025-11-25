@@ -287,7 +287,29 @@ Results Broken Down By Filter
     No data for filter...
 
 
-Plots
+PhotUtils-Attribute Plots
+************************************
+
+Scatter plots for PhotUtils source attributes, a total of 210 plots, were made (7 filters for the above 10 PhotUtils cases).
+All of these plots have been checked into the RAPID git repository at the following location:
+
+.. code-block::
+
+   rapid/docs/source/analyses/photutils_daostarfinder_parameters/photutils_attribute_plots
+
+Below are examples for the filters with the highest numbers of extracted sources (F184 and H158), for the above
+PhotUtils case #6 (which covered the widest range of parameter space):
+
+.. image:: photutils_attribute_plots/photutils_sharpness_case=6_filter=F184.png
+.. image:: photutils_attribute_plots/photutils_roundness1_case=6_filter=F184.png
+.. image:: photutils_attribute_plots/photutils_roundness2_case=6_filter=F184.png
+
+.. image:: photutils_attribute_plots/photutils_sharpness_case=6_filter=H158.png
+.. image:: photutils_attribute_plots/photutils_roundness1_case=6_filter=H158.png
+.. image:: photutils_attribute_plots/photutils_roundness2_case=6_filter=H158.png
+
+
+Sky-Position Plots
 ************************************
 
 Plots for the SExtractor ZTF baseline versus the ten PhotUtils cases are given below for the aforementioned single sample,
