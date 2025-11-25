@@ -290,7 +290,8 @@ Results Broken Down By Filter
 PhotUtils-Attribute Plots
 ************************************
 
-Scatter plots for PhotUtils source attributes, a total of 210 plots, were made (7 filters for the above 10 PhotUtils cases).
+Scatter plots for PhotUtils source attributes (sharpness, roundness1, and roundness2) were made for
+7 WFI filters, for the above 10 PhotUtils cases, a total of 210 plots
 All of these plots have been checked into the RAPID git repository at the following location:
 
 .. code-block::
