@@ -44,6 +44,7 @@ and make plots (offline, on a laptop):
     scripts/generate_sexcats_with_custom_config.py
     scripts/generate_psfcats_for_many_cases.py
     scripts/breakdown_by_filter_cats_for_many_cases.py
+    scripts/scatter_plot_by_filter_psfcats_for_many_cases.py
 
 
 SExtractor Baseline for Comparison
