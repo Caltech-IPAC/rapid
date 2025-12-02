@@ -44,6 +44,7 @@ and make plots (offline, on a laptop):
     scripts/generate_sexcats_with_custom_config.py
     scripts/generate_psfcats_for_many_cases.py
     scripts/breakdown_by_filter_cats_for_many_cases.py
+    scripts/scatter_plot_by_filter_psfcats_for_many_cases.py
 
 
 SExtractor Baseline for Comparison
@@ -287,7 +288,30 @@ Results Broken Down By Filter
     No data for filter...
 
 
-Plots
+PhotUtils-Attribute Plots
+************************************
+
+Scatter plots for PhotUtils source attributes (sharpness, roundness1, and roundness2) were made for
+7 WFI filters, for the above 10 PhotUtils cases, a total of 210 plots.
+All of these plots have been checked into the RAPID git repository at the following location:
+
+.. code-block::
+
+   rapid/docs/source/analyses/photutils_daostarfinder_parameters/photutils_attribute_plots
+
+Below are examples for the filters with the highest numbers of extracted sources (F184 and H158), for the above
+PhotUtils case #6 (which covered the widest range of parameter space):
+
+.. image:: photutils_attribute_plots/photutils_sharpness_case=6_filter=F184.png
+.. image:: photutils_attribute_plots/photutils_roundness1_case=6_filter=F184.png
+.. image:: photutils_attribute_plots/photutils_roundness2_case=6_filter=F184.png
+
+.. image:: photutils_attribute_plots/photutils_sharpness_case=6_filter=H158.png
+.. image:: photutils_attribute_plots/photutils_roundness1_case=6_filter=H158.png
+.. image:: photutils_attribute_plots/photutils_roundness2_case=6_filter=H158.png
+
+
+Sky-Position Plots
 ************************************
 
 Plots for the SExtractor ZTF baseline versus the ten PhotUtils cases are given below for the aforementioned single sample,
