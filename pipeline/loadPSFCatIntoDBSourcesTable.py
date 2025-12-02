@@ -410,8 +410,6 @@ def run_single_core_job(jids,overlapping_fields_list,meta_list,negative_diffimg_
     return message
 
 
-
-
 def execute_parallel_processes(jids,rtids_list,meta_list,negative_diffimg_flag,num_cores=None):
 
     if num_cores is None:
