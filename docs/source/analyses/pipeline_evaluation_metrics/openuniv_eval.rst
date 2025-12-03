@@ -83,13 +83,13 @@ ZOGY      H158      Nuc.        23.52                      24.27             24.
 ZOGY      H158      Overall     24.60                      23.95             25.06             25.94                  23.84                        24.69
 ======    ======    ========    =======================    ==============    ==============    ===================    =========================    =====
 
-.. toctree::
-:maxdepth: 1
-
-FOM_20250927_ZOGY_H158.rst
-
 .. note::
    This analysis is preliminary and meant to illustrate the procedure for evaluation the performance of the RAPID pipeline
    based on the FOM. The chosen
    thresholds, weights, and grouping criteria that will be used for, e.g., algorithm down-selection, are under development.
-   
+
+.. toctree::
+    :maxdepth: 1
+
+    FOM_20250927_ZOGY_H158.rst
+    
