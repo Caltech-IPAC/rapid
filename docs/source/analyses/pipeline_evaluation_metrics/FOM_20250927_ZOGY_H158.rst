@@ -1,0 +1,18 @@
+.. _FOM_20250927_ZOGY_H158:
+
+Figure of Merit Plots for 20250927 ZOGY H158
+###################################################
+
+Off-Nuclear Sources
+===================================
+
+.. image:: diagnostic_plots/false_positive_rate_H158_offnuc_ZOGY.png
+.. image:: diagnostic_plots/completeness_H158_offnuc_ZOGY.png
+.. image:: diagnostic_plots/psf_photometric_precision_H158_offnuc_ZOGY.png
+
+Nuclear Sources
+===================================
+
+.. image:: diagnostic_plots/false_positive_rate_H158_nuc_ZOGY.png
+.. image:: diagnostic_plots/completeness_H158_nuc_ZOGY.png
+.. image:: diagnostic_plots/psf_photometric_precision_H158_nuc_ZOGY.png
