@@ -1555,8 +1555,11 @@ def compute_diffimage_psf_catalog(n_clip_sigma,
 
     # Call PSFPhotometry class instance on the data array to do the PSF-fitting to the image data.
 
+    data_image_np = np.array(data_image)
+    data_uncert_np = np.array(data_uncert)
+
     try:
-        phot = psfphot(data=data_image,error=data_uncert)
+        phot = psfphot(data=data_image_np,error=data_uncert_np)
     except Exception as e:
         # Handle the exception and print its message
         print("*** Warning: Exception thrown calling PSFPhotometry class instance:", e)
@@ -1567,7 +1570,7 @@ def compute_diffimage_psf_catalog(n_clip_sigma,
 
     if psfcat_flag:
         try:
-            resid = psfphot.make_residual_image(data_image)
+            resid = psfphot.make_residual_image(data_image_np)
             new_hdu = fits.PrimaryHDU(data=resid.astype(np.float32))
             new_hdu.writeto(output_psfcat_residual_filename,overwrite=True,checksum=True)
         except:
