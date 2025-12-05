@@ -56,24 +56,25 @@ if __name__ == '__main__':
 
     fwhm = float(psfcat_diffimage_dict["fwhm"])
 
+
     # Override values.
 
-    fwhm = float(os.getenv('FWHM'))
+    fwhm = os.getenv('FWHM')
     if fwhm is None:
         fwhm = 2.0
-    sharplo = float(os.getenv('SHARPLO'))
+    sharplo = os.getenv('SHARPLO')
     if sharplo is None:
         sharplo = -1.0
-    sharphi = float(os.getenv('SHARPHI'))
+    sharphi = os.getenv('SHARPHI')
     if sharphi is None:
         sharphi = 10.0
-    roundlo = float(os.getenv('ROUNDLO'))
+    roundlo = os.getenv('ROUNDLO')
     if roundlo is None:
         roundlo = -2.0
-    roundhi = float(os.getenv('ROUNDHI'))
+    roundhi = os.getenv('ROUNDHI')
     if roundhi is None:
         roundhi = 2.0
-    min_separation = float(os.getenv('MINSEP'))
+    min_separation = os.getenv('MINSEP')
     if min_separation is None:
         min_separation = 1.0          # pixels
 
@@ -107,6 +108,9 @@ if __name__ == '__main__':
     output_psfcat_residual_filename = psfcat_diffimage_dict["output_zogy_psfcat_residual_filename"]
 
 
+    print("input_img_filename = ", input_img_filename)
+    print("input_unc_filename = ", input_unc_filename)
+    print("input_psf_filename = ", input_psf_filename)
     print("output_psfcat_filename = ", output_psfcat_filename)
 
 
