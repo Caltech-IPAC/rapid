@@ -78,6 +78,13 @@ if __name__ == '__main__':
     if min_separation is None:
         min_separation = 1.0          # pixels
 
+    fwhm = float(fwhm)
+    sharplo = float(sharplo)
+    sharphi = float(sharphi)
+    roundlo = float(roundlo)
+    roundhi = float(roundhi)
+    min_separation = float(min_separation)
+
 
     # Tried widening the allowed range of [sharplo,sharphi] from [0.2,1.0] to [-1.0,10.0], and
     # this increased the number of detections from 1707 to 1936 (for fwhm = 1.0), and to 1886 (for fwhm = 1.4).
