@@ -16,6 +16,12 @@ import subprocess
 import numpy as np
 import time
 
+swname = "generate_psfcats_for_many_cases.py"
+swvers = "1.1"
+
+print("swname =", swname)
+print("swvers =", swvers)
+
 start_time_benchmark_at_start = time.time()
 
 input_file = "diffimage_masked.fits"
