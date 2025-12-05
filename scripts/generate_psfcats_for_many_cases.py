@@ -119,6 +119,19 @@ for directory_path in directory_paths:
 
             old_path = "diffimage_masked_psfcat.txt"
             new_path = old_path.replace(".txt",f"_case{case}.txt")
+
+
+
+            # Code to force regeneration of PhotUtils catalogs.
+            try:
+                remove_path = new_path
+                os.remove(remove_path)
+                print(f"Existing file {new_path} was removed; continuing...")
+            except Exception as e:
+                print(f"File {new_path} could not be removed; continuing...")
+
+
+
             if not os.path.exists(new_path):
                 print("Generating PhotUtils catalog...")
                 try:
