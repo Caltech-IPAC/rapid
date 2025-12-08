@@ -65,10 +65,12 @@ filters = ["F184","H158","J129","K213","R062","Y106","Z087","W146"]
 sharpness_true_dict = {}
 roundness1_true_dict = {}
 roundness2_true_dict = {}
+reducedchi2_true_dict = {}
 snr_true_dict = {}
 sharpness_false_dict = {}
 roundness1_false_dict = {}
 roundness2_false_dict = {}
+reducedchi2_false_dict = {}
 snr_false_dict = {}
 
 current_directory = os.getcwd()
@@ -79,10 +81,12 @@ for filter in filters:
         sharpness_true_dict[filter_case] = []       # Initialize dictionary as empty list.
         roundness1_true_dict[filter_case] = []
         roundness2_true_dict[filter_case] = []
+        reducedchi2_true_dict[filter_case] = []
         snr_true_dict[filter_case] = []
         sharpness_false_dict[filter_case] = []
         roundness1_false_dict[filter_case] = []
         roundness2_false_dict[filter_case] = []
+        reducedchi2_false_dict[filter_case] = []
         snr_false_dict[filter_case] = []
 
 
@@ -194,7 +198,8 @@ for directory_path in directory_paths:
 
 
                     # Here are what the columns in the photutils catalogs are called:
-                    # Main: id group_id group_size local_bkg x_init y_init flux_init x_fit y_fit flux_fit x_err y_err flux_err npixfit qfit cfit flags ra dec
+                    # Main: id group_id group_size local_bkg x_init y_init flux_init x_fit y_fit flux_fit
+                    #       x_err y_err flux_err npixfit qfit cfit reduced_chi2 flags ra dec
                     # Finder: id xcentroid ycentroid sharpness roundness1 roundness2 npix peak flux mag daofind_mag
 
                     x_psfcat = []
@@ -202,6 +207,7 @@ for directory_path in directory_paths:
                     sharpness_psfcat = []
                     roundness1_psfcat = []
                     roundness2_psfcat = []
+                    reducedchi2_psfcat = []
                     snr_psfcat = []
 
 
@@ -213,6 +219,7 @@ for directory_path in directory_paths:
                         sharpness = float(row["sharpness"])
                         roundness1 = float(row["roundness1"])
                         roundness2 = float(row["roundness2"])
+                        reducedchi2 = float(row["reduced_chi2"])
                         flux_fit = float(row["flux_fit"])
                         flux_err = float(row["flux_err"])
 
@@ -228,6 +235,7 @@ for directory_path in directory_paths:
                         sharpness_psfcat.append(sharpness)
                         roundness1_psfcat.append(roundness1)
                         roundness2_psfcat.append(roundness2)
+                        reducedchi2_psfcat.append(reducedchi2)
                         snr_psfcat.append(snr)
                         #print("x_fit,y_fit =",x_fit,y_fit)
 
@@ -240,12 +248,13 @@ for directory_path in directory_paths:
                     j = 0
                     np_true = 0
                     np_false = 0
-                    for xp,yp,sharpness,roundness1,roundness2,snr in zip(x_psfcat,
-                                                                         y_psfcat,
-                                                                         sharpness_psfcat,
-                                                                         roundness1_psfcat,
-                                                                         roundness2_psfcat,
-                                                                         snr_psfcat):
+                    for xp,yp,sharpness,roundness1,roundness2,reducedchi2,snr in zip(x_psfcat,
+                                                                                     y_psfcat,
+                                                                                    sharpness_psfcat,
+                                                                                    roundness1_psfcat,
+                                                                                    roundness2_psfcat,
+                                                                                    reducedchi2_psfcat,
+                                                                                    snr_psfcat):
 
                         idxp = 999999
                         dminp = 999999.9
@@ -265,12 +274,14 @@ for directory_path in directory_paths:
                             sharpness_true_dict[filter_case].append(sharpness)
                             roundness1_true_dict[filter_case].append(roundness1)
                             roundness2_true_dict[filter_case].append(roundness2)
+                            reducedchi2_true_dict[filter_case].append(reducedchi2)
                             snr_true_dict[filter_case].append(snr)
                             np_true += 1
                         else:
                             sharpness_false_dict[filter_case].append(sharpness)
                             roundness1_false_dict[filter_case].append(roundness1)
                             roundness2_false_dict[filter_case].append(roundness2)
+                            reducedchi2_false_dict[filter_case].append(reducedchi2)
                             snr_false_dict[filter_case].append(snr)
                             np_false += 1
 
@@ -337,14 +348,14 @@ for case in case_list:
 
         # Create the scatter plot
         plt.figure(figsize=(8, 8))
-        plt.scatter(numpy_snr_false,numpy_sharpness_false,marker='.',facecolors='blue',edgecolors='blue',s=1,alpha=0.1)
+        plt.scatter(numpy_snr_false,numpy_sharpness_false,marker='.',facecolors='gray',edgecolors='gray',s=1,alpha=0.1)
         plt.scatter(numpy_snr_true,numpy_sharpness_true,marker='.',facecolors='red',edgecolors='red',s=1,alpha=1.0)
 
 
         # Add labels and a title
         plt.xlabel("SNR")
         plt.ylabel("sharpness")
-        plt.title("PhotUtils Sources matches Fake Sources (red) vs. not matching (blue)")
+        plt.title("PhotUtils Sources matches Fake Sources (red) vs. not matching (gray)")
 
         plt.figtext(0.05,
                     0.93,
@@ -396,14 +407,14 @@ for case in case_list:
 
         # Create the scatter plot
         plt.figure(figsize=(8, 8))
-        plt.scatter(numpy_snr_false,numpy_roundness1_false,marker='.',facecolors='blue',edgecolors='blue',s=1,alpha=0.1)
+        plt.scatter(numpy_snr_false,numpy_roundness1_false,marker='.',facecolors='gray',edgecolors='gray',s=1,alpha=0.1)
         plt.scatter(numpy_snr_true,numpy_roundness1_true,marker='.',facecolors='red',edgecolors='red',s=1,alpha=1.0)
 
 
         # Add labels and a title
         plt.xlabel("SNR")
         plt.ylabel("roundness1")
-        plt.title("PhotUtils Sources matches Fake Sources (red) vs. not matching (blue)")
+        plt.title("PhotUtils Sources matches Fake Sources (red) vs. not matching (gray)")
 
         plt.figtext(0.05,
                     0.93,
@@ -455,14 +466,67 @@ for case in case_list:
 
         # Create the scatter plot
         plt.figure(figsize=(8, 8))
-        plt.scatter(numpy_snr_false,numpy_roundness2_false,marker='.',facecolors='blue',edgecolors='blue',s=1,alpha=0.1)
+        plt.scatter(numpy_snr_false,numpy_roundness2_false,marker='.',facecolors='gray',edgecolors='gray',s=1,alpha=0.1)
         plt.scatter(numpy_snr_true,numpy_roundness2_true,marker='.',facecolors='red',edgecolors='red',s=1,alpha=1.0)
 
 
         # Add labels and a title
         plt.xlabel("SNR")
         plt.ylabel("roundness2")
-        plt.title("PhotUtils Sources matches Fake Sources (red) vs. not matching (blue)")
+        plt.title("PhotUtils Sources matches Fake Sources (red) vs. not matching (gray)")
+
+        plt.figtext(0.05,
+                    0.93,
+                    f'case={idx_case_list},filter={filter},n_true={n_numpy_snr_true},n_false={n_numpy_snr_false}',
+                    bbox=dict(facecolor='lightblue', alpha=0.7, pad=2))
+
+
+        # Output plot to PNG file.
+        plt.savefig(f'photutils_{attribute}_case={idx_case_list}_filter={filter}.png')
+
+        #plt.show()
+
+        plt.close()
+
+
+    # Plot reducedchi2, broken down by filter.
+
+    attribute = 'reducedchi2'
+    for filter in filters:
+
+        filter_case = filter + case
+
+        if len(reducedchi2_false_dict[filter_case]) == 0:
+           continue
+
+        numpy_reducedchi2_true = np.array(reducedchi2_true_dict[filter_case])
+        numpy_snr_true = np.array(snr_true_dict[filter_case])
+        numpy_reducedchi2_false = np.array(reducedchi2_false_dict[filter_case])
+        numpy_snr_false = np.array(snr_false_dict[filter_case])
+
+        n_numpy_snr_true = len(numpy_snr_true)
+        n_numpy_snr_false = len(numpy_snr_false)
+        n_numpy_reducedchi2_true = len(numpy_reducedchi2_true)
+        n_numpy_reducedchi2_false = len(numpy_reducedchi2_false)
+
+        #print(f"numpy_snr_true = {numpy_snr_true}")
+
+        print(f"n_numpy_snr_true = {n_numpy_snr_true}")
+        print(f"n_numpy_snr_false = {n_numpy_snr_false}")
+        print(f"n_numpy_reducedchi2_true = {n_numpy_reducedchi2_true}")
+        print(f"n_numpy_reducedchi2_false = {n_numpy_reducedchi2_false}")
+
+
+        # Create the scatter plot
+        plt.figure(figsize=(8, 8))
+        plt.scatter(numpy_snr_false,numpy_reducedchi2_false,marker='.',facecolors='gray',edgecolors='gray',s=1,alpha=0.1)
+        plt.scatter(numpy_snr_true,numpy_reducedchi2_true,marker='.',facecolors='red',edgecolors='red',s=1,alpha=1.0)
+
+
+        # Add labels and a title
+        plt.xlabel("SNR")
+        plt.ylabel("reducedchi2")
+        plt.title("PhotUtils Sources matches Fake Sources (red) vs. not matching (gray)")
 
         plt.figtext(0.05,
                     0.93,
