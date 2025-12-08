@@ -305,10 +305,12 @@ PhotUtils case #6 (which covered the widest range of parameter space):
 .. image:: photutils_attribute_plots/photutils_sharpness_case=6_filter=F184.png
 .. image:: photutils_attribute_plots/photutils_roundness1_case=6_filter=F184.png
 .. image:: photutils_attribute_plots/photutils_roundness2_case=6_filter=F184.png
+.. image:: photutils_attribute_plots/photutils_reducedchi2_case=6_filter=F184.png
 
 .. image:: photutils_attribute_plots/photutils_sharpness_case=6_filter=H158.png
 .. image:: photutils_attribute_plots/photutils_roundness1_case=6_filter=H158.png
 .. image:: photutils_attribute_plots/photutils_roundness2_case=6_filter=H158.png
+.. image:: photutils_attribute_plots/photutils_reducedchi2_case=6_filter=H158.png
 
 
 Sky-Position Plots
