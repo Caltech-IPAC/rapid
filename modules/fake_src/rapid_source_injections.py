@@ -197,7 +197,7 @@ def inject_point_sources(image, image_wcs, image_sca, image_filter,
         # might be a betterway to do this for many objects at once
         #default to galsim psf, but can use stpsf if desired
         psf = romanisim.psf.make_one_psf(image_sca, image_filter, wcs=image_wcs,
-                                         stpsf=False, pix=obj_pos, chromatic=False, oversample=4)
+                                         psftype='galsim', pix=obj_pos, chromatic=False, oversample=4)
         romanisim.image.add_objects_to_image(image, inject_catalog, [obj_pos[0]], [obj_pos[1]],
                                            psf, 1.0, filter_name=image_filter, add_noise=True)
 
