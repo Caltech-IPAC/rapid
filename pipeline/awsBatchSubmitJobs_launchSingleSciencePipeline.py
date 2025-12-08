@@ -203,6 +203,8 @@ zogy_dict["astrometric_uncert_x"] = config_input['ZOGY']['astrometric_uncert_x']
 zogy_dict["astrometric_uncert_y"] = config_input['ZOGY']['astrometric_uncert_y']
 zogy_dict["zogy_output_diffimage_file"] = config_input['ZOGY']['zogy_output_diffimage_file']
 zogy_dict["post_zogy_keep_diffimg_lower_cov_map_thresh"] = config_input['ZOGY']['post_zogy_keep_diffimg_lower_cov_map_thresh']
+zogy_dict["zogy_output_diffpsf_file"] = config_input['ZOGY']['zogy_output_diffpsf_file']
+zogy_dict["zogy_output_scorrimage_file"] = config_input['ZOGY']['zogy_output_scorrimage_file']
 
 
 # Get the swarp parameters.  Some of these parameters will be overwritten by this script.
