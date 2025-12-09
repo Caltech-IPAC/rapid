@@ -1,0 +1,18 @@
+.. _FOM_20250927_SFFT_H158:
+
+Figure of Merit Plots for 20250927 SFFT H158
+###################################################
+
+Off-Nuclear Sources
+===================================
+
+.. image:: diagnostic_plots/false_positive_rate_H158_offnuc_SFFT.png
+.. image:: diagnostic_plots/completeness_H158_offnuc_SFFT.png
+.. image:: diagnostic_plots/psf_photometric_precision_H158_offnuc_SFFT.png
+
+Nuclear Sources
+===================================
+
+.. image:: diagnostic_plots/false_positive_rate_H158_nuc_SFFT.png
+.. image:: diagnostic_plots/completeness_H158_nuc_SFFT.png
+.. image:: diagnostic_plots/psf_photometric_precision_H158_nuc_SFFT.png
