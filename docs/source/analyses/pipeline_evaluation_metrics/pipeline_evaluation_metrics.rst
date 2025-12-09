@@ -193,7 +193,7 @@ Here we describe the steps to evaluate the pipeline and calculate each term of t
     b. :math:`m_{80}` and :math:`m_{20}`: The recovery completess (fraction of injected sources in the sub-group of interest successfully recovered) 
        is computed in :math:`\Delta m = 0.5` bins of injected magnitude for all TP candidates passing :math:`SNR \geq` ``snrfpthres``. 
        The calculations accounts for the number of injected sources that lacked coverage in the reference image or fell within ``diffimedgetol`` 
-       of any image boundary. `m_{80}` and :math:`m_{20}` are computed via linear interpolation of the completness curve at 80% and 20% completeness, 
+       of any image boundary. :math:`m_{80}` and :math:`m_{20}` are computed via linear interpolation of the completness curve at 80% and 20% completeness, 
        respectively.
 
     c. :math:`m_{5\sigma}`: For each difference image, :math:`6\sigma`-clipped standard deviation of all pixel values is calculated as a 
