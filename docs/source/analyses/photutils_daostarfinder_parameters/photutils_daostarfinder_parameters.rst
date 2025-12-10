@@ -291,7 +291,7 @@ Results Broken Down By Filter
 PhotUtils-Attribute Plots
 ************************************
 
-Scatter plots for PhotUtils source attributes (sharpness, roundness1, roundness2 and reduced_chi2)
+Scatter plots for PhotUtils source attributes (sharpness, roundness1, roundness2, and reduced_chi2)
 were made for 7 WFI filters, for the above 10 PhotUtils cases, a total of 210 plots.
 All of these plots have been checked into the RAPID git repository at the following location:
 
