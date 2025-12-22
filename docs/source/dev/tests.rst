@@ -54,6 +54,10 @@ Date              Software modification
 9/17/2025         Modified to feed sca_gain * exptime_sciimage as gain to method pipeline.differenceImageSubs.compute_diffimage_uncertainty.
 9/17/2025         Fixed bug: x and y subpixels offsets were swapped (adversely affected inputs to ZOGY, SFFT, and naive image-differencing).
 9/25/2025         Added new method normalize_image to normalize science-image PSFs (required by ZOGY).
+10/29/2025        Set min_separation = 1.0 pixel for PhotUtils catalog generation.
+11/19/2025        Upgraded to SExtractor 2.28.2.
+12/4/2025         Explicitly cast data and uncertainty images as ndarrays when passed to PhotUtils methods (not sure whether this actually caused any problems).
+12/22/2025        Adjusted awaicgen_num_threads = 2 to match the number of VCPUs in the AWS Batch machines used by the RAPID pipeline.
 ===============   ===============================================================================================================================================================================================================================
 
 
