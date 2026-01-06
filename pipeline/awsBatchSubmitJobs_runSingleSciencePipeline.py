@@ -919,10 +919,14 @@ if __name__ == '__main__':
     start_time_benchmark = end_time_benchmark
 
 
-    ######################################################################################
+    #######################################################################################
     # Gain-match science and reference images by generating SExtractor catalogs for each
     # and then computing scale factor.  To apply, multiply reference image by scalefacref.
-    ######################################################################################
+    # The method optionally uploads both of these SExtractor catalogs to S3 bucket.
+    #######################################################################################
+
+    filename_scigainmatchsexcat_catalog = filename_bkg_subbed_science_image.replace(".fits","_scigainmatchsexcat.txt")
+    filename_refgainmatchsexcat_catalog = output_resampled_reference_image.replace(".fits","_refgainmatchsexcat.txt")
 
     scalefac,dxrmsfin,dyrmsfin,dxmedianfin,dymedianfin = dfis.gainMatchScienceAndReferenceImages(s3_client,
                                                                                                  product_s3_bucket,
@@ -930,8 +934,10 @@ if __name__ == '__main__':
                                                                                                  job_proc_date,
                                                                                                  filename_bkg_subbed_science_image,
                                                                                                  reformatted_science_uncert_image_filename,
+                                                                                                 filename_scigainmatchsexcat_catalog,
                                                                                                  output_resampled_reference_image,
                                                                                                  output_resampled_reference_uncert_image,
+                                                                                                 filename_refgainmatchsexcat_catalog,
                                                                                                  gainmatch_dict,
                                                                                                  sextractor_gainmatch_dict,
                                                                                                  fwhm_sci,
@@ -1549,10 +1555,6 @@ if __name__ == '__main__':
 
     #################################################################################################################
     # Optionally run SFFT to generate an alternate difference image and catalog.
-    # Filenames for the SExtractor segmented maps are provided, and, if they do not exist, they will be generated.
-    # Output files (constructed by the script, but not provided as input:
-    #    sfftdiffimage_masked.fits
-    #    sfftsoln.fits
     #################################################################################################################
 
     run_sfft = eval(sfft_dict['run_sfft'])
@@ -1564,7 +1566,7 @@ if __name__ == '__main__':
 
         # Cannot run under python3.11 because scikit-learn fails to install.
         python_cmd = '/usr/bin/python3'
-        sfft_code = rapid_sw + '/modules/sfft/sfft_rapid.py'
+        sfft_code = rapid_sw + '/modules/sfft/sfft_rapid_rimtimsim.py'
         filename_scifile = filename_bkg_subbed_science_image
         filename_reffile = output_resampled_gainmatched_reference_image
         filename_scisegm = 'sfftscisegm.fits'
@@ -1579,15 +1581,48 @@ if __name__ == '__main__':
             filename_sfftdiffimage = 'sfftdiffimage_masked.fits'
             filename_sfftsoln = 'sfftsoln.fits'
 
-        filename_cconvdiff = 'sfftdiffimage_cconv_masked.fits'
+        filename_cconvdiff = 'sfftdiffimage_cconv_masked.fits'               # Only generated if crossconv_flag = True
 
-        # A quirk in the software requires prepended "./" to input filenames.
-        sfft_cmd = [python_cmd,
-                    sfft_code,
-                    "./" + filename_scifile,
-                    "./" + filename_reffile,
-                    filename_scisegm,
-                    filename_refsegm]
+
+        # A quirk in the SFFT software requires prepended "./" to the positional input filenames.
+
+        if "rimtimsim" in science_image_filename:
+
+            crossconv_flag = False               # TODO Override config file
+
+            sfft_cmd = [python_cmd,
+                        sfft_code,
+                        "./" + filename_scifile,
+                        "./" + filename_reffile,
+                        "--scicat",
+                        filename_scigainmatchsexcat_catalog,
+                        "--refcat",
+                        filename_refgainmatchsexcat_catalog,
+                        "--satvalue",
+                        "1750.0",
+                        "--satmaskradius",
+                        "30,45",
+                        "--npixseg2",
+                        "4000.0"]
+
+        else:
+
+            # Should be same as config-file setting for OpenUniverse sims:
+            # crossconv_flag = True
+
+            sfft_cmd = [python_cmd,
+                        sfft_code,
+                        "./" + filename_scifile,
+                        "./" + filename_reffile,
+                        "--scicat",
+                        filename_scigainmatchsexcat_catalog,
+                        "--refcat",
+                        filename_refgainmatchsexcat_catalog,
+                        "--bsmaskvalue",
+                        "50.0",
+                        "--bsmaskradius",
+                        "100.0"]
+
 
         if crossconv_flag:
             sfft_cmd.append("--crossconv")
@@ -1595,6 +1630,10 @@ if __name__ == '__main__':
             sfft_cmd.append(filename_sciimage_psf_normalized)
             sfft_cmd.append("--refpsf")
             sfft_cmd.append(filename_refimage_psf)
+            sfft_cmd.append("--scisegm")
+            sfft_cmd.append(filename_scisegm)
+            sfft_cmd.append("--refsegm")
+            sfft_cmd.append(filename_refsegm)
 
         exitcode_from_sfft = util.execute_command(sfft_cmd)
 
