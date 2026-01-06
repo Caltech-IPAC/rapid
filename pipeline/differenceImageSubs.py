@@ -167,8 +167,10 @@ def gainMatchScienceAndReferenceImages(s3_client,
                                        job_proc_date,
                                        filename_sci_image,
                                        filename_sci_uncert,
+                                       filename_scigainmatchsexcat_catalog,
                                        filename_ref_image,
                                        filename_ref_uncert,
+                                       filename_refgainmatchsexcat_catalog,
                                        gainmatch_dict,
                                        sextractor_gainmatch_dict,
                                        fwhm_sci,
@@ -286,8 +288,6 @@ def gainMatchScienceAndReferenceImages(s3_client,
 
     # Compute SExtractor catalog for science image.
 
-    filename_scigainmatchsexcat_catalog = filename_sci_image.replace(".fits","_scigainmatchsexcat.txt")
-
     sextractor_gainmatch_dict["sextractor_detection_image".lower()] = "None"
     sextractor_gainmatch_dict["sextractor_input_image".lower()] = filename_sci_image
     sextractor_gainmatch_dict["sextractor_WEIGHT_IMAGE".lower()] = filename_sci_uncert
@@ -301,8 +301,6 @@ def gainMatchScienceAndReferenceImages(s3_client,
 
 
     # Compute SExtractor catalog for reference image.
-
-    filename_refgainmatchsexcat_catalog = filename_ref_image.replace(".fits","_refgainmatchsexcat.txt")
 
     sextractor_gainmatch_dict["sextractor_detection_image".lower()] = "None"
     sextractor_gainmatch_dict["sextractor_input_image".lower()] = filename_ref_image
