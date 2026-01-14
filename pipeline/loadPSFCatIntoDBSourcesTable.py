@@ -1,3 +1,9 @@
+'''
+Load into database sources table the PSF-fit catalogs made by the
+Python photutils package from the ZOGY difference images
+(until a final decision on which image-differencing method is best):
+'''
+
 import boto3
 import os
 import numpy as np
