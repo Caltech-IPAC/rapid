@@ -14,8 +14,9 @@ import boto3
 from botocore.exceptions import ClientError
 from astropy.io import fits
 from astropy.io import ascii
-from astropy.table import Table
+from astropy.table import QTable, join
 import numpy as np
+import pandas as pd
 from datetime import datetime, timezone
 from dateutil import tz
 import time
@@ -1314,6 +1315,22 @@ if __name__ == '__main__':
 
             ascii.write(psfphot.finder_results, output_psfcat_finder_filename, overwrite=True)
 
+
+            # Join photometry and finder objects and output parquet file.
+
+            joined_table_inner = join(phot, psfphot.finder_results, keys='id', join_type='inner')
+
+            nrows = len(joined_table_inner)
+            print(f"nrows in PSF-fit catalog = {nrows}\n")
+
+            output_psfcat_parquet_filename = output_psfcat_filename.replace(".txt",".parquet")
+
+            # Convert the QTable to a pandas DataFrame
+            df = joined_table_inner.to_pandas()
+
+            # Write the DataFrame to a Parquet file.
+            df.to_parquet(output_psfcat_parquet_filename, engine='pyarrow')
+
         except Exception as e:
             print(f"PSF-fit PSFPhotometry and DAOStarFinder catalogs: An unexpected error occurred: {e}")
 
@@ -1406,6 +1423,22 @@ if __name__ == '__main__':
 
             ascii.write(psfphot.finder_results, output_psfcat_finder_filename_negative, overwrite=True)
 
+
+            # Join photometry and finder objects and output parquet file.
+
+            joined_table_inner = join(phot, psfphot.finder_results, keys='id', join_type='inner')
+
+            nrows = len(joined_table_inner)
+            print(f"nrows in PSF-fit catalog = {nrows}\n")
+
+            output_psfcat_parquet_filename_negative = output_psfcat_filename_negative.replace(".txt",".parquet")
+
+            # Convert the QTable to a pandas DataFrame
+            df = joined_table_inner.to_pandas()
+
+            # Write the DataFrame to a Parquet file.
+            df.to_parquet(output_psfcat_parquet_filename_negative, engine='pyarrow')
+
         except Exception as e:
             print(f"PSF-fit PSFPhotometry and DAOStarFinder catalogs: An unexpected error occurred: {e}")
 
@@ -1451,7 +1484,8 @@ if __name__ == '__main__':
     s3_object_name_sciimage_psf_normalized = job_proc_date + "/jid" + str(jid) + "/" + filename_sciimage_psf_normalized
     s3_object_name_refimage_psf = job_proc_date + "/jid" + str(jid) + "/" + filename_refimage_psf
 
-
+    s3_object_name_output_psfcat_parquet_filename = job_proc_date + "/jid" + str(jid) + "/" + output_psfcat_parquet_filename
+    s3_object_name_output_psfcat_parquet_filename_negative = job_proc_date + "/jid" + str(jid) + "/" + output_psfcat_parquet_filename_negative
 
 
     filenames = [filename_diffimage_masked,
@@ -1471,7 +1505,9 @@ if __name__ == '__main__':
                  output_psfcat_finder_filename_negative,
                  output_psfcat_residual_filename_negative,
                  filename_sciimage_psf_normalized,
-                 filename_refimage_psf]
+                 filename_refimage_psf,
+                 output_psfcat_parquet_filename,
+                 output_psfcat_parquet_filename_negative]
 
     objectnames = [s3_object_name_diffimage,
                    s3_object_name_diffimage_unc_masked,
@@ -1490,7 +1526,9 @@ if __name__ == '__main__':
                    s3_object_name_output_psfcat_finder_filename_negative,
                    s3_object_name_output_psfcat_residual_filename_negative,
                    s3_object_name_sciimage_psf_normalized,
-                   s3_object_name_refimage_psf]
+                   s3_object_name_refimage_psf,
+                   s3_object_name_output_psfcat_parquet_filename,
+                   s3_object_name_output_psfcat_parquet_filename_negative]
 
     util.upload_files_to_s3_bucket(s3_client,product_s3_bucket,filenames,objectnames)
 
