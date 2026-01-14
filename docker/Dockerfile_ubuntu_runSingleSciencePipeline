@@ -30,6 +30,7 @@ RUN yum install -y pip
 RUN pip install --upgrade pip
 RUN pip install --upgrade numpy
 RUN pip install --upgrade astropy
+RUN pip install --upgrade pandas
 RUN pip install --upgrade psycopg2-binary
 RUN pip install --upgrade healpy
 RUN pip install --upgrade boto3
@@ -51,6 +52,7 @@ RUN python3.11 -m ensurepip
 RUN python3.11 -m pip install --upgrade pip
 RUN python3.11 -m pip install --upgrade numpy
 RUN python3.11 -m pip install --upgrade astropy
+RUN python3.11 -m pip install --upgrade pandas
 RUN python3.11 -m pip install --upgrade psycopg2-binary
 RUN python3.11 -m pip install --upgrade healpy
 RUN python3.11 -m pip install --upgrade boto3
