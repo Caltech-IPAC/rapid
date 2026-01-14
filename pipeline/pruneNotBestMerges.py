@@ -21,7 +21,7 @@ print("swvers =", swvers)
 print("cfg_filename_only =", cfg_filename_only)
 
 
-# Set debug = 1 here to get debug messages for creating and setting up Merges and AstroObjects tables.
+# Set debug = 1 here to get debug messages for querying database tables.
 
 debug = 1
 
