@@ -9,7 +9,6 @@ import os
 import numpy as np
 import healpy as hp
 import configparser
-from astropy.table import QTable
 from astropy.table import QTable, join
 from datetime import datetime, timezone
 from dateutil import tz
