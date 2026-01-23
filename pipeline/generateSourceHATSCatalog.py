@@ -24,7 +24,6 @@ from hats_import.pipeline import pipeline_with_client
 from hats_import.catalog.file_readers import CsvReader
 
 import database.modules.utils.rapid_db as db
-import modules.utils.rapid_pipeline_subs as util
 
 
 swname = "generateSourceHATSCatalog.py"
