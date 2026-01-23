@@ -176,7 +176,7 @@ if __name__ == '__main__':
 
     print(f"nrows_per_file,n_sids,nfiles={nrows_per_file},{n_sids},{nfiles}")
 
-    start_index = sid_list[0]
+    start_index = 0
     end_index = start_index + nrows_per_file - 1
     catalog_csv_path = []
     for i in range(nfiles):
