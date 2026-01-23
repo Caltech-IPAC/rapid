@@ -184,7 +184,7 @@ if __name__ == '__main__':
         start_index = start_index + nrows_per_file
         next_start_index = start_index + nrows_per_file
 
-        query = f"SELECT {sources_cols} FROM sources order by sid;"
+        query = f"SELECT {sources_cols} FROM sources WHERE sid >= {start_index} and sid < {next_start_index} order by sid;"
         sql_queries = []
         sql_queries.append(query)
         records = dbh.execute_sql_queries(sql_queries,debug)
