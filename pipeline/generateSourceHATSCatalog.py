@@ -90,11 +90,13 @@ config_input.read(config_input_filename)
 # Sources-database-table columns to be exported to HATS catalog (can be a subset).
 
 sources_cols = config_input['HATS_CATALOGS']['sources_cols']
-source_input_filename_glob = config_input['HATS_CATALOGS']['source_input_filename_glob']
-source_catalog_name = config_input['HATS_CATALOGS']['source_catalog_name']
+sources_input_filename_glob = config_input['HATS_CATALOGS']['sources_input_filename_glob']
+sources_catalog_name = config_input['HATS_CATALOGS']['sources_catalog_name']
 lowest_healpix_order = int(config_input['HATS_CATALOGS']['lowest_healpix_order'])
 highest_healpix_order = int(config_input['HATS_CATALOGS']['highest_healpix_order'])
 n_workers = int(config_input['HATS_CATALOGS']['n_workers'])
+
+sources_output_path = rapid_work
 
 
 ##############################################################
@@ -119,8 +121,8 @@ def generate_hats_catalog(catalog_csv_path):
         highest_healpix_order=highest_healpix_order,
         file_reader=CsvReader(),
         input_file_list=catalog_csv_path,
-        output_artifact_name=source_catalog_name,
-        output_path=output_path,
+        output_artifact_name=sources_catalog_name,
+        output_path=sources_output_path,
         tmp_dir=tmp_dir,
         tmp_path=tmp_dir,
         resume=False
@@ -181,7 +183,7 @@ if __name__ == '__main__':
     catalog_csv_path = []
     for i in range(nfiles):
         file_num = i + 1
-        filename_csv = source_input_filename_glob.replace("*",str(file_num))
+        filename_csv = sources_input_filename_glob.replace("*",str(file_num))
         catalog_csv_path.append(filename_csv)
 
         start_sid = sid_list[start_index]
