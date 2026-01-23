@@ -192,7 +192,7 @@ if __name__ == '__main__':
         with open(filename_csv, 'w', newline='') as csvfile:
             writer = csv.writer(csvfile)
             writer.writerow(sources_cols.split(","))
-            writer.writerows(data)
+            writer.writerows(records)
 
 
     # Code-timing benchmark.
