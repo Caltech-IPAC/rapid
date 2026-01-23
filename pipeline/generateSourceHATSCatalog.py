@@ -167,7 +167,7 @@ if __name__ == '__main__':
         sid = record[0]
         sid_list.append(sid)
 
-    nrows_per_file = 1000000
+    nrows_per_file = 100000
     nfiles = len(sid_list) // nrows_per_file
     r = len(sid_list) % nrows_per_file
     if r > 0:
