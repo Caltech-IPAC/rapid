@@ -291,7 +291,7 @@ if __name__ == '__main__':
 
     # Upload HATS catalog to S3 bucket.
 
-    hat_copy_cmd = f"aws s3 sync --recursive {filepath_hats_catalog} {s3_object_name_hats_catalog}"
+    hat_copy_cmd = f"aws s3 sync {filepath_hats_catalog} {s3_object_name_hats_catalog}"
     execute_command_in_shell(hat_copy_cmd)
 
 
