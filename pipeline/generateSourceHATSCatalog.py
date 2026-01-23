@@ -107,7 +107,7 @@ def generate_hats_catalog(catalog_csv_path):
 
     # Temporary directory for the intermediate/output files
     tmp_dir = Path.cwd() / "tmp"
-    print(f"tmp_path={tmp_path}")
+    print(f"tmp_dir={tmp_dir}")
 
 
     # Specify import arguments
@@ -168,13 +168,16 @@ if __name__ == '__main__':
         sid_list.append(sid)
 
     nrows_per_file = 100000
-    nfiles = len(sid_list) // nrows_per_file
-    r = len(sid_list) % nrows_per_file
+    n_sids = len(sid_list)
+    nfiles = n_sids // nrows_per_file
+    r = n_sids % nrows_per_file
     if r > 0:
         nfiles += 1
 
+    print(f"nrows_per_file,n_sids,nfiles={nrows_per_file},{n_sids},{n_sids}")
+
     start_index = sid_list[0]
-    next_start_index = start_index + nrows_per_file
+    end_start_index = start_index + nrows_per_file - 1
     catalog_csv_path = []
     for i in range(nfiles):
         file_num = i + 1
@@ -182,9 +185,15 @@ if __name__ == '__main__':
         catalog_csv_path.append(filename_csv)
 
         start_index = start_index + nrows_per_file
-        next_start_index = start_index + nrows_per_file
+        end_start_index = start_index + nrows_per_file - 1
 
-        query = f"SELECT {sources_cols} FROM sources WHERE sid >= {start_index} and sid < {next_start_index} order by sid;"
+        start_sid = sid_list[start_index]
+        try:
+            end_start_sid = sid_list[end_start_index]
+        except:
+            end_start_sid = sid_list[n_sids - 1]
+
+        query = f"SELECT {sources_cols} FROM sources WHERE sid >= {start_sid} and sid <= {end_start_sid} order by sid;"
         sql_queries = []
         sql_queries.append(query)
         records = dbh.execute_sql_queries(sql_queries,debug)
