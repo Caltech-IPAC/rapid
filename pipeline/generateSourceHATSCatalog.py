@@ -22,6 +22,7 @@ from dask.distributed import Client
 from hats_import.catalog.arguments import ImportArguments
 from hats_import.pipeline import pipeline_with_client
 from hats_import.catalog.file_readers import CsvReader
+import subprocess
 
 import database.modules.utils.rapid_db as db
 
@@ -97,6 +98,60 @@ highest_healpix_order = int(config_input['HATS_CATALOGS']['highest_healpix_order
 n_workers = int(config_input['HATS_CATALOGS']['n_workers'])
 
 sources_output_path = rapid_work
+
+product_s3_bucket_base = config_input['JOB_PARAMS']['product_s3_bucket_base']
+
+s3_object_name_hats_catalog = f"s3://" + product_s3_bucket_base + "/" + sources_catalog_name
+filepath_hats_catalog = sources_output_path + "/" + sources_catalog_name
+
+
+#####################################################################################################
+# Example usage of method execute_command_in_shell:
+#
+#    cmd1 = "which python"
+#    cmd2 = "source ./hats_env/bin/activate"
+#    cmd3 = "deactivate"
+#
+#    cmd = cmd1 + " && " + cmd2 + " && " + cmd1 + " && " + cmd3 + " && " + cmd1
+
+#    execute_command_in_shell(cmd)
+#####################################################################################################
+
+def execute_command_in_shell(bash_command,fname_out=None):
+
+    '''
+    Execute a batch command (a string, not a list; can be multiple bash commands connected with &&).
+    '''
+
+    print("execute_command: bash_command =",bash_command)
+
+
+    # Execute code_to_execute.  Note that STDERR and STDOUT are merged into the same data stream.
+    # AWS Batch runs Python 3.9.  According to https://docs.python.org/3.9/library/subprocess.html#subprocess.run,
+    # if you wish to capture and combine both streams into one, use stdout=PIPE and stderr=STDOUT instead of capture_output.
+    # capture_output=False is the default.
+
+    code_to_execute_object = subprocess.run(bash_command,shell=True,text=True,stdout=subprocess.PIPE,stderr=subprocess.STDOUT)
+
+    returncode = code_to_execute_object.returncode
+    print("returncode =",returncode)
+
+    code_to_execute_stdout = code_to_execute_object.stdout
+    print("code_to_execute_stdout =\n",code_to_execute_stdout)
+
+    if fname_out is not None:
+
+        try:
+            fh = open(fname_out, 'w', encoding="utf-8")
+            fh.write(code_to_execute_stdout)
+            fh.close()
+        except:
+            print(f"*** Warning from method execute_command: Could not open output file {fname_out}; quitting...")
+
+    code_to_execute_stderr = code_to_execute_object.stderr
+    print("code_to_execute_stderr (should be empty since STDERR is combined with STDOUT) =\n",code_to_execute_stderr)
+
+    return returncode
 
 
 ##############################################################
@@ -208,6 +263,11 @@ if __name__ == '__main__':
         end_index = start_index + nrows_per_file - 1
 
 
+    # Close database connection.
+
+    dbh.close()
+
+
     # Code-timing benchmark.
 
     end_time_benchmark = time.time()
@@ -229,15 +289,24 @@ if __name__ == '__main__':
     start_time_benchmark = end_time_benchmark
 
 
-    # Close database connection.
+    # Upload HATS catalog to S3 bucket.
 
-    dbh.close()
+    hat_copy_cmd = f"aws s3 cp --recursive {filepath_hats_catalog} {s3_object_name_hats_catalog}"
+    execute_command_in_shell(hat_copy_cmd)
+
+
+    # Code-timing benchmark.
+
+    end_time_benchmark = time.time()
+    print("Elapsed time in seconds to upload HATS catalog to S3 bucket =",
+        end_time_benchmark - start_time_benchmark)
+    start_time_benchmark = end_time_benchmark
 
 
     # Code-timing benchmark overall.
 
     end_time_benchmark = time.time()
-    print(f"Elapsed time in seconds from start to finish =",
+    print(f"Elapsed time in seconds from {enerateSourceHATSCatalog.py} start to finish =",
         end_time_benchmark - start_time_benchmark_at_start)
 
 
