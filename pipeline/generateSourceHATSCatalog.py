@@ -291,7 +291,7 @@ if __name__ == '__main__':
 
     # Upload HATS catalog to S3 bucket.
 
-    hat_copy_cmd = f"aws s3 cp --recursive {filepath_hats_catalog} {s3_object_name_hats_catalog}"
+    hat_copy_cmd = f"aws s3 sync --recursive {filepath_hats_catalog} {s3_object_name_hats_catalog}"
     execute_command_in_shell(hat_copy_cmd)
 
 
@@ -306,7 +306,7 @@ if __name__ == '__main__':
     # Code-timing benchmark overall.
 
     end_time_benchmark = time.time()
-    print(f"Elapsed time in seconds from {enerateSourceHATSCatalog.py} start to finish =",
+    print(f"Elapsed time in seconds from {swname} start to finish =",
         end_time_benchmark - start_time_benchmark_at_start)
 
 
