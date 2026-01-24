@@ -22,7 +22,7 @@ import database.modules.utils.rapid_db as db
 
 
 swname = "virtualPipelineOperator.py"
-swvers = "1.1"
+swvers = "1.2"
 cfg_filename_only = "awsBatchSubmitJobs_launchSingleSciencePipeline.ini"
 
 
@@ -33,6 +33,10 @@ launch_science_pipelines_code = '/code/pipeline/launchSciencePipelinesForDateTim
 register_science_pipeline_jobs_code = '/code/pipeline/parallelRegisterCompletedJobsInDB.py'
 launch_postproc_pipelines_code = '/code/pipeline/awsBatchSubmitJobs_launchPostProcPipelinesForProcDate.py'
 register_postproc_pipeline_jobs_code = '/code/pipeline/parallelRegisterCompletedJobsInDBAfterPostProc.py'
+load_psfcat_into_db_sources_code = '/code/pipeline/loadPSFCatIntoDBSourcesTable.py'
+crossmatch_sources_code = '/code/pipeline/crossMatchSources.py'
+compute_statistics_for_astroobjects_code = '/code/pipeline/computeStatisticsForAstroObjects.py'
+prune_notbest_merges_code = '/code/pipeline/pruneNotBestMerges.py'
 
 
 # Print diagnostics.
@@ -512,6 +516,80 @@ if __name__ == '__main__':
         start_time_benchmark = end_time_benchmark
 
 
+        # Launch script to load PSF-fit catalogs into database sources tables.
+        #
+        # Environment variable JOBPROCDATE to specify processing date is required.
+
+        fname_out = "load_psfcat_into_db_sources_code" + "_" + proc_date + ".out"
+        load_psfcat_into_db_sources_cmd = [python_cmd,
+                                           load_psfcat_into_db_sources_code]
+
+        exitcode_from_load_psfcat_into_db_sources_cmd = util.execute_command(load_psfcat_into_db_sources_cmd,fname_out)
+
+
+        # Code-timing benchmark.
+
+        end_time_benchmark = time.time()
+        print("Elapsed time in seconds after loading Sources database records =",
+            end_time_benchmark - start_time_benchmark)
+        start_time_benchmark = end_time_benchmark
+
+
+        # Launch script to crossmatch sources and astroobjects database tables.
+        #
+        # Environment variable JOBPROCDATE to specify processing date is required.
+
+        fname_out = "crossmatch_sources_code" + "_" + proc_date + ".out"
+        crossmatch_sources_cmd = [python_cmd,
+                                  crossmatch_sources_code]
+
+        exitcode_from_crossmatch_sources_cmd = util.execute_command(crossmatch_sources_cmd,fname_out)
+
+
+        # Code-timing benchmark.
+
+        end_time_benchmark = time.time()
+        print("Elapsed time in seconds after crossmatching Sources and AstroObjects database records =",
+            end_time_benchmark - start_time_benchmark)
+        start_time_benchmark = end_time_benchmark
+
+
+        # Launch script to compute statistics for astroobjects database tables.
+        #
+        # Environment variable JOBPROCDATE to specify processing date is required.
+
+        fname_out = "compute_statistics_for_astroobjects_code" + "_" + proc_date + ".out"
+        compute_statistics_for_astroobjects_cmd = [python_cmd,
+                                                   compute_statistics_for_astroobjects_code]
+
+        exitcode_from_compute_statistics_for_astroobjects_cmd = util.execute_command(compute_statistics_for_astroobjects_cmd,fname_out)
+
+
+        # Code-timing benchmark.
+
+        end_time_benchmark = time.time()
+        print("Elapsed time in seconds after computing statistics for AstroObjects database records =",
+            end_time_benchmark - start_time_benchmark)
+        start_time_benchmark = end_time_benchmark
+
+
+        # Launch script to delete not-best Merges database records.
+
+        fname_out = "prune_notbest_merges_code" + "_" + proc_date + ".out"
+        prune_notbest_merges_cmd = [python_cmd,
+                                    prune_notbest_merges_code]
+
+        exitcode_from_prune_notbest_merges_cmd = util.execute_command(prune_notbest_merges_cmd,fname_out)
+
+
+        # Code-timing benchmark.
+
+        end_time_benchmark = time.time()
+        print("Elapsed time in seconds after deleting not-best Merges database records =",
+            end_time_benchmark - start_time_benchmark)
+        start_time_benchmark = end_time_benchmark
+
+
         # Close database connection.
 
         dbh.close()
@@ -571,4 +649,3 @@ if __name__ == '__main__':
     print("Terminating: exitcode =",exitcode)
 
     exit(exitcode)
-
