@@ -2,7 +2,6 @@
 RAPID Pipeline Subs
 """
 
-
 import os
 import math
 from astropy.io import fits
@@ -14,10 +13,6 @@ import numpy as np
 import numpy.ma as ma
 import boto3
 from botocore.exceptions import ClientError
-
-from modules.sip_tpv.sip_tpv.sip_to_pv import sip_to_pv
-
-import matplotlib.pyplot as plt
 
 plot_flag = False
 
@@ -900,9 +895,12 @@ def build_swarp_command_line_args(swarp_dict):
 # FITS file with pv distortion (with image data moved to PRIMARY header).
 
 def convert_from_sip_to_pv(input_fits_file_with_sip,hdu_index,output_fits_file_with_pv):
+
     '''
     hdu_index is zero-based, and corresponds to HDU with image data.
     '''
+
+    from modules.sip_tpv.sip_tpv.sip_to_pv import sip_to_pv
 
     hdul = fits.open(input_fits_file_with_sip)
 
@@ -1473,10 +1471,9 @@ def compute_diffimage_psf_catalog(n_clip_sigma,
     Odd numbers for NAXIS1 and NAXIS2 is a required assumption for input PSF.
     '''
 
-
     from photutils.detection import DAOStarFinder
     from photutils.psf import PSFPhotometry,ImagePSF,IterativePSFPhotometry
-
+    import matplotlib.pyplot as plt
 
     print ("n_thresh_sigma =",n_thresh_sigma)
     print ("n_clip_sigma =",n_clip_sigma)
