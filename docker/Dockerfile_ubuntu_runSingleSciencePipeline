@@ -68,15 +68,10 @@ RUN python3.11 -m pip install --upgrade galsim
 RUN python3.11 -m pip install --upgrade romanisim
 RUN python3.11 -m pip install --upgrade scikit-image
 
+# Set up separate Python 3.11 venv under root directory for hats.
 
-# Cannot install sfft in Python 3.11 because of following error:
-# Failed to build scikit-image
-# ERROR: Failed to build installable wheels for some pyproject.toml based projects (scikit-image)
-# The command '/bin/sh -c python3.11 -m pip install --upgrade sfft' returned a non-zero code: 1
-# For now, the plan is to run sfft under Python 3.9
-
-#RUN python3.11 -m pip install --upgrade sfft
-
+RUN python3.11 -m venv /hats_env
+RUN /hats_env/bin/python3.11 -m pip install --upgrade hats
 
 # Install AWS CLI
 
