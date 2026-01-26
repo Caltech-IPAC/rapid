@@ -46,9 +46,7 @@ RUN pip install --upgrade scikit-image
 # Set up separate Python 3.9 venv under root directory for sfft.
 
 RUN python3 -m venv /sfft_env
-RUN source /sfft_env/bin/activate
-RUN python3 -m pip install --upgrade sfft
-RUN deactivate
+RUN /sfft_env/bin/python3 -m pip install --upgrade sfft
 
 # Install Python 3.11 with packages (/usr/bin/python3.11)
 
