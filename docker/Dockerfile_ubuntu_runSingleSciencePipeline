@@ -39,11 +39,16 @@ RUN pip install --upgrade sympy
 RUN pip install --upgrade sip_tpv
 RUN pip install --upgrade photutils
 RUN pip install --upgrade matplotlib
-RUN pip install --upgrade sfft
 RUN pip install --upgrade galsim
 RUN pip install --upgrade romanisim
-# Do not install scikit-image as sfft requires scikit-image<=0.18.3,>=0.16.2
-#RUN pip install --upgrade scikit-image
+RUN pip install --upgrade scikit-image
+
+# Set up separate Python 3.9 venv under root directory for sfft.
+
+RUN python3 -m venv /sfft_env
+RUN source /sfft_env/bin/activate
+RUN python3 -m pip install --upgrade sfft
+RUN deactivate
 
 # Install Python 3.11 with packages (/usr/bin/python3.11)
 
