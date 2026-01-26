@@ -96,13 +96,10 @@ sources_catalog_name = config_input['HATS_CATALOGS']['sources_catalog_name']
 lowest_healpix_order = int(config_input['HATS_CATALOGS']['lowest_healpix_order'])
 highest_healpix_order = int(config_input['HATS_CATALOGS']['highest_healpix_order'])
 n_workers = int(config_input['HATS_CATALOGS']['n_workers'])
-
-sources_output_path = rapid_work
-
 product_s3_bucket_base = config_input['JOB_PARAMS']['product_s3_bucket_base']
 
 s3_object_name_hats_catalog = f"s3://" + product_s3_bucket_base + "/" + sources_catalog_name
-filepath_hats_catalog = sources_output_path + "/" + sources_catalog_name
+filepath_hats_catalog = rapid_work + "/" + sources_catalog_name
 
 
 ##############################################################
@@ -128,7 +125,7 @@ def generate_hats_catalog(catalog_csv_path):
         file_reader=CsvReader(),
         input_file_list=catalog_csv_path,
         output_artifact_name=sources_catalog_name,
-        output_path=sources_output_path,
+        output_path=rapid_work,
         tmp_dir=tmp_dir,
         tmp_path=tmp_dir,
         resume=False
