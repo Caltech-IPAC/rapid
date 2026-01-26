@@ -68,10 +68,11 @@ RUN python3.11 -m pip install --upgrade galsim
 RUN python3.11 -m pip install --upgrade romanisim
 RUN python3.11 -m pip install --upgrade scikit-image
 
-# Set up separate Python 3.11 venv under root directory for hats.
+# Set up separate Python 3.11 venv under root directory for hats and hats-import.
 
 RUN python3.11 -m venv /hats_env
 RUN /hats_env/bin/python3.11 -m pip install --upgrade hats
+RUN /hats_env/bin/python3.11 -m pip install --upgrade hats-import
 
 # Install AWS CLI
 
