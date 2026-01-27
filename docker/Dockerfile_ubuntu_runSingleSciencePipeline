@@ -73,6 +73,7 @@ RUN python3.11 -m pip install --upgrade scikit-image
 RUN python3.11 -m venv /hats_env
 RUN /hats_env/bin/python3.11 -m pip install --upgrade hats
 RUN /hats_env/bin/python3.11 -m pip install --upgrade hats-import
+RUN /hats_env/bin/python3.11 -m pip install --upgrade lsdb
 
 # Install AWS CLI
 
