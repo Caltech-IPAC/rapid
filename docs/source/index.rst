@@ -26,7 +26,7 @@ pipeline already installed and ready to run.  It is publicly available from
 
    public.ecr.aws/y9b1s7h8/rapid_science_pipeline:latest
 
-It is currently 6.6 GB in size, and requires sufficient disk space on the target machine.
+It is currently 7.7 GB in size, and requires sufficient disk space on the target machine.
 It can be used to ``docker-run`` a container and from within execute
 code for image-differencing, etc., using a ``docker-run`` command like the
 following (note that an entry point to bash is required for interactive use
