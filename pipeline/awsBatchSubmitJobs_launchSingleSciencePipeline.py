@@ -112,6 +112,7 @@ config_input.read(config_input_filename)
 
 verbose = int(config_input['JOB_PARAMS']['verbose'])
 debug = int(config_input['JOB_PARAMS']['debug'])
+upload_to_s3_bucket = eval(config_input['JOB_PARAMS']['upload_to_s3_bucket'])
 job_info_s3_bucket_base = config_input['JOB_PARAMS']['job_info_s3_bucket_base']
 product_s3_bucket_base = config_input['JOB_PARAMS']['product_s3_bucket_base']
 job_config_filename_base = config_input['JOB_PARAMS']['job_config_filename_base']
@@ -669,12 +670,11 @@ if __name__ == '__main__':
     job_config = configparser.ConfigParser()
 
     job_config['JOB_PARAMS'] = {'debug': str(debug),
+                                'swname': swname,
+                                'swvers': swvers,
+                                'jid': str(jid)}
 
-                         'swname': swname,
-
-                         'swvers': swvers,
-                         'jid': str(jid)}
-
+    job_config['JOB_PARAMS']['upload_to_s3_bucket'] = str(upload_to_s3_bucket)
     job_config['JOB_PARAMS']['job_info_s3_bucket_base'] = job_info_s3_bucket_base
     job_config['JOB_PARAMS']['product_s3_bucket_base'] = product_s3_bucket_base
     job_config['JOB_PARAMS']['product_config_filename_base'] = product_config_filename_base
