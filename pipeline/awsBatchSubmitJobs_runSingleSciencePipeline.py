@@ -1,5 +1,5 @@
 ###############################################################################
-# output_diffimage_file_infobits:
+# RAPID pipeline output_diffimage_file_infobits:
 # BIT 0, No photutils catalog for ZOGY positive difference image was made.
 # BIT 1, No photutils catalog for ZOGY negative difference image was made.
 # BIT 2, No photutils catalog for SFFT positive difference image was made.
@@ -162,6 +162,7 @@ if __name__ == '__main__':
 
     verbose = int(config_input['JOB_PARAMS']['verbose'])
     debug = int(config_input['JOB_PARAMS']['debug'])
+    upload_to_s3_bucket = eval(config_input['JOB_PARAMS']['upload_to_s3_bucket'])
     job_info_s3_bucket_base = config_input['JOB_PARAMS']['job_info_s3_bucket_base']
     product_s3_bucket_base = config_input['JOB_PARAMS']['product_s3_bucket_base']
     refimage_psf_s3_bucket_dir = config_input['JOB_PARAMS']['refimage_psf_s3_bucket_dir']
@@ -269,18 +270,27 @@ if __name__ == '__main__':
     science_image_filename_gz,subdirs_science_image,downloaded_from_bucket = util.download_file_from_s3_bucket(s3_client,s3_full_name_science_image)
 
 
-    # Upload science image to product S3 bucket (in order to test upload method).
-
-    s3_object_name_science_image = job_proc_date + "/jid" + str(jid) + "/" + science_image_filename_gz
-
-    util.upload_files_to_s3_bucket(s3_client,product_s3_bucket,[science_image_filename_gz],[s3_object_name_science_image])
-
-
     # Code-timing benchmark.
 
     end_time_benchmark = time.time()
     print("Elapsed time in seconds after downloading science image =",end_time_benchmark - start_time_benchmark)
     start_time_benchmark = end_time_benchmark
+
+
+    # Upload science image to product S3 bucket.
+
+    s3_object_name_science_image = job_proc_date + "/jid" + str(jid) + "/" + science_image_filename_gz
+
+    if upload_to_s3_bucket:
+
+        util.upload_files_to_s3_bucket(s3_client,product_s3_bucket,[science_image_filename_gz],[s3_object_name_science_image])
+
+
+        # Code-timing benchmark.
+
+        end_time_benchmark = time.time()
+        print("Elapsed time in seconds after uploading science image to product S3 bucket =",end_time_benchmark - start_time_benchmark)
+        start_time_benchmark = end_time_benchmark
 
 
     # Optionally read in CVS file containing inputs for generating reference image.
@@ -350,7 +360,8 @@ if __name__ == '__main__':
                                                                          max_n_images_to_coadd,
                                                                          sca_gain,
                                                                          sca_readout_noise,
-                                                                         product_s3_bucket)
+                                                                         product_s3_bucket,
+                                                                         upload_to_s3_bucket)
 
         infobits_refimage = generateReferenceImage_return_list[0]
         checksum_refimage = generateReferenceImage_return_list[1]
@@ -391,7 +402,8 @@ if __name__ == '__main__':
                                                                                        job_proc_date,
                                                                                        awaicgen_output_mosaic_image_file,
                                                                                        awaicgen_output_mosaic_uncert_image_file,
-                                                                                       sextractor_refimage_dict)
+                                                                                       sextractor_refimage_dict,
+                                                                                       upload_to_s3_bucket)
 
         checksum_refimage_catalog = generateReferenceImageCatalog_return_list[0]
         filename_refimage_catalog = generateReferenceImageCatalog_return_list[1]
@@ -566,44 +578,53 @@ if __name__ == '__main__':
 
         # Upload reference-image file to S3 bucket.
 
-        uploaded_to_bucket = True
+        if upload_to_s3_bucket:
 
-        try:
-            response = s3_client.upload_file(awaicgen_output_mosaic_image_file,
-                                             product_s3_bucket,
-                                             awaicgen_output_mosaic_image_s3_bucket_object_name)
+            uploaded_to_bucket = True
 
-            print("response =",response)
+            try:
+                response = s3_client.upload_file(awaicgen_output_mosaic_image_file,
+                                                 product_s3_bucket,
+                                                 awaicgen_output_mosaic_image_s3_bucket_object_name)
 
-        except ClientError as e:
-            print("*** Error: Failed to upload {} to s3://{}/{}"\
-                .format(awaicgen_output_mosaic_image_file,product_s3_bucket,awaicgen_output_mosaic_image_s3_bucket_object_name))
-            uploaded_to_bucket = False
+                print("response =",response)
 
-        if uploaded_to_bucket:
-            print("Successfully uploaded {} to s3://{}/{}"\
-                .format(awaicgen_output_mosaic_image_file,product_s3_bucket,awaicgen_output_mosaic_image_s3_bucket_object_name))
+            except ClientError as e:
+                print("*** Error: Failed to upload {} to s3://{}/{}"\
+                    .format(awaicgen_output_mosaic_image_file,product_s3_bucket,awaicgen_output_mosaic_image_s3_bucket_object_name))
+                uploaded_to_bucket = False
+
+            if uploaded_to_bucket:
+                print("Successfully uploaded {} to s3://{}/{}"\
+                    .format(awaicgen_output_mosaic_image_file,product_s3_bucket,awaicgen_output_mosaic_image_s3_bucket_object_name))
 
 
-        # Upload reference-image uncertainty file to S3 bucket.
+            # Upload reference-image uncertainty file to S3 bucket.
 
-        uploaded_to_bucket = True
+            uploaded_to_bucket = True
 
-        try:
-            response = s3_client.upload_file(awaicgen_output_mosaic_uncert_image_file,
-                                             product_s3_bucket,
-                                             awaicgen_output_mosaic_uncert_image_s3_bucket_object_name)
+            try:
+                response = s3_client.upload_file(awaicgen_output_mosaic_uncert_image_file,
+                                                 product_s3_bucket,
+                                                 awaicgen_output_mosaic_uncert_image_s3_bucket_object_name)
 
-            print("response =",response)
+                print("response =",response)
 
-        except ClientError as e:
-            print("*** Error: Failed to upload {} to s3://{}/{}"\
-                .format(awaicgen_output_mosaic_uncert_image_file,product_s3_bucket,awaicgen_output_mosaic_uncert_image_s3_bucket_object_name))
-            uploaded_to_bucket = False
+            except ClientError as e:
+                print("*** Error: Failed to upload {} to s3://{}/{}"\
+                    .format(awaicgen_output_mosaic_uncert_image_file,product_s3_bucket,awaicgen_output_mosaic_uncert_image_s3_bucket_object_name))
+                uploaded_to_bucket = False
 
-        if uploaded_to_bucket:
-            print("Successfully uploaded {} to s3://{}/{}"\
-                .format(awaicgen_output_mosaic_uncert_image_file,product_s3_bucket,awaicgen_output_mosaic_uncert_image_s3_bucket_object_name))
+            if uploaded_to_bucket:
+                print("Successfully uploaded {} to s3://{}/{}"\
+                    .format(awaicgen_output_mosaic_uncert_image_file,product_s3_bucket,awaicgen_output_mosaic_uncert_image_s3_bucket_object_name))
+
+
+            # Code-timing benchmark.
+
+            end_time_benchmark = time.time()
+            print("Elapsed time in seconds after uploading reference image to S3 product bucket =",end_time_benchmark - start_time_benchmark)
+            start_time_benchmark = end_time_benchmark
 
 
     # Unzip the science image gzipped file if it does not already exist.
@@ -683,7 +704,9 @@ if __name__ == '__main__':
         objectnames = [s3_object_name_science_image_filename,
                        s3_object_name_injection_catalog]
 
-        util.upload_files_to_s3_bucket(s3_client,product_s3_bucket,filenames,objectnames)
+        if upload_to_s3_bucket:
+
+            util.upload_files_to_s3_bucket(s3_client,product_s3_bucket,filenames,objectnames)
 
 
         # Propagate the science image with fake sources through the pipeline.
@@ -830,7 +853,16 @@ if __name__ == '__main__':
         filenames.append(ref_fits_file_with_pv)
         objectnames.append(s3_object_name_ref_fits_file_with_pv)
 
-    util.upload_files_to_s3_bucket(s3_client,product_s3_bucket,filenames,objectnames)
+    if upload_to_s3_bucket:
+
+        util.upload_files_to_s3_bucket(s3_client,product_s3_bucket,filenames,objectnames)
+
+
+        # Code-timing benchmark.
+
+        end_time_benchmark = time.time()
+        print("Elapsed time in seconds after uploading intermediate FITS files to product S3 bucket =",end_time_benchmark - start_time_benchmark)
+        start_time_benchmark = end_time_benchmark
 
 
     # Compute image statistics for ZOGY.
@@ -944,7 +976,8 @@ if __name__ == '__main__':
                                                                                                  fwhm_sci,
                                                                                                  fwhm_ref,
                                                                                                  astrometric_uncert_x,
-                                                                                                 astrometric_uncert_y)
+                                                                                                 astrometric_uncert_y,
+                                                                                                 upload_to_s3_bucket)
 
     print("scalefac,dxrmsfin,dyrmsfin,dxmedianfin,dymedianfin =",scalefac,dxrmsfin,dyrmsfin,dxmedianfin,dymedianfin)
 
@@ -1530,7 +1563,17 @@ if __name__ == '__main__':
                    s3_object_name_output_psfcat_parquet_filename,
                    s3_object_name_output_psfcat_parquet_filename_negative]
 
-    util.upload_files_to_s3_bucket(s3_client,product_s3_bucket,filenames,objectnames)
+    if upload_to_s3_bucket:
+
+        util.upload_files_to_s3_bucket(s3_client,product_s3_bucket,filenames,objectnames)
+
+
+        # Code-timing benchmark.
+
+        end_time_benchmark = time.time()
+        print("Elapsed time in seconds after uploading main products to S3 bucket =",
+            end_time_benchmark - start_time_benchmark)
+        start_time_benchmark = end_time_benchmark
 
 
     # Define ZOGY dictionary in config-file dictionary for products.
@@ -1581,14 +1624,6 @@ if __name__ == '__main__':
     product_config['ZOGY']['dyrmsfin'] = str(dyrmsfin)
     product_config['ZOGY']['dxmedianfin'] = str(dxmedianfin)
     product_config['ZOGY']['dymedianfin'] = str(dymedianfin)
-
-
-    # Code-timing benchmark.
-
-    end_time_benchmark = time.time()
-    print("Elapsed time in seconds after uploading main products to S3 bucket =",
-        end_time_benchmark - start_time_benchmark)
-    start_time_benchmark = end_time_benchmark
 
 
     #################################################################################################################
@@ -1781,15 +1816,17 @@ if __name__ == '__main__':
                            s3_object_name_sfftdiffimage_negative,
                            s3_object_name_cconvdiff_negative]
 
-            util.upload_files_to_s3_bucket(s3_client,product_s3_bucket,filenames,objectnames)
+            if upload_to_s3_bucket:
+
+                util.upload_files_to_s3_bucket(s3_client,product_s3_bucket,filenames,objectnames)
 
 
-            # Code-timing benchmark.
+                # Code-timing benchmark.
 
-            end_time_benchmark = time.time()
-            print("Elapsed time in seconds after uploading SFFT difference image to S3 bucket =",
-                end_time_benchmark - start_time_benchmark)
-            start_time_benchmark = end_time_benchmark
+                end_time_benchmark = time.time()
+                print("Elapsed time in seconds after uploading SFFT difference image to S3 product bucket =",
+                    end_time_benchmark - start_time_benchmark)
+                start_time_benchmark = end_time_benchmark
 
 
             # Compute raw-ascii SExtractor catalog for positive SFFT masked difference image.
@@ -1910,15 +1947,17 @@ if __name__ == '__main__':
             objectnames = [s3_object_name_sfftdiffimage_catalog,
                            s3_object_name_sfftdiffimage_catalog_negative]
 
-            util.upload_files_to_s3_bucket(s3_client,product_s3_bucket,filenames,objectnames)
+            if upload_to_s3_bucket:
+
+                util.upload_files_to_s3_bucket(s3_client,product_s3_bucket,filenames,objectnames)
 
 
-            # Code-timing benchmark.
+                # Code-timing benchmark.
 
-            end_time_benchmark = time.time()
-            print("Elapsed time in seconds after uploading SFFT-diffimage SExtractor catalogs to S3 bucket =",
-                end_time_benchmark - start_time_benchmark)
-            start_time_benchmark = end_time_benchmark
+                end_time_benchmark = time.time()
+                print("Elapsed time in seconds after uploading SFFT-diffimage SExtractor catalogs to S3 product bucket =",
+                    end_time_benchmark - start_time_benchmark)
+                start_time_benchmark = end_time_benchmark
 
 
             # Generate PSF-fit catalog for positive SFFT difference image using photutils.  No background subtraction is done.
@@ -2175,15 +2214,17 @@ if __name__ == '__main__':
                            s3_object_name_output_psfcat_parquet_filename,
                            s3_object_name_output_psfcat_parquet_filename_negative]
 
-            util.upload_files_to_s3_bucket(s3_client,product_s3_bucket,filenames,objectnames)
+            if upload_to_s3_bucket:
+
+                util.upload_files_to_s3_bucket(s3_client,product_s3_bucket,filenames,objectnames)
 
 
-            # Code-timing benchmark.
+                # Code-timing benchmark.
 
-            end_time_benchmark = time.time()
-            print("Elapsed time in seconds after uploading SFFT-diffimage PSF-fit catalogs to S3 bucket =",
-                end_time_benchmark - start_time_benchmark)
-            start_time_benchmark = end_time_benchmark
+                end_time_benchmark = time.time()
+                print("Elapsed time in seconds after uploading SFFT-diffimage PSF-fit catalogs to S3 product bucket =",
+                    end_time_benchmark - start_time_benchmark)
+                start_time_benchmark = end_time_benchmark
 
 
     #################################################################################################################
@@ -2247,6 +2288,14 @@ if __name__ == '__main__':
         util.scale_image_data(filename_naive_diffimage_masked,-1.0,filename_naive_diffimage_masked_negative)
 
 
+        # Code-timing benchmark.
+
+        end_time_benchmark = time.time()
+        print("Elapsed time in seconds after computing naive difference images =",
+            end_time_benchmark - start_time_benchmark)
+        start_time_benchmark = end_time_benchmark
+
+
         # Upload naive-diffimage-product FITS file to product S3 bucket.
 
         product_s3_bucket = product_s3_bucket_base
@@ -2259,15 +2308,17 @@ if __name__ == '__main__':
         objectnames = [s3_object_name_naive_diffimage_masked,
                        s3_object_name_naive_diffimage_masked_negative]
 
-        util.upload_files_to_s3_bucket(s3_client,product_s3_bucket,filenames,objectnames)
+        if upload_to_s3_bucket:
+
+            util.upload_files_to_s3_bucket(s3_client,product_s3_bucket,filenames,objectnames)
 
 
-        # Code-timing benchmark.
+            # Code-timing benchmark.
 
-        end_time_benchmark = time.time()
-        print("Elapsed time in seconds after computing naive difference images =",
-            end_time_benchmark - start_time_benchmark)
-        start_time_benchmark = end_time_benchmark
+            end_time_benchmark = time.time()
+            print("Elapsed time in seconds after uploading naive difference images to S3 product bucket =",
+                end_time_benchmark - start_time_benchmark)
+            start_time_benchmark = end_time_benchmark
 
 
         # Generate naive diffimage uncertainty image, which will be the weight image for sextractor_WEIGHT_IMAGE.
@@ -2368,15 +2419,17 @@ if __name__ == '__main__':
                        s3_object_name_naive_diffimage_sextractor_catalog,
                        s3_object_name_naive_diffimage_sextractor_catalog_negative]
 
-        util.upload_files_to_s3_bucket(s3_client,product_s3_bucket,filenames,objectnames)
+        if upload_to_s3_bucket:
+
+            util.upload_files_to_s3_bucket(s3_client,product_s3_bucket,filenames,objectnames)
 
 
-        # Code-timing benchmark.
+            # Code-timing benchmark.
 
-        end_time_benchmark = time.time()
-        print("Elapsed time in seconds after uploading SExtractor catalogs for naive difference images =",
-            end_time_benchmark - start_time_benchmark)
-        start_time_benchmark = end_time_benchmark
+            end_time_benchmark = time.time()
+            print("Elapsed time in seconds after uploading SExtractor catalogs for naive difference images to S3 product bucket =",
+                end_time_benchmark - start_time_benchmark)
+            start_time_benchmark = end_time_benchmark
 
 
         # Generate PSF-fit catalog for positive naive difference image using photutils.  No background subtraction is done.
@@ -2591,15 +2644,17 @@ if __name__ == '__main__':
                            s3_object_name_output_psfcat_finder_filename_negative,
                            s3_object_name_output_psfcat_residual_filename_negative]
 
-            util.upload_files_to_s3_bucket(s3_client,product_s3_bucket,filenames,objectnames)
+            if upload_to_s3_bucket:
+
+                util.upload_files_to_s3_bucket(s3_client,product_s3_bucket,filenames,objectnames)
 
 
-        # Code-timing benchmark.
+                # Code-timing benchmark.
 
-        end_time_benchmark = time.time()
-        print("Elapsed time in seconds after uploading PSF-fit catalogs for naive difference images =",
-            end_time_benchmark - start_time_benchmark)
-        start_time_benchmark = end_time_benchmark
+                end_time_benchmark = time.time()
+                print("Elapsed time in seconds after uploading PSF-fit catalogs for naive difference images to S3 product bucket =",
+                    end_time_benchmark - start_time_benchmark)
+                start_time_benchmark = end_time_benchmark
 
 
     # Get listing of working directory as a diagnostic.
@@ -2639,28 +2694,30 @@ if __name__ == '__main__':
 
     # Upload product config file for job, along with associated file(s) if any, to S3 bucket.
 
-    uploaded_to_bucket = True
+    if upload_to_s3_bucket:
 
-    try:
-        response = s3_client.upload_file(product_config_ini_filename,
-                                         product_s3_bucket,
-                                         product_config_ini_file_s3_bucket_object_name)
-    except ClientError as e:
-        print("*** Error: Failed to upload {} to s3://{}/{}"\
-            .format(product_config_ini_filename,product_s3_bucket,product_config_ini_file_s3_bucket_object_name))
-        uploaded_to_bucket = False
+        uploaded_to_bucket = True
 
-    if uploaded_to_bucket:
-        print("Successfully uploaded {} to s3://{}/{}"\
-            .format(product_config_ini_filename,product_s3_bucket,product_config_ini_file_s3_bucket_object_name))
+        try:
+            response = s3_client.upload_file(product_config_ini_filename,
+                                             product_s3_bucket,
+                                             product_config_ini_file_s3_bucket_object_name)
+        except ClientError as e:
+            print("*** Error: Failed to upload {} to s3://{}/{}"\
+                .format(product_config_ini_filename,product_s3_bucket,product_config_ini_file_s3_bucket_object_name))
+            uploaded_to_bucket = False
+
+        if uploaded_to_bucket:
+            print("Successfully uploaded {} to s3://{}/{}"\
+                .format(product_config_ini_filename,product_s3_bucket,product_config_ini_file_s3_bucket_object_name))
 
 
-    # Code-timing benchmark.
+        # Code-timing benchmark.
 
-    end_time_benchmark = time.time()
-    print("Elapsed time in seconds after uploading products at pipeline end =",
-        end_time_benchmark - start_time_benchmark)
-    start_time_benchmark = end_time_benchmark
+        end_time_benchmark = time.time()
+        print("Elapsed time in seconds after uploading products at pipeline end to S3 product bucket =",
+            end_time_benchmark - start_time_benchmark)
+        start_time_benchmark = end_time_benchmark
 
 
     # Code-timing benchmark overall.
