@@ -176,7 +176,8 @@ def gainMatchScienceAndReferenceImages(s3_client,
                                        fwhm_sci,
                                        fwhm_ref,
                                        astrometric_uncert_x,
-                                       astrometric_uncert_y):
+                                       astrometric_uncert_y,
+                                       upload_to_s3_bucket):
 
 
     # Print diagnostics:
@@ -191,7 +192,11 @@ def gainMatchScienceAndReferenceImages(s3_client,
 
     iam = "Sub gainMatchScienceAndReferenceImages"
     verbose = int(gainmatch_dict['verbose'])
-    upload_intermediate_products = eval(gainmatch_dict['upload_intermediate_products'])
+
+    if upload_to_s3_bucket:
+        upload_intermediate_products = eval(gainmatch_dict['upload_intermediate_products'])
+    else:
+        upload_intermediate_products = False
 
     params_file = "/code/cdf/rapidSexParamsGainMatch.inp"
     filter_conv_file = "/code/cdf/rapidSexGainMatchFilter.conv"
@@ -314,7 +319,7 @@ def gainMatchScienceAndReferenceImages(s3_client,
     exitcode_from_sextractor = util.execute_command(sextractor_cmd)
 
 
-    # Upload SExtractor catalogs for science and reference images to S3 bucket.
+    # Optionally upload SExtractor catalogs for science and reference images to S3 bucket.
 
     if upload_intermediate_products:
 
