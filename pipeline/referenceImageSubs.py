@@ -26,7 +26,8 @@ def generateReferenceImage(s3_client,
                            max_n_images_to_coadd,
                            sca_gain,
                            sca_readout_noise,
-                           product_s3_bucket):
+                           product_s3_bucket,
+                           upload_to_s3_bucket):
 
 
     infobits_refimage = 0                                                             # TODO
@@ -203,6 +204,7 @@ def generateReferenceImage(s3_client,
                           [awaicgen_input_images_list_file,awaicgen_input_uncert_list_file]
 
         for fname in files_to_upload:
+
             s3_bucket_object_name = job_proc_date + "/jid" + str(jid) + "/refiminputs/" + fname
 
             uploaded_to_bucket = True
@@ -246,23 +248,25 @@ def generateReferenceImage(s3_client,
     # Upload ancillary reference-image products to S3 bucket.  Do not upload the reference image file and
     # reference-image uncertainty file until later, after informational keywords have been added to the FITS header.
 
-    uploaded_to_bucket = True
+    if upload_to_s3_bucket:
 
-    try:
-        response = s3_client.upload_file(awaicgen_output_mosaic_cov_map_file,
-                                         product_s3_bucket,
-                                         awaicgen_output_mosaic_cov_map_s3_bucket_object_name)
+        uploaded_to_bucket = True
 
-        print("response =",response)
+        try:
+            response = s3_client.upload_file(awaicgen_output_mosaic_cov_map_file,
+                                             product_s3_bucket,
+                                             awaicgen_output_mosaic_cov_map_s3_bucket_object_name)
 
-    except ClientError as e:
-        print("*** Error: Failed to upload {} to s3://{}/{}"\
-            .format(awaicgen_output_mosaic_cov_map_file,product_s3_bucket,awaicgen_output_mosaic_cov_map_s3_bucket_object_name))
-        uploaded_to_bucket = False
+            print("response =",response)
 
-    if uploaded_to_bucket:
-        print("Successfully uploaded {} to s3://{}/{}"\
-            .format(awaicgen_output_mosaic_cov_map_file,product_s3_bucket,awaicgen_output_mosaic_cov_map_s3_bucket_object_name))
+        except ClientError as e:
+            print("*** Error: Failed to upload {} to s3://{}/{}"\
+                .format(awaicgen_output_mosaic_cov_map_file,product_s3_bucket,awaicgen_output_mosaic_cov_map_s3_bucket_object_name))
+            uploaded_to_bucket = False
+
+        if uploaded_to_bucket:
+            print("Successfully uploaded {} to s3://{}/{}"\
+                .format(awaicgen_output_mosaic_cov_map_file,product_s3_bucket,awaicgen_output_mosaic_cov_map_s3_bucket_object_name))
 
 
     # Compute MD5 checksum of reference image.
@@ -302,7 +306,8 @@ def generateReferenceImageCatalog(s3_client,
                                   job_proc_date,
                                   filename_refimage_image,
                                   filename_refimage_uncert,
-                                  sextractor_refimage_dict):
+                                  sextractor_refimage_dict,
+                                  upload_to_s3_bucket):
 
 
     # Compute SExtractor catalog for reference image.
@@ -317,30 +322,33 @@ def generateReferenceImageCatalog(s3_client,
     sextractor_refimage_dict["sextractor_STARNNW_NAME".lower()] = "/code/cdf/rapidSexRefImageStarGalaxyClassifier.nnw"
     sextractor_refimage_dict["sextractor_CATALOG_NAME".lower()] = filename_refimage_catalog
     sextractor_cmd = util.build_sextractor_command_line_args(sextractor_refimage_dict)
+
     exitcode_from_sextractor = util.execute_command(sextractor_cmd)
 
 
     # Upload reference-image catalog to S3 product bucket.
 
-    refimage_sextractor_catalog_s3_bucket_object_name = job_proc_date + "/jid" + str(jid) + "/" + filename_refimage_catalog
+    if upload_to_s3_bucket:
 
-    uploaded_to_bucket = True
+        refimage_sextractor_catalog_s3_bucket_object_name = job_proc_date + "/jid" + str(jid) + "/" + filename_refimage_catalog
 
-    try:
-        response = s3_client.upload_file(filename_refimage_catalog,
-                                         product_s3_bucket,
-                                         refimage_sextractor_catalog_s3_bucket_object_name)
+        uploaded_to_bucket = True
 
-        print("response =",response)
+        try:
+            response = s3_client.upload_file(filename_refimage_catalog,
+                                             product_s3_bucket,
+                                             refimage_sextractor_catalog_s3_bucket_object_name)
 
-    except ClientError as e:
-        print("*** Error: Failed to upload {} to s3://{}/{}"\
-            .format(filename_refimage_catalog,product_s3_bucket,refimage_sextractor_catalog_s3_bucket_object_name))
-        uploaded_to_bucket = False
+            print("response =",response)
 
-    if uploaded_to_bucket:
-        print("Successfully uploaded {} to s3://{}/{}"\
-            .format(filename_refimage_catalog,product_s3_bucket,refimage_sextractor_catalog_s3_bucket_object_name))
+        except ClientError as e:
+            print("*** Error: Failed to upload {} to s3://{}/{}"\
+                .format(filename_refimage_catalog,product_s3_bucket,refimage_sextractor_catalog_s3_bucket_object_name))
+            uploaded_to_bucket = False
+
+        if uploaded_to_bucket:
+            print("Successfully uploaded {} to s3://{}/{}"\
+                .format(filename_refimage_catalog,product_s3_bucket,refimage_sextractor_catalog_s3_bucket_object_name))
 
 
     # Compute MD5 checksum of reference-image catalog.
