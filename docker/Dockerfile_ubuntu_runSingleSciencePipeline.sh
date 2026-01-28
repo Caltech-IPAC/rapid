@@ -3,7 +3,7 @@
 
 #####################################################################################
 # This script is used to build the RAPID-pipeline Docker image,
-# and propagate it to the AWS Elatstic Container Registry (ECR).
+# and propagate it to the AWS Elastic Container Registry (ECR).
 #
 # Instructions:
 # 1. Log into EC2 instance.
