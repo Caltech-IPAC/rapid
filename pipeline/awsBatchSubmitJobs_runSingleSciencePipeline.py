@@ -163,6 +163,12 @@ if __name__ == '__main__':
     verbose = int(config_input['JOB_PARAMS']['verbose'])
     debug = int(config_input['JOB_PARAMS']['debug'])
     upload_to_s3_bucket = eval(config_input['JOB_PARAMS']['upload_to_s3_bucket'])
+
+    override_upload_to_s3_bucket = os.getenv('DONOTUPLOADPRODUCTS')
+
+    if override_upload_to_s3_bucket is not None:
+        upload_to_s3_bucket = False
+
     job_info_s3_bucket_base = config_input['JOB_PARAMS']['job_info_s3_bucket_base']
     product_s3_bucket_base = config_input['JOB_PARAMS']['product_s3_bucket_base']
     refimage_psf_s3_bucket_dir = config_input['JOB_PARAMS']['refimage_psf_s3_bucket_dir']
