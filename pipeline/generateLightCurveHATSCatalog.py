@@ -271,7 +271,7 @@ if __name__ == '__main__':
 
             astroobjects_cols = lc_astroobjects_cols.split(",")
             sources_cols = lc_sources_cols.split(",")
-            sources_cols.insert(0,astroobjects_cols[0])             # Join index (aid)
+            sources_cols.insert(0,astroobjects_cols[0])             # add the join index column name (aid)
 
             astroobjects_data = {}
             sources_data = {}
@@ -296,6 +296,8 @@ if __name__ == '__main__':
                 sources_records = dbh.execute_sql_queries(sql_queries,debug)
 
                 for sources_record in sources_records:
+
+                    sources_record.insert(0,aid)                    # Augment the record with aid value.
 
                     for col,val in zip(sources_cols,sources_record):
                         sources_data[col].append(val)
