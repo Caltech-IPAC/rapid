@@ -125,8 +125,8 @@ highest_healpix_order = int(config_input['HATS_CATALOGS']['highest_healpix_order
 n_workers = int(config_input['HATS_CATALOGS']['n_workers'])
 product_s3_bucket_base = config_input['JOB_PARAMS']['product_s3_bucket_base']
 
-s3_object_name_hats_catalog = f"s3://" + product_s3_bucket_base + "/" + sources_catalog_name
-filepath_hats_catalog = rapid_work + "/" + sources_catalog_name
+s3_object_name_hats_catalog = f"s3://" + product_s3_bucket_base + "/" + lc_catalog_name
+filepath_hats_catalog = rapid_work + "/" + lc_catalog_name
 
 
 ##############################################################
