@@ -297,6 +297,7 @@ if __name__ == '__main__':
 
                 for sources_record in sources_records:
 
+                    sources_record = list(sources_record)           # Convert tuple to list.
                     sources_record.insert(0,aid)                    # Augment the record with aid value.
 
                     for col,val in zip(sources_cols,sources_record):
