@@ -1643,8 +1643,7 @@ if __name__ == '__main__':
 
     if run_sfft:
 
-        # Cannot run under python3.11 because scikit-learn fails to install.
-        python_cmd = 'python3'
+        python_cmd = '/usr/bin/python3.11'
         sfft_code = rapid_sw + '/modules/sfft/sfft_rapid_rimtimsim.py'
         filename_scifile = filename_bkg_subbed_science_image
         filename_reffile = output_resampled_gainmatched_reference_image
@@ -1720,7 +1719,7 @@ if __name__ == '__main__':
         deactivate_cmd = "deactivate"
 
 
-        # Execute SFFT in separate Python 3.9 venv under root directory for sfft.
+        # Execute SFFT in separate Python 3.11 venv under root directory for sfft.
         # Execute bash commands in the same shell (connected by &&).
 
         cmd = activate_cmd + " && " + sfft_cmd_str + " && " + deactivate_cmd
