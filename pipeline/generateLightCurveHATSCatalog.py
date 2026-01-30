@@ -118,6 +118,7 @@ config_input.read(config_input_filename)
 # AstroObjects-database-table and Sources-database-table columns to be exported to
 # HATS catalog (can be a subset).
 
+lc_df_join_index = config_input['HATS_CATALOGS']['lc_df_join_index']
 lc_astroobjects_cols = config_input['HATS_CATALOGS']['lc_astroobjects_cols']
 lc_sources_cols = config_input['HATS_CATALOGS']['lc_sources_cols']
 lc_input_filename_glob = config_input['HATS_CATALOGS']['lc_input_filename_glob']
@@ -223,7 +224,7 @@ if __name__ == '__main__':
         astroobjects_tablename = f"astroobjects_{field}"
         merges_tablename = f"merges_{field}"
 
-        query = f"SELECT aid FROM {astroobjects_tablename} order by aid;"
+        query = f"SELECT aid FROM {astroobjects_tablename} ORDER BY aid;"
         sql_queries = []
         sql_queries.append(query)
         records = dbh.execute_sql_queries(sql_queries,debug)
@@ -264,14 +265,17 @@ if __name__ == '__main__':
 
             print(f"file_num,start_index,end_index,start_aid,end_aid={file_num},{start_index},{end_index},{start_aid},{end_aid}")
 
-            query = f"SELECT {lc_astroobjects_cols} FROM {astroobjects_tablename} WHERE aid >= {start_aid} and aid <= {end_aid} order by aid;"
+
+            # Query for AstroObjects records.
+
+            query = f"SELECT {lc_astroobjects_cols} FROM {astroobjects_tablename} WHERE aid >= {start_aid} AND aid <= {end_aid} ORDER BY aid;"
             sql_queries = []
             sql_queries.append(query)
             astroobjects_records = dbh.execute_sql_queries(sql_queries,debug)
 
             astroobjects_cols = lc_astroobjects_cols.split(",")
             sources_cols = lc_sources_cols.split(",")
-            sources_cols.insert(0,astroobjects_cols[0])             # add the join index column name (aid)
+            sources_cols.insert(0,lc_df_join_index)             # add the join-index column name (aid)
 
             astroobjects_data = {}
             sources_data = {}
@@ -284,24 +288,22 @@ if __name__ == '__main__':
 
             for astroobjects_record in astroobjects_records:
 
-                aid = astroobjects_record[0]
-
                 for col,val in zip(astroobjects_cols,astroobjects_record):
                     astroobjects_data[col].append(val)
 
-                query = f"SELECT a.{lc_sources_cols} FROM sources a, {merges_tablename} b " +\
-                        f"WHERE a.sid = b.sid and aid = {aid} order by mjdobs;"
-                sql_queries = []
-                sql_queries.append(query)
-                sources_records = dbh.execute_sql_queries(sql_queries,debug)
 
-                for sources_record in sources_records:
+            # Query for Sources records.
 
-                    sources_record = list(sources_record)           # Convert tuple to list.
-                    sources_record.insert(0,aid)                    # Augment the record with aid value.
+            query = f"SELECT {lc_df_join_index},a.{lc_sources_cols} FROM sources a, {merges_tablename} b " +\
+                    f"WHERE a.sid = b.sid and AND aid >= {start_aid} AND aid <= {end_aid} ORDER BY aid,mjdobs;"
+            sql_queries = []
+            sql_queries.append(query)
+            sources_records = dbh.execute_sql_queries(sql_queries,debug)
 
-                    for col,val in zip(sources_cols,sources_record):
-                        sources_data[col].append(val)
+            for sources_record in sources_records:
+
+                for col,val in zip(sources_cols,sources_record):
+                    sources_data[col].append(val)
 
 
             # Create the nested data frame and the data frame to join with it.
