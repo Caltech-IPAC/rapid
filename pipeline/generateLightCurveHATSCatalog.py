@@ -286,8 +286,8 @@ if __name__ == '__main__':
 
                 aid = astroobjects_record[0]
 
-                for col,val in zip(cols,astroobjects_record):
-                    astroobjects_data[col] = append(val)
+                for col,val in zip(astroobjects_cols,astroobjects_record):
+                    astroobjects_data[col].append(val)
 
                 query = f"SELECT a.{lc_sources_cols} FROM sources a, {merges_tablename} b " +\
                         f"WHERE a.sid = b.sid and aid = {aid} order by mjdobs;"
@@ -297,8 +297,8 @@ if __name__ == '__main__':
 
                 for sources_record in sources_records:
 
-                    for col,val in zip(cols,sources_record):
-                        sources_data[col] = append(val)
+                    for col,val in zip(sources_cols,sources_record):
+                        sources_data[col].append(val)
 
 
             # Create the nested data frame and the data frame to join with it.
