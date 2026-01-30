@@ -331,17 +331,19 @@ if __name__ == '__main__':
 
             # Convert DataFrame to an Apache Arrow Table, and write to a Parquet file.
 
-            table = pa.Table.from_pandas(astroobjects_nf)
+            apache_arrow_table = pa.Table.from_pandas(astroobjects_nf)
             print("\nPyArrow Table Schema:")
-            print(f"astroobjects_nf.schema = {astroobjects_nf.schema}")
+            print(f"apache_arrow_table.schema = {apache_arrow_table.schema}")
 
-            pq.write_table(astroobjects_nf, output_parquet_filename)
+            pq.write_table(apache_arrow_table, output_parquet_filename)
             print(f"\nSuccessfully wrote lightcurve data to '{output_parquet_filename}'")
 
             # Increment the start and end indexes.
 
             start_index = start_index + nrows_per_file
             end_index = start_index + nrows_per_file - 1
+
+            j += 1
 
 
     # Close database connection.
