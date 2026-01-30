@@ -80,6 +80,7 @@ RUN /hats_env/bin/python3.11 -m pip install --upgrade hats
 RUN /hats_env/bin/python3.11 -m pip install --upgrade hats-import
 RUN /hats_env/bin/python3.11 -m pip install --upgrade lsdb
 RUN /hats_env/bin/python3.11 -m pip install --upgrade psycopg2-binary
+RUN /hats_env/bin/python3.11 -m pip install --upgrade boto3
 
 
 # Install AWS CLI
