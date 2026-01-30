@@ -19,6 +19,10 @@ RUN yum -y install diffutils
 RUN yum -y install which
 RUN yum -y install file
 
+# Install fftw3-devel
+RUN yum install -y fftw3-devel && \
+    rm -rf /var/lib/apt/lists/*
+
 # Remove requests from RPM package to allow
 # romanisim to install under Python 3.9
 
