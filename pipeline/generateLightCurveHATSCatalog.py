@@ -112,12 +112,14 @@ config_input = configparser.ConfigParser()
 config_input.read(config_input_filename)
 
 
-# Get parameters associated with generating a HATS catalog, including the
-# Sources-database-table columns to be exported to HATS catalog (can be a subset).
+# Get parameters associated with generating a lightcurve HATS catalog, including the
+# AstroObjects-database-table and Sources-database-table columns to be exported to
+# HATS catalog (can be a subset).
 
-sources_cols = config_input['HATS_CATALOGS']['sources_cols']
-sources_input_filename_glob = config_input['HATS_CATALOGS']['sources_input_filename_glob']
-sources_catalog_name = config_input['HATS_CATALOGS']['sources_catalog_name']
+lc_astroobjects_cols = config_input['HATS_CATALOGS']['lc_astroobjects_cols']
+lc_sources_cols = config_input['HATS_CATALOGS']['lc_sources_cols']
+lc_input_filename_glob = config_input['HATS_CATALOGS']['lc_input_filename_glob']
+lc_catalog_name = config_input['HATS_CATALOGS']['lc_catalog_name']
 lowest_healpix_order = int(config_input['HATS_CATALOGS']['lowest_healpix_order'])
 highest_healpix_order = int(config_input['HATS_CATALOGS']['highest_healpix_order'])
 n_workers = int(config_input['HATS_CATALOGS']['n_workers'])
@@ -149,7 +151,7 @@ def generate_hats_catalog(catalog_parquet_path):
         highest_healpix_order=highest_healpix_order,
         file_reader=ParquetReader(),
         input_file_list=catalog_parquet_path,
-        output_artifact_name=sources_catalog_name,
+        output_artifact_name=lc_catalog_name,
         output_path=rapid_work,
         tmp_dir=tmp_dir,
         tmp_path=tmp_dir,
@@ -246,7 +248,7 @@ if __name__ == '__main__':
 
         for i in range(nfiles):
             file_num = j + 1
-            output_parquet_filename = sources_input_filename_glob.replace("*",str(file_num))
+            output_parquet_filename = lc_input_filename_glob.replace("*",str(file_num))
             catalog_parquet_path.append(output_parquet_filename)
 
             start_aid = aid_list[start_index]
@@ -264,7 +266,7 @@ if __name__ == '__main__':
 
             astroobjects_cols = lc_astroobjects_cols.split(",")
             sources_cols = lc_sources_cols.split(",")
-            sources_cols.insert(0,astroobjects_cols[0])             # Join index
+            sources_cols.insert(0,astroobjects_cols[0])             # Join index (aid)
 
             astroobjects_data = {}
             sources_data = {}
