@@ -264,7 +264,7 @@ if __name__ == '__main__':
 
             print(f"file_num,start_index,end_index,start_aid,end_aid={file_num},{start_index},{end_index},{start_aid},{end_aid}")
 
-            query = f"SELECT {lc_astroobjects_cols} FROM astroobjects WHERE aid >= {start_aid} and aid <= {end_aid} order by aid;"
+            query = f"SELECT {lc_astroobjects_cols} FROM {astroobjects_tablename} WHERE aid >= {start_aid} and aid <= {end_aid} order by aid;"
             sql_queries = []
             sql_queries.append(query)
             astroobjects_records = dbh.execute_sql_queries(sql_queries,debug)
