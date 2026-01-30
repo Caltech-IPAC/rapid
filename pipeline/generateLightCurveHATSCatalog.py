@@ -295,7 +295,7 @@ if __name__ == '__main__':
             # Query for Sources records.
 
             query = f"SELECT {lc_df_join_index},a.{lc_sources_cols} FROM sources a, {merges_tablename} b " +\
-                    f"WHERE a.sid = b.sid and AND aid >= {start_aid} AND aid <= {end_aid} ORDER BY aid,mjdobs;"
+                    f"WHERE a.sid = b.sid AND aid >= {start_aid} AND aid <= {end_aid} ORDER BY aid,mjdobs;"
             sql_queries = []
             sql_queries.append(query)
             sources_records = dbh.execute_sql_queries(sql_queries,debug)
