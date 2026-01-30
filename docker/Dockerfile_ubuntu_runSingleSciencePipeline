@@ -22,6 +22,7 @@ RUN yum -y install file
 # Remove requests from RPM package to allow
 # romanisim to install under Python 3.9
 
+RUN dnf -y install python3-devel
 RUN yum -y remove python3-requests
 
 # Install packages in Python 3.9 (/usr/bin/python3)
@@ -43,14 +44,9 @@ RUN pip install --upgrade galsim
 RUN pip install --upgrade romanisim
 RUN pip install --upgrade scikit-image
 
-# Set up separate Python 3.9 venv under root directory for sfft.
-
-#RUN python3 -m venv /sfft_env
-#RUN /sfft_env/bin/python3 -m pip install --upgrade sfft
-
 # Install Python 3.11 with packages (/usr/bin/python3.11)
 
-RUN dnf -y install python3.11
+RUN dnf -y install python3.11-devel
 RUN python3.11 -m ensurepip
 RUN python3.11 -m pip install --upgrade pip
 RUN python3.11 -m pip install --upgrade numpy
@@ -67,6 +63,12 @@ RUN python3.11 -m pip install --upgrade matplotlib
 RUN python3.11 -m pip install --upgrade galsim
 RUN python3.11 -m pip install --upgrade romanisim
 RUN python3.11 -m pip install --upgrade scikit-image
+RUN python3.11 -m pip install --upgrade sfft
+
+# Set up separate Python 3.11 venv under root directory for sfft.
+
+RUN python3.11 -m venv /sfft_env
+RUN /sfft_env/bin/python3.11 -m pip install --upgrade sfft
 
 # Set up separate Python 3.11 venv under root directory for hats and hats-import.
 
