@@ -63,7 +63,6 @@ RUN python3.11 -m pip install --upgrade matplotlib
 RUN python3.11 -m pip install --upgrade galsim
 RUN python3.11 -m pip install --upgrade romanisim
 RUN python3.11 -m pip install --upgrade scikit-image
-RUN python3.11 -m pip install --upgrade sfft
 
 # Set up separate Python 3.11 venv under root directory for sfft.
 
