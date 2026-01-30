@@ -74,6 +74,8 @@ RUN python3.11 -m venv /hats_env
 RUN /hats_env/bin/python3.11 -m pip install --upgrade hats
 RUN /hats_env/bin/python3.11 -m pip install --upgrade hats-import
 RUN /hats_env/bin/python3.11 -m pip install --upgrade lsdb
+RUN /hats_env/bin/python3.11 -m pip install --upgrade psycopg2-binary
+
 
 # Install AWS CLI
 
