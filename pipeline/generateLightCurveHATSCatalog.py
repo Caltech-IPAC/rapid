@@ -237,6 +237,9 @@ if __name__ == '__main__':
         # Partition AstroObjects_<field> database records and lightcurve data into nrows_per_file chunks.
 
         n_aids = len(aid_list)
+
+        print(f"n_aids = {n_aids}")
+
         nfiles = n_aids // nrows_per_file
         r = n_aids % nrows_per_file
         if r > 0:
