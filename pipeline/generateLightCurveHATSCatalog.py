@@ -119,6 +119,8 @@ config_input.read(config_input_filename)
 # HATS catalog (can be a subset).
 
 lc_df_join_index = config_input['HATS_CATALOGS']['lc_df_join_index']
+lc_ra_col = config_input['HATS_CATALOGS']['lc_ra_col']
+lc_dec_col = config_input['HATS_CATALOGS']['lc_dec_col']
 lc_astroobjects_cols = config_input['HATS_CATALOGS']['lc_astroobjects_cols']
 lc_sources_cols = config_input['HATS_CATALOGS']['lc_sources_cols']
 lc_input_filename_glob = config_input['HATS_CATALOGS']['lc_input_filename_glob']
@@ -148,8 +150,8 @@ def generate_hats_catalog(catalog_parquet_path):
     # Specify import arguments
 
     args = ImportArguments(
-        ra_column="ra",
-        dec_column="dec",
+        ra_column=lc_ra_col,
+        dec_column=lc_dec_col,
         lowest_healpix_order=lowest_healpix_order,
         highest_healpix_order=highest_healpix_order,
         file_reader=ParquetReader(),
