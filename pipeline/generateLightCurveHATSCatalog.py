@@ -35,6 +35,8 @@ Here is an example of a complete sources database record:
 import os
 import pandas as pd
 from nested_pandas import NestedFrame
+import pyarrow as pa
+import pyarrow.parquet as pq
 import configparser
 from datetime import datetime, timezone
 from dateutil import tz
@@ -327,10 +329,14 @@ if __name__ == '__main__':
             astroobjects_nf = astroobjects_nf.join_nested(obj=sources_df,name="nested_lc_data")
 
 
-            # Write the DataFrame to a Parquet file.
+            # Convert DataFrame to an Apache Arrow Table, and write to a Parquet file.
 
-            astroobjects_nf.to_parquet(output_parquet_filename, engine='pyarrow')
+            table = pa.Table.from_pandas(astroobjects_nf)
+            print("\nPyArrow Table Schema:")
+            print(f"astroobjects_nf.schema = {astroobjects_nf.schema}")
 
+            pq.write_table(astroobjects_nf, output_parquet_filename)
+            print(f"\nSuccessfully wrote lightcurve data to '{output_parquet_filename}'")
 
             # Increment the start and end indexes.
 
