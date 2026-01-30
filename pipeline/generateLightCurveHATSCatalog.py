@@ -284,7 +284,7 @@ if __name__ == '__main__':
                 for col,val in zip(cols,astroobjects_record):
                     astroobjects_data[col] = append(val)
 
-                query = f"SELECT a.{lc_sources_cols} FROM sources a, {merges_tablename} b " +
+                query = f"SELECT a.{lc_sources_cols} FROM sources a, {merges_tablename} b " +\
                         f"WHERE a.sid = b.sid and aid = {aid} order by mjdobs;"
                 sql_queries = []
                 sql_queries.append(query)
