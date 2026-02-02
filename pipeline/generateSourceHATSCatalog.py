@@ -90,6 +90,8 @@ config_input.read(config_input_filename)
 # Get parameters associated with generating a HATS catalog, including the
 # Sources-database-table columns to be exported to HATS catalog (can be a subset).
 
+sources_ra_col = config_input['HATS_CATALOGS']['sources_ra_col']
+sources_dec_col = config_input['HATS_CATALOGS']['sources_dec_col']
 sources_cols = config_input['HATS_CATALOGS']['sources_cols']
 sources_input_filename_glob = config_input['HATS_CATALOGS']['sources_input_filename_glob']
 sources_catalog_name = config_input['HATS_CATALOGS']['sources_catalog_name']
@@ -118,8 +120,8 @@ def generate_hats_catalog(catalog_csv_path):
     # Specify import arguments
 
     args = ImportArguments(
-        ra_column="ra",
-        dec_column="dec",
+        ra_column=sources_ra_col,
+        dec_column=sources_dec_col,
         lowest_healpix_order=lowest_healpix_order,
         highest_healpix_order=highest_healpix_order,
         file_reader=CsvReader(),
@@ -147,7 +149,7 @@ if __name__ == '__main__':
 
     '''
     Dump sources database table and generate a HATS catalog.  HATS stands for Hierarchical Adaptive Tiling Scheme.
-    Dump operations are segmented and written to multiple files for memory management and possible parallelization.
+    The dumps are segmented and written to multiple files for memory management and possible parallelization.
     '''
 
 
@@ -160,7 +162,7 @@ if __name__ == '__main__':
 
     # Query for list of unique source IDs (sid) from parent Sources database table.
 
-    query = f"SELECT sid FROM sources order by sid;"
+    query = f"SELECT sid FROM sources ORDER BY sid;"
     sql_queries = []
     sql_queries.append(query)
     records = dbh.execute_sql_queries(sql_queries,debug)
@@ -184,6 +186,7 @@ if __name__ == '__main__':
     start_index = 0
     end_index = start_index + nrows_per_file - 1
     catalog_csv_path = []
+
     for i in range(nfiles):
         file_num = i + 1
         filename_csv = sources_input_filename_glob.replace("*",str(file_num))
@@ -195,9 +198,10 @@ if __name__ == '__main__':
         except:
             end_sid = sid_list[n_sids - 1]
 
-        print(f"file_num,start_index,end_index,start_sid,end_sid={file_num},{start_index},{end_index},{start_sid},{end_sid}")
+        print(f"file_num,start_index,end_index = {file_num},{start_index},{end_index}")
+        print(f"start_sid,end_sid = {start_sid},{end_sid}")
 
-        query = f"SELECT {sources_cols} FROM sources WHERE sid >= {start_sid} and sid <= {end_sid} order by sid;"
+        query = f"SELECT {sources_cols} FROM sources WHERE sid >= {start_sid} and sid <= {end_sid} ORDER BY sid;"
         sql_queries = []
         sql_queries.append(query)
         records = dbh.execute_sql_queries(sql_queries,debug)
@@ -254,7 +258,7 @@ if __name__ == '__main__':
     # Code-timing benchmark overall.
 
     end_time_benchmark = time.time()
-    print(f"Elapsed time in seconds from {swname} start to finish =",
+    print(f"Elapsed time in seconds from {swname} start to finish ({n_sids} sources) =",
         end_time_benchmark - start_time_benchmark_at_start)
 
 
