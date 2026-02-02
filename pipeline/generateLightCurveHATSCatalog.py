@@ -216,6 +216,7 @@ if __name__ == '__main__':
 
     nrows_per_file = 100000
     j = 0
+    total_n_aids = 0
 
     for field in fields_list:
 
@@ -240,6 +241,7 @@ if __name__ == '__main__':
         # Partition AstroObjects_<field> database records and lightcurve data into nrows_per_file chunks.
 
         n_aids = len(aid_list)
+        total_n_aids += n_aids
 
         print(f"n_aids = {n_aids}")
 
@@ -354,6 +356,11 @@ if __name__ == '__main__':
             end_index = start_index + nrows_per_file - 1
 
             j += 1
+
+
+    # Report total number of AstroObjects.
+
+    print(f"Total number of AstroObjects = {total_n_aids}")
 
 
     # Close database connection.
