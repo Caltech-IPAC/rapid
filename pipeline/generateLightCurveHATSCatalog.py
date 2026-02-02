@@ -218,6 +218,8 @@ if __name__ == '__main__':
     j = 0
     total_n_aids = 0
 
+    catalog_parquet_path = []
+
     for field in fields_list:
 
 
@@ -254,7 +256,6 @@ if __name__ == '__main__':
 
         start_index = 0
         end_index = start_index + nrows_per_file - 1
-        catalog_parquet_path = []
 
         for i in range(nfiles):
             file_num = j + 1
