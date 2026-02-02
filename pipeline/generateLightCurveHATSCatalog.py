@@ -229,7 +229,7 @@ if __name__ == '__main__':
         astroobjects_tablename = f"astroobjects_{field}"
         merges_tablename = f"merges_{field}"
 
-        query = f"SELECT aid FROM {astroobjects_tablename} ORDER BY aid;"
+        query = f"SELECT aid FROM {astroobjects_tablename} WHERE nsources > 0 ORDER BY aid;"
         sql_queries = []
         sql_queries.append(query)
         records = dbh.execute_sql_queries(sql_queries,debug)
@@ -407,7 +407,7 @@ if __name__ == '__main__':
     # Code-timing benchmark overall.
 
     end_time_benchmark = time.time()
-    print(f"Elapsed time in seconds from {swname} start to finish =",
+    print(f"Elapsed time in seconds from {swname} start to finish ({n_aids} astroobjects) =",
         end_time_benchmark - start_time_benchmark_at_start)
 
 
