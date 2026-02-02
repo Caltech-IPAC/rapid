@@ -3352,7 +3352,7 @@ class RAPIDDB:
 
             if debug == 1:
                 rows_affected = self.cur.rowcount
-                print(f"Deleted: {rows_affected}")
+                print(f"Deleted: {rows_affected} row")
 
         except (Exception, psycopg2.DatabaseError) as error:
             print(f'*** Error deleting {tablename} record (error={error}); skipping...')
@@ -3361,8 +3361,6 @@ class RAPIDDB:
 
         if self.exit_code == 0:
             self.conn.commit()           # Commit database transaction
-
-
 
 
 ########################################################################################################
@@ -3420,6 +3418,39 @@ class RAPIDDB:
 
         except (Exception, psycopg2.DatabaseError) as error:
             print(f'*** Error updating astroobjects_tablename record (aid={aid},error={error}); skipping...')
+            self.exit_code = 67
+            return
+
+        if self.exit_code == 0:
+            self.conn.commit()           # Commit database transaction
+
+
+########################################################################################################
+
+    def delete_source(self,child_tablename,sid,debug=0):
+
+        self.exit_code = 0
+
+
+        # Define query.
+
+        query = f"DELETE FROM {child_tablename} WHERE sid = {sid};"
+
+        if debug == 1:
+            print('query = {}'.format(query))
+
+
+        # Execute query.
+
+        try:
+            self.cur.execute(query)
+
+            if debug == 1:
+                rows_affected = self.cur.rowcount
+                print(f"Deleted: {rows_affected} row")
+
+        except (Exception, psycopg2.DatabaseError) as error:
+            print(f'*** Error deleting {child_tablename} record (error={error}); skipping...')
             self.exit_code = 67
             return
 
