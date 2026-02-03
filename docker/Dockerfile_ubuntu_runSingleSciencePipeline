@@ -2,7 +2,9 @@ FROM redhat/ubi9
 
 # Install software updates, and also install which command.
 
-RUN dnf update -y && dnf install -y which && dnf clean all
+RUN dnf update -y
+RUN dnf install -y which
+RUN dnf clean all
 
 # Install commands and tools.
 
