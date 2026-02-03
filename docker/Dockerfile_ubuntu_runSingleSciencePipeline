@@ -1,5 +1,9 @@
 FROM redhat/ubi9
 
+# Install software updates, and also install which command.
+
+RUN dnf update -y && dnf install -y which && dnf clean all
+
 # Install commands and tools.
 
 RUN yum -y install gcc
@@ -16,7 +20,6 @@ RUN yum -y install unzip
 RUN yum -y install git
 RUN yum -y install sqlite
 RUN yum -y install diffutils
-RUN yum -y install which
 RUN yum -y install file
 
 # Install fftw3-devel
