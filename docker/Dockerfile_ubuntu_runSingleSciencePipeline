@@ -3,7 +3,6 @@ FROM redhat/ubi9
 # Install software updates, and also install which command.
 
 RUN dnf update -y
-RUN dnf install -y subscription-manager
 RUN dnf install -y which
 RUN dnf clean all
 
