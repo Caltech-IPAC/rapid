@@ -43,6 +43,7 @@ CREATE TABLE sources (
     npixfit smallint NOT NULL,                 -- Number of unmasked pixels used to fit the source
     qfit real NOT NULL,                        -- Sum of absolute-value fit residuals divided by fit flux
     cfit  real NOT NULL,                       -- Fit residual in initial central pixel value divided by fit flux
+    redchi real NOT NULL DEFAULT 0.0           -- Reduced chi2
     flags smallint NOT NULL,                   -- photutils bitwise flags
     sharpness real NOT NULL,                   -- Object sharpness
     roundness1 real NOT NULL,                  -- Object roundness based on symmetry
