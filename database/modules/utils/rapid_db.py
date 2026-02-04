@@ -3015,10 +3015,10 @@ class RAPIDDB:
 
 ########################################################################################################
 
-    def copy_sources_data_from_file_into_database(self,csv_file_path,table_name,columns):
+    def copy_data_from_file_into_database(self,csv_file_path,table_name,columns):
 
         '''
-        Copy sources data from file into sources child database table.
+        Copy data from file into specified database table.
         '''
 
         self.exit_code = 0
@@ -3030,7 +3030,7 @@ class RAPIDDB:
         print('table_name = {}'.format(table_name))
 
 
-        # Open the CSV file in read mode
+        # Open the CSV file in read mode and bulk-load specified database table.
 
         try:
 
@@ -3041,7 +3041,7 @@ class RAPIDDB:
             self.conn.commit()           # Commit database transaction
 
         except (Exception, psycopg2.DatabaseError) as error:
-            print('*** Error sources data from file ({}) into sources child database table ({}); skipping...'.format(csv_file_path,table_name))
+            print(f'*** Error bulk-loading data from file ({csv_file_path}) into specified database table ({table_name}); skipping...')
             self.exit_code = 67
             exit(self.exit_code)
 
