@@ -11,7 +11,7 @@
 include $(RAPID_SW)/c/builds/definitions.mk
 
 BIN_NAME = cforcepsfaper
-CPPFLAGS = -I $(RAPID_INC_PATH)/include -I $(RAPID_INC_PATH)/nan -I $(RAPID_INC_PATH)/numericalrecipes
+CPPFLAGS = -I $(RAPID_INC_PATH)/cfitsio -I $(RAPID_INC_PATH)/nan -I $(RAPID_INC_PATH)/numericalrecipes
 LINKFLAGS = -lcfitsio -lm -lnan -lnumericalrecipes -lpthread -L$(RAPID_LIB_PATH)
 
 OBJECTS = cforcepsfaper.o
