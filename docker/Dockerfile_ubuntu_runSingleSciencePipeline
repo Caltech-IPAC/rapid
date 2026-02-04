@@ -114,15 +114,17 @@ RUN cd /code/c/builds && \
 
 # Configure run-time environment.
 
-ENV PATH=/code/c/bin:/root/.local/bin:/root/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
-ENV LD_LIBRARY_PATH=/code/c/lib
-ENV PYTHONPATH=/code
+ENV RAPID_SW=/code
+ENV RAPID_WORK=/work
+ENV PATH=$RAPID_SW/c/bin:/root/.local/bin:/root/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+ENV LD_LIBRARY_PATH=$RAPID_SW/c/lib
+ENV PYTHONPATH=$RAPID_SW
 ENV PYTHONUNBUFFERED=1
 
-WORKDIR /tmp
+WORKDIR $RAPID_WORK
 
 # Make the entrypoint bash so arbitrary commands can override the default.
 
 ENTRYPOINT ["bash"]
 
-CMD ["/code/pipeline/awsBatchSubmitJobs_runSingleSciencePipeline.sh"]
+CMD ["$RAPID_SW/pipeline/awsBatchSubmitJobs_runSingleSciencePipeline.sh"]
