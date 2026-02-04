@@ -170,9 +170,9 @@ def run_single_core_job_stage_1_crossmatching(scas,fields,index_thread):
     '''
     The current list of fields includes all fields that a science image may overlap, as found
     by querying for distinct fields all the sources child tables that are to be cross-matched.
-    The cross-matching between sources in adjacent fields done here in stage 1 includes
-    populating the pertinent AstroObjects_<field> and Merges_<field> database tables within
-    field boundaries).  Cross-matching sources across adjacent field boundaries is done in stage 2.
+    The cross-matching of sources in adjacent fields within field boundaries done here in stage 1
+    includes populating the pertinent AstroObjects_<field> and Merges_<field> database tables for
+    the relevant field.  Cross-matching sources across adjacent field boundaries is done in stage 2.
     '''
 
 
@@ -375,10 +375,10 @@ def run_single_core_job_stage_2_crossmatching(scas,fields,index_thread):
     '''
     The current list of fields includes all fields that a science image may overlap, as found
     by querying for distinct fields all the sources child tables that are to be cross-matched.
-    Cross-matching between sources in adjacent fields is done after stage 1 (populating the
-    pertinent AstroObjects_<field> and Merges_<field> database tables within field boundaries).
-    Field boundaries are infinitesimally thin lines (with no thickness), and the match radius
-    can extend across them.
+    Cross-matching of sources in adjacent fields outside of field boundaries is done here after
+    stage 1 (populating the pertinent AstroObjects_<field> and Merges_<field> database tables
+    within field   boundaries).  Field boundaries are infinitesimally thin lines (no thickness),
+    and the match radius can extend across them.
     '''
 
 
