@@ -253,3 +253,12 @@ make clean
 make
 echo " "
 echo "--->Finished building bkgest module."
+
+#--------Build cforcepsfaper module-------------------
+echo " "
+echo "--->Building cforcepsfaper module ..."
+cd ${RAPID_SW}/c/src/cforcepsfaper
+make clean
+make
+echo " "
+echo "--->Finished building cforcepsfaper module."
