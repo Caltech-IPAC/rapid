@@ -160,6 +160,7 @@ cols.append("fluxerr")
 cols.append("npixfit")
 cols.append("qfit")
 cols.append("cfit")
+cols.append("redchi")
 cols.append("flags")
 cols.append("sharpness")
 cols.append("roundness1")
@@ -301,7 +302,7 @@ def run_single_core_job(jids,overlapping_fields_list,meta_list,negative_diffimg_
 
 
         # Here are what the columns in the photutils catalogs are called:
-        # Main: id group_id group_size local_bkg x_init y_init flux_init x_fit y_fit flux_fit x_err y_err flux_err npixfit qfit cfit flags ra dec
+        # Main: id group_id group_size local_bkg x_init y_init flux_init x_fit y_fit flux_fit x_err y_err flux_err npixfit qfit cfit reduced_chi2 flags ra dec
         # Finder: id xcentroid ycentroid sharpness roundness1 roundness2 npix peak flux mag daofind_mag
         # Note that some catalog-column names have underscores that need to be dealt with specially
         # because the database columns do not have underscores.
@@ -331,6 +332,8 @@ def run_single_core_job(jids,overlapping_fields_list,meta_list,negative_diffimg_
                         cat_col = 'y_err'
                     elif cat_col == 'fluxerr':
                         cat_col = 'flux_err'
+                    elif cat_col == 'redchi':
+                        cat_col = 'reduced_chi2'
 
                     if cat_col == 'pid':
                         continue
@@ -393,7 +396,7 @@ def run_single_core_job(jids,overlapping_fields_list,meta_list,negative_diffimg_
 
         # Load records into sources database tables.
 
-        dbh.copy_sources_data_from_file_into_database(sources_table_file,sources_table,columns)
+        dbh.copy_data_from_file_into_database(sources_table_file,sources_table,columns)
 
 
         # Touch done file.  Upload done file to S3 bucket.
