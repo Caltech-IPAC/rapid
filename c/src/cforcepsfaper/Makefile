@@ -1,8 +1,8 @@
 ###################################################################################
-#     Makefile              10/17/22          Russ Laher
+#     Makefile              2/4/2026          Russ Laher
 #                                             laher@ipac.caltech.edu
 #                                             California Institute of Technology
-#                                             (c) 2022, All Rights Reserved.
+#                                             (c) 2026, All Rights Reserved.
 #
 #    The C-code cforcepsfaper is multi-threaded, intended to execute the
 #    compute-intensive parts of forced photometry.
