@@ -328,9 +328,9 @@ def generateReferenceImageCatalog(s3_client,
 
     # Upload reference-image catalog to S3 product bucket.
 
-    if upload_to_s3_bucket:
+    refimage_sextractor_catalog_s3_bucket_object_name = job_proc_date + "/jid" + str(jid) + "/" + filename_refimage_catalog
 
-        refimage_sextractor_catalog_s3_bucket_object_name = job_proc_date + "/jid" + str(jid) + "/" + filename_refimage_catalog
+    if upload_to_s3_bucket:
 
         uploaded_to_bucket = True
 
