@@ -16,6 +16,9 @@ import time
 from concurrent.futures import ProcessPoolExecutor, as_completed
 to_zone = tz.gettz('America/Los_Angeles')
 
+from astropy.wcs import WCS
+from astropy.io import fits
+
 import database.modules.utils.rapid_db as db
 import modules.utils.rapid_pipeline_subs as util
 import database.modules.utils.roman_tessellation_db as sqlite
@@ -360,6 +363,66 @@ if __name__ == '__main__':
             diff_image_filename,subdirs_diff_image,downloaded_from_bucket = util.download_file_from_s3_bucket(s3_client,s3_full_name_diff_image)
 
             print(f"diff_image_filename,subdirs_diff_image,downloaded_from_bucket = {diff_image_filename},{subdirs_diff_image},{downloaded_from_bucket}")
+
+
+        # Read FITS file
+
+        with fits.open(diff_image_filename) as hdul:
+
+            filter_diff = hdul[0].header["FILTER"].strip()
+
+            print("filter_diff =",filter_diff)
+
+            hdr = hdul[hdu_index_diff].header
+
+            w_diff = WCS(hdr) # Initialize WCS object from FITS header
+
+        print(w_diff)
+
+        print("CTYPE = ",w_diff.wcs.crpix)
+
+        naxis1_diff = hdr['NAXIS1']
+        naxis2_diff = hdr['NAXIS2']
+
+        print("naxis1_diff,naxis2_diff =",naxis1_diff,naxis2_diff)
+
+        crpix1 = w_diff.wcs.crpix[0]
+        crpix2 = w_diff.wcs.crpix[1]
+
+        crval1 = hdr['CRVAL1']
+        crval2 = hdr['CRVAL2']
+
+        print(f"crval1,crval2 = {crval1},{crval2}")
+
+
+        # Example of converting pixel coordinates to celestial coordinates
+        # The following should reproduce CRVAL1,CRVAL2.
+
+        pixel_x, pixel_y = crpix1 - 1, crpix2 - 1
+        celestial_coords = w_diff.pixel_to_world(pixel_x, pixel_y)
+        print(f"CRVAL1,CRVAL2 Pixel ({pixel_x}, {pixel_y}) corresponds to {celestial_coords.ra.deg:.12f} RA and {celestial_coords.dec.deg:.12f} Dec.")
+
+
+        # Compute pixel coordinates of diff-image center and four corners.
+
+        x0,y0,x1,y1,x2,y2,x3,y3,x4,y4 = util.compute_pix_image_center_and_four_corners(naxis1_diff,naxis2_diff)
+
+
+        # Compute percent overlap area.
+
+        percent_overlap_area = util.compute_image_overlap_area(w_diff,
+                                                               naxis1_diff,naxis2_diff,
+                                                               x0,y0,
+                                                               x1,y1,
+                                                               x2,y2,
+                                                               x3,y3,
+                                                               x4,y4,
+                                                               ra0_field,dec0_field,
+                                                               ra1_field,dec1_field,
+                                                               ra2_field,dec2_field,
+                                                               ra3_field,dec3_field,
+                                                               ra4_field,dec4_field)
+
 
 
             if i >= 5:
