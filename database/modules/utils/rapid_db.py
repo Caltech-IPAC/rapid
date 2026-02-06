@@ -3520,7 +3520,6 @@ class RAPIDDB:
         print(f'----> cattype = {cattype}')
         print(f'----> radius_of_initial_cone_search = {radius_of_initial_cone_search}')
         print(f'----> ppid_sci = {ppid_sci}')
-        print(f'----> ppid_ref = {ppid_ref}')
 
         rep = {"TEMPLATE_JDEARLIEST": str(jd_earliest)}
 
