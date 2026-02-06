@@ -439,7 +439,7 @@ if __name__ == '__main__':
                     if rfid_str == 'None':
                         rfid = None
 
-                        ppid_refimage = int(product_config_input['REF_IMAGE']['ppid'])
+                        ppid_refimage = int(product_config_input['REF_IMAGE']['ppid_refimage'])
 
                         checksum_refimage = product_config_input['REF_IMAGE']['awaicgen_output_mosaic_image_file_checksum']
                         filename_refimage = product_config_input['REF_IMAGE']['awaicgen_output_mosaic_image_file']
