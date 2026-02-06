@@ -257,7 +257,6 @@ if __name__ == '__main__':
 
     exitcode = 0
 
-
     s3_client = boto3.client('s3')
 
 
@@ -367,9 +366,12 @@ if __name__ == '__main__':
 
             # Read FITS file
 
+
+            hdu_index_diff = 0
+
             with fits.open(diff_image_filename) as hdul:
 
-                filter_diff = hdul[0].header["FILTER"].strip()
+                filter_diff = hdul[hdu_index_diff].header["FILTER"].strip()
 
                 print("filter_diff =",filter_diff)
 
