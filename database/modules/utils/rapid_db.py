@@ -3513,10 +3513,10 @@ class RAPIDDB:
 
         # Formulate query by substituting parameters into query template.
 
-        print(f'----> pid = {pid}')
-        print(f'----> radius_of_initial_cone_search = {radius_of_initial_cone_search}')
         print(f'----> field_ra0 = {field_ra0}')
         print(f'----> field_dec0 = {field_dec0}')
+        print(f'----> radius_of_initial_cone_search = {radius_of_initial_cone_search}')
+        print(f'----> jd_earliest = {jd_earliest}')
         print(f'----> cattype = {cattype}')
         print(f'----> radius_of_initial_cone_search = {radius_of_initial_cone_search}')
         print(f'----> ppid_sci = {ppid_sci}')
