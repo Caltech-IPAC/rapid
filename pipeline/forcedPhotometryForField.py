@@ -342,7 +342,7 @@ if __name__ == '__main__':
 
         i += 1
 
-        print(f"i,filename,refimfilename,ppid_ref,dist = {i},{filename},{refimfilename},{ppid_ref},{dist_field_sciimg_center}")
+        print(f"i,field,filename,refimfilename,ppid_ref,dist = {i},{field},{filename},{refimfilename},{ppid_ref},{dist_field_sciimg_center}")
 
 
     # Code-timing benchmark.
