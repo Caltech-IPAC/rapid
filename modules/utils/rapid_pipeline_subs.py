@@ -2132,8 +2132,6 @@ def computeSkyCoordsFromPixelCoords(filename_sciimage_image,x_list,y_list):
     return ra,dec
 
 
-
-
 #####################################################################################################
 # Normalize the FITS image data.
 #####################################################################################################
@@ -2185,3 +2183,190 @@ def normalize_image(fits_file,hdu_index,output_fits_file=None):
     # Return None implicitly.
 
     return
+
+
+#####################################################################################################
+# Compute pixel coordinates of four corners of image.  Pixel coordinates are zero-based in Python.
+#####################################################################################################
+
+def compute_pix_image_center_and_four_corners(naxis1,naxis2):
+
+    x0 = float(naxis1) / 2.0 + 0.5 - 1
+    y0 = float(naxis2) / 2.0 + 0.5 - 1
+
+    x1 = 0
+    y1 = 0
+
+    x2 = naxis1 - 1
+    y2 = 0
+
+    x3 = naxis1 - 1
+    y3 = naxis2 - 1
+
+    x4 = 0
+    y4 = naxis2 - 1
+
+    return x0,y0,x1,y1,x2,y2,x3,y3,x4,y4
+
+
+#####################################################################################################
+# Compute RA,Dec of center and four corners of image.  Pixel coordinates are zero-based in Python.
+#####################################################################################################
+
+def compute_sky_image_center_and_four_corners(w,x0,y0,x1,y1,x2,y2,x3,y3,x4,y4):
+
+    pixel_x = x0
+    pixel_y = y0
+    celestial_coords = w.pixel_to_world(pixel_x, pixel_y)
+    print(f"Center: Pixel ({pixel_x}, {pixel_y}) corresponds to {celestial_coords.ra.deg:.12f} RA and {celestial_coords.dec.deg:.12f} Dec.")
+    ra0 = celestial_coords.ra.deg
+    dec0 = celestial_coords.dec.deg
+
+    pixel_x = x1
+    pixel_y = y1
+    celestial_coords = w.pixel_to_world(pixel_x, pixel_y)
+    print(f"Corner 1: Pixel ({pixel_x}, {pixel_y}) corresponds to {celestial_coords.ra.deg:.12f} RA and {celestial_coords.dec.deg:.12f} Dec.")
+    ra1 = celestial_coords.ra.deg
+    dec1 = celestial_coords.dec.deg
+
+    pixel_x = x2
+    pixel_y = y2
+    celestial_coords = w.pixel_to_world(pixel_x, pixel_y)
+    print(f"Corner 2: Pixel ({pixel_x}, {pixel_y}) corresponds to {celestial_coords.ra.deg:.12f} RA and {celestial_coords.dec.deg:.12f} Dec.")
+    ra2 = celestial_coords.ra.deg
+    dec2 = celestial_coords.dec.deg
+
+    pixel_x = x3
+    pixel_y = y3
+    celestial_coords = w.pixel_to_world(pixel_x, pixel_y)
+    print(f"Corner 3: Pixel ({pixel_x}, {pixel_y}) corresponds to {celestial_coords.ra.deg:.12f} RA and {celestial_coords.dec.deg:.12f} Dec.")
+    ra3 = celestial_coords.ra.deg
+    dec3 = celestial_coords.dec.deg
+
+    pixel_x = x4
+    pixel_y = y4
+    celestial_coords = w.pixel_to_world(pixel_x, pixel_y)
+    print(f"Corner 4: Pixel ({pixel_x}, {pixel_y}) corresponds to {celestial_coords.ra.deg:.12f} RA and {celestial_coords.dec.deg:.12f} Dec.")
+    ra4 = celestial_coords.ra.deg
+    dec4 = celestial_coords.dec.deg
+
+    return ra0,dec0,ra1,dec1,ra2,dec2,ra3,dec3,ra4,dec4
+
+
+#####################################################################################################
+# Compute pixel coordinates of center and four corners of image in WCS grid from sky positions.
+# Pixel coordinates are zero-based in Python.
+#####################################################################################################
+
+def compute_pix_image_center_and_four_corners_from_sky(w,ra0,dec0,ra1,dec1,ra2,dec2,ra3,dec3,ra4,dec4):
+
+    ra = ra0
+    dec = dec0
+    pos = SkyCoord(ra=ra, dec=dec, unit='deg')
+    x0,y0 = w.world_to_pixel(pos)
+    print(f"Center: ra={ra}, dec={dec}) corresponds to x={x0}, y={y0}")
+
+    ra = ra1
+    dec = dec1
+    pos = SkyCoord(ra=ra, dec=dec, unit='deg')
+    x1,y1 = w.world_to_pixel(pos)
+    print(f"Corner 1: ra={ra}, dec={dec}) corresponds to x={x1}, y={y1}")
+
+    ra = ra2
+    dec = dec2
+    pos = SkyCoord(ra=ra, dec=dec, unit='deg')
+    x2,y2 = w.world_to_pixel(pos)
+    print(f"Corner 2: ra={ra}, dec={dec}) corresponds to x={x2}, y={y2}")
+
+    ra = ra3
+    dec = dec3
+    pos = SkyCoord(ra=ra, dec=dec, unit='deg')
+    x3,y3 = w.world_to_pixel(pos)
+    print(f"Corner 3: ra={ra}, dec={dec}) corresponds to x={x3}, y={y3}")
+
+    ra = ra4
+    dec = dec4
+    pos = SkyCoord(ra=ra, dec=dec, unit='deg')
+    x4,y4 = w.world_to_pixel(pos)
+    print(f"Corner 4: ra={ra}, dec={dec}) corresponds to x={x4}, y={y4}")
+
+    return x0,y0,x1,y1,x2,y2,x3,y3,x4,y4
+
+
+#####################################################################################################
+# Compute overlap area of reference image (or field) onto science image.
+#####################################################################################################
+
+def compute_image_overlap_area(w_sci,
+                               naxis1_sci,naxis2_sci,
+                               x0_sci,y0_sci,
+                               x1_sci,y1_sci,
+                               x2_sci,y2_sci,
+                               x3_sci,y3_sci,
+                               x4_sci,y4_sci,
+                               ra0_ref,dec0_ref,
+                               ra1_ref,dec1_ref,
+                               ra2_ref,dec2_ref,
+                               ra3_ref,dec3_ref,
+                               ra4_ref,dec4_ref):
+
+
+    # Compute pixel coordinates of reference-image center and four corners in the science-image wcs.
+
+    x0_refsci,y0_refsci,x1_refsci,y1_refsci,x2_refsci,y2_refsci,x3_refsci,y3_refsci,x4_refsci,y4_refsci = \
+        compute_pix_image_center_and_four_corners_from_sky(w_sci,\
+                                                           ra0_ref,dec0_ref,\
+                                                           ra1_ref,dec1_ref,\
+                                                           ra2_ref,dec2_ref,\
+                                                           ra3_ref,dec3_ref,\
+                                                           ra4_ref,dec4_ref)
+
+
+    # Compute overlap area now that polygon vertices are known.
+
+    num_contours = 1
+    num_vertices = 4
+    num_holes = 0
+
+    with open('subjfile', 'w') as f:
+        f.write(f'{num_contours}\n')
+        f.write(f'{num_vertices}\n')
+        f.write(f'{num_holes}\n')
+        f.write(f'{x1_sci} {y1_sci}\n')
+        f.write(f'{x2_sci} {y2_sci}\n')
+        f.write(f'{x3_sci} {y3_sci}\n')
+        f.write(f'{x4_sci} {y4_sci}\n')
+
+    with open('clipfile', 'w') as f:
+        f.write(f'{num_contours}\n')
+        f.write(f'{num_vertices}\n')
+        f.write(f'{num_holes}\n')
+        f.write(f'{x1_refsci} {y1_refsci}\n')
+        f.write(f'{x2_refsci} {y2_refsci}\n')
+        f.write(f'{x3_refsci} {y3_refsci}\n')
+        f.write(f'{x4_refsci} {y4_refsci}\n')
+
+    cmd = ['computeOverlapArea']
+    exitcode,listing = execute_command_and_return_stdout(cmd)
+
+    print("exitcode =",exitcode)
+
+    for line in listing.split('\n'):
+        line = line.strip()
+        if line != "":
+            #print(line)
+            a = line.split("=")
+            label = a[0].strip()
+            intersecting_area = a[1].strip()
+            print(label,"(science-image pixels) =",intersecting_area)
+
+
+    # Compute the percentage of overlap area between science and reference images.
+
+    percent_overlap = 100.0 * float(intersecting_area) / (naxis1_sci * naxis2_sci)
+
+    print(f"percent_overlap = {percent_overlap:.2f}")
+
+    print("Done computing overlap area...")
+
+    return percent_overlap
