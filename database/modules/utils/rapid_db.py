@@ -3466,6 +3466,8 @@ class RAPIDDB:
 ########################################################################################################
 
     def get_possible_overlapping_diffimages(self,
+                                            ppid_sci,
+                                            cattype,
                                             jd_earliest,
                                             field_ra0,
                                             field_dec0,
@@ -3489,13 +3491,19 @@ class RAPIDDB:
         # Define query template.
 
         query_template =\
-            "select pid,expid,sca,fid,field,jd,rfid,ra0,dec0,ra1,dec1,ra2,dec2,ra3,dec3,ra4,dec4, " +\
-            "filename,checksum,infobitssci,infobitsref, " +\
+            "select pid,expid,sca,a.fid,a.field,jd,ra0,dec0,ra1,dec1,ra2,dec2,ra3,dec3,ra4,dec4, " +\
+            "a.filename,a.checksum,infobitssci,infobitsref,rfid,b.filename,b.checksum,b.ppid " +\
             "q3c_dist(ra0, dec0, cast(TEMPLATE_RA0 as double precision), cast(TEMPLATE_DEC0 as double precision)) as dist " +\
-            "from DiffImages " +\
-            "where jd >= TEMPLATE_JDEARLIEST " +\
-            "and status > 0 " +\
-            "and vbest > 0 " +\
+            "from DiffImages a, RefImages b, RefImCatalogs c " +\
+            "where a.rfid = b.rfid " +\
+            "and b.rfid = c.rfid " +\
+            "and cattype = TEMPLATE_CATTYPE " +\
+            "and a.ppid = TEMPLATE_PPIDSCI " +\
+            "and jd >= TEMPLATE_JDEARLIEST " +\
+            "and a.status > 0 " +\
+            "and b.status > 0 " +\
+            "and a.vbest > 0 " +\
+            "and b.vbest > 0 " +\
             "and q3c_radial_query(ra0, dec0, " +\
             "cast(TEMPLATE_RA0 as double precision), " +\
             "cast(TEMPLATE_DEC0 as double precision), " +\
@@ -3505,14 +3513,22 @@ class RAPIDDB:
 
         # Formulate query by substituting parameters into query template.
 
-        print('----> pid = {}'.format(pid))
-        print('----> radius_of_initial_cone_search = {}'.format(radius_of_initial_cone_search))
+        print(f'----> pid = {pid}')
+        print(f'----> radius_of_initial_cone_search = {radius_of_initial_cone_search}')
+        print(f'----> field_ra0 = {field_ra0}')
+        print(f'----> field_dec0 = {field_dec0}')
+        print(f'----> cattype = {cattype}')
+        print(f'----> radius_of_initial_cone_search = {radius_of_initial_cone_search}')
+        print(f'----> ppid_sci = {ppid_sci}')
+        print(f'----> ppid_ref = {ppid_ref}')
 
         rep = {"TEMPLATE_JDEARLIEST": str(jd_earliest)}
 
         rep["TEMPLATE_RA0"] = str(field_ra0)
         rep["TEMPLATE_DEC0"] = str(field_dec0)
         rep["TEMPLATE_RADIUS"] = str(radius_of_initial_cone_search)
+        rep["TEMPLATE_CATTYPE"] = str(cattype)
+        rep["TEMPLATE_PPIDSCI"] = str(ppid_sci)
 
         rep = dict((re.escape(k), v) for k, v in rep.items())
         pattern = re.compile("|".join(rep.keys()))
