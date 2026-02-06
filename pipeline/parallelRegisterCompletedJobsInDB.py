@@ -428,7 +428,7 @@ def run_single_core_job(jids,log_fnames,index_thread):
                 if rfid_str == 'None':
                     rfid = None
 
-                    ppid_refimage = int(product_config_input['REF_IMAGE']['ppid_refimage'])
+                    ppid_refimage = int(product_config_input['REF_IMAGE']['ppid'])
 
                     checksum_refimage = product_config_input['REF_IMAGE']['awaicgen_output_mosaic_image_file_checksum']
                     filename_refimage = product_config_input['REF_IMAGE']['awaicgen_output_mosaic_image_file']
@@ -622,7 +622,7 @@ def run_single_core_job(jids,log_fnames,index_thread):
                 if zogy_output_diffimage_file_checksum != 'Not found':
 
                     rid_diffimage = product_config_input['ZOGY']['rid']
-                    ppid_diffimage = product_config_input['ZOGY']['ppid']
+                    ppid_diffimage = product_config_input['SCI_IMAGE']['ppid']
 
 
                     rfid_diffimage = product_config_input['ZOGY']['rfid']
