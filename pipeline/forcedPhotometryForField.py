@@ -190,7 +190,7 @@ simcalapfluxcor = float(config_input['FORCED_PHOTOMETRY']['simcalapfluxcor'])
 
 # official start of survey (Julian Date) => use as earliest
 # possible epoch for querying DB for photometry.
-d_earliest = config_input['FORCED_PHOTOMETRY']['d_earliest'])
+d_earliest = config_input['FORCED_PHOTOMETRY']['d_earliest']
 jd_earliest = float(config_input['FORCED_PHOTOMETRY']['jd_earliest'])
 
 # maximum matching radius for finding and reporting nearest
