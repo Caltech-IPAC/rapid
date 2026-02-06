@@ -126,7 +126,7 @@ sca_readout_noise = float(config_input['INSTRUMENT']['sca_readout_noise'])
 ppid = int(config_input['SCI_IMAGE']['ppid'])
 saturation_level_sciimage = config_input['SCI_IMAGE']['saturation_level']
 
-ppid_refimage = int(config_input['REF_IMAGE']['ppid_refimage'])
+ppid_refimage = int(config_input['REF_IMAGE']['ppid'])
 max_n_images_to_coadd = int(config_input['REF_IMAGE']['max_n_images_to_coadd'])
 naxis1_refimage = int(config_input['REF_IMAGE']['naxis1_refimage'])
 naxis2_refimage = int(config_input['REF_IMAGE']['naxis2_refimage'])
