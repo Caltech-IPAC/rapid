@@ -63,7 +63,7 @@ if field is None:
 
 sky_positions_csv_file = os.getenv('SKYPOSITIONSCSVFILE')
 
-if sky_positions_file is None:
+if sky_positions_csv_file is None:
 
     print("*** Error: Env. var. sky_positions_csv_file not set; quitting...")
     exit(64)
