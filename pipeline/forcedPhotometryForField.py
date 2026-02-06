@@ -255,6 +255,9 @@ if __name__ == '__main__':
     exitcode = 0
 
 
+    s3_client = boto3.client('s3')
+
+
     # Read input sky positions.
 
     with open(sky_positions_csv_file, newline='') as csvfile:
@@ -299,8 +302,8 @@ if __name__ == '__main__':
         exit(dbh.exit_code)
 
 
-    # Get difference images that possibly overlap the field.  Returns the following
-    # columns:
+    # Get difference images that possibly overlap the field.
+    # Returns the following columns:
     # pid,expid,sca,fid,field,jd,ra0,dec0,ra1,dec1,ra2,dec2,ra3,dec3,ra4,dec4,
     # filename,checksum,infobitssci,infobitsref,rfid,refimfilename,refimchecksum,
     # dist_field_sciimg_center (degrees).
@@ -312,37 +315,55 @@ if __name__ == '__main__':
                                                       dec0_field,
                                                       match_radius)
 
-    i = 0
-    for record in records:
-        pid = record[0]
-        expid = record[1]
-        sca = record[2]
-        fid = record[3]
-        field = record[4]
-        jd = record[5]
-        ra0 = record[6]
-        dec0 = record[7]
-        ra1 = record[8]
-        dec1 = record[9]
-        ra2 = record[10]
-        dec2 = record[11]
-        ra3 = record[12]
-        dec3 = record[13]
-        ra4 = record[14]
-        dec4 = record[15]
-        filename = record[16]
-        checksum = record[17]
-        infobitssci = record[18]
-        infobitsref = record[19]
-        rfid = record[20]
-        refimfilename = record[21]
-        refimchecksum = record[22]
-        ppid_ref = record[23]
-        dist_field_sciimg_center = record[24]
+    nrecs = len(records)
 
-        i += 1
+    print(f"nrecs = {nrecs}")
 
-        print(f"i,field,filename,refimfilename,ppid_ref,dist = {i},{field},{filename},{refimfilename},{ppid_ref},{dist_field_sciimg_center}")
+    if nrecs > 0:
+
+        i = 0
+        for record in records:
+            pid = record[0]
+            expid = record[1]
+            sca = record[2]
+            fid = record[3]
+            field = record[4]
+            jd = record[5]
+            ra0 = record[6]
+            dec0 = record[7]
+            ra1 = record[8]
+            dec1 = record[9]
+            ra2 = record[10]
+            dec2 = record[11]
+            ra3 = record[12]
+            dec3 = record[13]
+            ra4 = record[14]
+            dec4 = record[15]
+            filename = record[16]
+            checksum = record[17]
+            infobitssci = record[18]
+            infobitsref = record[19]
+            rfid = record[20]
+            refimfilename = record[21]
+            refimchecksum = record[22]
+            ppid_ref = record[23]
+            dist_field_sciimg_center = record[24]
+
+            i += 1
+
+            print(f"i,field,filename,refimfilename,ppid_ref,dist = {i},{field},{filename},{refimfilename},{ppid_ref},{dist_field_sciimg_center}")
+
+
+            # Download difference image from S3 bucket.
+
+            s3_full_name_diff_image = filename
+            diff_image_filename,subdirs_diff_image,downloaded_from_bucket = util.download_file_from_s3_bucket(s3_client,s3_full_name_diff_image)
+
+            print(f"diff_image_filename,subdirs_diff_image,downloaded_from_bucket = {diff_image_filename},{subdirs_diff_image},{downloaded_from_bucket}")
+
+
+            if i >= 5:
+                break
 
 
     # Code-timing benchmark.
