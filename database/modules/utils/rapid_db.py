@@ -1093,7 +1093,7 @@ class RAPIDDB:
 
         '''
         Query database for RIDs and distances from tile center for all science images that
-        overlap the sky tile associated with the input science image and its filter and
+        overlap the sky tile associated with the input science image and its filter
         that were acquired before the input science image.
         Returned list is ordered by distance from tile center.
         '''
@@ -1109,10 +1109,15 @@ class RAPIDDB:
 
         # Define query template.
 
+        # TODO: This query will not actually give all overlapping images (however small a chance this may be).
+        #       For example, an image corner may overlap on a sky tile that does not cover a tile center or corner.
+
         query_template =\
             "select rid,ra0,dec0,ra1,dec1,ra2,dec2,ra3,dec3,ra4,dec4,q3c_dist(ra0, dec0, cast(TEMPLATE_RA0 as double precision), cast(TEMPLATE_DEC0 as double precision)) as dist " +\
             "from L2FileMeta " +\
             "where fid = TEMPLATE_FID " +\
+            "and status > 0 " +\
+            "and vbest > 0 " +\
             "and q3c_radial_query(ra0, dec0, cast(TEMPLATE_RA0 as double precision), cast(TEMPLATE_DEC0 as double precision), cast(TEMPLATE_RADIUS as double precision)) " +\
             "and (q3c_poly_query(ra1, dec1, array[cast(TEMPLATE_RA1 as double precision), cast(TEMPLATE_DEC1 as double precision)," +\
                                                  "cast(TEMPLATE_RA2 as double precision), cast(TEMPLATE_DEC2 as double precision)," +\
@@ -3456,3 +3461,86 @@ class RAPIDDB:
 
         if self.exit_code == 0:
             self.conn.commit()           # Commit database transaction
+
+
+########################################################################################################
+
+    def get_possible_overlapping_diffimages(self,
+                                            jd_earliest,
+                                            field_ra0,
+                                            field_dec0,
+                                            radius_of_initial_cone_search=None):
+
+        '''
+        Query database for PIDs and distances from tile center for all difference images that
+        possibly overlap the specified field (a.k.a. sky tile).
+        Returned list is ordered by JD.
+        '''
+
+        self.exit_code = 0
+
+
+        # Radius of initial cone search, in angular degrees.
+
+        if radius_of_initial_cone_search is None:
+            radius_of_initial_cone_search = 1.0
+
+
+        # Define query template.
+
+        query_template =\
+            "select pid,expid,sca,fid,field,jd,rfid,ra0,dec0,ra1,dec1,ra2,dec2,ra3,dec3,ra4,dec4, " +\
+            "filename,checksum,infobitssci,infobitsref, " +\
+            "q3c_dist(ra0, dec0, cast(TEMPLATE_RA0 as double precision), cast(TEMPLATE_DEC0 as double precision)) as dist " +\
+            "from DiffImages " +\
+            "where jd >= TEMPLATE_JDEARLIEST " +\
+            "and status > 0 " +\
+            "and vbest > 0 " +\
+            "and q3c_radial_query(ra0, dec0, " +\
+            "cast(TEMPLATE_RA0 as double precision), " +\
+            "cast(TEMPLATE_DEC0 as double precision), " +\
+            "cast(TEMPLATE_RADIUS as double precision)) " +\
+            "order by jd; "
+
+
+        # Formulate query by substituting parameters into query template.
+
+        print('----> pid = {}'.format(pid))
+        print('----> radius_of_initial_cone_search = {}'.format(radius_of_initial_cone_search))
+
+        rep = {"TEMPLATE_JDEARLIEST": str(jd_earliest)}
+
+        rep["TEMPLATE_RA0"] = str(field_ra0)
+        rep["TEMPLATE_DEC0"] = str(field_dec0)
+        rep["TEMPLATE_RADIUS"] = str(radius_of_initial_cone_search)
+
+        rep = dict((re.escape(k), v) for k, v in rep.items())
+        pattern = re.compile("|".join(rep.keys()))
+        query = pattern.sub(lambda m: rep[re.escape(m.group(0))], query_template)
+
+        print('query = {}'.format(query))
+
+
+        # Execute query.
+
+        try:
+            self.cur.execute(query)
+
+            try:
+                records = []
+                nrecs = 0
+                for record in self.cur:
+                    records.append(record)
+                    nrecs += 1
+
+                print("nrecs =",nrecs)
+
+            except:
+                print("Nothing returned from database query; continuing...")
+
+        except (Exception, psycopg2.DatabaseError) as error:
+            print('*** Error from database method RAPIDDB.get_overlapping_diffimages ({}); skipping...'.format(error))
+            self.exit_code = 67
+            return
+
+        return records
