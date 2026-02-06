@@ -1714,7 +1714,7 @@ if __name__ == '__main__':
             sfft_cmd.append(filename_refsegm)
 
 
-        sfft_cmd_str = = ' '.join(sfft_cmd)
+        sfft_cmd_str = ' '.join(sfft_cmd)
         activate_cmd = "source /sfft_env/bin/activate"
         deactivate_cmd = "deactivate"
 
