@@ -4,6 +4,7 @@ The input sky_positions_csv_file has 3 columns: reqid,ra,dec, and these sky posi
 are required to be within the input field.
 '''
 
+import csv
 import boto3
 import os
 import numpy as np
