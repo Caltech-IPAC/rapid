@@ -913,7 +913,7 @@ if __name__ == '__main__':
     print("filename_refimage_psf = ",filename_refimage_psf)
 
 
-    # Normalize the science PSF.
+    # Normalize the science PSF.  The reference-image PSF is already normalized.
 
     filename_sciimage_psf_normalized = filename_sciimage_psf.replace(".fits","_normalized.fits")
 
