@@ -522,7 +522,7 @@ if __name__ == '__main__':
                 print("s3_full_name_refimage_psf = ",s3_full_name_refimage_psf)
                 print("filename_refimage_psf = ",filename_refimage_psf)
 
-                newpsffilename = f"rapid_{j}diffimgpsf.fits"
+                newpsffilename = f"rapid_{j}_diffimgpsf.fits"
 
                 shutil.move(filename_refimage_psf, newpsffilename)
                 print(f"Moved '{filename_refimage_psf}' to '{newpsffilename}'")
