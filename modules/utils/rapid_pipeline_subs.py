@@ -13,6 +13,7 @@ import numpy as np
 import numpy.ma as ma
 import boto3
 from botocore.exceptions import ClientError
+from scipy.ndimage import zoom
 
 plot_flag = False
 
@@ -2370,3 +2371,83 @@ def compute_image_overlap_area(w_sci,
     print("Done computing overlap area...")
 
     return percent_overlap
+
+
+##################################################################################################
+# Upsample PSF image from FITS file.  Regularize the image (replace negative pixels with zero).
+# Require input and upsampled grid dimensions to be odd integers so peak is centered, and
+# square (same dimension on each side).
+# Reference-image PSFs are 61x61 and need to trim to 25x25. Normalize the image.
+##################################################################################################
+
+def trim_and_upsample_refimg_psf_fits_image(input_fits_file,
+                                            hdu_index,
+                                            upsample_factor,
+                                            stampsz,
+                                            interp_order,
+                                            output_fits_file):
+
+
+    # Set exit_flag = 0 to presume success.
+
+    exit_flag = 0
+
+
+    # Read input FITS file.
+
+    hdul = fits.open(input_fits_file)
+    hdr = hdul[hdu_index].header
+    data = hdul[hdu_index].data
+    data_array = np.array(data)
+
+    naxis1 = hdr["NAXIS1"]
+    naxis2 = hdr["NAXIS2"]
+
+    if naxis1 != naxis2:
+        exit_flag = 1
+        return exit_flag
+
+    if naxis1 % 2 == 0:
+        exit_flag = 2
+        return exit_flag
+
+
+    # Trim the image from 61x61 to 25x25 keeping peak centered.
+
+    trim = (naxis1 - stampsz) // 2
+    trimmed_data_array = data_array[trim:-trim,trim:-trim]
+
+
+    # Replace negative values with zeros.
+
+    regularized_data_array = np.where(trimmed_data_array < 0.0, 0.0, trimmed_data_array)
+
+
+    # Upsample the array using a specified interpolation order (e.g., order=3 for cubic
+    # order=0 is nearest neighbor, order=1 is bilinear, order=3 is cubic).
+
+    upsampled_array = zoom(regularized_data_array, upsample_factor, order=interp_order)
+
+
+    # Normalize the resulting image.
+
+    total_sum = np.sum(upsampled_array)
+
+    normalized_array = upsampled_array / total_sum
+
+
+    # Replace primary HDU with trimmed, regularized, upsampled, normalized image data.
+
+    hdul[0] = fits.PrimaryHDU(header=hdr,data=normalized_array)
+
+
+    # Write output FITS file.
+
+    hdul.writeto(output_fits_file,overwrite=True,checksum=True)
+
+    hdul.close()
+
+
+    # Return exit_flag.
+
+    return exit_flag
