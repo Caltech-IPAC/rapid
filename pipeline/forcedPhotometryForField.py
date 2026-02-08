@@ -7,6 +7,7 @@ are required to be within the input field.
 import csv
 import boto3
 import os
+import shutil
 import numpy as np
 import healpy as hp
 import configparser
@@ -18,6 +19,7 @@ to_zone = tz.gettz('America/Los_Angeles')
 
 from astropy.wcs import WCS
 from astropy.io import fits
+
 
 import database.modules.utils.rapid_db as db
 import modules.utils.rapid_pipeline_subs as util
@@ -126,6 +128,12 @@ naxis1 = int(config_input['INSTRUMENT']['naxis1_sciimage'])
 naxis2 = int(config_input['INSTRUMENT']['naxis2_sciimage'])
 
 ppid_sci = int(config_input['SCI_IMAGE']['ppid'])
+
+sca_gain = float(config_input['INSTRUMENT']['sca_gain'])
+sca_readout_noise = float(config_input['INSTRUMENT']['sca_readout_noise'])
+
+refimage_psf_s3_bucket_dir = config_input['JOB_PARAMS']['refimage_psf_s3_bucket_dir']
+refimage_psf_filename = config_input['JOB_PARAMS']['refimage_psf_filename']
 
 
 # Use SExtractor reference-image catalogs for now, since PhotUtils catalogs are not made
@@ -324,6 +332,35 @@ if __name__ == '__main__':
     if nrecs > 0:
 
         i = 0
+        j = 0
+
+        pid_list = []
+        expid_list = []
+        sca_list = []
+        fid_list = []
+        field_list = []
+        jd_list = []
+        ra0_list = []
+        dec0_list = []
+        ra1_list = []
+        dec1_list = []
+        ra2_list = []
+        dec2_list = []
+        ra3_list = []
+        dec3_list = []
+        ra4_list = []
+        dec4_list = []
+        filename_list = []
+        checksum_list = []
+        infobitssci_list = []
+        infobitsref_list = []
+        rfid_list = []
+        refimfilename_list = []
+        refimchecksum_list = []
+        ppid_ref_list = []
+        dist_field_sciimg_center_list = []
+
+
         for record in records:
             pid = record[0]
             expid = record[1]
@@ -362,6 +399,14 @@ if __name__ == '__main__':
             diff_image_filename,subdirs_diff_image,downloaded_from_bucket = util.download_file_from_s3_bucket(s3_client,s3_full_name_diff_image)
 
             print(f"diff_image_filename,subdirs_diff_image,downloaded_from_bucket = {diff_image_filename},{subdirs_diff_image},{downloaded_from_bucket}")
+
+
+            # Download reference image from S3 bucket.
+
+            s3_full_name_ref_image = refimfilename
+            ref_image_filename,subdirs_ref_image,downloaded_from_bucket = util.download_file_from_s3_bucket(s3_client,s3_full_name_ref_image)
+
+            print(f"ref_image_filename,subdirs_ref_image,downloaded_from_bucket = {ref_image_filename},{subdirs_ref_image},{downloaded_from_bucket}")
 
 
             # Read FITS file
@@ -425,19 +470,98 @@ if __name__ == '__main__':
                                                                    ra3_field,dec3_field,
                                                                    ra4_field,dec4_field)
 
+            if percent_overlap_area > 0.05:
+
+                newfilename = f"rapid_{j}_scimrefdiffimg.fits"
+                newrefimfilename = f"rapid_{j}_refimg.fits"
+
+                shutil.move(diff_image_filename, newfilename)
+                print(f"Moved '{diff_image_filename}' to '{newfilename}'")
+
+                shutil.move(ref_image_filename, newrefimfilename)
+                print(f"Moved '{ref_image_filename}' to '{newrefimfilename}'")
+
+                pid_list.append(pid)
+                expid_list.append(expid)
+                sca_list.append(sca)
+                fid_list.append(fid)
+                field_list.append(field)
+                jd_list.append(jd)
+                ra0_list.append(ra0)
+                dec0_list.append(dec0)
+                ra1_list.append(ra1)
+                dec1_list.append(dec1)
+                ra2_list.append(ra2)
+                dec2_list.append(dec2)
+                ra3_list.append(ra3)
+                dec3_list.append(dec3)
+                ra4_list.append(ra4)
+                dec4_list.append(dec4)
+                filename_list.append(filename)
+                checksum_list.append(checksum)
+                infobitssci_list.append(infobitssci)
+                infobitsref_list.append(infobitsref)
+                rfid_list.append(rfid)
+                refimfilename_list.append(refimfilename)
+                refimchecksum_list.append(refimchecksum)
+                ppid_ref_list.append(ppid_ref)
+                dist_field_sciimg_center_list.append(dist_field_sciimg_center)
+
+
+                # Use reference-image PSF for the forced photometry since SFFT does not
+                # produce a difference-image PSF.  TODO
+
+                refimage_psf_filename = refimage_psf_filename.replace("FID",str(fid))
+                s3_full_name_refimage_psf = "s3://" + job_info_s3_bucket_base + "/" +\
+                    refimage_psf_s3_bucket_dir + "/" + refimage_psf_filename
+
+                if not os.path.exists(refimage_psf_filename):
+                    filename_refimage_psf,subdirs_refimage_psf,downloaded_from_bucket = \
+                        util.download_file_from_s3_bucket(s3_client,s3_full_name_refimage_psf,)
+
+                print("s3_full_name_refimage_psf = ",s3_full_name_refimage_psf)
+                print("filename_refimage_psf = ",filename_refimage_psf)
+
+                newpsffilename = f"rapid_{j}diffimgpsf.fits"
+
+                shutil.move(filename_refimage_psf, newpsffilename)
+                print(f"Moved '{filename_refimage_psf}' to '{newpsffilename}'")
+
+                rebinpsffilename = f"rapid_{j}_rebinpsf.fits"
+
+                hdu_index = 0
+                interp_order = 3
+                trim_and_upsample_refimg_psf_fits_image(newpsffilename,
+                                                        hdu_index,
+                                                        stampupsamplefac,
+                                                        stampsz,
+                                                        interp_order,
+                                                        rebinpsffilename)
+
+                j += 1
 
 
             if i >= 5:
                 break
 
 
-    # Code-timing benchmark.
+        # Code-timing benchmark.
+
+        end_time_benchmark = time.time()
+        print("Elapsed time in seconds to determine input difference images =",
+            end_time_benchmark - start_time_benchmark)
+        start_time_benchmark = end_time_benchmark
+
+
+
+
+
+
+    # Code-timing benchmark overall.
 
     end_time_benchmark = time.time()
-    print("Elapsed time in seconds to compute forced photometry =",
-        end_time_benchmark - start_time_benchmark)
-    start_time_benchmark = end_time_benchmark
-
+    print(f"Elapsed time in seconds to compute forced photometry =",
+        end_time_benchmark - start_time_benchmark_at_start)
 
     # Termination.
 
