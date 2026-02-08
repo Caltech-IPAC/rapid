@@ -531,12 +531,12 @@ if __name__ == '__main__':
 
                 hdu_index = 0
                 interp_order = 3
-                trim_and_upsample_refimg_psf_fits_image(newpsffilename,
-                                                        hdu_index,
-                                                        stampupsamplefac,
-                                                        stampsz,
-                                                        interp_order,
-                                                        rebinpsffilename)
+                util.trim_and_upsample_refimg_psf_fits_image(newpsffilename,
+                                                             hdu_index,
+                                                             stampupsamplefac,
+                                                             stampsz,
+                                                             interp_order,
+                                                             rebinpsffilename)
 
                 j += 1
 
