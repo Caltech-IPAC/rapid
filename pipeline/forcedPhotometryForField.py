@@ -578,7 +578,7 @@ if __name__ == '__main__':
             j += 1
 
 
-        if i >= 5:
+        if i >= 50:
             break
 
 
@@ -596,7 +596,8 @@ if __name__ == '__main__':
 
 
     # Create the text file that stores sky positions and (x,y) one-based
-    # image pixel coordinates for the cforcepsfaper C module.
+    # image pixel coordinates for the cforcepsfaper C module.  Whether
+    # a sky position falls off a difference is checked by the C module.
 
     xydatafile = 'xy.txt'
 
@@ -636,13 +637,38 @@ if __name__ == '__main__':
     # Code-timing benchmark.
 
     end_time_benchmark = time.time()
-    print("Elapsed time in seconds to determine input difference images =",
+    print("Elapsed time in seconds after generating cforcepsfaper-module inputs =",
         end_time_benchmark - start_time_benchmark)
     start_time_benchmark = end_time_benchmark
 
 
+    # Execute ulimit increase and cforcepsfaper C module in the same shell (connected by &&).
+    # Execute C module cforcepsfaper with 1 thread.
+
+    run_cforcepsfaper_was_successful = True
+
+    lightcurvefile = 'lightcurve_c.dat'
+
+    stack_size_cmd = "ulimit -s 262144"
+    show_stack_size_cmd = "ulimit -a"
+    cforcepsfaper_cmd = f"cforcepsfaper -i {diffimglistfile} -a {xydatafile} -o {lightcurvefile} -t 1 -r >& cforcepsfaper.out"
+
+    cmd = stack_size_cmd + " && " + show_stack_size_cmd + " && " + deactivate_cmd
+
+    exitcode_from_cforcepsfaper = util.execute_command_in_shell(cmd)
+
+    if int(exitcode_from_cforcepsfaper) != 0:
+        run_cforcepsfaper_was_successful = False
+
+    print(f"run_cforcepsfaper_was_successful = {run_cforcepsfaper_was_successful}")
 
 
+    # Code-timing benchmark.
+
+    end_time_benchmark = time.time()
+    print("Elapsed time in seconds after executing cforcerpsfaper =",
+        end_time_benchmark - start_time_benchmark)
+    start_time_benchmark = end_time_benchmark
 
 
     # Code-timing benchmark overall.
