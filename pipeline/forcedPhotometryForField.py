@@ -506,9 +506,10 @@ if __name__ == '__main__':
             print(f"Moved '{refimg_filename_from_bucket}' to '{refimg_filename}'")
 
 
-            # Write valid difference-image filename to text list file.
+            # Write valid difference-image filename and corresponding SCA gain to text list file.
+            # This probably varies with SCA.  TODO
 
-            fh_diffimglist.write(f"{diffimg_filename}\n")
+            fh_diffimglist.write(f"{diffimg_filename} {sca_gain}\n")
 
 
             # Append record columns into memory.
@@ -653,7 +654,7 @@ if __name__ == '__main__':
 
     stack_size_cmd = "ulimit -s 262144"
     show_stack_size_cmd = "ulimit -a"
-    cforcepsfaper_cmd = f"cforcepsfaper -i {diffimglistfile} -a {xydatafile} -o {lightcurvefile} -t 1 -r >& cforcepsfaper.out"
+    cforcepsfaper_cmd = f"cforcepsfaper -i {diffimglistfile} -a {xydatafile} -o {lightcurvefile} -t 1 -r -v >& cforcepsfaper.out"
 
     cmd = stack_size_cmd + " && " + show_stack_size_cmd + " && " + cforcepsfaper_cmd
 
