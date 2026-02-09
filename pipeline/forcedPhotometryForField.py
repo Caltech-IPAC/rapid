@@ -544,24 +544,24 @@ if __name__ == '__main__':
             # Use reference-image PSF for the forced photometry since SFFT does not
             # produce a difference-image PSF.  TODO
 
-            refimage_psf_filename = refimage_psf_filename.replace("FID",str(fid))
+            refimage_psf_filename_from_bucket = refimage_psf_filename.replace("FID",str(fid))
             s3_full_name_refimage_psf = "s3://" + job_info_s3_bucket_base + "/" +\
-                refimage_psf_s3_bucket_dir + "/" + refimage_psf_filename
+                refimage_psf_s3_bucket_dir + "/" + refimage_psf_filename_from_bucket
 
-            if not os.path.exists(refimage_psf_filename):
+            if not os.path.exists(refimage_psf_filename_from_bucket):
                 refimg_psf_from_bucket,subdirs_refimage_psf,downloaded_from_bucket = \
-                    util.download_file_from_s3_bucket(s3_client,s3_full_name_refimage_psf,)
+                    util.download_file_from_s3_bucket(s3_client,s3_full_name_refimage_psf,refimage_psf_filename_from_bucket)
 
-            print("s3_full_name_refimage_psf = ",s3_full_name_refimage_psf)
-            print("refimg_psf_from_bucket = ",refimg_psf_from_bucket)
+                print("s3_full_name_refimage_psf = ",s3_full_name_refimage_psf)
+                print("refimg_psf_from_bucket = ",refimg_psf_from_bucket)
 
 
             # Define PSF filename.
 
             refimg_psf_filename = f"rapid_{j}_diffimgpsf.fits"
 
-            shutil.copy2(refimg_psf_from_bucket, refimg_psf_filename)
-            print(f"Copied '{refimg_psf_from_bucket}' to '{refimg_psf_filename}'")
+            shutil.copy2(refimage_psf_filename_from_bucket, refimg_psf_filename)
+            print(f"Copied {refimage_psf_filename_from_bucket} to {refimg_psf_filename}")
 
             rebinpsffilename = f"rapid_{j}_rebinpsf.fits"
 
