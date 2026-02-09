@@ -147,7 +147,7 @@ cattype = 1
 
 # Match radius in degrees for cone search around field center, an overestimate,
 # to get all difference images that may overlap the field (a.k.a. sky tile).
-match_radius = float(config_input['FORCED_PHOTOMETRY']['match_radius'])
+match_radius_overlap_field = float(config_input['FORCED_PHOTOMETRY']['match_radius_overlap_field'])
 
 # switch to increase verbosity to stdout.
 verbose = int(config_input['FORCED_PHOTOMETRY']['verbose'])
@@ -217,9 +217,12 @@ maxbadpixfrac = float(config_input['FORCED_PHOTOMETRY']['maxbadpixfrac'])
 # image queries on subtractions DB table [deg].
 radthres = float(config_input['FORCED_PHOTOMETRY']['radthres'])
 
+# Minimum percent overlap of difference image onto sky tile (field).
+minimum_percent_overlap_area = float(config_input['FORCED_PHOTOMETRY']['minimum_percent_overlap_area'])
+
 #=================================================================
 
-print("field =",field)
+print("match_radius_overlap_field =",match_radius_overlap_field)
 print("field =",field)
 print("field =",field)
 print("field =",field)
@@ -323,235 +326,266 @@ if __name__ == '__main__':
                                                       jd_earliest,
                                                       ra0_field,
                                                       dec0_field,
-                                                      match_radius)
+                                                      match_radius_overlap_field)
 
     nrecs = len(records)
 
     print(f"nrecs = {nrecs}")
 
-    if nrecs > 0:
-
-        i = 0
-        j = 0
-
-        pid_list = []
-        expid_list = []
-        sca_list = []
-        fid_list = []
-        field_list = []
-        jd_list = []
-        ra0_list = []
-        dec0_list = []
-        ra1_list = []
-        dec1_list = []
-        ra2_list = []
-        dec2_list = []
-        ra3_list = []
-        dec3_list = []
-        ra4_list = []
-        dec4_list = []
-        filename_list = []
-        checksum_list = []
-        infobitssci_list = []
-        infobitsref_list = []
-        rfid_list = []
-        refimfilename_list = []
-        refimchecksum_list = []
-        ppid_ref_list = []
-        dist_field_sciimg_center_list = []
+    if nrecs == 0:
+        print("Zero DiffImages database records returned; quitting...")
 
 
-        for record in records:
-            pid = record[0]
-            expid = record[1]
-            sca = record[2]
-            fid = record[3]
-            field = record[4]
-            jd = record[5]
-            ra0 = record[6]
-            dec0 = record[7]
-            ra1 = record[8]
-            dec1 = record[9]
-            ra2 = record[10]
-            dec2 = record[11]
-            ra3 = record[12]
-            dec3 = record[13]
-            ra4 = record[14]
-            dec4 = record[15]
-            filename = record[16]
-            checksum = record[17]
-            infobitssci = record[18]
-            infobitsref = record[19]
-            rfid = record[20]
-            refimfilename = record[21]
-            refimchecksum = record[22]
-            ppid_ref = record[23]
-            dist_field_sciimg_center = record[24]
+    # Filter the DiffImages database records and set up forced-photometry calculations.
 
-            i += 1
+    i = 0
+    j = 0
 
-            print(f"i,field,filename,refimfilename,ppid_ref,dist = {i},{field},{filename},{refimfilename},{ppid_ref},{dist_field_sciimg_center}")
-
-
-            # Download difference image from S3 bucket.
-
-            s3_full_name_diff_image = filename
-            diff_image_filename,subdirs_diff_image,downloaded_from_bucket = util.download_file_from_s3_bucket(s3_client,s3_full_name_diff_image)
-
-            print(f"diff_image_filename,subdirs_diff_image,downloaded_from_bucket = {diff_image_filename},{subdirs_diff_image},{downloaded_from_bucket}")
+    pid_list = []
+    expid_list = []
+    sca_list = []
+    fid_list = []
+    field_list = []
+    jd_list = []
+    ra0_list = []
+    dec0_list = []
+    ra1_list = []
+    dec1_list = []
+    ra2_list = []
+    dec2_list = []
+    ra3_list = []
+    dec3_list = []
+    ra4_list = []
+    dec4_list = []
+    filename_list = []
+    checksum_list = []
+    infobitssci_list = []
+    infobitsref_list = []
+    rfid_list = []
+    refimfilename_list = []
+    refimchecksum_list = []
+    ppid_ref_list = []
+    dist_field_sciimg_center_list = []
 
 
-            # Download reference image from S3 bucket.
+    # Open text file to write list of valid difference-image filenames.
 
-            s3_full_name_ref_image = refimfilename
-            ref_image_filename,subdirs_ref_image,downloaded_from_bucket = util.download_file_from_s3_bucket(s3_client,s3_full_name_ref_image)
+    diffimglistfile = 'diffimglist.txt'
 
-            print(f"ref_image_filename,subdirs_ref_image,downloaded_from_bucket = {ref_image_filename},{subdirs_ref_image},{downloaded_from_bucket}")
-
-
-            # Read FITS file
-
-
-            hdu_index_diff = 0
-
-            with fits.open(diff_image_filename) as hdul:
-
-                filter_diff = hdul[hdu_index_diff].header["FILTER"].strip()
-
-                print("filter_diff =",filter_diff)
-
-                hdr = hdul[hdu_index_diff].header
-
-                w_diff = WCS(hdr) # Initialize WCS object from FITS header
-
-            print(w_diff)
-
-            print("CTYPE = ",w_diff.wcs.crpix)
-
-            naxis1_diff = hdr['NAXIS1']
-            naxis2_diff = hdr['NAXIS2']
-
-            print("naxis1_diff,naxis2_diff =",naxis1_diff,naxis2_diff)
-
-            crpix1 = w_diff.wcs.crpix[0]
-            crpix2 = w_diff.wcs.crpix[1]
-
-            crval1 = hdr['CRVAL1']
-            crval2 = hdr['CRVAL2']
-
-            print(f"crval1,crval2 = {crval1},{crval2}")
+    try:
+        fh_diffimglist = open(diffimglistfile, 'w', encoding="utf-8")
+    except:
+        print(f"*** Error: Could not open {diffimglistfile}; quitting...")
+        exit(64)
 
 
-            # Example of converting pixel coordinates to celestial coordinates
-            # The following should reproduce CRVAL1,CRVAL2.
+    # Loop over records returned from database query.
 
-            pixel_x, pixel_y = crpix1 - 1, crpix2 - 1
-            celestial_coords = w_diff.pixel_to_world(pixel_x, pixel_y)
-            print(f"CRVAL1,CRVAL2 Pixel ({pixel_x}, {pixel_y}) corresponds to {celestial_coords.ra.deg:.12f} RA and {celestial_coords.dec.deg:.12f} Dec.")
+    for record in records:
+        pid = record[0]
+        expid = record[1]
+        sca = record[2]
+        fid = record[3]
+        field = record[4]
+        jd = record[5]
+        ra0 = record[6]
+        dec0 = record[7]
+        ra1 = record[8]
+        dec1 = record[9]
+        ra2 = record[10]
+        dec2 = record[11]
+        ra3 = record[12]
+        dec3 = record[13]
+        ra4 = record[14]
+        dec4 = record[15]
+        filename = record[16]
+        checksum = record[17]
+        infobitssci = record[18]
+        infobitsref = record[19]
+        rfid = record[20]
+        refimfilename = record[21]
+        refimchecksum = record[22]
+        ppid_ref = record[23]
+        dist_field_sciimg_center = record[24]
 
+        i += 1
 
-            # Compute pixel coordinates of diff-image center and four corners.
-
-            x0,y0,x1,y1,x2,y2,x3,y3,x4,y4 = util.compute_pix_image_center_and_four_corners(naxis1_diff,naxis2_diff)
-
-
-            # Compute percent overlap area.
-
-            percent_overlap_area = util.compute_image_overlap_area(w_diff,
-                                                                   naxis1_diff,naxis2_diff,
-                                                                   x0,y0,
-                                                                   x1,y1,
-                                                                   x2,y2,
-                                                                   x3,y3,
-                                                                   x4,y4,
-                                                                   ra0_field,dec0_field,
-                                                                   ra1_field,dec1_field,
-                                                                   ra2_field,dec2_field,
-                                                                   ra3_field,dec3_field,
-                                                                   ra4_field,dec4_field)
-
-            if percent_overlap_area > 0.05:
-
-                newfilename = f"rapid_{j}_scimrefdiffimg.fits"
-                newrefimfilename = f"rapid_{j}_refimg.fits"
-
-                shutil.move(diff_image_filename, newfilename)
-                print(f"Moved '{diff_image_filename}' to '{newfilename}'")
-
-                shutil.move(ref_image_filename, newrefimfilename)
-                print(f"Moved '{ref_image_filename}' to '{newrefimfilename}'")
-
-                pid_list.append(pid)
-                expid_list.append(expid)
-                sca_list.append(sca)
-                fid_list.append(fid)
-                field_list.append(field)
-                jd_list.append(jd)
-                ra0_list.append(ra0)
-                dec0_list.append(dec0)
-                ra1_list.append(ra1)
-                dec1_list.append(dec1)
-                ra2_list.append(ra2)
-                dec2_list.append(dec2)
-                ra3_list.append(ra3)
-                dec3_list.append(dec3)
-                ra4_list.append(ra4)
-                dec4_list.append(dec4)
-                filename_list.append(filename)
-                checksum_list.append(checksum)
-                infobitssci_list.append(infobitssci)
-                infobitsref_list.append(infobitsref)
-                rfid_list.append(rfid)
-                refimfilename_list.append(refimfilename)
-                refimchecksum_list.append(refimchecksum)
-                ppid_ref_list.append(ppid_ref)
-                dist_field_sciimg_center_list.append(dist_field_sciimg_center)
+        print(f"i,field,filename,refimfilename,ppid_ref,dist = {i},{field},{filename},{refimfilename},{ppid_ref},{dist_field_sciimg_center}")
 
 
-                # Use reference-image PSF for the forced photometry since SFFT does not
-                # produce a difference-image PSF.  TODO
+        # Download difference image from S3 bucket.
 
-                refimage_psf_filename = refimage_psf_filename.replace("FID",str(fid))
-                s3_full_name_refimage_psf = "s3://" + job_info_s3_bucket_base + "/" +\
-                    refimage_psf_s3_bucket_dir + "/" + refimage_psf_filename
+        s3_full_name_diff_image = filename
+        diffimg_filename_from_bucket,subdirs_diff_image,downloaded_from_bucket = util.download_file_from_s3_bucket(s3_client,s3_full_name_diff_image)
 
-                if not os.path.exists(refimage_psf_filename):
-                    filename_refimage_psf,subdirs_refimage_psf,downloaded_from_bucket = \
-                        util.download_file_from_s3_bucket(s3_client,s3_full_name_refimage_psf,)
-
-                print("s3_full_name_refimage_psf = ",s3_full_name_refimage_psf)
-                print("filename_refimage_psf = ",filename_refimage_psf)
-
-                newpsffilename = f"rapid_{j}_diffimgpsf.fits"
-
-                shutil.move(filename_refimage_psf, newpsffilename)
-                print(f"Moved '{filename_refimage_psf}' to '{newpsffilename}'")
-
-                rebinpsffilename = f"rapid_{j}_rebinpsf.fits"
-
-                hdu_index = 0
-                interp_order = 1      # Don't use 2 or 3 as it (cubit) introduces negative values in rebinned PSF.
-
-                util.trim_and_upsample_refimg_psf_fits_image(newpsffilename,
-                                                             hdu_index,
-                                                             stampupsamplefac,
-                                                             stampsz,
-                                                             interp_order,
-                                                             rebinpsffilename)
-
-                j += 1
+        print(f"diffimg_filename_from_bucket,subdirs_diff_image,downloaded_from_bucket = {diffimg_filename_from_bucket},{subdirs_diff_image},{downloaded_from_bucket}")
 
 
-            if i >= 5:
-                break
+        # Download reference image from S3 bucket.
+
+        s3_full_name_ref_image = refimfilename
+        refimg_filename_from_bucket,subdirs_ref_image,downloaded_from_bucket = util.download_file_from_s3_bucket(s3_client,s3_full_name_ref_image)
+
+        print(f"refimg_filename_from_bucket,subdirs_ref_image,downloaded_from_bucket = {refimg_filename_from_bucket},{subdirs_ref_image},{downloaded_from_bucket}")
 
 
-        # Code-timing benchmark.
+        # Read FITS file
 
-        end_time_benchmark = time.time()
-        print("Elapsed time in seconds to determine input difference images =",
-            end_time_benchmark - start_time_benchmark)
-        start_time_benchmark = end_time_benchmark
+
+        hdu_index_diff = 0
+
+        with fits.open(diffimg_filename_from_bucket) as hdul:
+
+            filter_diff = hdul[hdu_index_diff].header["FILTER"].strip()
+
+            print("filter_diff =",filter_diff)
+
+            hdr = hdul[hdu_index_diff].header
+
+            w_diffimg = WCS(hdr) # Initialize WCS object from FITS header
+
+        print(w_diffimg)
+
+        print("CTYPE = ",w_diffimg.wcs.crpix)
+
+        naxis1_diffimg = hdr['NAXIS1']
+        naxis1_diffimg = hdr['NAXIS2']
+
+        print("naxis1_diffimg,naxis1_diffimg =",naxis1_diffimg,naxis1_diffimg)
+
+        crpix1 = w_diffimg.wcs.crpix[0]
+        crpix2 = w_diffimg.wcs.crpix[1]
+
+        crval1 = hdr['CRVAL1']
+        crval2 = hdr['CRVAL2']
+
+        print(f"crval1,crval2 = {crval1},{crval2}")
+
+
+        # Example of converting pixel coordinates to celestial coordinates
+        # The following should reproduce CRVAL1,CRVAL2.
+
+        pixel_x, pixel_y = crpix1 - 1, crpix2 - 1
+        celestial_coords = w_diffimg.pixel_to_world(pixel_x, pixel_y)
+        print(f"CRVAL1,CRVAL2 Pixel ({pixel_x}, {pixel_y}) corresponds to {celestial_coords.ra.deg:.12f} RA and {celestial_coords.dec.deg:.12f} Dec.")
+
+
+        # Compute pixel coordinates of diff-image center and four corners.
+
+        x0,y0,x1,y1,x2,y2,x3,y3,x4,y4 = util.compute_pix_image_center_and_four_corners(naxis1_diffimg,naxis1_diffimg)
+
+
+        # Compute percent overlap area.
+
+        percent_overlap_area = util.compute_image_overlap_area(w_diffimg,
+                                                               naxis1_diffimg,naxis1_diffimg,
+                                                               x0,y0,
+                                                               x1,y1,
+                                                               x2,y2,
+                                                               x3,y3,
+                                                               x4,y4,
+                                                               ra0_field,dec0_field,
+                                                               ra1_field,dec1_field,
+                                                               ra2_field,dec2_field,
+                                                               ra3_field,dec3_field,
+                                                               ra4_field,dec4_field)
+
+        if percent_overlap_area > minimum_percent_overlap_area:
+
+            diffimg_filename = f"rapid_{j}_scimrefdiffimg.fits"
+            newrefimfilename = f"rapid_{j}_refimg.fits"
+
+            shutil.move(diffimg_filename_from_bucket, diffimg_filename)
+            print(f"Moved '{diffimg_filename_from_bucket}' to '{diffimg_filename}'")
+
+            shutil.move(refimg_filename_from_bucket, newrefimfilename)
+            print(f"Moved '{refimg_filename_from_bucket}' to '{newrefimfilename}'")
+
+
+            # Write valid difference-image filename to text list file.
+
+            fh_diffimglist.write(f"diffimg_filename\n")
+
+
+            # Append record columns into memory.
+
+            pid_list.append(pid)
+            expid_list.append(expid)
+            sca_list.append(sca)
+            fid_list.append(fid)
+            field_list.append(field)
+            jd_list.append(jd)
+            ra0_list.append(ra0)
+            dec0_list.append(dec0)
+            ra1_list.append(ra1)
+            dec1_list.append(dec1)
+            ra2_list.append(ra2)
+            dec2_list.append(dec2)
+            ra3_list.append(ra3)
+            dec3_list.append(dec3)
+            ra4_list.append(ra4)
+            dec4_list.append(dec4)
+            filename_list.append(filename)
+            checksum_list.append(checksum)
+            infobitssci_list.append(infobitssci)
+            infobitsref_list.append(infobitsref)
+            rfid_list.append(rfid)
+            refimfilename_list.append(refimfilename)
+            refimchecksum_list.append(refimchecksum)
+            ppid_ref_list.append(ppid_ref)
+            dist_field_sciimg_center_list.append(dist_field_sciimg_center)
+
+
+            # Use reference-image PSF for the forced photometry since SFFT does not
+            # produce a difference-image PSF.  TODO
+
+            refimage_psf_filename = refimage_psf_filename.replace("FID",str(fid))
+            s3_full_name_refimage_psf = "s3://" + job_info_s3_bucket_base + "/" +\
+                refimage_psf_s3_bucket_dir + "/" + refimage_psf_filename
+
+            if not os.path.exists(refimage_psf_filename):
+                refimg_psf_from_bucket,subdirs_refimage_psf,downloaded_from_bucket = \
+                    util.download_file_from_s3_bucket(s3_client,s3_full_name_refimage_psf,)
+
+            print("s3_full_name_refimage_psf = ",s3_full_name_refimage_psf)
+            print("refimg_psf_from_bucket = ",refimg_psf_from_bucket)
+
+
+            # Define PSF filename.
+
+            refimg_psf_filename = f"rapid_{j}_diffimgpsf.fits"
+
+            shutil.copy2(refimg_psf_from_bucket, refimg_psf_filename)
+            print(f"Copied '{refimg_psf_from_bucket}' to '{refimg_psf_filename}'")
+
+            rebinpsffilename = f"rapid_{j}_rebinpsf.fits"
+
+            hdu_index = 0
+            interp_order = 1      # Don't use 2 or 3 as it (cubit) introduces negative values in rebinned PSF.
+
+            util.trim_and_upsample_refimg_psf_fits_image(refimg_psf_filename,
+                                                         hdu_index,
+                                                         stampupsamplefac,
+                                                         stampsz,
+                                                         interp_order,
+                                                         rebinpsffilename)
+
+            j += 1
+
+
+        if i >= 5:
+            break
+
+    fh_diffimglist.close()
+
+
+
+    # Code-timing benchmark.
+
+    end_time_benchmark = time.time()
+    print("Elapsed time in seconds to determine input difference images =",
+        end_time_benchmark - start_time_benchmark)
+    start_time_benchmark = end_time_benchmark
 
 
 
