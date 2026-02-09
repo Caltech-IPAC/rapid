@@ -19,6 +19,7 @@ to_zone = tz.gettz('America/Los_Angeles')
 
 from astropy.wcs import WCS
 from astropy.io import fits
+from astropy.coordinates import SkyCoord
 
 
 import database.modules.utils.rapid_db as db
@@ -271,7 +272,7 @@ if __name__ == '__main__':
     s3_client = boto3.client('s3')
 
 
-    # Read input sky positions.
+    # Read input sky positions, which should be (ra,dec) in degrees.
 
     with open(sky_positions_csv_file, newline='') as csvfile:
 
@@ -357,15 +358,16 @@ if __name__ == '__main__':
     dec3_list = []
     ra4_list = []
     dec4_list = []
-    filename_list = []
+    diffimg_list = []
     checksum_list = []
     infobitssci_list = []
     infobitsref_list = []
     rfid_list = []
-    refimfilename_list = []
+    refimg_list = []
     refimchecksum_list = []
     ppid_ref_list = []
     dist_field_sciimg_center_list = []
+    wcs_diffimg_list = []
 
 
     # Open text file to write list of valid difference-image filenames.
@@ -442,19 +444,19 @@ if __name__ == '__main__':
 
             hdr = hdul[hdu_index_diff].header
 
-            w_diffimg = WCS(hdr) # Initialize WCS object from FITS header
+            wcs_diffimg = WCS(hdr) # Initialize WCS object from FITS header
 
-        print(w_diffimg)
+        print(wcs_diffimg)
 
-        print("CTYPE = ",w_diffimg.wcs.crpix)
+        print("CTYPE = ",wcs_diffimg.wcs.crpix)
 
         naxis1_diffimg = hdr['NAXIS1']
         naxis1_diffimg = hdr['NAXIS2']
 
         print("naxis1_diffimg,naxis1_diffimg =",naxis1_diffimg,naxis1_diffimg)
 
-        crpix1 = w_diffimg.wcs.crpix[0]
-        crpix2 = w_diffimg.wcs.crpix[1]
+        crpix1 = wcs_diffimg.wcs.crpix[0]
+        crpix2 = wcs_diffimg.wcs.crpix[1]
 
         crval1 = hdr['CRVAL1']
         crval2 = hdr['CRVAL2']
@@ -466,7 +468,7 @@ if __name__ == '__main__':
         # The following should reproduce CRVAL1,CRVAL2.
 
         pixel_x, pixel_y = crpix1 - 1, crpix2 - 1
-        celestial_coords = w_diffimg.pixel_to_world(pixel_x, pixel_y)
+        celestial_coords = wcs_diffimg.pixel_to_world(pixel_x, pixel_y)
         print(f"CRVAL1,CRVAL2 Pixel ({pixel_x}, {pixel_y}) corresponds to {celestial_coords.ra.deg:.12f} RA and {celestial_coords.dec.deg:.12f} Dec.")
 
 
@@ -477,7 +479,7 @@ if __name__ == '__main__':
 
         # Compute percent overlap area.
 
-        percent_overlap_area = util.compute_image_overlap_area(w_diffimg,
+        percent_overlap_area = util.compute_image_overlap_area(wcs_diffimg,
                                                                naxis1_diffimg,naxis1_diffimg,
                                                                x0,y0,
                                                                x1,y1,
@@ -493,18 +495,18 @@ if __name__ == '__main__':
         if percent_overlap_area > minimum_percent_overlap_area:
 
             diffimg_filename = f"rapid_{j}_scimrefdiffimg.fits"
-            newrefimfilename = f"rapid_{j}_refimg.fits"
+            refimg_filename = f"rapid_{j}_refimg.fits"
 
             shutil.move(diffimg_filename_from_bucket, diffimg_filename)
             print(f"Moved '{diffimg_filename_from_bucket}' to '{diffimg_filename}'")
 
-            shutil.move(refimg_filename_from_bucket, newrefimfilename)
-            print(f"Moved '{refimg_filename_from_bucket}' to '{newrefimfilename}'")
+            shutil.move(refimg_filename_from_bucket, refimg_filename)
+            print(f"Moved '{refimg_filename_from_bucket}' to '{refimg_filename}'")
 
 
             # Write valid difference-image filename to text list file.
 
-            fh_diffimglist.write(f"diffimg_filename\n")
+            fh_diffimglist.write(f"{diffimg_filename}\n")
 
 
             # Append record columns into memory.
@@ -525,15 +527,16 @@ if __name__ == '__main__':
             dec3_list.append(dec3)
             ra4_list.append(ra4)
             dec4_list.append(dec4)
-            filename_list.append(filename)
+            diffimg_list.append(diffimg_filename)
             checksum_list.append(checksum)
             infobitssci_list.append(infobitssci)
             infobitsref_list.append(infobitsref)
             rfid_list.append(rfid)
-            refimfilename_list.append(refimfilename)
+            refimg_list.append(refimg_filename)
             refimchecksum_list.append(refimchecksum)
             ppid_ref_list.append(ppid_ref)
             dist_field_sciimg_center_list.append(dist_field_sciimg_center)
+            wcs_diffimg_list.append(wcs_diffimg)
 
 
             # Use reference-image PSF for the forced photometry since SFFT does not
@@ -576,8 +579,56 @@ if __name__ == '__main__':
         if i >= 5:
             break
 
+
+    numrecs = j
+
     fh_diffimglist.close()
 
+
+    # Code-timing benchmark.
+
+    end_time_benchmark = time.time()
+    print("Elapsed time in seconds to determine input difference images =",
+        end_time_benchmark - start_time_benchmark)
+    start_time_benchmark = end_time_benchmark
+
+
+    # Create the text file that stores sky positions and (x,y) one-based
+    # image pixel coordinates for the cforcepsfaper C module.
+
+    xydatafile = 'xy.txt'
+
+    try:
+        fh_xydatafile = open(xydatafile, 'w', encoding="utf-8")
+    except:
+        print(f"*** Error: Could not open {xydatafile}; quitting...")
+        exit(64)
+
+    x_list = []
+    y_list = []
+
+    c = 0
+
+    for ra,dec in zip(ra_list,dec_list):
+
+        for i in range(numrecs):
+
+            f = diffimg_list[i]
+            w = wcs_diffimg_list[i]
+            pid = pid_list[i]
+
+            pos = SkyCoord(ra=ra, dec=dec, unit='deg')     # Returns zero-based pixel coordinates.
+            x,y = w.world_to_pixel(pos)
+            print(f"Center: ra={ra}, dec={dec}) corresponds to x={x}, y={y} in ")
+
+            x -= 1       # Convert to one-based pixels coordinates.
+            y -= 1
+
+            # Write positions to text list file.
+
+            fh_xydatafile.write(f"{c} {i} {pid} {ra} {dec} {x} {y}\n")
+
+        c += 1
 
 
     # Code-timing benchmark.
