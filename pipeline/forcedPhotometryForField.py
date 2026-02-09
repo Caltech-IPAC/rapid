@@ -578,6 +578,8 @@ if __name__ == '__main__':
             j += 1
 
 
+        print(f"i,j = {i},{j}")
+
         if i >= 50:
             break
 
@@ -653,7 +655,7 @@ if __name__ == '__main__':
     show_stack_size_cmd = "ulimit -a"
     cforcepsfaper_cmd = f"cforcepsfaper -i {diffimglistfile} -a {xydatafile} -o {lightcurvefile} -t 1 -r >& cforcepsfaper.out"
 
-    cmd = stack_size_cmd + " && " + show_stack_size_cmd + " && " + deactivate_cmd
+    cmd = stack_size_cmd + " && " + show_stack_size_cmd + " && " + cforcepsfaper_cmd
 
     exitcode_from_cforcepsfaper = util.execute_command_in_shell(cmd)
 
