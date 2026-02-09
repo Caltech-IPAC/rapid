@@ -274,9 +274,11 @@ if __name__ == '__main__':
 
     # Read input sky positions, which should be (ra,dec) in degrees.
 
-    with open(sky_positions_csv_file, newline='') as csvfile:
+    with open(sky_positions_csv_file, mode='r', newline='') as csvfile:
 
         sky_postions_reader = csv.reader(csvfile, delimiter=',')
+
+        next(sky_postions_reader)                           # Skip header line.
 
         reqid_list = []
         ra_list = []
