@@ -654,11 +654,11 @@ if __name__ == '__main__':
 
     stack_size_cmd = "ulimit -s 262144"
     show_stack_size_cmd = "ulimit -a"
-    cforcepsfaper_cmd = f"cforcepsfaper -i {diffimglistfile} -a {xydatafile} -o {lightcurvefile} -t 1 -r -v >& cforcepsfaper.out"
+    cforcepsfaper_cmd = f"cforcepsfaper -i {diffimglistfile} -a {xydatafile} -o {lightcurvefile} -t 1 -r -v"
 
     cmd = stack_size_cmd + " && " + show_stack_size_cmd + " && " + cforcepsfaper_cmd
 
-    exitcode_from_cforcepsfaper = util.execute_command_in_shell(cmd)
+    exitcode_from_cforcepsfaper = util.execute_command_in_shell(cmd,"cforcepsfaper.out")
 
     if int(exitcode_from_cforcepsfaper) != 0:
         run_cforcepsfaper_was_successful = False
