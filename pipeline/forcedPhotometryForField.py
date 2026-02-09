@@ -283,9 +283,9 @@ if __name__ == '__main__':
         dec_list = []
 
         for row in sky_postions_reader:
-            reqid = row[0]
-            ra = row[1]
-            dec = row[2]
+            reqid = int(row[0])
+            ra = float(row[1])
+            dec = float(row[2])
             print(f"reqid,ra,dec = {reqid},{ra},{dec}")
             reqid_list.append(reqid)
             ra_list.append(ra)
