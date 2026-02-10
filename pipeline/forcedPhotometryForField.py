@@ -540,11 +540,20 @@ if __name__ == '__main__':
 
         if percent_overlap_area > minimum_percent_overlap_area:
 
+
+            # Ensure difference image and reference image have uniques names
+            # and the latter is not redundantly stored.
+
             diffimg_filename = f"rapid_{j}_scimrefdiffimg.fits"
             refimg_filename = f"rapid_{j}_refimg.fits"
 
             shutil.move(diffimg_filename_from_bucket, diffimg_filename)
             print(f"Moved '{diffimg_filename_from_bucket}' to '{diffimg_filename}'")
+
+            try:
+                os.remove(refimg_filename)
+            except FileNotFoundError:
+                pass
 
             os.symlink(ref_image_fname_dict[refimfilename], refimg_filename)
             print(f"Created symbolic link {refimg_filename} pointing to {ref_image_fname_dict[refimfilename]}")
