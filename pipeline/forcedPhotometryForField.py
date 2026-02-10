@@ -759,11 +759,11 @@ if __name__ == '__main__':
 
         for row in lightcurvefile_reader:
 
-            c = row[0]
+            c = int(row[0])
             i = int(row[1])
 
             # row[2] stores pid; skip since it is available from DB query.
-            if row[2] != pid_list[i]:
+            if row[2] != str(pid_list[i]):
                 print(f"pid from row[2] ({row[2]}) does not match pid_list ({pid_list[i]}) for i = {i}; quitting...")
                 #exit(64)
 
