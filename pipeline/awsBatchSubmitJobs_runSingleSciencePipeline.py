@@ -561,6 +561,7 @@ if __name__ == '__main__':
 
 
         # Add informational FITS keywords to header of reference image.
+        # TODO Add JD of earliest and latest science images used to generate reference image.
 
         rfis.addKeywordsToReferenceImageHeader(awaicgen_output_mosaic_image_file,
                                                field_sciimage,
