@@ -243,43 +243,31 @@ refmatchrad = float(config_input['FORCED_PHOTOMETRY']['refmatchrad'])
 # cutout above which photometry not possible and epoch is skipped.
 maxbadpixfrac = float(config_input['FORCED_PHOTOMETRY']['maxbadpixfrac'])
 
-# Radius from input ra,dec position to coarsely seed (and optimize)
-# image queries on subtractions DB table [deg].
-radthres = float(config_input['FORCED_PHOTOMETRY']['radthres'])
-
 # Minimum percent overlap of difference image onto sky tile (field).
 minimum_percent_overlap_area = float(config_input['FORCED_PHOTOMETRY']['minimum_percent_overlap_area'])
 
 #=================================================================
 
+print("verbose =",verbose)
+print("debug =",debug)
 print("match_radius_overlap_field =",match_radius_overlap_field)
-print("field =",field)
-print("field =",field)
-print("field =",field)
-print("field =",field)
-print("field =",field)
-print("field =",field)
-print("field =",field)
-print("field =",field)
-print("field =",field)
-print("field =",field)
-print("field =",field)
-print("field =",field)
-print("field =",field)
-print("field =",field)
-print("field =",field)
-print("field =",field)
-print("field =",field)
-print("field =",field)
-print("field =",field)
-print("field =",field)
-print("field =",field)
-print("field =",field)
-print("field =",field)
-print("field =",field)
-print("field =",field)
-print("field =",field)
-print("field =",field)
+print("simflag =",simflag)
+print("simmag =",simmag)
+print("stampsz =",stampsz)
+print("stampupsamplefac =",stampupsamplefac)
+print("apdiam =",apdiam)
+print("corrunc =",corrunc)
+print("snrforcor =",snrforcor)
+print("minnumrats =",minnumrats)
+print("applyflxcorr =",applyflxcorr)
+print("applysimcalcorr =",applysimcalcorr)
+print("simcalpsffluxcor =",simcalpsffluxcor)
+print("simcalapfluxcor =",simcalapfluxcor)
+print("d_earliest =",d_earliest)
+print("jd_earliest =",jd_earliest)
+print("refmatchrad =",refmatchrad)
+print("maxbadpixfrac =",maxbadpixfrac)
+print("minimum_percent_overlap_area =",minimum_percent_overlap_area)
 
 
 #################
@@ -313,6 +301,7 @@ if __name__ == '__main__':
         ra_list = []
         dec_list = []
 
+        c = 0
         for row in sky_postions_reader:
             reqid = int(row[0])
             ra = float(row[1])
@@ -321,6 +310,9 @@ if __name__ == '__main__':
             reqid_list.append(reqid)
             ra_list.append(ra)
             dec_list.append(dec)
+            c += 1
+
+    numskypositions = c
 
 
     # Get sky positions of center and four corners of sky tile.
@@ -639,9 +631,6 @@ if __name__ == '__main__':
         print(f"*** Error: Could not open {xydatafile}; quitting...")
         exit(64)
 
-    x_list = []
-    y_list = []
-
     c = 0
 
     for ra,dec in zip(ra_list,dec_list):
@@ -656,15 +645,15 @@ if __name__ == '__main__':
             x,y = w.world_to_pixel(pos)
             print(f"Center: ra={ra}, dec={dec}) corresponds to x={x}, y={y} in ")
 
-            x -= 1       # Convert to one-based pixels coordinates.
-            y -= 1
+            x += 1       # Convert to one-based pixels coordinates.
+            y += 1
+
 
             # Write positions to text list file.
 
             fh_xydatafile.write(f"{c} {i} {pid} {ra} {dec} {x} {y}\n")
 
         c += 1
-
 
     fh_xydatafile.close()
 
@@ -730,7 +719,114 @@ if __name__ == '__main__':
     # Code-timing benchmark.
 
     end_time_benchmark = time.time()
-    print("Elapsed time in seconds after executing cforcerpsfaper =",
+    print("Elapsed time in seconds after executing cforcerpsfaper C module =",
+        end_time_benchmark - start_time_benchmark)
+    start_time_benchmark = end_time_benchmark
+
+
+    # Parse output from cforceaper C module and store in memory.
+    # The key for all dictionaries is the c-index for the different sky positions.
+
+    forcediffimflux = {}
+    forcediffimfluxunc = {}
+    forcediffimsnr = {}
+    forcediffimchisq = {}
+    forcediffimfluxap = {}
+    forcediffimfluxuncap = {}
+    forcediffimsnrap = {}
+    aperturecorr = {}
+    exitstatuseph0 = {}
+    exitstatuseph2 = {}
+
+    for c in range(numskypositions):
+        forcediffimflux[c] = []
+        forcediffimfluxunc[c] = []
+        forcediffimsnr[c] = []
+        forcediffimchisq[c] = []
+        forcediffimfluxap[c] = []
+        forcediffimfluxuncap[c] = []
+        forcediffimsnrap[c] = []
+        aperturecorr[c] = []
+        exitstatuseph0[c] = []
+        exitstatuseph2[c] = []
+
+
+    with open(lightcurvefile, mode='r', newline='') as csvfile:
+
+        lightcurvefile_reader = csv.reader(csvfile, delimiter=' ')
+
+        next(lightcurvefile_reader)                           # Skip header line.
+
+        for row in lightcurvefile_reader:
+
+            c = row[0]
+            i = row[1]
+
+            # row[2] stores pid; skip since it is available from DB query.
+            if row[2] != pid_list[i]:
+                print(f"pid from row[2] does not match pid_list for i = {i}; quitting...")
+                exit(64)
+
+            forcediffimflux[c].append(row[3])
+            forcediffimfluxunc[c].append(row[4])
+            forcediffimsnr[c].append(row[5])
+            forcediffimchisq[c].append(row[6])
+            forcediffimfluxap[c].append(row[7])
+            forcediffimfluxuncap[c].append(row[8])
+            forcediffimsnrap[c].append(row[9])
+            aperturecorr[c].append(row[10])
+            exitstatuseph0[c].append(row[11])
+            exitstatuseph2[c].append(row[12])
+
+
+    # Code-timing benchmark.
+
+    end_time_benchmark = time.time()
+    print("Elapsed time in seconds to load output from cforcerpsfaper C module into memory =",
+        end_time_benchmark - start_time_benchmark)
+    start_time_benchmark = end_time_benchmark
+
+
+    # Create final lightcurve files, one for each sky position.
+
+
+    c = 0
+
+    for ra,dec,reqid in zip(ra_list,dec_list,reqid_list):
+
+
+        final_lc_file = f'rapid_req{reqid}_lc.txt'
+
+        try:
+            fh_lc = open(final_lc_file, 'w', encoding="utf-8")
+        except:
+            print(f"*** Error: Could not open {final_lc_file}; quitting...")
+            exit(64)
+
+        fh_lc.write(f"pid expid sca fid field psfflux exitstatuses\n")
+
+        for i in range(numrecs):
+
+            pid = pid_list[i]
+            expid = expid_list[i]
+            sca = sca_list[i]
+            fid = fid_list[i]
+            field = field_list[i]
+            jd = jd_list[i]
+            psfflux = forcediffimflux[c][i]
+            exitstatuses = exitstatuseph0[c][i]
+
+            fh_lc.write(f"{pid} {expid} {sca} {fid} {field} {psfflux} {exitstatuses}\n")
+
+        c += 1
+
+        fh_lc.close()
+
+
+    # Code-timing benchmark.
+
+    end_time_benchmark = time.time()
+    print("Elapsed time in seconds to write final lightcurve files =",
         end_time_benchmark - start_time_benchmark)
     start_time_benchmark = end_time_benchmark
 
