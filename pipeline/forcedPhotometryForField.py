@@ -4,6 +4,35 @@ The input sky_positions_csv_file has 3 columns: reqid,ra,dec, and these sky posi
 are required to be within the input field.
 '''
 
+#########################################################################################
+#
+# * Exit and warning status codes (see log output for more information):
+#
+#      - 0   => Successful execution.
+#      - 52  => 10K input-file limit reached; user must submit another request
+#               with a later JD range to complete the lightcurve.
+#      - 54  => Insufficient number of background pixels.
+#      - 55  => Too many bad pixels.
+#      - 56  => One or more epochs have photometry measurements that may
+#               be impacted by bad (including NaN'd) pixels.
+#      - 57  => One or more epochs had no reference image catalog source
+#               falling with 5 arcsec.
+#      - 58  => One or more epochs had a reference image PSF-catalog that
+#               does not exist in the archive.
+#      - 60  => One or more epochs had upsampled diff-image PSF dimensions
+#               that were not odd integers.
+#      - 61  => One or more epochs had diff-image cutouts that were off the
+#               image or too close to an edge.
+#      - 62  => Requested start JD was before official survey start date
+#               and was reset.
+#      - 63  => No records (epochs) returned by database query.
+#      - 64  => Catastrophic error (see log output).
+#      - 65  => Requested end JD is before official survey start date
+#      - 255 => Database connection or query execution error (see log output).
+#
+#########################################################################################
+
+
 import csv
 import boto3
 import os
