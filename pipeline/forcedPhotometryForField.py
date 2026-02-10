@@ -637,6 +637,9 @@ if __name__ == '__main__':
         c += 1
 
 
+    fh_xydatafile.close()
+
+
     # Code-timing benchmark.
 
     end_time_benchmark = time.time()
@@ -648,17 +651,46 @@ if __name__ == '__main__':
     # Execute ulimit increase and cforcepsfaper C module in the same shell (connected by &&).
     # Execute C module cforcepsfaper with 1 thread.
 
-    run_cforcepsfaper_was_successful = True
 
     lightcurvefile = 'lightcurve_c.dat'
 
+    bash_shebang_cmd = "#!/bin/bash -x"
     stack_size_cmd = "ulimit -s 262144"
     show_stack_size_cmd = "ulimit -a"
-    cforcepsfaper_cmd = f"/code/c/bin/cforcepsfaper -i {diffimglistfile} -a {xydatafile} -o {lightcurvefile} -t 1 -r -v"
+    cforcepsfaper_cmd = f"/code/c/bin/cforcepsfaper -i {diffimglistfile} -a {xydatafile} " +\
+                        f"-o {lightcurvefile} -t 1 -r -v >& cforcepsfaper.out"
 
-    cmd = stack_size_cmd + " && " + show_stack_size_cmd + " && " + cforcepsfaper_cmd
 
-    exitcode_from_cforcepsfaper = util.execute_command_in_shell(cforcepsfaper_cmd,"cforcepsfaper.out")
+    # Create a bash script to execute the cforcepsfaper C module, and then execute it.
+    # This is not the same as running it in a python shell.
+
+    cforcepsfaper_bash_script = 'cforcepsfaper.sh'
+
+    try:
+        fh_cforcepsfaper = open(cforcepsfaper_bash_script, 'w', encoding="utf-8")
+    except:
+        print(f"*** Error: Could not open {cforcepsfaper_bash_script}; quitting...")
+        exit(64)
+
+    fh_cforcepsfaper.write(f"{bash_shebang_cmd}\n")
+    fh_cforcepsfaper.write(f"{stack_size_cmd}\n")
+    fh_cforcepsfaper.write(f"{show_stack_size_cmd}\n")
+    fh_cforcepsfaper.write(f"{cforcepsfaper_cmd}\n")
+
+    fh_cforcepsfaper.close()
+
+    run_chmod_was_successful = True
+
+    exitcode_from_chmod = util.execute_command_in_shell(f"chmod +x {cforcepsfaper_bash_script}")
+
+    if int(exitcode_from_chmod) != 0:
+        run_chmod_was_successful = False
+
+    print(f"run_chmod_was_successful = {run_chmod_was_successful}")
+
+    run_cforcepsfaper_was_successful = True
+
+    exitcode_from_cforcepsfaper = util.execute_command_in_shell(f"./{cforcepsfaper_bash_script}","cforcepsfaper_sh.out")
 
     if int(exitcode_from_cforcepsfaper) != 0:
         run_cforcepsfaper_was_successful = False
