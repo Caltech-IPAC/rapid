@@ -829,7 +829,7 @@ if __name__ == '__main__':
             psffluxunc = forcediffimfluxunc[c][i]
             psfsnr = forcediffimsnr[c][i]
             psfchi2 = forcediffimchisq[c][i]
-            apflux = forcediffimfluxap[c][i]
+            aperflux = forcediffimfluxap[c][i]
             aperfluxunc = forcediffimfluxuncap[c][i]
             apersnr = forcediffimsnrap[c][i]
             apercorr = aperturecorr[c][i]
