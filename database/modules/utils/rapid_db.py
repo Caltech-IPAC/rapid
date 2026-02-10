@@ -3559,3 +3559,49 @@ class RAPIDDB:
             return
 
         return records
+
+
+########################################################################################################
+
+    def get_filters(self):
+
+        '''
+        Query database for all Filters records.
+        '''
+
+        self.exit_code = 0
+
+
+        # Define query.
+
+        query = f"select fid,filter from Filters order by fid;"
+
+
+        # Query database.
+
+        print('query = {}'.format(query))
+
+
+        # Execute query.
+
+        try:
+            self.cur.execute(query)
+
+            try:
+                records = []
+                nrecs = 0
+                for record in self.cur:
+                    records.append(record)
+                    nrecs += 1
+
+                print("nrecs =",nrecs)
+
+            except:
+                print("Nothing returned from database query; continuing...")
+
+        except (Exception, psycopg2.DatabaseError) as error:
+            print('*** Error getting all L2Files records for given dateobs range ({}); skipping...'.format(error))
+            self.exit_code = 67
+            return
+
+        return records
