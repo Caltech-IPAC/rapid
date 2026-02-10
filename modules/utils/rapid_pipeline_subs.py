@@ -2265,31 +2265,31 @@ def compute_pix_image_center_and_four_corners_from_sky(w,ra0,dec0,ra1,dec1,ra2,d
     dec = dec0
     pos = SkyCoord(ra=ra, dec=dec, unit='deg')
     x0,y0 = w.world_to_pixel(pos)
-    print(f"Center: ra={ra}, dec={dec}) corresponds to x={x0}, y={y0}")
+    print(f"Center: ra={ra}, dec={dec} corresponds to x={x0}, y={y0} (zero-based pixel coordinates)")
 
     ra = ra1
     dec = dec1
     pos = SkyCoord(ra=ra, dec=dec, unit='deg')
     x1,y1 = w.world_to_pixel(pos)
-    print(f"Corner 1: ra={ra}, dec={dec}) corresponds to x={x1}, y={y1}")
+    print(f"Corner 1: ra={ra}, dec={dec} corresponds to x={x1}, y={y1} (zero-based pixel coordinates)")
 
     ra = ra2
     dec = dec2
     pos = SkyCoord(ra=ra, dec=dec, unit='deg')
     x2,y2 = w.world_to_pixel(pos)
-    print(f"Corner 2: ra={ra}, dec={dec}) corresponds to x={x2}, y={y2}")
+    print(f"Corner 2: ra={ra}, dec={dec} corresponds to x={x2}, y={y2} (zero-based pixel coordinates)")
 
     ra = ra3
     dec = dec3
     pos = SkyCoord(ra=ra, dec=dec, unit='deg')
     x3,y3 = w.world_to_pixel(pos)
-    print(f"Corner 3: ra={ra}, dec={dec}) corresponds to x={x3}, y={y3}")
+    print(f"Corner 3: ra={ra}, dec={dec} corresponds to x={x3}, y={y3} (zero-based pixel coordinates)")
 
     ra = ra4
     dec = dec4
     pos = SkyCoord(ra=ra, dec=dec, unit='deg')
     x4,y4 = w.world_to_pixel(pos)
-    print(f"Corner 4: ra={ra}, dec={dec}) corresponds to x={x4}, y={y4}")
+    print(f"Corner 4: ra={ra}, dec={dec} corresponds to x={x4}, y={y4} (zero-based pixel coordinates)")
 
     return x0,y0,x1,y1,x2,y2,x3,y3,x4,y4
 
