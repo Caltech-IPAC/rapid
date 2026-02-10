@@ -338,6 +338,15 @@ if __name__ == '__main__':
     if dbh.exit_code >= 64:
         exit(dbh.exit_code)
 
+    # Get all filter names.
+
+    records = dbh.get_filters()
+    filters = {}
+    for record in records:
+        fid = record[0]
+        filter = record[1]
+        filters[fid] = filter
+
 
     # Get difference images that possibly overlap the field.
     # Returns the following columns:
@@ -643,10 +652,11 @@ if __name__ == '__main__':
 
             pos = SkyCoord(ra=ra, dec=dec, unit='deg')     # Returns zero-based pixel coordinates.
             x,y = w.world_to_pixel(pos)
-            print(f"Center: ra={ra}, dec={dec}) corresponds to x={x}, y={y} in ")
 
             x += 1       # Convert to one-based pixels coordinates.
             y += 1
+
+            print(f"Center: ra={ra}, dec={dec} corresponds to x={x}, y={y} (one-based pixel coordinates) in {f}")
 
 
             # Write positions to text list file.
@@ -803,7 +813,7 @@ if __name__ == '__main__':
             print(f"*** Error: Could not open {final_lc_file}; quitting...")
             exit(64)
 
-        fh_lc.write(f"pid expid sca fid field psfflux exitstatuses\n")
+        fh_lc.write(f"pid expid sca fid filter field psfflux exitstatuses\n")
 
         for i in range(numrecs):
 
@@ -811,12 +821,13 @@ if __name__ == '__main__':
             expid = expid_list[i]
             sca = sca_list[i]
             fid = fid_list[i]
+            filter = filters[fid]
             field = field_list[i]
             jd = jd_list[i]
             psfflux = forcediffimflux[c][i]
             exitstatuses = exitstatuseph0[c][i]
 
-            fh_lc.write(f"{pid} {expid} {sca} {fid} {field} {psfflux} {exitstatuses}\n")
+            fh_lc.write(f"{pid} {expid} {sca} {fid} {filter} {field} {psfflux} {exitstatuses}\n")
 
         c += 1
 
