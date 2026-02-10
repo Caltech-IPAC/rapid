@@ -760,7 +760,7 @@ if __name__ == '__main__':
         for row in lightcurvefile_reader:
 
             c = row[0]
-            i = row[1]
+            i = int(row[1])
 
             # row[2] stores pid; skip since it is available from DB query.
             if row[2] != pid_list[i]:
