@@ -833,6 +833,16 @@ if __name__ == '__main__':
         fh_lc.write(f"# Requested input R.A. = {ra} degrees\n")
         fh_lc.write(f"# Requested input Dec. = {dec} degrees\n")
         fh_lc.write(f"# Forced-photometry request ID = {reqid}\n")
+        fh_lc.write(f"# ------------------------------------------------------------------\n")
+        fh_lc.write(f"# Lightcurve-table column definitions:\n")
+        fh_lc.write(f"# sindex = sequential counter\n")
+        fh_lc.write(f"# jd = Julian Date at start of exposure [days]\n")
+        fh_lc.write(f"# expid = exposure RAPID-Operations-DB identifier\n")
+        fh_lc.write(f"# pid = difference-image RAPID-Operations-DB identifier\n")
+        fh_lc.write(f"# sca = Roman SCA number (between 1 and 18, inclusive)\n")
+        fh_lc.write(f"# fid = filter RAPID-Operations-DB identifier\n")
+        fh_lc.write(f"# filter = Roman filter name\n")
+        fh_lc.write(f"# field = sky-tile RAPID-Operations-DB number (between 1 and 6291458,inclusive)\n")
         fh_lc.write(f"# psfflux = PSF-fit flux [DN/s]\n")
         fh_lc.write(f"# psffluxunc = 1-sigma uncertainty in psfflux [DN/s]\n")
         fh_lc.write(f"# psfsnr = Signal-to-noise ratio for psfflux measurement\n")
@@ -844,18 +854,21 @@ if __name__ == '__main__':
         fh_lc.write(f"# procstatus = Per-epoch processing status codes: 0=normal, otherwise see documentation.\n")
         fh_lc.write(f"# ------------------------------------------------------------------\n")
         fh_lc.write(f"# Order of table columns is as follows:\n")
-        fh_lc.write("pid expid sca fid filter field psfflux psffluxunc psfsnr psfredchi2 " +\
+        fh_lc.write("sindex jd expid pid sca fid filter field psfflux psffluxunc psfsnr psfredchi2 " +\
                     "aperflux aperfluxunc apersnr apercorr exitstatuses\n")
+
+        sindex = 0
 
         for i in range(numrecs):
 
-            pid = pid_list[i]
+            sindex += 1
+            jd = jd_list[i]
             expid = expid_list[i]
+            pid = pid_list[i]
             sca = sca_list[i]
             fid = fid_list[i]
             filter = filters[fid]
             field = field_list[i]
-            jd = jd_list[i]
             psfflux = forcediffimflux[c][i]
             psffluxunc = forcediffimfluxunc[c][i]
             psfsnr = forcediffimsnr[c][i]
@@ -868,7 +881,7 @@ if __name__ == '__main__':
             if int(exitstatuseph2[c][i]) != 0:
                 exitstatuses += "," + exitstatuseph2[c][i]
 
-            fh_lc.write(f"{pid} {expid} {sca} {fid} {filter} {field} {psfflux} {psffluxunc} {psfsnr} {psfredchi2} " +\
+            fh_lc.write(f"{sindex} {jd} {expid} {pid} {sca} {fid} {filter} {field} {psfflux} {psffluxunc} {psfsnr} {psfredchi2} " +\
                         f"{aperflux} {aperfluxunc} {apersnr} {apercorr} {exitstatuses}\n")
 
         c += 1
