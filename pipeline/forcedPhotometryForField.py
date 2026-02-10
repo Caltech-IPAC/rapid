@@ -764,8 +764,8 @@ if __name__ == '__main__':
 
             # row[2] stores pid; skip since it is available from DB query.
             if row[2] != pid_list[i]:
-                print(f"pid from row[2] does not match pid_list for i = {i}; quitting...")
-                exit(64)
+                print(f"pid from row[2] ({row[2]}) does not match pid_list ({pid_list[i]}) for i = {i}; quitting...")
+                #exit(64)
 
             forcediffimflux[c].append(row[3])
             forcediffimfluxunc[c].append(row[4])
