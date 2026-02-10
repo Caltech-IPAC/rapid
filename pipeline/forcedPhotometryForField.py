@@ -33,9 +33,9 @@ are required to be within the input field.
 #########################################################################################
 
 
+import os
 import csv
 import boto3
-import os
 import shutil
 import numpy as np
 import healpy as hp
@@ -373,6 +373,7 @@ if __name__ == '__main__':
 
     i = 0
     j = 0
+    refimg_idx = 0
 
     pid_list = []
     expid_list = []
@@ -400,6 +401,8 @@ if __name__ == '__main__':
     ppid_ref_list = []
     dist_field_sciimg_center_list = []
     wcs_diffimg_list = []
+
+    ref_image_fname_dict = {}
 
 
     # Open text file to write list of valid difference-image filenames.
@@ -457,10 +460,21 @@ if __name__ == '__main__':
 
         # Download reference image from S3 bucket.
 
-        s3_full_name_ref_image = refimfilename
-        refimg_filename_from_bucket,subdirs_ref_image,downloaded_from_bucket = util.download_file_from_s3_bucket(s3_client,s3_full_name_ref_image)
+        if refimfilename not in ref_image_fname_dict:
 
-        print(f"refimg_filename_from_bucket,subdirs_ref_image,downloaded_from_bucket = {refimg_filename_from_bucket},{subdirs_ref_image},{downloaded_from_bucket}")
+            s3_full_name_ref_image = refimfilename
+            refimg_filename_from_bucket,subdirs_ref_image,downloaded_from_bucket = util.download_file_from_s3_bucket(s3_client,s3_full_name_ref_image)
+
+            print(f"refimg_filename_from_bucket,subdirs_ref_image,downloaded_from_bucket = {refimg_filename_from_bucket},{subdirs_ref_image},{downloaded_from_bucket}")
+
+            newrefimfilename = refimg_filename_from_bucket.replace(".fits",f"_{refimg_idx}.fits")
+
+            shutil.move(refimg_filename_from_bucket, newrefimfilename)
+            print(f"Moved '{refimg_filename_from_bucket}' to '{newrefimfilename}'")
+
+            refimg_idx += 1
+
+            ref_image_fname_dict[refimfilename] = newrefimfilename
 
 
         # Read FITS file
@@ -532,8 +546,8 @@ if __name__ == '__main__':
             shutil.move(diffimg_filename_from_bucket, diffimg_filename)
             print(f"Moved '{diffimg_filename_from_bucket}' to '{diffimg_filename}'")
 
-            shutil.move(refimg_filename_from_bucket, refimg_filename)
-            print(f"Moved '{refimg_filename_from_bucket}' to '{refimg_filename}'")
+            os.symlink(ref_image_fname_dict[refimfilename], refimg_filename)
+            print(f"Created symbolic link {refimg_filename} pointing to {ref_image_fname_dict[refimfilename]}")
 
 
             # Write valid difference-image filename and corresponding SCA gain to text list file.
@@ -611,8 +625,8 @@ if __name__ == '__main__':
 
         print(f"i,j = {i},{j}")
 
-        #if i >= 50:
-        #    break
+        if i >= 150:
+            break
 
 
     numrecs = j
