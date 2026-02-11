@@ -114,7 +114,11 @@ def generateReferenceImage(s3_client,
             # Reformat the FITS file so that the image data are contained in the PRIMARY header.
             # Also, compute via a simple model the uncertainty image from the science image,
             # assuming some value for the SCA gain (electrons/ADU), which is unavailable for Roman WFI.
-            # Normalize by exposure time.
+            # Normalize by exposure time, and scale the input image data such that the zero point
+            # of the reference image will always be a fixed value, as assigned in the input config file.
+            # The data units of the reference image data will be DN/s.
+
+            zprefimg = float(awaicgen_dict["zprefimg"])
 
             fname_input = refimage_input_filename.replace(".fits.gz",".fits")
             fname_output = refimage_input_filename.replace(".fits.gz","_reformatted.fits")
@@ -130,9 +134,20 @@ def generateReferenceImage(s3_client,
             exptime = hdr["EXPTIME"]
             hdr["BUNIT"] = "DN/s"
 
-            data_norm = data / exptime
+            data_norm = np.array(data) / exptime
 
-            hdu = fits.PrimaryHDU(header=hdr,data=data_norm)
+            zptmag = hdr["ZPTMAG"]
+            flux_scale_factor = 10 ** (0.4 * (zptmag - zprefimg))
+            print(f"For zptmag = {zptmag}:")
+            print(f"    flux_scale_factor = {flux_scale_factor}")
+            print(f"This ensures ZPREFIMG = {zprefimg}")
+
+            data_scaled = data_norm * flux_scale_factor
+
+
+            # Write the reformatted FITS file for the input for reference-image stacking.
+
+            hdu = fits.PrimaryHDU(header=hdr,data=data_scaled)
             hdu_list = []
             hdu_list.append(hdu)
             hdu = fits.HDUList(hdu_list)
@@ -141,7 +156,7 @@ def generateReferenceImage(s3_client,
 
             # Ensure data are positive for uncertainty calculations.
 
-            pos_data = np.abs(np.array(data))
+            pos_data = np.abs(np.array(data) * flux_scale_factor)
             data_unc = np.sqrt(pos_data / sca_gain + sca_readout_noise ** 2) / exptime
 
             hdu_unc = fits.PrimaryHDU(header=hdr,data=data_unc)
