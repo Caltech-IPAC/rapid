@@ -2423,8 +2423,8 @@ def trim_and_upsample_refimg_psf_fits_image(input_fits_file,
     regularized_data_array = np.where(trimmed_data_array < 0.0, 0.0, trimmed_data_array)
 
 
-    # Upsample the array using a specified interpolation order (e.g., order=3 for cubic
-    # order=0 is nearest neighbor, order=1 is bilinear, order=3 is cubic).
+    # Upsample the array using a specified interpolation order (e.g., order=0 for
+    # nearest neighbor, order=1 for bilinear, order=2 for parabolic, order=3 for cubic).
 
     upsampled_array = zoom(regularized_data_array, upsample_factor, order=interp_order)
 
