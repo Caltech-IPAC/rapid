@@ -49,6 +49,7 @@ to_zone = tz.gettz('America/Los_Angeles')
 from astropy.wcs import WCS
 from astropy.io import fits
 from astropy.coordinates import SkyCoord
+from astropy.table import QTable, join
 
 
 import database.modules.utils.rapid_db as db
@@ -268,6 +269,116 @@ print("jd_earliest =",jd_earliest)
 print("refmatchrad =",refmatchrad)
 print("maxbadpixfrac =",maxbadpixfrac)
 print("minimum_percent_overlap_area =",minimum_percent_overlap_area)
+
+
+#---------------------------------------------------------------------
+# Find nearest source in reference-image PSF-catalog that is within
+# refmatchrad arcsec and return metrics.
+# Canonical catalog filenames are:
+#     diffimage_masked_psfcat.txt
+#     diffimage_masked_psfcat_finder.txt
+#---------------------------------------------------------------------
+
+def nearestrefpsfcatmetrics(reffilenameinp,refcatfname,refcatfinderfname,fph_ra,fph_dec,refmatchrad):
+
+    dnearestrefsrc = "null"
+    nearestref_flux_fit = "null"
+    nearestref_flux_err = "null"
+    nearestref_reduced_chi2 = "null"
+    nearestref_sharpness = "null"
+    refjdstart = "null"
+    refjdend = "null"
+    exitstatuseph4 = 0
+    exitstatuseph5 = 0
+
+
+    #--------
+    # Read select FITS-image header keywords from reference image.
+
+    hdu_index = 0
+    hdul = fits.open(reffilenameinp)
+    hdr = hdul[hdu_index].header
+
+    refjdstart = hdr["JDSTART"]
+    refjdend = hdr["JDEND"]
+    refzp = hdr["MAGZP"]
+
+    hdul.close()
+
+
+    #--------
+    # Check where ref-image PSF-catalog files exist.
+
+    if (not os.path.isfile(refcatfname)) or (not os.path.isfile(refcatfinderfname)):
+
+        print(f"*** Warning: One or the other file does not exist ({refcatfname},{refcatfinderfname}); skipping...")
+
+        exitstatuseph4 = 58
+
+        return dnearestrefsrc, nearestref_flux_fit, refzp, nearestref_flux_err, nearestref_reduced_chi2,\
+               nearestref_sharpness, refjdstart, refjdend, exitstatuseph4, exitstatuseph5
+
+    #--------
+    # Read ra,dec positions of sources from PSF-catalog, compute square
+    # of Pythagorean distances from input ra,dec position, store numpy array
+    # index corresponding to minimum value and distance.
+    # Note: Pythagorean approximation is for speed!
+    #--------
+    # Join catalogs and extract the columns needed.
+
+    psfcat_qtable = QTable.read(refcatfname,format='ascii')
+    psfcat_finder_qtable = QTable.read(refcatfinderfname,format='ascii')
+
+    joined_table_inner = join(psfcat_qtable, psfcat_finder_qtable, keys='id', join_type='inner')
+
+    nrows = len(joined_table_inner)
+    print(f"nrows in PSF-fit catalog = {nrows}\n")
+
+    ra_val = joined_table_inner['ra'].value
+    dec_val = joined_table_inner['dec'].value
+
+    num_ra_val = len(ra_val)
+    num_dec_val = len(dec_val)
+
+    print(f"Number of ra values = {num_ra_val}")
+    print(f"Number of dec values = {num_dec_val}")
+
+    cos_dec = np.cos(np.radians(fph_dec))
+    dist2_val = ((cos_dec * (ra_val - fph_ra)) *\
+        (cos_dec *(ra_val - fph_ra))) +\
+        ((dec_val - fph_dec)*(dec_val - fph_dec))
+
+    idxmin = dist2_val.argmin()
+
+    print(f"idxmin = {idxmin}")
+
+    #--------
+    # Compute minimum approximate distance in arcsec.
+
+    distmin = 3600. * np.sqrt(dist2_val[idxmin])
+
+    print(f"{swname}: nearestrefpsfcatmetrics: distance to nearest source in PSF-catalog = {distmin} arcsec.")
+
+
+    #--------
+    # if distance is <= refmatchrad arcsec, store associated metrics from
+    # catalog, otherwise issue warning.
+
+    if distmin <= refmatchrad:
+
+        dnearestrefsrc = distmin
+        nearestref_flux_fit = joined_table_inner['flux_fit'].value[idxmin]
+        nearestref_flux_err = joined_table_inner['flux_err'].value[idxmin]
+        nearestref_reduced_chi2 = joined_table_inner['reduced_chi2'].value[idxmin]
+        nearestref_sharpness = joined_table_inner['sharpness'].value[idxmin]
+
+    else:
+
+        print(f"*** Warning: No ref-image catalog source exists within {refmatchrad} arcsec; skipping...")
+
+
+    return dnearestrefsrc, nearestref_flux_fit, refzp, nearestref_flux_err, nearestref_reduced_chi2,\
+           nearestref_sharpness, refjdstart, refjdend, exitstatuseph4, exitstatuseph5
 
 
 #################
@@ -820,8 +931,24 @@ if __name__ == '__main__':
     start_time_benchmark = end_time_benchmark
 
 
-    # Create final lightcurve files, one for each sky position.
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+    # Create final lightcurve files, one for each sky position.
 
     c = 0
 
