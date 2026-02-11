@@ -44,6 +44,8 @@ def generateReferenceImage(s3_client,
     refimage_input_filenames_reformatted_unc = []
 
     n = 0
+    jdstart = 999999999.0
+    jdend = 0.0
 
     with open(input_images_csv_filename, newline='') as csvfile:
 
@@ -143,6 +145,13 @@ def generateReferenceImage(s3_client,
             print(f"This ensures ZPREFIMG = {zprefimg}")
 
             data_scaled = data_norm * flux_scale_factor
+
+            mjdobs = float(hdr["MJD-OBS"])
+            jd = util.convert_mjd_to_jd(mjdobs)
+            if jd < jdstart:
+                jdstart = jd
+            if jd > jdend:
+                jdend = jd
 
 
             # Write the reformatted FITS file for the input for reference-image stacking.
@@ -307,6 +316,8 @@ def generateReferenceImage(s3_client,
     generateReferenceImage_return_list.append(awaicgen_output_mosaic_uncert_image_s3_bucket_object_name)
     generateReferenceImage_return_list.append(n_images_to_coadd)
     generateReferenceImage_return_list.append(refimage_input_filenames)
+    generateReferenceImage_return_list.append(jdstart)
+    generateReferenceImage_return_list.append(jdend)
 
     return generateReferenceImage_return_list
 
@@ -395,7 +406,9 @@ def addKeywordsToReferenceImageHeader(reference_image_filename,
                                       exposure_filter,
                                       cov5percent,
                                       nframes,
-                                      refimage_input_filenames):
+                                      refimage_input_filenames,
+                                      jdstart,
+                                      jdend):
 
     hdu_index = 0
 
@@ -411,11 +424,13 @@ def addKeywordsToReferenceImageHeader(reference_image_filename,
     # Add keywords to header.
 
     hdr["BUNIT"] = "DN/s"
-    hdr["FIELD"] = str(field)
-    hdr["FID"] = str(fid)
+    hdr["FIELD"] = (field,"Roman sky-tile number")
+    hdr["FID"] = (fid,"RAPID-OPS-DB filter number")
     hdr["FILTER"] = exposure_filter
-    hdr["COV5PERC"] = str(cov5percent)
-    hdr["NFRAMES"] = str(nframes)
+    hdr["COV5PERC"] = cov5percent
+    hdr["NFRAMES"] = (nframes,"Total number of images coadded")
+    hdr["JDSTART"] = (jdstart,"Obs. JD of earliest image used [days]")
+    hdr["JDEND"] = (jdend,"Obs. JD of latest image used [days]")
 
 
     # Add keywords for reference-image input filenames.

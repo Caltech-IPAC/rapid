@@ -379,6 +379,8 @@ if __name__ == '__main__':
         awaicgen_output_mosaic_uncert_image_s3_bucket_object_name = generateReferenceImage_return_list[7]
         nframes = generateReferenceImage_return_list[8]
         refimage_input_filenames = generateReferenceImage_return_list[9]
+        jdstart = generateReferenceImage_return_list[10]
+        jdend = generateReferenceImage_return_list[11]
 
         cov5percent = rfis.compute_cov5percent(awaicgen_output_mosaic_cov_map_file)
 
@@ -561,7 +563,6 @@ if __name__ == '__main__':
 
 
         # Add informational FITS keywords to header of reference image.
-        # TODO Add JD of earliest and latest science images used to generate reference image.
 
         rfis.addKeywordsToReferenceImageHeader(awaicgen_output_mosaic_image_file,
                                                field_sciimage,
@@ -569,7 +570,9 @@ if __name__ == '__main__':
                                                filter_sciimage,
                                                cov5percent,
                                                nframes,
-                                               refimage_input_filenames)
+                                               refimage_input_filenames,
+                                               jdstart,
+                                               jdend)
 
 
         # Also, add same informational FITS keywords to header of reference-image uncertainty image.
@@ -580,7 +583,9 @@ if __name__ == '__main__':
                                                filter_sciimage,
                                                cov5percent,
                                                nframes,
-                                               refimage_input_filenames)
+                                               refimage_input_filenames,
+                                               jdstart,
+                                               jdend)
 
 
         # Upload reference-image file to S3 bucket.
