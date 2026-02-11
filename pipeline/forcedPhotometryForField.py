@@ -620,7 +620,7 @@ if __name__ == '__main__':
             rebinpsffilename = f"rapid_{j}_rebinpsf.fits"
 
             hdu_index = 0
-            interp_order = 1      # Don't use 2 or 3 as it (cubit) introduces negative values in rebinned PSF.
+            interp_order = 1      # Don't use 2 or 3 introduces negative values in rebinned PSF.
 
             util.trim_and_upsample_refimg_psf_fits_image(refimg_psf_filename,
                                                          hdu_index,
@@ -864,7 +864,7 @@ if __name__ == '__main__':
         fh_lc.write(f"# ------------------------------------------------------------------\n")
         fh_lc.write(f"# Order of table columns is as follows:\n")
         fh_lc.write("sindex jd expid pid sca fid filter field psfflux psffluxunc psfsnr psfredchi2 " +\
-                    "aperflux aperfluxunc apersnr apercorr exitstatuses\n")
+                    "aperflux aperfluxunc apersnr apercorr procstatus\n")
 
         sindex = 0
 
