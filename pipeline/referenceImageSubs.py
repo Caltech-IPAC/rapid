@@ -318,6 +318,7 @@ def generateReferenceImage(s3_client,
     generateReferenceImage_return_list.append(refimage_input_filenames)
     generateReferenceImage_return_list.append(jdstart)
     generateReferenceImage_return_list.append(jdend)
+    generateReferenceImage_return_list.append(zprefimg)
 
     return generateReferenceImage_return_list
 
@@ -408,7 +409,8 @@ def addKeywordsToReferenceImageHeader(reference_image_filename,
                                       nframes,
                                       refimage_input_filenames,
                                       jdstart,
-                                      jdend):
+                                      jdend,
+                                      zprefimg):
 
     hdu_index = 0
 
@@ -431,6 +433,7 @@ def addKeywordsToReferenceImageHeader(reference_image_filename,
     hdr["NFRAMES"] = (nframes,"Total number of images coadded")
     hdr["JDSTART"] = (jdstart,"Obs. JD of earliest image used [days]")
     hdr["JDEND"] = (jdend,"Obs. JD of latest image used [days]")
+    hdr["MAGZP"] = (zprefimg,"Fixed zero point of all RAPID refimgs [mag]")
 
 
     # Add keywords for reference-image input filenames.

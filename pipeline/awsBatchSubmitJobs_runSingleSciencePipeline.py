@@ -381,6 +381,7 @@ if __name__ == '__main__':
         refimage_input_filenames = generateReferenceImage_return_list[9]
         jdstart = generateReferenceImage_return_list[10]
         jdend = generateReferenceImage_return_list[11]
+        zprefimg = generateReferenceImage_return_list[12]
 
         cov5percent = rfis.compute_cov5percent(awaicgen_output_mosaic_cov_map_file)
 
@@ -572,7 +573,8 @@ if __name__ == '__main__':
                                                nframes,
                                                refimage_input_filenames,
                                                jdstart,
-                                               jdend)
+                                               jdend,
+                                               zprefimg)
 
 
         # Also, add same informational FITS keywords to header of reference-image uncertainty image.
@@ -585,7 +587,8 @@ if __name__ == '__main__':
                                                nframes,
                                                refimage_input_filenames,
                                                jdstart,
-                                               jdend)
+                                               jdend,
+                                               zprefimg)
 
 
         # Upload reference-image file to S3 bucket.
