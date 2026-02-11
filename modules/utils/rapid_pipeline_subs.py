@@ -2425,6 +2425,7 @@ def trim_and_upsample_refimg_psf_fits_image(input_fits_file,
 
     # Upsample the array using a specified interpolation order (e.g., order=0 for
     # nearest neighbor, order=1 for bilinear, order=2 for parabolic, order=3 for cubic).
+    # Caution: Higher order than 1 introduces negative values in upsampled PSF.
 
     upsampled_array = zoom(regularized_data_array, upsample_factor, order=interp_order)
 
