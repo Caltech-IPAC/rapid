@@ -139,7 +139,7 @@ def generateReferenceImage(s3_client,
             data_norm = np.array(data) / exptime
 
             zptmag = hdr["ZPTMAG"]
-            flux_scale_factor = 10 ** (0.4 * (zptmag - zprefimg))
+            flux_scale_factor = 10 ** (0.4 * (zprefimg - zptmag))
             print(f"For zptmag = {zptmag}:")
             print(f"    flux_scale_factor = {flux_scale_factor}")
             print(f"This ensures ZPREFIMG = {zprefimg}")
