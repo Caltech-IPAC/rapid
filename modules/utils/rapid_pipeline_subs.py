@@ -2452,3 +2452,14 @@ def trim_and_upsample_refimg_psf_fits_image(input_fits_file,
     # Return exit_flag.
 
     return exit_flag
+
+
+########################################
+# Convert MDJ to JD.
+########################################
+
+def convert_mjd_to_jd(mjd):
+
+    jd = mjd + 2400000.5
+
+    return jd
