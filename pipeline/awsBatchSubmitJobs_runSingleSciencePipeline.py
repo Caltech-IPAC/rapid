@@ -403,20 +403,20 @@ if __name__ == '__main__':
         medpixunc = stats_uncimage["gmed"]
 
 
-        # Generate reference-image catalog.
+        # Generate SExtractor reference-image catalog.
 
-        generateReferenceImageCatalog_return_list = rfis.generateReferenceImageCatalog(s3_client,
-                                                                                       product_s3_bucket,
-                                                                                       jid,
-                                                                                       job_proc_date,
-                                                                                       awaicgen_output_mosaic_image_file,
-                                                                                       awaicgen_output_mosaic_uncert_image_file,
-                                                                                       sextractor_refimage_dict,
-                                                                                       upload_to_s3_bucket)
+        refimgsexcat_return_list = rfis.generateSExtractorReferenceImageCatalog(s3_client,
+                                                                                product_s3_bucket,
+                                                                                jid,
+                                                                                job_proc_date,
+                                                                                awaicgen_output_mosaic_image_file,
+                                                                                awaicgen_output_mosaic_uncert_image_file,
+                                                                                sextractor_refimage_dict,
+                                                                                upload_to_s3_bucket)
 
-        checksum_refimage_catalog = generateReferenceImageCatalog_return_list[0]
-        filename_refimage_catalog = generateReferenceImageCatalog_return_list[1]
-        refimage_catalog_s3_bucket_object_name = generateReferenceImageCatalog_return_list[2]
+        checksum_refimage_catalog = refimgsexcat_return_list[0]
+        filename_refimage_catalog = refimgsexcat_return_list[1]
+        refimage_catalog_s3_bucket_object_name = refimgsexcat_return_list[2]
 
 
 

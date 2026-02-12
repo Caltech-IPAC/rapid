@@ -324,17 +324,17 @@ def generateReferenceImage(s3_client,
 
 
 #####################################################################################
-# Generate reference-image catalog and upload it to S3 bucket.
+# Generate SExtractor reference-image catalog and upload it to S3 bucket.
 #####################################################################################
 
-def generateReferenceImageCatalog(s3_client,
-                                  product_s3_bucket,
-                                  jid,
-                                  job_proc_date,
-                                  filename_refimage_image,
-                                  filename_refimage_uncert,
-                                  sextractor_refimage_dict,
-                                  upload_to_s3_bucket):
+def generateSExtractorReferenceImageCatalog(s3_client,
+                                            product_s3_bucket,
+                                            jid,
+                                            job_proc_date,
+                                            filename_refimage_image,
+                                            filename_refimage_uncert,
+                                            sextractor_refimage_dict,
+                                            upload_to_s3_bucket):
 
 
     # Compute SExtractor catalog for reference image.
