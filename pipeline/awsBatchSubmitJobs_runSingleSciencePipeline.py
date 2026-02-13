@@ -265,6 +265,7 @@ if __name__ == '__main__':
     sfft_dict = config_input['SFFT']
     naive_diffimage_dict = config_input['NAIVE_DIFFIMAGE']
     fake_sources_dict = config_input['FAKE_SOURCES']
+    psfcat_refimage_dict = config_input['PSFCAT_REFIMAGE']
 
     print("max_n_images_to_coadd =", max_n_images_to_coadd)
 
@@ -297,6 +298,21 @@ if __name__ == '__main__':
         end_time_benchmark = time.time()
         print("Elapsed time in seconds after uploading science image to product S3 bucket =",end_time_benchmark - start_time_benchmark)
         start_time_benchmark = end_time_benchmark
+
+
+    # Download PSFs from S3 bucket.
+
+    filename_sciimage_psf,subdirs_psf,downloaded_from_bucket = util.download_file_from_s3_bucket(s3_client,s3_full_name_sciimage_psf)
+
+    print("s3_full_name_sciimage_psf = ",s3_full_name_sciimage_psf)
+    print("filename_sciimage_psf = ",filename_sciimage_psf)
+
+    refimage_psf_filename = refimage_psf_filename.replace("FID",str(fid_sciimage))
+    s3_full_name_refimage_psf = "s3://" + job_info_s3_bucket + "/" + refimage_psf_s3_bucket_dir + "/" + refimage_psf_filename
+    filename_refimage_psf,subdirs_refimage_psf,downloaded_from_bucket = util.download_file_from_s3_bucket(s3_client,s3_full_name_refimage_psf)
+
+    print("s3_full_name_refimage_psf = ",s3_full_name_refimage_psf)
+    print("filename_refimage_psf = ",filename_refimage_psf)
 
 
     # Optionally read in CVS file containing inputs for generating reference image.
@@ -414,9 +430,29 @@ if __name__ == '__main__':
                                                                                 sextractor_refimage_dict,
                                                                                 upload_to_s3_bucket)
 
-        checksum_refimage_catalog = refimgsexcat_return_list[0]
-        filename_refimage_catalog = refimgsexcat_return_list[1]
-        refimage_catalog_s3_bucket_object_name = refimgsexcat_return_list[2]
+        checksum_sex_refimage_catalog = refimgsexcat_return_list[0]
+        filename_sex_refimage_catalog = refimgsexcat_return_list[1]
+        refimage_sex_catalog_s3_bucket_object_name = refimgsexcat_return_list[2]
+
+
+        # Generate PhotUtils reference-image catalog.
+
+        refimgpsfcat_return_list = rfis.generatePhotUtilsReferenceImageCatalog(s3_client,
+                                                                               product_s3_bucket,
+                                                                               jid,
+                                                                               job_proc_date,
+                                                                               awaicgen_output_mosaic_image_file,
+                                                                               awaicgen_output_mosaic_uncert_image_file,
+                                                                               filename_refimage_psf,
+                                                                               psfcat_refimage_dict,
+                                                                               upload_to_s3_bucket)
+
+
+        flag_psf_refimage_catalog = refimgpsfcat_return_list[0]
+        checksum_psf_refimage_catalog = refimgpsfcat_return_list[1]
+        filename_psf_refimage_catalog = refimgpsfcat_return_list[2]
+        refimage_psf_catalog_s3_bucket_object_name = refimgpsfcat_return_list[3]
+
 
 
 
@@ -466,7 +502,7 @@ if __name__ == '__main__':
     sextractor_refimage_paramsfile = cfg_path + "/rapidSexParamsRefImage.inp";
     params_to_get_refimage = ["FWHM_IMAGE"]
 
-    vals_refimage = util.parse_ascii_text_sextractor_catalog(filename_refimage_catalog,
+    vals_refimage = util.parse_ascii_text_sextractor_catalog(filename_sex_refimage_catalog,
                                                              sextractor_refimage_paramsfile,
                                                              params_to_get_refimage)
 
@@ -529,7 +565,8 @@ if __name__ == '__main__':
         mosaic_image_name_for_db_record = "s3://{}/{}".format(product_s3_bucket,awaicgen_output_mosaic_image_s3_bucket_object_name)
         mosaic_cov_map_name_for_db_record = "s3://{}/{}".format(product_s3_bucket,awaicgen_output_mosaic_cov_map_s3_bucket_object_name)
         mosaic_uncert_image_name_for_db_record = "s3://{}/{}".format(product_s3_bucket,awaicgen_output_mosaic_uncert_image_s3_bucket_object_name)
-        refimage_catalog_name_for_db_record = "s3://{}/{}".format(product_s3_bucket,refimage_catalog_s3_bucket_object_name)
+        refimage_sex_catalog_name_for_db_record = "s3://{}/{}".format(product_s3_bucket,refimage_sex_catalog_s3_bucket_object_name)
+        refimage_psf_catalog_name_for_db_record = "s3://{}/{}".format(product_s3_bucket,refimage_psf_catalog_s3_bucket_object_name)
         input_images_csv_name_for_download = "s3://{}/{}".format(job_info_s3_bucket,input_images_csv_file_s3_bucket_object_name)
 
         product_config['REF_IMAGE']['awaicgen_output_mosaic_image_file'] = mosaic_image_name_for_db_record
@@ -538,10 +575,15 @@ if __name__ == '__main__':
         product_config['REF_IMAGE']['awaicgen_output_mosaic_image_status'] = str(1)
         product_config['REF_IMAGE']['awaicgen_output_mosaic_image_infobits'] = str(infobits_refimage)
 
-        product_config['REF_IMAGE']['sextractor_refimage_catalog_filename_for_db'] = refimage_catalog_name_for_db_record
-        product_config['REF_IMAGE']['sextractor_refimage_catalog_checksum'] = checksum_refimage_catalog
+        product_config['REF_IMAGE']['sextractor_refimage_catalog_filename_for_db'] = refimage_sex_catalog_name_for_db_record
+        product_config['REF_IMAGE']['sextractor_refimage_catalog_checksum'] = checksum_sex_refimage_catalog
         product_config['REF_IMAGE']['sextractor_refimage_catalog_cattype'] = str(1)
         product_config['REF_IMAGE']['sextractor_refimage_catalog_status'] = str(1)
+
+        product_config['REF_IMAGE']['photutils_refimage_catalog_filename_for_db'] = refimage_psf_catalog_name_for_db_record
+        product_config['REF_IMAGE']['photutils_refimage_catalog_checksum'] = checksum_psf_refimage_catalog
+        product_config['REF_IMAGE']['photutils_refimage_catalog_cattype'] = str(1)
+        product_config['REF_IMAGE']['photutils_refimage_catalog_status'] = str(1)
 
         product_config['REF_IMAGE']['nframes'] = str(nframes)
         product_config['REF_IMAGE']['npixsat'] = str(npixsat_refimage)
@@ -905,21 +947,6 @@ if __name__ == '__main__':
 
     print("avg_sci_img,std_sci_img,cnt_sci_img =",avg_sci_img,std_sci_img,cnt_sci_img)
     print("avg_ref_img,std_ref_img,cnt_ref_img =",avg_ref_img,std_ref_img,cnt_ref_img)
-
-
-    # Download PSFs from S3 bucket.
-
-    filename_sciimage_psf,subdirs_psf,downloaded_from_bucket = util.download_file_from_s3_bucket(s3_client,s3_full_name_sciimage_psf)
-
-    print("s3_full_name_sciimage_psf = ",s3_full_name_sciimage_psf)
-    print("filename_sciimage_psf = ",filename_sciimage_psf)
-
-    refimage_psf_filename = refimage_psf_filename.replace("FID",str(fid_sciimage))
-    s3_full_name_refimage_psf = "s3://" + job_info_s3_bucket + "/" + refimage_psf_s3_bucket_dir + "/" + refimage_psf_filename
-    filename_refimage_psf,subdirs_refimage_psf,downloaded_from_bucket = util.download_file_from_s3_bucket(s3_client,s3_full_name_refimage_psf)
-
-    print("s3_full_name_refimage_psf = ",s3_full_name_refimage_psf)
-    print("filename_refimage_psf = ",filename_refimage_psf)
 
 
     # Normalize the science PSF.  The reference-image PSF is already normalized.
@@ -1300,15 +1327,15 @@ if __name__ == '__main__':
     output_psfcat_finder_filename = psfcat_diffimage_dict["output_zogy_psfcat_finder_filename"]
     output_psfcat_residual_filename = psfcat_diffimage_dict["output_zogy_psfcat_residual_filename"]
 
-    psfcat_flag,phot,psfphot = util.compute_diffimage_psf_catalog(n_clip_sigma,
-                                                                  n_thresh_sigma,
-                                                                  fwhm,
-                                                                  fit_shape,
-                                                                  aperture_radius,
-                                                                  input_img_filename,
-                                                                  input_unc_filename,
-                                                                  input_psf_filename,
-                                                                  output_psfcat_residual_filename)
+    psfcat_flag,phot,psfphot = util.compute_psf_catalog(n_clip_sigma,
+                                                        n_thresh_sigma,
+                                                        fwhm,
+                                                        fit_shape,
+                                                        aperture_radius,
+                                                        input_img_filename,
+                                                        input_unc_filename,
+                                                        input_psf_filename,
+                                                        output_psfcat_residual_filename)
 
     print("psfcat_flag =",psfcat_flag)
 
@@ -1408,15 +1435,15 @@ if __name__ == '__main__':
     output_psfcat_finder_filename_negative = psfcat_diffimage_dict["output_zogy_psfcat_finder_filename"].replace(".txt","_negative.txt")
     output_psfcat_residual_filename_negative = psfcat_diffimage_dict["output_zogy_psfcat_residual_filename"].replace(".fits","_negative.fits")
 
-    psfcat_flag,phot,psfphot = util.compute_diffimage_psf_catalog(n_clip_sigma,
-                                                                  n_thresh_sigma,
-                                                                  fwhm,
-                                                                  fit_shape,
-                                                                  aperture_radius,
-                                                                  input_img_filename,
-                                                                  input_unc_filename,
-                                                                  input_psf_filename,
-                                                                  output_psfcat_residual_filename_negative)
+    psfcat_flag,phot,psfphot = util.compute_psf_catalog(n_clip_sigma,
+                                                        n_thresh_sigma,
+                                                        fwhm,
+                                                        fit_shape,
+                                                        aperture_radius,
+                                                        input_img_filename,
+                                                        input_unc_filename,
+                                                        input_psf_filename,
+                                                        output_psfcat_residual_filename_negative)
 
     print("psfcat_flag =",psfcat_flag)
 
@@ -1992,15 +2019,15 @@ if __name__ == '__main__':
             output_psfcat_finder_filename = psfcat_diffimage_dict["output_sfft_psfcat_finder_filename"]
             output_psfcat_residual_filename = psfcat_diffimage_dict["output_sfft_psfcat_residual_filename"]
 
-            psfcat_flag,phot,psfphot = util.compute_diffimage_psf_catalog(n_clip_sigma,
-                                                                          n_thresh_sigma,
-                                                                          fwhm,
-                                                                          fit_shape,
-                                                                          aperture_radius,
-                                                                          input_img_filename,
-                                                                          input_unc_filename,
-                                                                          input_psf_filename,
-                                                                          output_psfcat_residual_filename)
+            psfcat_flag,phot,psfphot = util.compute_psf_catalog(n_clip_sigma,
+                                                                n_thresh_sigma,
+                                                                fwhm,
+                                                                fit_shape,
+                                                                aperture_radius,
+                                                                input_img_filename,
+                                                                input_unc_filename,
+                                                                input_psf_filename,
+                                                                output_psfcat_residual_filename)
 
             print("psfcat_flag =",psfcat_flag)
 
@@ -2102,15 +2129,15 @@ if __name__ == '__main__':
             output_psfcat_finder_filename_negative = psfcat_diffimage_dict["output_sfft_psfcat_finder_filename"].replace(".txt","_negative.txt")
             output_psfcat_residual_filename_negative = psfcat_diffimage_dict["output_sfft_psfcat_residual_filename"].replace(".fits","_negative.fits")
 
-            psfcat_flag,phot,psfphot = util.compute_diffimage_psf_catalog(n_clip_sigma,
-                                                                          n_thresh_sigma,
-                                                                          fwhm,
-                                                                          fit_shape,
-                                                                          aperture_radius,
-                                                                          input_img_filename,
-                                                                          input_unc_filename,
-                                                                          input_psf_filename,
-                                                                          output_psfcat_residual_filename_negative)
+            psfcat_flag,phot,psfphot = util.compute_psf_catalog(n_clip_sigma,
+                                                                n_thresh_sigma,
+                                                                fwhm,
+                                                                fit_shape,
+                                                                aperture_radius,
+                                                                input_img_filename,
+                                                                input_unc_filename,
+                                                                input_psf_filename,
+                                                                output_psfcat_residual_filename_negative)
 
             print("psfcat_flag =",psfcat_flag)
 
@@ -2464,15 +2491,15 @@ if __name__ == '__main__':
         output_psfcat_finder_filename = psfcat_diffimage_dict["output_naive_psfcat_finder_filename"]
         output_psfcat_residual_filename = psfcat_diffimage_dict["output_naive_psfcat_residual_filename"]
 
-        psfcat_flag,phot,psfphot = util.compute_diffimage_psf_catalog(n_clip_sigma,
-                                                                      n_thresh_sigma,
-                                                                      fwhm,
-                                                                      fit_shape,
-                                                                      aperture_radius,
-                                                                      input_img_filename,
-                                                                      input_unc_filename,
-                                                                      input_psf_filename,
-                                                                      output_psfcat_residual_filename)
+        psfcat_flag,phot,psfphot = util.compute_psf_catalog(n_clip_sigma,
+                                                            n_thresh_sigma,
+                                                            fwhm,
+                                                            fit_shape,
+                                                            aperture_radius,
+                                                            input_img_filename,
+                                                            input_unc_filename,
+                                                            input_psf_filename,
+                                                            output_psfcat_residual_filename)
 
         print("psfcat_flag =",psfcat_flag)
 
@@ -2558,15 +2585,15 @@ if __name__ == '__main__':
         output_psfcat_finder_filename_negative = psfcat_diffimage_dict["output_naive_psfcat_finder_filename"].replace(".txt","_negative.txt")
         output_psfcat_residual_filename_negative = psfcat_diffimage_dict["output_naive_psfcat_residual_filename"].replace(".fits","_negative.fits")
 
-        psfcat_flag,phot,psfphot = util.compute_diffimage_psf_catalog(n_clip_sigma,
-                                                                      n_thresh_sigma,
-                                                                      fwhm,
-                                                                      fit_shape,
-                                                                      aperture_radius,
-                                                                      input_img_filename,
-                                                                      input_unc_filename,
-                                                                      input_psf_filename,
-                                                                      output_psfcat_residual_filename_negative)
+        psfcat_flag,phot,psfphot = util.compute_psf_catalog(n_clip_sigma,
+                                                            n_thresh_sigma,
+                                                            fwhm,
+                                                            fit_shape,
+                                                            aperture_radius,
+                                                            input_img_filename,
+                                                            input_unc_filename,
+                                                            input_psf_filename,
+                                                            output_psfcat_residual_filename_negative)
 
         print("psfcat_flag =",psfcat_flag)
 

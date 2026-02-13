@@ -387,7 +387,7 @@ def generateSExtractorReferenceImageCatalog(s3_client,
         print("*** Error: Unexpected value for checksum =",checksum_refimage_catalog)
 
 
-    # Return metadata about reference-image catalog that was generated.
+    # Return metadata about reference-image SExtractor catalog that was generated.
 
     generateReferenceImageCatalog_return_list = []
     generateReferenceImageCatalog_return_list.append(checksum_refimage_catalog)
@@ -499,3 +499,165 @@ def compute_cov5percent(reference_cov_map_filename):
     # and operations database.
 
     return cov5percent
+
+
+#####################################################################################
+# Generate PhotUtils reference-image catalog and upload it to S3 bucket.
+#####################################################################################
+
+def generatePhotUtilsReferenceImageCatalog(s3_client,
+                                           product_s3_bucket,
+                                           jid,
+                                           job_proc_date,
+                                           filename_refimage_image,
+                                           filename_refimage_uncert,
+                                           filename_refimage_psf,
+                                           psfcat_refimage_dict,
+                                           upload_to_s3_bucket):
+
+
+    # Generate PSF-fit catalog for reference image using PhotUtils.
+
+    n_clip_sigma = float(psfcat_refimage_dict["n_clip_sigma"])
+    n_thresh_sigma = float(psfcat_refimage_dict["n_thresh_sigma"])
+
+    fwhm = float(psfcat_refimage_dict["fwhm"])
+    fit_shape_str = psfcat_refimage_dict["fit_shape"]
+    fit_shape = tuple(int(x) for x in fit_shape_str.replace("(","").replace(")","").replace(" ", "").split(','))
+    aperture_radius = float(psfcat_refimage_dict["aperture_radius"])
+
+    input_img_filename = filename_refimage_image
+    input_unc_filename = filename_refimage_uncert
+    input_psf_filename = filename_refimage_psf
+    output_psfcat_filename = psfcat_refimage_dict["output_psfcat_filename"]
+    output_psfcat_finder_filename = psfcat_refimage_dict["output_psfcat_finder_filename"]
+    output_psfcat_residual_filename = psfcat_refimage_dict["output_psfcat_residual_filename"]
+
+    psfcat_flag,phot,psfphot = util.compute_psf_catalog(n_clip_sigma,
+                                                        n_thresh_sigma,
+                                                        fwhm,
+                                                        fit_shape,
+                                                        aperture_radius,
+                                                        input_img_filename,
+                                                        input_unc_filename,
+                                                        input_psf_filename,
+                                                        output_psfcat_residual_filename)
+
+    print("psfcat_flag =",psfcat_flag)
+
+    if not psfcat_flag:
+
+        checksum_refimage_catalog = None
+        filename_refimage_catalog = None
+        refimage_photutils_catalog_s3_bucket_object_name = None
+
+    else:
+
+        # Output psf-fit catalog is an PSFPhotometry astropy table with the PSF-fitting results
+        # merged with the DAOStarFinder astropy table.
+        # Output columns are documentated at
+        # https://photutils.readthedocs.io/en/latest/api/photutils.psf.PSFPhotometry.html
+        # https://photutils.readthedocs.io/en/stable/api/photutils.detection.DAOStarFinder.html
+
+        try:
+            phot['x_init'].info.format = '.4f'
+            phot['y_init'].info.format = '.4f'
+            phot['flux_init'].info.format = '.6f'
+            phot['flux_fit'].info.format = '.6f'
+            phot['x_err'].info.format = '.4f'
+            phot['y_err'].info.format = '.4f'
+            phot['flux_err'].info.format = '.5f'
+            phot['qfit'].info.format = '.4f'
+            phot['cfit'].info.format = '.4f'
+
+            print(phot[('id', 'x_fit', 'y_fit', 'flux_fit','x_err', 'y_err', 'flux_err', 'npixfit', 'qfit', 'cfit', 'flags')])
+
+
+            # Compute sky coordinates for given pixel coordinates.
+
+            ra,dec = util.computeSkyCoordsFromPixelCoords(filename_bkg_subbed_science_image,
+                                                          list(phot['x_fit']),
+                                                          list(phot['y_fit']))
+
+            phot['x_fit'].info.format = '.4f'
+            phot['y_fit'].info.format = '.4f'
+            phot.add_column(ra, name='ra')
+            phot.add_column(dec, name='dec')
+
+
+            # Write PSF-fit photometry catalog in astropy table to text file.
+
+            print("output_psfcat_filename = ", output_psfcat_filename)
+
+            ascii.write(phot, output_psfcat_filename, overwrite=True)
+
+
+            # Write PSF-fit finder catalog in astropy table to text file.
+
+            print("output_psfcat_finder_filename = ", output_psfcat_finder_filename)
+
+            ascii.write(psfphot.finder_results, output_psfcat_finder_filename, overwrite=True)
+
+
+            # Join photometry and finder objects and output parquet file.
+
+            joined_table_inner = join(phot, psfphot.finder_results, keys='id', join_type='inner')
+
+            nrows = len(joined_table_inner)
+            print(f"nrows in PSF-fit catalog = {nrows}\n")
+
+            output_psfcat_parquet_filename = output_psfcat_filename.replace(".txt",".parquet")
+
+            # Convert the QTable to a pandas DataFrame
+            df = joined_table_inner.to_pandas()
+
+            # Write the DataFrame to a Parquet file.
+            df.to_parquet(output_psfcat_parquet_filename, engine='pyarrow')
+
+        except Exception as e:
+            print(f"PSF-fit PSFPhotometry and DAOStarFinder catalogs: An unexpected error occurred: {e}")
+
+
+        # Upload reference-image catalog to S3 product bucket.
+
+        refimage_photutils_catalog_s3_bucket_object_name = job_proc_date + "/jid" + str(jid) + "/" + filename_refimage_catalog
+
+        if upload_to_s3_bucket:
+
+            uploaded_to_bucket = True
+
+            try:
+                response = s3_client.upload_file(filename_refimage_catalog,
+                                                 product_s3_bucket,
+                                                 refimage_photutils_catalog_s3_bucket_object_name)
+
+                print("response =",response)
+
+            except ClientError as e:
+                print("*** Error: Failed to upload {} to s3://{}/{}"\
+                    .format(filename_refimage_catalog,product_s3_bucket,refimage_photutils_catalog_s3_bucket_object_name))
+                uploaded_to_bucket = False
+
+            if uploaded_to_bucket:
+                print("Successfully uploaded {} to s3://{}/{}"\
+                    .format(filename_refimage_catalog,product_s3_bucket,refimage_photutils_catalog_s3_bucket_object_name))
+
+
+        # Compute MD5 checksum of reference-image catalog.
+
+        print("Computing checksum of reference-image catalog:",filename_refimage_catalog)
+        checksum_refimage_catalog = db.compute_checksum(filename_refimage_catalog)
+
+        if checksum_refimage_catalog == 65 or checksum_refimage_catalog == 68 or checksum_refimage_catalog == 66:
+            print("*** Error: Unexpected value for checksum =",checksum_refimage_catalog)
+
+
+    # Return metadata about reference-image PhotUtils catalog that was generated.
+
+    generateReferenceImageCatalog_return_list = []
+    generateReferenceImageCatalog_return_list.append(psfcat_flag)
+    generateReferenceImageCatalog_return_list.append(checksum_refimage_catalog)
+    generateReferenceImageCatalog_return_list.append(filename_refimage_catalog)
+    generateReferenceImageCatalog_return_list.append(refimage_photutils_catalog_s3_bucket_object_name)
+
+    return generateReferenceImageCatalog_return_list
