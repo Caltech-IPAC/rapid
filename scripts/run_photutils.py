@@ -112,15 +112,15 @@ if __name__ == '__main__':
         output_psfcat_finder_filename = "sfftdiffimage_masked_psfcat_finder.txt"
         output_psfcat_residual_filename = "sfftdiffimage_masked_psfcat_residual.fits"
 
-    psfcat_flag,phot,psfphot = util.compute_diffimage_psf_catalog(n_clip_sigma,
-                                                                  n_thresh_sigma,
-                                                                  fwhm,
-                                                                  fit_shape,
-                                                                  aperture_radius,
-                                                                  input_img_filename,
-                                                                  input_unc_filename,
-                                                                  input_psf_filename,
-                                                                  output_psfcat_residual_filename)
+    psfcat_flag,phot,psfphot = util.compute_psf_catalog(n_clip_sigma,
+                                                        n_thresh_sigma,
+                                                        fwhm,
+                                                        fit_shape,
+                                                        aperture_radius,
+                                                        input_img_filename,
+                                                        input_unc_filename,
+                                                        input_psf_filename,
+                                                        output_psfcat_residual_filename)
 
     print("psfcat_flag =",psfcat_flag)
 

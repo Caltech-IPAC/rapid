@@ -123,20 +123,20 @@ if __name__ == '__main__':
 
     # Compute PSF catalog for difference image.  No background subtraction is done.
 
-    psfcat_flag,phot,psfphot = util.compute_diffimage_psf_catalog(n_clip_sigma,
-                                                                  n_thresh_sigma,
-                                                                  fwhm,
-                                                                  fit_shape,
-                                                                  aperture_radius,
-                                                                  input_img_filename,
-                                                                  input_unc_filename,
-                                                                  input_psf_filename,
-                                                                  output_psfcat_residual_filename,
-                                                                  sharplo=sharplo,
-                                                                  sharphi=sharphi,
-                                                                  roundlo=roundlo,
-                                                                  roundhi=roundhi,
-                                                                  min_separation=min_separation)
+    psfcat_flag,phot,psfphot = util.compute_psf_catalog(n_clip_sigma,
+                                                        n_thresh_sigma,
+                                                        fwhm,
+                                                        fit_shape,
+                                                        aperture_radius,
+                                                        input_img_filename,
+                                                        input_unc_filename,
+                                                        input_psf_filename,
+                                                        output_psfcat_residual_filename,
+                                                        sharplo=sharplo,
+                                                        sharphi=sharphi,
+                                                        roundlo=roundlo,
+                                                        roundhi=roundhi,
+                                                        min_separation=min_separation)
 
 
     print("psfcat_flag =",psfcat_flag)
