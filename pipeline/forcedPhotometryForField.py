@@ -166,11 +166,8 @@ sca_readout_noise = float(config_input['INSTRUMENT']['sca_readout_noise'])
 refimage_psf_s3_bucket_dir = config_input['JOB_PARAMS']['refimage_psf_s3_bucket_dir']
 refimage_psf_filename = config_input['JOB_PARAMS']['refimage_psf_filename']
 
-
-# Use SExtractor reference-image catalogs for now, since PhotUtils catalogs are not made
-# for reference images at this time.  TODO
-
-cattype = 1
+output_psfcat_filename = config_input['PSFCAT_REFIMAGE']['output_psfcat_filename']
+output_psfcat_finder_filename = config_input['PSFCAT_REFIMAGE']['output_psfcat_finder_filename']
 
 
 #=================================================================
@@ -275,15 +272,15 @@ print("minimum_percent_overlap_area =",minimum_percent_overlap_area)
 # Find nearest source in reference-image PSF-catalog that is within
 # refmatchrad arcsec and return metrics.
 # Canonical catalog filenames are:
-#     diffimage_masked_psfcat.txt
-#     diffimage_masked_psfcat_finder.txt
+#     refimage_masked_psfcat.txt
+#     refimage_masked_psfcat_finder.txt
 #---------------------------------------------------------------------
 
 def nearestrefpsfcatmetrics(reffilenameinp,refcatfname,refcatfinderfname,fph_ra,fph_dec,refmatchrad):
 
     dnearestrefsrc = "null"
-    nearestref_flux_fit = "null"
-    nearestref_flux_err = "null"
+    nearestref_mag_fit = "null"
+    nearestref_mag_err = "null"
     nearestref_reduced_chi2 = "null"
     nearestref_sharpness = "null"
     refjdstart = "null"
@@ -315,7 +312,7 @@ def nearestrefpsfcatmetrics(reffilenameinp,refcatfname,refcatfinderfname,fph_ra,
 
         exitstatuseph4 = 58
 
-        return dnearestrefsrc, nearestref_flux_fit, refzp, nearestref_flux_err, nearestref_reduced_chi2,\
+        return dnearestrefsrc, nearestref_mag_fit, nearestref_mag_err, nearestref_reduced_chi2,\
                nearestref_sharpness, refjdstart, refjdend, exitstatuseph4, exitstatuseph5
 
     #--------
@@ -368,7 +365,8 @@ def nearestrefpsfcatmetrics(reffilenameinp,refcatfname,refcatfinderfname,fph_ra,
 
         dnearestrefsrc = distmin
         nearestref_flux_fit = joined_table_inner['flux_fit'].value[idxmin]
-        nearestref_flux_err = joined_table_inner['flux_err'].value[idxmin]
+        nearestref_mag_fit = -2.5 * np.log10(nearestref_flux_fit) + refzp
+        nearestref_mag_err = 1.085736205 * joined_table_inner['flux_err'].value[idxmin] / nearestref_flux_fit
         nearestref_reduced_chi2 = joined_table_inner['reduced_chi2'].value[idxmin]
         nearestref_sharpness = joined_table_inner['sharpness'].value[idxmin]
 
@@ -376,8 +374,10 @@ def nearestrefpsfcatmetrics(reffilenameinp,refcatfname,refcatfinderfname,fph_ra,
 
         print(f"*** Warning: No ref-image catalog source exists within {refmatchrad} arcsec; skipping...")
 
+        exitstatuseph5 = 57
 
-    return dnearestrefsrc, nearestref_flux_fit, refzp, nearestref_flux_err, nearestref_reduced_chi2,\
+
+    return dnearestrefsrc, nearestref_mag_fit, nearestref_mag_err, nearestref_reduced_chi2,\
            nearestref_sharpness, refjdstart, refjdend, exitstatuseph4, exitstatuseph5
 
 
@@ -466,7 +466,6 @@ if __name__ == '__main__':
     # dist_field_sciimg_center (degrees).
 
     records = dbh.get_possible_overlapping_diffimages(ppid_sci,
-                                                      cattype,
                                                       jd_earliest,
                                                       ra0_field,
                                                       dec0_field,
@@ -512,6 +511,8 @@ if __name__ == '__main__':
     ppid_ref_list = []
     dist_field_sciimg_center_list = []
     wcs_diffimg_list = []
+    refimg_psfcat_list = []
+    refimg_psfcat_finder_list = []
 
     ref_image_fname_dict = {}
 
@@ -569,23 +570,67 @@ if __name__ == '__main__':
         print(f"diffimg_filename_from_bucket,subdirs_diff_image,downloaded_from_bucket = {diffimg_filename_from_bucket},{subdirs_diff_image},{downloaded_from_bucket}")
 
 
-        # Download reference image from S3 bucket.
+        # Download reference image and PSF-fit catalogs from S3 bucket.
 
         if refimfilename not in ref_image_fname_dict:
+
+
 
             s3_full_name_ref_image = refimfilename
             refimg_filename_from_bucket,subdirs_ref_image,downloaded_from_bucket = util.download_file_from_s3_bucket(s3_client,s3_full_name_ref_image)
 
             print(f"refimg_filename_from_bucket,subdirs_ref_image,downloaded_from_bucket = {refimg_filename_from_bucket},{subdirs_ref_image},{downloaded_from_bucket}")
 
+            refimg_downloaded_from_bucket = downloaded_from_bucket
+
+
+            s3_full_name_ref_image_psfcat = "s3://" + product_s3_bucket_base + "/" + subdirs_ref_image + "/" + output_psfcat_filename
+            refimg_psfcat_filename_from_bucket,subdirs_ref_image,downloaded_from_bucket = util.download_file_from_s3_bucket(s3_client,s3_full_name_ref_image_psfcat)
+
+            print(f"refimg_psfcat_filename_from_bucket,subdirs_ref_image,downloaded_from_bucket = {refimg_psfcat_filename_from_bucket},{subdirs_ref_image},{downloaded_from_bucket}")
+
+            refimg_psfcat_downloaded_from_bucket = downloaded_from_bucket
+
+
+            s3_full_name_ref_image_psfcat_finder = "s3://" + product_s3_bucket_base + "/" + subdirs_ref_image + "/" + output_psfcat_finder_filename
+            refimg_psfcat_finder_filename_from_bucket,subdirs_ref_image,downloaded_from_bucket = util.download_file_from_s3_bucket(s3_client,s3_full_name_ref_image_psfcat_finder)
+
+            print(f"refimg_psfcat_finder_filename_from_bucket,subdirs_ref_image,downloaded_from_bucket = {refimg_psfcat_finder_filename_from_bucket},{subdirs_ref_image},{downloaded_from_bucket}")
+
+            refimg_psfcat_finder_downloaded_from_bucket = downloaded_from_bucket
+
+
+            if (not refimg_downloaded_from_bucket) or (not refimg_psfcat_downloaded_from_bucket) or (not refimg_psfcat_finder_downloaded_from_bucket):
+                continue
+
+
             newrefimfilename = refimg_filename_from_bucket.replace(".fits",f"_{refimg_idx}.fits")
 
             shutil.move(refimg_filename_from_bucket, newrefimfilename)
             print(f"Moved '{refimg_filename_from_bucket}' to '{newrefimfilename}'")
 
-            refimg_idx += 1
+            ref_image_fname_dict[refimfilename] = []
 
-            ref_image_fname_dict[refimfilename] = newrefimfilename
+            ref_image_fname_dict[refimfilename].append(newrefimfilename)
+
+
+            newrefimpsfcatfilename = refimg_psfcat_filename_from_bucket.replace(".fits",f"_{refimg_idx}.fits")
+
+            shutil.move(refimg_psfcat_filename_from_bucket, newrefimpsfcatfilename)
+            print(f"Moved '{refimg_psfcat_filename_from_bucket}' to '{newrefimpsfcatfilename}'")
+
+            ref_image_fname_dict[refimfilename].append(newrefimpsfcatfilename)
+
+
+            newrefimpsfcatfinderfilename = refimg_psfcat_filename_from_bucket.replace(".fits",f"_{refimg_idx}.fits")
+
+            shutil.move(refimg_psfcat_finder_filename_from_bucket, newrefimpsfcatfinderfilename)
+            print(f"Moved '{refimg_psfcat_finder_filename_from_bucket}' to '{newrefimpsfcatfinderfilename}'")
+
+            ref_image_fname_dict[refimfilename].append(newrefimpsfcatfinderfilename)
+
+
+            refimg_idx += 1
 
 
         # Read FITS file
@@ -657,6 +702,8 @@ if __name__ == '__main__':
 
             diffimg_filename = f"rapid_{j}_scimrefdiffimg.fits"
             refimg_filename = f"rapid_{j}_refimg.fits"
+            refimg_psfcat_filename = f"rapid_{j}_refimgpsfcat.fits"
+            refimg_psfcat_finder_filename = f"rapid_{j}_refimgpsfcatfinder.fits"
 
             shutil.move(diffimg_filename_from_bucket, diffimg_filename)
             print(f"Moved '{diffimg_filename_from_bucket}' to '{diffimg_filename}'")
@@ -666,8 +713,14 @@ if __name__ == '__main__':
             except FileNotFoundError:
                 pass
 
-            os.symlink(ref_image_fname_dict[refimfilename], refimg_filename)
-            print(f"Created symbolic link {refimg_filename} pointing to {ref_image_fname_dict[refimfilename]}")
+            os.symlink(ref_image_fname_dict[refimfilename][0], refimg_filename)
+            print(f"Created symbolic link {refimg_filename} pointing to {ref_image_fname_dict[refimfilename][0]}")
+
+            os.symlink(ref_image_fname_dict[refimfilename][1], refimg_psfcat_filename)
+            print(f"Created symbolic link {refimg_psfcat_filename} pointing to {ref_image_fname_dict[refimfilename][1]}")
+
+            os.symlink(ref_image_fname_dict[refimfilename][2], refimg_psfcat_finder_filename)
+            print(f"Created symbolic link {refimg_psfcat_finder_filename} pointing to {ref_image_fname_dict[refimfilename][2]}")
 
 
             # Write valid difference-image filename and corresponding SCA gain to text list file.
@@ -704,6 +757,8 @@ if __name__ == '__main__':
             ppid_ref_list.append(ppid_ref)
             dist_field_sciimg_center_list.append(dist_field_sciimg_center)
             wcs_diffimg_list.append(wcs_diffimg)
+            refimg_psfcat_list.append(refimg_psfcat_filename)
+            refimg_psfcat_finder_list.append(refimg_psfcat_finder_filename)
 
 
             # Use reference-image PSF for the forced photometry since SFFT does not
@@ -932,10 +987,57 @@ if __name__ == '__main__':
 
 
 
+#---------------------------------------------------------------------
+# Find nearest source in reference-image PSF-catalog that is within
+# refmatchrad arcsec and return metrics.
+#---------------------------------------------------------------------
 
+    d_nearestrefsrc = {}
+    nearestref_mag_fit = {}
+    nearestref_mag_err = {}
+    nearestref_reduced_chi2 = {}
+    nearestref_sharpness = {}
+    ref_jdstart = {}
+    ref_jdend = {}
+    exitstatuseph4 = {}
+    exitstatuseph5 = {}
 
+    for c in range(numskypositions):
+        d_nearestrefsrc[c] = []
+        nearestref_mag_fit[c] = []
+        nearestref_mag_err[c] = []
+        nearestref_reduced_chi2[c] = []
+        nearestref_sharpness[c] = []
+        refjdstart[c] = []
+        refjdend[c] = []
+        exitstatuseph4[c] = []
+        exitstatuseph5[c] = []
 
+    c = 0
 
+    for ra,dec in zip(ra_list,dec_list):
+
+        for i in range(numrecs):
+
+            reffilenameinp = refimg_list[i]
+            refcatfname = refimg_psfcat_list[i]
+            refcatfinderfname = refimg_psfcat_finder_list[i]
+
+            dnearestrefsrc, nearestrefmag, nearestrefmagunc, nearestrefredchi2,\
+                nearestrefsharp, refjdstart, refjdend, exitstatus4, exitstatus5 =\
+                nearestrefpsfcatmetrics(reffilenameinp,refcatfname,refcatfinderfname,ra,dec,refmatchrad)
+
+            d_nearestrefsrc[c].append(dnearestrefsrc)
+            nearestref_mag_fit[c].append(nearestrefmag)
+            nearestref_mag_err[c].append(nearestrefmagunc)
+            nearestref_reduced_chi2[c].append(nearestrefredchi2)
+            nearestref_sharpness[c].append(nearestrefsharp)
+            ref_jdstart[c].append(refjdstart)
+            ref_jdend[c].append(refjdend)
+            exitstatuseph4[c].append(exitstatus4)
+            exitstatuseph5[c].append(exitstatus5)
+
+        c += 1
 
 
 
@@ -979,6 +1081,7 @@ if __name__ == '__main__':
         fh_lc.write(f"# fid = filter RAPID-Operations-DB identifier\n")
         fh_lc.write(f"# filter = Roman filter name\n")
         fh_lc.write(f"# field = sky-tile RAPID-Operations-DB number (between 1 and 6291458,inclusive)\n")
+        fh_lc.write(f"# rfid = reference-image RAPID-Operations-DB identifier\n")
         fh_lc.write(f"# psfflux = PSF-fit flux [DN/s]\n")
         fh_lc.write(f"# psffluxunc = 1-sigma uncertainty in psfflux [DN/s]\n")
         fh_lc.write(f"# psfsnr = Signal-to-noise ratio for psfflux measurement\n")
@@ -987,11 +1090,19 @@ if __name__ == '__main__':
         fh_lc.write(f"# aperfluxunc = 1-sigma uncertainty in aperflux [DN/s]\n")
         fh_lc.write(f"# apersnr = Signal-to-noise ratio for aperflux measurement\n")
         fh_lc.write(f"# aperturecorr = Aperture correction applied to aperflux measurement (curve-of-growth)\n")
+        fh_lc.write(f"# dnearestrefsrc = Distance to nearest ref-image source within $refmatchrad arcsec [arcsec]\n")
+        fh_lc.write(f"# nearestrefmag = Magnitude of nearest refimage source [mag]\n")
+        fh_lc.write(f"# nearestrefmagunc = Magnitude uncertainty in nearestrefmag [mag]\n")
+        fh_lc.write(f"# nearestrefredchi2 = Reduced chi-square for nearestrefmag measurement (from PhotUtils catalog)\n")
+        fh_lc.write(f"# nearestrefsharp = Sharpness parameter for nearestrefmag measurement (from PhotUtils finder catalog)\n")
+        fh_lc.write(f"# refjdstart = JD of earliest sci image used for ref image [days]\n")
+        fh_lc.write(f"# refjdend = JD of latest sci image used for ref image [days]\n")
         fh_lc.write(f"# procstatus = Per-epoch processing status codes: 0=normal, otherwise see documentation.\n")
         fh_lc.write(f"# ------------------------------------------------------------------\n")
         fh_lc.write(f"# Order of table columns is as follows:\n")
-        fh_lc.write("sindex jd expid pid sca fid filter field psfflux psffluxunc psfsnr psfredchi2 " +\
-                    "aperflux aperfluxunc apersnr apercorr procstatus\n")
+        fh_lc.write("sindex jd expid pid sca fid filter field rfid psfflux psffluxunc psfsnr psfredchi2 " +\
+                    "aperflux aperfluxunc apersnr apercorr dnearestrefsrc nearestrefmag nearestrefmagunc " +\
+                    "nearestrefredchi2 nearestrefsharp refjdstart refjdend procstatus\n")
 
         sindex = 0
 
@@ -1005,6 +1116,12 @@ if __name__ == '__main__':
             fid = fid_list[i]
             filter = filters[fid]
             field = field_list[i]
+
+            # TODO: Add more science-image metrics.
+            # Cf. all output columns in ztf/src/pl/perl/forcedphotometry_trim_cforcepsfaper.pl
+
+            rfid = rfid_list[i]
+
             psfflux = forcediffimflux[c][i]
             psffluxunc = forcediffimfluxunc[c][i]
             psfsnr = forcediffimsnr[c][i]
@@ -1013,12 +1130,27 @@ if __name__ == '__main__':
             aperfluxunc = forcediffimfluxuncap[c][i]
             apersnr = forcediffimsnrap[c][i]
             apercorr = aperturecorr[c][i]
+
             exitstatuses = exitstatuseph0[c][i]
             if int(exitstatuseph2[c][i]) != 0:
                 exitstatuses += "," + exitstatuseph2[c][i]
+            if int(exitstatuseph4[c][i]) != 0:
+                exitstatuses += "," + exitstatuseph4[c][i]
+            if int(exitstatuseph5[c][i]) != 0:
+                exitstatuses += "," + exitstatuseph5[c][i]
 
-            fh_lc.write(f"{sindex} {jd} {expid} {pid} {sca} {fid} {filter} {field} {psfflux} {psffluxunc} {psfsnr} {psfredchi2} " +\
-                        f"{aperflux} {aperfluxunc} {apersnr} {apercorr} {exitstatuses}\n")
+            dnearestrefsrc = d_nearestrefsrc[c][i]
+            nearestrefmag = nearestref_mag_fit[c][i]
+            nearestrefmagunc = nearestref_mag_err[c][i]
+            nearestrefredchi2 = nearestref_reduced_chi2[c][i]
+            nearestrefsharp = nearestref_sharpness[c][i]
+            refjdstart = ref_jdstart[c][i]
+            refjdend = ref_jdend[c][i]
+
+            fh_lc.write(f"{sindex} {jd} {expid} {pid} {sca} {fid} {filter} {field} {rfid} {psfflux} " +\
+                        f"{psffluxunc} {psfsnr} {psfredchi2} {aperflux} {aperfluxunc} {apersnr} " +\
+                        f"{apercorr} {dnearestrefsrc} {nearestrefmag} {nearestrefmagunc} " +\
+                        f"{nearestrefredchi2} {nearestrefsharp} {refjdstart} {refjdend} {exitstatuses}\n")
 
         c += 1
 
