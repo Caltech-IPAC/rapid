@@ -1436,23 +1436,23 @@ def parse_ascii_text_sextractor_catalog(catalog_filename,params_filename,params_
 #-------------------------------------------------------------------
 # Compute PSF-fit catalog with photutils.
 
-def compute_diffimage_psf_catalog(n_clip_sigma,
-                                  n_thresh_sigma,
-                                  fwhm,
-                                  fit_shape,
-                                  aperture_radius,
-                                  input_img_filename,
-                                  input_unc_filename,
-                                  input_psf_filename,
-                                  output_psfcat_residual_filename,
-                                  sharplo=0.2,
-                                  sharphi=1.0,
-                                  roundlo=-1.0,
-                                  roundhi=1.0,
-                                  min_separation=0.0):
+def compute_psf_catalog(n_clip_sigma,
+                        n_thresh_sigma,
+                        fwhm,
+                        fit_shape,
+                        aperture_radius,
+                        input_img_filename,
+                        input_unc_filename,
+                        input_psf_filename,
+                        output_psfcat_residual_filename,
+                        sharplo=0.2,
+                        sharphi=1.0,
+                        roundlo=-1.0,
+                        roundhi=1.0,
+                        min_separation=0.0):
 
     '''
-    Method compute_diffimage_psf_catalog
+    Method compute_psf_catalog
 
     Inputs:
     n_clip_sigma            Number of sigmas for clipped data statistics.
