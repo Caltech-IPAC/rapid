@@ -3466,8 +3466,7 @@ class RAPIDDB:
 ########################################################################################################
 
     def get_possible_overlapping_diffimages(self,
-                                            ppid_sci,
-                                            cattype,
+                                            ppid,
                                             jd_earliest,
                                             field_ra0,
                                             field_dec0,
@@ -3494,11 +3493,9 @@ class RAPIDDB:
             "select pid,expid,sca,a.fid,a.field,jd,ra0,dec0,ra1,dec1,ra2,dec2,ra3,dec3,ra4,dec4, " +\
             "a.filename,a.checksum,infobitssci,infobitsref,a.rfid,b.filename,b.checksum,b.ppid, " +\
             "q3c_dist(ra0, dec0, cast(TEMPLATE_RA0 as double precision), cast(TEMPLATE_DEC0 as double precision)) as dist " +\
-            "from DiffImages a, RefImages b, RefImCatalogs c " +\
+            "from DiffImages a, RefImages b " +\
             "where a.rfid = b.rfid " +\
-            "and b.rfid = c.rfid " +\
-            "and cattype = TEMPLATE_CATTYPE " +\
-            "and a.ppid = TEMPLATE_PPIDSCI " +\
+            "and a.ppid = TEMPLATE_PPID " +\
             "and jd >= TEMPLATE_JDEARLIEST " +\
             "and a.status > 0 " +\
             "and b.status > 0 " +\
@@ -3517,17 +3514,15 @@ class RAPIDDB:
         print(f'----> field_dec0 = {field_dec0}')
         print(f'----> radius_of_initial_cone_search = {radius_of_initial_cone_search}')
         print(f'----> jd_earliest = {jd_earliest}')
-        print(f'----> cattype = {cattype}')
         print(f'----> radius_of_initial_cone_search = {radius_of_initial_cone_search}')
-        print(f'----> ppid_sci = {ppid_sci}')
+        print(f'----> ppid = {ppid}')
 
         rep = {"TEMPLATE_JDEARLIEST": str(jd_earliest)}
 
         rep["TEMPLATE_RA0"] = str(field_ra0)
         rep["TEMPLATE_DEC0"] = str(field_dec0)
         rep["TEMPLATE_RADIUS"] = str(radius_of_initial_cone_search)
-        rep["TEMPLATE_CATTYPE"] = str(cattype)
-        rep["TEMPLATE_PPIDSCI"] = str(ppid_sci)
+        rep["TEMPLATE_PPID"] = str(ppid)
 
         rep = dict((re.escape(k), v) for k, v in rep.items())
         pattern = re.compile("|".join(rep.keys()))
