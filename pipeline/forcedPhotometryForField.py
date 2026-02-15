@@ -276,31 +276,15 @@ print("minimum_percent_overlap_area =",minimum_percent_overlap_area)
 #     refimage_masked_psfcat_finder.txt
 #---------------------------------------------------------------------
 
-def nearestrefpsfcatmetrics(reffilenameinp,refcatfname,refcatfinderfname,fph_ra,fph_dec,refmatchrad):
+def nearestrefpsfcatmetrics(reffilenameinp,refcatfname,refcatfinderfname,fph_ra,fph_dec,refzp,refmatchrad):
 
     dnearestrefsrc = "null"
     nearestref_mag_fit = "null"
     nearestref_mag_err = "null"
     nearestref_reduced_chi2 = "null"
     nearestref_sharpness = "null"
-    refjdstart = "null"
-    refjdend = "null"
     exitstatuseph4 = 0
     exitstatuseph5 = 0
-
-
-    #--------
-    # Read select FITS-image header keywords from reference image.
-
-    hdu_index = 0
-    hdul = fits.open(reffilenameinp)
-    hdr = hdul[hdu_index].header
-
-    refjdstart = hdr["JDSTART"]
-    refjdend = hdr["JDEND"]
-    refzp = hdr["MAGZP"]
-
-    hdul.close()
 
 
     #--------
@@ -313,7 +297,7 @@ def nearestrefpsfcatmetrics(reffilenameinp,refcatfname,refcatfinderfname,fph_ra,
         exitstatuseph4 = 58
 
         return dnearestrefsrc, nearestref_mag_fit, nearestref_mag_err, nearestref_reduced_chi2,\
-               nearestref_sharpness, refjdstart, refjdend, exitstatuseph4, exitstatuseph5
+               nearestref_sharpness, exitstatuseph4, exitstatuseph5
 
     #--------
     # Read ra,dec positions of sources from PSF-catalog, compute square
@@ -378,7 +362,7 @@ def nearestrefpsfcatmetrics(reffilenameinp,refcatfname,refcatfinderfname,fph_ra,
 
 
     return dnearestrefsrc, nearestref_mag_fit, nearestref_mag_err, nearestref_reduced_chi2,\
-           nearestref_sharpness, refjdstart, refjdend, exitstatuseph4, exitstatuseph5
+           nearestref_sharpness, exitstatuseph4, exitstatuseph5
 
 
 #################
@@ -513,6 +497,12 @@ if __name__ == '__main__':
     wcs_diffimg_list = []
     refimg_psfcat_list = []
     refimg_psfcat_finder_list = []
+    refjdstart_list = []
+    refjeend_list = []
+    scizp_list = []
+    refzp_list = []
+    refjdstart_list = []
+    refjdend_list = []
 
     ref_image_fname_dict = {}
 
@@ -630,6 +620,23 @@ if __name__ == '__main__':
             ref_image_fname_dict[refimfilename].append(newrefimpsfcatfinderfilename)
 
 
+            #--------
+            # Read select FITS-image header keywords from reference image.
+
+            hdu_index = 0
+            hdul = fits.open(newrefimfilename)
+            hdr = hdul[hdu_index].header
+
+            refjdstart = hdr["JDSTART"]
+            refjdend = hdr["JDEND"]
+            refzp = hdr["MAGZP"]
+
+            hdul.close()
+
+            ref_image_fname_dict[refimfilename].append(refjdstart)
+            ref_image_fname_dict[refimfilename].append(refjdend)
+            ref_image_fname_dict[refimfilename].append(refzp)
+
             refimg_idx += 1
 
 
@@ -664,6 +671,8 @@ if __name__ == '__main__':
         crval2 = hdr['CRVAL2']
 
         print(f"crval1,crval2 = {crval1},{crval2}")
+
+        scizp = hdr['ZPTMAG']
 
 
         # Example of converting pixel coordinates to celestial coordinates
@@ -722,6 +731,10 @@ if __name__ == '__main__':
             os.symlink(ref_image_fname_dict[refimfilename][2], refimg_psfcat_finder_filename)
             print(f"Created symbolic link {refimg_psfcat_finder_filename} pointing to {ref_image_fname_dict[refimfilename][2]}")
 
+            refjdstart = ref_image_fname_dict[refimfilename][3]
+            refjdend = ref_image_fname_dict[refimfilename][4]
+            refzp = ref_image_fname_dict[refimfilename][5]
+
 
             # Write valid difference-image filename and corresponding SCA gain to text list file.
             # This probably varies with SCA.  TODO
@@ -759,6 +772,10 @@ if __name__ == '__main__':
             wcs_diffimg_list.append(wcs_diffimg)
             refimg_psfcat_list.append(refimg_psfcat_filename)
             refimg_psfcat_finder_list.append(refimg_psfcat_finder_filename)
+            scizp_list.append(scizp)
+            refzp_list.append(refzp)
+            refjdstart_list.append(refjdstart)
+            refjdend_list.append(refjdend)
 
 
             # Use reference-image PSF for the forced photometry since SFFT does not
@@ -997,8 +1014,6 @@ if __name__ == '__main__':
     nearestref_mag_err = {}
     nearestref_reduced_chi2 = {}
     nearestref_sharpness = {}
-    ref_jdstart = {}
-    ref_jdend = {}
     exitstatuseph4 = {}
     exitstatuseph5 = {}
 
@@ -1008,8 +1023,6 @@ if __name__ == '__main__':
         nearestref_mag_err[c] = []
         nearestref_reduced_chi2[c] = []
         nearestref_sharpness[c] = []
-        refjdstart[c] = []
-        refjdend[c] = []
         exitstatuseph4[c] = []
         exitstatuseph5[c] = []
 
@@ -1022,18 +1035,17 @@ if __name__ == '__main__':
             reffilenameinp = refimg_list[i]
             refcatfname = refimg_psfcat_list[i]
             refcatfinderfname = refimg_psfcat_finder_list[i]
+            refzp = refzp_list[i]
 
             dnearestrefsrc, nearestrefmag, nearestrefmagunc, nearestrefredchi2,\
-                nearestrefsharp, refjdstart, refjdend, exitstatus4, exitstatus5 =\
-                nearestrefpsfcatmetrics(reffilenameinp,refcatfname,refcatfinderfname,ra,dec,refmatchrad)
+                nearestrefsharp, exitstatus4, exitstatus5 =\
+                nearestrefpsfcatmetrics(reffilenameinp,refcatfname,refcatfinderfname,ra,dec, refzp,refmatchrad)
 
             d_nearestrefsrc[c].append(dnearestrefsrc)
             nearestref_mag_fit[c].append(nearestrefmag)
             nearestref_mag_err[c].append(nearestrefmagunc)
             nearestref_reduced_chi2[c].append(nearestrefredchi2)
             nearestref_sharpness[c].append(nearestrefsharp)
-            ref_jdstart[c].append(refjdstart)
-            ref_jdend[c].append(refjdend)
             exitstatuseph4[c].append(exitstatus4)
             exitstatuseph5[c].append(exitstatus5)
 
@@ -1084,6 +1096,8 @@ if __name__ == '__main__':
         fh_lc.write(f"# rfid = Reference-image RAPID-Operations-DB identifier\n")
         fh_lc.write(f"# infobitssci = Processing summary/QA bitwise flags for science image\n";
         fh_lc.write(f"# infobitsref = Processing summary/QA bitwise flags for reference image\n";
+        fh_lc.write(f"# zpmagsci = Photometric zeropoint of science image [mag]\n";
+        fh_lc.write(f"# zpmagref = Photometric zeropoint of reference image [mag]\n";
         fh_lc.write(f"# psfflux = PSF-fit flux [DN/s]\n")
         fh_lc.write(f"# psffluxunc = One-sigma uncertainty in psfflux [DN/s]\n")
         fh_lc.write(f"# psfsnr = Signal-to-noise ratio for psfflux measurement\n")
@@ -1103,7 +1117,7 @@ if __name__ == '__main__':
         fh_lc.write(f"# ------------------------------------------------------------------\n")
         fh_lc.write(f"# Order of table columns is as follows:\n")
         fh_lc.write("sindex jd expid pid sca fid filter field rfid "+\
-                    "infobitssci infobitsref " +\
+                    "infobitssci infobitsref zpmagsci zpmagref " +\
                     "psfflux psffluxunc psfsnr psfredchi2 " +\
                     "aperflux aperfluxunc apersnr apercorr dnearestrefsrc nearestrefmag nearestrefmagunc " +\
                     "nearestrefredchi2 nearestrefsharp refjdstart refjdend procstatus\n")
@@ -1120,6 +1134,9 @@ if __name__ == '__main__':
             fid = fid_list[i]
             filter = filters[fid]
             field = field_list[i]
+            refjdstart = refjdstart_list[i]
+            refjdend = refjdend_list[i]
+            refzp = refzp_list[i]
 
 
             # TODO: Add more science-image metrics.
@@ -1128,6 +1145,7 @@ if __name__ == '__main__':
             rfid = rfid_list[i]
             infobitssci = infobitssci_list[i]
             infobitsref = infobitsref_list[i]
+            scizp = scizp_list[i]
 
             psfflux = forcediffimflux[c][i]
             psffluxunc = forcediffimfluxunc[c][i]
@@ -1151,12 +1169,10 @@ if __name__ == '__main__':
             nearestrefmagunc = nearestref_mag_err[c][i]
             nearestrefredchi2 = nearestref_reduced_chi2[c][i]
             nearestrefsharp = nearestref_sharpness[c][i]
-            refjdstart = ref_jdstart[c][i]
-            refjdend = ref_jdend[c][i]
 
             fh_lc.write(f"{sindex} {jd} {expid} {pid} {sca} {fid} {filter} {field} {rfid} " +\
-                        f"{infobitssci} {infobitsref} {psfflux} " +\
-                        f"{psffluxunc} {psfsnr} {psfredchi2} " +\
+                        f"{infobitssci} {infobitsref} {scizp} {refzp}" +\
+                        f"{psfflux} {psffluxunc} {psfsnr} {psfredchi2} " +\
                         f"{aperflux} {aperfluxunc} {apersnr} " +\
                         f"{apercorr} {dnearestrefsrc} {nearestrefmag} {nearestrefmagunc} " +\
                         f"{nearestrefredchi2} {nearestrefsharp} {refjdstart} {refjdend} {exitstatuses}\n")
