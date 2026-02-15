@@ -1073,23 +1073,25 @@ if __name__ == '__main__':
         fh_lc.write(f"# Forced-photometry request ID = {reqid}\n")
         fh_lc.write(f"# ------------------------------------------------------------------\n")
         fh_lc.write(f"# Lightcurve-table column definitions:\n")
-        fh_lc.write(f"# sindex = sequential counter\n")
+        fh_lc.write(f"# sindex = Sequential counter\n")
         fh_lc.write(f"# jd = Julian Date at start of exposure [days]\n")
-        fh_lc.write(f"# expid = exposure RAPID-Operations-DB identifier\n")
-        fh_lc.write(f"# pid = difference-image RAPID-Operations-DB identifier\n")
+        fh_lc.write(f"# expid = Exposure RAPID-Operations-DB identifier\n")
+        fh_lc.write(f"# pid = Difference-image RAPID-Operations-DB identifier\n")
         fh_lc.write(f"# sca = Roman SCA number (between 1 and 18, inclusive)\n")
-        fh_lc.write(f"# fid = filter RAPID-Operations-DB identifier\n")
+        fh_lc.write(f"# fid = Filter RAPID-Operations-DB identifier\n")
         fh_lc.write(f"# filter = Roman filter name\n")
-        fh_lc.write(f"# field = sky-tile RAPID-Operations-DB number (between 1 and 6291458,inclusive)\n")
-        fh_lc.write(f"# rfid = reference-image RAPID-Operations-DB identifier\n")
+        fh_lc.write(f"# field = Sky-tile RAPID-Operations-DB number (between 1 and 6291458,inclusive)\n")
+        fh_lc.write(f"# rfid = Reference-image RAPID-Operations-DB identifier\n")
+        fh_lc.write(f"# infobitssci = Processing summary/QA bitwise flags for science image\n";
+        fh_lc.write(f"# infobitsref = Processing summary/QA bitwise flags for reference image\n";
         fh_lc.write(f"# psfflux = PSF-fit flux [DN/s]\n")
-        fh_lc.write(f"# psffluxunc = 1-sigma uncertainty in psfflux [DN/s]\n")
+        fh_lc.write(f"# psffluxunc = One-sigma uncertainty in psfflux [DN/s]\n")
         fh_lc.write(f"# psfsnr = Signal-to-noise ratio for psfflux measurement\n")
         fh_lc.write(f"# psfredchi2 = Reduced chi-square in PSF-fit\n")
         fh_lc.write(f"# aperflux = Aperture flux using a fixed {apdiam}-pixel diameter aperture [DN/s]\n")
-        fh_lc.write(f"# aperfluxunc = 1-sigma uncertainty in aperflux [DN/s]\n")
+        fh_lc.write(f"# aperfluxunc = One-sigma uncertainty in aperflux [DN/s]\n")
         fh_lc.write(f"# apersnr = Signal-to-noise ratio for aperflux measurement\n")
-        fh_lc.write(f"# aperturecorr = Aperture correction applied to aperflux measurement (curve-of-growth)\n")
+        fh_lc.write(f"# aperturecorr = Aperture  (curve-of-growth) correction applied to aperflux measurement\n")
         fh_lc.write(f"# dnearestrefsrc = Distance to nearest ref-image source within $refmatchrad arcsec [arcsec]\n")
         fh_lc.write(f"# nearestrefmag = Magnitude of nearest refimage source [mag]\n")
         fh_lc.write(f"# nearestrefmagunc = Magnitude uncertainty in nearestrefmag [mag]\n")
@@ -1100,7 +1102,9 @@ if __name__ == '__main__':
         fh_lc.write(f"# procstatus = Per-epoch processing status codes: 0=normal, otherwise see documentation.\n")
         fh_lc.write(f"# ------------------------------------------------------------------\n")
         fh_lc.write(f"# Order of table columns is as follows:\n")
-        fh_lc.write("sindex jd expid pid sca fid filter field rfid psfflux psffluxunc psfsnr psfredchi2 " +\
+        fh_lc.write("sindex jd expid pid sca fid filter field rfid "+\
+                    "infobitssci infobitsref " +\
+                    "psfflux psffluxunc psfsnr psfredchi2 " +\
                     "aperflux aperfluxunc apersnr apercorr dnearestrefsrc nearestrefmag nearestrefmagunc " +\
                     "nearestrefredchi2 nearestrefsharp refjdstart refjdend procstatus\n")
 
@@ -1117,10 +1121,13 @@ if __name__ == '__main__':
             filter = filters[fid]
             field = field_list[i]
 
+
             # TODO: Add more science-image metrics.
             # Cf. all output columns in ztf/src/pl/perl/forcedphotometry_trim_cforcepsfaper.pl
 
             rfid = rfid_list[i]
+            infobitssci = infobitssci_list[i]
+            infobitsref = infobitsref_list[i]
 
             psfflux = forcediffimflux[c][i]
             psffluxunc = forcediffimfluxunc[c][i]
@@ -1147,8 +1154,10 @@ if __name__ == '__main__':
             refjdstart = ref_jdstart[c][i]
             refjdend = ref_jdend[c][i]
 
-            fh_lc.write(f"{sindex} {jd} {expid} {pid} {sca} {fid} {filter} {field} {rfid} {psfflux} " +\
-                        f"{psffluxunc} {psfsnr} {psfredchi2} {aperflux} {aperfluxunc} {apersnr} " +\
+            fh_lc.write(f"{sindex} {jd} {expid} {pid} {sca} {fid} {filter} {field} {rfid} " +\
+                        f"{infobitssci} {infobitsref} {psfflux} " +\
+                        f"{psffluxunc} {psfsnr} {psfredchi2} " +\
+                        f"{aperflux} {aperfluxunc} {apersnr} " +\
                         f"{apercorr} {dnearestrefsrc} {nearestrefmag} {nearestrefmagunc} " +\
                         f"{nearestrefredchi2} {nearestrefsharp} {refjdstart} {refjdend} {exitstatuses}\n")
 
