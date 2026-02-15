@@ -433,7 +433,7 @@ def addKeywordsToReferenceImageHeader(reference_image_filename,
     hdr["NFRAMES"] = (nframes,"Total number of images coadded")
     hdr["JDSTART"] = (jdstart,"Obs. JD of earliest image used [days]")
     hdr["JDEND"] = (jdend,"Obs. JD of latest image used [days]")
-    hdr["MAGZP"] = (zprefimg,"Fixed zero point of all RAPID refimgs [mag]")
+    hdr["MAGZP"] = (zprefimg,"Zero point of reference image [mag]")
 
 
     # Add keywords for reference-image input filenames.
