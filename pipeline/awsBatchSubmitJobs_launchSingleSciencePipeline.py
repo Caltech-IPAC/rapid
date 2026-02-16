@@ -185,8 +185,6 @@ awaicgen_dict["awaicgen_verbose"] = config_input['AWAICGEN']['awaicgen_verbose']
 awaicgen_dict["zprefimg"] = config_input['AWAICGEN']['zprefimg']
 
 
-
-
 # Update the awaicgen dictionary for quantities that do not vary with sky location.
 
 pixel_scale = math.fabs(cdelt1_refimage)
