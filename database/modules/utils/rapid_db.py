@@ -1116,7 +1116,7 @@ class RAPIDDB:
             "select a.rid,ra0,dec0,ra1,dec1,ra2,dec2,ra3,dec3,ra4,dec4,q3c_dist(ra0, dec0, cast(TEMPLATE_RA0 as double precision), cast(TEMPLATE_DEC0 as double precision)) as dist " +\
             "from L2FileMeta a, L2Files b " +\
             "where a.rid = b.rid " +\
-            "and fid = TEMPLATE_FID " +\
+            "and a.fid = TEMPLATE_FID " +\
             "and status > 0 " +\
             "and vbest > 0 " +\
             "and q3c_radial_query(ra0, dec0, cast(TEMPLATE_RA0 as double precision), cast(TEMPLATE_DEC0 as double precision), cast(TEMPLATE_RADIUS as double precision)) " +\
