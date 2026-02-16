@@ -700,20 +700,20 @@ def generatePhotUtilsReferenceImageCatalog(s3_client,
 
         # Compute MD5 checksum of reference-image PSF-fit photometry catalog.
 
-        print("Computing checksum of reference-image catalog:",filename_refimage_catalog)
-        checksum_refimage_catalog = db.compute_checksum(filename_refimage_catalog)
+        print("Computing checksum of reference-image PSF-fit photometry catalog:",output_psfcat_filename)
+        checksum_psfcat_filename = db.compute_checksum(output_psfcat_filename)
 
-        if checksum_refimage_catalog == 65 or checksum_refimage_catalog == 68 or checksum_refimage_catalog == 66:
-            print("*** Error: Unexpected value for checksum =",checksum_refimage_catalog)
+        if checksum_psfcat_filename == 65 or checksum_psfcat_filename == 68 or checksum_psfcat_filename == 66:
+            print("*** Error: Unexpected value for checksum =",checksum_psfcat_filename)
 
 
         # Compute MD5 checksum of reference-image PSF-fit finder catalog.
 
-        print("Computing checksum of reference-image catalog:",filename_refimage_catalog)
-        checksum_refimage_catalog = db.compute_checksum(filename_refimage_catalog)
+        print("Computing checksum of reference-image PSF-fit finder catalog:",checksum_psfcat_finder_filename)
+        checksum_psfcat_finder_filename = db.compute_checksum(checksum_psfcat_finder_filename)
 
-        if checksum_refimage_catalog == 65 or checksum_refimage_catalog == 68 or checksum_refimage_catalog == 66:
-            print("*** Error: Unexpected value for checksum =",checksum_refimage_catalog)
+        if checksum_psfcat_finder_filename == 65 or checksum_psfcat_finder_filename == 68 or checksum_psfcat_finder_filename == 66:
+            print("*** Error: Unexpected value for checksum =",checksum_psfcat_finder_filename)
 
 
     # Return metadata about reference-image PhotUtils catalog that was generated.
