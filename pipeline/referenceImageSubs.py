@@ -618,32 +618,91 @@ def generatePhotUtilsReferenceImageCatalog(s3_client,
             print(f"PSF-fit PSFPhotometry and DAOStarFinder catalogs: An unexpected error occurred: {e}")
 
 
-        # Upload reference-image catalog to S3 product bucket.
+        # Upload reference-image photometry catalog to S3 product bucket.
 
-        refimage_photutils_catalog_s3_bucket_object_name = job_proc_date + "/jid" + str(jid) + "/" + filename_refimage_catalog
+        refimage_photutils_photometry_catalog_s3_bucket_object_name = job_proc_date + "/jid" + str(jid) + "/" + output_psfcat_filename
 
         if upload_to_s3_bucket:
 
             uploaded_to_bucket = True
 
             try:
-                response = s3_client.upload_file(filename_refimage_catalog,
+                response = s3_client.upload_file(output_psfcat_filename,
                                                  product_s3_bucket,
-                                                 refimage_photutils_catalog_s3_bucket_object_name)
+                                                 refimage_photutils_photometry_catalog_s3_bucket_object_name)
 
                 print("response =",response)
 
             except ClientError as e:
                 print("*** Error: Failed to upload {} to s3://{}/{}"\
-                    .format(filename_refimage_catalog,product_s3_bucket,refimage_photutils_catalog_s3_bucket_object_name))
+                    .format(output_psfcat_filename,product_s3_bucket,refimage_photutils_photometry_catalog_s3_bucket_object_name))
                 uploaded_to_bucket = False
 
             if uploaded_to_bucket:
                 print("Successfully uploaded {} to s3://{}/{}"\
-                    .format(filename_refimage_catalog,product_s3_bucket,refimage_photutils_catalog_s3_bucket_object_name))
+                    .format(output_psfcat_filename,product_s3_bucket,refimage_photutils_photometry_catalog_s3_bucket_object_name))
 
 
-        # Compute MD5 checksum of reference-image catalog.
+        # Upload reference-image finder catalog to S3 product bucket.
+
+        refimage_photutils_finder_catalog_s3_bucket_object_name = job_proc_date + "/jid" + str(jid) + "/" + output_psfcat_filename
+
+        if upload_to_s3_bucket:
+
+            uploaded_to_bucket = True
+
+            try:
+                response = s3_client.upload_file(output_psfcat_filename,
+                                                 product_s3_bucket,
+                                                 refimage_photutils_finder_catalog_s3_bucket_object_name)
+
+                print("response =",response)
+
+            except ClientError as e:
+                print("*** Error: Failed to upload {} to s3://{}/{}"\
+                    .format(output_psfcat_filename,product_s3_bucket,refimage_photutils_finder_catalog_s3_bucket_object_name))
+                uploaded_to_bucket = False
+
+            if uploaded_to_bucket:
+                print("Successfully uploaded {} to s3://{}/{}"\
+                    .format(output_psfcat_filename,product_s3_bucket,refimage_photutils_finder_catalog_s3_bucket_object_name))
+
+
+        # Upload reference-image-catalog parquet file to S3 product bucket.
+
+        refimage_photutils_parquet_catalog_s3_bucket_object_name = job_proc_date + "/jid" + str(jid) + "/" + output_psfcat_parquet_filename
+
+        if upload_to_s3_bucket:
+
+            uploaded_to_bucket = True
+
+            try:
+                response = s3_client.upload_file(output_psfcat_parquet_filename,
+                                                 product_s3_bucket,
+                                                 refimage_photutils_parquet_catalog_s3_bucket_object_name)
+
+                print("response =",response)
+
+            except ClientError as e:
+                print("*** Error: Failed to upload {} to s3://{}/{}"\
+                    .format(output_psfcat_parquet_filename,product_s3_bucket,refimage_photutils_parquet_catalog_s3_bucket_object_name))
+                uploaded_to_bucket = False
+
+            if uploaded_to_bucket:
+                print("Successfully uploaded {} to s3://{}/{}"\
+                    .format(output_psfcat_parquet_filename,product_s3_bucket,refimage_photutils_parquet_catalog_s3_bucket_object_name))
+
+
+        # Compute MD5 checksum of reference-image PSF-fit photometry catalog.
+
+        print("Computing checksum of reference-image catalog:",filename_refimage_catalog)
+        checksum_refimage_catalog = db.compute_checksum(filename_refimage_catalog)
+
+        if checksum_refimage_catalog == 65 or checksum_refimage_catalog == 68 or checksum_refimage_catalog == 66:
+            print("*** Error: Unexpected value for checksum =",checksum_refimage_catalog)
+
+
+        # Compute MD5 checksum of reference-image PSF-fit finder catalog.
 
         print("Computing checksum of reference-image catalog:",filename_refimage_catalog)
         checksum_refimage_catalog = db.compute_checksum(filename_refimage_catalog)
@@ -656,8 +715,11 @@ def generatePhotUtilsReferenceImageCatalog(s3_client,
 
     generateReferenceImageCatalog_return_list = []
     generateReferenceImageCatalog_return_list.append(psfcat_flag)
-    generateReferenceImageCatalog_return_list.append(checksum_refimage_catalog)
-    generateReferenceImageCatalog_return_list.append(filename_refimage_catalog)
-    generateReferenceImageCatalog_return_list.append(refimage_photutils_catalog_s3_bucket_object_name)
+    generateReferenceImageCatalog_return_list.append(checksum_psfcat_filename)
+    generateReferenceImageCatalog_return_list.append(checksum_psfcat_finder_filename)
+    generateReferenceImageCatalog_return_list.append(output_psfcat_filename)
+    generateReferenceImageCatalog_return_list.append(output_psfcat_finder_filename)
+    generateReferenceImageCatalog_return_list.append(refimage_photutils_photometry_catalog_s3_bucket_object_name)
+    generateReferenceImageCatalog_return_list.append(refimage_photutils_finder_catalog_s3_bucket_object_name)
 
     return generateReferenceImageCatalog_return_list

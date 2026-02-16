@@ -450,9 +450,11 @@ if __name__ == '__main__':
 
         flag_psf_refimage_catalog = refimgpsfcat_return_list[0]
         checksum_psf_refimage_catalog = refimgpsfcat_return_list[1]
-        filename_psf_refimage_catalog = refimgpsfcat_return_list[2]
-        refimage_psf_catalog_s3_bucket_object_name = refimgpsfcat_return_list[3]
-
+        checksum_psf_finder_refimage_catalog = refimgpsfcat_return_list[2]
+        filename_psf_refimage_catalog = refimgpsfcat_return_list[3]
+        filename_psf_finder_refimage_catalog = refimgpsfcat_return_list[4]
+        refimage_psf_catalog_s3_bucket_object_name = refimgpsfcat_return_list[5]
+        refimage_psf_finder_catalog_s3_bucket_object_name = refimgpsfcat_return_list[6]
 
 
 
