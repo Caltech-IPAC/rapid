@@ -575,7 +575,7 @@ def generatePhotUtilsReferenceImageCatalog(s3_client,
 
             # Compute sky coordinates for given pixel coordinates.
 
-            ra,dec = util.computeSkyCoordsFromPixelCoords(filename_bkg_subbed_science_image,
+            ra,dec = util.computeSkyCoordsFromPixelCoords(filename_refimage_catalog,
                                                           list(phot['x_fit']),
                                                           list(phot['y_fit']))
 
