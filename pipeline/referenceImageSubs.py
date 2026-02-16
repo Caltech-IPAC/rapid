@@ -3,6 +3,7 @@ import re
 import boto3
 from botocore.exceptions import ClientError
 from astropy.io import fits
+from astropy.io import ascii
 import numpy as np
 
 import modules.utils.rapid_pipeline_subs as util
