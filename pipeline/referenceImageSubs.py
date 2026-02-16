@@ -547,9 +547,12 @@ def generatePhotUtilsReferenceImageCatalog(s3_client,
 
     if not psfcat_flag:
 
-        checksum_refimage_catalog = None
-        filename_refimage_catalog = None
-        refimage_photutils_catalog_s3_bucket_object_name = None
+        checksum_psfcat_filename = None
+        checksum_psfcat_finder_filename = None
+        output_psfcat_filename = None
+        output_psfcat_finder_filename = None
+        refimage_photutils_photometry_catalog_s3_bucket_object_name = None
+        refimage_photutils_finder_catalog_s3_bucket_object_name = None
 
     else:
 
@@ -575,7 +578,7 @@ def generatePhotUtilsReferenceImageCatalog(s3_client,
 
             # Compute sky coordinates for given pixel coordinates.
 
-            ra,dec = util.computeSkyCoordsFromPixelCoords(filename_refimage_catalog,
+            ra,dec = util.computeSkyCoordsFromPixelCoords(filename_refimage_image,
                                                           list(phot['x_fit']),
                                                           list(phot['y_fit']))
 
