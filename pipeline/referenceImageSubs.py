@@ -4,6 +4,7 @@ import boto3
 from botocore.exceptions import ClientError
 from astropy.io import fits
 from astropy.io import ascii
+from astropy.table import QTable, join
 import numpy as np
 
 import modules.utils.rapid_pipeline_subs as util
