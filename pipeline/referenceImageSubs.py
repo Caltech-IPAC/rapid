@@ -650,14 +650,14 @@ def generatePhotUtilsReferenceImageCatalog(s3_client,
 
         # Upload reference-image finder catalog to S3 product bucket.
 
-        refimage_photutils_finder_catalog_s3_bucket_object_name = job_proc_date + "/jid" + str(jid) + "/" + output_psfcat_filename
+        refimage_photutils_finder_catalog_s3_bucket_object_name = job_proc_date + "/jid" + str(jid) + "/" + output_psfcat_finder_filename
 
         if upload_to_s3_bucket:
 
             uploaded_to_bucket = True
 
             try:
-                response = s3_client.upload_file(output_psfcat_filename,
+                response = s3_client.upload_file(output_psfcat_finder_filename,
                                                  product_s3_bucket,
                                                  refimage_photutils_finder_catalog_s3_bucket_object_name)
 
@@ -665,12 +665,12 @@ def generatePhotUtilsReferenceImageCatalog(s3_client,
 
             except ClientError as e:
                 print("*** Error: Failed to upload {} to s3://{}/{}"\
-                    .format(output_psfcat_filename,product_s3_bucket,refimage_photutils_finder_catalog_s3_bucket_object_name))
+                    .format(output_psfcat_finder_filename,product_s3_bucket,refimage_photutils_finder_catalog_s3_bucket_object_name))
                 uploaded_to_bucket = False
 
             if uploaded_to_bucket:
                 print("Successfully uploaded {} to s3://{}/{}"\
-                    .format(output_psfcat_filename,product_s3_bucket,refimage_photutils_finder_catalog_s3_bucket_object_name))
+                    .format(output_psfcat_finder_filename,product_s3_bucket,refimage_photutils_finder_catalog_s3_bucket_object_name))
 
 
         # Upload reference-image-catalog parquet file to S3 product bucket.
@@ -709,8 +709,8 @@ def generatePhotUtilsReferenceImageCatalog(s3_client,
 
         # Compute MD5 checksum of reference-image PSF-fit finder catalog.
 
-        print("Computing checksum of reference-image PSF-fit finder catalog:",checksum_psfcat_finder_filename)
-        checksum_psfcat_finder_filename = db.compute_checksum(checksum_psfcat_finder_filename)
+        print("Computing checksum of reference-image PSF-fit finder catalog:",output_psfcat_finder_filename)
+        checksum_psfcat_finder_filename = db.compute_checksum(output_psfcat_finder_filename)
 
         if checksum_psfcat_finder_filename == 65 or checksum_psfcat_finder_filename == 68 or checksum_psfcat_finder_filename == 66:
             print("*** Error: Unexpected value for checksum =",checksum_psfcat_finder_filename)
