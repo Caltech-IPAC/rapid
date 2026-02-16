@@ -693,7 +693,7 @@ if __name__ == '__main__':
     else:
         print(f"The file '{science_image_filename}' does not exist.")
 
-        gunzip_cmd = ['gunzip', science_image_filename_gz]
+        gunzip_cmd = ['gunzip', '-f', science_image_filename_gz]
         exitcode_from_gunzip = util.execute_command(gunzip_cmd)
 
 

@@ -109,7 +109,7 @@ def generateReferenceImage(s3_client,
 
             # Unzip the gz file.
 
-            gunzip_cmd = ['gunzip', refimage_input_filename]
+            gunzip_cmd = ['gunzip', '-f', refimage_input_filename]
             exitcode_from_gunzip = util.execute_command(gunzip_cmd)
 
 
