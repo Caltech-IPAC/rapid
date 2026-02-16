@@ -1113,9 +1113,10 @@ class RAPIDDB:
         #       For example, an image corner may overlap on a sky tile that does not cover a tile center or corner.
 
         query_template =\
-            "select rid,ra0,dec0,ra1,dec1,ra2,dec2,ra3,dec3,ra4,dec4,q3c_dist(ra0, dec0, cast(TEMPLATE_RA0 as double precision), cast(TEMPLATE_DEC0 as double precision)) as dist " +\
-            "from L2FileMeta " +\
-            "where fid = TEMPLATE_FID " +\
+            "select a.rid,ra0,dec0,ra1,dec1,ra2,dec2,ra3,dec3,ra4,dec4,q3c_dist(ra0, dec0, cast(TEMPLATE_RA0 as double precision), cast(TEMPLATE_DEC0 as double precision)) as dist " +\
+            "from L2FileMeta a, L2Files b" +\
+            "where a.rid = b.rid " +\
+            "and fid = TEMPLATE_FID " +\
             "and status > 0 " +\
             "and vbest > 0 " +\
             "and q3c_radial_query(ra0, dec0, cast(TEMPLATE_RA0 as double precision), cast(TEMPLATE_DEC0 as double precision), cast(TEMPLATE_RADIUS as double precision)) " +\
@@ -1139,9 +1140,9 @@ class RAPIDDB:
                                                "cast(TEMPLATE_RA2 as double precision), cast(TEMPLATE_DEC2 as double precision)," +\
                                                "cast(TEMPLATE_RA3 as double precision), cast(TEMPLATE_DEC3 as double precision)," +\
                                                "cast(TEMPLATE_RA4 as double precision), cast(TEMPLATE_DEC4 as double precision)])) " +\
-            "and mjdobs >= TEMPLATE_STARTMJDOBS " +\
-            "and mjdobs < TEMPLATE_ENDMJDOBS " +\
-            "and rid != TEMPLATE_RID " +\
+            "and a.mjdobs >= TEMPLATE_STARTMJDOBS " +\
+            "and a.mjdobs < TEMPLATE_ENDMJDOBS " +\
+            "and a.rid != TEMPLATE_RID " +\
             "order by dist; "
 
 
