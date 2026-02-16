@@ -778,7 +778,7 @@ if __name__ == '__main__':
 
     job_config['GAINMATCH'] = gainmatch_dict
     job_config['PSFCAT_DIFFIMAGE'] = psfcat_diffimage_dict
-    job_config['PSFCAT_REFIMAGE'] = psfcat_reffimage_dict
+    job_config['PSFCAT_REFIMAGE'] = psfcat_refimage_dict
 
     job_config['SEXTRACTOR_GAINMATCH'] = {}
     for key in sextractor_gainmatch_dict.keys():
