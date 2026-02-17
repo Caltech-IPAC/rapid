@@ -1201,3 +1201,23 @@ if __name__ == '__main__':
     print("Terminating: exitcode =",exitcode)
 
     exit(exitcode)
+
+
+    '''
+    Here are the ZTF lightcurve columns not included in the RAPID lightcurve file:
+
+    sciinpseeing = Effective FWHM of sci image [pixels]
+    scibckgnd = Background level in sci image [DN]
+    scisigpix = Robust sigma per pixel in sci image [DN]
+    zpmaginpsciunc = 1-sigma uncertainty in zpmaginpsci [mag]
+    zpmaginpscirms = RMS (deviation from average) in difference between instrumental mags and PS1 calibrators [mag]
+    clrcoeff = Linear color coefficient from calibration; for ZTF_g,r,i, PS1 color used is g-r, g-r, r-i respectively
+    clrcoeffunc = 1-sigma uncertainty in clrcoeff
+    ncalmatches = Number of PS1 calibrators used in initial calibration of sci image
+    exptime = Integration time for sci image [sec]
+    adpctdif1 = Full sci image astrometric RMS along R.A. with respect to Gaia1 [arcsec]
+    adpctdif2 = Full sci image astrometric RMS along Dec. with respect to Gaia1 [arcsec]
+    diffmaglim = Magnitude limit in difference image [mag]
+    programid = Program identifier [0=engineering; 1=public; 2=private; 3=Caltech time]
+    diffimgstatus = Difference-image quality filtering (0=bad,1=good)
+    '''
