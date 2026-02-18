@@ -1684,7 +1684,7 @@ if __name__ == '__main__':
 
     if run_sfft:
 
-        python_cmd = '/usr/bin/python3.11'
+        python_cmd = 'python3.11'                                           # /sfft_env/bin/python3.11
         sfft_code = rapid_sw + '/modules/sfft/sfft_rapid_rimtimsim.py'
         filename_scifile = filename_bkg_subbed_science_image
         filename_reffile = output_resampled_gainmatched_reference_image
