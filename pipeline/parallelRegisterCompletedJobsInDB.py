@@ -7,6 +7,7 @@ available cores on the job-launcher machine.
 
 import sys
 import os
+import ast
 import signal
 import configparser
 import boto3
@@ -459,7 +460,7 @@ def run_single_core_job(jids,log_fnames,index_thread):
                         exit(dbh.exit_code)
 
 
-                    # Parse metadata for reference-image catalog.
+                    # Parse metadata for reference-image SExtractor catalog.
 
                     sextractor_refimage_catalog_filename_for_db = product_config_input['REF_IMAGE']['sextractor_refimage_catalog_filename_for_db']
                     sextractor_refimage_catalog_checksum = product_config_input['REF_IMAGE']['sextractor_refimage_catalog_checksum']
@@ -467,7 +468,7 @@ def run_single_core_job(jids,log_fnames,index_thread):
                     sextractor_refimage_catalog_status = product_config_input['REF_IMAGE']['sextractor_refimage_catalog_status']
 
 
-                    # Insert record in RefImCatalogs database table.
+                    # Insert record in RefImCatalogs database table for reference-image SExtractor catalog.
 
                     dbh.register_refimcatalog(rfid,
                                               ppid_refimage,
@@ -486,8 +487,47 @@ def run_single_core_job(jids,log_fnames,index_thread):
                     rfcatid = dbh.rfcatid
                     svid = dbh.svid
 
+                    fh.write(f"sextractor_refimage_catalog_filename_for_db = {sextractor_refimage_catalog_filename_for_db}\n")
                     fh.write(f"rfcatid = {rfcatid}\n")
                     fh.write(f"svid = {svid}\n")
+
+
+                    # Parse metadata for reference-image PhotUtils catalog.
+
+                    photutils_refimage_catalog_filename_for_db = product_config_input['REF_IMAGE']['photutils_refimage_catalog_filename_for_db']
+                    photutils_refimage_catalog_checksum = product_config_input['REF_IMAGE']['photutils_refimage_catalog_checksum']
+                    photutils_refimage_catalog_cattype = product_config_input['REF_IMAGE']['photutils_refimage_catalog_cattype']
+                    photutils_refimage_catalog_status = product_config_input['REF_IMAGE']['photutils_refimage_catalog_status']
+                    photutils_refimage_catalog_uploaded_to_bucket = ast.literal_eval(product_config_input['REF_IMAGE']['photutils_refimage_catalog_uploaded_to_bucket'])
+
+
+                    # Insert record in RefImCatalogs database table for reference-image PhotUtils catalog.
+
+                    if photutils_refimage_catalog_uploaded_to_bucket:
+
+                        dbh.register_refimcatalog(rfid,
+                                                  ppid_refimage,
+                                                  photutils_refimage_catalog_cattype,
+                                                  field,
+                                                  hp6,
+                                                  hp9,
+                                                  fid,
+                                                  photutils_refimage_catalog_status,
+                                                  photutils_refimage_catalog_filename_for_db,
+                                                  photutils_refimage_catalog_checksum)
+
+                        if dbh.exit_code >= 64:
+                            exit(dbh.exit_code)
+
+                        rfcatid = dbh.rfcatid
+                        svid = dbh.svid
+
+                        fh.write(f"photutils_refimage_catalog_filename_for_db = {photutils_refimage_catalog_filename_for_db}\n")
+                        fh.write(f"rfcatid = {rfcatid}\n")
+                        fh.write(f"svid = {svid}\n")
+
+
+                    # Parse reference-image metadata.
 
                     nframes = product_config_input['REF_IMAGE']['nframes']
                     npixsat = product_config_input['REF_IMAGE']['npixsat']
