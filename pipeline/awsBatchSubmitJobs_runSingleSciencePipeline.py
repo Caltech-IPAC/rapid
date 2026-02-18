@@ -579,12 +579,12 @@ if __name__ == '__main__':
 
         product_config['REF_IMAGE']['sextractor_refimage_catalog_filename_for_db'] = refimage_sex_catalog_name_for_db_record
         product_config['REF_IMAGE']['sextractor_refimage_catalog_checksum'] = checksum_sex_refimage_catalog
-        product_config['REF_IMAGE']['sextractor_refimage_catalog_cattype'] = str(1)
+        product_config['REF_IMAGE']['sextractor_refimage_catalog_cattype'] = str(1)     # cattype = 1 in database.
         product_config['REF_IMAGE']['sextractor_refimage_catalog_status'] = str(1)
 
         product_config['REF_IMAGE']['photutils_refimage_catalog_filename_for_db'] = refimage_psf_catalog_name_for_db_record
         product_config['REF_IMAGE']['photutils_refimage_catalog_checksum'] = checksum_psf_refimage_catalog
-        product_config['REF_IMAGE']['photutils_refimage_catalog_cattype'] = str(1)
+        product_config['REF_IMAGE']['photutils_refimage_catalog_cattype'] = str(2)     # cattype = 2 in database.
         product_config['REF_IMAGE']['photutils_refimage_catalog_status'] = str(1)
 
         product_config['REF_IMAGE']['nframes'] = str(nframes)
