@@ -54,10 +54,23 @@ Date              Software modification
 9/17/2025         Modified to feed sca_gain * exptime_sciimage as gain to method pipeline.differenceImageSubs.compute_diffimage_uncertainty.
 9/17/2025         Fixed bug: x and y subpixels offsets were swapped (adversely affected inputs to ZOGY, SFFT, and naive image-differencing).
 9/25/2025         Added new method normalize_image to normalize science-image PSFs (required by ZOGY).
+10/10/2025        Added source matching within/without field boundaries to populate Sources, Merges, and AstroObjects database tables.
+10/11/2025        Added methods to compute statistics for AstroObjects database tables.
 10/29/2025        Set min_separation = 1.0 pixel for PhotUtils catalog generation.
 11/19/2025        Upgraded to SExtractor 2.28.2.
+11/25/2025        Modified awaicgen for execution on Mac laptop (compiler is more strict than Linux).
 12/4/2025         Explicitly cast data and uncertainty images as ndarrays when passed to PhotUtils methods (not sure whether this actually caused any problems).
+12/8/2025         Fixed call to romanisim.psf.make_one_psf method after interface changed.
+12/17/2025        New SFFT python module that works on rimtimsim images.
 12/22/2025        Adjusted awaicgen_num_threads = 2 to match the number of VCPUs in the AWS Batch machines used by the RAPID pipeline.
+1/14/2026         Modified science pipeline to output catalogs in parquet format.
+1/24/2026         Added methods to delete not-best records in Sources and Merges database tables.
+1/30/2026         Developed code to generate sources and lightcurves HATS catalogs.
+1/31/2026         Various miscellaneous improvements such as modifications to run RAPID science pipeline on Mac laptop.
+2/3/2026          Created forced-photometry backend and added cforcepsfaper C module.
+2/4/2026          Reduced-chi2 in PhotUtils catalogs and Sources database table.
+2/11/2026         Scaled reference-image inputs so that reference has fixed zero point = 17 mag.
+2/12/2026         Modified to generate PhotUtils catalog for reference image.
 ===============   ===============================================================================================================================================================================================================================
 
 
