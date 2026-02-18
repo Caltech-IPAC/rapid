@@ -647,6 +647,8 @@ def generatePhotUtilsReferenceImageCatalog(s3_client,
                 print("Successfully uploaded {} to s3://{}/{}"\
                     .format(output_psfcat_filename,product_s3_bucket,refimage_photutils_photometry_catalog_s3_bucket_object_name))
 
+        refimage_photutils_photometry_catalog_uploaded_to_bucket = uploaded_to_bucket
+
 
         # Upload reference-image finder catalog to S3 product bucket.
 
@@ -671,6 +673,8 @@ def generatePhotUtilsReferenceImageCatalog(s3_client,
             if uploaded_to_bucket:
                 print("Successfully uploaded {} to s3://{}/{}"\
                     .format(output_psfcat_finder_filename,product_s3_bucket,refimage_photutils_finder_catalog_s3_bucket_object_name))
+
+        refimage_photutils_finder_catalog_uploaded_to_bucket = uploaded_to_bucket
 
 
         # Upload reference-image-catalog parquet file to S3 product bucket.
@@ -726,5 +730,7 @@ def generatePhotUtilsReferenceImageCatalog(s3_client,
     generateReferenceImageCatalog_return_list.append(output_psfcat_finder_filename)
     generateReferenceImageCatalog_return_list.append(refimage_photutils_photometry_catalog_s3_bucket_object_name)
     generateReferenceImageCatalog_return_list.append(refimage_photutils_finder_catalog_s3_bucket_object_name)
+    generateReferenceImageCatalog_return_list.append(refimage_photutils_photometry_catalog_uploaded_to_bucket)
+    generateReferenceImageCatalog_return_list.append(refimage_photutils_finder_catalog_uploaded_to_bucket)
 
     return generateReferenceImageCatalog_return_list

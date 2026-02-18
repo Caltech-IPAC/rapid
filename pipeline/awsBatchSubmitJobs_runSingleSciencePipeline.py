@@ -455,6 +455,8 @@ if __name__ == '__main__':
         filename_psf_finder_refimage_catalog = refimgpsfcat_return_list[4]
         refimage_psf_catalog_s3_bucket_object_name = refimgpsfcat_return_list[5]
         refimage_psf_finder_catalog_s3_bucket_object_name = refimgpsfcat_return_list[6]
+        refimage_psf_catalog_uploaded_to_bucket = refimgpsfcat_return_list[7]
+        refimage_psf_finder_catalog_uploaded_to_bucket = refimgpsfcat_return_list[8]
 
 
 
@@ -586,6 +588,7 @@ if __name__ == '__main__':
         product_config['REF_IMAGE']['photutils_refimage_catalog_checksum'] = checksum_psf_refimage_catalog
         product_config['REF_IMAGE']['photutils_refimage_catalog_cattype'] = str(2)     # cattype = 2 in database.
         product_config['REF_IMAGE']['photutils_refimage_catalog_status'] = str(1)
+        product_config['REF_IMAGE']['photutils_refimage_catalog_uploaded_to_bucket'] = refimage_psf_catalog_uploaded_to_bucket
 
         product_config['REF_IMAGE']['nframes'] = str(nframes)
         product_config['REF_IMAGE']['npixsat'] = str(npixsat_refimage)
