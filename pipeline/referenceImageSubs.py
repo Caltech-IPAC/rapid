@@ -555,8 +555,14 @@ def generatePhotUtilsReferenceImageCatalog(s3_client,
         output_psfcat_finder_filename = None
         refimage_photutils_photometry_catalog_s3_bucket_object_name = None
         refimage_photutils_finder_catalog_s3_bucket_object_name = None
+        refimage_photutils_photometry_catalog_uploaded_to_bucket = None
+        refimage_photutils_finder_catalog_uploaded_to_bucket = None
 
     else:
+
+        refimage_photutils_photometry_catalog_uploaded_to_bucket = None
+        refimage_photutils_finder_catalog_uploaded_to_bucket = None
+
 
         # Output psf-fit catalog is an PSFPhotometry astropy table with the PSF-fitting results
         # merged with the DAOStarFinder astropy table.
@@ -647,7 +653,7 @@ def generatePhotUtilsReferenceImageCatalog(s3_client,
                 print("Successfully uploaded {} to s3://{}/{}"\
                     .format(output_psfcat_filename,product_s3_bucket,refimage_photutils_photometry_catalog_s3_bucket_object_name))
 
-        refimage_photutils_photometry_catalog_uploaded_to_bucket = uploaded_to_bucket
+            refimage_photutils_photometry_catalog_uploaded_to_bucket = uploaded_to_bucket
 
 
         # Upload reference-image finder catalog to S3 product bucket.
@@ -674,7 +680,7 @@ def generatePhotUtilsReferenceImageCatalog(s3_client,
                 print("Successfully uploaded {} to s3://{}/{}"\
                     .format(output_psfcat_finder_filename,product_s3_bucket,refimage_photutils_finder_catalog_s3_bucket_object_name))
 
-        refimage_photutils_finder_catalog_uploaded_to_bucket = uploaded_to_bucket
+            refimage_photutils_finder_catalog_uploaded_to_bucket = uploaded_to_bucket
 
 
         # Upload reference-image-catalog parquet file to S3 product bucket.
