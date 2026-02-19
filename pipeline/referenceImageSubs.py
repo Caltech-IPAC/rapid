@@ -555,13 +555,13 @@ def generatePhotUtilsReferenceImageCatalog(s3_client,
         output_psfcat_finder_filename = None
         refimage_photutils_photometry_catalog_s3_bucket_object_name = None
         refimage_photutils_finder_catalog_s3_bucket_object_name = None
-        refimage_photutils_photometry_catalog_uploaded_to_bucket = None
-        refimage_photutils_finder_catalog_uploaded_to_bucket = None
+        refimage_photutils_photometry_catalog_uploaded_to_bucket = False
+        refimage_photutils_finder_catalog_uploaded_to_bucket = False
 
     else:
 
-        refimage_photutils_photometry_catalog_uploaded_to_bucket = None
-        refimage_photutils_finder_catalog_uploaded_to_bucket = None
+        refimage_photutils_photometry_catalog_uploaded_to_bucket = False
+        refimage_photutils_finder_catalog_uploaded_to_bucket = False
 
 
         # Output psf-fit catalog is an PSFPhotometry astropy table with the PSF-fitting results
