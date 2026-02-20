@@ -356,13 +356,13 @@ if __name__ == '__main__':
 
         print("response =",response)
 
-        filename_refimage_catalog = awaicgen_output_mosaic_image_file.replace("image.fits","refimsexcat.txt")
-        refimage_catalog_s3_bucket_object_name =  subdirs + "/" + filename_refimage_catalog
+        filename_sex_refimage_catalog = awaicgen_output_mosaic_image_file.replace("image.fits","refimsexcat.txt")
+        refimage_sex_catalog_s3_bucket_object_name =  subdirs + "/" + filename_sex_refimage_catalog
 
         print("Downloading s3://{}/{} into {}...".\
-            format(product_s3_bucket,refimage_catalog_s3_bucket_object_name,filename_refimage_catalog))
+            format(product_s3_bucket,refimage_sex_catalog_s3_bucket_object_name,filename_sex_refimage_catalog))
 
-        response = s3_client.download_file(product_s3_bucket,refimage_catalog_s3_bucket_object_name,filename_refimage_catalog)
+        response = s3_client.download_file(product_s3_bucket,refimage_sex_catalog_s3_bucket_object_name,filename_sex_refimage_catalog)
 
         print("response =",response)
 
