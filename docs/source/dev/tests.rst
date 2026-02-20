@@ -58,7 +58,7 @@ Date              Software modification
 10/11/2025        Added methods to compute statistics for AstroObjects database tables.
 10/29/2025        Set ``min_separation = 1.0`` pixel for PhotUtils catalog generation.
 11/19/2025        Upgraded to SExtractor 2.28.2.
-11/25/2025        Modified awaicgen for execution on Mac laptop (compiler is more strict than Linux).
+11/25/2025        Modified ``awaicgen`` for execution on Mac laptop (compiler is more strict than Linux).
 12/4/2025         Explicitly cast data and uncertainty images as ndarrays when passed to PhotUtils methods (not sure whether this actually caused any problems).
 12/8/2025         Fixed call to ``romanisim.psf.make_one_psf`` method after interface changed.
 12/17/2025        New SFFT python module that works on rimtimsim images.
