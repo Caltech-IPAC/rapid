@@ -30,11 +30,7 @@ cfg_filename_only = "awsBatchSubmitJobs_launchSingleSciencePipeline.ini"
 
 python_cmd = '/usr/bin/python3.11'
 launch_science_pipelines_code = '/code/pipeline/launchSciencePipelinesForDateTimeRangeWithRefImageWindow.py'
-# The following single-threaded process is executed in Stage One to avoid a race condition when registering reference images.
-# Parallel process in Stage One is not required since it covers a small subset of the data.
-register_science_pipeline_jobs_code = '/code/pipeline/registerCompletedJobsInDB.py'
-# The following multi-threaded process is executed in Stage Two for speedy database-record registration.
-parallel_register_science_pipeline_jobs_code = '/code/pipeline/parallelRegisterCompletedJobsInDB.py'
+register_science_pipeline_jobs_code = '/code/pipeline/parallelRegisterCompletedJobsInDB.py'
 launch_postproc_pipelines_code = '/code/pipeline/awsBatchSubmitJobs_launchPostProcPipelinesForProcDate.py'
 register_postproc_pipeline_jobs_code = '/code/pipeline/parallelRegisterCompletedJobsInDBAfterPostProc.py'
 load_psfcat_into_db_sources_code = '/code/pipeline/loadPSFCatIntoDBSourcesTable.py'
@@ -181,7 +177,6 @@ print("startdatetime =",startdatetime)
 print("enddatetime =",enddatetime)
 print("launch_science_pipelines_code =", launch_science_pipelines_code)
 print("register_science_pipeline_jobs_code =", register_science_pipeline_jobs_code)
-print("parallel_register_science_pipeline_jobs_code =", parallel_register_science_pipeline_jobs_code)
 print("launch_postproc_pipelines_code =", launch_postproc_pipelines_code)
 print("register_postproc_pipeline_jobs_code =", register_postproc_pipeline_jobs_code)
 
@@ -448,19 +443,9 @@ if __name__ == '__main__':
             # Register metadata from science pipelines into operations database.
 
             fname_out = "register_science_pipeline_jobs_code" + "_" + stage_label + "_" + proc_date + ".out"
-
-            if make_refimages_flag == "True":
-
-                register_science_pipeline_jobs_cmd = [python_cmd,
-                                                      register_science_pipeline_jobs_code,
-                                                      proc_date]
-
-            else:
-
-                register_science_pipeline_jobs_cmd = [python_cmd,
-                                                      parallel_register_science_pipeline_jobs_code,
-                                                      proc_date]
-
+            register_science_pipeline_jobs_cmd = [python_cmd,
+                                                  register_science_pipeline_jobs_code,
+                                                  proc_date]
 
             exitcode_from_register_science_pipeline_jobs_cmd = util.execute_command(register_science_pipeline_jobs_cmd,fname_out)
 
