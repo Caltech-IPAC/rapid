@@ -449,7 +449,7 @@ if __name__ == '__main__':
 
             fname_out = "register_science_pipeline_jobs_code" + "_" + stage_label + "_" + proc_date + ".out"
 
-            if make_refimages_flag:
+            if make_refimages_flag == "True":
 
                 register_science_pipeline_jobs_cmd = [python_cmd,
                                                       register_science_pipeline_jobs_code,
