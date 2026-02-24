@@ -190,7 +190,7 @@ def run_single_core_job_stage_1_crossmatching(scas,fields,index_thread):
 
     print("index_thread,nfields =",index_thread,nfields)
 
-    thread_work_file = swname.replace(".py","stage_1_thread") + str(index_thread) + ".out"
+    thread_work_file = swname.replace(".py","_stage_1_thread") + str(index_thread) + ".out"
 
     try:
         fh = open(thread_work_file, 'w', encoding="utf-8")
@@ -396,7 +396,7 @@ def run_single_core_job_stage_2_crossmatching(scas,fields,index_thread):
 
     print("index_thread,nfields =",index_thread,nfields)
 
-    thread_work_file = swname.replace(".py","stage_2_thread") + str(index_thread) + ".out"
+    thread_work_file = swname.replace(".py","_stage_2_thread") + str(index_thread) + ".out"
 
     try:
         fh = open(thread_work_file, 'w', encoding="utf-8")
