@@ -294,6 +294,8 @@ def run_single_core_job(jids,log_fnames,index_thread):
                 tokens = re.split(r'\s*=\s*',line)
                 started_str = tokens[1].replace(" PT","")
 
+        file.close()
+
 
         # Try to download product config file, in order to harvest some of its metadata.
         # This may be unsuccessful if the pipeline failed.
@@ -376,7 +378,8 @@ def run_single_core_job(jids,log_fnames,index_thread):
             started = started_str
             ended = ended_str
 
-        fh.write(f"For Jobs records: started,ended = {started},{ended}\n")
+        fh.write(f"For Jobs records: jid,job_exitcode,aws_batch_job_id,started,ended = " +\
+                 f"{jid},{job_exitcode},{aws_batch_job_id},{started},{ended}\n")
 
 
         # Update Jobs record.
