@@ -113,6 +113,20 @@ if aws_secret_access_key is None:
     print("*** Error: Env. var. AWS_SECRET_ACCESS_KEY not set; quitting...")
     exit(64)
 
+make_refimages_flag_str = os.getenv('MAKEREFIMAGESFLAG')
+
+if make_refimages_flag_str is None:
+
+    print("*** Error: Env. var. MAKEREFIMAGESFLAG not set; quitting...")
+    exit(64)
+
+make_refimages_flag = eval(make_refimages_flag_str)
+
+if make_refimages_flag:
+    stage_label = "StageOne"
+else:
+    stage_label = "StageTwo"
+
 
 # Read input parameters from .ini file.
 
@@ -163,7 +177,7 @@ def run_single_core_job(jids,log_fnames,index_thread):
 
     print("index_thread,njobs =",index_thread,njobs)
 
-    thread_work_file = swname.replace(".py","_thread") + str(index_thread) + ".out"
+    thread_work_file = swname.replace(".py",f"_{stage_label}_thread") + str(index_thread) + ".out"
 
     try:
         fh = open(thread_work_file, 'w', encoding="utf-8")
@@ -783,6 +797,13 @@ def execute_parallel_processes(jids,log_filenames,num_cores=None):
         for i, future in enumerate(as_completed(futures)):
             index = futures.index(future)  # Find the original index/order of the completed future
             print(f"Completed: {i+1} processes, lastly for index={index}")
+
+    for future in futures:
+        index = futures.index(future)
+        try:
+            print(future.result())
+        except Exception as e:
+            print(f"*** Error in thread index {index} = {e}")
 
 
 #-------------------------------------------------------------------------------------------------------------
