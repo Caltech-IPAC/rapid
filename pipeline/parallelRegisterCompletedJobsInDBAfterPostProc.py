@@ -280,6 +280,7 @@ def run_single_core_job(jids,log_fnames,index_thread):
                 tokens = re.split(r'\s*=\s*',line)
                 job_exitcode = tokens[1]
 
+        file.close()
 
         # Try to download product config file, in order to harvest some of its metadata.
         # This may be unsuccessful if the pipeline failed.
@@ -404,7 +405,8 @@ def run_single_core_job(jids,log_fnames,index_thread):
 
         # Update Jobs record.
 
-        fh.write(f"For Jobs record: started,ended = {started},{ended}\n")
+        fh.write(f"For Jobs record: jid_post_proc,job_exitcode,aws_batch_job_id,started,ended = " +\
+                 f"{jid_post_proc},{job_exitcode},{aws_batch_job_id},{started},{ended}\n")
 
         dbh.end_job(jid_post_proc,job_exitcode,aws_batch_job_id,started,ended)
 
@@ -443,6 +445,13 @@ def execute_parallel_processes(jids,log_filenames,num_cores=None):
         for i, future in enumerate(as_completed(futures)):
             index = futures.index(future)  # Find the original index/order of the completed future
             print(f"Completed: {i+1} processes, lastly for index={index}")
+
+    for future in futures:
+        index = futures.index(future)
+        try:
+            print(future.result())
+        except Exception as e:
+            print(f"*** Error in thread index {index} = {e}")
 
 
 #-------------------------------------------------------------------------------------------------------------
