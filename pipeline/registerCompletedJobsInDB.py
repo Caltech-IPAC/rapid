@@ -293,6 +293,8 @@ if __name__ == '__main__':
                     tokens = re.split(r'\s*=\s*',line)
                     started_str = tokens[1].replace(" PT","")
 
+            file.close()
+
 
             # Try to download product config file, in order to harvest some of its metadata.
             # This may be unsuccessful if the pipeline failed.

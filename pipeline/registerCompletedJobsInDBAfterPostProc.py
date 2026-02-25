@@ -277,6 +277,8 @@ if __name__ == '__main__':
                 tokens = re.split(r'\s*=\s*',line)
                 job_exitcode = tokens[1]
 
+        file.close()
+
 
         # Try to download product config file, in order to harvest some of its metadata.
         # This may be unsuccessful if the pipeline failed.
