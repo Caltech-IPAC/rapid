@@ -1096,8 +1096,8 @@ if __name__ == '__main__':
         fh_lc.write(f"# rfid = Reference-image RAPID-Operations-DB identifier\n")
         fh_lc.write(f"# infobitssci = Processing summary/QA bitwise flags for science image\n";
         fh_lc.write(f"# infobitsref = Processing summary/QA bitwise flags for reference image\n";
-        fh_lc.write(f"# zpmagsci = Photometric zeropoint of science image [mag]\n";
-        fh_lc.write(f"# zpmagref = Photometric zeropoint of reference image [mag]\n";
+        fh_lc.write(f"# zpmagsci = Photometric zero point of science image [mag]\n";
+        fh_lc.write(f"# zpmagref = Photometric zero point of reference image [mag]\n";
         fh_lc.write(f"# psfflux = PSF-fit flux [DN/s]\n")
         fh_lc.write(f"# psffluxunc = One-sigma uncertainty in psfflux [DN/s]\n")
         fh_lc.write(f"# psfsnr = Signal-to-noise ratio for psfflux measurement\n")
