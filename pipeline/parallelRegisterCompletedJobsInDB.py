@@ -156,10 +156,12 @@ signal.signal(signal.SIGQUIT, signal_handler)
 # Open database connections for parallel access.
 
 
-num_cores = os.getenv('NUMCORES')
+num_cores_str = os.getenv('NUMCORES')
 
-if num_cores is None:
+if num_cores_str is None:
     num_cores = os.cpu_count()
+else:
+    num_cores = int(num_cores_str)
 
 dbh_list = []
 
