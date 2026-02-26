@@ -657,10 +657,10 @@ if __name__ == '__main__':
 
                 # Difference image.
 
+                zogy_output_diffimage_file = zogy_output_diffimage_file.replace(".fits","_masked.fits")
+
                 print("===> zogy_output_diffimage_file =",zogy_output_diffimage_file)
                 print("===> product_bucket_object.key =",product_bucket_object.key)
-
-                zogy_output_diffimage_file = zogy_output_diffimage_file.replace(".fits","_masked.fits")
 
                 if zogy_output_diffimage_file in product_bucket_object.key:
 

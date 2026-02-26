@@ -661,10 +661,10 @@ def run_single_core_job(jids,log_fnames,index_thread):
 
             # Difference image.
 
+            zogy_output_diffimage_file = zogy_output_diffimage_file.replace(".fits","_masked.fits")
+
             fh.write(f"===> zogy_output_diffimage_file = {zogy_output_diffimage_file}\n")
             fh.write(f"===> product_bucket_object.key = {product_bucket_object.key}\n")
-
-            zogy_output_diffimage_file = zogy_output_diffimage_file.replace(".fits","_masked.fits")
 
             if zogy_output_diffimage_file in product_bucket_object.key:
 
