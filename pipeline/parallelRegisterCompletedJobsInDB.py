@@ -664,6 +664,8 @@ def run_single_core_job(jids,log_fnames,index_thread):
             fh.write(f"===> zogy_output_diffimage_file = {zogy_output_diffimage_file}\n")
             fh.write(f"===> product_bucket_object.key = {product_bucket_object.key}\n")
 
+            zogy_output_diffimage_file = zogy_output_diffimage_file.replace(".fits","_masked.fits")
+
             if zogy_output_diffimage_file in product_bucket_object.key:
 
                 fh.write("Found in difference image in S3 product bucket: {}\n".format(zogy_output_diffimage_file))

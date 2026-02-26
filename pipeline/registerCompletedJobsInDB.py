@@ -660,6 +660,8 @@ if __name__ == '__main__':
                 print("===> zogy_output_diffimage_file =",zogy_output_diffimage_file)
                 print("===> product_bucket_object.key =",product_bucket_object.key)
 
+                zogy_output_diffimage_file = zogy_output_diffimage_file.replace(".fits","_masked.fits")
+
                 if zogy_output_diffimage_file in product_bucket_object.key:
 
                     print("Found in difference image in S3 product bucket: {}".format(zogy_output_diffimage_file))
