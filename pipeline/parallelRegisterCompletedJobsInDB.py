@@ -687,7 +687,7 @@ def run_single_core_job(jids,log_fnames,index_thread):
                 if zogy_output_diffimage_file_checksum != 'Not found':
 
                     rid_diffimage = product_config_input['ZOGY']['rid']
-                    ppid_diffimage = product_config_input['SCI_IMAGE']['ppid']
+                    ppid_diffimage = product_config_input['ZOGY']['ppid']
 
 
                     rfid_diffimage = product_config_input['ZOGY']['rfid']
