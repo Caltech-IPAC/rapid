@@ -120,7 +120,8 @@ product_s3_bucket_base = config_input['JOB_PARAMS']['product_s3_bucket_base']
 job_config_filename_base = config_input['JOB_PARAMS']['job_config_filename_base']
 product_config_filename_base = config_input['JOB_PARAMS']['product_config_filename_base']
 awaicgen_output_mosaic_image_file = config_input['AWAICGEN']['awaicgen_output_mosaic_image_file']
-zogy_output_diffimage_file = config_input['ZOGY']['zogy_output_diffimage_file']
+zogy_output_diffimage_file_from_config = config_input['ZOGY']['zogy_output_diffimage_file']
+zogy_output_diffimage_file = zogy_output_diffimage_file_from_config.replace(".fits","_masked.fits")
 
 
 # Set signal hander.
@@ -656,8 +657,6 @@ if __name__ == '__main__':
 
 
                 # Difference image.
-
-                zogy_output_diffimage_file = zogy_output_diffimage_file.replace(".fits","_masked.fits")
 
                 print("===> zogy_output_diffimage_file =",zogy_output_diffimage_file)
                 print("===> product_bucket_object.key =",product_bucket_object.key)

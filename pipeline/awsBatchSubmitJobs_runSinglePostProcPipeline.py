@@ -174,7 +174,8 @@ if __name__ == '__main__':
 
     awaicgen_output_mosaic_image_file = config_input['AWAICGEN']['awaicgen_output_mosaic_image_file']
 
-    zogy_output_diffimage_file = config_input['ZOGY']['zogy_output_diffimage_file']
+    zogy_output_diffimage_file_from_config = config_input['ZOGY']['zogy_output_diffimage_file']
+    zogy_output_diffimage_file = zogy_output_diffimage_file_from_config.replace(".fits","_masked.fits")
 
 
     # Populate config-file dictionary for products.
@@ -269,8 +270,6 @@ if __name__ == '__main__':
 
 
         # Difference image.
-
-        zogy_output_diffimage_file = zogy_output_diffimage_file.replace(".fits","_masked.fits")
 
         print("===> zogy_output_diffimage_file =",zogy_output_diffimage_file)
 
