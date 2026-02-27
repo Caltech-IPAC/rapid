@@ -48,6 +48,7 @@ def generateReferenceImage(s3_client,
     n = 0
     jdstart = 999999999.0
     jdend = 0.0
+    total_exptime = 0.0
 
     with open(input_images_csv_filename, newline='') as csvfile:
 
@@ -136,6 +137,8 @@ def generateReferenceImage(s3_client,
             data = hdul[1].data
 
             exptime = hdr["EXPTIME"]
+            total_exptime += exptime
+
             hdr["BUNIT"] = "DN/s"
 
             data_norm = np.array(data) / exptime
@@ -321,6 +324,7 @@ def generateReferenceImage(s3_client,
     generateReferenceImage_return_list.append(jdstart)
     generateReferenceImage_return_list.append(jdend)
     generateReferenceImage_return_list.append(zprefimg)
+    generateReferenceImage_return_list.append(total_exptime)
 
     return generateReferenceImage_return_list
 
@@ -412,7 +416,8 @@ def addKeywordsToReferenceImageHeader(reference_image_filename,
                                       refimage_input_filenames,
                                       jdstart,
                                       jdend,
-                                      zprefimg):
+                                      zprefimg,
+                                      total_refimage_exptime):
 
     hdu_index = 0
 
@@ -436,6 +441,7 @@ def addKeywordsToReferenceImageHeader(reference_image_filename,
     hdr["JDSTART"] = (jdstart,"Obs. JD of earliest image used [days]")
     hdr["JDEND"] = (jdend,"Obs. JD of latest image used [days]")
     hdr["MAGZP"] = (zprefimg,"Zero point of reference image [mag]")
+    hdr["TOTEXPTM"] = (total_refimage_exptime,"Total input-image exposure time [s]")
 
 
     # Add keywords for reference-image input filenames.
