@@ -28,7 +28,7 @@ This is parsed for metadata to load into the RAPID operations database after the
 The input and intermediate files for debugging and final products are listed in the table below.
 The input filenames are unique.
 The product filenames are canonical and predictable: they are the same from
-one science-image case to the next.
+one science-image case to the next in different directories.
 
 .. warning::
     Not all products listed below may be available for a given processing date.
@@ -58,6 +58,9 @@ awaicgen_output_mosaic_refimsexcat.txt                          SourceExtractor 
 awaicgen_output_mosaic_image_resampled.fits                     Reference image, resampled to distortion grid of science image and background subtracted
 awaicgen_output_mosaic_cov_map_resampled.fits                   RefIm coverage map, resampled to distortion grid of science image
 awaicgen_output_mosaic_uncert_image_resampled.fits              RefIm uncertainty image, resampled to distortion grid of science image
+refimage_psfcat.txt                                             RefIm PhotUtils PSF-fit photometry catalog (noniterative) in space-delimited text file
+refimage_psfcat_finder.txt                                      RefIm PhotUtils PSF-fit star-finder catalog (noniterative) in space-delimited text file
+refimage_psfcat.parquet                                         Combined PhotoUtils PSF-fit photometry and star-finder catalogs (noniterative) in parquet format
 bkg_subbed_science_image.fits                                   Science image, background subtracted, direct input to ZOGY
 awaicgen_output_mosaic_image_resampled_gainmatched.fits         Gain-matched reference image, background subtracted, directory input to ZOGY
 awaicgen_output_mosaic_image_resampled_refgainmatchsexcat.txt   SourceExtractor catalog from reference image for gain-matching purposes
