@@ -200,11 +200,11 @@ BUNIT             Reference-image data units [DN/s]
 FIELD             Roman sky-tile number
 FID               RAPID-OPS-DB filter number
 FILTER            Roman filer name
-COV5PERC=         Percentage of reference-image area with coverage depth of at least 5 input images
-NFRAMES =         Total number of input images coadded
-JDSTART =         Observation JD of earliest input image used [days]
-JDEND   =         Observation JD of latest input image used [days]
-MAGZP   =         Zero point of reference image [mag]
+COV5PERC          Percentage of reference-image area with coverage depth of at least 5 input images
+NFRAMES           Total number of input images coadded
+JDSTART           Observation JD of earliest input image used [days]
+JDEND             Observation JD of latest input image used [days]
+MAGZP             Zero point of reference image [mag]
 ================  ==================================================================================
 
 Here is an image-view of the above-mentioned reference image.  Note the areas of uneven coverage,
