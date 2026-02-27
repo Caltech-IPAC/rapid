@@ -100,18 +100,18 @@ Public Access
 To download a RAPID pipeline product, the
 user must construct a URL, knowing the filename in advance, like the following::
 
-    https://rapid-product-files.s3.us-west-2.amazonaws.com/20250927/jid90828/awaicgen_output_mosaic_cov_map.fits
+    https://rapid-product-files.s3.us-west-2.amazonaws.com/20260227/jid90828/awaicgen_output_mosaic_cov_map.fits
 
 For a listing of the latest product files, download the following text file:
 
-:download:`rapid-product-files_20250927.txt <rapid-product-files_20250927.txt>`
+:download:`rapid-product-files_20260227.txt <rapid-product-files_20260227.txt>`
 
 A simple Python script can be written to parse the listing and generate ``wget`` or ``curl`` download commands.
 
 The pipeline log files are also publicly accessible.  There is a log file for each science image processed.
 Here is a template for the log-file URL that corresponds to the above example::
 
-    https://rapid-pipeline-logs.s3.us-west-2.amazonaws.com/20250927/rapid_pipeline_job_20250927_jid90828_log.txt
+    https://rapid-pipeline-logs.s3.us-west-2.amazonaws.com/20260227/rapid_pipeline_job_20260227_jid90828_log.txt
 
 
 Example Reference-Image FITS Header
