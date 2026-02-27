@@ -119,12 +119,14 @@ Example Reference-Image FITS Header
 
 This section lists an example reference-image FITS header to expose the user to the
 various useful metadata contained therein.  The keywords near the end of the listing
-are operations database IDs written to the FITS header by the RAPID post-processing pipeline.
+include operations database IDs written to the FITS header by the RAPID post-processing pipeline.
+
+Note that all reference images are scaled to have a fixed MAGZP of 17.0 mag.
 
 .. code-block::
 
     Image_file = awaicgen_output_mosaic_image.fits
-    Date_time = Wed Apr 09 05:02:28 PDT 2025
+    Date_time = Fri Feb 27 11:36:07 PST 2026
 
     HDU number = 1
 
@@ -135,8 +137,8 @@ are operations database IDs written to the FITS header by the RAPID post-process
     NAXIS2  =                 7000
     COMMENT   FITS (Flexible Image Transport System) format is defined in 'Astronomy
     COMMENT   and Astrophysics', volume 376, page 359; bibcode: 2001A&A...376..359H
-    CRVAL1  =            10.490798 / RA at CRPIX1,CRPIX2, J2000.0 (deg)
-    CRVAL2  =           -44.102325 / Dec at CRPIX1,CRPIX2, J2000.0 (deg)
+    CRVAL1  =             8.887733 / RA at CRPIX1,CRPIX2, J2000.0 (deg)
+    CRVAL2  =           -44.894962 / Dec at CRPIX1,CRPIX2, J2000.0 (deg)
     EQUINOX =               2000.0 / Equinox of WCS, (year)
     CTYPE1  = 'RA---TAN'           / Projection type for axis 1
     CTYPE2  = 'DEC--TAN'           / Projection type for axis 2
@@ -148,47 +150,62 @@ are operations database IDs written to the FITS header by the RAPID post-process
     BITMASK =                    0 / Fatal bitstring mask template
     HISTORY A generic WISE Astronomical Image Coadder, v5.2
     HISTORY Frank J. Masci, fmasci@caltech.edu
-    DATE    = '2025-04-04T15:03:21' / file creation date (YYYY-MM-DDThh:mm:ss UT)
+    DATE    = '2026-02-27T17:41:34Z' / file creation date (YYYY-MM-DDThh:mm:ss UT)
     BUNIT   = 'DN/s    '
-    FIELD   = '5333132 '
-    FID     = '1       '
-    FILTER  = 'F184    '
-    COV5PERC= '51.334797'
-    NFRAMES = '11      '
-    INFIL001= 'Roman_TDS_simple_model_F184_1086_18_lite.fits.gz'
-    INFIL002= 'Roman_TDS_simple_model_F184_1846_12_lite.fits.gz'
-    INFIL003= 'Roman_TDS_simple_model_F184_312_4_lite.fits.gz'
-    INFIL004= 'Roman_TDS_simple_model_F184_1466_15_lite.fits.gz'
-    INFIL005= 'Roman_TDS_simple_model_F184_1471_13_lite.fits.gz'
-    INFIL006= 'Roman_TDS_simple_model_F184_1466_14_lite.fits.gz'
-    INFIL007= 'Roman_TDS_simple_model_F184_317_10_lite.fits.gz'
-    INFIL008= 'Roman_TDS_simple_model_F184_1466_11_lite.fits.gz'
-    INFIL009= 'Roman_TDS_simple_model_F184_317_13_lite.fits.gz'
-    INFIL010= 'Roman_TDS_simple_model_F184_1466_12_lite.fits.gz'
-    INFIL011= 'Roman_TDS_simple_model_F184_312_1_lite.fits.gz'
-    CHECKSUM= '3aE5AZC53aC5AWC5'   / HDU checksum updated 2025-04-07T17:20:20
-    DATASUM = '1546664296'         / data unit checksum updated 2025-04-07T17:20:20
-    RFID    = '17030   '
+    FIELD   =              5364185 / Roman sky-tile number
+    FID     =                    3 / RAPID-OPS-DB filter number
+    FILTER  = 'J129    '
+    COV5PERC=             66.54596
+    NFRAMES =                   14 / Total number of images coadded
+    JDSTART =        2463551.29014 / Obs. JD of earliest image used [days]
+    JDEND   =         2463561.3418 / Obs. JD of latest image used [days]
+    MAGZP   =                 17.0 / Zero point of reference image [mag]
+    INFIL001= 'Roman_TDS_simple_model_J129_57166_16_lite.fits.gz'
+    INFIL002= 'Roman_TDS_simple_model_J129_56386_7_lite.fits.gz'
+    INFIL003= 'Roman_TDS_simple_model_J129_56396_13_lite.fits.gz'
+    INFIL004= 'Roman_TDS_simple_model_J129_57156_3_lite.fits.gz'
+    INFIL005= 'Roman_TDS_simple_model_J129_56771_5_lite.fits.gz'
+    INFIL006= 'Roman_TDS_simple_model_J129_57161_14_lite.fits.gz'
+    INFIL007= 'Roman_TDS_simple_model_J129_56776_10_lite.fits.gz'
+    INFIL008= 'Roman_TDS_simple_model_J129_56781_13_lite.fits.gz'
+    INFIL009= 'Roman_TDS_simple_model_J129_56781_16_lite.fits.gz'
+    INFIL010= 'Roman_TDS_simple_model_J129_56776_11_lite.fits.gz'
+    INFIL011= 'Roman_TDS_simple_model_J129_56776_1_lite.fits.gz'
+    INFIL012= 'Roman_TDS_simple_model_J129_57161_11_lite.fits.gz'
+    INFIL013= 'Roman_TDS_simple_model_J129_56776_2_lite.fits.gz'
+    INFIL014= 'Roman_TDS_simple_model_J129_57161_10_lite.fits.gz'
+    CHECKSUM= 'RFMKTEJHREJHREJH'   / HDU checksum updated 2026-02-27T17:41:36
+    DATASUM = '3996369437'         / data unit checksum updated 2026-02-27T17:41:36
+    RFID    =                72284
     S3BUCKN = 'rapid-product-files'
-    S3OBJPRF= '20250404/jid999/'
+    S3OBJPRF= '20260227/jid90893/'
     RFFILEN = 'awaicgen_output_mosaic_image.fits'
-    INFOBITS= '0       '
-    RFIMVER = '16      '
-    PPID    = '15      '
+    INFOBITS=                    0
+    RFIMVER =                  205
+    PPID    =                   15
     END
 
 
-================  =========================================================================================
+================  ==================================================================================
 FITS Keyword      Definition
-================  =========================================================================================
-RFID              Unique database ID for RefImages table in RAPID operations database
-RFIMVER           Version number of reference image in record of RefImages table.
-PPID              Unique database ID for Pipelines table in RAPID operations database
+================  ==================================================================================
+RFID              Unique RAPID-OPS-DB ID for RefImages table in RAPID operations database
+RFIMVER           Version number of reference image in record of RefImages table
+PPID              Unique RAPID-OPS-DB ID for Pipelines table in RAPID operations database
 S3BUCKN           S3 bucket where reference image is stored
 S3OBJPRF          S3 object prefix where reference image is stored
 RFFILEN           Filename of reference image in S3 bucket
 INFOBITS          Bit-wise FLAGS for special conditions about reference image (TBD)
-================  =========================================================================================
+BUNIT             Reference-image data units [DN/s]
+FIELD             Roman sky-tile number
+FID               RAPID-OPS-DB filter number
+FILTER            Roman filer name
+COV5PERC=         Percentage of reference-image area with coverage depth of at least 5 input images
+NFRAMES =         Total number of input images coadded
+JDSTART =         Observation JD of earliest input image used [days]
+JDEND   =         Observation JD of latest input image used [days]
+MAGZP   =         Zero point of reference image [mag]
+================  ==================================================================================
 
 Here is an image-view of the above-mentioned reference image.  Note the areas of uneven coverage,
 including two blue patches representing NaNs (pixels storing not a number).
