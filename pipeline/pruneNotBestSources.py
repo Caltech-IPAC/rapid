@@ -129,8 +129,8 @@ s3_client = boto3.client('s3')
 def run_single_core_job(sources_table_names,index_thread):
 
     '''
-    Remove records from Sources_<proc_date> database tables associated with sources that are no longer best
-    (vbest=0 in associated Diffimages table).
+    Remove records from Sources_<proc_date>_<sca> database tables associated with sources
+    that are no longer best (vbest=0 in associated Diffimages table).
     '''
 
 
@@ -159,11 +159,6 @@ def run_single_core_job(sources_table_names,index_thread):
     dbh = dbh_list[index_thread]
 
     fh.write(f"\nStart of run_single_core_job: index_thread={index_thread}, dbh={dbh}\n")
-
-
-    # Requires all sources child tables be tied to parent sources table through inheritance.
-
-    sources_tablename = f"sources"
 
 
     # Loop over all sources_<proc_date>_* database tables associated with this thread and prune not-best sources:
@@ -349,13 +344,35 @@ if __name__ == '__main__':
     start_time_benchmark = end_time_benchmark
 
 
-    # Vacuum and analyze sources database tables for given proc_date.
-
-    print("Vacuuming and analyzing all sources_{proc_date}_* database tables...")
+    # Delete empty sources database tables for given proc_date.
+    # Otherwise, vacuum and analyze sources database tables for given proc_date.
 
     for tablename in sources_table_names:
 
-        dbh.vacuum_analyze_table(tablename)
+        query = f"SELECT count(*) FROM {tablename};"
+
+        sql_queries = []
+        sql_queries.append(query)
+        records = dbh.execute_sql_queries(sql_queries,thread_debug)
+
+        sources_child_table_count = records[0][0]
+
+        if sources_child_table_count == 0:
+
+
+            print("Dropping {tablename} database table...")
+
+            query = f"DROP {tablename};"
+
+            sql_queries = []
+            sql_queries.append(query)
+            records = dbh.execute_sql_queries(sql_queries,thread_debug)
+
+        else:
+
+            print("Vacuuming and analyzing {tablename} database table...")
+
+            dbh.vacuum_analyze_table(tablename)
 
 
     # Code-timing benchmark.
