@@ -352,9 +352,13 @@ if __name__ == '__main__':
 
         query = f"SELECT count(*) FROM {tablename};"
 
+        print(f"query = {query}")
+
         sql_queries = []
         sql_queries.append(query)
         records = dbh.execute_sql_queries(sql_queries,debug)
+
+        print(f"records = {records}")
 
         sources_child_table_count = records[0][0]
 
