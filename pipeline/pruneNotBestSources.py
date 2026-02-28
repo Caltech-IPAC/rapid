@@ -353,7 +353,7 @@ if __name__ == '__main__':
 
         sql_queries = []
         sql_queries.append(query)
-        records = dbh.execute_sql_queries(sql_queries,thread_debug)
+        records = dbh.execute_sql_queries(sql_queries,debug)
 
         sources_child_table_count = records[0][0]
 
@@ -366,7 +366,7 @@ if __name__ == '__main__':
 
             sql_queries = []
             sql_queries.append(query)
-            records = dbh.execute_sql_queries(sql_queries,thread_debug)
+            records = dbh.execute_sql_queries(sql_queries,debug)
 
         else:
 
