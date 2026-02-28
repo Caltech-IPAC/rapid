@@ -367,7 +367,7 @@ if __name__ == '__main__':
 
             print("Dropping {tablename} database table...")
 
-            query = f"DROP {tablename};"
+            query = f"DROP TABLE {tablename};"
 
             sql_queries = []
             sql_queries.append(query)
