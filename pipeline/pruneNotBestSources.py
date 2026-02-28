@@ -313,7 +313,8 @@ if __name__ == '__main__':
 
     sources_table_names = []
     for record in records:
-        sources_table_names.append(record)
+        tablename = record[0]
+        sources_table_names.append(tablename)
 
 
     # Code-timing benchmark.
