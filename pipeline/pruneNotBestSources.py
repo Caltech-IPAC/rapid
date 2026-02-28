@@ -170,7 +170,7 @@ def run_single_core_job(sources_table_names,index_thread):
 
     for index_sources_table_names in range(n_sources_table_names):
 
-        index_core = index_field % num_cores
+        index_core = index_sources_table_names % num_cores
         if index_thread != index_core:
             continue
 
