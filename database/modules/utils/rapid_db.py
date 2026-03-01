@@ -3601,3 +3601,36 @@ class RAPIDDB:
             return
 
         return records
+
+
+########################################################################################################
+
+    def delete_astroobject_from_field(self,tablename,aid,debug=0):
+
+        self.exit_code = 0
+
+
+        # Define query.
+
+        query = f"DELETE FROM {tablename} WHERE aid = {aid};"
+
+        if debug == 1:
+            print('query = {}'.format(query))
+
+
+        # Execute query.
+
+        try:
+            self.cur.execute(query)
+
+            if debug == 1:
+                rows_affected = self.cur.rowcount
+                print(f"Deleted: {rows_affected} row")
+
+        except (Exception, psycopg2.DatabaseError) as error:
+            print(f'*** Error deleting {tablename} record (error={error}); skipping...')
+            self.exit_code = 67
+            return
+
+        if self.exit_code == 0:
+            self.conn.commit()           # Commit database transaction
