@@ -885,7 +885,7 @@ if __name__ == '__main__':
         if num_cores == 1:
             run_single_core_job(jids,log_filenames,0)
         else:
-            execute_parallel_processes(jids,log_filenames)
+            execute_parallel_processes(jids,log_filenames,num_cores)
 
 
         # Close database connection.
