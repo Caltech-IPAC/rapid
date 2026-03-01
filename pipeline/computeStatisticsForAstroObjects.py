@@ -288,38 +288,44 @@ def run_single_core_job(fields,index_thread):
                 filtered_decs_list.append(dec)
                 filtered_fluxes_list.append(flux)
 
-            flag1 = False
-            flag2 = False
-            for ra in filtered_ras_list:
-                if ra < 10.0:
-                    flag1 = True
-                elif ra > 350.0:
-                    flag2 = True
+            if nsources == 0:
 
-            if flag1 and flag2:
-                i = 0
+                dbh.delete_astroobject_from_field(astroobjects_tablename,aid,thread_debug)
+
+            else:
+
+                flag1 = False
+                flag2 = False
                 for ra in filtered_ras_list:
-                    if ra > 350.0:
-                        filtered_ras_list[i] -= 360.0
-                    i += 1
+                    if ra < 10.0:
+                        flag1 = True
+                    elif ra > 350.0:
+                        flag2 = True
 
-            meanra = np.mean(filtered_ras_list)
-            meandec = np.mean(filtered_decs_list)
-            meanflux = np.mean(filtered_fluxes_list)
-            stdra = np.std(filtered_ras_list)
-            stddec = np.std(filtered_decs_list)
-            stdflux = np.std(filtered_fluxes_list)
+                if flag1 and flag2:
+                    i = 0
+                    for ra in filtered_ras_list:
+                        if ra > 350.0:
+                            filtered_ras_list[i] -= 360.0
+                        i += 1
 
-            dbh.update_astroobject_statistics(astroobjects_tablename,
-                                              aid,
-                                              meanra,
-                                              stdra,
-                                              meandec,
-                                              stddec,
-                                              meanflux,
-                                              stdflux,
-                                              nsources,
-                                              thread_debug)
+                meanra = np.mean(filtered_ras_list)
+                meandec = np.mean(filtered_decs_list)
+                meanflux = np.mean(filtered_fluxes_list)
+                stdra = np.std(filtered_ras_list)
+                stddec = np.std(filtered_decs_list)
+                stdflux = np.std(filtered_fluxes_list)
+
+                dbh.update_astroobject_statistics(astroobjects_tablename,
+                                                  aid,
+                                                  meanra,
+                                                  stdra,
+                                                  meandec,
+                                                  stddec,
+                                                  meanflux,
+                                                  stdflux,
+                                                  nsources,
+                                                  thread_debug)
 
 
         # Code-timing benchmark.
