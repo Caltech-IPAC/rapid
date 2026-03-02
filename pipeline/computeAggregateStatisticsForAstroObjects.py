@@ -172,7 +172,7 @@ if __name__ == '__main__':
     -----+-----
     (0 rows)
    '''
-    print("Counting astroobjects database tables for all fields...")
+    print("Counting records in merges_<field> database tables for where aid = 13806316 ...")
 
     for field in fields_list:
 
@@ -184,10 +184,14 @@ if __name__ == '__main__':
 
         count_astroobjects_in_table = records[0][0]
 
-        print(f"There are {count_astroobjects_in_table} astoobjects in {tablename} database table.")
-
         if count_astroobjects_in_table >= 1:
+
+            print(f"There are {count_astroobjects_in_table} astoobjects in {tablename} database table.")
             exit(7)
+
+        else:
+
+            print(f"{tablename} database table is empty...")
 
 
 
