@@ -122,7 +122,7 @@ if __name__ == '__main__':
         tablename = f"astroobjects_{field}"
 
         sql_queries = []
-        sql_queries.append(f"select count(*) from pg_tables where schemaname='public' and tablename like 'astroobjects_%';")
+        sql_queries.append(f"select count(*) from {tablename};")
         records = dbh.execute_sql_queries(sql_queries,debug)
 
         count_astroobjects_in_table = records[0][0]
