@@ -236,6 +236,31 @@ def run_single_core_job(fields,index_thread):
                 dbh.delete_merge_from_field(merges_tablename,sid,thread_debug)
 
 
+        # Drop merges_<field> table if empty.
+
+        query = f"SELECT count(*) FROM {merges_tablename};"
+
+        print(f"query = {query}")
+
+        sql_queries = []
+        sql_queries.append(query)
+        records = dbh.execute_sql_queries(sql_queries,thread_debug)
+
+        print(f"records = {records}")
+
+        merges_table_count = records[0][0]
+
+        if merges_table_count == 0:
+
+            print("Dropping {merges_tablename} database table...")
+
+            query = f"DROP TABLE {merges_tablename};"
+
+            sql_queries = []
+            sql_queries.append(query)
+            records = dbh.execute_sql_queries(sql_queries,thread_debug)
+
+
         # Code-timing benchmark.
 
         thread_end_time_benchmark = time.time()
