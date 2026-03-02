@@ -131,7 +131,7 @@ if __name__ == '__main__':
 
         sum += count
 
-    print(f"There is a grand total of {} astoobjects in all AstroObjects database tables.")
+    print(f"There is a grand total of {sum} astoobjects in all AstroObjects database tables.")
 
 
     # Code-timing benchmark.
