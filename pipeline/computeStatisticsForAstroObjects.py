@@ -279,6 +279,7 @@ def run_single_core_job(fields,index_thread):
         thread_end_time_benchmark = time.time()
         diff_time_benchmark = thread_end_time_benchmark - thread_start_time_benchmark
         fh.write(f"Elapsed time in seconds to determine not-best DiffImages database records = {diff_time_benchmark}\n")
+        fh.flush()
         thread_start_time_benchmark = thread_end_time_benchmark
 
 
@@ -425,6 +426,7 @@ def run_single_core_job(fields,index_thread):
 
 
     fh.write(f"\nEnd of run_single_core_job: index_thread={index_thread}\n")
+    fh.flush()
 
     fh.close()
 
