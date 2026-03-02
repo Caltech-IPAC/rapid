@@ -181,6 +181,8 @@ def run_single_core_job(fields,index_thread):
         query = f"SELECT aid FROM {astroobjects_tablename} WHERE aid NOT IN " +\
             f"(SELECT aid FROM {merges_tablename});"
 
+        fh.write(f"query = {query}\n")
+
         sql_queries = []
         sql_queries.append(query)
         records = dbh.execute_sql_queries(sql_queries,thread_debug)
@@ -190,6 +192,14 @@ def run_single_core_job(fields,index_thread):
             aid = records[0][0]
             dbh.delete_astroobject_from_field(astroobjects_tablename,aid,thread_debug)
 
+        # Code-timing benchmark.
+
+        thread_end_time_benchmark = time.time()
+        diff_time_benchmark = thread_end_time_benchmark - thread_start_time_benchmark
+        fh.write(f"Elapsed time in seconds to delete astroobjects records that do not have merges records = {diff_time_benchmark}\n")
+        fh.flush()
+        thread_start_time_benchmark = thread_end_time_benchmark
+
 
         # Process astroobjects records that do indeed have corresponding record(s)
         # in the merges_<field> database table and Sources database table.
@@ -197,6 +207,8 @@ def run_single_core_job(fields,index_thread):
         query = f"SELECT a.aid,a.sid,b.pid,b.ra,b.dec,b.fluxfit FROM {merges_tablename} AS a, " +\
             f"{sources_tablename} AS b " +\
             f"WHERE a.sid = b.sid;"
+
+        fh.write(f"query = {query}\n")
 
         sql_queries = []
         sql_queries.append(query)
@@ -239,6 +251,7 @@ def run_single_core_job(fields,index_thread):
         thread_end_time_benchmark = time.time()
         diff_time_benchmark = thread_end_time_benchmark - thread_start_time_benchmark
         fh.write(f"Elapsed time in seconds to select all records from {merges_tablename} and {sources_tablename} database tables = {diff_time_benchmark}\n")
+        fh.flush()
         thread_start_time_benchmark = thread_end_time_benchmark
 
 
@@ -402,6 +415,7 @@ def run_single_core_job(fields,index_thread):
         thread_end_time_benchmark = time.time()
         diff_time_benchmark = thread_end_time_benchmark - thread_start_time_benchmark
         fh.write(f"Elapsed time in seconds to update statistics in {astroobjects_tablename} database table\n")
+        fh.flush()
         thread_start_time_benchmark = thread_end_time_benchmark
 
 
