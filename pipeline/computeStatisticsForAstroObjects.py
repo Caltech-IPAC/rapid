@@ -175,6 +175,25 @@ def run_single_core_job(fields,index_thread):
         astroobjects_tablename = f"astroobjects_{field}"
 
 
+        # Delete astroobjects records that do not have corresponding record(s)
+        # in the merges_<field> database table.
+
+        query = f"SELECT aid FROM {astroobjects_tablename} WHERE aid NOT IN " +\
+            f"(SELECT aid FROM FROM {merges_tablename});"
+
+        sql_queries = []
+        sql_queries.append(query)
+        records = dbh.execute_sql_queries(sql_queries,thread_debug)
+
+        for record in records:
+
+            aid = records[0][0]
+            dbh.delete_astroobject_from_field(astroobjects_tablename,aid,thread_debug)
+
+
+        # Process astroobjects records that do indeed have corresponding record(s)
+        # in the merges_<field> database table and Sources database table.
+
         query = f"SELECT a.aid,a.sid,b.pid,b.ra,b.dec,b.fluxfit FROM {merges_tablename} AS a, " +\
             f"{sources_tablename} AS b " +\
             f"WHERE a.sid = b.sid;"
@@ -326,6 +345,56 @@ def run_single_core_job(fields,index_thread):
                                                   stdflux,
                                                   nsources,
                                                   thread_debug)
+
+
+        # Drop astroobjects_<field> database table if empty.
+
+        query = f"SELECT count(*) FROM {astroobjects_tablename};"
+
+        print(f"query = {query}")
+
+        sql_queries = []
+        sql_queries.append(query)
+        records = dbh.execute_sql_queries(sql_queries,thread_debug)
+
+        print(f"records = {records}")
+
+        astroobjects_table_count = records[0][0]
+
+        if astroobjects_table_count == 0:
+
+            print("Dropping {astroobjects_tablename} database table...")
+
+            query = f"DROP TABLE {astroobjects_tablename};"
+
+            sql_queries = []
+            sql_queries.append(query)
+            records = dbh.execute_sql_queries(sql_queries,thread_debug)
+
+
+        # Drop merges_<field> database table if empty.
+
+        query = f"SELECT count(*) FROM {merges_tablename};"
+
+        print(f"query = {query}")
+
+        sql_queries = []
+        sql_queries.append(query)
+        records = dbh.execute_sql_queries(sql_queries,thread_debug)
+
+        print(f"records = {records}")
+
+        merges_table_count = records[0][0]
+
+        if merges_table_count == 0:
+
+            print("Dropping {merges_tablename} database table...")
+
+            query = f"DROP TABLE {merges_tablename};"
+
+            sql_queries = []
+            sql_queries.append(query)
+            records = dbh.execute_sql_queries(sql_queries,thread_debug)
 
 
         # Code-timing benchmark.
