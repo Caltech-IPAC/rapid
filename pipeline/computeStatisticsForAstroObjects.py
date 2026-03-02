@@ -351,19 +351,19 @@ def run_single_core_job(fields,index_thread):
 
         query = f"SELECT count(*) FROM {astroobjects_tablename};"
 
-        print(f"query = {query}")
+        fh.write(f"query = {query}\n")
 
         sql_queries = []
         sql_queries.append(query)
         records = dbh.execute_sql_queries(sql_queries,thread_debug)
 
-        print(f"records = {records}")
+        fh.write(f"records = {records}\n")
 
         astroobjects_table_count = records[0][0]
 
         if astroobjects_table_count == 0:
 
-            print("Dropping {astroobjects_tablename} database table...")
+            fh.write(f"Dropping {astroobjects_tablename} database table...\n")
 
             query = f"DROP TABLE {astroobjects_tablename};"
 
@@ -376,19 +376,19 @@ def run_single_core_job(fields,index_thread):
 
         query = f"SELECT count(*) FROM {merges_tablename};"
 
-        print(f"query = {query}")
+        fh.write(f"query = {query}\n")
 
         sql_queries = []
         sql_queries.append(query)
         records = dbh.execute_sql_queries(sql_queries,thread_debug)
 
-        print(f"records = {records}")
+        fh.write(f"records = {records}\n")
 
         merges_table_count = records[0][0]
 
         if merges_table_count == 0:
 
-            print("Dropping {merges_tablename} database table...")
+            fh.write("Dropping {merges_tablename} database table...\n")
 
             query = f"DROP TABLE {merges_tablename};"
 
