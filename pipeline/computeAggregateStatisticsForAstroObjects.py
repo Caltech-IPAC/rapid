@@ -137,6 +137,8 @@ if __name__ == '__main__':
 
         sum += count_astroobjects_in_table
 
+    sum = int(sum)
+
     print(f"There is a grand total of {sum} astoobjects in all AstroObjects database tables.")
 
 
@@ -146,6 +148,50 @@ if __name__ == '__main__':
     print("Elapsed time in seconds to count all astroobjects database tables =",
         end_time_benchmark - start_time_benchmark)
     start_time_benchmark = end_time_benchmark
+
+
+
+
+
+    '''
+    Test code for the following:
+
+    fakesourcesdb=> select * from astroobjects_5257277;
+       aid    |        ra0        |        dec0        |  flux0   |      meanra       | stdevra |      meandec       | stdevdec | meanflux | stdevflux | nsources |  field  |  hp6  |   hp9
+    ----------+-------------------+--------------------+----------+-------------------+---------+--------------------+----------+----------+-----------+----------+---------+-------+---------
+     13806316 | 9.471188013414718 | -42.23346195294582 | 1.592923 | 9.471188013414718 |       0 | -42.23346195294582 |        0 | 1.592923 |         0 |        1 | 5257277 | 35476 | 2270521
+    (1 row)
+
+    fakesourcesdb=> select * from merges_5257277 where aid = 13806316;
+     aid | sid
+    -----+-----
+    (0 rows)
+
+    fakesourcesdb=> select * from merges_5257277 order by aid;
+     aid | sid
+    -----+-----
+    (0 rows)
+   '''
+    print("Counting astroobjects database tables for all fields...")
+
+    for field in fields_list:
+
+        tablename = f"merges_{field}"
+
+        sql_queries = []
+        sql_queries.append(f"select count(*) from {tablename} where aid = 13806316;")
+        records = dbh.execute_sql_queries(sql_queries,query_debug)
+
+        count_astroobjects_in_table = records[0][0]
+
+        print(f"There are {count_astroobjects_in_table} astoobjects in {tablename} database table.")
+
+        if count_astroobjects_in_table >= 1:
+            exit(7)
+
+
+
+
 
 
     # Code-timing benchmark overall.
