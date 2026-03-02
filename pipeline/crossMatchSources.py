@@ -210,6 +210,8 @@ def run_single_core_job_stage_1_crossmatching(scas,fields,index_thread):
 
         field = fields[index_field]
 
+        astroobjects_tablename = f"astroobjects_{field}"
+        merges_tablename = f"merges_{field}"
 
         fh.write(f"Loop start: index_field,field = {index_field},{field}\n")
 
@@ -219,9 +221,6 @@ def run_single_core_job_stage_1_crossmatching(scas,fields,index_thread):
         # 1. Cross-match each source in the field with the AstroObjects_<field> table.
         # 2. If there is no match, then create a new AstroObjects_<field> record.
         # 3. Register a Merges_<field> record to associate astroobject with source
-
-        astroobjects_tablename = f"astroobjects_{field}"
-        merges_tablename = f"merges_{field}"
 
         for sca in scas:
 
@@ -416,6 +415,9 @@ def run_single_core_job_stage_2_crossmatching(scas,fields,index_thread):
 
         field = fields[index_field]
 
+        astroobjects_tablename = f"astroobjects_{field}"
+        merges_tablename = f"merges_{field}"
+
 
         # Cross-match the current AstroObjects_<field> table with sources in all adjacent fields.
         # Field boundaries are infinitesimally thin lines, and the match radius can extend across them.
@@ -479,9 +481,6 @@ def run_single_core_job_stage_2_crossmatching(scas,fields,index_thread):
             # 1. Cross-match each source in an adjacent field with the AstroObjects_<field> table.
             # 2. Speed it up by restricting cross-matching within the inclusion radius.
             # 3. Register Merges_<field> records for cross-matches.
-
-            astroobjects_tablename = f"astroobjects_{field}"
-            merges_tablename = f"merges_{field}"
 
             for sca in scas:
 
