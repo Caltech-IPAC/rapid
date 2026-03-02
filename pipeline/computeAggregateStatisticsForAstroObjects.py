@@ -180,7 +180,7 @@ if __name__ == '__main__':
 
         sql_queries = []
         sql_queries.append(f"select count(*) from {tablename} where aid = 13806316;")
-        records = dbh.execute_sql_queries(sql_queries,query_debug)
+        records = dbh.execute_sql_queries(sql_queries,0)
 
         count_astroobjects_in_table = records[0][0]
 
