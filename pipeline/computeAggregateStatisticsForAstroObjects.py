@@ -31,9 +31,15 @@ print("swvers =", swvers)
 print("cfg_filename_only =", cfg_filename_only)
 
 
+# Set debug = 1 here to get debug messages for creating and setting up Merges and AstroObjects tables.
+
+query_debug = 1
+
+
 # Compute start time for benchmark.
 
 start_time_benchmark = time.time()
+start_time_benchmark_at_start = start_time_benchmark
 
 
 # Read environment variables.
@@ -94,7 +100,7 @@ if __name__ == '__main__':
 
     sql_queries = []
     sql_queries.append(f"select tablename from pg_tables where schemaname='public' and tablename like 'astroobjects_%';")
-    records = dbh.execute_sql_queries(sql_queries,debug)
+    records = dbh.execute_sql_queries(sql_queries,query_debug)
 
     fields_list = []
     for record in records:
@@ -123,7 +129,7 @@ if __name__ == '__main__':
 
         sql_queries = []
         sql_queries.append(f"select count(*) from {tablename};")
-        records = dbh.execute_sql_queries(sql_queries,debug)
+        records = dbh.execute_sql_queries(sql_queries,query_debug)
 
         count_astroobjects_in_table = records[0][0]
 
