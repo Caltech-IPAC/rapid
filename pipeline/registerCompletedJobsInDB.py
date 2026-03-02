@@ -1,7 +1,6 @@
 import sys
 import os
 import ast
-import signal
 import configparser
 import boto3
 from botocore.exceptions import ClientError
