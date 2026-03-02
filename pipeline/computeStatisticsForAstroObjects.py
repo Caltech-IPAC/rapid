@@ -179,7 +179,7 @@ def run_single_core_job(fields,index_thread):
         # in the merges_<field> database table.
 
         query = f"SELECT aid FROM {astroobjects_tablename} WHERE aid NOT IN " +\
-            f"(SELECT aid FROM FROM {merges_tablename});"
+            f"(SELECT aid FROM {merges_tablename});"
 
         sql_queries = []
         sql_queries.append(query)
