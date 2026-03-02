@@ -129,7 +129,7 @@ if __name__ == '__main__':
 
         print(f"There are {count_astroobjects_in_table} astoobjects in {tablename} database table.")
 
-        sum += count
+        sum += count_astroobjects_in_table
 
     print(f"There is a grand total of {sum} astoobjects in all AstroObjects database tables.")
 
