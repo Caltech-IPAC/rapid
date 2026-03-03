@@ -174,9 +174,18 @@ class RAPIDDB:
         old_isolation_level = self.conn.isolation_level
         self.conn.set_isolation_level(psycopg2.extensions.ISOLATION_LEVEL_AUTOCOMMIT)
         query = f"VACUUM ANALYZE {tablename};"
-        self._doQuery(query)
-        self.conn.set_isolation_level(old_isolation_level)
 
+        try:
+
+            self._doQuery(query)
+            self.conn.set_isolation_level(old_isolation_level)
+
+        except Exception as e:
+
+            print(f"*** Error in method vacuum_analyze_table: {e}")
+
+
+        return
 
 ########################################################################################################
 
