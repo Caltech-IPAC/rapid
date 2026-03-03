@@ -3017,6 +3017,7 @@ class RAPIDDB:
             except (Exception, psycopg2.DatabaseError) as error:
                 print(f"*** Error executing query ({query}): {error}; quitting...")
                 self.exit_code = 67
+                self.conn.rollback()           # Rollback database transaction
                 return
 
         if self.exit_code == 0:
