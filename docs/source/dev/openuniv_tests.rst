@@ -1206,7 +1206,7 @@ AstroObjects_<fields> database tables, for all fields of the sources, was done.
 The elapsed time to cross-match all sources was 3.39 hours with 8 parallel processes.
 This includes cross-matching across field boundaries for sources near field edges.
 A match radius of 0.1 arcsec (a Roman WFI pixel) was used.
-There were 4,393,541 AstroObjects records and 66,449,889 Merges records loaded
+There were 4,393,124 AstroObjects records and 66,449,889 Merges records loaded
 into the PostgreSQL database.  Of those merges (a.k.a. lightcurve data points), 16,307 merges
 resulted from cross-matching across field boundaries (i.e., the match radius can extend
 across a field boundary), which is an increase of 0.02454% in terms of number of merges.
@@ -1217,7 +1217,11 @@ no associated sources are deleted.
 The AstroObjects_<fields> database tables are explicitly vacuumed and analyzed at the end of this process.
 For this test, all of this took 11.75 minutes with 8 parallel processes.
 
-It took 10.4 hours to delete non-best Merges_<fields> records with 8 parallel processes.
+It took 10.4 hours to delete non-best Merges_<fields> records with 8 parallel processes,
+which also included vacuuming and analyzing all Merges_<fields> database tables.
+The likely reason this process took so long to execute is that the cross-matching step
+was executed several times during testing/debugging on the same input data, which
+created many multiple redundant records.
 
-Elapsed time in seconds to delete all not-best sources in sources_20250927_* database tables = 1975.3547887802124
+It took 33 minutes to delete all not-best records in sources_20250927_* database tables
 with 8 parallel processes.
