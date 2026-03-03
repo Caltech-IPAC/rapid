@@ -524,9 +524,28 @@ if __name__ == '__main__':
     start_time_benchmark = end_time_benchmark
 
 
-    # Vacuum and analyze astroobjects database tables for all fields.
+    # Create indexes on all astroobjects_<field> database tables.
 
-    print("Vacuuming and analyzing astroobjects database tables for all fields...")
+    print("Creating indexes on all astroobjects_<field> database tables...")
+
+    sql_queries = []
+    sql_queries.append("SET default_tablespace = pipeline_indx_01;")
+
+    for field in fields_list:
+
+        tablename = f"astroobjects_{field}"
+
+        sql_queries.append(f"CREATE INDEX {tablename}_meanradec_idx ON {tablename} (q3c_ang2ipix(meanra, meandec0));")
+        sql_queries.append(f"ALTER TABLE {tablename} SET LOGGED;")
+        sql_queries.append(f"CLUSTER {tablename}_meanradec_idx ON {tablename};")
+        sql_queries.append(f"ANALYZE {tablename};")
+
+    dbh.execute_sql_queries(sql_queries,debug)
+
+
+    # Vacuum and analyze astroobjects_<field> database tables for all fields.
+
+    print("Vacuuming and analyzing astroobjects_<field> database tables for all fields...")
 
     for field in fields_list:
 
