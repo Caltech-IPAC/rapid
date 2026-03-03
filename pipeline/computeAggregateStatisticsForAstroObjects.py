@@ -170,7 +170,7 @@ if __name__ == '__main__':
         records = dbh.execute_sql_queries(sql_queries,query_debug)
 
         try:
-            count_merges_in_table = records[0][0]     # Do not catch exception; handle manually.
+            count_merges_in_table = records[0][0]     # Handle exception manually.
 
             print(f"There are {count_merges_in_table} records in {tablename} database table.")
 
@@ -180,13 +180,9 @@ if __name__ == '__main__':
 
             astroobjects_tablename = f"astroobjects_{field}"
 
-            print(f"Dropping {astroobjects_tablename} database table...")
-
             query = f"DROP TABLE {astroobjects_tablename};"
 
-            sql_queries = []
-            sql_queries.append(query)
-            records = dbh.execute_sql_queries(sql_queries,query_debug)
+            print(f"{query}")
 
 
     sum = int(sum)
