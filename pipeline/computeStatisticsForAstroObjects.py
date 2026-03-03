@@ -492,7 +492,7 @@ if __name__ == '__main__':
 
     fields_list = []
     for record in records:
-        field = record[0].replace("merges_","")
+        field = record[0].replace("astroobjects_","")
         fields_list.append(field)
 
 
