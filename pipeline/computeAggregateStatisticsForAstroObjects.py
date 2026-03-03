@@ -133,13 +133,13 @@ if __name__ == '__main__':
 
         count_astroobjects_in_table = records[0][0]
 
-        print(f"There are {count_astroobjects_in_table} astoobjects in {tablename} database table.")
+        print(f"There are {count_astroobjects_in_table} astroobjects in {tablename} database table.")
 
         sum += count_astroobjects_in_table
 
     sum = int(sum)
 
-    print(f"There is a grand total of {sum} astoobjects in all AstroObjects_<field> database tables.")
+    print(f"There is a grand total of {sum} astroobjects in all AstroObjects_<field> database tables.")
 
     n_astroobjects_tables = len(fields_list)
 
