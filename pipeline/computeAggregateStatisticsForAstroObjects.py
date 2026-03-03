@@ -131,7 +131,7 @@ if __name__ == '__main__':
         sql_queries.append(f"select count(*) from {tablename};")
         records = dbh.execute_sql_queries(sql_queries,query_debug)
 
-        count_astroobjects_in_table = records[0][0]
+        count_astroobjects_in_table = records[0][0]     # Do not catch exception; handle manually.
 
         print(f"There are {count_astroobjects_in_table} records in {tablename} database table.")
 
@@ -169,11 +169,23 @@ if __name__ == '__main__':
         sql_queries.append(f"select count(*) from {tablename};")
         records = dbh.execute_sql_queries(sql_queries,query_debug)
 
-        count_merges_in_table = records[0][0]
+        try:
+            count_merges_in_table = records[0][0]     # Do not catch exception; handle manually.
 
-        print(f"There are {count_merges_in_table} records in {tablename} database table.")
+            print(f"There are {count_merges_in_table} records in {tablename} database table.")
 
-        sum += count_merges_in_table
+            sum += count_merges_in_table
+
+        except:
+
+            fh.write(f"Dropping {astroobjects_tablename} database table...\n")
+
+            query = f"DROP TABLE {astroobjects_tablename};"
+
+            sql_queries = []
+            sql_queries.append(query)
+            records = dbh.execute_sql_queries(sql_queries,thread_debug)
+
 
     sum = int(sum)
 
