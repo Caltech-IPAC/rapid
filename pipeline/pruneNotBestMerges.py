@@ -240,7 +240,7 @@ def run_single_core_job(fields,index_thread):
 
         thread_end_time_benchmark = time.time()
         diff_time_benchmark = thread_end_time_benchmark - thread_start_time_benchmark
-        fh.write(f"Elapsed time in seconds to delete not-best record(s) from {merges_tablename} database table\n")
+        fh.write(f"Elapsed time in seconds to delete not-best record(s) from {merges_tablename} database table = {diff_time_benchmark}\\n")
         thread_start_time_benchmark = thread_end_time_benchmark
 
 
