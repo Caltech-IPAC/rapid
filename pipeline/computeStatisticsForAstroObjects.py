@@ -170,6 +170,7 @@ def run_single_core_job(fields,index_thread):
 
 
         fh.write(f"Loop start: index_field,field = {index_field},{field}\n")
+        fh.flush()
 
         merges_tablename = f"merges_{field}"
         astroobjects_tablename = f"astroobjects_{field}"
@@ -182,6 +183,7 @@ def run_single_core_job(fields,index_thread):
             f"(SELECT aid FROM {merges_tablename});"
 
         fh.write(f"query = {query}\n")
+        fh.flush()
 
         sql_queries = []
         sql_queries.append(query)
@@ -190,6 +192,10 @@ def run_single_core_job(fields,index_thread):
         for record in records:
 
             aid = records[0][0]
+
+            fh.write(f"Deleting record for aid = {aid} in {astroobjects_tablename} database table...\n")
+            fh.flush()
+
             dbh.delete_astroobject_from_field(astroobjects_tablename,aid,thread_debug)
 
         # Code-timing benchmark.
@@ -418,6 +424,7 @@ def run_single_core_job(fields,index_thread):
         # End of loop over fields.
 
         fh.write(f"Loop end: index_field,field = {index_field},{field}\n")
+        fh.flush()
 
 
     fh.write(f"\nEnd of run_single_core_job: index_thread={index_thread}\n")
@@ -474,7 +481,7 @@ if __name__ == '__main__':
         exit(dbh.exit_code)
 
     sql_queries = []
-    sql_queries.append(f"select tablename from pg_tables where schemaname='public' and tablename like 'merges_%';")
+    sql_queries.append(f"select tablename from pg_tables where schemaname='public' and tablename like 'astroobjects_%';")
     records = dbh.execute_sql_queries(sql_queries,debug)
 
     fields_list = []
