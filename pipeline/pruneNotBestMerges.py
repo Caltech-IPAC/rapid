@@ -224,6 +224,8 @@ def run_single_core_job(fields,index_thread):
 
         # Check each source is associated with a not-best DiffImages record.
 
+        n_deleted = 0
+
         for sid,pid in zip(sids_list,pids_list):
 
             vbest = vbest_dict[pid]
@@ -234,13 +236,14 @@ def run_single_core_job(fields,index_thread):
                 # Source is not best, so delete Merges_<field> record.
 
                 dbh.delete_merge_from_field(merges_tablename,sid,thread_debug)
+                n_deleted += 1
 
 
         # Code-timing benchmark.
 
         thread_end_time_benchmark = time.time()
         diff_time_benchmark = thread_end_time_benchmark - thread_start_time_benchmark
-        fh.write(f"Elapsed time in seconds to delete not-best record(s) from {merges_tablename} database table = {diff_time_benchmark}\\n")
+        fh.write(f"Elapsed time in seconds to delete {n_deleted} not-best record(s) from {merges_tablename} database table = {diff_time_benchmark}\\n")
         thread_start_time_benchmark = thread_end_time_benchmark
 
 
