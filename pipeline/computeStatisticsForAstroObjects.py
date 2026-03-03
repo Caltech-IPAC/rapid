@@ -179,8 +179,14 @@ def run_single_core_job(fields,index_thread):
         # Delete astroobjects records that do not have corresponding record(s)
         # in the merges_<field> database table.
 
-        query = f"SELECT aid FROM {astroobjects_tablename} WHERE aid NOT IN " +\
-            f"(SELECT aid FROM {merges_tablename});"
+        #query = f"SELECT aid FROM {astroobjects_tablename} WHERE aid NOT IN " +\
+        #    f"(SELECT aid FROM {merges_tablename});"
+
+        # This query is much more efficient than the above.
+        query = f"SELECT a.aid " +\
+                f"FROM {astroobjects_tablename} a " +\
+                f"LEFT JOIN {merges_tablename} b ON a.aid = b.aid " +\
+                f"WHERE b.aid IS NULL;"
 
         fh.write(f"query = {query}\n")
         fh.flush()
