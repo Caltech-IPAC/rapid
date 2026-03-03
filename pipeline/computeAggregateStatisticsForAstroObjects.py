@@ -182,6 +182,7 @@ if __name__ == '__main__':
 
             query = f"DROP TABLE {astroobjects_tablename};"
 
+            print(f"Need to manually execute the following to clean up the database:")
             print(f"{query}")
 
 
