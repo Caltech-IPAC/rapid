@@ -178,6 +178,8 @@ if __name__ == '__main__':
 
         except:
 
+            astroobjects_tablename = f"astroobjects_{field}"
+
             fh.write(f"Dropping {astroobjects_tablename} database table...\n")
 
             query = f"DROP TABLE {astroobjects_tablename};"
