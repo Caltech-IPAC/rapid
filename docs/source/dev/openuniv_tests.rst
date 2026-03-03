@@ -1137,9 +1137,9 @@ applying sub-pixel offsets to the reference image,
 injecting fake sources, and generating PhotUtils catalogs are the dominant factors
 affecting pipeline performance.
 
-=================================================================  =====================
+=================================================================  =====================:
 Pipeline step                                                      Execution time (sec)
-=================================================================  =====================
+=================================================================  =====================:
 Downloading science image                                             0.587
 Uloading science image to product S3 bucket                           0.400
 Downloading or generating reference image                           333.833
@@ -1176,7 +1176,7 @@ Generating PSF-fit catalog on negative naive difference image        12.546
 Uploading PSF-fit catalogs for naive difference images                1.730
 Uploading products at pipeline end to S3 product bucket               0.036
 Total time to run one instance of science pipeline                  849.093
-=================================================================  =====================
+=================================================================  =====================:
 
 Typically only 1-4 science images in an exposure were processed in the 5,538 exposures covered by this test.
 Here is a breakdown of the number of science images processed per filter in this test:
