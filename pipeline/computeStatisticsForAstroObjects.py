@@ -361,7 +361,7 @@ def run_single_core_job(fields,index_thread):
                                                   thread_debug)
 
 
-        # Drop astroobjects_<field> database table if empty.
+        # Drop astroobjects_<field> and merges_<field> database tables if either are empty.
 
         query = f"SELECT count(*) FROM {astroobjects_tablename};"
 
@@ -373,20 +373,7 @@ def run_single_core_job(fields,index_thread):
 
         fh.write(f"records = {records}\n")
 
-        astroobjects_table_count = records[0][0]
-
-        if astroobjects_table_count == 0:
-
-            fh.write(f"Dropping {astroobjects_tablename} database table...\n")
-
-            query = f"DROP TABLE {astroobjects_tablename};"
-
-            sql_queries = []
-            sql_queries.append(query)
-            records = dbh.execute_sql_queries(sql_queries,thread_debug)
-
-
-        # Drop merges_<field> database table if empty.
+        astroobjects_table_count = records[0][0]    # Do not catch exception; handle manually.
 
         query = f"SELECT count(*) FROM {merges_tablename};"
 
@@ -398,9 +385,17 @@ def run_single_core_job(fields,index_thread):
 
         fh.write(f"records = {records}\n")
 
-        merges_table_count = records[0][0]
+        merges_table_count = records[0][0]    # Do not catch exception; handle manually.
 
-        if merges_table_count == 0:
+        if (astroobjects_table_count == 0) or (merges_table_count == 0):
+
+            fh.write(f"Dropping {astroobjects_tablename} database table...\n")
+
+            query = f"DROP TABLE {astroobjects_tablename};"
+
+            sql_queries = []
+            sql_queries.append(query)
+            records = dbh.execute_sql_queries(sql_queries,thread_debug)
 
             fh.write("Dropping {merges_tablename} database table...\n")
 
