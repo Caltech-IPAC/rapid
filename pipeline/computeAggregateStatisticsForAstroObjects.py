@@ -139,7 +139,11 @@ if __name__ == '__main__':
 
     sum = int(sum)
 
-    print(f"There is a grand total of {sum} astoobjects in all AstroObjects database tables.")
+    print(f"There is a grand total of {sum} astoobjects in all AstroObjects_<field> database tables.")
+
+    n_astroobjects_tables = len(fields_list)
+
+    print(f"There are {n_astroobjects_tables} AstroObjects_<field> database tables.")
 
 
     # Code-timing benchmark.
