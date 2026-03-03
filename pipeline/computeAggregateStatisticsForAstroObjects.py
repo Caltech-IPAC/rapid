@@ -133,17 +133,17 @@ if __name__ == '__main__':
 
         count_astroobjects_in_table = records[0][0]
 
-        print(f"There are {count_astroobjects_in_table} astroobjects in {tablename} database table.")
+        print(f"There are {count_astroobjects_in_table} records in {tablename} database table.")
 
         sum += count_astroobjects_in_table
 
     sum = int(sum)
 
-    print(f"There is a grand total of {sum} astroobjects in all AstroObjects_<field> database tables.")
+    print(f"There is a grand total of {sum} records in all astroobjects_<field> database tables.")
 
     n_astroobjects_tables = len(fields_list)
 
-    print(f"There are {n_astroobjects_tables} AstroObjects_<field> database tables.")
+    print(f"There are {n_astroobjects_tables} astroobjects_<field> database tables.")
 
 
     # Code-timing benchmark.
@@ -154,6 +154,42 @@ if __name__ == '__main__':
     start_time_benchmark = end_time_benchmark
 
 
+    # Count number of merges database tables for all fields.
+    # Obtain a grand total.
+
+    print("Counting merges database tables for all fields...")
+
+    sum = 0.0
+
+    for field in fields_list:
+
+        tablename = f"merges_{field}"
+
+        sql_queries = []
+        sql_queries.append(f"select count(*) from {tablename};")
+        records = dbh.execute_sql_queries(sql_queries,query_debug)
+
+        count_merges_in_table = records[0][0]
+
+        print(f"There are {count_merges_in_table} records in {tablename} database table.")
+
+        sum += count_merges_in_table
+
+    sum = int(sum)
+
+    print(f"There is a grand total of {sum} records in all merges_<field> database tables.")
+
+    n_merges_tables = len(fields_list)
+
+    print(f"There are {n_merges_tables} merges_<field> database tables.")
+
+
+    # Code-timing benchmark.
+
+    end_time_benchmark = time.time()
+    print("Elapsed time in seconds to count all merges database tables =",
+        end_time_benchmark - start_time_benchmark)
+    start_time_benchmark = end_time_benchmark
 
 
 
@@ -175,7 +211,8 @@ if __name__ == '__main__':
      aid | sid
     -----+-----
     (0 rows)
-    '''
+
+
 
     print("Counting records in merges_<field> database tables for where aid = 13806316...")
 
@@ -198,6 +235,7 @@ if __name__ == '__main__':
 
             print(f"{tablename} database table does not contain record(s) for aid = 13806316...")
 
+    '''
 
 
 
