@@ -171,8 +171,9 @@ if __name__ == '__main__':
      aid | sid
     -----+-----
     (0 rows)
-   '''
-    print("Counting records in merges_<field> database tables for where aid = 13806316 ...")
+    '''
+
+    print("Counting records in merges_<field> database tables for where aid = 13806316...")
 
     for field in fields_list:
 
@@ -191,7 +192,7 @@ if __name__ == '__main__':
 
         else:
 
-            print(f"{tablename} database table is empty...")
+            print(f"{tablename} database table does not contain record(s) for aid = 13806316...")
 
 
 
