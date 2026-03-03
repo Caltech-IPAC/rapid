@@ -727,32 +727,31 @@ if __name__ == '__main__':
 
         table_exists_flag = already_made_dict[field]
 
-        if table_exists_flag is True:
-            continue
-
         tablename1 = f"astroobjects_{field}"
-
         tablename2 = f"merges_{field}"
 
-        sql_queries.append(f"CREATE INDEX {tablename1}_field_idx ON {tablename1} (field);")
-        sql_queries.append(f"CREATE INDEX {tablename1}_nsources_idx ON {tablename1} (nsources);")
-        sql_queries.append(f"CREATE INDEX {tablename1}_aid_idx ON {tablename1} (aid);")
-        #sql_queries.append(f"ALTER TABLE ONLY {tablename1} ADD CONSTRAINT astroobjectspk_{field} UNIQUE (ra0, dec0);")       # TODO
-        sql_queries.append(f"CREATE INDEX {tablename1}_radec_idx ON {tablename1} (q3c_ang2ipix(ra0, dec0));")
-        sql_queries.append(f"CREATE INDEX {tablename2}_aid_idx ON {tablename2} USING btree (aid);")
-        sql_queries.append(f"CREATE INDEX {tablename2}_sid_idx ON {tablename2} USING btree (sid);")
-        sql_queries.append(f"REVOKE ALL ON TABLE {tablename1} FROM rapidreadrole;")
-        sql_queries.append(f"GRANT SELECT ON TABLE {tablename1} TO GROUP rapidreadrole;")
-        sql_queries.append(f"REVOKE ALL ON TABLE {tablename2} FROM rapidreadrole;")
-        sql_queries.append(f"GRANT SELECT ON TABLE {tablename2} TO GROUP rapidreadrole;")
-        sql_queries.append(f"REVOKE ALL ON TABLE {tablename1} FROM rapidadminrole;")
-        sql_queries.append(f"GRANT ALL ON TABLE {tablename1} TO GROUP rapidadminrole;")
-        sql_queries.append(f"REVOKE ALL ON TABLE {tablename2} FROM rapidadminrole;")
-        sql_queries.append(f"GRANT ALL ON TABLE {tablename2} TO GROUP rapidadminrole;")
-        sql_queries.append(f"REVOKE ALL ON TABLE {tablename1} FROM rapidporole;")
-        sql_queries.append(f"GRANT INSERT,UPDATE,SELECT,DELETE,TRUNCATE,TRIGGER,REFERENCES ON TABLE {tablename1} TO rapidporole;")
-        sql_queries.append(f"REVOKE ALL ON TABLE {tablename2} FROM rapidporole;")
-        sql_queries.append(f"GRANT INSERT,UPDATE,SELECT,DELETE,TRUNCATE,TRIGGER,REFERENCES ON TABLE {tablename2} TO rapidporole;")
+        if table_exists_flag is False:        # The following is done once, when the tables are created.
+
+            sql_queries.append(f"CREATE INDEX {tablename1}_field_idx ON {tablename1} (field);")
+            sql_queries.append(f"CREATE INDEX {tablename1}_nsources_idx ON {tablename1} (nsources);")
+            sql_queries.append(f"CREATE INDEX {tablename1}_aid_idx ON {tablename1} (aid);")
+            #sql_queries.append(f"ALTER TABLE ONLY {tablename1} ADD CONSTRAINT astroobjectspk_{field} UNIQUE (ra0, dec0);")       # TODO
+            sql_queries.append(f"CREATE INDEX {tablename1}_radec_idx ON {tablename1} (q3c_ang2ipix(ra0, dec0));")
+            sql_queries.append(f"CREATE INDEX {tablename2}_aid_idx ON {tablename2} USING btree (aid);")
+            sql_queries.append(f"CREATE INDEX {tablename2}_sid_idx ON {tablename2} USING btree (sid);")
+            sql_queries.append(f"REVOKE ALL ON TABLE {tablename1} FROM rapidreadrole;")
+            sql_queries.append(f"GRANT SELECT ON TABLE {tablename1} TO GROUP rapidreadrole;")
+            sql_queries.append(f"REVOKE ALL ON TABLE {tablename2} FROM rapidreadrole;")
+            sql_queries.append(f"GRANT SELECT ON TABLE {tablename2} TO GROUP rapidreadrole;")
+            sql_queries.append(f"REVOKE ALL ON TABLE {tablename1} FROM rapidadminrole;")
+            sql_queries.append(f"GRANT ALL ON TABLE {tablename1} TO GROUP rapidadminrole;")
+            sql_queries.append(f"REVOKE ALL ON TABLE {tablename2} FROM rapidadminrole;")
+            sql_queries.append(f"GRANT ALL ON TABLE {tablename2} TO GROUP rapidadminrole;")
+            sql_queries.append(f"REVOKE ALL ON TABLE {tablename1} FROM rapidporole;")
+            sql_queries.append(f"GRANT INSERT,UPDATE,SELECT,DELETE,TRUNCATE,TRIGGER,REFERENCES ON TABLE {tablename1} TO rapidporole;")
+            sql_queries.append(f"REVOKE ALL ON TABLE {tablename2} FROM rapidporole;")
+            sql_queries.append(f"GRANT INSERT,UPDATE,SELECT,DELETE,TRUNCATE,TRIGGER,REFERENCES ON TABLE {tablename2} TO rapidporole;")
+
         sql_queries.append(f"ALTER TABLE {tablename1} SET UNLOGGED;")
         sql_queries.append(f"ALTER TABLE {tablename2} SET UNLOGGED;")
 
