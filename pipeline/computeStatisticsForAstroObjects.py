@@ -536,7 +536,7 @@ if __name__ == '__main__':
 
         tablename = f"astroobjects_{field}"
 
-        sql_queries.append(f"CREATE INDEX {tablename}_meanradec_idx ON {tablename} (q3c_ang2ipix(meanra, meandec0));")
+        sql_queries.append(f"CREATE INDEX {tablename}_meanradec_idx ON {tablename} (q3c_ang2ipix(meanra, meandec));")
         sql_queries.append(f"ALTER TABLE {tablename} SET LOGGED;")
         sql_queries.append(f"CLUSTER {tablename}_meanradec_idx ON {tablename};")
         sql_queries.append(f"ANALYZE {tablename};")
