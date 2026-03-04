@@ -1201,21 +1201,24 @@ both positive and negative, were loaded into Sources child PostgreSQL database t
 The elapsed time to load all sources into the database was 17.0 minutes with 8 parallel processes.
 There were 13,722,343 Sources records loaded into the PostgreSQL database.
 
-Cross-matching the sources, resulting in records loaded into the Merges_<field> and
+Cross-matching the sources with astronomical objects (called AstroObjects),
+resulting in records loaded into the Merges_<field> and
 AstroObjects_<fields> database tables, for all fields of the sources, was done.
 The elapsed time to cross-match all sources was 3.39 hours with 8 parallel processes.
 This includes cross-matching across field boundaries for sources near field edges.
 A match radius of 0.1 arcsec (a Roman WFI pixel) was used.
-There were 4,393,124 AstroObjects records and 66,449,889 Merges records loaded
+There were 3,488,741 AstroObjects records and 66,449,889 Merges records loaded
 into the PostgreSQL database.  Of those merges (a.k.a. lightcurve data points), 16,307 merges
 resulted from cross-matching across field boundaries (i.e., the match radius can extend
 across a field boundary), which is an increase of 0.02454% in terms of number of merges.
 
 The lightcurve statistics stored in the AstroObjects_<fields> database tables are updated after the
 cross-matching.  This is done as a separate process.  Any AstroObjects_<fields> record with
-no associated sources are deleted.
-The AstroObjects_<fields> database tables are explicitly vacuumed and analyzed at the end of this process.
-For this test, all of this took 11.75 minutes with 8 parallel processes.
+no associated sources in the Merges_<field> database table are deleted.
+A new Q3C index on the (meanra, meandec) columns is computed for all AstroObjects_<fields> database tables,
+and then these tables are set to logged, clustered, and analyzed.
+The AstroObjects_<fields> database tables are explicitly vacuumed at the end of this process.
+For this test, all of this took 15.44 minutes with 8 parallel processes.
 
 It took 10.4 hours to delete non-best Merges_<fields> records with 8 parallel processes,
 which also included vacuuming and analyzing all Merges_<fields> database tables.
