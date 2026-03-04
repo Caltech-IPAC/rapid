@@ -153,7 +153,8 @@ def run_single_core_job(fields,index_thread):
 
 
     # Loop over all fields associated with this thread and compute statistics for astroobjects:
-    # 1. Query for all records in each Merges_<field> table.
+    # 0. Delete AstroObjects_<field> database records that do not have corresponding Merges_<field> record(s).
+    # 1. Query for records in each Merges_<field> database table joined with sources table.
     # 2. Determine unique pids (primary key of DiffImages table).
     # 3. Determine unique aids (primary key of AstroObjects_<field> table).
     # 4. Check associated DiffImages records for those that are best (vbest>0).
