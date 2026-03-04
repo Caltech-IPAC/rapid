@@ -197,7 +197,7 @@ def run_single_core_job(fields,index_thread):
 
         for record in records:
 
-            aid = records[0][0]
+            aid = record[0]
 
             fh.write(f"Deleting record for aid = {aid} in {astroobjects_tablename} database table...\n")
             fh.flush()
