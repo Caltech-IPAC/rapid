@@ -208,7 +208,7 @@ if __name__ == '__main__':
 
         for rtid in rtids_list:
 
-            s3_full_name_injection_catalog = f"s3://job_info_s3_bucket_base/injection_catalogs/{injection_catalog_rtid{rtid}.json}"
+            s3_full_name_injection_catalog = f"s3://job_info_s3_bucket_base/injection_catalogs/injection_catalog_rtid{rtid}.json"
 
             print("Try downloading {s3_full_name_injection_catalog}...")
 
