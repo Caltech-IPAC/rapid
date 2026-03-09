@@ -2,6 +2,7 @@ import boto3
 import os
 import configparser
 from astropy.io import fits
+from astropy.wcs import WCS
 from datetime import datetime, timezone
 from dateutil import tz
 import time
