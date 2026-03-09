@@ -226,7 +226,7 @@ if __name__ == '__main__':
 
             generate_injection_catalog_cmd = [python_cmd,
                                               generate_injection_catalog_code,
-                                              rtid]
+                                              str(rtid)]
 
             exitcode_from_generate_injection_catalog_cmd = util.execute_command(generate_injection_catalog_cmd)
 
