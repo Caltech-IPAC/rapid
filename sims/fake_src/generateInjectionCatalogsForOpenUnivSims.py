@@ -201,13 +201,15 @@ if __name__ == '__main__':
 
         # Compute all fields that overlap the reference image.
 
-        rtids_list = roman_tessellation_db.get_overlapping_rtids(ra0,dec0,ra1,dec1,ra2,dec2,ra3,dec3,ra4,dec4)
+        rtid_records_list = roman_tessellation_db.get_overlapping_rtids(ra0,dec0,ra1,dec1,ra2,dec2,ra3,dec3,ra4,dec4)
 
 
         # Skip injection-catalog generation for given rtid in list if it
         # already exists in the S3 bucket.
 
-        for rtid in rtids_list:
+        for rtid_record in rtid_records_list:
+
+            rtid = rtid_record[0]
 
             s3_full_name_injection_catalog = f"s3://job_info_s3_bucket_base/injection_catalogs/injection_catalog_rtid{rtid}.json"
 
