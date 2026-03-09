@@ -32,6 +32,7 @@ print("python_cmd =", python_cmd)
 # Compute start time for benchmark.
 
 start_time_benchmark = time.time()
+start_time_benchmark_at_start = start_time_benchmark
 
 
 # Compute processing datetime (UT) and processing datetime (Pacific time).
