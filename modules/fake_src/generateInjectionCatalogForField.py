@@ -1,5 +1,5 @@
 '''
-Generate a light curve catalog for fake variable sources to be injectied into a given field (sky tile) and
+Generate a light curve catalog for fake variable sources to be injected into a given field (sky tile) and
 adjacent fields that overlap with the reference image for that field.
 '''
 
@@ -14,10 +14,25 @@ import modules.utils.rapid_pipeline_subs as util
 import database.modules.utils.roman_tessellation_db as sqlite
 
 
-####### CONFIGURATION #######
-### will probably get moved to a config file at some point
-cfg_path = os.path.dirname(os.path.abspath(__file__))
+swname = "generateInjectionCatalogForField.py"
+swvers = "1.0"
 cfg_filename_only = "generateInjectionCatalogForField.ini"
+
+print("swname =", swname)
+print("swvers =", swvers)
+print("cfg_filename_only =", cfg_filename_only)
+
+
+# Other required environment variables.
+
+rapid_sw = os.getenv('RAPID_SW')
+
+if rapid_sw is None:
+
+    print("*** Error: Env. var. RAPID_SW not set; quitting...")
+    exit(64)
+
+cfg_path = rapid_sw + "/cdf"
 
 config_input_filename = cfg_path + "/" + cfg_filename_only
 config_input = configparser.ConfigParser()
