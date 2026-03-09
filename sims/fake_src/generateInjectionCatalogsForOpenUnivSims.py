@@ -195,7 +195,7 @@ if __name__ == '__main__':
         # Compute sky coordinates of reference-image center and four corners.
 
         ra0,dec0,ra1,dec1,ra2,dec2,ra3,dec3,ra4,dec4 = \
-            compute_sky_image_center_and_four_corners(wcs_refimg,x0,y0,x1,y1,x2,y2,x3,y3,x4,y4)
+            util.compute_sky_image_center_and_four_corners(wcs_refimg,x0,y0,x1,y1,x2,y2,x3,y3,x4,y4)
 
 
 
