@@ -527,3 +527,136 @@ class RomanTessellationNSIDE512:
 
 
         return rtids_list
+
+
+    def get_overlapping_rtids(self, ra0, dec0, ra1, dec1, ra2, dec2, ra3, dec3, ra4, dec4):
+
+        '''
+        Query SQLite database for all sky tiles that overlap the sky area defined
+        by the given center (ra0, dec0) and four corner positions (ra1,dec1) through
+        (ra4,dec4).  Assumes the image is square with N up (aligned to the RA/Dec grid),
+        so the bounding box of the five input points exactly defines the image footprint.
+        Returns a list of (rtid, ramin, ramax, decmin, decmax) records.
+
+        The south pole tile (rtid=6291458) is stored with ramin=ramax=0 in vskytiles
+        and is therefore invisible to the bounding-box RA overlap check.  It is handled
+        as a special case and appended explicitly when the query region reaches its
+        declination range.
+        '''
+
+        self.exit_code = 0
+
+
+        # Compute bounding box from center and all four corners.
+
+        ras  = [ra0,  ra1,  ra2,  ra3,  ra4]
+        decs = [dec0, dec1, dec2, dec3, dec4]
+
+        decmin_query = min(decs)
+        decmax_query = max(decs)
+
+
+        # Detect RA wrap-around (image straddles the RA=0/360 boundary).
+        # If the spread of RA values exceeds 180 degrees, normalize RAs > 180
+        # to their negative equivalents before computing ramin/ramax.
+
+        ra_spread = max(ras) - min(ras)
+
+        if ra_spread > 180.0:
+            ras_norm = [ra - 360.0 if ra > 180.0 else ra for ra in ras]
+            ramin_query = min(ras_norm)
+            ramax_query = max(ras_norm)
+            wrap = True
+        else:
+            ramin_query = min(ras)
+            ramax_query = max(ras)
+            wrap = False
+
+
+        # Define query template.
+        # Two rectangles overlap when: A.ramin < B.ramax AND A.ramax > B.ramin
+        #                          AND A.decmin < B.decmax AND A.decmax > B.decmin.
+        # For the wrap-around case the RA condition becomes an OR: the image covers
+        # [ramin_query+360, 360] union [0, ramax_query], so a tile overlaps if
+        # its ramin < ramax_query OR its ramax > ramin_query+360.
+
+        if wrap:
+            query_template = (
+                "select rtid,ramin,ramax,decmin,decmax from vskytiles "
+                "where decmax > QUERY_DECMIN and decmin < QUERY_DECMAX "
+                "and (ramin < QUERY_RAMAX or ramax > QUERY_RAMIN_PLUS360);"
+            )
+            rep = {
+                "QUERY_DECMIN":        str(decmin_query),
+                "QUERY_DECMAX":        str(decmax_query),
+                "QUERY_RAMAX":         str(ramax_query),
+                "QUERY_RAMIN_PLUS360": str(ramin_query + 360.0),
+            }
+        else:
+            query_template = (
+                "select rtid,ramin,ramax,decmin,decmax from vskytiles "
+                "where decmax > QUERY_DECMIN and decmin < QUERY_DECMAX "
+                "and ramax > QUERY_RAMIN and ramin < QUERY_RAMAX;"
+            )
+            rep = {
+                "QUERY_DECMIN": str(decmin_query),
+                "QUERY_DECMAX": str(decmax_query),
+                "QUERY_RAMIN":  str(ramin_query),
+                "QUERY_RAMAX":  str(ramax_query),
+            }
+
+        rep = dict((re.escape(k), v) for k, v in rep.items())
+        pattern = re.compile("|".join(rep.keys()))
+        query = pattern.sub(lambda m: rep[re.escape(m.group(0))], query_template)
+
+        if self.debug > 0:
+            print('query = {}'.format(query))
+
+
+        # Execute query.
+
+        try:
+            self.cur.execute(query)
+
+            try:
+                records = []
+                nrecs = 0
+                for record in self.cur:
+                    records.append(record)
+                    nrecs += 1
+
+                if self.debug > 0:
+                    print("nrecs =", nrecs)
+
+            except:
+                print("*** Error: Unexpected query return value in sub roman_tessellation_db.get_overlapping_sky_tiles; returning None...")
+                self.exit_code = 69
+                return
+
+        except (Exception, sqlite3.DatabaseError) as error:
+            print("*** Error executing sub roman_tessellation_db.get_overlapping_sky_tiles; returning None...")
+            self.exit_code = 67
+            return
+
+
+        # Special case: the south pole tile (rtid=6291458) is stored with ramin=ramax=0
+        # in vskytiles, making it invisible to the bounding-box RA overlap check.
+        # Explicitly add it if the query dec range overlaps its declination band.
+
+        south_pole_rtid = 6291458
+        south_pole_tile_decmax = -89.9543075561523
+
+        if decmin_query < south_pole_tile_decmax:
+            rtids_returned = [r[0] for r in records]
+            if south_pole_rtid not in rtids_returned:
+                try:
+                    self.cur.execute(
+                        "select rtid,ramin,ramax,decmin,decmax from vskytiles where rtid = {};".format(south_pole_rtid)
+                    )
+                    pole_record = self.cur.fetchone()
+                    if pole_record is not None:
+                        records.append(pole_record)
+                except (Exception, sqlite3.DatabaseError) as error:
+                    print("*** Error fetching south pole tile in sub roman_tessellation_db.get_overlapping_sky_tiles; skipping...")
+
+        return records
