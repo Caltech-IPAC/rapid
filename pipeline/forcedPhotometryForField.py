@@ -642,7 +642,6 @@ if __name__ == '__main__':
 
         # Read FITS file
 
-
         hdu_index_diff = 0
 
         with fits.open(diffimg_filename_from_bucket) as hdul:
