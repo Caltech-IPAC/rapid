@@ -243,12 +243,10 @@ if __name__ == '__main__':
 
         end_time_benchmark = time.time()
         diff_time_benchmark = end_time_benchmark - start_time_benchmark
-        fh.write(f"Elapsed time in seconds to compute all injection catalogs associated with field = {diff_time_benchmark}\n")
+        print(f"Elapsed time in seconds to compute all injection catalogs associated with field = {diff_time_benchmark}")
         start_time_benchmark = end_time_benchmark
 
         print(f"End of loop: field = {field}")
-
-
 
 
     # Code-timing benchmark.
