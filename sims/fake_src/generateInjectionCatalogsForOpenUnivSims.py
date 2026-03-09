@@ -212,7 +212,7 @@ if __name__ == '__main__':
 
             rtid = rtid_record[0]
 
-            s3_full_name_injection_catalog = f"s3://job_info_s3_bucket_base/injection_catalogs/injection_catalog_rtid{rtid}.json"
+            s3_full_name_injection_catalog = f"s3://{job_info_s3_bucket_base}/injection_catalogs/injection_catalog_rtid{rtid}.json"
 
             print("Try downloading {s3_full_name_injection_catalog}...")
 
@@ -232,14 +232,19 @@ if __name__ == '__main__':
             exitcode_from_generate_injection_catalog_cmd = util.execute_command(generate_injection_catalog_cmd)
 
 
+            # Upload fake-source injection catalog to product S3 bucket.
+
+            s3_object_name_injection_catalog = "injection_catalogs/" + injection_catalog_filename
+
+            util.upload_files_to_s3_bucket(s3_client,job_info_s3_bucket_base,[injection_catalog_filename],[s3_object_name_injection_catalog])
 
 
         # Code-timing benchmark.
 
-        thread_end_time_benchmark = time.time()
-        diff_time_benchmark = thread_end_time_benchmark - thread_start_time_benchmark
+        end_time_benchmark = time.time()
+        diff_time_benchmark = end_time_benchmark - start_time_benchmark
         fh.write(f"Elapsed time in seconds to compute all injection catalogs associated with field = {diff_time_benchmark}\n")
-        thread_start_time_benchmark = thread_end_time_benchmark
+        start_time_benchmark = end_time_benchmark
 
         print(f"End of loop: field = {field}")
 
