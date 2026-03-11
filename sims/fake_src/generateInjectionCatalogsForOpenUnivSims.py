@@ -158,11 +158,11 @@ if __name__ == '__main__':
 
         # Read FITS file.
 
-        hdu_index_diff = 0
+        hdu_index = 0
 
         with fits.open(refimage_filename) as hdul:
 
-            hdr = hdul[hdu_index_diff].header
+            hdr = hdul[hdu_index].header
 
             wcs_refimg = WCS(hdr) # Initialize WCS object from FITS header
 
