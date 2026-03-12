@@ -29,7 +29,8 @@ def generateReferenceImage(s3_client,
                            sca_gain,
                            sca_readout_noise,
                            product_s3_bucket,
-                           upload_to_s3_bucket):
+                           upload_to_s3_bucket,
+                           inject_fake_sources_flag):
 
 
     infobits_refimage = 0                                                             # TODO
@@ -44,6 +45,7 @@ def generateReferenceImage(s3_client,
     refimage_input_filenames = []
     refimage_input_filenames_reformatted = []
     refimage_input_filenames_reformatted_unc = []
+    refimage_input_filenames_injection_catalog = []
 
     n = 0
     jdstart = 999999999.0
@@ -60,7 +62,8 @@ def generateReferenceImage(s3_client,
 
             refimage_input_metadata.append(row)
 
-            refimage_input_s3_full_name = row[11]                                                   # TODO
+            refimage_input_s3_full_name = row[11]
+            refimage_input_field = row[14]
 
             filename_match = re.match(r"s3://(.+?)/(.+)", refimage_input_s3_full_name)              # TODO
 
@@ -117,8 +120,6 @@ def generateReferenceImage(s3_client,
 
 
             # Reformat the FITS file so that the image data are contained in the PRIMARY header.
-            # Also, compute via a simple model the uncertainty image from the science image,
-            # assuming some value for the SCA gain (electrons/ADU), which is unavailable for Roman WFI.
             # Normalize by exposure time, and scale the input image data such that the zero point
             # of the reference image will always be a fixed value, as assigned in the input config file.
             # The data units of the reference image data will be DN/s.
@@ -128,9 +129,6 @@ def generateReferenceImage(s3_client,
             fname_input = refimage_input_filename.replace(".fits.gz",".fits")
             fname_output = refimage_input_filename.replace(".fits.gz","_reformatted.fits")
             fname_output_unc = refimage_input_filename.replace(".fits.gz","_reformatted_unc.fits")
-
-            refimage_input_filenames_reformatted.append(fname_output)
-            refimage_input_filenames_reformatted_unc.append(fname_output_unc)
 
             hdul = fits.open(fname_input)
             hdr = hdul[1].header
@@ -167,10 +165,83 @@ def generateReferenceImage(s3_client,
             hdu = fits.HDUList(hdu_list)
             hdu.writeto(fname_output,overwrite=True,checksum=True)
 
+            hdul.close()
 
-            # Ensure data are positive for uncertainty calculations.
 
-            pos_data = np.abs(np.array(data) * flux_scale_factor)
+            # Optionally inject fake sources into reference-image input.
+
+            if inject_fake_sources_flag:
+
+
+                # Define filenames of injection catalog file and injection-catalog-list file (contains just one row).
+
+                injection_catalog_filename = f"injection_catalog_rtid{refimage_input_field}.json"
+                injection_catalog_list_filename = f"injection_catalog_list_rtid{refimage_input_field}.csv"
+
+
+                # Download injection catalog from S3 bucket.
+
+                s3_full_name_injection_catalog = f"s3://{job_info_s3_bucket}/injection_catalogs/{injection_catalog_filename}"
+
+                injection_catalog_filename,subdirs,downloaded_from_bucket = util.download_file_from_s3_bucket(s3_client,s3_full_name_injection_catalog)
+
+                print("s3_full_name_injection_catalog = ",s3_full_name_injection_catalog)
+                print("injection_catalog_filename = ",injection_catalog_filename)
+
+
+                # Write injection-catalog-list file (contains just one row).
+
+                file_content = f"{injection_catalog_filename}\n"
+
+                with open(injection_catalog_list_filename, 'w') as f:
+                    f.write(file_content)
+
+
+                # Run fake-source injections code.
+
+                sci_ext = fake_sources_dict['sci_ext']
+                num_injections = fake_sources_dict['num_injections']
+                injection_mag_min = fake_sources_dict['mag_min']
+                injection_mag_max = fake_sources_dict['mag_max']
+
+                python_cmd = '/usr/bin/python3.11'
+                fake_sources_code = rapid_sw + '/modules/fake_src/rapid_source_injections.py'
+
+                fake_sources_cmd = [python_cmd,
+                                    fake_sources_code,
+                                    '--sci_ext',
+                                    sci_ext,
+                                    '--num_injections',
+                                    num_injections,
+                                    '--mag_min',
+                                    injection_mag_min,
+                                    '--mag_max',
+                                    injection_mag_max,
+                                    '--injections_by_field_flag',
+                                    '--field_catalogs_input_filename',
+                                    injection_catalog_list_filename,
+                                    fname_output]
+
+                exitcode_from_fake_sources = util.execute_command(fake_sources_cmd)
+
+                filename_image_with_fake_sources = fname_output.replace(".fits","_inject.fits")
+                filename_injection_catalog = fname_output.replace(".fits","_inject.txt")
+
+
+            # Compute via a simple model the uncertainty image from the
+            # reformatted science image, which may or may not contain injected fake sources,
+            # assuming some value for the SCA gain (electrons/ADU), which is currently
+            # unavailable for Roman WFI.
+
+            if inject_fake_sources_flag:
+                hdul = fits.open(filename_image_with_fake_sources)
+            else:
+                hdul = fits.open(fname_output)
+
+            hdr = hdul[0].header
+            data = hdul[0].data
+
+            pos_data = np.abs(np.array(data)) # Ensure data are positive
             data_unc = np.sqrt(pos_data / sca_gain + sca_readout_noise ** 2) / exptime
 
             hdu_unc = fits.PrimaryHDU(header=hdr,data=data_unc)
@@ -178,6 +249,19 @@ def generateReferenceImage(s3_client,
             hdu_list_unc.append(hdu_unc)
             hdu_unc = fits.HDUList(hdu_list_unc)
             hdu_unc.writeto(fname_output_unc,overwrite=True,checksum=True)
+
+            hdul.close()
+
+
+            # Propagate the reference-image inputs to awaicgen and for uploading to S3 bucket.
+
+            if inject_fake_sources_flag:
+                refimage_input_filenames_reformatted.append(filename_image_with_fake_sources)
+                refimage_input_filenames_injection_catalog.append(filename_injection_catalog)
+            else:
+                refimage_input_filenames_reformatted.append(fname_output)
+
+            refimage_input_filenames_reformatted_unc.append(fname_output_unc)
 
 
             # Delete the original FITS file locally to save disk space.
@@ -222,6 +306,7 @@ def generateReferenceImage(s3_client,
 
 
     # Optionally upload reformatted awaicgen input image and uncertainty files to S3 bucket for off-line analysis.
+    # Also upload the reference-image-input fake-source injection catalogs if fake sources were indeed injected.
     # The upload_inputs flag is only to be set to True temporarily as it increases the number of uploaded files.
 
     upload_inputs = False
@@ -230,6 +315,7 @@ def generateReferenceImage(s3_client,
 
         files_to_upload = refimage_input_filenames_reformatted +\
                           refimage_input_filenames_reformatted_unc +\
+                          refimage_input_filenames_injection_catalog +\
                           [awaicgen_input_images_list_file,awaicgen_input_uncert_list_file]
 
         for fname in files_to_upload:
