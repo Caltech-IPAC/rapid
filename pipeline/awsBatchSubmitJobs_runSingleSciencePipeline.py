@@ -385,7 +385,8 @@ if __name__ == '__main__':
                                                                          sca_readout_noise,
                                                                          product_s3_bucket,
                                                                          upload_to_s3_bucket,
-                                                                         inject_fake_sources_flag)
+                                                                         inject_fake_sources_flag,
+                                                                         fake_sources_dict)
 
         infobits_refimage = generateReferenceImage_return_list[0]
         checksum_refimage = generateReferenceImage_return_list[1]
