@@ -268,6 +268,8 @@ if __name__ == '__main__':
 
     print("max_n_images_to_coadd =", max_n_images_to_coadd)
 
+    inject_fake_sources_flag = eval(fake_sources_dict['inject_fake_sources_flag'])
+
     saturation_level_refimage = float(sextractor_refimage_dict["sextractor_SATUR_LEVEL".lower()])
 
 
@@ -724,8 +726,6 @@ if __name__ == '__main__':
 
 
     # Optionally inject fake sources.
-
-    inject_fake_sources_flag = eval(fake_sources_dict['inject_fake_sources_flag'])
 
     if inject_fake_sources_flag:
 
