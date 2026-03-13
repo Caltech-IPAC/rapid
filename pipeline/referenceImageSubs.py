@@ -31,7 +31,8 @@ def generateReferenceImage(s3_client,
                            product_s3_bucket,
                            upload_to_s3_bucket,
                            inject_fake_sources_flag,
-                           fake_sources_dict):
+                           fake_sources_dict,
+                           rapid_sw):
 
 
     infobits_refimage = 0                                                             # TODO

@@ -386,7 +386,8 @@ if __name__ == '__main__':
                                                                          product_s3_bucket,
                                                                          upload_to_s3_bucket,
                                                                          inject_fake_sources_flag,
-                                                                         fake_sources_dict)
+                                                                         fake_sources_dict,
+                                                                         rapid_sw)
 
         infobits_refimage = generateReferenceImage_return_list[0]
         checksum_refimage = generateReferenceImage_return_list[1]
