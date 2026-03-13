@@ -201,6 +201,8 @@ def generateReferenceImage(s3_client,
 
                 # Run fake-source injections code.
 
+                print("fake_sources_dict =",fake_sources_dict)
+
                 sci_ext = fake_sources_dict['refimg_input_ext']
                 num_injections = fake_sources_dict['num_injections']
                 injection_mag_min = fake_sources_dict['mag_min']
