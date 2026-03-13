@@ -444,7 +444,11 @@ def tan_proj(x,y,crpix1,crpix2,crval1,crval2,cdelt1,cdelt2,crota2):
     return (lon,lat)
 
 
+#-------------------------------------------------------------------
+# Given pixel location (x, y) on a tangent plane, compute the corresponding
+# sky position (R.A., Dec.), neglecting geometric distortion.
 # Requires one-based pixel coordinates (both x,y and crpix1,crpix2).
+# Same as method tan_proj above, but CD matrix is used instead of cdelt1,cdelt2,crota2 values.
 
 def tan_proj2(x,y,crpix1,crpix2,crval1,crval2,cd1_1,cd1_2,cd2_1,cd2_2):
 
@@ -474,6 +478,63 @@ def tan_proj2(x,y,crpix1,crpix2,crval1,crval2,cd1_1,cd1_2,cd2_1,cd2_2):
     lon = lon * rtd
 
     return (lon,lat)
+
+
+#-------------------------------------------------------------------
+# Given sky position (R.A., Dec.), compute the corresponding
+# pixel location (x, y) on a tangent plane, neglecting geometric distortion.
+# Requires one-based pixel coordinates (both x,y and crpix1,crpix2).
+
+def rev_tan_proj(ra,dec,crpix1,crpix2,crval1,crval2,cdelt1,cdelt2,crota2):
+
+    if debug:
+        print("crpix1,crpix2,crval1,crval2,cdelt1,cdelt2,crota2 =",crpix1,crpix2,crval1,crval2,cdelt1,cdelt2,crota2)
+
+    lon = ra * dtr
+    lat = dec * dtr
+
+    glong = crval1
+    glat = crval2
+
+    twist = crota2
+
+    lon0 = glong * dtr
+    lat0 = glat * dtr
+
+    aa = math.cos(lat) * math.cos(lon - lon0)
+    ff1 = 1./ (math.sin(lat0) * math.sin(lat) + aa * math.cos(lat0))
+    ff2 = 1./ (math.sin(lat0) * math.sin(lat) + aa * math.cos(lat0))
+
+    #print("aa,ff1,ff2 =",aa,ff1,ff2)
+
+    if ff1 < 0.0:
+
+        # Point is more than 90 degrees from projection center
+
+        x = -999999
+        y = -999999
+
+    else:
+        fline = -ff2 * (math.cos(lat0) * math.sin(lat) - aa * math.sin(lat0))
+        fsamp = -ff1 * math.cos(lat) * math.sin(lon - lon0)
+
+        #print("fline,fsamp =",fline,fsamp)
+
+        rpp1 = -cdelt1 * dtr
+        rpp2 = -cdelt2 * dtr
+
+        rtwist = twist * dtr
+        temp = fsamp * math.cos(rtwist) + fline * math.sin(rtwist)
+        fline = -fsamp * math.sin(rtwist) + fline * math.cos(rtwist)
+        fsamp = temp
+
+        fsamp = fsamp / rpp1
+        fline = fline / rpp2
+
+        x = fsamp + crpix1
+        y = fline + crpix2
+
+    return (x,y)
 
 
 #-------------------------------------------------------------------
@@ -2458,3 +2519,194 @@ def convert_mjd_to_jd(mjd):
     jd = mjd + 2400000.5
 
     return jd
+
+
+#######################################################################################
+# Need a function that, given the boresight sky position, find the (ra,dec) of the centers
+# and corners of all the Roman WFI SCAs.  As a hack, we make use of the following metadata
+#  from the OpenUniverse simulated images.
+#
+# Roman_TDS_obseq_11_6_23.fits (gives the boresight sky position):
+# ra        dec        filter   exptime   date          pa
+# 7.60523   -45.6541   R062     161.025   62000.02139   0.0
+
+# Roman_TDS_obseq_11_6_23_radec.fits (corresponding row with SCA center sky positions):
+# ra_1                 ra_2                 ra_3                 ra_4                 ra_5                 ra_6                 ra_7                 ra_8                 ra_9                 ra_10                ra_11                ra_12                ra_13                ra_14                ra_15                ra_16                ra_17                ra_18                dec_1                 dec_2                 dec_3                 dec_4                 dec_5                 dec_6                 dec_7                 dec_8                 dec_9                 dec_10                dec_11                dec_12                dec_13                dec_14                dec_15                dec_16                dec_17                dec_18                filter
+# 7.70257523225097     7.7021784763940495   7.701810394150581    7.896975260747919    7.896212181342388    7.895393684952536    8.09131856656055     8.090468676252794    8.090776381136955    7.50817107670711     7.508424304595279    7.5087920545391045   7.313914400856016    7.314390664598548    7.315208829157174    7.119427328186973    7.1201343286056265   7.119683618863046    -45.689658660119015   -45.543259134568196   -45.41236073781342    -45.71642870400937    -45.569730686381085   -45.43913367529469    -45.78136918203001    -45.633972867283106   -45.50447180418685    -45.689658902909905   -45.54325925525537    -45.4123608577716     -45.71642979677176    -45.569731048951944   -45.439134036034716   -45.781470393591285   -45.63397347261506    -45.50447180418685    R062
+#
+# The boresight is at the midpoint of the centers of the SCAs 2 and 11, which for PA=0.0,
+# their dec values will be the same.
+# select * from l2files where mjdobs >= 62000.02138 and mjdobs <= 62000.02140 and sca=2;
+# s3://sims-sn-r062-lite/0/Roman_TDS_simple_model_R062_0_2_lite.fits.gz
+# CTYPE1  = 'RA---TAN-SIP'
+# CTYPE2  = 'DEC--TAN-SIP'
+# CRPIX1  =               2044.0
+# CRPIX2  =               2044.0
+# CD1_1   = 3.03200165117957E-05
+# CD1_2   = -1.0207861394338E-07
+# CD2_1   = -1.3704639694748E-07
+# CD2_2   = 2.93216996860482E-05
+# CUNIT1  = 'deg     '
+# CUNIT2  = 'deg     '
+# CRVAL1  =   7.7021784763940495
+# CRVAL2  =    -45.5432591345682
+# select * from l2files where mjdobs >= 62000.02138 and mjdobs <= 62000.02140 and sca=11;
+# s3://sims-sn-r062-lite/0/Roman_TDS_simple_model_R062_0_11_lite.fits.gz
+# CTYPE1  = 'RA---TAN-SIP'
+# CTYPE2  = 'DEC--TAN-SIP'
+# CRPIX1  =               2044.0
+# CRPIX2  =               2044.0
+# CD1_1   = 3.03109772868513E-05
+# CD1_2   = 1.20119978244440E-07
+# CD2_1   = 1.02651257648787E-07
+# CD2_2   = 2.93149522609288E-05
+# CUNIT1  = 'deg     '
+# CUNIT2  = 'deg     '
+# CRVAL1  =    7.508424304595279
+# CRVAL2  =   -45.54325925525538
+# Physical constraints force gaps between detectors; to minimize such gaps, the detectors
+# are placed in two different orientations, so that the separation between rows is slightly
+# different; namely, the detectors in the top two rows (positions 1, 4, 7, 10, 13, 16 and
+# 2, 5, 8, 11, 14, 17) are placed "upside-down", with the low Y end at the top, while
+# those in the third row (positions 3, 6, 9, 12, 15, 18) are placed top-up.
+#
+# Here is the layout of SCAs:
+#
+#                   3      12
+#           6                       15
+#    9              2      11               18
+#           5                       14
+#    8              1      10               17
+#           4                       13
+#    7                                      16
+#
+# Notice for sca=3, the CD matrix signs are different.
+# select * from l2files where mjdobs >= 62000.02138 and mjdobs <= 62000.02140 and sca=3;
+# s3://sims-sn-r062-lite/0/Roman_TDS_simple_model_R062_0_3_lite.fits.gz
+# CTYPE1  = 'RA---TAN-SIP'
+# CTYPE2  = 'DEC--TAN-SIP'
+# CRPIX1  =               2044.0
+# CRPIX2  =               2044.0
+# CD1_1   = -3.0075409450827E-05
+# CD1_2   = 2.54834746796580E-07
+# CD2_1   = 2.74155200131641E-08
+# CD2_2   = -2.8607800989939E-05
+# CUNIT1  = 'deg     '
+# CUNIT2  = 'deg     '
+# CRVAL1  =    7.701810394150581
+# CRVAL2  =   -45.41236073781343
+# select * from l2files where mjdobs >= 62000.02138 and mjdobs <= 62000.02140 and sca=9;
+# s3://sims-sn-r062-lite/0/Roman_TDS_simple_model_R062_0_9_lite.fits.gz
+# CTYPE1  = 'RA---TAN-SIP'
+# CTYPE2  = 'DEC--TAN-SIP'
+# CRPIX1  =               2044.0
+# CRPIX2  =               2044.0
+# CD1_1   = -2.9768856598789E-05
+# CD1_2   = 7.50986501808561E-07
+# CD2_1   = 4.56778726218148E-07
+# CD2_2   = -2.8965250501896E-05
+# CUNIT1  = 'deg     '
+# CUNIT2  = 'deg     '
+# CRVAL1  =    8.090776381136955
+# CRVAL2  =   -45.50447180418685
+# select * from l2files where mjdobs >= 62000.02138 and mjdobs <= 62000.02140 and sca=6;
+# s3://sims-sn-r062-lite/0/Roman_TDS_simple_model_R062_0_6_lite.fits.gz
+# CTYPE1  = 'RA---TAN-SIP'
+# CTYPE2  = 'DEC--TAN-SIP'
+# CRPIX1  =               2044.0
+# CRPIX2  =               2044.0
+# CD1_1   = -2.9957305360623E-05
+# CD1_2   = 4.70709382185402E-07
+# CD2_1   = 3.24105777275702E-07
+# CD2_2   = -2.8701655960462E-05
+# CUNIT1  = 'deg     '
+# CUNIT2  = 'deg     '
+# CRVAL1  =    7.895393684952536
+# CRVAL2  =   -45.43913367529469
+# select * from l2files where mjdobs >= 62000.02138 and mjdobs <= 62000.02140 and sca=12;
+# s3://sims-sn-r062-lite/0/Roman_TDS_simple_model_R062_0_12_lite.fits.gz
+# CTYPE1  = 'RA---TAN-SIP'
+# CTYPE2  = 'DEC--TAN-SIP'
+# CRPIX1  =               2044.0
+# CRPIX2  =               2044.0
+# CD1_1   = -3.0057022830523E-05
+# CD1_2   = -1.5382946425093E-07
+# CD2_1   = -1.0755735063756E-07
+# CD2_2   = -2.8591357809216E-05
+# CUNIT1  = 'deg     '
+# CUNIT2  = 'deg     '
+# CRVAL1  =   7.5087920545391045
+# CRVAL2  =    -45.4123608577716
+# select * from l2files where mjdobs >= 62000.02138 and mjdobs <= 62000.02140 and sca=15;
+# s3://sims-sn-r062-lite/0/Roman_TDS_simple_model_R062_0_15_lite.fits.gz
+# CTYPE1  = 'RA---TAN-SIP'
+# CTYPE2  = 'DEC--TAN-SIP'
+# CRPIX1  =               2044.0
+# CRPIX2  =               2044.0
+# CD1_1   = -2.9959568298769E-05
+# CD1_2   = -4.8222298114369E-07
+# CD2_1   = -2.9198123555605E-07
+# CD2_2   = -2.8702413129918E-05
+# CUNIT1  = 'deg     '
+# CUNIT2  = 'deg     '
+# CRVAL1  =    7.315208829157174
+# CRVAL2  =  -45.439134036034716
+# select * from l2files where mjdobs >= 62000.02138 and mjdobs <= 62000.02140 and sca=18;
+# s3://sims-sn-r062-lite/0/Roman_TDS_simple_model_R062_0_18_lite.fits.gz
+# CTYPE1  = 'RA---TAN-SIP'
+# CTYPE2  = 'DEC--TAN-SIP'
+# CRPIX1  =               2044.0
+# CRPIX2  =               2044.0
+# CD1_1   = -2.9794674929248E-05
+# CD1_2   = -7.1400719913419E-07
+# CD2_1   = -4.7733665077020E-07
+# CD2_2   = -2.8981937742477E-05
+# CUNIT1  = 'deg     '
+# CUNIT2  = 'deg     '
+# CRVAL1  =    7.119683618863046
+# CRVAL2  =   -45.50447180418685
+#
+# Ignore SCA rotation within FOV for now (because the above examples shows the CD matrices
+# have 3 different combinations of signs, depending on the SCA).
+#
+# The current optical modelling of the WFI suggests that the geometric distortion is small
+# and amounts to less than 2% over the field of view. As a result, the pixel scale is nearly
+# constant at 110 mas per pixel. This results in an outer dimension of the field of view of
+# about 2800 arcsec by 1400 arcsec, including gaps.
+#######################################################################################
+
+def compute_sca_center_and_corner_sky_positions_from_boresight_sky_position(ra,dec):
+
+    ra_boresight_ref = 7.60523
+    dec_boresight_ref = -45.6541
+
+    ra0_sca_ref = [7.70257523225097,7.7021784763940495,7.701810394150581,7.896975260747919,7.896212181342388,7.895393684952536,8.09131856656055,8.090468676252794,8.090776381136955,7.50817107670711,7.508424304595279,7.5087920545391045,7.313914400856016,7.314390664598548,7.315208829157174,7.119427328186973,7.1201343286056265,7.119683618863046]
+    dec0_sca_ref = [-45.689658660119015,-45.543259134568196,-45.41236073781342,-45.71642870400937,-45.569730686381085,-45.43913367529469,-45.78136918203001,-45.633972867283106,-45.50447180418685,-45.689658902909905,-45.54325925525537,-45.4123608577716,-45.71642979677176,-45.569731048951944,-45.439134036034716,-45.781470393591285,-45.63397347261506,-45.50447180418685]
+
+
+    # Define a tangent projection for the Roman WFI Field of View.
+
+    pixel_scale = 0.11         # Arcseconds.
+    cdelt1 = pixel_scale / 3600.0
+    cdelt2 = pixel_scale / 3600.0
+
+    n_pixels_x = 25500    # 2800 / 0.11 = 25,454.54545455
+    n_pixels_x = 12750    # = n_pixels_x / 2
+
+    crpix1 = n_pixels_x / 2.0 + 0.5
+    crpix2 = n_pixels_x / 2.0 + 0.5
+
+    crval1 = ra_boresight_ref
+    crval2 = dec_boresight_ref
+
+    ra1_fov,dec1_fov = tan_proj(1,1,crpix1,crpix2,crval1,crval2,cdelt1,cdelt2,crota2)
+    ra2_fov,dec2_fov = tan_proj(n_pixels_x,1,crpix1,crpix2,crval1,crval2,cdelt1,cdelt2,crota2)
+    ra3_fov,dec3_fov = tan_proj(n_pixels_x,n_pixels_y,crpix1,crpix2,crval1,crval2,cdelt1,cdelt2,crota2)
+    ra4_fov,dec4_fov = tan_proj(1,n_pixels_y,crpix1,crpix2,crval1,crval2,cdelt1,cdelt2,crota2)
+
+
+
+
+
+
+
