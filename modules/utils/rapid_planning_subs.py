@@ -2,9 +2,9 @@ import modules.utils.rapid_pipeline_subs as util
 
 
 #######################################################################################
-# Need a function that, given the boresight sky position, find the (ra,dec) of the centers
-# and corners of all the Roman WFI SCAs.  As a hack, we make use of the following metadata
-#  from the OpenUniverse simulated images.
+# Need a function that, given the boresight sky position and orientation angle, find the
+# (ra,dec) of the centers and corners of all the Roman WFI SCAs.  As a hack, we use the
+# following metadata from the OpenUniverse simulated images:
 #
 # Roman_TDS_obseq_11_6_23.fits (gives the boresight sky position):
 # ra        dec        filter   exptime   date          pa
@@ -14,8 +14,8 @@ import modules.utils.rapid_pipeline_subs as util
 # ra_1                 ra_2                 ra_3                 ra_4                 ra_5                 ra_6                 ra_7                 ra_8                 ra_9                 ra_10                ra_11                ra_12                ra_13                ra_14                ra_15                ra_16                ra_17                ra_18                dec_1                 dec_2                 dec_3                 dec_4                 dec_5                 dec_6                 dec_7                 dec_8                 dec_9                 dec_10                dec_11                dec_12                dec_13                dec_14                dec_15                dec_16                dec_17                dec_18                filter
 # 7.70257523225097     7.7021784763940495   7.701810394150581    7.896975260747919    7.896212181342388    7.895393684952536    8.09131856656055     8.090468676252794    8.090776381136955    7.50817107670711     7.508424304595279    7.5087920545391045   7.313914400856016    7.314390664598548    7.315208829157174    7.119427328186973    7.1201343286056265   7.119683618863046    -45.689658660119015   -45.543259134568196   -45.41236073781342    -45.71642870400937    -45.569730686381085   -45.43913367529469    -45.78136918203001    -45.633972867283106   -45.50447180418685    -45.689658902909905   -45.54325925525537    -45.4123608577716     -45.71642979677176    -45.569731048951944   -45.439134036034716   -45.781470393591285   -45.63397347261506    -45.50447180418685    R062
 #
-# The boresight is at the midpoint of the centers of the SCAs 2 and 11, which for PA=0.0,
-# their dec values will be the same.
+# https://roman-docs.stsci.edu/roman-instruments/the-wide-field-instrument/description-of-the-wfi
+#
 # select * from l2files where mjdobs >= 62000.02138 and mjdobs <= 62000.02140 and sca=2;
 # s3://sims-sn-r062-lite/0/Roman_TDS_simple_model_R062_0_2_lite.fits.gz
 # CTYPE1  = 'RA---TAN-SIP'
@@ -146,13 +146,15 @@ import modules.utils.rapid_pipeline_subs as util
 # CRVAL1  =    7.119683618863046
 # CRVAL2  =   -45.50447180418685
 #
-# Ignore SCA rotation within FOV for now (because the above examples shows the CD matrices
-# have 3 different combinations of signs, depending on the SCA).
+# Ignore SCA readout direction within FOV for now (because the above examples shows the
+# CD matrices have 3 different combinations of signs, depending on the SCA).
 #
 # The current optical modelling of the WFI suggests that the geometric distortion is small
 # and amounts to less than 2% over the field of view. As a result, the pixel scale is nearly
 # constant at 110 mas per pixel. This results in an outer dimension of the field of view of
 # about 2800 arcsec by 1400 arcsec, including gaps.
+#
+# Inputs to this method are (ra,dec) of boresight, in degrees, and position angle [deg].
 #######################################################################################
 
 def compute_sca_center_and_corner_sky_positions_from_boresight_sky_position(ra,dec,pa):
@@ -290,6 +292,16 @@ def compute_sca_center_and_corner_sky_positions_from_boresight_sky_position(ra,d
         decs4.append(dec4)
 
 
+    # Compute the boresight sky position based on how the boresight is defined in the OpenUniverse sims.
+
+    x_boresight = crpix1
+    y_boresight = crpix2
+    ra_boresight,dec_boresight = util.tan_proj(x_boresight,y_boresight,crpix1,crpix2,crval1,crval2,cdelt1,cdelt2,crota2)
+
+    print(f"x_boresight,y_boresight = {x_boresight},{y_boresight}")
+    print(f"ra_boresight,naxis2 = {ra_boresight},{dec_boresight}")
+
+
     return x_centers,y_centers,\
            naxis1,naxis2,\
            x_corners1,y_corners1,\
@@ -300,4 +312,6 @@ def compute_sca_center_and_corner_sky_positions_from_boresight_sky_position(ra,d
            ras1,decs1,\
            ras2,decs2,\
            ras3,decs3,\
-           ras4,decs4
+           ras4,decs4,\
+           x_boresight,y_boresight,\
+           ra_boresight,dec_boresight
