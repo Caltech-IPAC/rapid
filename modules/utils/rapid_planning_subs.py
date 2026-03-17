@@ -157,7 +157,7 @@ import modules.utils.rapid_pipeline_subs as util
 # Inputs to this method are (ra,dec) of boresight, in degrees, and position angle [deg].
 #######################################################################################
 
-def compute_sca_center_and_corner_sky_positions_from_boresight_sky_position(ra,dec,pa):
+def compute_sca_center_and_corner_sky_positions_from_boresight_sky_position(ra,dec,pa,debug=False):
 
     ra_boresight_ref = 7.60523
     dec_boresight_ref = -45.6541
@@ -179,7 +179,8 @@ def compute_sca_center_and_corner_sky_positions_from_boresight_sky_position(ra,d
     crpix1 = naxis1 / 2.0 + 0.5
     crpix2 = naxis2 / 2.0 + 0.5
 
-    print(f"crpix1,crpix2 = {crpix1},{crpix2}")
+    if debug:
+        print(f"crpix1,crpix2 = {crpix1},{crpix2}")
 
 
 
@@ -232,9 +233,10 @@ def compute_sca_center_and_corner_sky_positions_from_boresight_sky_position(ra,d
         crval2 = dec_boresight_ref
         crota2 = pa_boresight_ref
 
-        x0,y0 = util.rev_tan_proj(ra0_sca_ref,dec0_sca_ref,crpix1,crpix2,crval1,crval2,cdelt1,cdelt2,crota2)
+        x0,y0 = util.rev_tan_proj(ra0_sca_ref,dec0_sca_ref,crpix1,crpix2,crval1,crval2,cdelt1,cdelt2,crota2,debug)
 
-        print(f"i,x,y = {i},{x0},{y0}")
+        if debug:
+            print(f"i,x,y = {i},{x0},{y0}")
 
         x_centers.append(x0)
         y_centers.append(y0)
@@ -268,13 +270,14 @@ def compute_sca_center_and_corner_sky_positions_from_boresight_sky_position(ra,d
         crval2 = dec
         crota2 = pa
 
-        ra0,dec0 = util.tan_proj(x0,y0,crpix1,crpix2,crval1,crval2,cdelt1,cdelt2,crota2)
-        ra1,dec1 = util.tan_proj(x1,y1,crpix1,crpix2,crval1,crval2,cdelt1,cdelt2,crota2)
-        ra2,dec2 = util.tan_proj(x2,y2,crpix1,crpix2,crval1,crval2,cdelt1,cdelt2,crota2)
-        ra3,dec3 = util.tan_proj(x3,y3,crpix1,crpix2,crval1,crval2,cdelt1,cdelt2,crota2)
-        ra4,dec4 = util.tan_proj(x4,y4,crpix1,crpix2,crval1,crval2,cdelt1,cdelt2,crota2)
+        ra0,dec0 = util.tan_proj(x0,y0,crpix1,crpix2,crval1,crval2,cdelt1,cdelt2,crota2,debug)
+        ra1,dec1 = util.tan_proj(x1,y1,crpix1,crpix2,crval1,crval2,cdelt1,cdelt2,crota2,debug)
+        ra2,dec2 = util.tan_proj(x2,y2,crpix1,crpix2,crval1,crval2,cdelt1,cdelt2,crota2,debug)
+        ra3,dec3 = util.tan_proj(x3,y3,crpix1,crpix2,crval1,crval2,cdelt1,cdelt2,crota2,debug)
+        ra4,dec4 = util.tan_proj(x4,y4,crpix1,crpix2,crval1,crval2,cdelt1,cdelt2,crota2,debug)
 
-        print(f"i,ra0,dec0 = {i},{ra0},{dec0}")
+        if debug:
+            print(f"i,ra0,dec0 = {i},{ra0},{dec0}")
 
         ras0.append(ra0)
         decs0.append(dec0)
@@ -296,10 +299,11 @@ def compute_sca_center_and_corner_sky_positions_from_boresight_sky_position(ra,d
 
     x_boresight = crpix1
     y_boresight = crpix2
-    ra_boresight,dec_boresight = util.tan_proj(x_boresight,y_boresight,crpix1,crpix2,crval1,crval2,cdelt1,cdelt2,crota2)
+    ra_boresight,dec_boresight = util.tan_proj(x_boresight,y_boresight,crpix1,crpix2,crval1,crval2,cdelt1,cdelt2,crota2,debug)
 
-    print(f"x_boresight,y_boresight = {x_boresight},{y_boresight}")
-    print(f"ra_boresight,naxis2 = {ra_boresight},{dec_boresight}")
+    if debug:
+        print(f"x_boresight,y_boresight = {x_boresight},{y_boresight}")
+        print(f"ra_boresight,naxis2 = {ra_boresight},{dec_boresight}")
 
 
     return x_centers,y_centers,\
