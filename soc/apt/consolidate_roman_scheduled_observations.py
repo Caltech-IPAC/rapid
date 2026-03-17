@@ -77,6 +77,9 @@ def get_visit_id_dict():
 
             pa = row["assigned orient"]
 
+            if pa == "NA":
+                pa = row["nominal orient"]
+
             visit_id_dict[row["visit-id"]] = []
             visit_id_dict[row["visit-id"]].append(jd_start)
             visit_id_dict[row["visit-id"]].append(jd_end)
