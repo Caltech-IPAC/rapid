@@ -123,9 +123,39 @@ class RomanTessellationNSIDE512:
             if record is not None:
                 self.rtid = record[0]
             else:
-                print("*** Error: Unexpected query return value in sub roman_tessellation_db.get_rtid; returning None...")
-                self.exit_code = 69
-                return
+
+
+                # Near the 360-0 boundary crossing, special handling is needed.
+
+                bc_ra = str(ra - 360.0)
+
+                query = f"select rtid from vskytiles " +\
+                        f"where decmin <= {dec} and decmax > {dec} " +\
+                        f"and ramin <= {bc_ra} and ramax > {bc_ra};"
+
+                if self.debug > 0:
+                    print('query = {}'.format(query))
+
+
+                # Execute query.
+
+                self.rtid = None
+
+                try:
+                    self.cur.execute(query)
+
+                    record = self.cur.fetchone()
+
+                    if record is not None:
+                        self.rtid = record[0]
+                    else:
+                        print("*** Error: Unexpected query return value in sub roman_tessellation_db.get_rtid; returning None...")
+                        self.exit_code = 69
+                        return
+
+                except (Exception, sqlite3.DatabaseError) as error:
+                    print("*** Error executing sub roman_tessellation_db.get_rtid; returning None...")
+                    self.exit_code = 67
 
         except (Exception, sqlite3.DatabaseError) as error:
             print("*** Error executing sub roman_tessellation_db.get_rtid; returning None...")
