@@ -63,7 +63,7 @@ The pipeline produces products at several stages, each on a different timescale:
 Observation Model
 ************************************
 
-Volume estimates in this document are based on the provisional Roman scheduled observations (``consolidated_roman_scheduled_observations.csv``), which covers four Core Community Surveys (CCS) over a five-year nominal mission (2027--2031). RAPID does not process spectroscopic (GRISM/PRISM) exposures; these are excluded from all counts below.
+Volume estimates in this document are based on the provisional Roman scheduled observations (``consolidated_roman_scheduled_observations.csv``), which covers four Core Community Surveys (CCS) over a five-year nominal mission. The current schedule spans imaging observations from **2026-12-29** through **2031-12-09**; for delivery and cost modeling these are grouped into **60 mission-month bins** anchored on the first observation. RAPID does not process spectroscopic (GRISM/PRISM) exposures; these are excluded from all counts below.
 
 .. list-table:: Mission Summary by CCS (imaging only, 2027--2031)
    :header-rows: 1
@@ -105,7 +105,7 @@ Product Sizes
 
 Product sizes are measured from the 2026-02-27 pipeline test run using OpenUniverse simulated data. The pipeline currently generates products with three differencing methods (ZOGY, SFFT, Naive) in both positive and negative directions. For archive delivery to MAST, only **ZOGY positive** products are planned; SFFT and Naive products are retained internally for algorithm evaluation.
 
-This reduces the per-SCA archive footprint from 816 MB (all methods, both directions) to **204 MB** (ZOGY positive only). The archive volume per SCA is dominated by three 64 MB FITS images (difference image, uncertainty map, and SCORR image), which together account for 99% of the per-SCA footprint. Catalogs and PSFs are negligible by comparison.
+This reduces the per-SCA archive footprint from 816 MB (all methods, both directions) to **204 MB** (ZOGY positive only). The archive volume per SCA is dominated by three 67 MB FITS images (difference image, uncertainty map, and SCORR image), which together account for 99% of the per-SCA footprint. Catalogs and PSFs are negligible by comparison.
 
 Product Inventory
 =================
@@ -124,33 +124,49 @@ Product Inventory
      - Delivery
    * - **Reference** (per tile/filter)
      - Image (7Kx7K coadd)
-     - 190 MB
+     - 196 MB
      - 126 K
-     - 23 TB
+     - 25 TB
      - DR
      - FITS
      - ASDF
    * -
      - Coverage map
-     - 190 MB
+     - 196 MB
      - 126 K
-     - 23 TB
+     - 25 TB
      - DR
      - FITS
      - ASDF
    * -
      - Uncertainty image
-     - 190 MB
+     - 196 MB
      - 126 K
-     - 23 TB
+     - 25 TB
      - DR
      - FITS
      - ASDF
    * -
-     - Source catalog
-     - 4 MB
+     - SExtractor catalog
+     - 10.7 MB
      - 126 K
-     - 0.6 TB
+     - 1.3 TB
+     - DR
+     - Parquet
+     - Parquet
+   * -
+     - PSF-fit catalog (Parquet)
+     - 4.0 MB
+     - 126 K
+     - 0.5 TB
+     - DR
+     - Parquet
+     - Parquet
+   * -
+     - PSF-fit finder catalog
+     - 3.3 MB
+     - 126 K
+     - 0.4 TB
      - DR
      - Parquet
      - Parquet
@@ -164,9 +180,9 @@ Product Inventory
      - ASDF
    * -
      - *Subtotal*
-     - *611 MB*
+     - *606 MB*
      -
-     - *70 TB*
+     - *76 TB*
      -
      -
      -
@@ -180,25 +196,25 @@ Product Inventory
      -
    * - **Difference** (per SCA image)
      - Difference image (ZOGY)
-     - 64 MB
+     - 67 MB
      - 9.8 M
-     - 587 TB
+     - 654 TB
      - Prompt
      - FITS
      - ASDF
    * -
      - Uncertainty map (ZOGY)
-     - 64 MB
+     - 67 MB
      - 9.8 M
-     - 587 TB
+     - 654 TB
      - Prompt
      - FITS
      - ASDF
    * -
      - SCORR image (ZOGY)
-     - 64 MB
+     - 67 MB
      - 9.8 M
-     - 587 TB
+     - 654 TB
      - Prompt
      - FITS
      - ASDF
@@ -211,10 +227,18 @@ Product Inventory
      - FITS
      - ASDF
    * -
-     - Source catalogs
-     - 3 MB
+     - SExtractor catalog
+     - 2.5 MB
      - 9.8 M
-     - 28 TB
+     - 24 TB
+     - Prompt
+     - Parquet
+     - Parquet
+   * -
+     - PSF-fit catalog (Parquet)
+     - 0.3 MB
+     - 9.8 M
+     - 3 TB
      - Prompt
      - Parquet
      - Parquet
@@ -222,15 +246,15 @@ Product Inventory
      - Science image PSF
      - 43 KB
      - 9.8 M
-     - 0.5 TB
+     - 0.4 TB
      - Prompt
      - FITS
      - ASDF
    * -
      - *Subtotal*
-     - *195 MB*
+     - *204 MB*
      -
-     - *1.76 PB*
+     - *2.0 PB*
      -
      -
      -
@@ -283,7 +307,7 @@ Product Inventory
      -
      -
 
-All products are delivered monthly (60 deliveries over 5 years). Reference products are data releases (DR); difference-image products are prompt. Alerts stream live via Kafka and are archived to MAST monthly.
+All products are delivered monthly (60 mission-month deliveries over the 5-year mission model). Reference products are data releases (DR); difference-image products are prompt. Alerts stream live via Kafka and are archived to MAST monthly.
 
 A complete listing of all pipeline output files (including intermediate and debug products) is in :doc:`/prod/products`.
 
@@ -301,7 +325,7 @@ Key properties:
 * Defined per **sky tile and filter** (Roman tessellation NSIDE=512, giving 6.3 million tiles), not per SCA --- images from any SCA or exposure that overlaps the tile contribute to the stack
 * Quality assessed via the ``cov5percent`` metric and other measures stored in the :doc:`operations database </db/db>`
 
-Each reference image is accompanied by a coverage map, an uncertainty image, a PSF model, and a PhotUtils PSF-fit source catalog.
+Each reference image is accompanied by a coverage map, an uncertainty image, a PSF model, a SExtractor source catalog, and PSF-fit source and finder catalogs.
 
 For details of the tiling scheme and reference-image construction, see :doc:`/pl/pl`. For quality analysis of current reference images, see :doc:`/prod/products`.
 
@@ -409,7 +433,7 @@ Based on the provisional mission schedule, the estimated average monthly deliver
 
 * 2.0 PB of difference-image products
 * 0.75 PB of archived alert packets
-* 0.1 PB of reference images and catalogs
+* 0.08 PB of reference images and catalogs
 
 .. image:: volume_by_ccs.png
 
@@ -433,9 +457,9 @@ Each reprocessing regenerates all products from the beginning of the mission. Du
 
 The overlap effectively doubles the storage requirement at each reprocessing event:
 
-* **Baseline final storage**: 2.7 PB (single copy of all products)
-* **Peak at end-of-mission reprocessing**: 5.5 PB (old + new versions)
-* The 2-year reprocessing peak reaches 2.6 PB (on a 1.3 PB baseline)
+* **Baseline final storage**: 2.8 PB (single copy of all products)
+* **Peak at end-of-mission reprocessing**: 5.6 PB beginning on 2031-12-29 (old + new versions)
+* The 2-year reprocessing peak reaches 3.0 PB (on a 1.5 PB baseline)
 
 .. image:: reprocessing_storage.png
 
@@ -456,7 +480,7 @@ The following cost estimates are based on public AWS on-demand pricing for the u
      - Notes
    * - S3 storage
      - $0.021--0.023/GB/month (tiered)
-     - Includes reprocessing overlap periods where storage doubles
+     - Includes in-mission reprocessing overlaps; the final post-mission overlap is tracked in storage plots, not in the 5-year cost total
    * - Batch compute
      - $0.192/hr (m5.xlarge)
      - 4 vCPU, 16 GB; 8 min per science pipeline job, 1 min per post-processing job
@@ -474,19 +498,19 @@ The following cost estimates are based on public AWS on-demand pricing for the u
    * - Component
      - Cost
    * - S3 storage
-     - $2.1 M
+     - $2.2 M
    * - Compute (Batch + Reprocessing)
      - $0.7 M
    * - Kafka/MSK
-     - $28 K
+     - $27 K
    * - **TOTAL**
      - **$2.9 M**
    * - Average per month
-     - $48 K
+     - $49 K
    * - Average per year
-     - $571 K
+     - $587 K
 
-S3 storage dominates (74% of total cost) and grows steadily as the archive accumulates. Compute costs are relatively modest for routine processing but spike during the three reprocessing events, particularly the end-of-mission reprocessing which re-runs all 9.8 M SCA images. Total 5-year cost is estimated at $2.9 M at list price. Kafka/MSK is a minor fixed cost.
+S3 storage dominates (74% of total cost) and grows steadily as the archive accumulates. Compute costs are relatively modest for routine processing but spike during the three reprocessing events, particularly the end-of-mission reprocessing which re-runs all 9.8 M SCA images. Total 5-year cost is estimated at $2.9 M at list price; the separate 5.6 PB end-of-mission overlap peak occurs after the 60 modeled mission months. Kafka/MSK is a minor fixed cost.
 
 These estimates exclude data transfer (egress) costs, database hosting (RDS/EC2 for PostgreSQL), and any operational overhead. Negotiated pricing, reserved instances, or Spot instances for Batch could reduce costs significantly.
 
