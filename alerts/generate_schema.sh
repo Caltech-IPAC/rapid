@@ -1,270 +1,277 @@
 #!/usr/bin/env bash
 
-# Writes all .avsc schema files using heredocs
-# Uses variables for consistent entires
-# Widescreen format (>>80 characters!)
-# Reference alert schemas:
-#   ZTF
-#     https://github.com/Caltech-IPAC/ztf
-#     src/pl/avroalerts/schema/combined
-#   Rubin
+# Generates RAPID v01.00 Avro alert schema files (LSST-compatible)
+# Uses LSST record names and structure with Roman-appropriate content
+# Reference:
+#   LSST alert_packet v10.0
 #     https://github.com/lsst/alert_packet
-#     python/lsst/alert/packet 
+#   Roman filters: F062, F087, F106, F129, F146, F158, F184, F213
 
 # Strict error handling
 set -euo pipefail
 IFS=$'\n\t'
 
 # Schema version
-VERSION=X.Y
-echo Generating RAPID avro alert schema v${VERSION}
+VERSION=01.00
+MAJOR=01
+MINOR=00
+NAMESPACE="rapid.v01_00"
 
-# Top record
-cat << EOF > alert.avsc
+OUTDIR="schema/${MAJOR}/${MINOR}"
+echo "Generating RAPID avro alert schema v${VERSION}"
+mkdir -p "${OUTDIR}"
+
+# --- diaSource ---
+cat << 'EOF' > "${OUTDIR}/rapid.v01_00.diaSource.avsc"
 {
-	"namespace": "rapid",
+	"namespace": "rapid.v01_00",
+	"name": "diaSource",
+	"doc": "RAPID alert schema: individual source detection on a difference image",
+	"version": "01.00",
+	"type": "record",
+	"fields": [
+		{"name": "diaSourceId",        "type": "long",              "doc": "Unique identifier for this source detection"},
+		{"name": "visit",              "type": "long",              "doc": "Visit (exposure) identifier"},
+		{"name": "detector",           "type": "int",               "doc": "Detector (SCA) number"},
+		{"name": "diaObjectId",        "type": ["null", "long"],    "default": null, "doc": "Associated diaObject identifier"},
+		{"name": "ssObjectId",         "type": ["null", "long"],    "default": null, "doc": "Associated solar system object identifier (stub)"},
+		{"name": "parentDiaSourceId",  "type": ["null", "long"],    "default": null, "doc": "Parent diaSource if deblended (stub)"},
+		{"name": "midpointMjdTai",     "type": "double",            "doc": "Effective mid-observation time [TAI MJD]"},
+		{"name": "ra",                 "type": "double",            "doc": "Right ascension; ICRS [deg]"},
+		{"name": "dec",                "type": "double",            "doc": "Declination; ICRS [deg]"},
+		{"name": "raErr",              "type": ["null", "float"],   "default": null, "doc": "Uncertainty in ra [deg]"},
+		{"name": "decErr",             "type": ["null", "float"],   "default": null, "doc": "Uncertainty in dec [deg]"},
+		{"name": "x",                  "type": "float",             "doc": "x-pixel position on detector [pixels]"},
+		{"name": "y",                  "type": "float",             "doc": "y-pixel position on detector [pixels]"},
+		{"name": "xErr",               "type": ["null", "float"],   "default": null, "doc": "Uncertainty in x [pixels]"},
+		{"name": "yErr",               "type": ["null", "float"],   "default": null, "doc": "Uncertainty in y [pixels]"},
+		{"name": "band",               "type": ["null", "string"],  "default": null, "doc": "Filter band name (F062, F087, F106, F129, F146, F158, F184, F213)"},
+		{"name": "psfFlux",            "type": ["null", "float"],   "default": null, "doc": "Flux from PSF-fit on difference image [nJy]"},
+		{"name": "psfFluxErr",         "type": ["null", "float"],   "default": null, "doc": "Uncertainty in psfFlux [nJy]"},
+		{"name": "snr",                "type": ["null", "float"],   "default": null, "doc": "Signal-to-noise ratio (psfFlux / psfFluxErr)"},
+		{"name": "extendedness",       "type": ["null", "float"],   "default": null, "doc": "Probability of being extended (stub)"},
+		{"name": "reliability",        "type": ["null", "float"],   "default": null, "doc": "Reliability score (stub)"},
+		{"name": "flags",              "type": "long",              "doc": "Bitmask of processing flags"},
+
+		{"name": "apFlux",             "type": ["null", "float"],   "default": null, "doc": "Aperture flux on difference image (stub) [nJy]"},
+		{"name": "apFluxErr",          "type": ["null", "float"],   "default": null, "doc": "Uncertainty in apFlux (stub) [nJy]"},
+		{"name": "trailFlux",          "type": ["null", "float"],   "default": null, "doc": "Trail-fit flux (stub) [nJy]"},
+		{"name": "trailFluxErr",       "type": ["null", "float"],   "default": null, "doc": "Uncertainty in trailFlux (stub) [nJy]"},
+		{"name": "trailLength",        "type": ["null", "float"],   "default": null, "doc": "Trail length (stub) [arcsec]"},
+		{"name": "trailAngle",         "type": ["null", "float"],   "default": null, "doc": "Trail angle (stub) [deg]"},
+		{"name": "scienceFlux",        "type": ["null", "float"],   "default": null, "doc": "Forced PSF flux on science image (stub) [nJy]"},
+		{"name": "scienceFluxErr",     "type": ["null", "float"],   "default": null, "doc": "Uncertainty in scienceFlux (stub) [nJy]"},
+		{"name": "templateFlux",       "type": ["null", "float"],   "default": null, "doc": "Forced PSF flux on template image (stub) [nJy]"},
+		{"name": "templateFluxErr",    "type": ["null", "float"],   "default": null, "doc": "Uncertainty in templateFlux (stub) [nJy]"},
+		{"name": "dipoleMeanFlux",     "type": ["null", "float"],   "default": null, "doc": "Dipole mean flux (stub) [nJy]"},
+		{"name": "dipoleFluxErr",      "type": ["null", "float"],   "default": null, "doc": "Uncertainty in dipoleMeanFlux (stub) [nJy]"},
+		{"name": "dipoleLength",       "type": ["null", "float"],   "default": null, "doc": "Dipole separation (stub) [arcsec]"},
+		{"name": "dipoleAngle",        "type": ["null", "float"],   "default": null, "doc": "Dipole orientation (stub) [deg]"},
+
+		{"name": "ixx",                "type": ["null", "float"],   "default": null, "doc": "Adaptive second moment Ixx (stub) [arcsec^2]"},
+		{"name": "iyy",                "type": ["null", "float"],   "default": null, "doc": "Adaptive second moment Iyy (stub) [arcsec^2]"},
+		{"name": "ixy",                "type": ["null", "float"],   "default": null, "doc": "Adaptive second moment Ixy (stub) [arcsec^2]"},
+		{"name": "ixxErr",             "type": ["null", "float"],   "default": null, "doc": "Uncertainty in ixx (stub) [arcsec^2]"},
+		{"name": "iyyErr",             "type": ["null", "float"],   "default": null, "doc": "Uncertainty in iyy (stub) [arcsec^2]"},
+		{"name": "ixyErr",             "type": ["null", "float"],   "default": null, "doc": "Uncertainty in ixy (stub) [arcsec^2]"},
+
+		{"name": "pixelFlags_saturated",  "type": ["null", "boolean"], "default": null, "doc": "Source has saturated pixels (stub)"},
+		{"name": "pixelFlags_bad",        "type": ["null", "boolean"], "default": null, "doc": "Source has bad pixels (stub)"},
+		{"name": "pixelFlags_edge",       "type": ["null", "boolean"], "default": null, "doc": "Source is near detector edge (stub)"},
+		{"name": "pixelFlags_cr",         "type": ["null", "boolean"], "default": null, "doc": "Source has cosmic ray pixels (stub)"},
+
+		{"name": "timeProcessedMjdTai",   "type": ["null", "double"], "default": null, "doc": "Time alert was processed [TAI MJD]"},
+		{"name": "timeWithdrawnMjdTai",   "type": ["null", "double"], "default": null, "doc": "Time alert was withdrawn [TAI MJD]"},
+
+		{"name": "sca",               "type": "int",               "doc": "Roman SCA detector number"},
+		{"name": "field",              "type": "int",               "doc": "Roman field identifier"},
+		{"name": "hp6",                "type": "int",               "doc": "HEALPix index at nside=64 (order 6)"},
+		{"name": "hp9",                "type": "int",               "doc": "HEALPix index at nside=512 (order 9)"},
+		{"name": "pid",                "type": "long",              "doc": "Processing ID for science image"},
+		{"name": "expid",              "type": "int",               "doc": "Exposure identifier"},
+		{"name": "isdiffpos",          "type": "boolean",           "doc": "true if source is from positive (sci minus ref) subtraction"},
+		{"name": "qfit",               "type": ["null", "float"],   "default": null, "doc": "PSF-fit quality parameter"},
+		{"name": "cfit",               "type": ["null", "float"],   "default": null, "doc": "PSF-fit chi parameter"},
+		{"name": "redchi",             "type": ["null", "float"],   "default": null, "doc": "Reduced chi-square of PSF fit"},
+		{"name": "npixfit",            "type": ["null", "int"],     "default": null, "doc": "Number of pixels used in PSF fit"},
+		{"name": "sharpness",          "type": ["null", "float"],   "default": null, "doc": "PSF-fit sharpness parameter"},
+		{"name": "roundness1",         "type": ["null", "float"],   "default": null, "doc": "PSF-fit roundness parameter 1"},
+		{"name": "roundness2",         "type": ["null", "float"],   "default": null, "doc": "PSF-fit roundness parameter 2"},
+		{"name": "peak",               "type": ["null", "float"],   "default": null, "doc": "Peak pixel value in source stamp [DN]"}
+	]
+}
+EOF
+
+# --- diaForcedSource ---
+cat << 'EOF' > "${OUTDIR}/rapid.v01_00.diaForcedSource.avsc"
+{
+	"namespace": "rapid.v01_00",
+	"name": "diaForcedSource",
+	"doc": "RAPID alert schema: forced photometry measurement at a diaObject position",
+	"version": "01.00",
+	"type": "record",
+	"fields": [
+		{"name": "diaForcedSourceId",  "type": "long",              "doc": "Unique identifier for this forced source measurement"},
+		{"name": "diaObjectId",        "type": "long",              "doc": "Associated diaObject identifier"},
+		{"name": "visit",              "type": "long",              "doc": "Visit (exposure) identifier"},
+		{"name": "detector",           "type": "int",               "doc": "Detector (SCA) number"},
+		{"name": "ra",                 "type": "double",            "doc": "Right ascension of forced measurement position; ICRS [deg]"},
+		{"name": "dec",                "type": "double",            "doc": "Declination of forced measurement position; ICRS [deg]"},
+		{"name": "band",               "type": ["null", "string"],  "default": null, "doc": "Filter band name"},
+		{"name": "psfFlux",            "type": ["null", "float"],   "default": null, "doc": "Forced PSF flux on difference image [nJy]"},
+		{"name": "psfFluxErr",         "type": ["null", "float"],   "default": null, "doc": "Uncertainty in psfFlux [nJy]"},
+		{"name": "scienceFlux",        "type": ["null", "float"],   "default": null, "doc": "Forced PSF flux on science image (stub) [nJy]"},
+		{"name": "scienceFluxErr",     "type": ["null", "float"],   "default": null, "doc": "Uncertainty in scienceFlux (stub) [nJy]"},
+		{"name": "midpointMjdTai",     "type": "double",            "doc": "Effective mid-observation time [TAI MJD]"},
+		{"name": "timeProcessedMjdTai","type": "double",            "doc": "Time measurement was processed [TAI MJD]"},
+		{"name": "timeWithdrawnMjdTai","type": ["null", "double"],  "default": null, "doc": "Time measurement was withdrawn [TAI MJD]"}
+	]
+}
+EOF
+
+# --- diaObject ---
+cat << 'EOF' > "${OUTDIR}/rapid.v01_00.diaObject.avsc"
+{
+	"namespace": "rapid.v01_00",
+	"name": "diaObject",
+	"doc": "RAPID alert schema: astronomical object derived from DIASources",
+	"version": "01.00",
+	"type": "record",
+	"fields": [
+		{"name": "diaObjectId",            "type": "long",              "doc": "Unique identifier for this object"},
+		{"name": "ra",                     "type": "double",            "doc": "Right ascension of object centroid; ICRS [deg]"},
+		{"name": "dec",                    "type": "double",            "doc": "Declination of object centroid; ICRS [deg]"},
+		{"name": "raErr",                  "type": ["null", "float"],   "default": null, "doc": "Uncertainty in ra [deg]"},
+		{"name": "decErr",                 "type": ["null", "float"],   "default": null, "doc": "Uncertainty in dec [deg]"},
+		{"name": "nDiaSources",            "type": "int",               "doc": "Total number of associated DIASources"},
+		{"name": "firstDiaSourceMjdTai",   "type": ["null", "double"],  "default": null, "doc": "MJD of earliest associated diaSource [TAI MJD]"},
+		{"name": "lastDiaSourceMjdTai",    "type": ["null", "double"],  "default": null, "doc": "MJD of latest associated diaSource [TAI MJD]"},
+		{"name": "validityStartMjdTai",    "type": "double",            "doc": "Start of validity interval for this object summary [TAI MJD]"},
+
+		{"name": "F062PsfFluxMean",   "type": ["null", "float"], "default": null, "doc": "Mean PSF flux in F062 [nJy]"},
+		{"name": "F062PsfFluxSigma",  "type": ["null", "float"], "default": null, "doc": "Std dev of PSF flux in F062 [nJy]"},
+		{"name": "F062PsfFluxNdata",  "type": ["null", "int"],   "default": null, "doc": "Number of F062 measurements"},
+		{"name": "F062PsfFluxMin",    "type": ["null", "float"], "default": null, "doc": "Minimum PSF flux in F062 [nJy]"},
+		{"name": "F062PsfFluxMax",    "type": ["null", "float"], "default": null, "doc": "Maximum PSF flux in F062 [nJy]"},
+
+		{"name": "F087PsfFluxMean",   "type": ["null", "float"], "default": null, "doc": "Mean PSF flux in F087 [nJy]"},
+		{"name": "F087PsfFluxSigma",  "type": ["null", "float"], "default": null, "doc": "Std dev of PSF flux in F087 [nJy]"},
+		{"name": "F087PsfFluxNdata",  "type": ["null", "int"],   "default": null, "doc": "Number of F087 measurements"},
+		{"name": "F087PsfFluxMin",    "type": ["null", "float"], "default": null, "doc": "Minimum PSF flux in F087 [nJy]"},
+		{"name": "F087PsfFluxMax",    "type": ["null", "float"], "default": null, "doc": "Maximum PSF flux in F087 [nJy]"},
+
+		{"name": "F106PsfFluxMean",   "type": ["null", "float"], "default": null, "doc": "Mean PSF flux in F106 [nJy]"},
+		{"name": "F106PsfFluxSigma",  "type": ["null", "float"], "default": null, "doc": "Std dev of PSF flux in F106 [nJy]"},
+		{"name": "F106PsfFluxNdata",  "type": ["null", "int"],   "default": null, "doc": "Number of F106 measurements"},
+		{"name": "F106PsfFluxMin",    "type": ["null", "float"], "default": null, "doc": "Minimum PSF flux in F106 [nJy]"},
+		{"name": "F106PsfFluxMax",    "type": ["null", "float"], "default": null, "doc": "Maximum PSF flux in F106 [nJy]"},
+
+		{"name": "F129PsfFluxMean",   "type": ["null", "float"], "default": null, "doc": "Mean PSF flux in F129 [nJy]"},
+		{"name": "F129PsfFluxSigma",  "type": ["null", "float"], "default": null, "doc": "Std dev of PSF flux in F129 [nJy]"},
+		{"name": "F129PsfFluxNdata",  "type": ["null", "int"],   "default": null, "doc": "Number of F129 measurements"},
+		{"name": "F129PsfFluxMin",    "type": ["null", "float"], "default": null, "doc": "Minimum PSF flux in F129 [nJy]"},
+		{"name": "F129PsfFluxMax",    "type": ["null", "float"], "default": null, "doc": "Maximum PSF flux in F129 [nJy]"},
+
+		{"name": "F146PsfFluxMean",   "type": ["null", "float"], "default": null, "doc": "Mean PSF flux in F146 [nJy]"},
+		{"name": "F146PsfFluxSigma",  "type": ["null", "float"], "default": null, "doc": "Std dev of PSF flux in F146 [nJy]"},
+		{"name": "F146PsfFluxNdata",  "type": ["null", "int"],   "default": null, "doc": "Number of F146 measurements"},
+		{"name": "F146PsfFluxMin",    "type": ["null", "float"], "default": null, "doc": "Minimum PSF flux in F146 [nJy]"},
+		{"name": "F146PsfFluxMax",    "type": ["null", "float"], "default": null, "doc": "Maximum PSF flux in F146 [nJy]"},
+
+		{"name": "F158PsfFluxMean",   "type": ["null", "float"], "default": null, "doc": "Mean PSF flux in F158 [nJy]"},
+		{"name": "F158PsfFluxSigma",  "type": ["null", "float"], "default": null, "doc": "Std dev of PSF flux in F158 [nJy]"},
+		{"name": "F158PsfFluxNdata",  "type": ["null", "int"],   "default": null, "doc": "Number of F158 measurements"},
+		{"name": "F158PsfFluxMin",    "type": ["null", "float"], "default": null, "doc": "Minimum PSF flux in F158 [nJy]"},
+		{"name": "F158PsfFluxMax",    "type": ["null", "float"], "default": null, "doc": "Maximum PSF flux in F158 [nJy]"},
+
+		{"name": "F184PsfFluxMean",   "type": ["null", "float"], "default": null, "doc": "Mean PSF flux in F184 [nJy]"},
+		{"name": "F184PsfFluxSigma",  "type": ["null", "float"], "default": null, "doc": "Std dev of PSF flux in F184 [nJy]"},
+		{"name": "F184PsfFluxNdata",  "type": ["null", "int"],   "default": null, "doc": "Number of F184 measurements"},
+		{"name": "F184PsfFluxMin",    "type": ["null", "float"], "default": null, "doc": "Minimum PSF flux in F184 [nJy]"},
+		{"name": "F184PsfFluxMax",    "type": ["null", "float"], "default": null, "doc": "Maximum PSF flux in F184 [nJy]"},
+
+		{"name": "F213PsfFluxMean",   "type": ["null", "float"], "default": null, "doc": "Mean PSF flux in F213 [nJy]"},
+		{"name": "F213PsfFluxSigma",  "type": ["null", "float"], "default": null, "doc": "Std dev of PSF flux in F213 [nJy]"},
+		{"name": "F213PsfFluxNdata",  "type": ["null", "int"],   "default": null, "doc": "Number of F213 measurements"},
+		{"name": "F213PsfFluxMin",    "type": ["null", "float"], "default": null, "doc": "Minimum PSF flux in F213 [nJy]"},
+		{"name": "F213PsfFluxMax",    "type": ["null", "float"], "default": null, "doc": "Maximum PSF flux in F213 [nJy]"}
+	]
+}
+EOF
+
+# --- ssSource (stub) ---
+cat << 'EOF' > "${OUTDIR}/rapid.v01_00.ssSource.avsc"
+{
+	"namespace": "rapid.v01_00",
+	"name": "ssSource",
+	"doc": "RAPID alert schema: solar system source association (stub)",
+	"version": "01.00",
+	"type": "record",
+	"fields": [
+		{"name": "ssSourceId",    "type": "long",              "doc": "Unique identifier for this solar system source"},
+		{"name": "diaSourceId",   "type": "long",              "doc": "Associated diaSource identifier"},
+		{"name": "ssObjectId",    "type": ["null", "long"],    "default": null, "doc": "Associated solar system object identifier"},
+		{"name": "heliocentricX", "type": ["null", "double"],  "default": null, "doc": "Heliocentric x position [AU]"},
+		{"name": "heliocentricY", "type": ["null", "double"],  "default": null, "doc": "Heliocentric y position [AU]"},
+		{"name": "heliocentricZ", "type": ["null", "double"],  "default": null, "doc": "Heliocentric z position [AU]"},
+		{"name": "phaseAngle",    "type": ["null", "float"],   "default": null, "doc": "Phase angle [deg]"},
+		{"name": "heliocentricDist", "type": ["null", "float"],"default": null, "doc": "Heliocentric distance [AU]"},
+		{"name": "topocentricDist", "type": ["null", "float"], "default": null, "doc": "Topocentric distance [AU]"}
+	]
+}
+EOF
+
+# --- mpc_orbits (stub) ---
+cat << 'EOF' > "${OUTDIR}/rapid.v01_00.mpc_orbits.avsc"
+{
+	"namespace": "rapid.v01_00",
+	"name": "mpc_orbits",
+	"doc": "RAPID alert schema: MPC orbital elements (stub)",
+	"version": "01.00",
+	"type": "record",
+	"fields": [
+		{"name": "id",            "type": "string",             "doc": "MPC designation or packed designation"},
+		{"name": "a",             "type": ["null", "double"],   "default": null, "doc": "Semi-major axis [AU]"},
+		{"name": "e",             "type": ["null", "double"],   "default": null, "doc": "Eccentricity"},
+		{"name": "incl",          "type": ["null", "double"],   "default": null, "doc": "Inclination [deg]"},
+		{"name": "Omega",         "type": ["null", "double"],   "default": null, "doc": "Longitude of ascending node [deg]"},
+		{"name": "omega",         "type": ["null", "double"],   "default": null, "doc": "Argument of perihelion [deg]"},
+		{"name": "M",             "type": ["null", "double"],   "default": null, "doc": "Mean anomaly [deg]"},
+		{"name": "epoch",         "type": ["null", "double"],   "default": null, "doc": "Epoch of orbital elements [MJD]"},
+		{"name": "H",             "type": ["null", "float"],    "default": null, "doc": "Absolute magnitude [mag]"},
+		{"name": "G",             "type": ["null", "float"],    "default": null, "doc": "Slope parameter"}
+	]
+}
+EOF
+
+# --- alert (top-level) ---
+cat << 'EOF' > "${OUTDIR}/rapid.v01_00.alert.avsc"
+{
+	"namespace": "rapid.v01_00",
 	"name": "alert",
-	"doc": "RAPID avro alert schema",
-        "version": "${VERSION}",
-        "type": "record",
-	"fields": [
-		{"name": "alertId",          "type": "string",                                                          "doc":     "unique alert identifer"},
-                {"name": "candidate",        "type": "rapid.alert.candidate",                                           "default": null},
-                {"name": "prv_candidates",   "type": [{"type": "array","items": "rapid.alert.prv_candidate"}, "null" ], "default": null},
-                {"name": "fp_hists",         "type": [{"type": "array","items": "rapid.alert.fp_hist"},       "null" ], "default": null},
-		{"name": "cutoutScience",    "type": ["rapid.alert.cutout", "null"],                                    "default": null},
-		{"name": "cutoutTemplate",   "type": ["rapid.alert.cutout", "null"],                                    "default": null},
-		{"name": "cutoutDifference", "type": ["rapid.alert.cutout", "null"],                                    "default": null}
-     ]
-}
-EOF
-
-
-# Candidate information
-cat << EOF > candidate.avsc
-{
-	"namespace": "rapid.alert",
-	"name": "candidate",
-	"doc": "RAPID avro alert schema",
-	"version": "${VERSION}",
+	"doc": "RAPID alert schema: top-level alert record (LSST-compatible)",
+	"version": "01.00",
 	"type": "record",
 	"fields": [
-		{"name": "jd", "type": "double", "doc": "Observation Julian date at start of exposure [days]"},
-		{"name": "fid", "type": "int", "doc": "Filter ID (1=g; 2=R; 3=i)"},
-		{"name": "pid", "type": "long", "doc": "Processing ID for science image to facilitate archive retrieval"},
-		{"name": "diffmaglim", "type": ["null", "float"], "default": null, "doc": "Expected 5-sigma mag limit in difference image based on global noise estimate [mag]"},
-		{"name": "pdiffimfilename", "type": ["null", "string"], "default": null, "doc": "filename of positive (sci minus ref) difference image"},
-		{"name": "candid", "type": "long", "doc": "Candidate ID from operations DB"},
-		{"name": "isdiffpos", "type": "string", "doc": "t or 1 => candidate is from positive (sci minus ref) subtraction; f or 0 => candidate is from negative (ref minus sci) subtraction"},
-		{"name": "tblid", "type": ["null", "long"], "default": null, "doc": "Internal pipeline table extraction ID"},
-		{"name": "nid", "type": ["null", "int"], "default": null, "doc": "Night ID"},
-		{"name": "xpos", "type": ["null", "float"], "default": null, "doc": "x-image position of candidate [pixels]"},
-		{"name": "ypos", "type": ["null", "float"], "default": null, "doc": "y-image position of candidate [pixels]"},
-		{"name": "ra", "type": "double", "doc": "Right Ascension of candidate; J2000 [deg]"},
-		{"name": "dec", "type": "double", "doc": "Declination of candidate; J2000 [deg]"},
-		{"name": "magpsf", "type": "float", "doc": "Magnitude from PSF-fit photometry [mag]"},
-		{"name": "sigmapsf", "type": "float", "doc": "1-sigma uncertainty in magpsf [mag]"},
-		{"name": "chipsf", "type": ["null", "float"], "default": null, "doc": "Reduced chi-square for PSF-fit"},
-		{"name": "magap", "type": ["null", "float"], "default": null, "doc": "Aperture mag using 14 pixel diameter aperture [mag]"},
-		{"name": "sigmagap", "type": ["null", "float"], "default": null, "doc": "1-sigma uncertainty in magap [mag]"},
-		{"name": "distnr", "type": ["null", "float"], "default": null, "doc": "distance to nearest source in reference image PSF-catalog [pixels]"},
-		{"name": "magnr", "type": ["null", "float"], "default": null, "doc": "magnitude of nearest source in reference image PSF-catalog [mag]"},
-		{"name": "sigmagnr", "type": ["null", "float"], "default": null, "doc": "1-sigma uncertainty in magnr [mag]"},
-		{"name": "chinr", "type": ["null", "float"], "default": null, "doc": "DAOPhot chi parameter of nearest source in reference image PSF-catalog"},
-		{"name": "sharpnr", "type": ["null", "float"], "default": null, "doc": "DAOPhot sharp parameter of nearest source in reference image PSF-catalog"},
-		{"name": "sky", "type": ["null", "float"], "default": null, "doc": "Local sky background estimate [DN]"},
-		{"name": "magdiff", "type": ["null", "float"], "default": null, "doc": "Difference: magap - magpsf [mag]"},
-		{"name": "fwhm", "type": ["null", "float"], "default": null, "doc": "Full Width Half Max assuming a Gaussian core, from SExtractor [pixels]"},
-		{"name": "classtar", "type": ["null", "float"], "default": null, "doc": "Star/Galaxy classification score from SExtractor"},
-		{"name": "mindtoedge", "type": ["null", "float"], "default": null, "doc": "Distance to nearest edge in image [pixels]"},
-		{"name": "magfromlim", "type": ["null", "float"], "default": null, "doc": "Difference: diffmaglim - magap [mag]"},
-		{"name": "seeratio", "type": ["null", "float"], "default": null, "doc": "Ratio: difffwhm / fwhm"},
-		{"name": "aimage", "type": ["null", "float"], "default": null, "doc": "Windowed profile RMS afloat major axis from SExtractor [pixels]"},
-		{"name": "bimage", "type": ["null", "float"], "default": null, "doc": "Windowed profile RMS afloat minor axis from SExtractor [pixels]"},
-		{"name": "aimagerat", "type": ["null", "float"], "default": null, "doc": "Ratio: aimage / fwhm"},
-		{"name": "bimagerat", "type": ["null", "float"], "default": null, "doc": "Ratio: bimage / fwhm"},
-		{"name": "elong", "type": ["null", "float"], "default": null, "doc": "Ratio: aimage / bimage"},
-		{"name": "nneg", "type": ["null", "int"], "default": null, "doc": "number of negative pixels in a 5 x 5 pixel stamp"},
-		{"name": "nbad", "type": ["null", "int"], "default": null, "doc": "number of prior-tagged bad pixels in a 5 x 5 pixel stamp"},
-		{"name": "rb", "type": ["null", "float"], "default": null, "doc": "RealBogus quality score from Random Forest classifier; range is 0 to 1 where closer to 1 is more reliable"},
-		{"name": "ssdistnr", "type": ["null", "float"], "default": null, "doc": "distance to nearest known solar system object if exists within 30 arcsec [arcsec]"},
-		{"name": "ssmagnr", "type": ["null", "float"], "default": null, "doc": "magnitude of nearest known solar system object if exists within 30 arcsec (usually V-band from MPC archive) [mag]"},
-		{"name": "ssnamenr", "type": ["null", "string"], "default": null, "doc": "name of nearest known solar system object if exists within 30 arcsec (from MPC archive)"},
-		{"name": "sumrat", "type": ["null", "float"], "default": null, "doc": "Ratio: sum(pixels) / sum(|pixels|) in a 5 x 5 pixel stamp where stamp is first median-filtered to mitigate outliers"},
-		{"name": "magapbig", "type": ["null", "float"], "default": null, "doc": "Aperture mag using 18 pixel diameter aperture [mag]"},
-		{"name": "sigmagapbig", "type": ["null", "float"], "default": null, "doc": "1-sigma uncertainty in magapbig [mag]"},
-		{"name": "ranr", "type": "double", "doc": "Right Ascension of nearest source in reference image PSF-catalog; J2000 [deg]"},
-		{"name": "decnr", "type": "double", "doc": "Declination of nearest source in reference image PSF-catalog; J2000 [deg]"},
-		{"name": "sgmag1", "type": ["null", "float"], "default": null, "doc": "g-band PSF-fit magnitude of closest source from PS1 catalog; if exists within 30 arcsec [mag]"},
-		{"name": "srmag1", "type": ["null", "float"], "default": null, "doc": "r-band PSF-fit magnitude of closest source from PS1 catalog; if exists within 30 arcsec [mag]"},
-		{"name": "simag1", "type": ["null", "float"], "default": null, "doc": "i-band PSF-fit magnitude of closest source from PS1 catalog; if exists within 30 arcsec [mag]"},
-		{"name": "szmag1", "type": ["null", "float"], "default": null, "doc": "z-band PSF-fit magnitude of closest source from PS1 catalog; if exists within 30 arcsec [mag]"},
-		{"name": "sgscore1", "type": ["null", "float"], "default": null, "doc": "Star/Galaxy score of closest source from PS1 catalog; if exists within 30 arcsec: 0 <= sgscore <= 1 where closer to 1 implies higher likelihood of being a star"},
-		{"name": "distpsnr1", "type": ["null", "float"], "default": null, "doc": "Distance to closest source from PS1 catalog; if exists within 30 arcsec [arcsec]"},
-		{"name": "ndethist", "type": "int", "doc": "Number of spatially-coincident detections falling within 1.5 arcsec going back to beginning of survey; only detections that fell on the same field and readout-channel ID where the input candidate was observed are counted. All raw detections down to a photometric S/N of ~ 3 are included."},
-		{"name": "ncovhist", "type": "int", "doc": "Number of times input candidate position fell on any field and readout-channel going back to beginning of survey"},
-		{"name": "jdstarthist", "type": ["null", "double"], "default": null, "doc": "Earliest Julian date of epoch corresponding to ndethist [days]"},
-		{"name": "jdendhist", "type": ["null", "double"], "default": null, "doc": "Latest Julian date of epoch corresponding to ndethist [days]"},
-		{"name": "scorr", "type": ["null", "double"], "default": null, "doc": "Peak-pixel signal-to-noise ratio in point source matched-filtered detection image"},
-		{"name": "objectidps1", "type": ["null", "long"], "default": null, "doc": "Object ID of closest source from PS1 catalog; if exists within 30 arcsec"},
-		{"name": "objectidps2", "type": ["null", "long"], "default": null, "doc": "Object ID of second closest source from PS1 catalog; if exists within 30 arcsec"},
-		{"name": "sgmag2", "type": ["null", "float"], "default": null, "doc": "g-band PSF-fit magnitude of second closest source from PS1 catalog; if exists within 30 arcsec [mag]"},
-		{"name": "srmag2", "type": ["null", "float"], "default": null, "doc": "r-band PSF-fit magnitude of second closest source from PS1 catalog; if exists within 30 arcsec [mag]"},
-		{"name": "simag2", "type": ["null", "float"], "default": null, "doc": "i-band PSF-fit magnitude of second closest source from PS1 catalog; if exists within 30 arcsec [mag]"},
-		{"name": "szmag2", "type": ["null", "float"], "default": null, "doc": "z-band PSF-fit magnitude of second closest source from PS1 catalog; if exists within 30 arcsec [mag]"},
-		{"name": "sgscore2", "type": ["null", "float"], "default": null, "doc": "Star/Galaxy score of second closest source from PS1 catalog; if exists within 30 arcsec: 0 <= sgscore <= 1 where closer to 1 implies higher likelihood of being a star"},
-		{"name": "distpsnr2", "type": ["null", "float"], "default": null, "doc": "Distance to second closest source from PS1 catalog; if exists within 30 arcsec [arcsec]"},
-		{"name": "objectidps3", "type": ["null", "long"], "default": null, "doc": "Object ID of third closest source from PS1 catalog; if exists within 30 arcsec"},
-		{"name": "sgmag3", "type": ["null", "float"], "default": null, "doc": "g-band PSF-fit magnitude of third closest source from PS1 catalog; if exists within 30 arcsec [mag]"},
-		{"name": "srmag3", "type": ["null", "float"], "default": null, "doc": "r-band PSF-fit magnitude of third closest source from PS1 catalog; if exists within 30 arcsec [mag]"},
-		{"name": "simag3", "type": ["null", "float"], "default": null, "doc": "i-band PSF-fit magnitude of third closest source from PS1 catalog; if exists within 30 arcsec [mag]"},
-		{"name": "szmag3", "type": ["null", "float"], "default": null, "doc": "z-band PSF-fit magnitude of third closest source from PS1 catalog; if exists within 30 arcsec [mag]"},
-		{"name": "sgscore3", "type": ["null", "float"], "default": null, "doc": "Star/Galaxy score of third closest source from PS1 catalog; if exists within 30 arcsec: 0 <= sgscore <= 1 where closer to 1 implies higher likelihood of being a star"},
-		{"name": "distpsnr3", "type": ["null", "float"], "default": null, "doc": "Distance to third closest source from PS1 catalog; if exists within 30 arcsec [arcsec]"},
-		{"name": "nmtchps", "type": "int", "doc": "Number of source matches from PS1 catalog falling within 30 arcsec"},
-		{"name": "rfid", "type": "long", "doc": "Processing ID for reference image to facilitate archive retrieval"},
-		{"name": "jdstartref", "type": "double", "doc": "Observation Julian date of earliest exposure used to generate reference image [days]"},
-		{"name": "jdendref", "type": "double", "doc": "Observation Julian date of latest exposure used to generate reference image [days]"},
-		{"name": "nframesref", "type": "int", "doc": "Number of frames (epochal images) used to generate reference image"},
-		{"name": "rbversion", "type": "string", "doc": "version of Random Forest classifier model used to assign RealBogus (rb) quality score"},
-		{"name": "dsnrms", "type": ["null", "float"], "default": null, "doc": "Ratio: D/stddev(D) on event position where D = difference image"},
-		{"name": "ssnrms", "type": ["null", "float"], "default": null, "doc": "Ratio: S/stddev(S) on event position where S = image of convolution: D (x) PSF(D)"},
-		{"name": "dsdiff", "type": ["null", "float"], "default": null, "doc": "Difference of statistics: dsnrms - ssnrms"},
-		{"name": "magzpsci", "type": ["null", "float"], "default": null, "doc": "Magnitude zero point for photometry estimates [mag]"},
-		{"name": "magzpsciunc", "type": ["null", "float"], "default": null, "doc": "Magnitude zero point uncertainty (in magzpsci) [mag]"},
-		{"name": "magzpscirms", "type": ["null", "float"], "default": null, "doc": "RMS (deviation from average) in all differences between instrumental photometry and matched photometric calibrators from science image processing [mag]"},
-		{"name": "nmatches", "type": "int", "doc": "Number of PS1 photometric calibrators used to calibrate science image from science image processing"},
-		{"name": "clrcoeff", "type": ["null", "float"], "default": null, "doc": "Color coefficient from linear fit from photometric calibration of science image"},
-		{"name": "clrcounc", "type": ["null", "float"], "default": null, "doc": "Color coefficient uncertainty from linear fit (corresponding to clrcoeff)"},
-		{"name": "zpclrcov", "type": ["null", "float"], "default": null, "doc": "Covariance in magzpsci and clrcoeff from science image processing [mag^2]"},
-		{"name": "zpmed", "type": ["null", "float"], "default": null, "doc": "Magnitude zero point from median of all differences between instrumental photometry and matched photometric calibrators from science image processing [mag]"},
-		{"name": "clrmed", "type": ["null", "float"], "default": null, "doc": "Median color of all PS1 photometric calibrators used from science image processing [mag]: for filter (fid) = 1, 2, 3, PS1 color used = g-r, g-r, r-i respectively"},
-		{"name": "clrrms", "type": ["null", "float"], "default": null, "doc": "RMS color (deviation from average) of all PS1 photometric calibrators used from science image processing [mag]"},
-		{"name": "neargaia", "type": ["null", "float"], "default": null, "doc": "Distance to closest source from Gaia DR1 catalog irrespective of magnitude; if exists within 90 arcsec [arcsec]"},
-		{"name": "neargaiabright", "type": ["null", "float"], "default": null, "doc": "Distance to closest source from Gaia DR1 catalog brighter than magnitude 14; if exists within 90 arcsec [arcsec]"},
-		{"name": "maggaia", "type": ["null", "float"], "default": null, "doc": "Gaia (G-band) magnitude of closest source from Gaia DR1 catalog irrespective of magnitude; if exists within 90 arcsec [mag]"},
-		{"name": "maggaiabright", "type": ["null", "float"], "default": null, "doc": "Gaia (G-band) magnitude of closest source from Gaia DR1 catalog brighter than magnitude 14; if exists within 90 arcsec [mag]"},
-		{"name": "exptime", "type": ["null", "float"], "default": null, "doc": "Integration time of camera exposure [sec]"},
-		{"name": "drb", "type": ["null", "float"], "default": null, "doc": "RealBogus quality score from Deep-Learning-based classifier; range is 0 to 1 where closer to 1 is more reliable"},
-		{"name": "drbversion", "type": "string", "doc": "version of Deep-Learning-based classifier model used to assign RealBogus (drb) quality score"}
-			]
+		{"name": "diaSourceId",        "type": "long",                                                                         "doc": "Identifier for the triggering diaSource"},
+		{"name": "observation_reason",  "type": ["null", "string"],                                                            "default": null, "doc": "Reason for observation (e.g. survey, ToO)"},
+		{"name": "target_name",         "type": ["null", "string"],                                                            "default": null, "doc": "Target name if targeted observation"},
+		{"name": "diaSource",          "type": "rapid.v01_00.diaSource",                                                         "doc": "Triggering source detection"},
+		{"name": "prvDiaSources",      "type": ["null", {"type": "array", "items": "rapid.v01_00.diaSource"}],                   "default": null, "doc": "Previous detections of the same object within 12 months"},
+		{"name": "prvDiaForcedSources","type": ["null", {"type": "array", "items": "rapid.v01_00.diaForcedSource"}],              "default": null, "doc": "Forced photometry history at the object position"},
+		{"name": "diaObject",          "type": ["null", "rapid.v01_00.diaObject"],                                               "default": null, "doc": "Summary object record"},
+		{"name": "ssSource",           "type": ["null", "rapid.v01_00.ssSource"],                                                "default": null, "doc": "Solar system source association (stub)"},
+		{"name": "mpc_orbits",         "type": ["null", "rapid.v01_00.mpc_orbits"],                                              "default": null, "doc": "MPC orbital elements (stub)"},
+		{"name": "cutoutDifference",   "type": ["null", "bytes"],                                                              "default": null, "doc": "FITS cutout of difference image"},
+		{"name": "cutoutScience",      "type": ["null", "bytes"],                                                              "default": null, "doc": "FITS cutout of science image"},
+		{"name": "cutoutTemplate",     "type": ["null", "bytes"],                                                              "default": null, "doc": "FITS cutout of template image"}
+	]
 }
 EOF
 
-# Previous candidates
-cat << EOF > prv_candidates.avsc
-{
-	"namespace": "rapid.alert",
-	"name": "prv_candidate",
-        "doc": "RAPID avro alert schema",
-        "version": "${VERSION}",
-	"type": "record",
-	"fields": [
-		{"name": "jd", "type": "double", "doc": "Observation Julian date at start of exposure [days]"},
-		{"name": "pid", "type": "long", "doc": "Processing ID for image"},
-		{"name": "diffmaglim", "type": ["null", "float"], "default": null, "doc": "Expected 5-sigma mag limit in difference image based on global noise estimate [mag]"},
-		{"name": "pdiffimfilename", "type": ["null", "string"], "default": null, "doc": "filename of positive (sci minus ref) difference image"},
-		{"name": "candid", "type": ["null", "long"], "doc": "Candidate ID from operations DB"},
-		{"name": "isdiffpos", "type": ["null", "string"], "doc": "t or 1 => candidate is from positive (sci minus ref) subtraction; f or 0 => candidate is from negative (ref minus sci) subtraction"},
-		{"name": "tblid", "type": ["null", "long"], "default": null, "doc": "Internal pipeline table extraction ID"},
-		{"name": "nid", "type": ["null", "int"], "default": null, "doc": "Night ID"},
-		{"name": "xpos", "type": ["null", "float"], "default": null, "doc": "x-image position of candidate [pixels]"},
-		{"name": "ypos", "type": ["null", "float"], "default": null, "doc": "y-image position of candidate [pixels]"},
-		{"name": "ra", "type": ["null", "double"], "doc": "Right Ascension of candidate; J2000 [deg]"},
-		{"name": "dec", "type": ["null", "double"], "doc": "Declination of candidate; J2000 [deg]"},
-		{"name": "magpsf", "type": ["null", "float"], "doc": "Magnitude from PSF-fit photometry [mag]"},
-		{"name": "sigmapsf", "type": ["null", "float"], "doc": "1-sigma uncertainty in magpsf [mag]"},
-		{"name": "chipsf", "type": ["null", "float"], "default": null, "doc": "Reduced chi-square for PSF-fit"},
-		{"name": "magap", "type": ["null", "float"], "default": null, "doc": "Aperture mag using 14 pixel diameter aperture [mag]"},
-		{"name": "sigmagap", "type": ["null", "float"], "default": null, "doc": "1-sigma uncertainty in magap [mag]"},
-		{"name": "distnr", "type": ["null", "float"], "default": null, "doc": "distance to nearest source in reference image PSF-catalog [pixels]"},
-		{"name": "magnr", "type": ["null", "float"], "default": null, "doc": "magnitude of nearest source in reference image PSF-catalog [mag]"},
-		{"name": "sigmagnr", "type": ["null", "float"], "default": null, "doc": "1-sigma uncertainty in magnr [mag]"},
-		{"name": "chinr", "type": ["null", "float"], "default": null, "doc": "DAOPhot chi parameter of nearest source in reference image PSF-catalog"},
-		{"name": "sharpnr", "type": ["null", "float"], "default": null, "doc": "DAOPhot sharp parameter of nearest source in reference image PSF-catalog"},
-		{"name": "sky", "type": ["null", "float"], "default": null, "doc": "Local sky background estimate [DN]"},
-		{"name": "magdiff", "type": ["null", "float"], "default": null, "doc": "Difference: magap - magpsf [mag]"},
-		{"name": "fwhm", "type": ["null", "float"], "default": null, "doc": "Full Width Half Max assuming a Gaussian core, from SExtractor [pixels]"},
-		{"name": "classtar", "type": ["null", "float"], "default": null, "doc": "Star/Galaxy classification score from SExtractor"},
-		{"name": "mindtoedge", "type": ["null", "float"], "default": null, "doc": "Distance to nearest edge in image [pixels]"},
-		{"name": "magfromlim", "type": ["null", "float"], "default": null, "doc": "Difference: diffmaglim - magap [mag]"},
-		{"name": "seeratio", "type": ["null", "float"], "default": null, "doc": "Ratio: difffwhm / fwhm"},
-		{"name": "aimage", "type": ["null", "float"], "default": null, "doc": "Windowed profile RMS afloat major axis from SExtractor [pixels]"},
-		{"name": "bimage", "type": ["null", "float"], "default": null, "doc": "Windowed profile RMS afloat minor axis from SExtractor [pixels]"},
-		{"name": "aimagerat", "type": ["null", "float"], "default": null, "doc": "Ratio: aimage / fwhm"},
-		{"name": "bimagerat", "type": ["null", "float"], "default": null, "doc": "Ratio: bimage / fwhm"},
-		{"name": "elong", "type": ["null", "float"], "default": null, "doc": "Ratio: aimage / bimage"},
-		{"name": "nneg", "type": ["null", "int"], "default": null, "doc": "number of negative pixels in a 5 x 5 pixel stamp"},
-		{"name": "nbad", "type": ["null", "int"], "default": null, "doc": "number of prior-tagged bad pixels in a 5 x 5 pixel stamp"},
-		{"name": "rb", "type": ["null", "float"], "default": null, "doc": "RealBogus quality score; range is 0 to 1 where closer to 1 is more reliable"},
-		{"name": "ssdistnr", "type": ["null", "float"], "default": null, "doc": "distance to nearest known solar system object if exists within 30 arcsec [arcsec]"},
-		{"name": "ssmagnr", "type": ["null", "float"], "default": null, "doc": "magnitude of nearest known solar system object if exists within 30 arcsec (usually V-band from MPC archive) [mag]"},
-		{"name": "ssnamenr", "type": ["null", "string"], "default": null, "doc": "name of nearest known solar system object if exists within 30 arcsec (from MPC archive)"},
-		{"name": "sumrat", "type": ["null", "float"], "default": null, "doc": "Ratio: sum(pixels) / sum(|pixels|) in a 5 x 5 pixel stamp where stamp is first median-filtered to mitigate outliers"},
-		{"name": "magapbig", "type": ["null", "float"], "default": null, "doc": "Aperture mag using 18 pixel diameter aperture [mag]"},
-		{"name": "sigmagapbig", "type": ["null", "float"], "default": null, "doc": "1-sigma uncertainty in magapbig [mag]"},
-		{"name": "ranr", "type": ["null", "double"], "doc": "Right Ascension of nearest source in reference image PSF-catalog; J2000 [deg]"},
-		{"name": "decnr", "type": ["null", "double"], "doc": "Declination of nearest source in reference image PSF-catalog; J2000 [deg]"},
-		{"name": "scorr", "type": ["null", "double"], "default": null, "doc": "Peak-pixel signal-to-noise ratio in point source matched-filtered detection image"},
-		{"name": "magzpsci", "type": ["null", "float"], "default": null, "doc": "Magnitude zero point for photometry estimates [mag]"},
-		{"name": "magzpsciunc", "type": ["null", "float"], "default": null, "doc": "Magnitude zero point uncertainty (in magzpsci) [mag]"},
-		{"name": "magzpscirms", "type": ["null", "float"], "default": null, "doc": "RMS (deviation from average) in all differences between instrumental photometry and matched photometric calibrators from science image processing [mag]"},
-		{"name": "clrcoeff", "type": ["null", "float"], "default": null, "doc": "Color coefficient from linear fit from photometric calibration of science image"},
-		{"name": "clrcounc", "type": ["null", "float"], "default": null, "doc": "Color coefficient uncertainty from linear fit (corresponding to clrcoeff)"},
-		{"name": "rbversion", "type": "string", "doc": "version of RealBogus model/classifier used to assign rb quality score"}
-			]
-}
-EOF
+# --- Version pointer ---
+echo "${VERSION}" > schema/latest.txt
 
-# Forced-photometry history 
-cat << EOF > fp_hist.avsc
-{
-	"namespace": "rapid.alert",
-	"name": "fp_hist",
-	"doc": "RAPID avro alert schema",
-	"version": "${VERSION}",
-	"type": "record",
-	"fields": [
-		{"name": "pid", "type": "long", "doc": "Processing ID for image"},
-		{"name": "rfid", "type": "long", "doc": "Processing ID for reference image to facilitate archive retrieval"},
-		{"name": "sciinpseeing", "type": ["null", "float"], "default": null, "doc": "Effective FWHM of sci image [pixels]"},
-		{"name": "scibckgnd", "type": ["null", "float"], "default": null, "doc": "Background level in sci image [DN]"},
-		{"name": "scisigpix", "type": ["null", "float"], "default": null, "doc": "Robust sigma per pixel in sci image [DN]"},
-		{"name": "magzpsci", "type": ["null", "float"], "default": null, "doc": "Magnitude zero point for photometry estimates [mag]"},
-		{"name": "magzpsciunc", "type": ["null", "float"], "default": null, "doc": "Magnitude zero point uncertainty (in magzpsci) [mag]"},
-		{"name": "magzpscirms", "type": ["null", "float"], "default": null, "doc": "RMS (deviation from average) in all differences between instrumental photometry and matched photometric calibrators from science image processing [mag]"},
-		{"name": "clrcoeff", "type": ["null", "float"], "default": null, "doc": "Color coefficient from linear fit from photometric calibration of science image"},
-		{"name": "clrcounc", "type": ["null", "float"], "default": null, "doc": "Color coefficient uncertainty from linear fit (corresponding to clrcoeff)"},
-		{"name": "exptime", "type": ["null", "float"], "default": null, "doc": "Integration time of camera exposure [sec]"},
-		{"name": "adpctdif1", "type": ["null", "float"], "default": null, "doc": "Full sci image astrometric RMS along R.A. with respect to Gaia1 [arcsec]"},
-		{"name": "adpctdif2", "type": ["null", "float"], "default": null, "doc": "Full sci image astrometric RMS along Dec. with respect to Gaia1 [arcsec]"},
-		{"name": "diffmaglim", "type": ["null", "float"], "default": null, "doc": "Expected 5-sigma mag limit in difference image based on global noise estimate [mag]"},
-		{"name": "jd", "type": "double", "doc": "Observation Julian date at start of exposure [days]"},
-		{"name": "forcediffimflux", "type": ["null", "float"], "default": null, "doc": "Forced difference image PSF-fit flux [DN]"},
-		{"name": "forcediffimfluxunc", "type": ["null", "float"], "default": null, "doc": "1-sigma uncertainty in forcediffimflux [DN]"},
-		{"name": "procstatus", "type": ["null", "string"], "default": null, "doc": "Forced photometry processing status codes (0 => no warnings); see documentation"},
-		{"name": "distnr", "type": ["null", "float"], "default": null, "doc": "distance to nearest source in reference image PSF-catalog [arcsec]"},
-		{"name": "ranr", "type": "double", "doc": "Right Ascension of nearest source in reference image PSF-catalog; J2000 [deg]"},
-		{"name": "decnr", "type": "double", "doc": "Declination of nearest source in reference image PSF-catalog; J2000 [deg]"},
-		{"name": "magnr", "type": ["null", "float"], "default": null, "doc": "magnitude of nearest source in reference image PSF-catalog [mag]"},
-		{"name": "sigmagnr", "type": ["null", "float"], "default": null, "doc": "1-sigma uncertainty in magnr [mag]"},
-		{"name": "chinr", "type": ["null", "float"], "default": null, "doc": "DAOPhot chi parameter of nearest source in reference image PSF-catalog"},
-		{"name": "sharpnr", "type": ["null", "float"], "default": null, "doc": "DAOPhot sharp parameter of nearest source in reference image PSF-catalog"}
-			]
-}
-EOF
-
-# Postage stamp cutouts
-cat << EOF > cutout.avsc
-{
-	"namespace": "rapid.alert",
-	"name": "cutout",
-	"doc": "RAPID avro alert schema",
-	"version": "${VERSION}",
-        "type": "record",
-	"fields": [
-		{"name": "fileName", "type": "string"},
-		{"name": "stampData", "type": "bytes", "doc": "fits.gz"}
-			]
-}
-EOF
+echo "Schema v${VERSION} written to ${OUTDIR}/"
+echo "Files:"
+ls -1 "${OUTDIR}/"*.avsc
