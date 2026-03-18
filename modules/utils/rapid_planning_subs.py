@@ -2,11 +2,11 @@ import modules.utils.rapid_pipeline_subs as util
 
 
 #######################################################################################
-# Need a function that, given the boresight sky position and orientation angle, find the
+# Need a function that, given the WFI-center sky position and orientation angle, find the
 # (ra,dec) of the centers and corners of all the Roman WFI SCAs.  As a hack, we use the
 # following metadata from the OpenUniverse simulated images:
 #
-# Roman_TDS_obseq_11_6_23.fits (gives the boresight sky position):
+# Roman_TDS_obseq_11_6_23.fits (gives the WFI-center sky position):
 # ra        dec        filter   exptime   date          pa
 # 7.60523   -45.6541   R062     161.025   62000.02139   0.0
 
@@ -149,19 +149,19 @@ import modules.utils.rapid_pipeline_subs as util
 # Ignore SCA readout direction within FOV for now (because the above examples shows the
 # CD matrices have 3 different combinations of signs, depending on the SCA).
 #
-# The current optical modelling of the WFI suggests that the geometric distortion is small
+# The current optical modeling of the WFI suggests that the geometric distortion is small
 # and amounts to less than 2% over the field of view. As a result, the pixel scale is nearly
 # constant at 110 mas per pixel. This results in an outer dimension of the field of view of
 # about 2800 arcsec by 1400 arcsec, including gaps.
 #
-# Inputs to this method are (ra,dec) of boresight, in degrees, and position angle [deg].
+# Inputs to this method are (ra,dec) of WFI center, in degrees, and position angle [deg].
 #######################################################################################
 
-def compute_sca_center_and_corner_sky_positions_from_boresight_sky_position(ra,dec,pa,debug=False):
+def compute_sca_center_and_corner_sky_positions_from_wfi_center_sky_position(ra,dec,pa,debug=False):
 
-    ra_boresight_ref = 7.60523
-    dec_boresight_ref = -45.6541
-    pa_boresight_ref = 0.0
+    ra_wfi_center_ref = 7.60523
+    dec_wfi_center_ref = -45.6541
+    pa_wfi_center_ref = 0.0
 
     ra0_sca_refs = [7.70257523225097,7.7021784763940495,7.701810394150581,7.896975260747919,7.896212181342388,7.895393684952536,8.09131856656055,8.090468676252794,8.090776381136955,7.50817107670711,7.508424304595279,7.5087920545391045,7.313914400856016,7.314390664598548,7.315208829157174,7.119427328186973,7.1201343286056265,7.119683618863046]
     dec0_sca_refs = [-45.689658660119015,-45.543259134568196,-45.41236073781342,-45.71642870400937,-45.569730686381085,-45.43913367529469,-45.78136918203001,-45.633972867283106,-45.50447180418685,-45.689658902909905,-45.54325925525537,-45.4123608577716,-45.71642979677176,-45.569731048951944,-45.439134036034716,-45.781470393591285,-45.63397347261506,-45.50447180418685]
@@ -229,9 +229,9 @@ def compute_sca_center_and_corner_sky_positions_from_boresight_sky_position(ra,d
 
         i += 1
 
-        crval1 = ra_boresight_ref
-        crval2 = dec_boresight_ref
-        crota2 = pa_boresight_ref
+        crval1 = ra_wfi_center_ref
+        crval2 = dec_wfi_center_ref
+        crota2 = pa_wfi_center_ref
 
         x0,y0 = util.rev_tan_proj(ra0_sca_ref,dec0_sca_ref,crpix1,crpix2,crval1,crval2,cdelt1,cdelt2,crota2,debug)
 
@@ -295,15 +295,15 @@ def compute_sca_center_and_corner_sky_positions_from_boresight_sky_position(ra,d
         decs4.append(dec4)
 
 
-    # Compute the boresight sky position based on how the boresight is defined in the OpenUniverse sims.
+    # Compute the WFI-center sky position based on how it is defined in the OpenUniverse sims.
 
-    x_boresight = crpix1
-    y_boresight = crpix2
-    ra_boresight,dec_boresight = util.tan_proj(x_boresight,y_boresight,crpix1,crpix2,crval1,crval2,cdelt1,cdelt2,crota2,debug)
+    x_wfi_center = crpix1
+    y_wfi_center = crpix2
+    ra_wfi_center,dec_wfi_center = util.tan_proj(x_wfi_center,y_wfi_center,crpix1,crpix2,crval1,crval2,cdelt1,cdelt2,crota2,debug)
 
     if debug:
-        print(f"x_boresight,y_boresight = {x_boresight},{y_boresight}")
-        print(f"ra_boresight,naxis2 = {ra_boresight},{dec_boresight}")
+        print(f"x_wfi_center,y_wfi_center = {x_wfi_center},{y_wfi_center}")
+        print(f"ra_wfi_center,naxis2 = {ra_wfi_center},{dec_wfi_center}")
 
 
     return x_centers,y_centers,\
@@ -317,5 +317,5 @@ def compute_sca_center_and_corner_sky_positions_from_boresight_sky_position(ra,d
            ras2,decs2,\
            ras3,decs3,\
            ras4,decs4,\
-           x_boresight,y_boresight,\
-           ra_boresight,dec_boresight
+           x_wfi_center,y_wfi_center,\
+           ra_wfi_center,dec_wfi_center
