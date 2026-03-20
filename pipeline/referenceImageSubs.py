@@ -183,8 +183,8 @@ def generateReferenceImage(s3_client,
 
                 exitcode_from_fake_sources = util.execute_command(fake_sources_cmd)
 
-                filename_image_with_fake_sources = fname_output.replace(".fits","_inject.fits")
-                filename_injection_catalog = fname_output.replace(".fits","_inject.txt")
+                filename_image_with_fake_sources = fname_input.replace(".fits","_inject.fits")
+                filename_injection_catalog = fname_input.replace(".fits","_inject.txt")
                 fname_input = filename_image_with_fake_sources
 
 
