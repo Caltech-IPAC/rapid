@@ -104,9 +104,9 @@ if __name__ == '__main__':
             ras2,decs2, \
             ras3,decs3, \
             ras4,decs4, \
-            x_boresight,y_boresight, \
-            ra_boresight,dec_boresight = \
-            pln.compute_sca_center_and_corner_sky_positions_from_boresight_sky_position(ra,dec,pa)
+            x_wfi_center,y_wfi_center, \
+            ra_wfi_center,dec_wfi_center = \
+            pln.compute_sca_center_and_corner_sky_positions_from_wfi_center_sky_position(ra,dec,pa)
 
 
             # Loop over SCAs.
