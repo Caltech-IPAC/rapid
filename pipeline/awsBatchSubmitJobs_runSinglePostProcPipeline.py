@@ -214,7 +214,7 @@ if __name__ == '__main__':
 
         # Reference image.
 
-        if awaicgen_output_mosaic_image_file in product_bucket_object.key:
+        if f"{job_prefix}{awaicgen_output_mosaic_image_file}" == product_bucket_object.key:
 
             print("Found in reference image in S3 product bucket: {}".format(awaicgen_output_mosaic_image_file))
 
@@ -273,7 +273,7 @@ if __name__ == '__main__':
 
         print("===> zogy_output_diffimage_file =",zogy_output_diffimage_file)
 
-        if zogy_output_diffimage_file in product_bucket_object.key:
+        if f"{job_prefix}{zogy_output_diffimage_file}" == product_bucket_object.key:
 
             print("Found in difference image in S3 product bucket: {}".format(zogy_output_diffimage_file))
 
