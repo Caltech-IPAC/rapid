@@ -120,6 +120,73 @@ def generateReferenceImage(s3_client,
             gunzip_cmd = ['gunzip', '-f', refimage_input_filename]
             exitcode_from_gunzip = util.execute_command(gunzip_cmd)
 
+            refimage_input_filename_gunzipped = refimage_input_filename.replace(".fits.gz",".fits")
+
+            fname_input = refimage_input_filename_gunzipped
+
+
+            # Optionally inject fake sources into reference-image input.
+
+            if inject_fake_sources_flag:
+
+
+                # Define filenames of injection catalog file and injection-catalog-list file (contains just one row).
+
+                injection_catalog_filename = f"injection_catalog_rtid{refimage_input_field}.json"
+                injection_catalog_list_filename = f"injection_catalog_list_rtid{refimage_input_field}.csv"
+
+
+                # Download injection catalog from S3 bucket.
+
+                s3_full_name_injection_catalog = f"s3://{job_info_s3_bucket}/injection_catalogs/{injection_catalog_filename}"
+
+                injection_catalog_filename,subdirs,downloaded_from_bucket = util.download_file_from_s3_bucket(s3_client,s3_full_name_injection_catalog)
+
+                print("s3_full_name_injection_catalog = ",s3_full_name_injection_catalog)
+                print("injection_catalog_filename = ",injection_catalog_filename)
+
+
+                # Write injection-catalog-list file (contains just one row).
+
+                file_content = f"{injection_catalog_filename}\n"
+
+                with open(injection_catalog_list_filename, 'w') as f:
+                    f.write(file_content)
+
+
+                # Run fake-source injections code.
+
+                print("fake_sources_dict =",fake_sources_dict)
+
+                refimg_input_ext = fake_sources_dict['refimg_input_ext']
+                num_injections = fake_sources_dict['num_injections']
+                injection_mag_min = fake_sources_dict['mag_min']
+                injection_mag_max = fake_sources_dict['mag_max']
+
+                python_cmd = '/usr/bin/python3.11'
+                fake_sources_code = rapid_sw + '/modules/fake_src/rapid_source_injections.py'
+
+                fake_sources_cmd = [python_cmd,
+                                    fake_sources_code,
+                                    '--sci_ext',
+                                    refimg_input_ext,
+                                    '--num_injections',
+                                    num_injections,
+                                    '--mag_min',
+                                    injection_mag_min,
+                                    '--mag_max',
+                                    injection_mag_max,
+                                    '--injections_by_field_flag',
+                                    '--field_catalogs_input_filename',
+                                    injection_catalog_list_filename,
+                                    fname_input]
+
+                exitcode_from_fake_sources = util.execute_command(fake_sources_cmd)
+
+                filename_image_with_fake_sources = fname_output.replace(".fits","_inject.fits")
+                filename_injection_catalog = fname_output.replace(".fits","_inject.txt")
+                fname_input = filename_image_with_fake_sources
+
 
             # Reformat the FITS file so that the image data are contained in the PRIMARY header.
             # Normalize by exposure time, and scale the input image data such that the zero point
@@ -128,7 +195,6 @@ def generateReferenceImage(s3_client,
 
             zprefimg = float(awaicgen_dict["zprefimg"])
 
-            fname_input = refimage_input_filename.replace(".fits.gz",".fits")
             fname_output = refimage_input_filename.replace(".fits.gz","_reformatted.fits")
             fname_output_unc = refimage_input_filename.replace(".fits.gz","_reformatted_unc.fits")
 
@@ -170,77 +236,12 @@ def generateReferenceImage(s3_client,
             hdul.close()
 
 
-            # Optionally inject fake sources into reference-image input.
-
-            if inject_fake_sources_flag:
-
-
-                # Define filenames of injection catalog file and injection-catalog-list file (contains just one row).
-
-                injection_catalog_filename = f"injection_catalog_rtid{refimage_input_field}.json"
-                injection_catalog_list_filename = f"injection_catalog_list_rtid{refimage_input_field}.csv"
-
-
-                # Download injection catalog from S3 bucket.
-
-                s3_full_name_injection_catalog = f"s3://{job_info_s3_bucket}/injection_catalogs/{injection_catalog_filename}"
-
-                injection_catalog_filename,subdirs,downloaded_from_bucket = util.download_file_from_s3_bucket(s3_client,s3_full_name_injection_catalog)
-
-                print("s3_full_name_injection_catalog = ",s3_full_name_injection_catalog)
-                print("injection_catalog_filename = ",injection_catalog_filename)
-
-
-                # Write injection-catalog-list file (contains just one row).
-
-                file_content = f"{injection_catalog_filename}\n"
-
-                with open(injection_catalog_list_filename, 'w') as f:
-                    f.write(file_content)
-
-
-                # Run fake-source injections code.
-
-                print("fake_sources_dict =",fake_sources_dict)
-
-                sci_ext = fake_sources_dict['refimg_input_ext']
-                num_injections = fake_sources_dict['num_injections']
-                injection_mag_min = fake_sources_dict['mag_min']
-                injection_mag_max = fake_sources_dict['mag_max']
-
-                python_cmd = '/usr/bin/python3.11'
-                fake_sources_code = rapid_sw + '/modules/fake_src/rapid_source_injections.py'
-
-                fake_sources_cmd = [python_cmd,
-                                    fake_sources_code,
-                                    '--sci_ext',
-                                    sci_ext,
-                                    '--num_injections',
-                                    num_injections,
-                                    '--mag_min',
-                                    injection_mag_min,
-                                    '--mag_max',
-                                    injection_mag_max,
-                                    '--injections_by_field_flag',
-                                    '--field_catalogs_input_filename',
-                                    injection_catalog_list_filename,
-                                    fname_output]
-
-                exitcode_from_fake_sources = util.execute_command(fake_sources_cmd)
-
-                filename_image_with_fake_sources = fname_output.replace(".fits","_inject.fits")
-                filename_injection_catalog = fname_output.replace(".fits","_inject.txt")
-
-
             # Compute via a simple model the uncertainty image from the
             # reformatted science image, which may or may not contain injected fake sources,
             # assuming some value for the SCA gain (electrons/ADU), which is currently
             # unavailable for Roman WFI.
 
-            if inject_fake_sources_flag:
-                hdul = fits.open(filename_image_with_fake_sources)
-            else:
-                hdul = fits.open(fname_output)
+            hdul = fits.open(fname_output)
 
             hdr = hdul[0].header
             data = hdul[0].data
@@ -260,18 +261,23 @@ def generateReferenceImage(s3_client,
             # Propagate the reference-image inputs to awaicgen and for uploading to S3 bucket.
 
             if inject_fake_sources_flag:
-                refimage_input_filenames_reformatted.append(filename_image_with_fake_sources)
                 refimage_input_filenames_injection_catalog.append(filename_injection_catalog)
-            else:
-                refimage_input_filenames_reformatted.append(fname_output)
 
+            refimage_input_filenames_reformatted.append(fname_output)
             refimage_input_filenames_reformatted_unc.append(fname_output_unc)
 
 
             # Delete the original FITS file locally to save disk space.
 
-            rm_cmd = ['rm', '-f', fname_input]
+            rm_cmd = ['rm', '-f', refimage_input_filename_gunzipped]
             exitcode_from_rm = util.execute_command(rm_cmd)
+
+            if inject_fake_sources_flag:
+                rm_cmd = ['rm', '-f', filename_image_with_fake_sources]
+                exitcode_from_rm = util.execute_command(rm_cmd)
+
+
+            # Increment refimage-input-file counter.
 
             n += 1
             if n >= max_n_images_to_coadd:
