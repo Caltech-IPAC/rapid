@@ -402,6 +402,11 @@ if __name__ == '__main__':
         exit(dbh.exit_code)
 
 
+    # Compute all fields that overlap the science image.
+
+    sciimg_overlapping_rtids = roman_tessellation_db.get_overlapping_rtids(ra0,dec0,ra1,dec1,ra2,dec2,ra3,dec3,ra4,dec4)
+
+
     # Query PSFs database table for the best version of PSF, required by ZOGY.
 
     psfid,s3_full_name_sciimage_psf = dbh.get_best_psf(sca,fid)
@@ -516,6 +521,15 @@ if __name__ == '__main__':
                                                crval1_refimage,crval2_refimage,
                                                cdelt1_refimage,cdelt2_refimage,
                                                crota2_refimage)
+
+
+    # Compute all fields that overlap the reference image.
+
+    refimg_overlapping_rtids = roman_tessellation_db.get_overlapping_rtids(ra0_refimage,dec0_refimage,
+                                                                           ra1_refimage,dec1_refimage,
+                                                                           ra2_refimage,dec2_refimage,
+                                                                           ra3_refimage,dec3_refimage,
+                                                                           ra4_refimage,dec4_refimage)
 
 
     # Insert or update record in Jobs database table and return job ID.
@@ -717,6 +731,8 @@ if __name__ == '__main__':
     job_config['SCI_IMAGE']['ra4'] = str(ra4)
     job_config['SCI_IMAGE']['dec4'] = str(dec4)
 
+    job_config['SCI_IMAGE']['overlapping_fields'] = str(sciimg_overlapping_rtids)
+
     job_config['SKY_TILE'] = {}
 
     job_config['SKY_TILE']['rtid'] = str(rtid)
@@ -756,6 +772,8 @@ if __name__ == '__main__':
     job_config['REF_IMAGE']['dec3'] = str(dec3_refimage)
     job_config['REF_IMAGE']['ra4'] = str(ra4_refimage)
     job_config['REF_IMAGE']['dec4'] = str(dec4_refimage)
+
+    job_config['REF_IMAGE']['overlapping_fields'] = str(refimg_overlapping_rtids)
 
     zogy_dict["psfid"] = str(psfid)
     zogy_dict["s3_full_name_sciimage_psf"] = s3_full_name_sciimage_psf
