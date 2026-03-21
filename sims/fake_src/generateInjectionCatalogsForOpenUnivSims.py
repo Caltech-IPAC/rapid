@@ -138,68 +138,28 @@ if __name__ == '__main__':
         print(f"Start of loop: field = {field}")
 
 
-        # Query RAPID operations database for representative reference image,
-        # in order to find the sky positions of its four corners.  This is,
-        # unfortunately, because the sky positions are not stored in the database.
+        # Query RAPID operations database for representative science image,
+        # in order to find the sky positions of its four corners.
 
-        query = f"SELECT filename FROM refimages WHERE vbest>0 AND field = {field} limit 1;"
+        query = f"SELECT rid FROM l2files WHERE vbest>0 AND field = {field} limit 1;"
 
         sql_queries = []
         sql_queries.append(query)
         records = dbh.execute_sql_queries(sql_queries,debug)
 
-        s3_full_name_reference_image = records[0][0]
+        rid = records[0][0]
 
 
-        # Download reference image from S3 bucket.
+        # Query database for associated L2FileMeta record.
 
-        refimage_filename,subdirs,downloaded_from_bucket = util.download_file_from_s3_bucket(s3_client,s3_full_name_reference_image)
+        sca,fid,ra0,dec0,ra1,dec1,ra2,dec2,ra3,dec3,ra4,dec4 = dbh.get_l2filemeta_record(rid)
 
-
-        # Read FITS file.
-
-        hdu_index = 0
-
-        with fits.open(refimage_filename) as hdul:
-
-            hdr = hdul[hdu_index].header
-
-            wcs_refimg = WCS(hdr) # Initialize WCS object from FITS header
-
-            naxis1_refimg = hdr['NAXIS1']
-            naxis1_refimg = hdr['NAXIS2']
-
-            print("naxis1_refimg,naxis1_refimg =",naxis1_refimg,naxis1_refimg)
-
-            crpix1 = wcs_refimg.wcs.crpix[0]
-            crpix2 = wcs_refimg.wcs.crpix[1]
-
-            crval1 = hdr['CRVAL1']
-            crval2 = hdr['CRVAL2']
-
-            print(f"crval1,crval2 = {crval1},{crval2}")
+        if dbh.exit_code >= 64:
+            print("*** Error from {}; quitting ".format(swname))
+            exit(dbh.exit_code)
 
 
-        # Example of converting pixel coordinates to celestial coordinates
-        # The following should reproduce CRVAL1,CRVAL2.
-
-        pixel_x, pixel_y = crpix1 - 1, crpix2 - 1
-        celestial_coords = wcs_refimg.pixel_to_world(pixel_x, pixel_y)
-        print(f"CRVAL1,CRVAL2 Pixel ({pixel_x}, {pixel_y}) corresponds to {celestial_coords.ra.deg:.12f} RA and {celestial_coords.dec.deg:.12f} Dec.")
-
-
-        # Compute pixel coordinates of ref-image center and four corners.
-
-        x0,y0,x1,y1,x2,y2,x3,y3,x4,y4 = util.compute_pix_image_center_and_four_corners(naxis1_refimg,naxis1_refimg)
-
-
-        # Compute sky coordinates of reference-image center and four corners.
-
-        ra0,dec0,ra1,dec1,ra2,dec2,ra3,dec3,ra4,dec4 = \
-            util.compute_sky_image_center_and_four_corners(wcs_refimg,x0,y0,x1,y1,x2,y2,x3,y3,x4,y4)
-
-
-        # Compute all fields that overlap the reference image.
+        # Compute all fields that overlap the science image.
 
         rtid_records_list = roman_tessellation_db.get_overlapping_rtids(ra0,dec0,ra1,dec1,ra2,dec2,ra3,dec3,ra4,dec4)
 
