@@ -32,7 +32,8 @@ def generateReferenceImage(s3_client,
                            upload_to_s3_bucket,
                            inject_fake_sources_flag,
                            fake_sources_dict,
-                           rapid_sw):
+                           rapid_sw,
+                           overlapping_fields):
 
 
     infobits_refimage = 0                                                             # TODO
@@ -42,6 +43,29 @@ def generateReferenceImage(s3_client,
     response = s3_client.download_file(job_info_s3_bucket,input_images_csv_file_s3_bucket_object_name,input_images_csv_filename)
 
     print("response =",response)
+
+
+    # Define injection catalog files and download injection catalogs from S3 bucket.
+
+    file_content = []
+    for overlapping_field in overlapping_fields:
+        injection_catalog_filename = f"injection_catalog_rtid{overlapping_field}.json"
+        file_content.append(injection_catalog_filename)
+        s3_full_name_injection_catalog = f"s3://{job_info_s3_bucket}/injection_catalogs/{injection_catalog_filename}"
+        injection_catalog_filename,subdirs,downloaded_from_bucket = util.download_file_from_s3_bucket(s3_client,s3_full_name_injection_catalog)
+        print("s3_full_name_injection_catalog = ",s3_full_name_injection_catalog)
+        print("injection_catalog_filename = ",injection_catalog_filename)
+
+
+    # Write injection-catalog-list file (contains just one row).
+
+    injection_catalog_list_filename = f"injection_catalog_list_refimg.csv"
+
+    with open(injection_catalog_list_filename, 'w') as f:
+        f.writerows(file_content)
+
+
+    # Loop over reference-image inputs.
 
     refimage_input_metadata = []
     refimage_input_filenames = []
@@ -128,30 +152,6 @@ def generateReferenceImage(s3_client,
             # Optionally inject fake sources into reference-image input.
 
             if inject_fake_sources_flag:
-
-
-                # Define filenames of injection catalog file and injection-catalog-list file (contains just one row).
-
-                injection_catalog_filename = f"injection_catalog_rtid{refimage_input_field}.json"
-                injection_catalog_list_filename = f"injection_catalog_list_rtid{refimage_input_field}.csv"
-
-
-                # Download injection catalog from S3 bucket.
-
-                s3_full_name_injection_catalog = f"s3://{job_info_s3_bucket}/injection_catalogs/{injection_catalog_filename}"
-
-                injection_catalog_filename,subdirs,downloaded_from_bucket = util.download_file_from_s3_bucket(s3_client,s3_full_name_injection_catalog)
-
-                print("s3_full_name_injection_catalog = ",s3_full_name_injection_catalog)
-                print("injection_catalog_filename = ",injection_catalog_filename)
-
-
-                # Write injection-catalog-list file (contains just one row).
-
-                file_content = f"{injection_catalog_filename}\n"
-
-                with open(injection_catalog_list_filename, 'w') as f:
-                    f.write(file_content)
 
 
                 # Run fake-source injections code.

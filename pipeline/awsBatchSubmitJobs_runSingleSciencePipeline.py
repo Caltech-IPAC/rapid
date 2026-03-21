@@ -205,6 +205,11 @@ if __name__ == '__main__':
     ra4_sciimage = float(config_input['SCI_IMAGE']['ra4'])
     dec4_sciimage = float(config_input['SCI_IMAGE']['dec4'])
 
+    overlapping_fields_sciimage = float(config_input['SCI_IMAGE']['overlapping_fields'])
+
+    print(f"overlapping_fields_sciimage = {overlapping_fields_sciimage}")
+
+
     sky_tile_rtid = int(config_input['SKY_TILE']['rtid'])
     sky_tile_ra0 = float(config_input['SKY_TILE']['ra0'])
     sky_tile_dec0 = float(config_input['SKY_TILE']['dec0'])
@@ -241,6 +246,10 @@ if __name__ == '__main__':
     dec3_refimage = float(config_input['REF_IMAGE']['dec3'])
     ra4_refimage = float(config_input['REF_IMAGE']['ra4'])
     dec4_refimage = float(config_input['REF_IMAGE']['dec4'])
+
+    overlapping_fields_refimage = float(config_input['REF_IMAGE']['overlapping_fields'])
+
+    print(f"overlapping_fields_refimage = {overlapping_fields_refimage}")
 
 
     zogy_dict = config_input['ZOGY']
@@ -387,7 +396,8 @@ if __name__ == '__main__':
                                                                          upload_to_s3_bucket,
                                                                          inject_fake_sources_flag,
                                                                          fake_sources_dict,
-                                                                         rapid_sw)
+                                                                         rapid_sw,
+                                                                         overlapping_fields_refimage)
 
         infobits_refimage = generateReferenceImage_return_list[0]
         checksum_refimage = generateReferenceImage_return_list[1]
@@ -732,28 +742,24 @@ if __name__ == '__main__':
     if inject_fake_sources_flag:
 
 
-        # Define filenames of injection catalog file and injection-catalog-list file (contains just one row).
+        # Define injection catalog files and download injection catalogs from S3 bucket.
 
-        injection_catalog_filename = f"injection_catalog_rtid{field_sciimage}.json"
-        injection_catalog_list_filename = f"injection_catalog_list_rtid{field_sciimage}.csv"
-
-
-        # Download injection catalog from S3 bucket.
-
-        s3_full_name_injection_catalog = f"s3://{job_info_s3_bucket}/injection_catalogs/{injection_catalog_filename}"
-
-        injection_catalog_filename,subdirs,downloaded_from_bucket = util.download_file_from_s3_bucket(s3_client,s3_full_name_injection_catalog)
-
-        print("s3_full_name_injection_catalog = ",s3_full_name_injection_catalog)
-        print("injection_catalog_filename = ",injection_catalog_filename)
+        file_content = []
+        for overlapping_field in overlapping_fields_sciimage:
+            injection_catalog_filename = f"injection_catalog_rtid{overlapping_field}.json"
+            file_content.append(injection_catalog_filename)
+            s3_full_name_injection_catalog = f"s3://{job_info_s3_bucket}/injection_catalogs/{injection_catalog_filename}"
+            injection_catalog_filename,subdirs,downloaded_from_bucket = util.download_file_from_s3_bucket(s3_client,s3_full_name_injection_catalog)
+            print("s3_full_name_injection_catalog = ",s3_full_name_injection_catalog)
+            print("injection_catalog_filename = ",injection_catalog_filename)
 
 
         # Write injection-catalog-list file (contains just one row).
 
-        file_content = f"{injection_catalog_filename}\n"
+        injection_catalog_list_filename = f"injection_catalog_list_sciimg.csv"
 
         with open(injection_catalog_list_filename, 'w') as f:
-            f.write(file_content)
+            f.writerows(file_content)
 
 
         # Run fake-source injections code.
