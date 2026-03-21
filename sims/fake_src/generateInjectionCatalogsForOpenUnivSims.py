@@ -122,7 +122,7 @@ if __name__ == '__main__':
 
     # Query RAPID operations database for the relevant fields.
 
-    query = f"SELECT DISTINCT(field) FROM refimages WHERE vbest>0;"
+    query = f"SELECT DISTINCT field FROM l2files WHERE vbest>0 AND status>0;"
 
     sql_queries = []
     sql_queries.append(query)
