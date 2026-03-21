@@ -106,9 +106,7 @@ print("cfg_path =",cfg_path)
 dry_run_str = os.getenv('DRYRUN')
 
 if dry_run_str is None:
-
-    print("*** Error: Env. var. DRYRUN not set; quitting...")
-    exit(64)
+    dry_run_str = "False"
 
 dry_run = eval(dry_run_str)
 
