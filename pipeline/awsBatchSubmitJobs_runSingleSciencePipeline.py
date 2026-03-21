@@ -205,7 +205,7 @@ if __name__ == '__main__':
     ra4_sciimage = float(config_input['SCI_IMAGE']['ra4'])
     dec4_sciimage = float(config_input['SCI_IMAGE']['dec4'])
 
-    overlapping_fields_sciimage = float(config_input['SCI_IMAGE']['overlapping_fields'])
+    overlapping_fields_sciimage = config_input['SCI_IMAGE']['overlapping_fields']
 
     print(f"overlapping_fields_sciimage = {overlapping_fields_sciimage}")
 
@@ -247,7 +247,7 @@ if __name__ == '__main__':
     ra4_refimage = float(config_input['REF_IMAGE']['ra4'])
     dec4_refimage = float(config_input['REF_IMAGE']['dec4'])
 
-    overlapping_fields_refimage = float(config_input['REF_IMAGE']['overlapping_fields'])
+    overlapping_fields_refimage = config_input['REF_IMAGE']['overlapping_fields']
 
     print(f"overlapping_fields_refimage = {overlapping_fields_refimage}")
 
