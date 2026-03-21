@@ -9,6 +9,7 @@
 ###############################################################################
 
 import os
+import ast
 import configparser
 import boto3
 from botocore.exceptions import ClientError
@@ -205,7 +206,7 @@ if __name__ == '__main__':
     ra4_sciimage = float(config_input['SCI_IMAGE']['ra4'])
     dec4_sciimage = float(config_input['SCI_IMAGE']['dec4'])
 
-    overlapping_fields_sciimage = config_input['SCI_IMAGE']['overlapping_fields']
+    overlapping_fields_sciimage = ast.literal_eval(config_input['SCI_IMAGE']['overlapping_fields'])
 
     print(f"overlapping_fields_sciimage = {overlapping_fields_sciimage}")
 
@@ -247,7 +248,7 @@ if __name__ == '__main__':
     ra4_refimage = float(config_input['REF_IMAGE']['ra4'])
     dec4_refimage = float(config_input['REF_IMAGE']['dec4'])
 
-    overlapping_fields_refimage = config_input['REF_IMAGE']['overlapping_fields']
+    overlapping_fields_refimage = ast.literal_eval(config_input['REF_IMAGE']['overlapping_fields'])
 
     print(f"overlapping_fields_refimage = {overlapping_fields_refimage}")
 
@@ -746,8 +747,8 @@ if __name__ == '__main__':
 
         file_content = ""
         for overlapping_field in overlapping_fields_sciimage:
-            injection_catalog_filename = f"injection_catalog_rtid{overlapping_field}.json\n"
-            file_content += injection_catalog_filename
+            injection_catalog_filename = f"injection_catalog_rtid{overlapping_field}.json"
+            file_content += f"{injection_catalog_filename}\n"
             s3_full_name_injection_catalog = f"s3://{job_info_s3_bucket}/injection_catalogs/{injection_catalog_filename}"
             injection_catalog_filename,subdirs,downloaded_from_bucket = util.download_file_from_s3_bucket(s3_client,s3_full_name_injection_catalog)
             print("s3_full_name_injection_catalog = ",s3_full_name_injection_catalog)

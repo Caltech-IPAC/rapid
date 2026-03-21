@@ -49,8 +49,8 @@ def generateReferenceImage(s3_client,
 
     file_content = ""
     for overlapping_field in overlapping_fields:
-        injection_catalog_filename = f"injection_catalog_rtid{overlapping_field}.json\n"
-        file_content += injection_catalog_filename
+        injection_catalog_filename = f"injection_catalog_rtid{overlapping_field}.json"
+        file_content += f"{injection_catalog_filename}\n"
         s3_full_name_injection_catalog = f"s3://{job_info_s3_bucket}/injection_catalogs/{injection_catalog_filename}"
         injection_catalog_filename,subdirs,downloaded_from_bucket = util.download_file_from_s3_bucket(s3_client,s3_full_name_injection_catalog)
         print("s3_full_name_injection_catalog = ",s3_full_name_injection_catalog)
