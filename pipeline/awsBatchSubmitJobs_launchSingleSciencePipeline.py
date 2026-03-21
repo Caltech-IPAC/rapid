@@ -411,7 +411,12 @@ if __name__ == '__main__':
 
     # Compute all fields that overlap the science image.
 
-    sciimg_overlapping_rtids = roman_tessellation_db.get_overlapping_rtids(ra0,dec0,ra1,dec1,ra2,dec2,ra3,dec3,ra4,dec4)
+    rtid_records_list = roman_tessellation_db.get_overlapping_rtids(ra0,dec0,ra1,dec1,ra2,dec2,ra3,dec3,ra4,dec4)
+
+    sciimg_overlapping_rtids = []
+    for rtid_record in rtid_records_list:
+        rtid = rtid_record[0]
+        sciimg_overlapping_rtids.append(rtid)
 
 
     # Query PSFs database table for the best version of PSF, required by ZOGY.
@@ -532,11 +537,16 @@ if __name__ == '__main__':
 
     # Compute all fields that overlap the reference image.
 
-    refimg_overlapping_rtids = roman_tessellation_db.get_overlapping_rtids(ra0_refimage,dec0_refimage,
-                                                                           ra1_refimage,dec1_refimage,
-                                                                           ra2_refimage,dec2_refimage,
-                                                                           ra3_refimage,dec3_refimage,
-                                                                           ra4_refimage,dec4_refimage)
+    rtid_records_list = roman_tessellation_db.get_overlapping_rtids(ra0_refimage,dec0_refimage,
+                                                                    ra1_refimage,dec1_refimage,
+                                                                    ra2_refimage,dec2_refimage,
+                                                                    ra3_refimage,dec3_refimage,
+                                                                    ra4_refimage,dec4_refimage)
+
+    refimg_overlapping_rtids = []
+    for rtid_record in rtid_records_list:
+        rtid = rtid_record[0]
+        refimg_overlapping_rtids.append(rtid)
 
 
     # Insert or update record in Jobs database table and return job ID.
