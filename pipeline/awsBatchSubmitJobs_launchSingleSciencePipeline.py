@@ -103,6 +103,15 @@ cfg_path = rapid_sw + "/cdf"
 print("rapid_sw =",rapid_sw)
 print("cfg_path =",cfg_path)
 
+dry_run_str = os.getenv('DRYRUN')
+
+if dry_run_str is None:
+
+    print("*** Error: Env. var. DRYRUN not set; quitting...")
+    exit(64)
+
+dry_run = eval(dry_run_str)
+
 
 # Read input parameters from .ini file.
 
@@ -857,22 +866,23 @@ if __name__ == '__main__':
             print("Successfully uploaded {} to s3://{}/{}"\
                 .format(input_images_csv_file,job_info_s3_bucket,input_images_csv_file_s3_bucket_object_name))
 
+    if not dry_run:
 
-    aws_batch_job_id = submit_job_to_aws_batch(proc_date,
-                                               jid,
-                                               job_info_s3_bucket,
-                                               job_config_ini_file_filename,
-                                               job_config_ini_file_s3_bucket_object_name,
-                                               input_images_csv_filename,
-                                               input_images_csv_file_s3_bucket_object_name)
+        aws_batch_job_id = submit_job_to_aws_batch(proc_date,
+                                                   jid,
+                                                   job_info_s3_bucket,
+                                                   job_config_ini_file_filename,
+                                                   job_config_ini_file_s3_bucket_object_name,
+                                                   input_images_csv_filename,
+                                                   input_images_csv_file_s3_bucket_object_name)
 
 
-    # Update record in Jobs database table with aws_batch_job_id.
+        # Update record in Jobs database table with aws_batch_job_id.
 
-    jid = dbh.update_job_with_aws_batch_job_id(jid,aws_batch_job_id)
+        jid = dbh.update_job_with_aws_batch_job_id(jid,aws_batch_job_id)
 
-    if dbh.exit_code >= 64:
-        exit(dbh.exit_code)
+        if dbh.exit_code >= 64:
+            exit(dbh.exit_code)
 
 
     # Close database connection.
