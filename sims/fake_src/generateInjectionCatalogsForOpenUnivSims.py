@@ -199,7 +199,6 @@ if __name__ == '__main__':
             util.compute_sky_image_center_and_four_corners(wcs_refimg,x0,y0,x1,y1,x2,y2,x3,y3,x4,y4)
 
 
-
         # Compute all fields that overlap the reference image.
 
         rtid_records_list = roman_tessellation_db.get_overlapping_rtids(ra0,dec0,ra1,dec1,ra2,dec2,ra3,dec3,ra4,dec4)
