@@ -1376,6 +1376,7 @@ if __name__ == '__main__':
     output_psfcat_filename = psfcat_diffimage_dict["output_zogy_psfcat_filename"]
     output_psfcat_finder_filename = psfcat_diffimage_dict["output_zogy_psfcat_finder_filename"]
     output_psfcat_residual_filename = psfcat_diffimage_dict["output_zogy_psfcat_residual_filename"]
+    output_psfcat_parquet_filename = output_psfcat_filename.replace(".txt",".parquet")
 
     psfcat_flag,phot,psfphot = util.compute_psf_catalog(n_clip_sigma,
                                                         n_thresh_sigma,
@@ -1448,8 +1449,6 @@ if __name__ == '__main__':
             nrows = len(joined_table_inner)
             print(f"nrows in PSF-fit catalog = {nrows}\n")
 
-            output_psfcat_parquet_filename = output_psfcat_filename.replace(".txt",".parquet")
-
             # Convert the QTable to a pandas DataFrame
             df = joined_table_inner.to_pandas()
 
@@ -1484,6 +1483,7 @@ if __name__ == '__main__':
     output_psfcat_filename_negative = psfcat_diffimage_dict["output_zogy_psfcat_filename"].replace(".txt","_negative.txt")
     output_psfcat_finder_filename_negative = psfcat_diffimage_dict["output_zogy_psfcat_finder_filename"].replace(".txt","_negative.txt")
     output_psfcat_residual_filename_negative = psfcat_diffimage_dict["output_zogy_psfcat_residual_filename"].replace(".fits","_negative.fits")
+    output_psfcat_parquet_filename_negative = output_psfcat_filename_negative.replace(".txt",".parquet")
 
     psfcat_flag,phot,psfphot = util.compute_psf_catalog(n_clip_sigma,
                                                         n_thresh_sigma,
@@ -1555,8 +1555,6 @@ if __name__ == '__main__':
 
             nrows = len(joined_table_inner)
             print(f"nrows in PSF-fit catalog = {nrows}\n")
-
-            output_psfcat_parquet_filename_negative = output_psfcat_filename_negative.replace(".txt",".parquet")
 
             # Convert the QTable to a pandas DataFrame
             df = joined_table_inner.to_pandas()
@@ -2068,6 +2066,7 @@ if __name__ == '__main__':
             output_psfcat_filename = psfcat_diffimage_dict["output_sfft_psfcat_filename"]
             output_psfcat_finder_filename = psfcat_diffimage_dict["output_sfft_psfcat_finder_filename"]
             output_psfcat_residual_filename = psfcat_diffimage_dict["output_sfft_psfcat_residual_filename"]
+            output_psfcat_parquet_filename = output_psfcat_filename.replace(".txt",".parquet")
 
             psfcat_flag,phot,psfphot = util.compute_psf_catalog(n_clip_sigma,
                                                                 n_thresh_sigma,
@@ -2141,8 +2140,6 @@ if __name__ == '__main__':
                     nrows = len(joined_table_inner)
                     print(f"nrows in PSF-fit catalog = {nrows}\n")
 
-                    output_psfcat_parquet_filename = output_psfcat_filename.replace(".txt",".parquet")
-
                     # Convert the QTable to a pandas DataFrame
                     df = joined_table_inner.to_pandas()
 
@@ -2178,6 +2175,7 @@ if __name__ == '__main__':
             output_psfcat_filename_negative = psfcat_diffimage_dict["output_sfft_psfcat_filename"].replace(".txt","_negative.txt")
             output_psfcat_finder_filename_negative = psfcat_diffimage_dict["output_sfft_psfcat_finder_filename"].replace(".txt","_negative.txt")
             output_psfcat_residual_filename_negative = psfcat_diffimage_dict["output_sfft_psfcat_residual_filename"].replace(".fits","_negative.fits")
+            output_psfcat_parquet_filename_negative = output_psfcat_filename_negative.replace(".txt",".parquet")
 
             psfcat_flag,phot,psfphot = util.compute_psf_catalog(n_clip_sigma,
                                                                 n_thresh_sigma,
@@ -2250,8 +2248,6 @@ if __name__ == '__main__':
 
                     nrows = len(joined_table_inner)
                     print(f"nrows in PSF-fit catalog = {nrows}\n")
-
-                    output_psfcat_parquet_filename_negative = output_psfcat_filename_negative.replace(".txt",".parquet")
 
                     # Convert the QTable to a pandas DataFrame
                     df = joined_table_inner.to_pandas()
