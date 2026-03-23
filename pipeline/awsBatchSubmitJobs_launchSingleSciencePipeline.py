@@ -409,16 +409,6 @@ if __name__ == '__main__':
         exit(dbh.exit_code)
 
 
-    # Compute all fields that overlap the science image.
-
-    rtid_records_list = roman_tessellation_db.get_overlapping_rtids(ra0,dec0,ra1,dec1,ra2,dec2,ra3,dec3,ra4,dec4)
-
-    sciimg_overlapping_rtids = []
-    for rtid_record in rtid_records_list:
-        rtid = rtid_record[0]
-        sciimg_overlapping_rtids.append(rtid)
-
-
     # Query PSFs database table for the best version of PSF, required by ZOGY.
 
     psfid,s3_full_name_sciimage_psf = dbh.get_best_psf(sca,fid)
@@ -449,6 +439,16 @@ if __name__ == '__main__':
     if vbest == 0:
         print('*** Error: vbest is zero for rid = {}; quitting....'.format(rid))
         exit(64)
+
+
+    # Compute all fields that overlap the science image.
+
+    rtids_list = roman_tessellation_db.get_all_neighboring_rtids(field)
+
+    sciimg_overlapping_rtids = [field]
+    for rtid in rtids_list:
+        adjacent_field = rtid
+        sciimg_overlapping_rtids.append(adjacent_field)
 
 
     # Get field number (rtid) of sky tile containing center of input science image.
