@@ -443,12 +443,11 @@ if __name__ == '__main__':
 
     # Compute all fields that overlap the science image.
 
-    rtids_list = roman_tessellation_db.get_all_neighboring_rtids(field)
+    neighboring_rtids = roman_tessellation_db.get_all_neighboring_rtids(field)
 
     sciimg_overlapping_rtids = [field]
-    for rtid in rtids_list:
-        adjacent_field = rtid
-        sciimg_overlapping_rtids.append(adjacent_field)
+    for neighboring_rtid in neighboring_rtids:
+        sciimg_overlapping_rtids.append(neighboring_rtid)
 
 
     # Get field number (rtid) of sky tile containing center of input science image.
@@ -537,16 +536,16 @@ if __name__ == '__main__':
 
     # Compute all fields that overlap the reference image.
 
-    rtid_records_list = roman_tessellation_db.get_overlapping_rtids(ra0_refimage,dec0_refimage,
-                                                                    ra1_refimage,dec1_refimage,
-                                                                    ra2_refimage,dec2_refimage,
-                                                                    ra3_refimage,dec3_refimage,
-                                                                    ra4_refimage,dec4_refimage)
+    overlapping_rtid_records = roman_tessellation_db.get_overlapping_rtids(ra0_refimage,dec0_refimage,
+                                                                           ra1_refimage,dec1_refimage,
+                                                                           ra2_refimage,dec2_refimage,
+                                                                           ra3_refimage,dec3_refimage,
+                                                                           ra4_refimage,dec4_refimage)
 
     refimg_overlapping_rtids = []
-    for rtid_record in rtid_records_list:
-        rtid = rtid_record[0]
-        refimg_overlapping_rtids.append(rtid)
+    for overlapping_rtid_record in overlapping_rtid_records:
+        overlapping_rtid = overlapping_rtid_record[0]
+        refimg_overlapping_rtids.append(overlapping_rtid)
 
 
     # Insert or update record in Jobs database table and return job ID.
