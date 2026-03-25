@@ -1,6 +1,6 @@
 '''
 Generate RAPID light-curve HATS catalog from database dump of
-select columns in the AstroObjects, Merges, and Sources database table.
+select columns in the AstroObjects, Merges, and Sources database tables.
 
 HATS stands for Hierarchical Adaptive Tiling Scheme.
 
