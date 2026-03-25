@@ -65,14 +65,14 @@ bkg_subbed_science_image.fits                                   Science image, b
 awaicgen_output_mosaic_image_resampled_gainmatched.fits         Gain-matched reference image, background subtracted, directory input to ZOGY
 awaicgen_output_mosaic_image_resampled_refgainmatchsexcat.txt   SourceExtractor catalog from reference image for gain-matching purposes
 bkg_subbed_science_image_scigainmatchsexcat.txt                 SourceExtractor catalog from science image for gain-matching purposes
-diffimage_masked.fits                                           ZOGY positive difference image with NaNs in zero-coverage pixels
-diffimage_uncert_masked.fits                                    Uncertainty image for ZOGY positive difference image with NaNs in zero-coverage pixels
+zogy_diffimage_masked.fits                                      ZOGY positive difference image with NaNs in zero-coverage pixels
+zogy_diffimage_uncert_masked.fits                               Uncertainty image for ZOGY positive difference image with NaNs in zero-coverage pixels
 diffpsf.fits                                                    ZOGY difference-image PSF
 scorrimage_masked.fits                                          ZOGY SCORR image with NaNs in zero-coverage pixels
-diffimage_masked.txt                                            SourceExtractor catalog from ZOGY positive difference image
-diffimage_masked_psfcat.txt                                     PhotUtils PSF-fit photometry catalog from ZOGY positive difference image (noniterative)
-diffimage_masked_psfcat_finder.txt                              PhotUtils PSF-fit star-finder catalog from ZOGY positive difference image (noniterative)
-diffimage_masked_psfcat_residual.fits                           PhotUtils residual image from ZOGY positive difference image (noniterative)
+zogy_diffimage_masked.txt                                       SourceExtractor catalog from ZOGY positive difference image
+zogy_diffimage_masked_psfcat.txt                                PhotUtils PSF-fit photometry catalog from ZOGY positive difference image (noniterative)
+zogy_diffimage_masked_psfcat_finder.txt                         PhotUtils PSF-fit star-finder catalog from ZOGY positive difference image (noniterative)
+zogy_diffimage_masked_psfcat_residual.fits                      PhotUtils residual image from ZOGY positive difference image (noniterative)
 job_config_jid999.done                                          Indicates metadata from science pipeline ingested into RAPID operations database
 postproc_job_config_jid999.done                                 Indicates metadata from post-processing pipeline ingested into RAPID operations database
 sfftdiffimage_masked.fits                                       SFFT positive difference image (when SFFT is not run with the ``--crossconv`` flag), with NaNs in zero-coverage pixels
@@ -100,18 +100,18 @@ Public Access
 To download a RAPID pipeline product, the
 user must construct a URL, knowing the filename in advance, like the following::
 
-    https://rapid-product-files.s3.us-west-2.amazonaws.com/20260227/jid90828/awaicgen_output_mosaic_cov_map.fits
+    https://rapid-product-files.s3.us-west-2.amazonaws.com/20260325/jid90828/awaicgen_output_mosaic_cov_map.fits
 
 For a listing of the latest product files, download the following text file:
 
-:download:`rapid-product-files_20260227.txt <rapid-product-files_20260227.txt>`
+:download:`rapid-product-files_20260325.txt <rapid-product-files_20260325.txt>`
 
 A simple Python script can be written to parse the listing and generate ``wget`` or ``curl`` download commands.
 
 The pipeline log files are also publicly accessible.  There is a log file for each science image processed.
 Here is a template for the log-file URL that corresponds to the above example::
 
-    https://rapid-pipeline-logs.s3.us-west-2.amazonaws.com/20260227/rapid_pipeline_job_20260227_jid90828_log.txt
+    https://rapid-pipeline-logs.s3.us-west-2.amazonaws.com/20260325/rapid_pipeline_job_20260325_jid90828_log.txt
 
 
 Example Reference-Image FITS Header
