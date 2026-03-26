@@ -1406,3 +1406,35 @@ Here is a breakdown of the number of science images processed per filter in this
        3 |   770
     (7 rows)
 
+The PSF-fit catalogs made by the Python photutils package from the ZOGY difference images,
+both positive and negative, were loaded into Sources child PostgreSQL database tables.
+The elapsed time to load all sources into the database was 16.9 minutes with 8 parallel processes.
+There were 14,327,713 Sources records loaded into the PostgreSQL database.
+
+Cross-matching the sources with astronomical objects (called AstroObjects),
+resulting in records loaded into the Merges_<field> and
+AstroObjects_<fields> database tables, for all 262 fields of the sources, was done.
+The elapsed time to cross-match all sources was 3.392 hours with 8 parallel processes.
+This includes cross-matching across field boundaries for sources near field edges.
+A match radius of 0.1 arcsec (a Roman WFI pixel) was used.
+There were 3,623,747 AstroObjects records and 69,111,195 Merges records loaded
+into the PostgreSQL database.  Of those merges (a.k.a. lightcurve data points), 17,760 merges
+resulted from cross-matching across field boundaries (i.e., the match radius can extend
+across a field boundary), which is an increase of 0.02570% in terms of number of merges.
+
+The lightcurve statistics stored in the AstroObjects_<fields> database tables are updated after the
+cross-matching.  This is done as a separate process.  Any AstroObjects_<fields> record with
+no associated sources in the Merges_<field> database table are deleted.
+A new Q3C index on the (meanra, meandec) columns is computed for all AstroObjects_<fields> database tables,
+and then these tables are set to logged, clustered, and analyzed.
+The AstroObjects_<fields> database tables are explicitly vacuumed at the end of this process.
+For this test, all of this took 30.34 minutes with 8 parallel processes.
+
+It took 2.40 hours to delete non-best Merges_<fields> records with 8 parallel processes,
+which also included vacuuming and analyzing all Merges_<fields> database tables.
+The likely reason this process took so long to execute is that the cross-matching step
+was executed several times during testing/debugging on the same input data, which
+created many multiple redundant records.
+
+It took 28.50 minutes to delete all not-best records in sources_20260227_* database tables
+with 8 parallel processes.
