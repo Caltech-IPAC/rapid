@@ -1245,7 +1245,7 @@ sources with fixed sky positions.  Thus, lightcurves can be generated from extra
 of these fake sources over time.  The fake-source injection of variables has also been
 extended to the input science images that are used to build the reference images.
 
-Most of the ZOGY difference-image products now have the prefix "zogy_" in their filenames.
+New: Most of the ZOGY difference-image products now have the prefix "zogy_" in their filenames.
 
 This test covers 6,875 science images.  All science images in this run had 100 fake sources (variables)
 injected per science image.  This is in addition to the fake sources that are already
@@ -1306,7 +1306,7 @@ SExtractor and PhotUtils catalogs were generated for all three difference-image 
     export ENDREFIMMJDOBS=99999
     export MINREFIMNFRAMES=6
 
-    python3.11 /code/pipeline/virtualPipelineOperator.py 20260227 >& virtualPipelineOperator_20260227.out &
+    python3.11 /code/pipeline/virtualPipelineOperator.py 20260325 >& virtualPipelineOperator_20260325.out &
 
 .. code-block::
 
