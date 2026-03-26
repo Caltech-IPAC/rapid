@@ -1321,7 +1321,8 @@ SExtractor and PhotUtils catalogs were generated for all three difference-image 
 The following 2-D histogram shows job elapsed time versus job start time for parallel-processing
 of RAPID science pipelines under AWS Batch with up to 10,000 machined permitted in the job queue.
 The group of bins in the upper left corresponds to the 79 pipeline instances that generated all
-of the reference images.  Since fake-variable-source injection is now done in the reference-image
+of the reference images needed for the test.
+Since fake-variable-source injection is now done in the reference-image
 inputs, the run times are significantly higher relative to previous tests.  The group of bins in
 the middle correspond to pipeline instances for the rest of the science images that will have
 precomputed reference images (from the first group of 79 pipeline instances ran earlier).
