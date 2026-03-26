@@ -1258,7 +1258,8 @@ range of the science images that are processed in the test.
 The test covers only those field/filter combinations in which reference images can be made
 that have 6 input frames or more (which resulted in the aforementioned 79 reference images).
 The reference images are associated with 21 distinct fields, and for each of these
-fields there are reference images for three or more WFI bandpasses):
+fields there are reference images for three or more WFI bandpasses, as shown in the
+following query results:
 
 .. code-block::
 
@@ -1288,6 +1289,19 @@ fields there are reference images for three or more WFI bandpasses):
      5364186 |     4
     (21 rows)
 
+Here is the breakdown of number of reference images per number of input frames and quality-assurance metric cov5percent:
+
+.. image:: num_refimages_vs_nframes_20260325.png
+
+.. image:: num_refimages_vs_cov5percent_20260325.png
+
+The quality-assurance metric cov5percent, given by the keyword COV5PERC in the FITS header
+of each RAPID reference image, is an absolute quantifier for the aggregate areal-depth coverage
+of a reference image at a reference depth of 5, corresponding to a coadd depth of at
+least 5 input images. It is computed from the reference-image coverage map.
+It is defined as a percentage of the sum of the limited coverage of all pixels in an image,
+where the limited coverage is all coverage and any coverage greater than 5 that is
+reset to 5 for scoring purposes, relative to 5 times the total number of pixels in the image.
 
 ZOGY image-difference products were generated, as well as SFFT and naive difference-image products.
 Note that SFFT was run with the ``--crossconv`` flag, as was done for the 2/27/26 test.
