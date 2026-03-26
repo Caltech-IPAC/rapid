@@ -71,6 +71,7 @@ Date              Software modification
 2/4/2026          Reduced-chi2 in PhotUtils catalogs and Sources database table.
 2/11/2026         Scaled reference-image inputs so that reference image has fixed zero point = 17 mag.
 2/12/2026         Modified to generate PhotUtils catalog for reference image.
+3/24/2026         Completed upgrade/debugging fake-source injection for variable sources with fixed sky positions.
 ===============   ===============================================================================================================================================================================================================================
 
 
