@@ -1310,7 +1310,7 @@ SExtractor and PhotUtils catalogs were generated for all three difference-image 
 
 .. code-block::
 
-    fakesourcesdb=> select ppid,exitcode,count(*) from jobs where cast(launched as date) = '20260227' group by ppid, exitcode order by ppid, exitcode;
+    fakesourcesdb=> select ppid,exitcode,count(*) from jobs where cast(launched as date) = '20260325' group by ppid, exitcode order by ppid, exitcode;
      ppid | exitcode | count
     ------+----------+-------
        15 |        0 |  6875
