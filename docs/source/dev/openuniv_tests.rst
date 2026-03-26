@@ -979,7 +979,7 @@ A new capability is computing an SExtractor catalog for the naive difference ima
     (2 rows)
 
 The VPO clocked 3.55 hours to run the entire test (all 6,875 science images),
-with parallel processing (up to 1000 machines with 1 machine per science image).
+with parallel processing (up to 10,000 machines with 1 machine per science image).
 As shown in the table below for a particular pipeline instance, executing SFFT,
 executing AWAICGEN for reference-image generation, and injecting fake sources
 are the dominant factors affecting pipeline performance.
@@ -1129,7 +1129,7 @@ SExtractor and PhotUtils catalogs were generated for all three difference-image 
 The VPO clocked 2.46 hours to run the product-file-generation pipeline test
 (not including loading Sources database tables and subsequent steps), in which
 difference-image products were generated for all 6,875 science images.
-Parallel processing, up to 1000 machines with 1 machine per science image on AWS Batch
+Parallel processing, up to 10,000 machines with 1 machine per science image on AWS Batch
 facilitated the processing speed.
 As shown in the table below for a particular pipeline instance, executing SFFT,
 executing AWAICGEN for reference-image generation (depends on the number of input images),
@@ -1332,3 +1332,9 @@ updating FITS headers, and computing file checksums.  Post-processing pipelines 
 in parallel under AWS Batch.
 
 .. image:: elapsed_vs_started_20260325.png
+
+The VPO clocked 2.8 hours to run the product-file-generation pipeline test
+(not including loading Sources database tables and subsequent steps), in which
+difference-image products were generated for all 6,875 science images.
+Parallel processing, up to 10,000 machines with 1 machine per science image on AWS Batch
+facilitated the processing speed.
