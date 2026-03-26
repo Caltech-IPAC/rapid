@@ -1228,3 +1228,106 @@ created many multiple redundant records.
 
 It took 33 minutes to delete all not-best records in sources_20250927_* database tables
 with 8 parallel processes.
+
+
+
+
+
+
+
+
+
+3/25/2026
+************************************
+
+Similar to the 2/27/2026 test, but with fake-source injection upgraded to inject variable
+sources with fixed sky positions.  Thus, lightcurves can be generated from extractions
+of these fake sources over time.  The fake-source injection of variables has also been
+extended to the input science images that are used to build the reference images.
+
+Most of the ZOGY difference-image products now have the prefix "zogy_" in their filenames.
+
+This test covers 6,875 science images.  All science images in this run had 100 fake sources (variables)
+injected per science image.  This is in addition to the fake sources that are already
+included in the OpenUniverse simulation set.
+
+New reference images were made (79 total).
+The reference images are special in that their input frames are selected
+from the observation window 63,400 < MJD < 99,9999, which is later than the observation
+range of the science images that are processed in the test.
+The test covers only those field/filter combinations in which reference images can be made
+that have 6 input frames or more (which resulted in the aforementioned 79 reference images).
+The reference images are associated with 21 distinct fields, and for each of these
+fields there are reference images for three or more WFI bandpasses):
+
+.. code-block::
+
+    fakesourcesdb=> select field, count(*) from refimages where vbest>0 group by field order by field;
+      field  | count
+    ---------+-------
+     5257274 |     3
+     5261331 |     4
+     5261333 |     4
+     5285570 |     3
+     5293565 |     3
+     5297552 |     4
+     5297554 |     4
+     5297558 |     4
+     5321341 |     4
+     5325281 |     4
+     5325283 |     4
+     5333116 |     4
+     5352605 |     4
+     5356461 |     3
+     5356467 |     3
+     5356469 |     3
+     5356473 |     7
+     5356477 |     3
+     5356479 |     4
+     5364185 |     3
+     5364186 |     4
+    (21 rows)
+
+
+ZOGY image-difference products were generated, as well as SFFT and naive difference-image products.
+Note that SFFT was run with the ``--crossconv`` flag, as was done for the 2/27/26 test.
+The resulting SFFT deconvolved difference image, ``sfftdiffimage_dconv_masked.fits``, and the
+SFFT convolved difference image, ``sfftdiffimage_cconv_masked.fits``, are copied to the
+S3 product bucket, along with the other products.
+Naive image-differencing is simply science minus reference image, and the product is ``naive_diffimage_masked.fits``.
+SExtractor and PhotUtils catalogs were generated for all three difference-image methods employed.
+
+.. code-block::
+
+    export DBNAME=fakesourcesdb
+    export STARTDATETIME="2028-08-17 00:00:00"
+    export ENDDATETIME="2030-09-20 00:00:00"
+    export STARTREFIMMJDOBS=63400
+    export ENDREFIMMJDOBS=99999
+    export MINREFIMNFRAMES=6
+
+    python3.11 /code/pipeline/virtualPipelineOperator.py 20260227 >& virtualPipelineOperator_20260227.out &
+
+.. code-block::
+
+    fakesourcesdb=> select ppid,exitcode,count(*) from jobs where cast(launched as date) = '20260227' group by ppid, exitcode order by ppid, exitcode;
+     ppid | exitcode | count
+    ------+----------+-------
+       15 |        0 |  6875
+       17 |        0 |  6875
+    (2 rows)
+
+
+The following 2-D histogram shows job elapsed time versus job start time for parallel-processing
+of RAPID science pipelines under AWS Batch with up to 10,000 machined permitted in the job queue.
+The group of bins in the upper left corresponds to the 79 pipeline instances that generated all
+of the reference images.  Since fake-variable-source injection is now done in the reference-image
+inputs, the run times are significantly higher relative to previous tests.  The group of bins in
+the middle correspond to pipeline instances for the rest of the science images that will have
+precomputed reference images (from the first group of 79 pipeline instances ran earlier).
+The group of bins in the lower right correspond to instances of the post-processing pipeline,
+the purpose of which is to finalize the pipeline products, performing tasks such as
+updating FITS headers, and computing file checksums.  Post-processing pipelines also run
+in parallel under AWS Batch.
+
+.. image:: elapsed_vs_started_20260325.png
