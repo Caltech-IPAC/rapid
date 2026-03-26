@@ -1324,9 +1324,9 @@ The group of bins in the upper left corresponds to the 79 pipeline instances tha
 of the reference images needed for the test.
 Since fake-variable-source injection is now done in the reference-image
 inputs, the run times are significantly higher relative to previous tests.  The group of bins in
-the middle correspond to pipeline instances for the rest of the science images that will have
+the middle corresponds to pipeline instances for the rest of the science images that will have
 precomputed reference images (from the first group of 79 pipeline instances ran earlier).
-The group of bins in the lower right correspond to instances of the post-processing pipeline,
+The group of bins in the lower right corresponds to instances of the post-processing pipeline,
 the purpose of which is to finalize the pipeline products, performing tasks such as
 updating FITS headers, and computing file checksums.  Post-processing pipelines also run
 in parallel under AWS Batch.
