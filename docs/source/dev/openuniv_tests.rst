@@ -1337,4 +1337,6 @@ The VPO clocked 2.8 hours to run the product-file-generation pipeline test
 (not including loading Sources database tables and subsequent steps), in which
 difference-image products were generated for all 6,875 science images.
 Parallel processing, up to 10,000 machines with 1 machine per science image on AWS Batch
-facilitated the processing speed.
+facilitated the processing speed.  The average AWS-Batch queue wait time was 141 s (stddev=13.7 s);
+queue wait times vary from day to day, and can range from minutes to hours depending
+on machine availability.
