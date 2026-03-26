@@ -1340,3 +1340,69 @@ Parallel processing, up to 10,000 machines with 1 machine per science image on A
 facilitated the processing speed.  The average AWS-Batch queue wait time was 141 s (stddev=13.7 s);
 queue wait times vary from day to day, and can range from minutes to hours depending
 on machine availability.
+
+As shown in the table below for the longest running pipeline instance (jid = 90894),
+executing AWAICGEN for reference-image generation
+(depends on the number of input images; NFRAMES=14 for this case),
+executing SFFT, injecting fake sources  (both science image and reference-image inputs),
+and generating PhotUtils catalogs are the dominant factors
+affecting pipeline performance.
+
+=================================================================  =====================
+Pipeline step                                                      Execution time (sec)
+=================================================================  =====================
+Downloading science image                                                 0.590
+Uploading science image to product S3 bucket                              0.372
+Downloading or generating reference image                              1687.838
+Uploading reference image to S3 product bucket                            2.898
+Injecting fake sources                                                  108.987
+Generating science-image catalog                                          3.412
+Swarping images                                                           8.767
+Uploading intermediate FITS files to product S3 bucket                    3.249
+Running bkgest on science image                                           8.381
+Running gainMatchScienceAndReferenceImages                                6.792
+Replacing NaNs, applying image offsets, etc.                              0.096
+Running ZOGY                                                             39.313
+masking ZOGY difference image                                             0.877
+Running SExtractor on positive ZOGY difference image                      4.813
+Running SExtractor on negative ZOGY difference image                      2.538
+Generating PSF-fit catalog on positive ZOGY difference image             36.232
+Generating PSF-fit catalog on negative ZOGY difference image             19.169
+Uploading main products to S3 bucket                                      5.300
+Running SFFT                                                            142.225
+Uploading SFFT difference image to S3 product bucket                      6.107
+Running SExtractor on positive SFFT difference images                     2.906
+Running SExtractor on negative SFFT difference images                     2.332
+Uploading SFFT-diffimage SExtractor catalogs to S3 product bucket         0.177
+Generating PSF-fit catalog on positive SFFT difference image             27.088
+Generating PSF-fit catalog on negative SFFT difference image             21.861
+Uploading SFFT-diffimage PSF-fit catalogs to S3 product bucket            1.236
+Computing naive difference images                                         0.710
+Uploading naive difference images to S3 product bucket                    0.881
+Running SExtractor on positive naive difference image                     4.245
+Running SExtractor on negative naive difference image                     1.702
+Uploading SExtractor catalogs for naive difference images                 0.844
+Generating PSF-fit catalog on positive naive difference image            36.271
+Generating PSF-fit catalog on negative naive difference image            19.198
+Uploading PSF-fit catalogs for naive difference images to                 1.192
+Uploading products at pipeline end to S3 product bucket                   0.036
+Total time to run one instance of science pipeline                     2208.632
+=================================================================  =====================
+
+Typically only 1-4 science images in an exposure were processed in the 5,538 exposures covered by this test.
+Here is a breakdown of the number of science images processed per filter in this test:
+
+.. code-block::
+
+    fakesourcesdb=> select fid,count(*) from diffimages where vbest>0 and status>0 and created >= '2026-03-25' group by fid;
+     fid | count
+    -----+-------
+       7 |   770
+       1 |   770
+       5 |  1142
+       4 |  1140
+       2 |  1142
+       6 |  1141
+       3 |   770
+    (7 rows)
+
