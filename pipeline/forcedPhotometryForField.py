@@ -612,7 +612,7 @@ if __name__ == '__main__':
             ref_image_fname_dict[refimfilename].append(newrefimpsfcatfilename)
 
 
-            newrefimpsfcatfinderfilename = refimg_psfcat_filename_from_bucket.replace(".txt",f"_{refimg_idx}.txt")
+            newrefimpsfcatfinderfilename = refimg_psfcat_finder_filename_from_bucket.replace(".txt",f"_{refimg_idx}.txt")
 
             shutil.move(refimg_psfcat_finder_filename_from_bucket, newrefimpsfcatfinderfilename)
             print(f"Moved '{refimg_psfcat_finder_filename_from_bucket}' to '{newrefimpsfcatfinderfilename}'")
