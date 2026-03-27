@@ -1157,11 +1157,11 @@ if __name__ == '__main__':
 
             exitstatuses = exitstatuseph0[c][i]
             if int(exitstatuseph2[c][i]) != 0:
-                exitstatuses += "," + exitstatuseph2[c][i]
+                exitstatuses += "," + str(exitstatuseph2[c][i])
             if int(exitstatuseph4[c][i]) != 0:
-                exitstatuses += "," + exitstatuseph4[c][i]
+                exitstatuses += "," + str(exitstatuseph4[c][i])
             if int(exitstatuseph5[c][i]) != 0:
-                exitstatuses += "," + exitstatuseph5[c][i]
+                exitstatuses += "," + str(exitstatuseph5[c][i])
 
             dnearestrefsrc = d_nearestrefsrc[c][i]
             nearestrefmag = nearestref_mag_fit[c][i]
