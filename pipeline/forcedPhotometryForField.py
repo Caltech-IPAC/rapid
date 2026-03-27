@@ -604,7 +604,7 @@ if __name__ == '__main__':
             ref_image_fname_dict[refimfilename].append(newrefimfilename)
 
 
-            newrefimpsfcatfilename = refimg_psfcat_filename_from_bucket.replace(".fits",f"_{refimg_idx}.txt")
+            newrefimpsfcatfilename = refimg_psfcat_filename_from_bucket.replace(".txt",f"_{refimg_idx}.txt")
 
             shutil.move(refimg_psfcat_filename_from_bucket, newrefimpsfcatfilename)
             print(f"Moved '{refimg_psfcat_filename_from_bucket}' to '{newrefimpsfcatfilename}'")
@@ -612,7 +612,7 @@ if __name__ == '__main__':
             ref_image_fname_dict[refimfilename].append(newrefimpsfcatfilename)
 
 
-            newrefimpsfcatfinderfilename = refimg_psfcat_filename_from_bucket.replace(".fits",f"_{refimg_idx}.txt")
+            newrefimpsfcatfinderfilename = refimg_psfcat_filename_from_bucket.replace(".txt",f"_{refimg_idx}.txt")
 
             shutil.move(refimg_psfcat_finder_filename_from_bucket, newrefimpsfcatfinderfilename)
             print(f"Moved '{refimg_psfcat_finder_filename_from_bucket}' to '{newrefimpsfcatfinderfilename}'")
@@ -710,8 +710,8 @@ if __name__ == '__main__':
 
             diffimg_filename = f"rapid_{j}_scimrefdiffimg.fits"
             refimg_filename = f"rapid_{j}_refimg.fits"
-            refimg_psfcat_filename = f"rapid_{j}_refimgpsfcat.fits"
-            refimg_psfcat_finder_filename = f"rapid_{j}_refimgpsfcatfinder.fits"
+            refimg_psfcat_filename = f"rapid_{j}_refimgpsfcat.txt"
+            refimg_psfcat_finder_filename = f"rapid_{j}_refimgpsfcatfinder.txt"
 
             shutil.move(diffimg_filename_from_bucket, diffimg_filename)
             print(f"Moved '{diffimg_filename_from_bucket}' to '{diffimg_filename}'")
