@@ -816,8 +816,8 @@ if __name__ == '__main__':
 
         print(f"i,j = {i},{j}")
 
-        if i >= 150:
-            break
+        #if i >= 150:
+        #    break
 
 
     numrecs = j
