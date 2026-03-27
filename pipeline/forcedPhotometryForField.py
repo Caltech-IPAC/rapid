@@ -1170,7 +1170,7 @@ if __name__ == '__main__':
             nearestrefsharp = nearestref_sharpness[c][i]
 
             fh_lc.write(f"{sindex} {jd} {expid} {pid} {sca} {fid} {filter} {field} {rfid} " +\
-                        f"{infobitssci} {infobitsref} {scizp} {refzp}" +\
+                        f"{infobitssci} {infobitsref} {scizp} {refzp} " +\
                         f"{psfflux} {psffluxunc} {psfsnr} {psfredchi2} " +\
                         f"{aperflux} {aperfluxunc} {apersnr} " +\
                         f"{apercorr} {dnearestrefsrc} {nearestrefmag} {nearestrefmagunc} " +\
