@@ -96,6 +96,26 @@ class RAPIDDB:
 
         print("dbserver,dbname,dbport,dbuser =",dbserver,dbname,dbport,dbuser)
 
+        if dbport is None:
+            print("*** Error: Env. var. DBPORT not set; quitting...")
+            exit(64)
+
+        if dbname is None:
+            print("*** Error: Env. var. DBNAME not set; quitting...")
+            exit(64)
+
+        if dbuser is None:
+            print("*** Error: Env. var. DBUSER not set; quitting...")
+            exit(64)
+
+        if dbpass is None:
+            print("*** Error: Env. var. DBPASS not set; quitting...")
+            exit(64)
+
+        if dbserver is None:
+            print("*** Error: Env. var. DBSERVER not set; quitting...")
+            exit(64)
+
 
         # Connect to database
 
