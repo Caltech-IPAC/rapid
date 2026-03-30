@@ -74,10 +74,10 @@ if __name__ == '__main__':
     # The total number of merges records include sources that are
     # inside and outside of the field of interest.
 
-     num_merges_total = 0
-     num_merges_total_outside_field_of_interest = 0
+    num_merges_total = 0
+    num_merges_total_outside_field_of_interest = 0
 
-     for field in fields_list:
+    for field in fields_list:
 
         merges_tablename = f"merges_{field}"
 
