@@ -38,6 +38,40 @@ print("proc_utc_datetime =",proc_utc_datetime)
 print("proc_pt_datetime_started =",proc_pt_datetime_started)
 
 
+# Ensure the following environment variables are set:
+# DBPORT,DBNAME,DBUSER,DBPASS,DBSERVER,PYTHONPATH.
+
+dbport = os.getenv('DBPORT')
+if dbport is None:
+    print("*** Error: Env. var. DBPORT not set; quitting...")
+    exit(64)
+
+dbname = os.getenv('DBNAME')
+if dbname is None:
+    print("*** Error: Env. var. DBNAME not set; quitting...")
+    exit(64)
+
+dbuser = os.getenv('DBUSER')
+if dbuser is None:
+    print("*** Error: Env. var. DBUSER not set; quitting...")
+    exit(64)
+
+dbpass = os.getenv('DBPASS')
+if dbpass is None:
+    print("*** Error: Env. var. DBPASS not set; quitting...")
+    exit(64)
+
+dbserver = os.getenv('DBSERVER')
+if dbserver is None:
+    print("*** Error: Env. var. DBSERVER not set; quitting...")
+    exit(64)
+
+pythonpath = os.getenv('PYTHONPATH')
+if pythonpath is None:
+    print("*** Error: Env. var. PYTHONPATH not set; quitting...")
+    exit(64)
+
+
 
 #################
 # Main program.
