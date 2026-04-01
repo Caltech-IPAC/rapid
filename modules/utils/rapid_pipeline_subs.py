@@ -1416,7 +1416,7 @@ def smooth_image_by_local_clipped_averaging(nx,ny,data,x_window = 3,y_window = 3
             for ii in range(i - y_hwin, i + y_hwin + 1):
                 if ((ii < 0) or (ii >= ny)): continue
                 for jj in range(j - x_hwin, j + x_hwin + 1):
-                    if ((jj < 0) or (jj >= ny)): continue
+                    if ((jj < 0) or (jj >= nx)): continue
 
                     datum = data[ii, jj]
 
