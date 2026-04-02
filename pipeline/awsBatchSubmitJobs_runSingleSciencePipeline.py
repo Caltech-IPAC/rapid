@@ -1093,8 +1093,14 @@ if __name__ == '__main__':
     # Replace NaNs, if any, in ZOGY input images.  Use the same saturation level rate since they are gain-matched.
 
     saturation_value_rate_sciimage = saturation_level_sciimage / exptime_sciimage
-    nan_indices_sciimage = util.replace_nans_with_sat_val_rate(filename_bkg_subbed_science_image,saturation_value_rate_sciimage)
-    nan_indices_refimage = util.replace_nans_with_sat_val_rate(output_resampled_gainmatched_reference_image,saturation_value_rate_sciimage)
+    nan_indices_sciimage = util.replace_nans_with_value(filename_bkg_subbed_science_image,saturation_value_rate_sciimage)
+    nan_indices_refimage = util.replace_nans_with_value(output_resampled_gainmatched_reference_image,saturation_value_rate_sciimage)
+
+
+    # Replace NaNs, if any, with relevant clipped standard deviation in ZOGY input uncertainty images.
+
+    util.replace_nans_with_value(reformatted_science_uncert_image_filename,std_sci_img)
+    util.replace_nans_with_value(output_resampled_reference_uncert_image,std_ref_img)
 
 
     # Apply subpixel orthogonal offsets to ZOGY input reference image.
