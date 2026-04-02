@@ -1194,8 +1194,8 @@ if __name__ == '__main__':
                     if aperflux == 0.0:
                          continue
 
-                    ratsimpsf_val = truesrcflux / psfflux
-                    ratsimap_val = truesrcflux / aperflux
+                    ratsimpsf_val = truesrcflux / float(psfflux)
+                    ratsimap_val = truesrcflux / float(aperflux)
 
                     ratsimpsf_list.append(ratsimpsf_val)
                     ratsimap_list.append(ratsimap_val)
