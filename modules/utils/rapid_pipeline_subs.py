@@ -1830,12 +1830,12 @@ def list_aws_batch_jobs(batch_client,next_token,job_queue,job_name_wildcard):
 
 
 ##################################################################################################
-# Replace NaNs with saturation level rate in image, if any, of specified FITS file.
+# Replace NaNs, if any, with given value in image of specified FITS file.
 ##################################################################################################
 
-def replace_nans_with_sat_val_rate(fits_file,sat_val_rate):
+def replace_nans_with_value(fits_file,value):
 
-    print(f"Replacing NaNs with sat_val_rate = {sat_val_rate} in image, if any, of FITS file = {fits_file}")
+    print(f"Replacing NaNs, if any, with value = {value} in image of FITS file = {fits_file}")
 
 
     # Read input FITS file.
@@ -1846,7 +1846,7 @@ def replace_nans_with_sat_val_rate(fits_file,sat_val_rate):
     data_array = np.array(data)
 
 
-    # Replace NaNs in image with saturation value, if there are any.
+    # Replace NaNs, if there are any, in image with given value.
 
     nan_mask = np.isnan(data_array)
     nan_count = nan_mask.sum()
@@ -1855,7 +1855,7 @@ def replace_nans_with_sat_val_rate(fits_file,sat_val_rate):
 
     if np.any(nan_mask):
         row_indices, col_indices = np.where(nan_mask)
-        new_image_array = np.where(nan_mask,sat_val_rate,data_array)
+        new_image_array = np.where(nan_mask,value,data_array)
 
 
         # Replace primary HDU with new image data
