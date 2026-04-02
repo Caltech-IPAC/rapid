@@ -305,8 +305,8 @@ def add_simulated_point_source_to_difference_image(diffimg_filename,
 
     truesrcflx = 10 ** (0.4 * (scizp - simmag))
 
-    print(f"Adding a point source of magnitude {simmag} (~ {truesrcflx} DN) to difference image {diffimg_filename}...." )
-    print(f"x_zerobased,y_zerobased = {x_zerobased},{y_zerobased}")
+    print(f"Adding a point source of magnitude {simmag} (~ {truesrcflx} DN) to difference image {diffimg_filename}....")
+    print(f"x_zerobased,y_zerobased,truesrcflx = {x_zerobased},{y_zerobased},{truesrcflx}")
 
 
     # Read in difference image and PSF image from FITS files.
@@ -329,7 +329,7 @@ def add_simulated_point_source_to_difference_image(diffimg_filename,
     np_data_psf /= global_sum
 
 
-
+    # Get image and PSF dimensions.
 
     naxis1_image = hdr_image["NAXIS1"]
     naxis2_image = hdr_image["NAXIS2"]
@@ -339,6 +339,8 @@ def add_simulated_point_source_to_difference_image(diffimg_filename,
     naxis2_psf = hdr_psf["NAXIS2"]
     print("naxis1_psf,naxis2_psf =",naxis1_psf,naxis2_psf)
 
+
+    # Ensure PSF does not hang over image edge.
 
     x_hwin = int((naxis1_psf - 1) / 2)
     y_hwin = int((naxis2_psf - 1) / 2)
@@ -369,6 +371,8 @@ def add_simulated_point_source_to_difference_image(diffimg_filename,
 
     if not off_image:
 
+        print(f"Adding simulated point source with truesrcflx = {truesrcflx}....")
+
         iii = 0
 
         for ii in range(i - y_hwin, i + y_hwin + 1):
@@ -389,6 +393,8 @@ def add_simulated_point_source_to_difference_image(diffimg_filename,
 
 
     # Overwrite difference-image FITS file.
+
+    print(f"Overwriting difference image {diffimg_filename}....")
 
     np_data_image = np.array(data_image)
     new_hdu = fits.PrimaryHDU(header=hdr_image,data=np_data_image.astype(np.float32))
@@ -1351,11 +1357,11 @@ if __name__ == '__main__':
             infobitsref = infobitsref_list[i]
             scizp = scizp_list[i]
 
-            psfflux = forcediffimflux[c][i]
+            psfflux = float(forcediffimflux[c][i])
             psffluxunc = forcediffimfluxunc[c][i]
             psfsnr = forcediffimsnr[c][i]
             psfredchi2 = forcediffimchisq[c][i]
-            aperflux = forcediffimfluxap[c][i]
+            aperflux = float(forcediffimfluxap[c][i])
             aperfluxunc = forcediffimfluxuncap[c][i]
             apersnr = forcediffimsnrap[c][i]
             apercorr = aperturecorr[c][i]
