@@ -2,6 +2,9 @@
 Compute forced photometry for sky positions in a given RAPID field (a.k.a. sky tile).
 The input sky_positions_csv_file has 3 columns: reqid,ra,dec, and these sky positions
 are required to be within the input field.
+
+Use reference-image PSF for the forced photometry since SFFT does not
+produce a difference-image PSF.  TODO
 '''
 
 #########################################################################################
@@ -38,7 +41,6 @@ import csv
 import boto3
 import shutil
 import numpy as np
-import healpy as hp
 import configparser
 from datetime import datetime, timezone
 from dateutil import tz
@@ -51,20 +53,13 @@ from astropy.io import fits
 from astropy.coordinates import SkyCoord
 from astropy.table import QTable, join
 
-
 import database.modules.utils.rapid_db as db
 import modules.utils.rapid_pipeline_subs as util
 import database.modules.utils.roman_tessellation_db as sqlite
 
-level6 = 6
-nside6 = 2**level6
-
-level9 = 9
-nside9 = 2**level9
-
 
 swname = "forcedPhotometryForField.py"
-swvers = "1.0"
+swvers = "1.1"
 cfg_filename_only = "awsBatchSubmitJobs_launchSingleSciencePipeline.ini"
 
 print("swname =", swname)
@@ -244,7 +239,30 @@ maxbadpixfrac = float(config_input['FORCED_PHOTOMETRY']['maxbadpixfrac'])
 # Minimum percent overlap of difference image onto sky tile (field).
 minimum_percent_overlap_area = float(config_input['FORCED_PHOTOMETRY']['minimum_percent_overlap_area'])
 
+# FITS keywords.
+diffimg_fits_keyword_zptmag = config_input['FORCED_PHOTOMETRY']['diffimg_fits_keyword_zptmag']
+refimg_fits_keyword_zptmag = config_input['FORCED_PHOTOMETRY']['refimg_fits_keyword_zptmag']
+
 #=================================================================
+
+
+# Simultaneous filter-dependent and simulation-source-derived corrections are not allowed.
+
+if applyflxcorr == 1 and applysimcalcorr == 1:
+
+    print(f"*** Error: Not allowed to specify both applyflxcorr = 1 and applysimcalcorr = 1; quitting...")
+    exit(64)
+
+
+# Filter-dependent corrections have not been implemented.
+
+if applyflxcorr == 1:
+
+    print(f"*** Error: Code has not been implemented for applyflxcorr = 1; quitting...")
+    exit(64)
+
+
+# Print parameters.
 
 print("verbose =",verbose)
 print("debug =",debug)
@@ -266,6 +284,110 @@ print("jd_earliest =",jd_earliest)
 print("refmatchrad =",refmatchrad)
 print("maxbadpixfrac =",maxbadpixfrac)
 print("minimum_percent_overlap_area =",minimum_percent_overlap_area)
+print("diffimg_fits_keyword_zptmag =",diffimg_fits_keyword_zptmag)
+print("refimg_fits_keyword_zptmag =",refimg_fits_keyword_zptmag)
+
+
+#--------------------------------------------------------------------------
+# Method to optionally add a simulated point source of magnitude given
+# by the simmag parameter to the local copy of difference image.
+# A prerequisite for this option is that the chosen input (ra,dec) is
+# at a sky position with an empty background.  The difference image
+# is locally replaced with one containing the simulated point source.
+#--------------------------------------------------------------------------
+
+def add_simulated_point_source_to_difference_image(diffimg_filename,
+                                                   scizp,
+                                                   psf_filename,
+                                                   x_zerobased,
+                                                   y_zerobased,
+                                                   simmag)
+
+    truesrcflx = 10 ** (0.4 * (scizp - simmag))
+
+    print(f"Adding a point source of magnitude {simmag} (~ {truesrcflx} DN) to difference image {diffimg_filename}...." )
+    print(f"x_zerobased,y_zerobased = {x_zerobased},{y_zerobased}")
+
+
+    # Read in difference image and PSF image from FITS files.
+
+    hdul_image = fits.open(diffimg_filename)
+    hdr_image = hdul_image[0].header
+    data_image = hdul_image[0].data
+    hdul_image.close()
+
+    hdul_psf = fits.open(psf_filename)
+    hdr_psf = hdul_psf[0].header
+    data_psf = hdul_psf[0].data
+    hdul_psf.close()
+
+
+    # Normalize PSF.
+
+    np_data_psf = np.array(data_psf)
+    global_sum = np.sum(np_data_psf)
+    np_data_psf /= global_sum
+
+
+
+
+    naxis1_image = hdr_image["NAXIS1"]
+    naxis2_image = hdr_image["NAXIS2"]
+    print("naxis1_image,naxis2_image =",naxis1_image,naxis2_image)
+
+    naxis1_psf = hdr_psf["NAXIS1"]
+    naxis2_psf = hdr_psf["NAXIS2"]
+    print("naxis1_psf,naxis2_psf =",naxis1_psf,naxis2_psf)
+
+
+    x_hwin = int((naxis1_psf - 1) / 2)
+    y_hwin = int((naxis2_psf - 1) / 2)
+
+    i = y_zerobased
+    j = x_zerobased
+
+    off_image = False
+
+    for ii in range(i - y_hwin, i + y_hwin + 1):
+
+        if ((ii < 0) or (ii >= naxis2_image)):
+            off_image = True
+            break
+
+        for jj in range(j - x_hwin, j + x_hwin + 1):
+
+            if ((jj < 0) or (jj >= naxis1_image)):
+                off_image = True
+                break
+
+        if off_image:
+            break
+
+
+    # If PSF image is fully contained within difference image (i.e., not near an edge),
+    # then add the PSF image scaled by truesrcflx to the difference image.
+
+    if not off_image:
+        for ii in range(i - y_hwin, i + y_hwin + 1):
+            for jj in range(j - x_hwin, j + x_hwin + 1):
+
+                data[ii, jj] += truesrcflx * np_data_psf[ii, jj]
+    else:
+        truesrcflx = np.nan
+        return truesrcflx
+
+
+    # Overwrite difference-image FITS file.
+
+    np_data_image = np.array(data_image)
+    new_hdu = fits.PrimaryHDU(header=hdr_image,data=np_data_image.astype(np.float32))
+    new_hdu.writeto(diffimg_filename,overwrite=True,checksum=True)
+
+
+    # Return truesrcflx (it will be NaN if returned above because PSF is too
+    # close to an edge of the difference image.
+
+    return truesrcflx
 
 
 #---------------------------------------------------------------------
@@ -486,6 +608,7 @@ if __name__ == '__main__':
     ra4_list = []
     dec4_list = []
     diffimg_list = []
+    diffimg_psf_list = []
     checksum_list = []
     infobitssci_list = []
     infobitsref_list = []
@@ -671,7 +794,7 @@ if __name__ == '__main__':
 
         print(f"crval1,crval2 = {crval1},{crval2}")
 
-        scizp = hdr['ZPTMAG']
+        scizp = hdr[diffimg_fits_keyword_zptmag]
 
 
         # Example of converting pixel coordinates to celestial coordinates
@@ -712,6 +835,8 @@ if __name__ == '__main__':
             refimg_filename = f"rapid_{j}_refimg.fits"
             refimg_psfcat_filename = f"rapid_{j}_refimgpsfcat.txt"
             refimg_psfcat_finder_filename = f"rapid_{j}_refimgpsfcatfinder.txt"
+            diffimg_psf_filename = f"rapid_{j}_diffimgpsf.fits"
+            rebinpsffilename = f"rapid_{j}_rebinpsf.fits"
 
             shutil.move(diffimg_filename_from_bucket, diffimg_filename)
             print(f"Moved '{diffimg_filename_from_bucket}' to '{diffimg_filename}'")
@@ -760,6 +885,7 @@ if __name__ == '__main__':
             ra4_list.append(ra4)
             dec4_list.append(dec4)
             diffimg_list.append(diffimg_filename)
+            diffimg_psf_list.append(diffimg_psf_filename)
             checksum_list.append(checksum)
             infobitssci_list.append(infobitssci)
             infobitsref_list.append(infobitsref)
@@ -792,19 +918,19 @@ if __name__ == '__main__':
                 print("refimg_psf_from_bucket = ",refimg_psf_from_bucket)
 
 
-            # Define PSF filename.
+            # Copy PSF filename to unique local filename.
 
-            refimg_psf_filename = f"rapid_{j}_diffimgpsf.fits"
+            shutil.copy2(refimage_psf_filename_from_bucket, diffimg_psf_filename)
+            print(f"Copied {refimage_psf_filename_from_bucket} to {diffimg_psf_filename}")
 
-            shutil.copy2(refimage_psf_filename_from_bucket, refimg_psf_filename)
-            print(f"Copied {refimage_psf_filename_from_bucket} to {refimg_psf_filename}")
 
-            rebinpsffilename = f"rapid_{j}_rebinpsf.fits"
+           # Trim and upsample PSF and store in local filename rebinpsffilename for use
+           # by cforcepsfaper C module.
 
             hdu_index = 0
             interp_order = 1      # Don't use 2 or 3 introduces negative values in rebinned PSF.
 
-            util.trim_and_upsample_refimg_psf_fits_image(refimg_psf_filename,
+            util.trim_and_upsample_refimg_psf_fits_image(diffimg_psf_filename,
                                                          hdu_index,
                                                          stampupsamplefac,
                                                          stampsz,
@@ -833,6 +959,14 @@ if __name__ == '__main__':
     start_time_benchmark = end_time_benchmark
 
 
+    # Allocate memory storage for simulated-source results.
+
+    truesrcfluxperskyposition = {}
+
+    for c in range(numskypositions):
+        truesrcfluxperskyposition[c] = []
+
+
     # Create the text file that stores sky positions and (x,y) one-based
     # image pixel coordinates for the cforcepsfaper C module.  Whether
     # a sky position falls off a difference is checked by the C module.
@@ -851,22 +985,43 @@ if __name__ == '__main__':
 
         for i in range(numrecs):
 
-            f = diffimg_list[i]
+            diffimg_filename = diffimg_list[i]
             w = wcs_diffimg_list[i]
             pid = pid_list[i]
+            scizp = scizp_list[i]
+            diffimg_psf_filename = diffimg_psf_list[i]
+
 
             pos = SkyCoord(ra=ra, dec=dec, unit='deg')     # Returns zero-based pixel coordinates.
-            x,y = w.world_to_pixel(pos)
+            x_zerobased,y_zerobased = w.world_to_pixel(pos)
 
-            x += 1       # Convert to one-based pixels coordinates.
-            y += 1
+            x = x_zerobased + 1       # Convert to one-based pixels coordinates.
+            y = y_zerobased + 1
 
-            print(f"Center: ra={ra}, dec={dec} corresponds to x={x}, y={y} (one-based pixel coordinates) in {f}")
+            print(f"Center: ra={ra}, dec={dec} corresponds to x={x}, y={y} (one-based pixel coordinates) in {diffimg_filename}")
 
 
             # Write positions to text list file.
 
             fh_xydatafile.write(f"{c} {i} {pid} {ra} {dec} {x} {y}\n")
+
+
+            # Optionally add a simulated point source of magnitude specified by
+            # the simmag parameter to local copy of difference image.
+            # A prerequisite for this option is that the input (ra,dec) is at
+            # a sky position with an empty background.  The difference image
+            # is locally replaced with one containing the simulated point source.
+
+            if simflag == 1:
+
+                truesrcflux = add_simulated_point_source_to_difference_image(diffimg_filename,
+                                                                             scizp,
+                                                                             diffimg_psf_filename,
+                                                                             x_zerobased,
+                                                                             y_zerobased,
+                                                                             simmag)
+
+                truesrcfluxperskyposition[c].append(truesrcflux)
 
         c += 1
 
@@ -883,7 +1038,6 @@ if __name__ == '__main__':
 
     # Execute ulimit increase and cforcepsfaper C module in the same shell (connected by &&).
     # Execute C module cforcepsfaper with 1 thread.
-
 
     lightcurvefile = 'lightcurve_c.dat'
 
@@ -994,13 +1148,61 @@ if __name__ == '__main__':
             exitstatuseph2[c].append(row[12])
 
 
+    # If simflag was set, for each sky position, compute median ratio of true (sim) flux
+    # to measured flux for psf-fit and aperture flux separately over all filters and epochs.
+
+    if simflag == 1:
+
+        print("Computing simulation-derived medians of ratios of true simulated flux to " +
+              "PSF-fit and aperture fluxes separately over all filters and epochs...")
+
+        print("If multiple sky positions are specified, then the medians can be combined " +
+              "through averaging...")
+
+        c = 0
+
+        for ra,dec in zip(ra_list,dec_list):
+
+            ratsimpsf_list = []
+            ratsimap_list = []
+            num_truesrcflux_vals = 0
+
+            for i in range(numrecs):
+
+                psfflux = forcediffimflux[c][i]
+                aperflux = forcediffimfluxap[c][i]
+                truesrcflux = truesrcfluxperskyposition[c][i]
+
+                if not np.isnan(truesrcflux):
+
+                    num_truesrcflux_vals += 1
+
+                    if psfflux == 0.0:
+                         continue
+
+                    if aperflux == 0.0:
+                         continue
+
+                    ratsimpsf_val = truesrcflux / psfflux
+                    ratsimap_val = truesrcflux / aperflux
+
+                    ratsimpsf_list.append(ratsimpsf_val)
+                    ratsimap_list.append(ratsimap_val)
+
+            ratsimpsf = np.median(ratsimpsf_list)
+            ratsimap = np.median(ratsimap_list)
+
+            print(f"c,num_truesrcflux_vals,ratsimpsf,ratsimap = {c},{num_truesrcflux_vals},{ratsimpsf},{ratsimap}")
+
+            c += 1
+
+
     # Code-timing benchmark.
 
     end_time_benchmark = time.time()
     print("Elapsed time in seconds to load output from cforcerpsfaper C module into memory =",
         end_time_benchmark - start_time_benchmark)
     start_time_benchmark = end_time_benchmark
-
 
 
 #---------------------------------------------------------------------
@@ -1038,7 +1240,7 @@ if __name__ == '__main__':
 
             dnearestrefsrc, nearestrefmag, nearestrefmagunc, nearestrefredchi2,\
                 nearestrefsharp, exitstatus4, exitstatus5 =\
-                nearestrefpsfcatmetrics(reffilenameinp,refcatfname,refcatfinderfname,ra,dec, refzp,refmatchrad)
+                nearestrefpsfcatmetrics(reffilenameinp,refcatfname,refcatfinderfname,ra,dec,refzp,refmatchrad)
 
             d_nearestrefsrc[c].append(dnearestrefsrc)
             nearestref_mag_fit[c].append(nearestrefmag)
@@ -1051,17 +1253,7 @@ if __name__ == '__main__':
         c += 1
 
 
-
-
-
-
-
-
-
-
-
-
-    # Create final lightcurve files, one for each sky position.
+    # Create output lightcurve files, one for each sky position.
 
     c = 0
 
@@ -1107,7 +1299,7 @@ if __name__ == '__main__':
         fh_lc.write(f"# aperfluxunc = One-sigma uncertainty in aperflux [DN/s]\n")
         fh_lc.write(f"# apersnr = Signal-to-noise ratio for aperflux measurement\n")
         fh_lc.write(f"# aperturecorr = Aperture  (curve-of-growth) correction applied to aperflux measurement\n")
-        fh_lc.write(f"# dnearestrefsrc = Distance to nearest ref-image source within $refmatchrad arcsec [arcsec]\n")
+        fh_lc.write(f"# dnearestrefsrc = Distance to nearest ref-image source within {refmatchrad} arcsec [arcsec]\n")
         fh_lc.write(f"# nearestrefmag = Magnitude of nearest refimage source [mag]\n")
         fh_lc.write(f"# nearestrefmagunc = Magnitude uncertainty in nearestrefmag [mag]\n")
         fh_lc.write(f"# nearestrefredchi2 = Reduced chi-square for nearestrefmag measurement (from PhotUtils catalog)\n")
@@ -1170,6 +1362,20 @@ if __name__ == '__main__':
             nearestrefmagunc = nearestref_mag_err[c][i]
             nearestrefredchi2 = nearestref_reduced_chi2[c][i]
             nearestrefsharp = nearestref_sharpness[c][i]
+
+
+            # Optionally apply the constant (filter-independent) simulated-source-derived
+            # correction factors to psf and aperture fluxes if flag was set.
+
+            if applysimcalcorr == 1:
+
+                if psfflux != -99999 and aperflux != -99999:
+
+                    psfflux *= simcalpsffluxcor
+                    aperflux *= simcalapfluxcor
+
+
+            # Write lightcurve record to output file.
 
             fh_lc.write(f"{sindex} {jd} {expid} {pid} {sca} {fid} {filter} {field} {rfid} " +\
                         f"{infobitssci} {infobitsref} {scizp} {refzp} " +\
