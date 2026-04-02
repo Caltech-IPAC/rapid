@@ -343,8 +343,8 @@ def add_simulated_point_source_to_difference_image(diffimg_filename,
     x_hwin = int((naxis1_psf - 1) / 2)
     y_hwin = int((naxis2_psf - 1) / 2)
 
-    i = round(y_zerobased)
-    j = round(x_zerobased)
+    i = round(y_zerobased.item())
+    j = round(x_zerobased.item())
 
     off_image = False
 
