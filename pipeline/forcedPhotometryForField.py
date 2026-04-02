@@ -301,7 +301,7 @@ def add_simulated_point_source_to_difference_image(diffimg_filename,
                                                    psf_filename,
                                                    x_zerobased,
                                                    y_zerobased,
-                                                   simmag)
+                                                   simmag):
 
     truesrcflx = 10 ** (0.4 * (scizp - simmag))
 
