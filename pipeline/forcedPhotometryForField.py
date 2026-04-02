@@ -368,10 +368,21 @@ def add_simulated_point_source_to_difference_image(diffimg_filename,
     # then add the PSF image scaled by truesrcflx to the difference image.
 
     if not off_image:
+
+        iii = 0
+
         for ii in range(i - y_hwin, i + y_hwin + 1):
+
+            jjj = 0
+
             for jj in range(j - x_hwin, j + x_hwin + 1):
 
-                data_image[ii, jj] += truesrcflx * np_data_psf[ii, jj]
+                data_image[ii, jj] += truesrcflx * np_data_psf[iii, jjj]
+
+                jjj += 1
+
+            iii += 1
+
     else:
         truesrcflx = np.nan
         return truesrcflx
