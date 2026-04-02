@@ -371,7 +371,7 @@ def add_simulated_point_source_to_difference_image(diffimg_filename,
         for ii in range(i - y_hwin, i + y_hwin + 1):
             for jj in range(j - x_hwin, j + x_hwin + 1):
 
-                data[ii, jj] += truesrcflx * np_data_psf[ii, jj]
+                data_image[ii, jj] += truesrcflx * np_data_psf[ii, jj]
     else:
         truesrcflx = np.nan
         return truesrcflx
