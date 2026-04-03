@@ -1,0 +1,159 @@
+import os
+import numpy as np
+from datetime import datetime, timezone
+from dateutil import tz
+import time
+from concurrent.futures import ProcessPoolExecutor, as_completed
+to_zone = tz.gettz('America/Los_Angeles')
+
+import database.modules.utils.rapid_db as db
+import modules.utils.rapid_pipeline_subs as util
+
+
+swname = "count_astroobjects.py"
+swvers = "1.0"
+cfg_filename_only = "awsBatchSubmitJobs_launchSingleSciencePipeline.ini"
+
+debug = 1
+
+print("swname =", swname)
+print("swvers =", swvers)
+print("cfg_filename_only =", cfg_filename_only)
+
+
+# Compute start time for benchmark.
+
+start_time_benchmark = time.time()
+start_time_benchmark_at_start = start_time_benchmark
+
+
+# Compute processing datetime (UT) and processing datetime (Pacific time).
+
+datetime_utc_now = datetime.utcnow()
+proc_utc_datetime = datetime_utc_now.strftime('%Y-%m-%dT%H:%M:%SZ')
+datetime_pt_now = datetime_utc_now.replace(tzinfo=timezone.utc).astimezone(tz=to_zone)
+proc_pt_datetime_started = datetime_pt_now.strftime('%Y-%m-%dT%H:%M:%S PT')
+
+print("proc_utc_datetime =",proc_utc_datetime)
+print("proc_pt_datetime_started =",proc_pt_datetime_started)
+
+
+# Ensure the following environment variables are set:
+# DBPORT,DBNAME,DBUSER,DBPASS,DBSERVER,PYTHONPATH.
+
+dbport = os.getenv('DBPORT')
+if dbport is None:
+    print("*** Error: Env. var. DBPORT not set; quitting...")
+    exit(64)
+
+dbname = os.getenv('DBNAME')
+if dbname is None:
+    print("*** Error: Env. var. DBNAME not set; quitting...")
+    exit(64)
+
+dbuser = os.getenv('DBUSER')
+if dbuser is None:
+    print("*** Error: Env. var. DBUSER not set; quitting...")
+    exit(64)
+
+dbpass = os.getenv('DBPASS')
+if dbpass is None:
+    print("*** Error: Env. var. DBPASS not set; quitting...")
+    exit(64)
+
+dbserver = os.getenv('DBSERVER')
+if dbserver is None:
+    print("*** Error: Env. var. DBSERVER not set; quitting...")
+    exit(64)
+
+pythonpath = os.getenv('PYTHONPATH')
+if pythonpath is None:
+    print("*** Error: Env. var. PYTHONPATH not set; quitting...")
+    exit(64)
+
+
+
+#################
+# Main program.
+#################
+
+if __name__ == '__main__':
+
+    '''
+    Count total number of records in all partitioned astroobjects_<field> database tables.
+    '''
+
+
+    # Open database connection.
+
+    dbh = db.RAPIDDB()
+
+    if dbh.exit_code >= 64:
+        exit(dbh.exit_code)
+
+
+    # Select all astroobjects_<field> database tables.
+
+    sql_queries = []
+    sql_queries.append(f"select tablename from pg_tables where schemaname='public' and tablename like 'astroobjects_%';")
+    records = dbh.execute_sql_queries(sql_queries,debug)
+
+    fields_list = []
+    for record in records:
+        field = record[0].replace("astroobjects_","")
+        fields_list.append(field)
+
+
+    # Loop over all fields covered by astroobjects_<field> database tables.
+
+    num_astroobjects_total = 0
+
+    for field in fields_list:
+
+        astroobjects_tablename = f"astroobjects_{field}"
+
+
+        # Count all astroobjects_<field> database records.
+
+        query = f"SELECT count(*) FROM {astroobjects_tablename};"
+
+        sql_queries = []
+        sql_queries.append(query)
+        records = dbh.execute_sql_queries(sql_queries,debug)
+
+        for record in records:
+
+            num_astroobjects = record[0]
+            num_astroobjects_total += num_astroobjects
+
+
+    # Report results.
+
+    num_tables = len(fields_list)
+    print(f"Total number of astroobjects_<field> database tables = {num_tables}")
+
+    print(f"Total number of astroobjects_<field> database records = {num_astroobjects_total}")
+
+
+    # Code-timing benchmark overall.
+
+    end_time_benchmark = time.time()
+    print(f"Elapsed time in seconds to count all astroobjects records =",
+        end_time_benchmark - start_time_benchmark_at_start)
+
+
+    # Close database connections.
+
+    dbh.close()
+
+    if dbh.exit_code >= 64:
+        exit(dbh.exit_code)
+
+
+    # Termination.
+
+    terminating_exitcode = 0
+
+    print("terminating_exitcode =",terminating_exitcode)
+
+    exit(terminating_exitcode)
