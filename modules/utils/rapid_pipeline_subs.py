@@ -1860,7 +1860,7 @@ def replace_nans_with_value(fits_file,value):
 
         # Replace primary HDU with new image data
 
-        hdul[0] = fits.PrimaryHDU(header=hdr,data=new_image_array)
+        hdul[0] = fits.PrimaryHDU(header=hdr,data=new_image_array.astype(np.float32))
 
 
         # Write output FITS file.
@@ -1914,7 +1914,7 @@ def restore_nans(fits_file,nan_indices):
 
         # Replace primary HDU with new image data
 
-        hdul[0] = fits.PrimaryHDU(header=hdr,data=new_image_array)
+        hdul[0] = fits.PrimaryHDU(header=hdr,data=new_image_array.astype(np.float32))
 
 
         # Write output FITS file.
