@@ -10,7 +10,7 @@ import database.modules.utils.rapid_db as db
 import modules.utils.rapid_pipeline_subs as util
 
 
-swname = "countMerges.py"
+swname = "count_merges.py"
 swvers = "1.0"
 cfg_filename_only = "awsBatchSubmitJobs_launchSingleSciencePipeline.ini"
 
