@@ -24,10 +24,9 @@ import re
 import modules.utils.rapid_pipeline_subs as util
 
 
-bucket_name_input = "rimtimsim-250513"
-bucket_name_output = "rimtimsim-250513-lite"
-input_subdir = "simulated_image_data"
-subdir_work = "/work"
+bucket_name_input = "rimtimsim-251210"
+bucket_name_output = "rimtimsim-20260401-lite"
+work_dir = "/Users/laher/Folks/rapid/new_rimtimsims"
 
 
 # Parse input files in input S3 bucket.
@@ -44,37 +43,32 @@ for my_bucket_input_object in my_bucket_input.objects.all():
 
     fname_input = my_bucket_input_object.key
 
-    if input_subdir in fname_input:
+    only_fname_input = str(fname_input)
 
-        filename_match = re.match(r"(.+)/(.+\.fits)",fname_input)
+    input_fits_files.append(only_fname_input)
 
-        try:
-            subdir_only = filename_match.group(1)
-            only_fname_input = filename_match.group(2)
-            print("-----0-----> subdir_only =",subdir_only)
-            print("-----1-----> only_fname_input =",only_fname_input)
 
-        except:
-            print("-----2-----> No match in",fname_input)
-            continue
-
-        input_fits_files.append(only_fname_input)
-
+# Loop over input FITS files.
 
 for input_fits_file in input_fits_files:
+
+    print(f"input_fits_file = {input_fits_file}")
+
+    if ".fits" not in input_fits_file:
+        continue
 
 
     # Download file from input S3 bucket to local machine.
 
-    s3_object_input_fits_file = "s3://" + bucket_name_input + "/" + input_subdir + "/" + input_fits_file
+    s3_object_input_fits_file = "s3://" + bucket_name_input + "/" + input_fits_file
     download_cmd = ['aws','s3','cp',s3_object_input_fits_file,input_fits_file]
-    exitcode_from_gunzip = util.execute_command(download_cmd)
+    exitcode_from_download_cmd = util.execute_command(download_cmd)
 
 
     # Create output FITS filename for working directory.
 
-    output_fits_file = input_fits_file.replace("_lvl02","").replace("rimtimsim/","rimtimsim_lite/")\
-        .replace("_field03_rampfitted_exposureno","").replace("sim.fits","lite.fits")
+    output_fits_file = input_fits_file.replace("_lvl02_RAPIDSIMS","")\
+        .replace("_field03_rampfitted_exposureno","").replace("sim.fits","_lite.fits")
 
 
     # Read input FITS file.
@@ -210,10 +204,10 @@ for input_fits_file in input_fits_files:
 
     # Clean up work directory.
 
-    rm_cmd = ['rm','-f',subdir_work + "/" + input_fits_file]
+    rm_cmd = ['rm','-f',work_dir + "/" + input_fits_file]
     exitcode_from_rm = util.execute_command(rm_cmd)
 
-    rm_cmd = ['rm','-f',subdir_work + "/" + output_fits_file]
+    rm_cmd = ['rm','-f',work_dir + "/" + output_fits_file]
     exitcode_from_rm = util.execute_command(rm_cmd)
 
 
