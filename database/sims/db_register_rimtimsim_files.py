@@ -2,7 +2,6 @@ import boto3
 import os
 import time
 import numpy as np
-from astropy.io import fits
 import re
 import subprocess
 import healpy as hp
@@ -551,7 +550,9 @@ def register_files():
 
         s3_object_input_fits_file = "s3://" + bucket_name_input + "/" + input_fits_file
         download_cmd = ['aws','s3','cp',s3_object_input_fits_file,input_fits_file]
-        exitcode_from_gunzip = util.execute_command(download_cmd)
+        exitcode_from_download_cmd = util.execute_command(download_cmd)
+
+        print(f"exitcode_from_download_cmd = {exitcode_from_download_cmd}")
 
 
         # Register metadata in database.
