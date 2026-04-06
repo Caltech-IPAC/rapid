@@ -378,17 +378,21 @@ def register_l2file(dbh,header,wcs,file,expid,fid):
     key = "EQUINOX"
     equinox = get_keyword_value(header,key)
 
-    key = "PA_OBSY"
-    paobsy = get_keyword_value(header,key)
+    #key = "PA_OBSY"
+    #paobsy = get_keyword_value(header,key)
+    paobsy = 0.0
 
-    key = "PA_FPA"
-    pafpa = get_keyword_value(header,key)
+    #key = "PA_FPA"
+    #pafpa = get_keyword_value(header,key)
+    pafpa = 0.0
 
-    key = "ZPTMAG"
-    zptmag = get_keyword_value(header,key)
+    #key = "ZPTMAG"
+    #zptmag = get_keyword_value(header,key)
+    zptmag = 16.95
 
-    key = "SKY_MEAN"
-    skymean = get_keyword_value(header,key)
+    #key = "SKY_MEAN"
+    #skymean = get_keyword_value(header,key)
+    skymean = 0.0
 
 
     # Compute file checksum.
