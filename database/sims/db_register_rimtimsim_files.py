@@ -14,7 +14,7 @@ import database.modules.utils.rapid_db as db
 import database.modules.utils.roman_tessellation_db as sqlite
 
 
-bucket_name_input = "rimtimsim-250513-lite"
+bucket_name_input = "rimtimsim-20260401-lite"
 subdir_work = "/work"
 
 aws_access_key_id = os.getenv('AWS_ACCESS_KEY_ID')
