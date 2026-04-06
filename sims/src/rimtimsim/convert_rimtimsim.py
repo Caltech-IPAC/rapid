@@ -110,10 +110,16 @@ for input_fits_file in input_fits_files:
     hdr.rename_keyword('PC2_2', 'CD2_2', force=False)
 
 
-    # Add EXPTIME keyword, passed from EXPOSURE keyword,
+    # Add EXPTIME keyword, passed from EXPOSURE keyword.
 
     exptime = hdr["EXPOSURE"]
     hdr["EXPTIME"] = exptime
+
+
+    # Add ZPTMAG keyword.
+
+    zptmag = 18.82
+    hdr["ZPTMAG"] = zptmag
 
     print("input_fits_file =",input_fits_file)
     print("output_fits_file =",output_fits_file)

@@ -385,9 +385,8 @@ def register_l2file(dbh,header,wcs,file,expid,fid):
     #pafpa = get_keyword_value(header,key)
     pafpa = 0.0
 
-    #key = "ZPTMAG"
-    #zptmag = get_keyword_value(header,key)
-    zptmag = 16.95
+    key = "ZPTMAG"
+    zptmag = get_keyword_value(header,key)
 
     #key = "SKY_MEAN"
     #skymean = get_keyword_value(header,key)
