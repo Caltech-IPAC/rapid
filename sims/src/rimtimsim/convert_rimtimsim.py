@@ -118,7 +118,7 @@ for input_fits_file in input_fits_files:
 
     # Add ZPTMAG keyword.
 
-    zptmag = 18.82
+    zptmag = 25.85726796291789           # From Ryan for F213.
     hdr["ZPTMAG"] = zptmag
 
     print("input_fits_file =",input_fits_file)
