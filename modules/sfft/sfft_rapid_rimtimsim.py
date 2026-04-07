@@ -312,6 +312,7 @@ if __name__ == "__main__":
     parser.add_argument('--npixseg2', help='area in pixels in segmentation image corresponding to larger satmask radius for scaling', type=float, default=4000.)
     parser.add_argument('--bsmaskvalue', help='bright source mask value for images, used to mask bright source pixels', type=float, default=1e6)
     parser.add_argument('--bsmaskradius', help='bright source mask radius (in pixels)', type=float, default=0.)
+    parser.add_argument('--outlabel', help='label prefix for output file names', type=str, default='sfft')
 
     args = parser.parse_args()
     sciim = args.scifile
@@ -325,10 +326,14 @@ if __name__ == "__main__":
     scipsf = args.scipsf
     refpsf = args.refpsf
     sat_value = args.satvalue
-    satmask_radius = tuple(map(int, args.satmaskradius.split(',')))
+    satmask_radius = tuple(map(float, args.satmaskradius.split(',')))
     npix_seg2 = args.npixseg2
     bsmask_value = args.bsmaskvalue
     bsmask_radius = args.bsmaskradius
+    outlabel = args.outlabel
+
+    if crossconv and (scipsf is None or refpsf is None):
+        parser.error('--scipsf and --refpsf are required when --crossconv is used')
 
     if len(satmask_radius) == 1:
         satmask_radius1 = satmask_radius[0]
@@ -374,7 +379,8 @@ if __name__ == "__main__":
 
     #sigma clipped background std. dev. for background pixels
     if crossconv:
-        #sigma clipped background std. dev. for background pixels
+        if not np.any(bkgmask):
+            raise ValueError('No background pixels found in combined mask — cannot estimate background noise for decorrelation.')
         scibkgsig = sigma_clipped_stats(scidata[bkgmask].flatten(), sigma=5.0)[2]
         refbkgsig = sigma_clipped_stats(refdata[bkgmask].flatten(), sigma=5.0)[2]
 
@@ -382,7 +388,7 @@ if __name__ == "__main__":
         diff, dcdiff, soln, dcdiffpsf = run_sfft_rapid(sciim, refim, mask_image=bkgmaskim, crossconv=crossconv, scipsf=scipsf, refpsf=refpsf, \
                                             scibkgsig=scibkgsig, refbkgsig=refbkgsig, ForceConv=ForceConv, GKerHW=GKerHW, \
                                             KerPolyOrder=KerPolyOrder, BGPolyOrder=BGPolyOrder, ConstPhotRatio=ConstPhotRatio, \
-                                            backend=backend, cudadevice=cudadevice, nCPUthreads=nCPUthreads)
+                                            backend=backend, cudadevice=cudadevice, nCPUthreads=nCPUthreads, outlabel=outlabel)
         
         #mask 0 coverage pixels if dcdiff image
         with fits.open(dcdiff) as hdu:
@@ -395,7 +401,7 @@ if __name__ == "__main__":
         diff, soln, diffpsf = run_sfft_rapid(sciim, refim, mask_image=bkgmaskim, scipsf=scipsf, \
                                     ForceConv=ForceConv, GKerHW=GKerHW, \
                                     KerPolyOrder=KerPolyOrder, BGPolyOrder=BGPolyOrder, ConstPhotRatio=ConstPhotRatio, \
-                                    backend=backend, cudadevice=cudadevice, nCPUthreads=nCPUthreads)
+                                    backend=backend, cudadevice=cudadevice, nCPUthreads=nCPUthreads, outlabel=outlabel)
         
     #mask 0 coverage pixels if diff image
     with fits.open(diff) as hdu:
