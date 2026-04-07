@@ -110,6 +110,8 @@ if dry_run_str is None:
 
 dry_run = eval(dry_run_str)
 
+print(f"dry_run = {dry_run}")
+
 
 # Read input parameters from .ini file.
 
