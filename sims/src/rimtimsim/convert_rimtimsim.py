@@ -121,6 +121,13 @@ for input_fits_file in input_fits_files:
     zptmag = 25.85726796291789           # From Ryan for F213.
     hdr["ZPTMAG"] = zptmag
 
+
+    # Add SCA_NUM keyword.
+
+    detector = hdr["DETECTOR"]
+    sca_num = int(detector.replace("SCA",""))
+    hdr["SCA_NUM"] = sca_num
+
     print("input_fits_file =",input_fits_file)
     print("output_fits_file =",output_fits_file)
 
