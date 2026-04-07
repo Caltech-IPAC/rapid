@@ -1874,9 +1874,8 @@ if __name__ == '__main__':
             filename_sfftdiffimage_negative = filename_sfftdiffimage.replace(".fits","_negative.fits")
             util.scale_image_data(filename_sfftdiffimage,-1.0,filename_sfftdiffimage_negative)
 
+            filename_cconvdiff_negative = filename_cconvdiff.replace(".fits","_negative.fits")
             if crossconv_flag:
-
-                filename_cconvdiff_negative = filename_cconvdiff.replace(".fits","_negative.fits")
                 util.scale_image_data(filename_cconvdiff,-1.0,filename_cconvdiff_negative)
 
 
