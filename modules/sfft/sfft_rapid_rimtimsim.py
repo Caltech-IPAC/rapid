@@ -51,7 +51,7 @@ def bkg_mask(image, use_segm=True, run_sextractor=True, segm_image=None, bsmask=
     """
 
     with fits.open(image) as hdu:
-        hdudata = hdu[0].data
+        hdudata = hdu[0].data.copy()
     #indices for masking
     Y, X = np.indices(hdudata.shape)
 
@@ -66,13 +66,11 @@ def bkg_mask(image, use_segm=True, run_sextractor=True, segm_image=None, bsmask=
                                 CHECKIMAGE_TYPE='SEGMENTATION', AddRD=True, ONLY_FLAGS=None, XBoundary=0.0, YBoundary=0.0, \
                                 MDIR=None, VERBOSE_LEVEL=1)[1][0]
             segm_imdata = scatalog.T
-            #write out the segmentation image, if name provide, but don't overwrite
-            if (segm_image is not None) and (os.path.exists(segm_image) == False):
+            #write out the segmentation image, if name provided and doesn't already exist
+            if (segm_image is not None) and (not os.path.exists(segm_image)):
                 with fits.open(image) as hdu:
                     hdu[0].data = segm_imdata
                     hdu.writeto(segm_image)
-            else:
-                segm_imdata = fits.getdata(segm_image)
         else:
             segm_imdata = fits.getdata(segm_image)
 
