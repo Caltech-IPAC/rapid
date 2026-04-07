@@ -74,7 +74,7 @@ def bkg_mask(image, use_segm=True, run_sextractor=True, segm_image=None, bsmask=
             else:
                 segm_imdata = fits.getdata(segm_image)
         else:
-            segm_image = np.zeros()
+            segm_imdata = fits.getdata(segm_image)
 
         bkg_mask = (segm_imdata == 0)
     else:
@@ -151,6 +151,9 @@ def run_sfft_rapid(sciim, refim, mask_image, crossconv=False, scipsf=None,  refp
     diff (str) : Path to difference image file.
     dcdiff (str) : Path to decorrelated difference image file. Only returned if crossconv is True.
     soln (str) : Path to matching-kernel solution file.
+    diffpsf (str or None) : Path to diff image PSF file. If crossconv is True, this is the decorrelated diff PSF
+        (sci_PSF ⊗ ref_PSF ⊗ DCKer). If crossconv is False, this is the sci PSF written to a new file, or None
+        if scipsf was not provided.
     """
 
     #read in the image data
@@ -192,14 +195,16 @@ def run_sfft_rapid(sciim, refim, mask_image, crossconv=False, scipsf=None,  refp
         #setup the names of the outputs
         diff = os.path.join(os.path.dirname(sciim), f"{outlabel}diffimage_cconv_masked.fits")
         soln = os.path.join(os.path.dirname(sciim), f"{outlabel}soln_cconv.fits")
-        
+        dcdiffpsf = os.path.join(os.path.dirname(sciim), f"{outlabel}diffpsf_dconv.fits")
+
     else:
         insciim = sciim  #input images to sfft are just the original images
         inrefim = refim
-        
+
         #setup the names of the outputs
         diff = os.path.join(os.path.dirname(sciim), f"{outlabel}diffimage_masked.fits")
         soln = os.path.join(os.path.dirname(sciim), f"{outlabel}soln.fits")
+        diffpsf = os.path.join(os.path.dirname(sciim), f"{outlabel}diffpsf.fits") if scipsf is not None else None
 
     sciimagebase = insciim.split('.fits')[0]
     refimagebase = inrefim.split('.fits')[0]
@@ -253,11 +258,26 @@ def run_sfft_rapid(sciim, refim, mask_image, crossconv=False, scipsf=None,  refp
         with fits.open(diff) as diffhdu:
             diffhdu[0].data = dcdiffdata.T
             diffhdu.writeto(dcdiff, overwrite=True)
-        
-        return diff, dcdiff, soln
-    
+
+        #compute the decorrelated diff image PSF: sci_PSF ⊗ ref_PSF ⊗ DCKer
+        #DCKer already incorporates MK_Fin (passed to DeCorrelation_Calculator.DCC above)
+        cross_psf = convolve_fft(scipsfdata, refpsfdata, boundary='fill',
+                                 nan_treatment='fill', fill_value=0.0, normalize_kernel=True)
+        dc_diffpsf_data = convolve_fft(cross_psf, DCKer, boundary='fill',
+                                       nan_treatment='fill', fill_value=0.0, normalize_kernel=True)
+        dc_diffpsf_data /= dc_diffpsf_data.sum()
+        with fits.open(scipsf) as psfhdu:
+            psfhdu[0].data = dc_diffpsf_data.T
+            psfhdu.writeto(dcdiffpsf, overwrite=True)
+
+        return diff, dcdiff, soln, dcdiffpsf
+
     else:
-        return diff, soln
+        #diff PSF = sci PSF when crossconv is not used (ref is convolved to match sci)
+        if scipsf is not None:
+            with fits.open(scipsf) as psfhdu:
+                psfhdu.writeto(diffpsf, overwrite=True)
+        return diff, soln, diffpsf
     
 if __name__ == "__main__":
     #example usage with command line arguments
@@ -361,7 +381,7 @@ if __name__ == "__main__":
         refbkgsig = sigma_clipped_stats(refdata[bkgmask].flatten(), sigma=5.0)[2]
 
         #run sfft
-        diff, dcdiff, soln = run_sfft_rapid(sciim, refim, mask_image=bkgmaskim, crossconv=crossconv, scipsf=scipsf, refpsf=refpsf, \
+        diff, dcdiff, soln, dcdiffpsf = run_sfft_rapid(sciim, refim, mask_image=bkgmaskim, crossconv=crossconv, scipsf=scipsf, refpsf=refpsf, \
                                             scibkgsig=scibkgsig, refbkgsig=refbkgsig, ForceConv=ForceConv, GKerHW=GKerHW, \
                                             KerPolyOrder=KerPolyOrder, BGPolyOrder=BGPolyOrder, ConstPhotRatio=ConstPhotRatio, \
                                             backend=backend, cudadevice=cudadevice, nCPUthreads=nCPUthreads)
@@ -374,7 +394,7 @@ if __name__ == "__main__":
             hdu.writeto(dcdiff, overwrite=True)
 
     else:
-        diff, soln = run_sfft_rapid(sciim, refim, mask_image=bkgmaskim, \
+        diff, soln, diffpsf = run_sfft_rapid(sciim, refim, mask_image=bkgmaskim, scipsf=scipsf, \
                                     ForceConv=ForceConv, GKerHW=GKerHW, \
                                     KerPolyOrder=KerPolyOrder, BGPolyOrder=BGPolyOrder, ConstPhotRatio=ConstPhotRatio, \
                                     backend=backend, cudadevice=cudadevice, nCPUthreads=nCPUthreads)
