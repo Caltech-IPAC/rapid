@@ -128,6 +128,48 @@ for input_fits_file in input_fits_files:
     sca_num = int(detector.replace("SCA",""))
     hdr["SCA_NUM"] = sca_num
 
+
+    # Translater filter names to be similar to Open Universe sims:
+    #
+    # rimtimsims2db=> select * from filters;
+    # fid | filter
+    # -----+--------
+    #    1 | F184
+    #    2 | H158
+    #    3 | J129
+    #    4 | K213
+    #    5 | R062
+    #    6 | Y106
+    #    7 | Z087
+    #    8 | W146
+    # (8 rows)
+
+    filter = hdr["FILTER"]
+    if "213" in filter:
+        translated_filter = filter.replace("F213","K213").strip()
+    elif "184" in filter:
+        translated_filter = filter.replace("F184","F184").strip()
+    elif "158" in filter:
+        translated_filter = filter.replace("F158","H158").strip()
+    elif "129" in filter:
+        translated_filter = filter.replace("F129","J129").strip()
+    elif "062" in filter:
+        translated_filter = filter.replace("F062","R062").strip()
+    elif "106" in filter:
+        translated_filter = filter.replace("F106","Y106").strip()
+    elif "087" in filter:
+        translated_filter = filter.replace("F087","Z087").strip()
+    elif "146" in filter:
+        translated_filter = filter.replace("F146","W146").strip()
+    else:
+        print(f"*** Error: Unexpected filter = {filter}")
+        exit(64)
+
+    hdr["FILTER"] = translated_filter
+
+
+    # print input and output FITS filenames.
+
     print("input_fits_file =",input_fits_file)
     print("output_fits_file =",output_fits_file)
 
