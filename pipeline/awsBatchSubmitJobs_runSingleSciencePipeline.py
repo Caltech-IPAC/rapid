@@ -1742,6 +1742,14 @@ if __name__ == '__main__':
 
         crossconv_flag = eval(sfft_dict['crossconv_flag'])
 
+
+        # TODO Override config file if rimtimsim.
+
+        if "rimtimsim" in science_image_filename:
+
+            crossconv_flag = False
+
+
         if crossconv_flag:
             filename_sfftdiffimage = 'sfftdiffimage_dconv_masked.fits'
             filename_sfftsoln = 'sfftsoln_cconv.fits'
@@ -1755,8 +1763,6 @@ if __name__ == '__main__':
         # A quirk in the SFFT software requires prepended "./" to the positional input filenames.
 
         if "rimtimsim" in science_image_filename:
-
-            crossconv_flag = False               # TODO Override config file
 
             sfft_cmd = [python_cmd,
                         sfft_code,
