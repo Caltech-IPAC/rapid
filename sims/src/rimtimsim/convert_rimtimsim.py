@@ -26,7 +26,6 @@ import modules.utils.rapid_pipeline_subs as util
 
 bucket_name_input = "rimtimsim-251210"
 bucket_name_output = "rimtimsim-20260401-lite"
-work_dir = "/Users/laher/Folks/rapid/new_rimtimsims"
 
 
 # Parse input files in input S3 bucket.
@@ -259,10 +258,10 @@ for input_fits_file in input_fits_files:
 
     # Clean up work directory.
 
-    rm_cmd = ['rm','-f',work_dir + "/" + input_fits_file]
+    rm_cmd = ['rm','-f',input_fits_file]
     exitcode_from_rm = util.execute_command(rm_cmd)
 
-    rm_cmd = ['rm','-f',work_dir + "/" + output_fits_file]
+    rm_cmd = ['rm','-f',output_fits_file]
     exitcode_from_rm = util.execute_command(rm_cmd)
 
 
