@@ -405,7 +405,7 @@ def gainMatchScienceAndReferenceImages(s3_client,
 
     # Add some debug code to help setting the thresholds.
 
-    debug = 1
+    debug = False
 
     if debug:
 
