@@ -250,7 +250,7 @@ def generateReferenceImage(s3_client,
             data = hdul[0].data
 
             pos_data = np.abs(data_norm) # Ensure data are positive
-            data_unc = (np.sqrt(pos_data / sca_gain + sca_readout_noise ** 2) / exptime) * flux_scale_factor
+            data_unc = (np.sqrt(pos_data * exptime / sca_gain + sca_readout_noise ** 2) / exptime) * flux_scale_factor
 
             hdu_unc = fits.PrimaryHDU(header=hdr,data=data_unc)
             hdu_list_unc = []
