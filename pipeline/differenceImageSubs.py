@@ -62,7 +62,7 @@ def reformat_troxel_fits_file_and_compute_uncertainty_image_via_simple_model(inp
     # Ensure data are positive for uncertainty calculations.
 
     pos_np_data = np.abs(new_np_data)
-    data_unc = np.sqrt(pos_np_data / sca_gain + sca_readout_noise ** 2) / exptime
+    data_unc = np.sqrt(pos_np_data * exptime / sca_gain + sca_readout_noise ** 2) / exptime
 
     hdu_unc = fits.PrimaryHDU(header=hdr,data=data_unc.astype(np.float32))
     hdu_list_unc = []
