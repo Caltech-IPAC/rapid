@@ -403,6 +403,18 @@ def gainMatchScienceAndReferenceImages(s3_client,
     magref_val += magzpref
 
 
+    # Add some debug code to help setting the thresholds.
+
+    debug = 1
+
+    if debug:
+
+        for i in range(magref_val):
+
+            print(f"i,magref_val,classstarref_val,isoareafimageref_val,awintobwinworldratioref_val = {i},{magref_val[i]},{classstarref_val[i]},{isoareafimageref_val[i]},{awintobwinworldratioref_val[i]}")
+
+
+
     #-----------------------------------------------------------------
     # Filter ref-catalog sources to retain subset of point sources for
     # use in gain-matching below.
