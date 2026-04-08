@@ -409,7 +409,7 @@ def gainMatchScienceAndReferenceImages(s3_client,
 
     if debug:
 
-        for i in range(magref_val):
+        for i in range(len(magref_val)):
 
             print(f"i,magref_val,classstarref_val,isoareafimageref_val,awintobwinworldratioref_val = {i},{magref_val[i]},{classstarref_val[i]},{isoareafimageref_val[i]},{awintobwinworldratioref_val[i]}")
 
