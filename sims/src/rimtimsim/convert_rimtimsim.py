@@ -14,6 +14,8 @@ rimtimsim_lite/rimtimsim_WFI_F087_SCA02_000017675_lite.fits
 9. Modify CTYPE1 and CTYPE2 keyword values from TAN to TAN-SIP.
 10. Modify CRPIX1 and CRPIX2 keyword values to the coordinates of the image center.
 11. Transpose image data to correct WCS (original simulated data are incorrect).
+12. Multiply by exposure time to convert e-/s into DN (assuming sca_gain = 1.0).
+13. Add more FITS keywords: SCA_NUM, BUNIT = "DN", ZPTMAG for consistency with Open Universe sims.
 """
 
 from astropy.io import fits
@@ -219,9 +221,12 @@ for input_fits_file in input_fits_files:
     del hdul[1]
 
 
-    # Create a new ImageHDU with image data
+    # Create a new ImageHDU with image data.
+    # Multiply by exposure time to convert e-/s into DN (assuming sca_gain = 1.0).
 
-    np_data = np.array(transpose_data)
+    hdr["BUNIT"] = "DN"
+
+    np_data = np.array(transpose_data) * exptime
     new_hdu = fits.ImageHDU(header=hdr,data=np_data.astype(np.float32))
 
 
