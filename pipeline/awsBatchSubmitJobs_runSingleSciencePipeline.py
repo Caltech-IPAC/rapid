@@ -1753,9 +1753,11 @@ if __name__ == '__main__':
         if crossconv_flag:
             filename_sfftdiffimage = 'sfftdiffimage_dconv_masked.fits'
             filename_sfftsoln = 'sfftsoln_cconv.fits'
+            filename_sfftdffimagepsf = "sfftdiffpsf_dconv.fits"
         else:
             filename_sfftdiffimage = 'sfftdiffimage_masked.fits'
             filename_sfftsoln = 'sfftsoln.fits'
+            filename_sfftdffimagepsf = "sfftdiffpsf.fits"
 
         filename_cconvdiff = 'sfftdiffimage_cconv_masked.fits'               # Only generated if crossconv_flag = True
 
@@ -1797,11 +1799,13 @@ if __name__ == '__main__':
                         "--bsmaskradius",
                         "100.0"]
 
+        # If crossconv_flag = False, then the SFFT diffimage PSF is just the science-image PSF.
+
+        sfft_cmd.append("--scipsf")
+        sfft_cmd.append(filename_sciimage_psf_normalized)
 
         if crossconv_flag:
             sfft_cmd.append("--crossconv")
-            sfft_cmd.append("--scipsf")
-            sfft_cmd.append(filename_sciimage_psf_normalized)
             sfft_cmd.append("--refpsf")
             sfft_cmd.append(filename_refimage_psf)
             sfft_cmd.append("--scisegm")
@@ -1903,20 +1907,23 @@ if __name__ == '__main__':
             s3_object_name_sfftdiffimage_unc_masked = job_proc_date + "/jid" + str(jid) + "/" + filename_sfftdiffimage_unc_masked
             s3_object_name_sfftdiffimage_negative = job_proc_date + "/jid" + str(jid) + "/" + filename_sfftdiffimage_negative
             s3_object_name_cconvdiff_negative = job_proc_date + "/jid" + str(jid) + "/" + filename_cconvdiff_negative
+            s3_object_name_sfftdiffimagepsf = job_proc_date + "/jid" + str(jid) + "/" + filename_sfftdffimagepsf
 
             filenames = [filename_sfftdiffimage,
                          filename_sfftsoln,
                          filename_cconvdiff,
                          filename_sfftdiffimage_unc_masked,
                          filename_sfftdiffimage_negative,
-                         filename_cconvdiff_negative]
+                         filename_cconvdiff_negative,
+                         filename_sfftdffimagepsf]
 
             objectnames = [s3_object_name_sfftdiffimage,
                            s3_object_name_sfftsoln,
                            s3_object_name_cconvdiff,
                            s3_object_name_sfftdiffimage_unc_masked,
                            s3_object_name_sfftdiffimage_negative,
-                           s3_object_name_cconvdiff_negative]
+                           s3_object_name_cconvdiff_negative,
+                           s3_object_name_sfftdiffimagepsf]
 
             if upload_to_s3_bucket:
 
