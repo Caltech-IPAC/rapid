@@ -1108,7 +1108,7 @@ if __name__ == '__main__':
     util.apply_subpixel_orthogonal_offsets(output_resampled_gainmatched_reference_image,dxmedianfin,dymedianfin)
 
 
-    # Tranpose science-image PSF for rimtimsim data.
+    # Transpose science-image PSF for rimtimsim data.
 
     if "rimtimsim" in science_image_filename:
 
