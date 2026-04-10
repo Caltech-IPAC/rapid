@@ -831,20 +831,22 @@ if __name__ == '__main__':
 
 
 
-    # Reformat the Troxel OpenUniverse simulated image FITS file
+    # Reformat the simulated-image FITS file
     # so that the image data are contained in the PRIMARY header.
-    # Compute uncertainty image via simple model (photon noise only).
+    # Compute uncertainty image via simple model (photon noise and read noise only).
     # Resize images to 4089x4089 (odd number of pixels on each side).
+    # Normalize by exposure time so image data units are DN/s.
+    # Save image data as float32 in output FITS file.
 
     reformatted_science_image_filename = science_image_filename.replace(".fits","_reformatted.fits")
     reformatted_science_uncert_image_filename = science_image_filename.replace(".fits","_reformatted_unc.fits")
 
-    dfis.reformat_troxel_fits_file_and_compute_uncertainty_image_via_simple_model(science_image_filename,
-                                                                                  sca_gain,
-                                                                                  sca_readout_noise,
-                                                                                  avg_sci_img,
-                                                                                  reformatted_science_image_filename,
-                                                                                  reformatted_science_uncert_image_filename)
+    dfis.reformat_simdata_fits_file_and_compute_uncertainty_image_via_simple_model(science_image_filename,
+                                                                                   sca_gain,
+                                                                                   sca_readout_noise,
+                                                                                   avg_sci_img,
+                                                                                   reformatted_science_image_filename,
+                                                                                   reformatted_science_uncert_image_filename)
 
 
 

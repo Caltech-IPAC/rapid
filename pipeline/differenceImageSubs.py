@@ -8,29 +8,27 @@ import modules.utils.rapid_pipeline_subs as util
 
 
 #-------------------------------------------------------------------
-# Reformat a Troxel OpenUniverse simulated image FITS file
+# Reformat the simulated image in a FITS file
 # so that the image data are contained in the PRIMARY header.
 # Assumes the 2D image data are in the second HDU of the FITS file.
-# Compute uncertainty image via simple model (photon noise only).
-# We do this because the uncertainty image is not available as
-# we removed the uncertainy FITS extension earlier from the
-# Troxel OpenUniverse simulated images to save on disk-space costs.
+# Compute uncertainty image via simple model (photon noise and read noise).
 # Resize images to 4089x4089 (odd number of pixels on each side).
-# Normalize by exposure time.
+# Normalize by exposure time so image data units are DN/s.
+# Save image data as float32 in output FITS file.
 #
 # Inputs are:
-# 1. Filename of a single gunzipped Troxel OpenUniverse simulated image (as
+# 1. Filename of a single gunzipped simulated image (as
 #    read directly from the S3 bucket where it is stored), and
-# 2. SCA gain.
+# 2. SCA gain and readout noise.
 # 3. EXPTIME
 # 4. Data-clipped-image mean
 
-def reformat_troxel_fits_file_and_compute_uncertainty_image_via_simple_model(input_filename,
-                                                                             sca_gain,
-                                                                             sca_readout_noise,
-                                                                             clipped_image_mean,
-                                                                             fname_output,
-                                                                             fname_output_unc):
+def reformat_simdata_fits_file_and_compute_uncertainty_image_via_simple_model(input_filename,
+                                                                              sca_gain,
+                                                                              sca_readout_noise,
+                                                                              clipped_image_mean,
+                                                                              fname_output,
+                                                                              fname_output_unc):
 
 
     # Reformat the FITS file so that the image data are contained in the PRIMARY header.
