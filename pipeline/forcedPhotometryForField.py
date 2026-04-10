@@ -3,8 +3,8 @@ Compute forced photometry for sky positions in a given RAPID field (a.k.a. sky t
 The input sky_positions_csv_file has 3 columns: reqid,ra,dec, and these sky positions
 are required to be within the input field.
 
-Use reference-image PSF for the forced photometry since SFFT does not
-produce a difference-image PSF.  TODO
+Use the corresponding reference-image PSF for the forced photometry as a fallback if
+the SFFT difference-image PSF is not available.
 '''
 
 #########################################################################################
@@ -40,6 +40,7 @@ import os
 import csv
 import boto3
 import shutil
+import re
 import numpy as np
 import configparser
 from datetime import datetime, timezone
@@ -59,7 +60,7 @@ import database.modules.utils.roman_tessellation_db as sqlite
 
 
 swname = "forcedPhotometryForField.py"
-swvers = "1.1"
+swvers = "1.2"
 cfg_filename_only = "awsBatchSubmitJobs_launchSingleSciencePipeline.ini"
 
 print("swname =", swname)
@@ -147,9 +148,6 @@ product_s3_bucket_base = config_input['JOB_PARAMS']['product_s3_bucket_base']
 job_config_filename_base = config_input['JOB_PARAMS']['job_config_filename_base']
 product_config_filename_base = config_input['JOB_PARAMS']['product_config_filename_base']
 
-output_psfcat_filename = str(config_input['PSFCAT_DIFFIMAGE']['output_zogy_psfcat_filename'])
-output_psfcat_finder_filename = str(config_input['PSFCAT_DIFFIMAGE']['output_zogy_psfcat_finder_filename'])
-
 naxis1 = int(config_input['INSTRUMENT']['naxis1_sciimage'])
 naxis2 = int(config_input['INSTRUMENT']['naxis2_sciimage'])
 
@@ -163,6 +161,9 @@ refimage_psf_filename = config_input['JOB_PARAMS']['refimage_psf_filename']
 
 output_psfcat_filename = config_input['PSFCAT_REFIMAGE']['output_psfcat_filename']
 output_psfcat_finder_filename = config_input['PSFCAT_REFIMAGE']['output_psfcat_finder_filename']
+
+filename_diffimgpsf = "sfftdiffpsf.fits"
+filename_diffimgpsf_alternate = "sfftdiffpsf_dconv.fits"
 
 
 #=================================================================
@@ -582,7 +583,8 @@ if __name__ == '__main__':
         filters[fid] = filter
 
 
-    # Get difference images that possibly overlap the field.
+    # Get all difference images that possibly overlap the field by
+    # querying the DiffImages database table.
     # Returns the following columns:
     # pid,expid,sca,fid,field,jd,ra0,dec0,ra1,dec1,ra2,dec2,ra3,dec3,ra4,dec4,
     # filename,checksum,infobitssci,infobitsref,rfid,refimfilename,refimchecksum,
@@ -698,6 +700,36 @@ if __name__ == '__main__':
         diffimg_filename_from_bucket,subdirs_diff_image,downloaded_from_bucket = util.download_file_from_s3_bucket(s3_client,s3_full_name_diff_image)
 
         print(f"diffimg_filename_from_bucket,subdirs_diff_image,downloaded_from_bucket = {diffimg_filename_from_bucket},{subdirs_diff_image},{downloaded_from_bucket}")
+
+
+        # Parse S3 URI of difference image.
+
+        filename_match = re.match(r"(s3://.+)/(.+)", filename)
+
+        try:
+            s3path = filename_match.group(1)
+            s3filename = filename_match.group(2)
+
+            print(f"s3path,s3fileneme = {s3path}, {s3filename}")
+
+        except:
+            print(f"*** Error: Cannot parse S3 URI of difference image ({filename}); quitting...")
+            exit(64)
+
+
+        # Download difference-image PSF from S3 bucket.
+
+        s3_full_name_diff_image_psf = f"{s3path}/{filename_diffimgpsf}"
+        diffimgpsf_filename_from_bucket,subdirs_diff_image,downloaded_diffimgpsf_from_bucket = util.download_file_from_s3_bucket(s3_client,s3_full_name_diff_image_psf)
+
+        print(f"diffimgpsf_filename_from_bucket,subdirs_diff_image,downloaded_diffimgpsf_from_bucket = {diffimgpsf_filename_from_bucket},{subdirs_diff_image},{downloaded_diffimgpsf_from_bucket}")
+
+        if not downloaded_diffimgpsf_from_bucket:
+
+            s3_full_name_diff_image_psf = f"{s3path}/{filename_diffimgpsf_alternate}"
+            diffimgpsf_filename_from_bucket,subdirs_diff_image,downloaded_diffimgpsf_from_bucket = util.download_file_from_s3_bucket(s3_client,s3_full_name_diff_image_psf)
+
+            print(f"diffimgpsf_filename_from_bucket,subdirs_diff_image,downloaded_diffimgpsf_from_bucket = {diffimgpsf_filename_from_bucket},{subdirs_diff_image},{downloaded_diffimgpsf_from_bucket}")
 
 
         # Download reference image and PSF-fit catalogs from S3 bucket.
@@ -920,8 +952,8 @@ if __name__ == '__main__':
             refjdend_list.append(refjdend)
 
 
-            # Use reference-image PSF for the forced photometry since SFFT does not
-            # produce a difference-image PSF.  TODO
+            # Use the corresponding reference-image PSF for the forced photometry as a
+            # fallback if the SFFT difference-image PSF is not available.
 
             refimage_psf_filename_from_bucket = refimage_psf_filename.replace("FID",str(fid))
             s3_full_name_refimage_psf = "s3://" + job_info_s3_bucket_base + "/" +\
@@ -935,10 +967,18 @@ if __name__ == '__main__':
                 print("refimg_psf_from_bucket = ",refimg_psf_from_bucket)
 
 
-            # Copy PSF filename to unique local filename.
+            # Move or copy PSF filename to unique local filename, as appropriate.fe
+            # The reference-image PSF is used in case the difference-image PSF is not available.
 
-            shutil.copy2(refimage_psf_filename_from_bucket, diffimg_psf_filename)
-            print(f"Copied {refimage_psf_filename_from_bucket} to {diffimg_psf_filename}")
+            if not downloaded_diffimgpsf_from_bucket:
+
+                shutil.copy2(refimage_psf_filename_from_bucket, diffimg_psf_filename)
+                print(f"Copied {refimage_psf_filename_from_bucket} to {diffimg_psf_filename}")
+
+            else:
+
+                shutil.move(diffimgpsf_filename_from_bucket, diffimg_psf_filename)
+                print(f"Moved '{diffimgpsf_filename_from_bucket}' to '{diffimg_psf_filename}'")
 
 
            # Trim and upsample PSF and store in local filename rebinpsffilename for use
