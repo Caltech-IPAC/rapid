@@ -24,6 +24,7 @@ OpenUniverse           rapidopsdb               Observation range of reference i
 OpenUniverse           specialdb                Observation range of reference images later than test (special)
 RimTimSim              rimtimsimdb              Observation range of reference images earlier than test (normal)
 OpenUniverse           fakesourcesdb            For fake-source injection (copy of specialdb)
+RimTimSim              rimtimsims2db            For fake-source injection (emptied copy of fakesourcesdb)
 ===============      ===================      =====================================================================
 
 
@@ -72,6 +73,8 @@ Date              Software modification
 2/11/2026         Scaled reference-image inputs so that reference image has fixed zero point = 17 mag.
 2/12/2026         Modified to generate PhotUtils catalog for reference image.
 3/24/2026         Completed upgrade/debugging fake-source injection for variable sources with fixed sky positions.
+4/7/2026          Modified SFFT code to output a difference-image PSF
+4/9/2026          Changes to how the uncertainty images are calculated (for science image and refimage inputs).
 ===============   ===============================================================================================================================================================================================================================
 
 
