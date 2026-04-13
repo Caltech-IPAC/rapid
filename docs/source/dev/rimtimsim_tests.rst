@@ -143,6 +143,35 @@ than a few pixels) that is associated with field number 4682737.  These rimtimsi
 came already with fake-source injections, and therefore no additional fake sources
 were injected by the RAPID pipeline.
 
+SFFT was run without the ``--crossconv`` flag
+
+Here details about how the test was executed:
+
+.. code-block::
+
+    export DBNAME=rimtimsims2db
+    export STARTDATETIME="2027-02-19 17:00:00"
+    export ENDDATETIME="2027-04-24 23:00:00"
+    export STARTREFIMMJDOBS=61450
+    export ENDREFIMMJDOBS=61455.3
+    export MINREFIMNFRAMES=6
+
+    python3.11 /code/pipeline/virtualPipelineOperator.py 20260410 >& virtualPipelineOperator_20260410.out &
+
+
+The following database query shows the RAPID pipelines ran normally for the portion that generates the main file products:
+
+.. code-block::
+
+    rimtimsims2db=> select ppid,exitcode,count(*) from jobs where cast(launched as date) = '20260410' group by ppid, exitcode order by ppid, exitcode;
+
+     ppid | exitcode | count
+    ------+----------+-------
+       15 |        0 |   121
+       17 |        0 |   121
+    (2 rows)
+
+
 As shown in the table below for the longest running pipeline instance (jid = 91915),
 executing AWAICGEN for reference-image generation
 (depends on the number of input images; NFRAMES=10 for this case),
