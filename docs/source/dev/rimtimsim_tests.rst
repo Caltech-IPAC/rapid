@@ -159,7 +159,8 @@ Here details about how the test was executed:
     python3.11 /code/pipeline/virtualPipelineOperator.py 20260410 >& virtualPipelineOperator_20260410.out &
 
 
-The following database query shows the RAPID pipelines ran normally for the portion that generates the main file products:
+The following database query shows the RAPID pipelines ran normally for the portion that
+generates the file products in parallel via the AWS Batch service.
 
 .. code-block::
 
