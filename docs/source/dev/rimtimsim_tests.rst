@@ -145,7 +145,7 @@ were injected by the RAPID pipeline.
 
 SFFT was run without the ``--crossconv`` flag
 
-Here details about how the test was executed:
+Here are details about how the test was executed:
 
 .. code-block::
 
