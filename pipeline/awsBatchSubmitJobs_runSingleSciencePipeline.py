@@ -1777,7 +1777,7 @@ if __name__ == '__main__':
                         "--refcat",
                         filename_refgainmatchsexcat_catalog,
                         "--satvalue",
-                        "1750.0",
+                        str(saturation_value_rate_sciimage),
                         "--satmaskradius",
                         "30,45",
                         "--npixseg2",
