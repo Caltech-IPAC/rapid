@@ -21,7 +21,7 @@ Reference-image pixels are the same size as SCA images.
 To get a handle on the number of reference images and their coverage depths possible
 for the planned observations, statistics are computed covering all Roman WFI-camera surveys,
 all epochs, and all SCAs, but excluding PRISM/GRISM observations.
-The python code that was used is given in the code-output panel below.
+The output from python code count_fields_imaged.py is given in a separate section below.
 
 
 Reference-Image Numbers
@@ -55,7 +55,7 @@ The histograms are given separately for the different WFI-camera bandpass filter
 
 
 
-Detailed Output
+Code Output
 ************************************
 
 .. code-block::
