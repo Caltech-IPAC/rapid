@@ -132,3 +132,63 @@ Here are metadata about the two reference images, for fid = 4 and 7:
 The ``cov5percent`` QA metric for these two reference images is about 32.5 percent, but
 because the entire dataset has small dithers and small image-angle variations, the footprint
 of the image difference between science and reference images is almost 100 percent.
+
+
+4/10/2026
+************************************
+
+A new set of rimtimsims, consisting of 131 FITS images, covering SCA number 2,
+bandpass filter K213, and a single sky footprint/orientation (with dithers of no more
+than a few pixels) that is associated with field number 4682737.  These rimtimsims
+came already with fake-source injections, and therefore no additional fake sources
+were injected by the RAPID pipeline.
+
+As shown in the table below for the longest running pipeline instance (jid = 91915),
+executing AWAICGEN for reference-image generation
+(depends on the number of input images; NFRAMES=10 for this case),
+executing SFFT, (both science image and reference-image inputs),
+and generating PhotUtils catalogs are the dominant factors
+affecting pipeline performance.
+
+Generating a PSF-fit catalog for the positive naive-difference image took an
+anomalously long time (19.4 minutes!).
+
+=================================================================  =====================
+Pipeline step                                                      Execution time (sec)
+=================================================================  =====================
+Downloading science image                                             0.643
+Uploading science image to product S3 bucket                          0.450
+Downloading or generating reference image                           625.096
+Uploading reference image to S3 product bucket                        2.158
+Generating science-image catalog                                     23.402
+Swarping images                                                       8.927
+Uploading intermediate FITS files to product S3 bucket                2.653
+Running bkgest on science image                                       7.801
+Running gainMatchScienceAndReferenceImages                           30.194
+Replacing NaNs, applying image offsets, etc.                          0.573
+Running ZOGY                                                         39.462
+Masking ZOGY difference image                                         0.952
+Running SExtractor on positive ZOGY difference image                  4.315
+Running SExtractor on negative ZOGY difference image                 21.474
+Generating PSF-fit catalog on positive ZOGY difference image         82.193
+Generating PSF-fit catalog on negative ZOGY difference image          6.587
+Uploading main products to S3 bucket                                  5.502
+Running SFFT                                                        149.377
+Uploading SFFT difference image to S3 product bucket                  4.796
+Running SExtractor on positive SFFT difference images                43.833
+Running SExtractor on negative SFFT difference images                26.593
+Uploading SFFT-diffimage SExtractor catalogs to S3 product bucket     1.241
+Generating PSF-fit catalog on positive SFFT difference image         25.353
+Generating PSF-fit catalog on negative SFFT difference image         12.718
+Uploading SFFT-diffimage PSF-fit catalogs to S3 product bucket        0.131
+Computing naive difference images                                     0.560
+Uploading naive difference images to S3 product bucket                1.079
+Running SExtractor on positive naive difference image                 4.027
+Running SExtractor on negative naive difference image                18.012
+Uploading SExtractor catalogs for naive difference images             0.892
+Generating PSF-fit catalog on positive naive difference image      1164.406
+Generating PSF-fit catalog on negative naive difference image       192.792
+Uploading PSF-fit catalogs for naive difference images                1.837
+Uploading products at pipeline end to S3 product bucket               0.037
+Total elapsed time to run one instance of science pipeline         2510.065
+=================================================================  =====================
