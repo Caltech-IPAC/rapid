@@ -167,7 +167,7 @@ if __name__ == '__main__':
 
             # Query all merges_<field> database records associated with astroobject.
 
-            query = f"SELECT a.sid,mjdobs,ra,dec,fluxfit FROM {merges_tablename} a, Sources b where a.sid = b.sid;"
+            query = f"SELECT a.sid,mjdobs,ra,dec,fluxfit FROM {merges_tablename} a, Sources b where a.sid = b.sid and aid = {aid};"
 
             sql_queries = []
             sql_queries.append(query)
