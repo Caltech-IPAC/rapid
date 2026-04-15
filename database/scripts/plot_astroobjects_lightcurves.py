@@ -162,7 +162,7 @@ if __name__ == '__main__':
             mean_ra = astroobjects_record[1]
             mean_dec = astroobjects_record[2]
 
-            num_astroobjects_total += num_astroobjects
+            num_astroobjects_total += num_astroobjects_records
 
 
             # Query all merges_<field> database records associated with astroobject.
@@ -198,7 +198,7 @@ if __name__ == '__main__':
     num_tables = len(fields_list)
     print(f"Total number of astroobjects_<field> database tables = {num_tables}")
 
-    print(f"Total number of astroobjects_<field> database records = {num_astroobjects_total}")
+    print(f"Total number of astroobjects_<field> database records where nsources >= {num_pts_min} = {num_astroobjects_total}")
 
 
     # Code-timing benchmark overall.
