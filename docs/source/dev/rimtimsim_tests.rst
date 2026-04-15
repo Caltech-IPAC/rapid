@@ -145,7 +145,7 @@ were injected by the RAPID pipeline.
 
 SFFT was run without the ``--crossconv`` flag
 
-Here are details about how the test was executed:
+Here are details about how the test was executed via the Virtual Pipeline Operator (VPO):
 
 .. code-block::
 
@@ -174,6 +174,18 @@ generates the file products in parallel via the AWS Batch service.
        17 |        0 |   121
     (2 rows)
 
+The VPO took 1.8 hours to:
+
+=================================================================  =====================
+Pipeline stage                                                      Execution time (sec)
+=================================================================  =====================
+Generate file products and upload to S3 bucket                         5190.2
+Load all sources into PostgreSQL database                                34.2
+Cross-match all Sources and AstroObjects database records               877.1
+Compute statistics for AstroObjects database records                    305.6
+Delete not-best Merges database records (there were none)                 2.6
+Total elapsed time to execute VPO on above stages                      6409.7
+=================================================================  =====================
 
 As shown in the table below for the longest running pipeline instance (jid = 91915),
 executing AWAICGEN for reference-image generation
@@ -224,3 +236,28 @@ Uploading PSF-fit catalogs for naive difference images                1.837
 Uploading products at pipeline end to S3 product bucket               0.037
 Total elapsed time to run one instance of science pipeline         2510.065
 =================================================================  =====================
+
+The PSF-fit catalogs made by the Python photutils package from the ZOGY difference images,
+both positive and negative, were loaded into a Sources child PostgreSQL database table
+(i.e., tablename = sources_20260410_2).
+There were 600,695 Sources records loaded into the PostgreSQL database.
+The elapsed time to load all sources into the database was 34.2 seconds with 8 parallel processes.
+
+Cross-matching the sources with astronomical objects (called AstroObjects),
+resulting in records loaded into the Merges_<field> and
+AstroObjects_<fields> database tables, for all 62 fields of the sources, was done.
+The elapsed time to cross-match all sources was 877.1 seconds with 8 parallel processes.
+This includes cross-matching across field boundaries for sources near field edges.
+A match radius of 0.1 arcsec (a Roman WFI pixel) was used.
+There were 600,695 AstroObjects records and 601,071 Merges records loaded
+into the PostgreSQL database.  Of those merges (a.k.a. lightcurve data points), 376 merges
+resulted from cross-matching across field boundaries (i.e., the match radius can extend
+across a field boundary), which is an increase of 0.0626% in terms of number of merges.
+
+The lightcurve statistics stored in the AstroObjects_<fields> database tables are updated
+after the cross-matching.  This is done as a separate process from the cross-matching.
+Any AstroObjects_<fields> record with no associated sources in the Merges_<field> database table are deleted.
+A new Q3C index on the (meanra, meandec) columns is computed for all AstroObjects_<fields> database tables,
+and then these tables are set to logged, clustered, and analyzed.
+The AstroObjects_<fields> database tables are explicitly vacuumed at the end of this process.
+For this test, all of these items within the process took 305.6 seconds with 8 parallel processes.
