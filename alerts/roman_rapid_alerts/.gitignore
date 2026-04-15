@@ -1,0 +1,14 @@
+# Downloaded pipeline data (large; fetched via download_data.sh)
+data/
+
+# Generated output
+output/
+truth_sidecar/
+
+# Provenance (generated or downloaded)
+provenance/
+
+# Python
+__pycache__/
+*.pyc
+.ipynb_checkpoints/

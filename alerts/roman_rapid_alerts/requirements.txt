@@ -1,0 +1,8 @@
+fastavro
+numpy
+pandas
+astropy
+astropy-healpix
+scipy
+healpy
+matplotlib
