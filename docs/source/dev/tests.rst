@@ -75,6 +75,7 @@ Date              Software modification
 3/24/2026         Completed upgrade/debugging fake-source injection for variable sources with fixed sky positions.
 4/7/2026          Modified SFFT code to output a difference-image PSF
 4/9/2026          Changes to how the uncertainty images are calculated (for science image and refimage inputs).
+4/13/2026         Replaces hard-wired value 1750.0 with saturation_value_rate_sciimage for processing rimtimsims.
 ===============   ===============================================================================================================================================================================================================================
 
 
