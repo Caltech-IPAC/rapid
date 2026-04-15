@@ -386,6 +386,8 @@ if __name__ == '__main__':
         make_refimages_flags = ["True","False"]
         stage_labels = {"True":"StageOne","False":"StageTwo"}
 
+        start_time_benchmark_at_loop_start = start_time_benchmark
+
         for make_refimages_flag in make_refimages_flags:
 
             stage_label = stage_labels[make_refimages_flag]
@@ -416,7 +418,7 @@ if __name__ == '__main__':
             # Code-timing benchmark.
 
             end_time_benchmark = time.time()
-            print("Elapsed time in seconds after launching science pipelines =",
+            print("VPO Elapsed time in seconds to launch science pipelines =",
                 end_time_benchmark - start_time_benchmark)
             start_time_benchmark = end_time_benchmark
 
@@ -435,7 +437,7 @@ if __name__ == '__main__':
             # Code-timing benchmark.
 
             end_time_benchmark = time.time()
-            print("Elapsed time in seconds after waiting for science-pipeline AWS Batch jobs to finish =",
+            print("VPO Elapsed time in seconds to wait for science-pipeline AWS Batch jobs to finish =",
                 end_time_benchmark - start_time_benchmark)
             start_time_benchmark = end_time_benchmark
 
@@ -453,9 +455,16 @@ if __name__ == '__main__':
             # Code-timing benchmark.
 
             end_time_benchmark = time.time()
-            print("Elapsed time in seconds after registering science-pipeline metadata into operations database =",
+            print("VPO Elapsed time in seconds to register science-pipeline metadata into operations database =",
                 end_time_benchmark - start_time_benchmark)
             start_time_benchmark = end_time_benchmark
+
+
+        # Code-timing benchmark.
+
+        end_time_benchmark = time.time()
+        print("VPO Elapsed time in seconds after all science pipelines ran and database metadata loaded =",
+        end_time_benchmark - start_time_benchmark_at_loop_start)
 
 
         # Launch post-processing pipelines.
@@ -474,7 +483,7 @@ if __name__ == '__main__':
         # Code-timing benchmark.
 
         end_time_benchmark = time.time()
-        print("Elapsed time in seconds after launching postproc pipelines =",
+        print("VPO Elapsed time in seconds after launching postproc pipelines =",
             end_time_benchmark - start_time_benchmark)
         start_time_benchmark = end_time_benchmark
 
@@ -493,7 +502,7 @@ if __name__ == '__main__':
         # Code-timing benchmark.
 
         end_time_benchmark = time.time()
-        print("Elapsed time in seconds after waiting for postproc-pipeline AWS Batch jobs to finish =",
+        print("VPO Elapsed time in seconds after waiting for postproc-pipeline AWS Batch jobs to finish =",
             end_time_benchmark - start_time_benchmark)
         start_time_benchmark = end_time_benchmark
 
@@ -511,7 +520,7 @@ if __name__ == '__main__':
         # Code-timing benchmark.
 
         end_time_benchmark = time.time()
-        print("Elapsed time in seconds after registering postproc-pipeline metadata into operations database =",
+        print("VPO Elapsed time in seconds after registering postproc-pipeline metadata into operations database =",
             end_time_benchmark - start_time_benchmark)
         start_time_benchmark = end_time_benchmark
 
@@ -530,7 +539,7 @@ if __name__ == '__main__':
         # Code-timing benchmark.
 
         end_time_benchmark = time.time()
-        print("Elapsed time in seconds after loading Sources database records =",
+        print("VPO Elapsed time in seconds after loading Sources database records =",
             end_time_benchmark - start_time_benchmark)
         start_time_benchmark = end_time_benchmark
 
@@ -549,7 +558,7 @@ if __name__ == '__main__':
         # Code-timing benchmark.
 
         end_time_benchmark = time.time()
-        print("Elapsed time in seconds after crossmatching Sources and AstroObjects database records =",
+        print("VPO Elapsed time in seconds after crossmatching Sources and AstroObjects database records =",
             end_time_benchmark - start_time_benchmark)
         start_time_benchmark = end_time_benchmark
 
@@ -568,7 +577,7 @@ if __name__ == '__main__':
         # Code-timing benchmark.
 
         end_time_benchmark = time.time()
-        print("Elapsed time in seconds after computing statistics for AstroObjects database records =",
+        print("VPO Elapsed time in seconds after computing statistics for AstroObjects database records =",
             end_time_benchmark - start_time_benchmark)
         start_time_benchmark = end_time_benchmark
 
@@ -585,7 +594,7 @@ if __name__ == '__main__':
         # Code-timing benchmark.
 
         end_time_benchmark = time.time()
-        print("Elapsed time in seconds after deleting not-best Merges database records =",
+        print("VPO Elapsed time in seconds after deleting not-best Merges database records =",
             end_time_benchmark - start_time_benchmark)
         start_time_benchmark = end_time_benchmark
 
@@ -640,7 +649,7 @@ if __name__ == '__main__':
     # Code-timing benchmark.
 
     end_time_benchmark = time.time()
-    print("Elapsed time in seconds to run VPO =",
+    print("VPO Elapsed total time in seconds to run VPO =",
         end_time_benchmark - start_time_benchmark_at_start)
 
 
