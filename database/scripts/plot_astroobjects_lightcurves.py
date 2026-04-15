@@ -85,10 +85,10 @@ def plot_lightcurve(sim_type_db,field,aid,x,y):
     # Add labels and a title
     plt.xlabel("Observation MJD (day)")
     plt.ylabel("PSF-fit flux (DN/s)")
-    plt.title("Lightcurve from PostgreSQL Sources DB = {sim_type_db}, field={field}, astroObjectID={aid} ")
+    plt.title(f"Lightcurve from PostgreSQL Sources DB = {sim_type_db}, field={field}, astroObjectID={aid} ")
 
     ax = plt.subplot(1,1,1)
-    ax.plot(x,y,'.', markersize=6, alpha=0.5, color='red', markerfacecolor='None')
+    ax.plot(x,y,'.', markersize=6, alpha=1.0, color='red', markerfacecolor='red')
 
 
     # Output plot to PNG file.
