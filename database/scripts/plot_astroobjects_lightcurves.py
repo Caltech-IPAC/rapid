@@ -153,6 +153,8 @@ if __name__ == '__main__':
 
         num_astroobjects_records = len(astroobjects_records)
 
+        print(f"=====> num_astroobjects_records = {num_astroobjects_records}")
+
         if num_astroobjects_records == 0:
             continue
 
