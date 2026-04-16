@@ -544,7 +544,7 @@ if __name__ == '__main__':
     dbh.execute_sql_queries(sql_queries,debug)
 
 
-    # Vacuum and analyze astroobjects_<field> database tables for all fields.
+    # Vacuum and analyze astroobjects_<field> database tables for all fields.  Drop table if empty.
 
     print("Vacuuming and analyzing astroobjects_<field> database tables for all fields...")
 
@@ -552,7 +552,33 @@ if __name__ == '__main__':
 
         tablename = f"astroobjects_{field}"
 
-        dbh.vacuum_analyze_table(tablename)
+        query = f"SELECT count(*) FROM {tablename};"
+
+        print(f"query = {query}")
+
+        sql_queries = []
+        sql_queries.append(query)
+        records = dbh.execute_sql_queries(sql_queries,debug)
+
+        print(f"records = {records}")
+
+        astroobjects_child_table_count = records[0][0]
+
+        if astroobjects_child_table_count == 0:
+
+            print("Dropping {tablename} database table...")
+
+            query = f"DROP TABLE {tablename};"
+
+            sql_queries = []
+            sql_queries.append(query)
+            records = dbh.execute_sql_queries(sql_queries,debug)
+
+        else:
+
+            print("Vacuuming and analyzing {tablename} database table...")
+
+            dbh.vacuum_analyze_table(tablename)
 
 
     # Code-timing benchmark.
