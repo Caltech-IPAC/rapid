@@ -345,8 +345,7 @@ if __name__ == '__main__':
     start_time_benchmark = end_time_benchmark
 
 
-    # Delete empty sources database tables for given proc_date.
-    # Otherwise, vacuum and analyze sources database tables for given proc_date.
+    # Vacuum and analyze sources database tables for given proc_date.  Drop table if empty.
 
     for tablename in sources_table_names:
 
@@ -363,7 +362,6 @@ if __name__ == '__main__':
         sources_child_table_count = records[0][0]
 
         if sources_child_table_count == 0:
-
 
             print("Dropping {tablename} database table...")
 
