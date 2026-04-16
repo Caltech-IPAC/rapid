@@ -261,3 +261,8 @@ A new Q3C index on the (meanra, meandec) columns is computed for all AstroObject
 and then these tables are set to logged, clustered, and analyzed.
 The AstroObjects_<fields> database tables are explicitly vacuumed at the end of this process.
 For this test, all of these items within the process took 305.6 seconds with 8 parallel processes.
+
+Lesson learned:  Only 7 fields overlapping the rimtimsims, but cross-matching
+occurred over 62 fields.  Plotting the sky positions of PhotUtils catalog extractions revealed
+a relatively small fraction of bogus off-image sky positions.  As a result,
+crossMatchSources.py was modified to select only those sources with ``flags = 0``.
