@@ -1426,7 +1426,7 @@ if __name__ == '__main__':
 
             # Compute sky coordinates for given pixel coordinates.
 
-            ra,dec = util.computeSkyCoordsFromPixelCoords(filename_bkg_subbed_science_image,
+            ra,dec = util.computeSkyCoordsFromPixelCoords(reformatted_science_image_filename,
                                                           list(phot['x_fit']),
                                                           list(phot['y_fit']))
 
@@ -1533,7 +1533,7 @@ if __name__ == '__main__':
 
             # Compute sky coordinates for given pixel coordinates.
 
-            ra,dec = util.computeSkyCoordsFromPixelCoords(filename_bkg_subbed_science_image,
+            ra,dec = util.computeSkyCoordsFromPixelCoords(reformatted_science_image_filename,
                                                           list(phot['x_fit']),
                                                           list(phot['y_fit']))
 
@@ -2131,7 +2131,7 @@ if __name__ == '__main__':
 
                     # Compute sky coordinates for given pixel coordinates.
 
-                    ra,dec = util.computeSkyCoordsFromPixelCoords(filename_bkg_subbed_science_image,
+                    ra,dec = util.computeSkyCoordsFromPixelCoords(reformatted_science_image_filename,
                                                                   list(phot['x_fit']),
                                                                   list(phot['y_fit']))
 
@@ -2240,7 +2240,7 @@ if __name__ == '__main__':
 
                     # Compute sky coordinates for given pixel coordinates.
 
-                    ra,dec = util.computeSkyCoordsFromPixelCoords(filename_bkg_subbed_science_image,
+                    ra,dec = util.computeSkyCoordsFromPixelCoords(reformatted_science_image_filename,
                                                                   list(phot['x_fit']),
                                                                   list(phot['y_fit']))
 
@@ -2600,7 +2600,7 @@ if __name__ == '__main__':
 
                 # Compute sky coordinates for given pixel coordinates.
 
-                ra,dec = util.computeSkyCoordsFromPixelCoords(filename_bkg_subbed_science_image,
+                ra,dec = util.computeSkyCoordsFromPixelCoords(reformatted_science_image_filename,
                                                               list(phot['x_fit']),
                                                               list(phot['y_fit']))
 
@@ -2694,7 +2694,7 @@ if __name__ == '__main__':
 
                 # Compute sky coordinates for given pixel coordinates.
 
-                ra,dec = util.computeSkyCoordsFromPixelCoords(filename_bkg_subbed_science_image,
+                ra,dec = util.computeSkyCoordsFromPixelCoords(reformatted_science_image_filename,
                                                               list(phot['x_fit']),
                                                               list(phot['y_fit']))
 
