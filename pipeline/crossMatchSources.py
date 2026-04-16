@@ -651,7 +651,7 @@ if __name__ == '__main__':
         scas_dict[sca] = 1
 
         sql_queries = []
-        sql_queries.append(f"select distinct field from {tablename};")
+        sql_queries.append(f"select distinct field from {tablename} WHERE flags = 0;")
         records = dbh.execute_sql_queries(sql_queries,debug)
 
         for record in records:
