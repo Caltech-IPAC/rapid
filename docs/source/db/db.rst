@@ -201,8 +201,8 @@ Same for Merges and AstroObjects tables.
 This is to partition the data into manageable chunks.
 The partitioning schemes for these tables are discussed below in more detail.
 
-The parent or prototype tables will have the generic names: Sources, Merges, and AstroObjects.
-No actual records will stored here.
+The parent or prototype tables have the generic names: Sources, Merges, and AstroObjects.
+No actual records are stored here.
 
 Database-table inheritance is or can be used to tie child tables, which store the actual records,
 to the parent table.
@@ -217,8 +217,9 @@ and non-proliferation of Sources tables.  It is anticipated that most of
 sources to be matched are spurious, and so this partitioning scheme will
 have to be reassessed after the actual number of sources involved can be
 better estimated.
-Data are loaded into the Sources tables in parallel processes that are not
-necessarily in observation-date-time order.
+PhotUtils-catalog source extractions are loaded into the Sources tables via
+parallel processes that are not necessarily in observation-date-time order.
+This includes all sources, regardless of their bit-wise ``flags`` attribute.
 
 AstroObjects tables are created for each Roman-tessellation sky tile.
 Merges tables are also created for each Roman-tessellation sky tile.
@@ -228,12 +229,13 @@ sources (via Merges tables) are by sky position.
 Sources and AstroObjects tables are cross-matched for the appropriate partitions,
 in processing-date-time order, using the join function from the Q3C-library PostgreSQL extension,
 and records in the associated Merges tables are then populated.
+Only sources with ``flags = 0`` are considered.
 A given Sources child table can contain records for different fields, filters, and exposures.
 
 .. note::
    Sources that are NOT matched become new records in the AstroObjects tables.
 
-Source matching will be done in parallel by field.  Thus multiple cores
+Source matching is done in parallel by field.  Thus multiple cores
 on the database-server machine will be utilized, and scaling up the architecture is possible
 by moving the database server to a machine with more cores and memory (if it can be afforded).
 
