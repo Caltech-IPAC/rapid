@@ -343,15 +343,41 @@ if __name__ == '__main__':
     start_time_benchmark = end_time_benchmark
 
 
-    # Vacuum and analyze merges database tables for all fields.
+    # Vacuum and analyze merges_<field> database tables for all fields.  Drop table if empty.
 
-    print("Vacuuming and analyzing merges database tables for all fields...")
+    print("Vacuuming and analyzing merges_<field> database tables for all fields...")
 
     for field in fields_list:
 
         tablename = f"merges_{field}"
 
-        dbh.vacuum_analyze_table(tablename)
+        query = f"SELECT count(*) FROM {tablename};"
+
+        print(f"query = {query}")
+
+        sql_queries = []
+        sql_queries.append(query)
+        records = dbh.execute_sql_queries(sql_queries,debug)
+
+        print(f"records = {records}")
+
+        merges_child_table_count = records[0][0]
+
+        if merges_child_table_count == 0:
+
+            print("Dropping {tablename} database table...")
+
+            query = f"DROP TABLE {tablename};"
+
+            sql_queries = []
+            sql_queries.append(query)
+            records = dbh.execute_sql_queries(sql_queries,debug)
+
+        else:
+
+            print("Vacuuming and analyzing {tablename} database table...")
+
+            dbh.vacuum_analyze_table(tablename)
 
 
     # Code-timing benchmark.
