@@ -173,6 +173,8 @@ def run_single_core_job_stage_1_crossmatching(scas,fields,index_thread):
     The cross-matching of sources in adjacent fields within field boundaries done here in stage 1
     includes populating the pertinent AstroObjects_<field> and Merges_<field> database tables for
     the relevant field.  Cross-matching sources across adjacent field boundaries is done in stage 2.
+
+    Cross-match only sources with flags = 0.
     '''
 
 
@@ -228,7 +230,7 @@ def run_single_core_job_stage_1_crossmatching(scas,fields,index_thread):
 
             query = f"SELECT a.sid,b.aid FROM {sources_tablename} AS a, " +\
                 f"{astroobjects_tablename} AS b WHERE q3c_join(a.ra, a.dec, b.ra0, b.dec0, {match_radius}) " +\
-                f"AND a.field = {field};"
+                f"AND a.field = {field} AND a.flags = 0;"
 
             sql_queries = []
             sql_queries.append(query)
@@ -378,6 +380,8 @@ def run_single_core_job_stage_2_crossmatching(scas,fields,index_thread):
     stage 1 (populating the pertinent AstroObjects_<field> and Merges_<field> database tables
     within field   boundaries).  Field boundaries are infinitesimally thin lines (no thickness),
     and the match radius can extend across them.
+
+    Cross-match only sources with flags = 0.
     '''
 
 
@@ -493,7 +497,7 @@ def run_single_core_job_stage_2_crossmatching(scas,fields,index_thread):
                         f"{astroobjects_tablename} AS b " +\
                         f"WHERE q3c_radial_query(a.ra, a.dec, {ra0_field}, {dec0_field}, {ang_sep}) " +\
                         f"AND q3c_join(a.ra, a.dec, b.ra0, b.dec0, {match_radius}) " +\
-                        f"AND a.field = {adjacent_field};"
+                        f"AND a.field = {adjacent_field} AND a.flags = 0;"
 
                 else:
 
@@ -501,7 +505,7 @@ def run_single_core_job_stage_2_crossmatching(scas,fields,index_thread):
                         f"FROM {sources_tablename} AS a, " +\
                         f"{astroobjects_tablename} AS b " +\
                         f"WHERE q3c_join(a.ra, a.dec, b.ra0, b.dec0, {match_radius}) " +\
-                        f"AND a.field = {adjacent_field};"
+                        f"AND a.field = {adjacent_field} AND a.flags = 0;"
 
                 sql_queries = []
                 sql_queries.append(query)
