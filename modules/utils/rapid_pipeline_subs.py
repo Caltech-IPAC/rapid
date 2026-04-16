@@ -2161,6 +2161,8 @@ def generateScienceImageCatalog(filename_sciimage_image,
 
 def computeSkyCoordsFromPixelCoords(filename_sciimage_image,x_list,y_list):
 
+    print(f"filename_sciimage_image = {filename_sciimage_image}")
+
 
     # Get WCS of science-image FITS file.
 
