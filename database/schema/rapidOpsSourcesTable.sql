@@ -87,6 +87,7 @@ CREATE INDEX sources_pid_idx ON sources (pid);
 CREATE INDEX sources_expid_idx ON sources (expid);
 CREATE INDEX sources_sca_idx ON sources (sca);
 CREATE INDEX sources_field_idx ON sources (field);
+CREATE INDEX sources_flags_idx ON sources (flags);
 CREATE INDEX sources_mjdobs_idx ON sources (mjdobs);
 
 ALTER TABLE sources SET UNLOGGED;
