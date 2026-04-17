@@ -3664,3 +3664,57 @@ class RAPIDDB:
 
         if self.exit_code == 0:
             self.conn.commit()           # Commit database transaction
+
+
+########################################################################################################
+
+    def update_astroobject_mean_sky_position(self,
+                                             astroobjects_tablename,
+                                             aid,
+                                             meanra,
+                                             meandec,
+                                             nsources,
+                                             debug=0):
+
+        '''
+        Update select statistics in AstroObjects database record.
+        '''
+
+        self.exit_code = 0
+
+
+        # Define query.
+
+        query = f"update {astroobjects_tablename} " +\
+            f"set meanra = {meanra}, " +\
+            f"meandec = {meandec}, " +\
+            f"nsources = {nsources} " +\
+            f" where aid = {aid};"
+
+
+        # Query database.
+
+        if debug == 1:
+            print('query = {}'.format(query))
+
+
+        # Execute query.
+
+        try:
+            self.cur.execute(query)
+
+            try:
+                records = []
+                for record in self.cur:
+                    records.append(record)
+            except:
+                if debug == 1:
+                    print("Nothing returned from database query; continuing...")
+
+        except (Exception, psycopg2.DatabaseError) as error:
+            print(f'*** Error updating mean sky position in astroobjects_tablename record (aid={aid},error={error}); skipping...')
+            self.exit_code = 67
+            return
+
+        if self.exit_code == 0:
+            self.conn.commit()           # Commit database transaction
