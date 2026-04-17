@@ -2521,3 +2521,58 @@ def convert_mjd_to_jd(mjd):
     jd = mjd + 2400000.5
 
     return jd
+
+
+########################################
+# Update the average right ascension (RA)
+# when a new RA data point is added.
+########################################
+
+def update_meanra(ra1,nsources,ra2,debug=False):
+
+    ras_list = [ra1,ra2]
+
+    flag1 = False
+    flag2 = False
+    for ra in ras_list:
+        if ra < 10.0:
+            flag1 = True
+        elif ra > 350.0:
+            flag2 = True
+
+    if flag1 and flag2:
+        i = 0
+        for ra in ras_list:
+            if ra > 350.0:
+                ras_list[i] -= 360.0
+            i += 1
+
+    ra1 = ras_list[0]
+    ra2 = ras_list[1]
+
+    meanra = (ra1 * nsources + ra2) / (nsources + 1)
+
+    if debug:
+        print(f"ras_list = {ras_list}")
+        print(f"ra1,ra2 = {ra1},{ra2}")
+        print(f"nsources = {nsources}")
+        print(f"meanra = {meanra}")
+
+    return meanra
+
+
+########################################
+# Update the average declination (Dec)
+# when a new Dec data point is added.
+########################################
+
+def update_meandec(dec1,nsources,dec2,debug=False):
+
+    meandec = (dec1 * nsources + dec2) / (nsources + 1)
+
+    if debug:
+        print(f"dec1,dec2 = {dec1},{dec2}")
+        print(f"nsources = {nsources}")
+        print(f"meandec = {meandec}")
+
+    return meandec
