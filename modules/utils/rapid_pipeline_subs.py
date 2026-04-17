@@ -2552,6 +2552,9 @@ def update_meanra(ra1,nsources,ra2,debug=False):
 
     meanra = (ra1 * nsources + ra2) / (nsources + 1)
 
+    if meanra < 0.0:
+        meanra += 360.0
+
     if debug:
         print(f"ras_list = {ras_list}")
         print(f"ra1,ra2 = {ra1},{ra2}")
