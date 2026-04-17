@@ -229,7 +229,7 @@ def run_single_core_job_stage_1_crossmatching(scas,fields,index_thread):
             sources_tablename = f"sources_{proc_date}_{sca}"
 
             query = f"SELECT a.sid,b.aid FROM {sources_tablename} AS a, " +\
-                f"{astroobjects_tablename} AS b WHERE q3c_join(a.ra, a.dec, b.ra0, b.dec0, {match_radius}) " +\
+                f"{astroobjects_tablename} AS b WHERE q3c_join(a.ra, a.dec, b.meanra, b.meandec, {match_radius}) " +\
                 f"AND a.field = {field} AND a.flags = 0;"
 
             sql_queries = []
@@ -317,13 +317,13 @@ def run_single_core_job_stage_1_crossmatching(scas,fields,index_thread):
 
                     # For now, set the lightcurve statistics to zero.              # TODO
 
-                    meanra = 0
+                    meanra = source_ra
                     stdevra = 0
-                    meandec = 0
+                    meandec = source_dec
                     stdevdec = 0
                     meanflux = 0
                     stdevflux = 0
-                    nsources = 0
+                    nsources = 1
 
                     aid = dbh.add_astro_object_to_field(astroobjects_tablename,
                                                         source_ra,
@@ -496,7 +496,7 @@ def run_single_core_job_stage_2_crossmatching(scas,fields,index_thread):
                         f"FROM {sources_tablename} AS a, " +\
                         f"{astroobjects_tablename} AS b " +\
                         f"WHERE q3c_radial_query(a.ra, a.dec, {ra0_field}, {dec0_field}, {ang_sep}) " +\
-                        f"AND q3c_join(a.ra, a.dec, b.ra0, b.dec0, {match_radius}) " +\
+                        f"AND q3c_join(a.ra, a.dec, b.meanra, b.meandec, {match_radius}) " +\
                         f"AND a.field = {adjacent_field} AND a.flags = 0;"
 
                 else:
@@ -504,7 +504,7 @@ def run_single_core_job_stage_2_crossmatching(scas,fields,index_thread):
                     query = f"SELECT a.sid,b.aid " +\
                         f"FROM {sources_tablename} AS a, " +\
                         f"{astroobjects_tablename} AS b " +\
-                        f"WHERE q3c_join(a.ra, a.dec, b.ra0, b.dec0, {match_radius}) " +\
+                        f"WHERE q3c_join(a.ra, a.dec, b.meanra, b.meandec, {match_radius}) " +\
                         f"AND a.field = {adjacent_field} AND a.flags = 0;"
 
                 sql_queries = []
