@@ -228,7 +228,7 @@ def run_single_core_job_stage_1_crossmatching(scas,fields,index_thread):
 
             sources_tablename = f"sources_{proc_date}_{sca}"
 
-            query = f"SELECT a.sid,b.aid FROM {sources_tablename} AS a, " +\
+            query = f"SELECT a.sid,a.ra,a.dec,b.aid,b.meanra,b.meandec,b.nsources FROM {sources_tablename} AS a, " +\
                 f"{astroobjects_tablename} AS b WHERE q3c_join(a.ra, a.dec, b.meanra, b.meandec, {match_radius}) " +\
                 f"AND a.field = {field} AND a.flags = 0;"
 
@@ -246,17 +246,34 @@ def run_single_core_job_stage_1_crossmatching(scas,fields,index_thread):
 
 
             # For the sources that were matched, create Merges_<field> record.
+            # Also, update meanra, meandec, nsources in the AstroObjects_<field> record.
 
             sid_dict = {}
 
             for record in records:
 
                 sid = record[0]
-                aid = record[1]
+                source_ra = record[1]
+                source_dec = record[2]
+                aid = record[3]
+                meanra = record[4]
+                meandec = record[5]
+                nsources = record[6]
 
                 sid_dict[sid] = 1
 
                 dbh.add_merge_to_field(merges_tablename,aid,sid)
+
+                meanra = util.update_meanra(meanra,nsources,source_ra)
+                meandec = util.update_meandec(meandec,nsources,source_dec)
+                nsources += 1
+
+                dbh.update_astroobject_mean_sky_position(astroobjects_tablename,
+                                                         aid,
+                                                         meanra,
+                                                         meandec,
+                                                         nsources,
+                                                         thread_debug)
 
 
             # Code-timing benchmark.
@@ -492,7 +509,7 @@ def run_single_core_job_stage_2_crossmatching(scas,fields,index_thread):
 
                 if n_adjacent_fields == 8:
 
-                    query = f"SELECT a.sid,b.aid " +\
+                    query = f"SELECT a.sid,a.ra,a.dec,b.aid,b.meanra,b.meandec,b.nsources " +\
                         f"FROM {sources_tablename} AS a, " +\
                         f"{astroobjects_tablename} AS b " +\
                         f"WHERE q3c_radial_query(a.ra, a.dec, {ra0_field}, {dec0_field}, {ang_sep}) " +\
@@ -501,7 +518,7 @@ def run_single_core_job_stage_2_crossmatching(scas,fields,index_thread):
 
                 else:
 
-                    query = f"SELECT a.sid,b.aid " +\
+                    query = f"SELECT a.sid,a.ra,a.dec,b.aid,b.meanra,b.meandec,b.nsources " +\
                         f"FROM {sources_tablename} AS a, " +\
                         f"{astroobjects_tablename} AS b " +\
                         f"WHERE q3c_join(a.ra, a.dec, b.meanra, b.meandec, {match_radius}) " +\
@@ -521,13 +538,30 @@ def run_single_core_job_stage_2_crossmatching(scas,fields,index_thread):
 
 
                 # For the sources that were matched, create Merges_<field> record.
+                # Also, update meanra, meandec, nsources in the AstroObjects_<field> record.
 
                 for record in records:
 
                     sid = record[0]
-                    aid = record[1]
+                    source_ra = record[1]
+                    source_dec = record[2]
+                    aid = record[3]
+                    meanra = record[4]
+                    meandec = record[5]
+                    nsources = record[6]
 
                     dbh.add_merge_to_field(merges_tablename,aid,sid)
+
+                    meanra = util.update_meanra(meanra,nsources,source_ra)
+                    meandec = util.update_meandec(meandec,nsources,source_dec)
+                    nsources += 1
+
+                    dbh.update_astroobject_mean_sky_position(astroobjects_tablename,
+                                                             aid,
+                                                             meanra,
+                                                             meandec,
+                                                             nsources,
+                                                             thread_debug)
 
 
                 # Code-timing benchmark.
