@@ -287,7 +287,7 @@ def run_single_core_job_stage_1_crossmatching(scas,fields,index_thread):
             # Query for all sources for the field of interest in Sources_<proc_date>_<sca> and load into memory.
             # Find those sources that were not matched.
 
-            query = f"SELECT sid FROM {sources_tablename} WHERE field = {field};"
+            query = f"SELECT sid FROM {sources_tablename} WHERE field = {field} AND flags = 0;"
 
             sql_queries = []
             sql_queries.append(query)
