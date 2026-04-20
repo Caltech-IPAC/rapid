@@ -167,6 +167,7 @@ print(f"AstroObjects columns: {cols_comma_separated_string}")
 
 def run_single_core_job_stage_1_crossmatching(scas,fields,index_thread):
 
+
     '''
     The current list of fields includes all fields that a science image may overlap, as found
     by querying for distinct fields all the sources child tables that are to be cross-matched.
@@ -175,6 +176,8 @@ def run_single_core_job_stage_1_crossmatching(scas,fields,index_thread):
     the relevant field.  Cross-matching sources across adjacent field boundaries is done in stage 2.
 
     Cross-match only sources with flags = 0.
+
+    Cross-match one observation at a time for all SCAs in ascending time order.
     '''
 
 
@@ -218,165 +221,206 @@ def run_single_core_job_stage_1_crossmatching(scas,fields,index_thread):
         fh.write(f"Loop start: index_field,field = {index_field},{field}\n")
 
 
-        # For a given field pertinent to this parallel process, loop over all SCAs
-        # and perform source-matching:
-        # 1. Cross-match each source in the field with the AstroObjects_<field> table.
-        # 2. If there is no match, then create a new AstroObjects_<field> record.
-        # 3. Register a Merges_<field> record to associate astroobject with source
+        # For a given field, query for all pertinent exposures.
+        # Create list of exposure IDs in ascending time order.
+        # Allow for missing SCAs (cannot assume all SCAs are the same or present).
+
+        expids_dict = {}
 
         for sca in scas:
 
             sources_tablename = f"sources_{proc_date}_{sca}"
 
-            query = f"SELECT a.sid,a.ra,a.dec,b.aid,b.meanra,b.meandec,b.nsources FROM {sources_tablename} AS a, " +\
-                f"{astroobjects_tablename} AS b WHERE q3c_join(a.ra, a.dec, b.meanra, b.meandec, {match_radius}) " +\
-                f"AND a.field = {field} AND a.flags = 0;"
+            query = f"SELECT a.expid,a.mjdobs FROM {sources_tablename} " +\
+                f"WHERE a.field = {field} AND a.flags = 0;"
 
             sql_queries = []
             sql_queries.append(query)
             records = dbh.execute_sql_queries(sql_queries,thread_debug)
 
-
-            # Code-timing benchmark.
-
-            thread_end_time_benchmark = time.time()
-            diff_time_benchmark = thread_end_time_benchmark - thread_start_time_benchmark
-            fh.write(f"Elapsed time in seconds to cross-match {sources_tablename} and {astroobjects_tablename} database tables = {diff_time_benchmark}\n")
-            thread_start_time_benchmark = thread_end_time_benchmark
-
-
-            # For the sources that were matched, create Merges_<field> record.
-            # Also, update meanra, meandec, nsources in the AstroObjects_<field> record.
-
-            sid_dict = {}
-
             for record in records:
+                expid = record[0]
+                mjdobs = record[1]
+                expids_dict[expid] = mjdobs
 
-                sid = record[0]
-                source_ra = record[1]
-                source_dec = record[2]
-                aid = record[3]
-                meanra = record[4]
-                meandec = record[5]
-                nsources = record[6]
-
-                sid_dict[sid] = 1
-
-                dbh.add_merge_to_field(merges_tablename,aid,sid)
-
-                meanra = util.update_meanra(meanra,nsources,source_ra)
-                meandec = util.update_meandec(meandec,nsources,source_dec)
-                nsources += 1
-
-                dbh.update_astroobject_mean_sky_position(astroobjects_tablename,
-                                                         aid,
-                                                         meanra,
-                                                         meandec,
-                                                         nsources,
-                                                         thread_debug)
+        sorted_expids_dict = dict(sorted(expids_dict.items(), key=lambda item: item[1]))
+        expids_list = list(sorted_expids_dict.keys())
 
 
-            # Code-timing benchmark.
+        # For a given field pertinent to this parallel process,
+        # loop over exposure IDs and SCAs to perform source-matching:
+        # 1. Cross-match each source for field,expid,sca with the AstroObjects_<field> table.
+        # 2. If there is no match, then create a new AstroObjects_<field> record.
+        # 3. Register a Merges_<field> record to associate astroobject with source.
+        # 4. After all SCAs are done, advance to next exposure ID in ascending time order.
 
-            thread_end_time_benchmark = time.time()
-            diff_time_benchmark = thread_end_time_benchmark - thread_start_time_benchmark
-            fh.write(f"Elapsed time in seconds to insert {merges_tablename} database records for matched sources = {diff_time_benchmark}\n")
-            thread_start_time_benchmark = thread_end_time_benchmark
+        for expid in expids_list:
 
+            for sca in scas:
 
-            # Query for all sources for the field of interest in Sources_<proc_date>_<sca> and load into memory.
-            # Find those sources that were not matched.
+                sources_tablename = f"sources_{proc_date}_{sca}"
 
-            query = f"SELECT sid FROM {sources_tablename} WHERE field = {field} AND flags = 0;"
+                query = f"SELECT a.sid,a.ra,a.dec,b.aid,b.meanra,b.meandec,b.nsources FROM {sources_tablename} AS a, " +\
+                    f"{astroobjects_tablename} AS b WHERE q3c_join(a.ra, a.dec, b.meanra, b.meandec, {match_radius}) " +\
+                    f"AND a.expid = {expid} AND a.field = {field} AND a.flags = 0;"
 
-            sql_queries = []
-            sql_queries.append(query)
-            records = dbh.execute_sql_queries(sql_queries,thread_debug)
-
-            sids_list = []
-
-
-            # For the sources that were not matched for the field of interest,
-            # create AstroObjects_<field> record and then Merges_<field> record.
-
-            for record in records:
-
-                sid = record[0]
-                sids_list.append(sid)
-
-            for sid in sids_list:
-
-                if sid not in sid_dict:
+                sql_queries = []
+                sql_queries.append(query)
+                records = dbh.execute_sql_queries(sql_queries,thread_debug)
 
 
-                    # Source was not matched, so create AstroObjects_<field> record and then Merges_<field> record.
+                # Code-timing benchmark.
 
-                    query = f"SELECT ra,dec,field,hp6,hp9,fluxfit FROM {sources_tablename} WHERE sid = {sid};"
-
-                    sql_queries = []
-                    sql_queries.append(query)
-                    records = dbh.execute_sql_queries(sql_queries,thread_debug)
-
-                    for record in records:
-
-                        source_ra = record[0]
-                        source_dec = record[1]
-                        source_field = record[2]
-                        source_hp6 = record[3]
-                        source_hp9 = record[4]
-                        source_flux = record[5]
-
-                        if field != source_field:
-                            fh.write(f"*** Error: field ({field}) not equal to source_field ({source_field}); quitting...")
-                            print(f"*** Error: field ({field}) not equal to source_field ({source_field}); quitting...")
-                            raise Exception(f"*** Error: field ({field}) not equal to source_field ({source_field}); quitting...")
+                thread_end_time_benchmark = time.time()
+                diff_time_benchmark = thread_end_time_benchmark - thread_start_time_benchmark
+                fh.write(f"Elapsed time in seconds to cross-match {sources_tablename} and {astroobjects_tablename} database tables = {diff_time_benchmark}\n")
+                thread_start_time_benchmark = thread_end_time_benchmark
 
 
-                    # For now, set the lightcurve statistics to zero.              # TODO
+                # Short-circuit the loop if there are no cross-matches.
 
-                    meanra = source_ra
-                    stdevra = 0
-                    meandec = source_dec
-                    stdevdec = 0
-                    meanflux = 0
-                    stdevflux = 0
-                    nsources = 1
-
-                    aid = dbh.add_astro_object_to_field(astroobjects_tablename,
-                                                        source_ra,
-                                                        source_dec,
-                                                        source_flux,
-                                                        meanra,
-                                                        stdevra,
-                                                        meandec,
-                                                        stdevdec,
-                                                        meanflux,
-                                                        stdevflux,
-                                                        nsources,
-                                                        field,
-                                                        source_hp6,
-                                                        source_hp9,
-                                                        thread_debug)
-
-                    dbh.add_merge_to_field(merges_tablename,aid,sid,thread_debug)
+                n_records = len(records)
+                if n_records == 0:
+                    continue
 
 
-            # Code-timing benchmark.
+                # For the sources that were matched, create Merges_<field> record.
+                # Also, update meanra, meandec, nsources in the AstroObjects_<field> record.
 
-            thread_end_time_benchmark = time.time()
-            diff_time_benchmark = thread_end_time_benchmark - thread_start_time_benchmark
-            fh.write(f"Elapsed time in seconds to insert {merges_tablename} and {astroobjects_tablename} database records for unmatched sources = {diff_time_benchmark}\n")
-            thread_start_time_benchmark = thread_end_time_benchmark
+                sid_dict = {}
+
+                for record in records:
+
+                    sid = record[0]
+                    source_ra = record[1]
+                    source_dec = record[2]
+                    aid = record[3]
+                    meanra = record[4]
+                    meandec = record[5]
+                    nsources = record[6]
+
+                    sid_dict[sid] = 1
+
+                    dbh.add_merge_to_field(merges_tablename,aid,sid)
+
+                    meanra = util.update_meanra(meanra,nsources,source_ra)
+                    meandec = util.update_meandec(meandec,nsources,source_dec)
+                    nsources += 1
+
+                    dbh.update_astroobject_mean_sky_position(astroobjects_tablename,
+                                                             aid,
+                                                             meanra,
+                                                             meandec,
+                                                             nsources,
+                                                             thread_debug)
 
 
-            # End of loop over scas.
+                # Code-timing benchmark.
 
-            fh.write(f"Loop end: index_field,field,sca = {index_field},{field},{sca}\n")
+                thread_end_time_benchmark = time.time()
+                diff_time_benchmark = thread_end_time_benchmark - thread_start_time_benchmark
+                fh.write(f"Elapsed time in seconds to insert {merges_tablename} database records for matched sources = {diff_time_benchmark}\n")
+                thread_start_time_benchmark = thread_end_time_benchmark
+
+
+                # Query for all sources for the field of interest in Sources_<proc_date>_<sca> and load into memory.
+                # Find those sources that were not matched.
+
+                query = f"SELECT sid FROM {sources_tablename} WHERE field = {field} AND flags = 0;"
+
+                sql_queries = []
+                sql_queries.append(query)
+                records = dbh.execute_sql_queries(sql_queries,thread_debug)
+
+                sids_list = []
+
+
+                # For the sources that were not matched for the field of interest,
+                # create AstroObjects_<field> record and then Merges_<field> record.
+
+                for record in records:
+
+                    sid = record[0]
+                    sids_list.append(sid)
+
+                for sid in sids_list:
+
+                    if sid not in sid_dict:
+
+
+                        # Source was not matched, so create AstroObjects_<field> record and then Merges_<field> record.
+
+                        query = f"SELECT ra,dec,field,hp6,hp9,fluxfit FROM {sources_tablename} WHERE sid = {sid};"
+
+                        sql_queries = []
+                        sql_queries.append(query)
+                        records = dbh.execute_sql_queries(sql_queries,thread_debug)
+
+                        for record in records:
+
+                            source_ra = record[0]
+                            source_dec = record[1]
+                            source_field = record[2]
+                            source_hp6 = record[3]
+                            source_hp9 = record[4]
+                            source_flux = record[5]
+
+                            if field != source_field:
+                                fh.write(f"*** Error: field ({field}) not equal to source_field ({source_field}); quitting...")
+                                print(f"*** Error: field ({field}) not equal to source_field ({source_field}); quitting...")
+                                raise Exception(f"*** Error: field ({field}) not equal to source_field ({source_field}); quitting...")
+
+
+                        # For now, set the lightcurve statistics to zero.              # TODO
+
+                        meanra = source_ra
+                        stdevra = 0
+                        meandec = source_dec
+                        stdevdec = 0
+                        meanflux = 0
+                        stdevflux = 0
+                        nsources = 1
+
+                        aid = dbh.add_astro_object_to_field(astroobjects_tablename,
+                                                            source_ra,
+                                                            source_dec,
+                                                            source_flux,
+                                                            meanra,
+                                                            stdevra,
+                                                            meandec,
+                                                            stdevdec,
+                                                            meanflux,
+                                                            stdevflux,
+                                                            nsources,
+                                                            field,
+                                                            source_hp6,
+                                                            source_hp9,
+                                                            thread_debug)
+
+                        dbh.add_merge_to_field(merges_tablename,aid,sid,thread_debug)
+
+
+                # Code-timing benchmark.
+
+                thread_end_time_benchmark = time.time()
+                diff_time_benchmark = thread_end_time_benchmark - thread_start_time_benchmark
+                fh.write(f"Elapsed time in seconds to insert {merges_tablename} and {astroobjects_tablename} database records for unmatched sources = {diff_time_benchmark}\n")
+                thread_start_time_benchmark = thread_end_time_benchmark
+
+
+                # End of loop over SCAs.
+
+                fh.write(f"Loop end over SCAs: index_field,field,expid,sca = {index_field},{field},{expid},{sca}\n")
+
+
+            # End of loop over expids.
+
+            fh.write(f"Loop end over exposure IDs: index_field,field,expid = {index_field},{field},{expid}\n")
 
 
         # End of loop over fields.
 
-        fh.write(f"Loop end: index_field,field = {index_field},{field}\n")
+        fh.write(f"Loop end over fields: index_field,field = {index_field},{field}\n")
 
 
     fh.write(f"\nEnd of run_single_core_job: index_thread={index_thread}\n")
@@ -389,6 +433,7 @@ def run_single_core_job_stage_1_crossmatching(scas,fields,index_thread):
 
 
 def run_single_core_job_stage_2_crossmatching(scas,fields,index_thread):
+
 
     '''
     The current list of fields includes all fields that a science image may overlap, as found
