@@ -1,6 +1,6 @@
 '''
 Load into database sources table the PSF-fit catalogs made by the
-Python photutils package from the ZOGY difference images
+Python photutils package from the SFFT difference images
 (until a final decision on which image-differencing method is best):
 '''
 
@@ -28,7 +28,7 @@ nside9 = 2**level9
 
 
 swname = "loadPSFCatIntoDBSourcesTable.py"
-swvers = "1.0"
+swvers = "1.1"
 cfg_filename_only = "awsBatchSubmitJobs_launchSingleSciencePipeline.ini"
 
 print("swname =", swname)
@@ -113,8 +113,8 @@ product_s3_bucket_base = config_input['JOB_PARAMS']['product_s3_bucket_base']
 job_config_filename_base = config_input['JOB_PARAMS']['job_config_filename_base']
 product_config_filename_base = config_input['JOB_PARAMS']['product_config_filename_base']
 
-output_psfcat_filename = str(config_input['PSFCAT_DIFFIMAGE']['output_zogy_psfcat_filename'])
-output_psfcat_finder_filename = str(config_input['PSFCAT_DIFFIMAGE']['output_zogy_psfcat_finder_filename'])
+output_psfcat_filename = str(config_input['PSFCAT_DIFFIMAGE']['output_sfft_psfcat_filename'])
+output_psfcat_finder_filename = str(config_input['PSFCAT_DIFFIMAGE']['output_sfft_psfcat_finder_filename'])
 
 naxis1 = int(config_input['INSTRUMENT']['naxis1_sciimage'])
 naxis2 = int(config_input['INSTRUMENT']['naxis2_sciimage'])
@@ -262,7 +262,7 @@ def run_single_core_job(jids,overlapping_fields_list,meta_list,negative_diffimg_
             continue
 
 
-        # Download ZOGY-difference-image PSF-fit catalog file from S3 bucket.
+        # Download SFFT-difference-image PSF-fit catalog file from S3 bucket.
 
         output_psfcat_filename_for_jid = output_psfcat_filename_to_use.replace(".txt",f"_jid{jid}.txt")
 
@@ -276,7 +276,7 @@ def run_single_core_job(jids,overlapping_fields_list,meta_list,negative_diffimg_
             continue
 
 
-        # Download ZOGY-difference-image PSF-fit finder catalog file from S3 bucket.
+        # Download SFFT-difference-image PSF-fit finder catalog file from S3 bucket.
 
         output_psfcat_finder_filename_for_jid = output_psfcat_finder_filename_to_use.replace(".txt",f"_jid{jid}.txt")
 
