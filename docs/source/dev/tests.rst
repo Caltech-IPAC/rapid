@@ -77,6 +77,7 @@ Date              Software modification
 4/9/2026          Changes to how the uncertainty images are calculated (for science image and refimage inputs).
 4/13/2026         Replaces hard-wired value 1750.0 with saturation_value_rate_sciimage for processing rimtimsims.
 4/16/2026         Modified crossMatchSources.py to only cross-match sources with flags = 0.
+4/20/2026         Modified to cross-match all sources in one observation at a time for all SCAs in ascending time order.
 ===============   ===============================================================================================================================================================================================================================
 
 
