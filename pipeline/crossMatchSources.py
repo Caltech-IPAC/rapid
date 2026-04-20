@@ -122,7 +122,7 @@ num_cores = os.getenv('NUM_CORES')
 if num_cores is None:
     num_cores = os.cpu_count()
 else:
-    num_cores = str(num_cores
+    num_cores = int(num_cores)
 
 print("num_cores =",num_cores)
 
