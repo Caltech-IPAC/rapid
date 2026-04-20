@@ -117,7 +117,11 @@ match_radius = float(config_input['SOURCE_MATCHING']['match_radius'])
 
 # Open database connections for parallel access.
 
-num_cores = os.cpu_count()
+num_cores = os.getenv('NUM_CORES')
+
+if num_cores is None:
+
+    num_cores = os.cpu_count()
 
 print("num_cores =",num_cores)
 
