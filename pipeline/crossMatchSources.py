@@ -267,7 +267,7 @@ def run_single_core_job_stage_1_crossmatching(scas,fields,index_thread):
 
                 query = f"SELECT a.sid,a.ra,a.dec,b.aid,b.meanra,b.meandec,b.nsources FROM {sources_tablename} AS a, " +\
                     f"{astroobjects_tablename} AS b WHERE q3c_join(a.ra, a.dec, b.meanra, b.meandec, {match_radius}) " +\
-                    f"AND a.expid = {expid} AND a.field = {field} AND a.flags = 0;"
+                    f"AND a.field = {field} AND a.expid = {expid} AND a.flags = 0;"
 
                 sql_queries = []
                 sql_queries.append(query)
@@ -280,13 +280,6 @@ def run_single_core_job_stage_1_crossmatching(scas,fields,index_thread):
                 diff_time_benchmark = thread_end_time_benchmark - thread_start_time_benchmark
                 fh.write(f"Elapsed time in seconds to cross-match {sources_tablename} and {astroobjects_tablename} database tables = {diff_time_benchmark}\n")
                 thread_start_time_benchmark = thread_end_time_benchmark
-
-
-                # Short-circuit the loop if there are no cross-matches.
-
-                n_records = len(records)
-                if n_records == 0:
-                    continue
 
 
                 # For the sources that were matched, create Merges_<field> record.
@@ -331,7 +324,7 @@ def run_single_core_job_stage_1_crossmatching(scas,fields,index_thread):
                 # Query for all sources for the field of interest in Sources_<proc_date>_<sca> and load into memory.
                 # Find those sources that were not matched.
 
-                query = f"SELECT sid FROM {sources_tablename} WHERE field = {field} AND flags = 0;"
+                query = f"SELECT sid FROM {sources_tablename} WHERE field = {field} AND a.expid = {expid} AND flags = 0;"
 
                 sql_queries = []
                 sql_queries.append(query)
