@@ -236,8 +236,8 @@ def run_single_core_job_stage_1_crossmatching(scas,fields,index_thread):
 
             sources_tablename = f"sources_{proc_date}_{sca}"
 
-            query = f"SELECT a.expid,a.mjdobs FROM {sources_tablename} " +\
-                f"WHERE a.field = {field} AND a.flags = 0;"
+            query = f"SELECT distinct expid,mjdobs FROM {sources_tablename} " +\
+                f"WHERE field = {field} AND flags = 0;"
 
             sql_queries = []
             sql_queries.append(query)
