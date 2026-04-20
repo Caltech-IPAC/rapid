@@ -120,8 +120,9 @@ match_radius = float(config_input['SOURCE_MATCHING']['match_radius'])
 num_cores = os.getenv('NUM_CORES')
 
 if num_cores is None:
-
     num_cores = os.cpu_count()
+else:
+    num_cores = str(num_cores
 
 print("num_cores =",num_cores)
 
