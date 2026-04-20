@@ -231,6 +231,7 @@ in processing-date-time order, using the join function from the Q3C-library Post
 and records in the associated Merges tables are then populated.
 Only sources with ``flags = 0`` are considered.
 A given Sources child table can contain records for different fields, filters, and exposures.
+The cross-matching is done for all sources in one observation at a time, for all SCAs, in ascending time order.
 
 .. note::
    Sources that are NOT matched become new records in the AstroObjects tables.
