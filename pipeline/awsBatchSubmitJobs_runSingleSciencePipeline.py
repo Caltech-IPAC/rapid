@@ -1777,7 +1777,7 @@ if __name__ == '__main__':
                         "--refcat",
                         filename_refgainmatchsexcat_catalog,
                         "--satvalue",
-                        str(saturation_value_rate_sciimage),
+                        "20000",
                         "--satmaskradius",
                         "30,45",
                         "--npixseg2",
@@ -1839,6 +1839,9 @@ if __name__ == '__main__':
             end_time_benchmark - start_time_benchmark)
         start_time_benchmark = end_time_benchmark
 
+
+        # Generate corresponding catalogs, etc., if SFFT was successful.
+
         if run_sfft_was_successful:
 
 
@@ -1873,6 +1876,11 @@ if __name__ == '__main__':
                                                  kwdvals,
                                                  hdu_index,
                                                  filename_cconvdiff)
+
+
+            # Replace NaNs in output SFFT difference image, if any, with zeros.
+
+            util.replace_nans_with_value(filename_sfftdiffimage,0.0)
 
 
             # Compute negative SFFT difference and cconv images.
