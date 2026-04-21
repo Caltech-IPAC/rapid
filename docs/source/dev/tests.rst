@@ -77,7 +77,13 @@ Date              Software modification
 4/9/2026          Changes to how the uncertainty images are calculated (for science image and refimage inputs).
 4/13/2026         Replaces hard-wired value 1750.0 with saturation_value_rate_sciimage for processing rimtimsims.
 4/16/2026         Modified crossMatchSources.py to only cross-match sources with flags = 0.
+4/17/2026         Modified crossMatchSources.py to cross-match using AstroObjects (meanra,meandec) instead of (ra0,dec0).
+4/17/2026         Modified crossMatchSources.py to update AstroObjects (meanra,meandec) for each lightcurve data point added.
 4/20/2026         Modified to cross-match all sources in one observation at a time for all SCAs in ascending time order.
+4/20/2026         Modified to load into RAPID operations database the SFFT-difference-image PhotUtils catalogs, instead of ZOGY.
+4/21/2026         Modified to replace NaNs, if any, in SFFT difference image with zeros.
+4/21/2026         Modified to replace NaNs, if any, in difference-image uncertainty images with std_dif_img.
+4/21/2026         Increased [SCI_IMAGE] saturation level from 100000 to 1100000 for rimtimsims.
 ===============   ===============================================================================================================================================================================================================================
 
 
