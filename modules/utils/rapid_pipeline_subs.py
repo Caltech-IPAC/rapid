@@ -376,8 +376,8 @@ def fits_data_statistics_with_clipping(input_filename,n_sigma = 3.0,hdu_index = 
     d = np.where(np.isnan(a),True,False)
     mask = b | c | d
     mx = ma.masked_array(a, mask)
-    avg = ma.getdata(mx.mean())
-    std = ma.getdata(mx.std()) * sqrtcf
+    avg = ma.getdata(mx.nanmean())
+    std = ma.getdata(mx.nanstd()) * sqrtcf
     nkept = ma.getdata(mx.count())
     noutliers = pixcount - nancount - nkept
 
