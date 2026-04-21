@@ -1908,11 +1908,6 @@ if __name__ == '__main__':
             filename_weight_image = filename_sfftdiffimage_unc_masked
 
 
-            # Replace NaNs in SFFT diffimage uncertainty image, if any, with zeros.
-
-            util.replace_nans_with_value(filename_sfftdiffimage_unc_masked,0.0)
-
-
             # Upload SFFT-product FITS files to product S3 bucket.
 
             product_s3_bucket = product_s3_bucket_base

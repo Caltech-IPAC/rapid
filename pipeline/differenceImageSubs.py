@@ -145,7 +145,8 @@ def compute_diffimage_uncertainty(sca_gain,
 
     hdu_list_unc = []
     data_unc = np.sqrt(pos_np_data_sci / sca_gain + pos_np_data_ref / (sca_gain * pos_np_data_cov) + std_dif_img * std_dif_img)
-    hdu_unc = fits.PrimaryHDU(header=hdr_sci,data=data_unc.astype(np.float32))
+    pos_data_unc = np.where(np.isnan(data_unc),std_dif_img,data_unc)
+    hdu_unc = fits.PrimaryHDU(header=hdr_sci,data=pos_data_unc.astype(np.float32))
     hdu_list_unc.append(hdu_unc)
     hdu_unc = fits.HDUList(hdu_list_unc)
     hdu_unc.writeto(diffimage_unc_filename,overwrite=True,checksum=True)
