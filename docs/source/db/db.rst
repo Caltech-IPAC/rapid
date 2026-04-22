@@ -196,7 +196,7 @@ A diagram of the source-matching database-table schema is given as follows:
 .. image:: source_matching.png
 
 As indicated in the diagram, there will be several Sources tables
-named differently (according to the specified parameters).
+named differently (according to the processing-date and SCA parameters).
 Same for Merges and AstroObjects tables.
 This is to partition the data into manageable chunks.
 The partitioning schemes for these tables are discussed below in more detail.
