@@ -1768,6 +1768,16 @@ if __name__ == '__main__':
 
         if "rimtimsim" in science_image_filename:
 
+            '''
+
+            Jacob Jencson  [3:14 PM]
+            sfft images look usable, but there is still an issue with the masking step that is
+            degrading the results. What I think is happening is that that saturated pixels are being
+            ignored/flagged in the Sextractor run. This is probably the correct behavior for
+            SExtractor, but the masking procedure I wrote relies on the stars we want to mask
+            having FLUX_MAX >= sat_value in the sextractor output catalogs. The better thing to do
+            would probably be to use a FLAG from SExtractor for saturated sources.
+
             sfft_cmd = [python_cmd,
                         sfft_code,
                         "./" + filename_scifile,
@@ -1782,6 +1792,27 @@ if __name__ == '__main__':
                         "30,45",
                         "--npixseg2",
                         "4000.0"]
+
+            Jacob Jencson  [3:27 PM]
+            The quickest fix right now is to use the brute-force masking options
+            --bsmaskvalue and --bsmaskradius instead and ignore the sextractor catalogs.
+            These will simply mask out a circle around any pixel with a value above the bsmaskvalue.
+            I just ran a test like this and it worked well, although the 'brute-force' masking is slower:
+
+            '''
+
+            sfft_cmd = [python_cmd,
+                        sfft_code,
+                        "./" + filename_scifile,
+                        "./" + filename_reffile,
+                        "--scicat",
+                        filename_scigainmatchsexcat_catalog,
+                        "--refcat",
+                        filename_refgainmatchsexcat_catalog,
+                        "--bsmaskvalue",
+                        "20000.0",
+                        "--bsmaskradius",
+                        "30.0"]
 
         else:
 
