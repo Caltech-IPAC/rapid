@@ -336,6 +336,8 @@ def run_single_core_job(jids,overlapping_fields_list,meta_list,negative_diffimg_
                         cat_col = 'n_pixels_fit'
                     elif cat_col == 'redchi':
                         cat_col = 'reduced_chi2'
+                    elif cat_col == 'npix':
+                        cat_col = 'n_pixels'
 
                     if cat_col == 'pid':
                         continue
