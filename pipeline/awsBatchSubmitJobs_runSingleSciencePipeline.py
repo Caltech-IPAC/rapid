@@ -1421,7 +1421,7 @@ if __name__ == '__main__':
             phot['qfit'].info.format = '.4f'
             phot['cfit'].info.format = '.4f'
 
-            print(phot[('id', 'x_fit', 'y_fit', 'flux_fit','x_err', 'y_err', 'flux_err', 'npixfit', 'qfit', 'cfit', 'flags')])
+            print(phot[('id', 'x_fit', 'y_fit', 'flux_fit','x_err', 'y_err', 'flux_err', 'n_pixels_fit', 'qfit', 'cfit', 'flags')])
 
 
             # Compute sky coordinates for given pixel coordinates.
@@ -1528,7 +1528,7 @@ if __name__ == '__main__':
             phot['qfit'].info.format = '.4f'
             phot['cfit'].info.format = '.4f'
 
-            print(phot[('id', 'x_fit', 'y_fit', 'flux_fit','x_err', 'y_err', 'flux_err', 'npixfit', 'qfit', 'cfit', 'flags')])
+            print(phot[('id', 'x_fit', 'y_fit', 'flux_fit','x_err', 'y_err', 'flux_err', 'n_pixels_fit', 'qfit', 'cfit', 'flags')])
 
 
             # Compute sky coordinates for given pixel coordinates.
@@ -2165,7 +2165,7 @@ if __name__ == '__main__':
                     phot['qfit'].info.format = '.4f'
                     phot['cfit'].info.format = '.4f'
 
-                    print(phot[('id', 'x_fit', 'y_fit', 'flux_fit','x_err', 'y_err', 'flux_err', 'npixfit', 'qfit', 'cfit', 'flags')])
+                    print(phot[('id', 'x_fit', 'y_fit', 'flux_fit','x_err', 'y_err', 'flux_err', 'n_pixels_fit', 'qfit', 'cfit', 'flags')])
 
 
                     # Compute sky coordinates for given pixel coordinates.
@@ -2274,7 +2274,7 @@ if __name__ == '__main__':
                     phot['qfit'].info.format = '.4f'
                     phot['cfit'].info.format = '.4f'
 
-                    print(phot[('id', 'x_fit', 'y_fit', 'flux_fit','x_err', 'y_err', 'flux_err', 'npixfit', 'qfit', 'cfit', 'flags')])
+                    print(phot[('id', 'x_fit', 'y_fit', 'flux_fit','x_err', 'y_err', 'flux_err', 'n_pixels_fit', 'qfit', 'cfit', 'flags')])
 
 
                     # Compute sky coordinates for given pixel coordinates.
@@ -2634,7 +2634,7 @@ if __name__ == '__main__':
                 phot['qfit'].info.format = '.4f'
                 phot['cfit'].info.format = '.4f'
 
-                print(phot[('id', 'x_fit', 'y_fit', 'flux_fit','x_err', 'y_err', 'flux_err', 'npixfit', 'qfit', 'cfit', 'flags')])
+                print(phot[('id', 'x_fit', 'y_fit', 'flux_fit','x_err', 'y_err', 'flux_err', 'n_pixels_fit', 'qfit', 'cfit', 'flags')])
 
 
                 # Compute sky coordinates for given pixel coordinates.
@@ -2728,7 +2728,7 @@ if __name__ == '__main__':
                 phot['qfit'].info.format = '.4f'
                 phot['cfit'].info.format = '.4f'
 
-                print(phot[('id', 'x_fit', 'y_fit', 'flux_fit','x_err', 'y_err', 'flux_err', 'npixfit', 'qfit', 'cfit', 'flags')])
+                print(phot[('id', 'x_fit', 'y_fit', 'flux_fit','x_err', 'y_err', 'flux_err', 'n_pixels_fit', 'qfit', 'cfit', 'flags')])
 
 
                 # Compute sky coordinates for given pixel coordinates.

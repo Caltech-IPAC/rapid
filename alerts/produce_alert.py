@@ -110,7 +110,7 @@ def build_dia_source(row, filter_name=None):
         "qfit": row.get("qfit"),
         "cfit": row.get("cfit"),
         "redchi": row.get("redchi"),
-        "npixfit": row.get("npixfit"),
+        "n_pixels_fit": row.get("n_pixels_fit"),
         "sharpness": row.get("sharpness"),
         "roundness1": row.get("roundness1"),
         "roundness2": row.get("roundness2"),

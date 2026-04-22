@@ -1533,6 +1533,8 @@ def compute_psf_catalog(n_clip_sigma,
     Odd numbers for NAXIS1 and NAXIS2 is a required assumption for input PSF.
     '''
 
+    import photutils
+    photutils.future_column_names = True
     from photutils.detection import DAOStarFinder
     from photutils.psf import PSFPhotometry,ImagePSF,IterativePSFPhotometry
     import matplotlib.pyplot as plt

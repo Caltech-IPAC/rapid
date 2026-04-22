@@ -199,7 +199,7 @@ for directory_path in directory_paths:
 
                     # Here are what the columns in the photutils catalogs are called:
                     # Main: id group_id group_size local_bkg x_init y_init flux_init x_fit y_fit flux_fit
-                    #       x_err y_err flux_err npixfit qfit cfit reduced_chi2 flags ra dec
+                    #       x_err y_err flux_err n_pixels_fit qfit cfit reduced_chi2 flags ra dec
                     # Finder: id xcentroid ycentroid sharpness roundness1 roundness2 npix peak flux mag daofind_mag
 
                     x_psfcat = []
