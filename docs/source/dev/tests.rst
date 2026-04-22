@@ -84,6 +84,8 @@ Date              Software modification
 4/21/2026         Modified to replace NaNs, if any, in SFFT difference image with zeros.
 4/21/2026         Modified to replace NaNs, if any, in difference-image uncertainty images with std_dif_img.
 4/21/2026         Increased [SCI_IMAGE] saturation level from 100000 to 1100000 for rimtimsims.
+4/22/2026         Modified SFFT command for rimtimsims to use the brute-force masking options.
+4/22/2026         In the latest version of PhotUtils, output column name ``npixfit`` has been changed to ``n_pixels_fit``.
 ===============   ===============================================================================================================================================================================================================================
 
 
