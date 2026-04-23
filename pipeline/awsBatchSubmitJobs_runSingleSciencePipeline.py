@@ -1404,6 +1404,11 @@ if __name__ == '__main__':
 
     else:
 
+        npsfcatsources_zogy_diffimage = len(phot)
+
+        print("npsfcatsources_zogy_diffimage =",npsfcatsources_zogy_diffimage)
+
+
         # Output psf-fit catalog is an PSFPhotometry astropy table with the PSF-fitting results
         # merged with the DAOStarFinder astropy table.
         # Output columns are documentated at
@@ -1510,6 +1515,11 @@ if __name__ == '__main__':
         output_diffimage_file_infobits |= 2**1
 
     else:
+
+        npsfcatsources_zogy_diffimage_negative = len(phot)
+
+        print("npsfcatsources_zogy_diffimage_negative =",npsfcatsources_zogy_diffimage_negative)
+
 
         # Output psf-fit catalog is an PSFPhotometry astropy table with the PSF-fitting results
         # merged with the DAOStarFinder astropy table.
@@ -2148,6 +2158,11 @@ if __name__ == '__main__':
 
             else:
 
+                npsfcatsources_sfftdiffimage = len(phot)
+
+                print("npsfcatsources_sfftdiffimage =",npsfcatsources_sfftdiffimage)
+
+
                 # Output psf-fit catalog is an PSFPhotometry astropy table with the PSF-fitting results
                 # merged with the DAOStarFinder astropy table.
                 # Output columns are documentated at
@@ -2256,6 +2271,11 @@ if __name__ == '__main__':
                 output_diffimage_file_infobits |= 2**3
 
             else:
+
+                npsfcatsources_sfftdiffimage_negative = len(phot)
+
+                print("npsfcatsources_sfftdiffimage_negative =",npsfcatsources_sfftdiffimage_negative)
+
 
                 # Output psf-fit catalog is an PSFPhotometry astropy table with the PSF-fitting results
                 # merged with the DAOStarFinder astropy table.
@@ -2617,6 +2637,11 @@ if __name__ == '__main__':
 
         else:
 
+            npsfcatsources_naive_diffimage = len(phot)
+
+            print("npsfcatsources_naive_diffimage =",npsfcatsources_naive_diffimage)
+
+
             # Output psf-fit catalog is an PSFPhotometry astropy table with the PSF-fitting results
             # merged with the DAOStarFinder astropy table.
             # Output columns are documentated at
@@ -2710,6 +2735,11 @@ if __name__ == '__main__':
             output_diffimage_file_infobits |= 2**5
 
         else:
+
+            npsfcatsources_naive_diffimage_negative = len(phot)
+
+            print("npsfcatsources_naive_diffimage_negative =",npsfcatsources_naive_diffimage_negative)
+
 
             # Output psf-fit catalog is an PSFPhotometry astropy table with the PSF-fitting results
             # merged with the DAOStarFinder astropy table.
