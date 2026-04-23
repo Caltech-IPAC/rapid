@@ -1765,11 +1765,11 @@ if __name__ == '__main__':
         if crossconv_flag:
             filename_sfftdiffimage = 'sfftdiffimage_dconv_masked.fits'
             filename_sfftsoln = 'sfftsoln_cconv.fits'
-            filename_sfftdffimagepsf = "sfftdiffpsf_dconv.fits"
+            filename_sfftdiffpsf = "sfftdiffpsf_dconv.fits"
         else:
             filename_sfftdiffimage = 'sfftdiffimage_masked.fits'
             filename_sfftsoln = 'sfftsoln.fits'
-            filename_sfftdffimagepsf = "sfftdiffpsf.fits"
+            filename_sfftdiffpsf = "sfftdiffpsf.fits"
 
         filename_cconvdiff = 'sfftdiffimage_cconv_masked.fits'               # Only generated if crossconv_flag = True
 
@@ -1958,7 +1958,7 @@ if __name__ == '__main__':
             s3_object_name_sfftdiffimage_unc_masked = job_proc_date + "/jid" + str(jid) + "/" + filename_sfftdiffimage_unc_masked
             s3_object_name_sfftdiffimage_negative = job_proc_date + "/jid" + str(jid) + "/" + filename_sfftdiffimage_negative
             s3_object_name_cconvdiff_negative = job_proc_date + "/jid" + str(jid) + "/" + filename_cconvdiff_negative
-            s3_object_name_sfftdiffimagepsf = job_proc_date + "/jid" + str(jid) + "/" + filename_sfftdffimagepsf
+            s3_object_name_sfftdiffpsf = job_proc_date + "/jid" + str(jid) + "/" + filename_sfftdiffpsf
 
             filenames = [filename_sfftdiffimage,
                          filename_sfftsoln,
@@ -1966,7 +1966,7 @@ if __name__ == '__main__':
                          filename_sfftdiffimage_unc_masked,
                          filename_sfftdiffimage_negative,
                          filename_cconvdiff_negative,
-                         filename_sfftdffimagepsf]
+                         filename_sfftdiffpsf]
 
             objectnames = [s3_object_name_sfftdiffimage,
                            s3_object_name_sfftsoln,
@@ -1974,7 +1974,7 @@ if __name__ == '__main__':
                            s3_object_name_sfftdiffimage_unc_masked,
                            s3_object_name_sfftdiffimage_negative,
                            s3_object_name_cconvdiff_negative,
-                           s3_object_name_sfftdiffimagepsf]
+                           s3_object_name_sfftdiffpsf]
 
             if upload_to_s3_bucket:
 
@@ -2133,7 +2133,7 @@ if __name__ == '__main__':
 
             input_img_filename = filename_sfftdiffimage
             input_unc_filename = filename_sfftdiffimage_unc_masked
-            input_psf_filename = filename_refimage_psf                                                      # TODO
+            input_psf_filename = filename_sfftdiffpsf
             output_psfcat_filename = psfcat_diffimage_dict["output_sfft_psfcat_filename"]
             output_psfcat_finder_filename = psfcat_diffimage_dict["output_sfft_psfcat_finder_filename"]
             output_psfcat_residual_filename = psfcat_diffimage_dict["output_sfft_psfcat_residual_filename"]
@@ -2247,7 +2247,7 @@ if __name__ == '__main__':
 
             input_img_filename = filename_sfftdiffimage_negative
             input_unc_filename = filename_sfftdiffimage_unc_masked
-            input_psf_filename = filename_refimage_psf                                                      # TODO
+            input_psf_filename = filename_sfftdiffpsf
             output_psfcat_filename_negative = psfcat_diffimage_dict["output_sfft_psfcat_filename"].replace(".txt","_negative.txt")
             output_psfcat_finder_filename_negative = psfcat_diffimage_dict["output_sfft_psfcat_finder_filename"].replace(".txt","_negative.txt")
             output_psfcat_residual_filename_negative = psfcat_diffimage_dict["output_sfft_psfcat_residual_filename"].replace(".fits","_negative.fits")
