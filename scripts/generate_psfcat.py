@@ -147,9 +147,9 @@ if __name__ == '__main__':
 
     else:
 
-        nsexcatsources_zogydiffimage = len(phot)
+        npsfcatsources_diffimage = len(phot)
 
-        print("nsexcatsources_zogydiffimage =",nsexcatsources_zogydiffimage)
+        print("npsfcatsources_diffimage =",npsfcatsources_diffimage)
 
 
         # Output psf-fit catalog is an PSFPhotometry astropy table with the PSF-fitting results
