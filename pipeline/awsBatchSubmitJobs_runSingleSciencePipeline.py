@@ -1306,9 +1306,9 @@ if __name__ == '__main__':
                                                               sextractor_diffimage_paramsfile,
                                                               params_to_get_diffimage)
 
-    nsexcatsources_diffimage = len(vals_diffimage)
+    nsexcatsources_zogy_diffimage = len(vals_diffimage)
 
-    print("nsexcatsources_diffimage =",nsexcatsources_diffimage)
+    print("nsexcatsources_zogy_diffimage =",nsexcatsources_zogy_diffimage)
 
 
     # Code-timing benchmark.
@@ -1355,9 +1355,9 @@ if __name__ == '__main__':
                                                               sextractor_diffimage_paramsfile,
                                                               params_to_get_diffimage)
 
-    nsexcatsources_diffimage_negative = len(vals_diffimage_negative)
+    nsexcatsources_zogy_diffimage_negative = len(vals_diffimage_negative)
 
-    print("nsexcatsources_diffimage_negative =",nsexcatsources_diffimage_negative)
+    print("nsexcatsources_zogy_diffimage_negative =",nsexcatsources_zogy_diffimage_negative)
 
 
     # Code-timing benchmark.
@@ -1726,7 +1726,7 @@ if __name__ == '__main__':
 
     product_config['ZOGY']['fid'] = str(fid_sciimage)
     product_config['ZOGY']['sca'] = str(sca_sciimage)
-    product_config['ZOGY']['nsexcatsources'] = str(nsexcatsources_diffimage)
+    product_config['ZOGY']['nsexcatsources'] = str(nsexcatsources_zogy_diffimage)
     product_config['ZOGY']['scalefacref'] = str(scalefacref)
     product_config['ZOGY']['dxrmsfin'] = str(dxrmsfin)
     product_config['ZOGY']['dyrmsfin'] = str(dyrmsfin)
