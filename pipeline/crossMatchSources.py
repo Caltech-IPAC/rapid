@@ -194,7 +194,7 @@ def run_single_core_job_stage_1_crossmatching(scas,fields,index_thread):
     # Set thread_debug = 0 here to severly limit the amount of information logged for runs
     # that are anything but short tests.
 
-    thread_debug = 1
+    thread_debug = 0
 
     nfields = len(fields)
 
