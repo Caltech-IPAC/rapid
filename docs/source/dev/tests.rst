@@ -87,7 +87,7 @@ Date              Software modification
 4/22/2026         Modified SFFT command for rimtimsims to use the brute-force masking options (``--bsmaskvalue 20000.0 --bsmaskradius 30.0``).
 4/22/2026         In the latest version of PhotUtils, output column name ``npixfit`` has been changed to ``n_pixels_fit``, and output column name ``npix`` has been changed to ``n_pixels``.
 4/23/2026         Modified to use ``filename_sfftdiffpsf`` for SFFT-difference-image PSF-fit catalog generation, instead of ``filename_refimage_psf`` as before.
-4/24/2026         Changed [SOURCE_MATCHING] match_radius to 0.00001528 degrees (half a Roman WFI pixel).  Reran cross-matching for the 4/23/2026 test.
+4/24/2026         Changed ``[SOURCE_MATCHING] match_radius`` to 0.00001528 degrees (half a Roman WFI pixel).  Reran cross-matching for the 4/23/2026 test.
 ===============   ===============================================================================================================================================================================================================================
 
 
