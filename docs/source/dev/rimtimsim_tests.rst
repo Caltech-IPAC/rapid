@@ -360,28 +360,28 @@ Replacing NaNs, applying image offsets, etc.                          0.621
 Running ZOGY                                                         38.735
 masking ZOGY difference image                                         1.014
 Running SExtractor on positive ZOGY difference image                  6.058
-Running SExtractor on negative ZOGY difference image                 24.08959984779358
-Generating PSF-fit catalog on positive ZOGY difference image         77.72596883773804
-Generating PSF-fit catalog on negative ZOGY difference image          5.564685106277466
-Uploading main products to S3 bucket                                  9.136524200439453
-Running SFFT                                                        109.83462071418762
-Uploading SFFT difference image to S3 product bucket                  5.579442739486694
-Running SExtractor on positive SFFT difference images                18.170828104019165
-Running SExtractor on negative SFFT difference images                45.257628202438354
-Uploading SFFT-diffimage SExtractor catalogs to S3 product bucket     1.8877968788146973
-Generating PSF-fit catalog on positive SFFT difference image        512.7500882148743
-Generating PSF-fit catalog on negative SFFT difference image        670.2214193344116
-Uploading SFFT-diffimage PSF-fit catalogs to S3 product bucket        2.0992040634155273
-Computing naive difference images                                     0.7180922031402588
-Uploading naive difference images to S3 product bucket                1.2418198585510254
-Running SExtractor on positive naive difference image                 4.000657320022583
-Running SExtractor on negative naive difference image                20.821541786193848
-Uploading SExtractor catalogs for naive difference images             1.2118606567382812
-Generating PSF-fit catalog on positive naive difference image      1100.8391473293304
-Generating PSF-fit catalog on negative naive difference image       173.33703923225403
-Uploading PSF-fit catalogs for naive difference images                1.8760955333709717
-Uploading products at pipeline end to S3 product bucket               0.029317140579223633
-Total elapsed time to run one instance of science pipeline         3524.0951664447784
+Running SExtractor on negative ZOGY difference image                 24.090
+Generating PSF-fit catalog on positive ZOGY difference image         77.726
+Generating PSF-fit catalog on negative ZOGY difference image          5.564
+Uploading main products to S3 bucket                                  9.137
+Running SFFT                                                        109.835
+Uploading SFFT difference image to S3 product bucket                  5.579
+Running SExtractor on positive SFFT difference images                18.171
+Running SExtractor on negative SFFT difference images                45.258
+Uploading SFFT-diffimage SExtractor catalogs to S3 product bucket     1.888
+Generating PSF-fit catalog on positive SFFT difference image        512.750
+Generating PSF-fit catalog on negative SFFT difference image        670.221
+Uploading SFFT-diffimage PSF-fit catalogs to S3 product bucket        2.099
+Computing naive difference images                                     0.718
+Uploading naive difference images to S3 product bucket                1.242
+Running SExtractor on positive naive difference image                 4.001
+Running SExtractor on negative naive difference image                20.822
+Uploading SExtractor catalogs for naive difference images             1.212
+Generating PSF-fit catalog on positive naive difference image      1100.839
+Generating PSF-fit catalog on negative naive difference image       173.337
+Uploading PSF-fit catalogs for naive difference images                1.876
+Uploading products at pipeline end to S3 product bucket               0.029
+Total elapsed time to run one instance of science pipeline         3524.095
 =================================================================  =====================
 
 
