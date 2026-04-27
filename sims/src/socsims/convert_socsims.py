@@ -106,9 +106,7 @@ def run_single_core_job(asdf_files,index_thread):
         print(f"*** Error: Could not open output file {thread_work_file}; quitting...")
         exit(64)
 
-    dbh = dbh_list[index_thread]
-
-    fh.write(f"\nStart of run_single_core_job: index_thread={index_thread}, dbh={dbh}\n")
+    fh.write(f"\nStart of run_single_core_job: index_thread={index_thread}\n")
 
 
     # Loop over input ASDF files.
