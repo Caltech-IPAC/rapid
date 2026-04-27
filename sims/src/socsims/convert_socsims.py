@@ -5,6 +5,7 @@ Reformat socsims.  Convert from ASDF format to FITS format, and add required FIT
    88038  352152 6778926
 """
 
+import os
 import boto3
 import re
 import subprocess
@@ -38,6 +39,7 @@ bucket_name_output = "socsim-20260427-lite"
 # Create S3-client object.
 
 s3_client = boto3.client('s3')
+s3_resource = boto3.resource('s3')
 
 
 # Determine number of vCPUs to use in parallel.
@@ -719,7 +721,23 @@ def asdf_to_fits(asdf_path, fits_path, *, shape=None, sip_degree=4,
 if __name__ == '__main__':
 
 
-    # Parse desired input files in input S3 bucket.
+
+    # Parse FITS files in output S3 bucket.
+
+    my_bucket_output = s3_resource.Bucket(bucket_name_output)
+
+    output_fits_files = []
+
+    for my_bucket_output_object in my_bucket_output.objects.all():
+
+        fname_output = str(my_bucket_output_object.key)
+
+        print(f"fname_output = {fname_output}")
+
+        output_fits_files.append(fname_output)
+
+
+    # Parse desired ASDF files in input S3 bucket.
 
     input_asdf_files = []
 
@@ -736,11 +754,20 @@ if __name__ == '__main__':
 
         if "cal.asdf" in input_file_metadata[3]:
 
-            input_file = input_file_metadata[3]
+            input_asdf_file = input_file_metadata[3]
 
             #print(f"input_file = {input_file}")
 
-            input_asdf_files.append(input_file)
+            output_fits_file = input_asdf_file.replace(".asdf","_lite.fits.gz")
+
+            if output_fits_file in output_fits_files:
+
+                print(f"{output_fits_file} exists in output S3 bucket; skipping...")
+                continue
+
+
+
+            input_asdf_files.append(input_asdf_file)
 
         i += 1
 
