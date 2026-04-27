@@ -408,8 +408,14 @@ def asdf_to_fits(asdf_path, fits_path, *, shape=None, sip_degree=4,
     dateobs = exposure_metadata['start_time']
     dateend = exposure_metadata['end_time']
 
+    print(f"dateobs = {dateobs}")
+
+    t_dateobs = type(dateobs)
+    print(f"t_dateobs = {t_dateobs}")
+
+
     # %Y = Year, %m = Month, %d = Day, %H = Hour, %M = Minute, %S = Second
-    date_object = datetime.strptime(dateobs, "%Y-%m-%dT%H:%M:%S.%f")
+    date_object = datetime.strptime(f"{dateobs}", "%Y-%m-%dT%H:%M:%S.%f")
 
     t = Time(date_object)
     mjd = t.mjd
@@ -570,8 +576,8 @@ if __name__ == '__main__':
 
         i += 1
 
-        #if i > 1:
-        #    break
+        if i > 1:
+            break
 
     print(f"Total number of socsims = {i}")
 
