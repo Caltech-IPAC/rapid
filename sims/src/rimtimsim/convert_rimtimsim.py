@@ -30,9 +30,13 @@ bucket_name_input = "rimtimsim-251210"
 bucket_name_output = "rimtimsim-20260401-lite"
 
 
-# Parse input files in input S3 bucket.
+# Create S3 resource and client objects.
 
 s3_resource = boto3.resource('s3')
+s3_client = boto3.client('s3')
+
+
+# Parse input files in input S3 bucket.
 
 my_bucket_input = s3_resource.Bucket(bucket_name_input)
 
@@ -247,8 +251,6 @@ for input_fits_file in input_fits_files:
 
 
     # Upload gzipped file to output S3 bucket.
-
-    s3_client = boto3.client('s3')
 
     gzipped_output_fits_file = output_fits_file + ".gz"
 
