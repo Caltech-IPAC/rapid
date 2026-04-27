@@ -194,7 +194,7 @@ def run_single_core_job(asdf_files,index_thread):
 
         # End of loop over asdf_files.
 
-        fh.write(f"Loop end over asdf_files: index_asdf_file,asdf_file = {index_asdf_file},{asdf_file}\n")
+        fh.write(f"Loop end over asdf_files: index_asdf_file,input_asdf_file = {index_asdf_file},{input_asdf_file}\n")
 
 
     fh.write(f"\nEnd of run_single_core_job: index_thread={index_thread}\n")
