@@ -20,6 +20,7 @@ from datetime import datetime, timezone
 from dateutil import tz
 import time
 from concurrent.futures import ProcessPoolExecutor, as_completed
+to_zone = tz.gettz('America/Los_Angeles')
 
 import modules.utils.rapid_pipeline_subs as util
 
