@@ -421,8 +421,8 @@ def asdf_to_fits(asdf_path, fits_path, *, shape=None, sip_degree=4,
     mjd = t.mjd
 
     hdr["EXPTIME"] = exptime
-    hdr["DATE-OBS"] = dateobs
-    hdr["DATE-END"] = dateend
+    hdr["DATE-OBS"] = str(dateobs)
+    hdr["DATE-END"] = str(dateend)
     hdr["MJD-OBS"] = mjd
 
 
