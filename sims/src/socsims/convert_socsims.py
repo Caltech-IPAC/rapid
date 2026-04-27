@@ -576,8 +576,8 @@ if __name__ == '__main__':
 
         i += 1
 
-        if i > 1:
-            break
+        #if i > 1:
+        #    break
 
     print(f"Total number of socsims = {i}")
 
