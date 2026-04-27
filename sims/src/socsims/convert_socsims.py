@@ -15,20 +15,39 @@ from astropy.io import fits
 from astropy.wcs import WCS, Sip
 from astropy.coordinates import SkyCoord
 import astropy.units as u
-from datetime import datetime
 from astropy.time import Time
+from datetime import datetime, timezone
+from dateutil import tz
+import time
 from concurrent.futures import ProcessPoolExecutor, as_completed
 
 import modules.utils.rapid_pipeline_subs as util
 
 
-# Define code.
+# Define code name and version.
 
 swname = "convert_socsims.py"
 swvers = "1.0"
 
 print("swname =", swname)
 print("swvers =", swvers)
+
+
+# Compute start time for benchmark.
+
+start_time_benchmark = time.time()
+
+
+# Compute processing datetime (UT) and processing datetime (Pacific time).
+
+datetime_utc_now = datetime.utcnow()
+proc_utc_datetime = datetime_utc_now.strftime('%Y-%m-%dT%H:%M:%SZ')
+datetime_pt_now = datetime_utc_now.replace(tzinfo=timezone.utc).astimezone(tz=to_zone)
+proc_pt_datetime_started = datetime_pt_now.strftime('%Y-%m-%dT%H:%M:%S PT')
+
+print("proc_utc_datetime =",proc_utc_datetime)
+print("proc_pt_datetime_started =",proc_pt_datetime_started)
+
 
 # Define input and output S3 buckets.
 
@@ -50,11 +69,6 @@ if num_cores_str is None:
     num_cores = os.cpu_count()
 else:
     num_cores = int(num_cores_str)
-
-
-###################################################################
-# Methods.
-###################################################################
 
 
 #-------------------------------------------------------------------------------------------------------------
@@ -169,6 +183,14 @@ def run_single_core_job(asdf_files,index_thread):
 
         rm_cmd = ['rm','-f',gzipped_output_fits_file]
         exitcode_from_rm = util.execute_command(rm_cmd)
+
+
+        # Code-timing benchmark.
+
+        thread_end_time_benchmark = time.time()
+        diff_time_benchmark = thread_end_time_benchmark - thread_start_time_benchmark
+        fh.write(f"Elapsed time in seconds to convert ASDF file to FITS file = {diff_time_benchmark}\n")
+        thread_start_time_benchmark = thread_end_time_benchmark
 
 
         # End of loop over asdf_files.
@@ -721,7 +743,6 @@ def asdf_to_fits(asdf_path, fits_path, *, shape=None, sip_degree=4,
 if __name__ == '__main__':
 
 
-
     # Parse FITS files in output S3 bucket.
 
     my_bucket_output = s3_resource.Bucket(bucket_name_output)
@@ -787,6 +808,14 @@ if __name__ == '__main__':
     else:
         thread_index = 0
         run_single_core_job(input_asdf_files,thread_index)
+
+
+    # Code-timing benchmark.
+
+    end_time_benchmark = time.time()
+    print("Elapsed time in seconds to register database records =",
+        end_time_benchmark - start_time_benchmark)
+    start_time_benchmark = end_time_benchmark
 
 
     # Termination.
