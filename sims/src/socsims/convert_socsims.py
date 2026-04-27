@@ -16,6 +16,7 @@ from astropy.coordinates import SkyCoord
 import astropy.units as u
 from datetime import datetime
 from astropy.time import Time
+from concurrent.futures import ProcessPoolExecutor, as_completed
 
 import modules.utils.rapid_pipeline_subs as util
 
@@ -39,9 +40,176 @@ bucket_name_output = "socsim-20260427-lite"
 s3_client = boto3.client('s3')
 
 
+# Determine number of vCPUs to use in parallel.
+
+num_cores_str = os.getenv('NUMCORES')
+
+if num_cores_str is None:
+    num_cores = os.cpu_count()
+else:
+    num_cores = int(num_cores_str)
+
+
 ###################################################################
 # Methods.
 ###################################################################
+
+
+#-------------------------------------------------------------------------------------------------------------
+# Custom methods for parallel processing, taking advantage of multiple cores on the job-launcher machine.
+#-------------------------------------------------------------------------------------------------------------
+
+def run_single_core_job(asdf_files,index_thread):
+
+
+    '''
+    Convert a single ASDF file into a FITS file.
+    '''
+
+
+    # Compute thread start time for code-timing benchmark.
+
+    thread_start_time_benchmark = time.time()
+
+
+    # Set thread_debug = 0 here to severly limit the amount of information logged for runs
+    # that are anything but short tests.
+
+    thread_debug = 0
+
+    n_asdf_files = len(asdf_files)
+
+    print("index_thread,n_asdf_files =",index_thread,n_asdf_files)
+
+    thread_work_file = swname.replace(".py","_thread") + str(index_thread) + ".out"
+
+    try:
+        fh = open(thread_work_file, 'w', encoding="utf-8")
+    except:
+        print(f"*** Error: Could not open output file {thread_work_file}; quitting...")
+        exit(64)
+
+    dbh = dbh_list[index_thread]
+
+    fh.write(f"\nStart of run_single_core_job: index_thread={index_thread}, dbh={dbh}\n")
+
+
+    # Loop over input ASDF files.
+
+    for index_asdf_file in range(n_asdf_files):
+
+        index_core = index_asdf_file % num_cores
+        if index_thread != index_core:
+            continue
+
+        input_asdf_file = asdf_files[index_asdf_file]
+
+        fh.write(f"i,input_asdf_file = {i},{input_asdf_file}\n")
+
+        if ".asdf" not in input_asdf_file:
+            continue
+
+
+        # Download file from input S3 bucket to local machine.
+
+        s3_object_input_asdf_file = "s3://" + bucket_name_input + "/" + input_asdf_file
+        download_cmd = ['aws','s3','cp',s3_object_input_asdf_file,input_asdf_file]
+        exitcode_from_download_cmd = util.execute_command(download_cmd)
+
+
+        # Create output FITS filename for working directory.
+
+        output_fits_file = input_asdf_file.replace(".asdf","_lite.fits")
+
+
+        # Convert from ASDF format to FITS format, and add required FITS keywords.
+        # Define pixel grid spacing for computing SIP distortion.
+
+        degree = 5
+        step = 16
+        shape = None                # Method will compute this if None.
+
+        asdf_to_fits(
+            input_asdf_file,
+            output_fits_file,
+            shape=shape,
+            sip_degree=degree,
+            grid_step=step,
+        )
+
+
+        # Gzip the output FITS file.
+
+        gunzip_cmd = ['gzip', output_fits_file]
+        exitcode_from_gunzip = util.execute_command(gunzip_cmd)
+
+
+        # Upload gzipped file to output S3 bucket.
+
+        gzipped_output_fits_file = output_fits_file + ".gz"
+
+        s3_object_name = gzipped_output_fits_file
+
+        filenames = [gzipped_output_fits_file]
+
+        objectnames = [s3_object_name]
+
+        util.upload_files_to_s3_bucket(s3_client,bucket_name_output,filenames,objectnames)
+
+
+        # Clean up work directory.
+
+        rm_cmd = ['rm','-f',input_asdf_file]
+        exitcode_from_rm = util.execute_command(rm_cmd)
+
+        rm_cmd = ['rm','-f',output_fits_file]
+        exitcode_from_rm = util.execute_command(rm_cmd)
+
+        rm_cmd = ['rm','-f',gzipped_output_fits_file]
+        exitcode_from_rm = util.execute_command(rm_cmd)
+
+
+        # End of loop over asdf_files.
+
+        fh.write(f"Loop end over asdf_files: index_asdf_file,asdf_file = {index_asdf_file},{asdf_file}\n")
+
+
+    fh.write(f"\nEnd of run_single_core_job: index_thread={index_thread}\n")
+
+    fh.close()
+
+    message = f"Finish normally for index_thread = {index_thread}"
+
+    return message
+
+
+def execute_parallel_processes(asdf_files_list,num_cores=None):
+
+    if num_cores is None:
+        num_cores = os.cpu_count()  # Use all available cores if not specified
+
+    print("num_cores =",num_cores)
+
+    with ProcessPoolExecutor(max_workers=num_cores) as executor:
+        # Submit all tasks to the executor and store the futures in a list
+        futures = [executor.submit(run_single_core_job,asdf_files_list,thread_index) for thread_index in range(num_cores)]
+
+        # Iterate over completed futures and update progress
+        for i, future in enumerate(as_completed(futures)):
+            index = futures.index(future)  # Find the original index/order of the completed future
+            print(f"Completed: {i+1} processes, lastly for index={index}")
+
+    for future in futures:
+        index = futures.index(future)
+        try:
+            print(future.result())
+        except Exception as e:
+            print(f"*** Error in thread index {index} = {e}")
+
+
+#-------------------------------------------------------------------------------------------------------------
+# Methods for handling ASDF-to-FITS conversion.
+#-------------------------------------------------------------------------------------------------------------
 
 def execute_command_in_shell(bash_command,fname_out=None):
 
@@ -582,77 +750,16 @@ if __name__ == '__main__':
     print(f"Total number of socsims = {i}")
 
 
-    # Loop over input FITS files.
+    #########################################################################################
+    # Execute asdf-to-fits tasks.  The execution is done for input ASDF files in parallel,
+    # with the number of parallel threads equal to the number of cores on the job-launcher machine.
+    #########################################################################################
 
-    i = 0
-
-    for input_asdf_file in input_asdf_files:
-
-        print(f"i,input_asdf_file = {i},{input_asdf_file}")
-
-        if ".asdf" not in input_asdf_file:
-            continue
-
-
-        # Download file from input S3 bucket to local machine.
-
-        s3_object_input_asdf_file = "s3://" + bucket_name_input + "/" + input_asdf_file
-        download_cmd = ['aws','s3','cp',s3_object_input_asdf_file,input_asdf_file]
-        exitcode_from_download_cmd = util.execute_command(download_cmd)
-
-
-        # Create output FITS filename for working directory.
-
-        output_fits_file = input_asdf_file.replace(".asdf","_lite.fits")
-
-
-        # Convert from ASDF format to FITS format, and add required FITS keywords.
-        # Define pixel grid spacing for computing SIP distortion.
-
-        degree = 5
-        step = 16
-        shape = None                # Method will compute this if None.
-
-        asdf_to_fits(
-            input_asdf_file,
-            output_fits_file,
-            shape=shape,
-            sip_degree=degree,
-            grid_step=step,
-        )
-
-
-        # Gzip the output FITS file.
-
-        gunzip_cmd = ['gzip', output_fits_file]
-        exitcode_from_gunzip = util.execute_command(gunzip_cmd)
-
-
-        # Upload gzipped file to output S3 bucket.
-
-        gzipped_output_fits_file = output_fits_file + ".gz"
-
-        s3_object_name = gzipped_output_fits_file
-
-        filenames = [gzipped_output_fits_file]
-
-        objectnames = [s3_object_name]
-
-        util.upload_files_to_s3_bucket(s3_client,bucket_name_output,filenames,objectnames)
-
-
-        # Clean up work directory.
-
-        rm_cmd = ['rm','-f',input_asdf_file]
-        exitcode_from_rm = util.execute_command(rm_cmd)
-
-        rm_cmd = ['rm','-f',output_fits_file]
-        exitcode_from_rm = util.execute_command(rm_cmd)
-
-        rm_cmd = ['rm','-f',gzipped_output_fits_file]
-        exitcode_from_rm = util.execute_command(rm_cmd)
-
-        i += 1
+    if num_cores > 1:
+        execute_parallel_processes(input_asdf_files,num_cores)
+    else:
+        thread_index = 0
+        run_single_core_job(input_asdf_files,thread_index)
 
 
     # Termination.
