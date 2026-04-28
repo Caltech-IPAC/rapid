@@ -100,3 +100,4 @@ Tests
 
    openuniv_tests.rst
    rimtimsim_tests.rst
+   socsim_tests.rst
