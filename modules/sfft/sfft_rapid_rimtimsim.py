@@ -6,6 +6,7 @@ import numpy as np
 from astropy.io import fits, ascii
 from astropy.stats import sigma_clipped_stats
 from astropy.convolution import convolve_fft
+from scipy.ndimage import binary_dilation
 
 from sfft.utils.pyAstroMatic.PYSEx import PY_SEx
 from sfft.CustomizedPacket import Customized_Packet
@@ -82,6 +83,11 @@ def bkg_mask(image, use_segm=True, run_sextractor=True, segm_image=None, bsmask=
     if bsmask:
         hdudata[bkg_mask] = 0.0
 
+        #build circular dilation footprint for bright pixel masking
+        r = int(np.ceil(bsmask_radius))
+        yy, xx = np.ogrid[-r:r+1, -r:r+1]
+        bs_footprint = xx**2 + yy**2 <= bsmask_radius**2
+
         if bsmask_cat is not None:
             bscat = ascii.read(bsmask_cat)
 
@@ -102,15 +108,18 @@ def bkg_mask(image, use_segm=True, run_sextractor=True, segm_image=None, bsmask=
                 bs_mask = pix_dist <= bsmask_radius
                 bkg_mask[bs_mask] = 1
 
+            #final check: catch any bright pixels missed by catalog masking (e.g. saturated sources not well-characterised by sextractor)
+            #zero already-masked pixels so only genuinely unmasked bright pixels are caught
+            hdudata[bkg_mask] = 0.0
+            bright_pix_mask = hdudata >= bsmask_value
+            if bright_pix_mask.any():
+                bkg_mask[binary_dilation(bright_pix_mask, structure=bs_footprint)] = 1
+
         else:
-            #just mask bright stars based on pixel values (slow, no grouping)
-            h, w = np.shape(hdudata)[0], np.shape(hdudata)[1]
-            Y, X = np.ogrid[:h, :w]
-            bright_star_pix = np.where(hdudata > bsmask_value)
-            for bs_y, bs_x in zip(bright_star_pix[0], bright_star_pix[1]):
-                pix_dist =  np.sqrt((X - bs_x)**2 + (Y-bs_y)**2)
-                bs_mask = pix_dist <= bsmask_radius
-                bkg_mask[bs_mask] = 1
+            #mask bright pixels using binary dilation with circular footprint
+            bright_pix_mask = hdudata >= bsmask_value
+            if bright_pix_mask.any():
+                bkg_mask[binary_dilation(bright_pix_mask, structure=bs_footprint)] = 1
 
     return bkg_mask
 
