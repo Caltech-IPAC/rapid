@@ -3,6 +3,8 @@ Reformat socsims.  Convert from ASDF format to FITS format, and add required FIT
 
 % aws s3 ls s3://stpubdata/roman/nexus/soc_simulations/r00340/l2/ | grep cal.asdf | wc
    88038  352152 6778926
+
+On Streetfighter with 8 vCPUs, this code processes a little over 2,000 ADSF files per hour.
 """
 
 import os
