@@ -38,4 +38,6 @@ Key Aspects of wfi_soc-simulation_l2_cal.asdf Files:
 These files are used to test data analysis workflows, visualize the WFI field of view, and verify astrometric and photometric precision.
 
 The SOC sims have filenames like ``r0034001001001001001_0001_wfi01_f062_cal.asdf``.  Each file is for a given exposure and SCA.
-There are 88,038 of these files available, covering 4,891 exposures.
+There are 88,038 of these files available, covering 4,891 exposures.  Assuming the exposure time is 66.4 seconds, which is
+the predominant exposure time in the GBTDS observation-planning files, this dataset represents
+approximately 3.75 days of cumulative exposure.
