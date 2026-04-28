@@ -138,31 +138,47 @@ CREATE TABLE l2files (
     cunit1 character varying(16) NOT NULL,               -- FITS-header keyword: CUNIT1
     cunit2 character varying(16) NOT NULL,               -- FITS-header keyword: CUNIT2
     a_order smallint,                                    -- FITS-header keyword: A_ORDER
+    a_0_1 double precision,                              -- FITS-header keyword: A_0_1
     a_0_2 double precision,                              -- FITS-header keyword: A_0_2
     a_0_3 double precision,                              -- FITS-header keyword: A_0_3
     a_0_4 double precision,                              -- FITS-header keyword: A_0_4
+    a_0_5 double precision,                              -- FITS-header keyword: A_0_5
+    a_1_0 double precision,                              -- FITS-header keyword: A_1_0
     a_1_1 double precision,                              -- FITS-header keyword: A_1_1
     a_1_2 double precision,                              -- FITS-header keyword: A_1_2
     a_1_3 double precision,                              -- FITS-header keyword: A_1_3
+    a_1_4 double precision,                              -- FITS-header keyword: A_1_4
     a_2_0 double precision,                              -- FITS-header keyword: A_2_0
     a_2_1 double precision,                              -- FITS-header keyword: A_2_1
     a_2_2 double precision,                              -- FITS-header keyword: A_2_2
+    a_2_3 double precision,                              -- FITS-header keyword: A_2_3
     a_3_0 double precision,                              -- FITS-header keyword: A_3_0
     a_3_1 double precision,                              -- FITS-header keyword: A_3_1
+    a_3_2 double precision,                              -- FITS-header keyword: A_3_2
     a_4_0 double precision,                              -- FITS-header keyword: A_4_0
+    a_4_1 double precision,                              -- FITS-header keyword: A_4_1
+    a_5_0 double precision,                              -- FITS-header keyword: A_5_0
     b_order smallint,                                    -- FITS-header keyword: B_ORDER
+    b_0_1 double precision,                              -- FITS-header keyword: B_0_1
     b_0_2 double precision,                              -- FITS-header keyword: B_0_2
     b_0_3 double precision,                              -- FITS-header keyword: B_0_3
     b_0_4 double precision,                              -- FITS-header keyword: B_0_4
+    b_0_5 double precision,                              -- FITS-header keyword: B_0_5
+    b_1_0 double precision,                              -- FITS-header keyword: B_1_0
     b_1_1 double precision,                              -- FITS-header keyword: B_1_1
     b_1_2 double precision,                              -- FITS-header keyword: B_1_2
     b_1_3 double precision,                              -- FITS-header keyword: B_1_3
+    b_1_4 double precision,                              -- FITS-header keyword: B_1_4
     b_2_0 double precision,                              -- FITS-header keyword: B_2_0
     b_2_1 double precision,                              -- FITS-header keyword: B_2_1
     b_2_2 double precision,                              -- FITS-header keyword: B_2_2
+    b_2_3 double precision,                              -- FITS-header keyword: B_2_3
     b_3_0 double precision,                              -- FITS-header keyword: B_3_0
     b_3_1 double precision,                              -- FITS-header keyword: B_3_1
+    b_3_2 double precision,                              -- FITS-header keyword: B_3_2
     b_4_0 double precision,                              -- FITS-header keyword: B_4_0
+    b_4_1 double precision,                              -- FITS-header keyword: B_4_1
+    b_5_0 double precision,                              -- FITS-header keyword: B_5_0
     equinox real NOT NULL,                               -- FITS-header keyword: EQUINOX
     ra double precision NOT NULL,                        -- FITS-header keyword: RA_TARG
     dec double precision NOT NULL,                       -- FITS-header keyword: DEC_TARG
