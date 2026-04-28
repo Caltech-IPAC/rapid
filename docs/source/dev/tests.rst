@@ -25,6 +25,7 @@ OpenUniverse           specialdb                Observation range of reference i
 RimTimSim              rimtimsimdb              Observation range of reference images earlier than test (normal)
 OpenUniverse           fakesourcesdb            For fake-source injection (copy of specialdb)
 RimTimSim              rimtimsims2db            For fake-source injection (emptied copy of fakesourcesdb)
+SOC GBTDS Sims         socsimsdb                For fake-source injection (emptied copy of rimtimsims2db)
 ===============      ===================      =====================================================================
 
 
