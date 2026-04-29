@@ -640,4 +640,5 @@ def register_files():
 # Main program.
 
 if __name__ == '__main__':
+
     register_files()
