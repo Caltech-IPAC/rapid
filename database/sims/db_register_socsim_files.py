@@ -163,9 +163,10 @@ def run_single_core_job(fits_files,index_thread):
         # Register L2 FITS file in database.
 
         header = get_fits_header(input_fits_file)
-        expid,fid = register_exposure(dbh,header)
 
         wcs = WCS(header)
+
+        expid,fid = register_exposure(dbh,header,wcs)
 
         rid,version,filename,checksum = register_l2file(dbh,header,wcs,input_fits_file,expid,fid)
 
@@ -331,7 +332,7 @@ def get_fits_header(file):
     return header
 
 
-def register_exposure(dbh,header):
+def register_exposure(dbh,header,wcs):
 
     key = "DATE-OBS"
     try:
