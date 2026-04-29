@@ -253,6 +253,156 @@ create function addL2File (
 $$ language plpgsql;
 
 
+-- Insert a new record into the L2Files table.
+-- Overloaded function with additional fifth-order SIP-distortion coefficients.
+--
+create function addL2File (
+    expid_                integer,
+    sca_                  smallint,
+    field_                integer,
+    hp6_                  integer,
+    hp9_                  integer,
+    fid_                  smallint,
+    dateobs_              timestamp without time zone,
+    mjdobs_               double precision,
+    exptime_              real,
+    infobits_             integer,
+    filename_             character varying(255),
+    checksum_             character varying(32),
+    status_               smallint,
+    crval1_               double precision,
+    crval2_               double precision,
+    crpix1_               real,
+    crpix2_               real,
+    cd11_                 double precision,
+    cd12_                 double precision,
+    cd21_                 double precision,
+    cd22_                 double precision,
+    ctype1_               character varying(16),
+    ctype2_               character varying(16),
+    cunit1_               character varying(16),
+    cunit2_               character varying(16),
+    a_order_              smallint,
+    a_0_1_                double precision,
+    a_0_2_                double precision,
+    a_0_3_                double precision,
+    a_0_4_                double precision,
+    a_0_5_                double precision,
+    a_1_0_                double precision,
+    a_1_1_                double precision,
+    a_1_2_                double precision,
+    a_1_3_                double precision,
+    a_1_4_                double precision,
+    a_2_0_                double precision,
+    a_2_1_                double precision,
+    a_2_2_                double precision,
+    a_2_3_                double precision,
+    a_3_0_                double precision,
+    a_3_1_                double precision,
+    a_3_2_                double precision,
+    a_4_0_                double precision,
+    a_4_1_                double precision,
+    a_5_0_                double precision,
+    b_order_              smallint,
+    b_0_1_                double precision,
+    b_0_2_                double precision,
+    b_0_3_                double precision,
+    b_0_4_                double precision,
+    b_0_5_                double precision,
+    b_1_0_                double precision,
+    b_1_1_                double precision,
+    b_1_2_                double precision,
+    b_1_3_                double precision,
+    b_1_4_                double precision,
+    b_2_0_                double precision,
+    b_2_1_                double precision,
+    b_2_2_                double precision,
+    b_2_3_                double precision,
+    b_3_0_                double precision,
+    b_3_1_                double precision,
+    b_3_2_                double precision,
+    b_4_0_                double precision,
+    b_4_1_                double precision,
+    b_5_0_                double precision,
+    equinox_              real,
+    ra_                   double precision,
+    dec_                  double precision,
+    paobsy_               real,
+    pafpa_                real,
+    zptmag_               real,
+    skymean_              real
+)
+    returns record as $$
+
+    declare
+
+        r_               record;
+        rid_              integer;
+        version_          smallint;
+        vbest_            smallint;
+
+    begin
+
+        -- Processed images are versioned according to unique (expid, sca) pairs.
+
+        -- Note that the vBest flag is updated when database stored
+        -- function updateL2File is executed.
+
+        select coalesce(max(version), 0) + 1
+        into version_
+        from L2Files
+        where expid = expid_
+        and sca = sca_;
+
+        if not found then
+            version_ := 1;
+        end if;
+
+        vbest_ := 0;
+
+        -- Insert L2Files record.
+
+        begin
+
+            insert into L2Files
+            (expid,sca,version,status,vbest,
+             field,hp6,hp9,fid,dateobs,mjdobs,exptime,infobits,
+             filename,checksum,crval1,crval2,
+             crpix1,crpix2,cd11,cd12,cd21,cd22,ctype1,ctype2,
+             cunit1,cunit2,a_order,a_0_1,a_0_2,a_0_3,a_0_4,a_0_5,a_1_0,a_1_1,a_1_2,
+             a_1_3,a_1_4,a_2_0,a_2_1,a_2_2,a_2_3,a_3_0,a_3_1,a_3_2,a_4_0,a_4_1,a_5_0,b_order,
+             b_0_1,b_0_2,b_0_3,b_0_4,b_0_5,b_1_0,b_1_1,b_1_2,b_1_3,b_1_4,b_2_0,b_2_1,
+             b_2_2,b_2_3,b_3_0,b_3_1,b_3_2,b_4_0,b_4_1,b_5_0,equinox,ra,dec,paobsy,pafpa,
+             zptmag,skymean
+            )
+            values
+            (expid_,sca_,version_,status_,vbest_,
+             field_,hp6_,hp9_,fid_,dateobs_,mjdobs_,exptime_,infobits_,
+             filename_,checksum_,crval1_,crval2_,
+             crpix1_,crpix2_,cd11_,cd12_,cd21_,cd22_,ctype1_,ctype2_,
+             cunit1_,cunit2_,a_order_,a_0_1_,a_0_2_,a_0_3_,a_0_4_,a_0_5_,a_1_0_,a_1_1_,a_1_2_,
+             a_1_3_,a_1_4_,a_2_0_,a_2_1_,a_2_2_,a_2_3_,a_3_0_,a_3_1_,a_3_2_,a_4_0_,a_4_1_,a_5_0_,b_order_,
+             b_0_1_,b_0_2_,b_0_3_,b_0_4_,b_0_5_,b_1_0_,b_1_1_,b_1_2_,b_1_3_,b_1_4_,b_2_0_,b_2_1_,
+             b_2_2_,b_2_3_,b_3_0_,b_3_1_,b_3_2_,b_4_0_,b_4_1_,b_5_0_,equinox_,ra_,dec_,paobsy_,pafpa_,
+             zptmag_,skymean_
+            )
+            returning rid into strict rid_;
+            exception
+                when no_data_found then
+                    raise exception
+                        '*** Error in addL2File: L2Files record for expid,sca=%,% not inserted.', expid_,sca_;
+
+        end;
+
+        select rid_, version_ into r_;
+
+        return r_;
+
+    end;
+
+$$ language plpgsql;
+
+
 -- Update a L2Files record with a filename, checksum, status, and version.
 -- The status must have a non-zero value for the record to be valid.
 -- The vBest flag for the record is also updated automatically, from
