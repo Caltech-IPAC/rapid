@@ -605,8 +605,9 @@ def register_l2file(dbh,header,wcs,file,expid,fid):
     key = "B_5_0"
     b_5_0 = get_keyword_value(header,key)
 
-    key = "EQUINOX"
-    equinox = get_keyword_value(header,key)
+    #key = "EQUINOX"
+    #equinox = get_keyword_value(header,key)
+    equinox = 2000
 
     #key = "PA_OBSY"
     #paobsy = get_keyword_value(header,key)
