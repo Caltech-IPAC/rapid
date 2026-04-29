@@ -17,6 +17,31 @@ import database.modules.utils.rapid_db as db
 import database.modules.utils.roman_tessellation_db as sqlite
 
 
+# Define code name and version.
+
+swname = "db_register_socsim_files.py"
+swvers = "1.0"
+
+print("swname =", swname)
+print("swvers =", swvers)
+
+
+# Compute start time for benchmark.
+
+start_time_benchmark = time.time()
+
+
+# Compute processing datetime (UT) and processing datetime (Pacific time).
+
+datetime_utc_now = datetime.utcnow()
+proc_utc_datetime = datetime_utc_now.strftime('%Y-%m-%dT%H:%M:%SZ')
+datetime_pt_now = datetime_utc_now.replace(tzinfo=timezone.utc).astimezone(tz=to_zone)
+proc_pt_datetime_started = datetime_pt_now.strftime('%Y-%m-%dT%H:%M:%S PT')
+
+print("proc_utc_datetime =",proc_utc_datetime)
+print("proc_pt_datetime_started =",proc_pt_datetime_started)
+
+
 bucket_name_input = "socsim-20260427-lite"
 subdir_work = "/work"
 
