@@ -7,6 +7,9 @@ import subprocess
 import healpy as hp
 from astropy.io import fits
 from astropy.wcs import WCS
+import time
+from concurrent.futures import ProcessPoolExecutor, as_completed
+to_zone = tz.gettz('America/Los_Angeles')
 
 import modules.utils.rapid_pipeline_subs as util
 import database.modules.utils.rapid_db as db
@@ -27,8 +30,178 @@ nside6 = 2**level6
 level9 = 9
 nside9 = 2**level9
 
+
+# Ensure sqlite database that defines the Roman sky tessellation is available.
+
+roman_tessellation_dbname = os.getenv('ROMANTESSELLATIONDBNAME')
+
+if roman_tessellation_dbname is None:
+
+    print("*** Error: Env. var. ROMANTESSELLATIONDBNAME not set; quitting...")
+    exit(64)
+
 roman_tessellation_db = sqlite.RomanTessellationNSIDE512()
 
+
+# Open database connections for parallel access.
+
+num_cores = os.getenv('NUM_CORES')
+
+if num_cores is None:
+    num_cores = os.cpu_count()
+else:
+    num_cores = int(num_cores)
+
+print("num_cores =",num_cores)
+
+dbh_list = []
+
+for i in range(num_cores):
+
+    dbh = db.RAPIDDB()
+
+    if dbh.exit_code >= 64:
+        exit(dbh.exit_code)
+
+    dbh_list.append(dbh)
+
+
+# Create S3-resource object.
+
+s3_resource = boto3.resource('s3')
+
+
+#-------------------------------------------------------------------------------------------------------------
+# Custom methods for parallel processing, taking advantage of multiple cores on the job-launcher machine.
+#-------------------------------------------------------------------------------------------------------------
+
+
+def run_single_core_job(fits_files,index_thread):
+
+
+    '''
+    Convert a single FITS file into a FITS file.
+    '''
+
+
+    # Compute thread start time for code-timing benchmark.
+
+    thread_start_time_benchmark = time.time()
+
+
+    # Set thread_debug = 0 here to severly limit the amount of information logged for runs
+    # that are anything but short tests.
+
+    thread_debug = 0
+
+    n_fits_files = len(fits_files)
+
+    print("index_thread,n_fits_files =",index_thread,n_fits_files)
+
+    thread_work_file = swname.replace(".py","_thread") + str(index_thread) + ".out"
+
+    try:
+        fh = open(thread_work_file, 'w', encoding="utf-8")
+    except:
+        print(f"*** Error: Could not open output file {thread_work_file}; quitting...")
+        exit(64)
+
+    dbh = dbh_list[index_thread]
+
+    fh.write(f"\nStart of run_single_core_job: index_thread={index_thread}\n")
+
+
+    # Loop over input FITS files.
+
+    for index_fits_file in range(n_fits_files):
+
+        index_core = index_fits_file % num_cores
+        if index_thread != index_core:
+            continue
+
+        input_fits_file = fits_files[index_fits_file]
+
+        fh.write(f"i,input_fits_file = {i},{input_fits_file}\n")
+
+
+        # Download file from input S3 bucket to local machine.
+
+        s3_object_input_fits_file = "s3://" + bucket_name_input + "/" + input_fits_file
+        download_cmd = ['aws','s3','cp',s3_object_input_fits_file,input_fits_file]
+        exitcode_from_download_cmd = util.execute_command(download_cmd)
+
+        fh.write(f"exitcode_from_download_cmd = {exitcode_from_download_cmd}\n")
+
+
+        # Register L2 FITS file in database.
+
+        header = get_fits_header(input_fits_file)
+        expid,fid = register_exposure(dbh,header)
+
+        wcs = WCS(header)
+
+        rid,version,filename,checksum = register_l2file(dbh,header,wcs,input_fits_file,expid,fid)
+
+        finalize_l2file(dbh,rid,version,filename,checksum)     # Keep same filename and version for now.
+
+        compute_and_register_l2filemeta(dbh,header,wcs,rid,fid)
+
+
+        # Clean up work directory.
+
+        rm_cmd = ['rm','-f',subdir_work + "/" + input_fits_file]
+        exitcode_from_rm = util.execute_command(rm_cmd)
+
+
+        # Code-timing benchmark.
+
+        thread_end_time_benchmark = time.time()
+        diff_time_benchmark = thread_end_time_benchmark - thread_start_time_benchmark
+        fh.write(f"Elapsed time in seconds to register L2 FITS file in database = {diff_time_benchmark}\n")
+        thread_start_time_benchmark = thread_end_time_benchmark
+
+
+        # End of loop over fits_files.
+
+        fh.write(f"Loop end over fits_files: index_fits_file,input_fits_file = {index_fits_file},{input_fits_file}\n")
+
+
+    fh.write(f"\nEnd of run_single_core_job: index_thread={index_thread}\n")
+
+    fh.close()
+
+    message = f"Finish normally for index_thread = {index_thread}"
+
+    return message
+
+
+def execute_parallel_processes(fits_files_list,num_cores=None):
+
+    if num_cores is None:
+        num_cores = os.cpu_count()  # Use all available cores if not specified
+
+    print("num_cores =",num_cores)
+
+    with ProcessPoolExecutor(max_workers=num_cores) as executor:
+        # Submit all tasks to the executor and store the futures in a list
+        futures = [executor.submit(run_single_core_job,fits_files_list,thread_index) for thread_index in range(num_cores)]
+
+        # Iterate over completed futures and update progress
+        for i, future in enumerate(as_completed(futures)):
+            index = futures.index(future)  # Find the original index/order of the completed future
+            print(f"Completed: {i+1} processes, lastly for index={index}")
+
+    for future in futures:
+        index = futures.index(future)
+        try:
+            print(future.result())
+        except Exception as e:
+            print(f"*** Error in thread index {index} = {e}")
+
+
+#-------------------------------------------------------------------------------------------------------------
+# Methods for L2-file database registration.
+#-------------------------------------------------------------------------------------------------------------
 
 def execute_command(cmd,no_check=False):
 
@@ -157,35 +330,31 @@ def register_exposure(dbh,header):
     except:
         return
 
-    key = "CRVAL1"
-    try:
-        ra = header[key]
-    except:
-        return
-
-    key = "CRVAL2"
-    try:
-        dec = header[key]
-    except:
-        return
-
     infobits = 0
     status = 1
 
 
+    # Compute sky position of image center.
+
+    sky0 = compute_center_sky_position(header,wcs)
+
+    ra0 = sky0.ra.degree
+    dec0 = sky0.dec.degree
+
+
     # Compute level-6 healpix index (NESTED pixel ordering).
 
-    hp6 = hp.ang2pix(nside6,ra,dec,nest=True,lonlat=True)
+    hp6 = hp.ang2pix(nside6,ra0,dec-,nest=True,lonlat=True)
 
 
     # Compute level-9 healpix index (NESTED pixel ordering).
 
-    hp9 = hp.ang2pix(nside9,ra,dec,nest=True,lonlat=True)
+    hp9 = hp.ang2pix(nside9,ra0,dec-,nest=True,lonlat=True)
 
 
     # Compute field.
 
-    roman_tessellation_db.get_rtid(ra,dec)
+    roman_tessellation_db.get_rtid(ra0,dec0)
     field = roman_tessellation_db.rtid
 
 
@@ -205,14 +374,6 @@ def register_exposure(dbh,header):
        8 | W146
     (8 rows)
     """
-
-    if "087" in filter:
-        filter = "Z087"
-    elif "213" in filter:
-        filter = "K213"
-    else:
-        print(f"filter = {filter} not handled; quitting....")
-        exit(64)
 
 
     # Insert or update record in Exposures database table.
@@ -248,12 +409,6 @@ def register_l2file(dbh,header,wcs,file,expid,fid):
 
     key = "EXPTIME"
     exptime = get_keyword_value(header,key)
-
-    key = "CRVAL1"
-    ra = get_keyword_value(header,key)
-
-    key = "CRVAL2"
-    dec = get_keyword_value(header,key)
 
     key = "SCA_NUM"
     sca = get_keyword_value(header,key)
@@ -488,7 +643,7 @@ def register_l2file(dbh,header,wcs,file,expid,fid):
         a_2_0,a_2_1,a_2_2,a_2_3,a_3_0,a_3_1,a_3_2,a_4_0,a_4_1,a_5_0,
         b_order,b_0_1,b_0_2,b_0_3,b_0_4,b_0_5,b_1_0,b_1_1,b_1_2,b_1_3,b_1_4,
         b_2_0,b_2_1,b_2_2,b_2_3,b_3_0,b_3_1,b_3_2,b_4_0,b_4_1,b_5_0,
-        equinox,ra,dec,paobsy,pafpa,zptmag,skymean)
+        equinox,ra0,dec0,paobsy,pafpa,zptmag,skymean)
 
     rid = dbh.rid
     version = dbh.version
@@ -552,11 +707,16 @@ def compute_and_register_l2filemeta(dbh,header,wcs,rid,fid):
     dbh.register_l2filemeta(rid,ra0,dec0,ra1,dec1,ra2,dec2,ra3,dec3,ra4,dec4,x,y,z,hp6,hp9,fid,sca,mjdobs)
 
 
-def register_files():
+#-------------------------------------------------------------------------------------------------------------
+# Main program.
+#-------------------------------------------------------------------------------------------------------------
 
-    # Parse input files in input S3 bucket.
+if __name__ == '__main__':
 
-    s3_resource = boto3.resource('s3')
+
+    # Parse FITS files in input S3 bucket.
+
+    i = 0
 
     my_bucket_input = s3_resource.Bucket(bucket_name_input)
 
@@ -564,81 +724,43 @@ def register_files():
 
     for my_bucket_input_object in my_bucket_input.objects.all():
 
-        #print(my_bucket_input_object.key)
+        fname_input = str(my_bucket_input_object.key)
 
-        fname_input = my_bucket_input_object.key
+        print(f"fname_input = {fname_input}")
 
-        if fname_input:
+        input_fits_files.append(fname_input)
 
-            filename_match = re.match(r"(.+\.fits\.gz)",fname_input)
+        i += 1
 
-            try:
-                only_fname_input = filename_match.group(1)
-                print("-----1-----> only_fname_input =",only_fname_input)
+        #if i > 1:
+        #    break
 
-            except:
-                print("-----2-----> No match in",fname_input)
-                continue
-
-            input_fits_files.append(only_fname_input)
-
-    # Open database connection.
-
-    dbh = db.RAPIDDB()
+    print(f"Total number of socsims = {i}")
 
 
-    # Loop over files from S3 bucket with one copy command.
+    ###############################################################################################
+    # Execute database-registration tasks.  The execution is done for input FITS files in parallel,
+    # with the number of parallel threads equal to the number of cores on the job-launcher machine.
+    ###############################################################################################
 
-    nfiles = 0
-
-    for input_fits_file in input_fits_files:
-
-        print("input_fits_file =",input_fits_file)
-
-        # Download file from input S3 bucket to local machine.
-
-        s3_object_input_fits_file = "s3://" + bucket_name_input + "/" + input_fits_file
-        download_cmd = ['aws','s3','cp',s3_object_input_fits_file,input_fits_file]
-        exitcode_from_download_cmd = util.execute_command(download_cmd)
-
-        print(f"exitcode_from_download_cmd = {exitcode_from_download_cmd}")
+    if num_cores > 1:
+        execute_parallel_processes(input_fits_files,num_cores)
+    else:
+        thread_index = 0
+        run_single_core_job(input_fits_files,thread_index)
 
 
-        # Register metadata in database.
+    # Code-timing benchmark.
 
-        header = get_fits_header(input_fits_file)
-        expid,fid = register_exposure(dbh,header)
-
-        wcs = WCS(header)
-
-        rid,version,filename,checksum = register_l2file(dbh,header,wcs,input_fits_file,expid,fid)
-
-        finalize_l2file(dbh,rid,version,filename,checksum)     # Keep same filename and version for now.
-
-        compute_and_register_l2filemeta(dbh,header,wcs,rid,fid)
+    end_time_benchmark = time.time()
+    print("Elapsed time in seconds to register database records =",
+        end_time_benchmark - start_time_benchmark)
+    start_time_benchmark = end_time_benchmark
 
 
-        # Clean up work directory.
+    # Termination.
 
-        rm_cmd = ['rm','-f',subdir_work + "/" + input_fits_file]
-        exitcode_from_rm = util.execute_command(rm_cmd)
-
-        nfiles += 1
+    exit(0)
 
 
-    # Close database connection.
 
-    dbh.close()
-
-
-    return
-
-
-    print("nfiles =",nfiles)
-
-
-# Main program.
-
-if __name__ == '__main__':
-
-    register_files()
