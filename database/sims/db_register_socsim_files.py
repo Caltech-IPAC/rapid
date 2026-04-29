@@ -7,6 +7,7 @@ import subprocess
 import healpy as hp
 from astropy.io import fits
 from astropy.wcs import WCS
+from datetime import datetime, timezone
 from dateutil import tz
 import time
 from concurrent.futures import ProcessPoolExecutor, as_completed
