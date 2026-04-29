@@ -344,12 +344,12 @@ def register_exposure(dbh,header):
 
     # Compute level-6 healpix index (NESTED pixel ordering).
 
-    hp6 = hp.ang2pix(nside6,ra0,dec-,nest=True,lonlat=True)
+    hp6 = hp.ang2pix(nside6,ra0,dec0,nest=True,lonlat=True)
 
 
     # Compute level-9 healpix index (NESTED pixel ordering).
 
-    hp9 = hp.ang2pix(nside9,ra0,dec-,nest=True,lonlat=True)
+    hp9 = hp.ang2pix(nside9,ra0,dec0,nest=True,lonlat=True)
 
 
     # Compute field.
