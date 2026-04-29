@@ -4,7 +4,7 @@ Testing with SOC Simulated Data
 Overview
 ************************************
 
-The SOC has generated simulated L2 files for the GBTDS.  These are located here::
+The SOC has generated simulated L2 files for the GBTDS survey.  These are located here::
 
     s3://stpubdata/roman/nexus/soc_simulations/r00340/l2/
 
@@ -40,4 +40,4 @@ These files are used to test data analysis workflows, visualize the WFI field of
 The SOC sims have filenames like ``r0034001001001001001_0001_wfi01_f062_cal.asdf``.  Each file is for a given exposure and SCA.
 There are 88,038 of these files available, covering 4,891 exposures.  Assuming the exposure time is 66.4 seconds, which is
 the predominant exposure time in the GBTDS observation-planning files, this dataset represents
-approximately 3.75 days of cumulative exposure.
+approximately 3.75 days of cumulative exposure, and approximately 34% of the entire GBTDS survey.
