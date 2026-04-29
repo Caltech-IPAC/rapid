@@ -91,20 +91,23 @@ def bkg_mask(image, use_segm=True, run_sextractor=True, segm_image=None, bsmask=
         if bsmask_cat is not None:
             bscat = ascii.read(bsmask_cat)
 
+            xcol = 'XWIN_IMAGE' if 'XWIN_IMAGE' in bscat.colnames else 'X_IMAGE'
+            ycol = 'YWIN_IMAGE' if 'YWIN_IMAGE' in bscat.colnames else 'Y_IMAGE'
+
             #first deal with saturated sources
             sat_sources = bscat[bscat['FLUX_MAX'] >= sat_value]
             for source in sat_sources:
                 #scale based on "size" of source measured by sextrator
                 source_mask_radius = satmask_radius1 + (satmask_radius2 - satmask_radius1)/(np.sqrt(npix_seg2) - 1) * (np.sqrt(source['ISOAREA_IMAGE']) - 1)
                 #mask all pixels within radius
-                pix_dist =  np.sqrt((X - source['XWIN_IMAGE'] - 1)**2 + (Y - source['YWIN_IMAGE'] - 1)**2)
+                pix_dist =  np.sqrt((X - source[xcol] - 1)**2 + (Y - source[ycol] - 1)**2)
                 sat_mask = pix_dist <= source_mask_radius
                 bkg_mask[sat_mask] = 1
 
             #now mask addtional bright sources below saturation
             bright_sources = bscat[(bscat['FLUX_MAX'] < sat_value) & (bscat['FLUX_MAX'] >= bsmask_value)]
             for source in bright_sources:
-                pix_dist = np.sqrt((X - source['XWIN_IMAGE'] - 1)**2 + (Y - source['YWIN_IMAGE'] - 1)**2)
+                pix_dist = np.sqrt((X - source[xcol] - 1)**2 + (Y - source[ycol] - 1)**2)
                 bs_mask = pix_dist <= bsmask_radius
                 bkg_mask[bs_mask] = 1
 
@@ -313,6 +316,7 @@ if __name__ == "__main__":
     parser.add_argument('--scicat', help='path to source catalog for science image for bright source masking', default=None)
     parser.add_argument('--refcat', help='path to source catalog for reference image for bright source masking', default=None)
     parser.add_argument('--refcovmap', help='reference coverage map for masking output', default=None)
+    parser.add_argument('--skipcovmask', help='skip coverage masking of output diff images', action='store_true')
     parser.add_argument('--crossconv', help='use PSF cross-convolution', action='store_true')
     parser.add_argument('--scipsf', help='path to PSF image for science image. Required if cross-convolution is used.', default=None)
     parser.add_argument('--refpsf', help='path to PSF image for reference image. Required if cross-convolution is used.', default=None)
@@ -331,6 +335,7 @@ if __name__ == "__main__":
     scicat = args.scicat
     refcat = args.refcat
     refcovmap = args.refcovmap
+    skipcovmask = args.skipcovmask
     crossconv = args.crossconv
     scipsf = args.scipsf
     refpsf = args.refpsf
@@ -350,6 +355,8 @@ if __name__ == "__main__":
     elif len(satmask_radius) == 2:
         satmask_radius1 = satmask_radius[0]
         satmask_radius2 = satmask_radius[1]
+    else:
+        parser.error('--satmaskradius must be one or two comma-separated values, e.g. 30 or 30,45')
 
 
     #logic for masking background pixels with segmentation images
@@ -367,11 +374,12 @@ if __name__ == "__main__":
                            sat_value=sat_value, satmask_radius1=satmask_radius1, satmask_radius2=satmask_radius2, npix_seg2=npix_seg2,
                            bsmask_value=bsmask_value, bsmask_radius=bsmask_radius)
 
-    if (refcovmap is not None) and os.path.isfile(refcovmap):
-        covmask = fits.getdata(refcovmap) == 0
-    else:
-        #otherwise use 0 in ref image
-        covmask = fits.getdata(refim) == 0
+    if not skipcovmask:
+        if (refcovmap is not None) and os.path.isfile(refcovmap):
+            covmask = fits.getdata(refcovmap) == 0
+        else:
+            #fall back to masking zero-valued pixels in the reference image
+            covmask = fits.getdata(refim) == 0
 
     #read in the image data to make the masks and get the background noise estimates if needed
     scidata = fits.getdata(sciim)
@@ -388,10 +396,13 @@ if __name__ == "__main__":
 
     #sigma clipped background std. dev. for background pixels
     if crossconv:
-        if not np.any(bkgmask):
-            raise ValueError('No background pixels found in combined mask — cannot estimate background noise for decorrelation.')
-        scibkgsig = sigma_clipped_stats(scidata[bkgmask].flatten(), sigma=5.0)[2]
-        refbkgsig = sigma_clipped_stats(refdata[bkgmask].flatten(), sigma=5.0)[2]
+        bkg_fin_sci = bkgmask & np.isfinite(scidata)
+        bkg_fin_ref = bkgmask & np.isfinite(refdata)
+        if not np.any(bkg_fin_sci) or not np.any(bkg_fin_ref):
+            raise ValueError('No finite background pixels found in combined mask — cannot estimate background noise for decorrelation. '
+                             'Use segmentation images (--scisegm/--refsegm) to identify background pixels when crossconv is enabled.')
+        scibkgsig = sigma_clipped_stats(scidata[bkg_fin_sci].flatten(), sigma=5.0)[2]
+        refbkgsig = sigma_clipped_stats(refdata[bkg_fin_ref].flatten(), sigma=5.0)[2]
 
         #run sfft
         diff, dcdiff, soln, dcdiffpsf = run_sfft_rapid(sciim, refim, mask_image=bkgmaskim, crossconv=crossconv, scipsf=scipsf, refpsf=refpsf, \
@@ -400,11 +411,12 @@ if __name__ == "__main__":
                                             backend=backend, cudadevice=cudadevice, nCPUthreads=nCPUthreads, outlabel=outlabel)
 
         #mask 0 coverage pixels if dcdiff image
-        with fits.open(dcdiff) as hdu:
-            hdudata = hdu[0].data
-            hdudata[covmask] = np.nan
-            hdu[0].data = hdudata
-            hdu.writeto(dcdiff, overwrite=True)
+        if not skipcovmask:
+            with fits.open(dcdiff) as hdu:
+                hdudata = hdu[0].data
+                hdudata[covmask] = np.nan
+                hdu[0].data = hdudata
+                hdu.writeto(dcdiff, overwrite=True)
 
     else:
         diff, soln, diffpsf = run_sfft_rapid(sciim, refim, mask_image=bkgmaskim, scipsf=scipsf, \
@@ -413,9 +425,10 @@ if __name__ == "__main__":
                                     backend=backend, cudadevice=cudadevice, nCPUthreads=nCPUthreads, outlabel=outlabel)
 
     #mask 0 coverage pixels if diff image
-    with fits.open(diff) as hdu:
-        hdudata = hdu[0].data
-        hdudata[covmask] = np.nan
-        hdu[0].data = hdudata
-        hdu.writeto(diff, overwrite=True)
+    if not skipcovmask:
+        with fits.open(diff) as hdu:
+            hdudata = hdu[0].data
+            hdudata[covmask] = np.nan
+            hdu[0].data = hdudata
+            hdu.writeto(diff, overwrite=True)
 
