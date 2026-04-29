@@ -58,7 +58,7 @@ bucket_name_input = "stpubdata/roman/nexus/soc_simulations/r00340/l2"
 bucket_name_output = "socsim-20260427-lite"
 
 
-# Create S3-client object.
+# Create S3-client and S3-resource objects.
 
 s3_client = boto3.client('s3')
 s3_resource = boto3.resource('s3')
