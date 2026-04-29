@@ -814,7 +814,7 @@ if __name__ == '__main__':
     # Code-timing benchmark.
 
     end_time_benchmark = time.time()
-    print("Elapsed time in seconds to register database records =",
+    print("Elapsed time in seconds to convert ASDF files to FITS files =",
         end_time_benchmark - start_time_benchmark)
     start_time_benchmark = end_time_benchmark
 
