@@ -26,7 +26,7 @@ nCPUthreads = 8  #number of CPU threads to use for SFFT
 verbose = 0  #verbosity level for SFFT (0=quiet, 1=normal, 2=full)
 
 #sfft functions
-def bkg_mask(image, use_segm=True, run_sextractor=True, segm_image=None, bsmask=True, bsmask_cat=None, sat_value=1750.0, satmask_radius1=30.0, satmask_radius2=45.0, npix_seg2=4000.0,  bsmask_value=50.0, bsmask_radius=100.0):
+def bkg_mask(image, use_segm=True, run_sextractor=True, segm_image=None, bsmask=True, bsmask_cat=None, sat_value=1e6, satmask_radius1=30.0, satmask_radius2=45.0, npix_seg2=4000.0,  bsmask_value=1e6, bsmask_radius=100.0):
     """
     Create detection mask for sfft to mask background/noise pixels. By default this runs SExtractor using the wrapper within sfft to generate a segmentation image.
     To DO: could implement input Sextractor parameters.
@@ -39,7 +39,7 @@ def bkg_mask(image, use_segm=True, run_sextractor=True, segm_image=None, bsmask=
     segm_image (str) : Path to segmentation image file. Generated on-the-fly if run_sextractor is True.
     bsmask (bool) : If True, mask bright stars in the image.
     bsmask_cat (str) : Path to S-Extractor catalog for bright star masking. If None, mask bright stars based on pixel values (slow).
-    sat_value (float) : Saturation value above which sources are masked.
+    sat_value (float) : Saturation value above which sources are masked. Large default value effectively disables saturation masking if not explicitly set.
     sat_mask_radius1 (float) : Minumum radius around saturated sources to mask.
     sat_mask_radius2 (float) : Larger radius around severely saturated sources to mask.
     npix_seg2 (float) : Area in pixels in segmentation image corresponding to sat_maskradius2, used for scaling.
