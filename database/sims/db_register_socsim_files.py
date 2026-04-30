@@ -750,6 +750,8 @@ if __name__ == '__main__':
     my_bucket_input = s3_resource.Bucket(bucket_name_input)
 
     input_fits_files = []
+    sca_nums = []
+    root_names = []
 
     for my_bucket_input_object in my_bucket_input.objects.all():
 
@@ -757,14 +759,39 @@ if __name__ == '__main__':
 
         print(f"fname_input = {fname_input}")
 
+        fname_fields = fname_input.split("_")
+
+        print(f"fname_fields = {fname_fields}")
+
+        root_name = fname_fields[0] + fname_fields[1]
+        sca_num = fname_fields[2]
+
         input_fits_files.append(fname_input)
+        root_names.append(root_name)
+        sca_nums.append(sca_num)
 
         i += 1
 
-        #if i > 1:
+        #if i > 400:
         #    break
 
     print(f"Total number of socsims = {i}")
+
+
+    # Sort by SCA, observation in order to avoid possible database race condition
+    # of inserting identical Exposures records at the same time.
+    #
+    # lexsort uses (Secondary Sort Key, Primary Sort Key)
+
+    fname_indexes = np.lexsort((root_names, sca_nums))
+
+    j = 0
+    sorted_input_fits_files = []
+    for i in fname_indexes:
+        input_fits_file = input_fits_files[i]
+        print(f"j,i,input_fits_file = {j},{i},{input_fits_file}")
+        sorted_input_fits_files.append(input_fits_file)
+        j += 1
 
 
     ###############################################################################################
@@ -773,10 +800,10 @@ if __name__ == '__main__':
     ###############################################################################################
 
     if num_cores > 1:
-        execute_parallel_processes(input_fits_files,num_cores)
+        execute_parallel_processes(sorted_input_fits_files,num_cores)
     else:
         thread_index = 0
-        run_single_core_job(input_fits_files,thread_index)
+        run_single_core_job(sorted_input_fits_files,thread_index)
 
 
     # Code-timing benchmark.
