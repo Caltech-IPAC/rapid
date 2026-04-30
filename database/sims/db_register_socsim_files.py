@@ -23,6 +23,8 @@ import database.modules.utils.roman_tessellation_db as sqlite
 swname = "db_register_socsim_files.py"
 swvers = "1.0"
 
+debug = 1
+
 print("swname =", swname)
 print("swvers =", swvers)
 
@@ -743,6 +745,39 @@ def compute_and_register_l2filemeta(dbh,header,wcs,rid,fid):
 if __name__ == '__main__':
 
 
+    # Open database connection.
+
+    dbh = db.RAPIDDB()
+
+    if dbh.exit_code >= 64:
+        exit(dbh.exit_code)
+
+
+    # Query database for already-ingested FITS files.
+
+    already_ingested_fits_files = []
+
+    query = f"SELECT (regexp_match(filename, '.+/(.+)'))[1] from l2files where vbest>0;"
+
+    sql_queries = []
+    sql_queries.append(query)
+    records = dbh.execute_sql_queries(sql_queries,debug)
+
+    for record in records:
+        already_ingested_fits_file = record[0]
+        already_ingested_fits_files.append(already_ingested_fits_file)
+
+    n_ingested_fits_files = len(already_ingested_fits_files)
+    print(f"n_ingested_fits_files = {n_ingested_fits_files}")
+    first_ingested_fits_file = already_ingested_fits_files[0]
+    print(f"first_ingested_fits_file = {first_ingested_fits_file}")
+
+
+    # Close database connections.
+
+    dbh.close()
+
+
     # Parse FITS files in input S3 bucket.
 
     i = 0
@@ -756,6 +791,9 @@ if __name__ == '__main__':
     for my_bucket_input_object in my_bucket_input.objects.all():
 
         fname_input = str(my_bucket_input_object.key)
+
+        if fname_input in already_ingested_fits_files:
+            continue
 
         print(f"fname_input = {fname_input}")
 
@@ -775,7 +813,10 @@ if __name__ == '__main__':
         #if i > 400:
         #    break
 
-    print(f"Total number of socsims = {i}")
+    print(f"Total number of socsims to ingest into database = {i}")
+
+
+    exit(0)
 
 
     # Sort by SCA, observation in order to avoid possible database race condition
