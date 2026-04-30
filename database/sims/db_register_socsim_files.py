@@ -816,9 +816,6 @@ if __name__ == '__main__':
     print(f"Total number of socsims to ingest into database = {i}")
 
 
-    exit(0)
-
-
     # Sort by SCA, observation in order to avoid possible database race condition
     # of inserting identical Exposures records at the same time.
     #
