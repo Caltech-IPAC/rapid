@@ -3,6 +3,7 @@
 
 #2024-10-01 - Joseph Masiero, based on prototype by Manaswi Kondapally
 #2025-01-15 - Revised to hook better into RAPID pipeline
+#2026-04-29 - slight adjustement to s/c pos, vel, and time based on simulated headers
 
 
 import kete
@@ -57,14 +58,17 @@ def kona(input_files,mpc_local=None,median_jd=None,mpc_save=None,logger=None):
         in_tree=asdf.open(input_file)
         trees.append(in_tree)
         
-        image_time=kete.Time.from_mjd(in_tree["roman"]["meta"]["exposure"]["mid_time_mjd"])
-    
+        image_time=kete.Time.from_iso(in_tree["roman"]["meta"]["exposure"]["mid_time"]+'Z')  #trailing Z required to indicate UTC
+
+        #read in, convert from km to AU
         scx=in_tree["roman"]["meta"]["ephemeris"]["spatial_x"]/kete.constants.AU_KM
         scy=in_tree["roman"]["meta"]["ephemeris"]["spatial_y"]/kete.constants.AU_KM
         scz=in_tree["roman"]["meta"]["ephemeris"]["spatial_z"]/kete.constants.AU_KM
-        scvx=in_tree["roman"]["meta"]["ephemeris"]["velocity_x"]/kete.constants.AU_KM
-        scvy=in_tree["roman"]["meta"]["ephemeris"]["velocity_y"]/kete.constants.AU_KM
-        scvz=in_tree["roman"]["meta"]["ephemeris"]["velocity_z"]/kete.constants.AU_KM
+
+        #convert to from km/s to AU/day
+        scvx=in_tree["roman"]["meta"]["ephemeris"]["velocity_x"]/kete.constants.AU_KM*3600*24.
+        scvy=in_tree["roman"]["meta"]["ephemeris"]["velocity_y"]/kete.constants.AU_KM*3600*24.
+        scvz=in_tree["roman"]["meta"]["ephemeris"]["velocity_z"]/kete.constants.AU_KM*3600*24.
     
         headerframe=in_tree["roman"]["meta"]["ephemeris"]["ephemeris_reference_frame"]
         if headerframe=="Ecliptic":
