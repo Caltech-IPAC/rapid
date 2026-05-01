@@ -619,6 +619,12 @@ def asdf_to_fits(asdf_path, fits_path, *, shape=None, sip_degree=4,
     hdr["MJD-OBS"] = mjd
 
 
+    # Modify CRPIX1,2 to image center.
+
+    hdr["CRPIX1"] = 2044.5
+    hdr["CRPIX2"] = 2044.5
+
+
     # Remove CDELT1 and CDELT2 keywords.
 
     hdr.remove('CDELT1', remove_all=True)
@@ -743,6 +749,7 @@ def asdf_to_fits(asdf_path, fits_path, *, shape=None, sip_degree=4,
 
 if __name__ == '__main__':
 
+    do_not_overwrite = False
 
     # Parse FITS files in output S3 bucket.
 
@@ -778,11 +785,17 @@ if __name__ == '__main__':
 
             input_asdf_file = input_file_metadata[3]
 
-            #print(f"input_file = {input_file}")
+
+            # Special logic.
+            if "r0034001001001001001_" not in input_asdf_file:
+                continue
+
+
+            print(f"input_file = {input_file}")
 
             output_fits_file = input_asdf_file.replace(".asdf","_lite.fits.gz")
 
-            if output_fits_file in output_fits_files:
+            if do_not_overwrite and output_fits_file in output_fits_files:
 
                 print(f"{output_fits_file} exists in output S3 bucket; skipping...")
                 continue
