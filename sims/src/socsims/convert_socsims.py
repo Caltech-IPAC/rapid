@@ -761,7 +761,7 @@ if __name__ == '__main__':
 
         fname_output = str(my_bucket_output_object.key)
 
-        print(f"fname_output = {fname_output}")
+        #print(f"fname_output = {fname_output}")
 
         output_fits_files.append(fname_output)
 
