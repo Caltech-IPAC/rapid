@@ -791,7 +791,7 @@ if __name__ == '__main__':
                 continue
 
 
-            print(f"input_file = {input_file}")
+            print(f"input_asdf_file = {input_asdf_file}")
 
             output_fits_file = input_asdf_file.replace(".asdf","_lite.fits.gz")
 
