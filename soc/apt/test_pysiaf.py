@@ -17,15 +17,31 @@ print(f'WFI01 V3 Ref: {wfi01.V3Ref}')
 # Plot the Roman apertures on the telescope ("V") frame
 roman_apertures = [f'WFI{i + 1:02}_FULL' for i in range(18)]
 roman_apertures.append('CGI_CEN')
+roman_apertures.append('WFI_CEN')
 
 fig, ax = plt.subplots()
+
+xs = []
+ys = []
 
 for rap in roman_apertures:
 
     print("rap =",rap)
+    print("rsiaf[rap] =", rsiaf[rap])
+
+    x = rsiaf[rap].V2Ref
+    y = rsiaf[rap].V3Ref
+
+    print(f"x,y = {x},{y}")
+
+    xs.append(x)
+    ys.append(y)
 
     color = 'salmon' if 'WFI' in rap else 'cyan'
     rsiaf[rap].plot(color=color)
+
+# Plot centers.
+plt.scatter(xs,ys,c='green',marker='o')
 
 # Add guide lines for boresight (V2, V3) = (0, 0)
 ylim = ax.get_ylim()
