@@ -553,8 +553,8 @@ if __name__ == '__main__':
 
 
             # Special logic.
-            #if "r0034001001001001001_" not in input_asdf_file:
-            if "r0034001001001001001_0003_wfi06_f062_cal" not in input_asdf_file:
+            if "r0034001001001001001_" not in input_asdf_file:
+            #if "r0034001001001001001_0003_wfi06_f062_cal" not in input_asdf_file:
                 continue
 
 
