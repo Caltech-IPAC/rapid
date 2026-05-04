@@ -365,10 +365,11 @@ def asdf_to_fits(asdf_path, fits_path, sip_degree=5):
 
     # Add EXPTIME,DATE-OBS,DATE-END,MJD-OBS keywords.
 
-    exptime = exposure_metadata['exposure_time']
-    dateobs = exposure_metadata['start_time']
-    dateend = exposure_metadata['end_time']
+    exptime = dm.meta.exposure.exposure_time
+    dateobs = dm.meta.exposure.start_time
+    dateend = dm.meta.exposure.end_time
 
+    print(f"exptime = {exptime}")
     print(f"dateobs = {dateobs}")
 
     t_dateobs = type(dateobs)
@@ -409,7 +410,7 @@ def asdf_to_fits(asdf_path, fits_path, sip_degree=5):
 
     # Add SCA_NUM keyword.
 
-    detector = roman_tree['meta']['instrument']['detector']
+    detector = dm.meta.instrument.detector
     sca_num = int(detector.replace("WFI",""))
     hdr["SCA_NUM"] = sca_num
 
@@ -429,7 +430,7 @@ def asdf_to_fits(asdf_path, fits_path, sip_degree=5):
     #    8 | W146
     # (8 rows)
 
-    filter = roman_tree['meta']['instrument']['optical_element']
+    filter = dm.meta.instrument.optical_element
     if "213" in filter:
         translated_filter = filter.replace("F213","K213").strip()
     elif "184" in filter:
