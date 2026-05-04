@@ -305,12 +305,13 @@ def asdf_to_fits(asdf_path, fits_path, sip_degree=5):
     # ------------------------------------------------------------------ #
     sci_data = np.array(dm.data)          # shape (ny, nx) or (nints, ny, nx)
     image_data_64 = sci_data.astype(np.float64)
+    shape = sci_data.shape
 
     # ------------------------------------------------------------------ #
     # WCS                                                                  #
     # ------------------------------------------------------------------ #
     wcs_obj   = dm.meta.wcs              # gwcs.WCS instance
-    wcs_header = gwcs_to_fits_header(wcs_obj, sci_data.shape)
+    wcs_header = gwcs_to_fits_header(wcs_obj, shape)
 
 
     # Build FITS file.
