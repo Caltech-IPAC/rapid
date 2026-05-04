@@ -388,26 +388,6 @@ def asdf_to_fits(asdf_path, fits_path, sip_degree=5):
     hdr["MJD-OBS"] = mjd
 
 
-    # Modify CRPIX1,2 to image center.
-
-    hdr["CRPIX1"] = 2044.0
-    hdr["CRPIX2"] = 2044.0
-
-
-    # Remove CDELT1 and CDELT2 keywords.
-
-    hdr.remove('CDELT1', remove_all=True)
-    hdr.remove('CDELT2', remove_all=True)
-
-
-    # Rename PCi_j keywords to CDi_j keywords.
-
-    hdr.rename_keyword('PC1_1', 'CD1_1', force=False)
-    hdr.rename_keyword('PC1_2', 'CD1_2', force=False)
-    hdr.rename_keyword('PC2_1', 'CD2_1', force=False)
-    hdr.rename_keyword('PC2_2', 'CD2_2', force=False)
-
-
     # Add SCA_NUM keyword.
 
     detector = dm.meta.instrument.detector
