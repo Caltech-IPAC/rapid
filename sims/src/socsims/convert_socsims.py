@@ -304,6 +304,7 @@ def asdf_to_fits(asdf_path, fits_path, sip_degree=5):
     # Science array                                                        #
     # ------------------------------------------------------------------ #
     sci_data = np.array(dm.data)          # shape (ny, nx) or (nints, ny, nx)
+    image_data_64 = sci_data.astype(np.float64)
 
     # ------------------------------------------------------------------ #
     # WCS                                                                  #
