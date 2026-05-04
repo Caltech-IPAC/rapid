@@ -142,8 +142,8 @@ def run_single_core_job(asdf_files,index_thread):
         # Convert from ASDF format to FITS format, and add required FITS keywords.
         # Define pixel grid spacing for computing SIP distortion.
 
-        degree = 5
-        step = 16
+        degree = 4
+        step = 8
         shape = None                # Method will compute this if None.
 
         asdf_to_fits(
