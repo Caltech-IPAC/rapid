@@ -141,7 +141,7 @@ def run_single_core_job(asdf_files,index_thread):
         # Convert from ASDF format to FITS format, and add required FITS keywords.
         # Define pixel grid spacing for computing SIP distortion.
 
-        degree = 5
+        degree = 4
 
         fh.write(f"degree = {degree}\n")
 
@@ -267,7 +267,7 @@ def execute_command_in_shell(bash_command,fname_out=None):
     return returncode,code_to_execute_stdout
 
 
-def gwcs_to_fits_header(wcs_obj, shape):
+def gwcs_to_fits_header(wcs_obj, shape, degree):
 
     # Try the native SIP export first (gwcs >= 0.18)
     try:
@@ -278,12 +278,13 @@ def gwcs_to_fits_header(wcs_obj, shape):
         fits_wcs = wcs_obj.to_fits_sip(
             bounding_box=((0, shape[-1] - 1), (0, shape[-2] - 1)),
             max_pix_error=0.1,
-            degree=5
+            degree=degree
         )
         print("Executed to_fits_sip method...")
         type_fits_wcs = type(fits_wcs)
         print(f"type_fits_wcs = {type_fits_wcs}")
         print(f"fits_wcs = {fits_wcs}")
+        print(f"degree = {degree}")
 
         #return fits_wcs.to_header(relax=True)
         return fits_wcs
@@ -311,7 +312,7 @@ def asdf_to_fits(asdf_path, fits_path, sip_degree=5):
     # WCS                                                                  #
     # ------------------------------------------------------------------ #
     wcs_obj   = dm.meta.wcs              # gwcs.WCS instance
-    wcs_header = gwcs_to_fits_header(wcs_obj, shape)
+    wcs_header = gwcs_to_fits_header(wcs_obj, shape, sip_degree)
 
 
     # Build FITS file.
