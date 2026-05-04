@@ -13,10 +13,9 @@ import re
 import subprocess
 import numpy as np
 import asdf
+import roman_datamodels as rdm
 from astropy.io import fits
-from astropy.wcs import WCS, Sip
-from astropy.coordinates import SkyCoord
-import astropy.units as u
+from astropy.wcs import WCS
 from astropy.time import Time
 from datetime import datetime, timezone
 from dateutil import tz
@@ -142,17 +141,15 @@ def run_single_core_job(asdf_files,index_thread):
         # Convert from ASDF format to FITS format, and add required FITS keywords.
         # Define pixel grid spacing for computing SIP distortion.
 
-        degree = 4
-        step = 8
-        shape = None                # Method will compute this if None.
+        degree = 5
+
+        fh.write(f"degree = {degree}\n")
 
         asdf_to_fits(
             input_asdf_file,
             output_fits_file,
-            shape=shape,
-            sip_degree=degree,
-            grid_step=step,
-        )
+            sip_degree=degree
+            )
 
 
         # Gzip the output FITS file.
@@ -177,9 +174,6 @@ def run_single_core_job(asdf_files,index_thread):
         # Clean up work directory.
 
         rm_cmd = ['rm','-f',input_asdf_file]
-        exitcode_from_rm = util.execute_command(rm_cmd)
-
-        rm_cmd = ['rm','-f',output_fits_file]
         exitcode_from_rm = util.execute_command(rm_cmd)
 
         rm_cmd = ['rm','-f',gzipped_output_fits_file]
@@ -273,284 +267,56 @@ def execute_command_in_shell(bash_command,fname_out=None):
     return returncode,code_to_execute_stdout
 
 
-def extract_gwcs(af):
-    """Extract a gwcs.WCS object from an open ASDF file."""
-    tree = af.tree
-    # Common locations for WCS in ASDF trees (JWST, Roman, etc.)
-    for key in ("roman.meta.wcs","roman.meta","wcs", "meta.wcs"):
-        parts = key.split(".")
-        node = tree
-        try:
-            for p in parts:
-                node = node[p]
-            if hasattr(node, "pixel_to_world"):
-                return node
-        except (KeyError, TypeError):
-            continue
-    # Walk top-level keys
-    for v in tree.values():
-        if hasattr(v, "pixel_to_world"):
-            return v
-    raise ValueError(
-        "No gwcs.WCS object found in ASDF tree. "
-        "Inspect af.tree manually to locate the WCS key."
-    )
+def gwcs_to_fits_header(wcs_obj, shape):
+
+    # Try the native SIP export first (gwcs >= 0.18)
+    try:
+        #fits_wcs, _ = wcs_obj.to_fits_sip(
+        #    bounding_box=((0, shape[-1] - 1), (0, shape[-2] - 1)),
+        #    max_pix_error=0.1,
+        #)
+        fits_wcs = wcs_obj.to_fits_sip(
+            bounding_box=((0, shape[-1] - 1), (0, shape[-2] - 1)),
+            max_pix_error=0.1,
+            degree=5
+        )
+        print("Executed to_fits_sip method...")
+        type_fits_wcs = type(fits_wcs)
+        print(f"type_fits_wcs = {type_fits_wcs}")
+        print(f"fits_wcs = {fits_wcs}")
+
+        #return fits_wcs.to_header(relax=True)
+        return fits_wcs
+
+    except (AttributeError, Exception) as e:
+        print("Could not execute to_fits_sip method...")
+        # Handle the exception and print its message
+        print("*** Exception thrown calling wcs_obj.to_fits_sip method:", e)
+        exit(64)
 
 
-def make_pixel_grid(shape, step=32):
-    """Return (x, y) pixel coordinate arrays on a regular grid."""
-    ny, nx = shape
-    y_pts = np.arange(0, ny, step, dtype=float)
-    x_pts = np.arange(0, nx, step, dtype=float)
-    xg, yg = np.meshgrid(x_pts, y_pts)
-    return xg.ravel(), yg.ravel()
+def asdf_to_fits(asdf_path, fits_path, sip_degree=5):
 
+    print(f"Reading {asdf_path}...")
+    dm = rdm.open(asdf_path)
 
-def fit_sip(gwcs_obj, shape, sip_degree=4, step=32):
-    """
-    Fit a FITS WCS + SIP polynomial to a gwcs.WCS object.
+    # ------------------------------------------------------------------ #
+    # Science array                                                        #
+    # ------------------------------------------------------------------ #
+    sci_data = np.array(dm.data)          # shape (ny, nx) or (nints, ny, nx)
 
-    Parameters
-    ----------
-    gwcs_obj : gwcs.WCS
-        The generalized WCS to approximate.
-    shape : (ny, nx) tuple
-        Image dimensions in pixels.
-    sip_degree : int
-        Polynomial order for SIP (2–5 is typical).
-    step : int
-        Pixel grid spacing used for fitting.
-
-    Returns
-    -------
-    astropy.wcs.WCS
-        A FITS WCS with SIP keywords populated.
-    """
-    px, py = make_pixel_grid(shape, step=step)
-
-    # Transform pixel -> sky using gwcs
-    sky = gwcs_obj.pixel_to_world(px, py)
-    if isinstance(sky, SkyCoord):
-        ra = sky.ra.deg
-        dec = sky.dec.deg
-    else:
-        # Some gwcs objects return (lon, lat) arrays directly
-        ra, dec = np.asarray(sky[0]), np.asarray(sky[1])
-
-    # Remove NaN/Inf points (outside valid domain)
-    mask = np.isfinite(ra) & np.isfinite(dec)
-    px, py, ra, dec = px[mask], py[mask], ra[mask], dec[mask]
-    if mask.sum() < 10:
-        raise RuntimeError("Too few valid sky coordinates to fit SIP.")
-
-    # --- Linear (CD-matrix) WCS fit ---
-    # Reference pixel: image centre
-    crpix1 = shape[1] / 2.0
-    crpix2 = shape[0] / 2.0
-
-    dpx = px - (crpix1 - 1)   # 0-indexed offset
-    dpy = py - (crpix2 - 1)
-
-    # Least-squares fit: [ra, dec] = crval + CD * [dpx, dpy]
-    A_lin = np.column_stack([np.ones(len(dpx)), dpx, dpy])
-    (crval1, cd1_1, cd1_2), _, _, _ = np.linalg.lstsq(A_lin, ra, rcond=None)
-    (crval2, cd2_1, cd2_2), _, _, _ = np.linalg.lstsq(A_lin, dec, rcond=None)
-
-    # Build a plain WCS to compute linear residuals
-    w = WCS(naxis=2)
-    w.wcs.crpix = [crpix1, crpix2]
-    w.wcs.crval = [crval1, crval2]
-    w.wcs.cd = np.array([[cd1_1, cd1_2], [cd2_1, cd2_2]])
-    w.wcs.ctype = ["RA---TAN-SIP", "DEC--TAN-SIP"]
-    w.wcs.set()
-
-    # --- SIP forward coefficients (pixel -> intermediate) ---
-    # Residuals in intermediate world coordinates (degrees)
-    xi_full, eta_full = w.all_world2pix(ra, dec, 0)  # back to pixel (undistorted)
-    # Actual pixel coords minus undistorted: the distortion
-    u_dist = px - xi_full   # residual in x
-    v_dist = py - eta_full  # residual in y
-
-    # Fit polynomial: distortion = sum_{p+q<=N} a_pq * dpx^p * dpy^q
-    def poly_design_matrix(dpx, dpy, degree):
-        cols = []
-        for p in range(degree + 1):
-            for q in range(degree + 1):
-                if 1 <= p + q <= degree:   # SIP excludes 0th order & linear handled by CD
-                    cols.append(dpx**p * dpy**q)
-        return np.column_stack(cols)
-
-    def poly_indices(degree):
-        idxs = []
-        for p in range(degree + 1):
-            for q in range(degree + 1):
-                if 1 <= p + q <= degree:
-                    idxs.append((p, q))
-        return idxs
-
-    # Re-centre on CRPIX for SIP convention (1-indexed)
-    dpx1 = px - (crpix1 - 1)
-    dpy1 = py - (crpix2 - 1)
-
-    P = poly_design_matrix(dpx1, dpy1, sip_degree)
-    idxs = poly_indices(sip_degree)
-
-    coeffs_a, _, _, _ = np.linalg.lstsq(P, u_dist, rcond=None)
-    coeffs_b, _, _, _ = np.linalg.lstsq(P, v_dist, rcond=None)
-
-    # Build SIP coefficient arrays (shape [degree+1, degree+1])
-    a_arr = np.zeros((sip_degree + 1, sip_degree + 1))
-    b_arr = np.zeros((sip_degree + 1, sip_degree + 1))
-    for (p, q), ca, cb in zip(idxs, coeffs_a, coeffs_b):
-        a_arr[p, q] = ca
-        b_arr[p, q] = cb
-
-    # Inverse SIP (approximate via reverse fit)
-    # Apply forward SIP to get corrected pixel, then fit inverse
-    u_sip = dpx1 + (P @ coeffs_a)
-    v_sip = dpy1 + (P @ coeffs_b)
-
-    # Residuals for inverse: given corrected pixel, recover original
-    f_dist = dpx1 - u_sip
-    g_dist = dpy1 - v_sip
-
-    P_inv = poly_design_matrix(u_sip, v_sip, sip_degree)
-    coeffs_ap, _, _, _ = np.linalg.lstsq(P_inv, f_dist, rcond=None)
-    coeffs_bp, _, _, _ = np.linalg.lstsq(P_inv, g_dist, rcond=None)
-
-    ap_arr = np.zeros((sip_degree + 1, sip_degree + 1))
-    bp_arr = np.zeros((sip_degree + 1, sip_degree + 1))
-    for (p, q), ca, cb in zip(idxs, coeffs_ap, coeffs_bp):
-        ap_arr[p, q] = ca
-        bp_arr[p, q] = cb
-
-    # Attach SIP to the WCS object
-    w.sip = Sip(a_arr, b_arr, ap_arr, bp_arr, [crpix1, crpix2])
-    w.wcs.ctype = ["RA---TAN-SIP", "DEC--TAN-SIP"]
-    w.wcs.set()
-    return w
-
-
-def residual_stats(gwcs_obj, fits_wcs, shape, step=64):
-    """Report RMS residual (arcsec) between gwcs and the fitted SIP WCS."""
-    px, py = make_pixel_grid(shape, step=step)
-    sky = gwcs_obj.pixel_to_world(px, py)
-    if isinstance(sky, SkyCoord):
-        ra_true, dec_true = sky.ra.deg, sky.dec.deg
-    else:
-        ra_true, dec_true = np.asarray(sky[0]), np.asarray(sky[1])
-
-    mask = np.isfinite(ra_true) & np.isfinite(dec_true)
-    ra_fit, dec_fit = fits_wcs.all_pix2world(px[mask], py[mask], 0)
-
-    d_ra  = (ra_fit  - ra_true[mask])  * np.cos(np.radians(dec_true[mask])) * 3600
-    d_dec = (dec_fit - dec_true[mask]) * 3600
-    sep   = np.hypot(d_ra, d_dec)
-    return sep.mean(), sep.max()
-
-
-def asdf_to_fits(asdf_path, fits_path, *, shape=None, sip_degree=4,
-                 grid_step=32, image_data=None):
-    """
-    Read *asdf_path*, extract the WCS, fit SIP, and write *fits_path*.
-
-    Parameters
-    ----------
-    asdf_path : str
-        Input ASDF file.
-    fits_path : str
-        Output FITS file.
-    shape : (ny, nx) or None
-        Image shape. Inferred from ASDF data array if None.
-    sip_degree : int
-        SIP polynomial order (default 4).
-    grid_step : int
-        Pixel spacing for fitting grid (default 32).
-    image_data : ndarray or None
-        Optional image array to embed in the FITS file.
-    """
-    with asdf.open(asdf_path, lazy_load=False) as af:
-
-        af.info()
-
-        af_tree_keys = af.tree.keys()
-        for key in af_tree_keys:
-            value = af.tree[key]
-            print(f"=====>af_tree_key = {key}")
-            print(f"=====>af_tree_value = {value}")
-
-        #af_tree_wcs = af.tree['meta']
-        #print(f"af_tree_wcs = {af_tree_wcs}")
-
-        gwcs_obj = extract_gwcs(af)
-
-        # Determine image shape
-        if shape is None:
-
-
-            '''
-            # Try common ASDF tree locations
-            for key in ("roman.data", "data", "science", "SCI"):
-                arr = af.tree.get(key)
-                if arr is not None and hasattr(arr, "shape") and arr.ndim >= 2:
-                    shape = arr.shape[-2:]
-                    if image_data is None:
-                        image_data = np.asarray(arr)
-                    break
-            '''
-
-            roman_tree = af.tree['roman']
-
-            # get exposure start time from the metadata
-            start_time = roman_tree['meta']['exposure']['start_time']
-
-            print(f"=====>start_time = {start_time}")
-
-
-            # get exposure metadata
-            exposure_metadata = roman_tree['meta']['exposure']
-
-            print(f"exposure_metadata = {exposure_metadata}")
-
-
-            # load the data array
-            arr = roman_tree['data']
-            if image_data is None:
-                image_data = np.asarray(arr)
-                image_data_64 = image_data.astype(np.float64)
-
-            shape = arr.shape
-
-            print(f"=====>data_shape = {shape}")
-
-
-        if shape is None:
-            # Fall back to bounding box from gwcs
-            try:
-                bb = gwcs_obj.bounding_box
-                # bounding_box is ((x0,x1),(y0,y1)) for 2D
-                (x0, x1), (y0, y1) = bb
-                shape = (int(y1 - y0), int(x1 - x0))
-            except Exception:
-                raise ValueError(
-                    "Cannot determine image shape. "
-                    "Pass shape=(ny, nx) explicitly."
-                )
-
-        print(f"Image shape : {shape}")
-        print(f"SIP degree  : {sip_degree}")
-        print(f"Grid step   : {grid_step} px")
-
-        fits_wcs = fit_sip(gwcs_obj, shape,
-                           sip_degree=sip_degree, step=grid_step)
-
-        rms, mx = residual_stats(gwcs_obj, fits_wcs, shape)
-        print(f"Residuals   : RMS={rms*1000:.2f} mas  max={mx*1000:.2f} mas")
+    # ------------------------------------------------------------------ #
+    # WCS                                                                  #
+    # ------------------------------------------------------------------ #
+    wcs_obj   = dm.meta.wcs              # gwcs.WCS instance
+    wcs_header = gwcs_to_fits_header(wcs_obj, sci_data.shape)
 
 
     # Build FITS file.
 
-    hdr = fits_wcs.to_header(relax=True)   # relax=True writes SIP keywords
+    hdr = fits.Header()
+
+    hdr["EXTNAME"] = "SCI"
     hdr["NAXIS"]  = 2
     hdr["NAXIS1"] = shape[1]
     hdr["NAXIS2"] = shape[0]
@@ -621,8 +387,8 @@ def asdf_to_fits(asdf_path, fits_path, *, shape=None, sip_degree=4,
 
     # Modify CRPIX1,2 to image center.
 
-    hdr["CRPIX1"] = 2044.5
-    hdr["CRPIX2"] = 2044.5
+    hdr["CRPIX1"] = 2044.0
+    hdr["CRPIX2"] = 2044.0
 
 
     # Remove CDELT1 and CDELT2 keywords.
@@ -787,7 +553,8 @@ if __name__ == '__main__':
 
 
             # Special logic.
-            if "r0034001001001001001_" not in input_asdf_file:
+            #if "r0034001001001001001_" not in input_asdf_file:
+            if "r0034001001001001001_0003_wfi06_f062_cal" not in input_asdf_file:
                 continue
 
 
