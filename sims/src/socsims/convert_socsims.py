@@ -317,6 +317,7 @@ def asdf_to_fits(asdf_path, fits_path, sip_degree=5):
     # Build FITS file.
 
     hdr = fits.Header()
+    hdr.update(wcs_header)
 
     hdr["EXTNAME"] = "SCI"
     hdr["NAXIS"]  = 2
