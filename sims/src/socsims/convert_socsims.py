@@ -139,7 +139,7 @@ def run_single_core_job(asdf_files,index_thread):
 
 
         # Convert from ASDF format to FITS format, and add required FITS keywords.
-        # Define pixel grid spacing for computing SIP distortion.
+        # Define highest order for computing SIP distortion.
 
         degree = 4
 
@@ -308,8 +308,10 @@ def asdf_to_fits(asdf_path, fits_path, sip_degree=5):
 
     #sci_data = np.fliplr(untransformed_sci_data)        # Horizontally flip image-data array
     #hdu_ext_label = "SCI_HORIZ_FLIP"
+
     sci_data = np.transpose(untransformed_sci_data)     # Transpose image-data array
     hdu_ext_label = "SCI_TRANSPOSED"
+
     image_data_64 = sci_data.astype(np.float64)
     shape = sci_data.shape
 
