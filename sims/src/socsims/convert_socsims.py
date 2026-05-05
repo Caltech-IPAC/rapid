@@ -306,6 +306,7 @@ def asdf_to_fits(asdf_path, fits_path, sip_degree=5):
     # ------------------------------------------------------------------ #
     unflipped_sci_data = np.array(dm.data)          # shape (ny, nx) or (nints, ny, nx)
     sci_data = np.fliplr(unflipped_sci_data)        # Horizontally flip image-data array
+    hdu_ext_label = "SCI_HORIZ_FLIP"
     image_data_64 = sci_data.astype(np.float64)
     shape = sci_data.shape
 
@@ -321,7 +322,6 @@ def asdf_to_fits(asdf_path, fits_path, sip_degree=5):
     hdr = fits.Header()
     hdr.update(wcs_header)
 
-    hdr["EXTNAME"] = "SCI"
     hdr["NAXIS"]  = 2
     hdr["NAXIS1"] = shape[1]
     hdr["NAXIS2"] = shape[0]
@@ -486,9 +486,11 @@ def asdf_to_fits(asdf_path, fits_path, sip_degree=5):
 
     # Create primary and image HDUs, and then output FITS file.
 
-    new_hdu = fits.ImageHDU(header=hdr,data=np_data.astype(np.float32))
-
     primary_hdu = fits.PrimaryHDU(header=hdr)
+
+    hdr["EXTNAME"] = hdu_ext_label
+
+    new_hdu = fits.ImageHDU(header=hdr,data=np_data.astype(np.float32))
 
     hdul = fits.HDUList([primary_hdu, new_hdu])
     hdul.writeto(fits_path,overwrite=True,checksum=True)
