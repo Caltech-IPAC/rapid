@@ -304,9 +304,11 @@ def asdf_to_fits(asdf_path, fits_path, sip_degree=5):
     # ------------------------------------------------------------------ #
     # Science array                                                        #
     # ------------------------------------------------------------------ #
-    unflipped_sci_data = np.array(dm.data)          # shape (ny, nx) or (nints, ny, nx)
-    sci_data = np.fliplr(unflipped_sci_data)        # Horizontally flip image-data array
+    untransformed_sci_data = np.array(dm.data)          # shape (ny, nx) or (nints, ny, nx)
+    #sci_data = np.fliplr(untransformed_sci_data)        # Horizontally flip image-data array
     hdu_ext_label = "SCI_HORIZ_FLIP"
+    sci_data = np.fliplr(untransformed_sci_data)        # Transpose image-data array
+    hdu_ext_label = "SCI_TRANSPOSED"
     image_data_64 = sci_data.astype(np.float64)
     shape = sci_data.shape
 
