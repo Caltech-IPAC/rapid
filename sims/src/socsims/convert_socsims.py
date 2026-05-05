@@ -508,7 +508,7 @@ def asdf_to_fits(asdf_path, fits_path, sip_degree=5):
 
 if __name__ == '__main__':
 
-    do_not_overwrite = False
+    do_not_overwrite = True
 
     # Parse FITS files in output S3 bucket.
 
@@ -546,9 +546,9 @@ if __name__ == '__main__':
 
 
             # Special logic.
-            if "r0034001001001001001_" not in input_asdf_file:
+            #if "r0034001001001001001_" not in input_asdf_file:
             #if "r0034001001001001001_0003_wfi06_f062_cal" not in input_asdf_file:
-                continue
+            #    continue
 
 
             print(f"input_asdf_file = {input_asdf_file}")
