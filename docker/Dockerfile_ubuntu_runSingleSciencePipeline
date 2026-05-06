@@ -73,6 +73,7 @@ RUN python3.11 -m pip install --upgrade galsim
 RUN python3.11 -m pip install --upgrade romanisim
 RUN python3.11 -m pip install --upgrade scikit-image
 RUN python3.11 -m pip install --upgrade pysiaf
+RUN python3.11 -m pip install --upgrade roman_datamodels
 
 # Set up separate Python 3.11 venv under root directory for sfft.
 
