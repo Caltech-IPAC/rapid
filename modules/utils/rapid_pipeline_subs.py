@@ -2161,7 +2161,7 @@ def generateScienceImageCatalog(filename_sciimage_image,
 # Compute sky coordinates for given pixel coordinates.
 #####################################################################################
 
-def computeSkyCoordsFromPixelCoords(filename_sciimage_image,x_list,y_list):
+def computeSkyCoordsFromPixelCoords(filename_sciimage_image,x_list,y_list,hdu_index=0):
 
     print(f"filename_sciimage_image = {filename_sciimage_image}")
 
@@ -2169,8 +2169,8 @@ def computeSkyCoordsFromPixelCoords(filename_sciimage_image,x_list,y_list):
     # Get WCS of science-image FITS file.
 
     hdul = fits.open(filename_sciimage_image)
-    hdr = hdul[0].header
-    data = hdul[0].data
+    hdr = hdul[hdu_index].header
+    data = hdul[hdu_index].data
 
     w = WCS(hdr) # Initialize WCS object from FITS header
 
