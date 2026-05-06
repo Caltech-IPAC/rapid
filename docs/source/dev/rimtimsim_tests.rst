@@ -271,7 +271,7 @@ For this test, all of these items within the process took 305.6 seconds with 8 p
 .. note::
     This test failed to generate SFFT-difference-image PhotUtils catalogs because of NaNs
     in the output SFFT difference image and associated uncertainty image.  Code changes were
-    made to ameliorate this in the 4/22/2026 test.
+    made to ameliorate this in the 4/23/2026 test (documented below).
 
 
 4/23/2026
