@@ -601,13 +601,10 @@ if __name__ == '__main__':
 
 
         # Query L2FileMeta database table for RID,ra0,dec0,ra1,dec1,ra2,dec2,ra3,dec3,ra4,dec4,
-        # and distance from tile center (degrees) for all science images that
-        # overlap the sky tile associated with the input science image and its filter.
-        # Use radius_of_initial_cone_search = 0.18 degrees.
+        # and distance from tile center (degrees) for all best science images in the
+        # L2Files database table that overlap the sky tile associated with the input science image
+        # and its filter.  Use radius_of_initial_cone_search = 0.18 degrees.
         # Returned list is ordered by distance from tile center.
-        #
-        # NOTE: The returned list includes all versions, and regardless of status (the query of the
-        # L2FileMeta table does NOT join with the L2Files table, in order to optimize query speed).
         #
         # If environment variables STARTREFIMMJDOBS and ENDREFIMMJDOBS are set, these will be
         # will be included as qualifiers in the following database query.
