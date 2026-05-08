@@ -1397,6 +1397,13 @@ class RAPIDDB:
 
             start_mjdobs = start_refimage_mjdobs
             end_mjdobs = end_refimage_mjdobs
+
+            startdatetime = os.getenv('STARTDATETIME')
+
+            if startdatetime == "dynamic":
+                end_mjdobs = mjdobs
+
+
         else:
             start_mjdobs = 0.0
             end_mjdobs = mjdobs
@@ -3039,7 +3046,7 @@ class RAPIDDB:
 
 ########################################################################################################
 
-    def get_field_fid_nframes_records_for_mjdobs_range(self,start_refimage_mjdobs,end_refimage_mjdobs,min_refimage_nframes):
+    def get_field_fid_nframes_records_for_mjdobs_range(self,start_refimage_mjdobs,end_refimage_mjdobs,min_refimage_nframes,fid=None):
 
         '''
         Query database for all field/filter/nframes combinations in reference-image window with
@@ -3051,10 +3058,27 @@ class RAPIDDB:
 
         # Define query.
 
-        query =\
-            f"select field,fid,count(*) from l2files where mjdobs >= {start_refimage_mjdobs} " +\
-            f"and mjdobs < {end_refimage_mjdobs} group by field,fid having " +\
-            f"count(*) >= {min_refimage_nframes} order by field,fid;"
+        if fid is not None:
+
+            query =\
+                f"select field,fid,count(*) from l2files " +\
+                f"where mjdobs >= {start_refimage_mjdobs} " +\
+                f"and mjdobs < {end_refimage_mjdobs} " +\
+                f"group by field,fid " +\
+                f"having count(*) >= {min_refimage_nframes} " +\
+                f"order by field,fid;"
+
+        else:
+
+            query =\
+                f"select field,fid,count(*) from l2files " +\
+                f"where mjdobs >= {start_refimage_mjdobs} " +\
+                f"and mjdobs < {end_refimage_mjdobs} " +\
+                f"fid = {fid} " +\
+                f"group by field,fid " +\
+                f"having count(*) >= {min_refimage_nframes} " +\
+                f"order by field,fid;"
+
 
         print('query = {}'.format(query))
 
