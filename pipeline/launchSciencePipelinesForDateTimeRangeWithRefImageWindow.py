@@ -1,4 +1,5 @@
 import os
+import ast
 from datetime import datetime, timezone
 from dateutil import tz
 import time
@@ -32,8 +33,14 @@ print("proc_utc_datetime =",proc_utc_datetime)
 print("proc_pt_datetime_started =",proc_pt_datetime_started)
 
 
-# Inputs are observaton start and end datetimes of exposures to be processed.
+# Inputs are observation start and end datetimes of exposures to be processed.
 # E.g., startdatetime = "2028-09-08 00:18:00", enddatetime = "2028-09-11 00:00:00"
+#
+# If startdatetime is set to "dynamic", a database query will be used to determine
+# the startdatetime for each field and filter, assuming MINREFIMNFRAMES early in the
+# observation data set are reserved/skipped for reference-image generation.  In this
+# case, STARTREFIMMJDOBS and ENDREFIMMJDOBS should be set to cover the entire range
+# of observations.
 
 startdatetime = os.getenv('STARTDATETIME')
 
@@ -53,11 +60,11 @@ if enddatetime is None:
 # Additional inputs are observation start and end MJD of window for generating
 # reference images, and minimum number of frames in coadd stack.
 # When the flag to make reference images is set to True, then only one
-# representative raw image for the field and filter is processed
-# to initially make the needed reference image for the other raw images
+# representative L2 science image for the field and filter is processed
+# to initially make the needed reference image for the other L2 science images
 # with the same field and filter;  when it is set to False then
-# all other raw images, except for the representative raw images,
-# are processed.  The representative raw image is the first in
+# all other L2 science images, except for the representative L2 science images,
+# are processed.  The representative L2 science image is the first in
 # a time-ordered, SCA-ordered list for a given field and filter.
 
 start_refimage_mjdobs = os.getenv('STARTREFIMMJDOBS')
@@ -74,12 +81,31 @@ if end_refimage_mjdobs is None:
     print("*** Error: Env. var. ENDREFIMMJDOBS not set; quitting...")
     exit(64)
 
+
+# Assume min_refimage_nframes is either an integer or
+# an list of 8 integers for fids 1 through 8, inclusive.
+
 min_refimage_nframes = os.getenv('MINREFIMNFRAMES')
 
 if min_refimage_nframes is None:
 
     print("*** Error: Env. var. MINREFIMNFRAMES not set; quitting...")
     exit(64)
+
+first_char = min_refimage_nframes[0]
+last_char = min_refimage_nframes[-1]
+
+if first_char == "[" and last_char == "]":
+
+    min_refimage_nframes = ast.literal_eval(min_refimage_nframes)
+
+    if len(min_refimage_nframes) != 8:
+
+        print("*** Error: Env. var. MINREFIMNFRAMES list does not have 8 elements; quitting...")
+        exit(64)
+
+
+# Set flag to determine whether pipeline instances may generate reference images.
 
 make_refimages_flag_str = os.getenv('MAKEREFIMAGESFLAG')
 
@@ -90,12 +116,18 @@ if make_refimages_flag_str is None:
 
 make_refimages_flag = eval(make_refimages_flag_str)
 
+
+# If RUNFID is set, then process just the specified filter.
+
 run_fid = os.getenv('RUNFID')
 
 if run_fid is None:
     print("*** Message: Will process all filters; quitting...")
 else:
     print(f"*** Message: Will process only fid={run_fid}; quitting...")
+
+
+# Get optional DRYRUN.
 
 dry_run_str = os.getenv('DRYRUN')
 
@@ -121,6 +153,7 @@ print("dry_run =",dry_run)
 # Custom methods for parallel processing, taking advantage of multiple cores on the job-launcher machine.
 
 def run_script(rid):
+
 
     """
     Load unique value of rid into the environment variable RID.
@@ -184,30 +217,46 @@ if __name__ == '__main__':
     # Query database for all field/filter/nframes combinations in reference-image window with
     # minimum number of frames in coadd stack.
 
-    recs = dbh.get_field_fid_nframes_records_for_mjdobs_range(start_refimage_mjdobs,end_refimage_mjdobs,min_refimage_nframes)
+    print("Querying database for all field/filter/nframes combinations in the " +
+          "reference-image window with minimum number of frames in coadd stack.")
 
-    if dbh.exit_code >= 64:
-        print("*** Error from query for field/filter/nframes combinations {}; quitting ".format(swname))
-        exit(dbh.exit_code)
+    n_filters = 8
 
     num = 1
 
     field_list = []
     fid_list = []
 
-    for rec in recs:
+    for fid in range(1,n_filters + 1):
 
-        field = rec[0]
-        fid = rec[1]
-        nframes = rec[2]
+        recs = dbh.get_field_fid_nframes_records_for_mjdobs_range(start_refimage_mjdobs,end_refimage_mjdobs,min_refimage_nframes,fid)
 
-        field_list.append(field)
-        fid_list.append(fid)
+        if dbh.exit_code >= 64:
+            print("*** Error from query for field/filter/nframes combinations {}; quitting ".format(swname))
+            exit(dbh.exit_code)
 
-        print("num,field,fid,nframes =",field,fid,nframes)
+        for rec in recs:
+
+            field = rec[0]
+            fid = rec[1]
+            nframes = rec[2]
+
+            field_list.append(field)
+            fid_list.append(fid)
+
+            print("num,field,fid,nframes =",num,field,fid,nframes)
+
+            num += 1
 
 
     # Loop over field/filter combinations.
+    #
+    # Note: In order to run an instance of the RAPID pipeline that both
+    # 1. Generates a reference image; and
+    # 2. Processes a science image
+    # the database query for a given field and filter must return min_refimage_nframes plus one
+    # (includes frames reserved for reference-image generation, plus one frame for image-differencing).
+    # This is only checked explicitly if export STARTDATETIME="dynamic".
 
     rid_list = []
 
@@ -230,14 +279,33 @@ if __name__ == '__main__':
              print("*** Error from query for L2Files records {}; quitting ".format(swname))
              exit(dbh.exit_code)
 
+        n_records = len(recs)
 
-        # Aggregate pipeline instances to be run under AWS Batch.
+        if startdatetime == "dynamic":
+
+            if first_char == "[" and last_char == "]":
+                fid_index = fid - 1
+                min_required_frames = min_refimage_nframes[fid_index] + 1          # min_refimage_nframes is a list.
+            else:
+                min_required_frames = min_refimage_nframes + 1                     # min_refimage_nframes is an integer.
+
+            if n_records < min_required_frames:
+                continue
+            else:
+                # Skip L2 science images reserved for reference-image generation.
+                # min_required_frames includes frames reserved for reference-image generation, plus one frame for image-differencing.
+                for i in range(min_required_frames - 1):
+                    recs.pop(0)
+
+
+        # For the remaining records (which are not reserved for reference-image generation),
+        # aggregate pipeline instances to be run under AWS Batch.
         # When the flag to make reference images is set to True, then only one
-        # representative raw image for the field and filter is processed
-        # to initially make the needed reference image for the other raw images
+        # representative L2 science image for the field and filter is processed
+        # to initially make the needed reference image for the other L2 science images
         # with the same field and filter;  when it is set to False then
-        # all other raw images, except for the representative raw images,
-        # are processed.  The representative raw image is the first in
+        # all other L2 science images, except for the representative L2 science images,
+        # are processed.  The representative L2 science image is the first in
         # a time-ordered, SCA-ordered list for a given field and filter.
 
         if make_refimages_flag:
