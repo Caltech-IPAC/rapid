@@ -89,6 +89,10 @@ Date              Software modification
 4/22/2026         In the latest version of PhotUtils, output column name ``npixfit`` has been changed to ``n_pixels_fit``, and output column name ``npix`` has been changed to ``n_pixels``.
 4/23/2026         Modified to use ``filename_sfftdiffpsf`` for SFFT-difference-image PSF-fit catalog generation, instead of ``filename_refimage_psf`` as before.
 4/24/2026         Changed ``[SOURCE_MATCHING] match_radius`` to 0.00001528 degrees (half a Roman WFI pixel).  Reran cross-matching for the 4/23/2026 test.
+4/28/2026         Modified SFFT code to refactor bright star masking in ``bkg_mask`` to use binary_dilation.
+4/28/2026         Modified SFFT code to replace the slow per-pixel distance loop with ``scipy.ndimage.binary_dilation`` and a precomputed circular footprint.
+4/28/2026         Modified SFFT code so that when a SExtractor catalog is provided, a second pass after catalog masking to catch any remaining bright pixels above ``bsmask_value``.
+4/29/2026         Modified SFFT code to fix logic path issues, and set ``sat_value`` and ``bsmask_value`` defaults to 1e6 to disable masking unless explicitly set.
 ===============   ===============================================================================================================================================================================================================================
 
 
