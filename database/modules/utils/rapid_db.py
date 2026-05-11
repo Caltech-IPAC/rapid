@@ -3058,7 +3058,7 @@ class RAPIDDB:
 
         # Define query.
 
-        if fid is not None:
+        if fid is None:
 
             query =\
                 f"select field,fid,count(*) from l2files " +\
