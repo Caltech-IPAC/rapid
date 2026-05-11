@@ -3074,7 +3074,7 @@ class RAPIDDB:
                 f"select field,fid,count(*) from l2files " +\
                 f"where mjdobs >= {start_refimage_mjdobs} " +\
                 f"and mjdobs < {end_refimage_mjdobs} " +\
-                f"fid = {fid} " +\
+                f"and fid = {fid} " +\
                 f"group by field,fid " +\
                 f"having count(*) >= {min_refimage_nframes} " +\
                 f"order by field,fid;"
