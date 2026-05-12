@@ -9,19 +9,19 @@ the RAPID-product S3 bucket with the processing date as a prefix::
 
     aws s3 ls --recursive s3://rapid-product-files/<yyyymmdd>
 
-For example, this command covers all jobs under processing date ``20250428``::
+For example, this command covers all jobs under processing date ``20260325``::
 
-    aws s3 ls --recursive s3://rapid-product-files/20250428
+    aws s3 ls --recursive s3://rapid-product-files/20260325
 
-Here are the available products for just one job (``jid=999``) under that processing date::
+Here are the available products for just one job (``jid=90828``) under that processing date::
 
-    aws s3 ls --recursive s3://rapid-product-files/20250428/jid999
+    aws s3 ls --recursive s3://rapid-product-files/20260325/jid90828
 
 Note that there is one science image differenced per job.
 
 The associated product config output file is::
 
-    aws s3 ls  --recursive s3://rapid-product-files/20250428/product_config_jid999.ini
+    aws s3 ls  --recursive s3://rapid-product-files/20260325/product_config_jid90828.ini
 
 This is parsed for metadata to load into the RAPID operations database after the processing.
 
@@ -73,8 +73,8 @@ zogy_diffimage_masked.txt                                       SourceExtractor 
 zogy_diffimage_masked_psfcat.txt                                PhotUtils PSF-fit photometry catalog from ZOGY positive difference image (noniterative)
 zogy_diffimage_masked_psfcat_finder.txt                         PhotUtils PSF-fit star-finder catalog from ZOGY positive difference image (noniterative)
 zogy_diffimage_masked_psfcat_residual.fits                      PhotUtils residual image from ZOGY positive difference image (noniterative)
-job_config_jid999.done                                          Indicates metadata from science pipeline ingested into RAPID operations database
-postproc_job_config_jid999.done                                 Indicates metadata from post-processing pipeline ingested into RAPID operations database
+job_config_jid90828.done                                        Indicates metadata from science pipeline ingested into RAPID operations database
+postproc_job_config_jid90828.done                               Indicates metadata from post-processing pipeline ingested into RAPID operations database
 sfftdiffimage_masked.fits                                       SFFT positive difference image (when SFFT is not run with the ``--crossconv`` flag), with NaNs in zero-coverage pixels
 sfftdiffimage_dconv_masked.fits                                 SFFT decorrelated positive difference image (SFFT via ``--crossconv`` flag).  Akin to ZOGY positive difference image.
 sfftdiffimage_cconv_masked.fits                                 SFFT cross-convolved positive difference image (SFFT via ``--crossconv`` flag).  Akin to ZOGY SCORR image.
@@ -102,9 +102,13 @@ user must construct a URL, knowing the filename in advance, like the following::
 
     https://rapid-product-files.s3.us-west-2.amazonaws.com/20260325/jid90828/awaicgen_output_mosaic_cov_map.fits
 
-For a listing of the latest product files, download the following text file:
+For a listing of the latest product files from the ``Open Universe sims``, download the following text file:
 
 :download:`rapid-product-files_20260325.txt <rapid-product-files_20260325.txt>`
+
+For a listing of the latest product files from the ``rimtimsims``, download the following text file:
+
+:download:`rapid-product-files_20260511.txt <rapid-product-files_20260511.txt>`
 
 A simple Python script can be written to parse the listing and generate ``wget`` or ``curl`` download commands.
 
@@ -210,7 +214,7 @@ MAGZP             Zero point of reference image [mag]
 Here is an image-view of the above-mentioned reference image.  Note the areas of uneven coverage,
 including two blue patches representing NaNs (pixels storing not a number).
 
-.. image:: s3_rapid-product-files_20250404_jid999_awaicgen_output_mosaic_image.png
+.. image:: s3_rapid-product-files_20260325_jid90828_awaicgen_output_mosaic_image.png
 
 
 Analysis of Reference Images
