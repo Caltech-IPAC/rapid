@@ -412,3 +412,10 @@ A new Q3C index on the (meanra, meandec) columns is computed for all AstroObject
 and then these tables are set to logged, clustered, and analyzed.
 The AstroObjects_<fields> database tables are explicitly vacuumed at the end of this process.
 For this test, all of these items within the process took 337.0 seconds with 8 parallel processes.
+
+
+5/11/2026
+************************************
+
+Similar to the 4/23/2026 test, except the more recent improvements to the SFFT code give deeper PhotUtils detections.
+The products from this test should be used in lieu of those from the 4/23/2026 test.
