@@ -214,7 +214,7 @@ MAGZP             Zero point of reference image [mag]
 Here is an image-view of the above-mentioned reference image.  Note the areas of uneven coverage,
 including two blue patches representing NaNs (pixels storing not a number).
 
-.. image:: s3_rapid-product-files_20260325_jid90828_awaicgen_output_mosaic_image.png
+.. image:: s3_rapid-product-files_20250404_jid999_awaicgen_output_mosaic_image.png
 
 
 Analysis of Reference Images
