@@ -418,5 +418,20 @@ For this test, all of these items within the process took 337.0 seconds with 8 p
 ************************************
 
 Similar to the 4/23/2026 test, except the more recent improvements to the SFFT code give deeper PhotUtils detections.
-Other minor differences are that ``sca_readout_noise = 8.5`` and ``saturation_level = 2500000`` was used (instead of ``sca_readout_noise = 11.0`` and ``saturation_level = 1100000``), which were simply mistakes.
+Other minor differences are that ``sca_readout_noise = 8.5`` and ``saturation_level = 2500000`` was used
+(instead of ``sca_readout_noise = 11.0`` and ``saturation_level = 1100000``), which were simply mistakes.
 The products from this test should be used in lieu of those from the 4/23/2026 test.
+
+The recovered lightcurve of an injected fake source with a peak of approximately 18th magnitude
+for one example has improved with 6 deeper detections (because of the upgraded SFFT code). 
+The database query for this recovered lightcurve from SFFT-difference-image PhotUtils catalogs is:
+
+.. code-block::
+
+    select a.sid,mjdobs,pid,xfit,yfit,fluxfit,peak,field,
+    q3c_dist(ra, dec,cast(268.52236887996474 as double precision), cast(-29.256728163618668 as double precision)) * 3600.0 as dist
+    from sources a, merges_4682737 b where a.sid = b.sid and aid = 24673086 order by mjdobs;
+
+A plot of the recovered lightcurve is given as follows:
+
+.. image:: lightcurve_20260511.png
