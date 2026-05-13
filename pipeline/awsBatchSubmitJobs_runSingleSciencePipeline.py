@@ -933,74 +933,6 @@ if __name__ == '__main__':
     start_time_benchmark = end_time_benchmark
 
 
-    # Upload intermediate FITS files to product S3 bucket for diagnostic purposes.
-
-    product_s3_bucket = product_s3_bucket_base
-    s3_object_name_reformatted_science_image_filename = job_proc_date + "/jid" + str(jid) + "/" + reformatted_science_image_filename
-    s3_object_name_reformatted_science_uncert_image_filename = job_proc_date + "/jid" + str(jid) + "/" + reformatted_science_uncert_image_filename
-    s3_object_name_sci_fits_file_with_pv = job_proc_date + "/jid" + str(jid) + "/" + sci_fits_file_with_pv
-    s3_object_name_ref_fits_file_with_pv = job_proc_date + "/jid" + str(jid) + "/" + ref_fits_file_with_pv
-    s3_object_name_output_resampled_reference_image = job_proc_date + "/jid" + str(jid) + "/" + output_resampled_reference_image
-    s3_object_name_output_resampled_reference_cov_map = job_proc_date + "/jid" + str(jid) + "/" + output_resampled_reference_cov_map
-    s3_object_name_output_resampled_reference_uncert_image = job_proc_date + "/jid" + str(jid) + "/" + output_resampled_reference_uncert_image
-
-    filenames = [reformatted_science_image_filename,
-                 reformatted_science_uncert_image_filename,
-                 sci_fits_file_with_pv,
-                 output_resampled_reference_image,
-                 output_resampled_reference_cov_map,
-                 output_resampled_reference_uncert_image]
-
-    objectnames = [s3_object_name_reformatted_science_image_filename,
-                   s3_object_name_reformatted_science_uncert_image_filename,
-                   s3_object_name_sci_fits_file_with_pv,
-                   s3_object_name_output_resampled_reference_image,
-                   s3_object_name_output_resampled_reference_cov_map,
-                   s3_object_name_output_resampled_reference_uncert_image]
-
-    if pv_convert_flag_for_reference_image_data:
-        filenames.append(ref_fits_file_with_pv)
-        objectnames.append(s3_object_name_ref_fits_file_with_pv)
-
-    if upload_to_s3_bucket:
-
-        util.upload_files_to_s3_bucket(s3_client,product_s3_bucket,filenames,objectnames)
-
-
-        # Code-timing benchmark.
-
-        end_time_benchmark = time.time()
-        print("Elapsed time in seconds after uploading intermediate FITS files to product S3 bucket =",end_time_benchmark - start_time_benchmark)
-        start_time_benchmark = end_time_benchmark
-
-
-    # Compute image statistics for ZOGY.
-
-    n_sigma = 3.0
-    hdu_index = 0
-
-    stats_sci_img = util.fits_data_statistics_with_clipping(reformatted_science_image_filename,\
-                                                            n_sigma,\
-                                                            hdu_index,\
-                                                            saturation_level_sciimage)
-
-    avg_sci_img = stats_sci_img["clippedavg"]
-    std_sci_img = stats_sci_img["clippedstd"]
-    cnt_sci_img = stats_sci_img["nkept"]
-
-    stats_ref_img = util.fits_data_statistics_with_clipping(output_resampled_reference_image,\
-                                                            n_sigma,\
-                                                            hdu_index,\
-                                                            saturation_level_refimage)
-
-    avg_ref_img = stats_ref_img["clippedavg"]
-    std_ref_img = stats_ref_img["clippedstd"]
-    cnt_ref_img = stats_ref_img["nkept"]
-
-    print("avg_sci_img,std_sci_img,cnt_sci_img =",avg_sci_img,std_sci_img,cnt_sci_img)
-    print("avg_ref_img,std_ref_img,cnt_ref_img =",avg_ref_img,std_ref_img,cnt_ref_img)
-
-
     # Normalize the science PSF.  The reference-image PSF is already normalized.
 
     filename_sciimage_psf_normalized = filename_sciimage_psf.replace(".fits","_normalized.fits")
@@ -1078,10 +1010,13 @@ if __name__ == '__main__':
     scalefacref = 1. / scalefac
 
 
-    # Compute resampled gain-matched reference image.
+    # Compute resampled gain-matched reference image.  Do the same for the refimage uncertainty map.
 
     output_resampled_gainmatched_reference_image = output_resampled_reference_image.replace(".fits","_gainmatched.fits")
     util.scale_image_data(output_resampled_reference_image,scalefacref,output_resampled_gainmatched_reference_image)
+
+    output_resampled_gainmatched_reference_uncert_image = output_resampled_reference_uncert_image.replace(".fits","_gainmatched.fits")
+    util.scale_image_data(output_resampled_reference_uncert_image,scalefacref,output_resampled_gainmatched_reference_uncert_image)
 
 
     # Code-timing benchmark.
@@ -1099,10 +1034,37 @@ if __name__ == '__main__':
     nan_indices_refimage = util.replace_nans_with_value(output_resampled_gainmatched_reference_image,saturation_value_rate_sciimage)
 
 
+    # Compute image statistics for ZOGY.
+
+    n_sigma = 3.0
+    hdu_index = 0
+
+    stats_sci_img = util.fits_data_statistics_with_clipping(reformatted_science_image_filename,\
+                                                            n_sigma,\
+                                                            hdu_index,\
+                                                            saturation_level_sciimage)
+
+    avg_sci_img = stats_sci_img["clippedavg"]
+    std_sci_img = stats_sci_img["clippedstd"]
+    cnt_sci_img = stats_sci_img["nkept"]
+
+    stats_ref_img = util.fits_data_statistics_with_clipping(output_resampled_reference_image,\
+                                                            n_sigma,\
+                                                            hdu_index,\
+                                                            saturation_level_refimage)
+
+    avg_ref_img = stats_ref_img["clippedavg"]
+    std_ref_img = stats_ref_img["clippedstd"]
+    cnt_ref_img = stats_ref_img["nkept"]
+
+    print("avg_sci_img,std_sci_img,cnt_sci_img =",avg_sci_img,std_sci_img,cnt_sci_img)
+    print("avg_ref_img,std_ref_img,cnt_ref_img =",avg_ref_img,std_ref_img,cnt_ref_img)
+
+
     # Replace NaNs, if any, with relevant clipped standard deviation in ZOGY input uncertainty images.
 
     util.replace_nans_with_value(reformatted_science_uncert_image_filename,std_sci_img)
-    util.replace_nans_with_value(output_resampled_reference_uncert_image,std_ref_img)
+    util.replace_nans_with_value(output_resampled_gainmatched_reference_uncert_image,std_ref_img)
 
 
     # Apply subpixel orthogonal offsets to ZOGY input reference image.
@@ -1123,6 +1085,47 @@ if __name__ == '__main__':
     print("Elapsed time in seconds after replacing NaNs, applying image offsets, etc. =",
         end_time_benchmark - start_time_benchmark)
     start_time_benchmark = end_time_benchmark
+
+
+    # Upload intermediate FITS files to product S3 bucket for diagnostic purposes.
+
+    product_s3_bucket = product_s3_bucket_base
+    s3_object_name_reformatted_science_image_filename = job_proc_date + "/jid" + str(jid) + "/" + reformatted_science_image_filename
+    s3_object_name_reformatted_science_uncert_image_filename = job_proc_date + "/jid" + str(jid) + "/" + reformatted_science_uncert_image_filename
+    s3_object_name_sci_fits_file_with_pv = job_proc_date + "/jid" + str(jid) + "/" + sci_fits_file_with_pv
+    s3_object_name_ref_fits_file_with_pv = job_proc_date + "/jid" + str(jid) + "/" + ref_fits_file_with_pv
+    s3_object_name_output_resampled_reference_image = job_proc_date + "/jid" + str(jid) + "/" + output_resampled_reference_image
+    s3_object_name_output_resampled_reference_cov_map = job_proc_date + "/jid" + str(jid) + "/" + output_resampled_reference_cov_map
+    s3_object_name_output_resampled_reference_uncert_image = job_proc_date + "/jid" + str(jid) + "/" + output_resampled_reference_uncert_image
+
+    filenames = [reformatted_science_image_filename,
+                 reformatted_science_uncert_image_filename,
+                 sci_fits_file_with_pv,
+                 output_resampled_reference_image,
+                 output_resampled_reference_cov_map,
+                 output_resampled_reference_uncert_image]
+
+    objectnames = [s3_object_name_reformatted_science_image_filename,
+                   s3_object_name_reformatted_science_uncert_image_filename,
+                   s3_object_name_sci_fits_file_with_pv,
+                   s3_object_name_output_resampled_reference_image,
+                   s3_object_name_output_resampled_reference_cov_map,
+                   s3_object_name_output_resampled_reference_uncert_image]
+
+    if pv_convert_flag_for_reference_image_data:
+        filenames.append(ref_fits_file_with_pv)
+        objectnames.append(s3_object_name_ref_fits_file_with_pv)
+
+    if upload_to_s3_bucket:
+
+        util.upload_files_to_s3_bucket(s3_client,product_s3_bucket,filenames,objectnames)
+
+
+        # Code-timing benchmark.
+
+        end_time_benchmark = time.time()
+        print("Elapsed time in seconds after uploading intermediate FITS files to product S3 bucket =",end_time_benchmark - start_time_benchmark)
+        start_time_benchmark = end_time_benchmark
 
 
     #################################################################################################################
@@ -1160,7 +1163,7 @@ if __name__ == '__main__':
                 filename_sciimage_psf_normalized,
                 filename_refimage_psf,
                 reformatted_science_uncert_image_filename,
-                output_resampled_reference_uncert_image,
+                output_resampled_gainmatched_reference_uncert_image,
                 str(std_sci_img),
                 str(std_ref_img),
                 str(dxrmsfin),
@@ -1612,6 +1615,8 @@ if __name__ == '__main__':
     s3_object_name_bkg_subbed_science_image = job_proc_date + "/jid" + str(jid) + "/" + filename_bkg_subbed_science_image
     s3_object_name_output_resampled_gainmatched_reference_image = job_proc_date + "/jid" + str(jid) + "/" + \
                                                                   output_resampled_gainmatched_reference_image
+    s3_object_name_output_resampled_gainmatched_reference_uncert_image = job_proc_date + "/jid" + str(jid) + "/" + \
+                                                                  output_resampled_gainmatched_reference_uncert_image
     s3_object_name_output_psfcat_filename = job_proc_date + "/jid" + str(jid) + "/" + output_psfcat_filename
     s3_object_name_output_psfcat_finder_filename = job_proc_date + "/jid" + str(jid) + "/" + output_psfcat_finder_filename
     s3_object_name_output_psfcat_residual_filename = job_proc_date + "/jid" + str(jid) + "/" + output_psfcat_residual_filename
@@ -1636,6 +1641,7 @@ if __name__ == '__main__':
                  filename_scorrimage_masked,
                  filename_bkg_subbed_science_image,
                  output_resampled_gainmatched_reference_image,
+                 output_resampled_gainmatched_reference_uncert_image,
                  output_psfcat_filename,
                  output_psfcat_finder_filename,
                  output_psfcat_residual_filename,
@@ -1657,6 +1663,7 @@ if __name__ == '__main__':
                    s3_object_name_scorrimage,
                    s3_object_name_bkg_subbed_science_image,
                    s3_object_name_output_resampled_gainmatched_reference_image,
+                   s3_object_name_output_resampled_gainmatched_reference_uncert_image,
                    s3_object_name_output_psfcat_filename,
                    s3_object_name_output_psfcat_finder_filename,
                    s3_object_name_output_psfcat_residual_filename,
