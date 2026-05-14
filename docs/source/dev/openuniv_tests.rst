@@ -1230,13 +1230,6 @@ It took 33 minutes to delete all not-best records in sources_20250927_* database
 with 8 parallel processes.
 
 
-
-
-
-
-
-
-
 3/25/2026
 ************************************
 
@@ -1333,7 +1326,7 @@ SExtractor and PhotUtils catalogs were generated for all three difference-image 
 
 
 The following 2-D histogram shows job elapsed time versus job start time for parallel-processing
-of RAPID science pipelines under AWS Batch with up to 10,000 machined permitted in the job queue.
+of RAPID science pipelines under AWS Batch with up to 10,000 machines permitted in the job queue.
 The group of bins in the upper left corresponds to the 79 pipeline instances that generated all
 of the reference images needed for the test.
 Since fake-variable-source injection is now done in the reference-image
@@ -1451,4 +1444,135 @@ was executed several times during testing/debugging on the same input data, whic
 created many multiple redundant records.
 
 It took 28.50 minutes to delete all not-best records in sources_20260227_* database tables
+with 8 parallel processes.
+
+
+5/13/2026
+************************************
+
+Similar to the 3/25/2026 test, but with substantial pipeline improvements as listed in the table below.
+In this test, the PSF-fit catalogs loaded into the database are from SFFT difference images,
+instead of ZOGY difference images as in the 3/25/2026 test.
+
+===============   ===============================================================================================================================================================================================================================
+Date              Software modification
+===============   ===============================================================================================================================================================================================================================
+4/7/2026          Modified SFFT code to output a difference-image PSF
+4/9/2026          Changes to how the uncertainty images are calculated (for science image and refimage inputs).
+4/13/2026         Replaces hard-wired value 1750.0 with ``saturation_value_rate_sciimage`` for processing rimtimsims.
+4/16/2026         Modified crossMatchSources.py to only cross-match sources with ``flags = 0``.
+4/17/2026         Modified crossMatchSources.py to cross-match using AstroObjects ``(meanra,meandec)`` instead of ``(ra0,dec0)``.
+4/17/2026         Modified crossMatchSources.py to update AstroObjects ``(meanra,meandec)`` record for each lightcurve data point added.
+4/20/2026         Modified to cross-match all sources in one observation at a time for all SCAs in ascending time order.
+4/20/2026         Modified to load into RAPID operations database the SFFT-difference-image PhotUtils catalogs, instead of ZOGY.
+4/21/2026         Modified to replace NaNs, if any, in SFFT difference image with zeros.
+4/21/2026         Modified to replace NaNs, if any, in difference-image uncertainty images with ``std_dif_img``.
+4/21/2026         Increased ``[SCI_IMAGE] saturation_level`` from 100000 to 1100000 for rimtimsims.
+4/22/2026         Modified SFFT command for rimtimsims to use the brute-force masking options (``--bsmaskvalue 20000.0 --bsmaskradius 30.0``).
+4/22/2026         In the latest version of PhotUtils, output column name ``npixfit`` has been changed to ``n_pixels_fit``, and output column name ``npix`` has been changed to ``n_pixels``.
+4/23/2026         Modified to use ``filename_sfftdiffpsf`` for SFFT-difference-image PSF-fit catalog generation, instead of ``filename_refimage_psf`` as before.
+4/24/2026         Changed ``[SOURCE_MATCHING] match_radius`` to 0.00001528 degrees (half a Roman WFI pixel).  Reran cross-matching for the 4/23/2026 test.
+4/28/2026         Modified SFFT code to refactor bright star masking in ``bkg_mask`` to use binary_dilation.
+4/28/2026         Modified SFFT code to replace the slow per-pixel distance loop with ``scipy.ndimage.binary_dilation`` and a precomputed circular footprint.
+4/28/2026         Modified SFFT code so that when a SExtractor catalog is provided, a second pass after catalog masking to catch any remaining bright pixels above ``bsmask_value``.
+4/29/2026         Modified SFFT code to fix logic path issues, and set ``sat_value`` and ``bsmask_value`` defaults to 1e6 to disable masking unless explicitly set.
+5/12/2026         Modified to apply gain-matching to the reference-image uncertainty map (prior to this, gain-matching was only applied to the reference image).
+5/12/2026         Moved the block of code that uploads intermediate products to just before ZOGY execution (this facilitates running ZOGY offline from S3-bucket downloaded inputs).
+===============   ===============================================================================================================================================================================================================================
+
+
+Like the 3/25/2026 test, the injected variable fake sources have fixed sky positions, and
+the fake-source injection of variables has been
+extended to the input science images that are used to build the reference images.
+Thus, lightcurves can be generated from extractions of these fake sources over time.
+
+This test covers 6,875 science images.  All science images in this run had 100 fake sources (variables)
+injected per science image.  This is in addition to the fake sources that are already
+included in the OpenUniverse simulation set.
+
+New reference images were made (79 total).  More details about the reference images are given
+in the 3/25/2026 description above.
+
+ZOGY image-difference products were generated, as well as SFFT and naive difference-image products.
+Note that SFFT was run with the ``--crossconv`` flag, as was done for the 3/25/2026 test.
+The resulting SFFT deconvolved difference image, ``sfftdiffimage_dconv_masked.fits``, and the
+SFFT convolved difference image, ``sfftdiffimage_cconv_masked.fits``, are copied to the
+S3 product bucket, along with the other products.
+Naive image-differencing is simply science minus reference image, and the product is ``naive_diffimage_masked.fits``.
+SExtractor and PhotUtils catalogs were generated for all three difference-image methods employed.
+
+.. code-block::
+
+    export DBNAME=fakesourcesdb
+    export STARTDATETIME="2028-08-17 00:00:00"
+    export ENDDATETIME="2030-09-20 00:00:00"
+    export STARTREFIMMJDOBS=63400
+    export ENDREFIMMJDOBS=99999
+    export MINREFIMNFRAMES=6
+
+    python3.11 /code/pipeline/virtualPipelineOperator.py 20260513 >& virtualPipelineOperator_20260513.out &
+
+.. code-block::
+
+    fakesourcesdb=> select ppid,exitcode,count(*) from jobs where cast(launched as date) = '20260513' group by ppid, exitcode order by ppid, exitcode;
+     ppid | exitcode | count
+    ------+----------+-------
+       15 |        0 |  6875
+       17 |        0 |  6875
+    (2 rows)
+
+
+The VPO clocked 2.48 hours to run the product-file-generation pipeline test
+(not including loading Sources database tables and subsequent steps), in which
+difference-image products were generated for all 6,875 science images.
+Parallel processing, up to 10,000 machines with 1 machine per science image on AWS Batch
+facilitated the processing speed.  A detailed breakdown of the pipeline steps can be found
+above in the description of the 3/25/2026 test.
+
+Typically only 1-4 science images in an exposure were processed in the 5,538 exposures covered by this test.
+Here is a breakdown of the number of science images processed per filter in this test:
+
+.. code-block::
+
+    fakesourcesdb=> select fid,count(*) from diffimages where vbest>0 and status>0 and created >= '2026-03-25' group by fid;
+     fid | count
+    -----+-------
+       7 |   770
+       1 |   770
+       5 |  1142
+       4 |  1140
+       2 |  1142
+       6 |  1141
+       3 |   770
+    (7 rows)
+
+The PSF-fit catalogs made by the Python photutils package from the SFFT difference images,
+both positive and negative, were loaded into Sources child PostgreSQL database tables
+(unlike the 3/25/2026 test, in which the PSF-fit catalogs from the ZOGY difference images were loaded).
+The elapsed time to load all sources into the database was 17.9 minutes with 8 parallel processes.
+There were 14,239,446 Sources records loaded into the PostgreSQL database.
+
+Cross-matching the sources with astronomical objects (called AstroObjects),
+resulting in records loaded into the Merges_<field> and
+AstroObjects_<fields> database tables, for all 196 fields of the sources, was done.
+The elapsed time to cross-match all sources was 4.084 hours with 8 parallel processes.
+This includes cross-matching across field boundaries for sources near field edges.
+A match radius of 0.1 arcsec (a Roman WFI pixel) was used.
+There were 6,277,546 AstroObjects records and 39,396,561 Merges records loaded
+into the PostgreSQL database.  Of those merges (a.k.a. lightcurve data points), 9,945 merges
+resulted from cross-matching across field boundaries (i.e., the match radius can extend
+across a field boundary), which is an increase of 0.02524% in terms of number of merges.
+
+The lightcurve statistics stored in the AstroObjects_<fields> database tables are updated after the
+cross-matching.  This is done as a separate process.  Any AstroObjects_<fields> record with
+no associated sources in the Merges_<field> database table are deleted.
+A new Q3C index on the (meanra, meandec) columns is computed for all AstroObjects_<fields> database tables,
+and then these tables are set to logged, clustered, and analyzed.
+The AstroObjects_<fields> database tables are explicitly vacuumed at the end of this process.
+For this test, all of this took 20.99 minutes with 8 parallel processes.
+
+It took 1.26 hours to delete non-best Merges_<fields> records with 8 parallel processes,
+which also included vacuuming and analyzing all Merges_<fields> database tables.
+
+It took 32.87 minutes to delete all not-best records in sources_20260325_* database tables
 with 8 parallel processes.
