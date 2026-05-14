@@ -1452,7 +1452,8 @@ with 8 parallel processes.
 
 Similar to the 3/25/2026 test, but with substantial pipeline improvements as listed in the table below.
 In this test, the PSF-fit catalogs loaded into the database are from SFFT difference images,
-instead of ZOGY difference images as in the 3/25/2026 test.
+instead of ZOGY difference images as in the 3/25/2026 test.  Other noteworthy pipeline improvements are
+all the upgrades to ``crossMatchSources.py`` and the reduction of the match radius to 0.00001528 degrees (half a Roman WFI pixel).
 
 ===============   ===============================================================================================================================================================================================================================
 Date              Software modification
