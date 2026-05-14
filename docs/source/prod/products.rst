@@ -9,19 +9,19 @@ the RAPID-product S3 bucket with the processing date as a prefix::
 
     aws s3 ls --recursive s3://rapid-product-files/<yyyymmdd>
 
-For example, this command covers all jobs under processing date ``20260325``::
+For example, this command covers all jobs under processing date ``20260513``::
 
-    aws s3 ls --recursive s3://rapid-product-files/20260325
+    aws s3 ls --recursive s3://rapid-product-files/20260513
 
 Here are the available products for just one job (``jid=90828``) under that processing date::
 
-    aws s3 ls --recursive s3://rapid-product-files/20260325/jid90828
+    aws s3 ls --recursive s3://rapid-product-files/20260513/jid90828
 
 Note that there is one science image differenced per job.
 
 The associated product config output file is::
 
-    aws s3 ls  --recursive s3://rapid-product-files/20260325/product_config_jid90828.ini
+    aws s3 ls  --recursive s3://rapid-product-files/20260513/product_config_jid90828.ini
 
 This is parsed for metadata to load into the RAPID operations database after the processing.
 
@@ -100,11 +100,11 @@ Public Access
 To download a RAPID pipeline product, the
 user must construct a URL, knowing the filename in advance, like the following::
 
-    https://rapid-product-files.s3.us-west-2.amazonaws.com/20260325/jid90828/awaicgen_output_mosaic_cov_map.fits
+    https://rapid-product-files.s3.us-west-2.amazonaws.com/20260513/jid90828/awaicgen_output_mosaic_cov_map.fits
 
 For a listing of the latest product files from the ``Open Universe sims``, download the following text file:
 
-:download:`rapid-product-files_20260325.txt <rapid-product-files_20260325.txt>`
+:download:`rapid-product-files_20260513.txt <rapid-product-files_20260513.txt>`
 
 For a listing of the latest product files from the ``rimtimsims``, download the following text file:
 
@@ -115,7 +115,7 @@ A simple Python script can be written to parse the listing and generate ``wget``
 The pipeline log files are also publicly accessible.  There is a log file for each science image processed.
 Here is a template for the log-file URL that corresponds to the above example::
 
-    https://rapid-pipeline-logs.s3.us-west-2.amazonaws.com/20260325/rapid_pipeline_job_20260325_jid90828_log.txt
+    https://rapid-pipeline-logs.s3.us-west-2.amazonaws.com/20260513/rapid_pipeline_job_20260513_jid90828_log.txt
 
 
 Example Reference-Image FITS Header
