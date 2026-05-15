@@ -1477,7 +1477,7 @@ Date              Software modification
 4/28/2026         Modified SFFT code to replace the slow per-pixel distance loop with ``scipy.ndimage.binary_dilation`` and a precomputed circular footprint.
 4/28/2026         Modified SFFT code so that when a SExtractor catalog is provided, a second pass after catalog masking to catch any remaining bright pixels above ``bsmask_value``.
 4/29/2026         Modified SFFT code to fix logic path issues, and set ``sat_value`` and ``bsmask_value`` defaults to 1e6 to disable masking unless explicitly set.
-5/12/2026         Modified to apply gain-matching to the reference-image uncertainty map (prior to this, gain-matching was only applied to the reference image).
+5/12/2026         Modified to scale the reference-image uncertainty map by the gain-matching scale factor (prior to this, gain-matching was only applied to the reference image).
 5/12/2026         Moved the block of code that uploads intermediate products to just before ZOGY execution (this facilitates running ZOGY offline from S3-bucket downloaded inputs).
 ===============   ===============================================================================================================================================================================================================================
 
