@@ -435,3 +435,21 @@ The database query for this recovered lightcurve from SFFT-difference-image Phot
 A plot of the recovered lightcurve is given as follows:
 
 .. image:: lightcurve_20260511.png
+
+
+5/14/2026
+************************************
+
+Similar to the 5/11/2026 test, except the aforementioned mistakes have been fixed, and two recent
+pipeline improvements have been included:
+
+===============   ===============================================================================================================================================================================================================================
+Date              Software modification
+===============   ===============================================================================================================================================================================================================================
+5/12/2026         Modified to apply gain-matching to the reference-image uncertainty map (prior to this, gain-matching was only applied to the reference image).
+5/12/2026         Moved the block of code that uploads intermediate products to just before ZOGY execution (this facilitates running ZOGY offline from S3-bucket downloaded inputs).
+===============   ===============================================================================================================================================================================================================================
+
+Applying gain-matching to the reference-image uncertainty map should improve the ZOGY difference images.
+The products from this test should be used in lieu of those from the 5/11/2026 test.
+
