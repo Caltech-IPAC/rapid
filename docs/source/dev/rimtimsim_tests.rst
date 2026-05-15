@@ -399,7 +399,7 @@ AstroObjects_<fields> database tables, for all 7 fields of the sources
 The elapsed time to cross-match all sources was 8604.1 seconds with 8 parallel processes.
 This includes cross-matching across field boundaries for sources near field edges.
 The cross-matching was done with ``match_radius = 0.00001528`` degrees (half a Roman WFI pixel),
-unlike the the 4/10/2026 test in which a match radius of 0.1 arcsec (approximately a Roman WFI pixel) was used.
+unlike the 4/10/2026 test in which a match radius of 0.1 arcsec (approximately a Roman WFI pixel) was used.
 There were 826,503 AstroObjects records and 11,779,174 Merges records loaded
 into the PostgreSQL database.  Of those merges (a.k.a. lightcurve data points), 3153 merges
 resulted from cross-matching across field boundaries (i.e., the match radius can extend
@@ -453,3 +453,36 @@ Date              Software modification
 Applying the gain-matching scale factor to the reference-image uncertainty map improved the ZOGY difference images.
 The products from this test should be used in lieu of those from the 5/11/2026 test.
 
+The PSF-fit catalogs made by the Python photutils package from the SFFT difference images
+(as opposed to ZOGY difference images for the 4/10/2026 test),
+both positive and negative, were loaded into a Sources child PostgreSQL database table
+(i.e., ``tablename = sources_20260410_2`` since there is only one SCA in the new rimtimsims).
+There were 6,067,135 Sources records loaded into the PostgreSQL database.
+This number is 38% lower than the 4/23/2026 test because the upgrades to the SFFT code reduced the number of false positives.
+The elapsed time to load all sources into the database was 291 seconds with 8 parallel processes.
+
+Cross-matching the sources with astronomical objects (called AstroObjects),
+resulting in records loaded into the Merges_<field> and
+AstroObjects_<fields> database tables, for all 7 fields of the sources
+(i.e., fields overlapped by the rimtimsims), was done.
+The elapsed time to cross-match all sources was 2.12 hours with 8 parallel processes.
+This includes cross-matching across field boundaries for sources near field edges.
+The cross-matching was done with ``match_radius = 0.00001528`` degrees (half a Roman WFI pixel).
+There were 2,017,329 AstroObjects records and 8,774,607 Merges records loaded
+into the PostgreSQL database.  Of those merges (a.k.a. lightcurve data points), 2083 merges
+resulted from cross-matching across field boundaries (i.e., the match radius can extend
+across a field boundary), which is an increase of 0.0237% in terms of number of merges.
+
+The lightcurve statistics stored in the AstroObjects_<fields> database tables are updated
+after the cross-matching.  This is done as a separate process from the cross-matching.
+Any AstroObjects_<fields> record with no associated sources in the Merges_<field> database table are deleted.
+A new Q3C index on the (meanra, meandec) columns is computed for all AstroObjects_<fields> database tables,
+and then these tables are set to logged, clustered, and analyzed.
+The AstroObjects_<fields> database tables are explicitly vacuumed at the end of this process.
+For this test, all of these items within the process took 1040 seconds with 8 parallel processes.
+
+It took 41.7 minutes to delete non-best Merges_<fields> records with 8 parallel processes,
+which also included vacuuming and analyzing all Merges_<fields> database tables.
+
+It took 133.7 minutes to delete all not-best records in sources_20260325_* database tables
+with 8 parallel processes.
