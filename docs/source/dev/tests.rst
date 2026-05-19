@@ -95,6 +95,7 @@ Date              Software modification
 4/29/2026         Modified SFFT code to fix logic path issues, and set ``sat_value`` and ``bsmask_value`` defaults to 1e6 to disable masking unless explicitly set.
 5/12/2026         Modified to scale the reference-image uncertainty map by the gain-matching scale factor (prior to this, gain-matching was only applied to the reference image).
 5/12/2026         Moved the block of code that uploads intermediate products to just before ZOGY execution (this facilitates running ZOGY offline from S3-bucket downloaded inputs).
+5/19/2026         Modified to feed ZOGY scaled std_ref_img by scalefacref.
 ===============   ===============================================================================================================================================================================================================================
 
 
