@@ -1165,7 +1165,7 @@ if __name__ == '__main__':
                 reformatted_science_uncert_image_filename,
                 output_resampled_gainmatched_reference_uncert_image,
                 str(std_sci_img),
-                str(std_ref_img),
+                str(std_ref_img * scalefacref),
                 str(dxrmsfin),
                 str(dyrmsfin),
                 filename_diffimage,
