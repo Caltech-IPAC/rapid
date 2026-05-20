@@ -1577,3 +1577,16 @@ which also included vacuuming and analyzing all Merges_<fields> database tables.
 
 It took 32.87 minutes to delete all not-best records in sources_20260325_* database tables
 with 8 parallel processes.
+
+
+5/20/2026
+************************************
+
+Similar to the 5/13/2026 test, except the following
+pipeline improvement has been included, which will improve the ZOGY difference images and its downstream products:
+
+===============   ===============================================================================================================================================================================================================================
+Date              Software modification
+===============   ===============================================================================================================================================================================================================================
+5/19/2026         Modified to feed ZOGY scaled std_ref_img by scalefacref (gain-matching correction).
+===============   ===============================================================================================================================================================================================================================
