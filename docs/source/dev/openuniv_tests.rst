@@ -1558,7 +1558,7 @@ resulting in records loaded into the Merges_<field> and
 AstroObjects_<fields> database tables, for all 196 fields of the sources, was done.
 The elapsed time to cross-match all sources was 4.084 hours with 8 parallel processes.
 This includes cross-matching across field boundaries for sources near field edges.
-A match radius of 0.1 arcsec (a Roman WFI pixel) was used.
+A match radius of 0.055 arcseconds was used (half a Roman WFI pixel).
 There were 6,277,546 AstroObjects records and 39,396,561 Merges records loaded
 into the PostgreSQL database.  Of those merges (a.k.a. lightcurve data points), 9,945 merges
 resulted from cross-matching across field boundaries (i.e., the match radius can extend
@@ -1590,3 +1590,97 @@ Date              Software modification
 ===============   ===============================================================================================================================================================================================================================
 5/19/2026         Modified to feed ZOGY scaled std_ref_img by scalefacref (gain-matching correction).
 ===============   ===============================================================================================================================================================================================================================
+
+Like the 5/13/2026 test, the injected variable fake sources have fixed sky positions, and
+the fake-source injection of variables has been
+extended to the input science images that are used to build the reference images.
+Thus, lightcurves can be generated from extractions of these fake sources over time.
+
+This test covers 6,875 science images.  All science images in this run had 100 fake sources (variables)
+injected per science image.  This is in addition to the fake sources that are already
+included in the OpenUniverse simulation set.
+
+New reference images were made (79 total).  More details about the reference images are given
+in the 3/25/2026 description above.
+
+ZOGY image-difference products were generated, as well as SFFT and naive difference-image products.
+Note that SFFT was run with the ``--crossconv`` flag, as was done for the 5/13/2026 test.
+The resulting SFFT deconvolved difference image, ``sfftdiffimage_dconv_masked.fits``, and the
+SFFT convolved difference image, ``sfftdiffimage_cconv_masked.fits``, are copied to the
+S3 product bucket, along with the other products.
+Naive image-differencing is simply science minus reference image, and the product is ``naive_diffimage_masked.fits``.
+SExtractor and PhotUtils catalogs were generated for all three difference-image methods employed.
+
+.. code-block::
+
+    export DBNAME=fakesourcesdb
+    export STARTDATETIME="2028-08-17 00:00:00"
+    export ENDDATETIME="2030-09-20 00:00:00"
+    export STARTREFIMMJDOBS=63400
+    export ENDREFIMMJDOBS=99999
+    export MINREFIMNFRAMES=6
+
+    python3.11 /code/pipeline/virtualPipelineOperator.py 20260513 >& virtualPipelineOperator_20260513.out &
+
+.. code-block::
+
+    fakesourcesdb=> select ppid,exitcode,count(*) from jobs where cast(launched as date) = '20260520' group by ppid, exitcode order by ppid, exitcode;
+     ppid | exitcode | count
+    ------+----------+-------
+       15 |        0 |  6875
+       17 |        0 |  6875
+    (2 rows)
+
+
+The VPO clocked 2.47 hours to run the product-file-generation pipeline test
+(not including loading Sources database tables and subsequent steps), in which
+difference-image products were generated for all 6,875 science images.
+Parallel processing, up to 10,000 machines with 1 machine per science image on AWS Batch
+facilitated the processing speed.  A detailed breakdown of the pipeline steps can be found
+above in the description of the 3/25/2026 test.
+
+Typically only 1-4 science images in an exposure were processed in the 5,538 exposures covered by this test.
+Here is a breakdown of the number of science images processed per filter in this test:
+
+.. code-block::
+
+    fakesourcesdb=> select fid,count(*) from diffimages where vbest>0 and status>0 and created >= '2026-03-25' group by fid;
+     fid | count
+    -----+-------
+       7 |   770
+       1 |   770
+       5 |  1142
+       4 |  1140
+       2 |  1142
+       6 |  1141
+       3 |   770
+    (7 rows)
+
+The PSF-fit catalogs made by the Python photutils package from the SFFT difference images,
+both positive and negative, were loaded into Sources child PostgreSQL database tables.
+The elapsed time to load all sources into the database was 17.6 minutes with 8 parallel processes.
+There were 14,239,540 Sources records loaded into the PostgreSQL database.
+
+Cross-matching the sources with astronomical objects (called AstroObjects),
+resulting in records loaded into the Merges_<field> and
+AstroObjects_<fields> database tables, for all 196 fields of the sources, was done.
+The elapsed time to cross-match all sources was 1.47 hours with 8 parallel processes.
+This includes cross-matching across field boundaries for sources near field edges.
+A match radius of 0.055 arcseconds was used (half a Roman WFI pixel).
+There were 5,216,999 AstroObjects records and 15,970,855 Merges records loaded
+into the PostgreSQL database.  Of those merges (a.k.a. lightcurve data points), 3,350 merges
+resulted from cross-matching across field boundaries (i.e., the match radius can extend
+across a field boundary), which is an increase of 0.02098% in terms of number of merges.
+
+Prior to this test, all AstroObjects_<field> and Merges_<field> table were dropped.
+Differences in numbers of AstroObjects and Merges records between this test and the 5/13/2026 test
+are attributed to insufficient database clean-up (i.e., redundancies owing to multiple tests, not necessarily documented).
+Additional development effort to address this issue is needed here.
+
+The lightcurve statistics stored in the AstroObjects_<fields> database tables are updated after the
+cross-matching.  This is done as a separate process.  Any AstroObjects_<fields> record with
+no associated sources in the Merges_<field> database table are deleted.
+A new Q3C index on the (meanra, meandec) columns is computed for all AstroObjects_<fields> database tables,
+and then these tables are set to logged, clustered, and analyzed.
+The AstroObjects_<fields> database tables are explicitly vacuumed at the end of this process.
+For this test, all of this took 15.46 minutes with 8 parallel processes.
