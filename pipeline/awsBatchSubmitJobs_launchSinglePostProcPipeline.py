@@ -86,6 +86,15 @@ cfg_path = rapid_sw + "/cdf"
 print("rapid_sw =",rapid_sw)
 print("cfg_path =",cfg_path)
 
+dry_run_str = os.getenv('DRYRUN')
+
+if dry_run_str is None:
+    dry_run_str = "False"
+
+dry_run = bool(eval(dry_run_str))
+
+print(f"dry_run = {dry_run}")
+
 
 # Read input parameters from .ini file.
 
@@ -373,21 +382,28 @@ if __name__ == '__main__':
     # Launch a post-processing pipeline.
     #
 
-    print(f"Launching AWS Batch post-processing job for jid={jid}, proc_date={proc_date}")
+    if not dry_run:
 
-    aws_batch_job_id = submit_job_to_aws_batch(proc_date,
-                                               jid,
-                                               job_info_s3_bucket,
-                                               job_config_ini_file_filename,
-                                               job_config_ini_file_s3_bucket_object_name)
+        print(f"Launching AWS Batch post-processing job for jid={jid}, proc_date={proc_date}, dry_run={dry_run}")
 
 
-    # Update record in Jobs database table with aws_batch_job_id.
+        aws_batch_job_id = submit_job_to_aws_batch(proc_date,
+                                                   jid,
+                                                   job_info_s3_bucket,
+                                                   job_config_ini_file_filename,
+                                                   job_config_ini_file_s3_bucket_object_name)
 
-    jid = dbh.update_job_with_aws_batch_job_id(jid_postproc,aws_batch_job_id)
 
-    if dbh.exit_code >= 64:
-        exit(dbh.exit_code)
+        # Update record in Jobs database table with aws_batch_job_id.
+
+        jid = dbh.update_job_with_aws_batch_job_id(jid_postproc,aws_batch_job_id)
+
+        if dbh.exit_code >= 64:
+            exit(dbh.exit_code)
+
+    else:
+
+        print(f"Dry run for launching AWS Batch post-processing job for jid={jid}, proc_date={proc_date}, dry_run={dry_run}")
 
 
     # Close database connection.
