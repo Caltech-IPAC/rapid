@@ -10,7 +10,6 @@ to_zone = tz.gettz('America/Los_Angeles')
 
 import database.modules.utils.rapid_db as db
 import modules.utils.rapid_pipeline_subs as util
-import database.modules.utils.roman_tessellation_db as sqlite
 
 swname = "pruneNotBestMerges.py"
 swvers = "1.0"
