@@ -148,6 +148,10 @@ def run_single_core_job(fields,index_thread):
 
     # Loop over all fields associated with this thread and prune not-best merges.
 
+
+    n_total_redundant_rows_deleted = 0
+
+
     for index_field in range(nfields):
 
         index_core = index_field % num_cores
@@ -185,6 +189,8 @@ def run_single_core_job(fields,index_thread):
 
         fh.write(f"Number of redundant records removed from {merges_tablename} database table = {n_redundant_rows_deleted}\n")
 
+        n_total_redundant_rows_deleted += n_redundant_rows_deleted
+
 
         # Code-timing benchmark.
 
@@ -203,9 +209,9 @@ def run_single_core_job(fields,index_thread):
 
     fh.close()
 
-    message = f"Finish normally for index_thread = {index_thread}"
+    message = f"Finish normally for index_thread = {index_thread}: n_total_redundant_rows_deleted = {n_total_redundant_rows_deleted}"
 
-    return message
+    return message,n_total_redundant_rows_deleted
 
 
 def execute_parallel_processes(fields_list,num_cores=None):
@@ -227,7 +233,9 @@ def execute_parallel_processes(fields_list,num_cores=None):
     for future in futures:
         index = futures.index(future)
         try:
-            print(future.result())
+            message,n_total_redundant_rows_deleted = future.result()
+            print(message)
+            print(f"n_total_redundant_rows_deleted for this thread = {n_total_redundant_rows_deleted}")
         except Exception as e:
             print(f"*** Error in thread index {index} = {e}")
 
