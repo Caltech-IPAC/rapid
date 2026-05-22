@@ -127,7 +127,7 @@ def run_single_core_job(fields,index_thread):
     # Set thread_debug = 0 here to severly limit the amount of information logged for runs
     # that are anything but short tests.
 
-    thread_debug = 0
+    thread_debug = 1
 
     nfields = len(fields)
 
@@ -177,6 +177,10 @@ def run_single_core_job(fields,index_thread):
             aid = record[0]
             aids_list.append(aid)
 
+        n_aids_for_field = len(aids_list)
+
+        fh.write(f"Number of astroobjects in {merges_tablename} database table = {n_aids_for_field}\n")
+
 
         # Delete redundant rows for each astroobject one at a time
         # to minimize DB-server memory requirements.
@@ -185,7 +189,7 @@ def run_single_core_job(fields,index_thread):
 
         for aid in aids_list:
 
-            n_redundant_rows_deleted += dbh.delete_redundant_merges_for_astroobject(merges_tablename,aid)
+            n_redundant_rows_deleted += dbh.delete_redundant_merges_for_astroobject(merges_tablename,aid,1)
 
         fh.write(f"Number of redundant records removed from {merges_tablename} database table = {n_redundant_rows_deleted}\n")
 
