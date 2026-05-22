@@ -438,7 +438,7 @@ def run_single_core_job_stage_2_crossmatching(scas,fields,index_thread):
     by querying for distinct fields all the sources child tables that are to be cross-matched.
     Cross-matching of sources in adjacent fields outside of field boundaries is done here after
     stage 1 (populating the pertinent AstroObjects_<field> and Merges_<field> database tables
-    within field   boundaries).  Field boundaries are infinitesimally thin lines (no thickness),
+    within field boundaries).  Field boundaries are infinitesimally thin lines (no thickness),
     and the match radius can extend across them.
 
     Cross-match only sources with flags = 0.
