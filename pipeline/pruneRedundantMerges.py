@@ -146,7 +146,7 @@ def run_single_core_job(fields,index_thread):
     fh.write(f"\nStart of run_single_core_job: index_thread={index_thread}, dbh={dbh}\n")
 
 
-    # Loop over all fields associated with this thread and prune not-best merges.
+    # Loop over all fields associated with this thread and prune redundant merges.
 
 
     n_total_redundant_rows_deleted = 0
@@ -164,32 +164,7 @@ def run_single_core_job(fields,index_thread):
 
         merges_tablename = f"merges_{field}"
 
-        query = f"SELECT distinct aid FROM {merges_tablename};"
-
-        sql_queries = []
-        sql_queries.append(query)
-        records = dbh.execute_sql_queries(sql_queries,thread_debug)
-
-        aids_list = []
-
-        for record in records:
-
-            aid = record[0]
-            aids_list.append(aid)
-
-        n_aids_for_field = len(aids_list)
-
-        fh.write(f"Number of astroobjects in {merges_tablename} database table = {n_aids_for_field}\n")
-
-
-        # Delete redundant rows for each astroobject one at a time
-        # to minimize DB-server memory requirements.
-
-        n_redundant_rows_deleted = 0
-
-        for aid in aids_list:
-
-            n_redundant_rows_deleted += dbh.delete_redundant_merges_for_astroobject(merges_tablename,aid,1)
+        n_redundant_rows_deleted = dbh.delete_redundant_merges_for_field(merges_tablename,1)
 
         fh.write(f"Number of redundant records removed from {merges_tablename} database table = {n_redundant_rows_deleted}\n")
 
