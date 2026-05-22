@@ -3948,3 +3948,45 @@ class RAPIDDB:
 
         if self.exit_code == 0:
             self.conn.commit()           # Commit database transaction
+
+
+
+########################################################################################################
+
+    def delete_redundant_merges_for_astroobject(self,tablename,aid,debug=0):
+
+        self.exit_code = 0
+
+
+        # Define query.
+
+        query = f"DELETE FROM {tablename} " +\
+            f"WHERE aid = {aid} " +\
+            f"AND ctid NOT IN " +\
+            f"(SELECT MIN(ctid) " +\
+            f"FROM {tablename} " +\
+            f"GROUP BY aid,sid);"
+
+        if debug == 1:
+            print('query = {}'.format(query))
+
+
+        # Execute query.
+
+        try:
+            self.cur.execute(query)
+
+            n_rows_deleted = self.cur.rowcount
+
+            if debug == 1:
+                print(f"Deleted: {n_rows_deleted} rows")
+
+        except (Exception, psycopg2.DatabaseError) as error:
+            print(f'*** Error deleting {tablename} record (error={error}); skipping...')
+            self.exit_code = 67
+            return
+
+        if self.exit_code == 0:
+            self.conn.commit()           # Commit database transaction
+
+        return n_rows_deleted
