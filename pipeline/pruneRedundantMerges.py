@@ -185,7 +185,7 @@ def run_single_core_job(fields,index_thread):
 
         for aid in aids_list:
 
-            n_redundant_rows_deleted += delete_redundant_merges_for_astroobject(merges_tablename,aid)
+            n_redundant_rows_deleted += dbh.delete_redundant_merges_for_astroobject(merges_tablename,aid)
 
         fh.write(f"Number of redundant records removed from {merges_tablename} database table = {n_redundant_rows_deleted}\n")
 
