@@ -148,9 +148,7 @@ def run_single_core_job(fields,index_thread):
 
     # Loop over all fields associated with this thread and prune redundant merges.
 
-
     n_total_redundant_rows_deleted = 0
-
 
     for index_field in range(nfields):
 
@@ -224,7 +222,6 @@ def execute_parallel_processes(fields_list,num_cores=None):
 #################
 
 if __name__ == '__main__':
-
 
     '''
     Launch parallel tasks to delete any redundant Merges database records associated with
