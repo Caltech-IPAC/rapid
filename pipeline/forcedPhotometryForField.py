@@ -163,6 +163,12 @@ output_psfcat_filename = config_input['PSFCAT_REFIMAGE']['output_psfcat_filename
 output_psfcat_finder_filename = config_input['PSFCAT_REFIMAGE']['output_psfcat_finder_filename']
 
 crossconv_flag = eval(config_input['SFFT']['crossconv_flag'])
+# TODO Need following override flag since this code does not check input science filename like the RAPID pipeline.
+rimtimsims_flag = os.getenv('RIMTIMSIMS')
+if rimtimsims_flag is None:
+    pass
+elif rimtimsims_flag:
+    crossconv_flag = False
 
 filename_diffimgpsf = "sfftdiffpsf.fits"
 filename_diffimgpsf_alternate = "sfftdiffpsf_dconv.fits"
