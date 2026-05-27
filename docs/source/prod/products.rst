@@ -100,11 +100,11 @@ Public Access
 To download a RAPID pipeline product, the
 user must construct a URL, knowing the filename in advance, like the following::
 
-    https://rapid-product-files.s3.us-west-2.amazonaws.com/20260513/jid90828/awaicgen_output_mosaic_cov_map.fits
+    https://rapid-product-files.s3.us-west-2.amazonaws.com/20260520/jid90828/awaicgen_output_mosaic_cov_map.fits
 
 For a listing of the latest product files from the ``Open Universe sims``, download the following text file:
 
-:download:`rapid-product-files_20260513.txt <rapid-product-files_20260513.txt>`
+:download:`rapid-product-files_20260520.txt <rapid-product-files_20260520.txt>`
 
 For a listing of the latest product files from the ``rimtimsims``, download the following text file:
 
