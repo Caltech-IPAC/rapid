@@ -3,9 +3,9 @@ import numpy as np
 
 import modules.utils.rapid_pipeline_subs as util
 
-
-# Subs used by the RAPID pipeline related to difference-image processing.
-
+'''
+Subs used by the RAPID pipeline related to difference-image processing.
+'''
 
 #-------------------------------------------------------------------
 # Reformat the simulated image in a FITS file
@@ -151,6 +151,10 @@ def compute_diffimage_uncertainty(sca_gain,
     hdu_unc = fits.HDUList(hdu_list_unc)
     hdu_unc.writeto(diffimage_unc_filename,overwrite=True,checksum=True)
 
+    hdul_sci.close()
+    hdul_ref.close()
+    hdul_cov.close()
+
 
 ############################################################################################
 # Gain-match science and reference images by generating SExtractor catalogs for each.
@@ -257,37 +261,26 @@ def gainMatchScienceAndReferenceImages(s3_client,
     print(" max_awin_to_bwin_world_ratio_thresh =",max_awin_to_bwin_world_ratio_thresh)
 
 
-    # Read in keyword values from FITS header science image.
+    # Read in keyword values from FITS header of science image.
+
+    zero_point_sci_keyword = gainmatch_dict['zero_point_sci_keyword']
 
     hdul_sci = fits.open(filename_sci_image)
     hdr_sci = hdul_sci[0].header
-
     naxis1 = hdr_sci["NAXIS1"]
     naxis2 = hdr_sci["NAXIS2"]
+    magzpsci = hdr_sci[zero_point_sci_keyword]
+    hdul_sci.close()
 
 
+    # Read in keyword values from FITS header of reference image.
 
+    zero_point_ref_keyword = gainmatch_dict['zero_point_ref_keyword']
 
-
-
-
-
-    # TODO: Read MAGZP from FITS header of reference image and science image
-    # (FWIW, for the science image, this is ZPTMAG in Troxel OpenUniverse sims.)
-    # All the same ZPTMAG for F184 Troxel OpenUniverse sims.
-    # For example: imheaders -i Roman_TDS_simple_model_F184_11864_3_lite_reformatted.fits | grep ZP
-    # ZPTMAG  =   18.824125825690057
-
-    magzpsci_keyword = "ZPTMAG"
-
-    # Keep magzpref = 0.0 and magzpsci = 0.0 until we implement photometric calibration of reference images.
-    magzpsci = 0.0
-    magzpref = 0.0
-
-
-
-
-
+    hdul_ref = fits.open(filename_ref_image)
+    hdr_ref = hdul_ref[0].header
+    magzpref = hdr_ref[zero_point_ref_keyword]
+    hdul_ref.close()
 
 
     # Compute SExtractor catalog for science image.
