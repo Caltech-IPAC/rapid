@@ -162,6 +162,8 @@ refimage_psf_filename = config_input['JOB_PARAMS']['refimage_psf_filename']
 output_psfcat_filename = config_input['PSFCAT_REFIMAGE']['output_psfcat_filename']
 output_psfcat_finder_filename = config_input['PSFCAT_REFIMAGE']['output_psfcat_finder_filename']
 
+crossconv_flag = eval(config_input['SFFT']['crossconv_flag'])
+
 filename_diffimgpsf = "sfftdiffpsf.fits"
 filename_diffimgpsf_alternate = "sfftdiffpsf_dconv.fits"
 
@@ -680,6 +682,18 @@ if __name__ == '__main__':
         ra4 = record[14]
         dec4 = record[15]
         filename = record[16]
+
+        # TODO The database query returns ZOGY difference images.  E.g.,
+        # s3://rapid-product-files/20260519/jid91919/zogy_diffimage_masked.fits
+        # We want to use SFFT difference images.  E.g.,
+        # s3://rapid-product-files/20260519/jid91919/sfftdiffimage_masked.fits
+        # Note that crossconv_flag is True for Open Universe sims and False for rimtimsims.
+
+        if crossconv_flag:
+            filename = filename.replace("zogy_diffimage","sfftdiffimage_dconv")
+        else:
+            filename = filename.replace("zogy_diffimage","sfftdiffimage")
+
         checksum = record[17]
         infobitssci = record[18]
         infobitsref = record[19]
