@@ -14,6 +14,7 @@ import subprocess
 import numpy as np
 import asdf
 import roman_datamodels as rdm
+from romancal.assign_wcs import AssignWcsStep
 from astropy.io import fits
 from astropy.wcs import WCS
 from astropy.time import Time
@@ -299,7 +300,13 @@ def gwcs_to_fits_header(wcs_obj, shape, degree):
 def asdf_to_fits(asdf_path, fits_path, sip_degree=5):
 
     print(f"Reading {asdf_path}...")
-    dm = rdm.open(asdf_path)
+    original_dm = rdm.open(asdf_path)
+
+
+    # dm.meta.wcs now has the correct WCS
+
+    dm = AssignWcsStep.call(original_dm)
+
 
     # ------------------------------------------------------------------ #
     # Science array                                                        #
