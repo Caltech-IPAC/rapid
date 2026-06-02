@@ -769,8 +769,10 @@ if __name__ == '__main__':
 
     n_ingested_fits_files = len(already_ingested_fits_files)
     print(f"n_ingested_fits_files = {n_ingested_fits_files}")
-    first_ingested_fits_file = already_ingested_fits_files[0]
-    print(f"first_ingested_fits_file = {first_ingested_fits_file}")
+
+    if n_ingested_fits_files > 0:
+        first_ingested_fits_file = already_ingested_fits_files[0]
+        print(f"first_ingested_fits_file = {first_ingested_fits_file}")
 
 
     # Close database connections.
