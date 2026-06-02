@@ -15,7 +15,7 @@ These files are typically produced by simulation tools like Roman-I-Sim or
 STIPS to mimic real-world data that the telescope will produce, allowing researchers
 to prepare for data analysis before launch.
 
-Key Aspects of wfi_soc-simulation_l2_cal.asdf Files:
+Key aspects of wfi_soc-simulation_l2_cal.asdf files:
 
 * Content: They contain calibrated rate images in units of Digital Numbers per second (DN/s),
   where raw detector signals have been processed to remove instrumental effects.
@@ -35,9 +35,21 @@ Key Aspects of wfi_soc-simulation_l2_cal.asdf Files:
 
   - STIPS (Space Telescope Imaging Product Simulator): Used for creating synthetic astronomical scenes.
 
-These files are used to test data analysis workflows, visualize the WFI field of view, and verify astrometric and photometric precision.
+These files are used to test data analysis workflows, visualize the WFI field of view, and
+verify astrometric and photometric precision.
 
-The SOC sims have filenames like ``r0034001001001001001_0001_wfi01_f062_cal.asdf``.  Each file is for a given exposure and SCA.
-There are 88,038 of these files available, covering 4,891 exposures.  Assuming the exposure time is 66.4 seconds, which is
-the predominant exposure time in the GBTDS observation-planning files, this dataset represents
-approximately 3.75 days of cumulative exposure, and approximately 34% of the entire GBTDS survey.
+The SOC sims have filenames like ``r0034001001001001001_0001_wfi01_f062_cal.asdf``.
+Each file is for a given exposure and SCA.
+There are 88,038 of these files available, covering 4,891 exposures.
+Assuming the exposure time is 66.4 seconds, which is the predominant exposure time in the
+GBTDS observation-planning files, this dataset representsapproximately 3.75 days of
+cumulative exposure, and approximately 34% of the entire GBTDS survey.
+
+For the RAPID pipeline, the ASDF files are converted into FITS files and stored here::
+
+    s3://socsim-20260427-lite/
+
+The WCS in the FITS files is represented by the TAN-SIP projection with fifth-order SIP distortion.
+Tests show this represents the WCS very well.  Two examples were examined to compare the
+absolute error in the WCS between fits and the original ASDF gWCS (SCAs 2 and 9).
+Across all 18 SCAs, the worst deviations are never larger than ~1e-6 of a pixel.
