@@ -20,7 +20,7 @@ import sphinx_rtd_theme
 
 project = 'Caltech-IPAC-RAPID'
 copyright = '2026, Ben Rusholme, Schuyler Van Dyk, Mansi Kasliwal, Lin Yan, Ashish Mahabal, Roberta Paladini, Joe Masiero, Jacob Jencson, Amalia Rivera, Ryan Lau, and Russ Laher'
-author = 'Ben Rusholme, Schuyler Van Dyk, Mansi Kasliwal, Lin Yan, Ashish Mahabal, Roberta Paladini, Joe Masiero, Jacob Jencson, Amalia Rivera, Ryan Lau, and Russ Laher'
+author = 'Ben Rusholme, Schuyler Van Dyk, Mansi Kasliwal, Lin Yan, Ashish Mahabal, Roberta Paladini, Joe Masiero, Jacob Jencson, Amalia Rivera, Ryan Lau, Emily Everetts, Azalee Bostroem, and Russ Laher'
 
 # The full version, including alpha/beta/rc tags
 release = '0.1'
