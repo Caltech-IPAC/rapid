@@ -52,6 +52,7 @@ For the RAPID pipeline, the ASDF files are converted into FITS files and stored 
 It was discovered that the gWCS in the SOC sims is incorrect (there were no GAIA stars,
 so the astrometry strep failed).  We corrected this using the following Python code::
 
+    import roman_datamodels as rdm
     from romancal.assign_wcs import AssignWcsStep
     original_dm = rdm.open(asdf_path)
     dm = AssignWcsStep.call(original_dm)
