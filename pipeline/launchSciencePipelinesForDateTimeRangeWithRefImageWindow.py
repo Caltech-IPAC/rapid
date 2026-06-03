@@ -263,7 +263,7 @@ if __name__ == '__main__':
     for field,fid in zip(field_list,fid_list):
 
         if run_fid is not None:
-            if run_fid != fid:
+            if int(run_fid) != fid:
                 print(f"*** Message: Skipping fid={fid}; continuing...")
                 continue
 
