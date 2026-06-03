@@ -40,10 +40,57 @@ verify astrometric and photometric precision.
 
 The SOC sims have filenames like ``r0034001001001001001_0001_wfi01_f062_cal.asdf``.
 Each file is for a given exposure and SCA.
-There are 88,038 of these files available, covering 4,891 exposures.
+There are 88,038 of these files available, covering 4,891 exposures, and all bandpass filters.
 Assuming the exposure time is 66.4 seconds, which is the predominant exposure time in the
-GBTDS observation-planning files, this dataset representsapproximately 3.75 days of
+GBTDS observation-planning files, this dataset represents approximately 3.75 days of
 cumulative exposure, and approximately 34% of the entire GBTDS survey.
+Indeed, the precise cumulative exposure time in days is:
+
+.. code-block::
+
+    socsimsdb=> select sum(exptime) / (3600*24) as cumexposdays from exposures;
+        cumexposdays
+    --------------------
+     3.7593229166666666
+    (1 row)
+
+The minimum and maximum observation times of the SOC sims cover about 8 days:
+
+.. code-block::
+
+    select min(dateobs),min(mjdobs),max(dateobs),max(mjdobs) from l2files;
+             min         |  min  |         max         |        max
+    ---------------------+-------+---------------------+-------------------
+     2027-10-01 00:00:00 | 61679 | 2027-10-08 18:21:34 | 61686.76497685185
+    (1 row)
+
+The images overlap a total of 109 sky-tiles (a.k.a. fields):
+
+.. code-block::
+
+    select count(distinct field) from l2files;
+     count
+    -------
+       109
+
+Here is a breakdown of the number of SOC-sim images, all SCAs, by bandpass filter (where the filter-name convention
+of the Open Univers sims is retained):
+
+.. code-block::
+
+    select a.fid,filter,count(*) from l2files a, filters b where a.fid=b.fid group by a.fid,filter order by a.fid,filter;
+     fid | filter | count
+    -----+--------+-------
+       1 | F184   |   216
+       2 | H158   |   216
+       3 | J129   |   216
+       4 | K213   |  3348
+       5 | R062   |   432
+       6 | Y106   |   198
+       7 | Z087   |  3330
+       8 | W146   | 80082
+    (8 rows)
+
 
 For the RAPID pipeline, the ASDF files are converted into FITS files and stored here::
 
