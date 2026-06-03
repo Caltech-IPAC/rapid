@@ -57,7 +57,8 @@ so the astrometry strep failed).  We corrected this using the following Python c
     original_dm = rdm.open(asdf_path)
     dm = AssignWcsStep.call(original_dm)
 
-Metadata about the SOC sims are stored in a dedicated RAPID-operations PostgreSQL database.
+.. note::
+    Metadata about the SOC sims are stored in a dedicated RAPID-operations PostgreSQL database.
 
 Indeed, the precise cumulative exposure time in days is:
 
