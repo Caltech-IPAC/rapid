@@ -40,10 +40,24 @@ verify astrometric and photometric precision.
 
 The SOC sims have filenames like ``r0034001001001001001_0001_wfi01_f062_cal.asdf``.
 Each file is for a given exposure and SCA.
-There are 88,038 of these files available, covering 4,891 exposures, and all bandpass filters.
+There are 88,038 of these files available, covering 4,891 exposures and all bandpass filters.
 Assuming the exposure time is 66.4 seconds, which is the predominant exposure time in the
 GBTDS observation-planning files, this dataset represents approximately 3.75 days of
-cumulative exposure, and approximately 34% of the entire GBTDS survey.
+cumulative exposure time, which is approximately 34% of the entire GBTDS survey.
+
+For the RAPID pipeline, the ASDF files are converted into FITS files and stored here::
+
+    s3://socsim-20260427-lite/
+
+It was discovered that the gWCS in the SOC sims is incorrect (there were no GAIA stars,
+so the astrometry strep failed).  We corrected this using the following Python code::
+
+    from romancal.assign_wcs import AssignWcsStep
+    original_dm = rdm.open(asdf_path)
+    dm = AssignWcsStep.call(original_dm)
+
+Metadata about the SOC sims are stored in a dedicated RAPID-operations PostgreSQL database.
+
 Indeed, the precise cumulative exposure time in days is:
 
 .. code-block::
@@ -90,11 +104,6 @@ of the Open Univers sims is retained):
        7 | Z087   |  3330
        8 | W146   | 80082
     (8 rows)
-
-
-For the RAPID pipeline, the ASDF files are converted into FITS files and stored here::
-
-    s3://socsim-20260427-lite/
 
 The WCS in the FITS files is represented by the TAN-SIP projection with fifth-order SIP distortion.
 Tests show this represents the WCS very well.  Two examples were examined to compare the
