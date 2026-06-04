@@ -174,6 +174,7 @@ def gainMatchScienceAndReferenceImages(s3_client,
                                        filename_ref_image,
                                        filename_ref_uncert,
                                        filename_refgainmatchsexcat_catalog,
+                                       awaicgen_dict,
                                        gainmatch_dict,
                                        sextractor_gainmatch_dict,
                                        fwhm_sci,
@@ -272,15 +273,16 @@ def gainMatchScienceAndReferenceImages(s3_client,
     magzpsci = hdr_sci[zero_point_sci_keyword]
     hdul_sci.close()
 
+    print(f"magzpsci={magzpsci}")
 
-    # Read in keyword values from FITS header of reference image.
 
-    zero_point_ref_keyword = gainmatch_dict['zero_point_ref_keyword']
+    # The MAGZP keyword will not be in the header of the swarped reference image, because the
+    # swarped-reference-image FITS header is inherited from the science image with PV keywords.
+    # So get the reference-image zero point from the [AWAICGEN] config-file block.
 
-    hdul_ref = fits.open(filename_ref_image)
-    hdr_ref = hdul_ref[0].header
-    magzpref = hdr_ref[zero_point_ref_keyword]
-    hdul_ref.close()
+    magzpref = float(awaicgen_dict["zprefimg"])
+
+    print(f"magzpref={magzpref}")
 
 
     # Compute SExtractor catalog for science image.
