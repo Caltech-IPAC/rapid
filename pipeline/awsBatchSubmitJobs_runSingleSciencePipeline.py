@@ -997,6 +997,7 @@ if __name__ == '__main__':
                                                                                                  output_resampled_reference_image,
                                                                                                  output_resampled_reference_uncert_image,
                                                                                                  filename_refgainmatchsexcat_catalog,
+                                                                                                 awaicgen_dict,
                                                                                                  gainmatch_dict,
                                                                                                  sextractor_gainmatch_dict,
                                                                                                  fwhm_sci,
