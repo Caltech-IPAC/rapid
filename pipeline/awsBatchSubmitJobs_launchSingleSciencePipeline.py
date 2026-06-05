@@ -36,11 +36,23 @@ datetime_utc_now = datetime.utcnow()
 proc_utc_datetime = datetime_utc_now.strftime('%Y-%m-%dT%H:%M:%SZ')
 datetime_pt_now = datetime_utc_now.replace(tzinfo=timezone.utc).astimezone(tz=to_zone)
 proc_pt_datetime_started = datetime_pt_now.strftime('%Y-%m-%dT%H:%M:%S PT')
-proc_date = datetime_pt_now.strftime('%Y%m%d')
 
 print("proc_utc_datetime =",proc_utc_datetime)
 print("proc_pt_datetime_started =",proc_pt_datetime_started)
-# Processing date is always in Pacific time zone.
+
+
+# JOBPROCDATE of RAPID science-pipeline jobs.  Processing date is always in Pacific time zone.
+
+proc_date = os.getenv('JOBPROCDATE')
+
+if proc_date is None:
+
+    print("*** Error: Env. var. JOBPROCDATE not set; quitting...")
+    exit(64)
+
+
+# Print out basic information for log file.
+
 print("proc_date =",proc_date)
 
 
