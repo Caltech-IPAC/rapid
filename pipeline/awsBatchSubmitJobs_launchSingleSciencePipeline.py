@@ -612,13 +612,13 @@ if __name__ == '__main__':
         input_images_csv_file_s3_bucket_object_name = proc_date + "/" + input_images_csv_filename
 
 
-        # Query L2FileMeta database table for RID,ra0,dec0,ra1,dec1,ra2,dec2,ra3,dec3,ra4,dec4,
+        # Query L2FileMeta database table for RID,ra0,dec0,ra1,dec1,ra2,dec2,ra3,dec3,ra4,dec4,field
         # and distance from tile center (degrees) for all best science images in the
         # L2Files database table that overlap the sky tile associated with the input science image
         # and its filter.  Use radius_of_initial_cone_search = 0.18 degrees.
         # Returned list is ordered by distance from tile center.
         #
-        # If environment variables STARTREFIMMJDOBS and ENDREFIMMJDOBS are set, these will be
+        # If environment variables STARTREFIMMJDOBS and ENDREFIMMJDOBS are set, these
         # will be included as qualifiers in the following database query.
 
         radius_of_initial_cone_search = 0.18
@@ -655,7 +655,8 @@ if __name__ == '__main__':
             dec3_refimage_input = image_meta[8]
             ra4_refimage_input = image_meta[9]
             dec4_refimage_input = image_meta[10]
-            cone_search_dist_refimage_input = image_meta[11]
+            field_from_get_overlapping_l2files = image_meta[11]
+            cone_search_dist_refimage_input = image_meta[12]
 
             image_info = dbh.get_info_for_l2file(rid_refimage_input)
 
@@ -675,6 +676,17 @@ if __name__ == '__main__':
 
             if status_refimage_input == 0: continue             # Omit if status = 0
             if vbest_refimage_input == 0: continue              # Omit if not the best version
+
+
+            # Sanity check:
+
+            if field_refimage_input != field_from_get_overlapping_l2files:
+                print(f"*** Error: field_refimage_input ({field_refimage_input}) not equal to " +\
+                      f"field_from_get_overlapping_l2files ({field_from_get_overlapping_l2files}); quitting...")
+                exit(64)
+
+
+            # Format CSV record.
 
             csv_record = str(rid_refimage_input) + "," +\
                          str(ra0_refimage_input) + "," +\
