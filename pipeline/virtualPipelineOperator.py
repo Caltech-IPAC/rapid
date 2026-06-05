@@ -407,12 +407,17 @@ if __name__ == '__main__':
 
             os.environ['STARTDATETIME'] = startdatetime
             os.environ['ENDDATETIME'] = enddatetime
+            os.environ['JOBPROCDATE'] = proc_date
 
             fname_out = "launch_science_pipelines_code" + "_" + stage_label + "_" + proc_date + ".out"
             launch_science_pipelines_cmd = [python_cmd,
                                             launch_science_pipelines_code]
 
             exitcode_from_launch_science_pipelines_cmd = util.execute_command(launch_science_pipelines_cmd,fname_out)
+
+            if exitcode_from_launch_science_pipelines_cmd >= 64:
+                print(f"*** Error: {launch_science_pipelines_cmd} returned exit code = {exitcode_from_launch_science_pipelines_cmd}; quitting...")
+                exit(64)
 
 
             # Code-timing benchmark.
