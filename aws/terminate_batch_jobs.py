@@ -1,4 +1,9 @@
-"""Terminate AWS Batch jobs in specified states."""
+"""
+Terminate AWS Batch jobs in specified states.
+
+Example command:
+python /Users/laher/git/rapid/aws/terminate_batch_jobs.py --queue arn:aws:batch:us-west-2:891377127831:job-queue/getting-started-wizard-job-queue --states SUBMITTED PENDING RUNNABLE STARTING RUNNING --profile RussLaherRapidAWS --dry-run
+"""
 
 import argparse
 import boto3
