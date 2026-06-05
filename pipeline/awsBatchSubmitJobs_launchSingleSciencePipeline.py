@@ -640,6 +640,9 @@ if __name__ == '__main__':
 
         # For each overlapping image, query L2Files database table for
         # filename, sca, mjdobs, exptime, infobits, and status.
+        #
+        # NOTE: max_n_images_to_coadd is not enforced here, but instead
+        # when the RAPID pipeline instance is executed.  TODO?
 
         f = open(input_images_csv_file, "w")
 
