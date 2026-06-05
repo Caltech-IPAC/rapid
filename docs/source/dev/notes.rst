@@ -36,6 +36,16 @@ Developer Guidelines
 
 #. Remember to ``git pull`` before any ``git push`` and often, in order to make sure your RAPID git repo is up to date.
 
+#. For exitcodes, we follow the Spitzer convention:
+
+==============   ================
+Exitcode range   Definition
+==============   ================
+[0,31]           Normal termination, with messages
+[32,61]          Warnings
+[64+]            Error
+==============   ================
+
 
 Log into EC2 Instance Machine
 ********************************************
