@@ -1348,7 +1348,8 @@ class RAPIDDB:
         #       For example, an image corner may overlap on a sky tile that does not cover a tile center or corner.
 
         query_template =\
-            "select a.rid,ra0,dec0,ra1,dec1,ra2,dec2,ra3,dec3,ra4,dec4,q3c_dist(ra0, dec0, cast(TEMPLATE_RA0 as double precision), cast(TEMPLATE_DEC0 as double precision)) as dist " +\
+            "select a.rid,ra0,dec0,ra1,dec1,ra2,dec2,ra3,dec3,ra4,dec4,field, " +\
+            "q3c_dist(ra0, dec0, cast(TEMPLATE_RA0 as double precision), cast(TEMPLATE_DEC0 as double precision)) as dist " +\
             "from L2FileMeta a, L2Files b " +\
             "where a.rid = b.rid " +\
             "and a.fid = TEMPLATE_FID " +\
@@ -3810,7 +3811,7 @@ class RAPIDDB:
                 print("Nothing returned from database query; continuing...")
 
         except (Exception, psycopg2.DatabaseError) as error:
-            print('*** Error from database method RAPIDDB.get_overlapping_diffimages ({}); skipping...'.format(error))
+            print('*** Error from database method RAPIDDB.get_possible_overlapping_diffimages ({}); skipping...'.format(error))
             self.exit_code = 67
             return
 
