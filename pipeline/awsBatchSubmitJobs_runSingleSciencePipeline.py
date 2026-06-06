@@ -1784,7 +1784,7 @@ if __name__ == '__main__':
 
         # A quirk in the SFFT software requires prepended "./" to the positional input filenames.
 
-        if "rimtimsim" in science_image_filename:
+        if "r" == science_image_filename[0]:
 
             sfft_cmd = [python_cmd,
                         sfft_code,
