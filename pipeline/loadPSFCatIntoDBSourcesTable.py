@@ -421,7 +421,7 @@ def run_single_core_job(jids,overlapping_fields_list,meta_list,negative_diffimg_
         fh.write(f"Loop end: done_filename,product_s3_bucket_base,proc_date,jid = {done_filename},{product_s3_bucket_base},{proc_date},{jid}\n")
 
 
-        # Flush write buffere.
+        # Flush write buffer.
 
         fh.flush()
 
