@@ -63,6 +63,16 @@ if proc_date is None:
     exit(64)
 
 
+# Set DONTCHECKDONEFILE to skip existence-checking of the source_dbload_jid<jid>.done S3 bucket file.
+
+skip_done_check = os.getenv('DONTCHECKDONEFILE')
+
+if skip_done_check is None:
+    do_done_check = True
+else:
+    do_done_check = False
+
+
 # Print out basic information for log file.
 
 print("proc_date =",proc_date)
@@ -257,7 +267,7 @@ def run_single_core_job(jids,overlapping_fields_list,meta_list,negative_diffimg_
         s3_full_name_done_file = "s3://" + product_s3_bucket_base + "/" + proc_date + '/jid' + str(jid) + "/source_dbload" + done_suffix + "_jid" +  str(jid)  + ".done"
         done_filename,subdirs_done,downloaded_from_bucket = util.download_file_from_s3_bucket(s3_client,s3_full_name_done_file)
 
-        if downloaded_from_bucket:
+        if do_done_check and downloaded_from_bucket:
             fh.write("*** Warning: Done file exists ({}); skipping...\n".format(done_filename))
             continue
 
@@ -310,7 +320,7 @@ def run_single_core_job(jids,overlapping_fields_list,meta_list,negative_diffimg_
         # Prepare records into sources database tables.
 
         sources_table = f"sources_{proc_date}_{sca}"
-        sources_table_file = f"sources_{proc_date}_{sca}_{jid}" + ".csv"
+        sources_table_file = f"sources_{proc_date}_sca{sca}_jid{jid}" + ".csv"
 
         with open(sources_table_file, "w") as csv_fh:
 
