@@ -72,6 +72,8 @@ if skip_done_check is None:
 else:
     do_done_check = False
 
+print(f"do_done_check = {do_done_check}")
+
 
 # Print out basic information for log file.
 
