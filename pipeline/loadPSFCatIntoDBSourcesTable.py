@@ -410,6 +410,23 @@ def run_single_core_job(jids,overlapping_fields_list,meta_list,negative_diffimg_
         fh.write(f"Loop end: done_filename,product_s3_bucket_base,proc_date,jid = {done_filename},{product_s3_bucket_base},{proc_date},{jid}\n")
 
 
+        # Flush write buffere.
+
+        fh.flush()
+
+
+        # Remove no-longer-needed intermediate files.
+
+        file_paths = [output_psfcat_finder_filename_for_jid, sources_table_file]
+        for file_path in file_paths:
+
+            if os.path.exists(file_path):
+                os.remove(file_path)
+                print(f"File deleted successfully ({file_path}).")
+            else:
+                print(f"The file does not exist({file_path}).")
+
+
         # End of loop over job ID.
 
 
