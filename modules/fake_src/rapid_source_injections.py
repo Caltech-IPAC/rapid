@@ -15,6 +15,7 @@ from photutils.background import Background2D, MedianBackground
 import romanisim.psf
 import romanisim.image
 import romanisim.catalog
+import romanisim.bandpass
 import galsim
 import galsim.wcs
 from galsim import roman
@@ -222,7 +223,7 @@ def load_injection_catalog(infile):
     return xpos, ypos, fluxes
 
 def inject_point_sources(image, image_wcs, image_sca, image_filter,
-                         xpos, ypos, fluxes):
+                         xpos, ypos, fluxes, sed_temperature=None):
     """
     Inject point sources into the image using romanisim.
 
@@ -238,38 +239,68 @@ def inject_point_sources(image, image_wcs, image_sca, image_filter,
         Roman filter name
     xpos, ypos, fluxes : arrays
         Position and flux arrays for injection
+    sed_temperature : float, optional
+        Blackbody temperature in Kelvin for source SEDs. If None, uses a flat SED.
     """
 
     nobj = len(xpos)
 
-    #doing them one at a time since PSF is position dependent, might be a better way to do this
+    # Get galsim bandpass object for chromatic rendering
+    galsim_filter = romanisim.bandpass.roman2galsim_bandpass[image_filter]
+    galsim_bp = roman.getBandpasses(AB_zeropoint=True)[galsim_filter]
+
+    if sed_temperature is not None:
+        print(f"  Using blackbody SED at T={sed_temperature:.0f} K")
+        waves = np.linspace(300, 2500, 500)
+        h, c, k = 6.626e-34, 3e8, 1.38e-23
+        wave_m = waves * 1e-9
+        flambda = (2*h*c**2 / wave_m**5) / (np.exp(h*c / (k*wave_m*sed_temperature)) - 1)
+        source_sed = galsim.SED(galsim.LookupTable(waves, flambda, interpolant='linear'),
+                                wave_type='nm', flux_type='flambda').withFlux(1.0, galsim_bp)
+    else:
+        source_sed = galsim.SED(lambda wave: 1.0, wave_type='nm', flux_type='fphotons').withFlux(1.0, galsim_bp)
+
+    # Build variable PSF once from SCA corners to avoid recomputing the full optical model per source
+    # pupil_bin=4 and n_waves=5 match the OpenUniverse simulation settings
+    print(f"  [1/4] Building chromatic variable PSF (SCA {image_sca}, {image_filter})...")
+    variable_psf = romanisim.psf.make_psf(image_sca, image_filter, wcs=image_wcs,
+                                          psftype='galsim', chromatic=True, variable=True,
+                                          n_waves=5, pupil_bin=8)
+
+    # Build the full chromatic catalog, then inject all sources in one call
+    print(f"  [2/4] Building injection catalog ({nobj} sources)...")
+    inject_objlist = []
     for i in range(nobj):
-        obj_pos = (xpos[i], ypos[i])
         image_pos = galsim.PositionD(x=xpos[i], y=ypos[i])
         image_world_pos = image_wcs.toWorld(image_pos)
+        sky_pos = galsim.CelestialCoord(image_world_pos.ra, image_world_pos.dec)
+        inject_objlist.append(romanisim.catalog.CatalogObject(sky_pos, galsim.DeltaFunction() * source_sed, flux=None))
 
-        # Convert to RA/Dec
-        ra = np.array([(image_world_pos.ra.rad * u.rad).to(u.deg).value], dtype=np.float64)
-        dec = np.array([(image_world_pos.dec.rad * u.rad).to(u.deg).value], dtype=np.float64)
+    print(f"  [3/4] Injecting sources into image...")
+    data_before = image.array.copy()
+    flux_list = list(fluxes)
+    romanisim.image.add_objects_to_image(image, inject_objlist, list(xpos), list(ypos),
+                                         variable_psf, flux_list, bandpass=galsim_bp, add_noise=True,
+                                         fastpointsources=False)
 
-        # Create injection catalog for romanisim
-        type_arr = ['PSF']
-        n = np.array([-1.0], dtype=np.float64)
-        half_light_radius = np.array([0.0], dtype=np.float64)
-        pa = np.array([0.0], dtype=np.float64)
-        ba = np.array([1.0], dtype=np.float64)
+    # Apply charge diffusion to only the injected flux, matching OpenUniverse's ChargeDiff
+    # photon op (OpenUniverse2024 paper eq. 7, section 5.2). The MTF is fit as a sech
+    # approximated by a sum of three 2D Gaussians (sigma=0.3279 px):
+    #   c_i = {0.4522, 0.8050, 1.4329}, w_i = {0.17519, 0.53146, 0.29335}
+    # Effective RMS sigma ~0.325 pixels. Blurring the difference avoids re-blurring
+    # existing sources that already have charge diffusion from the original simulation.
+    print(f"  [4/4] Applying charge diffusion and saturation clip...")
+    from scipy.ndimage import gaussian_filter
+    _cd_sigma = 0.3279
+    _cd_ci = [0.4522, 0.8050, 1.4329]
+    _cd_wi = [0.17519, 0.53146, 0.29335]
+    injected = image.array - data_before
+    blurred = sum(w * gaussian_filter(injected, sigma=c * _cd_sigma)
+                  for c, w in zip(_cd_ci, _cd_wi))
+    image.array[:] = data_before + blurred
 
-        inject_table = Table([ra, dec, type_arr, n, half_light_radius, pa, ba, [fluxes[i]]],
-                           names=('ra', 'dec', 'type', 'n', 'half_light_radius', 'pa', 'ba', image_filter))
-        inject_catalog = romanisim.catalog.table_to_catalog(inject_table, bandpasses=[image_filter])
-
-        # Generate PSF and inject
-        # might be a betterway to do this for many objects at once
-        #default to galsim psf, but can use stpsf if desired
-        psf = romanisim.psf.make_one_psf(image_sca, image_filter, wcs=image_wcs,
-                                         psftype='galsim', pix=obj_pos, chromatic=False, oversample=4)
-        romanisim.image.add_objects_to_image(image, inject_catalog, [obj_pos[0]], [obj_pos[1]],
-                                           psf, 1.0, filter_name=image_filter, add_noise=True)
+    # Clip at full-well saturation matching the OpenUniverse simple_model simulation
+    np.clip(image.array, None, 100000.0, out=image.array)
 
 
 def main():
