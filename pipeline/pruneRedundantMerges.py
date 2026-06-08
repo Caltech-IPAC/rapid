@@ -182,6 +182,11 @@ def run_single_core_job(fields,index_thread):
         fh.write(f"Loop end: index_field,field = {index_field},{field}\n")
 
 
+        # Flush write buffer.
+
+        fh.flush()
+
+
     fh.write(f"\nEnd of run_single_core_job: index_thread={index_thread}\n")
 
     fh.close()

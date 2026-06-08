@@ -253,6 +253,11 @@ def run_single_core_job(sources_table_names,index_thread):
         fh.write(f"Loop end: index_sources_table_names,sources_tablename = {index_sources_table_names},{sources_tablename}\n")
 
 
+        # Flush write buffer.
+
+        fh.flush()
+
+
     fh.write(f"\nEnd of run_single_core_job: index_thread={index_thread}\n")
 
     fh.close()
