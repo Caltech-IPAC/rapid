@@ -621,6 +621,9 @@ if __name__ == '__main__':
 
     dbh.execute_sql_queries(sql_queries)
 
+    if dbh.exit_code >= 64:
+        exit(dbh.exit_code)
+
 
     # Code-timing benchmark.
 
