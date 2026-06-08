@@ -11,6 +11,7 @@ import astropy.units as u
 
 from photutils.segmentation import detect_threshold, detect_sources, deblend_sources, SourceCatalog
 from photutils.background import Background2D, MedianBackground
+from scipy.ndimage import gaussian_filter
 
 import romanisim.psf
 import romanisim.image
@@ -290,7 +291,6 @@ def inject_point_sources(image, image_wcs, image_sca, image_filter,
     # Effective RMS sigma ~0.325 pixels. Blurring the difference avoids re-blurring
     # existing sources that already have charge diffusion from the original simulation.
     print(f"  [4/4] Applying charge diffusion and saturation clip...")
-    from scipy.ndimage import gaussian_filter
     _cd_sigma = 0.3279
     _cd_ci = [0.4522, 0.8050, 1.4329]
     _cd_wi = [0.17519, 0.53146, 0.29335]
