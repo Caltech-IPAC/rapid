@@ -425,6 +425,15 @@ def run_single_core_job(jids,log_fnames,index_thread):
 
         fh.write(f"Loop end: done_filename,product_s3_bucket_base,datearg,jid = {done_filename},{product_s3_bucket_base},{datearg},{jid}\n")
 
+
+        # Flush write buffer.
+
+        fh.flush()
+
+
+        # End of loop over job ID.
+
+
     fh.write(f"\nEnd of run_single_core_job: index_thread={index_thread}\n")
 
     fh.close()
