@@ -315,6 +315,8 @@ def wait_until_aws_batch_jobs_finished(job_type,proc_date,config_input,dbh):
                 print('*** Error running client.describe_jobs ({}); continuing...'.format(error))
 
 
+        print(f"n_succeeded,n_failed = {n_succeeded},{n_failed}")
+
         njobs_succeeded_failed = n_succeeded + n_failed
 
         print("njobs_succeeded_failed =",njobs_succeeded_failed)
