@@ -67,10 +67,9 @@ if proc_date is None:
 
 skip_done_check = os.getenv('DONTCHECKDONEFILE')
 
+do_done_check = False
 if skip_done_check is None:
     do_done_check = True
-else:
-    do_done_check = False
 
 print(f"do_done_check = {do_done_check}")
 
