@@ -270,4 +270,58 @@ Because the socsims have sub-pixel dithers, the ``cov5percent`` coverage metric 
     (107 rows)
 
 
+As shown in the table below for one of the longest running pipeline instances (jid = 92313),
+executing AWAICGEN for reference-image generation
+(depends on the number of input images; NFRAMES=22 for this case),
+and generating PSF-fit PhotUtils catalogs are the dominant factors
+affecting pipeline performance.  Executing SFFT was relatively quick.
+
+=================================================================  =====================
+Pipeline step                                                      Execution time (sec)
+=================================================================  =====================
+Downloading science image                                                  0.616
+Uploading science image to product S3 bucket                               0.431
+Downloading or generating reference image                               3497.479
+Uploading reference image to S3 product bucket                             2.345
+Injecting fake sources                                                    97.909
+Generating science-image catalog                                           5.066
+Swarping images                                                            8.727
+Running bkgest on science image                                            4.032
+Running gainMatchScienceAndReferenceImages                                 9.673
+Replacing NaNs, applying image offsets, etc.                              96.370
+Uploading intermediate FITS files to product S3 bucket                     2.111
+Running ZOGY                                                              39.900
+masking ZOGY difference image                                              1.036
+Running SExtractor on positive ZOGY difference image                      12.890
+Running SExtractor on negative ZOGY difference image                      18.141
+Generating PSF-fit catalog on positive ZOGY difference image            1019.1431
+Generating PSF-fit catalog on negative ZOGY difference image             573.208
+Uploading main products to S3 bucket                                       6.647
+Running SFFT                                                             168.611
+Uploading SFFT difference image to S3 product bucket                       4.562
+Running SExtractor on positive SFFT difference images                     27.128
+Running SExtractor on negative SFFT difference images                     24.547
+Uploading SFFT-diffimage SExtractor catalogs to S3 product bucket          0.915
+Generating PSF-fit catalog on positive SFFT difference image            1213.519
+Generating PSF-fit catalog on negative SFFT difference image             205.150
+Uploading SFFT-diffimage PSF-fit catalogs to S3 product bucket             5.149
+Computing naive difference images                                          0.823
+Uploading naive difference images to S3 product bucket                     0.736
+Running SExtractor on positive naive difference image                     24.370
+Running SExtractor on negative naive difference image                     21.248
+Uploading SExtractor catalogs for naive difference images                  1.180
+Generating PSF-fit catalog on positive naive difference image           1041.101
+Generating PSF-fit catalog on negative naive difference image            559.035
+Uploading PSF-fit catalogs for naive difference images                     1.820
+Uploading products at pipeline end to S3 product bucket                    0.035
+Total elapsed time to run one instance of science pipeline              8695.654
+=================================================================  =====================
+
+The above pipeline instance took about 2.4 hours to execute.  Pipeline instances
+that made use of already-generated reference images took about 1.5 hours each to run.
+
+Attempts were made to load the PSF-fit catalogs from SFFT difference images into
+the operations-PostgreSQL-database sources child tables.  Around 500 million
+sources were loaded before the database machine ran out of disk space.
+We plan to increase the database disk space from 200 GB to 4 TB and then try again.
 
