@@ -4,7 +4,8 @@ Testing with SOC Simulated Data
 Overview
 ************************************
 
-The SOC has generated simulated L2 files for the GBTDS survey.  These are located here::
+The SOC has generated simulated L2 files for the GBTDS survey (also referred to here as "socsims").
+These are located here::
 
     s3://stpubdata/roman/nexus/soc_simulations/r00340/l2/
 
@@ -80,7 +81,7 @@ The minimum and maximum observation times of the SOC sims cover about 8 days:
      2027-10-01 00:00:00 | 61679 | 2027-10-08 18:21:34 | 61686.76497685185
     (1 row)
 
-The images overlap a total of 109 sky-tiles (a.k.a. fields):
+The images overlap a total of 109 sky tiles (a.k.a. fields):
 
 .. code-block::
 
@@ -107,7 +108,166 @@ of the Open Univers sims is retained):
        8 | W146   | 80082
     (8 rows)
 
+It is see that most of the exposures by a large margin are taken with the W146 bandpass filter (``fid=8``).
+
 The WCS in the FITS files is represented by the TAN-SIP projection with fifth-order SIP distortion.
 Tests show this represents the WCS very well.  Two examples were examined to compare the
 absolute error in the WCS between fits and the original ASDF gWCS (SCAs 2 and 9).
 Across all 18 SCAs, the worst deviations are never larger than ~1e-6 of a pixel.
+
+
+6/6/2026
+************************************
+
+The first socsims test is limited to the first day of observations and the W146 bandpass filter(``fid=8``).
+
+Here are details about how the test was executed via the Virtual Pipeline Operator (VPO):
+
+.. code-block::
+
+    export DBNAME=socsimsdb
+    export STARTDATETIME="2027-10-01 07:12:00"
+    export ENDDATETIME="2027-10-02 00:00:00"
+    export STARTREFIMMJDOBS=61678.9
+    export ENDREFIMMJDOBS=61679.3
+    export MINREFIMNFRAMES=20
+    export RUNFID=8
+
+    python3.11 /code/pipeline/virtualPipelineOperator.py 20260606 >& virtualPipelineOperator_20260606.out &
+
+The ``STARTDATETIME`` and ``ENDDATETIME`` date/times exclude the first 20 or so images per field,
+which are reserved for reference-image generation.
+
+Here is a summary of the pipeline exit codes after the test:
+
+    .. code-block::
+
+    socsimsdb=> select ppid,exitcode,count(*) from jobs where cast(launched as date) = '20260606' group by ppid, exitcode order by ppid, exitcode;
+
+     ppid | exitcode | count
+    ------+----------+-------
+       15 |        0 |  7204
+       17 |        0 |  7204
+     (2 rows)
+
+Reference images were generated for 107 unique fields, again, only for the W146 bandpass filter(``fid=8``).
+The pipeline configuration file had the following setting: ``[REF_IMAGE] max_n_images_to_coadd = 25``.
+Because the socsims have sub-pixel dithers, the ``cov5percent`` coverage metric is only ~30-50 percent.
+
+    .. code-block::
+
+    socsimsdb=> select a.field,nframes,cov5percent from refimages a, refimmeta b where a.rfid=b.rfid and vbest>0 order by a.field;
+
+      field  | nframes | cov5percent
+    ---------+---------+-------------
+     4637678 |      21 |    32.73843
+     4641773 |      21 |   32.430183
+     4641775 |      25 |    42.77647
+     4645869 |      21 |   31.432497
+     4645873 |      21 |   33.729588
+     4649967 |      21 |   31.677393
+     4649970 |      21 |   33.681595
+     4654042 |      21 |    33.46265
+     4654060 |      21 |    33.27963
+     4654062 |      21 |   31.692574
+     4654064 |      21 |   32.606316
+     4654065 |      21 |   32.133385
+     4654068 |      21 |    32.70658
+     4654070 |      21 |   33.401962
+     4658155 |      21 |   32.693756
+     4658157 |      21 |   33.643055
+     4658159 |      21 |   31.684643
+     4658163 |      21 |     32.7347
+     4658165 |      21 |    32.72199
+     4662233 |      25 |   45.760822
+     4662235 |      21 |   33.543083
+     4662250 |      21 |   31.286154
+     4662254 |      21 |    33.72963
+     4662257 |      21 |   31.177967
+     4662258 |      25 |    42.45193
+     4662260 |      21 |    31.36813
+     4666328 |      21 |   31.773603
+     4666330 |      21 |    32.71913
+     4666332 |      21 |   33.729687
+     4666348 |      21 |   32.414513
+     4666352 |      21 |   33.735176
+     4670425 |      21 |   31.038904
+     4670427 |      21 |    32.75587
+     4670430 |      25 |   48.046066
+     4670431 |      21 |    33.64448
+     4670433 |      21 |     33.5287
+     4670441 |      22 |    33.41171
+     4670443 |      21 |    31.69581
+     4670445 |      21 |   32.726513
+     4670449 |      21 |    32.81417
+     4670451 |      21 |   33.402306
+     4674525 |      21 |   32.700558
+     4674536 |      22 |    32.69452
+     4674538 |      22 |    33.64378
+     4674540 |      21 |   31.656721
+     4674544 |      21 |    32.36977
+     4674546 |      25 |    42.57313
+     4678618 |      21 |   31.253231
+     4678620 |      21 |   31.602139
+     4678622 |      21 |    32.38252
+     4678624 |      21 |    32.72074
+     4678631 |      22 |    31.02836
+     4678636 |      22 |   33.320835
+     4678638 |      21 |    31.69249
+     4678640 |      21 |   31.448936
+     4682717 |      21 |   31.259579
+     4682719 |      25 |   41.772526
+     4682729 |      22 |   32.560844
+     4682733 |      22 |    33.73667
+     4682738 |      25 |    44.10697
+     4686822 |      22 |   33.091373
+     4686824 |      22 |   31.676891
+     4686827 |      22 |   32.531746
+     4686831 |      25 |   42.169044
+     4686833 |      22 |   33.529278
+     4690917 |      22 |   32.345646
+     4690920 |      22 |   33.224113
+     4690922 |      22 |   31.685425
+     4690924 |      22 |     32.0887
+     4690926 |      22 |    32.73542
+     4690928 |      22 |   32.722683
+     4695013 |      22 |    30.78574
+     4695017 |      22 |   33.725956
+     4695019 |      22 |   31.693172
+     4695021 |      22 |    31.59868
+     4699111 |      22 |   32.360275
+     4699114 |      22 |    33.48728
+     4699119 |      25 |   45.379913
+     4703204 |      22 |   33.462925
+     4703206 |      22 |   31.696457
+     4703208 |      22 |   32.756405
+     4703212 |      22 |   33.358307
+     4703214 |      22 |   33.529152
+     4707299 |      22 |    32.69443
+     4707301 |      22 |    33.64372
+     4707303 |      22 |   31.685322
+     4707305 |      22 |   31.871956
+     4707307 |      22 |    32.73533
+     4707309 |      22 |     32.7226
+     4711394 |      22 |    30.84438
+     4711398 |      22 |   33.724174
+     4711401 |      22 |   31.452185
+     4711402 |      25 |    40.58188
+     4715492 |      22 |    32.61433
+     4715496 |      22 |   33.736614
+     4715500 |      22 |   31.308329
+     4719587 |      22 |   31.696472
+     4719589 |      22 |   32.756424
+     4719593 |      22 |   32.923428
+     4719595 |      22 |   33.251926
+     4723684 |      22 |   31.676392
+     4723687 |      25 |   41.014404
+     4723688 |      22 |   32.262604
+     4723690 |      25 |    40.50013
+     4727782 |      22 |   31.693094
+     4727784 |      22 |   31.464005
+     4731882 |      22 |   31.031593
+    (107 rows)
+
+
+
