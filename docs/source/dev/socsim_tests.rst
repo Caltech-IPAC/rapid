@@ -140,7 +140,7 @@ which are reserved for reference-image generation.
 
 Here is a summary of the pipeline exit codes after the test:
 
-    .. code-block::
+.. code-block::
 
     socsimsdb=> select ppid,exitcode,count(*) from jobs where cast(launched as date) = '20260606' group by ppid, exitcode order by ppid, exitcode;
 
@@ -154,7 +154,7 @@ Reference images were generated for 107 unique fields, again, only for the W146 
 The pipeline configuration file had the following setting: ``[REF_IMAGE] max_n_images_to_coadd = 25``.
 Because the socsims have sub-pixel dithers, the ``cov5percent`` coverage metric is only ~30-50 percent.
 
-    .. code-block::
+.. code-block::
 
     socsimsdb=> select a.field,nframes,cov5percent from refimages a, refimmeta b where a.rfid=b.rfid and vbest>0 order by a.field;
 
