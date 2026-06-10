@@ -74,6 +74,17 @@ if skip_done_check is None:
 print(f"do_done_check = {do_done_check}")
 
 
+# Set SKIPLOADING to skip sources child database table creation and bulk loading of sources records.
+
+skip_loading = os.getenv('SKIPLOADING')
+
+do_loading = False
+if skip_loading is None:
+    do_loading = True
+
+print(f"do_loading = {do_loading}")
+
+
 # Print out basic information for log file.
 
 print("proc_date =",proc_date)
@@ -511,13 +522,12 @@ if __name__ == '__main__':
         exit(dbh.exit_code)
 
 
-    # Launch multi-processing for loading sources database tables.
+    # Set up to launch multi-processing for loading sources database tables.
 
     jid_list = []
     overlapping_fields_list = []
     meta_list = []
     scas_dict = {}
-
 
     for jid in recs:
 
@@ -596,6 +606,8 @@ if __name__ == '__main__':
 
         print("jid =",jid)
 
+    scas_list = scas_dict.keys()
+
 
     # Code-timing benchmark.
 
@@ -605,64 +617,68 @@ if __name__ == '__main__':
     start_time_benchmark = end_time_benchmark
 
 
-    # Create sources database tables for all SCAs associated with processing date.
-
-    print("Creating sources database tables for all SCAs associated with processing date...")
-
-    sql_queries = []
-    sql_queries.append("SET default_tablespace = pipeline_data_01;")
-
-    scas_list = scas_dict.keys()
-
-    for sca in scas_list:
-
-        tablename = f"sources_{proc_date}_{sca}"
-
-        sql_queries.append(f"SELECT to_regclass('public.{tablename}') IS NOT NULL;")
-        sql_queries.append(f"CREATE TABLE {tablename} (LIKE sources INCLUDING DEFAULTS INCLUDING CONSTRAINTS);")
-        sql_queries.append(f"ALTER TABLE {tablename} SET UNLOGGED;")
-        sql_queries.append(f"ALTER TABLE {tablename} INHERIT sources;")
-
-    dbh.execute_sql_queries(sql_queries)
-
-    if dbh.exit_code >= 64:
-        exit(dbh.exit_code)
+    # Skip sources child database table creation and bulk loading of sources records.
 
 
-    # Code-timing benchmark.
-
-    end_time_benchmark = time.time()
-    print("Elapsed time in seconds to create sources database tables for all SCAs associated with processing date =",
-        end_time_benchmark - start_time_benchmark)
-    start_time_benchmark = end_time_benchmark
+    if do_loading:
 
 
-    ################################################################################
-    # Execute sources-table-loading tasks for all science-pipeline jobs with jids on
-    # a given processing date.  The execution is done in parallel, with the number
-    # of parallel threads equal to the number of cores on the job-launcher machine.
-    # First do for sources from positive difference images, and then from negative.
-    ################################################################################
+        # Create sources database tables for all SCAs associated with processing date.
 
-    if num_cores > 1:
-        negative_diffimg_flag = False
-        execute_parallel_processes(jid_list,overlapping_fields_list,meta_list,negative_diffimg_flag,num_cores)
-        negative_diffimg_flag = True
-        execute_parallel_processes(jid_list,overlapping_fields_list,meta_list,negative_diffimg_flag,num_cores)
-    else:
-        thread_index = 0
-        negative_diffimg_flag = False
-        run_single_core_job(jid_list,overlapping_fields_list,meta_list,negative_diffimg_flag,thread_index)
-        negative_diffimg_flag = True
-        run_single_core_job(jid_list,overlapping_fields_list,meta_list,negative_diffimg_flag,thread_index)
+        print("Creating sources database tables for all SCAs associated with processing date...")
+
+        sql_queries = []
+        sql_queries.append("SET default_tablespace = pipeline_data_01;")
+
+        for sca in scas_list:
+
+            tablename = f"sources_{proc_date}_{sca}"
+
+            sql_queries.append(f"SELECT to_regclass('public.{tablename}') IS NOT NULL;")
+            sql_queries.append(f"CREATE TABLE {tablename} (LIKE sources INCLUDING DEFAULTS INCLUDING CONSTRAINTS);")
+            sql_queries.append(f"ALTER TABLE {tablename} SET UNLOGGED;")
+            sql_queries.append(f"ALTER TABLE {tablename} INHERIT sources;")
+
+        dbh.execute_sql_queries(sql_queries)
+
+        if dbh.exit_code >= 64:
+            exit(dbh.exit_code)
 
 
-    # Code-timing benchmark.
+        # Code-timing benchmark.
 
-    end_time_benchmark = time.time()
-    print("Elapsed time in seconds to load all sources database tables =",
-        end_time_benchmark - start_time_benchmark)
-    start_time_benchmark = end_time_benchmark
+        end_time_benchmark = time.time()
+        print("Elapsed time in seconds to create sources database tables for all SCAs associated with processing date =",
+            end_time_benchmark - start_time_benchmark)
+        start_time_benchmark = end_time_benchmark
+
+
+        ################################################################################
+        # Execute sources-table-loading tasks for all science-pipeline jobs with jids on
+        # a given processing date.  The execution is done in parallel, with the number
+        # of parallel threads equal to the number of cores on the job-launcher machine.
+        # First do for sources from positive difference images, and then from negative.
+        ################################################################################
+
+        if num_cores > 1:
+            negative_diffimg_flag = False
+            execute_parallel_processes(jid_list,overlapping_fields_list,meta_list,negative_diffimg_flag,num_cores)
+            negative_diffimg_flag = True
+            execute_parallel_processes(jid_list,overlapping_fields_list,meta_list,negative_diffimg_flag,num_cores)
+        else:
+            thread_index = 0
+            negative_diffimg_flag = False
+            run_single_core_job(jid_list,overlapping_fields_list,meta_list,negative_diffimg_flag,thread_index)
+            negative_diffimg_flag = True
+            run_single_core_job(jid_list,overlapping_fields_list,meta_list,negative_diffimg_flag,thread_index)
+
+
+        # Code-timing benchmark.
+
+        end_time_benchmark = time.time()
+        print("Elapsed time in seconds to load all sources database tables =",
+            end_time_benchmark - start_time_benchmark)
+        start_time_benchmark = end_time_benchmark
 
 
     # Index, cluster, and apply grants to sources database tables for all SCAs associated with processing date.
