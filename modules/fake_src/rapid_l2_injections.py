@@ -1,3 +1,4 @@
+import argparse
 import importlib
 import json
 import numpy as np
@@ -282,3 +283,31 @@ def inject_variable_stars_into_l2(asdf_path, catalog_list_file, output_path,
     result.save(output_path)
 
     return result, injection_catalog
+
+
+if __name__ == '__main__':
+    parser = argparse.ArgumentParser(
+        description='Inject variable stars into a Roman L2 ASDF file.')
+    parser.add_argument('asdf_path',
+                        help='Path or S3 URI of the input L2 ASDF file.')
+    parser.add_argument('catalog_list_file',
+                        help='Text file listing one JSON field catalog path per line.')
+    parser.add_argument('output_path',
+                        help='Output ASDF file path for the image with injected sources.')
+    parser.add_argument('--fix-wcs', action='store_true',
+                        help='Rerun AssignWcsStep to restore the nominal WCS '
+                             '(required for current SOC GBTDS simulations).')
+    parser.add_argument('--seed', type=int, default=None,
+                        help='Integer random seed for reproducibility.')
+    args = parser.parse_args()
+
+    result, catalog = inject_variable_stars_into_l2(
+        args.asdf_path,
+        args.catalog_list_file,
+        args.output_path,
+        fix_wcs=args.fix_wcs,
+        seed=args.seed)
+
+    print(f"Done. {len(catalog)} sources injected.")
+    if len(catalog) > 0:
+        catalog.pprint(max_lines=20)
