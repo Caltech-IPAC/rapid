@@ -413,6 +413,10 @@ def run_single_core_job(jids,overlapping_fields_list,meta_list,negative_diffimg_
 
         dbh.copy_data_from_file_into_database(sources_table_file,sources_table,columns)
 
+        if dbh.exit_code >= 64:
+            fh.write(f"*** Error bulk-loading data from file ({sources_table_file}) into specified database table ({sources_table}); quitting...\n")
+            exit(dbh.exit_code)
+
 
         # Touch done file.  Upload done file to S3 bucket.
 
