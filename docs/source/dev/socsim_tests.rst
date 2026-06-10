@@ -120,6 +120,10 @@ Across all 18 SCAs, the worst deviations are never larger than ~1e-6 of a pixel
 ************************************
 
 The first socsims test is limited to the first day of observations and the W146 bandpass filter(``fid=8``).
+This test covers 7,204 science images.  Fake variable sources with fixed sky positions were injected, 100 per science image.
+Thus, lightcurves can be generated from extractions
+of these fake sources over time.  The fake-source injection of variables has also been
+extended to the input science images that are used to build the reference images.
 
 Here are details about how the test was executed via the Virtual Pipeline Operator (VPO):
 
