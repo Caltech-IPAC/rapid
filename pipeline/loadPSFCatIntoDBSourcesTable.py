@@ -645,6 +645,14 @@ if __name__ == '__main__':
             exit(dbh.exit_code)
 
 
+        # Close main-program database connection before long episode of bulk-loading source records.
+
+        dbh.close()
+
+        if dbh.exit_code >= 64:
+            exit(dbh.exit_code)
+
+
         # Code-timing benchmark.
 
         end_time_benchmark = time.time()
@@ -679,6 +687,24 @@ if __name__ == '__main__':
         print("Elapsed time in seconds to load all sources database tables =",
             end_time_benchmark - start_time_benchmark)
         start_time_benchmark = end_time_benchmark
+
+    else:
+
+
+        # Close main-program database connection.
+
+        dbh.close()
+
+        if dbh.exit_code >= 64:
+            exit(dbh.exit_code)
+
+
+    # Reopen main-program database connection.
+
+    dbh = db.RAPIDDB()
+
+    if dbh.exit_code >= 64:
+        exit(dbh.exit_code)
 
 
     # Index, cluster, and apply grants to sources database tables for all SCAs associated with processing date.
