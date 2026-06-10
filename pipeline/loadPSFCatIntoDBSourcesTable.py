@@ -420,6 +420,25 @@ def run_single_core_job(jids,overlapping_fields_list,meta_list,negative_diffimg_
                 csv_fh.write(line_to_write_to_file)
 
 
+        # Check whether database connection is still alive.
+
+        if dbh.is_connection_alive():
+
+            print("Database is responsive!")
+
+        else:
+
+            print("Database is not responsive! Connection is dead. Re-establishment required...")
+
+
+            # Open database connection.
+
+            dbh = db.RAPIDDB()
+
+            if dbh.exit_code >= 64:
+                exit(dbh.exit_code)
+
+
         # Load records into sources database tables.
 
         dbh.copy_data_from_file_into_database(sources_table_file,sources_table,columns)
