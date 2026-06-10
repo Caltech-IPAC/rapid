@@ -158,7 +158,6 @@ class RAPIDDB:
         Close database cursor and then connection.
         '''
 
-
         try:
             self.cur.close()
         except (Exception, psycopg2.DatabaseError) as error:
