@@ -169,6 +169,17 @@ class RAPIDDB:
                 self.conn.close()
                 print('Database connection closed.')
 
+########################################################################################################
+
+    def is_connection_alive():
+
+        try:
+            # Open a temporary cursor and run a minimal query
+            with self.conn.cursor() as cur:
+                cur.execute("SELECT 1;")
+            return True
+        except (psycopg2.OperationalError, psycopg2.InterfaceError):
+            return False
 
 ########################################################################################################
 
