@@ -428,7 +428,7 @@ def run_single_core_job(jids,overlapping_fields_list,meta_list,negative_diffimg_
 
         # Remove no-longer-needed intermediate files.
 
-        file_paths = [output_psfcat_finder_filename_for_jid, sources_table_file]
+        file_paths = [output_psfcat_filename_for_jid,output_psfcat_finder_filename_for_jid,sources_table_file]
         for file_path in file_paths:
 
             if os.path.exists(file_path):
