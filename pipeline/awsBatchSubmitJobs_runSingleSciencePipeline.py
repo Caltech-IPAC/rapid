@@ -1,12 +1,30 @@
-###############################################################################
-# RAPID pipeline output_diffimage_file_infobits:
-# BIT 0, No photutils catalog for ZOGY positive difference image was made.
-# BIT 1, No photutils catalog for ZOGY negative difference image was made.
-# BIT 2, No photutils catalog for SFFT positive difference image was made.
-# BIT 3, No photutils catalog for SFFT negative difference image was made.
-# BIT 4, No photutils catalog for naive positive difference image was made.
-# BIT 5, No photutils catalog for naive negative difference image was made.
-###############################################################################
+'''
+RAPID Science pipeline
+
+
+Terminating exit codes:
+
+=============       =========================================
+exit_code            Definition
+=============       =========================================
+    0                Normal termination
+    4                SFFT did not execute successfully
+=============       =========================================
+
+
+RAPID pipeline output_diffimage_file_infobits:
+
+==========  ==========================================================================
+infobit     Definition
+==========  ==========================================================================
+     0      No photutils catalog for ZOGY positive difference image was made.
+     1      No photutils catalog for ZOGY negative difference image was made.
+     2      No photutils catalog for SFFT positive difference image was made.
+     3      No photutils catalog for SFFT negative difference image was made.
+     4      No photutils catalog for naive positive difference image was made.
+     5      No photutils catalog for naive negative difference image was made.
+==========  ==========================================================================
+ '''
 
 import os
 import ast
@@ -291,7 +309,7 @@ if __name__ == '__main__':
     # Code-timing benchmark.
 
     end_time_benchmark = time.time()
-    print("Elapsed time in seconds after downloading science image =",end_time_benchmark - start_time_benchmark)
+    print("Elapsed time in seconds after downloading science image =",round(end_time_benchmark - start_time_benchmark,3))
     start_time_benchmark = end_time_benchmark
 
 
@@ -307,7 +325,7 @@ if __name__ == '__main__':
         # Code-timing benchmark.
 
         end_time_benchmark = time.time()
-        print("Elapsed time in seconds after uploading science image to product S3 bucket =",end_time_benchmark - start_time_benchmark)
+        print("Elapsed time in seconds after uploading science image to product S3 bucket =",round(end_time_benchmark - start_time_benchmark,3))
         start_time_benchmark = end_time_benchmark
 
 
@@ -552,7 +570,7 @@ if __name__ == '__main__':
 
     end_time_benchmark = time.time()
     print("Elapsed time in seconds after downloading or generating reference image =",
-        end_time_benchmark - start_time_benchmark)
+        round(end_time_benchmark - start_time_benchmark,3))
     start_time_benchmark = end_time_benchmark
 
 
@@ -703,7 +721,7 @@ if __name__ == '__main__':
             # Code-timing benchmark.
 
             end_time_benchmark = time.time()
-            print("Elapsed time in seconds after uploading reference image to S3 product bucket =",end_time_benchmark - start_time_benchmark)
+            print("Elapsed time in seconds after uploading reference image to S3 product bucket =",round(end_time_benchmark - start_time_benchmark,3))
             start_time_benchmark = end_time_benchmark
 
 
@@ -824,7 +842,7 @@ if __name__ == '__main__':
         # Code-timing benchmark.
 
         end_time_benchmark = time.time()
-        print("Elapsed time in seconds after injecting fake sources =",end_time_benchmark - start_time_benchmark)
+        print("Elapsed time in seconds after injecting fake sources =",round(end_time_benchmark - start_time_benchmark,3))
         start_time_benchmark = end_time_benchmark
 
 
@@ -896,7 +914,7 @@ if __name__ == '__main__':
     # Code-timing benchmark.
 
     end_time_benchmark = time.time()
-    print("Elapsed time in seconds after generating science-image catalog =",end_time_benchmark - start_time_benchmark)
+    print("Elapsed time in seconds after generating science-image catalog =",round(end_time_benchmark - start_time_benchmark,3))
     start_time_benchmark = end_time_benchmark
 
 
@@ -929,7 +947,7 @@ if __name__ == '__main__':
     # Code-timing benchmark.
 
     end_time_benchmark = time.time()
-    print("Elapsed time in seconds after swarping images =",end_time_benchmark - start_time_benchmark)
+    print("Elapsed time in seconds after swarping images =",round(end_time_benchmark - start_time_benchmark,3))
     start_time_benchmark = end_time_benchmark
 
 
@@ -974,7 +992,7 @@ if __name__ == '__main__':
 
     end_time_benchmark = time.time()
     print("Elapsed time in seconds after running bkgest on science image =",
-        end_time_benchmark - start_time_benchmark)
+        round(end_time_benchmark - start_time_benchmark,3))
     start_time_benchmark = end_time_benchmark
 
 
@@ -1024,7 +1042,7 @@ if __name__ == '__main__':
 
     end_time_benchmark = time.time()
     print("Elapsed time in seconds after running gainMatchScienceAndReferenceImages =",
-        end_time_benchmark - start_time_benchmark)
+        round(end_time_benchmark - start_time_benchmark,3))
     start_time_benchmark = end_time_benchmark
 
 
@@ -1084,7 +1102,7 @@ if __name__ == '__main__':
 
     end_time_benchmark = time.time()
     print("Elapsed time in seconds after replacing NaNs, applying image offsets, etc. =",
-        end_time_benchmark - start_time_benchmark)
+        round(end_time_benchmark - start_time_benchmark,3))
     start_time_benchmark = end_time_benchmark
 
 
@@ -1125,7 +1143,7 @@ if __name__ == '__main__':
         # Code-timing benchmark.
 
         end_time_benchmark = time.time()
-        print("Elapsed time in seconds after uploading intermediate FITS files to product S3 bucket =",end_time_benchmark - start_time_benchmark)
+        print("Elapsed time in seconds after uploading intermediate FITS files to product S3 bucket =",round(end_time_benchmark - start_time_benchmark,3))
         start_time_benchmark = end_time_benchmark
 
 
@@ -1180,7 +1198,7 @@ if __name__ == '__main__':
 
     end_time_benchmark = time.time()
     print("Elapsed time in seconds after running ZOGY =",
-        end_time_benchmark - start_time_benchmark)
+        round(end_time_benchmark - start_time_benchmark,3))
     start_time_benchmark = end_time_benchmark
 
 
@@ -1250,7 +1268,7 @@ if __name__ == '__main__':
 
     end_time_benchmark = time.time()
     print("Elapsed time in seconds after masking ZOGY difference image =",
-        end_time_benchmark - start_time_benchmark)
+        round(end_time_benchmark - start_time_benchmark,3))
     start_time_benchmark = end_time_benchmark
 
 
@@ -1319,7 +1337,7 @@ if __name__ == '__main__':
 
     end_time_benchmark = time.time()
     print("Elapsed time in seconds after running SExtractor on positive ZOGY difference image =",
-        end_time_benchmark - start_time_benchmark)
+        round(end_time_benchmark - start_time_benchmark,3))
     start_time_benchmark = end_time_benchmark
 
 
@@ -1368,7 +1386,7 @@ if __name__ == '__main__':
 
     end_time_benchmark = time.time()
     print("Elapsed time in seconds after running SExtractor on negative ZOGY difference image =",
-        end_time_benchmark - start_time_benchmark)
+        round(end_time_benchmark - start_time_benchmark,3))
     start_time_benchmark = end_time_benchmark
 
 
@@ -1480,7 +1498,7 @@ if __name__ == '__main__':
 
     end_time_benchmark = time.time()
     print("Elapsed time in seconds after generating PSF-fit catalog on positive ZOGY difference image =",
-        end_time_benchmark - start_time_benchmark)
+        round(end_time_benchmark - start_time_benchmark,3))
     start_time_benchmark = end_time_benchmark
 
 
@@ -1592,7 +1610,7 @@ if __name__ == '__main__':
 
     end_time_benchmark = time.time()
     print("Elapsed time in seconds after generating PSF-fit catalog on negative ZOGY difference image =",
-        end_time_benchmark - start_time_benchmark)
+        round(end_time_benchmark - start_time_benchmark,3))
     start_time_benchmark = end_time_benchmark
 
 
@@ -1688,7 +1706,7 @@ if __name__ == '__main__':
 
         end_time_benchmark = time.time()
         print("Elapsed time in seconds after uploading main products to S3 bucket =",
-            end_time_benchmark - start_time_benchmark)
+            round(end_time_benchmark - start_time_benchmark,3))
         start_time_benchmark = end_time_benchmark
 
 
@@ -1848,7 +1866,7 @@ if __name__ == '__main__':
 
         end_time_benchmark = time.time()
         print("Elapsed time in seconds after running SFFT =",
-            end_time_benchmark - start_time_benchmark)
+            round(end_time_benchmark - start_time_benchmark,3))
         start_time_benchmark = end_time_benchmark
 
 
@@ -1956,7 +1974,7 @@ if __name__ == '__main__':
 
                 end_time_benchmark = time.time()
                 print("Elapsed time in seconds after uploading SFFT difference image to S3 product bucket =",
-                    end_time_benchmark - start_time_benchmark)
+                    round(end_time_benchmark - start_time_benchmark,3))
                 start_time_benchmark = end_time_benchmark
 
 
@@ -2009,7 +2027,7 @@ if __name__ == '__main__':
 
             end_time_benchmark = time.time()
             print("Elapsed time in seconds after running SExtractor on positive SFFT difference images =",
-                end_time_benchmark - start_time_benchmark)
+                round(end_time_benchmark - start_time_benchmark,3))
             start_time_benchmark = end_time_benchmark
 
 
@@ -2062,7 +2080,7 @@ if __name__ == '__main__':
 
             end_time_benchmark = time.time()
             print("Elapsed time in seconds after running SExtractor on negative SFFT difference images =",
-                end_time_benchmark - start_time_benchmark)
+                round(end_time_benchmark - start_time_benchmark,3))
             start_time_benchmark = end_time_benchmark
 
 
@@ -2087,7 +2105,7 @@ if __name__ == '__main__':
 
                 end_time_benchmark = time.time()
                 print("Elapsed time in seconds after uploading SFFT-diffimage SExtractor catalogs to S3 product bucket =",
-                    end_time_benchmark - start_time_benchmark)
+                    round(end_time_benchmark - start_time_benchmark,3))
                 start_time_benchmark = end_time_benchmark
 
 
@@ -2201,7 +2219,7 @@ if __name__ == '__main__':
 
             end_time_benchmark = time.time()
             print("Elapsed time in seconds after generating PSF-fit catalog on positive SFFT difference image =",
-                end_time_benchmark - start_time_benchmark)
+                round(end_time_benchmark - start_time_benchmark,3))
             start_time_benchmark = end_time_benchmark
 
 
@@ -2315,7 +2333,7 @@ if __name__ == '__main__':
 
             end_time_benchmark = time.time()
             print("Elapsed time in seconds after generating PSF-fit catalog on negative SFFT difference image =",
-                end_time_benchmark - start_time_benchmark)
+                round(end_time_benchmark - start_time_benchmark,3))
             start_time_benchmark = end_time_benchmark
 
 
@@ -2362,7 +2380,7 @@ if __name__ == '__main__':
 
                 end_time_benchmark = time.time()
                 print("Elapsed time in seconds after uploading SFFT-diffimage PSF-fit catalogs to S3 product bucket =",
-                    end_time_benchmark - start_time_benchmark)
+                    round(end_time_benchmark - start_time_benchmark,3))
                 start_time_benchmark = end_time_benchmark
 
 
@@ -2431,7 +2449,7 @@ if __name__ == '__main__':
 
         end_time_benchmark = time.time()
         print("Elapsed time in seconds after computing naive difference images =",
-            end_time_benchmark - start_time_benchmark)
+            round(end_time_benchmark - start_time_benchmark,3))
         start_time_benchmark = end_time_benchmark
 
 
@@ -2456,7 +2474,7 @@ if __name__ == '__main__':
 
             end_time_benchmark = time.time()
             print("Elapsed time in seconds after uploading naive difference images to S3 product bucket =",
-                end_time_benchmark - start_time_benchmark)
+                round(end_time_benchmark - start_time_benchmark,3))
             start_time_benchmark = end_time_benchmark
 
 
@@ -2505,7 +2523,7 @@ if __name__ == '__main__':
 
         end_time_benchmark = time.time()
         print("Elapsed time in seconds after running SExtractor on positive naive difference image =",
-            end_time_benchmark - start_time_benchmark)
+            round(end_time_benchmark - start_time_benchmark,3))
         start_time_benchmark = end_time_benchmark
 
 
@@ -2539,7 +2557,7 @@ if __name__ == '__main__':
 
         end_time_benchmark = time.time()
         print("Elapsed time in seconds after running SExtractor on negative naive difference image =",
-            end_time_benchmark - start_time_benchmark)
+            round(end_time_benchmark - start_time_benchmark,3))
         start_time_benchmark = end_time_benchmark
 
 
@@ -2567,7 +2585,7 @@ if __name__ == '__main__':
 
             end_time_benchmark = time.time()
             print("Elapsed time in seconds after uploading SExtractor catalogs for naive difference images to S3 product bucket =",
-                end_time_benchmark - start_time_benchmark)
+                round(end_time_benchmark - start_time_benchmark,3))
             start_time_benchmark = end_time_benchmark
 
 
@@ -2666,7 +2684,7 @@ if __name__ == '__main__':
 
             end_time_benchmark = time.time()
             print("Elapsed time in seconds after generating PSF-fit catalog on positive naive difference image =",
-                end_time_benchmark - start_time_benchmark)
+                round(end_time_benchmark - start_time_benchmark,3))
             start_time_benchmark = end_time_benchmark
 
 
@@ -2765,7 +2783,7 @@ if __name__ == '__main__':
 
             end_time_benchmark = time.time()
             print("Elapsed time in seconds after generating PSF-fit catalog on negative naive difference image =",
-                end_time_benchmark - start_time_benchmark)
+                round(end_time_benchmark - start_time_benchmark,3))
             start_time_benchmark = end_time_benchmark
 
 
@@ -2802,7 +2820,7 @@ if __name__ == '__main__':
 
                 end_time_benchmark = time.time()
                 print("Elapsed time in seconds after uploading PSF-fit catalogs for naive difference images to S3 product bucket =",
-                    end_time_benchmark - start_time_benchmark)
+                    round(end_time_benchmark - start_time_benchmark,3))
                 start_time_benchmark = end_time_benchmark
 
 
@@ -2865,7 +2883,7 @@ if __name__ == '__main__':
 
         end_time_benchmark = time.time()
         print("Elapsed time in seconds after uploading products at pipeline end to S3 product bucket =",
-            end_time_benchmark - start_time_benchmark)
+            round(end_time_benchmark - start_time_benchmark,3))
         start_time_benchmark = end_time_benchmark
 
 
@@ -2873,7 +2891,7 @@ if __name__ == '__main__':
 
     end_time_benchmark = time.time()
     print("Elapsed time in seconds to run one instance of science pipeline =",
-        end_time_benchmark - start_time_benchmark_at_start)
+        round(end_time_benchmark - start_time_benchmark_at_start,3))
 
 
     # Termination.
