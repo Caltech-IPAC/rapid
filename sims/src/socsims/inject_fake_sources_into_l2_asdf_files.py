@@ -3,6 +3,11 @@ Input L2 ASDF file.
 Correct gWCS.
 Inject fake variable sources.
 Output L2 ASDF file in a different S3 bucket.
+
+Requires the following for correction to gWCS:
+
+export CRDS_PATH=$HOME/crds_cache
+export CRDS_SERVER_URL=https://roman-crds.stsci.edu
 '''
 
 import os
@@ -24,6 +29,7 @@ to_zone = tz.gettz('America/Los_Angeles')
 
 import modules.utils.rapid_pipeline_subs as util
 import modules.fake_src.rapid_l2_injections as fksrc
+import database.modules.utils.roman_tessellation_db as sqlite
 
 
 # Define code name and version.
