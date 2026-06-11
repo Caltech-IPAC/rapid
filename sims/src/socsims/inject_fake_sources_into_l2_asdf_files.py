@@ -140,7 +140,7 @@ config_input.read(config_input_filename)
 
 verbose = int(config_input['JOB_PARAMS']['verbose'])
 debug = int(config_input['JOB_PARAMS']['debug'])
-job_info_s3_bucket_base = config_input['JOB_PARAMS']['job_info_s3_bucket_base']
+job_info_s3_bucket = config_input['JOB_PARAMS']['job_info_s3_bucket_base']
 
 fake_sources_dict = config_input['FAKE_SOURCES']
 
