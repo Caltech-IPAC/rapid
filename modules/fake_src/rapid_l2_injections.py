@@ -11,13 +11,12 @@ import roman_datamodels.datamodels as rdm_datamodels
 from astropy.table import Table
 from romancal.assign_wcs import AssignWcsStep
 
-import romanisim.parameters as rsim_parameters
+import romanisim.models.parameters as rsim_parameters
 import romanisim.psf
 import romanisim.wcs
 from romanisim.image import inject_sources_into_l2
 
-from injectionLightCurveModels import SinusoidalLightCurve, GaussianLightCurve
-
+from modules.fake_src.injectionLightCurveModels import SinusoidalLightCurve, GaussianLightCurve
 
 class GriddedEPSF:
     """Spatially variable ePSF backed by the full CRDS GriddedPSFModel.
