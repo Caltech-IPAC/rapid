@@ -393,7 +393,7 @@ def correct_gwcs_inject_fake_variable_sources_output_asdf_file(input_asdf_path, 
     # Define injection catalog files and download injection catalogs from S3 bucket.
 
     file_content = ""
-    for overlapping_field in overlapping_fields_sciimage:
+    for overlapping_field in refimg_overlapping_rtids:
         injection_catalog_filename = f"injection_catalog_rtid{overlapping_field}.json"
         s3_full_name_injection_catalog = f"s3://{job_info_s3_bucket}/injection_catalogs/{injection_catalog_filename}"
         injection_catalog_filename,subdirs,downloaded_from_bucket = util.download_file_from_s3_bucket(s3_client,s3_full_name_injection_catalog)
