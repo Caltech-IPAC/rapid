@@ -43,16 +43,19 @@ class GriddedEPSF:
 def _open_l2_asdf(asdf_path):
     """Open an L2 ASDF file from a local path or S3 URI.
 
-    Returns a copied ImageModel (in-memory, safe to modify).
+    For local files the ASDF file handle stays open (backed by the model)
+    so block data remains accessible throughout processing. For S3,
+    copy_arrays=True forces all arrays into numpy memory before the
+    connection closes.
     """
     if asdf_path.startswith('s3://'):
         import s3fs
         fs = s3fs.S3FileSystem(anon=True)
         with fs.open(asdf_path, 'rb') as f:
-            with asdf.open(f) as af:
+            with asdf.open(f, copy_arrays=True) as af:
                 dm = rdm.open(af).copy()
     else:
-        dm = rdm_datamodels.open(asdf_path).copy()
+        dm = rdm_datamodels.open(asdf_path)
     return dm
 
 
