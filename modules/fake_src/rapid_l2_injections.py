@@ -18,6 +18,7 @@ from romanisim.image import inject_sources_into_l2
 
 from modules.fake_src.injectionLightCurveModels import SinusoidalLightCurve, GaussianLightCurve
 
+
 class GriddedEPSF:
     """Spatially variable ePSF backed by the full CRDS GriddedPSFModel.
 
