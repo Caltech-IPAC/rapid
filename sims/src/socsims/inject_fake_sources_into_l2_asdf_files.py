@@ -36,6 +36,7 @@ import database.modules.utils.roman_tessellation_db as sqlite
 
 swname = "inject_fake_sources_into_l2_asdf_files.py"
 swvers = "1.0"
+cfg_filename_only = "awsBatchSubmitJobs_launchSingleSciencePipeline.ini"
 
 debug = 1
 
