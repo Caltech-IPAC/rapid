@@ -355,7 +355,7 @@ def correct_gwcs_inject_fake_variable_sources_output_asdf_file(input_asdf_path, 
     # ------------------------------------------------------------------ #
     # WCS                                                                  #
     # ------------------------------------------------------------------ #
-    wcs_obj   = dm.meta.wcs              # gwcs.WCS instance
+    gwcs_obj   = dm.meta.wcs              # gwcs.WCS instance
 
 
     # Compute center of ASDF image.  Image pixel coordinates must be zero-based.
