@@ -1,9 +1,9 @@
-''''
+'''
 Input L2 ASDF file.
 Correct gWCS.
 Inject fake variable sources.
 Output L2 ASDF file in a different S3 bucket.
-''''
+'''
 
 import os
 import boto3
