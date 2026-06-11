@@ -38,6 +38,9 @@ swname = "inject_fake_sources_into_l2_asdf_files.py"
 swvers = "1.0"
 cfg_filename_only = "awsBatchSubmitJobs_launchSingleSciencePipeline.ini"
 
+python_cmd = '/usr/bin/python3.11'
+generate_injection_catalog_code = '/code/modules/fake_src/generateInjectionCatalogForField.py'
+
 debug = 1
 
 print("swname =", swname)
@@ -213,6 +216,7 @@ def run_single_core_job(asdf_files,index_thread):
         # Correct gWCS.  Inject fake variable sources.  Output local L2 ASDF file.
 
         correct_gwcs_inject_fake_variable_sources_output_asdf_file(
+            fh,
             input_asdf_file,
             output_asdf_file
             )
@@ -333,9 +337,9 @@ def execute_command_in_shell(bash_command,fname_out=None):
     return returncode,code_to_execute_stdout
 
 
-def correct_gwcs_inject_fake_variable_sources_output_asdf_file(input_asdf_path, output_asdf_path):
+def correct_gwcs_inject_fake_variable_sources_output_asdf_file(fh, input_asdf_path, output_asdf_path):
 
-    print(f"Reading {input_asdf_path}...")
+    fh.write(f"Reading {input_asdf_path}...\n")
     original_dm = rdm.open(input_asdf_path)
 
 
@@ -368,11 +372,11 @@ def correct_gwcs_inject_fake_variable_sources_output_asdf_file(input_asdf_path, 
     if isinstance(sky, SkyCoord):
         ra = sky.ra.deg
         dec = sky.dec.deg
-        print(f"===asdf===>x,y,ra,dec = {x},{y},{ra},{dec}")
+        fh.write(f"===asdf===>x,y,ra,dec = {x},{y},{ra},{dec}\n")
     else:
         # Some gwcs objects return (lon, lat) arrays directly
         ra, dec = np.asarray(sky[0]), np.asarray(sky[1])
-        print(f"x,y,ra,dec = {x},{y},{ra},{dec}")
+        fh.write(f"x,y,ra,dec = {x},{y},{ra},{dec}\n")
 
 
     # Compute field.
@@ -397,13 +401,29 @@ def correct_gwcs_inject_fake_variable_sources_output_asdf_file(input_asdf_path, 
         injection_catalog_filename = f"injection_catalog_rtid{overlapping_field}.json"
         s3_full_name_injection_catalog = f"s3://{job_info_s3_bucket}/injection_catalogs/{injection_catalog_filename}"
         injection_catalog_filename,subdirs,downloaded_from_bucket = util.download_file_from_s3_bucket(s3_client,s3_full_name_injection_catalog)
-        print("s3_full_name_injection_catalog = ",s3_full_name_injection_catalog)
-        print("injection_catalog_filename = ",injection_catalog_filename)
+        fh.write(f"s3_full_name_injection_catalog = {s3_full_name_injection_catalog}\n")
+        fh.write(f"injection_catalog_filename = {injection_catalog_filename}\n")
         if downloaded_from_bucket:
             file_content += f"{injection_catalog_filename}\n"
         else:
-            print(f"*** Warning: Injection catalog is missing ({injection_catalog_filename}); quitting...")
-            exit(64)
+
+
+            # Launch script to generate injection catalog for field.
+
+            fh.write(f"*** Warning: Injection catalog is missing ({injection_catalog_filename}); generating catalog...\n")
+
+            generate_injection_catalog_cmd = [python_cmd,
+                                              generate_injection_catalog_code,
+                                              str(overlapping_field)]
+
+            exitcode_from_generate_injection_catalog_cmd = util.execute_command(generate_injection_catalog_cmd)
+
+
+            # Upload fake-source injection catalog to product S3 bucket.
+
+            s3_object_name_injection_catalog = "injection_catalogs/" + injection_catalog_filename
+
+            util.upload_files_to_s3_bucket(s3_client,job_info_s3_bucket,[injection_catalog_filename],[s3_object_name_injection_catalog])
 
 
     # Write injection-catalog-list file.
@@ -433,7 +453,7 @@ def correct_gwcs_inject_fake_variable_sources_output_asdf_file(input_asdf_path, 
 
     exitcode_from_fake_sources = util.execute_command(fake_sources_cmd)
 
-    print(f"exitcode_from_fake_sources={exitcode_from_fake_sources}")
+    fh.write(f"exitcode_from_fake_sources={exitcode_from_fake_sources}\n")
 
     return
 
