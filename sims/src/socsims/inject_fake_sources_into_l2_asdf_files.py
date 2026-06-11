@@ -441,7 +441,6 @@ def correct_gwcs_inject_fake_variable_sources_output_asdf_file(fh, input_asdf_pa
     injection_mag_min = fake_sources_dict['mag_min']
     injection_mag_max = fake_sources_dict['mag_max']
 
-    python_cmd = '/usr/bin/python3.11'
     fake_sources_code = rapid_sw + '/modules/fake_src/rapid_l2_injections.py'
 
     fake_sources_cmd = [python_cmd,
