@@ -156,7 +156,7 @@ def run_single_core_job(asdf_files,index_thread):
 
 
     '''
-    Convert a single ASDF file into an ASDF file with fake variables.
+    Convert a single ASDF file into an ASDF file with injected fake variables.
     '''
 
 
@@ -254,7 +254,7 @@ def run_single_core_job(asdf_files,index_thread):
 
         thread_end_time_benchmark = time.time()
         diff_time_benchmark = thread_end_time_benchmark - thread_start_time_benchmark
-        fh.write(f"Elapsed time in seconds to convert ASDF file to ASDF file with fake variables = {diff_time_benchmark}\n")
+        fh.write(f"Elapsed time in seconds to convert ASDF file to ASDF file with injected fake variables = {diff_time_benchmark}\n")
         thread_start_time_benchmark = thread_end_time_benchmark
 
 
@@ -297,7 +297,7 @@ def execute_parallel_processes(asdf_files_list,num_cores=None):
 
 
 #-------------------------------------------------------------------------------------------------------------
-# Methods for handling conversion from ASDF to ASDF with fake variables.
+# Methods for handling conversion from ASDF to ASDF with injected fake variables.
 #-------------------------------------------------------------------------------------------------------------
 
 def execute_command_in_shell(bash_command,fname_out=None):
