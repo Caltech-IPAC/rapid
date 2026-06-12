@@ -5,6 +5,11 @@ Reformat socsims.  Convert from ASDF format to FITS format, and add required FIT
    88038  352152 6778926
 
 On Streetfighter with 8 vCPUs, this code processes a little over 2,000 ADSF files per hour.
+
+Requires the following for correction to gWCS:
+
+export CRDS_PATH=$HOME/crds_cache
+export CRDS_SERVER_URL=https://roman-crds.stsci.edu
 """
 
 import os
@@ -303,7 +308,7 @@ def asdf_to_fits(asdf_path, fits_path, sip_degree=5):
     original_dm = rdm.open(asdf_path)
 
 
-    # dm.meta.wcs now has the correct WCS
+    # The following ensures dm.meta.wcs will have the correct gWCS
 
     dm = AssignWcsStep.call(original_dm)
 
