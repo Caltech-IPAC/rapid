@@ -79,11 +79,10 @@ Here is how to execute the forced-photometry backend inside a a RAPID-pipeline c
 
     tail -f forcedPhotometryForField.out
 
-The output files from the above backend-execution example are::
+The output files from the above backend-execution example are:
 
 .. code-block::
 
     rapid_req1_lc.txt
     rapid_req2_lc.txt
     rapid_req3_lc.txt
-
