@@ -36,7 +36,7 @@ class GriddedEPSF:
 
     def at_position(self, x, y):
         stamp = romanisim.psf.psf_from_grid(self.gridded_model, x, y)
-        return romanisim.psf.psfstamp_to_galsimimange(
+        return romanisim.psf.psfstamp_to_galsimimage(
             stamp, self.pixelscale, wcs=self.wcs, pix=(x, y))
 
 
