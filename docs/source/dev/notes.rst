@@ -29,6 +29,8 @@ Developer Guidelines
 #. Before checking into the git repo modifications to someone else's source code,
    let that person know what to expect (and assure there is the expected level of trust beforehand).
 
+#. Your git commits should have self-explanatory descriptive messages (saves time not having to review source code later for reports).
+
 #. Always test code changes before the code is put into operations; the development is not done until
    the code changes have been tested.
 
