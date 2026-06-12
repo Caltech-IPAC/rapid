@@ -59,14 +59,32 @@ print("proc_pt_datetime_started =",proc_pt_datetime_started)
 
 # Define input and output S3 buckets.
 
-bucket_name_input = "stpubdata/roman/nexus/soc_simulations/r00340/l2"
-bucket_name_output = "socsim-20260427-lite"
+#bucket_name_input = "stpubdata/roman/nexus/soc_simulations/r00340/l2"
+#bucket_name_output = "socsim-20260427-lite"
+# The WCS correction has already been done by sims/src/socsims/inject_fake_sources_into_l2_asdf_files.py
+# Note the following new S3 buckets:
+bucket_name_input = "socsims-fakesrc-asdf-20260610"
+bucket_name_output = "socsims-fakesrc-fits-20260610-lite"
 
 
 # Create S3-client and S3-resource objects.
 
 s3_client = boto3.client('s3')
 s3_resource = boto3.resource('s3')
+
+
+# Need access to distortion model for gWCS correction.
+
+crds_path = os.getenv('CRDS_PATH')
+
+if crds_path is None:
+    home_env_var = os.getenv('HOME')
+    os.environ['CRDS_PATH'] = f"{home_env_var}/crds_cache"
+
+crds_server_url = os.getenv('CRDS_SERVER_URL')
+
+if crds_server_url is None:
+    os.environ['CRDS_SERVER_URL'] = "https://roman-crds.stsci.edu"
 
 
 # Determine number of vCPUs to use in parallel.
@@ -309,8 +327,9 @@ def asdf_to_fits(asdf_path, fits_path, sip_degree=5):
 
 
     # The following ensures dm.meta.wcs will have the correct gWCS
-
-    dm = AssignWcsStep.call(original_dm)
+    #dm = AssignWcsStep.call(original_dm)
+    # The WCS correction has already been done by sims/src/socsims/inject_fake_sources_into_l2_asdf_files.py
+    dm = original_dm
 
 
     # ------------------------------------------------------------------ #
@@ -375,6 +394,28 @@ def asdf_to_fits(asdf_path, fits_path, sip_degree=5):
     ZPTMAG  =    25.85726796291789
     SCA_NUM =                    2
     '''
+
+
+    # Fill in all SIP distortion keywords not populated by wcs_header
+    # (Frank says this is needed for awaicgen to not ignore SIP distortion).
+
+    for i in range(0,sip_degree + 1):
+        for j in range(0,sip_degree + 1):
+            print(f"i,j={i},{j}")
+            keyword_a = f"A_{i}_{j}"
+            keyword_b = f"B_{i}_{j}"
+
+            try:
+                a = hdr[keyword_a]
+            except:
+                print(f"{keyword_a} not in header...")
+                hdr[keyword_a] = 0.0
+
+            try:
+                b = hdr[keyword_b]
+            except:
+                print(f"{keyword_b} not in header...")
+                hdr[keyword_b] = 0.0
 
 
     # Add EXPTIME,DATE-OBS,DATE-END,MJD-OBS keywords.
