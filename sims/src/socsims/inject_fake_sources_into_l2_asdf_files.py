@@ -75,6 +75,20 @@ s3_client = boto3.client('s3')
 s3_resource = boto3.resource('s3')
 
 
+# Need access to distortion model for gWCS correction.
+
+crds_path = os.getenv('CRDS_PATH')
+
+if crds_path is None:
+    home_env_var = os.getenv('HOME')
+    os.environ['CRDS_PATH'] = f"{home_env_var}/crds_cache"
+
+crds_server_url = os.getenv('CRDS_SERVER_URL')
+
+if crds_server_url is None:
+    os.environ['CRDS_SERVER_URL'] = "https://roman-crds.stsci.edu"
+
+
 # Determine number of vCPUs to use in parallel.
 
 num_cores_str = os.getenv('NUMCORES')
