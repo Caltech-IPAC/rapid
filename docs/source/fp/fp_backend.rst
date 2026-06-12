@@ -5,7 +5,7 @@ Overview
 ************************************
 
 The python script ``pipeline/forcedPhotometryForField.py``
-is the RAPID Forced-Photometry Backend.
+is the RAPID forced-photometry backend.
 For a given set of sky positions in the same sky tile (a.k.a. field),
 separate forced-photometry lightcurve output files will be generated.
 Access to a RAPID operations PostgreSQL database is required, and the read-only
