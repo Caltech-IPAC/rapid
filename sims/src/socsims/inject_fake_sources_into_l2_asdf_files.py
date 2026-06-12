@@ -156,7 +156,7 @@ def run_single_core_job(asdf_files,index_thread):
 
 
     '''
-    Convert a single ASDF file into a FITS file.
+    Convert a single ASDF file into an ASDF file with fake variables.
     '''
 
 
@@ -208,7 +208,7 @@ def run_single_core_job(asdf_files,index_thread):
         exitcode_from_download_cmd = util.execute_command(download_cmd)
 
 
-        # Create output FITS filename for working directory.
+        # Create output ASDF filename for working directory.
 
         output_asdf_file = input_asdf_file.replace(".asdf","_lite.asdf")
 
@@ -254,7 +254,7 @@ def run_single_core_job(asdf_files,index_thread):
 
         thread_end_time_benchmark = time.time()
         diff_time_benchmark = thread_end_time_benchmark - thread_start_time_benchmark
-        fh.write(f"Elapsed time in seconds to convert ASDF file to FITS file = {diff_time_benchmark}\n")
+        fh.write(f"Elapsed time in seconds to convert ASDF file to ASDF file with fake variables = {diff_time_benchmark}\n")
         thread_start_time_benchmark = thread_end_time_benchmark
 
 
@@ -297,7 +297,7 @@ def execute_parallel_processes(asdf_files_list,num_cores=None):
 
 
 #-------------------------------------------------------------------------------------------------------------
-# Methods for handling ASDF-to-FITS conversion.
+# Methods for handling conversion from ASDF to ASDF with fake variables.
 #-------------------------------------------------------------------------------------------------------------
 
 def execute_command_in_shell(bash_command,fname_out=None):
@@ -465,7 +465,7 @@ if __name__ == '__main__':
 
     do_not_overwrite = True
 
-    # Parse FITS files in output S3 bucket.
+    # Parse ASDF files in output S3 bucket.
 
     my_bucket_output = s3_resource.Bucket(bucket_name_output)
 
@@ -540,7 +540,7 @@ if __name__ == '__main__':
     # Code-timing benchmark.
 
     end_time_benchmark = time.time()
-    print("Elapsed time in seconds to convert ASDF files to FITS files =",
+    print("Elapsed time in seconds to convert ASDF files to ASDF-with-fake-variables files =",
         end_time_benchmark - start_time_benchmark)
     start_time_benchmark = end_time_benchmark
 
