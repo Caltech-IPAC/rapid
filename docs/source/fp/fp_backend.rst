@@ -19,12 +19,18 @@ For rimtimsims, use::
 
     export DBNAME=rimtimsims2db
 
+For Soc-sim images, use::
+
+    export DBNAME=socsimsdb
+
+
 Instructions
 ************************************
 
 The forced-photometry backend should be executed inside a RAPID-pipeline container.
 
-Sky positions must be in same field (a.k.a sky tile).
+A set of one or more sky positions must be in same field (a.k.a sky tile) for a
+given forced-photometry backend execution.
 The PostgreSQL database table called ``Fields`` defines field centers and corners for the entire sky.
 For now, the ``reqid`` is just an arbitrary unique index.
 
@@ -60,6 +66,7 @@ Here is how to execute the forced-photometry backend inside a a RAPID-pipeline c
     export PYTHONUNBUFFERED=1
     export ROMANTESSELLATIONDBNAME=/work/roman_tessellation_nside512.db
 
+    # The following is the database ID from the associated ``Fields`` record in the PostgreSQL database.
     export FIELD=5261331
     export SKYPOSITIONSCSVFILE=input_sky_positions.txt
 
