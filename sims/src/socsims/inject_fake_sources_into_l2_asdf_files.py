@@ -433,6 +433,11 @@ def correct_gwcs_inject_fake_variable_sources_output_asdf_file(fh, input_asdf_pa
             exitcode_from_generate_injection_catalog_cmd = util.execute_command(generate_injection_catalog_cmd)
 
 
+            # Add newly generated injection catalog to list.
+
+            file_content += f"{injection_catalog_filename}\n"
+
+
             # Upload fake-source injection catalog to product S3 bucket.
 
             s3_object_name_injection_catalog = "injection_catalogs/" + injection_catalog_filename
