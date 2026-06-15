@@ -121,7 +121,7 @@ This will move HEAD to the latest commit from the remote branch and replay
 your changes on top. Resolve the merge conflict (see below), and run:
 
 .. code-block:: bash
-   
+
    git add <files you want>
    git rebase --continue
 
@@ -163,10 +163,20 @@ open a pull request on GitHub to merge it into ``dev``:
 2. On GitHub, navigate to the repository. A banner usually appears offering
    to **Compare & pull request** for your recently pushed branch — click it.
    Otherwise, go to the **Pull requests** tab and click **New pull request**.
+
+   .. image:: pull_request_open.png
+      :width: 600
+      :alt: GitHub Compare & pull request banner
+
 3. Set the **base** branch to ``dev`` and the **compare** branch to
    ``my_branch``. Double-check that the base is ``dev`` and **not** ``main``.
 4. Give the PR a descriptive title and summary, then click
    **Create pull request**.
+
+   .. image:: pull_request_create.png
+      :width: 600
+      :alt: Selecting base=dev and compare=my_branch
+
 5. Request a reviewer if required, and address any review comments by
    pushing additional commits to ``my_branch`` (the PR updates
    automatically).
@@ -174,12 +184,6 @@ open a pull request on GitHub to merge it into ``dev``:
 
 .. Add screenshots of the PR flow here. Suggested images, dropped in this
    directory (docs/source/dev/):
-.. .. image:: pr_compare.png
-..    :width: 600
-..    :alt: GitHub Compare & pull request banner
-.. .. image:: pr_base_compare.png
-..    :width: 600
-..    :alt: Selecting base=dev and compare=my_branch
 .. .. image:: pr_merge.png
 ..    :width: 600
 ..    :alt: Merge pull request button
