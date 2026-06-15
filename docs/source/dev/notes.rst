@@ -1,4 +1,4 @@
-RAPID Pipeline Development Notes
+RAPID Pipeline Development
 ####################################################
 
 Increasing AWS Cloud Limits
@@ -13,7 +13,7 @@ in the relevant limit for the RAPID project
 Login with your IPAC credentials (not sure whether VPN must be running).
 
 
-Developer Guidelines
+Development Guidelines
 ************************************
 
 #. Set up your text editor to clip trailing spaces when saving source-code file
@@ -47,6 +47,273 @@ Exitcode range   Definition
 [32,61]          Warnings
 [64+]            Error
 ==============   ================
+
+
+GitHub Merging, Branching, and Pull Requests
+********************************************
+
+This section describes the recommended git workflow for contributing to the
+RAPID code base.
+
+.. note::
+
+   Pending approval of the team, we will be migrating to a ``dev`` branch
+   workflow and **disabling direct pushes to** ``main``. Once this is in
+   effect, all routine development will target ``dev``, and changes will
+   reach ``main`` only through pull requests. The instructions
+   below assume this workflow.
+
+
+GitHub Branches
+============================================
+
+The RAPID repository follows a two-branch model:
+
+* ``main`` — the stable, production branch. Direct pushes will be disabled;
+  it is updated only via approved pull requests.
+* ``dev`` — the active development branch. Day-to-day work lands here.
+
+The general rule of thumb: **small changes can go straight to** ``dev``, while
+**large changes or new features get their own branch** off ``dev`` and can be
+merged back via a pull request. The diagram below illustrates the full flow:
+a feature branch off ``dev``, two commits of work, a pull request merging the
+feature back into ``dev``, and ``dev`` later merging into ``main``.
+
+.. figure:: code_astro_feature_graph.png
+   :width: 600
+   :alt: Git graph: feature branch off dev, PR back to dev, then dev merged to main
+
+   Source: `Code/Astro Workshop <https://ciera.northwestern.edu/programs/code-astro/>`__
+
+Small Changes
+============================================
+
+Small, low-risk changes (a bug fix, a comment, a one-line tweak) can be
+pushed directly to ``dev``. The basic cycle is **pull, commit, push**:
+
+.. code-block:: bash
+
+   git pull
+   git add <files>
+   git commit -m "Describe your change"
+   git push
+
+If you have unsaved changes and ``git pull`` reports a
+conflict, stash your changes, pull, then re-apply your stash:
+
+.. code-block:: bash
+
+   git stash
+   git pull
+   git stash pop
+
+After ``git stash pop``, resolve any conflicts that git reports 
+(see merge conflicts, below), then commit and push as above.
+
+If you have a local commit that conflicts with a pulled commit, causing 
+``git pull`` to fail:
+
+.. code-block:: bash
+
+   git pull --rebase
+
+This will move HEAD to the latest commit from the remote branch and replay
+your changes on top. Resolve the merge conflict (see below), and run:
+
+.. code-block:: bash
+   
+   git add <files you want>
+   git rebase --continue
+
+Large Changes / Feature Additions
+============================================
+
+For larger changes or new features, create a dedicated branch off ``dev``
+so that work-in-progress does not destabilize the shared branch.
+
+
+Create a branch from ``dev``
+--------------------------------------------
+
+If you are already on ``dev``, create and switch to a new branch:
+
+.. code-block:: bash
+
+   git checkout -b my_branch
+   # or
+   git checkout -b my_branch dev # if you are on another branch
+
+Then push the branch to GitHub and set it to track the remote, so that
+future ``git push`` / ``git pull`` commands work without extra arguments:
+
+.. code-block:: bash
+
+   git push -u origin my_branch
+
+After this, make commits as normal to your new branch.
+
+
+Open a Pull Request back to ``dev``
+--------------------------------------------
+
+When you are done with your feature branch or have completed major changes, 
+open a pull request on GitHub to merge it into ``dev``:
+
+1. Push your latest commits (``git push``).
+2. On GitHub, navigate to the repository. A banner usually appears offering
+   to **Compare & pull request** for your recently pushed branch — click it.
+   Otherwise, go to the **Pull requests** tab and click **New pull request**.
+3. Set the **base** branch to ``dev`` and the **compare** branch to
+   ``my_branch``. Double-check that the base is ``dev`` and **not** ``main``.
+4. Give the PR a descriptive title and summary, then click
+   **Create pull request**.
+5. Request a reviewer if required, and address any review comments by
+   pushing additional commits to ``my_branch`` (the PR updates
+   automatically).
+6. Once approved, click **Merge pull request** to merge into ``dev``.
+
+.. Add screenshots of the PR flow here. Suggested images, dropped in this
+   directory (docs/source/dev/):
+.. .. image:: pr_compare.png
+..    :width: 600
+..    :alt: GitHub Compare & pull request banner
+.. .. image:: pr_base_compare.png
+..    :width: 600
+..    :alt: Selecting base=dev and compare=my_branch
+.. .. image:: pr_merge.png
+..    :width: 600
+..    :alt: Merge pull request button
+
+
+Close the branch after merging (optional)
+--------------------------------------------
+
+Once the pull request is merged, if you are finished editing a particular 
+feature, delete the branch to keep the repository tidy. On GitHub, click the 
+**Delete branch** button shown on the merged pull request. To delete the 
+branch locally and on the remote from the command line:
+
+.. code-block:: bash
+
+   git checkout dev
+   git pull
+   git branch -d my_branch
+   git push origin --delete my_branch
+
+The ``git pull`` on ``dev`` brings in your just-merged changes. Use
+``git branch -d`` (lowercase) to delete only a branch that has been fully
+merged; ``git branch -D`` (uppercase) forces deletion of an unmerged
+branch, so use it with care.
+
+Merging changes from ``dev``
+--------------------------------------------
+
+If ``dev`` has moved ahead and you need those changes in your branch,
+fetch the latest refs and merge ``dev`` into your branch:
+
+.. code-block:: bash
+
+   git fetch origin
+   git merge origin/dev
+
+Resolve any conflicts git reports, then commit the merge and push:
+
+.. code-block:: bash
+
+   git add <files>
+   git commit
+   git push
+
+
+Resolving Merge Conflicts
+============================================
+
+A conflict happens when two changes touch the same lines of a file and git
+cannot decide which to keep. This can come up after any of the operations
+above. Git will report which files conflicted, for example::
+
+   Auto-merging pipeline.py
+   CONFLICT (content): Merge conflict in pipeline.py
+   Automatic merge failed; fix conflicts and then commit the result.
+
+You can always list the files that still need attention:
+
+.. code-block:: bash
+
+   git status
+
+Conflicted files are shown under **"Unmerged paths"**.
+
+
+Editing the conflict markers
+--------------------------------------------
+
+Open each conflicted file. Git inserts markers around the disagreeing
+sections:
+
+.. code-block:: text
+
+   <<<<<<< HEAD
+   your version of the lines
+   =======
+   the incoming version of the lines
+   >>>>>>> origin/dev
+
+The block above ``=======`` is your current branch's version (``HEAD``);
+the block below is the incoming version (here, ``origin/dev``). Edit the
+file so it contains exactly what you want the final result to be, and
+**delete all three marker lines** (``<<<<<<<``, ``=======``, ``>>>>>>>``).
+
+.. note::
+
+   VS Code makes this easier: it highlights each conflict and offers
+   **Accept Current Change**, **Accept Incoming Change**, **Accept Both
+   Changes**, or **Compare Changes** buttons directly above the conflict.
+   Click the one you want, or edit manually, then save the file.
+
+
+Completing the merge
+--------------------------------------------
+
+Once a file looks correct, stage it to mark the conflict resolved, then
+repeat for every conflicted file:
+
+.. code-block:: bash
+
+   git add <file>
+
+When ``git status`` shows no remaining unmerged paths, finish the
+operation:
+
+* After a **merge** or **stash pop**, commit the result:
+
+  .. code-block:: bash
+
+     git commit
+
+* After a **pull** that started a rebase, continue it instead:
+
+  .. code-block:: bash
+
+     git rebase --continue
+
+Then push as usual.
+
+
+Bailing out
+--------------------------------------------
+
+If things get tangled and you want to start over, you can abort and return
+to the state before the operation began:
+
+.. code-block:: bash
+
+   git merge --abort      # during a conflicted merge
+   git rebase --abort     # during a conflicted rebase
+
+If you applied a stash with ``git stash pop`` and want to undo it, note that
+``pop`` removes the stash once applied; use ``git stash apply`` instead when
+you want to keep the stash entry around as a safety net while resolving.
 
 
 Log into EC2 Instance Machine
@@ -90,7 +357,7 @@ Here is how to stop your EC2 instance later:
 
 
 Build Docker Image for RAPID Science Pipeline
-********************************************
+*********************************************
 
 Check your latest source-code changes into the RAPID git repo.
 
@@ -175,7 +442,7 @@ Tag the Docker image with "latest" and push to ECR with these two commands:
 
 
 Running an Instance of the RAPID Science Pipeline under AWS Batch
-********************************************
+*****************************************************************
 
 The following shows commands to launch an instance of the RAPID science pipeline as AWS Batch job.
 The to-be-run-under-AWS-Batch Docker container rapid_science_pipeline:1.0 has /code built in,
