@@ -108,8 +108,16 @@ RUN cd /tmp && \
 RUN yum -y install procps
 
 # Checkout RAPID git repo.
+# Must pass --build-arg RAPID_BRANCH=<branch-you-want>
 
-RUN git clone https://github.com/Caltech-IPAC/rapid code
+ARG RAPID_BRANCH
+RUN if [ -z "$RAPID_BRANCH" ]; then \
+        echo "ERROR: RAPID_BRANCH build-arg is required (e.g. --build-arg RAPID_BRANCH=dev)." >&2; \
+        exit 1; \
+    fi && \
+    git clone --branch "$RAPID_BRANCH" --single-branch https://github.com/Caltech-IPAC/rapid code
+
+# RUN git clone https://github.com/Caltech-IPAC/rapid code
 WORKDIR /code
 
 # Build C code in RAPID software stack.
