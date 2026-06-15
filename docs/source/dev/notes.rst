@@ -182,11 +182,9 @@ open a pull request on GitHub to merge it into ``dev``:
    automatically).
 6. Once approved, click **Merge pull request** to merge into ``dev``.
 
-.. Add screenshots of the PR flow here. Suggested images, dropped in this
-   directory (docs/source/dev/):
-.. .. image:: pr_merge.png
-..    :width: 600
-..    :alt: Merge pull request button
+   .. image:: pull_request_merge.png
+      :width: 600
+      :alt: Merge pull request button
 
 
 Close the branch after merging (optional)
