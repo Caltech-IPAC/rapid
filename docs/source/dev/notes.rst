@@ -107,10 +107,10 @@ conflict, stash your changes, pull, then re-apply your stash:
    git pull
    git stash pop
 
-After ``git stash pop``, resolve any conflicts that git reports 
+After ``git stash pop``, resolve any conflicts that git reports
 (see merge conflicts, below), then commit and push as above.
 
-If you have a local commit that conflicts with a pulled commit, causing 
+If you have a local commit that conflicts with a pulled commit, causing
 ``git pull`` to fail:
 
 .. code-block:: bash
@@ -156,7 +156,7 @@ After this, make commits as normal to your new branch.
 Open a Pull Request back to ``dev``
 --------------------------------------------
 
-When you are done with your feature branch or have completed major changes, 
+When you are done with your feature branch or have completed major changes,
 open a pull request on GitHub to merge it into ``dev``:
 
 1. Push your latest commits (``git push``).
@@ -190,9 +190,9 @@ open a pull request on GitHub to merge it into ``dev``:
 Close the branch after merging (optional)
 --------------------------------------------
 
-Once the pull request is merged, if you are finished editing a particular 
-feature, delete the branch to keep the repository tidy. On GitHub, click the 
-**Delete branch** button shown on the merged pull request. To delete the 
+Once the pull request is merged, if you are finished editing a particular
+feature, delete the branch to keep the repository tidy. On GitHub, click the
+**Delete branch** button shown on the merged pull request. To delete the
 branch locally and on the remote from the command line:
 
 .. code-block:: bash
@@ -588,5 +588,5 @@ Download and examine log file:
    aws s3 cp s3://rapid-pipeline-logs/20250314/rapid_pipeline_job_20250314_jid1_log.txt rapid_pipeline_job_20250314_jid1_log.txt
    cat rapid_pipeline_job_20250314_jid1_log.txt
 
-Last modified: Fri 2025 Apr 4 8:29 a.m.
+Last modified: Tue 2026 Jun 16 8:48 a.m.
 
