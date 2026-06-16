@@ -20,7 +20,9 @@ git pull
 docker system prune -a -f
 cd /home/ubuntu/rapid
 
-docker build --no-cache --file /home/ubuntu/rapid/docker/Dockerfile_ubuntu_runSingleSciencePipeline --tag rapid_science_pipeline:1.0 . >& build.out
+# The RAPID git repo branch dev is specified as an argument to the following docker build command.
+
+docker build --build-arg RAPID_BRANCH=dev --no-cache --file /home/ubuntu/rapid/docker/Dockerfile_ubuntu_runSingleSciencePipeline --tag rapid_science_pipeline:1.0 . >& build.out
 
 cksum=$(tail -n 2 build.out | grep "Successfully built" | sed 's/Successfully built //')
 echo $cksum
