@@ -403,7 +403,7 @@ Rebuild the Docker image from scratch:
 .. code-block::
 
    cd /home/ubuntu/rapid
-   docker build --file /home/ubuntu/rapid/docker/Dockerfile_ubuntu_runSingleSciencePipeline --tag rapid_science_pipeline:1.0 .
+   docker build --build-arg RAPID_BRANCH=<current branch> --file /home/ubuntu/rapid/docker/Dockerfile_ubuntu_runSingleSciencePipeline --tag rapid_science_pipeline:1.0 .
 
 
 Push Docker image to the Amazon public elastic container registry (ECR):
