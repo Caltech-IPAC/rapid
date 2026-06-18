@@ -1,8 +1,10 @@
 """
-Compute reprojected coadd image, coadd uncertainty, and depth of coverage.
+Compute reprojected coadd image, coadd uncertainty map, and depth-of-coverage map.
 
-Uses reproject_and_coadd with exact resampling (area-weighted interpolation)
-and parallel processing.
+Uses reproject_and_coadd with either exact resampling (area-weighted interpolation)
+or gaussian-kernel adaptive resampling.
+
+Utilize parallel processing as the default for all available cores.
 
 Usage
 -----
@@ -30,8 +32,8 @@ def create_output_wcs(ra,dec,n_pixels,cdelt1_refimage,cdelt2_refimage):
 
     # 2. Set the reference pixel (CRPIX) - 1-based indexing standard
     # This represents the center or anchor pixel in your image array
-    crval = n_pixels / 2 + 0.5
-    w.wcs.crpix = [crval, crval]
+    crpix = n_pixels / 2 + 0.5
+    w.wcs.crpix = [crpix, crpix]
 
     # 3. Set the coordinate values at the reference pixel (CRVAL)
     # For example, RA and Dec coordinates in degrees
@@ -74,8 +76,10 @@ def write_fits(path, data, header, overwrite=True):
 def _reproject_method(input_data, output_projection, shape_out=None, reprojection_type=None, **kwargs):
 
     '''
-    reproject_exact (drop-in for reproject_and_coadd).
+    Does reprojection using either reproject_adaptive or reproject_exact
+    (drop-in for reproject_and_coadd), depending on reprojection_type selected.
     '''
+
     print(f"In _reproject_method: reprojection_type={reprojection_type}")
 
     if reprojection_type == "adaptive":
@@ -88,7 +92,7 @@ def _reproject_method(input_data, output_projection, shape_out=None, reprojectio
             **kwargs,
         )
 
-    else:
+    elif reprojection_type == "exact":
 
         return reproject_exact(
             input_data,
@@ -96,6 +100,11 @@ def _reproject_method(input_data, output_projection, shape_out=None, reprojectio
             shape_out=shape_out,
             **kwargs,
         )
+
+    else:
+
+        raise SystemExit(f"*** Error: Type of reprojection must be exact or adaptive " +\
+                         f"(use -t or --type option) = {reprojection_type}")
 
 
 # ---------------------------------------------------------------------------
@@ -126,8 +135,9 @@ def compute_coadd(
     shape_out : tuple[int, int] | None
         Output (ny, nx).  Required when *output_wcs* is supplied explicitly.
     combine : str
-        How to combine overlapping pixels: 'mean' (default), 'sum',
-        'median', 'min', 'max', 'first', 'last'.
+        How to combine overlapping pixels for coadd only
+        (uncertainties are converted to variances and summed):
+        'mean' (default), 'sum', 'median', 'min', 'max', 'first', 'last'.
     n_jobs : int | None
         Worker processes.  None → use all available CPUs.
         Pass 1 to disable parallelism.
@@ -212,10 +222,10 @@ def compute_coadd(
 
 def write_outputs(coadd, uncertainty, coverage, wcs, prefix):
     header = wcs.to_header()
-    write_fits(f"{prefix}_coadd.fits",    coadd,       header)
-    write_fits(f"{prefix}_coverage.fits", coverage,    header)
+    write_fits(f"{prefix}_image.fits",    coadd,       header)
+    write_fits(f"{prefix}_cov_map.fits", coverage,    header)
     if uncertainty is not None:
-        write_fits(f"{prefix}_uncertainty.fits", uncertainty, header)
+        write_fits(f"{prefix}_uncert_image.fits", uncertainty, header)
 
 
 # ---------------------------------------------------------------------------
@@ -225,7 +235,7 @@ def write_outputs(coadd, uncertainty, coverage, wcs, prefix):
 def parse_args():
 
     p = argparse.ArgumentParser(
-        description="Reproject and coadd FITS images with Gaussian-kernel adaptive resampling."
+        description="Reproject and coadd FITS images with user-selected resampling type."
     )
     p.add_argument("inputs", nargs="+", help="Science FITS files (ordered)")
     p.add_argument(
@@ -239,7 +249,8 @@ def parse_args():
     p.add_argument(
         "--combine", default="mean",
         choices=["mean", "sum", "median", "min", "max", "first", "last"],
-        help="Pixel combine function  [default: mean]",
+        help="Pixel combine function for coadd only (uncertainties are " +\
+             "always converted to varianeces and summed)  [default: mean]",
     )
     p.add_argument(
         "-j", "--jobs", type=int, default=None, metavar="NJOBS",
@@ -278,7 +289,7 @@ def main():
 
     if args.uncertainties and len(args.uncertainties) != len(args.inputs):
         raise SystemExit(
-            "error: --uncertainties count must match the number of input files "
+            "*** Error: Uncertainty-image count must match the number of input image files "
             f"({len(args.uncertainties)} vs {len(args.inputs)})"
         )
 
@@ -294,7 +305,8 @@ def main():
     reprojection_type = args.type
     if not (reprojection_type == "adaptive" or reprojection_type == "exact"):
         raise SystemExit(
-            f"error: Type of reprojection must be exact or adaptive (use -t or --type option) = {reprojection_type}"
+            f"*** Error: Type of reprojection must be exact or adaptive " +\
+            f"(use -t or --type option) = {reprojection_type}"
         )
     print(f"reprojection_type={reprojection_type}")
 
