@@ -576,7 +576,7 @@ if __name__ == '__main__':
 
     input_asdf_files = []
 
-    cp_cmd = f"aws s3 ls s3://{bucket_name_input}/ | grep cal.asdf"
+    cp_cmd = f"aws s3 ls s3://{bucket_name_input}/ | grep cal_lite.asdf"
     exitcode_from_cp,code_to_execute_stdout = execute_command_in_shell(cp_cmd)
     lines = code_to_execute_stdout.splitlines()
 
