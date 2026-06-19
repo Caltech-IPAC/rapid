@@ -159,7 +159,15 @@ def run_single_core_job(asdf_files,index_thread):
 
         # Create output FITS filename for working directory.
 
-        output_fits_file = input_asdf_file.replace(".asdf","_lite.fits")
+        #output_fits_file = input_asdf_file.replace(".asdf","_lite.fits")
+        output_fits_file = input_asdf_file.replace(".asdf.gz",".fits")
+        input_asdf_file_gunzipped = input_asdf_file.replace(".gz","")
+
+
+        # Gunzip the input ASDF file.
+
+        gunzip_cmd = ['gunzip', input_asdf_file]
+        exitcode_from_gunzip = util.execute_command(gunzip_cmd)
 
 
         # Convert from ASDF format to FITS format, and add required FITS keywords.
@@ -170,7 +178,7 @@ def run_single_core_job(asdf_files,index_thread):
         fh.write(f"degree = {degree}\n")
 
         asdf_to_fits(
-            input_asdf_file,
+            input_asdf_file_gunzipped,
             output_fits_file,
             sip_degree=degree
             )
@@ -178,8 +186,8 @@ def run_single_core_job(asdf_files,index_thread):
 
         # Gzip the output FITS file.
 
-        gunzip_cmd = ['gzip', output_fits_file]
-        exitcode_from_gunzip = util.execute_command(gunzip_cmd)
+        gzip_cmd = ['gzip', output_fits_file]
+        exitcode_from_gzip = util.execute_command(gzip_cmd)
 
 
         # Upload gzipped file to output S3 bucket.
@@ -197,7 +205,7 @@ def run_single_core_job(asdf_files,index_thread):
 
         # Clean up work directory.
 
-        rm_cmd = ['rm','-f',input_asdf_file]
+        rm_cmd = ['rm','-f',input_asdf_file_gunzipped]
         exitcode_from_rm = util.execute_command(rm_cmd)
 
         rm_cmd = ['rm','-f',gzipped_output_fits_file]
@@ -214,7 +222,7 @@ def run_single_core_job(asdf_files,index_thread):
 
         # End of loop over asdf_files.
 
-        fh.write(f"Loop end over asdf_files: index_asdf_file,input_asdf_file = {index_asdf_file},{input_asdf_file}\n")
+        fh.write(f"Loop end over asdf_files: index_asdf_file,input_asdf_file_gunzipped = {index_asdf_file},{input_asdf_file_gunzipped}\n")
 
 
     fh.write(f"\nEnd of run_single_core_job: index_thread={index_thread}\n")
