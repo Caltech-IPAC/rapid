@@ -131,7 +131,10 @@ def run_single_core_job(asdf_files,index_thread):
         print(f"*** Error: Could not open output file {thread_work_file}; quitting...")
         exit(64)
 
-    fh.write(f"\nStart of run_single_core_job: index_thread={index_thread}\n")
+    if num_cores == 1:
+        print(f"\nStart of run_single_core_job: index_thread={index_thread}\n")
+    else:
+        fh.write(f"\nStart of run_single_core_job: index_thread={index_thread}\n")
 
 
     # Loop over input ASDF files.
@@ -144,7 +147,10 @@ def run_single_core_job(asdf_files,index_thread):
 
         input_asdf_file = asdf_files[index_asdf_file]
 
-        fh.write(f"i,input_asdf_file = {i},{input_asdf_file}\n")
+        if num_cores == 1:
+            print(f"i,input_asdf_file = {i},{input_asdf_file}\n")
+        else:
+            fh.write(f"i,input_asdf_file = {i},{input_asdf_file}\n")
 
         if ".asdf" not in input_asdf_file:
             continue
@@ -175,7 +181,10 @@ def run_single_core_job(asdf_files,index_thread):
 
         degree = 5
 
-        fh.write(f"degree = {degree}\n")
+        if num_cores == 1:
+            print(f"degree = {degree}\n")
+        else:
+            fh.write(f"degree = {degree}\n")
 
         asdf_to_fits(
             input_asdf_file_gunzipped,
@@ -216,16 +225,28 @@ def run_single_core_job(asdf_files,index_thread):
 
         thread_end_time_benchmark = time.time()
         diff_time_benchmark = thread_end_time_benchmark - thread_start_time_benchmark
-        fh.write(f"Elapsed time in seconds to convert ASDF file to FITS file = {diff_time_benchmark}\n")
+        if num_cores == 1:
+            print(f"Elapsed time in seconds to convert ASDF file to FITS file = {diff_time_benchmark}\n")
+        else:
+            fh.write(f"Elapsed time in seconds to convert ASDF file to FITS file = {diff_time_benchmark}\n")
         thread_start_time_benchmark = thread_end_time_benchmark
 
 
         # End of loop over asdf_files.
 
-        fh.write(f"Loop end over asdf_files: index_asdf_file,input_asdf_file_gunzipped = {index_asdf_file},{input_asdf_file_gunzipped}\n")
+        if num_cores == 1:
+            print(f"Loop end over asdf_files: index_asdf_file,input_asdf_file_gunzipped = {index_asdf_file},{input_asdf_file_gunzipped}\n")
+        else:
+            fh.write(f"Loop end over asdf_files: index_asdf_file,input_asdf_file_gunzipped = {index_asdf_file},{input_asdf_file_gunzipped}\n")
 
+        fh.flush()
 
-    fh.write(f"\nEnd of run_single_core_job: index_thread={index_thread}\n")
+    # Outside of loop over asdf_files.
+
+    if num_cores == 1:
+        print(f"\nEnd of run_single_core_job: index_thread={index_thread}\n")
+    else:
+        fh.write(f"\nEnd of run_single_core_job: index_thread={index_thread}\n")
 
     fh.close()
 
