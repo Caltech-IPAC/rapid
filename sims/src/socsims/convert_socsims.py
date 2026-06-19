@@ -608,7 +608,7 @@ if __name__ == '__main__':
 
             print(f"input_asdf_file = {input_asdf_file}")
 
-            output_fits_file = input_asdf_file.replace(".asdf","_lite.fits.gz")
+            output_fits_file = input_asdf_file.replace(".asdf.gz","_lite.fits.gz")
 
             if do_not_overwrite and output_fits_file in output_fits_files:
 
