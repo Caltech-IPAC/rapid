@@ -425,6 +425,24 @@ def asdf_to_fits(asdf_path, fits_path, sip_degree=5):
                 print(f"{keyword_b} not in header...")
                 hdr[keyword_b] = 0.0
 
+    for i in range(0,sip_degree + 1):
+        for j in range(0,sip_degree + 1):
+            print(f"i,j={i},{j}")
+            keyword_a = f"AP_{i}_{j}"
+            keyword_b = f"BP_{i}_{j}"
+
+            try:
+                a = hdr[keyword_a]
+            except:
+                print(f"{keyword_a} not in header...")
+                hdr[keyword_a] = 0.0
+
+            try:
+                b = hdr[keyword_b]
+            except:
+                print(f"{keyword_b} not in header...")
+                hdr[keyword_b] = 0.0
+
 
     # Add EXPTIME,DATE-OBS,DATE-END,MJD-OBS keywords.
 
