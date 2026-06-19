@@ -172,7 +172,7 @@ def run_single_core_job(asdf_files,index_thread):
 
         # Gunzip the input ASDF file.
 
-        gunzip_cmd = ['gunzip', input_asdf_file]
+        gunzip_cmd = ['gunzip','-f', input_asdf_file]
         exitcode_from_gunzip = util.execute_command(gunzip_cmd)
 
 
@@ -195,7 +195,7 @@ def run_single_core_job(asdf_files,index_thread):
 
         # Gzip the output FITS file.
 
-        gzip_cmd = ['gzip', output_fits_file]
+        gzip_cmd = ['gzip','-f', output_fits_file]
         exitcode_from_gzip = util.execute_command(gzip_cmd)
 
 
