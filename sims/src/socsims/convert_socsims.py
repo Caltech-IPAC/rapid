@@ -595,7 +595,7 @@ if __name__ == '__main__':
 
         input_file_metadata = line.strip().split()
 
-        if "cal.asdf" in input_file_metadata[3]:
+        if "cal_lite.asdf" in input_file_metadata[3]:
 
             input_asdf_file = input_file_metadata[3]
 
