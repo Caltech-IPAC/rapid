@@ -72,6 +72,17 @@ if roman_tessellation_dbname is None:
 roman_tessellation_db = sqlite.RomanTessellationNSIDE512()
 
 
+# Set DONTCHECKALREADYINGESTED to skip existence-checking of the source_dbload_jid<jid>.done S3 bucket file.
+
+skip_already_ingested_check = os.getenv('DONTCHECKALREADYINGESTED')
+
+do_already_ingested_check = False
+if skip_already_ingested_check is None:
+    do_already_ingested_check = True
+
+print(f"do_already_ingested_check = {do_already_ingested_check}")
+
+
 # Open database connections for parallel access.
 
 num_cores = os.getenv('NUM_CORES')
@@ -794,7 +805,7 @@ if __name__ == '__main__':
 
         fname_input = str(my_bucket_input_object.key)
 
-        if fname_input in already_ingested_fits_files:
+        if do_already_ingested_check and (fname_input in already_ingested_fits_files):
             continue
 
         print(f"fname_input = {fname_input}")
