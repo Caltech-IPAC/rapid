@@ -90,13 +90,13 @@ echo "--->Finished building wcstools."
 
 #--------Build awaicgen binary---------------------
 echo " "
-echo "--->Building awaicgen, version 5.3 ..."
+echo "--->Building awaicgen, version 5.4 ..."
 cd ${RAPID_SW}/c/common/awaicgen
-rm -rf awaicgen-5.3
-tar -xvf awaicgen-5.3.tar
-cd ${RAPID_SW}/c/common/awaicgen/awaicgen-5.3/libtwoplane
+rm -rf awaicgeneric_russ_tested
+tar -xvf awaicgeneric_russ_tested.tar
+cd ${RAPID_SW}/c/common/awaicgen/awaicgeneric_russ_tested/libtwoplane
 make
-cd ${RAPID_SW}/c/common/awaicgen/awaicgen-5.3
+cd ${RAPID_SW}/c/common/awaicgen/awaicgeneric_russ_tested
 make
 cp -p awaicgen ${RAPID_SW}/c/bin
 echo " "
