@@ -465,6 +465,21 @@ def asdf_to_fits(asdf_path, fits_path, sip_degree=5):
                 hdr[keyword_b] = 0.0
 
 
+    # Add TARGAPER (WFI_CEN expected), TARGRA, TARGDEC.
+    # From Jacob: "target aperture" might be different from WFI_CEN, depending on
+    # how the observations are defined: WFI_CEN is the default aperture for pointing,
+    # but it can be changed:
+    # https://roman-docs.stsci.edu/raug/astronomers-proposal-tool-apt/requirements/special-requirements
+
+    targ_aper = dm.meta.pointing.target_aperture
+    targ_ra = dm.meta.pointing.target_ra
+    targ_dec = dm.meta.pointing.target_dec
+
+    hdr["TARGAPER"] = targ_aper
+    hdr["TARGRA"] = targ_ra
+    hdr["TARGDEC"] = targ_dec
+
+
     # Add EXPTIME,DATE-OBS,DATE-END,MJD-OBS keywords.
 
     exptime = dm.meta.exposure.exposure_time

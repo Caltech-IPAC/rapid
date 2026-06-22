@@ -375,12 +375,25 @@ def register_exposure(dbh,header,wcs):
     status = 1
 
 
-    # Compute sky position of image center.
+    # Look up sky position of WFI center.
 
-    sky0 = compute_center_sky_position(header,wcs)
+    key = "TARGRA"
+    targra = get_keyword_value(header,key)
 
-    ra0 = sky0.ra.degree
-    dec0 = sky0.dec.degree
+    key = "TARGDEC"
+    targdec = get_keyword_value(header,key)
+
+    if targra == 'null' or targdec == 'null':
+
+        sky0 = compute_center_sky_position(header,wcs)        # Fall back on image center.
+
+        ra0 = sky0.ra.degree
+        dec0 = sky0.dec.degree
+
+    else:
+
+        ra0 = targra
+        dec0= targdec
 
 
     # Compute level-6 healpix index (NESTED pixel ordering).
