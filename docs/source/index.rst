@@ -132,6 +132,14 @@ RAPID Archive Deliveries
 
    archive/archive.rst
 
+RAPID Forced Photometry
+************************************
+
+.. toctree::
+   :maxdepth: 1
+
+   fp/fp_backend.rst
+
 Acronyms
 ************************************
 
