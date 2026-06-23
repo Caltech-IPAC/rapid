@@ -1,12 +1,12 @@
 # export LD_LIBRARY_PATH=/code/c/lib
 
-# ./awaicgen 
+# ./awaicgen
 
-A generic WISE Astronomical Image Coadder, Version 5.2
+A generic WISE Astronomical Image Coadder, Version 5.4
 
 Usage: awaicgen
  -f1 <inp_image_list_fname>  (Required; list of images in FITS format)
- 
+
  -f2 <inp_mask_list_fname>   (Optional; list of bad-pixel masks in 32-bit INT
                               FITS format; only values 0 -> 2^31 are used)
  -f3 <inp_uncert_list_fname> (Optional; list of uncertainty images in
@@ -72,10 +72,10 @@ Usage: awaicgen
                               -o5,-o6 specified; Default=0 => no suppression)
  -o1 <out_mosaic_image>      (Required; output mosaic image FITS
                               filename)
-			      
+
  -o2 <out_mosaic_cov_map>    (Required; output mosaic coverage map
   FITS fname)
-  
+
  -o3 <out_uncert_mosaic>     (Optional; output uncertainty mosaic FITS fname;
                               only applicable to -n = 1 and -sc 1 co-adds;
                               based on input prior uncertainties)
