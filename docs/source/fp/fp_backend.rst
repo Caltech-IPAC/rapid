@@ -7,7 +7,7 @@ Overview
 The python script ``pipeline/forcedPhotometryForField.py``
 is the RAPID forced-photometry backend.
 For a given set of sky positions in the same sky tile (a.k.a. field),
-separate forced-photometry lightcurve output files will be generated.
+separate forced-photometry lightcurve files will be generated, one per sky position.
 Access to a RAPID operations PostgreSQL database is required, and the read-only
 ``DBUSER=apollo`` can be used.
 
@@ -79,10 +79,14 @@ Here is how to execute the forced-photometry backend inside a a RAPID-pipeline c
 
     tail -f forcedPhotometryForField.out
 
-The output files from the above backend-execution example are:
+The forced-photometry lightcurve files produced in the above backend-execution example are:
 
 .. code-block::
 
     rapid_req1_lc.txt
     rapid_req2_lc.txt
     rapid_req3_lc.txt
+
+These output files contain a table with useful columns of pertinent metadata.
+Each table row is a lightcurve data point.  The table contains
+lightcurve data points for all available Roman WFI bandpass filters.
