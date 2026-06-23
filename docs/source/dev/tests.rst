@@ -97,6 +97,8 @@ Date              Software modification
 5/12/2026         Moved the block of code that uploads intermediate products to just before ZOGY execution (this facilitates running ZOGY offline from S3-bucket downloaded inputs).
 5/19/2026         Modified to feed ZOGY scaled std_ref_img by scalefacref  (gain-matching correction).
 5/27/2026         Modified gain-matching to fall back on scalefac = 10**(0.4*(magzpref - magzpsci)) if unable to find a sufficient number of matches.
+6/2/2026          Updated L2Files database table for 5th-order SIP distortion.
+6/23/2026         Upgraded awaicgen version from 5.2 to 5.4 (fixed bug in handling SIP distortion).
 ===============   ===============================================================================================================================================================================================================================
 
 
