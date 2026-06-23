@@ -66,7 +66,7 @@ Here is how to execute the forced-photometry backend inside a a RAPID-pipeline c
     export PYTHONUNBUFFERED=1
     export ROMANTESSELLATIONDBNAME=/work/roman_tessellation_nside512.db
 
-    # The following is the database ID from the associated ``Fields`` record
+    # The following is the database ID from the associated Fields-table record
     # in the PostgreSQL database.
     export FIELD=5261331
     export SKYPOSITIONSCSVFILE=input_sky_positions.txt
