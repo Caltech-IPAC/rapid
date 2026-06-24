@@ -402,8 +402,11 @@ if __name__ == '__main__':
 
 
         # Generate reference image.
+        # Isolate generation in subdir and move products up to normal work dir.
 
         refimage_generation_subdir = "refimage_generation"
+
+        os.mkdir(refimage_generation_subdir)
 
         with chdir(refimage_generation_subdir):
 
