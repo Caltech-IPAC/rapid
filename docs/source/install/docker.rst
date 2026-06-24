@@ -28,9 +28,15 @@ Install Docker on Ubuntu EC2 instance
 
 .. code-block::
 
-   sudo apt-get install docker.io -y
+   sudo systemctl start docker
 
-5. Verify installation
+5. Configure to automatically start Docker service on system boot (usually already configured by AWS when EC2 instance is launched):
+
+.. code-block::
+
+   sudo systemctl enable docker.service
+
+6. Verify installation
 
 .. code-block::
 
