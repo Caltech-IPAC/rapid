@@ -66,7 +66,7 @@ print("proc_pt_datetime_started =",proc_pt_datetime_started)
 # Define input and output S3 buckets.
 
 bucket_name_input = "stpubdata/roman/nexus/soc_simulations/r00340/l2"
-bucket_name_output = "socsims-fakesrc-asdf-20260610"
+bucket_name_output = "socsims-fakesrc-asdf-20260624"
 
 
 # Create S3-client and S3-resource objects.
@@ -447,7 +447,7 @@ def correct_gwcs_inject_fake_variable_sources_output_asdf_file(fh, input_asdf_pa
 
     # Write injection-catalog-list file.
 
-    injection_catalog_list_filename = f"injection_catalog_list_sciimg.csv"
+    injection_catalog_list_filename = input_asdf_path.replace(".asdf", "_catalog_list_sciimg.csv")
 
     with open(injection_catalog_list_filename, 'w') as f:
         f.write(file_content)
