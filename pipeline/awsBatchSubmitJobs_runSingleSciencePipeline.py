@@ -442,8 +442,6 @@ if __name__ == '__main__':
         zprefimg = generateReferenceImage_return_list[12]
         total_refimage_exptime = generateReferenceImage_return_list[13]
 
-        cov5percent = rfis.compute_cov5percent(awaicgen_output_mosaic_cov_map_file)
-
         shutil.move(f"{refimage_generation_subdir}/{awaicgen_output_mosaic_image_file}", awaicgen_output_mosaic_image_file)
         print(f"Moved {refimage_generation_subdir}/{awaicgen_output_mosaic_image_file} up to {awaicgen_output_mosaic_image_file}")
 
@@ -452,6 +450,11 @@ if __name__ == '__main__':
 
         shutil.move(f"{refimage_generation_subdir}/{awaicgen_output_mosaic_uncert_image_file}", awaicgen_output_mosaic_uncert_image_file)
         print(f"Moved {refimage_generation_subdir}/{awaicgen_output_mosaic_uncert_image_file} up to {awaicgen_output_mosaic_uncert_image_file}")
+
+
+        # Compute cov5percent metric for reference image.
+
+        cov5percent = rfis.compute_cov5percent(awaicgen_output_mosaic_cov_map_file)
 
 
         # Compute required statistics for reference-image depth-of-coverage image and uncertainty image.
