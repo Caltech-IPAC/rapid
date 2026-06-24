@@ -6,6 +6,7 @@ from astropy.io import fits
 from astropy.io import ascii
 from astropy.table import QTable, join
 import numpy as np
+import time
 
 import modules.utils.rapid_pipeline_subs as util
 import database.modules.utils.rapid_db as db
@@ -36,6 +37,8 @@ def generateReferenceImage(s3_client,
                            overlapping_fields):
 
 
+    start_time_benchmark = time.time()
+
     infobits_refimage = 0                                                             # TODO
 
     print("Downloading s3://{}/{} into {}...".format(job_info_s3_bucket,input_images_csv_file_s3_bucket_object_name,input_images_csv_filename))
@@ -45,27 +48,29 @@ def generateReferenceImage(s3_client,
     print("response =",response)
 
 
-    # Define injection catalog files and download injection catalogs from S3 bucket.
+    # Optionally define injection catalog files and download injection catalogs from S3 bucket.
 
-    file_content = ""
-    for overlapping_field in overlapping_fields:
-        injection_catalog_filename = f"injection_catalog_rtid{overlapping_field}.json"
-        s3_full_name_injection_catalog = f"s3://{job_info_s3_bucket}/injection_catalogs/{injection_catalog_filename}"
-        injection_catalog_filename,subdirs,downloaded_from_bucket = util.download_file_from_s3_bucket(s3_client,s3_full_name_injection_catalog)
-        print("s3_full_name_injection_catalog = ",s3_full_name_injection_catalog)
-        print("injection_catalog_filename = ",injection_catalog_filename)
-        if downloaded_from_bucket:
-            file_content += f"{injection_catalog_filename}\n"
-        else:
-            print(f"*** Warning: Injection catalog is missing ({injection_catalog_filename}); omitting...")
+    if inject_fake_sources_flag:
+
+        file_content = ""
+        for overlapping_field in overlapping_fields:
+            injection_catalog_filename = f"injection_catalog_rtid{overlapping_field}.json"
+            s3_full_name_injection_catalog = f"s3://{job_info_s3_bucket}/injection_catalogs/{injection_catalog_filename}"
+            injection_catalog_filename,subdirs,downloaded_from_bucket = util.download_file_from_s3_bucket(s3_client,s3_full_name_injection_catalog)
+            print("s3_full_name_injection_catalog = ",s3_full_name_injection_catalog)
+            print("injection_catalog_filename = ",injection_catalog_filename)
+            if downloaded_from_bucket:
+                file_content += f"{injection_catalog_filename}\n"
+            else:
+                print(f"*** Warning: Injection catalog is missing ({injection_catalog_filename}); omitting...")
 
 
-    # Write injection-catalog-list file (contains just one row).
+        # Write injection-catalog-list file (contains just one row).
 
-    injection_catalog_list_filename = f"injection_catalog_list_refimg.csv"
+        injection_catalog_list_filename = f"injection_catalog_list_refimg.csv"
 
-    with open(injection_catalog_list_filename, 'w') as f:
-        f.write(file_content)
+        with open(injection_catalog_list_filename, 'w') as f:
+            f.write(file_content)
 
 
     # Loop over reference-image inputs.
@@ -328,8 +333,12 @@ def generateReferenceImage(s3_client,
 
         files_to_upload = refimage_input_filenames_reformatted +\
                           refimage_input_filenames_reformatted_unc +\
-                          refimage_input_filenames_injection_catalog +\
-                          [awaicgen_input_images_list_file,awaicgen_input_uncert_list_file,injection_catalog_list_filename]
+                          [awaicgen_input_images_list_file,awaicgen_input_uncert_list_file]
+
+        if inject_fake_sources_flag:
+
+            files_to_upload += refimage_input_filenames_injection_catalog +\
+                               [injection_catalog_list_filename]
 
         for fname in files_to_upload:
 
@@ -367,10 +376,26 @@ def generateReferenceImage(s3_client,
         awaicgen_dict["awaicgen_output_mosaic_uncert_image_file"]
 
 
+    # Code-timing benchmark.
+
+    end_time_benchmark = time.time()
+    print("=====> Elapsed time in seconds just to set up inputs for awaicgen =",
+        round(end_time_benchmark - start_time_benchmark,3))
+    start_time_benchmark = end_time_benchmark
+
+
     # Execute awaicgen to generate reference image.
 
     awaicgen_cmd = util.build_awaicgen_command_line_args(awaicgen_dict)
     exitcode_from_awaicgen = util.execute_command(awaicgen_cmd)
+
+
+    # Code-timing benchmark.
+
+    end_time_benchmark = time.time()
+    print("=====> Elapsed time in seconds just to execute awaicgen =",
+        round(end_time_benchmark - start_time_benchmark,3))
+    start_time_benchmark = end_time_benchmark
 
 
     # Upload ancillary reference-image products to S3 bucket.  Do not upload the reference image file and
