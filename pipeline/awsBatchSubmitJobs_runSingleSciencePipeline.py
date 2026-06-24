@@ -39,6 +39,8 @@ import pandas as pd
 from datetime import datetime, timezone
 from dateutil import tz
 import time
+from contextlib import chdir
+import shutil
 
 to_zone = tz.gettz('America/Los_Angeles')
 
@@ -401,22 +403,26 @@ if __name__ == '__main__':
 
         # Generate reference image.
 
-        generateReferenceImage_return_list = rfis.generateReferenceImage(s3_client,
-                                                                         job_info_s3_bucket,
-                                                                         input_images_csv_file_s3_bucket_object_name,
-                                                                         input_images_csv_filename,
-                                                                         jid,
-                                                                         job_proc_date,
-                                                                         awaicgen_dict,
-                                                                         max_n_images_to_coadd,
-                                                                         sca_gain,
-                                                                         sca_readout_noise,
-                                                                         product_s3_bucket,
-                                                                         upload_to_s3_bucket,
-                                                                         inject_fake_sources_flag,
-                                                                         fake_sources_dict,
-                                                                         rapid_sw,
-                                                                         overlapping_fields_refimage)
+        refimage_generation_subdir = "refimage_generation"
+
+        with chdir(refimage_generation_subdir):
+
+            generateReferenceImage_return_list = rfis.generateReferenceImage(s3_client,
+                                                                             job_info_s3_bucket,
+                                                                             input_images_csv_file_s3_bucket_object_name,
+                                                                             input_images_csv_filename,
+                                                                             jid,
+                                                                             job_proc_date,
+                                                                             awaicgen_dict,
+                                                                             max_n_images_to_coadd,
+                                                                             sca_gain,
+                                                                             sca_readout_noise,
+                                                                             product_s3_bucket,
+                                                                             upload_to_s3_bucket,
+                                                                             inject_fake_sources_flag,
+                                                                             fake_sources_dict,
+                                                                             rapid_sw,
+                                                                             overlapping_fields_refimage)
 
         infobits_refimage = generateReferenceImage_return_list[0]
         checksum_refimage = generateReferenceImage_return_list[1]
@@ -434,6 +440,15 @@ if __name__ == '__main__':
         total_refimage_exptime = generateReferenceImage_return_list[13]
 
         cov5percent = rfis.compute_cov5percent(awaicgen_output_mosaic_cov_map_file)
+
+        shutil.move(f"{refimage_generation_subdir}/{awaicgen_output_mosaic_image_file}", awaicgen_output_mosaic_image_file)
+        print(f"Moved {refimage_generation_subdir}/{awaicgen_output_mosaic_image_file} up to {awaicgen_output_mosaic_image_file}")
+
+        shutil.move(f"{refimage_generation_subdir}/{awaicgen_output_mosaic_cov_map_file}", awaicgen_output_mosaic_cov_map_file)
+        print(f"Moved {refimage_generation_subdir}/{awaicgen_output_mosaic_cov_map_file} up to {awaicgen_output_mosaic_cov_map_file}")
+
+        shutil.move(f"{refimage_generation_subdir}/{awaicgen_output_mosaic_uncert_image_file}", awaicgen_output_mosaic_uncert_image_file)
+        print(f"Moved {refimage_generation_subdir}/{awaicgen_output_mosaic_uncert_image_file} up to {awaicgen_output_mosaic_uncert_image_file}")
 
 
         # Compute required statistics for reference-image depth-of-coverage image and uncertainty image.
