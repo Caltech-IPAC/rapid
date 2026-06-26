@@ -146,7 +146,7 @@ def execute_command_in_shell(bash_command,fname_out=None):
     code_to_execute_stderr = code_to_execute_object.stderr
     print("code_to_execute_stderr (should be empty since STDERR is combined with STDOUT) =\n",code_to_execute_stderr)
 
-    return returncode
+    return returncode,code_to_execute_stdout
 
 
 def get_datetime_of_last_file_written_to_bucket(path):
