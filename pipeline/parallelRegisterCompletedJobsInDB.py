@@ -426,6 +426,9 @@ def run_single_core_job(jids,log_fnames,index_thread):
 
         # Inventory products associated with job.
 
+        difference_image_found = False
+        reference_image_found = False
+
         product_bucket = s3_resource.Bucket(product_s3_bucket_base)
 
         job_prefix = datearg + '/jid' + str(jid) + '/'
@@ -442,6 +445,8 @@ def run_single_core_job(jids,log_fnames,index_thread):
             if f"{job_prefix}{awaicgen_output_mosaic_image_file}" == product_bucket_object.key:
 
                 fh.write("Found in reference image in S3 product bucket: {}\n".format(awaicgen_output_mosaic_image_file))
+
+                reference_image_found = True
 
 
                 # Harvest select product metadata from product config file
@@ -676,6 +681,8 @@ def run_single_core_job(jids,log_fnames,index_thread):
 
                 fh.write("Found in difference image in S3 product bucket: {}\n".format(zogy_output_diffimage_file))
 
+                difference_image_found = True
+
 
                 # Harvest select product metadata from product config file
 
@@ -786,7 +793,9 @@ def run_single_core_job(jids,log_fnames,index_thread):
 
         util.write_done_file_to_s3_bucket(done_filename,product_s3_bucket_base,datearg,jid,s3_client)
 
-        fh.write(f"Loop end: done_filename,product_s3_bucket_base,datearg,jid = {done_filename},{product_s3_bucket_base},{datearg},{jid}\n")
+        fh.write(f"Outside loop over products: done_filename,product_s3_bucket_base,datearg,jid = {done_filename},{product_s3_bucket_base},{datearg},{jid}\n")
+
+        fh.write(f"jid,difference_image_found,reference_image_found = {jid},{difference_image_found},{reference_image_found}\n")
 
 
         # Flush write buffer.
