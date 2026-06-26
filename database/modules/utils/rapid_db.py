@@ -937,7 +937,7 @@ class RAPIDDB:
 
         # Define query.
 
-        query = "select rid,fid,sca from L2Files;"
+        query = "select rid,fid,sca from L2Files and vbest > 0;"
 
 
         # Query database.
@@ -1072,7 +1072,7 @@ class RAPIDDB:
 
         # Define query.
 
-        query = "select a.rid, ra0, dec0 from L2Files a, L2FileMeta b where a.rid = b.rid;"
+        query = "select a.rid, ra0, dec0 from L2Files a, L2FileMeta b where a.rid = b.rid and vbest > 0;"
 
 
         # Query database.
@@ -1170,7 +1170,7 @@ class RAPIDDB:
         # Here we query the L2Files table for all exposures, since
         # RA_TARG, DEC_TARG are currently stored here.
 
-        query = "select distinct expid, ra, dec from L2Files;"
+        query = "select distinct expid, ra, dec from L2Files and vbest > 0;"
 
 
         # Query database.
@@ -2495,7 +2495,7 @@ class RAPIDDB:
 
         # Define query.
 
-        query = "select rid,sca,fid,mjdobs from L2Files where expid = " + expid + ";"
+        query = "select rid,sca,fid,mjdobs from L2Files where expid = " + expid + " and vbest > 0;"
 
 
         # Query database.
@@ -2687,7 +2687,7 @@ class RAPIDDB:
         # Define query.
 
         query = "select rid,sca,fid,mjdobs from L2Files where dateobs >= '" +\
-                startdatetime + "' and dateobs < '" + enddatetime + "' order by mjdobs;"
+                startdatetime + "' and dateobs < '" + enddatetime + "' and vbest > 0 order by mjdobs;"
 
 
         # Query database.
@@ -3016,6 +3016,7 @@ class RAPIDDB:
                 "where a.field = b.field " +\
                 "and b.rfid = c.rfid " +\
                 "and a.fid = b.fid " +\
+                "and a.vbest > 0 " +\
                 "and b.status > 0 " +\
                 "and b.vbest > 0 " +\
                 "and cov5percent >= " + str(cov5percent) + " " +\
@@ -3075,6 +3076,7 @@ class RAPIDDB:
                 f"select field,fid,count(*) from l2files " +\
                 f"where mjdobs >= {start_refimage_mjdobs} " +\
                 f"and mjdobs < {end_refimage_mjdobs} " +\
+                f"and vbest > 0 " +\
                 f"group by field,fid " +\
                 f"having count(*) >= {min_refimage_nframes} " +\
                 f"order by field,fid;"
@@ -3085,6 +3087,7 @@ class RAPIDDB:
                 f"select field,fid,count(*) from l2files " +\
                 f"where mjdobs >= {start_refimage_mjdobs} " +\
                 f"and mjdobs < {end_refimage_mjdobs} " +\
+                f"and vbest > 0 " +\
                 f"and fid = {fid} " +\
                 f"group by field,fid " +\
                 f"having count(*) >= {min_refimage_nframes} " +\
@@ -3138,6 +3141,7 @@ class RAPIDDB:
             f"and dateobs < '{enddatetime}' " +\
             f"and field = {field} " +\
             f"and fid = {fid} " +\
+            f"and vbest > 0 " +\
             f"order by mjdobs,sca;"
 
 
