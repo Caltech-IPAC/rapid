@@ -147,7 +147,6 @@ print("start_refimage_mjdobs =",start_refimage_mjdobs)
 print("end_refimage_mjdobs =",end_refimage_mjdobs)
 print("min_refimage_nframes =",min_refimage_nframes)
 print("make_refimages_flag =",make_refimages_flag)
-print("dry_run =",dry_run)
 
 
 #################
