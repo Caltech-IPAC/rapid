@@ -122,9 +122,9 @@ make_refimages_flag = eval(make_refimages_flag_str)
 run_fid = os.getenv('RUNFID')
 
 if run_fid is None:
-    print("*** Message: Will process all filters; quitting...")
+    print("*** Message: Will process all filters...")
 else:
-    print(f"*** Message: Will process only fid={run_fid}; quitting...")
+    print(f"*** Message: Will process only fid={run_fid}...")
 
 
 # Get optional DRYRUN.
