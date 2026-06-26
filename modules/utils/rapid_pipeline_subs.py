@@ -112,7 +112,7 @@ def execute_command_and_return_stdout(code_to_execute_args):
 #    execute_command_in_shell(cmd)
 #####################################################################################################
 
-def execute_command_in_shell(bash_command,fname_out=None):
+def execute_command_in_shell(bash_command,fname_out=None,print_output=True):
 
     '''
     Execute a batch command (a string, not a list; can be multiple bash commands connected with &&).
@@ -132,7 +132,9 @@ def execute_command_in_shell(bash_command,fname_out=None):
     print("returncode =",returncode)
 
     code_to_execute_stdout = code_to_execute_object.stdout
-    print("code_to_execute_stdout =\n",code_to_execute_stdout)
+
+    if print_output:
+        print("code_to_execute_stdout =\n",code_to_execute_stdout)
 
     if fname_out is not None:
 
@@ -144,7 +146,9 @@ def execute_command_in_shell(bash_command,fname_out=None):
             print(f"*** Warning from method execute_command: Could not open output file {fname_out}; quitting...")
 
     code_to_execute_stderr = code_to_execute_object.stderr
-    print("code_to_execute_stderr (should be empty since STDERR is combined with STDOUT) =\n",code_to_execute_stderr)
+
+    if print_output:
+        print("code_to_execute_stderr (should be empty since STDERR is combined with STDOUT) =\n",code_to_execute_stderr)
 
     return returncode,code_to_execute_stdout
 
