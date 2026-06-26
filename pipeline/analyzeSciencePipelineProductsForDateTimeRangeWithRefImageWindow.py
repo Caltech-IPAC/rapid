@@ -139,18 +139,6 @@ else:
     print(f"*** Message: Will process only fid={run_fid}...")
 
 
-# Get optional DRYRUN.
-
-dry_run_str = os.getenv('DRYRUN')
-
-if dry_run_str is None:
-
-    print("*** Error: Env. var. DRYRUN not set; quitting...")
-    exit(64)
-
-dry_run = eval(dry_run_str)
-
-
 # Print parameters.
 
 print("startdatetime =",startdatetime)
@@ -322,7 +310,7 @@ if __name__ == '__main__':
         print(f"=====>s3_url = {s3_url}")
 
         ls_cmd = f"aws s3 ls {s3_url}/ | grep awaicgen"
-        exitcode_from_ls,code_to_execute_stdout = util.execute_command_in_shell(ls_cmd)
+        exitcode_from_ls,code_to_execute_stdout = util.execute_command_in_shell(ls_cmd,print_output=False)
         lines = code_to_execute_stdout.splitlines()
 
         i = 0
