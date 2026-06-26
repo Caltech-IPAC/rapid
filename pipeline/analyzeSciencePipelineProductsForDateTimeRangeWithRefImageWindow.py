@@ -304,7 +304,7 @@ if __name__ == '__main__':
         for record in records:
             jid = record[0]
 
-        s3_url = f"s3://rapid-product-files/procdate/jid{jid}/"
+        s3_url = f"s3://rapid-product-files/{proc_date}/jid{jid}"
 
         print(f"=====>s3_url = {s3_url}")
 
