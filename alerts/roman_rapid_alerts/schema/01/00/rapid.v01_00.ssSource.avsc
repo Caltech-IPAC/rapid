@@ -1,0 +1,18 @@
+{
+	"namespace": "rapid.v01_00",
+	"name": "ssSource",
+	"doc": "RAPID alert schema: solar system source association (stub)",
+	"version": "01.00",
+	"type": "record",
+	"fields": [
+		{"name": "ssSourceId",    "type": "long",              "doc": "Unique identifier for this solar system source"},
+		{"name": "diaSourceId",   "type": "long",              "doc": "Associated diaSource identifier"},
+		{"name": "ssObjectId",    "type": ["null", "long"],    "default": null, "doc": "Associated solar system object identifier"},
+		{"name": "heliocentricX", "type": ["null", "double"],  "default": null, "doc": "Heliocentric x position [AU]"},
+		{"name": "heliocentricY", "type": ["null", "double"],  "default": null, "doc": "Heliocentric y position [AU]"},
+		{"name": "heliocentricZ", "type": ["null", "double"],  "default": null, "doc": "Heliocentric z position [AU]"},
+		{"name": "phaseAngle",    "type": ["null", "float"],   "default": null, "doc": "Phase angle [deg]"},
+		{"name": "heliocentricDist", "type": ["null", "float"],"default": null, "doc": "Heliocentric distance [AU]"},
+		{"name": "topocentricDist", "type": ["null", "float"], "default": null, "doc": "Topocentric distance [AU]"}
+	]
+}

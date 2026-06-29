@@ -1,0 +1,19 @@
+{
+	"namespace": "rapid.v01_00",
+	"name": "mpc_orbits",
+	"doc": "RAPID alert schema: MPC orbital elements (stub)",
+	"version": "01.00",
+	"type": "record",
+	"fields": [
+		{"name": "id",            "type": "string",             "doc": "MPC designation or packed designation"},
+		{"name": "a",             "type": ["null", "double"],   "default": null, "doc": "Semi-major axis [AU]"},
+		{"name": "e",             "type": ["null", "double"],   "default": null, "doc": "Eccentricity"},
+		{"name": "incl",          "type": ["null", "double"],   "default": null, "doc": "Inclination [deg]"},
+		{"name": "Omega",         "type": ["null", "double"],   "default": null, "doc": "Longitude of ascending node [deg]"},
+		{"name": "omega",         "type": ["null", "double"],   "default": null, "doc": "Argument of perihelion [deg]"},
+		{"name": "M",             "type": ["null", "double"],   "default": null, "doc": "Mean anomaly [deg]"},
+		{"name": "epoch",         "type": ["null", "double"],   "default": null, "doc": "Epoch of orbital elements [MJD]"},
+		{"name": "H",             "type": ["null", "float"],    "default": null, "doc": "Absolute magnitude [mag]"},
+		{"name": "G",             "type": ["null", "float"],    "default": null, "doc": "Slope parameter"}
+	]
+}

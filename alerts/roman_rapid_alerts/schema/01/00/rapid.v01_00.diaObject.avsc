@@ -1,0 +1,66 @@
+{
+	"namespace": "rapid.v01_00",
+	"name": "diaObject",
+	"doc": "RAPID alert schema: astronomical object derived from DIASources",
+	"version": "01.00",
+	"type": "record",
+	"fields": [
+		{"name": "diaObjectId",            "type": "long",              "doc": "Unique identifier for this object"},
+		{"name": "ra",                     "type": "double",            "doc": "Right ascension of object centroid; ICRS [deg]"},
+		{"name": "dec",                    "type": "double",            "doc": "Declination of object centroid; ICRS [deg]"},
+		{"name": "raErr",                  "type": ["null", "float"],   "default": null, "doc": "Uncertainty in ra [deg]"},
+		{"name": "decErr",                 "type": ["null", "float"],   "default": null, "doc": "Uncertainty in dec [deg]"},
+		{"name": "nDiaSources",            "type": "int",               "doc": "Total number of associated DIASources"},
+		{"name": "firstDiaSourceMjdTai",   "type": ["null", "double"],  "default": null, "doc": "MJD of earliest associated diaSource [TAI MJD]"},
+		{"name": "lastDiaSourceMjdTai",    "type": ["null", "double"],  "default": null, "doc": "MJD of latest associated diaSource [TAI MJD]"},
+		{"name": "validityStartMjdTai",    "type": "double",            "doc": "Start of validity interval for this object summary [TAI MJD]"},
+
+		{"name": "F062PsfFluxMean",   "type": ["null", "float"], "default": null, "doc": "Mean PSF flux in F062 [nJy]"},
+		{"name": "F062PsfFluxSigma",  "type": ["null", "float"], "default": null, "doc": "Std dev of PSF flux in F062 [nJy]"},
+		{"name": "F062PsfFluxNdata",  "type": ["null", "int"],   "default": null, "doc": "Number of F062 measurements"},
+		{"name": "F062PsfFluxMin",    "type": ["null", "float"], "default": null, "doc": "Minimum PSF flux in F062 [nJy]"},
+		{"name": "F062PsfFluxMax",    "type": ["null", "float"], "default": null, "doc": "Maximum PSF flux in F062 [nJy]"},
+
+		{"name": "F087PsfFluxMean",   "type": ["null", "float"], "default": null, "doc": "Mean PSF flux in F087 [nJy]"},
+		{"name": "F087PsfFluxSigma",  "type": ["null", "float"], "default": null, "doc": "Std dev of PSF flux in F087 [nJy]"},
+		{"name": "F087PsfFluxNdata",  "type": ["null", "int"],   "default": null, "doc": "Number of F087 measurements"},
+		{"name": "F087PsfFluxMin",    "type": ["null", "float"], "default": null, "doc": "Minimum PSF flux in F087 [nJy]"},
+		{"name": "F087PsfFluxMax",    "type": ["null", "float"], "default": null, "doc": "Maximum PSF flux in F087 [nJy]"},
+
+		{"name": "F106PsfFluxMean",   "type": ["null", "float"], "default": null, "doc": "Mean PSF flux in F106 [nJy]"},
+		{"name": "F106PsfFluxSigma",  "type": ["null", "float"], "default": null, "doc": "Std dev of PSF flux in F106 [nJy]"},
+		{"name": "F106PsfFluxNdata",  "type": ["null", "int"],   "default": null, "doc": "Number of F106 measurements"},
+		{"name": "F106PsfFluxMin",    "type": ["null", "float"], "default": null, "doc": "Minimum PSF flux in F106 [nJy]"},
+		{"name": "F106PsfFluxMax",    "type": ["null", "float"], "default": null, "doc": "Maximum PSF flux in F106 [nJy]"},
+
+		{"name": "F129PsfFluxMean",   "type": ["null", "float"], "default": null, "doc": "Mean PSF flux in F129 [nJy]"},
+		{"name": "F129PsfFluxSigma",  "type": ["null", "float"], "default": null, "doc": "Std dev of PSF flux in F129 [nJy]"},
+		{"name": "F129PsfFluxNdata",  "type": ["null", "int"],   "default": null, "doc": "Number of F129 measurements"},
+		{"name": "F129PsfFluxMin",    "type": ["null", "float"], "default": null, "doc": "Minimum PSF flux in F129 [nJy]"},
+		{"name": "F129PsfFluxMax",    "type": ["null", "float"], "default": null, "doc": "Maximum PSF flux in F129 [nJy]"},
+
+		{"name": "F146PsfFluxMean",   "type": ["null", "float"], "default": null, "doc": "Mean PSF flux in F146 [nJy]"},
+		{"name": "F146PsfFluxSigma",  "type": ["null", "float"], "default": null, "doc": "Std dev of PSF flux in F146 [nJy]"},
+		{"name": "F146PsfFluxNdata",  "type": ["null", "int"],   "default": null, "doc": "Number of F146 measurements"},
+		{"name": "F146PsfFluxMin",    "type": ["null", "float"], "default": null, "doc": "Minimum PSF flux in F146 [nJy]"},
+		{"name": "F146PsfFluxMax",    "type": ["null", "float"], "default": null, "doc": "Maximum PSF flux in F146 [nJy]"},
+
+		{"name": "F158PsfFluxMean",   "type": ["null", "float"], "default": null, "doc": "Mean PSF flux in F158 [nJy]"},
+		{"name": "F158PsfFluxSigma",  "type": ["null", "float"], "default": null, "doc": "Std dev of PSF flux in F158 [nJy]"},
+		{"name": "F158PsfFluxNdata",  "type": ["null", "int"],   "default": null, "doc": "Number of F158 measurements"},
+		{"name": "F158PsfFluxMin",    "type": ["null", "float"], "default": null, "doc": "Minimum PSF flux in F158 [nJy]"},
+		{"name": "F158PsfFluxMax",    "type": ["null", "float"], "default": null, "doc": "Maximum PSF flux in F158 [nJy]"},
+
+		{"name": "F184PsfFluxMean",   "type": ["null", "float"], "default": null, "doc": "Mean PSF flux in F184 [nJy]"},
+		{"name": "F184PsfFluxSigma",  "type": ["null", "float"], "default": null, "doc": "Std dev of PSF flux in F184 [nJy]"},
+		{"name": "F184PsfFluxNdata",  "type": ["null", "int"],   "default": null, "doc": "Number of F184 measurements"},
+		{"name": "F184PsfFluxMin",    "type": ["null", "float"], "default": null, "doc": "Minimum PSF flux in F184 [nJy]"},
+		{"name": "F184PsfFluxMax",    "type": ["null", "float"], "default": null, "doc": "Maximum PSF flux in F184 [nJy]"},
+
+		{"name": "F213PsfFluxMean",   "type": ["null", "float"], "default": null, "doc": "Mean PSF flux in F213 [nJy]"},
+		{"name": "F213PsfFluxSigma",  "type": ["null", "float"], "default": null, "doc": "Std dev of PSF flux in F213 [nJy]"},
+		{"name": "F213PsfFluxNdata",  "type": ["null", "int"],   "default": null, "doc": "Number of F213 measurements"},
+		{"name": "F213PsfFluxMin",    "type": ["null", "float"], "default": null, "doc": "Minimum PSF flux in F213 [nJy]"},
+		{"name": "F213PsfFluxMax",    "type": ["null", "float"], "default": null, "doc": "Maximum PSF flux in F213 [nJy]"}
+	]
+}
