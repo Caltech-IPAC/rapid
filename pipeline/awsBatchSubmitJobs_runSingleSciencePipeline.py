@@ -39,7 +39,7 @@ import pandas as pd
 from datetime import datetime, timezone
 from dateutil import tz
 import time
-from contextlib import chdir
+from contextlib import chdir     # Requires Python 3.11+
 import shutil
 
 to_zone = tz.gettz('America/Los_Angeles')
@@ -69,7 +69,7 @@ print("aws_batch_job_id =", aws_batch_job_id)
 
 # Compute processing datetime (UT) and processing datetime (Pacific time).
 
-datetime_utc_now = datetime.utcnow()
+datetime_utc_now = datetime.now(timezone.utc)
 proc_utc_datetime = datetime_utc_now.strftime('%Y-%m-%dT%H:%M:%SZ')
 datetime_pt_now = datetime_utc_now.replace(tzinfo=timezone.utc).astimezone(tz=to_zone)
 proc_pt_datetime_started = datetime_pt_now.strftime('%Y-%m-%dT%H:%M:%S PT')
@@ -183,7 +183,7 @@ if __name__ == '__main__':
 
     verbose = int(config_input['JOB_PARAMS']['verbose'])
     debug = int(config_input['JOB_PARAMS']['debug'])
-    upload_to_s3_bucket = eval(config_input['JOB_PARAMS']['upload_to_s3_bucket'])
+    upload_to_s3_bucket = ast.literal_eval(config_input['JOB_PARAMS']['upload_to_s3_bucket'])
 
     override_upload_to_s3_bucket = os.getenv('DONOTUPLOADPRODUCTS')
 
@@ -250,6 +250,7 @@ if __name__ == '__main__':
     else:
         rfid = int(rfid_str)
 
+    # The launcher script determines where the following stores ppid=12 or ppid=15.
     ppid_refimage = int(config_input['REF_IMAGE']['ppid'])
     max_n_images_to_coadd = int(config_input['REF_IMAGE']['max_n_images_to_coadd'])
     naxis1_refimage = int(config_input['REF_IMAGE']['naxis1'])
@@ -298,7 +299,7 @@ if __name__ == '__main__':
 
     print("max_n_images_to_coadd =", max_n_images_to_coadd)
 
-    inject_fake_sources_flag = eval(fake_sources_dict['inject_fake_sources_flag'])
+    inject_fake_sources_flag = ast.literal_eval(fake_sources_dict['inject_fake_sources_flag'])
 
     saturation_level_refimage = float(sextractor_refimage_dict["sextractor_SATUR_LEVEL".lower()])
 
@@ -346,7 +347,7 @@ if __name__ == '__main__':
     print("filename_refimage_psf = ",filename_refimage_psf)
 
 
-    # Optionally read in CVS file containing inputs for generating reference image.
+    # Optionally read in CSV file containing inputs for generating reference image.
 
     if rfid is not None:
 
@@ -558,7 +559,7 @@ if __name__ == '__main__':
 
     # Compute additional quantities needed for later.
 
-    sextractor_refimage_paramsfile = cfg_path + "/rapidSexParamsRefImage.inp";
+    sextractor_refimage_paramsfile = cfg_path + "/rapidSexParamsRefImage.inp"
     params_to_get_refimage = ["FWHM_IMAGE"]
 
     vals_refimage = util.parse_ascii_text_sextractor_catalog(filename_sex_refimage_catalog,
@@ -612,10 +613,14 @@ if __name__ == '__main__':
     product_config['JOB_PARAMS']['verbose'] = str(verbose)
     product_config['JOB_PARAMS']['job_started'] = str(proc_pt_datetime_started)
 
+    product_config['REF_IMAGE'] = {}
 
-    if rfid is None:
+    if rfid is not None:
 
-        product_config['REF_IMAGE'] = {}
+        product_config['REF_IMAGE']['rfid'] = str(rfid)
+        product_config['REF_IMAGE']['ppid'] = str(ppid_refimage)
+
+    else:
 
         product_config['REF_IMAGE']['rfid'] = str(rfid)
         product_config['REF_IMAGE']['ppid'] = str(ppid_sciimage)
@@ -1785,7 +1790,7 @@ if __name__ == '__main__':
     # Optionally run SFFT to generate an alternate difference image and catalog.
     #################################################################################################################
 
-    run_sfft = eval(sfft_dict['run_sfft'])
+    run_sfft = ast.literal_eval(sfft_dict['run_sfft'])
 
     # Always leave as True, and can only be reset to False if and only if SFFT runs and fails.
     run_sfft_was_successful = True
@@ -1799,7 +1804,7 @@ if __name__ == '__main__':
         filename_scisegm = 'sfftscisegm.fits'
         filename_refsegm = 'sfftrefsegm.fits'
 
-        crossconv_flag = eval(sfft_dict['crossconv_flag'])
+        crossconv_flag = ast.literal_eval(sfft_dict['crossconv_flag'])
 
 
         # TODO Override config file if rimtimsim.
@@ -2409,7 +2414,7 @@ if __name__ == '__main__':
     # Compute naive image difference.
     #################################################################################################################
 
-    naive_diffimage_flag = eval(naive_diffimage_dict['naive_diffimage_flag'])
+    naive_diffimage_flag = ast.literal_eval(naive_diffimage_dict['naive_diffimage_flag'])
 
     if naive_diffimage_flag:
 
@@ -2853,7 +2858,7 @@ if __name__ == '__main__':
 
     # Get timestamp job ended in Pacific Time for Jobs database record later.
 
-    datetime_utc_now = datetime.utcnow()
+    datetime_utc_now = datetime.now(timezone.utc)
     proc_utc_datetime = datetime_utc_now.strftime('%Y-%m-%dT%H:%M:%SZ')
     datetime_pt_now = datetime_utc_now.replace(tzinfo=timezone.utc).astimezone(tz=to_zone)
     proc_pt_datetime_ended = datetime_pt_now.strftime('%Y-%m-%dT%H:%M:%S PT')
