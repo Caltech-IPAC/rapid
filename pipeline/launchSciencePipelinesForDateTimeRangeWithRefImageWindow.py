@@ -229,7 +229,10 @@ if __name__ == '__main__':
 
     for fid in range(1,n_filters + 1):
 
-        recs = dbh.get_field_fid_nframes_records_for_mjdobs_range(start_refimage_mjdobs,end_refimage_mjdobs,min_n_images_to_coadd,fid)
+        recs = dbh.get_field_fid_nframes_records_for_mjdobs_range(start_refimage_mjdobs,
+                                                                  end_refimage_mjdobs,
+                                                                  min_n_images_to_coadd,
+                                                                  fid)
 
         if dbh.exit_code >= 64:
             print("*** Error from query for field/filter/nframes combinations {}; quitting ".format(swname))
@@ -306,7 +309,8 @@ if __name__ == '__main__':
                 print("rid, sca =",rid,sca)
 
 
-    # The job launching is done in parallel, taking advantage of multiple cores on the job-launcher machine.
+    # The job launching is done in parallel, taking advantage of multiple cores
+    # on the job-launcher machine.
 
     number_pipeline_instances = len(rid_list)
     print(f"number_pipeline_instances = {number_pipeline_instances}")
@@ -314,7 +318,8 @@ if __name__ == '__main__':
     if dry_run:
         print("*** Message: Skip launching pipelines...")
     else:
-        print("*** Message: Launching pipelines...")
+        print("*** Message: Executing pipeline/awsBatchSubmitJobs_launchSingleSciencePipeline.py " +\
+              "in parallel to launch pipelines...")
         launch_parallel_processes(rid_list)
 
 
