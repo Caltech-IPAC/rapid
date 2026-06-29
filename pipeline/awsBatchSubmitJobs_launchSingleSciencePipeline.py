@@ -1,3 +1,16 @@
+'''
+Terminating exit codes:
+
+=============       =========================================
+exit_code            Definition
+=============       =========================================
+     0               Normal termination
+    32               Warning
+    33               n_images_to_coadd < min_n_images_to_coadd: pipeline not launched
+    64               Error
+=============       =========================================
+'''
+
 import boto3
 import os
 from astropy.io import fits
@@ -19,7 +32,6 @@ import database.modules.utils.roman_tessellation_db as sqlite
 swname = "awsBatchSubmitJobs_launchSingleSciencePipeline.py"
 swvers = "1.0"
 cfg_filename_only = "awsBatchSubmitJobs_launchSingleSciencePipeline.ini"
-
 
 print("swname =", swname)
 print("swvers =", swvers)
@@ -148,12 +160,16 @@ ppid = int(config_input['SCI_IMAGE']['ppid'])
 saturation_level_sciimage = config_input['SCI_IMAGE']['saturation_level']
 
 ppid_refimage = int(config_input['REF_IMAGE']['ppid'])
+min_n_images_to_coadd = int(config_input['REF_IMAGE']['min_n_images_to_coadd'])
 max_n_images_to_coadd = int(config_input['REF_IMAGE']['max_n_images_to_coadd'])
 naxis1_refimage = int(config_input['REF_IMAGE']['naxis1_refimage'])
 naxis2_refimage = int(config_input['REF_IMAGE']['naxis2_refimage'])
 cdelt1_refimage = float(config_input['REF_IMAGE']['cdelt1_refimage'])
 cdelt2_refimage = float(config_input['REF_IMAGE']['cdelt2_refimage'])
 crota2_refimage = float(config_input['REF_IMAGE']['crota2_refimage'])
+
+print("min_n_images_to_coadd =",min_n_images_to_coadd)
+print("max_n_images_to_coadd =",max_n_images_to_coadd)
 
 
 # Set up AWS Batch.
@@ -578,15 +594,18 @@ if __name__ == '__main__':
     # If no reference imag is found, check whether there is one made by the science pipeline (ppid=15).
 
     db_refimages_rec_dict = dbh.get_best_reference_image(ppid_refimage,field,fid)
+    ppid_existing_refimg = ppid_refimage
 
     if dbh.exit_code == 7:
         print("No database record from dbh.get_best_reference_image for ppid={} called by {}; continuing with rfid = None...".format(ppid_refimage,swname))
 
         db_refimages_rec_dict = dbh.get_best_reference_image(ppid,field,fid)
+        ppid_existing_refimg = ppid
 
     if dbh.exit_code == 7:
         print("No database record from dbh.get_best_reference_image for ppid={} called by {}; continuing with rfid = None...".format(ppid,swname))
         rfid = None
+        ppid_existing_refimg = ppid
     elif dbh.exit_code >= 64:
         print("*** Error from {}; quitting ".format(swname))
         exit(dbh.exit_code)
@@ -605,6 +624,7 @@ if __name__ == '__main__':
         n_images_to_coadd = -1
 
     else:
+
         filename_refimage = "None"
         infobits_refimage = "None"
         input_images_csv_filename = "input_images_for_refimage_jid"+ str(jid) + ".csv"
@@ -636,6 +656,11 @@ if __name__ == '__main__':
             exit(dbh.exit_code)
 
         n_images_to_coadd = len(overlapping_images)
+
+        if n_images_to_coadd < min_n_images_to_coadd:
+            print(f"*** Warning: n_images_to_coadd ({n_images_to_coadd}) < min_n_images_to_coadd " +\
+                  f"({min_n_images_to_coadd}) for rid,field,fid = {rid},{field},{fid}; quitting...")
+            exit(33)
 
 
         # For each overlapping image, query L2Files database table for
@@ -792,7 +817,12 @@ if __name__ == '__main__':
 
     job_config['REF_IMAGE'] = {}
 
-    job_config['REF_IMAGE']['ppid'] = str(ppid_refimage)
+    if rfid is not None:
+        job_config['REF_IMAGE']['ppid'] = str(ppid_existing_refimg)
+    else:
+        job_config['REF_IMAGE']['ppid'] = str(ppid)
+
+    job_config['REF_IMAGE']['min_n_images_to_coadd'] = str(min_n_images_to_coadd)
     job_config['REF_IMAGE']['max_n_images_to_coadd'] = str(max_n_images_to_coadd)
     job_config['REF_IMAGE']['n_images_to_coadd'] = str(n_images_to_coadd)
     job_config['REF_IMAGE']['rfid'] = str(rfid)
