@@ -1,4 +1,5 @@
 import os
+import configparser
 import ast
 from datetime import datetime, timezone
 from dateutil import tz
@@ -12,6 +13,7 @@ import modules.utils.rapid_pipeline_subs as util
 
 swname = "launchSciencePipelinesForDateTimeRangeWithRefImageWindow.py"
 swvers = "1.0"
+cfg_filename_only = "awsBatchSubmitJobs_launchSingleSciencePipeline.ini"
 
 print("swname =", swname)
 print("swvers =", swvers)
@@ -76,29 +78,6 @@ if end_refimage_mjdobs is None:
     exit(64)
 
 
-# Assume min_refimage_nframes is either an integer or
-# an list of 8 integers for fids 1 through 8, inclusive.
-
-min_refimage_nframes = os.getenv('MINREFIMNFRAMES')
-
-if min_refimage_nframes is None:
-
-    print("*** Error: Env. var. MINREFIMNFRAMES not set; quitting...")
-    exit(64)
-
-first_char = min_refimage_nframes[0]
-last_char = min_refimage_nframes[-1]
-
-if first_char == "[" and last_char == "]":
-
-    min_refimage_nframes = ast.literal_eval(min_refimage_nframes)
-
-    if len(min_refimage_nframes) != 8:
-
-        print("*** Error: Env. var. MINREFIMNFRAMES list does not have 8 elements; quitting...")
-        exit(64)
-
-
 # Set flag to determine whether pipeline instances may generate reference images.
 
 make_refimages_flag_str = os.getenv('MAKEREFIMAGESFLAG')
@@ -139,9 +118,36 @@ print("startdatetime =",startdatetime)
 print("enddatetime =",enddatetime)
 print("start_refimage_mjdobs =",start_refimage_mjdobs)
 print("end_refimage_mjdobs =",end_refimage_mjdobs)
-print("min_refimage_nframes =",min_refimage_nframes)
 print("make_refimages_flag =",make_refimages_flag)
 print("dry_run =",dry_run)
+
+
+# Get env. var. RAPID_SW and assign cfg_path.
+
+rapid_sw = os.getenv('RAPID_SW')
+
+if rapid_sw is None:
+
+    print("*** Error: Env. var. RAPID_SW not set; quitting...")
+    exit(64)
+
+cfg_path = rapid_sw + "/cdf"
+
+print("rapid_sw =",rapid_sw)
+print("cfg_path =",cfg_path)
+
+
+# Read input parameters from .ini file.
+
+config_input_filename = cfg_path + "/" + cfg_filename_only
+config_input = configparser.ConfigParser()
+config_input.read(config_input_filename)
+
+min_n_images_to_coadd = int(config_input['REF_IMAGE']['min_n_images_to_coadd'])
+max_n_images_to_coadd = int(config_input['REF_IMAGE']['max_n_images_to_coadd'])
+
+print("min_n_images_to_coadd =",min_n_images_to_coadd)
+print("max_n_images_to_coadd =",max_n_images_to_coadd)
 
 
 # Custom methods for parallel processing, taking advantage of multiple cores on the job-launcher machine.
@@ -223,7 +229,7 @@ if __name__ == '__main__':
 
     for fid in range(1,n_filters + 1):
 
-        recs = dbh.get_field_fid_nframes_records_for_mjdobs_range(start_refimage_mjdobs,end_refimage_mjdobs,min_refimage_nframes,fid)
+        recs = dbh.get_field_fid_nframes_records_for_mjdobs_range(start_refimage_mjdobs,end_refimage_mjdobs,min_n_images_to_coadd,fid)
 
         if dbh.exit_code >= 64:
             print("*** Error from query for field/filter/nframes combinations {}; quitting ".format(swname))
