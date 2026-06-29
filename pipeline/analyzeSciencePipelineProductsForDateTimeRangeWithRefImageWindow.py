@@ -47,12 +47,6 @@ if proc_date is None:
 
 # Inputs are observation start and end datetimes of exposures to be processed.
 # E.g., startdatetime = "2028-09-08 00:18:00", enddatetime = "2028-09-11 00:00:00"
-#
-# If startdatetime is set to "dynamic", a database query will be used to determine
-# the startdatetime for each field and filter, assuming MINREFIMNFRAMES early in the
-# observation data set are reserved/skipped for reference-image generation.  In this
-# case, STARTREFIMMJDOBS and ENDREFIMMJDOBS should be set to cover the entire range
-# of observations.
 
 startdatetime = os.getenv('STARTDATETIME')
 
@@ -178,7 +172,7 @@ if __name__ == '__main__':
 
     n_filters = 8
 
-    num = 1
+    num = 0
 
     field_list = []
     fid_list = []
@@ -200,9 +194,9 @@ if __name__ == '__main__':
             field_list.append(field)
             fid_list.append(fid)
 
-            print("num,field,fid,nframes =",num,field,fid,nframes)
-
             num += 1
+
+            print("num,field,fid,nframes =",num,field,fid,nframes)
 
 
     # Loop over field/filter combinations.
@@ -210,9 +204,6 @@ if __name__ == '__main__':
     # Note: In order to run an instance of the RAPID pipeline that both
     # 1. Generates a reference image; and
     # 2. Processes a science image
-    # the database query for a given field and filter must return min_refimage_nframes plus one
-    # (includes frames reserved for reference-image generation, plus one frame for image-differencing).
-    # This is only checked explicitly if export STARTDATETIME="dynamic".
 
     rid_list = []
 
@@ -236,22 +227,6 @@ if __name__ == '__main__':
              exit(dbh.exit_code)
 
         n_records = len(recs)
-
-        if startdatetime == "dynamic":
-
-            if first_char == "[" and last_char == "]":
-                fid_index = fid - 1
-                min_required_frames = min_refimage_nframes[fid_index] + 1          # min_refimage_nframes is a list.
-            else:
-                min_required_frames = min_refimage_nframes + 1                     # min_refimage_nframes is an integer.
-
-            if n_records < min_required_frames:
-                continue
-            else:
-                # Skip L2 science images reserved for reference-image generation.
-                # min_required_frames includes frames reserved for reference-image generation, plus one frame for image-differencing.
-                for i in range(min_required_frames - 1):
-                    recs.pop(0)
 
 
         # For the remaining records (which are not reserved for reference-image generation),
