@@ -63,8 +63,8 @@ print("proc_pt_datetime_started =",proc_pt_datetime_started)
 #bucket_name_output = "socsim-20260427-lite"
 # The WCS correction has already been done by sims/src/socsims/inject_fake_sources_into_l2_asdf_files.py
 # Note the following new S3 buckets:
-bucket_name_input = "socsims-fakesrc-asdf-20260610"
-bucket_name_output = "socsims-fakesrc-fits-20260610-lite"
+bucket_name_input = "socsims-fakesrc-asdf-20260624"
+bucket_name_output = "socsims-fakesrc-fits-20260624-lite"
 
 
 # Create S3-client and S3-resource objects.
