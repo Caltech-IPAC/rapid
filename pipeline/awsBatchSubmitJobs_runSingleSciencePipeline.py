@@ -909,7 +909,7 @@ if __name__ == '__main__':
 
     # Compute additional quantities needed for the science-image PSF.
 
-    sextractor_sciimage_paramsfile = cfg_path + "/rapidSexParamsSciImage.inp";
+    sextractor_sciimage_paramsfile = cfg_path + "/rapidSexParamsSciImage.inp"
     params_to_get_sciimage = ["FWHM_IMAGE"]
 
     vals_sciimage = util.parse_ascii_text_sextractor_catalog(filename_sciimage_catalog,
@@ -1323,7 +1323,7 @@ if __name__ == '__main__':
     # image, then use to perform aperture phot on difference image to generate
     # raw ascii catalog file.
 
-    sextractor_diffimage_paramsfile = cfg_path + "/rapidSexParamsDiffImage.inp";
+    sextractor_diffimage_paramsfile = cfg_path + "/rapidSexParamsDiffImage.inp"
     filename_diffimage_sextractor_catalog = filename_diffimage_masked.replace(".fits",".txt")
 
     sextractor_diffimage_dict["sextractor_detection_image".lower()] = filename_scorrimage_masked
@@ -1372,7 +1372,7 @@ if __name__ == '__main__':
     # image, then use to perform aperture phot on difference image to generate
     # raw ascii catalog file.
 
-    sextractor_diffimage_paramsfile = cfg_path + "/rapidSexParamsDiffImage.inp";
+    sextractor_diffimage_paramsfile = cfg_path + "/rapidSexParamsDiffImage.inp"
     filename_diffimage_sextractor_catalog_negative = filename_diffimage_masked_negative.replace(".fits",".txt")
 
     sextractor_diffimage_dict["sextractor_detection_image".lower()] = filename_scorrimage_masked_negative
@@ -2013,7 +2013,7 @@ if __name__ == '__main__':
             else:
                 filename_detection_image = filename_sfftdiffimage
 
-            sextractor_diffimage_paramsfile = cfg_path + "/rapidSexParamsDiffImage.inp";
+            sextractor_diffimage_paramsfile = cfg_path + "/rapidSexParamsDiffImage.inp"
             filename_sfftdiffimage_sextractor_catalog = filename_detection_image.replace(".fits",".txt")
 
             sextractor_diffimage_dict["sextractor_detection_image".lower()] = filename_detection_image
@@ -2066,7 +2066,7 @@ if __name__ == '__main__':
             else:
                 filename_detection_image_negative = filename_sfftdiffimage_negative
 
-            sextractor_diffimage_paramsfile = cfg_path + "/rapidSexParamsDiffImage.inp";
+            sextractor_diffimage_paramsfile = cfg_path + "/rapidSexParamsDiffImage.inp"
             filename_sfftdiffimage_sextractor_catalog_negative = filename_sfftdiffimage_negative.replace(".fits",".txt")
 
             sextractor_diffimage_dict["sextractor_detection_image".lower()] = filename_detection_image_negative
@@ -2521,7 +2521,7 @@ if __name__ == '__main__':
 
         # Compute SExtractor catalog for positive naive difference image and generate raw ascii catalog file.
 
-        sextractor_diffimage_paramsfile = cfg_path + "/rapidSexParamsDiffImage.inp";
+        sextractor_diffimage_paramsfile = cfg_path + "/rapidSexParamsDiffImage.inp"
         filename_naive_diffimage_sextractor_catalog = filename_naive_diffimage_masked.replace(".fits",".txt")
 
         sextractor_diffimage_dict["sextractor_detection_image".lower()] = filename_naive_diffimage_masked
@@ -2555,7 +2555,7 @@ if __name__ == '__main__':
 
         # Compute SExtractor catalog for negative naive difference image and generate raw ascii catalog file.
 
-        sextractor_diffimage_paramsfile = cfg_path + "/rapidSexParamsDiffImage.inp";
+        sextractor_diffimage_paramsfile = cfg_path + "/rapidSexParamsDiffImage.inp"
         filename_naive_diffimage_sextractor_catalog_negative = filename_naive_diffimage_masked_negative.replace(".fits",".txt")
 
         sextractor_diffimage_dict["sextractor_detection_image".lower()] = filename_naive_diffimage_masked_negative
@@ -2813,41 +2813,41 @@ if __name__ == '__main__':
             start_time_benchmark = end_time_benchmark
 
 
-            # Upload naive PSF-fit catalogs for naive difference images to product S3 bucket.
+        # Upload naive PSF-fit catalogs for naive difference images to product S3 bucket.
 
-            product_s3_bucket = product_s3_bucket_base
-            s3_object_name_output_psfcat_filename = job_proc_date + "/jid" + str(jid) + "/" + output_psfcat_filename
-            s3_object_name_output_psfcat_finder_filename = job_proc_date + "/jid" + str(jid) + "/" + output_psfcat_finder_filename
-            s3_object_name_output_psfcat_residual_filename = job_proc_date + "/jid" + str(jid) + "/" + output_psfcat_residual_filename
-            s3_object_name_output_psfcat_filename_negative = job_proc_date + "/jid" + str(jid) + "/" + output_psfcat_filename_negative
-            s3_object_name_output_psfcat_finder_filename_negative = job_proc_date + "/jid" + str(jid) + "/" + output_psfcat_finder_filename_negative
-            s3_object_name_output_psfcat_residual_filename_negative = job_proc_date + "/jid" + str(jid) + "/" + output_psfcat_residual_filename_negative
+        product_s3_bucket = product_s3_bucket_base
+        s3_object_name_output_psfcat_filename = job_proc_date + "/jid" + str(jid) + "/" + output_psfcat_filename
+        s3_object_name_output_psfcat_finder_filename = job_proc_date + "/jid" + str(jid) + "/" + output_psfcat_finder_filename
+        s3_object_name_output_psfcat_residual_filename = job_proc_date + "/jid" + str(jid) + "/" + output_psfcat_residual_filename
+        s3_object_name_output_psfcat_filename_negative = job_proc_date + "/jid" + str(jid) + "/" + output_psfcat_filename_negative
+        s3_object_name_output_psfcat_finder_filename_negative = job_proc_date + "/jid" + str(jid) + "/" + output_psfcat_finder_filename_negative
+        s3_object_name_output_psfcat_residual_filename_negative = job_proc_date + "/jid" + str(jid) + "/" + output_psfcat_residual_filename_negative
 
-            filenames = [output_psfcat_filename,
-                         output_psfcat_finder_filename,
-                         output_psfcat_residual_filename,
-                         output_psfcat_filename_negative,
-                         output_psfcat_finder_filename_negative,
-                         output_psfcat_residual_filename_negative]
+        filenames = [output_psfcat_filename,
+                     output_psfcat_finder_filename,
+                     output_psfcat_residual_filename,
+                     output_psfcat_filename_negative,
+                     output_psfcat_finder_filename_negative,
+                     output_psfcat_residual_filename_negative]
 
-            objectnames = [s3_object_name_output_psfcat_filename,
-                           s3_object_name_output_psfcat_finder_filename,
-                           s3_object_name_output_psfcat_residual_filename,
-                           s3_object_name_output_psfcat_filename_negative,
-                           s3_object_name_output_psfcat_finder_filename_negative,
-                           s3_object_name_output_psfcat_residual_filename_negative]
+        objectnames = [s3_object_name_output_psfcat_filename,
+                       s3_object_name_output_psfcat_finder_filename,
+                       s3_object_name_output_psfcat_residual_filename,
+                       s3_object_name_output_psfcat_filename_negative,
+                       s3_object_name_output_psfcat_finder_filename_negative,
+                       s3_object_name_output_psfcat_residual_filename_negative]
 
-            if upload_to_s3_bucket:
+        if upload_to_s3_bucket:
 
-                util.upload_files_to_s3_bucket(s3_client,product_s3_bucket,filenames,objectnames)
+            util.upload_files_to_s3_bucket(s3_client,product_s3_bucket,filenames,objectnames)
 
 
-                # Code-timing benchmark.
+            # Code-timing benchmark.
 
-                end_time_benchmark = time.time()
-                print("Elapsed time in seconds after uploading PSF-fit catalogs for naive difference images to S3 product bucket =",
-                    round(end_time_benchmark - start_time_benchmark,3))
-                start_time_benchmark = end_time_benchmark
+            end_time_benchmark = time.time()
+            print("Elapsed time in seconds after uploading PSF-fit catalogs for naive difference images to S3 product bucket =",
+                round(end_time_benchmark - start_time_benchmark,3))
+            start_time_benchmark = end_time_benchmark
 
 
     # Get listing of working directory as a diagnostic.
