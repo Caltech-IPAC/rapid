@@ -418,7 +418,7 @@ if __name__ == '__main__':
 
     #
     # Launch a science pipeline for input science image (obtained from environment variable RID above), which
-    # entails machine-generating a config file, and, if applicable, a CVS file with reference-image inputs.
+    # entails machine-generating a config file, and, if applicable, a CSV file with reference-image inputs.
     #
 
 
