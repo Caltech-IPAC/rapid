@@ -619,6 +619,7 @@ if __name__ == '__main__':
 
     do_not_overwrite = True
 
+
     # Parse FITS files in output S3 bucket.
 
     my_bucket_output = s3_resource.Bucket(bucket_name_output)
@@ -653,13 +654,6 @@ if __name__ == '__main__':
 
             input_asdf_file = input_file_metadata[3]
 
-
-            # Special logic.
-            #if "r0034001001001001001_" not in input_asdf_file:
-            #if "r0034001001001001001_0003_wfi06_f062_cal" not in input_asdf_file:
-            #    continue
-
-
             print(f"input_asdf_file = {input_asdf_file}")
 
             output_fits_file = input_asdf_file.replace(".asdf.gz","_lite.fits.gz")
@@ -668,8 +662,6 @@ if __name__ == '__main__':
 
                 print(f"{output_fits_file} exists in output S3 bucket; skipping...")
                 continue
-
-
 
             input_asdf_files.append(input_asdf_file)
 
