@@ -1486,12 +1486,12 @@ def parse_ascii_text_sextractor_catalog(catalog_filename,params_filename,params_
             except:
                 pass
 
-            all = line.strip().split()
+            all_cols = line.strip().split()
 
             vals = []
             for p in params_to_parse:
                 j = idx[p]
-                vals.append(all[j])
+                vals.append(all_cols[j])
 
             r.append(vals)
 
@@ -2211,6 +2211,7 @@ def normalize_image(fits_file,hdu_index,output_fits_file=None):
     hdul = fits.open(fits_file)
     hdr = hdul[hdu_index].header
     data = hdul[hdu_index].data
+    hdul.close()
 
 
     # Normalize the image.
@@ -2229,7 +2230,7 @@ def normalize_image(fits_file,hdu_index,output_fits_file=None):
 
     np_data = np.array(data_output)
 
-    hdul[hdu_index] = fits.PrimaryHDU(header=hdr,data=np_data)
+    new_hdu = fits.PrimaryHDU(header=hdr,data=np_data)
 
 
     # Write output FITS file.
@@ -2240,9 +2241,7 @@ def normalize_image(fits_file,hdu_index,output_fits_file=None):
     else:
         print(f"Writing new FITS file = {output_fits_file}")
 
-    hdul.writeto(output_fits_file,overwrite=True,checksum=True)
-
-    hdul.close()
+    new_hdu.writeto(output_fits_file,overwrite=True,checksum=True)
 
 
     # Return None implicitly.
