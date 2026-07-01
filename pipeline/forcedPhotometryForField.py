@@ -37,6 +37,7 @@ the SFFT difference-image PSF is not available.
 
 
 import os
+import ast
 import csv
 import boto3
 import shutil
@@ -162,7 +163,7 @@ refimage_psf_filename = config_input['JOB_PARAMS']['refimage_psf_filename']
 output_psfcat_filename = config_input['PSFCAT_REFIMAGE']['output_psfcat_filename']
 output_psfcat_finder_filename = config_input['PSFCAT_REFIMAGE']['output_psfcat_finder_filename']
 
-crossconv_flag = eval(config_input['SFFT']['crossconv_flag'])
+crossconv_flag = ast.literal_eval(config_input['SFFT']['crossconv_flag'])
 
 
 filename_diffimgpsf = "sfftdiffpsf.fits"
