@@ -385,6 +385,8 @@ def register_exposure(dbh,header,wcs):
 
     if targra == 'null' or targdec == 'null':
 
+        print(f"*** Warning: Exposure for dateobs,mjdobs = {dateobs},{mjdobs} has missing TARGRA or TARGDEC; continuing...")
+
         sky0 = compute_center_sky_position(header,wcs)        # Fall back on image center.
 
         ra0 = sky0.ra.degree
