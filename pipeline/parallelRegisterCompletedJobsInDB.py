@@ -120,7 +120,7 @@ if make_refimages_flag_str is None:
     print("*** Error: Env. var. MAKEREFIMAGESFLAG not set; quitting...")
     exit(64)
 
-make_refimages_flag = eval(make_refimages_flag_str)
+make_refimages_flag = ast.literal_eval(make_refimages_flag_str)
 
 if make_refimages_flag:
     stage_label = "StageOne"
