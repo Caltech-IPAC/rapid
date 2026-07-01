@@ -87,7 +87,7 @@ if make_refimages_flag_str is None:
     print("*** Error: Env. var. MAKEREFIMAGESFLAG not set; quitting...")
     exit(64)
 
-make_refimages_flag = eval(make_refimages_flag_str)
+make_refimages_flag = ast.literal_eval(make_refimages_flag_str)
 
 
 # If RUNFID is set, then process just the specified filter.
@@ -109,7 +109,7 @@ if dry_run_str is None:
     print("*** Error: Env. var. DRYRUN not set; quitting...")
     exit(64)
 
-dry_run = eval(dry_run_str)
+dry_run = ast.literal_eval(dry_run_str)
 
 
 # Print parameters.
