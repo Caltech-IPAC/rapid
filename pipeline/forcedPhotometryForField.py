@@ -1141,7 +1141,7 @@ if __name__ == '__main__':
 
     run_chmod_was_successful = True
 
-    exitcode_from_chmod = util.execute_command_in_shell(f"chmod +x {cforcepsfaper_bash_script}")
+    exitcode_from_chmod,_ = util.execute_command_in_shell(f"chmod +x {cforcepsfaper_bash_script}")
 
     if int(exitcode_from_chmod) != 0:
         run_chmod_was_successful = False
@@ -1150,7 +1150,7 @@ if __name__ == '__main__':
 
     run_cforcepsfaper_was_successful = True
 
-    exitcode_from_cforcepsfaper = util.execute_command_in_shell(f"./{cforcepsfaper_bash_script}","cforcepsfaper_sh.out")
+    exitcode_from_cforcepsfaper,_ = util.execute_command_in_shell(f"./{cforcepsfaper_bash_script}","cforcepsfaper_sh.out")
 
     if int(exitcode_from_cforcepsfaper) != 0:
         run_cforcepsfaper_was_successful = False
