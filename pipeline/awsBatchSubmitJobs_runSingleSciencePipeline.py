@@ -1882,7 +1882,7 @@ if __name__ == '__main__':
 
         cmd = activate_cmd + " && " + sfft_cmd_str + " && " + deactivate_cmd
 
-        exitcode_from_sfft = util.execute_command_in_shell(cmd)
+        exitcode_from_sfft,_ = util.execute_command_in_shell(cmd)
 
         if int(exitcode_from_sfft) != 0:
             run_sfft_was_successful = False
