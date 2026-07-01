@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 
-# Generates RAPID v01.00 Avro alert schema files (LSST-compatible)
+# Generates RAPID Avro alert schema files for a given version (LSST-compatible)
 # Uses LSST record names and structure with Roman-appropriate content
 # Reference:
 #   LSST alert_packet v10.0
@@ -11,23 +11,34 @@
 set -euo pipefail
 IFS=$'\n\t'
 
-# Schema version
-VERSION=01.00
-MAJOR=01
-MINOR=00
-NAMESPACE="rapid.v01_00"
+# Schema version, e.g. "01.00" (major and minor must each be zero-padded to at least 2 digits)
+if [[ $# -ne 1 ]]; then
+	echo "Usage: $0 <major>.<minor>" >&2
+	echo "Example: $0 01.00" >&2
+	exit 1
+fi
+
+VERSION="$1"
+if [[ ! "${VERSION}" =~ ^[0-9]{2,}\.[0-9]{2,}$ ]]; then
+	echo "Error: version '${VERSION}' must be <major>.<minor>, each zero-padded to at least 2 digits (e.g. 01.00)" >&2
+	exit 1
+fi
+
+MAJOR="${VERSION%%.*}"
+MINOR="${VERSION##*.}"
+NAMESPACE="rapid.v${MAJOR}_${MINOR}"
 
 OUTDIR="schema/${MAJOR}/${MINOR}"
 echo "Generating RAPID avro alert schema v${VERSION}"
 mkdir -p "${OUTDIR}"
 
 # --- diaSource ---
-cat << 'EOF' > "${OUTDIR}/rapid.v01_00.diaSource.avsc"
+cat << EOF > "${OUTDIR}/${NAMESPACE}.diaSource.avsc"
 {
-	"namespace": "rapid.v01_00",
+	"namespace": "${NAMESPACE}",
 	"name": "diaSource",
 	"doc": "RAPID alert schema: individual source detection on a difference image",
-	"version": "01.00",
+	"version": "${VERSION}",
 	"type": "record",
 	"fields": [
 		{"name": "diaSourceId",        "type": "long",              "doc": "Unique identifier for this source detection"},
@@ -103,12 +114,12 @@ cat << 'EOF' > "${OUTDIR}/rapid.v01_00.diaSource.avsc"
 EOF
 
 # --- diaForcedSource ---
-cat << 'EOF' > "${OUTDIR}/rapid.v01_00.diaForcedSource.avsc"
+cat << EOF > "${OUTDIR}/${NAMESPACE}.diaForcedSource.avsc"
 {
-	"namespace": "rapid.v01_00",
+	"namespace": "${NAMESPACE}",
 	"name": "diaForcedSource",
 	"doc": "RAPID alert schema: forced photometry measurement at a diaObject position",
-	"version": "01.00",
+	"version": "${VERSION}",
 	"type": "record",
 	"fields": [
 		{"name": "diaForcedSourceId",  "type": "long",              "doc": "Unique identifier for this forced source measurement"},
@@ -130,12 +141,12 @@ cat << 'EOF' > "${OUTDIR}/rapid.v01_00.diaForcedSource.avsc"
 EOF
 
 # --- diaObject ---
-cat << 'EOF' > "${OUTDIR}/rapid.v01_00.diaObject.avsc"
+cat << EOF > "${OUTDIR}/${NAMESPACE}.diaObject.avsc"
 {
-	"namespace": "rapid.v01_00",
+	"namespace": "${NAMESPACE}",
 	"name": "diaObject",
 	"doc": "RAPID alert schema: astronomical object derived from DIASources",
-	"version": "01.00",
+	"version": "${VERSION}",
 	"type": "record",
 	"fields": [
 		{"name": "diaObjectId",            "type": "long",              "doc": "Unique identifier for this object"},
@@ -200,12 +211,12 @@ cat << 'EOF' > "${OUTDIR}/rapid.v01_00.diaObject.avsc"
 EOF
 
 # --- ssSource (stub) ---
-cat << 'EOF' > "${OUTDIR}/rapid.v01_00.ssSource.avsc"
+cat << EOF > "${OUTDIR}/${NAMESPACE}.ssSource.avsc"
 {
-	"namespace": "rapid.v01_00",
+	"namespace": "${NAMESPACE}",
 	"name": "ssSource",
 	"doc": "RAPID alert schema: solar system source association (stub)",
-	"version": "01.00",
+	"version": "${VERSION}",
 	"type": "record",
 	"fields": [
 		{"name": "ssSourceId",    "type": "long",              "doc": "Unique identifier for this solar system source"},
@@ -222,12 +233,12 @@ cat << 'EOF' > "${OUTDIR}/rapid.v01_00.ssSource.avsc"
 EOF
 
 # --- mpc_orbits (stub) ---
-cat << 'EOF' > "${OUTDIR}/rapid.v01_00.mpc_orbits.avsc"
+cat << EOF > "${OUTDIR}/${NAMESPACE}.mpc_orbits.avsc"
 {
-	"namespace": "rapid.v01_00",
+	"namespace": "${NAMESPACE}",
 	"name": "mpc_orbits",
 	"doc": "RAPID alert schema: MPC orbital elements (stub)",
-	"version": "01.00",
+	"version": "${VERSION}",
 	"type": "record",
 	"fields": [
 		{"name": "id",            "type": "string",             "doc": "MPC designation or packed designation"},
@@ -245,23 +256,23 @@ cat << 'EOF' > "${OUTDIR}/rapid.v01_00.mpc_orbits.avsc"
 EOF
 
 # --- alert (top-level) ---
-cat << 'EOF' > "${OUTDIR}/rapid.v01_00.alert.avsc"
+cat << EOF > "${OUTDIR}/${NAMESPACE}.alert.avsc"
 {
-	"namespace": "rapid.v01_00",
+	"namespace": "${NAMESPACE}",
 	"name": "alert",
 	"doc": "RAPID alert schema: top-level alert record (LSST-compatible)",
-	"version": "01.00",
+	"version": "${VERSION}",
 	"type": "record",
 	"fields": [
 		{"name": "diaSourceId",        "type": "long",                                                                         "doc": "Identifier for the triggering diaSource"},
 		{"name": "observation_reason",  "type": ["null", "string"],                                                            "default": null, "doc": "Reason for observation (e.g. survey, ToO)"},
 		{"name": "target_name",         "type": ["null", "string"],                                                            "default": null, "doc": "Target name if targeted observation"},
-		{"name": "diaSource",          "type": "rapid.v01_00.diaSource",                                                         "doc": "Triggering source detection"},
-		{"name": "prvDiaSources",      "type": ["null", {"type": "array", "items": "rapid.v01_00.diaSource"}],                   "default": null, "doc": "Previous detections of the same object within 12 months"},
-		{"name": "prvDiaForcedSources","type": ["null", {"type": "array", "items": "rapid.v01_00.diaForcedSource"}],              "default": null, "doc": "Forced photometry history at the object position"},
-		{"name": "diaObject",          "type": ["null", "rapid.v01_00.diaObject"],                                               "default": null, "doc": "Summary object record"},
-		{"name": "ssSource",           "type": ["null", "rapid.v01_00.ssSource"],                                                "default": null, "doc": "Solar system source association (stub)"},
-		{"name": "mpc_orbits",         "type": ["null", "rapid.v01_00.mpc_orbits"],                                              "default": null, "doc": "MPC orbital elements (stub)"},
+		{"name": "diaSource",          "type": "${NAMESPACE}.diaSource",                                                         "doc": "Triggering source detection"},
+		{"name": "prvDiaSources",      "type": ["null", {"type": "array", "items": "${NAMESPACE}.diaSource"}],                   "default": null, "doc": "Previous detections of the same object within 12 months"},
+		{"name": "prvDiaForcedSources","type": ["null", {"type": "array", "items": "${NAMESPACE}.diaForcedSource"}],              "default": null, "doc": "Forced photometry history at the object position"},
+		{"name": "diaObject",          "type": ["null", "${NAMESPACE}.diaObject"],                                               "default": null, "doc": "Summary object record"},
+		{"name": "ssSource",           "type": ["null", "${NAMESPACE}.ssSource"],                                                "default": null, "doc": "Solar system source association (stub)"},
+		{"name": "mpc_orbits",         "type": ["null", "${NAMESPACE}.mpc_orbits"],                                              "default": null, "doc": "MPC orbital elements (stub)"},
 		{"name": "cutoutDifference",   "type": ["null", "bytes"],                                                              "default": null, "doc": "FITS cutout of difference image"},
 		{"name": "cutoutScience",      "type": ["null", "bytes"],                                                              "default": null, "doc": "FITS cutout of science image"},
 		{"name": "cutoutTemplate",     "type": ["null", "bytes"],                                                              "default": null, "doc": "FITS cutout of template image"}
