@@ -13,6 +13,7 @@ associated post-processing pipeline for the same exposure-SCA image (indexed by 
 
 import boto3
 import os
+import ast
 import configparser
 from datetime import datetime, timezone
 from dateutil import tz
@@ -91,7 +92,7 @@ dry_run_str = os.getenv('DRYRUN')
 if dry_run_str is None:
     dry_run_str = "False"
 
-dry_run = bool(eval(dry_run_str))
+dry_run = bool(ast.literal_eval(dry_run_str))
 
 print(f"dry_run = {dry_run}")
 
