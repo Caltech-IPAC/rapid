@@ -99,7 +99,7 @@ if make_refimages_flag_str is None:
     print("*** Error: Env. var. MAKEREFIMAGESFLAG not set; quitting...")
     exit(64)
 
-make_refimages_flag = eval(make_refimages_flag_str)
+make_refimages_flag = ast.literal_eval(make_refimages_flag_str)
 
 
 # If RUNFID is set, then process just the specified filter.
