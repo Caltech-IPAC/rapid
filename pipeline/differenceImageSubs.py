@@ -1,3 +1,4 @@
+import ast
 from astropy.io import fits
 import numpy as np
 
@@ -198,7 +199,7 @@ def gainMatchScienceAndReferenceImages(s3_client,
     verbose = int(gainmatch_dict['verbose'])
 
     if upload_to_s3_bucket:
-        upload_intermediate_products = eval(gainmatch_dict['upload_intermediate_products'])
+        upload_intermediate_products = ast.literal_eval(gainmatch_dict['upload_intermediate_products'])
     else:
         upload_intermediate_products = False
 
