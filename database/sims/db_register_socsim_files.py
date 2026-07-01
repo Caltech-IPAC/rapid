@@ -72,7 +72,9 @@ if roman_tessellation_dbname is None:
 roman_tessellation_db = sqlite.RomanTessellationNSIDE512()
 
 
-# Set DONTCHECKALREADYINGESTED to skip existence-checking of the source_dbload_jid<jid>.done S3 bucket file.
+# Set DONTCHECKALREADYINGESTED to skip existence-checking of the FITS files
+# already ingested, which are found by querying the L2Files database table for
+# filenames (without S3-bucket names).
 
 skip_already_ingested_check = os.getenv('DONTCHECKALREADYINGESTED')
 
