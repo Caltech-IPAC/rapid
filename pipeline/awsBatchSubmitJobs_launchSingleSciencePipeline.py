@@ -13,6 +13,7 @@ exit_code            Definition
 
 import boto3
 import os
+import ast
 from astropy.io import fits
 import subprocess
 import re
@@ -132,7 +133,7 @@ dry_run_str = os.getenv('DRYRUN')
 if dry_run_str is None:
     dry_run_str = "False"
 
-dry_run = eval(dry_run_str)
+dry_run = ast.literal_eval(dry_run_str)
 
 print(f"dry_run = {dry_run}")
 
@@ -145,7 +146,7 @@ config_input.read(config_input_filename)
 
 verbose = int(config_input['JOB_PARAMS']['verbose'])
 debug = int(config_input['JOB_PARAMS']['debug'])
-upload_to_s3_bucket = eval(config_input['JOB_PARAMS']['upload_to_s3_bucket'])
+upload_to_s3_bucket = ast.literal_eval(config_input['JOB_PARAMS']['upload_to_s3_bucket'])
 job_info_s3_bucket_base = config_input['JOB_PARAMS']['job_info_s3_bucket_base']
 product_s3_bucket_base = config_input['JOB_PARAMS']['product_s3_bucket_base']
 job_config_filename_base = config_input['JOB_PARAMS']['job_config_filename_base']
