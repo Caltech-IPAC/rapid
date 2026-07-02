@@ -19,7 +19,7 @@ fi
 
 # Test if var is blank (empty string).
 
-if [ -z $var ]; then
+if [ -z "$var" ]; then
     echo "input var is blank; resetting to 2...";
     var=2;
 fi
@@ -63,7 +63,7 @@ fi
 
 
 echo "Executing aws s3 cp --quiet $logfile s3://rapid-pipeline-logs/${JOBPROCDATE}/$logfile"
-aws s3 cp --quiet $logfile s3://rapid-pipeline-logs/${JOBPROCDATE}/$logfile
+aws s3 cp --quiet "$logfile" s3://rapid-pipeline-logs/${JOBPROCDATE}/$logfile
 
 awss3cpexitcode=$?
 echo "awss3cpexitcode=$awss3cpexitcode"
