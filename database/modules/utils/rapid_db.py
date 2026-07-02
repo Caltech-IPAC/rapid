@@ -1409,12 +1409,6 @@ class RAPIDDB:
             start_mjdobs = start_refimage_mjdobs
             end_mjdobs = end_refimage_mjdobs
 
-            startdatetime = os.getenv('STARTDATETIME')
-
-            if startdatetime == "dynamic":
-                end_mjdobs = mjdobs
-
-
         else:
             start_mjdobs = 0.0
             end_mjdobs = mjdobs
