@@ -148,9 +148,9 @@ def run_single_core_job(asdf_files,index_thread):
         input_asdf_file = asdf_files[index_asdf_file]
 
         if num_cores == 1:
-            print(f"i,input_asdf_file = {i},{input_asdf_file}\n")
+            print(f"index_asdf_file,input_asdf_file = {index_asdf_file},{input_asdf_file}\n")
         else:
-            fh.write(f"i,input_asdf_file = {i},{input_asdf_file}\n")
+            fh.write(f"index_asdf_file,input_asdf_file = {index_asdf_file},{input_asdf_file}\n")
 
         if ".asdf" not in input_asdf_file:
             continue
@@ -240,6 +240,7 @@ def run_single_core_job(asdf_files,index_thread):
             fh.write(f"Loop end over asdf_files: index_asdf_file,input_asdf_file_gunzipped = {index_asdf_file},{input_asdf_file_gunzipped}\n")
 
         fh.flush()
+
 
     # Outside of loop over asdf_files.
 
