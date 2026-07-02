@@ -209,7 +209,7 @@ def run_single_core_job(asdf_files,index_thread):
 
         input_asdf_file = asdf_files[index_asdf_file]
 
-        fh.write(f"i,input_asdf_file = {i},{input_asdf_file}\n")
+        fh.write(f"index_asdf_file,input_asdf_file = {index_asdf_file},{input_asdf_file}\n")
 
         if ".asdf" not in input_asdf_file:
             continue
