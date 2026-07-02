@@ -582,7 +582,7 @@ if __name__ == '__main__':
     print("fwhm_ref_medpix,fwhm_ref_minpix,fwhm_ref_maxpix =",fwhm_ref_medpix,fwhm_ref_minpix,fwhm_ref_maxpix)
 
     fwhm_ref = fwhm_ref_medpix
-    if fwhm_ref < 0.0:
+    if np.isnan(fwhm_ref) or fwhm_ref < 0.0:
         fwhm_ref = 2.0
 
     print("fwhm_ref =",fwhm_ref)
@@ -931,7 +931,7 @@ if __name__ == '__main__':
     print("fwhm_sci_medpix,fwhm_sci_minpix,fwhm_sci_maxpix =",fwhm_sci_medpix,fwhm_sci_minpix,fwhm_sci_maxpix)
 
     fwhm_sci = fwhm_sci_medpix
-    if fwhm_sci < 0.0:
+    if np.isnan(fwhm_sci) or fwhm_sci < 0.0:
         fwhm_sci = 2.0
 
     print("fwhm_sci =",fwhm_sci)
