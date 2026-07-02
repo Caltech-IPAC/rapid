@@ -397,14 +397,14 @@ if __name__ == '__main__':
 
         # Update record in Jobs database table with aws_batch_job_id.
 
-        jid = dbh.update_job_with_aws_batch_job_id(jid_postproc,aws_batch_job_id)
+        dbh.update_job_with_aws_batch_job_id(jid_postproc,aws_batch_job_id)
 
         if dbh.exit_code >= 64:
             exit(dbh.exit_code)
 
     else:
 
-        print(f"Dry run for launching AWS Batch post-processing job for jid={jid}, proc_date={proc_date}, dry_run={dry_run}")
+        print(f"Dry run for launching AWS Batch post-processing job for jid={jid_postproc}, proc_date={proc_date}, dry_run={dry_run}")
 
 
     # Close database connection.
