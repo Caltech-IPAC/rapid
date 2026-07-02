@@ -404,7 +404,7 @@ if __name__ == '__main__':
 
     else:
 
-        print(f"Dry run for launching AWS Batch post-processing job for jid={jid_postproc}, proc_date={proc_date}, dry_run={dry_run}")
+        print(f"Dry run for launching AWS Batch post-processing job for jid={jid}, proc_date={proc_date}, dry_run={dry_run}")
 
 
     # Close database connection.
