@@ -32,6 +32,8 @@ import database.modules.utils.roman_tessellation_db as sqlite
 
 swname = "awsBatchSubmitJobs_launchSingleSciencePipeline.py"
 swvers = "1.0"
+
+# Use the science pipeline's config file (all parameters in one file).
 cfg_filename_only = "awsBatchSubmitJobs_launchSingleSciencePipeline.ini"
 
 print("swname =", swname)
@@ -943,7 +945,7 @@ if __name__ == '__main__':
 
         # Update record in Jobs database table with aws_batch_job_id.
 
-        jid = dbh.update_job_with_aws_batch_job_id(jid,aws_batch_job_id)
+        dbh.update_job_with_aws_batch_job_id(jid,aws_batch_job_id)
 
         if dbh.exit_code >= 64:
             exit(dbh.exit_code)
