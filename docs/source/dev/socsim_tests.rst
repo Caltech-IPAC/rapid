@@ -63,14 +63,12 @@ so the astrometry step failed).  We corrected this using the following Python co
 There were also a few thousand outright failures to create ASDF files due to a bug in romanisim (version 0.13.1).
 This is detailed in the following note:
 
-.. note:
-
+.. note::
     In romanisim/image.py (add_objects_to_image), when GalSim raises GalSimFFTSizeError
     (source requires too large an FFT), the exception is caught but there's no continue
     to skip to the next source. The code immediately tries to use the unbound stamp
     variable -> UnboundLocalError. Some images also hit ArrayMemoryError when GalSim
     tries to allocate a ~154,000 × 154,000 pixel stamp before the size check fires.
-
     The missing continue is the romanisim bug. Why some sources trigger the huge stamp
     requirement is unresolved — it doesn't appear to be flux-related, so it's likely s
     omething in the PSF evaluation path (psf_from_grid with size=185 may exceed the native
@@ -137,4 +135,3 @@ The WCS in the FITS files is represented by the TAN-SIP projection with fifth-or
 Tests show this represents the WCS very well.  Two examples were examined to compare the
 absolute error in the WCS between fits and the original ASDF gWCS (SCAs 2 and 9).
 Across all 18 SCAs, the worst deviations are never larger than ~1e-6 of a pixel.
-
