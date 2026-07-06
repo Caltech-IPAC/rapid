@@ -453,6 +453,13 @@ if __name__ == '__main__':
         print(f"Moved {refimage_generation_subdir}/{awaicgen_output_mosaic_uncert_image_file} up to {awaicgen_output_mosaic_uncert_image_file}")
 
 
+        # Code-timing benchmark.
+
+        end_time_benchmark = time.time()
+        print("Elapsed time in seconds after calling generateReferenceImage =",round(end_time_benchmark - start_time_benchmark,3))
+        start_time_benchmark = end_time_benchmark
+
+
         # Compute cov5percent metric for reference image.
 
         cov5percent = rfis.compute_cov5percent(awaicgen_output_mosaic_cov_map_file)
@@ -491,6 +498,13 @@ if __name__ == '__main__':
         refimage_sex_catalog_s3_bucket_object_name = refimgsexcat_return_list[2]
 
 
+        # Code-timing benchmark.
+
+        end_time_benchmark = time.time()
+        print("Elapsed time in seconds after calling generateSExtractorReferenceImageCatalog =",round(end_time_benchmark - start_time_benchmark,3))
+        start_time_benchmark = end_time_benchmark
+
+
         # Generate PhotUtils reference-image catalog.
 
         refimgpsfcat_return_list = rfis.generatePhotUtilsReferenceImageCatalog(s3_client,
@@ -513,6 +527,13 @@ if __name__ == '__main__':
         refimage_psf_finder_catalog_s3_bucket_object_name = refimgpsfcat_return_list[6]
         refimage_psf_catalog_uploaded_to_bucket = refimgpsfcat_return_list[7]
         refimage_psf_finder_catalog_uploaded_to_bucket = refimgpsfcat_return_list[8]
+
+
+        # Code-timing benchmark.
+
+        end_time_benchmark = time.time()
+        print("Elapsed time in seconds after calling generatePhotUtilsReferenceImageCatalog =",round(end_time_benchmark - start_time_benchmark,3))
+        start_time_benchmark = end_time_benchmark
 
 
 
