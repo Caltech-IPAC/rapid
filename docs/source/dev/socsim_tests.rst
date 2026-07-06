@@ -322,7 +322,7 @@ Executing SFFT was relatively quick.
 
 
 ==================================================================  =====================
-Pipeline step                                                      Execution time (sec)
+Pipeline step                                                        Execution time (sec)
 ==================================================================  =====================
 Downloading science image                                                   0.606
 Uploading science image to product S3 bucket                                0.457
