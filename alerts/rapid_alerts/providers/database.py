@@ -4,6 +4,24 @@ Provider backed by the RAPID operations database (RAPIDDB).
 Ports the SQL that previously lived inline in produce_alert.py. All
 column-name translation to the canonical records.py attributes happens
 here and nowhere else.
+
+Data flow (DB table -> normalized record -> schema record):
+
+    sources + filters            -> Detection    -> diaSource
+        one row per difference-image detection; the triggering source is
+        looked up by sid, previous detections via the merges join below
+    merges_<field>               -> (sid -> aid association only)
+        per-field table linking detections (sid) to persistent objects (aid)
+    astroobjects_<field>         -> ObjectRecord -> diaObject
+        one row per persistent object, keyed by aid
+    (forced photometry)          -> ForcedPhot   -> diaForcedSource
+        not yet in the DB; produces FITS files only
+    <cutout_dir>/{sid}_*.fits.gz -> Cutouts      -> alert cutout* fields
+
+The Detection dataclass attribute names ARE the sources column names, so
+Detection.from_row() maps a sources row directly; the only derived keys are
+band (from filters.filter) and aid (from merges). Columns not declared on
+Detection (e.g. sources.id, fid, npix) are silently dropped by from_row().
 """
 
 import logging
@@ -27,6 +45,7 @@ class DatabaseProvider(AlertDataProvider):
         self.cutout_dir = cutout_dir
 
     def _query(self, sql, params):
+        """Run one query and return rows as {column_name: value} dicts."""
         cur = self.db.conn.cursor()
         try:
             cur.execute(sql, params)
@@ -36,6 +55,11 @@ class DatabaseProvider(AlertDataProvider):
             cur.close()
 
     def get_detection(self, sid):
+        # sources row -> Detection, column names matching attribute names
+        # (sid, expid, sca, mjdobs, ra, dec, xfit, yfit, xerr, yerr, fluxfit,
+        # fluxerr, flags, field, hp6, hp9, pid, isdiffpos, qfit, cfit, redchi,
+        # npixfit, sharpness, roundness1, roundness2, peak). The filters join
+        # resolves the numeric fid to the band string ("F158", ...).
         rows = self._query("""
             SELECT s.*, f.filter AS filter_name
             FROM sources s
@@ -46,10 +70,16 @@ class DatabaseProvider(AlertDataProvider):
             raise ValueError(f"Source {sid} not found")
         row = rows[0]
         row["band"] = row.get("filter_name")
+        # Detection.aid stays None here; assemble.py fills it in after
+        # get_object_for_source() resolves the association.
         return Detection.from_row(row)
 
     def get_object_for_source(self, detection):
+        # The merges/astroobjects tables are partitioned by Roman field, so
+        # the detection's field number selects which pair to query.
         field = int(detection.field)
+        # merges_<field> links this sid to its persistent object (aid);
+        # astroobjects_<field> supplies the object summary itself.
         rows = self._query(f"""
             SELECT m.aid, a.*
             FROM merges_{field} m
@@ -57,8 +87,13 @@ class DatabaseProvider(AlertDataProvider):
             WHERE m.sid = %s
         """, (detection.sid,))
         if not rows:
-            return None
+            return None  # unassociated detection -> alert has no diaObject
         row = rows[0]
+        # Only these four columns feed diaObject today. Available but unused:
+        # meanra/meandec (mean position), stdevra/stdevdec (candidates for
+        # the raErr/decErr stubs), flux0/meanflux/stdevflux, hp6/hp9.
+        # ObjectRecord's first/last/validity MJDs are computed later by
+        # assemble.py from the source history, not read from the DB.
         return ObjectRecord(
             aid=int(row["aid"]),
             ra0=float(row["ra0"]),
@@ -67,6 +102,11 @@ class DatabaseProvider(AlertDataProvider):
         )
 
     def get_prv_detections(self, detection, obj, window_days=365.25):
+        # Same sources -> Detection mapping as get_detection(), but selecting
+        # the object's other detections: merges_<field> gathers every sid
+        # associated with this aid, minus the trigger itself, restricted to
+        # the look-back window before the triggering detection. These become
+        # the alert's prvDiaSources (oldest first).
         field = int(detection.field)
         rows = self._query(f"""
             SELECT s.*, f.filter AS filter_name
@@ -80,7 +120,7 @@ class DatabaseProvider(AlertDataProvider):
         detections = []
         for row in rows:
             row["band"] = row.get("filter_name")
-            row["aid"] = obj.aid
+            row["aid"] = obj.aid  # known from the join; save a lookup
             detections.append(Detection.from_row(row))
         return detections
 
@@ -91,6 +131,10 @@ class DatabaseProvider(AlertDataProvider):
         return []
 
     def get_cutouts(self, detection):
+        # Cutouts are not stored in the DB; they are pre-made files named
+        # <cutout_dir>/{sid}_{diff|sci|tmpl}.fits.gz. Raw gzipped-FITS bytes
+        # go into the alert's cutoutDifference/Science/Template fields as-is;
+        # a missing file just leaves that cutout null.
         if self.cutout_dir is None:
             return Cutouts()
 

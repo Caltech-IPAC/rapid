@@ -1,5 +1,5 @@
 """
-Single source of truth for the RAPID alert schema (rapid.v01_00).
+Single source of truth for the RAPID alert schema (current version: VERSION below).
 
 Every field of every record in the alert packet is declared here once, with:
 
@@ -19,7 +19,7 @@ reordering fields is a schema change -- regenerate the .avsc files and treat
 it like any other schema edit.
 
 Avro types are given version-independently; a leading "@" marks a reference
-to another record in this schema ("@diaSource" -> "rapid.v01_00.diaSource").
+to another record in this schema ("@diaSource" -> "rapid.v01_01.diaSource").
 Nullable union fields automatically get "default": null in the .avsc.
 """
 
@@ -27,7 +27,7 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Any, Callable, Optional
 
-VERSION = "01.00"
+VERSION = "01.01"
 
 ROMAN_FILTERS = ["F062", "F087", "F106", "F129", "F146", "F158", "F184", "F213"]
 
@@ -90,6 +90,8 @@ DIA_SOURCE_FIELDS = (
                     STUB, "set at assembly time (decide TAI convention first)"),
     Field("timeWithdrawnMjdTai",  ["null", "double"],  "Time alert was withdrawn [TAI MJD]",
                     STUB, "alert-withdrawal mechanism (not designed)"),
+    Field("exposureTime",  ["null", "float"],  "Exposure duration [s]",
+                    STUB, "exposures table metadata (join not implemented)"),
 
     # --- Position (sky & pixel) -------------------------------------------
     Field("ra",            "double",           "Right ascension; ICRS [deg]",
@@ -118,6 +120,9 @@ DIA_SOURCE_FIELDS = (
                     IMPLEMENTED, "sources.fluxerr", lambda d: d.fluxerr),
     Field("snr",           ["null", "float"],  "Signal-to-noise ratio (psfFlux / psfFluxErr)",
                     IMPLEMENTED, "computed: fluxfit / fluxerr", lambda d: d.snr),
+    Field("isNegative",    "boolean",          "true if source is from negative (ref minus sci) subtraction",
+                    IMPLEMENTED, "sources.isdiffpos (inverted; renamed per schema spreadsheet)",
+                    lambda d: not bool(d.isdiffpos)),
     Field("apFlux",        ["null", "float"],  "Aperture flux on difference image (stub) [nJy]",
                     STUB, "aperture photometry (not in DB flow; SExtractor MAG_AUTO in file flow)"),
     Field("apFluxErr",     ["null", "float"],  "Uncertainty in apFlux (stub) [nJy]",
@@ -130,6 +135,8 @@ DIA_SOURCE_FIELDS = (
                     STUB, _FP),
     Field("templateFluxErr", ["null", "float"], "Uncertainty in templateFlux (stub) [nJy]",
                     STUB, _FP),
+    Field("diffimglimmag", ["null", "float"],  "Expected 5-sigma limiting magnitude of difference image (stub) [mag]",
+                    STUB, "difference-image depth estimate (not computed)"),
 
     # --- PSF-fit quality (photutils) ---------------------------------------
     Field("qfit",          ["null", "float"],  "PSF-fit quality parameter",
@@ -148,6 +155,10 @@ DIA_SOURCE_FIELDS = (
                     IMPLEMENTED, "sources.roundness2", lambda d: d.roundness2),
     Field("peak",          ["null", "float"],  "Peak pixel value in source stamp [DN]",
                     IMPLEMENTED, "sources.peak",   lambda d: d.peak),
+    Field("psfChi2",       ["null", "float"],  "Chi-square of PSF fit (stub)",
+                    STUB, "overlaps sources.redchi (reduced chi2) -- decide whether to derive or rename"),
+    Field("psfNdata",      ["null", "int"],    "Number of data points in PSF fit (stub)",
+                    STUB, "overlaps sources.npixfit -- decide whether to alias or rename"),
 
     # --- Classification (all stubs) -----------------------------------------
     Field("extendedness",  ["null", "float"],  "Probability of being extended (stub)",
@@ -188,6 +199,8 @@ DIA_SOURCE_FIELDS = (
                     STUB, "shape measurement"),
     Field("ixyErr",        ["null", "float"],  "Uncertainty in ixy (stub) [arcsec^2]",
                     STUB, "shape measurement"),
+    Field("elong",         ["null", "float"],  "Elongation of source: ratio of major to minor axis (stub)",
+                    STUB, "shape measurement (SExtractor ELONGATION in file flow)"),
 
     # --- Flags -----------------------------------------------------------------
     Field("flags",         "long",             "Bitmask of processing flags",
@@ -200,6 +213,28 @@ DIA_SOURCE_FIELDS = (
                     STUB, "pixel-mask analysis (not run)"),
     Field("pixelFlags_cr",        ["null", "boolean"], "Source has cosmic ray pixels (stub)",
                     STUB, "pixel-mask analysis (not run)"),
+    Field("centroid_flag", ["null", "boolean"], "Centroid measurement failed (stub)",
+                    STUB, "may fold into flags bitmask (spreadsheet: 'flags dict?')"),
+    Field("apFlux_flag",   ["null", "boolean"], "Aperture flux measurement failed (stub)",
+                    STUB, "may fold into flags bitmask (spreadsheet: 'flags dict?')"),
+    Field("psfFlux_flag",  ["null", "boolean"], "PSF flux measurement failed (stub)",
+                    STUB, "may fold into flags bitmask (spreadsheet: 'flags dict?')"),
+
+    # --- Nearest reference-image source (all stubs) ------------------------------
+    Field("distnr",        ["null", "float"],  "Distance to nearest reference-image source (stub) [arcsec]",
+                    STUB, "cross-match to reference-image catalog (not run)"),
+    Field("ranr",          ["null", "double"], "RA of nearest reference-image source (stub) [deg]",
+                    STUB, "cross-match to reference-image catalog (not run)"),
+    Field("decnr",         ["null", "double"], "Dec of nearest reference-image source (stub) [deg]",
+                    STUB, "cross-match to reference-image catalog (not run)"),
+    Field("magnr",         ["null", "float"],  "Magnitude of nearest reference-image source (stub) [mag]",
+                    STUB, "cross-match to reference-image catalog (not run)"),
+    Field("sigmagnr",      ["null", "float"],  "1-sigma uncertainty in magnr (stub) [mag]",
+                    STUB, "cross-match to reference-image catalog (not run)"),
+    Field("chinr",         ["null", "float"],  "Chi parameter of nearest reference-image source (stub)",
+                    STUB, "cross-match to reference-image catalog (not run)"),
+    Field("sharpnr",       ["null", "float"],  "Sharpness parameter of nearest reference-image source (stub)",
+                    STUB, "cross-match to reference-image catalog (not run)"),
 
     # --- Roman-specific identifiers & tiling ------------------------------------
     Field("sca",           "int",              "Roman SCA detector number",
@@ -214,8 +249,14 @@ DIA_SOURCE_FIELDS = (
                     IMPLEMENTED, "sources.pid",    lambda d: int(d.pid)),
     Field("expid",         "int",              "Exposure identifier",
                     IMPLEMENTED, "sources.expid",  lambda d: int(d.expid)),
-    Field("isdiffpos",     "boolean",          "true if source is from positive (sci minus ref) subtraction",
-                    IMPLEMENTED, "sources.isdiffpos", lambda d: bool(d.isdiffpos)),
+    Field("pass",          ["null", "int"],    "Roman survey pass number (stub)",
+                    STUB, "Roman observation ID components (exposure metadata; not in sources table)"),
+    Field("segment",       ["null", "int"],    "Roman survey segment number (stub)",
+                    STUB, "Roman observation ID components (exposure metadata; not in sources table)"),
+    Field("program",       ["null", "int"],    "Roman program identifier (stub)",
+                    STUB, "Roman observation ID components (exposure metadata; not in sources table)"),
+    Field("survey",        ["null", "string"], "Survey name (stub)",
+                    STUB, "observation metadata (not available)"),
 )
 
 
@@ -271,13 +312,15 @@ DIA_FORCED_SOURCE_FIELDS = (
 # ---------------------------------------------------------------------------
 
 def _per_filter_flux_fields():
-    """The 8 filters x 5 statistics block of diaObject fields."""
+    """The 8 filters x 8 statistics block of diaObject fields."""
     src = ("per-filter statistics over associated sources; needs nJy flux "
            "calibration (see roman_rapid_alerts FILTER_ZP_EFF)")
     fields = []
     for b in ROMAN_FILTERS:
         fields += [
             Field(f"{b}PsfFluxMean",  ["null", "float"], f"Mean PSF flux in {b} [nJy]",
+                        STUB, src),
+            Field(f"{b}PsfFluxMeanErr", ["null", "float"], f"Uncertainty in {b}PsfFluxMean [nJy]",
                         STUB, src),
             Field(f"{b}PsfFluxSigma", ["null", "float"], f"Std dev of PSF flux in {b} [nJy]",
                         STUB, src),
@@ -286,6 +329,10 @@ def _per_filter_flux_fields():
             Field(f"{b}PsfFluxMin",   ["null", "float"], f"Minimum PSF flux in {b} [nJy]",
                         STUB, src),
             Field(f"{b}PsfFluxMax",   ["null", "float"], f"Maximum PSF flux in {b} [nJy]",
+                        STUB, src),
+            Field(f"{b}PsfFluxMaxSlope", ["null", "float"], f"Maximum slope of PSF flux between any two {b} epochs [nJy/day]",
+                        STUB, src),
+            Field(f"{b}PsfFluxErrMean", ["null", "float"], f"Mean of PSF flux errors in {b} [nJy]",
                         STUB, src),
         ]
     return tuple(fields)
@@ -313,6 +360,12 @@ DIA_OBJECT_FIELDS = (
                         IMPLEMENTED, "computed from source history", lambda o: o.last_mjd),
     Field("validityStartMjdTai",  "double",    "Start of validity interval for this object summary [TAI MJD]",
                         IMPLEMENTED, "triggering source mjdobs", lambda o: float(o.validity_mjd)),
+    Field("ncovhist",      ["null", "int"],    "Number of times the object position fell on an observed image (stub)",
+                        STUB, "coverage history (not computed)"),
+    Field("firstRefMjdTai", ["null", "double"], "MJD of earliest exposure in the reference image [TAI MJD] (stub)",
+                        STUB, "reference-image metadata (not tracked)"),
+    Field("lastRefMjdTai", ["null", "double"], "MJD of latest exposure in the reference image [TAI MJD] (stub)",
+                        STUB, "reference-image metadata (not tracked)"),
 
     # --- Per-filter flux statistics (all stubs) ------------------------------
 ) + _per_filter_flux_fields()
@@ -380,6 +433,12 @@ MPC_ORBITS_FIELDS = (
 # ---------------------------------------------------------------------------
 
 ALERT_FIELDS = (
+    # --- Provenance ---------------------------------------------------------
+    Field("schemaVersion",  ["null", "string"], "Version of the alert schema used to serialize this packet",
+                        IMPLEMENTED, "fields.VERSION (set in assemble.py)"),
+    Field("pipelineVersion", ["null", "string"], "Version of the RAPID pipeline that produced this alert (stub)",
+                        STUB, "pipeline build/release identifier (not plumbed through)"),
+
     # --- Triggering detection --------------------------------------------
     Field("diaSourceId",    "long",           "Identifier for the triggering diaSource",
                         IMPLEMENTED, "assemble.py"),

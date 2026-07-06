@@ -6,6 +6,7 @@ the AlertDataProvider interface and the registry-driven builders.
 """
 
 from .build import build_dia_source, build_dia_object, build_dia_forced_source
+from .fields import VERSION
 
 PRV_WINDOW_DAYS = 365.25  # look-back window for previous detections
 
@@ -49,6 +50,8 @@ def assemble_alert(provider, sid):
     cutouts = provider.get_cutouts(detection)
 
     return {
+        "schemaVersion": VERSION,
+        "pipelineVersion": None,
         "diaSourceId": detection.sid,
         "observation_reason": None,
         "target_name": None,

@@ -18,7 +18,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import fastavro
 
 from rapid_alerts.assemble import assemble_alert
-from rapid_alerts.fields import RECORDS, Status
+from rapid_alerts.fields import RECORDS, VERSION, Status
 from rapid_alerts.gen_schema import generate
 from rapid_alerts.providers.base import AlertDataProvider
 from rapid_alerts.records import Detection, ObjectRecord, Cutouts
@@ -62,6 +62,8 @@ def main():
     # 2. Assemble from the fake provider
     alert = assemble_alert(FakeProvider(), 9999)
     assert alert["diaSourceId"] == 9999
+    assert alert["schemaVersion"] == VERSION
+    assert alert["diaSource"]["isNegative"] is False  # isdiffpos=True inverted
     assert alert["diaSource"]["npixfit"] == 25
     assert alert["diaSource"]["diaObjectId"] == 777
     assert abs(alert["diaSource"]["snr"] - 1234.5 / 56.7) < 1e-6
