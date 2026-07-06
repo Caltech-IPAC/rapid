@@ -1,5 +1,5 @@
 """
-Command-line alert production (successor to running produce_alert.py).
+Command-line alert production.
 
 Usage:
     python -m rapid_alerts.cli <source_id> [--kafka] [--cutout-dir DIR]
@@ -11,30 +11,28 @@ import os
 import sys
 from pathlib import Path
 
-from .serialize import produce_alert
+from .produce import produce_alert
+from .providers import DatabaseProvider
 
 logging.basicConfig(level=logging.INFO)
 
 
-def make_provider(name, cutout_dir=None):
-    if name == "db":
-        # RAPIDDB lives at <repo>/database/modules/utils/rapid_db.py
-        repo_root = Path(__file__).resolve().parents[2]
-        sys.path.insert(0, str(repo_root))
-        from database.modules.utils.rapid_db import RAPIDDB
-        from .providers.database import DatabaseProvider
-        return DatabaseProvider(RAPIDDB(), cutout_dir=cutout_dir)
-    if name == "filesystem":
-        from .providers.filesystem import FilesystemProvider
-        return FilesystemProvider(cutout_dir)
-    raise ValueError(f"Unknown provider: {name}")
+def make_provider(cutout_dir=None):
+    """Connect to the RAPID operations database.
+
+    A future file-system or sqlite backend would be constructed here instead
+    (see the porting notes at the bottom of providers.py).
+    """
+    # RAPIDDB lives at <repo>/database/modules/utils/rapid_db.py
+    repo_root = Path(__file__).resolve().parents[2]
+    sys.path.insert(0, str(repo_root))
+    from database.modules.utils.rapid_db import RAPIDDB
+    return DatabaseProvider(RAPIDDB(), cutout_dir=cutout_dir)
 
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description="Produce one RAPID alert")
     parser.add_argument("source_id", type=int, help="source ID (sources.sid)")
-    parser.add_argument("--provider", choices=["db", "filesystem"],
-                        default="db", help="data backend (default: db)")
     parser.add_argument("--cutout-dir", default=None,
                         help="directory containing cutout FITS files")
     parser.add_argument("--kafka", action="store_true",
@@ -43,7 +41,7 @@ def main(argv=None):
     parser.add_argument("--topic", default="alerts", help="Kafka topic")
     args = parser.parse_args(argv)
 
-    provider = make_provider(args.provider, cutout_dir=args.cutout_dir)
+    provider = make_provider(cutout_dir=args.cutout_dir)
 
     producer = None
     if args.kafka:

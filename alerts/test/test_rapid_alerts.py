@@ -17,12 +17,13 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import fastavro
 
-from rapid_alerts.assemble import assemble_alert
 from rapid_alerts.fields import RECORDS, VERSION, Status
 from rapid_alerts.gen_schema import generate
-from rapid_alerts.providers.base import AlertDataProvider
-from rapid_alerts.records import Detection, ObjectRecord, Cutouts
-from rapid_alerts.serialize import load_schema, serialize_alert
+from rapid_alerts.produce import (assemble_alert, build_dia_source,
+                                  build_dia_forced_source, load_schema,
+                                  serialize_alert)
+from rapid_alerts.providers import (AlertDataProvider, Detection,
+                                    ObjectRecord, ForcedPhot, Cutouts)
 
 
 def make_detection(sid, mjd, aid=None):
@@ -82,7 +83,30 @@ def main():
         if f.status is Status.STUB:
             assert alert["diaSource"][f.name] is None, f.name
 
-    # 4. Serialize and read back
+    # 4. Status enforcement: an IMPLEMENTED non-nullable field yielding None
+    # must raise, not serialize silently
+    bad = make_detection(9999, mjd=60500.5)
+    bad.sid = None                      # diaSourceId is non-nullable
+    try:
+        build_dia_source(bad)
+        raise AssertionError("None in non-nullable IMPLEMENTED field "
+                             "did not raise")
+    except ValueError as e:
+        assert "diaSourceId" in str(e)
+
+    # 5. Status enforcement: STUB fields stay null even with a getter staged
+    fp = ForcedPhot(forced_id=1, aid=777, expid=42, sca=7, ra=150.1, dec=2.2,
+                    mjdobs=60500.5, time_processed=60500.6, flux=123.4)
+    assert all(v is None for v in build_dia_forced_source(fp).values())
+
+    # 6. Provider boundary: strict from_row rejects rows with missing columns
+    try:
+        Detection.from_row({"sid": 1, "expid": 42}, strict=True)
+        raise AssertionError("strict from_row accepted an incomplete row")
+    except KeyError as e:
+        assert "fluxfit" in str(e)
+
+    # 7. Serialize and read back
     schema = load_schema()
     blob = serialize_alert(alert, schema=schema)
     decoded = fastavro.schemaless_reader(io.BytesIO(blob), schema)

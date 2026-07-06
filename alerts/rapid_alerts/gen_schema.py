@@ -18,7 +18,7 @@ import json
 import sys
 from pathlib import Path
 
-from .fields import RECORDS, VERSION, Status
+from .fields import RECORDS, VERSION, Status, is_nullable
 
 SCHEMA_ROOT = Path(__file__).resolve().parent.parent / "schema"
 
@@ -37,10 +37,6 @@ def _resolve_type(avro_type, namespace):
     raise TypeError(f"Unexpected avro type spec: {avro_type!r}")
 
 
-def _is_nullable(avro_type):
-    return isinstance(avro_type, list) and avro_type and avro_type[0] == "null"
-
-
 def record_schema(record, version, namespace):
     """Build the Avro schema dict for one registry record."""
     fields = []
@@ -48,7 +44,7 @@ def record_schema(record, version, namespace):
         if f.status is Status.NOT_USED:
             continue
         entry = {"name": f.name, "type": _resolve_type(f.avro, namespace)}
-        if _is_nullable(f.avro):
+        if is_nullable(f.avro):
             entry["default"] = None
         entry["doc"] = f.doc
         fields.append(entry)
