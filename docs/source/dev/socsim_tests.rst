@@ -365,3 +365,10 @@ Total time to run this instance of the science pipeline                  2996.13
 
 The above pipeline instance took about 50 minutes to execute.  Pipeline instances
 that made use of already-generated reference images took about 20 minutes each to run.
+
+The entire set of 6917 science images took 3.7 hours to run the science pipelines that
+generated the aforementioned 109 reference images and basic products (``ppid=15``),
+run the post-processing pipelines (``ppid=17``), and load product metadata into the
+RAPID-operations PostgresSQL database.  This does not include loading SFFT-difference-image
+PhotUtils catalogs into the RAPID-operations PostgresSQL database and subsequent
+source cross-matching.
