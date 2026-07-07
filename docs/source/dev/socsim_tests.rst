@@ -46,17 +46,38 @@ Assuming the exposure time is 66.4 seconds, which is the predominant exposure ti
 GBTDS observation-planning files, this dataset represents approximately 3.75 days of
 cumulative exposure time, which is approximately 34% of the entire GBTDS survey.
 
-For the RAPID pipeline, the ASDF files are converted into FITS files and stored here::
 
-    s3://socsim-20260427-lite/
+For the RAPID pipeline, fake variable sources with fixed sky positions have been added to
+the ASDF files and stored here::
+
+    s3://socsims-fakesrc-asdf-20260624/
 
 It was discovered that the gWCS in the SOC sims is incorrect (there were no GAIA stars,
-so the astrometry strep failed).  We corrected this using the following Python code::
+so the astrometry step failed).  We corrected this using the following Python code::
 
     import roman_datamodels as rdm
     from romancal.assign_wcs import AssignWcsStep
     original_dm = rdm.open(asdf_path)
     dm = AssignWcsStep.call(original_dm)
+
+There were also a few thousand outright failures to create ASDF files due to a bug in romanisim (version 0.13.1).
+This is detailed in the following note:
+
+.. note::
+    In romanisim/image.py (add_objects_to_image), when GalSim raises GalSimFFTSizeError
+    (source requires too large an FFT), the exception is caught but there's no continue
+    to skip to the next source. The code immediately tries to use the unbound stamp
+    variable -> UnboundLocalError. Some images also hit ArrayMemoryError when GalSim
+    tries to allocate a ~154,000 × 154,000 pixel stamp before the size check fires.
+    The missing continue is the romanisim bug. Why some sources trigger the huge stamp
+    requirement is unresolved — it doesn't appear to be flux-related, so it's likely s
+    omething in the PSF evaluation path (psf_from_grid with size=185 may exceed the native
+    CRDS ePSF support for some detector positions).
+
+
+The ASDF files have been converted into FITS files and stored here::
+
+    s3://socsims-fakesrc-fits-20260624-lite/
 
 .. note::
     Metadata about the SOC sims are stored in a dedicated RAPID-operations PostgreSQL database.
@@ -95,17 +116,17 @@ of the Open Univers sims is retained):
 
 .. code-block::
 
-    select a.fid,filter,count(*) from l2files a, filters b where a.fid=b.fid group by a.fid,filter order by a.fid,filter;
+    select a.fid,filter,count(*) from l2files a, filters b where a.fid=b.fid and vbest > 0 group by a.fid,filter order by a.fid,filter;
      fid | filter | count
     -----+--------+-------
-       1 | F184   |   216
-       2 | H158   |   216
-       3 | J129   |   216
-       4 | K213   |  3348
-       5 | R062   |   432
-       6 | Y106   |   198
-       7 | Z087   |  3330
-       8 | W146   | 80082
+       1 | F184   |   205
+       2 | H158   |   210
+       3 | J129   |   204
+       4 | K213   |  3186
+       5 | R062   |   414
+       6 | Y106   |   186
+       7 | Z087   |  3171
+       8 | W146   | 76250
     (8 rows)
 
 It is see that most of the exposures by a large margin are taken with the W146 bandpass filter (``fid=8``).
@@ -116,14 +137,15 @@ absolute error in the WCS between fits and the original ASDF gWCS (SCAs 2 and 9)
 Across all 18 SCAs, the worst deviations are never larger than ~1e-6 of a pixel.
 
 
-6/6/2026
+7/6/2026
 ************************************
 
 The first socsims test is limited to the first day of observations and the W146 bandpass filter(``fid=8``).
-This test covers 7,204 science images.  Fake variable sources with fixed sky positions were injected, 100 per science image.
+This test covers 7,204 science images.  Fake variable sources with fixed sky positions were
+injected into the ASDF files prior to conversion to FITS, ~200 or so fake sources per science image.
 Thus, lightcurves can be generated from extractions
-of these fake sources over time.  The fake-source injection of variables has also been
-extended to the input science images that are used to build the reference images.
+of these fake sources over time.  The science images that are used to build the reference images also
+have fake variable sources.
 
 Here are details about how the test was executed via the Virtual Pipeline Operator (VPO):
 
@@ -134,13 +156,29 @@ Here are details about how the test was executed via the Virtual Pipeline Operat
     export ENDDATETIME="2027-10-02 00:00:00"
     export STARTREFIMMJDOBS=61678.9
     export ENDREFIMMJDOBS=61679.3
-    export MINREFIMNFRAMES=20
     export RUNFID=8
 
     python3.11 /code/pipeline/virtualPipelineOperator.py 20260606 >& virtualPipelineOperator_20260606.out &
 
 The ``STARTDATETIME`` and ``ENDDATETIME`` date/times exclude the first 20 or so images per field,
-which are reserved for reference-image generation.
+which are reserved for reference-image generation.  The input configuration file has specified the
+following parameters for reference images::
+
+    [REF_IMAGE]
+    # Pipeline number of reference-image pipeline.
+    ppid = 12
+    # Size of reference image to be generated.
+    naxis1_refimage = 7000
+    naxis2_refimage = 7000
+    # SCA is 0.11 arcsec per pixel or 0.000030555555556 degrees
+    cdelt1_refimage = -0.000030555555556
+    cdelt2_refimage = 0.000030555555556
+    # Reference image is NOT rotated (CROTA2 = 0.0 degrees)
+    crota2_refimage = 0.0
+    # Need to limit number of reference-image input frames; otherwise AWS Batch job may time out.
+    min_n_images_to_coadd = 3
+    max_n_images_to_coadd = 25
+
 
 Here is a summary of the pipeline exit codes after the test:
 
@@ -154,8 +192,7 @@ Here is a summary of the pipeline exit codes after the test:
        17 |        0 |  7204
      (2 rows)
 
-Reference images were generated for 107 unique fields, again, only for the W146 bandpass filter(``fid=8``).
-The pipeline configuration file had the following setting: ``[REF_IMAGE] max_n_images_to_coadd = 25``.
+Reference images were generated for 109 unique fields, again, only for the W146 bandpass filter(``fid=8``).
 Because the socsims have sub-pixel dithers, the ``cov5percent`` coverage metric is only ~30-50 percent.
 
 .. code-block::
@@ -164,168 +201,167 @@ Because the socsims have sub-pixel dithers, the ``cov5percent`` coverage metric 
 
       field  | nframes | cov5percent
     ---------+---------+-------------
-     4637678 |      21 |    32.73843
-     4641773 |      21 |   32.430183
-     4641775 |      25 |    42.77647
-     4645869 |      21 |   31.432497
-     4645873 |      21 |   33.729588
-     4649967 |      21 |   31.677393
-     4649970 |      21 |   33.681595
-     4654042 |      21 |    33.46265
-     4654060 |      21 |    33.27963
-     4654062 |      21 |   31.692574
-     4654064 |      21 |   32.606316
-     4654065 |      21 |   32.133385
-     4654068 |      21 |    32.70658
-     4654070 |      21 |   33.401962
-     4658155 |      21 |   32.693756
-     4658157 |      21 |   33.643055
-     4658159 |      21 |   31.684643
-     4658163 |      21 |     32.7347
-     4658165 |      21 |    32.72199
-     4662233 |      25 |   45.760822
-     4662235 |      21 |   33.543083
-     4662250 |      21 |   31.286154
-     4662254 |      21 |    33.72963
-     4662257 |      21 |   31.177967
-     4662258 |      25 |    42.45193
-     4662260 |      21 |    31.36813
-     4666328 |      21 |   31.773603
-     4666330 |      21 |    32.71913
-     4666332 |      21 |   33.729687
-     4666348 |      21 |   32.414513
-     4666352 |      21 |   33.735176
-     4670425 |      21 |   31.038904
-     4670427 |      21 |    32.75587
-     4670430 |      25 |   48.046066
-     4670431 |      21 |    33.64448
-     4670433 |      21 |     33.5287
-     4670441 |      22 |    33.41171
-     4670443 |      21 |    31.69581
-     4670445 |      21 |   32.726513
-     4670449 |      21 |    32.81417
-     4670451 |      21 |   33.402306
-     4674525 |      21 |   32.700558
-     4674536 |      22 |    32.69452
-     4674538 |      22 |    33.64378
-     4674540 |      21 |   31.656721
-     4674544 |      21 |    32.36977
-     4674546 |      25 |    42.57313
-     4678618 |      21 |   31.253231
-     4678620 |      21 |   31.602139
-     4678622 |      21 |    32.38252
-     4678624 |      21 |    32.72074
-     4678631 |      22 |    31.02836
-     4678636 |      22 |   33.320835
-     4678638 |      21 |    31.69249
-     4678640 |      21 |   31.448936
-     4682717 |      21 |   31.259579
-     4682719 |      25 |   41.772526
-     4682729 |      22 |   32.560844
-     4682733 |      22 |    33.73667
-     4682738 |      25 |    44.10697
-     4686822 |      22 |   33.091373
-     4686824 |      22 |   31.676891
-     4686827 |      22 |   32.531746
-     4686831 |      25 |   42.169044
-     4686833 |      22 |   33.529278
-     4690917 |      22 |   32.345646
-     4690920 |      22 |   33.224113
-     4690922 |      22 |   31.685425
-     4690924 |      22 |     32.0887
-     4690926 |      22 |    32.73542
-     4690928 |      22 |   32.722683
-     4695013 |      22 |    30.78574
-     4695017 |      22 |   33.725956
-     4695019 |      22 |   31.693172
-     4695021 |      22 |    31.59868
-     4699111 |      22 |   32.360275
-     4699114 |      22 |    33.48728
-     4699119 |      25 |   45.379913
-     4703204 |      22 |   33.462925
-     4703206 |      22 |   31.696457
-     4703208 |      22 |   32.756405
-     4703212 |      22 |   33.358307
-     4703214 |      22 |   33.529152
-     4707299 |      22 |    32.69443
-     4707301 |      22 |    33.64372
-     4707303 |      22 |   31.685322
-     4707305 |      22 |   31.871956
-     4707307 |      22 |    32.73533
-     4707309 |      22 |     32.7226
-     4711394 |      22 |    30.84438
-     4711398 |      22 |   33.724174
-     4711401 |      22 |   31.452185
-     4711402 |      25 |    40.58188
-     4715492 |      22 |    32.61433
-     4715496 |      22 |   33.736614
-     4715500 |      22 |   31.308329
-     4719587 |      22 |   31.696472
-     4719589 |      22 |   32.756424
-     4719593 |      22 |   32.923428
-     4719595 |      22 |   33.251926
-     4723684 |      22 |   31.676392
-     4723687 |      25 |   41.014404
-     4723688 |      22 |   32.262604
-     4723690 |      25 |    40.50013
-     4727782 |      22 |   31.693094
-     4727784 |      22 |   31.464005
-     4731882 |      22 |   31.031593
-    (107 rows)
+     4637678 |      21 |   32.699566
+     4641773 |       9 |   32.364754
+     4641775 |      25 |    42.81024
+     4645869 |      21 |   31.454176
+     4645873 |      21 |   33.714382
+     4649967 |      21 |   31.675232
+     4649970 |      21 |    33.66247
+     4654042 |      21 |   33.451668
+     4654060 |      21 |   33.264027
+     4654062 |      10 |   31.661242
+     4654064 |      21 |    32.57979
+     4654065 |      19 |   32.143597
+     4654068 |      21 |    32.65233
+     4654070 |      21 |   33.370052
+     4658155 |      21 |   32.678642
+     4658157 |      21 |   33.627655
+     4658159 |      21 |   31.673664
+     4658163 |      21 |   32.721188
+     4658165 |      12 |    32.68768
+     4662233 |      25 |   45.761803
+     4662235 |      21 |    33.52244
+     4662250 |      21 |   31.291698
+     4662254 |      21 |   33.714424
+     4662257 |      21 |   31.193888
+     4662258 |      25 |   42.473377
+     4662260 |      21 |    31.39644
+     4666328 |      21 |   31.760868
+     4666330 |      21 |   32.704926
+     4666332 |      10 |   33.689045
+     4666348 |      21 |    32.38571
+     4666352 |      21 |   33.721836
+     4670425 |      21 |   31.055794
+     4670427 |      21 |   32.744156
+     4670430 |      25 |    48.01205
+     4670431 |      21 |    33.62679
+     4670433 |      18 |   33.507244
+     4670441 |      22 |   33.396664
+     4670443 |      21 |   31.682625
+     4670445 |      21 |    32.70783
+     4670447 |      18 |   31.893322
+     4670449 |      20 |   32.762115
+     4670451 |      21 |   33.381954
+     4674525 |      21 |    32.69599
+     4674536 |      22 |   32.679405
+     4674538 |      22 |   33.628376
+     4674540 |      21 |   31.637186
+     4674543 |      25 |   43.877113
+     4674544 |      21 |   32.346336
+     4674546 |      25 |   42.561398
+     4678618 |      21 |    31.21337
+     4678620 |      20 |   31.605726
+     4678622 |      21 |   32.336544
+     4678624 |      21 |   32.705383
+     4678631 |      14 |   31.025618
+     4678636 |      22 |   33.327637
+     4678638 |      21 |    31.68165
+     4678640 |      21 |   31.463388
+     4682717 |      21 |   31.231985
+     4682719 |      25 |   44.344437
+     4682729 |      17 |   32.529026
+     4682733 |      21 |   33.722122
+     4682738 |      25 |   44.068043
+     4686822 |      21 |   33.049397
+     4686824 |      22 |   31.655037
+     4686827 |      22 |   32.538555
+     4686831 |      25 |   48.138443
+     4686833 |      22 |   33.513924
+     4690917 |      22 |    32.29945
+     4690920 |      22 |   33.236004
+     4690922 |      22 |   31.674442
+     4690924 |      22 |   32.040066
+     4690926 |      22 |   32.721912
+     4690928 |      14 |   32.691975
+     4695013 |      22 |   30.814701
+     4695017 |      22 |   33.712738
+     4695019 |      18 |    31.67748
+     4695021 |      22 |   31.607107
+     4699111 |      22 |    32.36241
+     4699114 |      22 |   33.462963
+     4699119 |      25 |      45.352
+     4703204 |      22 |   33.448296
+     4703206 |      22 |    31.68327
+     4703208 |      22 |     32.7447
+     4703212 |      22 |   33.318813
+     4703214 |      20 |   33.512596
+     4707299 |      22 |   32.679314
+     4707301 |      22 |    33.62832
+     4707303 |      22 |   31.674343
+     4707305 |      21 |     31.8079
+     4707307 |      22 |   32.721813
+     4707309 |      22 |     32.7074
+     4711394 |      22 |   30.856216
+     4711398 |      22 |    33.71138
+     4711401 |      22 |    31.46055
+     4711402 |      25 |    40.61648
+     4715492 |      22 |    32.59121
+     4715496 |      22 |   33.722668
+     4715500 |      22 |   31.253225
+     4719587 |      22 |   31.683285
+     4719589 |      22 |   32.744705
+     4719593 |      22 |   32.878258
+     4719595 |      20 |   33.238686
+     4723684 |      14 |   31.647387
+     4723687 |      25 |    40.95568
+     4723688 |      22 |   32.238068
+     4723690 |      25 |   45.896633
+     4727782 |      22 |   31.682259
+     4727784 |      17 |    31.47939
+     4731882 |      22 |   30.980074
+    (109 rows)
 
 
-As shown in the table below for one of the longest running pipeline instances (jid = 92313),
-executing AWAICGEN for reference-image generation
-(depends on the number of input images; NFRAMES=22 for this case),
-and generating PSF-fit PhotUtils catalogs are the dominant factors
-affecting pipeline performance.  Executing SFFT was relatively quick.
+As shown in the table below for one of the pipeline instances that generated a
+reference image (jid = 114725), generating PSF-fit PhotUtils catalogs for the reference image
+and the difference images are the dominant factors affecting pipeline performance.
+Setting up and executing awaicgen for reference-image generation took about 5 minutes
+(depends on the number of input images; NFRAMES=21 for this case).
+Executing SFFT was relatively quick.
 
-=================================================================  =====================
-Pipeline step                                                      Execution time (sec)
-=================================================================  =====================
-Downloading science image                                                  0.616
-Uploading science image to product S3 bucket                               0.431
-Downloading or generating reference image                               3497.479
-Uploading reference image to S3 product bucket                             2.345
-Injecting fake sources                                                    97.909
-Generating science-image catalog                                           5.066
-Swarping images                                                            8.727
-Running bkgest on science image                                            4.032
-Running gainMatchScienceAndReferenceImages                                 9.673
-Replacing NaNs, applying image offsets, etc.                              96.370
-Uploading intermediate FITS files to product S3 bucket                     2.111
-Running ZOGY                                                              39.900
-masking ZOGY difference image                                              1.036
-Running SExtractor on positive ZOGY difference image                      12.890
-Running SExtractor on negative ZOGY difference image                      18.141
-Generating PSF-fit catalog on positive ZOGY difference image            1019.1431
-Generating PSF-fit catalog on negative ZOGY difference image             573.208
-Uploading main products to S3 bucket                                       6.647
-Running SFFT                                                             168.611
-Uploading SFFT difference image to S3 product bucket                       4.562
-Running SExtractor on positive SFFT difference images                     27.128
-Running SExtractor on negative SFFT difference images                     24.547
-Uploading SFFT-diffimage SExtractor catalogs to S3 product bucket          0.915
-Generating PSF-fit catalog on positive SFFT difference image            1213.519
-Generating PSF-fit catalog on negative SFFT difference image             205.150
-Uploading SFFT-diffimage PSF-fit catalogs to S3 product bucket             5.149
-Computing naive difference images                                          0.823
-Uploading naive difference images to S3 product bucket                     0.736
-Running SExtractor on positive naive difference image                     24.370
-Running SExtractor on negative naive difference image                     21.248
-Uploading SExtractor catalogs for naive difference images                  1.180
-Generating PSF-fit catalog on positive naive difference image           1041.101
-Generating PSF-fit catalog on negative naive difference image            559.035
-Uploading PSF-fit catalogs for naive difference images                     1.820
-Uploading products at pipeline end to S3 product bucket                    0.035
-Total elapsed time to run one instance of science pipeline              8695.654
-=================================================================  =====================
 
-The above pipeline instance took about 2.4 hours to execute.  Pipeline instances
-that made use of already-generated reference images took about 1.5 hours each to run.
+==================================================================  =====================
+Pipeline step                                                        Execution time (sec)
+==================================================================  =====================
+Downloading science image                                                   0.606
+Uploading science image to product S3 bucket                                0.457
+Setting up inputs for awaicgen                                             28.350
+Executing awaicgen                                                        271.428
+Downloading or generating reference-image products                       1638.540
+Uploading reference image to S3 product bucket                              2.167
+Generating science-image catalog                                            9.443
+Swarping images                                                             9.089
+Running bkgest on science image                                             3.973
+Running gainMatchScienceAndReferenceImages                                 10.426
+Replacing NaNs, applying image offsets, etc.                                4.616
+Uploading intermediate FITS files to product S3 bucket                      2.569
+Running ZOGY                                                               39.150
+Masking ZOGY difference image                                               0.952
+Running SExtractor on positive ZOGY difference image                       10.057
+Running SExtractor on negative ZOGY difference image                        8.503
+Generating PSF-fit catalog on positive ZOGY difference image              129.956
+Generating PSF-fit catalog on negative ZOGY difference image              128.204
+Uploading main products to S3 bucket                                        5.788
+Running SFFT                                                              130.775
+Uploading SFFT difference image to S3 product bucket                        4.697
+Running SExtractor on positive SFFT difference images                      19.006
+Running SExtractor on negative SFFT difference images                      17.591
+Uploading SFFT-diffimage SExtractor catalogs to S3 product bucket           1.792
+Generating PSF-fit catalog on positive SFFT difference image              103.801
+Generating PSF-fit catalog on negative SFFT difference image              365.842
+Uploading SFFT-diffimage PSF-fit catalogs to S3 product bucket              1.587
+Computing naive difference images                                           0.666
+Uploading naive difference images to S3 product bucket                      0.884
+Running SExtractor on positive naive difference image                       5.175
+Running SExtractor on negative naive difference image                      32.254
+Uploading SExtractor catalogs for naive difference images                   1.043
+Generating PSF-fit catalog on positive naive difference image             173.096
+Generating PSF-fit catalog on negative naive difference image             131.839
+Uploading PSF-fit catalogs for naive difference images                      1.505
+Uploading products at pipeline end to S3 product bucket                     0.083
+Total time to run this instance of the science pipeline                  2996.133
+==================================================================  =====================
 
-Attempts were made to load the PSF-fit catalogs from SFFT difference images into
-the operations-PostgreSQL-database sources child tables.  Around 500 million
-sources were loaded before the database machine ran out of disk space.
-We plan to increase the database disk space from 200 GB to 4 TB and then try again.
-
+The above pipeline instance took about 50 minutes to execute.  Pipeline instances
+that made use of already-generated reference images took about 20 minutes each to run.
