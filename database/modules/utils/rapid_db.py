@@ -170,7 +170,7 @@ class RAPIDDB:
 
 ########################################################################################################
 
-    def is_connection_alive():
+    def is_connection_alive(self):
 
         try:
             # Open a temporary cursor and run a minimal query
