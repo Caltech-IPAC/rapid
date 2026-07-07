@@ -140,9 +140,10 @@ Across all 18 SCAs, the worst deviations are never larger than ~1e-6 of a pixel
 7/6/2026
 ************************************
 
-The first socsims test is limited to the first day of observations and the W146 bandpass filter(``fid=8``).
-This test covers 7,204 science images.  Fake variable sources with fixed sky positions were
-injected into the ASDF files prior to conversion to FITS, ~200 or so fake sources per science image.
+The first socsims test is limited to a subset of the first day of observations and the
+W146 bandpass filter(``fid=8``).  This test covers 6,917 science images.
+Fake variable sources with fixed sky positions were
+injected into the ASDF files prior to conversion to FITS, about 200 fake sources per science image.
 Thus, lightcurves can be generated from extractions
 of these fake sources over time.  The science images that are used to build the reference images also
 have fake variable sources.
@@ -366,7 +367,7 @@ Total time to run this instance of the science pipeline                  2996.13
 The above pipeline instance took about 50 minutes to execute.  Pipeline instances
 that made use of already-generated reference images took about 20 minutes each to run.
 
-The entire set of 6917 science images took 3.7 hours to run the science pipelines that
+The entire set of 6,917 science images took 3.7 hours to run the science pipelines that
 generated the aforementioned 109 reference images and basic products (``ppid=15``),
 run the post-processing pipelines (``ppid=17``), and load product metadata into the
 RAPID-operations PostgresSQL database.  This does not include loading SFFT-difference-image
