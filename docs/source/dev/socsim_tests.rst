@@ -158,7 +158,7 @@ Here are details about how the test was executed via the Virtual Pipeline Operat
     export ENDREFIMMJDOBS=61679.3
     export RUNFID=8
 
-    python3.11 /code/pipeline/virtualPipelineOperator.py 20260606 >& virtualPipelineOperator_20260606.out &
+    python3.11 /code/pipeline/virtualPipelineOperator.py 20260706 >& virtualPipelineOperator_20260706.out &
 
 The ``STARTDATETIME`` and ``ENDDATETIME`` date/times exclude the first 20 or so images per field,
 which are reserved for reference-image generation.  The input configuration file has specified the
@@ -184,13 +184,13 @@ Here is a summary of the pipeline exit codes after the test:
 
 .. code-block::
 
-    socsimsdb=> select ppid,exitcode,count(*) from jobs where cast(launched as date) = '20260606' group by ppid, exitcode order by ppid, exitcode;
+    socsimsdb=> select ppid,exitcode,count(*) from jobs where cast(launched as date) = '20260706' group by ppid, exitcode order by ppid, exitcode;
 
      ppid | exitcode | count
     ------+----------+-------
-       15 |        0 |  7204
-       17 |        0 |  7204
-     (2 rows)
+       15 |        0 |  6917
+       17 |        0 |  6917
+    (2 rows)
 
 Reference images were generated for 109 unique fields, again, only for the W146 bandpass filter(``fid=8``).
 Because the socsims have sub-pixel dithers, the ``cov5percent`` coverage metric is only ~30-50 percent.
@@ -314,10 +314,10 @@ Because the socsims have sub-pixel dithers, the ``cov5percent`` coverage metric 
 
 
 As shown in the table below for one of the pipeline instances that generated a
-reference image (jid = 114725), generating PSF-fit PhotUtils catalogs for the reference image
-and the difference images are the dominant factors affecting pipeline performance.
-Setting up and executing awaicgen for reference-image generation took about 5 minutes
-(depends on the number of input images; NFRAMES=21 for this case).
+reference image (jid = 114725), the computation of PSF-fit PhotUtils catalogs for the
+reference image and the difference images are the dominant factors affecting pipeline
+performance. Setting up and executing awaicgen for reference-image generation took
+about 5 minutes (depends on the number of input images; NFRAMES=21 for this case).
 Executing SFFT was relatively quick.
 
 
