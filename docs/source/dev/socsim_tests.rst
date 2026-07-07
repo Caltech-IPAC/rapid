@@ -378,5 +378,6 @@ source cross-matching.
 The PSF-fit catalogs made by the Python photutils package from the SFFT difference images,
 both positive and negative, were loaded into Sources child PostgreSQL database tables.
 There were 259,157,881 Sources records loaded into the PostgreSQL database.
+This number of sources scales up to about 10 billion sources for the entire GBTDS survey.
 The elapsed time to load all sources into the database was ~3.5 hours with 8 parallel processes
 (and both the VPO machine and the database-server machine have 8 vCPUs).
