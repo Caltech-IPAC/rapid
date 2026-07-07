@@ -370,6 +370,13 @@ that made use of already-generated reference images took about 20 minutes each t
 The entire set of 6,917 science images took 3.7 hours to run the science pipelines that
 generated the aforementioned 109 reference images and basic products (``ppid=15``),
 run the post-processing pipelines (``ppid=17``), and load product metadata into the
-RAPID-operations PostgresSQL database.  This does not include loading SFFT-difference-image
+RAPID-operations PostgresSQL database.  This translates into an overall throughput of
+1.926 seconds per input science image.  This does not include loading SFFT-difference-image
 PhotUtils catalogs into the RAPID-operations PostgresSQL database and subsequent
 source cross-matching.
+
+The PSF-fit catalogs made by the Python photutils package from the SFFT difference images,
+both positive and negative, were loaded into Sources child PostgreSQL database tables.
+There were 259,157,881 Sources records loaded into the PostgreSQL database.
+The elapsed time to load all sources into the database was ~3.5 hours with 8 parallel processes
+(and both the VPO machine and the database-server machine have 8 vCPUs).
