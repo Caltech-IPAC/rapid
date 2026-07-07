@@ -146,7 +146,12 @@ ppid = int(config_input['SCI_IMAGE']['ppid'])
 
 # Open database connections for parallel access.
 
-num_cores = os.cpu_count()
+num_cores = os.getenv('NUM_CORES')
+
+if num_cores is None:
+    num_cores = os.cpu_count()
+else:
+    num_cores = int(num_cores)
 
 print("num_cores =",num_cores)
 
@@ -257,6 +262,7 @@ def run_single_core_job(jids,overlapping_fields_list,meta_list,negative_diffimg_
 
         if jid != jid_from_dict:
             fh.write(f"*** Error: jid is not equal to jid from meta dictionary; quitting...\n")
+            fh.flush()
             exit(64)
 
         expid = meta_dict["expid"]
@@ -281,6 +287,7 @@ def run_single_core_job(jids,overlapping_fields_list,meta_list,negative_diffimg_
 
         if do_done_check and downloaded_from_bucket:
             fh.write("*** Warning: Done file exists ({}); skipping...\n".format(done_filename))
+            fh.flush()
             continue
 
 
@@ -295,6 +302,7 @@ def run_single_core_job(jids,overlapping_fields_list,meta_list,negative_diffimg_
 
         if not downloaded_from_bucket:
             fh.write("*** Warning: PSF-fit catalog file does not exist ({}); skipping...\n".format(output_psfcat_filename_to_use))
+            fh.flush()
             continue
 
 
@@ -309,6 +317,7 @@ def run_single_core_job(jids,overlapping_fields_list,meta_list,negative_diffimg_
 
         if not downloaded_from_bucket:
             fh.write("*** Warning: PSF-fit finder catalog file does not exist ({}); skipping...\n".format(output_psfcat_finder_filename_to_use))
+            fh.flush()
             continue
 
 
@@ -424,11 +433,11 @@ def run_single_core_job(jids,overlapping_fields_list,meta_list,negative_diffimg_
 
         if dbh.is_connection_alive():
 
-            print("Database is responsive!")
+            fh.write("Database is responsive!\n")
 
         else:
 
-            print("Database is not responsive! Connection is dead. Re-establishment required...")
+            fh.write("Database is not responsive! Connection is dead. Re-establishment required...\n")
 
 
             # Open database connection.
@@ -436,6 +445,7 @@ def run_single_core_job(jids,overlapping_fields_list,meta_list,negative_diffimg_
             dbh = db.RAPIDDB()
 
             if dbh.exit_code >= 64:
+                fh.flush()
                 exit(dbh.exit_code)
 
 
@@ -445,6 +455,7 @@ def run_single_core_job(jids,overlapping_fields_list,meta_list,negative_diffimg_
 
         if dbh.exit_code >= 64:
             fh.write(f"*** Error bulk-loading data from file ({sources_table_file}) into specified database table ({sources_table}); quitting...\n")
+            fh.flush()
             exit(dbh.exit_code)
 
 
@@ -636,8 +647,9 @@ if __name__ == '__main__':
     start_time_benchmark = end_time_benchmark
 
 
-    # Skip sources child database table creation and bulk loading of sources records.
-
+    # Optionally skip sources child database table creation and bulk loading of sources records,
+    # and just do the indexing, clustering, and applying grants to sources database tables for
+    # all SCAs associated with processing date...")
 
     if do_loading:
 
