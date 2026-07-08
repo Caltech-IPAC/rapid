@@ -119,6 +119,7 @@ print("enddatetime =",enddatetime)
 print("start_refimage_mjdobs =",start_refimage_mjdobs)
 print("end_refimage_mjdobs =",end_refimage_mjdobs)
 print("make_refimages_flag =",make_refimages_flag)
+print("run_fid =",run_fid)
 print("dry_run =",dry_run)
 
 
