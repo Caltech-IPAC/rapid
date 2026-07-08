@@ -1093,11 +1093,10 @@ if __name__ == '__main__':
     start_time_benchmark = end_time_benchmark
 
 
-    # Replace NaNs, if any, in ZOGY input images.  Use the same saturation level rate since they are gain-matched.
+    # Replace NaNs, if any, in ZOGY input images, with zeros.
 
-    saturation_value_rate_sciimage = saturation_level_sciimage / exptime_sciimage
-    nan_indices_sciimage = util.replace_nans_with_value(filename_bkg_subbed_science_image,saturation_value_rate_sciimage)
-    nan_indices_refimage = util.replace_nans_with_value(output_resampled_gainmatched_reference_image,saturation_value_rate_sciimage)
+    nan_indices_sciimage = util.replace_nans_with_value(filename_bkg_subbed_science_image,0.0)
+    nan_indices_refimage = util.replace_nans_with_value(output_resampled_gainmatched_reference_image,0.0)
 
 
     # Compute image statistics for ZOGY.
