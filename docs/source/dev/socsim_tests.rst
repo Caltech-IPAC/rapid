@@ -375,7 +375,7 @@ RAPID-operations PostgresSQL database.  This translates into an overall throughp
 PhotUtils catalogs into the RAPID-operations PostgresSQL database and subsequent
 source cross-matching.
 
-The PSF-fit catalogs made by the Python photutils package from the SFFT difference images,
+The PSF-fit catalogs made by the Python PhotUtils package from the SFFT difference images,
 both positive and negative, were loaded into Sources child PostgreSQL database tables.
 There were 259,157,881 Sources records loaded into the PostgreSQL database.
 This number of sources scales up to about 10 billion sources for the entire GBTDS survey.
