@@ -370,7 +370,7 @@ that made use of already-generated reference images took about 20 minutes each t
 The entire set of 6,917 science images took 3.7 hours to run the science pipelines that
 generated the aforementioned 109 reference images and basic products (``ppid=15``),
 run the post-processing pipelines (``ppid=17``), and load product metadata into the
-RAPID-operations PostgresSQL database.  This translates into an overall throughput of
+RAPID-operations PostgresSQL database.  This translates into an overall throughput rate of
 1.926 seconds per input science image.  This does not include loading SFFT-difference-image
 PhotUtils catalogs into the RAPID-operations PostgresSQL database and subsequent
 source cross-matching.
@@ -381,3 +381,15 @@ There were 259,157,881 Sources records loaded into the PostgreSQL database.
 This number of sources scales up to about 10 billion sources for the entire GBTDS survey.
 The elapsed time to load all sources into the database was ~3.5 hours with 8 parallel processes
 (and both the VPO machine and the database-server machine have 8 vCPUs).
+
+Cross-matching the sources with astronomical objects (called AstroObjects),
+resulting in records loaded into the Merges_<field> and
+AstroObjects_<fields> database tables, for all 358 fields of the sources
+(i.e., fields overlapped by this test), was done.
+The elapsed time to cross-match all sources was 19.2 hours with 8 parallel processes.
+This includes cross-matching across field boundaries for sources near field edges.
+The cross-matching was done with ``match_radius = 0.00001528`` degrees (half a Roman WFI pixel).
+There were 88,747,880 AstroObjects records and 215,703,276 Merges records loaded
+into the PostgreSQL database.  Of those merges (a.k.a. lightcurve data points), 33,261 merges
+resulted from cross-matching across field boundaries (i.e., the match radius can extend
+across a field boundary), which is an increase of 0.0154% in terms of number of merges.
