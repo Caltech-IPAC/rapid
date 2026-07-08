@@ -92,11 +92,17 @@ make_refimages_flag = ast.literal_eval(make_refimages_flag_str)
 
 # If RUNFID is set, then process just the specified filter.
 
-run_fid = os.getenv('RUNFID')
+run_fid_str = os.getenv('RUNFID')
 
-if run_fid is None:
+if run_fid_str is None:
+    run_fid = None
     print("*** Message: Will process all filters...")
 else:
+    try:
+        run_fid = int(run_fid_str)
+    except:
+        print(f"*** Error: run_fid cannot be converted to integer (run_fid={run_fid_str}); quitting...")
+        exit(64)
     print(f"*** Message: Will process only fid={run_fid}...")
 
 
@@ -266,7 +272,7 @@ if __name__ == '__main__':
     for field,fid in zip(field_list,fid_list):
 
         if run_fid is not None:
-            if int(run_fid) != fid:
+            if run_fid != fid:
                 print(f"*** Message: Skipping fid={fid}; continuing...")
                 continue
 
