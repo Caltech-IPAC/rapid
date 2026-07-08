@@ -600,6 +600,8 @@ def SourceMatchRefSci(xf_val,
                       radscirefmatch,
                       verbose):
 
+    iam = "Sub SourceMatchRefSci"
+
     radsq = radscirefmatch * radscirefmatch
     radaxis = radscirefmatch / np.sqrt(2.0)
 
@@ -670,9 +672,9 @@ def SourceMatchRefSci(xf_val,
         dymedian = np.median(mdynear_val)
 
     if verbose > 0:
-        print("iam: SourceMatchRefSci: number of matches = {}".format(nmtch))
-        print("iam: SourceMatchRefSci: DxRMS = {} pixels".format(dxrms))
-        print("iam: SourceMatchRefSci: DyRMS = {} pixels".format(dyrms))
+        print("{}: SourceMatchRefSci: number of matches = {}".format(iam,nmtch))
+        print("{}: SourceMatchRefSci: DxRMS = {} pixels".format(iam,dxrms))
+        print("{}: SourceMatchRefSci: DyRMS = {} pixels".format(iam,dyrms))
 
 
     return mdnear,mfluxsci,nmtch,dxrms,dyrms,dxmedian,dymedian
