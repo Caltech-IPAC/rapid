@@ -4038,3 +4038,65 @@ class RAPIDDB:
             self.conn.commit()           # Commit database transaction
 
         return n_rows_deleted
+
+
+########################################################################################################
+
+    def get_field_fid_nframes_records(self,min_refimage_nframes,fid=None):
+
+        '''
+        Query database for all field/filter/nframes combinations with
+        minimum number of frames in coadd stack.
+        '''
+
+        self.exit_code = 0
+
+
+        # Define query.
+
+        if fid is None:
+
+            query =\
+                f"select field,fid,count(*) from l2files " +\
+                f"and vbest > 0 " +\
+                f"group by field,fid " +\
+                f"having count(*) >= {min_refimage_nframes} " +\
+                f"order by field,fid;"
+
+        else:
+
+            query =\
+                f"select field,fid,count(*) from l2files " +\
+                f"and vbest > 0 " +\
+                f"and fid = {fid} " +\
+                f"group by field,fid " +\
+                f"having count(*) >= {min_refimage_nframes} " +\
+                f"order by field,fid;"
+
+
+        print('query = {}'.format(query))
+
+
+        # Execute query.
+
+        try:
+            self.cur.execute(query)
+
+            try:
+                records = []
+                nrecs = 0
+                for record in self.cur:
+                    records.append(record)
+                    nrecs += 1
+
+                print("nrecs =",nrecs)
+
+            except:
+                print("Nothing returned from database query; continuing...")
+
+        except (Exception, psycopg2.DatabaseError) as error:
+            print('*** Error executing get_field_fid_nframes_records ({}); skipping...'.format(error))
+            self.exit_code = 67
+            return
+
+        return records
