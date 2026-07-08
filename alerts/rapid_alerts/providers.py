@@ -1,7 +1,7 @@
 """
 How alert data gets loaded: the provider contract and its implementations.
 
-The normalized records (Detection, ObjectRecord, ForcedPhot, Cutouts) are
+The normalized records (Source, ObjectRecord, ForcedPhot, Cutouts) are
 the contract between storage backends and the alert builders in produce.py.
 Providers translate their native column names into these canonical
 attributes exactly once; everything downstream only sees these records, so
@@ -10,7 +10,7 @@ one new AlertDataProvider subclass and nothing else.
 
 Data flow for the database backend (DB table -> record -> schema record):
 
-    sources + filters            -> Detection    -> diaSource
+    sources + filters            -> Source    -> diaSource
         one row per difference-image detection; the triggering source is
         looked up by sid, previous detections via the merges join below
     merges_<field>               -> (sid -> aid association only)
@@ -19,22 +19,29 @@ Data flow for the database backend (DB table -> record -> schema record):
         one row per persistent object, keyed by aid
     (forced photometry)          -> ForcedPhot   -> diaForcedSource
         not yet in the DB; produces FITS files only
-    <cutout_dir>/{sid}_*.fits.gz -> Cutouts      -> alert cutout* fields
+    diffimages + l2files + refimages -> full chip images -> Cutouts
+        stamps cut around each source position by extract_stamp(); the
+        three images are loaded once per chip and reused for every source
 
-The Detection dataclass attribute names ARE the sources column names, so
-Detection.from_row() maps a sources row directly; the only derived keys are
+The Source dataclass attribute names ARE the sources column names, so
+Source.from_row() maps a sources row directly; the only derived keys are
 band (from filters.filter) and aid (from merges). Columns not declared on
-Detection (e.g. sources.id, fid, npix) are silently dropped by from_row().
+Source (e.g. sources.id, fid, npix) are silently dropped by from_row().
 """
 
 import dataclasses
+import io
 import logging
-import os
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import List, Optional
 
+import numpy as np
+from astropy.io import fits
+
 logger = logging.getLogger(__name__)
+
+PRV_WINDOW_DAYS = 365.25  # default look-back window for previous detections
 
 
 # ---------------------------------------------------------------------------
@@ -42,7 +49,7 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 @dataclass
-class Detection:
+class Source:
     """One difference-image source detection (DB `sources` row equivalent)."""
     sid: int
     expid: int
@@ -81,9 +88,9 @@ class Detection:
 
     @classmethod
     def from_row(cls, row, strict=False):
-        """Build from a dict, ignoring keys that are not Detection fields.
+        """Build from a dict, ignoring keys that are not Source fields.
 
-        With strict=True, every Detection field must be present as a key in
+        With strict=True, every Source field must be present as a key in
         row (except aid, which is derived from the merges association, not a
         storage column). This turns a renamed or dropped storage column into
         an immediate error instead of a silently-null alert field.
@@ -93,7 +100,7 @@ class Detection:
             missing = names - set(row) - {"aid"}
             if missing:
                 raise KeyError(
-                    f"Detection row is missing expected columns: "
+                    f"Source row is missing expected columns: "
                     f"{sorted(missing)} (renamed or dropped in storage?)")
         return cls(**{key: value for key, value in row.items() if key in names})
 
@@ -139,6 +146,51 @@ class Cutouts:
 
 
 # ---------------------------------------------------------------------------
+# Cutout stamps (backend-independent helpers: any provider that can get its
+# hands on full images uses these to fill Cutouts)
+# ---------------------------------------------------------------------------
+
+STAMP_HALF_WIDTH = 64  # stamps are 2*64+1 = 129x129 pixels
+
+
+def load_image(path):
+    """Return the primary-HDU pixel array of a FITS image, or None if the
+    file is missing/unreadable (the alert then carries a null cutout)."""
+    if path is None:
+        return None
+    try:
+        with fits.open(path, memmap=False) as hdul:
+            return hdul[0].data
+    except OSError:
+        logger.warning("Could not load image %s", path)
+        return None
+
+
+def extract_stamp(image_data, x, y, half_width=STAMP_HALF_WIDTH):
+    """Cut a square stamp centered on pixel (x, y) out of a full image and
+    return it as the bytes of a small single-HDU FITS file (which is what
+    the alert cutout params carry).
+
+    Returns None if there is no image, or if the stamp would run off the
+    edge of the chip.
+    """
+    if image_data is None or x is None or y is None:
+        return None
+    # FITS pixel coordinates are 1-based; numpy indexing is 0-based
+    col = int(round(x)) - 1
+    row = int(round(y)) - 1
+    nrows, ncols = image_data.shape
+    top, bottom = row - half_width, row + half_width + 1
+    left, right = col - half_width, col + half_width + 1
+    if top < 0 or bottom > nrows or left < 0 or right > ncols:
+        return None
+    stamp = np.asarray(image_data[top:bottom, left:right], dtype=np.float32)
+    buf = io.BytesIO()
+    fits.PrimaryHDU(stamp).writeto(buf)
+    return buf.getvalue()
+
+
+# ---------------------------------------------------------------------------
 # Provider interface
 # ---------------------------------------------------------------------------
 
@@ -151,7 +203,7 @@ class AlertDataProvider(ABC):
     """
 
     @abstractmethod
-    def get_detection(self, sid) -> Detection:
+    def get_detection(self, sid) -> Source:
         """Return the triggering detection. Raises ValueError if not found."""
 
     @abstractmethod
@@ -160,7 +212,7 @@ class AlertDataProvider(ABC):
 
     @abstractmethod
     def get_prv_detections(self, detection, obj,
-                           window_days=365.25) -> List[Detection]:
+                           window_days=PRV_WINDOW_DAYS) -> List[Source]:
         """Return prior detections of obj within window_days before the
         triggering detection, oldest first, excluding the trigger itself."""
 
@@ -172,9 +224,11 @@ class AlertDataProvider(ABC):
     def get_cutouts(self, detection) -> Cutouts:
         """Return image stamps for the detection (members None if missing)."""
 
-    def iter_detections(self, job_or_visit):
-        """Yield all Detections for one processing unit (batch alert
-        production, as in roman_rapid_alerts). Optional per backend."""
+    def iter_sources(self, pid):
+        """Yield every Source on one chip (one difference image, keyed by
+        its processing ID) for batch alert production. Backends should use
+        this to prefetch whatever makes the per-source get_* calls cheap.
+        Optional per backend."""
         raise NotImplementedError(
             f"{type(self).__name__} does not support batch iteration")
 
@@ -184,16 +238,36 @@ class AlertDataProvider(ABC):
 # ---------------------------------------------------------------------------
 
 class DatabaseProvider(AlertDataProvider):
-    """Pulls alert inputs from the RAPID operations database (RAPIDDB)."""
+    """Pulls alert inputs from the RAPID operations database (RAPIDDB).
 
-    def __init__(self, db, cutout_dir=None):
+    The one DB connection (held by RAPIDDB) persists for the provider's
+    lifetime; each query uses a short-lived cursor.
+
+    Two flows share the same get_* interface:
+      - single-alert: each get_* call issues its own query
+      - batch (per chip): iter_sources(pid) prefetches the whole chip's
+        associations and histories with a few set-based queries, and the
+        get_* calls below answer from that prefetch instead of querying
+    assemble_alert() cannot tell the difference, by design.
+    """
+
+    def __init__(self, db):
         """
         Args:
             db: RAPIDDB instance (rapid.database.modules.utils.rapid_db).
-            cutout_dir: optional directory containing {sid}_{diff,sci,tmpl}.fits.gz.
         """
         self.db = db
-        self.cutout_dir = cutout_dir
+        # Per-chip prefetch state, filled by iter_sources(pid). While the
+        # current chip matches source.pid, get_object_for_source() and
+        # get_prv_detections() answer from these dicts.
+        self._chip_pid = None
+        self._chip_objects = {}       # sid -> astroobjects row dict
+        self._chip_history = {}       # aid -> [Source, ...], oldest first
+        self._chip_window_days = 0.0  # look-back window the prefetch covers
+        # Full chip images for cutouts, loaded lazily by get_cutouts() and
+        # held until a source from a different chip comes along.
+        self._images_pid = None
+        self._images = {}             # "diff" | "sci" | "ref" -> pixel array
 
     def _query(self, sql, params):
         """Run one query and return rows as {column_name: value} dicts."""
@@ -206,7 +280,7 @@ class DatabaseProvider(AlertDataProvider):
             cur.close()
 
     def get_detection(self, sid):
-        # sources row -> Detection, column names matching attribute names.
+        # sources row -> Source, column names matching attribute names.
         # The filters join resolves the numeric fid to the band string
         # ("F158", ...).
         rows = self._query("""
@@ -219,12 +293,94 @@ class DatabaseProvider(AlertDataProvider):
             raise ValueError(f"Source {sid} not found")
         row = rows[0]
         row["band"] = row.get("filter_name")
-        # Detection.aid stays None here; assemble_alert() fills it in after
+        # Source.aid stays None here; assemble_alert() fills it in after
         # get_object_for_source() resolves the association. strict=True makes
         # a renamed/dropped sources column an error, not a null alert field.
-        return Detection.from_row(row, strict=True)
+        return Source.from_row(row, strict=True)
+
+    def iter_sources(self, pid):
+        # One chip = one difference image = one diffimages.pid. Fetch every
+        # detection on it with a single query, then prefetch the association
+        # and history rows for all of them at once (a handful of set-based
+        # queries instead of ~3 queries per alert).
+        rows = self._query("""
+            SELECT s.*, f.filter AS filter_name
+            FROM sources s
+            JOIN filters f ON s.fid = f.fid
+            WHERE s.pid = %s
+            ORDER BY s.sid
+        """, (pid,))
+        sources = []
+        for row in rows:
+            row["band"] = row.get("filter_name")
+            sources.append(Source.from_row(row, strict=True))
+        self._prefetch_chip(pid, sources)
+        yield from sources
+
+    def _prefetch_chip(self, pid, sources, window_days=PRV_WINDOW_DAYS):
+        """Load the object associations and detection histories for a whole
+        chip into memory, so the per-source get_* calls don't hit the DB."""
+        objects_by_sid = {}
+        history_by_aid = {}
+        # merges/astroobjects are partitioned by Roman field, and sources
+        # near a field boundary can land in different partitions, so group
+        # the sids by field first (usually a single group).
+        for field in sorted({s.field for s in sources}):
+            sids = [s.sid for s in sources if s.field == field]
+            object_rows = self._query(f"""
+                SELECT m.sid, a.aid, a.ra0, a.dec0, a.nsources
+                FROM merges_{int(field)} m
+                JOIN astroobjects_{int(field)} a ON m.aid = a.aid
+                WHERE m.sid = ANY(%s)
+            """, (sids,))
+            for row in object_rows:
+                objects_by_sid[row["sid"]] = row
+
+            aids = sorted({row["aid"] for row in object_rows})
+            if not aids:
+                continue
+            # All prior detections of every associated object, in one query.
+            # The MJD cutoff uses the earliest trigger on the chip; each
+            # get_prv_detections() call then tightens it to its own trigger.
+            earliest_mjd = min(s.mjdobs for s in sources) - window_days
+            history_rows = self._query(f"""
+                SELECT m.aid AS object_aid, s.*, f.filter AS filter_name
+                FROM sources s
+                JOIN merges_{int(field)} m ON s.sid = m.sid
+                JOIN filters f ON s.fid = f.fid
+                WHERE m.aid = ANY(%s) AND s.mjdobs >= %s
+                ORDER BY s.mjdobs
+            """, (aids, earliest_mjd))
+            for row in history_rows:
+                row["band"] = row.get("filter_name")
+                row["aid"] = row["object_aid"]
+                history_by_aid.setdefault(row["aid"], []).append(
+                    Source.from_row(row, strict=True))
+
+        self._chip_pid = pid
+        self._chip_objects = objects_by_sid
+        self._chip_history = history_by_aid
+        self._chip_window_days = window_days
 
     def get_object_for_source(self, detection):
+        # Batch flow: after iter_sources(pid), every association for the
+        # chip is already in memory. A sid absent from the prefetch means
+        # "no associated object" -- no fallback query needed.
+        if self._chip_pid is not None and self._chip_pid == detection.pid:
+            row = self._chip_objects.get(detection.sid)
+            if row is None:
+                return None
+            # Build a fresh ObjectRecord each time: assemble_alert() fills
+            # in the first/last/validity MJDs, and two sources on the same
+            # chip may share an object.
+            return ObjectRecord(
+                aid=int(row["aid"]),
+                ra0=float(row["ra0"]),
+                dec0=float(row["dec0"]),
+                nsources=int(row["nsources"]),
+            )
+
+        # Single-alert flow: query for just this sid.
         # The merges/astroobjects tables are partitioned by Roman field, so
         # the detection's field number selects which pair to query.
         field = int(detection.field)
@@ -251,8 +407,18 @@ class DatabaseProvider(AlertDataProvider):
             nsources=int(row["nsources"]),
         )
 
-    def get_prv_detections(self, detection, obj, window_days=365.25):
-        # Same sources -> Detection mapping as get_detection(), but selecting
+    def get_prv_detections(self, detection, obj, window_days=PRV_WINDOW_DAYS):
+        # Batch flow: filter this object's prefetched history down to this
+        # trigger's window. Only usable when the prefetch covered at least
+        # as long a look-back window as requested.
+        if (self._chip_pid is not None and self._chip_pid == detection.pid
+                and window_days <= self._chip_window_days):
+            cutoff = detection.mjdobs - window_days
+            return [s for s in self._chip_history.get(obj.aid, [])
+                    if s.sid != detection.sid and s.mjdobs >= cutoff]
+
+        # Single-alert flow: same sources -> Source mapping as
+        # get_detection(), but selecting
         # the object's other detections: merges_<field> gathers every sid
         # associated with this aid, minus the trigger itself, restricted to
         # the look-back window before the triggering detection. These become
@@ -271,7 +437,7 @@ class DatabaseProvider(AlertDataProvider):
         for row in rows:
             row["band"] = row.get("filter_name")
             row["aid"] = obj.aid  # known from the join; save a lookup
-            detections.append(Detection.from_row(row, strict=True))
+            detections.append(Source.from_row(row, strict=True))
         return detections
 
     def get_forced_photometry(self, detection, obj):
@@ -281,25 +447,51 @@ class DatabaseProvider(AlertDataProvider):
         return []
 
     def get_cutouts(self, detection):
-        # Cutouts are not stored in the DB; they are pre-made files named
-        # <cutout_dir>/{sid}_{diff|sci|tmpl}.fits.gz. Raw gzipped-FITS bytes
-        # go into the alert's cutoutDifference/Science/Template fields as-is;
-        # a missing file just leaves that cutout null.
-        if self.cutout_dir is None:
-            return Cutouts()
+        # Cutouts are generated on the fly: stamps sliced out of the chip's
+        # full difference/science/reference images at the source position.
+        # The images are loaded once per chip and reused for every source
+        # on it, in both the batch and single-alert flows.
+        images = self._chip_images(detection.pid)
+        return Cutouts(
+            difference=extract_stamp(images.get("diff"),
+                                     detection.xfit, detection.yfit),
+            science=extract_stamp(images.get("sci"),
+                                  detection.xfit, detection.yfit),
+            template=extract_stamp(images.get("ref"),
+                                   detection.xfit, detection.yfit),
+        )
 
-        def load(suffix):
-            path = os.path.join(self.cutout_dir,
-                                f"{detection.sid}_{suffix}.fits.gz")
-            try:
-                with open(path, "rb") as f:
-                    return f.read()
-            except OSError:
-                return None
+    def _chip_images(self, pid):
+        """Return the chip's {"diff", "sci", "ref"} pixel arrays, loading
+        and holding them on first use. The file locations come from the DB:
+        diffimages.filename (difference), diffimages.rid -> l2files.filename
+        (science), diffimages.rfid -> refimages.filename (reference). A
+        missing/unreadable file loads as None, which extract_stamp() turns
+        into a null cutout."""
+        if self._images_pid == pid:
+            return self._images
 
-        return Cutouts(difference=load("diff"),
-                       science=load("sci"),
-                       template=load("tmpl"))
+        rows = self._query("""
+            SELECT d.filename AS diff_file,
+                   l.filename AS sci_file,
+                   r.filename AS ref_file
+            FROM diffimages d
+            JOIN l2files l ON d.rid = l.rid
+            JOIN refimages r ON d.rfid = r.rfid
+            WHERE d.pid = %s
+        """, (pid,))
+        if rows:
+            self._images = {
+                "diff": load_image(rows[0]["diff_file"]),
+                "sci":  load_image(rows[0]["sci_file"]),
+                "ref":  load_image(rows[0]["ref_file"]),
+            }
+        else:
+            logger.warning("No diffimages row for pid=%s; cutouts will be "
+                           "null", pid)
+            self._images = {}
+        self._images_pid = pid
+        return self._images
 
 
 # ---------------------------------------------------------------------------

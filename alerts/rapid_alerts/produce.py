@@ -1,15 +1,17 @@
 """
 The complete alert-production path, from provider data to published bytes:
 
-    provider.get_*()   ->  Detection / ObjectRecord / ...  (providers.py)
+    provider.get_*()   ->  Source / ObjectRecord / ...  (providers.py)
     build_record()     ->  schema-conforming dicts, driven by the registry
     assemble_alert()   ->  one alert packet dict
     serialize_alert()  ->  Avro bytes (schema loaded from the .avsc files)
     publish_alert()    ->  Kafka topic
 
-produce_alert() chains all of these for one source ID. This module knows
-nothing about where the data lives -- it only talks to the
-AlertDataProvider interface and the field registry.
+produce_alert() chains all of these for one source ID; produce_chip() does
+the same for every source on one chip (difference image), letting the
+provider prefetch the chip's data once. This module knows nothing about
+where the data lives -- it only talks to the AlertDataProvider interface
+and the param registry.
 """
 
 import dataclasses
@@ -20,21 +22,19 @@ from pathlib import Path
 import fastavro
 import fastavro.schema
 
-from .fields import (ALERT_FIELDS, DIA_FORCED_SOURCE_FIELDS, DIA_OBJECT_FIELDS,
-                     DIA_SOURCE_FIELDS, RECORDS, VERSION, Status, is_nullable)
-from .providers import Detection, ForcedPhot, ObjectRecord
+from .param_registry import (ALERT_PARAMS, DIA_FORCED_SOURCE_PARAMS, DIA_OBJECT_PARAMS,
+                     DIA_SOURCE_PARAMS, RECORDS, VERSION, Status, is_nullable)
+from .providers import PRV_WINDOW_DAYS, Source, ForcedPhot, ObjectRecord
 
 logger = logging.getLogger(__name__)
 
 # Generated .avsc files live in alerts/schema/<major>/<minor>/
 SCHEMA_ROOT = Path(__file__).resolve().parent.parent / "schema"
 
-PRV_WINDOW_DAYS = 365.25  # look-back window for previous detections
-
 # Which normalized record each schema record is built from. The top-level
 # alert record is not listed because assemble_alert() fills it directly.
 BUILDER_DATA_CLASSES = {
-    "diaSource": Detection,
+    "diaSource": Source,
     "diaForcedSource": ForcedPhot,
     "diaObject": ObjectRecord,
 }
@@ -42,12 +42,12 @@ BUILDER_DATA_CLASSES = {
 
 # ---------------------------------------------------------------------------
 # Registry validation -- runs when this module is imported, so a bad
-# declaration in fields.py fails loudly before any alert is built
+# declaration in param_registry.py fails loudly before any alert is built
 # ---------------------------------------------------------------------------
 
 def _available_attributes(data_cls):
-    """Names a Field.attr may reference on this record class: its dataclass
-    fields plus any properties (e.g. Detection.snr)."""
+    """Names a Param.attr may reference on this record class: its dataclass
+    fields plus any properties (e.g. Source.snr)."""
     field_names = {f.name for f in dataclasses.fields(data_cls)}
     property_names = {name for name, value in vars(data_cls).items()
                       if isinstance(value, property)}
@@ -60,19 +60,19 @@ def _validate_registry():
         if record.name == "alert":
             continue  # filled directly by assemble_alert(), checked there
         data_cls = BUILDER_DATA_CLASSES.get(record.name)
-        for f in record.fields:
-            if f.status is not Status.IMPLEMENTED:
+        for p in record.params:
+            if p.status is not Status.IMPLEMENTED:
                 continue  # stubs are inactive; nothing to check
             if data_cls is None:
                 problems.append(
-                    f"{record.name}.{f.name} is IMPLEMENTED, but the "
+                    f"{record.name}.{p.name} is IMPLEMENTED, but the "
                     f"{record.name} record has no builder data class")
-            elif f.getter is None and (f.attr or f.name) not in _available_attributes(data_cls):
+            elif p.getter is None and (p.attr or p.name) not in _available_attributes(data_cls):
                 problems.append(
-                    f"{record.name}.{f.name} reads {data_cls.__name__}."
-                    f"{f.attr or f.name}, which does not exist")
+                    f"{record.name}.{p.name} reads {data_cls.__name__}."
+                    f"{p.attr or p.name}, which does not exist")
     if problems:
-        raise ValueError("fields.py registry is inconsistent:\n  "
+        raise ValueError("param_registry.py is inconsistent:\n  "
                          + "\n  ".join(problems))
 
 
@@ -83,43 +83,43 @@ _validate_registry()
 # Record builders (registry-driven)
 # ---------------------------------------------------------------------------
 
-def build_record(field_list, data):
-    """Build a schema-conforming dict, enforcing each field's status."""
+def build_record(param_list, data):
+    """Build a schema-conforming dict, enforcing each param's status."""
     out = {}
-    for f in field_list:
-        if f.status is Status.NOT_USED:
+    for p in param_list:
+        if p.status is Status.NOT_USED:
             continue
-        if f.status is not Status.IMPLEMENTED:
-            out[f.name] = None  # stubs stay null even if attr/getter is staged
+        if p.status is not Status.IMPLEMENTED:
+            out[p.name] = None  # stubs stay null even if attr/getter is staged
             continue
         try:
-            if f.getter is not None:
-                value = f.getter(data)
+            if p.getter is not None:
+                value = p.getter(data)
             else:
-                value = getattr(data, f.attr or f.name)
+                value = getattr(data, p.attr or p.name)
         except Exception as exc:
             raise RuntimeError(
-                f"getting field {f.name!r} from {type(data).__name__} "
+                f"getting param {p.name!r} from {type(data).__name__} "
                 f"failed: {exc}") from exc
-        if value is None and not is_nullable(f.avro):
+        if value is None and not is_nullable(p.avro):
             raise ValueError(
-                f"field {f.name!r} is IMPLEMENTED and non-nullable but its "
+                f"param {p.name!r} is IMPLEMENTED and non-nullable but its "
                 f"value is None (was the {type(data).__name__} populated by "
                 f"the provider?)")
-        out[f.name] = value
+        out[p.name] = value
     return out
 
 
-def build_dia_source(detection):
-    return build_record(DIA_SOURCE_FIELDS, detection)
+def build_dia_source(source):
+    return build_record(DIA_SOURCE_PARAMS, source)
 
 
 def build_dia_object(obj):
-    return build_record(DIA_OBJECT_FIELDS, obj)
+    return build_record(DIA_OBJECT_PARAMS, obj)
 
 
 def build_dia_forced_source(forced_phot):
-    return build_record(DIA_FORCED_SOURCE_FIELDS, forced_phot)
+    return build_record(DIA_FORCED_SOURCE_PARAMS, forced_phot)
 
 
 # ---------------------------------------------------------------------------
@@ -136,39 +136,48 @@ def assemble_alert(provider, sid):
     Returns:
         dict conforming to the rapid alert schema.
     """
-    detection = provider.get_detection(sid)
-    obj = provider.get_object_for_source(detection)
+    return assemble_alert_for_source(provider, provider.get_detection(sid))
+
+
+def assemble_alert_for_source(provider, source):
+    """Assemble an alert packet for a Source already in hand.
+
+    Used directly by the batch flow (produce_chip), where iter_sources()
+    has already fetched every Source on the chip -- re-querying each one
+    by sid would defeat the point of batching.
+    """
+    obj = provider.get_object_for_source(source)
 
     dia_object = None
     prv_dia_sources = None
     prv_dia_forced_sources = None
 
     if obj is not None:
-        detection.aid = obj.aid
+        source.aid = obj.aid
 
-        prv = provider.get_prv_detections(detection, obj,
+        prv = provider.get_prv_detections(source, obj,
                                           window_days=PRV_WINDOW_DAYS)
         if prv:
             prv_dia_sources = [build_dia_source(p) for p in prv]
 
-        mjds = [detection.mjdobs] + [p.mjdobs for p in prv]
+        mjds = [source.mjdobs] + [p.mjdobs for p in prv]
         obj.first_mjd = min(mjds)
         obj.last_mjd = max(mjds)
-        obj.validity_mjd = detection.mjdobs
+        obj.validity_mjd = source.mjdobs
         dia_object = build_dia_object(obj)
 
-        forced = provider.get_forced_photometry(detection, obj)
+        forced = provider.get_forced_photometry(source, obj)
         if forced:
             prv_dia_forced_sources = [build_dia_forced_source(fp)
                                       for fp in forced]
 
-    cutouts = provider.get_cutouts(detection)
+    cutouts = provider.get_cutouts(source)
 
     alert = {
         "schemaVersion": VERSION,
         "pipelineVersion": None,
-        "diaSourceId": detection.sid,
-        "diaSource": build_dia_source(detection),
+        "diaSourceId": source.sid,
+        "diaSource": build_dia_source(source),
         "prvDiaSources": prv_dia_sources,
         "diaObject": dia_object,
         "prvDiaForcedSources": prv_dia_forced_sources,
@@ -182,12 +191,12 @@ def assemble_alert(provider, sid):
     }
 
     # The dict above is written by hand; make sure it stays in sync with the
-    # registry (fastavro would silently fill a forgotten nullable field with
+    # registry (fastavro would silently fill a forgotten nullable param with
     # its null default).
-    expected = {f.name for f in ALERT_FIELDS if f.status is not Status.NOT_USED}
+    expected = {p.name for p in ALERT_PARAMS if p.status is not Status.NOT_USED}
     if set(alert) != expected:
         raise RuntimeError(
-            "assemble_alert() and ALERT_FIELDS in fields.py disagree: "
+            "assemble_alert() and ALERT_PARAMS in param_registry.py disagree: "
             f"missing keys {sorted(expected - set(alert))}, "
             f"unexpected keys {sorted(set(alert) - expected)}")
 
@@ -233,13 +242,16 @@ def serialize_alert(alert_dict, schema=None):
     return buf.getvalue()
 
 
-def publish_alert(alert_bytes, producer, topic="alerts"):
+def publish_alert(alert_bytes, producer, topic="alerts", flush=True):
     """Publish serialized alert bytes to a Kafka topic.
 
     Args:
         alert_bytes: Avro-serialized alert bytes.
         producer: confluent_kafka.Producer instance.
         topic: Kafka topic name.
+        flush: wait for delivery before returning. Right for one-off alerts;
+            batch callers (produce_chip) pass False and flush once at the
+            end instead.
     """
     def delivery_callback(err, msg):
         if err:
@@ -249,7 +261,8 @@ def publish_alert(alert_bytes, producer, topic="alerts"):
                         msg.topic(), msg.partition())
 
     producer.produce(topic, alert_bytes, callback=delivery_callback)
-    producer.flush()
+    if flush:
+        producer.flush()
 
 
 def produce_alert(provider, sid, producer=None, topic="alerts", schema=None):
@@ -275,3 +288,37 @@ def produce_alert(provider, sid, producer=None, topic="alerts", schema=None):
         publish_alert(alert_bytes, producer, topic=topic)
 
     return alert_bytes
+
+
+def produce_chip(provider, pid, producer=None, topic="alerts", schema=None):
+    """Produce alerts for every source on one chip (one difference image).
+
+    Batch counterpart of produce_alert(): the provider fetches the chip's
+    DB rows and images up front (see DatabaseProvider.iter_sources), and
+    Kafka is flushed once at the end instead of per message.
+
+    Args:
+        provider: an AlertDataProvider instance that supports iter_sources().
+        pid: processing ID of the chip (diffimages.pid).
+        producer: optional confluent_kafka.Producer instance.
+        topic: Kafka topic name.
+        schema: parsed fastavro schema (loaded if not provided).
+
+    Returns:
+        the number of alerts produced.
+    """
+    if schema is None:
+        schema = load_schema()
+
+    count = 0
+    for source in provider.iter_sources(pid):
+        alert_dict = assemble_alert_for_source(provider, source)
+        alert_bytes = serialize_alert(alert_dict, schema=schema)
+        if producer is not None:
+            publish_alert(alert_bytes, producer, topic=topic, flush=False)
+        count += 1
+
+    if producer is not None:
+        producer.flush()
+    logger.info("Chip pid=%s: %d alerts produced", pid, count)
+    return count

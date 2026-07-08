@@ -1,14 +1,17 @@
 """
-Generate the .avsc Avro schema files from the field registry in fields.py.
+Generate the .avsc Avro schema files from the registry in param_registry.py.
 
 Replaces generate_schema.sh: the registry is the source of truth and the
 .avsc files are build products (still committed, since downstream consumers
 need them). --check verifies the committed files match the registry without
 writing anything, so drift is caught mechanically.
 
+Note: the generated files contain a "fields" array -- that token is Avro's,
+even though this codebase calls schema fields "params".
+
 Usage:
-    python -m rapid_alerts.gen_schema              # write schema/01/00/*.avsc
-    python -m rapid_alerts.gen_schema 01.01        # write a new version
+    python -m rapid_alerts.gen_schema              # write current VERSION
+    python -m rapid_alerts.gen_schema 01.02        # write a new version
     python -m rapid_alerts.gen_schema --check      # compare, don't write
 """
 
@@ -18,7 +21,7 @@ import json
 import sys
 from pathlib import Path
 
-from .fields import RECORDS, VERSION, Status, is_nullable
+from .param_registry import RECORDS, VERSION, Status, is_nullable
 
 SCHEMA_ROOT = Path(__file__).resolve().parent.parent / "schema"
 
@@ -39,22 +42,22 @@ def _resolve_type(avro_type, namespace):
 
 def record_schema(record, version, namespace):
     """Build the Avro schema dict for one registry record."""
-    fields = []
-    for f in record.fields:
-        if f.status is Status.NOT_USED:
+    avro_fields = []  # "fields" is the Avro spec's name for what we call params
+    for p in record.params:
+        if p.status is Status.NOT_USED:
             continue
-        entry = {"name": f.name, "type": _resolve_type(f.avro, namespace)}
-        if is_nullable(f.avro):
+        entry = {"name": p.name, "type": _resolve_type(p.avro, namespace)}
+        if is_nullable(p.avro):
             entry["default"] = None
-        entry["doc"] = f.doc
-        fields.append(entry)
+        entry["doc"] = p.doc
+        avro_fields.append(entry)
     return {
         "namespace": namespace,
         "name": record.name,
         "doc": record.doc,
         "version": version,
         "type": "record",
-        "fields": fields,
+        "fields": avro_fields,
     }
 
 
@@ -85,7 +88,7 @@ def generate(version=VERSION, schema_root=SCHEMA_ROOT, check=False):
                 diff = difflib.unified_diff(
                     json.dumps(existing, indent=2).splitlines(),
                     json.dumps(schema, indent=2).splitlines(),
-                    fromfile=str(path), tofile="registry (fields.py)",
+                    fromfile=str(path), tofile="registry (param_registry.py)",
                     lineterm="")
                 for line in diff:
                     print(f"    {line}")
@@ -103,7 +106,7 @@ def generate(version=VERSION, schema_root=SCHEMA_ROOT, check=False):
 
 def main(argv=None):
     parser = argparse.ArgumentParser(
-        description="Generate RAPID .avsc schema files from fields.py")
+        description="Generate RAPID .avsc schema files from param_registry.py")
     parser.add_argument("version", nargs="?", default=VERSION,
                         help="schema version <major>.<minor>, zero-padded "
                              "(default: %(default)s)")

@@ -1,15 +1,17 @@
 """
 RAPID alert production package.
 
-    fields.py      THE schema registry: every field of every record, with its
-                   Avro type, doc, implementation status, and how to read it
-                   from the normalized records. Edit this file to change the
-                   schema or mark a field implemented -- everything else
-                   derives from it. "python -m rapid_alerts.fields" prints
-                   the implemented/stub report.
+    param_registry.py  THE schema registry: every param (= Avro schema field;
+                   renamed to avoid clashing with the Roman sky field) of
+                   every record, with its Avro type, doc, implementation
+                   status, and how to read it from the normalized records.
+                   Edit this file to change the schema or mark a param
+                   implemented -- everything else derives from it.
+                   "python -m rapid_alerts.param_registry" prints the
+                   implemented/stub report.
     gen_schema.py  Writes the .avsc files from the registry
                    ("python -m rapid_alerts.gen_schema [--check]").
-    providers.py   Normalized records (Detection, ObjectRecord, ...) plus the
+    providers.py   Normalized records (Source, ObjectRecord, ...) plus the
                    data-access backends that produce them, so the storage
                    decision (database / file system / sqlite) stays swappable.
     produce.py     The runtime path: build records, assemble a packet,

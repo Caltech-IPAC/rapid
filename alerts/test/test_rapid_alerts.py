@@ -17,17 +17,20 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import fastavro
 
-from rapid_alerts.fields import RECORDS, VERSION, Status
+import numpy as np
+
+from rapid_alerts.param_registry import RECORDS, VERSION, Status
 from rapid_alerts.gen_schema import generate
 from rapid_alerts.produce import (assemble_alert, build_dia_source,
                                   build_dia_forced_source, load_schema,
-                                  serialize_alert)
-from rapid_alerts.providers import (AlertDataProvider, Detection,
-                                    ObjectRecord, ForcedPhot, Cutouts)
+                                  produce_chip, serialize_alert)
+from rapid_alerts.providers import (AlertDataProvider, Source,
+                                    ObjectRecord, ForcedPhot, Cutouts,
+                                    extract_stamp)
 
 
 def make_detection(sid, mjd, aid=None):
-    return Detection(
+    return Source(
         sid=sid, expid=42, sca=7, mjdobs=mjd, ra=150.1, dec=2.2,
         xfit=101.5, yfit=202.5, band="F158", aid=aid,
         xerr=0.01, yerr=0.02, fluxfit=1234.5, fluxerr=56.7,
@@ -55,10 +58,28 @@ class FakeProvider(AlertDataProvider):
         return Cutouts(difference=b"FAKE_DIFF", science=b"FAKE_SCI",
                        template=None)
 
+    def iter_sources(self, pid):
+        for sid in (9001, 9002, 9003):
+            yield make_detection(sid, mjd=60500.5)
+
+
+class FakeKafkaProducer:
+    """Counts messages and flushes (stand-in for confluent_kafka.Producer)."""
+
+    def __init__(self):
+        self.messages = []
+        self.flushes = 0
+
+    def produce(self, topic, value, callback=None):
+        self.messages.append((topic, value, callback))
+
+    def flush(self):
+        self.flushes += 1
+
 
 def main():
     # 1. Committed .avsc files must match the registry
-    assert generate(check=True), ".avsc files differ from fields.py registry"
+    assert generate(check=True), ".avsc files differ from param_registry.py"
 
     # 2. Assemble from the fake provider
     alert = assemble_alert(FakeProvider(), 9999)
@@ -79,7 +100,7 @@ def main():
 
     # 3. Every stub field must be null in the built records
     by_name = {r.name: r for r in RECORDS}
-    for f in by_name["diaSource"].fields:
+    for f in by_name["diaSource"].params:
         if f.status is Status.STUB:
             assert alert["diaSource"][f.name] is None, f.name
 
@@ -94,14 +115,14 @@ def main():
     except ValueError as e:
         assert "diaSourceId" in str(e)
 
-    # 5. Status enforcement: STUB fields stay null even with a getter staged
+    # 5. Status enforcement: STUB params stay null even with a getter staged
     fp = ForcedPhot(forced_id=1, aid=777, expid=42, sca=7, ra=150.1, dec=2.2,
                     mjdobs=60500.5, time_processed=60500.6, flux=123.4)
     assert all(v is None for v in build_dia_forced_source(fp).values())
 
     # 6. Provider boundary: strict from_row rejects rows with missing columns
     try:
-        Detection.from_row({"sid": 1, "expid": 42}, strict=True)
+        Source.from_row({"sid": 1, "expid": 42}, strict=True)
         raise AssertionError("strict from_row accepted an incomplete row")
     except KeyError as e:
         assert "fluxfit" in str(e)
@@ -115,8 +136,33 @@ def main():
     assert len(decoded["prvDiaSources"]) == 2
     assert decoded["cutoutDifference"] == b"FAKE_DIFF"
 
+    # 8. Cutout stamps: extract_stamp round-trips through FITS bytes and
+    # refuses positions too close to the chip edge
+    image = np.arange(300 * 300, dtype=np.float32).reshape(300, 300)
+    stamp_bytes = extract_stamp(image, 150.0, 150.0)
+    from astropy.io import fits
+    with fits.open(io.BytesIO(stamp_bytes)) as hdul:
+        stamp = hdul[0].data
+    assert stamp.shape == (129, 129)
+    assert stamp[64, 64] == image[149, 149]  # center pixel (1-based coords)
+    assert extract_stamp(image, 5.0, 150.0) is None  # off-edge -> no stamp
+    assert extract_stamp(None, 150.0, 150.0) is None
+
+    # 9. Batch flow: produce_chip serializes every source on the chip and
+    # flushes Kafka exactly once
+    fake_producer = FakeKafkaProducer()
+    count = produce_chip(FakeProvider(), pid=99, producer=fake_producer,
+                         schema=schema)
+    assert count == 3
+    assert len(fake_producer.messages) == 3
+    assert fake_producer.flushes == 1
+    # batch messages go through publish_alert(flush=False), so each still
+    # carries the delivery-report callback
+    assert all(callback is not None for _, _, callback in fake_producer.messages)
+
     print(f"OK: alert assembled, serialized ({len(blob)} bytes), "
-          "and round-tripped through the Avro schema")
+          "round-tripped through the Avro schema, and batch-produced "
+          f"{count} alerts for a fake chip")
 
 
 if __name__ == "__main__":
