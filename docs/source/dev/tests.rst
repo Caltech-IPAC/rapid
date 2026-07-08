@@ -99,6 +99,7 @@ Date              Software modification
 5/27/2026         Modified gain-matching to fall back on scalefac = 10**(0.4*(magzpref - magzpsci)) if unable to find a sufficient number of matches.
 6/2/2026          Updated L2Files database table for 5th-order SIP distortion.
 6/23/2026         Upgraded awaicgen version from 5.2 to 5.4 (fixed bug in handling SIP distortion).
+7/8/2026          Modified to replace NaNs in difference-image inputs with zeros.
 ===============   ===============================================================================================================================================================================================================================
 
 
