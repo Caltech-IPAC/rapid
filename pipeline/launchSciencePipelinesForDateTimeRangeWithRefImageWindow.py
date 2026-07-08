@@ -182,6 +182,8 @@ def launch_parallel_processes(rids, num_cores=None):
 
     if num_cores is None:
         num_cores = os.cpu_count()  # Use all available cores if not specified
+        if num_cores is None:
+            num_cores = 1
 
     print("num_cores =",num_cores)
 
