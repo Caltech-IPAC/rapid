@@ -66,7 +66,7 @@ print("proc_pt_datetime_started =",proc_pt_datetime_started)
 # Define input and output S3 buckets.
 
 bucket_name_input = "stpubdata/roman/nexus/soc_simulations/r00340/l2"
-bucket_name_output = "socsims-fakesrc-asdf-20260624"
+bucket_name_output = "socsims-fakesrc-asdf-20260709"
 
 
 # Create S3-client and S3-resource objects.
