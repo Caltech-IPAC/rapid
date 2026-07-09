@@ -106,6 +106,9 @@ config_input_filename = cfg_path + "/" + cfg_filename_only
 config_input = configparser.ConfigParser()
 config_input.read(config_input_filename)
 
+ppid_sciimage = int(config_input['SCI_IMAGE']['ppid'])
+
+ppid_refimage = int(config_input['REF_IMAGE']['ppid'])
 min_n_images_to_coadd = int(config_input['REF_IMAGE']['min_n_images_to_coadd'])
 max_n_images_to_coadd = int(config_input['REF_IMAGE']['max_n_images_to_coadd'])
 
@@ -255,6 +258,47 @@ if __name__ == '__main__':
             nframes = rec[2]
 
             print("field,fid =",field,fid)
+
+
+            # Query RefImages database table for the best version of reference image
+            # (which is usually the latest unless a prior version is locked).
+            # A reference image depends only on pipeline number, field, filter, and version.
+            # If a reference image already exists, then do not launch a referene-image pipeline for it.
+            # First, check for reference images made by the dedicated reference-image pipeline (ppid=12).
+            # If no reference imag is found, check whether there is one made by the science pipeline (ppid=15).
+
+            rfid = None
+
+            db_refimages_rec_dict = dbh.get_best_reference_image(ppid_refimage,field,fid)
+            ppid_existing_refimg = ppid_refimage
+
+            if dbh.exit_code == 7:
+                print(f"No database record from dbh.get_best_reference_image for " +
+                      f"ppid={ppid_refimage} called by {swname}; continuing with rfid = None...")
+
+                db_refimages_rec_dict = dbh.get_best_reference_image(ppid_sciimage,field,fid)
+                ppid_existing_refimg = ppid_sciimage
+
+            if dbh.exit_code == 7:
+                print(f"No database record from dbh.get_best_reference_image for " +
+                      f"ppid={} called by {}; continuing with rfid = None...".format(ppid_sciimage,swname))
+                ppid_existing_refimg = ppid_sciimage
+            elif dbh.exit_code >= 64:
+                print("*** Error from {}; quitting ".format(swname))
+                exit(dbh.exit_code)
+            else:
+                rfid = db_refimages_rec_dict["rfid"]
+                filename_refimage = db_refimages_rec_dict["filename"]
+                infobits_refimage = db_refimages_rec_dict["infobits"]
+
+
+            if rfid is not None:
+                print(f"*** Message: Reference image found in database for " +
+                      "field,fid.ppid_existing_refimg={field},{fid},{ppid_existing_refimg} (rfid={rfid})")
+                continue
+
+
+            # Append to lists of fields and fids for which to launch reference-image pipelines.
 
             field_list.append(field)
             fid_list.append(fid)
