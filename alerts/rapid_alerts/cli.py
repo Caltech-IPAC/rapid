@@ -12,8 +12,16 @@ import os
 import sys
 from pathlib import Path
 
-from .produce import produce_alert, produce_chip
-from .providers import DatabaseProvider
+# Support both `python -m rapid_alerts.cli` (module) and `python cli.py` (script).
+if __package__:
+    from .produce import produce_alert, produce_chip
+    from .providers import DatabaseProvider
+else:
+    # Run directly as a script: no package context, so make the package
+    # importable by its name and switch to absolute imports.
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+    from rapid_alerts.produce import produce_alert, produce_chip
+    from rapid_alerts.providers import DatabaseProvider
 
 logging.basicConfig(level=logging.INFO)
 
