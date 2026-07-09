@@ -4058,7 +4058,7 @@ class RAPIDDB:
 
             query =\
                 f"select field,fid,count(*) from l2files " +\
-                f"and vbest > 0 " +\
+                f"where vbest > 0 " +\
                 f"group by field,fid " +\
                 f"having count(*) >= {min_refimage_nframes} " +\
                 f"order by field,fid;"
@@ -4067,7 +4067,7 @@ class RAPIDDB:
 
             query =\
                 f"select field,fid,count(*) from l2files " +\
-                f"and vbest > 0 " +\
+                f"where vbest > 0 " +\
                 f"and fid = {fid} " +\
                 f"group by field,fid " +\
                 f"having count(*) >= {min_refimage_nframes} " +\
