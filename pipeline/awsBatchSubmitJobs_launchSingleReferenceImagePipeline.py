@@ -70,7 +70,6 @@ print("proc_date =",proc_date)
 # Read environment variable FIELD.
 # This is the sky tile upon which the reference image is centered.
 
-
 field_str = os.getenv('FIELD')
 
 if field_str is None:
