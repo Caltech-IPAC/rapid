@@ -1387,9 +1387,14 @@ class RAPIDDB:
                                                "cast(TEMPLATE_RA3 as double precision), cast(TEMPLATE_DEC3 as double precision)," +\
                                                "cast(TEMPLATE_RA4 as double precision), cast(TEMPLATE_DEC4 as double precision)])) " +\
             "and a.mjdobs >= TEMPLATE_STARTMJDOBS " +\
-            "and a.mjdobs < TEMPLATE_ENDMJDOBS " +\
-            "and a.rid != TEMPLATE_RID " +\
-            "order by dist; "
+            "and a.mjdobs < TEMPLATE_ENDMJDOBS "
+
+            if rid == 'null':
+                query_template += "and a.rid is not TEMPLATE_RID " +\
+                                  "order by dist; "
+            else:
+                query_template += "and a.rid != TEMPLATE_RID " +\
+                                  "order by dist; "
 
 
         # Special logic for generating reference image from inputs observed within a certain observation date range.
