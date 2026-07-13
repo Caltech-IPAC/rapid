@@ -666,6 +666,9 @@ if __name__ == '__main__':
 
     job_config['REF_IMAGE'] = {}
 
+    job_config['REF_IMAGE']['field'] = str(field)
+    job_config['REF_IMAGE']['fid'] = str(fid)
+    job_config['REF_IMAGE']['filter'] = exposure_filter
     job_config['REF_IMAGE']['ppid'] = str(ppid_refimage)
     job_config['REF_IMAGE']['min_n_images_to_coadd'] = str(min_n_images_to_coadd)
     job_config['REF_IMAGE']['max_n_images_to_coadd'] = str(max_n_images_to_coadd)
