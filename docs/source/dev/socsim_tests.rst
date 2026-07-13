@@ -393,3 +393,11 @@ There were 88,747,880 AstroObjects records and 215,703,276 Merges records loaded
 into the PostgreSQL database.  Of those merges (a.k.a. lightcurve data points), 33,261 merges
 resulted from cross-matching across field boundaries (i.e., the match radius can extend
 across a field boundary), which is an increase of 0.0154% in terms of number of merges.
+
+The lightcurve statistics stored in the AstroObjects_<fields> database tables are updated
+after the cross-matching.  This is done as a separate process from the cross-matching.
+Any AstroObjects_<fields> record with no associated sources in the Merges_<field> database table are deleted.
+A new Q3C index on the (meanra, meandec) columns is computed for all AstroObjects_<fields> database tables,
+and then these tables are set to logged, clustered, and analyzed.
+The AstroObjects_<fields> database tables are explicitly vacuumed at the end of this process.
+For this test, all of these items within the process took 15.9 hours with 8 parallel processes.
