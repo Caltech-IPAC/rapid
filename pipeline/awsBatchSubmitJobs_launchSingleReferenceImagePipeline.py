@@ -777,6 +777,10 @@ if __name__ == '__main__':
         if dbh.exit_code >= 64:
             print(f"*** Error: dbh.update_job_with_aws_batch_job_id returned abnormal exit code (dbh.exit_code = {dbh.exit_code}); continuing...")
 
+    else:
+
+        print(f"*** Message: Skipping launch of single reference-image pipeline (dry_run={dry_run})...")
+
 
     # Close database connection.
 
