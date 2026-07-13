@@ -153,15 +153,26 @@ signal.signal(signal.SIGINT, signal_handler)
 signal.signal(signal.SIGQUIT, signal_handler)
 
 
-# Open database connections for parallel access.
+# Determine number of parallel processes.
 
-
-num_cores_str = os.getenv('NUMCORES')
+num_cores_str = os.getenv('NUM_CORES')
 
 if num_cores_str is None:
     num_cores = os.cpu_count()
+    if num_cores is None:
+        num_cores = 1
 else:
-    num_cores = int(num_cores_str)
+    try:
+        num_cores = int(num_cores_str)
+    except:
+        print(f"*** Error: num_cores cannot be converted to integer (num_cores_str={num_cores_str}); quitting...")
+        exit(64)
+
+print("num_cores =",num_cores)
+
+
+# Open database connections for parallel access.
+
 
 dbh_list = []
 

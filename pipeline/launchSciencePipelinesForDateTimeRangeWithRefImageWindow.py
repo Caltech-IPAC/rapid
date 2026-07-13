@@ -26,7 +26,7 @@ start_time_benchmark = time.time()
 
 # Compute processing datetime (UT) and processing datetime (Pacific time).
 
-datetime_utc_now = datetime.utcnow()
+datetime_utc_now = datetime.now(timezone.utc)
 proc_utc_datetime = datetime_utc_now.strftime('%Y-%m-%dT%H:%M:%SZ')
 datetime_pt_now = datetime_utc_now.replace(tzinfo=timezone.utc).astimezone(tz=to_zone)
 proc_pt_datetime_started = datetime_pt_now.strftime('%Y-%m-%dT%H:%M:%S PT')
@@ -92,11 +92,17 @@ make_refimages_flag = ast.literal_eval(make_refimages_flag_str)
 
 # If RUNFID is set, then process just the specified filter.
 
-run_fid = os.getenv('RUNFID')
+run_fid_str = os.getenv('RUNFID')
 
-if run_fid is None:
+if run_fid_str is None:
+    run_fid = None
     print("*** Message: Will process all filters...")
 else:
+    try:
+        run_fid = int(run_fid_str)
+    except:
+        print(f"*** Error: run_fid cannot be converted to integer (run_fid={run_fid_str}); quitting...")
+        exit(64)
     print(f"*** Message: Will process only fid={run_fid}...")
 
 
@@ -119,6 +125,7 @@ print("enddatetime =",enddatetime)
 print("start_refimage_mjdobs =",start_refimage_mjdobs)
 print("end_refimage_mjdobs =",end_refimage_mjdobs)
 print("make_refimages_flag =",make_refimages_flag)
+print("run_fid =",run_fid)
 print("dry_run =",dry_run)
 
 
@@ -181,6 +188,8 @@ def launch_parallel_processes(rids, num_cores=None):
 
     if num_cores is None:
         num_cores = os.cpu_count()  # Use all available cores if not specified
+        if num_cores is None:
+            num_cores = 1
 
     print("num_cores =",num_cores)
 
@@ -263,7 +272,7 @@ if __name__ == '__main__':
     for field,fid in zip(field_list,fid_list):
 
         if run_fid is not None:
-            if int(run_fid) != fid:
+            if run_fid != fid:
                 print(f"*** Message: Skipping fid={fid}; continuing...")
                 continue
 

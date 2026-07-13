@@ -155,11 +155,21 @@ def _evaluate_catalogs_at_mjd(catalog_list_file, image_mjdobs, image_size, image
         Sky coordinates of sources that fall on the image.
     fluxes_maggies : np.ndarray
         Source fluxes in maggies at the observation epoch.
+    xpix, ypix : np.ndarray
+        Pixel positions of the sources, from the same image_wcs.toImage()
+        call used for the on-image check. Passed on to inject_sources_into_l2
+        as x=/y= so it doesn't fall back to its internal
+        model.meta.wcs.numerical_inverse(..., with_bounding_box=False) call,
+        which can silently return wildly wrong pixel positions (millions of
+        pixels off) for some RA/Dec when the iterative solver fails to
+        converge -- romanisim.wcs.GWCS itself avoids this same failure mode
+        by using .invert() instead (see the commented-out numerical_inverse
+        line in romanisim/wcs.py), but inject_sources_into_l2 does not.
     """
     with open(catalog_list_file, 'r') as fh:
         input_catalogs = [line.strip() for line in fh if line.strip()]
 
-    ra_out, dec_out, flux_out = [], [], []
+    ra_out, dec_out, flux_out, xpix_out, ypix_out = [], [], [], [], []
 
     for catalog_path in input_catalogs:
         with open(catalog_path, 'r') as f:
@@ -175,7 +185,7 @@ def _evaluate_catalogs_at_mjd(catalog_list_file, image_mjdobs, image_size, image
         on_image = ((xpos >= -50.0) & (xpos < nx + 50.0) &
                     (ypos >= -50.0) & (ypos < ny + 50.0))
 
-        for source in catalog_sources[on_image]:
+        for source, x_i, y_i in zip(catalog_sources[on_image], xpos[on_image], ypos[on_image]):
             if source['type'] == 'sinusoidal':
                 mag = SinusoidalLightCurve(
                     image_mjdobs,
@@ -199,8 +209,11 @@ def _evaluate_catalogs_at_mjd(catalog_list_file, image_mjdobs, image_size, image
             ra_out.append(source['ra'])
             dec_out.append(source['dec'])
             flux_out.append(flux_maggies)
+            xpix_out.append(x_i)
+            ypix_out.append(y_i)
 
-    return np.array(ra_out), np.array(dec_out), np.array(flux_out)
+    return (np.array(ra_out), np.array(dec_out), np.array(flux_out),
+           np.array(xpix_out), np.array(ypix_out))
 
 
 def inject_variable_stars_into_l2(asdf_path, catalog_list_file, output_path,
@@ -256,7 +269,7 @@ def inject_variable_stars_into_l2(asdf_path, catalog_list_file, output_path,
     print(f"  Filter: {filter_name}, SCA: {dm.meta.instrument.detector}, MJD: {image_mjdobs:.4f}")
 
     print("Evaluating light curves...")
-    ra, dec, fluxes_maggies = _evaluate_catalogs_at_mjd(
+    ra, dec, fluxes_maggies, xpix, ypix = _evaluate_catalogs_at_mjd(
         catalog_list_file, image_mjdobs, image_size, image_wcs, filter_name)
     print(f"  {len(ra)} sources on image")
 
@@ -280,6 +293,7 @@ def inject_variable_stars_into_l2(asdf_path, catalog_list_file, output_path,
     print(f"Injecting {len(ra)} sources...")
     result = inject_sources_into_l2(
         dm.copy(), injection_catalog,
+        x=xpix, y=ypix,
         psf=psf, gain=gain, rng=rng, seed=seed)
 
     print(f"Saving to {output_path}")

@@ -110,6 +110,10 @@ For a listing of the latest product files from the ``rimtimsims``, download the 
 
 :download:`rapid-product-files_20260519.txt <rapid-product-files_20260519.txt>`
 
+For a listing of the latest product files from the ``SOC sims``, download the following text file:
+
+:download:`rapid-product-files_20260706.txt <rapid-product-files_20260706.txt>`
+
 A simple Python script can be written to parse the listing and generate ``wget`` or ``curl`` download commands.
 
 The pipeline log files are also publicly accessible.  There is a log file for each science image processed.

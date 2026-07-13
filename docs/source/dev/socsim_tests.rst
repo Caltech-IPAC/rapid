@@ -140,9 +140,10 @@ Across all 18 SCAs, the worst deviations are never larger than ~1e-6 of a pixel
 7/6/2026
 ************************************
 
-The first socsims test is limited to the first day of observations and the W146 bandpass filter(``fid=8``).
-This test covers 7,204 science images.  Fake variable sources with fixed sky positions were
-injected into the ASDF files prior to conversion to FITS, ~200 or so fake sources per science image.
+The first socsims test is limited to a subset of the first day of observations and the
+W146 bandpass filter(``fid=8``).  This test covers 6,917 science images.
+Fake variable sources with fixed sky positions were
+injected into the ASDF files prior to conversion to FITS, about 200 fake sources per science image.
 Thus, lightcurves can be generated from extractions
 of these fake sources over time.  The science images that are used to build the reference images also
 have fake variable sources.
@@ -158,7 +159,7 @@ Here are details about how the test was executed via the Virtual Pipeline Operat
     export ENDREFIMMJDOBS=61679.3
     export RUNFID=8
 
-    python3.11 /code/pipeline/virtualPipelineOperator.py 20260606 >& virtualPipelineOperator_20260606.out &
+    python3.11 /code/pipeline/virtualPipelineOperator.py 20260706 >& virtualPipelineOperator_20260706.out &
 
 The ``STARTDATETIME`` and ``ENDDATETIME`` date/times exclude the first 20 or so images per field,
 which are reserved for reference-image generation.  The input configuration file has specified the
@@ -184,13 +185,13 @@ Here is a summary of the pipeline exit codes after the test:
 
 .. code-block::
 
-    socsimsdb=> select ppid,exitcode,count(*) from jobs where cast(launched as date) = '20260606' group by ppid, exitcode order by ppid, exitcode;
+    socsimsdb=> select ppid,exitcode,count(*) from jobs where cast(launched as date) = '20260706' group by ppid, exitcode order by ppid, exitcode;
 
      ppid | exitcode | count
     ------+----------+-------
-       15 |        0 |  7204
-       17 |        0 |  7204
-     (2 rows)
+       15 |        0 |  6917
+       17 |        0 |  6917
+    (2 rows)
 
 Reference images were generated for 109 unique fields, again, only for the W146 bandpass filter(``fid=8``).
 Because the socsims have sub-pixel dithers, the ``cov5percent`` coverage metric is only ~30-50 percent.
@@ -314,10 +315,10 @@ Because the socsims have sub-pixel dithers, the ``cov5percent`` coverage metric 
 
 
 As shown in the table below for one of the pipeline instances that generated a
-reference image (jid = 114725), generating PSF-fit PhotUtils catalogs for the reference image
-and the difference images are the dominant factors affecting pipeline performance.
-Setting up and executing awaicgen for reference-image generation took about 5 minutes
-(depends on the number of input images; NFRAMES=21 for this case).
+reference image (jid = 114725), the computation of PSF-fit PhotUtils catalogs for the
+reference image and the difference images are the dominant factors affecting pipeline
+performance. Setting up and executing awaicgen for reference-image generation took
+about 5 minutes (depends on the number of input images; NFRAMES=21 for this case).
 Executing SFFT was relatively quick.
 
 
@@ -365,3 +366,38 @@ Total time to run this instance of the science pipeline                  2996.13
 
 The above pipeline instance took about 50 minutes to execute.  Pipeline instances
 that made use of already-generated reference images took about 20 minutes each to run.
+
+The entire set of 6,917 science images took 3.7 hours to run the science pipelines that
+generated the aforementioned 109 reference images and basic products (``ppid=15``),
+run the post-processing pipelines (``ppid=17``), and load product metadata into the
+RAPID-operations PostgresSQL database.  This translates into an overall throughput rate of
+1.926 seconds per input science image.  This does not include loading SFFT-difference-image
+PhotUtils catalogs into the RAPID-operations PostgresSQL database and subsequent
+source cross-matching.
+
+The PSF-fit catalogs made by the Python PhotUtils package from the SFFT difference images,
+both positive and negative, were loaded into Sources child PostgreSQL database tables.
+There were 259,157,881 Sources records loaded into the PostgreSQL database.
+This number of sources scales up to about 10 billion sources for the entire GBTDS survey.
+The elapsed time to load all sources into the database was ~3.5 hours with 8 parallel processes
+(and both the VPO machine and the database-server machine have 8 vCPUs).
+
+Cross-matching the sources with astronomical objects (called AstroObjects),
+resulting in records loaded into the Merges_<field> and
+AstroObjects_<fields> database tables, for all 358 fields of the sources
+(i.e., fields overlapped by this test), was done.
+The elapsed time to cross-match all sources was 19.2 hours with 8 parallel processes.
+This includes cross-matching across field boundaries for sources near field edges.
+The cross-matching was done with ``match_radius = 0.00001528`` degrees (half a Roman WFI pixel).
+There were 88,747,880 AstroObjects records and 215,703,276 Merges records loaded
+into the PostgreSQL database.  Of those merges (a.k.a. lightcurve data points), 33,261 merges
+resulted from cross-matching across field boundaries (i.e., the match radius can extend
+across a field boundary), which is an increase of 0.0154% in terms of number of merges.
+
+The lightcurve statistics stored in the AstroObjects_<fields> database tables are updated
+after the cross-matching.  This is done as a separate process from the cross-matching.
+Any AstroObjects_<fields> record with no associated sources in the Merges_<field> database table are deleted.
+A new Q3C index on the (meanra, meandec) columns is computed for all AstroObjects_<fields> database tables,
+and then these tables are set to logged, clustered, and analyzed.
+The AstroObjects_<fields> database tables are explicitly vacuumed at the end of this process.
+For this test, all of these items within the process took 15.9 hours with 8 parallel processes.
