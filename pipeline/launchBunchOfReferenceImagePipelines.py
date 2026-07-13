@@ -35,6 +35,21 @@ print("proc_utc_datetime =",proc_utc_datetime)
 print("proc_pt_datetime_started =",proc_pt_datetime_started)
 
 
+# JOBPROCDATE of RAPID science-pipeline jobs.  Processing date is always in Pacific time zone.
+
+proc_date = os.getenv('JOBPROCDATE')
+
+if proc_date is None:
+
+    print("*** Error: Env. var. JOBPROCDATE not set; quitting...")
+    exit(64)
+
+
+# Print out basic information for log file.
+
+print("proc_date =",proc_date)
+
+
 # If RUNFID is set, then process just the specified filter.
 
 run_fid_str = os.getenv('RUNFID')
