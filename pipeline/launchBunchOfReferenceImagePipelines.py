@@ -281,7 +281,7 @@ if __name__ == '__main__':
 
             if dbh.exit_code == 7:
                 print(f"No database record from dbh.get_best_reference_image for " +
-                      f"ppid={} called by {}; continuing with rfid = None...".format(ppid_sciimage,swname))
+                      f"ppid={ppid_sciimage} called by {swname}; continuing with rfid = None...")
                 ppid_existing_refimg = ppid_sciimage
             elif dbh.exit_code >= 64:
                 print("*** Error from {}; quitting ".format(swname))
