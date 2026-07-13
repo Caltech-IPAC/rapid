@@ -1389,12 +1389,12 @@ class RAPIDDB:
             "and a.mjdobs >= TEMPLATE_STARTMJDOBS " +\
             "and a.mjdobs < TEMPLATE_ENDMJDOBS "
 
-            if rid == 'null':
-                query_template += "and a.rid is not TEMPLATE_RID " +\
-                                  "order by dist; "
-            else:
-                query_template += "and a.rid != TEMPLATE_RID " +\
-                                  "order by dist; "
+        if rid == 'null':
+            query_template += "and a.rid is not TEMPLATE_RID " +\
+                              "order by dist; "
+        else:
+            query_template += "and a.rid != TEMPLATE_RID " +\
+                              "order by dist; "
 
 
         # Special logic for generating reference image from inputs observed within a certain observation date range.
