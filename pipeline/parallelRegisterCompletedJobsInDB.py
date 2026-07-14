@@ -156,9 +156,10 @@ product_s3_bucket_base = config_input['JOB_PARAMS']['product_s3_bucket_base']
 job_config_filename_base = config_input['JOB_PARAMS']['job_config_filename_base']
 product_config_filename_base = config_input['JOB_PARAMS']['product_config_filename_base']
 awaicgen_output_mosaic_image_file = config_input['AWAICGEN']['awaicgen_output_mosaic_image_file']
-
 zogy_output_diffimage_file_from_config = config_input['ZOGY']['zogy_output_diffimage_file']
 zogy_output_diffimage_file = zogy_output_diffimage_file_from_config.replace(".fits","_masked.fits")
+ppid_science_pipeline = int(config_input['SCI_IMAGE']['ppid'])
+ppid_refimage_pipeline = int(config_input['REF_IMAGE']['ppid'])
 
 
 # Set signal hander.
@@ -278,13 +279,13 @@ def run_single_core_job(jids,log_fnames,index_thread):
         job_config_input = configparser.ConfigParser()
         job_config_input.read(job_config_ini_filename)
 
-        if ppid == 15:
+        if ppid == ppid_science_pipeline:
             fid = int(job_config_input['SCI_IMAGE']['fid'])
             rtid = int(job_config_input['SKY_TILE']['rtid'])
             field = rtid
             ra0 = float(job_config_input['SKY_TILE']['ra0'])
             dec0 = float(job_config_input['SKY_TILE']['dec0'])
-        elif ppid = 12:
+        elif ppid == ppid_refimage_pipeline:
             fid = int(job_config_input['REF_IMAGE']['fid'])
             field = int(job_config_input['REF_IMAGE']['field'])
             rtid = field
