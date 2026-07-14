@@ -161,6 +161,9 @@ zogy_output_diffimage_file = zogy_output_diffimage_file_from_config.replace(".fi
 ppid_science_pipeline = int(config_input['SCI_IMAGE']['ppid'])
 ppid_refimage_pipeline = int(config_input['REF_IMAGE']['ppid'])
 
+if ppid == ppid_refimage_pipeline:
+    stage_label = "RefImage"
+
 
 # Set signal hander.
 
