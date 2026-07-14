@@ -278,12 +278,21 @@ def run_single_core_job(jids,log_fnames,index_thread):
         job_config_input = configparser.ConfigParser()
         job_config_input.read(job_config_ini_filename)
 
-        fid = int(job_config_input['SCI_IMAGE']['fid'])
-
-        rtid = int(job_config_input['SKY_TILE']['rtid'])
-        field = rtid
-        ra0 = float(job_config_input['SKY_TILE']['ra0'])
-        dec0 = float(job_config_input['SKY_TILE']['dec0'])
+        if ppid == 15:
+            fid = int(job_config_input['SCI_IMAGE']['fid'])
+            rtid = int(job_config_input['SKY_TILE']['rtid'])
+            field = rtid
+            ra0 = float(job_config_input['SKY_TILE']['ra0'])
+            dec0 = float(job_config_input['SKY_TILE']['dec0'])
+        elif ppid = 12:
+            fid = int(job_config_input['REF_IMAGE']['fid'])
+            field = int(job_config_input['REF_IMAGE']['field'])
+            rtid = field
+            ra0 = float(job_config_input['REF_IMAGE']['ra0'])
+            dec0 = float(job_config_input['REF_IMAGE']['dec0'])
+        else:
+            fh.write(f"*** Error: Unexpected value of ppid ({ppid}); quitting...")
+            exit(64)
 
         fh.write(f"rtid,ra0,dec0 = {rtid},{ra0},{dec0}\n")
 
