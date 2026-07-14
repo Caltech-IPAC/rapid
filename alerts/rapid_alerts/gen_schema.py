@@ -61,6 +61,37 @@ def record_schema(record, version, namespace):
     }
 
 
+def schema_problems(version=VERSION, schema_root=SCHEMA_ROOT):
+    """Compare the on-disk .avsc files for a version against the registry.
+
+    Returns a list of problem strings, empty when everything is in sync.
+    produce.load_schema() calls this so that stale files fail at load time
+    with a clear message instead of a cryptic fastavro error (or a silently
+    mis-filled alert) at serialization time. --check prints full diffs and
+    stays the tool for humans; this is the cheap programmatic answer.
+    """
+    major, minor = version.split(".")
+    namespace = f"rapid.v{major}_{minor}"
+    out_dir = Path(schema_root) / major / minor
+
+    problems = []
+    for record in RECORDS:
+        path = out_dir / f"{namespace}.{record.name}.avsc"
+        if not path.exists():
+            problems.append(f"{path.name} is missing")
+        elif json.loads(path.read_text()) != record_schema(record, version,
+                                                           namespace):
+            problems.append(f"{path.name} differs from the registry")
+
+    latest = Path(schema_root) / "latest.txt"
+    if latest.exists():
+        pointed = latest.read_text().strip()
+        if pointed != version:
+            problems.append(f"latest.txt points at {pointed}, but the "
+                            f"registry VERSION is {version}")
+    return problems
+
+
 def generate(version=VERSION, schema_root=SCHEMA_ROOT, check=False):
     """Write (or with check=True, verify) the .avsc files for a version.
 

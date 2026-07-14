@@ -220,7 +220,26 @@ def schema_paths(version=None, schema_root=SCHEMA_ROOT):
 
 
 def load_schema(version=None, schema_root=SCHEMA_ROOT):
-    """Load and parse the RAPID alert schema."""
+    """Load and parse the RAPID alert schema.
+
+    With no explicit version (the production path), the .avsc files are
+    first verified against param_registry.py and loading fails with a
+    clear message if they have drifted. Alerts are built from the
+    registry, so serializing them with stale files would otherwise
+    surface as a cryptic fastavro error -- or worse, serialize "fine"
+    with renamed/added params silently dropped or defaulted to null.
+    An explicit version skips the check: that is for reading back
+    alerts written under an older schema, not for producing new ones.
+    """
+    if version is None:
+        from .gen_schema import schema_problems
+        problems = schema_problems(schema_root=schema_root)
+        if problems:
+            raise RuntimeError(
+                "Avro schema files are stale (out of sync with "
+                "param_registry.py):\n  " + "\n  ".join(problems)
+                + "\nRegenerate them with: python -m rapid_alerts.gen_schema")
+        version = VERSION
     paths = [str(p) for p in schema_paths(version, schema_root)]
     return fastavro.schema.load_schema_ordered(paths)
 
