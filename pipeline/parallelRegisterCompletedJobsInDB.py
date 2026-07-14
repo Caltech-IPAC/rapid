@@ -128,6 +128,20 @@ else:
     stage_label = "StageTwo"
 
 
+# Read environment variable PIPEID (ppid).
+# The ppid is used to look up Jobs database records to DB register:
+# jobs_records = dbh.get_unclosedout_jobs_for_processing_date(ppid,datearg)
+
+ppid_str = os.getenv('PIPEID')
+
+if ppid_str is None:
+
+    print("*** Error: Env. var. PIPEID not set; quitting...")
+    exit(64)
+
+ppid = int(ppid_str)
+
+
 # Read input parameters from .ini file.
 
 config_input_filename = cfg_path + "/" + cfg_filename_only
@@ -875,7 +889,6 @@ if __name__ == '__main__':
 
         # Query database for Jobs records that ended on the given processing date and ran normally.
 
-        ppid = 15
         jobs_records = dbh.get_unclosedout_jobs_for_processing_date(ppid,datearg)
 
         if dbh.exit_code >= 64:

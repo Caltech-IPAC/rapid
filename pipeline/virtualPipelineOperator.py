@@ -188,6 +188,25 @@ signal.signal(signal.SIGQUIT, signal_handler)
 
 
 #-------------------------------------------------------------------------------------------------------------
+# Method to look up ppid of Jobs database records associated with pipeline instances.
+#-------------------------------------------------------------------------------------------------------------
+
+def look_up_ppid_of_job_type(job_type):
+
+    if job_type == "science":
+        ppid = 15
+    elif job_type == "postproc":
+        ppid = 17
+    elif job_type == "refimage":
+        ppid = 12
+    else:
+        print(f"Job type undefined ({job_type}); quitting")
+        exit(64)
+
+    return ppid
+
+
+#-------------------------------------------------------------------------------------------------------------
 # Method to wait until common set of AWS Batch jobs have finished.
 #-------------------------------------------------------------------------------------------------------------
 
@@ -201,13 +220,7 @@ def wait_until_aws_batch_jobs_finished(job_type,proc_date,config_input,dbh):
     print("job_type =",job_type)
     print("proc_date =",proc_date)
 
-    if job_type == "science":
-        ppid = 15
-    elif job_type == "postproc":
-        ppid = 17
-    else:
-        print(f"Job type undefined ({job_type}); quitting")
-        exit(64)
+    ppid = look_up_ppid_of_job_type(job_type)
 
     print("ppid =",ppid)
 
@@ -450,6 +463,9 @@ if __name__ == '__main__':
 
 
             # Register metadata from science pipelines into operations database.
+
+            ppid = look_up_ppid_of_job_type(job_type)
+            os.environ['PIPEID'] = str(ppid)              # Required by register_science_pipeline_jobs_code
 
             fname_out = "register_science_pipeline_jobs_code" + "_" + stage_label + "_" + proc_date + ".out"
             register_science_pipeline_jobs_cmd = [python_cmd,

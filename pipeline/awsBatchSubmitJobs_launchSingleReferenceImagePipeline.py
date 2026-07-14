@@ -52,7 +52,7 @@ print("proc_utc_datetime =",proc_utc_datetime)
 print("proc_pt_datetime_started =",proc_pt_datetime_started)
 
 
-# JOBPROCDATE of RAPID science-pipeline jobs.  Processing date is always in Pacific time zone.
+# JOBPROCDATE of RAPID reference-image-pipeline jobs.  Processing date is always in Pacific time zone.
 
 proc_date = os.getenv('JOBPROCDATE')
 
@@ -69,7 +69,6 @@ print("proc_date =",proc_date)
 
 # Read environment variable FIELD.
 # This is the sky tile upon which the reference image is centered.
-
 
 field_str = os.getenv('FIELD')
 
@@ -284,6 +283,7 @@ def submit_job_to_aws_batch(proc_date,
     job_name = job_name_base + proc_date + "_jid" + str(jid)
 
     print("Submitting job to AWS Batch...")
+    print(f"job_definition={job_definition}")
 
     response = client.submit_job(
         jobName=job_name,
@@ -666,6 +666,9 @@ if __name__ == '__main__':
 
     job_config['REF_IMAGE'] = {}
 
+    job_config['REF_IMAGE']['field'] = str(field)
+    job_config['REF_IMAGE']['fid'] = str(fid)
+    job_config['REF_IMAGE']['filter'] = exposure_filter
     job_config['REF_IMAGE']['ppid'] = str(ppid_refimage)
     job_config['REF_IMAGE']['min_n_images_to_coadd'] = str(min_n_images_to_coadd)
     job_config['REF_IMAGE']['max_n_images_to_coadd'] = str(max_n_images_to_coadd)
@@ -776,6 +779,10 @@ if __name__ == '__main__':
 
         if dbh.exit_code >= 64:
             print(f"*** Error: dbh.update_job_with_aws_batch_job_id returned abnormal exit code (dbh.exit_code = {dbh.exit_code}); continuing...")
+
+    else:
+
+        print(f"*** Message: Skipping launch of single reference-image pipeline (dry_run={dry_run})...")
 
 
     # Close database connection.
