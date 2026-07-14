@@ -52,7 +52,7 @@ print("proc_utc_datetime =",proc_utc_datetime)
 print("proc_pt_datetime_started =",proc_pt_datetime_started)
 
 
-# JOBPROCDATE of RAPID science-pipeline jobs.  Processing date is always in Pacific time zone.
+# JOBPROCDATE of RAPID reference-image-pipeline jobs.  Processing date is always in Pacific time zone.
 
 proc_date = os.getenv('JOBPROCDATE')
 
@@ -283,6 +283,7 @@ def submit_job_to_aws_batch(proc_date,
     job_name = job_name_base + proc_date + "_jid" + str(jid)
 
     print("Submitting job to AWS Batch...")
+    print(f"job_definition={job_definition}")
 
     response = client.submit_job(
         jobName=job_name,
