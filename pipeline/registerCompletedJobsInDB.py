@@ -125,6 +125,8 @@ product_config_filename_base = config_input['JOB_PARAMS']['product_config_filena
 awaicgen_output_mosaic_image_file = config_input['AWAICGEN']['awaicgen_output_mosaic_image_file']
 zogy_output_diffimage_file_from_config = config_input['ZOGY']['zogy_output_diffimage_file']
 zogy_output_diffimage_file = zogy_output_diffimage_file_from_config.replace(".fits","_masked.fits")
+ppid_science_pipeline = int(config_input['SCI_IMAGE']['ppid'])
+ppid_refimage_pipeline = int(config_input['REF_IMAGE']['ppid'])
 
 
 # Set signal hander.
@@ -241,12 +243,21 @@ if __name__ == '__main__':
         job_config_input = configparser.ConfigParser()
         job_config_input.read(job_config_ini_filename)
 
-        fid = int(job_config_input['SCI_IMAGE']['fid'])
-
-        rtid = int(job_config_input['SKY_TILE']['rtid'])
-        field = rtid
-        ra0 = float(job_config_input['SKY_TILE']['ra0'])
-        dec0 = float(job_config_input['SKY_TILE']['dec0'])
+        if ppid == ppid_science_pipeline:
+            fid = int(job_config_input['SCI_IMAGE']['fid'])
+            rtid = int(job_config_input['SKY_TILE']['rtid'])
+            field = rtid
+            ra0 = float(job_config_input['SKY_TILE']['ra0'])
+            dec0 = float(job_config_input['SKY_TILE']['dec0'])
+        elif ppid == ppid_refimage_pipeline:
+            fid = int(job_config_input['REF_IMAGE']['fid'])
+            field = int(job_config_input['REF_IMAGE']['field'])
+            rtid = field
+            ra0 = float(job_config_input['REF_IMAGE']['ra0'])
+            dec0 = float(job_config_input['REF_IMAGE']['dec0'])
+        else:
+            fh.write(f"*** Error: Unexpected value of ppid ({ppid}); quitting...")
+            exit(64)
 
         print("rtid,ra0,dec0 =",rtid,ra0,dec0)
 
