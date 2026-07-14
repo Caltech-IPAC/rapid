@@ -55,6 +55,7 @@ RUN pip install --upgrade romanisim
 RUN pip install --upgrade scikit-image
 RUN pip install --upgrade fastavro
 RUN pip install --upgrade fitsio
+RUN pip install --upgrade pytest
 
 # Install Python 3.11 with packages (/usr/bin/python3.11)
 

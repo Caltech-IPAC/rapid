@@ -159,6 +159,11 @@ class Cutouts:
 
 STAMP_HALF_WIDTH = 64  # stamps are 2*64+1 = 129x129 pixels
 
+# Value for stamp pixels that fall outside the chip (edge clips).
+# TODO: when cutouts gain a mask/DQ HDU, flag these filled pixels there so
+# consumers don't have to treat the fill value itself as meaningful.
+STAMP_FILL_VALUE = 0.0
+
 # The three cutout images all come from the difference image's pipeline job
 # directory and share one pixel grid (the template is the mosaic already
 # resampled and gain-matched onto the science grid), so a source's fitted
@@ -211,10 +216,13 @@ def extract_stamp(image_data, x, y, header=None, half_width=STAMP_HALF_WIDTH):
     """Cut a square stamp centered on pixel (x, y) out of a full image and
     return it as the bytes of a small single-HDU FITS file (which is what
     the alert cutout params carry). With the parent image's header, the
-    stamp carries the parent WCS with CRPIX shifted to the stamp frame.
+    stamp carries the parent WCS with CRPIX shifted to the stamp frame
+    (also valid for edge stamps: the shift is pure translation, on- or
+    off-chip). Stamp pixels beyond the chip edge are set to
+    STAMP_FILL_VALUE.
 
-    Returns None if there is no image, or if the stamp would run off the
-    edge of the chip.
+    Returns None if there is no image, or if the stamp would not overlap
+    the chip at all.
     """
     if image_data is None or x is None or y is None:
         return None
@@ -224,10 +232,15 @@ def extract_stamp(image_data, x, y, header=None, half_width=STAMP_HALF_WIDTH):
     nrows, ncols = image_data.shape
     top, bottom = row - half_width, row + half_width + 1
     left, right = col - half_width, col + half_width + 1
-    if top < 0 or bottom > nrows or left < 0 or right > ncols:
+    # the part of the stamp window that actually lies on the chip
+    ontop, onbottom = max(top, 0), min(bottom, nrows)
+    onleft, onright = max(left, 0), min(right, ncols)
+    if ontop >= onbottom or onleft >= onright:
         return None
-    stamp = np.ascontiguousarray(image_data[top:bottom, left:right],
-                                 dtype=np.float32)
+    side = 2 * half_width + 1
+    stamp = np.full((side, side), STAMP_FILL_VALUE, dtype=np.float32)
+    stamp[ontop - top:onbottom - top, onleft - left:onright - left] = \
+        image_data[ontop:onbottom, onleft:onright]
 
     cards = []
     if header is not None:
