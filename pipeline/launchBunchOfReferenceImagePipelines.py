@@ -35,7 +35,7 @@ print("proc_utc_datetime =",proc_utc_datetime)
 print("proc_pt_datetime_started =",proc_pt_datetime_started)
 
 
-# JOBPROCDATE of RAPID science-pipeline jobs.  Processing date is always in Pacific time zone.
+# JOBPROCDATE of RAPID reference-image-pipeline jobs.  Processing date is always in Pacific time zone.
 
 proc_date = os.getenv('JOBPROCDATE')
 
