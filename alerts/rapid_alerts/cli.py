@@ -26,7 +26,7 @@ else:
 logging.basicConfig(level=logging.INFO)
 
 
-def make_provider():
+def make_provider(diff_flavor="sfft"):
     """Connect to the RAPID operations database.
 
     A future file-system or sqlite backend would be constructed here instead
@@ -36,7 +36,7 @@ def make_provider():
     repo_root = Path(__file__).resolve().parents[2]
     sys.path.insert(0, str(repo_root))
     from database.modules.utils.rapid_db import RAPIDDB
-    return DatabaseProvider(RAPIDDB())
+    return DatabaseProvider(RAPIDDB(), diff_flavor=diff_flavor)
 
 
 def main(argv=None):
@@ -51,9 +51,13 @@ def main(argv=None):
                         help="publish to Kafka ($KAFKA_BROKER, default "
                              "localhost:9092)")
     parser.add_argument("--topic", default="alerts", help="Kafka topic")
+    parser.add_argument("--diff-flavor", choices=["sfft", "zogy"],
+                        default="sfft",
+                        help="which differencing algorithm's image feeds "
+                             "cutoutDifference (default: %(default)s)")
     args = parser.parse_args(argv)
 
-    provider = make_provider()
+    provider = make_provider(diff_flavor=args.diff_flavor)
 
     producer = None
     if args.kafka:

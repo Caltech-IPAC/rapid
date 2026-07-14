@@ -10,12 +10,14 @@ Run:
 """
 
 import io
+import os
 import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import fastavro
+import fitsio
 
 import numpy as np
 
@@ -26,7 +28,7 @@ from rapid_alerts.produce import (assemble_alert, build_dia_source,
                                   produce_chip, serialize_alert)
 from rapid_alerts.providers import (AlertDataProvider, Source,
                                     ObjectRecord, ForcedPhot, Cutouts,
-                                    extract_stamp)
+                                    extract_stamp, load_fits_image)
 
 
 def make_detection(sid, mjd, aid=None):
@@ -147,6 +149,39 @@ def main():
     assert stamp[64, 64] == image[149, 149]  # center pixel (1-based coords)
     assert extract_stamp(image, 5.0, 150.0) is None  # off-edge -> no stamp
     assert extract_stamp(None, 150.0, 150.0) is None
+
+    # 8b. With a parent header the stamp carries the parent WCS: CRPIX
+    # shifted by the stamp corner, other WCS cards (incl. distortion)
+    # copied, non-WCS cards left behind
+    parent_header = fitsio.FITSHDR({
+        "CTYPE1": "RA---TPV", "CRVAL1": 268.1, "CRPIX1": 100.5,
+        "CRPIX2": 200.5, "CD1_1": -2.6e-05, "PV1_5": 1.25e-4,
+        "JOBPROCDATE": "2026-07-14",  # pipeline card, must not be copied
+    })
+    stamp_bytes = extract_stamp(image, 150.0, 150.0, header=parent_header)
+    with fits.open(io.BytesIO(stamp_bytes)) as hdul:
+        clip_header = hdul[0].header
+    assert clip_header["CRPIX1"] == 100.5 - 85  # corner col = 149 - 64
+    assert clip_header["CRPIX2"] == 200.5 - 85  # corner row = 149 - 64
+    assert clip_header["CTYPE1"] == "RA---TPV"
+    assert clip_header["CRVAL1"] == 268.1
+    assert clip_header["PV1_5"] == 1.25e-4
+    assert "JOBPROCDATE" not in clip_header
+
+    # 8c. load_fits_image finds the pixels wherever they live: primary HDU
+    # or (as in Roman L2 cal files) the first extension with data
+    import tempfile
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        path = os.path.join(tmp_dir, "ext_image.fits")
+        with fitsio.FITS(path, "rw") as out:
+            out.write(None)                    # header-only primary HDU
+            out.write(image, header={"CRPIX1": 100.5})
+        pixels, header = load_fits_image(path)
+        assert pixels is not None and pixels.shape == (300, 300)
+        assert header["CRPIX1"] == 100.5
+        assert load_fits_image(os.path.join(tmp_dir, "no.fits")) == (None,
+                                                                     None)
+    assert load_fits_image(None) == (None, None)
 
     # 9. Batch flow: produce_chip serializes every source on the chip and
     # flushes Kafka exactly once

@@ -19,9 +19,14 @@ Data flow for the database backend (DB table -> record -> schema record):
         one row per persistent object, keyed by aid
     (forced photometry)          -> ForcedPhot   -> diaForcedSource
         not yet in the DB; produces FITS files only
-    diffimages + l2files + refimages -> full chip images -> Cutouts
-        stamps cut around each source position by extract_stamp(); the
-        three images are loaded once per chip and reused for every source
+    diffimages.filename          -> full chip images -> Cutouts
+        diffimages.filename names one difference image in a pipeline job
+        directory (s3://.../<date>/jid<N>/); the science and template
+        images used for cutouts are the co-gridded products in that same
+        directory (see CUTOUT_FILES/DIFF_FLAVORS). Stamps are cut around
+        each source position by extract_stamp() and carry the parent
+        image's WCS; the three images are staged and loaded once per chip
+        and reused for every source
 
 The Source dataclass attribute names ARE the sources column names, so
 Source.from_row() maps a sources row directly; the only derived keys are
@@ -30,14 +35,16 @@ Source (e.g. sources.id, fid, npix) are silently dropped by from_row().
 """
 
 import dataclasses
-import io
 import logging
+import os
+import tempfile
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import List, Optional
+from urllib.parse import urlparse
 
+import fitsio
 import numpy as np
-from astropy.io import fits
 
 logger = logging.getLogger(__name__)
 
@@ -152,24 +159,59 @@ class Cutouts:
 
 STAMP_HALF_WIDTH = 64  # stamps are 2*64+1 = 129x129 pixels
 
+# The three cutout images all come from the difference image's pipeline job
+# directory and share one pixel grid (the template is the mosaic already
+# resampled and gain-matched onto the science grid), so a source's fitted
+# pixel position is valid in all of them. The job runs both differencing
+# algorithms; which one feeds cutoutDifference is the provider's
+# diff_flavor argument.
+DIFF_FLAVORS = {
+    "sfft": "sfftdiffimage_masked.fits",
+    "zogy": "zogy_diffimage_masked.fits",
+}
+CUTOUT_FILES = {
+    "sci": "bkg_subbed_science_image.fits",
+    "ref": "awaicgen_output_mosaic_image_resampled_gainmatched.fits",
+}
 
-def load_image(path):
-    """Return the primary-HDU pixel array of a FITS image, or None if the
-    file is missing/unreadable (the alert then carries a null cutout)."""
+# Header cards copied from the parent image into each cutout, so every clip
+# is a self-describing FITS image with a valid WCS. CRPIX1/2 are shifted by
+# the stamp's corner offset; everything else (including the PV/SIP
+# distortion polynomials, which are defined relative to CRPIX) copies
+# unchanged.
+WCS_CARD_PREFIXES = (
+    "CTYPE", "CUNIT", "CRVAL", "CRPIX", "CDELT", "CD1_", "CD2_",
+    "PC1_", "PC2_", "PV1_", "PV2_",
+    "A_", "B_", "AP_", "BP_",           # SIP polynomials and their ORDERs
+    "RADESYS", "EQUINOX", "LONPOLE", "LATPOLE",
+    "MJD-OBS", "BUNIT", "FILTER",
+)
+
+
+def load_fits_image(path):
+    """Return (pixels, header) of a FITS image: the first HDU that has
+    pixel data (primary for the pipeline products; Roman L2 cal files keep
+    the pixels in a SCI extension). (None, None) if the file is missing,
+    unreadable, or has no image HDU -- the alert then carries a null
+    cutout."""
     if path is None:
-        return None
+        return None, None
     try:
-        with fits.open(path, memmap=False) as hdul:
-            return hdul[0].data
-    except OSError:
-        logger.warning("Could not load image %s", path)
-        return None
+        with fitsio.FITS(path) as hdus:
+            for hdu in hdus:
+                if hdu.get_exttype() == "IMAGE_HDU" and hdu.has_data():
+                    return hdu.read(), hdu.read_header()
+        logger.warning("No image HDU in %s", path)
+    except Exception:
+        logger.warning("Could not load image %s", path, exc_info=True)
+    return None, None
 
 
-def extract_stamp(image_data, x, y, half_width=STAMP_HALF_WIDTH):
+def extract_stamp(image_data, x, y, header=None, half_width=STAMP_HALF_WIDTH):
     """Cut a square stamp centered on pixel (x, y) out of a full image and
     return it as the bytes of a small single-HDU FITS file (which is what
-    the alert cutout params carry).
+    the alert cutout params carry). With the parent image's header, the
+    stamp carries the parent WCS with CRPIX shifted to the stamp frame.
 
     Returns None if there is no image, or if the stamp would run off the
     edge of the chip.
@@ -184,10 +226,33 @@ def extract_stamp(image_data, x, y, half_width=STAMP_HALF_WIDTH):
     left, right = col - half_width, col + half_width + 1
     if top < 0 or bottom > nrows or left < 0 or right > ncols:
         return None
-    stamp = np.asarray(image_data[top:bottom, left:right], dtype=np.float32)
-    buf = io.BytesIO()
-    fits.PrimaryHDU(stamp).writeto(buf)
-    return buf.getvalue()
+    stamp = np.ascontiguousarray(image_data[top:bottom, left:right],
+                                 dtype=np.float32)
+
+    cards = []
+    if header is not None:
+        for rec in header.records():
+            if not str(rec["name"]).startswith(WCS_CARD_PREFIXES):
+                continue
+            card = {"name": rec["name"], "value": rec["value"],
+                    "comment": rec.get("comment", "")}
+            # 1-based parent pixel p lands at p - left (p - top) in the clip
+            if rec["name"] == "CRPIX1":
+                card["value"] = rec["value"] - left
+            elif rec["name"] == "CRPIX2":
+                card["value"] = rec["value"] - top
+            cards.append(card)
+
+    # cfitsio only writes to paths, not buffers; round-trip through a
+    # temp file to get the clip bytes
+    fd, tmp = tempfile.mkstemp(suffix=".fits")
+    try:
+        os.close(fd)
+        fitsio.write(tmp, stamp, header=cards, clobber=True)
+        with open(tmp, "rb") as f:
+            return f.read()
+    finally:
+        os.unlink(tmp)
 
 
 # ---------------------------------------------------------------------------
@@ -251,12 +316,19 @@ class DatabaseProvider(AlertDataProvider):
     assemble_alert() cannot tell the difference, by design.
     """
 
-    def __init__(self, db):
+    def __init__(self, db, diff_flavor="sfft"):
         """
         Args:
             db: RAPIDDB instance (rapid.database.modules.utils.rapid_db).
+            diff_flavor: which differencing algorithm's image feeds
+                cutoutDifference ("sfft" or "zogy"). The detections
+                themselves always come from the sources table regardless.
         """
+        if diff_flavor not in DIFF_FLAVORS:
+            raise ValueError(f"diff_flavor must be one of "
+                             f"{sorted(DIFF_FLAVORS)}, not {diff_flavor!r}")
         self.db = db
+        self.diff_flavor = diff_flavor
         # Per-chip prefetch state, filled by iter_sources(pid). While the
         # current chip matches source.pid, get_object_for_source() and
         # get_prv_detections() answer from these dicts.
@@ -265,9 +337,12 @@ class DatabaseProvider(AlertDataProvider):
         self._chip_history = {}       # aid -> [Source, ...], oldest first
         self._chip_window_days = 0.0  # look-back window the prefetch covers
         # Full chip images for cutouts, loaded lazily by get_cutouts() and
-        # held until a source from a different chip comes along.
+        # held until a source from a different chip comes along. S3 files
+        # are staged here before loading; constant product basenames mean
+        # each chip's downloads replace the previous chip's files.
         self._images_pid = None
-        self._images = {}             # "diff" | "sci" | "ref" -> pixel array
+        self._images = {}             # "diff"|"sci"|"ref" -> (pixels, header)
+        self._staging_dir = tempfile.mkdtemp(prefix="rapid_cutouts_")
 
     def _query(self, sql, params):
         """Run one query and return rows as {column_name: value} dicts."""
@@ -448,50 +523,96 @@ class DatabaseProvider(AlertDataProvider):
 
     def get_cutouts(self, detection):
         # Cutouts are generated on the fly: stamps sliced out of the chip's
-        # full difference/science/reference images at the source position.
-        # The images are loaded once per chip and reused for every source
-        # on it, in both the batch and single-alert flows.
+        # full difference/science/template images at the source position
+        # (one shared pixel grid; see DIFF_FLAVORS/CUTOUT_FILES). The
+        # images are loaded once per chip and reused for every source on
+        # it, in both the batch and single-alert flows.
         images = self._chip_images(detection.pid)
-        return Cutouts(
-            difference=extract_stamp(images.get("diff"),
-                                     detection.xfit, detection.yfit),
-            science=extract_stamp(images.get("sci"),
-                                  detection.xfit, detection.yfit),
-            template=extract_stamp(images.get("ref"),
-                                   detection.xfit, detection.yfit),
-        )
+        # sources.xfit/yfit are 0-based (photutils PSF-fit convention);
+        # extract_stamp takes 1-based FITS pixel coordinates. Verified
+        # against the DB: sources.ra/dec equals the difference image's
+        # TPV WCS evaluated at exactly (xfit+1, yfit+1).
+        x, y = detection.xfit + 1.0, detection.yfit + 1.0
+        stamps = {}
+        for key in ("diff", "sci", "ref"):
+            pixels, header = images.get(key, (None, None))
+            stamps[key] = extract_stamp(pixels, x, y, header=header)
+        return Cutouts(difference=stamps["diff"], science=stamps["sci"],
+                       template=stamps["ref"])
+
+    def _stage(self, url):
+        """Make one image available locally, downloading s3:// URLs into
+        the staging directory (plain paths pass through). Returns the local
+        path, or None if the download failed -- that image's cutouts are
+        then null."""
+        if not url.startswith("s3://"):
+            return url
+        parts = urlparse(url)
+        local = os.path.join(self._staging_dir, os.path.basename(url))
+        try:
+            import boto3  # deferred so non-AWS providers/tests don't need it
+            boto3.client("s3").download_file(parts.netloc,
+                                             parts.path.lstrip("/"), local)
+            return local
+        except Exception:
+            logger.warning("Could not stage %s", url, exc_info=True)
+            return None
 
     def _chip_images(self, pid):
-        """Return the chip's {"diff", "sci", "ref"} pixel arrays, loading
-        and holding them on first use. The file locations come from the DB:
-        diffimages.filename (difference), diffimages.rid -> l2files.filename
-        (science), diffimages.rfid -> refimages.filename (reference). A
-        missing/unreadable file loads as None, which extract_stamp() turns
-        into a null cutout."""
+        """Return the chip's {"diff", "sci", "ref"} (pixels, header) pairs,
+        staging and loading them on first use. diffimages.filename locates
+        the job directory; the three cutout images are the co-gridded
+        products in it (the DB's own diff filename is replaced by the
+        diff_flavor one). A missing/unreadable file loads as (None, None),
+        which extract_stamp() turns into a null cutout."""
         if self._images_pid == pid:
             return self._images
 
-        rows = self._query("""
-            SELECT d.filename AS diff_file,
-                   l.filename AS sci_file,
-                   r.filename AS ref_file
-            FROM diffimages d
-            JOIN l2files l ON d.rid = l.rid
-            JOIN refimages r ON d.rfid = r.rfid
-            WHERE d.pid = %s
-        """, (pid,))
+        rows = self._query(
+            "SELECT filename FROM diffimages WHERE pid = %s", (pid,))
         if rows:
+            job_dir = os.path.dirname(rows[0]["filename"])
+            names = {"diff": DIFF_FLAVORS[self.diff_flavor],
+                     "sci": CUTOUT_FILES["sci"], "ref": CUTOUT_FILES["ref"]}
             self._images = {
-                "diff": load_image(rows[0]["diff_file"]),
-                "sci":  load_image(rows[0]["sci_file"]),
-                "ref":  load_image(rows[0]["ref_file"]),
+                key: load_fits_image(self._stage(f"{job_dir}/{name}"))
+                for key, name in names.items()
             }
+            self._check_grids_match(pid)
         else:
             logger.warning("No diffimages row for pid=%s; cutouts will be "
                            "null", pid)
             self._images = {}
         self._images_pid = pid
         return self._images
+
+    def _check_grids_match(self, pid):
+        """Cutout positions assume the three images share one pixel grid.
+        Verify it from the loaded WCS headers and drop (null) any image on
+        a different grid rather than emit a cutout of the wrong sky
+        position. Tolerances allow the header-writing rounding differences
+        between the products (~1e-10 deg)."""
+        _, diff_header = self._images.get("diff", (None, None))
+        if diff_header is None:
+            return
+        grid_cards = ("CRVAL1", "CRVAL2", "CRPIX1", "CRPIX2",
+                      "CD1_1", "CD1_2", "CD2_1", "CD2_2")
+        for key in ("sci", "ref"):
+            _, header = self._images.get(key, (None, None))
+            if header is None:
+                continue
+            for card in grid_cards:
+                if np.isclose(header.get(card, np.nan),
+                              diff_header.get(card, np.nan),
+                              rtol=1e-6, atol=1e-8):
+                    continue
+                logger.warning(
+                    "pid=%s: %s image grid differs from the difference "
+                    "image (%s: %r vs %r); its cutouts will be null",
+                    pid, key, card, header.get(card),
+                    diff_header.get(card))
+                self._images[key] = (None, None)
+                break
 
 
 # ---------------------------------------------------------------------------
@@ -507,7 +628,7 @@ class DatabaseProvider(AlertDataProvider):
 #     get_object_for_source            <-  load_lc_tile() + match_lc()
 #     get_prv_detections               <-  nested_lc_data unpacking in
 #                                          build_prv_dia_sources()
-#     get_cutouts                      <-  load_image() + extract_stamp()
+#     get_cutouts                      <-  load_fits_image() + extract_stamp()
 #
 # Note the flux calibration difference: that script converts SExtractor and
 # light-curve fluxes to nJy via FILTER_ZP_EFF, while the database flow
