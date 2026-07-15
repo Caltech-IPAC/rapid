@@ -637,6 +637,9 @@ if __name__ == '__main__':
     input_images_csv_file = rapid_work + "/" + input_images_csv_filename
     input_images_csv_file_s3_bucket_object_name = proc_date + "/" + input_images_csv_filename
 
+
+    # Write reference-image inputs to CSV file.
+
     f = open(input_images_csv_file, "w")
     for csv_record in csv_records:
         f.write(csv_record + "\n")
