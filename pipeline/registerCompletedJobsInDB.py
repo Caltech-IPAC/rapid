@@ -156,15 +156,13 @@ if __name__ == '__main__':
         exit(dbh.exit_code)
 
 
-    # Query database for Jobs records that ended on the given processing date and ran normally.
+    # Query database for Jobs records that were launched on the given processing date,
+    # but not yet closed out by finalizing started, ended, elapsed, exitcode and status.
 
     jobs_records = dbh.get_unclosedout_jobs_for_processing_date(ppid,datearg)
 
-
-
     if dbh.exit_code >= 64:
         exit(dbh.exit_code)
-
 
     njobs = 0
     log_filenames = []
