@@ -236,7 +236,20 @@ def wait_until_aws_batch_jobs_finished(job_type,proc_date,config_input,dbh):
         dbh.close()
         exit(dbh.exit_code)
 
-    njobs_total = len(jobs_records)
+
+    # Count only Jobs records where awsbatchjobid is not None.
+    # Will make software changes elsewhere to ensure this never happens.
+
+    njobs_total = 0
+
+    for jobs_record in jobs_records:
+
+        jid = jobs_record[0]
+        awsbatchjobid = jobs_record[1]
+
+        if awsbatchjobid is not None:
+            njobs_total += 1
+
     print("njobs_total =",njobs_total)
 
     if njobs_total == 0:
@@ -304,6 +317,9 @@ def wait_until_aws_batch_jobs_finished(job_type,proc_date,config_input,dbh):
 
             jid = jobs_record[0]
             awsbatchjobid = jobs_record[1]
+
+            if awsbatchjobid is None:
+                continue
 
             if njobs_total < 3000 or n_checked % 100 == 0:
                 print(f"Calling client.describe_jobs for jobs={awsbatchjobid}, n_checked={n_checked}")
