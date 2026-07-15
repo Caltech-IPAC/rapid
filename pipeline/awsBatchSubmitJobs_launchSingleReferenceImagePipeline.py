@@ -502,6 +502,7 @@ if __name__ == '__main__':
     # by method dbh.get_overlapping_l2files).
 
 
+    rid = 'null'
     radius_of_initial_cone_search = 0.18
     # mjdobs defines the end MJD covered by the database query.
     # MJD of 999999.9 converts to May 11, 4692, at approximately 21:36:00 UTC.
@@ -618,7 +619,6 @@ if __name__ == '__main__':
 
     # Insert or update record in Jobs database table and return job ID.
 
-    rid = 'null'
     sca = 'null'
     expid = 'null'
 
