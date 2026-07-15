@@ -10,7 +10,6 @@ import os
 import signal
 import configparser
 import boto3
-import re
 from datetime import datetime, timezone
 from dateutil import tz
 import time
@@ -37,6 +36,10 @@ load_psfcat_into_db_sources_code = '/code/pipeline/loadPSFCatIntoDBSourcesTable.
 crossmatch_sources_code = '/code/pipeline/crossMatchSources.py'
 compute_statistics_for_astroobjects_code = '/code/pipeline/computeStatisticsForAstroObjects.py'
 prune_notbest_merges_code = '/code/pipeline/pruneNotBestMerges.py'
+launch_reference_image_pipelines_code = '/code/pipeline/launchBunchOfReferenceImagePipelines.py'
+# Python script /code/pipeline/parallelRegisterCompletedJobsInDB.py is dual purposed to
+# handle both reference-image pipeline jobs and science pipeline jobs, with PIPEID as parameter.
+register_reference_image_pipeline_jobs_code = register_science_pipeline_jobs_code
 
 
 # Print diagnostics.
@@ -55,7 +58,7 @@ start_time_benchmark_at_start = start_time_benchmark
 
 # Compute processing datetime (UT) and processing datetime (Pacific time).
 
-datetime_utc_now = datetime.utcnow()
+datetime_utc_now = datetime.now(timezone.utc)
 proc_utc_datetime = datetime_utc_now.strftime('%Y-%m-%dT%H:%M:%SZ')
 datetime_pt_now = datetime_utc_now.replace(tzinfo=timezone.utc).astimezone(tz=to_zone)
 proc_pt_datetime_started = datetime_pt_now.strftime('%Y-%m-%dT%H:%M:%S PT')
@@ -212,7 +215,7 @@ def look_up_ppid_of_job_type(job_type):
 
 def wait_until_aws_batch_jobs_finished(job_type,proc_date,config_input,dbh):
 
-    """"
+    """
     Wait until AWS Batch jobs of a given job type and processing date have finished.
     """
 
@@ -230,6 +233,7 @@ def wait_until_aws_batch_jobs_finished(job_type,proc_date,config_input,dbh):
     jobs_records = dbh.get_unclosedout_jobs_for_processing_date(ppid,proc_date)
 
     if dbh.exit_code >= 64:
+        dbh.close()
         exit(dbh.exit_code)
 
     njobs_total = len(jobs_records)
@@ -241,17 +245,20 @@ def wait_until_aws_batch_jobs_finished(job_type,proc_date,config_input,dbh):
 
     # Initialize iteration number.
 
-    iter = 0
+    n_iter = 0
 
 
-    # Define job definition.
+    # Define job definitions.    Use AWS Batch Console to set them up once.
 
     if job_type == "science":
         job_definition = config_input['AWS_BATCH']['job_definition']
     elif job_type == "postproc":
         job_definition = config_input['AWS_BATCH']['postproc_job_definition']
+    elif job_type == "refimage":
+        job_definition = config_input['AWS_BATCH']['refimage_job_definition']
     else:
         print(f"*** Error: job_type not recognized (job_type={job_type}); quitting...")
+        dbh.close()
         exit(64)
 
 
@@ -266,14 +273,15 @@ def wait_until_aws_batch_jobs_finished(job_type,proc_date,config_input,dbh):
         job_name_base = config_input['AWS_BATCH']['job_name_base']
     elif job_type == "postproc":
         job_name_base = config_input['AWS_BATCH']['postproc_job_name_base']
+    elif job_type == "refimage":
+        job_name_base = config_input['AWS_BATCH']['refimage_job_name_base']
     else:
-        print(f"*** Error: job_name_base not recognized (job_name_base={job_name_base}); quitting...")
+        print(f"*** Error: job_type not recognized (job_type={job_type}); quitting...")
         exit(64)
 
 
     # Print more parameters.
 
-    print("job_name_base =",job_name_base)
     print("job_type =",job_type)
     print("job_queue =",job_queue)
     print("job_definition =",job_definition)
@@ -308,7 +316,13 @@ def wait_until_aws_batch_jobs_finished(job_type,proc_date,config_input,dbh):
 
                 n_checked += 1
 
-                job_status = response['jobs'][0]['status']
+                try:
+                    job_status = response['jobs'][0]['status']
+                except IndexError as error:
+                    print(f'*** Error: IndexError raised because of empty jobs list (e.g., job ID not found or expired) ' +
+                          f'running client.describe_jobs (error={error},awsbatchjobid={awsbatchjobid}); quitting...')
+                    dbh.close()
+                    exit(64)
 
                 if njobs_total < 3000 or n_checked % 100 == 0:
                     print("job_status =",job_status)
@@ -318,11 +332,19 @@ def wait_until_aws_batch_jobs_finished(job_type,proc_date,config_input,dbh):
                 elif job_status == "FAILED":
                     n_failed += 1
                 elif job_status == "RUNNABLE":
-                    break
+                    pass
                 elif job_status == "STARTING":
-                    break
+                    pass
                 elif job_status == "RUNNING":
-                    break
+                    pass
+                elif job_status == "SUBMITTED":
+                    pass
+                elif job_status == "PENDING":
+                    pass
+                else:
+                    print(f"*** Error: Unexpected job_status ({job_status}); quitting...")
+                    dbh.close()
+                    exit(64)
 
             except Exception as error:
                 print('*** Error running client.describe_jobs ({}); continuing...'.format(error))
@@ -337,8 +359,8 @@ def wait_until_aws_batch_jobs_finished(job_type,proc_date,config_input,dbh):
         if njobs_total == njobs_succeeded_failed:
             break
 
-        iter += 1
-        print(f"From method wait_until_aws_batch_jobs_finished after iteration iter={iter}: " +\
+        n_iter += 1
+        print(f"From method wait_until_aws_batch_jobs_finished after iteration n_iter={n_iter}: " +\
                "Sleeping 60 seconds and then will check again...")
         time.sleep(60)
 
@@ -354,8 +376,6 @@ if __name__ == '__main__':
 
     # Open loop.
 
-    s3_client = boto3.client('s3')
-
     exitcode = 0
 
     i = 0
@@ -365,7 +385,7 @@ if __name__ == '__main__':
 
         # Get current date and time.
 
-        datetime_utc_now = datetime.utcnow()
+        datetime_utc_now = datetime.now(timezone.utc)
         proc_utc_datetime = datetime_utc_now.strftime('%Y-%m-%dT%H:%M:%SZ')
         datetime_pt_now = datetime_utc_now.replace(tzinfo=timezone.utc).astimezone(tz=to_zone)
         proc_pt_datetime_started = datetime_pt_now.strftime('%Y-%m-%dT%H:%M:%S PT')
@@ -380,6 +400,8 @@ if __name__ == '__main__':
         else:
             proc_date = datearg
 
+        os.environ['JOBPROCDATE'] = proc_date
+
 
         # Open database connection.
 
@@ -389,14 +411,90 @@ if __name__ == '__main__':
             exit(dbh.exit_code)
 
 
+        # Launch reference-image pipelines.
+
+        fname_out = "launch_reference_image_pipelines_code" + "_" + proc_date + ".out"
+        launch_reference_image_pipelines_cmd = [python_cmd,
+                                                launch_reference_image_pipelines_code]
+
+        exitcode_from_launch_reference_image_pipelines_cmd = util.execute_command(launch_reference_image_pipelines_cmd,fname_out)
+
+        if exitcode_from_launch_reference_image_pipelines_cmd >= 64:
+            print(f"*** Error: {launch_reference_image_pipelines_cmd} returned exit code = {exitcode_from_launch_reference_image_pipelines_cmd}; quitting...")
+            dbh.close()
+            exit(64)
+
+
+        # Code-timing benchmark.
+
+        end_time_benchmark = time.time()
+        print("VPO Elapsed time in seconds to launch reference-image pipelines =",
+            end_time_benchmark - start_time_benchmark)
+        start_time_benchmark = end_time_benchmark
+
+
+        # Wait for all reference-image pipelines to complete under AWS Batch.
+
+        job_type = "refimage"
+
+        print(f"Waiting until AWS Batch jobs have finished for job_type={job_type}, proc_date={proc_date}...")
+
+        wait_until_aws_batch_jobs_finished(job_type,proc_date,config_input,dbh)
+
+        print(f"Okay, all AWS Batch jobs have finished for job_type={job_type}, proc_date={proc_date}...")
+
+
+        # Code-timing benchmark.
+
+        end_time_benchmark = time.time()
+        print("VPO Elapsed time in seconds to wait for reference-image-pipeline AWS Batch jobs to finish =",
+            end_time_benchmark - start_time_benchmark)
+        start_time_benchmark = end_time_benchmark
+
+
+        # Register metadata from reference-image pipelines into operations database.
+
+        ppid_refimage = look_up_ppid_of_job_type(job_type)
+        print("ppid_refimage =",ppid_refimage)
+        os.environ['PIPEID'] = str(ppid_refimage)          # Required by register_reference_image_pipeline_jobs_code, which
+                                                           # is dual purposed to handle both reference-image pipeline jobs
+                                                           # and science pipeline jobs.
+
+        fname_out = "register_reference_image_pipeline_jobs_code" + "_" + proc_date + ".out"
+        register_reference_image_pipeline_jobs_cmd = [python_cmd,
+                                                      register_reference_image_pipeline_jobs_code,
+                                                      proc_date]
+
+        exitcode_from_register_reference_image_pipeline_jobs_cmd = util.execute_command(register_reference_image_pipeline_jobs_cmd,fname_out)
+
+        if exitcode_from_register_reference_image_pipeline_jobs_cmd >= 64:
+            print(f"*** Error: {register_reference_image_pipeline_jobs_cmd} returned exit code = {exitcode_from_register_reference_image_pipeline_jobs_cmd}; quitting...")
+            dbh.close()
+            exit(64)
+
+
+        # Code-timing benchmark.
+
+        end_time_benchmark = time.time()
+        print("VPO Elapsed time in seconds to register reference-image pipeline metadata into operations database =",
+            end_time_benchmark - start_time_benchmark)
+        start_time_benchmark = end_time_benchmark
+
+
         # For efficiency, the science pipelines are launched in two stages.  In the
-        # first stage, only one representative science image per field/filter combination is
-        # processed to initially make the needed reference image for the other science images
-        # with the same field and filter.  In the second stage, all other science images are
-        # processed (i.e., except the representative science images).  A representative
-        # science image is the first in a time-ordered, SCA-ordered list that is returned
-        # from a database query for a given field and filter for the observation time
-        # range of interest.
+        # first stage, only one representative science image per field/filter combination
+        # is processed to, if needed, initially make the required reference image for the
+        # other science images with the same field and filter.  In the second stage, all
+        # other science images are processed (i.e., except for the aforementioned
+        # representative science images).  A representative science image is the first in
+        # a time-ordered, SCA-ordered list that is returned from a database query for a
+        # given field and filter for the observation time range of interest.
+        #
+        # The science pipeline for a representative science image may not necessarily
+        # generate the required reference image, only if it does not exist.
+        #
+        # MAKEREFIMAGESFLAG controls whether either the representative science images or
+        # all the other science images are processed under AWS Batch.
 
         make_refimages_flags = ["True","False"]
         stage_labels = {"True":"StageOne","False":"StageTwo"}
@@ -422,7 +520,6 @@ if __name__ == '__main__':
 
             os.environ['STARTDATETIME'] = startdatetime
             os.environ['ENDDATETIME'] = enddatetime
-            os.environ['JOBPROCDATE'] = proc_date
 
             fname_out = "launch_science_pipelines_code" + "_" + stage_label + "_" + proc_date + ".out"
             launch_science_pipelines_cmd = [python_cmd,
@@ -432,6 +529,7 @@ if __name__ == '__main__':
 
             if exitcode_from_launch_science_pipelines_cmd >= 64:
                 print(f"*** Error: {launch_science_pipelines_cmd} returned exit code = {exitcode_from_launch_science_pipelines_cmd}; quitting...")
+                dbh.close()
                 exit(64)
 
 
@@ -465,6 +563,7 @@ if __name__ == '__main__':
             # Register metadata from science pipelines into operations database.
 
             ppid = look_up_ppid_of_job_type(job_type)
+            print("ppid =",ppid)
             os.environ['PIPEID'] = str(ppid)              # Required by register_science_pipeline_jobs_code
 
             fname_out = "register_science_pipeline_jobs_code" + "_" + stage_label + "_" + proc_date + ".out"
@@ -473,6 +572,11 @@ if __name__ == '__main__':
                                                   proc_date]
 
             exitcode_from_register_science_pipeline_jobs_cmd = util.execute_command(register_science_pipeline_jobs_cmd,fname_out)
+
+            if exitcode_from_register_science_pipeline_jobs_cmd >= 64:
+                print(f"*** Error: {register_science_pipeline_jobs_cmd} returned exit code = {exitcode_from_register_science_pipeline_jobs_cmd}; quitting...")
+                dbh.close()
+                exit(64)
 
 
             # Code-timing benchmark.
@@ -487,20 +591,24 @@ if __name__ == '__main__':
 
         end_time_benchmark = time.time()
         print("VPO Elapsed time in seconds after all science pipelines ran and database metadata loaded =",
-        end_time_benchmark - start_time_benchmark_at_loop_start)
+            end_time_benchmark - start_time_benchmark_at_loop_start)
+        start_time_benchmark = end_time_benchmark
 
 
         # Launch post-processing pipelines.
         #
         # Load environment variable JOBPROCDATE to specify processing date.
 
-        os.environ['JOBPROCDATE'] = proc_date
-
         fname_out = "launch_postproc_pipelines_code" + "_" + proc_date + ".out"
         launch_postproc_pipelines_cmd = [python_cmd,
                                         launch_postproc_pipelines_code]
 
         exitcode_from_launch_postproc_pipelines_cmd = util.execute_command(launch_postproc_pipelines_cmd,fname_out)
+
+        if exitcode_from_launch_postproc_pipelines_cmd >= 64:
+            print(f"*** Error: {launch_postproc_pipelines_cmd} returned exit code = {exitcode_from_launch_postproc_pipelines_cmd}; quitting...")
+            dbh.close()
+            exit(64)
 
 
         # Code-timing benchmark.
@@ -539,6 +647,11 @@ if __name__ == '__main__':
 
         exitcode_from_register_postproc_pipeline_jobs_cmd = util.execute_command(register_postproc_pipeline_jobs_cmd,fname_out)
 
+        if exitcode_from_register_postproc_pipeline_jobs_cmd >= 64:
+            print(f"*** Error: {register_postproc_pipeline_jobs_cmd} returned exit code = {exitcode_from_register_postproc_pipeline_jobs_cmd}; quitting...")
+            dbh.close()
+            exit(64)
+
 
         # Code-timing benchmark.
 
@@ -557,6 +670,11 @@ if __name__ == '__main__':
                                            load_psfcat_into_db_sources_code]
 
         exitcode_from_load_psfcat_into_db_sources_cmd = util.execute_command(load_psfcat_into_db_sources_cmd,fname_out)
+
+        if exitcode_from_load_psfcat_into_db_sources_cmd >= 64:
+            print(f"*** Error: {load_psfcat_into_db_sources_cmd} returned exit code = {exitcode_from_load_psfcat_into_db_sources_cmd}; quitting...")
+            dbh.close()
+            exit(64)
 
 
         # Code-timing benchmark.
@@ -577,6 +695,11 @@ if __name__ == '__main__':
 
         exitcode_from_crossmatch_sources_cmd = util.execute_command(crossmatch_sources_cmd,fname_out)
 
+        if exitcode_from_crossmatch_sources_cmd >= 64:
+            print(f"*** Error: {crossmatch_sources_cmd} returned exit code = {exitcode_from_crossmatch_sources_cmd}; quitting...")
+            dbh.close()
+            exit(64)
+
 
         # Code-timing benchmark.
 
@@ -596,6 +719,11 @@ if __name__ == '__main__':
 
         exitcode_from_compute_statistics_for_astroobjects_cmd = util.execute_command(compute_statistics_for_astroobjects_cmd,fname_out)
 
+        if exitcode_from_compute_statistics_for_astroobjects_cmd >= 64:
+            print(f"*** Error: {compute_statistics_for_astroobjects_cmd} returned exit code = {exitcode_from_compute_statistics_for_astroobjects_cmd}; quitting...")
+            dbh.close()
+            exit(64)
+
 
         # Code-timing benchmark.
 
@@ -612,6 +740,11 @@ if __name__ == '__main__':
                                     prune_notbest_merges_code]
 
         exitcode_from_prune_notbest_merges_cmd = util.execute_command(prune_notbest_merges_cmd,fname_out)
+
+        if exitcode_from_prune_notbest_merges_cmd >= 64:
+            print(f"*** Error: {prune_notbest_merges_cmd} returned exit code = {exitcode_from_prune_notbest_merges_cmd}; quitting...")
+            dbh.close()
+            exit(64)
 
 
         # Code-timing benchmark.
@@ -650,8 +783,9 @@ if __name__ == '__main__':
 
         if i == 3:
             #os.kill(os.getpid(), signal.SIGQUIT)          # Quits gracefully via signal handler upon receiving control-/
-            #os.kill(os.getpid(), signal.SIGINT)           # Quits gracefully via signal handler upon receiving control-c
-            os.kill(os.getpid(), signal.SIGSTOP)           # Quits unconditionally and immediately.
+            os.kill(os.getpid(), signal.SIGINT)           # Quits gracefully via signal handler upon receiving control-c
+            #os.kill(os.getpid(), signal.SIGSTOP)          # Pauses the process so it cannot be caught or ignored, and will hang indefinitely.
+            #os.kill(os.getpid(), signal.SIGKILL)           # Quits unconditionally and immediately.
 
         if istop == 1:
             print("Terminating gracefully now...")
