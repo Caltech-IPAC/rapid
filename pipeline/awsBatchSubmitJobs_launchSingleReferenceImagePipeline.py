@@ -604,7 +604,7 @@ if __name__ == '__main__':
                      str(vbest_refimage_input) + "," +\
                      str(version_refimage_input)
 
-        cvs_records.append(csv_record)
+        csv_records.append(csv_record)
 
         n_images_to_coadd += 1
 
@@ -631,14 +631,14 @@ if __name__ == '__main__':
         dbh.close()             # Close database connection.
         exit(64)
 
+
+    # Write reference-image inputs to CSV file.
+
     filename_refimage = "None"
-    infobits_refimage = "None"
+    infobits_refimage = None
     input_images_csv_filename = "input_images_for_refimage_jid"+ str(jid) + ".csv"
     input_images_csv_file = rapid_work + "/" + input_images_csv_filename
     input_images_csv_file_s3_bucket_object_name = proc_date + "/" + input_images_csv_filename
-
-
-    # Write reference-image inputs to CSV file.
 
     f = open(input_images_csv_file, "w")
     for csv_record in csv_records:
