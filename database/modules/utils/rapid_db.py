@@ -4094,7 +4094,7 @@ class RAPIDDB:
                     records.append(record)
                     nrecs += 1
 
-                print("nrecs =",nrecs)
+                print(f"fid,min_refimage_nframes,nrecs = {fid},{min_refimage_nframes},{nrecs}")
 
             except:
                 print("Nothing returned from database query; continuing...")
