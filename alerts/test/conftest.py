@@ -119,6 +119,17 @@ class ChipData:
         # derives the job directory from it and picks the flavored file
         self.diff_filename = str(job_dir / "zogy_diffimage_masked.fits")
 
+        # diffimages rows for resolve_pid(expid, sca): reprocessing
+        # campaigns leave several rows per (expid, sca), more than one
+        # of them with vbest=1 -- mirroring the real database. The
+        # newest vbest>0 row is CHIP_PID, the one the chip's sources
+        # belong to; pid 100 is newer still but vbest=0 (not best).
+        self.campaigns = [
+            {"pid": 77, "expid": 42, "sca": 7, "vbest": 1},
+            {"pid": CHIP_PID, "expid": 42, "sca": 7, "vbest": 1},
+            {"pid": 100, "expid": 42, "sca": 7, "vbest": 0},
+        ]
+
         # Three on-chip detections: two associated with objects (one shared
         # object would also be legal; kept distinct for clarity), one
         # unassociated. Positions include a fractional part so rounding is
@@ -167,7 +178,14 @@ class FakeCursor:
     # -- the dispatch table ------------------------------------------------
     def execute(self, sql, params):
         d = self.data
-        if "FROM diffimages" in sql:
+        if "vbest" in sql:                            # resolve_pid(expid, sca)
+            expid, sca = params
+            best = sorted((c for c in d.campaigns
+                           if c["expid"] == expid and c["sca"] == sca
+                           and c["vbest"] > 0),
+                          key=lambda c: -c["pid"])
+            self._rows = [{"pid": c["pid"]} for c in best]
+        elif "FROM diffimages" in sql:
             self._rows = ([{"filename": d.diff_filename}]
                           if d.diff_filename else [])
         elif "WHERE s.sid" in sql:                    # get_detection(sid)

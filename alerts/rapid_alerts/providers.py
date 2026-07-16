@@ -146,10 +146,23 @@ class ForcedPhot:
 
 @dataclass
 class Cutouts:
-    """Raw FITS bytes for the three image stamps (any may be missing)."""
+    """Raw FITS bytes for the three image stamps (any may be missing).
+
+    Each non-None member is a complete little FITS file: parse with
+    fits.open(io.BytesIO(cutouts.difference)) or write it straight to
+    disk for DS9."""
     difference: Optional[bytes] = None
     science: Optional[bytes] = None
     template: Optional[bytes] = None
+
+    def __repr__(self):
+        # the default dataclass repr would dump ~80 kB of raw bytes per
+        # stamp into the terminal; summarize instead
+        parts = (f"{f.name}=<FITS clip, {len(v)} bytes>" if v is not None
+                 else f"{f.name}=None"
+                 for f in dataclasses.fields(self)
+                 for v in [getattr(self, f.name)])
+        return f"Cutouts({', '.join(parts)})"
 
 
 # ---------------------------------------------------------------------------
@@ -356,8 +369,9 @@ class DatabaseProvider(AlertDataProvider):
         self._images_pid = None
         self._images = {}             # "diff"|"sci"|"ref" -> (pixels, header)
         self._staging_dir = tempfile.mkdtemp(prefix="rapid_cutouts_")
+        self._forced_phot_logged = False  # log the not-implemented note once
 
-    def _query(self, sql, params):
+    def _query(self, sql, params=None):
         """Run one query and return rows as {column_name: value} dicts."""
         cur = self.db.conn.cursor()
         try:
@@ -366,6 +380,35 @@ class DatabaseProvider(AlertDataProvider):
             return [dict(zip(columns, row)) for row in cur.fetchall()]
         finally:
             cur.close()
+
+    def resolve_pid(self, expid, sca):
+        """Map (exposure, SCA) to the difference-image processing ID to
+        alert on.
+
+        One pid is one processing of one (exposure, SCA), but the mapping
+        back is not unique: reprocessing campaigns leave several
+        diffimages rows per (expid, sca), each with vbest=1 (older
+        campaigns' flags are not cleared). Take the newest such row -- in
+        practice only the newest campaign's pid has sources loaded.
+
+        TODO: remove this workaround once the database standards for
+        vbest/reprocessing are settled; vbest > 0 should then identify
+        exactly one row per (expid, sca).
+        """
+        rows = self._query("""
+            SELECT pid FROM diffimages
+            WHERE expid = %s AND sca = %s AND vbest > 0
+            ORDER BY pid DESC
+        """, (expid, sca))
+        if not rows:
+            raise ValueError(
+                f"no vbest>0 difference image for expid={expid} sca={sca}")
+        if len(rows) > 1:
+            logger.warning(
+                "expid=%s sca=%s has %d vbest>0 diffimages rows "
+                "(reprocessing campaigns); using the newest, pid=%s",
+                expid, sca, len(rows), rows[0]["pid"])
+        return int(rows[0]["pid"])
 
     def get_detection(self, sid):
         # sources row -> Source, column names matching attribute names.
@@ -530,8 +573,13 @@ class DatabaseProvider(AlertDataProvider):
 
     def get_forced_photometry(self, detection, obj):
         # Forced photometry in RAPID produces FITS files, not DB records;
-        # integration with alert packets is not yet implemented.
-        logger.info("Forced photometry not yet available for alert assembly")
+        # integration with alert packets is not yet implemented. Log once
+        # per provider, not once per source -- a batch run reaches here
+        # tens of thousands of times.
+        if not self._forced_phot_logged:
+            logger.info(
+                "Forced photometry not yet available for alert assembly")
+            self._forced_phot_logged = True
         return []
 
     def get_cutouts(self, detection):

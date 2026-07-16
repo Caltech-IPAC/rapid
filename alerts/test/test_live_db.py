@@ -19,7 +19,7 @@ TODO (test plan, not yet implemented):
   D16 single-alert live check: produce a real alert, all three cutouts
       present, each clip's WCS puts the DB ra/dec at the stamp center
       (< 80 mas), cross-clip agreement < 1 mas
-  D18 chip-level: produce_chip(pid) count equals the sources row count
+  D18 batch-level: batch_produce(pid) count equals the sources row count
       for that pid; decode a sample of the produced alerts
 """
 

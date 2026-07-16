@@ -6,8 +6,9 @@ Priority tests implemented here:
       never crash a production run (regression for the live S3
       EndpointConnectionError crash of 2026-07-13)
   B11 batch/single equivalence -- the same source produced through
-      produce_alert() and through produce_chip() must yield byte-identical
-      alerts, pinning the prefetch path to the per-query path
+      produce_alert() and through batch_produce() must yield
+      byte-identical alerts, pinning the prefetch path to the per-query
+      path
 
 TODO (test plan, not yet implemented):
   B8  grid-mismatch guard: a template written with a shifted CRVAL gets
@@ -21,11 +22,29 @@ TODO (test plan, not yet implemented):
 
 import pytest
 
-from rapid_alerts.produce import load_schema, produce_alert, produce_chip
+from rapid_alerts.produce import batch_produce, load_schema, produce_alert
 from rapid_alerts.providers import DatabaseProvider
 
 from conftest import CHIP_PID, PRODUCT_OFFSETS, FakeDB
 from test_clips import clip_to_numpy
+
+
+# ---------------------------------------------------------------------------
+# resolve_pid: (exposure, SCA) -> the newest vbest>0 processing. The fake
+# chip_data.campaigns mirrors the real database's reprocessing-campaign
+# mess: several vbest=1 rows per (expid, sca), plus a newer vbest=0 row
+# that must NOT win.
+# ---------------------------------------------------------------------------
+
+def test_resolve_pid_picks_newest_best_campaign(make_provider):
+    provider = make_provider()
+    # newest vbest>0 is CHIP_PID (99); pid 100 is newer but vbest=0
+    assert provider.resolve_pid(42, 7) == CHIP_PID
+
+
+def test_resolve_pid_unknown_exposure_raises(make_provider):
+    with pytest.raises(ValueError, match="expid=1 sca=1"):
+        make_provider().resolve_pid(1, 1)
 
 
 # ---------------------------------------------------------------------------
@@ -102,7 +121,7 @@ def test_s3_staging_failure_degrades_to_null_cutouts(make_provider,
 
 
 # ---------------------------------------------------------------------------
-# B11: batch/single equivalence. produce_chip() answers from set-based
+# B11: batch/single equivalence. batch_produce() answers from set-based
 # prefetches while produce_alert() issues per-source queries; any semantic
 # drift between the two paths shows up as differing bytes. Byte-identity
 # is deliberately strict -- it also catches nondeterminism in the clip
@@ -129,8 +148,8 @@ def test_batch_and_single_paths_produce_identical_bytes(make_provider,
 
     # batch flow: one provider, whole chip through the prefetch path
     producer = CapturingProducer()
-    count = produce_chip(make_provider(), CHIP_PID, producer=producer,
-                         schema=schema)
+    count = batch_produce(make_provider(), CHIP_PID, producer=producer,
+                          schema=schema)
     assert count == len(chip_data.sources)
     assert producer.flushes == 1               # one flush per chip, at the end
 

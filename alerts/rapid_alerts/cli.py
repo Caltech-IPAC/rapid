@@ -1,9 +1,12 @@
 """
 Command-line alert production.
 
-Usage:
-    python -m rapid_alerts.cli <source_id> [--kafka]          # one alert
-    python -m rapid_alerts.cli <pid> --chip [--kafka]         # whole chip
+The selector implies the mode:
+
+    python -m rapid_alerts.cli <source_id>                  # one alert
+    python -m rapid_alerts.cli --pid <pid>                  # one diff image
+    python -m rapid_alerts.cli --exposure <expid> --sca <n> # same, by
+                                                            # exposure + SCA
 """
 
 import argparse
@@ -14,16 +17,14 @@ from pathlib import Path
 
 # Support both `python -m rapid_alerts.cli` (module) and `python cli.py` (script).
 if __package__:
-    from .produce import produce_alert, produce_chip
+    from .produce import batch_produce, produce_alert
     from .providers import DatabaseProvider
 else:
     # Run directly as a script: no package context, so make the package
     # importable by its name and switch to absolute imports.
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-    from rapid_alerts.produce import produce_alert, produce_chip
+    from rapid_alerts.produce import batch_produce, produce_alert
     from rapid_alerts.providers import DatabaseProvider
-
-logging.basicConfig(level=logging.INFO)
 
 
 def make_provider(diff_flavor="sfft"):
@@ -40,13 +41,20 @@ def make_provider(diff_flavor="sfft"):
 
 
 def main(argv=None):
-    parser = argparse.ArgumentParser(description="Produce RAPID alerts")
-    parser.add_argument("id", type=int,
-                        help="source ID (sources.sid), or with --chip a "
-                             "processing ID (diffimages.pid)")
-    parser.add_argument("--chip", action="store_true",
-                        help="produce alerts for every source on the chip "
-                             "with this processing ID")
+    parser = argparse.ArgumentParser(
+        description="Produce RAPID alerts. The selector implies the mode: "
+                    "a source ID produces one alert; --pid or "
+                    "--exposure/--sca batch-produce a difference image.")
+    parser.add_argument("sid", type=int, nargs="?",
+                        help="source ID (sources.sid): produce one alert")
+    parser.add_argument("--pid", type=int,
+                        help="batch-produce every source on this "
+                             "difference image (diffimages.pid)")
+    parser.add_argument("--exposure", type=int, metavar="EXPID",
+                        help="batch-produce one exposure + SCA (needs "
+                             "--sca); uses the newest vbest>0 processing")
+    parser.add_argument("--sca", type=int,
+                        help="SCA number (1-18), goes with --exposure")
     parser.add_argument("--kafka", action="store_true",
                         help="publish to Kafka ($KAFKA_BROKER, default "
                              "localhost:9092)")
@@ -55,7 +63,25 @@ def main(argv=None):
                         default="sfft",
                         help="which differencing algorithm's image feeds "
                              "cutoutDifference (default: %(default)s)")
+    parser.add_argument("--log-level", default="WARNING",
+                        choices=["DEBUG", "INFO", "WARNING", "ERROR"],
+                        help="diagnostic verbosity on stderr; quiet by "
+                             "default, use INFO for per-step progress "
+                             "(default: %(default)s)")
     args = parser.parse_args(argv)
+
+    # the CLI is the application, so logging policy is decided here (library
+    # modules only ever create loggers); log records go to stderr, the final
+    # result line goes to stdout
+    logging.basicConfig(level=getattr(logging, args.log_level))
+
+    if (args.exposure is None) != (args.sca is None):
+        parser.error("--exposure and --sca must be given together")
+    selectors = (args.sid is not None) + (args.pid is not None) \
+        + (args.exposure is not None)
+    if selectors != 1:
+        parser.error("give exactly one of: a source ID, --pid, or "
+                     "--exposure with --sca")
 
     provider = make_provider(diff_flavor=args.diff_flavor)
 
@@ -68,14 +94,16 @@ def main(argv=None):
             "message.max.bytes": "15728640",
         })
 
-    if args.chip:
-        count = produce_chip(provider, args.id,
-                             producer=producer, topic=args.topic)
-        print(f"Chip pid={args.id}: {count} alerts produced")
-    else:
-        alert_bytes = produce_alert(provider, args.id,
+    if args.sid is not None:
+        alert_bytes = produce_alert(provider, args.sid,
                                     producer=producer, topic=args.topic)
         print(f"Alert produced: {len(alert_bytes)} bytes")
+    else:
+        pid = (args.pid if args.pid is not None
+               else provider.resolve_pid(args.exposure, args.sca))
+        count = batch_produce(provider, pid,
+                              producer=producer, topic=args.topic)
+        print(f"pid={pid}: {count} alerts produced")
     return 0
 
 

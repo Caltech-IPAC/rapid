@@ -98,7 +98,7 @@ DIA_SOURCE_PARAMS = (
     # --- Identifiers & associations -------------------------------------
     Param("diaSourceId",   "long",             "Unique identifier for this source detection",
                     IMPLEMENTED, "sources.sid",    attr="sid"),
-    Param("visit",         "long",             "Visit (exposure) identifier",
+    Param("expId",         "long",             "Visit (exposure) identifier",
                     IMPLEMENTED, "sources.expid",  attr="expid"),
     Param("detector",      "int",              "Detector (SCA) number",
                     IMPLEMENTED, "sources.sca",    attr="sca"),
@@ -112,10 +112,10 @@ DIA_SOURCE_PARAMS = (
                     IMPLEMENTED, "sources.mjdobs", attr="mjdobs"),
     Param("timeProcessedMjdTai",  ["null", "double"],  "Time alert was processed [TAI MJD]",
                     STUB, "set at assembly time (decide TAI convention first)"),
-    Param("timeWithdrawnMjdTai",  ["null", "double"],  "Time alert was withdrawn [TAI MJD]",
-                    STUB, "alert-withdrawal mechanism (not designed)"),
-    Param("exposureTime",  ["null", "float"],  "Exposure duration [s]",
+    Param("exposureTime",  ["null", "float"],  "Exposure time [s]",
                     STUB, "exposures table metadata (join not implemented)"),
+    Param("timeWithdrawnMjdTai",  ["null", "double"],  "Time alert was withdrawn [TAI MJD]",
+                    NOT_USED, "alert-withdrawal mechanism (not designed)"),
 
     # --- Position (sky & pixel) -------------------------------------------
     Param("ra",            "double",           "Right ascension; ICRS [deg]",

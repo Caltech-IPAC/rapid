@@ -7,11 +7,12 @@ The complete alert-production path, from provider data to published bytes:
     serialize_alert()  ->  Avro bytes (schema loaded from the .avsc files)
     publish_alert()    ->  Kafka topic
 
-produce_alert() chains all of these for one source ID; produce_chip() does
-the same for every source on one chip (difference image), letting the
-provider prefetch the chip's data once. This module knows nothing about
-where the data lives -- it only talks to the AlertDataProvider interface
-and the param registry.
+produce_alert() chains all of these for one source ID; batch_produce()
+does the same for every source on one difference image -- one exposure +
+SCA, keyed by its processing ID (diffimages.pid) -- letting the provider
+prefetch that image's data once. This module knows nothing about where
+the data lives -- it only talks to the AlertDataProvider interface and
+the param registry.
 """
 
 import dataclasses
@@ -142,7 +143,7 @@ def assemble_alert(provider, sid):
 def assemble_alert_for_source(provider, source):
     """Assemble an alert packet for a Source already in hand.
 
-    Used directly by the batch flow (produce_chip), where iter_sources()
+    Used directly by the batch flow (batch_produce), where iter_sources()
     has already fetched every Source on the chip -- re-querying each one
     by sid would defeat the point of batching.
     """
@@ -269,7 +270,7 @@ def publish_alert(alert_bytes, producer, topic="alerts", flush=True):
         producer: confluent_kafka.Producer instance.
         topic: Kafka topic name.
         flush: wait for delivery before returning. Right for one-off alerts;
-            batch callers (produce_chip) pass False and flush once at the
+            batch callers (batch_produce) pass False and flush once at the
             end instead.
     """
     def delivery_callback(err, msg):
@@ -309,16 +310,20 @@ def produce_alert(provider, sid, producer=None, topic="alerts", schema=None):
     return alert_bytes
 
 
-def produce_chip(provider, pid, producer=None, topic="alerts", schema=None):
-    """Produce alerts for every source on one chip (one difference image).
+def batch_produce(provider, pid, producer=None, topic="alerts", schema=None):
+    """Produce alerts for every source on one difference image -- the
+    batch unit is one exposure + SCA (chip), which is exactly what one
+    diffimages.pid identifies. Use DatabaseProvider.resolve_pid(expid,
+    sca) to obtain the pid for an exposure + SCA pair.
 
-    Batch counterpart of produce_alert(): the provider fetches the chip's
-    DB rows and images up front (see DatabaseProvider.iter_sources), and
-    Kafka is flushed once at the end instead of per message.
+    Batch counterpart of produce_alert(): the provider fetches the
+    image's DB rows and pixels up front (see
+    DatabaseProvider.iter_sources), and Kafka is flushed once at the end
+    instead of per message.
 
     Args:
         provider: an AlertDataProvider instance that supports iter_sources().
-        pid: processing ID of the chip (diffimages.pid).
+        pid: processing ID of the difference image (diffimages.pid).
         producer: optional confluent_kafka.Producer instance.
         topic: Kafka topic name.
         schema: parsed fastavro schema (loaded if not provided).
@@ -339,5 +344,5 @@ def produce_chip(provider, pid, producer=None, topic="alerts", schema=None):
 
     if producer is not None:
         producer.flush()
-    logger.info("Chip pid=%s: %d alerts produced", pid, count)
+    logger.info("pid=%s: %d alerts produced", pid, count)
     return count
