@@ -506,6 +506,9 @@ if __name__ == '__main__':
     radius_of_initial_cone_search = 0.18
     # mjdobs defines the end MJD covered by the database query.
     # MJD of 999999.9 converts to May 11, 4692, at approximately 21:36:00 UTC.
+    # Method dbh.get_overlapping_l2files will use this MJD as ending MJD (and the
+    # starting MJD will be 0.0), unless STARTREFIMMJDOBS and ENDREFIMMJDOBS are set
+    # in the environment.
     mjdobs = 999999.9
     overlapping_images = dbh.get_overlapping_l2files(rid,
                                                      fid,
