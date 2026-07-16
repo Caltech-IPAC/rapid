@@ -129,12 +129,6 @@ ppid_science_pipeline = int(config_input['SCI_IMAGE']['ppid'])
 ppid_refimage_pipeline = int(config_input['REF_IMAGE']['ppid'])
 
 
-# Set signal hander.
-
-signal.signal(signal.SIGINT, signal_handler)
-signal.signal(signal.SIGQUIT, signal_handler)
-
-
 #-------------------------------------------------------------------------------------------------------------
 # Main program.
 #-------------------------------------------------------------------------------------------------------------
