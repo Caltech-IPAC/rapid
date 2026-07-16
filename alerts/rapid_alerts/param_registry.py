@@ -368,12 +368,12 @@ DIA_OBJECT_PARAMS = (
                         IMPLEMENTED, "astroobjects_<field>.aid",  attr="aid"),
     Param("ra",            "double",           "Right ascension of object centroid; ICRS [deg]",
                         IMPLEMENTED, "astroobjects_<field>.ra0",  attr="ra0"),
-    Param("dec",           "double",           "Declination of object centroid; ICRS [deg]",
+    Param("dec",           "double",           "Declination of object centroid; ICRS [deg]", #TODO should these be mean?
                         IMPLEMENTED, "astroobjects_<field>.dec0", attr="dec0"),
-    Param("raErr",         ["null", "float"],  "Uncertainty in ra [deg]",
-                        STUB, "astroobjects stdevra is available but unused"),
+    Param("raErr",         ["null", "float"],  "Uncertainty in ra [deg]", # TODO: on-sky error or std dev in degrees? Need cos(dec) factor if former
+                        IMPLEMENTED, "astroobjects_<field> stdevra", attr="stdevdec"),
     Param("decErr",        ["null", "float"],  "Uncertainty in dec [deg]",
-                        STUB, "astroobjects stdevdec is available but unused"),
+                        IMPLEMENTED, "astroobjects_<field> stdevdec", attr="stdevra"),
 
     # --- Source history ----------------------------------------------------
     Param("nDiaSources",   "int",              "Total number of associated DIASources",

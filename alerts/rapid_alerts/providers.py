@@ -122,10 +122,39 @@ class ObjectRecord:
     aid: int
     ra0: float
     dec0: float
+    stdevra: float
+    stdevdec: float
     nsources: int
     first_mjd: Optional[float] = None
     last_mjd: Optional[float] = None
     validity_mjd: float = 0.0
+
+    # fields assemble_alert() fills in later; never storage columns
+    FILLED_LATER = frozenset({"first_mjd", "last_mjd", "validity_mjd"})
+
+    @classmethod
+    def from_row(cls, row, strict=False):
+        """Build from a dict, ignoring keys that are not ObjectRecord
+        fields (a SELECT a.* row carries meanra, flux0, hp6, ...).
+
+        With strict=True, every field except the FILLED_LATER ones must be
+        present in row. This turns a renamed/dropped storage column -- or
+        a column missing from a set-based prefetch SELECT list, the easy
+        one to forget -- into an immediate error instead of a silently
+        broken alert field. Used by both the batch and single-alert flows
+        of get_object_for_source(), so a new column is added in exactly
+        one place (here) plus the prefetch SELECT list.
+        """
+        names = {f.name for f in dataclasses.fields(cls)}
+        if strict:
+            missing = names - set(row) - cls.FILLED_LATER
+            if missing:
+                raise KeyError(
+                    f"ObjectRecord row is missing expected columns: "
+                    f"{sorted(missing)} (renamed or dropped in storage, or "
+                    f"absent from a prefetch SELECT list?)")
+        return cls(**{key: value for key, value in row.items()
+                      if key in names})
 
 
 @dataclass
@@ -237,6 +266,7 @@ def extract_stamp(image_data, x, y, header=None, half_width=STAMP_HALF_WIDTH):
     Returns None if there is no image, or if the stamp would not overlap
     the chip at all.
     """
+    #TODO: should we include edge stamps or not? What strategy?
     if image_data is None or x is None or y is None:
         return None
     # FITS pixel coordinates are 1-based; numpy indexing is 0-based
@@ -459,7 +489,8 @@ class DatabaseProvider(AlertDataProvider):
         for field in sorted({s.field for s in sources}):
             sids = [s.sid for s in sources if s.field == field]
             object_rows = self._query(f"""
-                SELECT m.sid, a.aid, a.ra0, a.dec0, a.nsources
+                SELECT m.sid, a.aid, a.ra0, a.dec0,
+                       a.stdevra, a.stdevdec, a.nsources
                 FROM merges_{int(field)} m
                 JOIN astroobjects_{int(field)} a ON m.aid = a.aid
                 WHERE m.sid = ANY(%s)
@@ -495,7 +526,7 @@ class DatabaseProvider(AlertDataProvider):
 
     def get_object_for_source(self, detection):
         # Batch flow: after iter_sources(pid), every association for the
-        # chip is already in memory. A sid absent from the prefetch means
+        # chip is already in memory. An sid absent from the prefetch means
         # "no associated object" -- no fallback query needed.
         if self._chip_pid is not None and self._chip_pid == detection.pid:
             row = self._chip_objects.get(detection.sid)
@@ -504,12 +535,7 @@ class DatabaseProvider(AlertDataProvider):
             # Build a fresh ObjectRecord each time: assemble_alert() fills
             # in the first/last/validity MJDs, and two sources on the same
             # chip may share an object.
-            return ObjectRecord(
-                aid=int(row["aid"]),
-                ra0=float(row["ra0"]),
-                dec0=float(row["dec0"]),
-                nsources=int(row["nsources"]),
-            )
+            return ObjectRecord.from_row(row, strict=True)
 
         # Single-alert flow: query for just this sid.
         # The merges/astroobjects tables are partitioned by Roman field, so
@@ -525,18 +551,10 @@ class DatabaseProvider(AlertDataProvider):
         """, (detection.sid,))
         if not rows:
             return None  # unassociated detection -> alert has no diaObject
-        row = rows[0]
-        # Only these four columns feed diaObject today. Available but unused:
-        # meanra/meandec (mean position), stdevra/stdevdec (candidates for
-        # the raErr/decErr stubs), flux0/meanflux/stdevflux, hp6/hp9.
-        # ObjectRecord's first/last/validity MJDs are computed later by
-        # assemble_alert() from the source history, not read from the DB.
-        return ObjectRecord(
-            aid=int(row["aid"]),
-            ra0=float(row["ra0"]),
-            dec0=float(row["dec0"]),
-            nsources=int(row["nsources"]),
-        )
+        # from_row() keeps only the ObjectRecord columns. Available in the
+        # a.* row but currently unused: meanra/meandec (mean position),
+        # flux0/meanflux/stdevflux, hp6/hp9.
+        return ObjectRecord.from_row(rows[0], strict=True)
 
     def get_prv_detections(self, detection, obj, window_days=PRV_WINDOW_DAYS):
         # Batch flow: filter this object's prefetched history down to this

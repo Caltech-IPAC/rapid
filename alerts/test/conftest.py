@@ -141,10 +141,15 @@ class ChipData:
         ]
         # merges_<field>: sid -> aid (9003 stays unassociated)
         self.merges = {9001: 777, 9002: 888}
-        # astroobjects_<field>: aid -> object row
+        # astroobjects_<field>: aid -> object row (the full storage row;
+        # the SELECT-list projection in FakeCursor trims it per query)
         self.objects = {
-            777: {"aid": 777, "ra0": 268.09, "dec0": -29.88, "nsources": 3},
-            888: {"aid": 888, "ra0": 268.10, "dec0": -29.87, "nsources": 1},
+            777: {"aid": 777, "ra0": 268.09, "dec0": -29.88,
+                  "stdevra": 1.5e-05, "stdevdec": 1.2e-05, "nsources": 3,
+                  "meanra": 268.09, "meandec": -29.88, "flux0": 1200.0},
+            888: {"aid": 888, "ra0": 268.10, "dec0": -29.87,
+                  "stdevra": 2.5e-05, "stdevdec": 2.1e-05, "nsources": 1,
+                  "meanra": 268.10, "meandec": -29.87, "flux0": 800.0},
         }
         # Prior detections (other sids of the same objects, earlier mjd,
         # different pid -- they belong to older chips). Object 777 has two,
@@ -163,12 +168,34 @@ class ChipData:
         return {**self.merges, **self.history_merges}.get(sid)
 
 
+def _selected_columns(sql):
+    """The column names a query's SELECT list actually asks for, stripped
+    of table aliases ("a.ra0" -> "ra0", "x AS y" -> "y"); None when the
+    list contains a '*' (no projection possible)."""
+    select_list = sql.split("FROM")[0].split("SELECT")[1]
+    columns = []
+    for item in select_list.split(","):
+        item = item.strip()
+        if "*" in item:
+            return None
+        columns.append(item.split()[-1].split(".")[-1].lower()
+                       if " as " in item.lower()
+                       else item.split(".")[-1].lower())
+    return columns
+
+
 class FakeCursor:
     """Answers DatabaseProvider._query()'s SQL from a ChipData.
 
     Routing is by SQL substring -- brittle on purpose: if the provider's
     queries change shape, the KeyError here says "teach the fake about the
     new query" rather than silently returning wrong rows.
+
+    Results are projected onto the query's actual SELECT list (see
+    execute), so a provider bug where a set-based prefetch forgets to
+    SELECT a newly added column fails here, in the fast suite, instead of
+    only in a live batch run. (SELECT-* queries can't be projected and
+    return the full fake row, just like the real database.)
     """
 
     def __init__(self, data):
@@ -217,6 +244,13 @@ class FakeCursor:
                 key=lambda r: r["mjdobs"])
         else:
             raise KeyError(f"FakeCursor has no route for query: {sql}")
+
+        # deliver only the columns the SQL asked for -- a KeyError here
+        # means the query names a column the fake rows don't carry (teach
+        # ChipData about it)
+        columns = _selected_columns(sql)
+        if columns is not None:
+            self._rows = [{c: row[c] for c in columns} for row in self._rows]
 
     # -- cursor protocol used by _query -------------------------------------
     @property

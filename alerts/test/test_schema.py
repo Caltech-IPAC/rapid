@@ -49,7 +49,8 @@ class MinimalProvider(AlertDataProvider):
         return make_detection(sid, mjd=60500.5)
 
     def get_object_for_source(self, detection):
-        return ObjectRecord(aid=777, ra0=150.1, dec0=2.2, nsources=3)
+        return ObjectRecord(aid=777, ra0=150.1, dec0=2.2,
+                            stdevra=1.5e-05, stdevdec=1.2e-05, nsources=3)
 
     def get_prv_detections(self, detection, obj, window_days=365.25):
         return [make_detection(1001, mjd=60480.5, aid=obj.aid),
