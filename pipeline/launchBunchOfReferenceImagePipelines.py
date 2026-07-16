@@ -309,7 +309,7 @@ if __name__ == '__main__':
 
             if rfid is not None:
                 print(f"*** Message: Reference image found in database for " +
-                      "field,fid.ppid_existing_refimg={field},{fid},{ppid_existing_refimg} (rfid={rfid})")
+                      f"field,fid.ppid_existing_refimg={field},{fid},{ppid_existing_refimg} (rfid={rfid})")
                 continue
 
 

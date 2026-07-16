@@ -491,20 +491,6 @@ if __name__ == '__main__':
         exit(terminating_exitcode)
 
 
-    # Insert or update record in Jobs database table and return job ID.
-
-    rid = 'null'
-    sca = 'null'
-    expid = 'null'
-
-    jid = dbh.start_job(ppid_refimage,fid,expid,field,sca,rid)
-
-    if dbh.exit_code >= 64:
-        print(f"*** Error from dbh.start_job (dbh.exit_code = {dbh.exit_code}); quitting...")
-        dbh.close()             # Close database connection.
-        exit(64)
-
-
     # Query L2FileMeta database table for RID,ra0,dec0,ra1,dec1,ra2,dec2,ra3,dec3,ra4,dec4,field
     # and distance from tile center (degrees) for all best science images in the
     # L2Files database table that overlap the sky tile associated with the input science image
@@ -512,15 +498,11 @@ if __name__ == '__main__':
     # Returned list is ordered by distance from tile center.
     #
     # If environment variables STARTREFIMMJDOBS and ENDREFIMMJDOBS are set, these
-    # will be included as qualifiers in the following database query (read in by
-    # method dbh.get_overlapping_l2files).
+    # will be included as qualifiers in the database query (retrieved from the environment
+    # by method dbh.get_overlapping_l2files).
 
-    filename_refimage = "None"
-    infobits_refimage = "None"
-    input_images_csv_filename = "input_images_for_refimage_jid"+ str(jid) + ".csv"
-    input_images_csv_file = rapid_work + "/" + input_images_csv_filename
-    input_images_csv_file_s3_bucket_object_name = proc_date + "/" + input_images_csv_filename
 
+    rid = 'null'
     radius_of_initial_cone_search = 0.18
     # mjdobs defines the end MJD covered by the database query.
     # MJD of 999999.9 converts to May 11, 4692, at approximately 21:36:00 UTC.
@@ -549,7 +531,7 @@ if __name__ == '__main__':
 
     n_images_to_coadd = 0
 
-    f = open(input_images_csv_file, "w")
+    csv_records = []
 
     for image_meta in overlapping_images:
         rid_refimage_input = image_meta[0]
@@ -623,11 +605,9 @@ if __name__ == '__main__':
                      str(vbest_refimage_input) + "," +\
                      str(version_refimage_input)
 
-        f.write(csv_record + "\n")
+        csv_records.append(csv_record)
 
         n_images_to_coadd += 1
-
-    f.close()
 
     if n_images_to_coadd < min_n_images_to_coadd:
         print(f"*** Warning: n_images_to_coadd ({n_images_to_coadd}) < min_n_images_to_coadd " +\
@@ -635,6 +615,35 @@ if __name__ == '__main__':
         terminating_exitcode = 33
         dbh.close()             # Close database connection.
         exit(terminating_exitcode)
+
+
+    # Insert or update record in Jobs database table and return job ID.
+
+    sca = 'null'
+    expid = 'null'
+
+    jid = dbh.start_job(ppid_refimage,fid,expid,field,sca,rid)
+
+    print(f"jid = {jid}")
+
+    if dbh.exit_code >= 64:
+        print(f"*** Error from dbh.start_job (dbh.exit_code = {dbh.exit_code}); quitting...")
+        dbh.close()             # Close database connection.
+        exit(64)
+
+
+    # Write reference-image inputs to CSV file.
+
+    filename_refimage = "None"
+    infobits_refimage = None
+    input_images_csv_filename = "input_images_for_refimage_jid"+ str(jid) + ".csv"
+    input_images_csv_file = rapid_work + "/" + input_images_csv_filename
+    input_images_csv_file_s3_bucket_object_name = proc_date + "/" + input_images_csv_filename
+
+    f = open(input_images_csv_file, "w")
+    for csv_record in csv_records:
+        f.write(csv_record + "\n")
+    f.close()
 
 
     # Populate config-file dictionary for job.
