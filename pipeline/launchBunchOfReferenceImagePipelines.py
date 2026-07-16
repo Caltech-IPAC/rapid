@@ -182,8 +182,12 @@ def run_single_core_job(fields,fids,num_cores,index_thread):
 
                 if exitcode_from_launch_cmd == 0:
                     fh.write(f"Launched reference-image pipeline for dry_run,field,fid = {dry_run},{field},{fid}\n")
-                else:
+                elif exitcode_from_launch_cmd >= 64:
                     fh.write(f"*** Error from launch_cmd = {launch_cmd}: " +
+                             f"exitcode_from_launch_cmd,dry_run,field,fid = " +
+                             f"{exitcode_from_launch_cmd},{dry_run},{field},{fid}\n")
+                else:
+                    fh.write(f"*** Warning from launch_cmd = {launch_cmd}: " +
                              f"exitcode_from_launch_cmd,dry_run,field,fid = " +
                              f"{exitcode_from_launch_cmd},{dry_run},{field},{fid}\n")
 
