@@ -530,7 +530,7 @@ if __name__ == '__main__':
     print("Creating tables and indexes for all astroobjectsmeta_<field> database tables...")
 
     sql_queries = []
-    sql_queries.append("SET default_tablespace = pipeline_indx_01;")
+    sql_queries.append("SET default_tablespace = pipeline_data_01;")
 
     fillfactor = 70
 
@@ -541,6 +541,7 @@ if __name__ == '__main__':
         sql_queries.append(f"CREATE TABLE {tablename} (LIKE astroobjectsmeta INCLUDING " +
                            f"DEFAULTS INCLUDING CONSTRAINTS) WITH (fillfactor = {fillfactor});")
 
+        sql_queries.append("SET default_tablespace = pipeline_indx_01;")
         sql_queries.append(f"CREATE INDEX {tablename}_nsources_idx ON {tablename} (nsources);")
         sql_queries.append(f"CREATE INDEX {tablename}_meanradec_idx ON {tablename} (q3c_ang2ipix(meanra, meandec));")
 
