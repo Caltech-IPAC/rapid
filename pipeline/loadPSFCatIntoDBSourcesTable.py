@@ -91,7 +91,7 @@ print("proc_date =",proc_date)
 
 
 # Ensure sqlite database that defines the Roman sky tessellation is available.
-
+# TODO Decide if we need this
 roman_tessellation_dbname = os.getenv('ROMANTESSELLATIONDBNAME')
 
 if roman_tessellation_dbname is None:
@@ -142,6 +142,7 @@ naxis1 = int(config_input['INSTRUMENT']['naxis1_sciimage'])
 naxis2 = int(config_input['INSTRUMENT']['naxis2_sciimage'])
 
 ppid = int(config_input['SCI_IMAGE']['ppid'])
+match_radius = float(config_input['SOURCE_MATCHING']['match_radius'])
 
 
 # Open database connections for parallel access.
@@ -151,7 +152,7 @@ num_cores = os.getenv('NUM_CORES')
 if num_cores is None:
     num_cores = os.cpu_count()
 else:
-    num_cores = int(num_cores)
+    num_cores = int(num_cores) #TODO default to 18 max?
 
 print("num_cores =",num_cores)
 
@@ -196,7 +197,7 @@ cols.append("npix")
 cols.append("peak")
 cols.append("pid")
 cols.append("isdiffpos")
-cols.append("field")
+cols.append("field") #TODO decide if I want (or can get) this field
 cols.append("hp6")
 cols.append("hp9")
 cols.append("expid")
@@ -209,12 +210,29 @@ columns = tuple(cols)
 
 print(f"Sources columns: {cols_comma_separated_string}")
 
+#-------------------------------------------------------------------------------------------------------------
+# Convert a QTable to a buffer for bulk database ingest
+#-------------------------------------------------------------------------------------------------------------
+def table_to_buffer(tbl, colnames, null_string=r"\N", separator=","):
+    cols = []
+    for name in colnames:
+        column_data = np.asarray(tbl[name])
+        #use %r to create a string with minimum number of digits
+        column_data_str = np.char.mod('%r', column_data) if column_data.dtype.kind == 'f' else column_data.astype(str)
+        if column_data.dtype.kind == 'f':
+            s = np.where(np.isnan(column_data), null_string, column_data_str)      # NaN -> NULL at the source
+        cols.append(column_data_str)
+    buf = io.StringIO()
+    buf.write("\n".join(separator.join(row) for row in zip(*cols)))
+    buf.write("\n")
+    buf.seek(0)
+    return buf
 
 #-------------------------------------------------------------------------------------------------------------
 # Custom methods for parallel processing, taking advantage of multiple cores on the job-launcher machine.
 #-------------------------------------------------------------------------------------------------------------
 
-def run_single_core_job(jids,overlapping_fields_list,meta_list,negative_diffimg_flag,index_thread):
+def run_single_core_job(jid,meta_list,negative_diffimg_flag,index_thread):
 
 
     # Handle sources from positive versus negative difference images.
@@ -249,6 +267,19 @@ def run_single_core_job(jids,overlapping_fields_list,meta_list,negative_diffimg_
     fh.write(f"\nStart of run_single_core_job: index_thread={index_thread}, dbh={dbh}\n")
 
     for index_job in range(njobs):
+        print("Creating temporary sources table")
+        tablename = f"temp_sources_{index_job}"
+        sql_queries = []
+        #TODO: verify that duplicate index_jobs will never exist
+        #Create a temporary table that mirrors sources table for light-weight cross-matching to AstroObjects
+        #don't worry about a unique sid, that will be added when injected into full table
+        sql_queries = f"""DROP TABLE IF EXISTS {tablename} ;
+                        CREATE UNLOGGED TABLE {tablename}
+                        (LIKE sources INCLUDING DEFAULTS INCLUDING CONSTRAINTS)
+                        ALTER TABLE {tablename} DROP sid,
+                            ADD COLUMN aid bigint;"""
+
+        dbh.execute_sql_queries(sql_queries)
 
         index_core = index_job % num_cores
         if index_thread != index_core:
@@ -340,94 +371,51 @@ def run_single_core_job(jids,overlapping_fields_list,meta_list,negative_diffimg_
         #
         # Prepare records into sources database tables.
 
-        sources_table = f"sources_{proc_date}_{sca}"
-        sources_table_file = f"sources_{proc_date}_sca{sca}_jid{jid}" + ".csv"
+        joined_table_inner.rename_columns(['x_fit',
+                                        'y_fit',
+                                        'flux_fit',
+                                        'x_err',
+                                        'y_err',
+                                        'flux_err',
+                                        'n_pixels_fit',
+                                        'reduced_chi2',
+                                        'n_pixels'],
+                                        ['xfit',
+                                        'yfit',
+                                        'fluxfit',
+                                        'xerr',
+                                        'yerr',
+                                        'fluxerr',
+                                        'npixfit',
+                                        'redchi',
+                                        'npix'
+                                        ])
 
-        with open(sources_table_file, "w") as csv_fh:
-
-            for row in joined_table_inner:
-                nums = ""
-                for col in cols:
-
-                    cat_col = col
-
-                    if cat_col == 'xfit':
-                        cat_col = 'x_fit'
-                    elif cat_col == 'yfit':
-                        cat_col = 'y_fit'
-                    elif cat_col == 'fluxfit':
-                        cat_col = 'flux_fit'
-                    elif cat_col == 'xerr':
-                        cat_col = 'x_err'
-                    elif cat_col == 'yerr':
-                        cat_col = 'y_err'
-                    elif cat_col == 'fluxerr':
-                        cat_col = 'flux_err'
-                    elif cat_col == 'npixfit':
-                        cat_col = 'n_pixels_fit'
-                    elif cat_col == 'redchi':
-                        cat_col = 'reduced_chi2'
-                    elif cat_col == 'npix':
-                        cat_col = 'n_pixels'
-
-                    if cat_col == 'pid':
-                        continue
-                    if cat_col == 'isdiffpos':
-                        continue
-                    if cat_col == 'field':
-                        continue
-                    if cat_col == 'hp6':
-                        continue
-                    if cat_col == 'hp9':
-                        continue
-                    if cat_col == 'expid':
-                        continue
-                    if cat_col == 'fid':
-                        continue
-                    if cat_col == 'sca':
-                        continue
-                    if cat_col == 'mjdobs':
-                        continue
-
-                    num = str(row[cat_col])
-                    nums = nums + num + ","
-
-
-                # The field,hp6,hp9 indexes must be overridden with
-                # the actual ra,dec position of the source.
-
-                ra = float(row["ra"])
-                dec = float(row["dec"])
-                roman_tessellation_db.get_rtid(ra,dec)
-                field = roman_tessellation_db.rtid
-                hp6 = hp.ang2pix(nside6,ra,dec,nest=True,lonlat=True)
-                hp9 = hp.ang2pix(nside9,ra,dec,nest=True,lonlat=True)
-
-                num = str(pid)
-                nums = nums + num + ","
-                num = str(isdiffpos)
-                nums = nums + num + ","
-                num = str(field)
-                nums = nums + num + ","
-                num = str(hp6)
-                nums = nums + num + ","
-                num = str(hp9)
-                nums = nums + num + ","
-                num = str(expid)
-                nums = nums + num + ","
-                num = str(fid)
-                nums = nums + num + ","
-                num = str(sca)
-                nums = nums + num + ","
-                num = str(mjdobs)
-                nums = nums + num + ","
-
-                # Slice the string to get all but the last character, then add the newline character
-                new_character = "\n"
-                line_to_write_to_file = nums[:-1] + new_character
-
-                csv_fh.write(line_to_write_to_file)
-
+        joined_table_inner.remove_columns(['group_id',
+                                        'group_size',
+                                        'local_bkg',
+                                        'x_init',
+                                        'y_init',
+                                        'flux_init',
+                                        'x_centroid',
+                                        'y_centroid',
+                                        'flux',
+                                        'mag',
+                                        'daofind_mag'])
+        joined_table_inner['pid']=pid
+        joined_table_inner['isdiffpos']=isdiffpos
+        joined_table_inner['field']=field
+        joined_table_inner['expid']=expid
+        joined_table_inner['fid']=fid
+        joined_table_inner['sca'] = sca
+        joined_table_inner['mjdobs']= mjdobs
+        # The field,hp6,hp9 indexes must be overridden with
+        # the actual ra,dec position of the source.
+        joined_table_inner['hp6']   = hp.ang2pix(2**6, joined_table_inner['ra'], joined_table_inner['dec'], nest=True, lonlat=True)
+        joined_table_inner['hp9']   = hp.ang2pix(2**9, joined_table_inner['ra'], joined_table_inner['dec'], nest=True, lonlat=True)
+        joined_table_inner['field'] = roman_tessellation_index(joined_table_inner['ra'], joined_table_inner['dec'])   # vectorized
+        nums = joined_table_inner.colnames
+        buffer = table_to_buffer(joined_table_inner, nums)
 
         # Check whether database connection is still alive.
 
@@ -451,12 +439,33 @@ def run_single_core_job(jids,overlapping_fields_list,meta_list,negative_diffimg_
 
         # Load records into sources database tables.
 
-        dbh.copy_data_from_file_into_database(sources_table_file,sources_table,columns)
+        dbh.copy_data_from_buffer_into_database(buffer,tablename,columns)
 
         if dbh.exit_code >= 64:
-            fh.write(f"*** Error bulk-loading data from file ({sources_table_file}) into specified database table ({sources_table}); quitting...\n")
+            fh.write(f"*** Error bulk-loading data from buffer into specified database table ({tablename}); quitting...\n")
             fh.flush()
             exit(dbh.exit_code)
+
+        cross_match_sql = ""
+        #Analyze new table so POSTGRE SQL plans correctly
+        # DISTINCT ON coupled with ORDERED BY returns only the first closest match
+        #"    match_dist = m.dist * 3600" #Add later, in arcsec
+        cross_match_sql = f"""ANALYZE {tablename};
+        UPDATE {tablename} s
+        SET aid = m.aid,
+        FROM (
+            SELECT DISTINCT ON (s2.src_id)
+            s2.src_id,
+            a.aid,
+            q3c_dist(s2.ra, s2.dec, a.ra0, a.dec0) AS dist
+            FROM {tablename} s2
+            JOIN astroobjects a
+                ON q3c_join(s2.ra, s2.dec, a.ra0, a.dec0, {match_radius})
+            WHERE s2.flags=0") #can remove if filter R/B first
+            ORDER BY s2.src_id, dist
+            ) m
+        WHERE s.src_id = m.src_id;"""
+
 
 
         # Touch done file.  Upload done file to S3 bucket.
@@ -545,6 +554,8 @@ if __name__ == '__main__':
     # that are associated with the given processing date.
     # Returns a list of job IDs.
 
+    # TODO Figure out how to pass in SCAs as they finish and limit to processing on exposure at a time?
+    #How much will this hold things up if SCAs take different amounts of time to process?
     recs = dbh.get_jids_of_normal_science_pipeline_jobs_for_processing_date(proc_date)
 
     if dbh.exit_code >= 64:
@@ -564,6 +575,7 @@ if __name__ == '__main__':
         job_dict = dbh.get_info_for_job(jid)
 
         rid = job_dict["rid"]
+        expid = job_dict["expid"]
 
         l2file_dict = dbh.get_l2file_info_for_sources(rid)
 
@@ -578,7 +590,7 @@ if __name__ == '__main__':
         expid = l2file_dict["expid"]
         sca = l2file_dict["sca"]
         fid = l2file_dict["fid"]
-        field = l2file_dict["field"]
+        #field = l2file_dict["field"]
         hp6 = l2file_dict["hp6"]
         hp9 = l2file_dict["hp9"]
         mjdobs = l2file_dict["mjdobs"]
@@ -605,7 +617,7 @@ if __name__ == '__main__':
         meta_dict["mjdobs"] = mjdobs
         meta_dict["pid"] = pid
 
-
+        #TODO Replace this part? Do I need it?
         # Get field numbers (rtids) of all sky tiles containing sky positions
         # in given science image associated with job ID.
 
@@ -652,28 +664,27 @@ if __name__ == '__main__':
     # all SCAs associated with processing date...")
 
     if do_loading:
+        # #TODO move this to the SCA processing since we're going to create a temp tabl
+        # # Create sources database tables for all SCAs associated with processing date.
 
+        # print("Creating temp source database tables for all SCAs associated with processing date...")
 
-        # Create sources database tables for all SCAs associated with processing date.
+        # sql_queries = []
+        # sql_queries.append("SET default_tablespace = pipeline_data_01;")
 
-        print("Creating sources database tables for all SCAs associated with processing date...")
+        # for sca in scas_list:
 
-        sql_queries = []
-        sql_queries.append("SET default_tablespace = pipeline_data_01;")
+        #     tablename = f"sources_{proc_date}_{sca}"
 
-        for sca in scas_list:
+        #     sql_queries.append(f"SELECT to_regclass('public.{tablename}') IS NOT NULL;")
+        #     sql_queries.append(f"CREATE TABLE {tablename} (LIKE sources INCLUDING DEFAULTS INCLUDING CONSTRAINTS);")
+        #     sql_queries.append(f"ALTER TABLE {tablename} SET UNLOGGED;")
+        #     sql_queries.append(f"ALTER TABLE {tablename} INHERIT sources;")
 
-            tablename = f"sources_{proc_date}_{sca}"
+        # dbh.execute_sql_queries(sql_queries)
 
-            sql_queries.append(f"SELECT to_regclass('public.{tablename}') IS NOT NULL;")
-            sql_queries.append(f"CREATE TABLE {tablename} (LIKE sources INCLUDING DEFAULTS INCLUDING CONSTRAINTS);")
-            sql_queries.append(f"ALTER TABLE {tablename} SET UNLOGGED;")
-            sql_queries.append(f"ALTER TABLE {tablename} INHERIT sources;")
-
-        dbh.execute_sql_queries(sql_queries)
-
-        if dbh.exit_code >= 64:
-            exit(dbh.exit_code)
+        #if dbh.exit_code >= 64:
+        #    exit(dbh.exit_code)
 
 
         # Close main-program database connection before long episode of bulk-loading source records.
@@ -701,6 +712,7 @@ if __name__ == '__main__':
 
         if num_cores > 1:
             negative_diffimg_flag = False
+            #AZ: Unit to parallelize over will be Exposure
             execute_parallel_processes(jid_list,overlapping_fields_list,meta_list,negative_diffimg_flag,num_cores)
             negative_diffimg_flag = True
             execute_parallel_processes(jid_list,overlapping_fields_list,meta_list,negative_diffimg_flag,num_cores)
