@@ -3876,3 +3876,65 @@ class RAPIDDB:
             return
 
         return records
+
+
+########################################################################################################
+
+    def update_astroobjectsmeta_statistics(self,
+                                           astroobjectsmeta_tablename,
+                                           aid,
+                                           meanra,
+                                           stdra,
+                                           meandec,
+                                           stddec,
+                                           meanflux,
+                                           stdflux,
+                                           nsources,
+                                           debug=0):
+
+        '''
+        Update statistics in AstroObjectsMeta_<field> database record.
+        '''
+
+        self.exit_code = 0
+
+
+        # Define query.
+
+        query = f"update {astroobjectsmeta_tablename} " +\
+            f"set meanra = {meanra}, " +\
+            f"stdevra = {stdra}, " +\
+            f"meandec = {meandec}, " +\
+            f"stdevdec = {stddec}, " +\
+            f"meanflux = {meanflux}, " +\
+            f"stdevflux = {stdflux}, " +\
+            f"nsources = {nsources} " +\
+            f"where aid = {aid};"
+
+
+        # Query database.
+
+        if debug == 1:
+            print('query = {}'.format(query))
+
+
+        # Execute query.
+
+        try:
+            self.cur.execute(query)
+
+            try:
+                records = []
+                for record in self.cur:
+                    records.append(record)
+            except:
+                if debug == 1:
+                    print("Nothing returned from database query; continuing...")
+
+        except (Exception, psycopg2.DatabaseError) as error:
+            print(f'*** Error updating astroobjectsmeta_tablename record (aid={aid},error={error}); skipping...')
+            self.exit_code = 67
+            return
+
+        if self.exit_code == 0:
+            self.conn.commit()           # Commit database transaction
