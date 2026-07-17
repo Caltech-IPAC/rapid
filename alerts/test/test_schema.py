@@ -82,9 +82,9 @@ def test_assembled_alert_semantics(alert):
     assert abs(alert["diaSource"]["snr"] - 1234.5 / 56.7) < 1e-6
     assert alert["diaObject"]["nDiaSources"] == 3
     # first/last/validity MJDs are computed from the detection history
-    assert alert["diaObject"]["firstDiaSourceMjdTai"] == 60480.5
-    assert alert["diaObject"]["lastDiaSourceMjdTai"] == 60500.5
-    assert alert["diaObject"]["validityStartMjdTai"] == 60500.5
+    assert alert["diaObject"]["firstDiaSourceMjd"] == 60480.5
+    assert alert["diaObject"]["lastDiaSourceMjd"] == 60500.5
+    assert alert["diaObject"]["validityStartMjd"] == 60500.5
     assert len(alert["prvDiaSources"]) == 2
     assert alert["prvDiaForcedSources"] is None
     assert alert["cutoutDifference"] == b"FAKE_DIFF"

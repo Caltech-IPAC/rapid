@@ -98,23 +98,24 @@ DIA_SOURCE_PARAMS = (
     # --- Identifiers & associations -------------------------------------
     Param("diaSourceId",   "long",             "Unique identifier for this source detection",
                     IMPLEMENTED, "sources.sid",    attr="sid"),
-    Param("expId",         "long",             "Visit (exposure) identifier",
+    Param("expId",         "long",             "Visit (exposure) identifier", #TODO: is this called visit or exposure
                     IMPLEMENTED, "sources.expid",  attr="expid"),
     Param("detector",      "int",              "Detector (SCA) number",
                     IMPLEMENTED, "sources.sca",    attr="sca"),
     Param("diaObjectId",   ["null", "long"],   "Associated diaObject identifier",
                     IMPLEMENTED, "merges_<field>.aid", attr="aid"),
     Param("ssObjectId",    ["null", "long"],   "Associated solar system object identifier (stub)",
-                    STUB, "solar-system cross-matching (not run)"),
+                    STUB, "solar-system cross-matching (not run yet)"),
 
     # --- Time ------------------------------------------------------------
-    Param("midpointMjdTai", "double",          "Effective mid-observation time [TAI MJD]",
+    #TODO - make sure final Roman decision is UTC, propagate to other times
+    Param("midpointMjd", "double",          "Effective mid-observation time (UTC scale) [MJD]",
                     IMPLEMENTED, "sources.mjdobs", attr="mjdobs"),
-    Param("timeProcessedMjdTai",  ["null", "double"],  "Time alert was processed [TAI MJD]",
-                    STUB, "set at assembly time (decide TAI convention first)"),
+    Param("timeProcessedMjd",  ["null", "double"],  "Time alert was processed (UTC scale) [MJD]",
+                    NOT_USED, "set at assembly time"), #TODO: do we actually need this?
     Param("exposureTime",  ["null", "float"],  "Exposure time [s]",
-                    STUB, "exposures table metadata (join not implemented)"),
-    Param("timeWithdrawnMjdTai",  ["null", "double"],  "Time alert was withdrawn [TAI MJD]",
+                    IMPLEMENTED, "exposures.exptime", attr="exptime"),
+    Param("timeWithdrawnMjd",  ["null", "double"],  "Time alert was withdrawn (UTC scale) [MJD]",
                     NOT_USED, "alert-withdrawal mechanism (not designed)"),
 
     # --- Position (sky & pixel) -------------------------------------------
@@ -322,12 +323,12 @@ DIA_FORCED_SOURCE_PARAMS = (
                         STUB, _FP),
 
     # --- Time ---
-    Param("midpointMjdTai",    "double",          "Effective mid-observation time [TAI MJD]",
+    Param("midpointMjd",    "double",          "Effective mid-observation time (UTC scale) [MJD]",
                         STUB, _FP, attr="mjdobs"),
-    Param("timeProcessedMjdTai", "double",        "Time measurement was processed [TAI MJD]",
+    Param("timeProcessedMjd", "double",        "Time measurement was processed (UTC scale) [MJD]",
                         STUB, _FP, attr="time_processed"),
-    Param("timeWithdrawnMjdTai", ["null", "double"], "Time measurement was withdrawn [TAI MJD]",
-                        STUB, "alert-withdrawal mechanism (not designed)"),
+    Param("timeWithdrawnMjd", ["null", "double"], "Time measurement was withdrawn (UTC scale) [MJD]",
+                        NOT_USED, "alert-withdrawal mechanism (not designed)"),
 )
 
 
@@ -378,17 +379,17 @@ DIA_OBJECT_PARAMS = (
     # --- Source history ----------------------------------------------------
     Param("nDiaSources",   "int",              "Total number of associated DIASources",
                         IMPLEMENTED, "astroobjects_<field>.nsources", attr="nsources"),
-    Param("firstDiaSourceMjdTai", ["null", "double"], "MJD of earliest associated diaSource [TAI MJD]",
+    Param("firstDiaSourceMjd", ["null", "double"], "MJD of earliest associated diaSource (UTC scale) [MJD]",
                         IMPLEMENTED, "computed from source history", attr="first_mjd"),
-    Param("lastDiaSourceMjdTai",  ["null", "double"], "MJD of latest associated diaSource [TAI MJD]",
+    Param("lastDiaSourceMjd",  ["null", "double"], "MJD of latest associated diaSource (UTC scale) [MJD]",
                         IMPLEMENTED, "computed from source history", attr="last_mjd"),
-    Param("validityStartMjdTai",  "double",    "Start of validity interval for this object summary [TAI MJD]",
+    Param("validityStartMjd",  "double",    "Start of validity interval for this object summary (UTC scale) [MJD]",
                         IMPLEMENTED, "triggering source mjdobs", attr="validity_mjd"),
     Param("ncovhist",      ["null", "int"],    "Number of times the object position fell on an observed image (stub)",
                         STUB, "coverage history (not computed)"),
-    Param("firstRefMjdTai", ["null", "double"], "MJD of earliest exposure in the reference image [TAI MJD] (stub)",
+    Param("firstRefMjd", ["null", "double"], "MJD of earliest exposure in the reference image (UTC scale) [MJD] (stub)",
                         STUB, "reference-image metadata (not tracked)"),
-    Param("lastRefMjdTai", ["null", "double"], "MJD of latest exposure in the reference image [TAI MJD] (stub)",
+    Param("lastRefMjd", ["null", "double"], "MJD of latest exposure in the reference image (UTC scale) [MJD] (stub)",
                         STUB, "reference-image metadata (not tracked)"),
 
     # --- Per-filter flux statistics (all stubs) ------------------------------
@@ -512,7 +513,7 @@ RECORDS = (
     Record("diaObject",       "RAPID alert schema: astronomical object derived from DIASources",             DIA_OBJECT_PARAMS),
     Record("ssSource",        "RAPID alert schema: solar system source association (stub)",                  SS_SOURCE_PARAMS),
     Record("mpc_orbits",      "RAPID alert schema: MPC orbital elements (stub)",                             MPC_ORBITS_PARAMS),
-    Record("alert",           "RAPID alert schema: top-level alert record (LSST-compatible)",                ALERT_PARAMS),
+    Record("alert",           "RAPID alert schema: top-level alert record",                                  ALERT_PARAMS),
 )
 
 

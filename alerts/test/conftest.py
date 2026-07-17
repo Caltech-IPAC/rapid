@@ -108,6 +108,7 @@ def make_source_row(sid, xfit, yfit, mjdobs, tpv_header, pid=CHIP_PID):
         "pid": pid, "isdiffpos": True, "qfit": 0.1, "cfit": 0.05,
         "redchi": 1.2, "npixfit": 25, "sharpness": 0.4,
         "roundness1": 0.1, "roundness2": -0.05, "peak": 321.0,
+        "exptime": 139.8,
     }
 
 

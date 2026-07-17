@@ -86,6 +86,7 @@ class Source:
     roundness1: Optional[float] = None
     roundness2: Optional[float] = None
     peak: Optional[float] = None
+    exptime: Optional[float] = None
 
     @property
     def snr(self):
@@ -445,9 +446,10 @@ class DatabaseProvider(AlertDataProvider):
         # The filters join resolves the numeric fid to the band string
         # ("F158", ...).
         rows = self._query("""
-            SELECT s.*, f.filter AS filter_name
+            SELECT s.*, f.filter AS filter_name, e.exptime
             FROM sources s
             JOIN filters f ON s.fid = f.fid
+            JOIN exposures e ON s.expid = e.expid
             WHERE s.sid = %s
         """, (sid,))
         if not rows:
@@ -465,9 +467,10 @@ class DatabaseProvider(AlertDataProvider):
         # and history rows for all of them at once (a handful of set-based
         # queries instead of ~3 queries per alert).
         rows = self._query("""
-            SELECT s.*, f.filter AS filter_name
+            SELECT s.*, f.filter AS filter_name, e.exptime
             FROM sources s
             JOIN filters f ON s.fid = f.fid
+            JOIN exposures e ON s.expid = e.expid
             WHERE s.pid = %s
             ORDER BY s.sid
         """, (pid,))
@@ -506,10 +509,11 @@ class DatabaseProvider(AlertDataProvider):
             # get_prv_detections() call then tightens it to its own trigger.
             earliest_mjd = min(s.mjdobs for s in sources) - window_days
             history_rows = self._query(f"""
-                SELECT m.aid AS object_aid, s.*, f.filter AS filter_name
+                SELECT m.aid AS object_aid, s.*, f.filter AS filter_name, e.exptime
                 FROM sources s
                 JOIN merges_{int(field)} m ON s.sid = m.sid
                 JOIN filters f ON s.fid = f.fid
+                JOIN exposures e ON s.expid = e.expid
                 WHERE m.aid = ANY(%s) AND s.mjdobs >= %s
                 ORDER BY s.mjdobs
             """, (aids, earliest_mjd))
@@ -574,10 +578,11 @@ class DatabaseProvider(AlertDataProvider):
         # the alert's prvDiaSources (oldest first).
         field = int(detection.field)
         rows = self._query(f"""
-            SELECT s.*, f.filter AS filter_name
+            SELECT s.*, f.filter AS filter_name, e.exptime
             FROM sources s
             JOIN merges_{field} m ON s.sid = m.sid
             JOIN filters f ON s.fid = f.fid
+            JOIN exposures e ON s.expid = e.expid
             WHERE m.aid = %s AND s.sid != %s
               AND s.mjdobs >= %s
             ORDER BY s.mjdobs
