@@ -3330,160 +3330,7 @@ class RAPIDDB:
 
 ########################################################################################################
 
-    def add_astro_object(self,ra0,dec0,flux0,meanra,stdevra,meandec,stdevdec,meanflux,stdevflux,nsources,field,hp6,hp9):
-
-        '''
-        Add record to AstroObjects database table.
-        '''
-
-        self.exit_code = 0
-
-
-        # Define query template.
-
-        query_template =\
-            "select aid from addAstroObjects(" +\
-            "cast('TEMPLATE_RA0' as double precision)," +\
-            "cast('TEMPLATE_DEC0' as double precision)," +\
-            "cast('TEMPLATE_FLUX0' as real)," +\
-            "cast('TEMPLATE_MEANRA' as double precision)," +\
-            "cast('TEMPLATE_STDEVRA' as real)," +\
-            "cast('TEMPLATE_MEANDEC' as double precision)," +\
-            "cast('TEMPLATE_STDEVDEC' as real)," +\
-            "cast('TEMPLATE_MEANFLUX' as real)," +\
-            "cast('TEMPLATE_STDEVFLUX' as real)," +\
-            "cast('TEMPLATE_NSOURCES' as smallint)," +\
-            "cast('TEMPLATE_FIELD' as integer)," +\
-            "cast('TEMPLATE_HP6' as integer)," +\
-            "cast('TEMPLATE_HP9' as integer)) as aid;"
-
-
-        # Query database.
-
-        print(f"----> ra0 = {ra0}")
-        print(f"----> dec0 = {dec0}")
-        print(f"----> flux0 = {flux0}")
-        print(f"----> meanra = {meanra}")
-        print(f"----> stdevra = {stdevra}")
-        print(f"----> meandec = {meandec}")
-        print(f"----> stdevdec = {stdevdec}")
-        print(f"----> meanflux = {meanflux}")
-        print(f"----> stdevflux = {stdevflux}")
-        print(f"----> nsources = {nsources}")
-        print(f"----> field = {field}")
-        print(f"----> hp6 = {hp6}")
-        print(f"----> hp9 = {hp9}")
-
-        ra0_str = str(ra0)
-        dec0_str = str(dec0)
-        flux0_str = str(flux0)
-        meanra_str = str(meanra)
-        stdevra_str = str(stdevra)
-        meandec_str = str(meandec)
-        stdevdec_str = str(stdevdec)
-        meanflux_str = str(meanflux)
-        stdevflux_str = str(stdevflux)
-        nsources_str = str(nsources)
-        field_str = str(field)
-        hp6_str = str(hp6)
-        hp9_str = str(hp9)
-
-        rep = {"TEMPLATE_FIELD": field_str,
-               "TEMPLATE_HP6": hp6_str,
-               "TEMPLATE_HP9": hp9_str}
-
-        rep["TEMPLATE_RA0"] = ra0_str
-        rep["TEMPLATE_DEC0"] = dec0_str
-        rep["TEMPLATE_FLUX0"] = flux0_str
-        rep["TEMPLATE_MEANRA"] = meanra_str
-        rep["TEMPLATE_STDEVRA"] = stdevra_str
-        rep["TEMPLATE_MEANDEC"] = meandec_str
-        rep["TEMPLATE_STDEVDEC"] = stdevdec_str
-        rep["TEMPLATE_MEANFLUX"] = meanflux_str
-        rep["TEMPLATE_STDEVFLUX"] = stdevflux_str
-        rep["TEMPLATE_NSOURCES"] = nsources_str
-
-        rep = dict((re.escape(k), v) for k, v in rep.items())
-        pattern = re.compile("|".join(rep.keys()))
-        query = pattern.sub(lambda m: rep[re.escape(m.group(0))], query_template)
-
-        print('query = {}'.format(query))
-
-        self.cur.execute(query)
-        record = self.cur.fetchone()
-
-        if record is not None:
-            aid = record[0]
-        else:
-            print("*** Error: Could not insert AstroObjects record; returning...")
-            self.exit_code = 67
-            return
-
-        if self.exit_code == 0:
-            self.conn.commit()           # Commit database transaction
-
-        return aid
-
-
-########################################################################################################
-
-    def register_merge(self,aid,sid):
-
-        '''
-        Insert record in Merges database table.
-        '''
-
-        self.exit_code = 0
-
-
-        # Define query template.
-
-        query_template =\
-            "select * from registerMerge(" +\
-            "cast(TEMPLATE_AID as integer)," +\
-            "cast(TEMPLATE_SID AS integer));"
-
-
-        # Query database.
-
-        print('----> aid = {}'.format(aid))
-        print('----> sid = {}'.format(sid))
-
-        rep = {"TEMPLATE_AID": str(aid)}
-
-        rep["TEMPLATE_SID"] = str(sid)
-
-
-        rep = dict((re.escape(k), v) for k, v in rep.items())
-        pattern = re.compile("|".join(rep.keys()))
-        query = pattern.sub(lambda m: rep[re.escape(m.group(0))], query_template)
-
-        print('query = {}'.format(query))
-
-
-        # Execute query.
-
-        try:
-            self.cur.execute(query)
-
-            try:
-                for record in self.cur:
-                    print(record)
-            except:
-                print("Nothing returned from database stored function; continuing...")
-
-        except (Exception, psycopg2.DatabaseError) as error:
-            print('*** Error inserting Merges record ({}); skipping...'.format(error))
-            self.exit_code = 67
-            return
-
-        if self.exit_code == 0:
-            self.conn.commit()           # Commit database transaction
-
-
-########################################################################################################
-
-    def add_astro_object_to_field(self,tablename,ra0,dec0,flux0,meanra,stdevra,meandec,stdevdec,meanflux,stdevflux,nsources,field,hp6,hp9,debug=0):
+    def add_astro_object_to_field(self,tablename,ra0,dec0,flux0,field,hp6,hp9,debug=0):
 
         self.exit_code = 0
 
@@ -3495,13 +3342,6 @@ class RAPIDDB:
             f"            (ra0," +\
             f"             dec0," +\
             f"             flux0," +\
-            f"             meanra," +\
-            f"             stdevra," +\
-            f"             meandec," +\
-            f"             stdevdec," +\
-            f"             meanflux," +\
-            f"             stdevflux," +\
-            f"             nsources," +\
             f"             field," +\
             f"             hp6," +\
             f"             hp9" +\
@@ -3510,13 +3350,6 @@ class RAPIDDB:
             f"            ({str(ra0)}," +\
             f"             {str(dec0)}," +\
             f"             {str(flux0)}," +\
-            f"             {str(meanra)}," +\
-            f"             {str(stdevra)}," +\
-            f"             {str(meandec)}," +\
-            f"             {str(stdevdec)}," +\
-            f"             {str(meanflux)}," +\
-            f"             {str(stdevflux)}," +\
-            f"             {str(nsources)}," +\
             f"             {str(field)}," +\
             f"             {str(hp6)}," +\
             f"             {str(hp9)})" +\
@@ -3636,68 +3469,6 @@ class RAPIDDB:
 
         except (Exception, psycopg2.DatabaseError) as error:
             print(f'*** Error deleting {tablename} record (error={error}); skipping...')
-            self.exit_code = 67
-            return
-
-        if self.exit_code == 0:
-            self.conn.commit()           # Commit database transaction
-
-
-########################################################################################################
-
-    def update_astroobject_statistics(self,
-                                      astroobjects_tablename,
-                                      aid,
-                                      meanra,
-                                      stdra,
-                                      meandec,
-                                      stddec,
-                                      meanflux,
-                                      stdflux,
-                                      nsources,
-                                      debug=0):
-
-        '''
-        Update statistics in AstroObjects database record.
-        '''
-
-        self.exit_code = 0
-
-
-        # Define query.
-
-        query = f"update {astroobjects_tablename} " +\
-            f"set meanra = {meanra}, " +\
-            f"stdevra = {stdra}, " +\
-            f"meandec = {meandec}, " +\
-            f"stdevdec = {stddec}, " +\
-            f"meanflux = {meanflux}, " +\
-            f"stdevflux = {stdflux}, " +\
-            f"nsources = {nsources} " +\
-            f" where aid = {aid};"
-
-
-        # Query database.
-
-        if debug == 1:
-            print('query = {}'.format(query))
-
-
-        # Execute query.
-
-        try:
-            self.cur.execute(query)
-
-            try:
-                records = []
-                for record in self.cur:
-                    records.append(record)
-            except:
-                if debug == 1:
-                    print("Nothing returned from database query; continuing...")
-
-        except (Exception, psycopg2.DatabaseError) as error:
-            print(f'*** Error updating astroobjects_tablename record (aid={aid},error={error}); skipping...')
             self.exit_code = 67
             return
 
