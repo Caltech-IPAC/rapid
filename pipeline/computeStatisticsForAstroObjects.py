@@ -532,21 +532,28 @@ if __name__ == '__main__':
     sql_queries = []
     sql_queries.append("SET default_tablespace = pipeline_indx_01;")
 
+    fillfactor = 70
+
     for field in fields_list:
 
         tablename = f"astroobjectsmeta_{field}"
 
-        sql_queries.append(f"CREATE TABLE {tablename} (LIKE astroobjectsmeta INCLUDING DEFAULTS INCLUDING CONSTRAINTS);")
+        sql_queries.append(f"CREATE TABLE {tablename} (LIKE astroobjectsmeta INCLUDING " +
+                           f"DEFAULTS INCLUDING CONSTRAINTS) WITH (fillfactor = {fillfactor});")
+
         sql_queries.append(f"CREATE INDEX {tablename}_nsources_idx ON {tablename} (nsources);")
         sql_queries.append(f"CREATE INDEX {tablename}_meanradec_idx ON {tablename} (q3c_ang2ipix(meanra, meandec));")
+
         sql_queries.append(f"CLUSTER {tablename}_meanradec_idx ON {tablename};")
         sql_queries.append(f"ANALYZE {tablename};")
+
         sql_queries.append(f"REVOKE ALL ON TABLE {tablename} FROM rapidreadrole;")
         sql_queries.append(f"GRANT SELECT ON TABLE {tablename} TO GROUP rapidreadrole;")
         sql_queries.append(f"REVOKE ALL ON TABLE {tablename} FROM rapidadminrole;")
         sql_queries.append(f"GRANT ALL ON TABLE {tablename} TO GROUP rapidadminrole;")
         sql_queries.append(f"REVOKE ALL ON TABLE {tablename} FROM rapidporole;")
         sql_queries.append(f"GRANT INSERT,UPDATE,SELECT,DELETE,TRUNCATE,TRIGGER,REFERENCES ON TABLE {tablename} TO rapidporole;")
+
         sql_queries.append(f"ALTER TABLE {tablename} SET UNLOGGED;")
 
     dbh.execute_sql_queries(sql_queries,debug)
