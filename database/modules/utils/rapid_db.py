@@ -3330,6 +3330,40 @@ class RAPIDDB:
 
 ########################################################################################################
 
+
+########################################################################################################
+
+    def copy_data_from_buffer_into_database(self,buffer,table_name,columns):
+
+        '''
+        Copy data from a Table in memory into specified database table.
+        '''
+
+        self.exit_code = 0
+
+        separator = ","
+        null_string = "\\N" # Default for PostgreSQL COPY
+
+        print('table_name = {}'.format(table_name))
+
+
+        # Open the CSV file in read mode and bulk-load specified database table.
+
+        try:
+            sql = f"COPY {table_name} ({", ".join(columns)}) FROM STDIN WITH (FORMAT text, DELIMITER {separator}, NULL {null_string})"
+            self.cur.copy_expert(sql, buffer)
+            self.conn.commit()           # Commit database transaction
+
+        except (Exception, psycopg2.DatabaseError) as error:
+            print(f'*** Error bulk-loading data from buffer into specified database table ({table_name}); skipping...')
+            self.exit_code = 67
+            exit(self.exit_code)
+
+        return None
+
+
+########################################################################################################
+
     def add_astro_object(self,ra0,dec0,flux0,meanra,stdevra,meandec,stdevdec,meanflux,stdevflux,nsources,field,hp6,hp9):
 
         '''
