@@ -372,7 +372,7 @@ def run_single_core_job(fields,index_thread):
                 stddec = np.std(filtered_decs_list)
                 stdflux = np.std(filtered_fluxes_list)
 
-                dbh.update_astroobjectsmeta_statistics(astroobjectsmeta_tablename,
+                dbh.insert_astroobjectsmeta_statistics(astroobjectsmeta_tablename,
                                                        aid,
                                                        meanra,
                                                        stdra,

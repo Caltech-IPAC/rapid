@@ -3880,7 +3880,7 @@ class RAPIDDB:
 
 ########################################################################################################
 
-    def update_astroobjectsmeta_statistics(self,
+    def insert_astroobjectsmeta_statistics(self,
                                            astroobjectsmeta_tablename,
                                            aid,
                                            meanra,
@@ -3893,7 +3893,7 @@ class RAPIDDB:
                                            debug=0):
 
         '''
-        Update statistics in AstroObjectsMeta_<field> database record.
+        Insert statistics in AstroObjectsMeta_<field> database record.
         '''
 
         self.exit_code = 0
@@ -3901,15 +3901,9 @@ class RAPIDDB:
 
         # Define query.
 
-        query = f"update {astroobjectsmeta_tablename} " +\
-            f"set meanra = {meanra}, " +\
-            f"stdevra = {stdra}, " +\
-            f"meandec = {meandec}, " +\
-            f"stdevdec = {stddec}, " +\
-            f"meanflux = {meanflux}, " +\
-            f"stdevflux = {stdflux}, " +\
-            f"nsources = {nsources} " +\
-            f"where aid = {aid};"
+        query = f"INSERT INTO {astroobjectsmeta_tablename} " +\
+            f"(aid,meanra,stdevra,meandec,stdevdec,meanflux,stdevflux,nsources) " +\
+            f"VALUES ({aid},{meanra},{stdevra},{meandec},{stdevdec},{meanflux},{stdevflux},{nsources});"
 
 
         # Query database.
@@ -3932,7 +3926,7 @@ class RAPIDDB:
                     print("Nothing returned from database query; continuing...")
 
         except (Exception, psycopg2.DatabaseError) as error:
-            print(f'*** Error updating astroobjectsmeta_tablename record (aid={aid},error={error}); skipping...')
+            print(f'*** Error inserting astroobjectsmeta_tablename record (aid={aid},error={error}); skipping...')
             self.exit_code = 67
             return
 
