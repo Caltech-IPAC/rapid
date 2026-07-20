@@ -133,7 +133,7 @@ def run_single_core_job(fields,index_thread):
     # Set thread_debug = 0 here to severly limit the amount of information logged for runs
     # that are anything but short tests.
 
-    thread_debug = 1
+    thread_debug = 0
 
     nfields = len(fields)
 
@@ -401,7 +401,6 @@ def run_single_core_job(fields,index_thread):
         thread_start_time_benchmark = thread_end_time_benchmark
 
 
-        '''
         # Drop empty astroobjects_<field>, astroobjectsmeta_<field>, and
         # merges_<field> database tables.
 
@@ -464,7 +463,6 @@ def run_single_core_job(fields,index_thread):
                  f"{merges_tablename}, and {astroobjectsmeta_tablename} database table\n")
         fh.flush()
         thread_start_time_benchmark = thread_end_time_benchmark
-        '''
 
 
         # End of loop over fields.
