@@ -128,7 +128,7 @@ def run_single_core_job(fields,index_thread):
     # Set thread_debug = 0 here to severly limit the amount of information logged for runs
     # that are anything but short tests.
 
-    thread_debug = 0
+    thread_debug = 1
 
     nfields = len(fields)
 
@@ -307,7 +307,7 @@ def run_single_core_job(fields,index_thread):
         # Loop over astroobjects for current field:
         # 1. Filter out not-best sources.
         # 2. Compute statistics using full sources history (no cumulative statistics).
-        # 3. Update AstroObjectsMeta_<field> record.
+        # 3. Insert AstroObjectsMeta_<field> record.
 
         aids_list = list(sids_for_aid_dict.keys())
 
@@ -384,6 +384,16 @@ def run_single_core_job(fields,index_thread):
                                                        thread_debug)
 
 
+        # Code-timing benchmark.
+
+        thread_end_time_benchmark = time.time()
+        diff_time_benchmark = thread_end_time_benchmark - thread_start_time_benchmark
+        fh.write(f"Elapsed time in seconds to insert statistics in {astroobjectsmeta_tablename} database table\n")
+        fh.flush()
+        thread_start_time_benchmark = thread_end_time_benchmark
+
+
+        '''
         # Drop empty astroobjects_<field>, astroobjectsmeta_<field>, and
         # merges_<field> database tables.
 
@@ -442,9 +452,11 @@ def run_single_core_job(fields,index_thread):
 
         thread_end_time_benchmark = time.time()
         diff_time_benchmark = thread_end_time_benchmark - thread_start_time_benchmark
-        fh.write(f"Elapsed time in seconds to update statistics in {astroobjectsmeta_tablename} database table\n")
+        fh.write(f"Elapsed time in seconds to drop empty {astroobjects_tablename}, " +
+                 f"{merges_tablename}, and {astroobjectsmeta_tablename} database table\n")
         fh.flush()
         thread_start_time_benchmark = thread_end_time_benchmark
+        '''
 
 
         # End of loop over fields.
