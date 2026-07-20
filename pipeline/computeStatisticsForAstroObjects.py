@@ -377,6 +377,9 @@ def run_single_core_job(fields,index_thread):
                 stddec = np.std(filtered_decs_list)
                 stdflux = np.std(filtered_fluxes_list)
 
+                if meanra < 0.0:
+                    meanra += 360.0
+
                 if thread_debug == 1:
                     fh.write(f"Inserting AstroObjectsMeta record: astroobjectsmeta_tablename,aid," +
                              f"meanra,meandec,nsources={astroobjectsmeta_tablename},{aid},{meanra},{meandec},{nsources}\n")
@@ -398,7 +401,8 @@ def run_single_core_job(fields,index_thread):
 
         thread_end_time_benchmark = time.time()
         diff_time_benchmark = thread_end_time_benchmark - thread_start_time_benchmark
-        fh.write(f"Elapsed time in seconds to insert statistics records into {astroobjectsmeta_tablename} database table\n")
+        fh.write(f"Elapsed time in seconds to insert statistics records into " +
+                 f"{astroobjectsmeta_tablename} database table = {diff_time_benchmark}\n")
         fh.flush()
         thread_start_time_benchmark = thread_end_time_benchmark
 
@@ -462,7 +466,7 @@ def run_single_core_job(fields,index_thread):
         thread_end_time_benchmark = time.time()
         diff_time_benchmark = thread_end_time_benchmark - thread_start_time_benchmark
         fh.write(f"Elapsed time in seconds to drop empty {astroobjects_tablename}, " +
-                 f"{merges_tablename}, and {astroobjectsmeta_tablename} database table\n")
+                 f"{merges_tablename}, and {astroobjectsmeta_tablename} database table = {diff_time_benchmark}\n")
         fh.flush()
         thread_start_time_benchmark = thread_end_time_benchmark
 
@@ -553,7 +557,6 @@ if __name__ == '__main__':
     print("Creating tables and indexes for all astroobjectsmeta_<field> database tables...")
 
     sql_queries = []
-    sql_queries.append("SET default_tablespace = pipeline_data_01;")
 
     fillfactor = 70
 
@@ -563,6 +566,7 @@ if __name__ == '__main__':
 
         tablename = f"astroobjectsmeta_{field}"
 
+        sql_queries.append("SET default_tablespace = pipeline_data_01;")
         sql_queries.append(f"CREATE TABLE {tablename} (LIKE astroobjectsmeta INCLUDING " +
                            f"DEFAULTS INCLUDING CONSTRAINTS) WITH (fillfactor = {fillfactor});")
 
