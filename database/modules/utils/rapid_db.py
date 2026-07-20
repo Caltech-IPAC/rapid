@@ -3884,11 +3884,11 @@ class RAPIDDB:
                                            astroobjectsmeta_tablename,
                                            aid,
                                            meanra,
-                                           stdra,
+                                           stdevra,
                                            meandec,
-                                           stddec,
+                                           stdevdec,
                                            meanflux,
-                                           stdflux,
+                                           stdevflux,
                                            nsources,
                                            debug=0):
 
