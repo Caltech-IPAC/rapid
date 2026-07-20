@@ -495,7 +495,10 @@ if __name__ == '__main__':
 
 
     '''
-    Launch parallel tasks to update lightcurve statistics in AstroObjectsMeta_<field> database tables.
+    Launch parallel tasks to compute lightcurve statistics in AstroObjectsMeta_<field> database tables.
+    These tables must be dropped before running this script, as the tables are recreated, indexed,
+    and then populated with inserts.  No record updates are done for speed.  Further upgrade to this
+    script could be to replace inserts with bulk copies.
     '''
 
 
@@ -507,7 +510,7 @@ if __name__ == '__main__':
         exit(dbh.exit_code)
 
     sql_queries = []
-    sql_queries.append(f"select tablename from pg_tables where schemaname='public' and tablename like 'astroobjects_%';")
+    sql_queries.append(f"select tablename from pg_tables where schemaname='public' and tablename like 'astroobjects\_%';")
     records = dbh.execute_sql_queries(sql_queries,debug)
 
     fields_list = []
@@ -535,6 +538,8 @@ if __name__ == '__main__':
     fillfactor = 70
 
     for field in fields_list:
+
+        print(f"field = {field}")
 
         tablename = f"astroobjectsmeta_{field}"
 
