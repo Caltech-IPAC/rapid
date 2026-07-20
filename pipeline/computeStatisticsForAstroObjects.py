@@ -87,7 +87,12 @@ ppid = int(config_input['SCI_IMAGE']['ppid'])
 
 # Open database connections for parallel access.
 
-num_cores = os.cpu_count()
+num_cores = os.getenv('NUM_CORES')
+
+if num_cores is None:
+    num_cores = os.cpu_count()
+else:
+    num_cores = int(num_cores)
 
 print("num_cores =",num_cores)
 
@@ -372,8 +377,8 @@ def run_single_core_job(fields,index_thread):
                 stddec = np.std(filtered_decs_list)
                 stdflux = np.std(filtered_fluxes_list)
 
-                print(f"Inserting AstroObjectsMeta record: astroobjectsmeta_tablename,aid," +
-                      f"meanra,meandec,nsources={astroobjectsmeta_tablename},{aid},{meanra},{meandec},{nsources}")
+                fh.write(f"Inserting AstroObjectsMeta record: astroobjectsmeta_tablename,aid," +
+                         f"meanra,meandec,nsources={astroobjectsmeta_tablename},{aid},{meanra},{meandec},{nsources}\n")
 
                 dbh.insert_astroobjectsmeta_statistics(astroobjectsmeta_tablename,
                                                        aid,
