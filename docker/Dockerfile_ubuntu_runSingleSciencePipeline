@@ -82,6 +82,7 @@ RUN python3.11 -m pip install --upgrade romancal
 RUN python3.11 -m pip install --upgrade fitsio
 RUN python3.11 -m pip install --upgrade fastavro
 RUN python3.11 -m pip install --upgrade pytest
+RUN python3.11 -m pip install --upgrade psutil
 
 # Set up separate Python 3.11 venv under root directory for sfft.
 

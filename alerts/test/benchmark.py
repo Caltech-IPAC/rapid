@@ -18,19 +18,30 @@ Writes one JSON Lines file per run, mixing four record kinds:
                                      the next source is requested, i.e.
                                      the complete assemble+serialize
                                      (+publish) cost of that alert
-    {"kind": "summary", ...}         one per run: totals and percentiles
+    {"kind": "summary", ...}         one per run: timing totals and
+                                     percentiles, peak/bracketing memory,
+                                     and (with --save) the output archive
+                                     size
 
 This is a data product, not a log stream: it is written directly to the
-requested path, while everything human-oriented goes through logging.
+requested path (and the summary is also narrated to the console), while
+everything else human-oriented goes through logging.
 
 Usage (works on any machine with the DB environment variables set):
 
     python test/benchmark.py --exposure 80982 --sca 18 -o timing.jsonl
-    python test/benchmark.py --pid 338173 -o timing.jsonl
+    python test/benchmark.py --pid 338173 --save alerts.avro -o timing.jsonl
     python test/benchmark.py report timing.jsonl [more.jsonl ...]
+
+Memory tooling note: peak RSS comes from resource.ru_maxrss (exact, no
+sampling, but single-process); current RSS from psutil when available
+(else /proc). tracemalloc is intentionally unused -- it misses the
+C-level numpy/fitsio image buffers that dominate this workload. See
+MemoryMonitor for the process-pool extension point.
 """
 
 import argparse
+import contextlib
 import datetime
 import json
 import logging
@@ -41,6 +52,16 @@ import sys
 import time
 from pathlib import Path
 
+try:
+    import resource                       # Unix only (Linux, macOS)
+except ImportError:                       # pragma: no cover - Windows
+    resource = None
+
+try:
+    import psutil                         # optional; enables tree-aware RSS
+except ImportError:
+    psutil = None
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from rapid_alerts.providers import AlertDataProvider
@@ -48,7 +69,76 @@ from rapid_alerts.providers import AlertDataProvider
 logger = logging.getLogger(__name__)
 
 VERSIONED_PACKAGES = ("numpy", "fitsio", "astropy", "fastavro",
-                      "psycopg2-binary", "boto3")
+                      "psycopg2-binary", "boto3", "psutil")
+
+
+# ---------------------------------------------------------------------------
+# memory measurement
+#
+# The dominant memory user here is the ~200 MB of chip images fitsio/numpy
+# load per difference image -- C-level allocations that Python-level tools
+# (tracemalloc) cannot see. Two complementary measures, both near-zero
+# overhead so they don't distort the timing measured in the same run:
+#
+#   peak_rss_bytes()     exact process high-water mark (resource.ru_maxrss).
+#                        No sampling, so it never misses a spike -- but it
+#                        is single-process only.
+#   MemoryMonitor        current RSS bracketing the batch, via psutil (or a
+#                        /proc fallback). The seam for the future
+#                        process-pool case: see its TODO.
+#
+# tracemalloc is deliberately unused (misses the numpy image buffers and
+# ~2x's runtime); psutil is optional (guarded import) so a machine without
+# it still benchmarks, just without the tree-aware numbers.
+# ---------------------------------------------------------------------------
+
+def peak_rss_bytes():
+    """Peak resident set size of this process so far, in bytes, or None if
+    unavailable. ru_maxrss is KiB on Linux but bytes on macOS."""
+    if resource is None:
+        return None
+    raw = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+    return raw if platform.system() == "Darwin" else raw * 1024
+
+
+def current_rss_bytes():
+    """Current (not peak) resident set size of this process in bytes, or
+    None if unavailable. Prefers psutil (portable); falls back to /proc
+    (Linux)."""
+    if psutil is not None:
+        return psutil.Process().memory_info().rss
+    try:
+        with open("/proc/self/statm") as f:
+            resident_pages = int(f.read().split()[1])
+        return resident_pages * (resource.getpagesize() if resource
+                                 else 4096)
+    except (OSError, IndexError, ValueError):
+        return None
+
+
+class MemoryMonitor:
+    """Records RSS at the start and end of a batch.
+
+    Today this brackets one process. When production fans alert work out
+    to a multiprocessing pool, resource.ru_maxrss (RUSAGE_SELF) will miss
+    the workers, so extend here rather than at the call sites.
+
+    TODO (process-pool parallelism): sample psutil.Process().children(
+    recursive=True) on a background timer for a live aggregate tree peak,
+    and report memory_full_info().pss instead of rss so pages shared via
+    the mmap'd chip images are not double-counted across workers.
+    """
+
+    def __init__(self):
+        self.rss_start = None
+        self.rss_end = None
+
+    def __enter__(self):
+        self.rss_start = current_rss_bytes()
+        return self
+
+    def __exit__(self, *exc):
+        self.rss_end = current_rss_bytes()
 
 
 # ---------------------------------------------------------------------------
@@ -223,23 +313,45 @@ def percentile(sorted_values, fraction):
 
 
 def benchmark_batch(provider, pid, out_path, meta_extra=None, producer=None,
-                    topic="alerts"):
+                    topic="alerts", archive_path=None, compress=True):
     """Run batch_produce(pid) through the timing harness; returns the
-    alert count. Callable from pytest with a fake provider."""
-    from rapid_alerts.produce import batch_produce, load_schema
+    alert count. Callable from pytest with a fake provider.
 
+    With archive_path set, the run's alerts are written to that Avro
+    object-container file (compressed unless compress=False), so the
+    benchmark measures the real, compressed output and reports its size.
+    """
+    from rapid_alerts.produce import (batch_produce, load_schema,
+                                      open_alert_archive)
+
+    meta = collect_meta(pid=pid,
+                        archive="deflate" if (archive_path and compress)
+                        else "uncompressed" if archive_path else None,
+                        **(meta_extra or {}))
     log = TimingLog(out_path)
     timed = TimedProvider(provider, log)
     try:
-        log.write(collect_meta(pid=pid, **(meta_extra or {})))
+        log.write(meta)
         schema = load_schema()          # excluded from the timed window:
-        t0 = time.perf_counter()        # schema parsing is per-process, not
-        count = batch_produce(timed, pid, producer=producer,  # per-batch
-                              topic=topic, schema=schema)
-        total = time.perf_counter() - t0
+                                        # schema parsing is per-process,
+                                        # not per-batch
+        archive_cm = (open_alert_archive(
+            archive_path, schema=schema,
+            codec="deflate" if compress else "null")
+            if archive_path else contextlib.nullcontext())
 
+        with MemoryMonitor() as mem:
+            t0 = time.perf_counter()
+            with archive_cm as archive:
+                count = batch_produce(timed, pid, producer=producer,
+                                      topic=topic, schema=schema,
+                                      archive=archive)
+            total = time.perf_counter() - t0
+
+        archive_bytes = (os.path.getsize(archive_path)
+                         if archive_path else None)
         ordered = sorted(timed.source_seconds)
-        log.write({
+        summary = {
             "kind": "summary",
             "n_alerts": count,
             "total_s": round(total, 3),
@@ -249,9 +361,23 @@ def benchmark_batch(provider, pid, out_path, meta_extra=None, producer=None,
             "per_source_max_s": percentile(ordered, 1.00),
             "phase_totals_s": {k: round(v, 3)
                                for k, v in sorted(timed.phase_totals.items())},
-        })
+            # memory: peak is the exact process high-water mark; start/end
+            # bracket the batch (see MemoryMonitor)
+            "peak_rss_bytes": peak_rss_bytes(),
+            "rss_start_bytes": mem.rss_start,
+            "rss_end_bytes": mem.rss_end,
+            # output: the on-disk size of the produced alert archive
+            "archive_bytes": archive_bytes,
+            "archive_bytes_per_alert": (round(archive_bytes / count)
+                                        if archive_bytes and count else None),
+        }
+        log.write(summary)
     finally:
         log.close()
+    # the summary is a data product (saved to out_path) AND narrated to the
+    # console, so a direct caller (pytest, a manual run) sees the numbers
+    for line in summary_lines(meta, summary):
+        logger.info("%s", line)
     logger.info("benchmark written to %s", out_path)
     return count
 
@@ -259,6 +385,54 @@ def benchmark_batch(provider, pid, out_path, meta_extra=None, producer=None,
 # ---------------------------------------------------------------------------
 # reading benchmarks back
 # ---------------------------------------------------------------------------
+
+def _mib(n_bytes):
+    return None if n_bytes is None else round(n_bytes / (1024 * 1024), 1)
+
+
+def summary_lines(meta, summary):
+    """Human-readable summary as a list of lines. Shared by report()
+    (prints them) and benchmark_batch() (logs them), so the console
+    format has one definition."""
+    lines = []
+    if meta:
+        lines.append(f"{meta['started_utc']}  {meta['host']} "
+                     f"({meta['arch']}, {meta['cores']} cores)  "
+                     f"python {meta['python']}  git {meta.get('git_sha')}")
+        lines.append(f"cpu: {meta['cpu']}")
+        identity = {k: meta[k] for k in
+                    ("pid", "expid", "sca", "diff_flavor", "archive")
+                    if meta.get(k) is not None}
+        lines.append(f"run: {identity}")
+    if summary is None:
+        lines.append("(no summary record -- crashed or still running?)")
+        return lines
+
+    lines.append(f"{summary['n_alerts']} alerts in {summary['total_s']} s "
+                 f"= {summary['alerts_per_s']} alerts/s")
+    lines.append(f"per-source: median {summary['per_source_median_s']} s, "
+                 f"p95 {summary['per_source_p95_s']} s, "
+                 f"max {summary['per_source_max_s']} s")
+
+    peak = _mib(summary.get("peak_rss_bytes"))
+    if peak is not None:
+        start, end = (_mib(summary.get("rss_start_bytes")),
+                      _mib(summary.get("rss_end_bytes")))
+        bracket = (f" (batch RSS {start} -> {end} MiB)"
+                   if start is not None and end is not None else "")
+        lines.append(f"peak RSS: {peak} MiB{bracket}")
+
+    archive_bytes = summary.get("archive_bytes")
+    if archive_bytes is not None:
+        codec = (meta or {}).get("archive", "?")
+        lines.append(f"archive: {_mib(archive_bytes)} MiB "
+                     f"({summary.get('archive_bytes_per_alert')} bytes/alert, "
+                     f"{codec})")
+
+    for phase, seconds in summary["phase_totals_s"].items():
+        lines.append(f"  {phase:24s} {seconds:10.3f} s")
+    return lines
+
 
 def report(paths):
     for path in paths:
@@ -271,25 +445,8 @@ def report(paths):
                 elif record["kind"] == "summary":
                     summary = record
         print(f"\n=== {path}")
-        if meta:
-            print(f"  {meta['started_utc']}  {meta['host']} "
-                  f"({meta['arch']}, {meta['cores']} cores)  "
-                  f"python {meta['python']}  git {meta.get('git_sha')}")
-            print(f"  cpu: {meta['cpu']}")
-            identity = {k: meta[k] for k in
-                        ("pid", "expid", "sca", "diff_flavor")
-                        if meta.get(k) is not None}
-            print(f"  run: {identity}")
-        if summary is None:
-            print("  (no summary record -- crashed or still running?)")
-            continue
-        print(f"  {summary['n_alerts']} alerts in {summary['total_s']} s "
-              f"= {summary['alerts_per_s']} alerts/s")
-        print(f"  per-source: median {summary['per_source_median_s']} s, "
-              f"p95 {summary['per_source_p95_s']} s, "
-              f"max {summary['per_source_max_s']} s")
-        for phase, seconds in summary["phase_totals_s"].items():
-            print(f"    {phase:24s} {seconds:10.3f} s")
+        for line in summary_lines(meta, summary):
+            print(f"  {line}")
 
 
 # ---------------------------------------------------------------------------
@@ -313,7 +470,13 @@ def main(argv=None):
                              "(needs --sca)")
     parser.add_argument("--sca", type=int)
     parser.add_argument("-o", "--out", default="alert_timing.jsonl",
-                        help="output JSONL path (default: %(default)s)")
+                        help="timing JSONL output path (default: %(default)s)")
+    parser.add_argument("--save", metavar="FILE",
+                        help="also write the alerts to this Avro archive and "
+                             "report its size (measures real output)")
+    parser.add_argument("--no-compress", action="store_true",
+                        help="store the --save archive uncompressed; by "
+                             "default it is deflate-compressed (MAST format)")
     parser.add_argument("--diff-flavor", choices=["sfft", "zogy"],
                         default="sfft")
     parser.add_argument("--log-level", default="INFO",
@@ -331,12 +494,15 @@ def main(argv=None):
     pid = (args.pid if args.pid is not None
            else provider.resolve_pid(args.exposure, args.sca))
 
+    # benchmark_batch narrates the full summary to the console (logging)
+    # and saves it to --out; no separate report() call needed here
     count = benchmark_batch(
         provider, pid, args.out,
         meta_extra={"expid": args.exposure, "sca": args.sca,
-                    "diff_flavor": args.diff_flavor})
-    print(f"pid={pid}: {count} alerts benchmarked -> {args.out}")
-    report([args.out])
+                    "diff_flavor": args.diff_flavor},
+        archive_path=args.save, compress=not args.no_compress)
+    print(f"pid={pid}: {count} alerts benchmarked -> {args.out}"
+          + (f" (+ archive {args.save})" if args.save else ""))
     return 0
 
 

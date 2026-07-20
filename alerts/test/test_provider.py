@@ -20,9 +20,11 @@ TODO (test plan, not yet implemented):
   E20 CLI surface: --diff-flavor choices enforced, bad args exit nonzero
 """
 
+import fastavro
 import pytest
 
-from rapid_alerts.produce import batch_produce, load_schema, produce_alert
+from rapid_alerts.produce import (batch_produce, load_schema,
+                                  open_alert_archive, produce_alert)
 from rapid_alerts.providers import DatabaseProvider
 
 from conftest import CHIP_PID, PRODUCT_OFFSETS, FakeDB
@@ -140,6 +142,26 @@ class CapturingProducer:
 
     def flush(self):
         self.flushes += 1
+
+
+# ---------------------------------------------------------------------------
+# --save archives: one Avro object-container file per run, self-describing
+# (schema embedded), read back with fastavro.reader alone
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("codec", ["deflate", "null"])
+def test_alert_archive_round_trips(make_provider, chip_data, tmp_path, codec):
+    path = str(tmp_path / "alerts.avro")
+    with open_alert_archive(path, codec=codec) as archive:
+        count = batch_produce(make_provider(), CHIP_PID, archive=archive)
+
+    with open(path, "rb") as f:
+        alerts = list(fastavro.reader(f))   # codec read from file header
+    assert len(alerts) == count == len(chip_data.sources)
+    assert ([a["diaSourceId"] for a in alerts]
+            == sorted(row["sid"] for row in chip_data.sources))
+    # cutouts survive as complete FITS files
+    assert alerts[0]["cutoutDifference"].startswith(b"SIMPLE")
 
 
 def test_batch_and_single_paths_produce_identical_bytes(make_provider,

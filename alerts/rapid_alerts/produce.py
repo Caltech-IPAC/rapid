@@ -15,6 +15,7 @@ the data lives -- it only talks to the AlertDataProvider interface and
 the param registry.
 """
 
+import contextlib
 import dataclasses
 import io
 import logging
@@ -285,7 +286,34 @@ def publish_alert(alert_bytes, producer, topic="alerts", flush=True):
         producer.flush()
 
 
-def produce_alert(provider, sid, producer=None, topic="alerts", schema=None):
+@contextlib.contextmanager
+def open_alert_archive(path, schema=None, codec="deflate"):
+    """One run's alerts as one Avro object-container file.
+
+    Yields a fastavro Writer; pass it to produce_alert()/batch_produce()
+    as `archive` and each alert is appended as one record. The container
+    format embeds the schema (and codec) in the file header, so the file
+    is self-describing: read it back with fastavro.reader(open(path,
+    "rb")) and no .avsc files. codec="deflate" (the default, and part of
+    the MAST delivery contract) compresses per block; "null" stores raw.
+    """
+    if schema is None:
+        schema = load_schema()
+    # TODO: level 1 keeps most of deflate's size win at a fraction of the
+    # CPU (level 9ish default measured ~12 ms/alert vs ~1.3 uncompressed);
+    # revisit codec and level when the MAST delivery requirements are
+    # nailed down.
+    with open(path, "wb") as f:
+        writer = fastavro.write.Writer(f, schema, codec=codec,
+                                       compression_level=1)
+        try:
+            yield writer
+        finally:
+            writer.flush()  # even on error: completed blocks stay readable
+
+
+def produce_alert(provider, sid, producer=None, topic="alerts", schema=None,
+                  archive=None):
     """End-to-end: assemble, serialize, and optionally publish an alert.
 
     Args:
@@ -294,6 +322,8 @@ def produce_alert(provider, sid, producer=None, topic="alerts", schema=None):
         producer: optional confluent_kafka.Producer instance.
         topic: Kafka topic name.
         schema: parsed fastavro schema (loaded if not provided).
+        archive: optional Writer from open_alert_archive(); the alert is
+            appended as one record.
 
     Returns:
         bytes containing the serialized alert.
@@ -306,11 +336,14 @@ def produce_alert(provider, sid, producer=None, topic="alerts", schema=None):
 
     if producer is not None:
         publish_alert(alert_bytes, producer, topic=topic)
+    if archive is not None:
+        archive.write(alert_dict)
 
     return alert_bytes
 
 
-def batch_produce(provider, pid, producer=None, topic="alerts", schema=None):
+def batch_produce(provider, pid, producer=None, topic="alerts", schema=None,
+                  archive=None):
     """Produce alerts for every source on one difference image -- the
     batch unit is one exposure + SCA (chip), which is exactly what one
     diffimages.pid identifies. Use DatabaseProvider.resolve_pid(expid,
@@ -327,6 +360,8 @@ def batch_produce(provider, pid, producer=None, topic="alerts", schema=None):
         producer: optional confluent_kafka.Producer instance.
         topic: Kafka topic name.
         schema: parsed fastavro schema (loaded if not provided).
+        archive: optional Writer from open_alert_archive(); every alert
+            of the run is appended to the one container file.
 
     Returns:
         the number of alerts produced.
@@ -340,6 +375,8 @@ def batch_produce(provider, pid, producer=None, topic="alerts", schema=None):
         alert_bytes = serialize_alert(alert_dict, schema=schema)
         if producer is not None:
             publish_alert(alert_bytes, producer, topic=topic, flush=False)
+        if archive is not None:
+            archive.write(alert_dict)
         count += 1
 
     if producer is not None:

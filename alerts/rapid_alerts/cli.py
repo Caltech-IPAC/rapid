@@ -10,6 +10,7 @@ The selector implies the mode:
 """
 
 import argparse
+import contextlib
 import logging
 import os
 import sys
@@ -17,13 +18,14 @@ from pathlib import Path
 
 # Support both `python -m rapid_alerts.cli` (module) and `python cli.py` (script).
 if __package__:
-    from .produce import batch_produce, produce_alert
+    from .produce import batch_produce, open_alert_archive, produce_alert
     from .providers import DatabaseProvider
 else:
     # Run directly as a script: no package context, so make the package
     # importable by its name and switch to absolute imports.
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-    from rapid_alerts.produce import batch_produce, produce_alert
+    from rapid_alerts.produce import (batch_produce, open_alert_archive,
+                                      produce_alert)
     from rapid_alerts.providers import DatabaseProvider
 
 
@@ -59,6 +61,14 @@ def main(argv=None):
                         help="publish to Kafka ($KAFKA_BROKER, default "
                              "localhost:9092)")
     parser.add_argument("--topic", default="alerts", help="Kafka topic")
+    parser.add_argument("--save", metavar="FILE",
+                        help="also write the run's alerts to one Avro "
+                             "object-container file (self-describing; read "
+                             "back with fastavro.reader)")
+    parser.add_argument("--no-compress", action="store_true",
+                        help="store --save archives uncompressed; by "
+                             "default they are deflate-compressed, the "
+                             "MAST delivery format")
     parser.add_argument("--diff-flavor", choices=["sfft", "zogy"],
                         default="sfft",
                         help="which differencing algorithm's image feeds "
@@ -94,16 +104,25 @@ def main(argv=None):
             "message.max.bytes": "15728640",
         })
 
-    if args.sid is not None:
-        alert_bytes = produce_alert(provider, args.sid,
-                                    producer=producer, topic=args.topic)
-        print(f"Alert produced: {len(alert_bytes)} bytes")
-    else:
-        pid = (args.pid if args.pid is not None
-               else provider.resolve_pid(args.exposure, args.sca))
-        count = batch_produce(provider, pid,
-                              producer=producer, topic=args.topic)
-        print(f"pid={pid}: {count} alerts produced")
+    archive_ctx = (open_alert_archive(
+                       args.save,
+                       codec="null" if args.no_compress else "deflate")
+                   if args.save else contextlib.nullcontext())
+    with archive_ctx as archive:
+        if args.sid is not None:
+            alert_bytes = produce_alert(provider, args.sid,
+                                        producer=producer, topic=args.topic,
+                                        archive=archive)
+            print(f"Alert produced: {len(alert_bytes)} bytes")
+        else:
+            pid = (args.pid if args.pid is not None
+                   else provider.resolve_pid(args.exposure, args.sca))
+            count = batch_produce(provider, pid,
+                                  producer=producer, topic=args.topic,
+                                  archive=archive)
+            print(f"pid={pid}: {count} alerts produced")
+    if args.save:
+        print(f"saved to {args.save}")
     return 0
 
 
