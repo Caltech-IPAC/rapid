@@ -372,6 +372,9 @@ def run_single_core_job(fields,index_thread):
                 stddec = np.std(filtered_decs_list)
                 stdflux = np.std(filtered_fluxes_list)
 
+                print(f"Insert AstrObjectsMeta record: astroobjectsmeta_tablename,aid," +
+                      f"meanra,meandec,nsources={astroobjectsmeta_tablename},{aid},{meanra},{meandec},{nsources}")
+
                 dbh.insert_astroobjectsmeta_statistics(astroobjectsmeta_tablename,
                                                        aid,
                                                        meanra,
