@@ -98,7 +98,7 @@ DIA_SOURCE_PARAMS = (
     # --- Identifiers & associations -------------------------------------
     Param("diaSourceId",   "long",             "Unique identifier for this source detection",
                     IMPLEMENTED, "sources.sid",    attr="sid"),
-    Param("expId",         "long",             "Visit (exposure) identifier", #TODO: is this called visit or exposure
+    Param("visit",         "long",             "Visit (exposure) identifier", #TODO: is this called visit or exposure ID for Roman?
                     IMPLEMENTED, "sources.expid",  attr="expid"),
     Param("detector",      "int",              "Detector (SCA) number",
                     IMPLEMENTED, "sources.sca",    attr="sca"),
@@ -131,9 +131,9 @@ DIA_SOURCE_PARAMS = (
                     IMPLEMENTED, "sources.xerr",   attr="xerr"),
     Param("yErr",          ["null", "float"],  "Uncertainty in y [pixels]",
                     IMPLEMENTED, "sources.yerr",   attr="yerr"),
-    Param("raErr",         ["null", "float"],  "Uncertainty in ra [deg]",
+    Param("raErr",         ["null", "float"],  "Uncertainty in ra [deg]", #TODO: implement in run_photutils.py?
                     STUB, "not produced by PSF fit yet"),
-    Param("decErr",        ["null", "float"],  "Uncertainty in dec [deg]",
+    Param("decErr",        ["null", "float"],  "Uncertainty in dec [deg]", #TODO: see raErr
                     STUB, "not produced by PSF fit yet"),
 
     # --- Photometry --------------------------------------------------------
@@ -152,7 +152,8 @@ DIA_SOURCE_PARAMS = (
                     STUB, "aperture photometry (not in DB flow; SExtractor MAG_AUTO in file flow)"),
     Param("apFluxErr",     ["null", "float"],  "Uncertainty in apFlux (stub) [nJy]",
                     STUB, "aperture photometry"),
-    Param("scienceFlux",   ["null", "float"],  "Forced PSF flux on science image (stub) [nJy]",
+    # --- Forced Photometry ---------------------------------------------------- #TODO
+    Param("scienceFlux",   ["null", "float"],  "Forced PSF flux on science image (stub) [nJy]", #TODO: why is this not in diaForcedSource???
                     STUB, _FP),
     Param("scienceFluxErr", ["null", "float"], "Uncertainty in scienceFlux (stub) [nJy]",
                     STUB, _FP),
@@ -161,16 +162,16 @@ DIA_SOURCE_PARAMS = (
     Param("templateFluxErr", ["null", "float"], "Uncertainty in templateFlux (stub) [nJy]",
                     STUB, _FP),
     Param("diffimglimmag", ["null", "float"],  "Expected 5-sigma limiting magnitude of difference image (stub) [mag]",
-                    STUB, "difference-image depth estimate (not computed)"),
+                    STUB, "difference-image depth estimate (not computed)"), #TODO: do we need this?
 
     # --- PSF-fit quality (photutils) ---------------------------------------
-    Param("qfit",          ["null", "float"],  "PSF-fit quality parameter",
+    Param("psfQfit",          ["null", "float"],  "PSF-fit quality parameter",
                     IMPLEMENTED, "sources.qfit"),
-    Param("cfit",          ["null", "float"],  "PSF-fit chi parameter",
+    Param("psfCfit",          ["null", "float"],  "PSF-fit chi parameter",
                     IMPLEMENTED, "sources.cfit"),
-    Param("redchi",        ["null", "float"],  "Reduced chi-square of PSF fit",
+    Param("psfRChi2",        ["null", "float"],  "Reduced chi-square of PSF fit",
                     IMPLEMENTED, "sources.redchi"),
-    Param("npixfit",       ["null", "int"],    "Number of pixels used in PSF fit",
+    Param("psfNdata",       ["null", "int"],    "Number of pixels used in PSF fit",
                     IMPLEMENTED, "sources.npixfit"),
     Param("sharpness",     ["null", "float"],  "PSF-fit sharpness parameter",
                     IMPLEMENTED, "sources.sharpness"),
@@ -180,16 +181,18 @@ DIA_SOURCE_PARAMS = (
                     IMPLEMENTED, "sources.roundness2"),
     Param("peak",          ["null", "float"],  "Peak pixel value in source stamp [DN]",
                     IMPLEMENTED, "sources.peak"),
-    Param("psfChi2",       ["null", "float"],  "Chi-square of PSF fit (stub)",
-                    STUB, "overlaps sources.redchi (reduced chi2) -- decide whether to derive or rename"),
-    Param("psfNdata",      ["null", "int"],    "Number of data points in PSF fit (stub)",
-                    STUB, "overlaps sources.npixfit -- decide whether to alias or rename"),
+    # Param("psfChi2",       ["null", "float"],  "Chi-square of PSF fit (stub)",
+    #                 NOT_USED, "overlaps sources.redchi (reduced chi2) -- decide whether to derive or rename"),
+    # Param("psfNdata",      ["null", "int"],    "Number of data points in PSF fit (stub)",
+    #                 NOT_USED, "overlaps sources.npixfit -- decide whether to alias or rename"),
 
     # --- Classification (all stubs) -----------------------------------------
     Param("extendedness",  ["null", "float"],  "Probability of being extended (stub)",
                     STUB, "star/galaxy classification (not run)"),
     Param("reliability",   ["null", "float"],  "Reliability score (stub)",
                     STUB, "real/bogus classifier (not run)"),
+    Param("reliabilityVersion", ["null", "string"],  "Reliability code version",
+                    STUB, "from real/bogus classifier version (not run)")
 
     # --- Trailed-source fit (all stubs) --------------------------------------
     Param("trailFlux",     ["null", "float"],  "Trail-fit flux (stub) [nJy]",
@@ -263,7 +266,7 @@ DIA_SOURCE_PARAMS = (
 
     # --- Roman-specific identifiers & tiling ------------------------------------
     Param("sca",           "int",              "Roman SCA detector number",
-                    IMPLEMENTED, "sources.sca"),
+                    NOT_USED, "sources.sca"), # duplicate from detector
     Param("field",         "int",              "Roman field identifier",
                     IMPLEMENTED, "sources.field"),
     Param("hp6",           "int",              "HEALPix index at nside=64 (order 6)",
@@ -273,15 +276,15 @@ DIA_SOURCE_PARAMS = (
     Param("pid",           "long",             "Processing ID for science image",
                     IMPLEMENTED, "sources.pid"),
     Param("expid",         "int",              "Exposure identifier",
-                    IMPLEMENTED, "sources.expid"),
+                    NOT_USED, "sources.expid"), # duplicate from visit/expId above
     Param("pass",          ["null", "int"],    "Roman survey pass number (stub)",
-                    STUB, "Roman observation ID components (exposure metadata; not in sources table)"),
+                    NOT_USED, "Roman observation ID components (exposure metadata; not in sources table)"),
     Param("segment",       ["null", "int"],    "Roman survey segment number (stub)",
-                    STUB, "Roman observation ID components (exposure metadata; not in sources table)"),
+                    NOT_USED, "Roman observation ID components (exposure metadata; not in sources table)"),
     Param("program",       ["null", "int"],    "Roman program identifier (stub)",
-                    STUB, "Roman observation ID components (exposure metadata; not in sources table)"),
+                    NOT_USED, "Roman observation ID components (exposure metadata; not in sources table)"),
     Param("survey",        ["null", "string"], "Survey name (stub)",
-                    STUB, "observation metadata (not available)"),
+                    NOT_USED, "observation metadata (not available)"),p
 )
 
 
@@ -372,9 +375,9 @@ DIA_OBJECT_PARAMS = (
     Param("dec",           "double",           "Declination of object centroid; ICRS [deg]", #TODO should these be mean?
                         IMPLEMENTED, "astroobjects_<field>.dec0", attr="dec0"),
     Param("raErr",         ["null", "float"],  "Uncertainty in ra [deg]", # TODO: on-sky error or std dev in degrees? Need cos(dec) factor if former
-                        IMPLEMENTED, "astroobjects_<field> stdevra", attr="stdevdec"),
+                        IMPLEMENTED, "astroobjects_<field> stdevra", attr="stdevra"),
     Param("decErr",        ["null", "float"],  "Uncertainty in dec [deg]",
-                        IMPLEMENTED, "astroobjects_<field> stdevdec", attr="stdevra"),
+                        IMPLEMENTED, "astroobjects_<field> stdevdec", attr="stdevdec"),
 
     # --- Source history ----------------------------------------------------
     Param("nDiaSources",   "int",              "Total number of associated DIASources",

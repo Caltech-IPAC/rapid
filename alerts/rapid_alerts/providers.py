@@ -66,7 +66,7 @@ class Source:
     dec: float
     xfit: float
     yfit: float
-    band: Optional[str] = None
+    band: str
     aid: Optional[int] = None        # associated object; set once known
     xerr: Optional[float] = None
     yerr: Optional[float] = None
