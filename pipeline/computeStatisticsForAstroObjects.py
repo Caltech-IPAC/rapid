@@ -161,6 +161,7 @@ def run_single_core_job(fields,index_thread):
 
     if dbh.exit_code >= 64:
         fh.write(f"*** Error opening database connection (dbh.exit_code={dbh.exit_code}); quitting...\n")
+        fh.flush()
         raise RuntimeError(f"*** Error opening database connection (dbh.exit_code={dbh.exit_code}); quitting...\n")
 
     fh.write(f"\nStart of run_single_core_job: index_thread={index_thread}, dbh={dbh}\n")
@@ -546,8 +547,10 @@ def run_single_core_job(fields,index_thread):
             if os.path.exists(file_path):
                 os.remove(file_path)
                 fh.write(f"File deleted successfully ({file_path})...\n")
+                fh.flush()
             else:
                 fh.write(f"The file does not exist({file_path})...\n")
+                fh.flush()
 
 
     # Close database connection.
