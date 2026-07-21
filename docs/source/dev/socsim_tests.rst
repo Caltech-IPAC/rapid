@@ -50,7 +50,7 @@ cumulative exposure time, which is approximately 34% of the entire GBTDS survey.
 For the RAPID pipeline, fake variable sources with fixed sky positions have been added to
 the ASDF files and stored here::
 
-    s3://socsims-fakesrc-asdf-20260624/
+    s3://socsims-fakesrc-asdf-20260709/
 
 It was discovered that the gWCS in the SOC sims is incorrect (there were no GAIA stars,
 so the astrometry step failed).  We corrected this using the following Python code::
@@ -60,24 +60,9 @@ so the astrometry step failed).  We corrected this using the following Python co
     original_dm = rdm.open(asdf_path)
     dm = AssignWcsStep.call(original_dm)
 
-There were also a few thousand outright failures to create ASDF files due to a bug in romanisim (version 0.13.1).
-This is detailed in the following note:
-
-.. note::
-    In romanisim/image.py (add_objects_to_image), when GalSim raises GalSimFFTSizeError
-    (source requires too large an FFT), the exception is caught but there's no continue
-    to skip to the next source. The code immediately tries to use the unbound stamp
-    variable -> UnboundLocalError. Some images also hit ArrayMemoryError when GalSim
-    tries to allocate a ~154,000 × 154,000 pixel stamp before the size check fires.
-    The missing continue is the romanisim bug. Why some sources trigger the huge stamp
-    requirement is unresolved — it doesn't appear to be flux-related, so it's likely s
-    omething in the PSF evaluation path (psf_from_grid with size=185 may exceed the native
-    CRDS ePSF support for some detector positions).
-
-
 The ASDF files have been converted into FITS files and stored here::
 
-    s3://socsims-fakesrc-fits-20260624-lite/
+    s3://socsims-fakesrc-fits-20260709-lite/
 
 .. note::
     Metadata about the SOC sims are stored in a dedicated RAPID-operations PostgreSQL database.
@@ -106,7 +91,7 @@ The images overlap a total of 109 sky tiles (a.k.a. fields):
 
 .. code-block::
 
-    select count(distinct field) from l2files;
+    select count(distinct field) from l2files where vbest>0;
      count
     -------
        109
@@ -129,7 +114,7 @@ of the Open Univers sims is retained):
        8 | W146   | 76250
     (8 rows)
 
-It is see that most of the exposures by a large margin are taken with the W146 bandpass filter (``fid=8``).
+It is seen that most of the exposures by a large margin are taken with the W146 bandpass filter (``fid=8``).
 
 The WCS in the FITS files is represented by the TAN-SIP projection with fifth-order SIP distortion.
 Tests show this represents the WCS very well.  Two examples were examined to compare the
