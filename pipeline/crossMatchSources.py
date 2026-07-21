@@ -154,7 +154,7 @@ astroobjects_cols.append("hp6")
 astroobjects_cols.append("hp9")
 
 astroobjects_cols_comma_separated_string = ", ".join(astroobjects_cols)
-columns = tuple(astroobjects_cols)
+astroobjects_columns = tuple(astroobjects_cols)
 
 print(f"AstroObjects columns: {astroobjects_cols_comma_separated_string}")
 
@@ -164,7 +164,7 @@ print(f"AstroObjects columns: {astroobjects_cols_comma_separated_string}")
 astroobjectsmeta_cols = []
 astroobjectsmeta_cols.append("aid")
 astroobjectsmeta_cols.append("meanra")
-astroobjectsmeta_cols.append("stdefra")
+astroobjectsmeta_cols.append("stdevra")
 astroobjectsmeta_cols.append("meandec")
 astroobjectsmeta_cols.append("stdevdec")
 astroobjectsmeta_cols.append("meanflux")
@@ -172,9 +172,9 @@ astroobjectsmeta_cols.append("stdevflux")
 astroobjectsmeta_cols.append("nsources")
 
 astroobjectsmeta_cols_comma_separated_string = ", ".join(astroobjectsmeta_cols)
-columns = tuple(astroobjectsmeta_cols)
+astroobjectsmeta_columns = tuple(astroobjectsmeta_cols)
 
-print(f"AstroObjects columns: {astroobjectsmeta_cols_comma_separated_string}")
+print(f"AstroObjectsMeta columns: {astroobjectsmeta_cols_comma_separated_string}")
 
 
 #-------------------------------------------------------------------------------------------------------------
