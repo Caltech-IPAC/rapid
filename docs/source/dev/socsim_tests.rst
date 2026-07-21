@@ -81,7 +81,7 @@ The minimum and maximum observation times of the SOC sims cover about 8 days:
 
 .. code-block::
 
-    select min(dateobs),min(mjdobs),max(dateobs),max(mjdobs) from l2files;
+    select min(dateobs),min(mjdobs),max(dateobs),max(mjdobs) from l2files where vbest > 0;
              min         |  min  |         max         |        max
     ---------------------+-------+---------------------+-------------------
      2027-10-01 00:00:00 | 61679 | 2027-10-08 18:21:34 | 61686.76497685185
@@ -91,7 +91,7 @@ The images overlap a total of 109 sky tiles (a.k.a. fields):
 
 .. code-block::
 
-    select count(distinct field) from l2files where vbest>0;
+    select count(distinct field) from l2files where vbest > 0;
      count
     -------
        109
