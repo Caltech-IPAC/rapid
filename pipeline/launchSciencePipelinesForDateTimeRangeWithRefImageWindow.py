@@ -14,6 +14,7 @@ import modules.utils.rapid_pipeline_subs as util
 swname = "launchSciencePipelinesForDateTimeRangeWithRefImageWindow.py"
 swvers = "1.0"
 cfg_filename_only = "awsBatchSubmitJobs_launchSingleSciencePipeline.ini"
+launch_single_pipeline_instance_code = 'awsBatchSubmitJobs_launchSingleSciencePipeline.py'
 
 print("swname =", swname)
 print("swvers =", swvers)
@@ -87,7 +88,11 @@ if make_refimages_flag_str is None:
     print("*** Error: Env. var. MAKEREFIMAGESFLAG not set; quitting...")
     exit(64)
 
-make_refimages_flag = ast.literal_eval(make_refimages_flag_str)
+try:
+    make_refimages_flag = ast.literal_eval(make_refimages_flag_str)
+except (ValueError, SyntaxError):
+    print(f"*** Error: make_refimages_flag_str is neither True nor False ({make_refimages_flag_str}); quitting...")
+    exit(64)
 
 
 # If RUNFID is set, then process just the specified filter.
@@ -111,11 +116,29 @@ else:
 dry_run_str = os.getenv('DRYRUN')
 
 if dry_run_str is None:
+    dry_run = False
+else:
+    try:
+        dry_run = ast.literal_eval(dry_run_str)
+    except (ValueError, SyntaxError):
+        print(f"*** Error: dry_run_str is neither True nor False ({dry_run_str}); quitting...")
+        exit(64)
 
-    print("*** Error: Env. var. DRYRUN not set; quitting...")
-    exit(64)
 
-dry_run = ast.literal_eval(dry_run_str)
+# Determine number of parallel processes.
+
+num_cores_str = os.getenv('NUM_CORES')
+
+if num_cores_str is None:
+    num_cores = os.cpu_count()
+    if num_cores is None:
+        num_cores = 1
+else:
+    try:
+        num_cores = int(num_cores_str)
+    except:
+        print(f"*** Error: num_cores cannot be converted to integer (num_cores_str={num_cores_str}); quitting...")
+        exit(64)
 
 
 # Print parameters.
@@ -127,6 +150,7 @@ print("end_refimage_mjdobs =",end_refimage_mjdobs)
 print("make_refimages_flag =",make_refimages_flag)
 print("run_fid =",run_fid)
 print("dry_run =",dry_run)
+print("num_cores =",num_cores)
 
 
 # Get env. var. RAPID_SW and assign cfg_path.
@@ -159,48 +183,97 @@ print("max_n_images_to_coadd =",max_n_images_to_coadd)
 
 # Custom methods for parallel processing, taking advantage of multiple cores on the job-launcher machine.
 
-def run_script(rid):
-
+def run_single_core_job(rids,num_cores,index_thread):
 
     """
     Load unique value of rid into the environment variable RID.
-    Launch single instance of script with given environment-variable setting for RID.
+    Launch single instance of script with given environment-variable setting RID.
     """
 
+    njobs = len(rids)
 
-    # Load RID into the environment.
+    print("index_thread,njobs =",index_thread,njobs)
 
-    os.environ['RID'] = str(rid)
+    thread_work_file = swname.replace(".py","_thread") + str(index_thread) + ".out"
+
+    with open(thread_work_file, 'w', encoding="utf-8") as fh:
+
+        fh.write(f"\nStart of run_single_core_job: index_thread={index_thread}\n")
+
+        for index_job in range(njobs):
+
+            index_core = index_job % num_cores
+            if index_thread != index_core:
+                continue
+
+            rid = rids[index_job]
 
 
-    # Launch single pipeline from within Docker container.
+            # Load RID into the environment.
 
-    python_cmd = 'python3.11'
-    launch_single_pipeline_instance_code = '/code/pipeline/awsBatchSubmitJobs_launchSingleSciencePipeline.py'
-
-    launch_cmd = [python_cmd,
-                  launch_single_pipeline_instance_code]
-
-    exitcode_from_launch_cmd = util.execute_command(launch_cmd)
+            os.environ['RID'] = str(rid)
 
 
-def launch_parallel_processes(rids, num_cores=None):
+            # Launch single pipeline from within Docker container.
 
-    if num_cores is None:
-        num_cores = os.cpu_count()  # Use all available cores if not specified
-        if num_cores is None:
-            num_cores = 1
+            python_cmd = 'python3.11'
+            python_script = f"{rapid_sw}/pipeline/{launch_single_pipeline_instance_code}"
 
-    print("num_cores =",num_cores)
+            launch_cmd = [python_cmd,
+                          python_script]
+
+            if dry_run:
+                fh.write(f"Skipped launching science pipeline for dry_run,rid = {dry_run},{rid}\n")
+            else:
+                exitcode_from_launch_cmd = util.execute_command(launch_cmd)
+
+
+                if exitcode_from_launch_cmd == 0:
+                    fh.write(f"Launched science pipeline for dry_run,rid = {dry_run},{rid}\n")
+                elif exitcode_from_launch_cmd >= 64:
+                    fh.write(f"*** Error from launch_cmd = {launch_cmd}: " +
+                             f"exitcode_from_launch_cmd,dry_run,rid = " +
+                             f"{exitcode_from_launch_cmd},{dry_run},{rid}\n")
+                else:
+                    fh.write(f"*** Warning from launch_cmd = {launch_cmd}: " +
+                             f"exitcode_from_launch_cmd,dry_run,rid = " +
+                             f"{exitcode_from_launch_cmd},{dry_run},{rid}\n")
+
+            fh.flush()
+
+            # End of loop over rids.
+
+
+        fh.write(f"\nEnd of run_single_core_job: index_thread={index_thread}\n")
+
+
+    message = f"Finished normally for index_thread = {index_thread}"
+
+    return message
+
+
+def execute_parallel_processes(rids,num_cores):
 
     with ProcessPoolExecutor(max_workers=num_cores) as executor:
         # Submit all tasks to the executor and store the futures in a list
-        futures = [executor.submit(run_script,rid) for rid in rids]
+        futures = [executor.submit(run_single_core_job,rids,num_cores,thread_index) for thread_index in range(num_cores)]
 
         # Iterate over completed futures and update progress
         for i, future in enumerate(as_completed(futures)):
             index = futures.index(future)  # Find the original index/order of the completed future
             print(f"Completed: {i+1} processes, lastly for index={index}")
+
+    exitcode_execute_parallel_processes = 0
+
+    for future in futures:
+        index = futures.index(future)
+        try:
+            print(future.result())
+        except Exception as e:
+            print(f"*** Error in thread index {index} = {e}")
+            exitcode_execute_parallel_processes = 64
+
+    return exitcode_execute_parallel_processes
 
 
 #################
@@ -238,6 +311,11 @@ if __name__ == '__main__':
 
     for fid in range(1,n_filters + 1):
 
+        if run_fid is not None:
+            if run_fid != fid:
+                print(f"*** Message: Skipping fid={fid}; continuing...")
+                continue
+
         recs = dbh.get_field_fid_nframes_records_for_mjdobs_range(start_refimage_mjdobs,
                                                                   end_refimage_mjdobs,
                                                                   min_n_images_to_coadd,
@@ -245,12 +323,13 @@ if __name__ == '__main__':
 
         if dbh.exit_code >= 64:
             print("*** Error from query for field/filter/nframes combinations {}; quitting ".format(swname))
+            dbh.close()
             exit(dbh.exit_code)
 
         for rec in recs:
 
             field = rec[0]
-            fid = rec[1]
+            _ = rec[1]         # Parse from query to avoid confusion; will be same as fid.
             nframes = rec[2]
 
             field_list.append(field)
@@ -271,11 +350,6 @@ if __name__ == '__main__':
 
     for field,fid in zip(field_list,fid_list):
 
-        if run_fid is not None:
-            if run_fid != fid:
-                print(f"*** Message: Skipping fid={fid}; continuing...")
-                continue
-
         print("field,fid =",field,fid)
 
 
@@ -285,10 +359,15 @@ if __name__ == '__main__':
         recs = dbh.get_l2files_records_for_datetime_range_field_fid(startdatetime,enddatetime,field,fid)
 
         if dbh.exit_code >= 64:
-             print("*** Error from query for L2Files records {}; quitting ".format(swname))
-             exit(dbh.exit_code)
+            print("*** Error from query for L2Files records {}; quitting...".format(swname))
+            dbh.close()
+            exit(dbh.exit_code)
 
         n_records = len(recs)
+
+        if n_records == 0:
+            print("*** Message: No records returned dbh.get_l2files_records_for_datetime_range_field_fid; continuing...")
+            continue
 
 
         # For the remaining records (which are not reserved for reference-image generation),
@@ -318,20 +397,6 @@ if __name__ == '__main__':
                 print("rid, sca =",rid,sca)
 
 
-    # The job launching is done in parallel, taking advantage of multiple cores
-    # on the job-launcher machine.
-
-    number_pipeline_instances = len(rid_list)
-    print(f"number_pipeline_instances = {number_pipeline_instances}")
-
-    if dry_run:
-        print("*** Message: Skip launching pipelines...")
-    else:
-        print("*** Message: Executing pipeline/awsBatchSubmitJobs_launchSingleSciencePipeline.py " +\
-              "in parallel to launch pipelines...")
-        launch_parallel_processes(rid_list)
-
-
     # Close database connection.
 
     dbh.close()
@@ -340,17 +405,35 @@ if __name__ == '__main__':
         exit(dbh.exit_code)
 
 
+    # The job launching is done in parallel, taking advantage of multiple cores
+    # on the job-launcher machine.
+
+    number_pipeline_instances = len(rid_list)
+    print(f"number_pipeline_instances = {number_pipeline_instances}")
+
+    exitcode_execute_parallel_processes = 0
+
+    if num_cores > 1:
+        print(f"*** Message: Calling method execute_parallel_processes...")
+        exitcode_execute_parallel_processes = execute_parallel_processes(rid_list,num_cores)
+    else:
+        thread_index = 0
+        run_single_core_job(rid_list,num_cores,thread_index)
+
+
     # Code-timing benchmark.
 
     end_time_benchmark = time.time()
     print("Elapsed time in seconds to launch all pipelines =",
         end_time_benchmark - start_time_benchmark)
-    start_time_benchmark = end_time_benchmark
 
 
     # Termination.
 
     terminating_exitcode = 0
+
+    if exitcode_execute_parallel_processes >= 64:
+        terminating_exitcode = exitcode_execute_parallel_processes
 
     print("terminating_exitcode =",terminating_exitcode)
 

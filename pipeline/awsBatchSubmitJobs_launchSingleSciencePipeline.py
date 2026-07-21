@@ -14,9 +14,6 @@ exit_code            Definition
 import boto3
 import os
 import ast
-from astropy.io import fits
-import subprocess
-import re
 import math
 import configparser
 from botocore.exceptions import ClientError
@@ -581,20 +578,12 @@ if __name__ == '__main__':
         refimg_overlapping_rtids.append(overlapping_rtid)
 
 
-    # Insert or update record in Jobs database table and return job ID.
-
-    jid = dbh.start_job(ppid,fid,expid,field,sca,rid)
-
-    if dbh.exit_code >= 64:
-        exit(dbh.exit_code)
-
-
     # Query RefImages database table for the best version of reference image
     # (which is usually the latest unless a prior version is locked).
     # A reference image depends only on pipeline number, field, filter, and version.
     # If a reference image does not exist, then aggregate all the inputs required to make one.
     # First, check for reference images made by the dedicated reference-image pipeline (ppid=12).
-    # If no reference imag is found, check whether there is one made by the science pipeline (ppid=15).
+    # If no reference image is found, check whether there is one made by the science pipeline (ppid=15).
 
     rfid = None
 
@@ -609,7 +598,6 @@ if __name__ == '__main__':
 
     if dbh.exit_code == 7:
         print("No database record from dbh.get_best_reference_image for ppid={} called by {}; continuing with rfid = None...".format(ppid,swname))
-        ppid_existing_refimg = ppid
     elif dbh.exit_code >= 64:
         print("*** Error from {}; quitting ".format(swname))
         exit(dbh.exit_code)
@@ -627,13 +615,15 @@ if __name__ == '__main__':
         input_images_csv_file_s3_bucket_object_name = "None"
         n_images_to_coadd = -1
 
-    else:
 
-        filename_refimage = "None"
-        infobits_refimage = "None"
-        input_images_csv_filename = "input_images_for_refimage_jid"+ str(jid) + ".csv"
-        input_images_csv_file = rapid_work + "/" + input_images_csv_filename
-        input_images_csv_file_s3_bucket_object_name = proc_date + "/" + input_images_csv_filename
+        # Insert or update record in Jobs database table and return job ID.
+
+        jid = dbh.start_job(ppid,fid,expid,field,sca,rid)
+
+        if dbh.exit_code >= 64:
+            exit(dbh.exit_code)
+
+    else:
 
 
         # Query L2FileMeta database table for RID,ra0,dec0,ra1,dec1,ra2,dec2,ra3,dec3,ra4,dec4,field
@@ -659,13 +649,6 @@ if __name__ == '__main__':
         if dbh.exit_code >= 64:
             exit(dbh.exit_code)
 
-        n_images_to_coadd = len(overlapping_images)
-
-        if n_images_to_coadd < min_n_images_to_coadd:
-            print(f"*** Warning: n_images_to_coadd ({n_images_to_coadd}) < min_n_images_to_coadd " +\
-                  f"({min_n_images_to_coadd}) for rid,field,fid = {rid},{field},{fid}; quitting...")
-            exit(33)
-
 
         # For each overlapping image, query L2Files database table for
         # filename, sca, mjdobs, exptime, infobits, and status.
@@ -673,7 +656,9 @@ if __name__ == '__main__':
         # NOTE: max_n_images_to_coadd is not enforced here, but instead
         # when the RAPID pipeline instance is executed.  TODO?
 
-        f = open(input_images_csv_file, "w")
+        n_images_to_coadd = 0
+
+        csv_records = []
 
         for image_meta in overlapping_images:
             rid_refimage_input = image_meta[0]
@@ -742,8 +727,36 @@ if __name__ == '__main__':
                          str(vbest_refimage_input) + "," +\
                          str(version_refimage_input)
 
-            f.write(csv_record + "\n")
+            csv_records.append(csv_record)
 
+            n_images_to_coadd += 1
+
+
+        if n_images_to_coadd < min_n_images_to_coadd:
+            print(f"*** Warning: n_images_to_coadd ({n_images_to_coadd}) < min_n_images_to_coadd " +\
+                  f"({min_n_images_to_coadd}) for rid,field,fid = {rid},{field},{fid}; quitting...")
+            exit(33)
+
+
+        # Insert or update record in Jobs database table and return job ID.
+
+        jid = dbh.start_job(ppid,fid,expid,field,sca,rid)
+
+        if dbh.exit_code >= 64:
+            exit(dbh.exit_code)
+
+
+        # Write reference-image inputs to CSV file.
+
+        filename_refimage = "None"
+        infobits_refimage = None
+        input_images_csv_filename = "input_images_for_refimage_jid"+ str(jid) + ".csv"
+        input_images_csv_file = rapid_work + "/" + input_images_csv_filename
+        input_images_csv_file_s3_bucket_object_name = proc_date + "/" + input_images_csv_filename
+
+        f = open(input_images_csv_file, "w")
+        for csv_record in csv_records:
+            f.write(csv_record + "\n")
         f.close()
 
 

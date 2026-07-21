@@ -44,7 +44,7 @@ start_time_benchmark_at_start = start_time_benchmark
 
 # Compute processing datetime (UT) and processing datetime (Pacific time).
 
-datetime_utc_now = datetime.utcnow()
+datetime_utc_now = datetime.now(timezone.utc)
 proc_utc_datetime = datetime_utc_now.strftime('%Y-%m-%dT%H:%M:%SZ')
 datetime_pt_now = datetime_utc_now.replace(tzinfo=timezone.utc).astimezone(tz=to_zone)
 proc_pt_datetime_started = datetime_pt_now.strftime('%Y-%m-%dT%H:%M:%S PT')
@@ -145,7 +145,7 @@ ppid = int(config_input['SCI_IMAGE']['ppid'])
 match_radius = float(config_input['SOURCE_MATCHING']['match_radius'])
 
 
-# Open database connections for parallel access.
+# Get number of cores for parallel processing.
 
 num_cores = os.getenv('NUM_CORES')
 
@@ -155,17 +155,6 @@ else:
     num_cores = int(num_cores) #TODO default to 18 max?
 
 print("num_cores =",num_cores)
-
-dbh_list = []
-
-for i in range(num_cores):
-
-    dbh = db.RAPIDDB()
-
-    if dbh.exit_code >= 64:
-        exit(dbh.exit_code)
-
-    dbh_list.append(dbh)
 
 
 # Get S3 client.
@@ -260,9 +249,18 @@ def run_single_core_job(jid,meta_list,negative_diffimg_flag,index_thread):
         fh = open(thread_work_file, 'w', encoding="utf-8")
     except:
         print(f"*** Error: Could not open output file {thread_work_file}; quitting...")
-        exit(64)
+        raise RuntimeError(f"*** Error: Could not open output file {thread_work_file}; quitting...")
 
-    dbh = dbh_list[index_thread]
+
+    # Open database connection.
+
+    dbh = db.RAPIDDB()
+
+    if dbh.exit_code >= 64:
+        fh.write(f"*** Error opening database connection (dbh.exit_code={dbh.exit_code}); quitting...\n")
+        fh.flush()
+        raise RuntimeError(f"*** Error opening database connection (dbh.exit_code={dbh.exit_code}); quitting...\n")
+
 
     fh.write(f"\nStart of run_single_core_job: index_thread={index_thread}, dbh={dbh}\n")
 
@@ -574,12 +572,24 @@ def run_single_core_job(jid,meta_list,negative_diffimg_flag,index_thread):
 
             if os.path.exists(file_path):
                 os.remove(file_path)
-                print(f"File deleted successfully ({file_path}).")
+                fh.write(f"File deleted successfully ({file_path})...\n")
+                fh.flush()
             else:
-                print(f"The file does not exist({file_path}).")
+                fh.write(f"The file does not exist({file_path})...\n")
+                fh.flush()
 
 
         # End of loop over job ID.
+
+
+    # Close database connection.
+
+    dbh.close()
+
+    if dbh.exit_code >= 64:
+        fh.write(f"*** Error closing database connection (dbh.exit_code={dbh.exit_code}); quitting...\n")
+        fh.flush()
+        raise RuntimeError(f"*** Error closing database connection (dbh.exit_code={dbh.exit_code}); quitting...")
 
 
     fh.write(f"\nEnd of run_single_core_job: index_thread={index_thread}\n")
@@ -591,10 +601,7 @@ def run_single_core_job(jid,meta_list,negative_diffimg_flag,index_thread):
     return message
 
 
-def execute_parallel_processes(jids,rtids_list,meta_list,negative_diffimg_flag,num_cores=None):
-
-    if num_cores is None:
-        num_cores = os.cpu_count()  # Use all available cores if not specified
+def execute_parallel_processes(jids,rtids_list,meta_list,negative_diffimg_flag,num_cores):
 
     print("num_cores =",num_cores)
 
@@ -882,18 +889,12 @@ if __name__ == '__main__':
         end_time_benchmark - start_time_benchmark_at_start)
 
 
-    # Close database connections.
+    # Close database connection.
 
     dbh.close()
 
     if dbh.exit_code >= 64:
         exit(dbh.exit_code)
-
-    for tdbh in dbh_list:
-        tdbh.close()
-
-        if tdbh.exit_code >= 64:
-            exit(tdbh.exit_code)
 
 
     # Termination.

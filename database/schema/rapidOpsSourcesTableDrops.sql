@@ -24,6 +24,13 @@ DROP SEQUENCE astroobjects_aid_seq;
 
 
 -------------------
+-- AstroObjectsMeta table
+-------------------
+
+DROP TABLE astroobjectsmeta;
+
+
+-------------------
 -- Merges table
 -------------------
 

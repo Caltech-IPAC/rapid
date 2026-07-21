@@ -35,7 +35,7 @@ start_time_benchmark_at_start = start_time_benchmark
 
 # Compute processing datetime (UT) and processing datetime (Pacific time).
 
-datetime_utc_now = datetime.utcnow()
+datetime_utc_now = datetime.now(timezone.utc)
 proc_utc_datetime = datetime_utc_now.strftime('%Y-%m-%dT%H:%M:%SZ')
 datetime_pt_now = datetime_utc_now.replace(tzinfo=timezone.utc).astimezone(tz=to_zone)
 proc_pt_datetime_started = datetime_pt_now.strftime('%Y-%m-%dT%H:%M:%S PT')
@@ -126,17 +126,6 @@ else:
 
 print("num_cores =",num_cores)
 
-dbh_list = []
-
-for i in range(num_cores):
-
-    dbh = db.RAPIDDB()
-
-    if dbh.exit_code >= 64:
-        exit(dbh.exit_code)
-
-    dbh_list.append(dbh)
-
 
 # Get S3 client.
 
@@ -145,25 +134,36 @@ s3_client = boto3.client('s3')
 
 # Define columns to be populated in AstroObjects tables.
 
-cols = []
-cols.append("ra0")
-cols.append("dec0")
-cols.append("flux0")
-cols.append("meanra")
-cols.append("stdefra")
-cols.append("meandec")
-cols.append("stdevdec")
-cols.append("meanflux")
-cols.append("stdevflux")
-cols.append("nsources")
-cols.append("field")
-cols.append("hp6")
-cols.append("hp9")
+astroobjects_cols = []
+astroobjects_cols.append("ra0")
+astroobjects_cols.append("dec0")
+astroobjects_cols.append("flux0")
+astroobjects_cols.append("field")
+astroobjects_cols.append("hp6")
+astroobjects_cols.append("hp9")
 
-cols_comma_separated_string = ", ".join(cols)
-columns = tuple(cols)
+astroobjects_cols_comma_separated_string = ", ".join(astroobjects_cols)
+astroobjects_columns = tuple(astroobjects_cols)
 
-print(f"AstroObjects columns: {cols_comma_separated_string}")
+print(f"AstroObjects columns: {astroobjects_cols_comma_separated_string}")
+
+
+# Define columns to be populated in AstroObjectsMeta tables.
+
+astroobjectsmeta_cols = []
+astroobjectsmeta_cols.append("aid")
+astroobjectsmeta_cols.append("meanra")
+astroobjectsmeta_cols.append("stdevra")
+astroobjectsmeta_cols.append("meandec")
+astroobjectsmeta_cols.append("stdevdec")
+astroobjectsmeta_cols.append("meanflux")
+astroobjectsmeta_cols.append("stdevflux")
+astroobjectsmeta_cols.append("nsources")
+
+astroobjectsmeta_cols_comma_separated_string = ", ".join(astroobjectsmeta_cols)
+astroobjectsmeta_columns = tuple(astroobjectsmeta_cols)
+
+print(f"AstroObjectsMeta columns: {astroobjectsmeta_cols_comma_separated_string}")
 
 
 #-------------------------------------------------------------------------------------------------------------
@@ -206,9 +206,18 @@ def run_single_core_job_stage_1_crossmatching(scas,fields,index_thread):
         fh = open(thread_work_file, 'w', encoding="utf-8")
     except:
         print(f"*** Error: Could not open output file {thread_work_file}; quitting...")
-        exit(64)
+        raise RuntimeError(f"*** Error: Could not open output file {thread_work_file}; quitting...")
 
-    dbh = dbh_list[index_thread]
+
+    # Open database connection.
+
+    dbh = db.RAPIDDB()
+
+    if dbh.exit_code >= 64:
+        fh.write(f"*** Error opening database connection (dbh.exit_code={dbh.exit_code}); quitting...\n")
+        fh.flush()
+        raise RuntimeError(f"*** Error opening database connection (dbh.exit_code={dbh.exit_code}); quitting...\n")
+
 
     fh.write(f"\nStart of run_single_core_job: index_thread={index_thread}, dbh={dbh}\n")
 
@@ -265,8 +274,9 @@ def run_single_core_job_stage_1_crossmatching(scas,fields,index_thread):
 
                 sources_tablename = f"sources_{proc_date}_{sca}"
 
-                query = f"SELECT a.sid,a.ra,a.dec,b.aid,b.meanra,b.meandec,b.nsources FROM {sources_tablename} AS a, " +\
-                    f"{astroobjects_tablename} AS b WHERE q3c_join(a.ra, a.dec, b.meanra, b.meandec, {match_radius}) " +\
+                query = f"SELECT a.sid,b.aid FROM {sources_tablename} AS a, " +\
+                    f"{astroobjects_tablename} AS b " +\
+                    f"WHERE q3c_join(a.ra, a.dec, b.ra0, b.dec0, {match_radius}) " +\
                     f"AND a.field = {field} AND a.expid = {expid} AND a.flags = 0;"
 
                 sql_queries = []
@@ -283,34 +293,17 @@ def run_single_core_job_stage_1_crossmatching(scas,fields,index_thread):
 
 
                 # For the sources that were matched, create Merges_<field> record.
-                # Also, update meanra, meandec, nsources in the AstroObjects_<field> record.
 
                 sid_dict = {}
 
                 for record in records:
 
                     sid = record[0]
-                    source_ra = record[1]
-                    source_dec = record[2]
-                    aid = record[3]
-                    meanra = record[4]
-                    meandec = record[5]
-                    nsources = record[6]
+                    aid = record[1]
 
                     sid_dict[sid] = 1
 
                     dbh.add_merge_to_field(merges_tablename,aid,sid)
-
-                    meanra = util.update_meanra(meanra,nsources,source_ra)
-                    meandec = util.update_meandec(meandec,nsources,source_dec)
-                    nsources += 1
-
-                    dbh.update_astroobject_mean_sky_position(astroobjects_tablename,
-                                                             aid,
-                                                             meanra,
-                                                             meandec,
-                                                             nsources,
-                                                             thread_debug)
 
 
                 # Code-timing benchmark.
@@ -364,32 +357,16 @@ def run_single_core_job_stage_1_crossmatching(scas,fields,index_thread):
                             source_flux = record[5]
 
                             if field != source_field:
-                                fh.write(f"*** Error: field ({field}) not equal to source_field ({source_field}); quitting...")
-                                print(f"*** Error: field ({field}) not equal to source_field ({source_field}); quitting...")
+                                fh.write(f"*** Error: field ({field}) not equal to source_field ({source_field}); quitting...\n")
                                 raise Exception(f"*** Error: field ({field}) not equal to source_field ({source_field}); quitting...")
 
 
-                        # For now, set the lightcurve statistics to zero.              # TODO
-
-                        meanra = source_ra
-                        stdevra = 0
-                        meandec = source_dec
-                        stdevdec = 0
-                        meanflux = 0
-                        stdevflux = 0
-                        nsources = 1
+                        # Insert record in AstroObjects_field table.
 
                         aid = dbh.add_astro_object_to_field(astroobjects_tablename,
                                                             source_ra,
                                                             source_dec,
                                                             source_flux,
-                                                            meanra,
-                                                            stdevra,
-                                                            meandec,
-                                                            stdevdec,
-                                                            meanflux,
-                                                            stdevflux,
-                                                            nsources,
                                                             field,
                                                             source_hp6,
                                                             source_hp9,
@@ -425,6 +402,15 @@ def run_single_core_job_stage_1_crossmatching(scas,fields,index_thread):
 
         fh.flush()
 
+
+    # Close database connection.
+
+    dbh.close()
+
+    if dbh.exit_code >= 64:
+        fh.write(f"*** Error closing database connection (dbh.exit_code={dbh.exit_code}); quitting...\n")
+        fh.flush()
+        raise RuntimeError(f"*** Error closing database connection (dbh.exit_code={dbh.exit_code}); quitting...")
 
     fh.write(f"\nEnd of run_single_core_job: index_thread={index_thread}\n")
 
@@ -470,9 +456,18 @@ def run_single_core_job_stage_2_crossmatching(scas,fields,index_thread):
         fh = open(thread_work_file, 'w', encoding="utf-8")
     except:
         print(f"*** Error: Could not open output file {thread_work_file}; quitting...")
-        exit(64)
+        raise RuntimeError(f"*** Error: Could not open output file {thread_work_file}; quitting...")
 
-    dbh = dbh_list[index_thread]
+
+    # Open database connection.
+
+    dbh = db.RAPIDDB()
+
+    if dbh.exit_code >= 64:
+        fh.write(f"*** Error opening database connection (dbh.exit_code={dbh.exit_code}); quitting...\n")
+        fh.flush()
+        raise RuntimeError(f"*** Error opening database connection (dbh.exit_code={dbh.exit_code}); quitting...\n")
+
 
     fh.write(f"\nStart of run_single_core_job: index_thread={index_thread}, dbh={dbh}\n")
 
@@ -557,19 +552,19 @@ def run_single_core_job_stage_2_crossmatching(scas,fields,index_thread):
 
                 if n_adjacent_fields == 8:
 
-                    query = f"SELECT a.sid,a.ra,a.dec,b.aid,b.meanra,b.meandec,b.nsources " +\
+                    query = f"SELECT a.sid,b.aid " +\
                         f"FROM {sources_tablename} AS a, " +\
                         f"{astroobjects_tablename} AS b " +\
                         f"WHERE q3c_radial_query(a.ra, a.dec, {ra0_field}, {dec0_field}, {ang_sep}) " +\
-                        f"AND q3c_join(a.ra, a.dec, b.meanra, b.meandec, {match_radius}) " +\
+                        f"AND q3c_join(a.ra, a.dec, b.ra0, b.dec0, {match_radius}) " +\
                         f"AND a.field = {adjacent_field} AND a.flags = 0;"
 
                 else:
 
-                    query = f"SELECT a.sid,a.ra,a.dec,b.aid,b.meanra,b.meandec,b.nsources " +\
+                    query = f"SELECT a.sid,b.aid " +\
                         f"FROM {sources_tablename} AS a, " +\
                         f"{astroobjects_tablename} AS b " +\
-                        f"WHERE q3c_join(a.ra, a.dec, b.meanra, b.meandec, {match_radius}) " +\
+                        f"WHERE q3c_join(a.ra, a.dec, b.ra0, b.dec0, {match_radius}) " +\
                         f"AND a.field = {adjacent_field} AND a.flags = 0;"
 
                 sql_queries = []
@@ -586,30 +581,13 @@ def run_single_core_job_stage_2_crossmatching(scas,fields,index_thread):
 
 
                 # For the sources that were matched, create Merges_<field> record.
-                # Also, update meanra, meandec, nsources in the AstroObjects_<field> record.
 
                 for record in records:
 
                     sid = record[0]
-                    source_ra = record[1]
-                    source_dec = record[2]
-                    aid = record[3]
-                    meanra = record[4]
-                    meandec = record[5]
-                    nsources = record[6]
+                    aid = record[1]
 
                     dbh.add_merge_to_field(merges_tablename,aid,sid)
-
-                    meanra = util.update_meanra(meanra,nsources,source_ra)
-                    meandec = util.update_meandec(meandec,nsources,source_dec)
-                    nsources += 1
-
-                    dbh.update_astroobject_mean_sky_position(astroobjects_tablename,
-                                                             aid,
-                                                             meanra,
-                                                             meandec,
-                                                             nsources,
-                                                             thread_debug)
 
 
                 # Code-timing benchmark.
@@ -635,6 +613,15 @@ def run_single_core_job_stage_2_crossmatching(scas,fields,index_thread):
         fh.flush()
 
 
+    # Close database connection.
+
+    dbh.close()
+
+    if dbh.exit_code >= 64:
+        fh.write(f"*** Error closing database connection (dbh.exit_code={dbh.exit_code}); quitting...\n")
+        fh.flush()
+        raise RuntimeError(f"*** Error closing database connection (dbh.exit_code={dbh.exit_code}); quitting...")
+
     fh.write(f"\nEnd of run_single_core_job: index_thread={index_thread}\n")
 
     fh.close()
@@ -644,10 +631,7 @@ def run_single_core_job_stage_2_crossmatching(scas,fields,index_thread):
     return message
 
 
-def execute_parallel_processes_stage_1_crossmatching(scas_list,fields_list,num_cores=None):
-
-    if num_cores is None:
-        num_cores = os.cpu_count()  # Use all available cores if not specified
+def execute_parallel_processes_stage_1_crossmatching(scas_list,fields_list,num_cores):
 
     print("num_cores =",num_cores)
 
@@ -668,10 +652,7 @@ def execute_parallel_processes_stage_1_crossmatching(scas_list,fields_list,num_c
             print(f"*** Error in thread index {index} = {e}")
 
 
-def execute_parallel_processes_stage_2_crossmatching(scas_list,fields_list,num_cores=None):
-
-    if num_cores is None:
-        num_cores = os.cpu_count()  # Use all available cores if not specified
+def execute_parallel_processes_stage_2_crossmatching(scas_list,fields_list,num_cores):
 
     print("num_cores =",num_cores)
 
@@ -824,9 +805,8 @@ if __name__ == '__main__':
         if table_exists_flag is False:        # The following is done once, when the tables are created.
 
             sql_queries.append(f"CREATE INDEX {tablename1}_field_idx ON {tablename1} (field);")
-            sql_queries.append(f"CREATE INDEX {tablename1}_nsources_idx ON {tablename1} (nsources);")
             sql_queries.append(f"CREATE INDEX {tablename1}_aid_idx ON {tablename1} (aid);")
-            sql_queries.append(f"CREATE INDEX {tablename1}_radec_idx ON {tablename1} (q3c_ang2ipix(meanra, meandec));")
+            sql_queries.append(f"CREATE INDEX {tablename1}_radec_idx ON {tablename1} (q3c_ang2ipix(ra0, dec0));")
             sql_queries.append(f"CREATE INDEX {tablename2}_aid_idx ON {tablename2} USING btree (aid);")
             sql_queries.append(f"CREATE INDEX {tablename2}_sid_idx ON {tablename2} USING btree (sid);")
             sql_queries.append(f"REVOKE ALL ON TABLE {tablename1} FROM rapidreadrole;")
@@ -943,18 +923,12 @@ if __name__ == '__main__':
         end_time_benchmark - start_time_benchmark_at_start)
 
 
-    # Close database connections.
+    # Close database connection.
 
     dbh.close()
 
     if dbh.exit_code >= 64:
         exit(dbh.exit_code)
-
-    for tdbh in dbh_list:
-        tdbh.close()
-
-        if tdbh.exit_code >= 64:
-            exit(tdbh.exit_code)
 
 
     # Termination.

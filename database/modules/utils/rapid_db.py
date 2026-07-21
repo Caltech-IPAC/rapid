@@ -3517,7 +3517,7 @@ class RAPIDDB:
 
 ########################################################################################################
 
-    def add_astro_object_to_field(self,tablename,ra0,dec0,flux0,meanra,stdevra,meandec,stdevdec,meanflux,stdevflux,nsources,field,hp6,hp9,debug=0):
+    def add_astro_object_to_field(self,tablename,ra0,dec0,flux0,field,hp6,hp9,debug=0):
 
         self.exit_code = 0
 
@@ -3529,13 +3529,6 @@ class RAPIDDB:
             f"            (ra0," +\
             f"             dec0," +\
             f"             flux0," +\
-            f"             meanra," +\
-            f"             stdevra," +\
-            f"             meandec," +\
-            f"             stdevdec," +\
-            f"             meanflux," +\
-            f"             stdevflux," +\
-            f"             nsources," +\
             f"             field," +\
             f"             hp6," +\
             f"             hp9" +\
@@ -3544,13 +3537,6 @@ class RAPIDDB:
             f"            ({str(ra0)}," +\
             f"             {str(dec0)}," +\
             f"             {str(flux0)}," +\
-            f"             {str(meanra)}," +\
-            f"             {str(stdevra)}," +\
-            f"             {str(meandec)}," +\
-            f"             {str(stdevdec)}," +\
-            f"             {str(meanflux)}," +\
-            f"             {str(stdevflux)}," +\
-            f"             {str(nsources)}," +\
             f"             {str(field)}," +\
             f"             {str(hp6)}," +\
             f"             {str(hp9)})" +\
@@ -3670,68 +3656,6 @@ class RAPIDDB:
 
         except (Exception, psycopg2.DatabaseError) as error:
             print(f'*** Error deleting {tablename} record (error={error}); skipping...')
-            self.exit_code = 67
-            return
-
-        if self.exit_code == 0:
-            self.conn.commit()           # Commit database transaction
-
-
-########################################################################################################
-
-    def update_astroobject_statistics(self,
-                                      astroobjects_tablename,
-                                      aid,
-                                      meanra,
-                                      stdra,
-                                      meandec,
-                                      stddec,
-                                      meanflux,
-                                      stdflux,
-                                      nsources,
-                                      debug=0):
-
-        '''
-        Update statistics in AstroObjects database record.
-        '''
-
-        self.exit_code = 0
-
-
-        # Define query.
-
-        query = f"update {astroobjects_tablename} " +\
-            f"set meanra = {meanra}, " +\
-            f"stdevra = {stdra}, " +\
-            f"meandec = {meandec}, " +\
-            f"stdevdec = {stddec}, " +\
-            f"meanflux = {meanflux}, " +\
-            f"stdevflux = {stdflux}, " +\
-            f"nsources = {nsources} " +\
-            f" where aid = {aid};"
-
-
-        # Query database.
-
-        if debug == 1:
-            print('query = {}'.format(query))
-
-
-        # Execute query.
-
-        try:
-            self.cur.execute(query)
-
-            try:
-                records = []
-                for record in self.cur:
-                    records.append(record)
-            except:
-                if debug == 1:
-                    print("Nothing returned from database query; continuing...")
-
-        except (Exception, psycopg2.DatabaseError) as error:
-            print(f'*** Error updating astroobjects_tablename record (aid={aid},error={error}); skipping...')
             self.exit_code = 67
             return
 
@@ -4128,7 +4052,7 @@ class RAPIDDB:
                     records.append(record)
                     nrecs += 1
 
-                print("nrecs =",nrecs)
+                print(f"fid,min_refimage_nframes,nrecs = {fid},{min_refimage_nframes},{nrecs}")
 
             except:
                 print("Nothing returned from database query; continuing...")
@@ -4139,3 +4063,59 @@ class RAPIDDB:
             return
 
         return records
+
+
+########################################################################################################
+
+    def insert_astroobjectsmeta_statistics(self,
+                                           astroobjectsmeta_tablename,
+                                           aid,
+                                           meanra,
+                                           stdevra,
+                                           meandec,
+                                           stdevdec,
+                                           meanflux,
+                                           stdevflux,
+                                           nsources,
+                                           debug=0):
+
+        '''
+        Insert statistics in AstroObjectsMeta_<field> database record.
+        '''
+
+        self.exit_code = 0
+
+
+        # Define query.
+
+        query = f"INSERT INTO {astroobjectsmeta_tablename} " +\
+            f"(aid,meanra,stdevra,meandec,stdevdec,meanflux,stdevflux,nsources) " +\
+            f"VALUES ({aid},{meanra},{stdevra},{meandec},{stdevdec},{meanflux},{stdevflux},{nsources});"
+
+
+        # Query database.
+
+        if debug == 1:
+            print('query = {}'.format(query))
+
+
+        # Execute query.
+
+        try:
+            self.cur.execute(query)
+
+            try:
+                records = []
+                for record in self.cur:
+                    records.append(record)
+            except:
+                if debug == 1:
+                    print("Nothing returned from database query; continuing...")
+
+        except (Exception, psycopg2.DatabaseError) as error:
+            print(f'*** Error inserting astroobjectsmeta_tablename record (aid={aid},error={error}); skipping...')
+            self.exit_code = 67
+            return
+
+        if self.exit_code == 0:
+            self.conn.commit()           # Commit database transaction

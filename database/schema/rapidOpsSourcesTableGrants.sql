@@ -73,6 +73,26 @@ GRANT USAGE ON SEQUENCE astroobjects_aid_seq TO rapidporole;
 
 
 -------------------
+-- AstroObjectsMeta table
+-------------------
+
+-- rapidreadrole
+
+REVOKE ALL ON TABLE astroobjectsmeta FROM rapidreadrole;
+GRANT SELECT ON TABLE astroobjectsmeta TO GROUP rapidreadrole;
+
+-- rapidadminrole
+
+REVOKE ALL ON TABLE astroobjectsmeta FROM rapidadminrole;
+GRANT ALL ON TABLE astroobjectsmeta TO GROUP rapidadminrole;
+
+-- rapidporole
+
+REVOKE ALL ON TABLE astroobjectsmeta FROM rapidporole;
+GRANT INSERT,UPDATE,SELECT,DELETE,TRUNCATE,TRIGGER,REFERENCES ON TABLE astroobjectsmeta TO rapidporole;
+
+
+-------------------
 -- Merges table
 -------------------
 

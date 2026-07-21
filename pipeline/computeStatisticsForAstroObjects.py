@@ -21,7 +21,7 @@ print("swvers =", swvers)
 print("cfg_filename_only =", cfg_filename_only)
 
 
-# Set debug = 1 here to get debug messages for creating and setting up Merges and AstroObjects tables.
+# Set debug = 1 here to get debug messages for creating and setting up AstroObjectsMeta tables.
 
 debug = 1
 
@@ -34,7 +34,7 @@ start_time_benchmark_at_start = start_time_benchmark
 
 # Compute processing datetime (UT) and processing datetime (Pacific time).
 
-datetime_utc_now = datetime.utcnow()
+datetime_utc_now = datetime.now(timezone.utc)
 proc_utc_datetime = datetime_utc_now.strftime('%Y-%m-%dT%H:%M:%SZ')
 datetime_pt_now = datetime_utc_now.replace(tzinfo=timezone.utc).astimezone(tz=to_zone)
 proc_pt_datetime_started = datetime_pt_now.strftime('%Y-%m-%dT%H:%M:%S PT')
@@ -85,27 +85,39 @@ naxis2 = int(config_input['INSTRUMENT']['naxis2_sciimage'])
 ppid = int(config_input['SCI_IMAGE']['ppid'])
 
 
-# Open database connections for parallel access.
+# Get number of cores for parallel processing.
 
-num_cores = os.cpu_count()
+num_cores = os.getenv('NUM_CORES')
+
+if num_cores is None:
+    num_cores = os.cpu_count()
+else:
+    num_cores = int(num_cores)
 
 print("num_cores =",num_cores)
-
-dbh_list = []
-
-for i in range(num_cores):
-
-    dbh = db.RAPIDDB()
-
-    if dbh.exit_code >= 64:
-        exit(dbh.exit_code)
-
-    dbh_list.append(dbh)
 
 
 # Get S3 client.
 
 s3_client = boto3.client('s3')
+
+
+# Define columns to be populated in AstroObjectsMeta tables.
+
+astroobjectsmeta_cols = []
+astroobjectsmeta_cols.append("aid")
+astroobjectsmeta_cols.append("meanra")
+astroobjectsmeta_cols.append("stdevra")
+astroobjectsmeta_cols.append("meandec")
+astroobjectsmeta_cols.append("stdevdec")
+astroobjectsmeta_cols.append("meanflux")
+astroobjectsmeta_cols.append("stdevflux")
+astroobjectsmeta_cols.append("nsources")
+
+astroobjectsmeta_cols_comma_separated_string = ", ".join(astroobjectsmeta_cols)
+astroobjectsmeta_columns = tuple(astroobjectsmeta_cols)
+
+print(f"AstroObjectsMeta columns: {astroobjectsmeta_cols_comma_separated_string}")
 
 
 #-------------------------------------------------------------------------------------------------------------
@@ -115,7 +127,7 @@ s3_client = boto3.client('s3')
 def run_single_core_job(fields,index_thread):
 
     '''
-    Update lightcurve statistics in AstroObjects_<field> database tables, omitting sources that
+    Update lightcurve statistics in AstroObjectsMeta_<field> database tables, omitting sources that
     are associated with not-best difference images.
     '''
 
@@ -140,9 +152,17 @@ def run_single_core_job(fields,index_thread):
         fh = open(thread_work_file, 'w', encoding="utf-8")
     except:
         print(f"*** Error: Could not open output file {thread_work_file}; quitting...")
-        exit(64)
+        raise RuntimeError(f"*** Error: Could not open output file {thread_work_file}; quitting...")
 
-    dbh = dbh_list[index_thread]
+
+    # Open database connection.
+
+    dbh = db.RAPIDDB()
+
+    if dbh.exit_code >= 64:
+        fh.write(f"*** Error opening database connection (dbh.exit_code={dbh.exit_code}); quitting...\n")
+        fh.flush()
+        raise RuntimeError(f"*** Error opening database connection (dbh.exit_code={dbh.exit_code}); quitting...\n")
 
     fh.write(f"\nStart of run_single_core_job: index_thread={index_thread}, dbh={dbh}\n")
 
@@ -153,13 +173,15 @@ def run_single_core_job(fields,index_thread):
 
 
     # Loop over all fields associated with this thread and compute statistics for astroobjects:
-    # 0. Delete AstroObjects_<field> database records that do not have corresponding Merges_<field> record(s).
+    # 0. Delete AstroObjects_<field> and AstroObjectsMeta_<field>  database records that
+    #    do not have corresponding Merges_<field> record(s).
     # 1. Query for records in each Merges_<field> database table joined with sources table.
     # 2. Determine unique pids (primary key of DiffImages table).
     # 3. Determine unique aids (primary key of AstroObjects_<field> table).
     # 4. Check associated DiffImages records for those that are best (vbest>0).
     # 5. Populate vbest dictionary keyed by unique pid.
     # 6. Compute statistics for all Merges_<field> records with best sources.
+    # 7. Populate AstroObjectsMeta_<field> database records
 
     for index_field in range(nfields):
 
@@ -175,10 +197,11 @@ def run_single_core_job(fields,index_thread):
 
         merges_tablename = f"merges_{field}"
         astroobjects_tablename = f"astroobjects_{field}"
+        astroobjectsmeta_tablename = f"astroobjectsmeta_{field}"
 
 
-        # Delete astroobjects records that do not have corresponding record(s)
-        # in the merges_<field> database table.
+        # Delete astroobjects/astroobjectsmeta records that do not have corresponding
+        # record(s) in the merges_<field> database table.
 
         #query = f"SELECT aid FROM {astroobjects_tablename} WHERE aid NOT IN " +\
         #    f"(SELECT aid FROM {merges_tablename});"
@@ -200,22 +223,27 @@ def run_single_core_job(fields,index_thread):
 
             aid = record[0]
 
-            fh.write(f"Deleting record for aid = {aid} in {astroobjects_tablename} database table...\n")
+            fh.write(f"Deleting records for aid = {aid} in {astroobjects_tablename} and " +
+                     f"{astroobjectsmeta_tablename} database tables...\n")
             fh.flush()
 
             dbh.delete_astroobject_from_field(astroobjects_tablename,aid,thread_debug)
+            # Call same method with different tablename.
+            dbh.delete_astroobject_from_field(astroobjectsmeta_tablename,aid,thread_debug)
+
 
         # Code-timing benchmark.
 
         thread_end_time_benchmark = time.time()
         diff_time_benchmark = thread_end_time_benchmark - thread_start_time_benchmark
-        fh.write(f"Elapsed time in seconds to delete astroobjects records that do not have merges records = {diff_time_benchmark}\n")
+        fh.write(f"Elapsed time in seconds to delete astroobjects and astroobjectsmeta " +
+                 f"records that do not have merges records = {diff_time_benchmark}\n")
         fh.flush()
         thread_start_time_benchmark = thread_end_time_benchmark
 
 
-        # Process astroobjects records that do indeed have corresponding record(s)
-        # in the merges_<field> database table and Sources database table.
+        # Process astroobjects/astroobjectsmeta records that do indeed have corresponding
+        # record(s) in the merges_<field> database table and Sources database table.
 
         query = f"SELECT a.aid,a.sid,b.pid,b.ra,b.dec,b.fluxfit FROM {merges_tablename} AS a, " +\
             f"{sources_tablename} AS b " +\
@@ -263,7 +291,8 @@ def run_single_core_job(fields,index_thread):
 
         thread_end_time_benchmark = time.time()
         diff_time_benchmark = thread_end_time_benchmark - thread_start_time_benchmark
-        fh.write(f"Elapsed time in seconds to select all records from {merges_tablename} and {sources_tablename} database tables = {diff_time_benchmark}\n")
+        fh.write(f"Elapsed time in seconds to select all records from {merges_tablename} " +
+                 f"and {sources_tablename} database tables = {diff_time_benchmark}\n")
         fh.flush()
         thread_start_time_benchmark = thread_end_time_benchmark
 
@@ -298,83 +327,151 @@ def run_single_core_job(fields,index_thread):
 
         # Loop over astroobjects for current field:
         # 1. Filter out not-best sources.
-        # 2. Compute statistics.
-        # 3. Update AstroObjects record.
+        # 2. Compute statistics using full sources history (no cumulative statistics).
+        # 3. Prepare AstroObjectsMeta_<field> records for bulk copy.
 
         aids_list = list(sids_for_aid_dict.keys())
 
-        for aid in aids_list:
+        astroobjectsmeta_table_file = f"astroobjectsmeta_{field}.csv"
 
-            sids_list = sids_for_aid_dict[aid]
-            pids_list = pids_for_aid_dict[aid]
-            ras_list = ras_for_aid_dict[aid]
-            decs_list = decs_for_aid_dict[aid]
-            fluxes_list = fluxes_for_aid_dict[aid]
-            nsources = 0
+        with open(astroobjectsmeta_table_file, "w") as csv_fh:
 
-            filtered_ras_list =[]
-            filtered_decs_list =[]
-            filtered_fluxes_list =[]
+            for aid in aids_list:
 
-            for sid,pid,ra,dec,flux in zip(sids_list,pids_list,ras_list,decs_list,fluxes_list):
+                sids_list = sids_for_aid_dict[aid]
+                pids_list = pids_for_aid_dict[aid]
+                ras_list = ras_for_aid_dict[aid]
+                decs_list = decs_for_aid_dict[aid]
+                fluxes_list = fluxes_for_aid_dict[aid]
+                nsources = 0
 
-                vbest = vbest_dict[pid]
+                filtered_ras_list =[]
+                filtered_decs_list =[]
+                filtered_fluxes_list =[]
 
+                for sid,pid,ra,dec,flux in zip(sids_list,pids_list,ras_list,decs_list,fluxes_list):
 
-                # Skip source that is associated with a not-best DiffImages record.
-
-                if vbest == 0:
-                    continue
+                    vbest = vbest_dict[pid]
 
 
-                # Source is best, so include it in lists for statistical computations.
+                    # Skip source that is associated with a not-best DiffImages record.
 
-                nsources += 1
-                filtered_ras_list.append(ra)
-                filtered_decs_list.append(dec)
-                filtered_fluxes_list.append(flux)
+                    if vbest == 0:
+                        continue
 
-            if nsources == 0:
 
-                dbh.delete_astroobject_from_field(astroobjects_tablename,aid,thread_debug)
+                    # Source is best, so include it in lists for statistical computations.
 
-            else:
+                    nsources += 1
+                    filtered_ras_list.append(ra)
+                    filtered_decs_list.append(dec)
+                    filtered_fluxes_list.append(flux)
 
-                flag1 = False
-                flag2 = False
-                for ra in filtered_ras_list:
-                    if ra < 10.0:
-                        flag1 = True
-                    elif ra > 350.0:
-                        flag2 = True
+                if nsources == 0:
 
-                if flag1 and flag2:
-                    i = 0
+                    dbh.delete_astroobject_from_field(astroobjects_tablename,aid,thread_debug)
+                    # Call same method with different tablename.
+                    dbh.delete_astroobject_from_field(astroobjectsmeta_tablename,aid,thread_debug)
+
+                else:
+
+                    flag1 = False
+                    flag2 = False
                     for ra in filtered_ras_list:
-                        if ra > 350.0:
-                            filtered_ras_list[i] -= 360.0
-                        i += 1
+                        if ra < 10.0:
+                            flag1 = True
+                        elif ra > 350.0:
+                            flag2 = True
 
-                meanra = np.mean(filtered_ras_list)
-                meandec = np.mean(filtered_decs_list)
-                meanflux = np.mean(filtered_fluxes_list)
-                stdra = np.std(filtered_ras_list)
-                stddec = np.std(filtered_decs_list)
-                stdflux = np.std(filtered_fluxes_list)
+                    if flag1 and flag2:
+                        i = 0
+                        for ra in filtered_ras_list:
+                            if ra > 350.0:
+                                filtered_ras_list[i] -= 360.0
+                            i += 1
 
-                dbh.update_astroobject_statistics(astroobjects_tablename,
-                                                  aid,
-                                                  meanra,
-                                                  stdra,
-                                                  meandec,
-                                                  stddec,
-                                                  meanflux,
-                                                  stdflux,
-                                                  nsources,
-                                                  thread_debug)
+                    meanra = np.mean(filtered_ras_list)
+                    meandec = np.mean(filtered_decs_list)
+                    meanflux = np.mean(filtered_fluxes_list)
+                    stdra = np.std(filtered_ras_list)
+                    stddec = np.std(filtered_decs_list)
+                    stdflux = np.std(filtered_fluxes_list)
+
+                    if meanra < 0.0:
+                        meanra += 360.0
+
+                    if thread_debug == 1:
+                        fh.write(f"Inserting AstroObjectsMeta record: astroobjectsmeta_tablename,aid," +
+                                 f"meanra,meandec,nsources={astroobjectsmeta_tablename},{aid},{meanra},{meandec},{nsources}\n")
+                        fh.flush()
 
 
-        # Drop astroobjects_<field> and merges_<field> database tables if either are empty.
+                    # Bulk copy is much faster than row-by-row inserts.
+
+                    '''
+                    dbh.insert_astroobjectsmeta_statistics(astroobjectsmeta_tablename,
+                                                           aid,
+                                                           meanra,
+                                                           stdra,
+                                                           meandec,
+                                                           stddec,
+                                                           meanflux,
+                                                           stdflux,
+                                                           nsources,
+                                                           thread_debug)
+                    '''
+
+
+                    nums = ""
+
+                    num = str(aid)
+                    nums = nums + num + ","
+                    num = str(meanra)
+                    nums = nums + num + ","
+                    num = str(stdra)
+                    nums = nums + num + ","
+                    num = str(meandec)
+                    nums = nums + num + ","
+                    num = str(stddec)
+                    nums = nums + num + ","
+                    num = str(meanflux)
+                    nums = nums + num + ","
+                    num = str(stdflux)
+                    nums = nums + num + ","
+                    num = str(nsources)
+                    nums = nums + num + ","
+
+                    # Slice the string to get all but the last character, then add the newline character
+                    new_character = "\n"
+                    line_to_write_to_file = nums[:-1] + new_character
+
+                    csv_fh.write(line_to_write_to_file)
+
+
+        # Load records into AstroObjectsMeta_<field> database tables.
+
+        dbh.copy_data_from_file_into_database(astroobjectsmeta_table_file,astroobjectsmeta_tablename,astroobjectsmeta_columns)
+
+        if dbh.exit_code >= 64:
+            fh.write(f"*** Error bulk-loading data from file ({astroobjectsmeta_table_file}) " +
+                     f"into specified database table ({astroobjectsmeta_tablename}); quitting...\n")
+            fh.flush()
+            raise RuntimeError(f"*** Error bulk-loading data from file ({astroobjectsmeta_table_file}) " +
+                     f"into specified database table ({astroobjectsmeta_tablename}); quitting..."))
+
+
+        # Code-timing benchmark.
+
+        thread_end_time_benchmark = time.time()
+        diff_time_benchmark = thread_end_time_benchmark - thread_start_time_benchmark
+        fh.write(f"Elapsed time in seconds to bulk copy records into " +
+                 f"{astroobjectsmeta_tablename} database table = {diff_time_benchmark}\n")
+        fh.flush()
+        thread_start_time_benchmark = thread_end_time_benchmark
+
+
+        # Drop empty astroobjects_<field>, astroobjectsmeta_<field>, and
+        # merges_<field> database tables.
 
         query = f"SELECT count(*) FROM {astroobjects_tablename};"
 
@@ -410,7 +507,15 @@ def run_single_core_job(fields,index_thread):
             sql_queries.append(query)
             records = dbh.execute_sql_queries(sql_queries,thread_debug)
 
-            fh.write("Dropping {merges_tablename} database table...\n")
+            fh.write(f"Dropping {astroobjectsmeta_tablename} database table...\n")
+
+            query = f"DROP TABLE {astroobjectsmeta_tablename};"
+
+            sql_queries = []
+            sql_queries.append(query)
+            records = dbh.execute_sql_queries(sql_queries,thread_debug)
+
+            fh.write(f"Dropping {merges_tablename} database table...\n")
 
             query = f"DROP TABLE {merges_tablename};"
 
@@ -423,7 +528,8 @@ def run_single_core_job(fields,index_thread):
 
         thread_end_time_benchmark = time.time()
         diff_time_benchmark = thread_end_time_benchmark - thread_start_time_benchmark
-        fh.write(f"Elapsed time in seconds to update statistics in {astroobjects_tablename} database table\n")
+        fh.write(f"Elapsed time in seconds to drop empty {astroobjects_tablename}, " +
+                 f"{merges_tablename}, and {astroobjectsmeta_tablename} database table = {diff_time_benchmark}\n")
         fh.flush()
         thread_start_time_benchmark = thread_end_time_benchmark
 
@@ -433,6 +539,29 @@ def run_single_core_job(fields,index_thread):
         fh.write(f"Loop end: index_field,field = {index_field},{field}\n")
         fh.flush()
 
+
+        # Remove no-longer-needed intermediate files.
+
+        file_paths = [astroobjectsmeta_table_file]
+        for file_path in file_paths:
+
+            if os.path.exists(file_path):
+                os.remove(file_path)
+                fh.write(f"File deleted successfully ({file_path})...\n")
+                fh.flush()
+            else:
+                fh.write(f"The file does not exist({file_path})...\n")
+                fh.flush()
+
+
+    # Close database connection.
+
+    dbh.close()
+
+    if dbh.exit_code >= 64:
+        fh.write(f"*** Error closing database connection (dbh.exit_code={dbh.exit_code}); quitting...\n")
+        fh.flush()
+        raise RuntimeError(f"*** Error closing database connection (dbh.exit_code={dbh.exit_code}); quitting...")
 
     fh.write(f"\nEnd of run_single_core_job: index_thread={index_thread}\n")
     fh.flush()
@@ -444,10 +573,7 @@ def run_single_core_job(fields,index_thread):
     return message
 
 
-def execute_parallel_processes(fields_list,num_cores=None):
-
-    if num_cores is None:
-        num_cores = os.cpu_count()  # Use all available cores if not specified
+def execute_parallel_processes(fields_list,num_cores):
 
     print("num_cores =",num_cores)
 
@@ -476,7 +602,9 @@ if __name__ == '__main__':
 
 
     '''
-    Launch parallel tasks to update lightcurve statistics in AstroObjects_<field> database tables.
+    Launch parallel tasks to compute lightcurve statistics in AstroObjectsMeta_<field> database tables.
+    These tables must be dropped before running this script, as the tables are recreated, indexed,
+    and then records populated with bulk copy for each field.  No record inserts or updates are done for speed.
     '''
 
 
@@ -488,7 +616,7 @@ if __name__ == '__main__':
         exit(dbh.exit_code)
 
     sql_queries = []
-    sql_queries.append(f"select tablename from pg_tables where schemaname='public' and tablename like 'astroobjects_%';")
+    sql_queries.append(f"select tablename from pg_tables where schemaname='public' and tablename like 'astroobjects\_%';")
     records = dbh.execute_sql_queries(sql_queries,debug)
 
     fields_list = []
@@ -501,6 +629,47 @@ if __name__ == '__main__':
 
     end_time_benchmark = time.time()
     print("Elapsed time in seconds to ascertain available fields =",
+        end_time_benchmark - start_time_benchmark)
+    start_time_benchmark = end_time_benchmark
+
+
+    # Create astroobjectsmeta database tables for all fields.
+    # Defer creating indexes on all astroobjectsmeta_<field> database tables until
+    # after the tables have been populated.
+
+    print("Creating tables and indexes for all astroobjectsmeta_<field> database tables...")
+
+    sql_queries = []
+
+    sql_queries.append("SET default_tablespace = pipeline_data_01;")
+
+    fillfactor = 70
+
+    for field in fields_list:
+
+        print(f"field = {field}")
+
+        tablename = f"astroobjectsmeta_{field}"
+
+        sql_queries.append(f"CREATE TABLE {tablename} (LIKE astroobjectsmeta INCLUDING " +
+                           f"DEFAULTS INCLUDING CONSTRAINTS) WITH (fillfactor = {fillfactor});")
+
+        sql_queries.append(f"REVOKE ALL ON TABLE {tablename} FROM rapidreadrole;")
+        sql_queries.append(f"GRANT SELECT ON TABLE {tablename} TO GROUP rapidreadrole;")
+        sql_queries.append(f"REVOKE ALL ON TABLE {tablename} FROM rapidadminrole;")
+        sql_queries.append(f"GRANT ALL ON TABLE {tablename} TO GROUP rapidadminrole;")
+        sql_queries.append(f"REVOKE ALL ON TABLE {tablename} FROM rapidporole;")
+        sql_queries.append(f"GRANT INSERT,UPDATE,SELECT,DELETE,TRUNCATE,TRIGGER,REFERENCES ON TABLE {tablename} TO rapidporole;")
+
+        sql_queries.append(f"ALTER TABLE {tablename} SET UNLOGGED;")
+
+    dbh.execute_sql_queries(sql_queries,debug)
+
+
+    # Code-timing benchmark.
+
+    end_time_benchmark = time.time()
+    print("Elapsed time in seconds to create astroobjectsmeta database tables for all fields =",
         end_time_benchmark - start_time_benchmark)
     start_time_benchmark = end_time_benchmark
 
@@ -525,32 +694,42 @@ if __name__ == '__main__':
     start_time_benchmark = end_time_benchmark
 
 
-    # Create indexes on all astroobjects_<field> database tables.
+    # Create indexes on all astroobjectsmeta_<field> database tables.
 
-    print("Creating indexes on all astroobjects_<field> database tables...")
+    print("Creating tables and indexes for all astroobjectsmeta_<field> database tables...")
 
     sql_queries = []
+
     sql_queries.append("SET default_tablespace = pipeline_indx_01;")
 
     for field in fields_list:
 
-        tablename = f"astroobjects_{field}"
+        print(f"field = {field}")
 
+        tablename = f"astroobjectsmeta_{field}"
+        sql_queries.append(f"CREATE INDEX {tablename}_nsources_idx ON {tablename} (nsources);")
         sql_queries.append(f"CREATE INDEX {tablename}_meanradec_idx ON {tablename} (q3c_ang2ipix(meanra, meandec));")
-        sql_queries.append(f"ALTER TABLE {tablename} SET LOGGED;")
+
         sql_queries.append(f"CLUSTER {tablename}_meanradec_idx ON {tablename};")
-        sql_queries.append(f"ANALYZE {tablename};")
 
     dbh.execute_sql_queries(sql_queries,debug)
 
 
-    # Vacuum and analyze astroobjects_<field> database tables for all fields.  Drop table if empty.
+    # Code-timing benchmark.
 
-    print("Vacuuming and analyzing astroobjects_<field> database tables for all fields...")
+    end_time_benchmark = time.time()
+    print("Elapsed time in seconds to create indexes for all astroobjectsmeta database tables =",
+        end_time_benchmark - start_time_benchmark)
+    start_time_benchmark = end_time_benchmark
+
+
+    # Vacuum and analyze astroobjectsmeta_<field> database tables for all fields.  Drop table if empty.
+
+    print("Vacuuming and analyzing astroobjectsmeta_<field> database tables for all fields...")
 
     for field in fields_list:
 
-        tablename = f"astroobjects_{field}"
+        tablename = f"astroobjectsmeta_{field}"
 
         query = f"SELECT count(*) FROM {tablename};"
 
@@ -562,11 +741,11 @@ if __name__ == '__main__':
 
         print(f"records = {records}")
 
-        astroobjects_child_table_count = records[0][0]
+        astroobjectsmeta_child_table_count = records[0][0]
 
-        if astroobjects_child_table_count == 0:
+        if astroobjectsmeta_child_table_count == 0:
 
-            print("Dropping {tablename} database table...")
+            print(f"Dropping {tablename} database table...")
 
             query = f"DROP TABLE {tablename};"
 
@@ -576,7 +755,7 @@ if __name__ == '__main__':
 
         else:
 
-            print("Vacuuming and analyzing {tablename} database table...")
+            print(f"Vacuuming and analyzing {tablename} database table...")
 
             dbh.vacuum_analyze_table(tablename)
 
@@ -584,7 +763,7 @@ if __name__ == '__main__':
     # Code-timing benchmark.
 
     end_time_benchmark = time.time()
-    print("Elapsed time in seconds to vacuum and analyze all astroobjects database tables =",
+    print("Elapsed time in seconds to vacuum and analyze all astroobjectsmeta database tables =",
         end_time_benchmark - start_time_benchmark)
     start_time_benchmark = end_time_benchmark
 
@@ -592,22 +771,16 @@ if __name__ == '__main__':
     # Code-timing benchmark overall.
 
     end_time_benchmark = time.time()
-    print(f"Elapsed time in seconds to update all astroobjects statistics =",
+    print(f"Elapsed time in seconds to update all astroobjectsmeta statistics =",
         end_time_benchmark - start_time_benchmark_at_start)
 
 
-    # Close database connections.
+    # Close database connection.
 
     dbh.close()
 
     if dbh.exit_code >= 64:
         exit(dbh.exit_code)
-
-    for tdbh in dbh_list:
-        tdbh.close()
-
-        if tdbh.exit_code >= 64:
-            exit(tdbh.exit_code)
 
 
     # Termination.

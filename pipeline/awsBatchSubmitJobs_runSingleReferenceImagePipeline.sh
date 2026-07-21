@@ -6,7 +6,7 @@ env
 echo "AWS Batch job to run single RAPID-reference-image pipeline instance."
 
 
-logfile="rapid_refimage_pipeline_job_${JOBPROCDATE}_jid${RAPID_JOB_ID}_log.txt"
+logfile="rapid_pipeline_job_${JOBPROCDATE}_jid${RAPID_JOB_ID}_log.txt"
 echo "logfile = $logfile"
 
 echo "Executing /usr/bin/python3.11 /code/pipeline/awsBatchSubmitJobs_runSingleReferenceImagePipeline.py >& $logfile"

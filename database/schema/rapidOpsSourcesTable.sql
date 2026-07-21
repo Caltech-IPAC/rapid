@@ -195,13 +195,6 @@ CREATE TABLE astroobjects (
     ra0 double precision NOT NULL,              -- RA corresponding to initial sky position
     dec0 double precision NOT NULL,             -- Dec corresponding to initial sky position
     flux0 real NOT NULL,                        -- Flux of initial sky position
-    meanra double precision NOT NULL,           -- Mean RA
-    stdevra real NOT NULL,                      -- Standard deviation of RA
-    meandec double precision NOT NULL,          -- Mean Dec
-    stdevdec real NOT NULL,                     -- Standard deviation of Dec
-    meanflux real NOT NULL,                     -- Mean flux
-    stdevflux real NOT NULL,                    -- Standard deviation of flux
-    nsources smallint NOT NULL,                 -- Total number of sources (all filters)
     field integer NOT NULL,                     -- Roman tessellation index for (ra,dec)
     hp6 integer NOT NULL,                       -- Level-6 healpix index (NESTED) for (ra,dec)
     hp9 integer NOT NULL                        -- Level-9 healpix index (NESTED) for (ra,dec)
@@ -225,7 +218,6 @@ SET default_tablespace = pipeline_indx_01;
 ALTER TABLE ONLY astroobjects ADD CONSTRAINT astroobjects_pkey PRIMARY KEY (aid);
 
 CREATE INDEX astroobjects_field_idx ON astroobjects (field);
-CREATE INDEX astroobjects_nsources_idx ON astroobjects (nsources);
 
 
 ------------------------------------------------------------
@@ -291,4 +283,30 @@ CREATE INDEX astroobjects_nsources_idx ON astroobjects (nsources);
 -- WHERE q3c_radial_query(ra0, dec0, ra_, dec_, radius_)
 -- ORDER by dist;
 ------------------------------------------------------------
+
+
+-----------------------------
+-- TABLE: AstroObjectsMeta
+-----------------------------
+
+SET default_tablespace = pipeline_data_01;
+
+CREATE TABLE astroobjectsmeta (
+    aid bigint NOT NULL,
+    meanra double precision NOT NULL,           -- Mean RA
+    stdevra real NOT NULL,                      -- Standard deviation of RA
+    meandec double precision NOT NULL,          -- Mean Dec
+    stdevdec real NOT NULL,                     -- Standard deviation of Dec
+    meanflux real NOT NULL,                     -- Mean flux
+    stdevflux real NOT NULL,                    -- Standard deviation of flux
+    nsources smallint NOT NULL                  -- Total number of sources (all filters)
+);
+
+ALTER TABLE astroobjectsmeta OWNER TO rapidadminrole;
+
+SET default_tablespace = pipeline_indx_01;
+
+ALTER TABLE ONLY astroobjectsmeta ADD CONSTRAINT astroobjectsmeta_pkey PRIMARY KEY (aid);
+
+CREATE INDEX astroobjectsmeta_nsources_idx ON astroobjectsmeta (nsources);
 
