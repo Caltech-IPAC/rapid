@@ -291,7 +291,8 @@ def run_single_core_job(fields,index_thread):
 
         thread_end_time_benchmark = time.time()
         diff_time_benchmark = thread_end_time_benchmark - thread_start_time_benchmark
-        fh.write(f"Elapsed time in seconds to select all records from {merges_tablename} and {sources_tablename} database tables = {diff_time_benchmark}\n")
+        fh.write(f"Elapsed time in seconds to select all records from {merges_tablename} " +
+                 f"and {sources_tablename} database tables = {diff_time_benchmark}\n")
         fh.flush()
         thread_start_time_benchmark = thread_end_time_benchmark
 
