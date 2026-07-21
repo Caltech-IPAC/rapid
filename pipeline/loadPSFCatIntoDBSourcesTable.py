@@ -277,7 +277,8 @@ def run_single_core_job(jid,meta_list,negative_diffimg_flag,index_thread):
                         CREATE UNLOGGED TABLE {tablename}
                         (LIKE sources INCLUDING DEFAULTS INCLUDING CONSTRAINTS)
                         ALTER TABLE {tablename} DROP sid,
-                            ADD COLUMN aid bigint;"""
+                            ADD COLUMN aid bigint,
+                            ADD COLUMN is_new boolean NOT NULL DEFAULT false;"""
 
         dbh.execute_sql_queries(sql_queries)
 
@@ -446,28 +447,104 @@ def run_single_core_job(jid,meta_list,negative_diffimg_flag,index_thread):
             fh.flush()
             exit(dbh.exit_code)
 
-        cross_match_sql = ""
+        #----------------------------------
+        # Cross match temp_sources to AstroObjects to get aid
+        #----------------------------------
         #Analyze new table so POSTGRE SQL plans correctly
         # DISTINCT ON coupled with ORDERED BY returns only the first closest match
-        #"    match_dist = m.dist * 3600" #Add later, in arcsec
+        # match_dist = m.dist * 3600 #Add later, in arcsec
         cross_match_sql = f"""ANALYZE {tablename};
-        UPDATE {tablename} s
-        SET aid = m.aid,
-        FROM (
-            SELECT DISTINCT ON (s2.src_id)
-            s2.src_id,
-            a.aid,
-            q3c_dist(s2.ra, s2.dec, a.ra0, a.dec0) AS dist
-            FROM {tablename} s2
-            JOIN astroobjects a
-                ON q3c_join(s2.ra, s2.dec, a.ra0, a.dec0, {match_radius})
-            WHERE s2.flags=0") #can remove if filter R/B first
-            ORDER BY s2.src_id, dist
-            ) m
-        WHERE s.src_id = m.src_id;"""
+            UPDATE {tablename} s
+            SET aid = m.aid,
+                is_new =
+            FROM (
+                SELECT DISTINCT ON (s2.src_id)
+                s2.src_id,
+                a.aid,
+                q3c_dist(s2.ra, s2.dec, a.ra0, a.dec0) AS dist
+                FROM {tablename} s2
+                JOIN astroobjects a
+                    ON q3c_join(s2.ra, s2.dec, a.ra0, a.dec0, {match_radius})
+                WHERE s2.flags=0") #can remove if filter R/B first
+                ORDER BY s2.src_id, dist
+                ) m
+            WHERE s.src_id = m.src_id;"""
+        dbh.execute_sql_queries(cross_match_sql)
 
+        #----------------------------------
+        # For rows in temp_sources not cross-matched, create a new aid
+        #----------------------------------
+        create_new_aid_sql = f"""UPDATE {tablename}
+            SET aid = nextval('astroobjects_aid_seq'),
+                is_new = true
+            WHERE aid IS NULL;
 
+            INSERT INTO astroobjects (aid, ra0, dec0, flux0, field, hp6, hp9)
+            SELECT aid, ra, dec, fluxfit, field, hp6, hp9
+            FROM {tablename}
+            WHERE is_new;"""
+        dbh.execute_sql_queries(create_new_aid_sql)
 
+        #----------------------------------
+        # For temp_sources not cross-matched, create new astroobjectmeta rows
+        #----------------------------------
+        create_new_aid_to_astroobjectmeta_sql = f"""INSERT INTO astroobjectsmeta (aid, nsources, fluxmean, fluxsum2, stdevflux, cos_sum, sin_sum, meanra, meandec, mjdmin, mjdmax)
+            SELECT aid, 0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, NULL, NULL
+            FROM {tablename}
+            WHERE is_new;"""
+        dbh.execute_sql_queries(create_new_aid_to_astroobjectmeta_sql)
+
+        #----------------------------------
+        # Update sources table with temp_sources
+        #----------------------------------
+        update_source_table_sql = f"""INSERT INTO sources (sid, aid, id, pid, isdiffpos, ra, dec,
+                xfit, yfit, fluxfit, xerr, yerr, fluxerr,
+                npixfit, qfit, cfit, redchi, flags,
+                sharpness, roundness1, roundness2, npix, peak,
+                field, hp6, hp9, expid, fid, sca, mjdobs)
+            SELECT nextval('sources_sid_seq'), aid, id, pid, isdiffpos, ra, dec,
+                xfit, yfit, fluxfit, xerr, yerr, fluxerr,
+                npixfit, qfit, cfit, redchi, flags,
+                sharpness, roundness1, roundness2, npix, peak,
+                field, hp6, hp9, expid, fid, sca, mjdobs
+            FROM {tablename};"""
+        dbh.execute_sql_queries(update_source_table_sql)
+
+        #----------------------------------
+        # Update astroobjectmeta table with temp_sources
+        #----------------------------------
+        # Use circular mean for meanra = arctan2(sum(sin(ra)), sum(cos(ra)))
+        # for stdev - use GREATEST to protect against really small neg numbers blowing up
+        update_existing_astroobjectmeta_sql = f"""UPDATE astroobjectsmeta m
+                SET nsources  = m.nsources + agg.n,
+                    fluxmean  = (m.fluxmean*m.nsources + agg.fsum) / (m.nsources + agg.n),
+                    fluxsum2  = m.fluxsum2 + agg.fsum2,
+                    stdevflux = sqrt(GREATEST(
+                                    (m.fluxsum2 + agg.fsum2) / (m.nsources + agg.n)
+                                    - ((m.fluxmean*m.nsources + agg.fsum) / (m.nsources + agg.n))^2,
+                                    0.0)),
+                    cos_sum   = m.cos_sum + agg.cossum,
+                    sin_sum   = m.sin_sum + agg.sinsum,
+                    meanra    = mod(degrees(atan2(m.sin_sum + agg.sinsum,
+                                  m.cos_sum + agg.cossum)) + 360.0, 360.0),
+                    meandec   = (m.meandec*m.nsources + agg.sumdec) / (m.nsources + agg.n),
+                    mjdmin    = LEAST(m.mjdmin, agg.minmjd),
+                    mjdmax    = GREATEST(m.mjdmax, agg.maxmjd)
+                FROM (
+                    SELECT aid,
+                        count(*)                        AS n,
+                        sum(fluxfit::float8)            AS fsum,
+                        sum(fluxfit::float8 * fluxfit)  AS fsum2,
+                        sum(sind(ra))                   AS sinsum,
+                        sum(cosd(ra))                   AS cossum,
+                        sum(dec::float8)                AS sumdec,
+                        min(mjdobs)                     AS minmjd,
+                        max(mjdobs)                     AS maxmjd
+                    FROM temp_sources
+                    GROUP BY aid
+                ) agg
+                WHERE m.aid = agg.aid;"""
+        dbh.execute_sql_queries(update_existing_astroobjectmeta_sql)
         # Touch done file.  Upload done file to S3 bucket.
 
         util.write_done_file_to_s3_bucket(done_filename,product_s3_bucket_base,proc_date,jid,s3_client)
