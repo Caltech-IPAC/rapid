@@ -662,6 +662,14 @@ if __name__ == '__main__':
     dbh.execute_sql_queries(sql_queries,debug)
 
 
+    # Code-timing benchmark.
+
+    end_time_benchmark = time.time()
+    print("Elapsed time in seconds to create astroobjectsmeta database tables for all fields =",
+        end_time_benchmark - start_time_benchmark)
+    start_time_benchmark = end_time_benchmark
+
+
     ################################################################################
     # Execute tasks for fields in parallel, with the number of parallel threads
     # equal to the number of cores on the job-launcher machine.
