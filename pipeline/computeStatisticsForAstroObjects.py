@@ -85,7 +85,7 @@ naxis2 = int(config_input['INSTRUMENT']['naxis2_sciimage'])
 ppid = int(config_input['SCI_IMAGE']['ppid'])
 
 
-# Open database connections for parallel access.
+# Get number of cores for parallel processing.
 
 num_cores = os.getenv('NUM_CORES')
 
@@ -95,7 +95,6 @@ else:
     num_cores = int(num_cores)
 
 print("num_cores =",num_cores)
-
 
 
 # Get S3 client.
@@ -161,8 +160,8 @@ def run_single_core_job(fields,index_thread):
     dbh = db.RAPIDDB()
 
     if dbh.exit_code >= 64:
-        print(f"*** Error opening database connection (dbh.exit_code={dbh.exit_code}); quitting...")
-        raise RuntimeError(f"*** Error opening database connection (dbh.exit_code={dbh.exit_code}); quitting...")
+        fh.write(f"*** Error opening database connection (dbh.exit_code={dbh.exit_code}); quitting...\n")
+        raise RuntimeError(f"*** Error opening database connection (dbh.exit_code={dbh.exit_code}); quitting...\n")
 
     fh.write(f"\nStart of run_single_core_job: index_thread={index_thread}, dbh={dbh}\n")
 
@@ -546,18 +545,12 @@ def run_single_core_job(fields,index_thread):
 
             if os.path.exists(file_path):
                 os.remove(file_path)
-                print(f"File deleted successfully ({file_path}).")
+                fh.write(f"File deleted successfully ({file_path})...\n")
             else:
-                print(f"The file does not exist({file_path}).")
+                fh.write(f"The file does not exist({file_path})...\n")
 
 
-    fh.write(f"\nEnd of run_single_core_job: index_thread={index_thread}\n")
-    fh.flush()
-
-    fh.close()
-
-
-    # Close database connections.
+    # Close database connection.
 
     dbh.close()
 
@@ -566,6 +559,10 @@ def run_single_core_job(fields,index_thread):
         fh.flush()
         raise RuntimeError(f"*** Error closing database connection (dbh.exit_code={dbh.exit_code}); quitting...")
 
+    fh.write(f"\nEnd of run_single_core_job: index_thread={index_thread}\n")
+    fh.flush()
+
+    fh.close()
 
     message = f"Finish normally for index_thread = {index_thread}"
 
@@ -766,7 +763,7 @@ if __name__ == '__main__':
         end_time_benchmark - start_time_benchmark_at_start)
 
 
-    # Close database connections.
+    # Close database connection.
 
     dbh.close()
 
