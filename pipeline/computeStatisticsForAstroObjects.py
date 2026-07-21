@@ -538,6 +538,18 @@ def run_single_core_job(fields,index_thread):
         fh.flush()
 
 
+        # Remove no-longer-needed intermediate files.
+
+        file_paths = [astroobjectsmeta_table_file]
+        for file_path in file_paths:
+
+            if os.path.exists(file_path):
+                os.remove(file_path)
+                print(f"File deleted successfully ({file_path}).")
+            else:
+                print(f"The file does not exist({file_path}).")
+
+
     fh.write(f"\nEnd of run_single_core_job: index_thread={index_thread}\n")
     fh.flush()
 
