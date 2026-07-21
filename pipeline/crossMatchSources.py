@@ -206,7 +206,7 @@ def run_single_core_job_stage_1_crossmatching(scas,fields,index_thread):
         fh = open(thread_work_file, 'w', encoding="utf-8")
     except:
         print(f"*** Error: Could not open output file {thread_work_file}; quitting...")
-        exit(64)
+        raise RuntimeError(f"*** Error: Could not open output file {thread_work_file}; quitting...")
 
 
     # Open database connection.
@@ -455,7 +455,7 @@ def run_single_core_job_stage_2_crossmatching(scas,fields,index_thread):
         fh = open(thread_work_file, 'w', encoding="utf-8")
     except:
         print(f"*** Error: Could not open output file {thread_work_file}; quitting...")
-        exit(64)
+        raise RuntimeError(f"*** Error: Could not open output file {thread_work_file}; quitting...")
 
 
     # Open database connection.
@@ -629,10 +629,7 @@ def run_single_core_job_stage_2_crossmatching(scas,fields,index_thread):
     return message
 
 
-def execute_parallel_processes_stage_1_crossmatching(scas_list,fields_list,num_cores=None):
-
-    if num_cores is None:
-        num_cores = os.cpu_count()  # Use all available cores if not specified
+def execute_parallel_processes_stage_1_crossmatching(scas_list,fields_list,num_cores):
 
     print("num_cores =",num_cores)
 
@@ -653,10 +650,7 @@ def execute_parallel_processes_stage_1_crossmatching(scas_list,fields_list,num_c
             print(f"*** Error in thread index {index} = {e}")
 
 
-def execute_parallel_processes_stage_2_crossmatching(scas_list,fields_list,num_cores=None):
-
-    if num_cores is None:
-        num_cores = os.cpu_count()  # Use all available cores if not specified
+def execute_parallel_processes_stage_2_crossmatching(scas_list,fields_list,num_cores):
 
     print("num_cores =",num_cores)
 
