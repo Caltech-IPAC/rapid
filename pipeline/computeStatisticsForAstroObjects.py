@@ -455,7 +455,8 @@ def run_single_core_job(fields,index_thread):
             fh.write(f"*** Error bulk-loading data from file ({astroobjectsmeta_table_file}) " +
                      f"into specified database table ({astroobjectsmeta_tablename}); quitting...\n")
             fh.flush()
-            exit(dbh.exit_code)
+            raise RuntimeError(f"*** Error bulk-loading data from file ({astroobjectsmeta_table_file}) " +
+                     f"into specified database table ({astroobjectsmeta_tablename}); quitting..."))
 
 
         # Code-timing benchmark.
@@ -561,7 +562,9 @@ def run_single_core_job(fields,index_thread):
     dbh.close()
 
     if dbh.exit_code >= 64:
-        exit(dbh.exit_code)
+        fh.write(f"*** Error closing database connection (dbh.exit_code={dbh.exit_code}); quitting...\n")
+        fh.flush()
+        raise RuntimeError(f"*** Error closing database connection (dbh.exit_code={dbh.exit_code}); quitting...")
 
 
     message = f"Finish normally for index_thread = {index_thread}"
