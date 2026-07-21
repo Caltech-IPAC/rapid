@@ -126,17 +126,6 @@ else:
 
 print("num_cores =",num_cores)
 
-dbh_list = []
-
-for i in range(num_cores):
-
-    dbh = db.RAPIDDB()
-
-    if dbh.exit_code >= 64:
-        exit(dbh.exit_code)
-
-    dbh_list.append(dbh)
-
 
 # Get S3 client.
 
@@ -219,7 +208,15 @@ def run_single_core_job_stage_1_crossmatching(scas,fields,index_thread):
         print(f"*** Error: Could not open output file {thread_work_file}; quitting...")
         exit(64)
 
-    dbh = dbh_list[index_thread]
+
+    # Open database connection.
+
+    dbh = db.RAPIDDB()
+
+    if dbh.exit_code >= 64:
+        fh.write(f"*** Error opening database connection (dbh.exit_code={dbh.exit_code}); quitting...\n")
+        raise RuntimeError(f"*** Error opening database connection (dbh.exit_code={dbh.exit_code}); quitting...\n")
+
 
     fh.write(f"\nStart of run_single_core_job: index_thread={index_thread}, dbh={dbh}\n")
 
@@ -359,8 +356,7 @@ def run_single_core_job_stage_1_crossmatching(scas,fields,index_thread):
                             source_flux = record[5]
 
                             if field != source_field:
-                                fh.write(f"*** Error: field ({field}) not equal to source_field ({source_field}); quitting...")
-                                print(f"*** Error: field ({field}) not equal to source_field ({source_field}); quitting...")
+                                fh.write(f"*** Error: field ({field}) not equal to source_field ({source_field}); quitting...\n")
                                 raise Exception(f"*** Error: field ({field}) not equal to source_field ({source_field}); quitting...")
 
 
@@ -405,6 +401,15 @@ def run_single_core_job_stage_1_crossmatching(scas,fields,index_thread):
 
         fh.flush()
 
+
+    # Close database connection.
+
+    dbh.close()
+
+    if dbh.exit_code >= 64:
+        fh.write(f"*** Error closing database connection (dbh.exit_code={dbh.exit_code}); quitting...\n")
+        fh.flush()
+        raise RuntimeError(f"*** Error closing database connection (dbh.exit_code={dbh.exit_code}); quitting...")
 
     fh.write(f"\nEnd of run_single_core_job: index_thread={index_thread}\n")
 
@@ -452,7 +457,15 @@ def run_single_core_job_stage_2_crossmatching(scas,fields,index_thread):
         print(f"*** Error: Could not open output file {thread_work_file}; quitting...")
         exit(64)
 
-    dbh = dbh_list[index_thread]
+
+    # Open database connection.
+
+    dbh = db.RAPIDDB()
+
+    if dbh.exit_code >= 64:
+        fh.write(f"*** Error opening database connection (dbh.exit_code={dbh.exit_code}); quitting...\n")
+        raise RuntimeError(f"*** Error opening database connection (dbh.exit_code={dbh.exit_code}); quitting...\n")
+
 
     fh.write(f"\nStart of run_single_core_job: index_thread={index_thread}, dbh={dbh}\n")
 
@@ -597,6 +610,15 @@ def run_single_core_job_stage_2_crossmatching(scas,fields,index_thread):
 
         fh.flush()
 
+
+    # Close database connection.
+
+    dbh.close()
+
+    if dbh.exit_code >= 64:
+        fh.write(f"*** Error closing database connection (dbh.exit_code={dbh.exit_code}); quitting...\n")
+        fh.flush()
+        raise RuntimeError(f"*** Error closing database connection (dbh.exit_code={dbh.exit_code}); quitting...")
 
     fh.write(f"\nEnd of run_single_core_job: index_thread={index_thread}\n")
 
@@ -905,18 +927,12 @@ if __name__ == '__main__':
         end_time_benchmark - start_time_benchmark_at_start)
 
 
-    # Close database connections.
+    # Close database connection.
 
     dbh.close()
 
     if dbh.exit_code >= 64:
         exit(dbh.exit_code)
-
-    for tdbh in dbh_list:
-        tdbh.close()
-
-        if tdbh.exit_code >= 64:
-            exit(tdbh.exit_code)
 
 
     # Termination.
