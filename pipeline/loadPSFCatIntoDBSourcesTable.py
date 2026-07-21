@@ -453,10 +453,10 @@ def run_single_core_job(jid,meta_list,negative_diffimg_flag,index_thread):
         #Analyze new table so POSTGRE SQL plans correctly
         # DISTINCT ON coupled with ORDERED BY returns only the first closest match
         # match_dist = m.dist * 3600 #Add later, in arcsec
+        cross_match_time_benchmark_start = time.time()
         cross_match_sql = f"""ANALYZE {tablename};
             UPDATE {tablename} s
-            SET aid = m.aid,
-                is_new =
+            SET aid = m.aid
             FROM (
                 SELECT DISTINCT ON (s2.src_id)
                 s2.src_id,
@@ -465,15 +465,17 @@ def run_single_core_job(jid,meta_list,negative_diffimg_flag,index_thread):
                 FROM {tablename} s2
                 JOIN astroobjects a
                     ON q3c_join(s2.ra, s2.dec, a.ra0, a.dec0, {match_radius})
-                WHERE s2.flags=0") #can remove if filter R/B first
+                WHERE s2.flags=0" #can remove if filter R/B first
                 ORDER BY s2.src_id, dist
                 ) m
             WHERE s.src_id = m.src_id;"""
         dbh.execute_sql_queries(cross_match_sql)
-
+        cross_match_time_benchmark_end = time.time()
+        fh.write(f"Elapsed time in seconds to crossmatch = {cross_match_time_benchmark_end-cross_match_time_benchmark_start}\n")
         #----------------------------------
         # For rows in temp_sources not cross-matched, create a new aid
         #----------------------------------
+        update_astroobjects_time_benchmark_start = time.time()
         create_new_aid_sql = f"""UPDATE {tablename}
             SET aid = nextval('astroobjects_aid_seq'),
                 is_new = true
@@ -484,19 +486,13 @@ def run_single_core_job(jid,meta_list,negative_diffimg_flag,index_thread):
             FROM {tablename}
             WHERE is_new;"""
         dbh.execute_sql_queries(create_new_aid_sql)
-
-        #----------------------------------
-        # For temp_sources not cross-matched, create new astroobjectmeta rows
-        #----------------------------------
-        create_new_aid_to_astroobjectmeta_sql = f"""INSERT INTO astroobjectsmeta (aid, nsources, fluxmean, fluxsum2, stdevflux, cos_sum, sin_sum, meanra, meandec, mjdmin, mjdmax)
-            SELECT aid, 0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, NULL, NULL
-            FROM {tablename}
-            WHERE is_new;"""
-        dbh.execute_sql_queries(create_new_aid_to_astroobjectmeta_sql)
+        update_astrobjects_time_benchmark_end = time.time()
+        fh.write(f"Elapsed time in seconds to update astroobjects Table = {update_astroobjects_time_benchmark_end-update_astroobjects_time_benchmark_start}\n")
 
         #----------------------------------
         # Update sources table with temp_sources
         #----------------------------------
+        insert_sources_time_benchmark_start = time.time()
         update_source_table_sql = f"""INSERT INTO sources (sid, aid, id, pid, isdiffpos, ra, dec,
                 xfit, yfit, fluxfit, xerr, yerr, fluxerr,
                 npixfit, qfit, cfit, redchi, flags,
@@ -509,6 +505,19 @@ def run_single_core_job(jid,meta_list,negative_diffimg_flag,index_thread):
                 field, hp6, hp9, expid, fid, sca, mjdobs
             FROM {tablename};"""
         dbh.execute_sql_queries(update_source_table_sql)
+        insert_sources_time_benchmark_end = time.time()
+        fh.write(f"Elapsed time in seconds to insert new detections into Source table = {insert_sources_time_benchmark_end-insert_sources_time_benchmark_start}\n")
+
+
+        #----------------------------------
+        # For temp_sources not cross-matched, create new astroobjectmeta rows
+        #----------------------------------
+        update_astroobjectsmeta_time_benchmark_start = time.time()
+        create_new_aid_to_astroobjectmeta_sql = f"""INSERT INTO astroobjectsmeta (aid, nsources, fluxmean, fluxsum2, stdevflux, cos_sum, sin_sum, meanra, meandec, mjdmin, mjdmax)
+            SELECT aid, 0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, NULL, NULL
+            FROM {tablename}
+            WHERE is_new;"""
+        dbh.execute_sql_queries(create_new_aid_to_astroobjectmeta_sql)
 
         #----------------------------------
         # Update astroobjectmeta table with temp_sources
@@ -545,6 +554,8 @@ def run_single_core_job(jid,meta_list,negative_diffimg_flag,index_thread):
                 ) agg
                 WHERE m.aid = agg.aid;"""
         dbh.execute_sql_queries(update_existing_astroobjectmeta_sql)
+        update_astroobjectsmeta_time_benchmark_end = time.time()
+        fh.write(f"Elapsed time in seconds to update the AstroObjectsMeta table = {update_astroobjectsmeta_time_benchmark_end-update_astroobjectsmeta_time_benchmark_start}\n")
         # Touch done file.  Upload done file to S3 bucket.
 
         util.write_done_file_to_s3_bucket(done_filename,product_s3_bucket_base,proc_date,jid,s3_client)
@@ -558,8 +569,7 @@ def run_single_core_job(jid,meta_list,negative_diffimg_flag,index_thread):
 
 
         # Remove no-longer-needed intermediate files.
-
-        file_paths = [output_psfcat_filename_for_jid,output_psfcat_finder_filename_for_jid,sources_table_file]
+        file_paths = [output_psfcat_filename_for_jid,output_psfcat_finder_filename_for_jid]
         for file_path in file_paths:
 
             if os.path.exists(file_path):
