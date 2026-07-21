@@ -215,6 +215,7 @@ def run_single_core_job_stage_1_crossmatching(scas,fields,index_thread):
 
     if dbh.exit_code >= 64:
         fh.write(f"*** Error opening database connection (dbh.exit_code={dbh.exit_code}); quitting...\n")
+        fh.flush()
         raise RuntimeError(f"*** Error opening database connection (dbh.exit_code={dbh.exit_code}); quitting...\n")
 
 
@@ -464,6 +465,7 @@ def run_single_core_job_stage_2_crossmatching(scas,fields,index_thread):
 
     if dbh.exit_code >= 64:
         fh.write(f"*** Error opening database connection (dbh.exit_code={dbh.exit_code}); quitting...\n")
+        fh.flush()
         raise RuntimeError(f"*** Error opening database connection (dbh.exit_code={dbh.exit_code}); quitting...\n")
 
 
