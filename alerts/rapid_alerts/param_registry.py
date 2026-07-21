@@ -171,11 +171,11 @@ DIA_SOURCE_PARAMS = (
                     IMPLEMENTED, "sources.cfit"),
     Param("psfRChi2",        ["null", "float"],  "Reduced chi-square of PSF fit",
                     IMPLEMENTED, "sources.redchi"),
-    Param("psfNdata",       ["null", "int"],    "Number of pixels used in PSF fit",
+    Param("psfNdata",       ["null", "int"],    "Number of pixels used in  PSF fit", #TODO: used to be npixfit
                     IMPLEMENTED, "sources.npixfit"),
-    Param("sharpness",     ["null", "float"],  "PSF-fit sharpness parameter",
+    Param("sharpness",     ["null", "float"],  "PSF-fit sharpness parameter", #TODO: should we add PSF as prefix?
                     IMPLEMENTED, "sources.sharpness"),
-    Param("roundness1",    ["null", "float"],  "PSF-fit roundness parameter 1",
+    Param("roundness1",    ["null", "float"],  "PSF-fit roundness parameter 1", #TODO: better description
                     IMPLEMENTED, "sources.roundness1"),
     Param("roundness2",    ["null", "float"],  "PSF-fit roundness parameter 2",
                     IMPLEMENTED, "sources.roundness2"),
@@ -189,10 +189,10 @@ DIA_SOURCE_PARAMS = (
     # --- Classification (all stubs) -----------------------------------------
     Param("extendedness",  ["null", "float"],  "Probability of being extended (stub)",
                     STUB, "star/galaxy classification (not run)"),
-    Param("reliability",   ["null", "float"],  "Reliability score (stub)",
+    Param("reliability",   ["null", "float"],  "Reliability score from ML classifier",
                     STUB, "real/bogus classifier (not run)"),
     Param("reliabilityVersion", ["null", "string"],  "Reliability code version",
-                    STUB, "from real/bogus classifier version (not run)")
+                    STUB, "from real/bogus classifier version (not run)"),
 
     # --- Trailed-source fit (all stubs) --------------------------------------
     Param("trailFlux",     ["null", "float"],  "Trail-fit flux (stub) [nJy]",
@@ -284,7 +284,7 @@ DIA_SOURCE_PARAMS = (
     Param("program",       ["null", "int"],    "Roman program identifier (stub)",
                     NOT_USED, "Roman observation ID components (exposure metadata; not in sources table)"),
     Param("survey",        ["null", "string"], "Survey name (stub)",
-                    NOT_USED, "observation metadata (not available)"),p
+                    NOT_USED, "observation metadata (not available)"),
 )
 
 

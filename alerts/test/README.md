@@ -1,0 +1,104 @@
+# `rapid_alerts` tests
+
+Automated tests and benchmarking tools for the alert-production package
+(`../rapid_alerts/`).
+
+## Requirements
+
+- **Python 3.11** (the environment where `fitsio`, `numpy` 2, `astropy`,
+  `fastavro`, and `pytest` are installed). Invoke it explicitly as
+  `python3.11` — the default `python3` may be a different interpreter
+  without these packages.
+- Run commands from the package root, `alerts/`, so that `rapid_alerts`
+  imports and the `conftest.py` path setup resolve.
+
+```bash
+cd alerts
+python3.11 -m pytest test/ -q
+```
+
+That runs the whole suite (28 tests). The live-database tests
+(`test_live_db.py`) **skip** unless the database environment is set (see
+below) — a skipped run is normal and not a failure.
+
+## What each file is
+
+### Automated tests (`pytest`)
+
+| File | Covers |
+|------|--------|
+| `test_schema.py` | Schema-registry consistency, alert assembly semantics, stub/nullable enforcement, Avro round-trip. Uses a hand-rolled provider — no DB, no files. |
+| `test_clips.py` | Cutout clips: the 0-based/1-based indexing regression, the WCS/position-consistency invariant, edge padding, header whitelist, multi-HDU loading. |
+| `test_provider.py` | `DatabaseProvider` behavior over a fake DB + synthetic job directory: `resolve_pid`, flavor selection, the cutout-failure degradation ladder, batch/single byte-identity, and `--save` archive round-trip. |
+| `test_benchmark.py` | The benchmark harness itself: the timing/memory/size JSONL is well-formed and `TimedProvider` is transparent. |
+| `test_live_db.py` | Live-database integration: the pixel-convention sentinel. **Skips** without DB access (see below). |
+
+### Support modules (imported by the tests, not run directly)
+
+| File | Role |
+|------|------|
+| `conftest.py` | Shared fixtures: the fake database (`FakeDB`/`ChipData`), a synthetic on-disk job directory of FITS products, and a realistic TPV WCS header. The whole suite hangs off these. |
+| `wcs_eval.py` | A minimal forward-TPV WCS evaluator (`astropy.wcs` is unavailable in the container; `fitsio` has no transforms). |
+
+### Tools (run by hand, not part of `pytest`)
+
+| File | Role |
+|------|------|
+| `benchmark.py` | Timing + memory + output-size benchmark of batch production against the live database. |
+| `avro_producer.py`, `avro_consumer.py` | Standalone Kafka publish/consume smoke scripts (require a running broker and `confluent_kafka`). Legacy manual utilities, not maintained by the suite. |
+
+## Running subsets
+
+```bash
+# one file
+python3.11 -m pytest test/test_clips.py -q
+
+# one test, showing prints/logs (-s disables output capture)
+python3.11 -m pytest test/test_provider.py::test_resolve_pid_picks_newest_best_campaign -sv
+
+# everything matching a keyword
+python3.11 -m pytest test/ -k cutout -q
+```
+
+## Live-database tests
+
+`test_live_db.py` needs the RAPID database environment variables
+(`DBSERVER`, `DBPORT`, `DBNAME`, `DBUSER`, `DBPASS`) and AWS credentials
+for the product bucket. Without them — or when the database is
+unreachable (VPN down, security group) — the tests emit a visible
+`UserWarning` and skip; they never fail for lack of access.
+
+```bash
+# with the environment set (and VPN/DB reachable):
+python3.11 -m pytest test/test_live_db.py -sv
+```
+
+The `test_database_reachable` canary owns the "not run" warning, so the
+other live tests skip quietly and point to it.
+
+## Benchmarking (not a `pytest` target)
+
+`benchmark.py` runs batch production against the live database and writes
+one JSON Lines file per run (timing per source, peak/bracketing memory,
+and — with `--save` — the produced Avro archive's size). It needs the
+same DB/AWS environment as the live tests. The summary is both printed to
+the console and saved to the `-o` file.
+
+```bash
+# benchmark one exposure + SCA, also writing the (compressed) alert archive
+python3.11 test/benchmark.py --exposure 80982 --sca 18 \
+    --save alerts.avro -o timing.jsonl
+
+# benchmark a specific processing ID, timing only (no archive)
+python3.11 test/benchmark.py --pid 338173 -o timing.jsonl
+
+# store the archive uncompressed (default is deflate, the MAST format)
+python3.11 test/benchmark.py --pid 338173 --save alerts.avro --no-compress
+
+# re-print the summary of one or more existing runs, side by side
+python3.11 test/benchmark.py report timing.jsonl other_machine.jsonl
+```
+
+The embedded `meta` record (architecture, CPU, cores, library versions,
+git SHA) makes runs from different machines directly comparable with
+`report`.
