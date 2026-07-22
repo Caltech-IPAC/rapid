@@ -29,6 +29,7 @@ SET default_tablespace = pipeline_data_01;
 
 CREATE TABLE sources (
     sid bigint NOT NULL,                       -- Database unique primary key
+    aid bigint NOT NULL,                 -- AstroObjects FK; the partition key
     id integer NOT NULL,                       -- Non-unique id column in photutils psf-fit catalog file in S3 bucket
     pid integer NOT NULL,                      -- DiffImages primary key
     isdiffpos boolean NOT NULL DEFAULT TRUE,   -- t = positive difference, f = negative difference
@@ -57,19 +58,36 @@ CREATE TABLE sources (
     fid smallint NOT NULL,                     -- Filter ID
     sca smallint NOT NULL,                     -- SCA number (1...18)
     mjdobs double precision NOT NULL           -- MJD OBS of exposure
-);
+    PRIMARY KEY (aid, sid)                     -- partition key must be in the PK
+) PARTITION BY HASH (aid) ;
 
-
-# Sources table must be owned by rapidporole for inheritance.
-#ALTER TABLE sources OWNER TO rapidadminrole;
+-- Sources table must be owned by rapidporole for inheritance.
+-- ALTER TABLE sources OWNER TO rapidadminrole;
 ALTER TABLE sources OWNER TO rapidporole;
+
+-- Create 128 partitions based on hash on aid
+-- May need to increase the number of paritions if we don't do real/bogus filtering first
+DO $$
+BEGIN
+    FOR r IN 0..127 LOOP
+        EXECUTE format(
+            'CREATE TABLE sources_p%s PARTITION OF sources '
+            'FOR VALUES WITH (MODULUS 128, REMAINDER %s)', r, r);
+        EXECUTE format('ALTER TABLE sources_p%s OWNER TO rapidporole', r);
+    END LOOP;
+END $$;
+
+SET default_tablespace = pipeline_indx_01;
+CREATE INDEX sources_aid_mjd_idx ON sources (aid, mjdobs);   -- light-curve retrieval
+CREATE INDEX sources_mjdobs_brin ON sources USING brin (mjdobs);  -- date-range scans
+
 
 CREATE SEQUENCE sources_sid_seq
     START WITH 1
     INCREMENT BY 1
     NO MAXVALUE
     NO MINVALUE
-    CACHE 1;
+    CACHE 100; --allow for parallel workers to not conflict (creates sid gaps but sid only needs to be unique)
 
 ALTER SEQUENCE sources_sid_seq OWNER TO rapidadminrole;
 
@@ -77,21 +95,15 @@ ALTER TABLE sources ALTER COLUMN sid SET DEFAULT nextval('sources_sid_seq'::regc
 
 SET default_tablespace = pipeline_indx_01;
 
-ALTER TABLE ONLY sources ADD CONSTRAINT sources_pkey PRIMARY KEY (sid);
+ALTER TABLE sources ADD CONSTRAINT sourcespk UNIQUE (aid, pid, id); --prevents loading the same source to the same aid twice
 
-ALTER TABLE ONLY sources ADD CONSTRAINT sourcespk UNIQUE (pid, id);
-
-ALTER TABLE ONLY sources ADD CONSTRAINT sources_pid_fk FOREIGN KEY (pid) REFERENCES diffimages(pid);
+ALTER TABLE sources ADD CONSTRAINT sources_pid_fk FOREIGN KEY (pid) REFERENCES diffimages(pid);
 
 CREATE INDEX sources_pid_idx ON sources (pid);
 CREATE INDEX sources_expid_idx ON sources (expid);
 CREATE INDEX sources_sca_idx ON sources (sca);
 CREATE INDEX sources_field_idx ON sources (field);
 CREATE INDEX sources_flags_idx ON sources (flags);
-CREATE INDEX sources_mjdobs_idx ON sources (mjdobs);
-
-ALTER TABLE sources SET UNLOGGED;
-
 
 ------------------------------------------------------------
 -- A python script will create child tables like the parent sources table.
@@ -166,25 +178,6 @@ ALTER TABLE sources SET UNLOGGED;
 -- No records are directly inserted into the prototype tables.
 
 -----------------------------
--- TABLE: Merges
------------------------------
-
-SET default_tablespace = pipeline_data_01;
-
-CREATE TABLE merges (
-    aid bigint NOT NULL,
-    sid bigint NOT NULL
-);
-
-ALTER TABLE merges OWNER TO rapidadminrole;
-
-SET default_tablespace = pipeline_indx_01;
-
-CREATE INDEX merges_aid_idx ON merges USING btree (aid);
-CREATE INDEX merges_sid_idx ON merges USING btree (sid);
-
-
------------------------------
 -- TABLE: AstroObjects
 -----------------------------
 
@@ -212,8 +205,6 @@ CREATE SEQUENCE astroobjects_aid_seq
 ALTER SEQUENCE astroobjects_aid_seq OWNER TO rapidadminrole;
 
 ALTER TABLE astroobjects ALTER COLUMN aid SET DEFAULT nextval('astroobjects_aid_seq'::regclass);
-
-SET default_tablespace = pipeline_indx_01;
 
 ALTER TABLE ONLY astroobjects ADD CONSTRAINT astroobjects_pkey PRIMARY KEY (aid);
 
