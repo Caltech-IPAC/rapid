@@ -457,7 +457,7 @@ def run_single_core_job(fields,index_thread):
                      f"into specified database table ({astroobjectsmeta_tablename}); quitting...\n")
             fh.flush()
             raise RuntimeError(f"*** Error bulk-loading data from file ({astroobjectsmeta_table_file}) " +
-                     f"into specified database table ({astroobjectsmeta_tablename}); quitting..."))
+                               f"into specified database table ({astroobjectsmeta_tablename}); quitting...")
 
 
         # Code-timing benchmark.
