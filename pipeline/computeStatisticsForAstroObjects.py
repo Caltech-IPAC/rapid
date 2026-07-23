@@ -140,7 +140,7 @@ def run_single_core_job(fields,index_thread):
     # Set thread_debug = 0 here to severly limit the amount of information logged for runs
     # that are anything but short tests.
 
-    thread_debug = 0
+    thread_debug = 1
 
     nfields = len(fields)
 
@@ -375,38 +375,21 @@ def run_single_core_job(fields,index_thread):
 
                 else:
 
-                    flag1 = False
-                    flag2 = False
-                    for ra in filtered_ras_list:
-                        if ra < 10.0:
-                            flag1 = True
-                        elif ra > 350.0:
-                            flag2 = True
-
-                    if flag1 and flag2:
-                        i = 0
-                        for ra in filtered_ras_list:
-                            if ra > 350.0:
-                                filtered_ras_list[i] -= 360.0
-                            i += 1
-
-                    meanra = np.mean(filtered_ras_list)
-                    meandec = np.mean(filtered_decs_list)
+                    meanra,meandec,stdra,stddec,sky_position_spread = \
+                        util.compute_radec_statistics(filtered_ras_list, filtered_decs_list)
                     meanflux = np.mean(filtered_fluxes_list)
-                    stdra = np.std(filtered_ras_list)
-                    stddec = np.std(filtered_decs_list)
                     stdflux = np.std(filtered_fluxes_list)
 
-                    if meanra < 0.0:
-                        meanra += 360.0
 
                     if thread_debug == 1:
+                        fh.write(f"sky_position_spread = {sky_position_spread} degrees\n")
                         fh.write(f"Inserting AstroObjectsMeta record: astroobjectsmeta_tablename,aid," +
                                  f"meanra,meandec,nsources={astroobjectsmeta_tablename},{aid},{meanra},{meandec},{nsources}\n")
                         fh.flush()
 
 
-                    # Bulk copy is much faster than row-by-row inserts.
+                    # Bulk copy is supposed to be much faster than row-by-row inserts,
+                    # even for unlogged table.
 
                     '''
                     dbh.insert_astroobjectsmeta_statistics(astroobjectsmeta_tablename,
