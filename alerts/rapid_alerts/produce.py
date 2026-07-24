@@ -346,12 +346,12 @@ def batch_produce(provider, pid, producer=None, topic="alerts", schema=None,
                   archive=None):
     """Produce alerts for every source on one difference image -- the
     batch unit is one exposure + SCA (chip), which is exactly what one
-    diffimages.pid identifies. Use DatabaseProvider.resolve_pid(expid,
+    diffimages.pid identifies. Use AlertDataProvider.resolve_pid(expid,
     sca) to obtain the pid for an exposure + SCA pair.
 
     Batch counterpart of produce_alert(): the provider fetches the
     image's DB rows and pixels up front (see
-    DatabaseProvider.iter_sources), and Kafka is flushed once at the end
+    AlertDataProvider.iter_sources), and Kafka is flushed once at the end
     instead of per message.
 
     Args:

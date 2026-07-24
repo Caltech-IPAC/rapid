@@ -27,7 +27,7 @@ from rapid_alerts.param_registry import RECORDS, VERSION, Status
 from rapid_alerts.produce import (assemble_alert, build_dia_source,
                                   build_dia_forced_source, load_schema,
                                   serialize_alert)
-from rapid_alerts.providers import (AlertDataProvider, Cutouts, ForcedPhot,
+from rapid_alerts.providers import (Cutouts, ForcedPhot,
                                     ObjectRecord, Source)
 
 
@@ -42,8 +42,11 @@ def make_detection(sid, mjd, aid=None):
     )
 
 
-class MinimalProvider(AlertDataProvider):
-    """Hand-rolled records; no database, no files, no cutout machinery."""
+class MinimalProvider:
+    """Hand-rolled records; no database, no files, no cutout machinery.
+
+    Duck-typed: assemble_alert() only calls these get_* methods, so this
+    needs no provider base class."""
 
     def get_detection(self, sid):
         return make_detection(sid, mjd=60500.5)
@@ -77,7 +80,7 @@ def test_assembled_alert_semantics(alert):
     assert alert["diaSourceId"] == 9999
     assert alert["schemaVersion"] == VERSION
     assert alert["diaSource"]["isNegative"] is False   # isdiffpos inverted
-    assert alert["diaSource"]["npixfit"] == 25
+    assert alert["diaSource"]["psfNdata"] == 25
     assert alert["diaSource"]["diaObjectId"] == 777
     assert abs(alert["diaSource"]["snr"] - 1234.5 / 56.7) < 1e-6
     assert alert["diaObject"]["nDiaSources"] == 3

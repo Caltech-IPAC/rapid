@@ -8,7 +8,7 @@ skip could hide the fact that the live invariants have not been checked
 in a long time.
 
 The priority test here is the pixel-convention sentinel (plan D17). The
-+1 conversion in DatabaseProvider.get_cutouts() rests on an empirical
++1 conversion in AlertDataProvider.get_cutouts() rests on an empirical
 fact about the pipeline: sources.ra/dec equals the difference image's
 TPV WCS evaluated at (xfit+1, yfit+1), i.e. xfit/yfit are 0-based. If
 the pipeline ever changes convention, this test fails loudly and tells
@@ -152,6 +152,6 @@ def test_db_positions_match_wcs_at_xfit_plus_one(db_conn):
             f"sid={sid}: ra/dec is {sep:.1f} mas from TPV(xfit+1, yfit+1) "
             f"-- has the pipeline's pixel convention changed? If sources "
             f"switched to 1-based coordinates, remove the +1 in "
-            f"DatabaseProvider.get_cutouts().")
+            f"AlertDataProvider.get_cutouts().")
     print(f"convention sentinel: worst offset {worst:.2f} mas "
           f"over {len(rows)} sources")

@@ -166,13 +166,13 @@ DIA_SOURCE_PARAMS = (
 
     # --- PSF-fit quality (photutils) ---------------------------------------
     Param("psfQfit",          ["null", "float"],  "PSF-fit quality parameter",
-                    IMPLEMENTED, "sources.qfit"),
+                    IMPLEMENTED, "sources.qfit", attr="qfit"),
     Param("psfCfit",          ["null", "float"],  "PSF-fit chi parameter",
-                    IMPLEMENTED, "sources.cfit"),
+                    IMPLEMENTED, "sources.cfit", attr="cfit"),
     Param("psfRChi2",        ["null", "float"],  "Reduced chi-square of PSF fit",
-                    IMPLEMENTED, "sources.redchi"),
+                    IMPLEMENTED, "sources.redchi", attr="redchi"),
     Param("psfNdata",       ["null", "int"],    "Number of pixels used in  PSF fit", #TODO: used to be npixfit
-                    IMPLEMENTED, "sources.npixfit"),
+                    IMPLEMENTED, "sources.npixfit", attr="npixfit"),
     Param("sharpness",     ["null", "float"],  "PSF-fit sharpness parameter", #TODO: should we add PSF as prefix?
                     IMPLEMENTED, "sources.sharpness"),
     Param("roundness1",    ["null", "float"],  "PSF-fit roundness parameter 1", #TODO: better description
@@ -362,6 +362,7 @@ def _per_filter_flux_params():
                         STUB, src),
             Param(f"{b}PsfFluxErrMean", ["null", "float"], f"Mean of PSF flux errors in {b} [nJy]",
                         STUB, src),
+            # Maybe add Von Neumann ratio: https://metricgate.com/docs/von-neumann-ratio-trend-test/
         ]
     return tuple(params)
 

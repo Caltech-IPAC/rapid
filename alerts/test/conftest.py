@@ -1,6 +1,6 @@
 """Shared fixtures for the rapid_alerts test suite.
 
-The strategy: DatabaseProvider only needs (a) an object exposing
+The strategy: AlertDataProvider only needs (a) an object exposing
 .conn.cursor() and (b) product files it can reach with a plain path (its
 _stage() passes non-s3:// paths straight through). So a FakeDB routing
 canned rows plus a synthetic on-disk "job directory" exercise the entire
@@ -22,7 +22,7 @@ Fixture map (all function-scoped unless noted):
                   computed from the TPV WCS at xfit+1/yfit+1, exactly the
                   invariant the real DB satisfies), objects, associations,
                   and detection history
-    make_provider factory -> DatabaseProvider(FakeDB(chip_data), ...);
+    make_provider factory -> AlertDataProvider(FakeDB(chip_data), ...);
                   a factory so tests can build independent providers
 """
 
@@ -186,7 +186,7 @@ def _selected_columns(sql):
 
 
 class FakeCursor:
-    """Answers DatabaseProvider._query()'s SQL from a ChipData.
+    """Answers AlertDataProvider._query()'s SQL from a ChipData.
 
     Routing is by SQL substring -- brittle on purpose: if the provider's
     queries change shape, the KeyError here says "teach the fake about the
@@ -286,10 +286,10 @@ def chip_data(tpv_header, job_dir):
 
 @pytest.fixture()
 def make_provider(chip_data):
-    """Factory for independent DatabaseProviders over the same fake chip."""
-    from rapid_alerts.providers import DatabaseProvider
+    """Factory for independent AlertDataProviders over the same fake chip."""
+    from rapid_alerts.providers import AlertDataProvider
 
     def _make(diff_flavor="sfft"):
-        return DatabaseProvider(FakeDB(chip_data), diff_flavor=diff_flavor)
+        return AlertDataProvider(FakeDB(chip_data), diff_flavor=diff_flavor)
 
     return _make

@@ -19,14 +19,14 @@ from pathlib import Path
 # Support both `python -m rapid_alerts.cli` (module) and `python cli.py` (script).
 if __package__:
     from .produce import batch_produce, open_alert_archive, produce_alert
-    from .providers import DatabaseProvider
+    from .providers import AlertDataProvider
 else:
     # Run directly as a script: no package context, so make the package
     # importable by its name and switch to absolute imports.
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
     from rapid_alerts.produce import (batch_produce, open_alert_archive,
                                       produce_alert)
-    from rapid_alerts.providers import DatabaseProvider
+    from rapid_alerts.providers import AlertDataProvider
 
 
 def make_provider(diff_flavor="sfft"):
@@ -39,7 +39,7 @@ def make_provider(diff_flavor="sfft"):
     repo_root = Path(__file__).resolve().parents[2]
     sys.path.insert(0, str(repo_root))
     from database.modules.utils.rapid_db import RAPIDDB
-    return DatabaseProvider(RAPIDDB(), diff_flavor=diff_flavor)
+    return AlertDataProvider(RAPIDDB(), diff_flavor=diff_flavor)
 
 
 def main(argv=None):

@@ -64,8 +64,6 @@ except ImportError:
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from rapid_alerts.providers import AlertDataProvider
-
 logger = logging.getLogger(__name__)
 
 VERSIONED_PACKAGES = ("numpy", "fitsio", "astropy", "fastavro",
@@ -212,8 +210,8 @@ class TimingLog:
         self._file.close()
 
 
-class TimedProvider(AlertDataProvider):
-    """Times any AlertDataProvider without touching production code.
+class TimedProvider:
+    """Times any provider without touching production code.
 
     get_* calls are timed directly. Per-source wall time falls out of the
     batch flow's shape: batch_produce pulls sources one at a time from

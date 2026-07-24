@@ -1,46 +1,82 @@
-"""
-How alert data gets loaded: the provider contract and its implementations.
+"""How alert data gets loaded: one provider plus per-source reader functions.
 
-The normalized records (Source, ObjectRecord, ForcedPhot, Cutouts) are
-the contract between storage backends and the alert builders in produce.py.
-Providers translate their native column names into these canonical
-attributes exactly once; everything downstream only sees these records, so
-swapping the storage backend (database / file system / sqlite) means writing
-one new AlertDataProvider subclass and nothing else.
+The normalized records (:class:`Source`, :class:`ObjectRecord`,
+:class:`ForcedPhot`, :class:`Cutouts`) are the contract between the raw data
+and the alert builders in :mod:`rapid_alerts.produce`. The provider translates
+native column names into these canonical attributes exactly once; everything
+downstream only sees the records.
 
-Data flow for the database backend (DB table -> record -> schema record):
+There is a single provider, :class:`AlertDataProvider`. It is not "database
+only": the RAPID database is effectively a fast index over the pipeline job
+directories, so the provider reads tabular data (detections, object
+associations, history) from the DB and reads pixel/auxiliary products (cutout
+FITS, and an auxiliary source catalog to cross-reference) from the job
+directory those DB rows point at. Each distinct data source is a small
+module-level reader function (:func:`load_fits_image`, :func:`extract_stamp`,
+:func:`parse_catalog`, ...); adding a source means adding a function and one
+call site, not a new class or subclass. A future no-DB flow would be an
+alternate constructor on this same provider, not a separate class.
 
-    sources + filters            -> Source    -> diaSource
+The :class:`Source` dataclass attribute names ARE the ``sources`` column
+names, so :meth:`Source.from_row` maps a sources row directly; the only
+derived keys are ``band`` (from ``filters.filter``) and ``aid`` (from
+merges). Columns not declared on ``Source`` (e.g. ``sources.id``, ``fid``,
+``npix``) are silently dropped by ``from_row``.
+
+Notes
+-----
+Data flow (DB table / job-dir file -> record -> schema record)::
+
+    sources + filters     -> Source        -> diaSource
         one row per difference-image detection; the triggering source is
         looked up by sid, previous detections via the merges join below
-    merges_<field>               -> (sid -> aid association only)
+    merges_<field>        -> (sid -> aid association only)
         per-field table linking detections (sid) to persistent objects (aid)
-    astroobjects_<field>         -> ObjectRecord -> diaObject
+    astroobjects_<field>  -> ObjectRecord   -> diaObject
         one row per persistent object, keyed by aid
-    (forced photometry)          -> ForcedPhot   -> diaForcedSource
+    (forced photometry)   -> ForcedPhot     -> diaForcedSource
         not yet in the DB; produces FITS files only
-    diffimages.filename          -> full chip images -> Cutouts
+    diffimages.filename   -> full chip images -> Cutouts
         diffimages.filename names one difference image in a pipeline job
-        directory (s3://.../<date>/jid<N>/); the science and template
-        images used for cutouts are the co-gridded products in that same
-        directory (see CUTOUT_FILES/DIFF_FLAVORS). Stamps are cut around
-        each source position by extract_stamp() and carry the parent
-        image's WCS; the three images are staged and loaded once per chip
-        and reused for every source
+        directory (s3://.../<date>/jid<N>/); the science and template images
+        used for cutouts are the co-gridded products in that same directory
+        (see CUTOUT_FILES / DIFF_FLAVORS). Stamps are cut around each source
+        position by extract_stamp() and carry the parent image's WCS; the
+        three images are staged and loaded once per chip and reused for
+        every source.
 
-The Source dataclass attribute names ARE the sources column names, so
-Source.from_row() maps a sources row directly; the only derived keys are
-band (from filters.filter) and aid (from merges). Columns not declared on
-Source (e.g. sources.id, fid, npix) are silently dropped by from_row().
+Examples
+--------
+>>> from rapid_alerts.providers import AlertDataProvider
+>>> provider = AlertDataProvider(db, diff_flavor="sfft")
+>>> source = provider.get_detection(sid)
+>>> cutouts = provider.get_cutouts(source)
+
+Attributes
+----------
+PRV_WINDOW_DAYS : float
+    Default look-back window (days) for previous detections of an object.
+STAMP_HALF_WIDTH : int
+    Half the cutout stamp side; stamps are ``2 * STAMP_HALF_WIDTH + 1`` px.
+STAMP_FILL_VALUE : float
+    Value for stamp pixels that fall outside the chip (edge clips).
+DIFF_FLAVORS : dict
+    Differencing algorithm ("sfft" / "zogy") -> difference-image basename.
+CUTOUT_FILES : dict
+    Cutout kind ("sci" / "ref") -> co-gridded product basename in the job dir.
+WCS_CARD_PREFIXES : tuple of str
+    FITS header-card prefixes copied from the parent image into each cutout.
+CATALOG_FILE : str or None
+    Basename of the auxiliary catalog to cross-reference against, or None
+    while cross-referencing is not wired up.
 """
 
 import dataclasses
 import logging
 import os
 import tempfile
-from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from typing import List, Optional
+from typing import Optional
 from urllib.parse import urlparse
 
 import fitsio
@@ -313,53 +349,64 @@ def extract_stamp(image_data, x, y, header=None, half_width=STAMP_HALF_WIDTH):
 
 
 # ---------------------------------------------------------------------------
-# Provider interface
+# Per-source readers (auxiliary source catalog)
+#
+# "A different source is a function, not a subclass." Besides the cutout
+# FITS, the pipeline job directory holds per-source catalogs carrying
+# measurements the DB `sources` row does not (aperture flux, shape moments,
+# elongation, position errors, ...). Cross-referencing pulls those onto a
+# Source by position-matching, filling currently-stubbed diaSource params
+# (apFlux, ixx/iyy/ixy, elong, raErr/decErr, ...).
+#
+# The catalog product is not settled yet -- candidates are the difference-
+# image SExtractor catalog and the photutils psf-fit catalog -- so these
+# readers stay product-agnostic: parse_catalog returns opaque (rows, index)
+# and match_catalog_row does the nearest-neighbour lookup on them.
+#
+# Both are STUBS and the whole path is a no-op today: CATALOG_FILE is unset
+# and cross-referencing is off by default. A reference implementation to port
+# from is alerts/roman_rapid_alerts/generate_alerts.py on the
+# add-alert-generation branch (parse_sextractor / load_psf_catalog /
+# match_psf).
 # ---------------------------------------------------------------------------
 
-class AlertDataProvider(ABC):
-    """Data-access interface for alert assembly.
+# Basename of the catalog to cross-reference against, beside the cutout FITS
+# in the job dir. Unset until the product is chosen (e.g. a SExtractor
+# ".txt" or a photutils psf-fit parquet); while None, _load_catalog()
+# short-circuits and cross-referencing stays a no-op.
+CATALOG_FILE = None
 
-    produce.assemble_alert() only ever calls these methods, so switching
-    storage backends means writing a new subclass -- the schema registry
-    and assembly logic do not change.
-    """
 
-    @abstractmethod
-    def get_detection(self, sid) -> Source:
-        """Return the triggering detection. Raises ValueError if not found."""
+def parse_catalog(path):
+    """STUB. Parse the auxiliary source catalog at `path` and return
+    (rows, index) for position matching -- e.g. a table of catalog rows plus
+    a spatial index (cKDTree) over their (x, y) pixel positions -- or
+    (None, None) if the file is missing or empty. Port from
+    generate_alerts.py:parse_sextractor / load_psf_catalog."""
+    raise NotImplementedError(
+        "catalog parsing not implemented yet; port from "
+        "add-alert-generation:alerts/roman_rapid_alerts/generate_alerts.py")
 
-    @abstractmethod
-    def get_object_for_source(self, detection) -> Optional[ObjectRecord]:
-        """Return the associated persistent object, or None if unassociated."""
 
-    @abstractmethod
-    def get_prv_detections(self, detection, obj,
-                           window_days=PRV_WINDOW_DAYS) -> List[Source]:
-        """Return prior detections of obj within window_days before the
-        triggering detection, oldest first, excluding the trigger itself."""
-
-    @abstractmethod
-    def get_forced_photometry(self, detection, obj) -> List[ForcedPhot]:
-        """Return forced-photometry history at the object position."""
-
-    @abstractmethod
-    def get_cutouts(self, detection) -> Cutouts:
-        """Return image stamps for the detection (members None if missing)."""
-
-    def iter_sources(self, pid):
-        """Yield every Source on one chip (one difference image, keyed by
-        its processing ID) for batch alert production. Backends should use
-        this to prefetch whatever makes the per-source get_* calls cheap.
-        Optional per backend."""
-        raise NotImplementedError(
-            f"{type(self).__name__} does not support batch iteration")
+def match_catalog_row(x, y, index, rows, radius=3.0):
+    """STUB. Return the catalog row nearest to pixel (x, y) within `radius`
+    pixels, or None if there is no match. Port from
+    generate_alerts.py:match_psf."""
+    raise NotImplementedError(
+        "catalog position matching not implemented yet")
 
 
 # ---------------------------------------------------------------------------
-# Database backend
+# The alert data provider
+#
+# One provider. The RAPID database is effectively a fast index over the
+# pipeline job directories, so this reads tabular data (detections, object
+# associations, history) from the DB and pixel/auxiliary products (cutout
+# FITS, and -- opt-in -- the source catalog above) from the job directory
+# those DB rows point at, via the module-level reader functions.
 # ---------------------------------------------------------------------------
 
-class DatabaseProvider(AlertDataProvider):
+class AlertDataProvider:
     """Pulls alert inputs from the RAPID operations database (RAPIDDB).
 
     The one DB connection (held by RAPIDDB) persists for the provider's
@@ -401,6 +448,12 @@ class DatabaseProvider(AlertDataProvider):
         self._images = {}             # "diff"|"sci"|"ref" -> (pixels, header)
         self._staging_dir = tempfile.mkdtemp(prefix="rapid_cutouts_")
         self._forced_phot_logged = False  # log the not-implemented note once
+        # Auxiliary-catalog cross-reference state. The catalog is staged and
+        # parsed once per pid -- same lifetime as _images. While CATALOG_FILE
+        # is unset, _load_catalog() short-circuits before any query or stage,
+        # so cross-referencing costs nothing beyond a cache check per source.
+        self._catalog_pid = None
+        self._catalog = (None, None)  # (rows, index) from parse_catalog
 
     def _query(self, sql, params=None):
         """Run one query and return rows as {column_name: value} dicts."""
@@ -459,7 +512,9 @@ class DatabaseProvider(AlertDataProvider):
         # Source.aid stays None here; assemble_alert() fills it in after
         # get_object_for_source() resolves the association. strict=True makes
         # a renamed/dropped sources column an error, not a null alert field.
-        return Source.from_row(row, strict=True)
+        source = Source.from_row(row, strict=True)
+        self._crossref(source)
+        return source
 
     def iter_sources(self, pid):
         # One chip = one difference image = one diffimages.pid. Fetch every
@@ -477,7 +532,9 @@ class DatabaseProvider(AlertDataProvider):
         sources = []
         for row in rows:
             row["band"] = row.get("filter_name")
-            sources.append(Source.from_row(row, strict=True))
+            source = Source.from_row(row, strict=True)
+            self._crossref(source)
+            sources.append(source)
         self._prefetch_chip(pid, sources)
         yield from sources
 
@@ -698,23 +755,71 @@ class DatabaseProvider(AlertDataProvider):
                 self._images[key] = (None, None)
                 break
 
+    # -- Auxiliary-catalog cross-reference ---------------------------------
+
+    def _load_catalog(self, pid):
+        """(rows, index) for this chip's auxiliary source catalog, staged and
+        parsed once per pid -- same lifetime as _images. Returns (None, None)
+        when cross-referencing is not wired up yet (CATALOG_FILE unset) or the
+        diffimages row / catalog file is missing, so _crossref() degrades to a
+        no-op (the null-cutout ladder). While CATALOG_FILE is None this
+        short-circuits before any query or stage."""
+        if self._catalog_pid == pid:
+            return self._catalog
+        self._catalog = (None, None)
+        self._catalog_pid = pid
+        if CATALOG_FILE is None:
+            return self._catalog
+        rows = self._query(
+            "SELECT filename FROM diffimages WHERE pid = %s", (pid,))
+        if rows:
+            job_dir = os.path.dirname(rows[0]["filename"])
+            path = self._stage(f"{job_dir}/{CATALOG_FILE}")
+            if path is not None:
+                self._catalog = parse_catalog(path)
+        else:
+            logger.warning("No diffimages row for pid=%s; catalog "
+                           "cross-reference skipped", pid)
+        return self._catalog
+
+    def _crossref(self, source):
+        """Cross-reference `source` against the chip's auxiliary source
+        catalog by position and pull extra per-source fields (apFlux, shape
+        moments, elong, raErr/decErr, ...) onto it. A no-op when the catalog
+        or a matching row is unavailable, so a source with no catalog
+        counterpart still yields a valid (stub-null) alert.
+
+        The attribute assignments are intentionally left as a TODO: they land
+        in lockstep with (a) new optional fields on Source and (b) flipping
+        the matching params to IMPLEMENTED in param_registry.py. See
+        generate_alerts.py:build_alert for a field->column mapping and the
+        FILTER_ZP_EFF nJy calibration.
+        """
+        rows, index = self._load_catalog(source.pid)
+        if rows is None:
+            return
+        match = match_catalog_row(source.xfit, source.yfit, index, rows)
+        if match is None:
+            return
+        # TODO: assign cross-referenced attributes onto `source` from the
+        # matched catalog row, once Source gains those fields and the registry
+        # marks them IMPLEMENTED. Until then the match is intentionally unused.
+
 
 # ---------------------------------------------------------------------------
-# Future file-system backend
+# No-DB (pure filesystem) flow
 #
-# A FilesystemProvider would read pipeline products directly from disk. The
-# logic to port lives in alerts/roman_rapid_alerts/generate_alerts.py on the
-# add-alert-generation branch:
+# There is deliberately no separate FilesystemProvider: the database and
+# filesystem paths overlapped almost entirely (get_cutouts already reads job-
+# dir FITS; the SExtractor/LC products live in that same directory). A no-DB
+# run -- reading detections/objects straight from the pipeline products
+# instead of the sources/astroobjects tables -- would be an alternate
+# constructor on this one provider (e.g. AlertDataProvider.from_job_dir) that
+# fills the same normalized records using the same module-level readers
+# (load_fits_image, extract_stamp, parse_catalog, plus a light-curve tile
+# reader to port from generate_alerts.py:load_lc_tile/match_lc).
 #
-#     get_detection / iter_detections  <-  parse_sextractor() +
-#                                          load_psf_catalog() + match_psf()
-#                                          + FITS header parsing
-#     get_object_for_source            <-  load_lc_tile() + match_lc()
-#     get_prv_detections               <-  nested_lc_data unpacking in
-#                                          build_prv_dia_sources()
-#     get_cutouts                      <-  load_fits_image() + extract_stamp()
-#
-# Note the flux calibration difference: that script converts SExtractor and
-# light-curve fluxes to nJy via FILTER_ZP_EFF, while the database flow
-# currently passes instrumental fluxfit through. Reconcile when porting.
+# Calibration note: that script converts SExtractor and light-curve fluxes to
+# nJy via FILTER_ZP_EFF, while this flow currently passes instrumental fluxfit
+# through. Reconcile the calibration when porting.
 # ---------------------------------------------------------------------------

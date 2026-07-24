@@ -1,4 +1,4 @@
-"""Section B of the test plan: DatabaseProvider behavior over a fake DB
+"""Section B of the test plan: AlertDataProvider behavior over a fake DB
 and a synthetic on-disk job directory (see conftest.py).
 
 Priority tests implemented here:
@@ -25,7 +25,7 @@ import pytest
 
 from rapid_alerts.produce import (batch_produce, load_schema,
                                   open_alert_archive, produce_alert)
-from rapid_alerts.providers import DatabaseProvider
+from rapid_alerts.providers import AlertDataProvider
 
 from conftest import CHIP_PID, PRODUCT_OFFSETS, FakeDB
 from test_clips import clip_to_numpy
@@ -69,7 +69,7 @@ def test_diff_flavor_selects_difference_image(make_provider, chip_data):
 
 def test_invalid_diff_flavor_rejected_at_construction(chip_data):
     with pytest.raises(ValueError):
-        DatabaseProvider(FakeDB(chip_data), diff_flavor="hotpants")
+        AlertDataProvider(FakeDB(chip_data), diff_flavor="hotpants")
 
 
 # ---------------------------------------------------------------------------
