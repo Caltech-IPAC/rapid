@@ -4202,3 +4202,55 @@ class RAPIDDB:
             self.exit_code = 67
             self.logger.exception("Failed to enqueue pid %s", pid)
             raise
+    def get_pending_psfcat_uploads(self, limit=100, claim=False):
+        '''
+        Return pending rows from upload_psfcat_queue, oldest first.
+
+        Returns a list of dicts (possibly empty).
+        '''
+        self.exit_code = 0
+        sql = """
+            SELECT qid, pid, rid, fid, expid, sca, queued_at
+            FROM upload_psfcat_queue
+            WHERE inserted_at IS NULL
+            ORDER BY queued_at
+        """
+        try:
+            self.cur.execute(sql)
+            cols = [d[0] for d in self.cur.description]
+            return [dict(zip(cols, row)) for row in self.cur.fetchall()]
+        except (Exception, psycopg2.DatabaseError):
+            self.conn.rollback()
+            self.exit_code = 67
+            self.logger.exception("Failed to fetch pending psfcat uploads")
+            raise
+
+
+def mark_psfcat_uploaded(self, qids, commit=True):
+    '''
+    Stamp queue rows as ingested. Returns the number of rows updated.
+    '''
+    self.exit_code = 0
+    if not qids:
+        return 0
+    sql = """
+        UPDATE upload_psfcat_queue
+        SET inserted_at = now()
+        WHERE qid = ANY(%(qids)s)
+          AND inserted_at IS NULL
+        RETURNING qid;
+    """
+    try:
+        self.cur.execute(sql, {"qids": list(qids)})
+        n = len(self.cur.fetchall())
+        if n != len(qids):
+            self.logger.warning("mark_psfcat_uploaded: %d of %d qids updated "
+                                "(rest missing or already stamped)", n, len(qids))
+        if commit:
+            self.conn.commit()
+        return n
+    except (Exception, psycopg2.DatabaseError):
+        self.conn.rollback()
+        self.exit_code = 67
+        self.logger.exception("Failed to mark psfcat uploads complete")
+        raise
