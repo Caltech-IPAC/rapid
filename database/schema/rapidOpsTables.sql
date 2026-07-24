@@ -1033,3 +1033,33 @@ CREATE INDEX fields_radec_idx ON fields (q3c_ang2ipix(ra0, dec0));
 CLUSTER fields_radec_idx ON fields;
 ANALYZE fields;
 
+-----------------------------
+-- TABLE:
+-----------------------------
+
+SET default_tablespace = pipeline_data_01;
+
+CREATE TABLE upload_psfcat_queue (
+    qid integer NOT NULL,
+    pid integer NOT NULL,
+    rid integer,
+    fid smallint,
+    expid integer,
+    sca smallint,
+    queued_at timestampz NOT NULL DEFAULT now(),
+    inserted_at timestamptz,
+    PRIMARY KEY (pid));
+
+ALTER TABLE upload_psfcat_queue OWNER TO rapidadminrole;
+
+CREATE SEQUENCE psfcat_qid_seq
+    INCREMENT BY 1
+    NO MAXVALUE
+    NO MINVALUE
+    CACHE 1;
+
+ALTER SEQUENCE psfcat_qid_seq OWNER TO rapidadminrole;
+ALTER TABLE upload_psfcat_queue ALTER COLUMN qid SET DEFAULT nextval('psfcat_qid_seq'::regclass);
+
+CREATE INDEX psfcat_pending_idx ON upload_psfcat_queue (queued_at)
+    WHERE inserted_at IS NULL;
