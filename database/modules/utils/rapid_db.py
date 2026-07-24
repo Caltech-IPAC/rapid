@@ -4172,7 +4172,7 @@ class RAPIDDB:
 ########################################################################################################
 
     def add_to_upload_psfcat_queue(self, pid, rid=None, fid=None,
-                                expid=None, sca=None, commit=True):
+                                sca=None, commit=True):
         '''
         Insert a record into the upload_psfcat_queue table.
         Returns the new qid. Raises on failure (including duplicate pid,
@@ -4180,13 +4180,13 @@ class RAPIDDB:
         '''
         self.exit_code = 0
         sql = """
-            INSERT INTO upload_psfcat_queue (pid, rid, fid, expid, sca)
-            VALUES (%(pid)s, %(rid)s, %(fid)s, %(expid)s, %(sca)s)
+            INSERT INTO upload_psfcat_queue (pid, rid, fid, sca)
+            VALUES (%(pid)s, %(rid)s, %(fid)s, %(sca)s)
             RETURNING qid;
             """
         try:
             self.cur.execute(sql, {"pid": pid, "rid": rid, "fid": fid,
-                                "expid": expid, "sca": sca})
+                                   "sca": sca})
             qid = self.cur.fetchone()[0]
             if commit:
                 self.conn.commit()

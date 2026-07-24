@@ -1044,7 +1044,6 @@ CREATE TABLE upload_psfcat_queue (
     pid integer NOT NULL,
     rid integer,
     fid smallint,
-    expid integer,
     sca smallint,
     queued_at timestampz NOT NULL DEFAULT now(),
     inserted_at timestamptz,
