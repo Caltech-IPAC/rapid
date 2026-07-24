@@ -2937,7 +2937,57 @@ class RAPIDDB:
 
         return records
 
+########################################################################################################
 
+    def get_jids_of_normal_science_pipeline_jobs_for_processing_date_ordered(self,proc_date):
+
+        '''
+        Query database for science-pipeline Jobs records that both
+        ended on the given processing date and ran normally.
+        '''
+
+        self.exit_code = 0
+
+
+        # Define query.
+
+        query = "select jid from Jobs " +\
+                "where ppid = 15 " +\
+                "and ended >= cast('" + proc_date + "' as timestamp) " +\
+                "and ended < cast('" + proc_date + "' as timestamp) + cast('1 day' as interval) " +\
+                "and status > 0 " +\
+                "and exitcode <= 32;"
+
+
+        # Query database.
+
+        print('query = {}'.format(query))
+
+
+        # Execute query.
+
+        try:
+            self.cur.execute(query)
+
+            try:
+                records = []
+                nrecs = 0
+                for record in self.cur:
+                    jid = record[0]
+                    records.append(jid)
+                    nrecs += 1
+
+                print("nrecs =",nrecs)
+
+            except:
+                print("Nothing returned from database query; continuing...")
+
+        except (Exception, psycopg2.DatabaseError) as error:
+            print('*** Error getting Jobs records for given processing date {}: {}; skipping...'.format(proc_date,error))
+            self.exit_code = 67
+            return
+
+        return records
 ########################################################################################################
 
     def get_unclosedout_jobs_for_processing_date(self,ppid,proc_date):
@@ -4119,3 +4169,36 @@ class RAPIDDB:
 
         if self.exit_code == 0:
             self.conn.commit()           # Commit database transaction
+########################################################################################################
+
+    def add_to_upload_psfcat_queue(self, pid, rid=None, fid=None,
+                                expid=None, sca=None, commit=True):
+        '''
+        Insert a record into the upload_psfcat_queue table.
+        Returns the new qid. Raises on failure (including duplicate pid,
+        which indicates a pipeline double-enqueue bug).
+        '''
+        self.exit_code = 0
+        sql = """
+            INSERT INTO upload_psfcat_queue (pid, rid, fid, expid, sca)
+            VALUES (%(pid)s, %(rid)s, %(fid)s, %(expid)s, %(sca)s)
+            RETURNING qid;
+            """
+        try:
+            self.cur.execute(sql, {"pid": pid, "rid": rid, "fid": fid,
+                                "expid": expid, "sca": sca})
+            qid = self.cur.fetchone()[0]
+            if commit:
+                self.conn.commit()
+            return qid
+        except errors.UniqueViolation:
+            self.conn.rollback()
+            self.exit_code = 67
+            self.logger.error("pid %s already queued in upload_psfcat_queue "
+                            "(pipeline double-enqueue?)", pid)
+            raise
+        except (Exception, psycopg2.DatabaseError):
+            self.conn.rollback()
+            self.exit_code = 67
+            self.logger.exception("Failed to enqueue pid %s", pid)
+            raise
