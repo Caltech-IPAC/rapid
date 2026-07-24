@@ -769,7 +769,11 @@ if __name__ == '__main__':
                     if dbh.exit_code >= 64:
                         exit(dbh.exit_code)
 
-
+                    # Insert record into upload_sources_queue
+                    dbh.add_to_upload_psfcat_queue(pid, rid_diffimage,
+                                                   fid_diffimage, sca_diffimage)
+                    if dbh.exit_code >= 64:
+                        exit(dbh.exit_code)
         # Touch done file.  Upload done file to S3 bucket.
 
         util.write_done_file_to_s3_bucket(done_filename,product_s3_bucket_base,datearg,jid,s3_client)
