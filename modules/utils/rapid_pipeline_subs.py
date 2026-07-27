@@ -2598,3 +2598,25 @@ def compute_radec_statistics(ra_deg, dec_deg):
 
     return mean_ra, mean_dec, stddev_ra, stddev_dec, sky_position_spread
 
+
+########################################
+# Compute primary key aid for database AstroObjects records outside of the database with
+# a deterministic method based on (ra0,dec0).  Convert both coordinates to integer units
+# of 1/1000th arcsecond, then pack into a single 64-bit integer.
+# Works with scalars, lists, and numpy arrays. np.asarray is a no-op on existing arrays,
+# and np.rint + .astype(np.int64) replaces round() for vectorized rounding.
+#
+# Method radec_index computes the aid index.
+# Method index_to_radec converts the index back into (ra,dec).
+########################################
+
+def radec_index(ra_deg, dec_deg):
+    ra_mas  = np.rint(np.asarray(ra_deg) * 3_600_000).astype(np.int64)
+    dec_mas = np.rint((np.asarray(dec_deg) + 90.0) * 3_600_000).astype(np.int64)
+    return ra_mas * 648_000_001 + dec_mas
+
+def index_to_radec(idx):
+    idx = np.asarray(idx, dtype=np.int64)
+    dec_mas = idx % 648_000_001
+    ra_mas  = idx // 648_000_001
+    return ra_mas / 3_600_000, dec_mas / 3_600_000 - 90.0
