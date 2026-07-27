@@ -3382,15 +3382,18 @@ class RAPIDDB:
     def add_merge_to_field(self,tablename,aid,sid,debug=0):
 
         self.exit_code = 0
-        record_exists = False
 
 
         # Define query.
 
         query =\
-            f"select aid,sid from {tablename} " +\
-            f"where aid = {aid} " +\
-            f"and sid = {sid};"
+            f"insert into {tablename}" +\
+            f"            (aid," +\
+            f"             sid" +\
+            f"            )" +\
+            f"            values" +\
+            f"            ({str(aid)}," +\
+            f"             {str(sid)});"
 
         if debug == 1:
             print('query = {}'.format(query))
@@ -3402,45 +3405,12 @@ class RAPIDDB:
 
         try:
             record = self.cur.fetchone()
-            if debug == 1:
-                print(f"Record from querying {tablename} = {record}; continuing...")
-            if record is not None:
-                record_exists = True
         except:
             if debug == 1:
                 print(f"Nothing returned from database query ({query}); continuing...")
 
-
-        if not record_exists:
-
-
-            # Define query.
-
-            query =\
-                f"insert into {tablename}" +\
-                f"            (aid," +\
-                f"             sid" +\
-                f"            )" +\
-                f"            values" +\
-                f"            ({str(aid)}," +\
-                f"             {str(sid)});"
-
-            if debug == 1:
-                print('query = {}'.format(query))
-
-
-            # Execute query.
-
-            self.cur.execute(query)
-
-            try:
-                record = self.cur.fetchone()
-            except:
-                if debug == 1:
-                    print(f"Nothing returned from database query ({query}); continuing...")
-
-            if self.exit_code == 0:
-                self.conn.commit()           # Commit database transaction
+        if self.exit_code == 0:
+            self.conn.commit()           # Commit database transaction
 
 
 ########################################################################################################
