@@ -34,8 +34,13 @@ Data flow (DB table / job-dir file -> record -> schema record)::
         per-field table linking detections (sid) to persistent objects (aid)
     astroobjects_<field>  -> ObjectRecord   -> diaObject
         one row per persistent object, keyed by aid
-    (forced photometry)   -> ForcedPhot     -> diaForcedSource
-        not yet in the DB; produces FITS files only
+    rapid_req<N>_lc.txt   -> ForcedPhot     -> diaForcedSource
+        forced photometry never lands in the DB: the pipeline's
+        forcedPhotometryForField.py writes one lightcurve text file per
+        requested sky position (rapid_req<reqid>_lc.txt). The provider
+        reads them from a local directory (the forced_phot_dir
+        constructor argument), matching a file to an object by the
+        requested position recorded in the file header
     diffimages.filename   -> full chip images -> Cutouts
         diffimages.filename names one difference image in a pipeline job
         directory (s3://.../<date>/jid<N>/); the science and template images
@@ -465,6 +470,21 @@ class AlertDataProvider:
         finally:
             cur.close()
 
+    def _partition_exists(self, field):
+        """merges/astroobjects are per-field partition tables, and a chip
+        near a field boundary can carry sources whose field's partitions
+        were never created (seen live: pid 339271 -> merges_4686817).
+        Sources there have no associations by construction; queries
+        against the missing table would abort the whole transaction."""
+        rows = self._query("SELECT to_regclass(%s) AS reg",
+                           (f"merges_{int(field)}",))
+        exists = bool(rows) and rows[0]["reg"] is not None
+        if not exists:
+            logger.warning(
+                "merges_%s does not exist; sources in field %s are "
+                "treated as unassociated", int(field), field)
+        return exists
+
     def resolve_pid(self, expid, sca):
         """Map (exposure, SCA) to the difference-image processing ID to
         alert on.
@@ -547,6 +567,8 @@ class AlertDataProvider:
         # near a field boundary can land in different partitions, so group
         # the sids by field first (usually a single group).
         for field in sorted({s.field for s in sources}):
+            if not self._partition_exists(field):
+                continue  # those sids stay unassociated
             sids = [s.sid for s in sources if s.field == field]
             object_rows = self._query(f"""
                 SELECT m.sid, a.aid, a.ra0, a.dec0,
@@ -602,6 +624,8 @@ class AlertDataProvider:
         # The merges/astroobjects tables are partitioned by Roman field, so
         # the detection's field number selects which pair to query.
         field = int(detection.field)
+        if not self._partition_exists(field):
+            return None  # no partition -> no association possible
         # merges_<field> links this sid to its persistent object (aid);
         # astroobjects_<field> supplies the object summary itself.
         rows = self._query(f"""
@@ -634,6 +658,8 @@ class AlertDataProvider:
         # the look-back window before the triggering detection. These become
         # the alert's prvDiaSources (oldest first).
         field = int(detection.field)
+        if not self._partition_exists(field):
+            return []  # no partition -> no recorded history
         rows = self._query(f"""
             SELECT s.*, f.filter AS filter_name, e.exptime
             FROM sources s

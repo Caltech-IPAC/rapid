@@ -17,7 +17,7 @@ cd alerts
 python3.11 -m pytest test/ -q
 ```
 
-That runs the whole suite (28 tests). The live-database tests
+That runs the whole suite (38 tests). The live-database tests
 (`test_live_db.py`) **skip** unless the database environment is set (see
 below) — a skipped run is normal and not a failure.
 
@@ -31,6 +31,7 @@ below) — a skipped run is normal and not a failure.
 | `test_clips.py` | Cutout clips: the 0-based/1-based indexing regression, the WCS/position-consistency invariant, edge padding, header whitelist, multi-HDU loading. |
 | `test_provider.py` | `DatabaseProvider` behavior over a fake DB + synthetic job directory: `resolve_pid`, flavor selection, the cutout-failure degradation ladder, batch/single byte-identity, and `--save` archive round-trip. |
 | `test_benchmark.py` | The benchmark harness itself: the timing/memory/size JSONL is well-formed and `TimedProvider` is transparent. |
+| `test_benchmark_forced_phot.py` | Offline pieces of the forced-photometry cost benchmark: footprint geometry (incl. RA wrap), FP stdout/lightcurve parsing, run selection, the cost fit, and the report path. |
 | `test_live_db.py` | Live-database integration: the pixel-convention sentinel. **Skips** without DB access (see below). |
 
 ### Support modules (imported by the tests, not run directly)
@@ -45,6 +46,7 @@ below) — a skipped run is normal and not a failure.
 | File | Role |
 |------|------|
 | `benchmark.py` | Timing + memory + output-size benchmark of batch production against the live database. |
+| `benchmark_forced_phot.py` | Forced-photometry cost benchmark: decision data for alert-time FP vs storing FP products (see below). |
 | `avro_producer.py`, `avro_consumer.py` | Standalone Kafka publish/consume smoke scripts (require a running broker and `confluent_kafka`). Legacy manual utilities, not maintained by the suite. |
 
 ## Running subsets
@@ -102,3 +104,38 @@ python3.11 test/benchmark.py report timing.jsonl other_machine.jsonl
 The embedded `meta` record (architecture, CPU, cores, library versions,
 git SHA) makes runs from different machines directly comparable with
 `report`.
+
+## Forced-photometry cost benchmark (not a `pytest` target)
+
+`benchmark_forced_phot.py` gathers the data for an architecture decision:
+run forced photometry at alert time, or store FP products and refresh
+them (and, if stored, how often full re-runs are affordable). Two tiers,
+one JSONL output:
+
+- **survey** (default; needs only the DB environment): walks the real
+  alert path for one chip and, per alert-triggering object, counts the
+  difference-image epochs covering its position — the work an alert-time
+  FP request would redo — alongside its detection history. This is the
+  per-chip "varying source histories" distribution.
+- **measure** (`--run`; pipeline container + AWS + DB): actually executes
+  `pipeline/forcedPhotometryForField.py` for batches of surveyed
+  positions (request CSVs written with `reqid = aid`) at several batch
+  sizes, recording wall time, the backend's own phase timings, staged
+  bytes, and lightcurve row counts. Because the FP backend works per
+  *field*, batch-size variation separates the fixed per-job staging cost
+  from the marginal per-position cost — the two numbers the decision
+  turns on. Scratch directories are kept for inspection.
+
+```bash
+# survey only: history/epoch distribution for one chip
+python3.11 test/benchmark_forced_phot.py --pid 338173 -o fp.jsonl
+
+# survey + real FP runs at batch sizes 1, 4 and 16 (expensive: each run
+# downloads every difference image overlapping the field)
+python3.11 test/benchmark_forced_phot.py --pid 338173 --run \
+    --batches 1,4,16 -o fp.jsonl
+
+# summarize, including the derived decision aid (per-alert latency,
+# per-chip batched cost, full re-run cost per field)
+python3.11 test/benchmark_forced_phot.py report fp.jsonl
+```

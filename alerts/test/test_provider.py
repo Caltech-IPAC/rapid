@@ -50,6 +50,27 @@ def test_resolve_pid_unknown_exposure_raises(make_provider):
 
 
 # ---------------------------------------------------------------------------
+# missing per-field partitions: the real DB can lack merges_<field>/
+# astroobjects_<field> for a chip's field (seen live: pid 339271 ->
+# merges_4686817). Sources there must degrade to unassociated -- alerts
+# with no diaObject -- in both flows, never crash the batch.
+# ---------------------------------------------------------------------------
+
+def test_missing_field_partition_degrades_to_unassociated(make_provider,
+                                                          chip_data):
+    chip_data.partitions_exist = False
+    provider = make_provider()
+    sources = list(provider.iter_sources(CHIP_PID))       # batch prefetch
+    assert len(sources) == len(chip_data.sources)
+    for source in sources:
+        assert provider.get_object_for_source(source) is None
+
+    single = make_provider()                              # single-alert flow
+    detection = single.get_detection(9001)
+    assert single.get_object_for_source(detection) is None
+
+
+# ---------------------------------------------------------------------------
 # diff_flavor selection (plan B7): the flavor argument picks which
 # difference image feeds cutoutDifference; each product carries a distinct
 # DC offset, so the stamp values identify the file that was read

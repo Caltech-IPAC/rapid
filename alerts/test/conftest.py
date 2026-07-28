@@ -152,6 +152,11 @@ class ChipData:
                   "stdevra": 2.5e-05, "stdevdec": 2.1e-05, "nsources": 1,
                   "meanra": 268.10, "meandec": -29.87, "flux0": 800.0},
         }
+        # Per-field merges/astroobjects partition tables exist unless a
+        # test flips this (the real DB can lack a field's partitions;
+        # the provider must then treat its sources as unassociated).
+        self.partitions_exist = True
+
         # Prior detections (other sids of the same objects, earlier mjd,
         # different pid -- they belong to older chips). Object 777 has two,
         # one of them older than typical look-back windows tests may use;
@@ -206,7 +211,9 @@ class FakeCursor:
     # -- the dispatch table ------------------------------------------------
     def execute(self, sql, params):
         d = self.data
-        if "vbest" in sql:                            # resolve_pid(expid, sca)
+        if "to_regclass" in sql:                      # _partition_exists(field)
+            self._rows = [{"reg": params[0] if d.partitions_exist else None}]
+        elif "vbest" in sql:                          # resolve_pid(expid, sca)
             expid, sca = params
             best = sorted((c for c in d.campaigns
                            if c["expid"] == expid and c["sca"] == sca
