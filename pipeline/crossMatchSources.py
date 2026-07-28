@@ -836,6 +836,14 @@ if __name__ == '__main__':
     start_time_benchmark = end_time_benchmark
 
 
+    # Close database connection.
+
+    dbh.close()
+
+    if dbh.exit_code >= 64:
+        exit(dbh.exit_code)
+
+
     #########################################################################################
     # Execute stage-1 source-matching tasks, which includes cross-matching sources and
     # astroobjects within field boundaries, making new merges records for sources that
@@ -859,6 +867,14 @@ if __name__ == '__main__':
     print("Elapsed time in seconds to load astroobjects and merges database tables within field boundaries =",
         end_time_benchmark - start_time_benchmark)
     start_time_benchmark = end_time_benchmark
+
+
+    # Open database connection.
+
+    dbh = db.RAPIDDB()
+
+    if dbh.exit_code >= 64:
+        exit(dbh.exit_code)
 
 
     # Cluster and analyze astroobjects database tables for all fields associated with processing date.
@@ -891,6 +907,14 @@ if __name__ == '__main__':
     start_time_benchmark = end_time_benchmark
 
 
+    # Close database connection.
+
+    dbh.close()
+
+    if dbh.exit_code >= 64:
+        exit(dbh.exit_code)
+
+
     #####################################################################################
     # Execute stage-2 source-matching tasks, which includes cross-matching sources
     # and astroobjects across adjacent field boundaries and making new merges records
@@ -921,14 +945,6 @@ if __name__ == '__main__':
     end_time_benchmark = time.time()
     print(f"Elapsed time in seconds to cross-match all sources for {proc_date} =",
         end_time_benchmark - start_time_benchmark_at_start)
-
-
-    # Close database connection.
-
-    dbh.close()
-
-    if dbh.exit_code >= 64:
-        exit(dbh.exit_code)
 
 
     # Termination.
