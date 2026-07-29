@@ -770,7 +770,7 @@ if __name__ == '__main__':
                         exit(dbh.exit_code)
 
                     # Insert record into upload_sources_queue
-                    dbh.add_to_upload_psfcat_queue(pid, rid_diffimage,
+                    dbh.add_to_upload_psfcat_queue(pid, jid, rid_diffimage,
                                                    fid_diffimage, sca_diffimage)
                     if dbh.exit_code >= 64:
                         exit(dbh.exit_code)
