@@ -1,7 +1,6 @@
 '''
 Load into database sources table the PSF-fit catalogs made by the
-Python photutils package from the SFFT difference images
-(until a final decision on which image-differencing method is best):
+Python photutils package from the SFFT difference images.
 '''
 
 import boto3
@@ -245,6 +244,7 @@ def run_single_core_job(jids,overlapping_fields_list,meta_list,negative_diffimg_
 
 
     fh.write(f"\nStart of run_single_core_job: index_thread={index_thread}, dbh={dbh}\n")
+    fh.write(f"negative_diffimg_flag = {negative_diffimg_flag\n")
 
     for index_job in range(njobs):
 
@@ -675,7 +675,6 @@ if __name__ == '__main__':
             sql_queries.append(f"SELECT to_regclass('public.{tablename}') IS NOT NULL;")
             sql_queries.append(f"CREATE TABLE {tablename} (LIKE sources INCLUDING DEFAULTS INCLUDING CONSTRAINTS);")
             sql_queries.append(f"ALTER TABLE {tablename} SET UNLOGGED;")
-            sql_queries.append(f"ALTER TABLE {tablename} INHERIT sources;")
 
         dbh.execute_sql_queries(sql_queries)
 
@@ -771,6 +770,7 @@ if __name__ == '__main__':
         sql_queries.append(f"GRANT ALL ON TABLE sources_{proc_date}_{sca} TO GROUP rapidadminrole;")
         sql_queries.append(f"REVOKE ALL ON TABLE sources_{proc_date}_{sca} FROM rapidporole;")
         sql_queries.append(f"GRANT INSERT,UPDATE,SELECT,DELETE,TRUNCATE,TRIGGER,REFERENCES ON TABLE sources_{proc_date}_{sca} TO rapidporole;")
+        sql_queries.append(f"ALTER TABLE {tablename} INHERIT sources;")
 
     dbh.execute_sql_queries(sql_queries)
 
