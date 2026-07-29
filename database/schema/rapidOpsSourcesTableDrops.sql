@@ -20,7 +20,6 @@ DROP SEQUENCE sources_sid_seq;
 -------------------
 
 DROP TABLE astroobjects;
-DROP SEQUENCE astroobjects_aid_seq;
 
 
 -------------------
