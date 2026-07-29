@@ -1042,6 +1042,7 @@ SET default_tablespace = pipeline_data_01;
 CREATE TABLE upload_psfcat_queue (
     qid integer NOT NULL,
     pid integer NOT NULL,
+    jid integer,
     rid integer,
     fid smallint,
     sca smallint,
