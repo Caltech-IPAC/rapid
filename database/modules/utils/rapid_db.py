@@ -4171,7 +4171,7 @@ class RAPIDDB:
             self.conn.commit()           # Commit database transaction
 ########################################################################################################
 
-    def add_to_upload_psfcat_queue(self, pid, rid=None, fid=None,
+    def add_to_upload_psfcat_queue(self, pid, jid, rid=None, fid=None,
                                 sca=None, commit=True):
         '''
         Insert a record into the upload_psfcat_queue table.
@@ -4180,12 +4180,12 @@ class RAPIDDB:
         '''
         self.exit_code = 0
         sql = """
-            INSERT INTO upload_psfcat_queue (pid, rid, fid, sca)
+            INSERT INTO upload_psfcat_queue (pid, jid, rid, fid, sca)
             VALUES (%(pid)s, %(rid)s, %(fid)s, %(sca)s)
             RETURNING qid;
             """
         try:
-            self.cur.execute(sql, {"pid": pid, "rid": rid, "fid": fid,
+            self.cur.execute(sql, {"pid": pid, "jid": jid, "rid": rid, "fid": fid,
                                    "sca": sca})
             qid = self.cur.fetchone()[0]
             if commit:
@@ -4202,7 +4202,7 @@ class RAPIDDB:
             self.exit_code = 67
             self.logger.exception("Failed to enqueue pid %s", pid)
             raise
-    def get_pending_psfcat_uploads(self, limit=100, claim=False):
+    def get_pending_psfcat_uploads(self):
         '''
         Return pending rows from upload_psfcat_queue, oldest first.
 
@@ -4210,7 +4210,7 @@ class RAPIDDB:
         '''
         self.exit_code = 0
         sql = """
-            SELECT qid, pid, rid, fid, expid, sca, queued_at
+            SELECT qid, pid, jid, rid, fid, sca, queued_at
             FROM upload_psfcat_queue
             WHERE inserted_at IS NULL
             ORDER BY queued_at
