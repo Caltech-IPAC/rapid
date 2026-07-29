@@ -6,6 +6,7 @@ Python photutils package from the SFFT difference images
 
 import boto3
 import os
+import io
 import numpy as np
 import healpy as hp
 import configparser
@@ -203,6 +204,9 @@ print(f"Sources columns: {cols_comma_separated_string}")
 # Convert a QTable to a buffer for bulk database ingest
 #-------------------------------------------------------------------------------------------------------------
 def table_to_buffer(tbl, colnames, null_string=r"\N", separator=","):
+    """
+    Convert a QTable to a buffer for bulk database ingest
+    """
     cols = []
     for name in colnames:
         column_data = np.asarray(tbl[name])
@@ -210,18 +214,36 @@ def table_to_buffer(tbl, colnames, null_string=r"\N", separator=","):
         column_data_str = np.char.mod('%r', column_data) if column_data.dtype.kind == 'f' else column_data.astype(str)
         if column_data.dtype.kind == 'f':
             s = np.where(np.isnan(column_data), null_string, column_data_str)      # NaN -> NULL at the source
-        cols.append(column_data_str)
+        cols.append(s)
     buf = io.StringIO()
     buf.write("\n".join(separator.join(row) for row in zip(*cols)))
     buf.write("\n")
     buf.seek(0)
     return buf
 
+def roman_tessellation_index(ra, dec):
+    """
+
+    """
+    ra  = np.atleast_1d(np.asarray(ra, dtype=float))
+    dec = np.atleast_1d(np.asarray(dec, dtype=float))
+    if ra.shape != dec.shape:
+        raise ValueError(f"ra and dec shapes differ: {ra.shape} vs {dec.shape}")
+    out = []
+    for i, (ira, idec) in enumerate(zip(ra, dec)):
+        roman_tessellation_db.get_rtid(ira, idec)
+        if roman_tessellation_db.rtid is None:
+            raise ValueError(f"no tessellation tile for ra={ira}, dec={idec} "
+                             f"(exit_code={roman_tessellation_db.exit_code})")
+        else:
+            out.append(roman_tessellation_db.rtid)
+    return np.array(out)
+
 #-------------------------------------------------------------------------------------------------------------
 # Custom methods for parallel processing, taking advantage of multiple cores on the job-launcher machine.
 #-------------------------------------------------------------------------------------------------------------
 
-def run_single_core_job(jid,meta_list,negative_diffimg_flag,index_thread):
+def run_single_core_job(jids,meta_list,negative_diffimg_flag,index_thread):
 
 
     # Handle sources from positive versus negative difference images.
@@ -265,28 +287,24 @@ def run_single_core_job(jid,meta_list,negative_diffimg_flag,index_thread):
     fh.write(f"\nStart of run_single_core_job: index_thread={index_thread}, dbh={dbh}\n")
 
     for index_job in range(njobs):
+        jid = jids[index_job]
+        meta_dict = meta_list[index_job]
+        index_core = index_job % num_cores
+        if index_thread != index_core:
+            continue
+
         print("Creating temporary sources table")
-        tablename = f"temp_sources_{index_job}"
-        sql_queries = []
-        #TODO: verify that duplicate index_jobs will never exist
+        tablename = f"temp_sources_{jid}"
         #Create a temporary table that mirrors sources table for light-weight cross-matching to AstroObjects
         #don't worry about a unique sid, that will be added when injected into full table
         sql_queries = f"""DROP TABLE IF EXISTS {tablename} ;
                         CREATE UNLOGGED TABLE {tablename}
-                        (LIKE sources INCLUDING DEFAULTS INCLUDING CONSTRAINTS)
+                        (LIKE sources INCLUDING DEFAULTS INCLUDING CONSTRAINTS);
                         ALTER TABLE {tablename} DROP sid,
                             ADD COLUMN aid bigint,
                             ADD COLUMN is_new boolean NOT NULL DEFAULT false;"""
 
         dbh.execute_sql_queries(sql_queries)
-
-        index_core = index_job % num_cores
-        if index_thread != index_core:
-            continue
-
-        jid = jids[index_job]
-        overlapping_fields = overlapping_fields_list[index_job]
-        meta_dict = meta_list[index_job]
 
         jid_from_dict = meta_dict["jid"]
 
@@ -298,14 +316,11 @@ def run_single_core_job(jid,meta_list,negative_diffimg_flag,index_thread):
         expid = meta_dict["expid"]
         sca = meta_dict["sca"]
         fid = meta_dict["fid"]
-        field = meta_dict["field"]
-        hp6 = meta_dict["hp6"]
-        hp9 = meta_dict["hp9"]
         mjdobs = meta_dict["mjdobs"]
         pid = meta_dict["pid"]
 
 
-        fh.write(f"Loop start: index_job,jid,overlapping_fields = {index_job},{jid},{overlapping_fields}\n")
+        fh.write(f"Loop start: index_job,jid= {index_job},{jid}\n")
 
 
         # Check whether done file exists in S3 bucket for job, and skip if it exists.
@@ -438,7 +453,7 @@ def run_single_core_job(jid,meta_list,negative_diffimg_flag,index_thread):
 
         # Load records into sources database tables.
 
-        dbh.copy_data_from_buffer_into_database(buffer,tablename,columns)
+        dbh.copy_data_from_buffer_into_database(buffer,tablename,nums)
 
         if dbh.exit_code >= 64:
             fh.write(f"*** Error bulk-loading data from buffer into specified database table ({tablename}); quitting...\n")
@@ -452,21 +467,22 @@ def run_single_core_job(jid,meta_list,negative_diffimg_flag,index_thread):
         # DISTINCT ON coupled with ORDERED BY returns only the first closest match
         # match_dist = m.dist * 3600 #Add later, in arcsec
         cross_match_time_benchmark_start = time.time()
+        #can remove if s2.flags filter R/B first
         cross_match_sql = f"""ANALYZE {tablename};
             UPDATE {tablename} s
             SET aid = m.aid
             FROM (
-                SELECT DISTINCT ON (s2.src_id)
-                s2.src_id,
+                SELECT DISTINCT ON (s2.id)
+                s2.id,
                 a.aid,
                 q3c_dist(s2.ra, s2.dec, a.ra0, a.dec0) AS dist
                 FROM {tablename} s2
                 JOIN astroobjects a
                     ON q3c_join(s2.ra, s2.dec, a.ra0, a.dec0, {match_radius})
-                WHERE s2.flags=0" #can remove if filter R/B first
-                ORDER BY s2.src_id, dist
+                WHERE s2.flags=0
+                ORDER BY s2.id, dist
                 ) m
-            WHERE s.src_id = m.src_id;"""
+            WHERE s.id = m.id;"""
         dbh.execute_sql_queries(cross_match_sql)
         cross_match_time_benchmark_end = time.time()
         fh.write(f"Elapsed time in seconds to crossmatch = {cross_match_time_benchmark_end-cross_match_time_benchmark_start}\n")
@@ -485,7 +501,7 @@ def run_single_core_job(jid,meta_list,negative_diffimg_flag,index_thread):
             WHERE is_new;"""
         dbh.execute_sql_queries(create_new_aid_sql)
         update_astrobjects_time_benchmark_end = time.time()
-        fh.write(f"Elapsed time in seconds to update astroobjects Table = {update_astroobjects_time_benchmark_end-update_astroobjects_time_benchmark_start}\n")
+        fh.write(f"Elapsed time in seconds to update astroobjects Table = {update_astrobjects_time_benchmark_end-update_astroobjects_time_benchmark_start}\n")
 
         #----------------------------------
         # Update sources table with temp_sources
@@ -547,7 +563,7 @@ def run_single_core_job(jid,meta_list,negative_diffimg_flag,index_thread):
                         sum(dec::float8)                AS sumdec,
                         min(mjdobs)                     AS minmjd,
                         max(mjdobs)                     AS maxmjd
-                    FROM temp_sources
+                    FROM {tablename}
                     GROUP BY aid
                 ) agg
                 WHERE m.aid = agg.aid;"""
@@ -555,7 +571,7 @@ def run_single_core_job(jid,meta_list,negative_diffimg_flag,index_thread):
         update_astroobjectsmeta_time_benchmark_end = time.time()
         fh.write(f"Elapsed time in seconds to update the AstroObjectsMeta table = {update_astroobjectsmeta_time_benchmark_end-update_astroobjectsmeta_time_benchmark_start}\n")
         # Touch done file.  Upload done file to S3 bucket.
-
+        dbh.mark_psfcat_uploaded(rec['qid'])
         util.write_done_file_to_s3_bucket(done_filename,product_s3_bucket_base,proc_date,jid,s3_client)
 
         fh.write(f"Loop end: done_filename,product_s3_bucket_base,proc_date,jid = {done_filename},{product_s3_bucket_base},{proc_date},{jid}\n")
@@ -601,13 +617,13 @@ def run_single_core_job(jid,meta_list,negative_diffimg_flag,index_thread):
     return message
 
 
-def execute_parallel_processes(jids,rtids_list,meta_list,negative_diffimg_flag,num_cores):
+def execute_parallel_processes(jids,meta_list,negative_diffimg_flag,num_cores):
 
     print("num_cores =",num_cores)
 
     with ProcessPoolExecutor(max_workers=num_cores) as executor:
         # Submit all tasks to the executor and store the futures in a list
-        futures = [executor.submit(run_single_core_job,jids,rtids_list,meta_list,negative_diffimg_flag,thread_index) for thread_index in range(num_cores)]
+        futures = [executor.submit(run_single_core_job,jids,meta_list,negative_diffimg_flag,thread_index) for thread_index in range(num_cores)]
 
         # Iterate over completed futures and update progress
         for i, future in enumerate(as_completed(futures)):
@@ -644,13 +660,11 @@ if __name__ == '__main__':
         exit(dbh.exit_code)
 
 
-    # Query database for all normal RAPID science-pipeline Jobs records
-    # that are associated with the given processing date.
+    # Query database for all normal RAPID science-pipeline pids that have PSFCatalogs
+    # thave have not been ingested
     # Returns a list of job IDs.
 
-    # TODO Figure out how to pass in SCAs as they finish and limit to processing on exposure at a time?
-    #How much will this hold things up if SCAs take different amounts of time to process?
-    recs = dbh.get_jids_of_normal_science_pipeline_jobs_for_processing_date(proc_date)
+    recs = dbh.get_pending_psfcat_uploads()
 
     if dbh.exit_code >= 64:
         print("*** Error from {}; quitting ".format(swname))
@@ -659,91 +673,18 @@ if __name__ == '__main__':
 
     # Set up to launch multi-processing for loading sources database tables.
 
-    jid_list = []
-    overlapping_fields_list = []
     meta_list = []
-    scas_dict = {}
 
-    for jid in recs:
-
-        job_dict = dbh.get_info_for_job(jid)
-
-        rid = job_dict["rid"]
-        expid = job_dict["expid"]
-
-        l2file_dict = dbh.get_l2file_info_for_sources(rid)
-
-        crval1 = l2file_dict['crval1']
-        crval2 = l2file_dict['crval2']
-        crpix1 = l2file_dict['crpix1']
-        crpix2 = l2file_dict['crpix2']
-        cd11 = l2file_dict['cd11']
-        cd12 = l2file_dict['cd12']
-        cd21 = l2file_dict['cd21']
-        cd22 = l2file_dict['cd22']
-        expid = l2file_dict["expid"]
-        sca = l2file_dict["sca"]
-        fid = l2file_dict["fid"]
-        #field = l2file_dict["field"]
-        hp6 = l2file_dict["hp6"]
-        hp9 = l2file_dict["hp9"]
-        mjdobs = l2file_dict["mjdobs"]
-
-        diffimage_dict = dbh.get_best_difference_image(rid,ppid)
-
-        pid = diffimage_dict['pid']
-
-        scas_dict[sca] = 1
-
-
+    for rec in recs:
+        l2file_dict = dbh.get_l2file_info_for_sources(rec['rid'])
+        meta_dict = rec
+        meta_dict['expid'] = l2file_dict["expid"]
+        meta_dict['mjdobs'] = l2file_dict["mjdobs"]
         # Load Sources record metadata into a dictionary that can be appended to a list,
         # and then unpacked later.
-
-        meta_dict = {}
-
-        meta_dict["jid"] = jid
-        meta_dict["expid"] = expid
-        meta_dict["sca"] = sca
-        meta_dict["fid"] = fid
-        meta_dict["field"] = field
-        meta_dict["hp6"] = hp6
-        meta_dict["hp9"] = hp9
-        meta_dict["mjdobs"] = mjdobs
-        meta_dict["pid"] = pid
-
-        #TODO Replace this part? Do I need it?
-        # Get field numbers (rtids) of all sky tiles containing sky positions
-        # in given science image associated with job ID.
-
-        rtid_dict = {}
-
-        x_list = [*range(0,naxis1,500)]
-        y_list = [*range(0,naxis2,500)]
-        x_list.append(naxis1)
-        y_list.append(naxis1)
-
-        for y in y_list:
-            for x in x_list:
-
-                # x,y,crpix1,crpix2 must be zero-based.
-                ra,dec = util.tan_proj2(x,y,crpix1-1,crpix2-1,crval1,crval2,cd11,cd12,cd21,cd22)
-
-                roman_tessellation_db.get_rtid(ra,dec)
-                rtid = str(roman_tessellation_db.rtid)
-
-                rtid_dict[rtid] = 1
-
-        keys_view = rtid_dict.keys()
-        print("fields overlapping image =",keys_view)
-
-        jid_list.append(jid)
-        overlapping_fields_list.append(keys_view)
         meta_list.append(meta_dict)
 
-        print("jid =",jid)
-
-    scas_list = scas_dict.keys()
-
+        print(f"jid ={rec['jid']}")
 
     # Code-timing benchmark.
 
@@ -753,87 +694,52 @@ if __name__ == '__main__':
     start_time_benchmark = end_time_benchmark
 
 
-    # Optionally skip sources child database table creation and bulk loading of sources records,
-    # and just do the indexing, clustering, and applying grants to sources database tables for
-    # all SCAs associated with processing date...")
 
-    if do_loading:
-        # #TODO move this to the SCA processing since we're going to create a temp tabl
-        # # Create sources database tables for all SCAs associated with processing date.
+    dbh.close()
 
-        # print("Creating temp source database tables for all SCAs associated with processing date...")
-
-        # sql_queries = []
-        # sql_queries.append("SET default_tablespace = pipeline_data_01;")
-
-        # for sca in scas_list:
-
-        #     tablename = f"sources_{proc_date}_{sca}"
-
-        #     sql_queries.append(f"SELECT to_regclass('public.{tablename}') IS NOT NULL;")
-        #     sql_queries.append(f"CREATE TABLE {tablename} (LIKE sources INCLUDING DEFAULTS INCLUDING CONSTRAINTS);")
-        #     sql_queries.append(f"ALTER TABLE {tablename} SET UNLOGGED;")
-        #     sql_queries.append(f"ALTER TABLE {tablename} INHERIT sources;")
-
-        # dbh.execute_sql_queries(sql_queries)
-
-        #if dbh.exit_code >= 64:
-        #    exit(dbh.exit_code)
+    if dbh.exit_code >= 64:
+        exit(dbh.exit_code)
 
 
-        # Close main-program database connection before long episode of bulk-loading source records.
+    # Code-timing benchmark.
 
-        dbh.close()
-
-        if dbh.exit_code >= 64:
-            exit(dbh.exit_code)
-
-
-        # Code-timing benchmark.
-
-        end_time_benchmark = time.time()
-        print("Elapsed time in seconds to create sources database tables for all SCAs associated with processing date =",
-            end_time_benchmark - start_time_benchmark)
-        start_time_benchmark = end_time_benchmark
+    end_time_benchmark = time.time()
+    print("Elapsed time in seconds to create sources database tables for all SCAs associated with processing date =",
+        end_time_benchmark - start_time_benchmark)
+    start_time_benchmark = end_time_benchmark
 
 
-        ################################################################################
-        # Execute sources-table-loading tasks for all science-pipeline jobs with jids on
-        # a given processing date.  The execution is done in parallel, with the number
-        # of parallel threads equal to the number of cores on the job-launcher machine.
-        # First do for sources from positive difference images, and then from negative.
-        ################################################################################
+    ################################################################################
+    # Execute sources-table-loading tasks for all science-pipeline jobs with jids on
+    # a given processing date.  Parallel execution should not be performed at this time
+    # as there is no check for two different files creating an aid on the same object
+    # detected in two images. If this is overcome, the execution is done in parallel, with the number
+    # of parallel threads equal to the number of cores on the job-launcher machine.
+    # First do for sources from positive difference images, and then from negative.
+    ################################################################################
 
-        if num_cores > 1:
-            negative_diffimg_flag = False
-            #AZ: Unit to parallelize over will be Exposure
-            execute_parallel_processes(jid_list,overlapping_fields_list,meta_list,negative_diffimg_flag,num_cores)
-            negative_diffimg_flag = True
-            execute_parallel_processes(jid_list,overlapping_fields_list,meta_list,negative_diffimg_flag,num_cores)
-        else:
-            thread_index = 0
-            negative_diffimg_flag = False
-            run_single_core_job(jid_list,overlapping_fields_list,meta_list,negative_diffimg_flag,thread_index)
-            negative_diffimg_flag = True
-            run_single_core_job(jid_list,overlapping_fields_list,meta_list,negative_diffimg_flag,thread_index)
-
-
-        # Code-timing benchmark.
-
-        end_time_benchmark = time.time()
-        print("Elapsed time in seconds to load all sources database tables =",
-            end_time_benchmark - start_time_benchmark)
-        start_time_benchmark = end_time_benchmark
-
+    if num_cores > 1:
+        raise NotImplementedError("Work needs to be done to handle ingestion of the same field and " \
+        "and therefore potentially same object at the same time, creating multiple aids")
+        negative_diffimg_flag = False
+        #AZ: Unit to parallelize over will be Exposure
+        execute_parallel_processes(recs['jid'],meta_list,negative_diffimg_flag,num_cores)
+        negative_diffimg_flag = True
+        execute_parallel_processes(recs['jid'],meta_list,negative_diffimg_flag,num_cores)
     else:
+        thread_index = 0
+        negative_diffimg_flag = False
+        run_single_core_job(recs['jid'],meta_list,negative_diffimg_flag,thread_index)
+        negative_diffimg_flag = True
+        run_single_core_job(recs['jid'],meta_list,negative_diffimg_flag,thread_index)
 
 
-        # Close main-program database connection.
+    # Code-timing benchmark.
 
-        dbh.close()
-
-        if dbh.exit_code >= 64:
-            exit(dbh.exit_code)
+    end_time_benchmark = time.time()
+    print("Elapsed time in seconds to load all sources database tables =",
+        end_time_benchmark - start_time_benchmark)
+    start_time_benchmark = end_time_benchmark
 
 
     # Reopen main-program database connection.
@@ -842,44 +748,6 @@ if __name__ == '__main__':
 
     if dbh.exit_code >= 64:
         exit(dbh.exit_code)
-
-
-    # Index, cluster, and apply grants to sources database tables for all SCAs associated with processing date.
-
-    print("Indexing, clustering, and applying grants to sources database tables for all SCAs associated with processing date...")
-
-    sql_queries = []
-    sql_queries.append("SET default_tablespace = pipeline_indx_01;")
-
-    for sca in scas_list:
-
-        sql_queries.append(f"CREATE INDEX sources_{proc_date}_{sca}_pid_idx ON sources_{proc_date}_{sca} (pid);")
-        sql_queries.append(f"CREATE INDEX sources_{proc_date}_{sca}_expid_idx ON sources_{proc_date}_{sca} (expid);")
-        sql_queries.append(f"CREATE INDEX sources_{proc_date}_{sca}_sca_idx ON sources_{proc_date}_{sca} (sca);")
-        sql_queries.append(f"CREATE INDEX sources_{proc_date}_{sca}_field_idx ON sources_{proc_date}_{sca} (field);")
-        sql_queries.append(f"CREATE INDEX sources_{proc_date}_{sca}_flags_idx ON sources_{proc_date}_{sca} (flags);")
-        sql_queries.append(f"CREATE INDEX sources_{proc_date}_{sca}_mjdobs_idx ON sources_{proc_date}_{sca} (mjdobs);")
-        sql_queries.append(f"CREATE INDEX sources_{proc_date}_{sca}_sid_idx ON sources_{proc_date}_{sca} (sid);")
-        sql_queries.append(f"CREATE INDEX sources_{proc_date}_{sca}_radec_idx ON sources_{proc_date}_{sca} (q3c_ang2ipix(ra, dec));")
-        sql_queries.append(f"CLUSTER sources_{proc_date}_{sca}_radec_idx ON sources_{proc_date}_{sca};")
-        sql_queries.append(f"ANALYZE sources_{proc_date}_{sca};")
-        #sql_queries.append(f"ALTER TABLE sources_{proc_date}_{sca} SET LOGGED;")                  # For speed, do not log.
-        sql_queries.append(f"REVOKE ALL ON TABLE sources_{proc_date}_{sca} FROM rapidreadrole;")
-        sql_queries.append(f"GRANT SELECT ON TABLE sources_{proc_date}_{sca} TO GROUP rapidreadrole;")
-        sql_queries.append(f"REVOKE ALL ON TABLE sources_{proc_date}_{sca} FROM rapidadminrole;")
-        sql_queries.append(f"GRANT ALL ON TABLE sources_{proc_date}_{sca} TO GROUP rapidadminrole;")
-        sql_queries.append(f"REVOKE ALL ON TABLE sources_{proc_date}_{sca} FROM rapidporole;")
-        sql_queries.append(f"GRANT INSERT,UPDATE,SELECT,DELETE,TRUNCATE,TRIGGER,REFERENCES ON TABLE sources_{proc_date}_{sca} TO rapidporole;")
-
-    dbh.execute_sql_queries(sql_queries)
-
-
-    # Code-timing benchmark.
-
-    end_time_benchmark = time.time()
-    print("Elapsed time in seconds to index, cluster, and apply grants to sources database tables for all SCAs associated with processing date =",
-        end_time_benchmark - start_time_benchmark)
-    start_time_benchmark = end_time_benchmark
 
 
     # Code-timing benchmark overall.
