@@ -756,47 +756,15 @@ if __name__ == '__main__':
     sql_queries.append("SET default_tablespace = pipeline_indx_01;")
 
     for sca in scas_list:
-        sql_queries.append(f"CREATE INDEX CONCURRENTLY sources_{proc_date}_{sca}_pid_idx ON sources_{proc_date}_{sca} (pid);")
-    dbh.execute_sql_queries(sql_queries,commit=False)
 
-    sql_queries = []
-    for sca in scas_list:
-        sql_queries.append(f"CREATE INDEX CONCURRENTLY sources_{proc_date}_{sca}_expid_idx ON sources_{proc_date}_{sca} (expid);")
-    dbh.execute_sql_queries(sql_queries,commit=False)
-
-    sql_queries = []
-    for sca in scas_list:
-        sql_queries.append(f"CREATE INDEX CONCURRENTLY sources_{proc_date}_{sca}_sca_idx ON sources_{proc_date}_{sca} (sca);")
-    dbh.execute_sql_queries(sql_queries,commit=False)
-
-    sql_queries = []
-    for sca in scas_list:
-        sql_queries.append(f"CREATE INDEX CONCURRENTLY sources_{proc_date}_{sca}_field_idx ON sources_{proc_date}_{sca} (field);")
-    dbh.execute_sql_queries(sql_queries,commit=False)
-
-    sql_queries = []
-    for sca in scas_list:
-        sql_queries.append(f"CREATE INDEX CONCURRENTLY sources_{proc_date}_{sca}_flags_idx ON sources_{proc_date}_{sca} (flags);")
-    dbh.execute_sql_queries(sql_queries,commit=False)
-
-    sql_queries = []
-    for sca in scas_list:
-        sql_queries.append(f"CREATE INDEX CONCURRENTLY sources_{proc_date}_{sca}_mjdobs_idx ON sources_{proc_date}_{sca} (mjdobs);")
-    dbh.execute_sql_queries(sql_queries,commit=False)
-
-    sql_queries = []
-    for sca in scas_list:
-        sql_queries.append(f"CREATE INDEX CONCURRENTLY sources_{proc_date}_{sca}_sid_idx ON sources_{proc_date}_{sca} (sid);")
-    dbh.execute_sql_queries(sql_queries,commit=False)
-
-    sql_queries = []
-    for sca in scas_list:
-        sql_queries.append(f"CREATE INDEX CONCURRENTLY sources_{proc_date}_{sca}_radec_idx ON sources_{proc_date}_{sca} (q3c_ang2ipix(ra, dec));")
-    dbh.execute_sql_queries(sql_queries,commit=False)
-
-    sql_queries = []
-    for sca in scas_list:
-
+        sql_queries.append(f"CREATE INDEX sources_{proc_date}_{sca}_pid_idx ON sources_{proc_date}_{sca} (pid);")
+        sql_queries.append(f"CREATE INDEX sources_{proc_date}_{sca}_expid_idx ON sources_{proc_date}_{sca} (expid);")
+        sql_queries.append(f"CREATE INDEX sources_{proc_date}_{sca}_sca_idx ON sources_{proc_date}_{sca} (sca);")
+        sql_queries.append(f"CREATE INDEX sources_{proc_date}_{sca}_field_idx ON sources_{proc_date}_{sca} (field);")
+        sql_queries.append(f"CREATE INDEX sources_{proc_date}_{sca}_flags_idx ON sources_{proc_date}_{sca} (flags);")
+        sql_queries.append(f"CREATE INDEX sources_{proc_date}_{sca}_mjdobs_idx ON sources_{proc_date}_{sca} (mjdobs);")
+        sql_queries.append(f"CREATE INDEX sources_{proc_date}_{sca}_sid_idx ON sources_{proc_date}_{sca} (sid);")
+        sql_queries.append(f"CREATE INDEX sources_{proc_date}_{sca}_radec_idx ON sources_{proc_date}_{sca} (q3c_ang2ipix(ra, dec));")
         sql_queries.append(f"CLUSTER sources_{proc_date}_{sca}_radec_idx ON sources_{proc_date}_{sca};")
         sql_queries.append(f"ANALYZE sources_{proc_date}_{sca};")
         #sql_queries.append(f"ALTER TABLE sources_{proc_date}_{sca} SET LOGGED;")                  # For speed, do not log.
@@ -808,6 +776,7 @@ if __name__ == '__main__':
         sql_queries.append(f"GRANT INSERT,UPDATE,SELECT,DELETE,TRUNCATE,TRIGGER,REFERENCES ON TABLE sources_{proc_date}_{sca} TO rapidporole;")
 
     dbh.execute_sql_queries(sql_queries)
+
 
     # Code-timing benchmark.
 
