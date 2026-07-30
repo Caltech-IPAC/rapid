@@ -3251,6 +3251,7 @@ class RAPIDDB:
         self.exit_code = 0
 
         if not commit:
+            self.conn.rollback()                        # Clear transaction state
             self.conn.set_session(autocommit=True)
 
         for query in sql_queries:
@@ -3291,6 +3292,7 @@ class RAPIDDB:
             if self.exit_code == 0:
                 self.conn.commit()           # Commit database transaction
         else:
+            self.conn.rollback()                        # Clear transaction state
             self.conn.set_session(autocommit=False)
 
 
