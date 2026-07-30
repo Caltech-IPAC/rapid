@@ -456,6 +456,20 @@ def run_single_core_job_stage_1_crossmatching(scas,fields,index_thread):
             thread_start_time_benchmark = thread_end_time_benchmark
 
 
+            # Remove no-longer-needed intermediate files.
+
+            file_paths = [astroobjects_table_file,merges_table_file]
+            for file_path in file_paths:
+
+                if os.path.exists(file_path):
+                    os.remove(file_path)
+                    fh.write(f"File deleted successfully ({file_path})...\n")
+                    fh.flush()
+                else:
+                    fh.write(f"The file does not exist({file_path})...\n")
+                    fh.flush()
+
+
             # End of loop over expids.
 
             fh.write(f"Loop end over exposure IDs: index_field,field,expid = {index_field},{field},{expid}\n")
