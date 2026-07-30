@@ -23,7 +23,6 @@ def md5(fname):
         return(68)
 
 
-
 def compute_checksum(fname,dbcksum=None):
 
 
