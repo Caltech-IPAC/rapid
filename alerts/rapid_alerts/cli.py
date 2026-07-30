@@ -39,7 +39,17 @@ def make_provider(diff_flavor="sfft"):
     repo_root = Path(__file__).resolve().parents[2]
     sys.path.insert(0, str(repo_root))
     from database.modules.utils.rapid_db import RAPIDDB
-    return AlertDataProvider(RAPIDDB(), diff_flavor=diff_flavor)
+    db = RAPIDDB()
+    # RAPIDDB reports connection failure by exit_code/conn=None rather than
+    # raising; fail here with the actual problem, not an AttributeError on
+    # conn.cursor() at first query.
+    if getattr(db, "conn", None) is None or db.exit_code >= 64:
+        raise SystemExit(
+            "cannot connect to the RAPID database: check that DBSERVER, "
+            "DBPORT, DBNAME, DBUSER and DBPASS are set in this shell, and "
+            "that this machine can reach the DB (VPN up / EC2 security "
+            "group allows it)")
+    return AlertDataProvider(db, diff_flavor=diff_flavor)
 
 
 def main(argv=None):
