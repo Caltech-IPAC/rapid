@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Timing benchmark harness for alert production (test-side tooling; the
-production modules in rapid_alerts/ are not instrumented and need no
+production modules in alerts/ are not instrumented and need no
 changes -- see TimedProvider below for how).
 
 Writes one JSON Lines file per run, mixing four record kinds:
@@ -62,7 +62,7 @@ try:
 except ImportError:
     psutil = None
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 logger = logging.getLogger(__name__)
 
@@ -319,7 +319,7 @@ def benchmark_batch(provider, pid, out_path, meta_extra=None, producer=None,
     object-container file (compressed unless compress=False), so the
     benchmark measures the real, compressed output and reports its size.
     """
-    from rapid_alerts.produce import (batch_produce, load_schema,
+    from alerts.produce import (batch_produce, load_schema,
                                       open_alert_archive)
 
     meta = collect_meta(pid=pid,
@@ -487,7 +487,7 @@ def main(argv=None):
     if (args.pid is not None) == (args.exposure is not None):
         parser.error("give exactly one of --pid or --exposure/--sca")
 
-    from rapid_alerts.cli import make_provider
+    from alerts.cli import make_provider
     provider = make_provider(diff_flavor=args.diff_flavor)
     pid = (args.pid if args.pid is not None
            else provider.resolve_pid(args.exposure, args.sca))

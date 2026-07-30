@@ -22,7 +22,7 @@ import fitsio
 import numpy as np
 from astropy.io import fits
 
-from rapid_alerts.providers import (STAMP_FILL_VALUE, Source, extract_stamp,
+from alerts.providers import (STAMP_FILL_VALUE, Source, extract_stamp,
                                     load_fits_image)
 from conftest import CHIP_PID, PRODUCT_OFFSETS, make_source_row
 from wcs_eval import separation_mas, tpv_pixel_to_sky

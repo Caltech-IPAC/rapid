@@ -23,9 +23,9 @@ TODO (test plan, not yet implemented):
 import fastavro
 import pytest
 
-from rapid_alerts.produce import (batch_produce, load_schema,
+from alerts.produce import (batch_produce, load_schema,
                                   open_alert_archive, produce_alert)
-from rapid_alerts.providers import AlertDataProvider
+from alerts.providers import AlertDataProvider
 
 from conftest import CHIP_PID, PRODUCT_OFFSETS, FakeDB
 from test_clips import clip_to_numpy

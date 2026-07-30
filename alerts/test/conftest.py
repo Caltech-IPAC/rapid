@@ -1,4 +1,4 @@
-"""Shared fixtures for the rapid_alerts test suite.
+"""Shared fixtures for the alerts test suite.
 
 The strategy: AlertDataProvider only needs (a) an object exposing
 .conn.cursor() and (b) product files it can reach with a plain path (its
@@ -29,9 +29,9 @@ Fixture map (all function-scoped unless noted):
 import sys
 from pathlib import Path
 
-# make `rapid_alerts` and the test helpers importable no matter where
+# make `alerts` and the test helpers importable no matter where
 # pytest is invoked from
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import fitsio
@@ -294,7 +294,7 @@ def chip_data(tpv_header, job_dir):
 @pytest.fixture()
 def make_provider(chip_data):
     """Factory for independent AlertDataProviders over the same fake chip."""
-    from rapid_alerts.providers import AlertDataProvider
+    from alerts.providers import AlertDataProvider
 
     def _make(diff_flavor="sfft"):
         return AlertDataProvider(FakeDB(chip_data), diff_flavor=diff_flavor)

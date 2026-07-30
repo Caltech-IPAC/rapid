@@ -1,7 +1,7 @@
-# `rapid_alerts` tests
+# `alerts` tests
 
 Automated tests and benchmarking tools for the alert-production package
-(`../rapid_alerts/`).
+(`alerts/`, the parent directory).
 
 ## Requirements
 
@@ -9,8 +9,10 @@ Automated tests and benchmarking tools for the alert-production package
   `fastavro`, and `pytest` are installed). Invoke it explicitly as
   `python3.11` — the default `python3` may be a different interpreter
   without these packages.
-- Run commands from the package root, `alerts/`, so that `rapid_alerts`
-  imports and the `conftest.py` path setup resolve.
+- The commands below are written to be run from the package root,
+  `alerts/`. (Imports resolve from any directory — `conftest.py` and the
+  hand-run tools put the repo root on `sys.path` themselves — only the
+  relative `test/...` paths in the examples assume this cwd.)
 
 ```bash
 cd alerts

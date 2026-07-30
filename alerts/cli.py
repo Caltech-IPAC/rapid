@@ -3,9 +3,9 @@ Command-line alert production.
 
 The selector implies the mode:
 
-    python -m rapid_alerts.cli <source_id>                  # one alert
-    python -m rapid_alerts.cli --pid <pid>                  # one diff image
-    python -m rapid_alerts.cli --exposure <expid> --sca <n> # same, by
+    python -m alerts.cli <source_id>                  # one alert
+    python -m alerts.cli --pid <pid>                  # one diff image
+    python -m alerts.cli --exposure <expid> --sca <n> # same, by
                                                             # exposure + SCA
 """
 
@@ -16,7 +16,7 @@ import os
 import sys
 from pathlib import Path
 
-# Support both `python -m rapid_alerts.cli` (module) and `python cli.py` (script).
+# Support both `python -m alerts.cli` (module) and `python cli.py` (script).
 if __package__:
     from .produce import batch_produce, open_alert_archive, produce_alert
     from .providers import AlertDataProvider
@@ -24,19 +24,35 @@ else:
     # Run directly as a script: no package context, so make the package
     # importable by its name and switch to absolute imports.
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-    from rapid_alerts.produce import (batch_produce, open_alert_archive,
+    from alerts.produce import (batch_produce, open_alert_archive,
                                       produce_alert)
-    from rapid_alerts.providers import AlertDataProvider
+    from alerts.providers import AlertDataProvider
 
 
 def make_provider(diff_flavor="sfft"):
-    """Connect to the RAPID operations database.
+    """Connect to the RAPID operations database and wrap it in a provider.
 
     A future file-system or sqlite backend would be constructed here instead
     (see the porting notes at the bottom of providers.py).
+
+    Parameters
+    ----------
+    diff_flavor : {"sfft", "zogy"}, optional
+        Which differencing algorithm's image feeds ``cutoutDifference``.
+
+    Returns
+    -------
+    providers.AlertDataProvider
+        Provider reading from the live RAPID database.
+
+    Raises
+    ------
+    SystemExit
+        If the database connection cannot be established (missing DB
+        environment variables, or the database is unreachable).
     """
     # RAPIDDB lives at <repo>/database/modules/utils/rapid_db.py
-    repo_root = Path(__file__).resolve().parents[2]
+    repo_root = Path(__file__).resolve().parents[1]
     sys.path.insert(0, str(repo_root))
     from database.modules.utils.rapid_db import RAPIDDB
     db = RAPIDDB()
@@ -53,6 +69,18 @@ def make_provider(diff_flavor="sfft"):
 
 
 def main(argv=None):
+    """Run one alert-production command.
+
+    Parameters
+    ----------
+    argv : list of str, optional
+        Command-line arguments. None (the default) means ``sys.argv[1:]``.
+
+    Returns
+    -------
+    int
+        Process exit status: 0 on success.
+    """
     parser = argparse.ArgumentParser(
         description="Produce RAPID alerts. The selector implies the mode: "
                     "a source ID produces one alert; --pid or "

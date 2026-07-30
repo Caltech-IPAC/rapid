@@ -2,7 +2,7 @@
 
 The normalized records (:class:`Source`, :class:`ObjectRecord`,
 :class:`ForcedPhot`, :class:`Cutouts`) are the contract between the raw data
-and the alert builders in :mod:`rapid_alerts.produce`. The provider translates
+and the alert builders in :mod:`alerts.produce`. The provider translates
 native column names into these canonical attributes exactly once; everything
 downstream only sees the records.
 
@@ -52,7 +52,7 @@ Data flow (DB table / job-dir file -> record -> schema record)::
 
 Examples
 --------
->>> from rapid_alerts.providers import AlertDataProvider
+>>> from alerts.providers import AlertDataProvider
 >>> provider = AlertDataProvider(db, diff_flavor="sfft")
 >>> source = provider.get_detection(sid)
 >>> cutouts = provider.get_cutouts(source)
@@ -98,7 +98,13 @@ PRV_WINDOW_DAYS = 365.25  # default look-back window for previous detections
 
 @dataclass
 class Source:
-    """One difference-image source detection (DB `sources` row equivalent)."""
+    """One difference-image source detection (DB ``sources`` row equivalent).
+
+    Attribute names ARE the ``sources`` column names (see the module
+    docstring); the only derived attributes are `band` (from
+    ``filters.filter``) and `aid` (from the merges association, set by
+    assemble_alert_for_source() once the object is resolved).
+    """
     sid: int
     expid: int
     sca: int
@@ -131,18 +137,38 @@ class Source:
 
     @property
     def snr(self):
+        """float or None: signal-to-noise ratio, fluxfit / fluxerr.
+
+        None when the flux is missing or the uncertainty is zero/missing.
+        """
         if self.fluxfit is not None and self.fluxerr:
             return self.fluxfit / self.fluxerr
         return None
 
     @classmethod
     def from_row(cls, row, strict=False):
-        """Build from a dict, ignoring keys that are not Source fields.
+        """Build a Source from a dict, ignoring keys that are not fields.
 
-        With strict=True, every Source field must be present as a key in
-        row (except aid, which is derived from the merges association, not a
-        storage column). This turns a renamed or dropped storage column into
-        an immediate error instead of a silently-null alert field.
+        Parameters
+        ----------
+        row : dict
+            A ``sources`` row (column name -> value), typically with the
+            derived ``band`` key already added.
+        strict : bool, optional
+            If True, every Source field must be present as a key in `row`
+            (except `aid`, which is derived from the merges association,
+            not a storage column). This turns a renamed or dropped storage
+            column into an immediate error instead of a silently-null
+            alert field.
+
+        Returns
+        -------
+        Source
+
+        Raises
+        ------
+        KeyError
+            In strict mode, if an expected column is missing from `row`.
         """
         names = {f.name for f in dataclasses.fields(cls)}
         if strict:
@@ -156,10 +182,11 @@ class Source:
 
 @dataclass
 class ObjectRecord:
-    """Persistent astronomical object (DB `astroobjects_<field>` row equivalent).
+    """Persistent astronomical object (DB ``astroobjects_<field>`` row equivalent).
 
-    first_mjd / last_mjd / validity_mjd are filled in by assemble_alert()
-    from the source history before the diaObject record is built.
+    `first_mjd` / `last_mjd` / `validity_mjd` are filled in by
+    assemble_alert_for_source() from the source history before the
+    diaObject record is built (see `FILLED_LATER`).
     """
     aid: int
     ra0: float
@@ -176,16 +203,32 @@ class ObjectRecord:
 
     @classmethod
     def from_row(cls, row, strict=False):
-        """Build from a dict, ignoring keys that are not ObjectRecord
-        fields (a SELECT a.* row carries meanra, flux0, hp6, ...).
+        """Build an ObjectRecord from a dict, ignoring non-field keys.
 
-        With strict=True, every field except the FILLED_LATER ones must be
-        present in row. This turns a renamed/dropped storage column -- or
-        a column missing from a set-based prefetch SELECT list, the easy
-        one to forget -- into an immediate error instead of a silently
-        broken alert field. Used by both the batch and single-alert flows
-        of get_object_for_source(), so a new column is added in exactly
-        one place (here) plus the prefetch SELECT list.
+        (A ``SELECT a.*`` row carries meanra, flux0, hp6, ... -- those are
+        dropped.) Used by both the batch and single-alert flows of
+        get_object_for_source(), so a new column is added in exactly one
+        place (here) plus the prefetch SELECT list.
+
+        Parameters
+        ----------
+        row : dict
+            An ``astroobjects_<field>`` row (column name -> value).
+        strict : bool, optional
+            If True, every field except the `FILLED_LATER` ones must be
+            present in `row`. This turns a renamed/dropped storage column
+            -- or a column missing from a set-based prefetch SELECT list,
+            the easy one to forget -- into an immediate error instead of a
+            silently broken alert field.
+
+        Returns
+        -------
+        ObjectRecord
+
+        Raises
+        ------
+        KeyError
+            In strict mode, if an expected column is missing from `row`.
         """
         names = {f.name for f in dataclasses.fields(cls)}
         if strict:
@@ -201,7 +244,12 @@ class ObjectRecord:
 
 @dataclass
 class ForcedPhot:
-    """One forced-photometry measurement at an object position."""
+    """One forced-photometry measurement at an object position.
+
+    Staged for the diaForcedSource record; no provider fills it yet
+    (RAPID forced photometry writes lightcurve files, not DB rows), so
+    the record remains a stub end to end.
+    """
     forced_id: int
     aid: int
     expid: int
@@ -220,15 +268,18 @@ class Cutouts:
     """Raw FITS bytes for the three image stamps (any may be missing).
 
     Each non-None member is a complete little FITS file: parse with
-    fits.open(io.BytesIO(cutouts.difference)) or write it straight to
+    ``fits.open(io.BytesIO(cutouts.difference))`` or write it straight to
     disk for DS9."""
     difference: Optional[bytes] = None
     science: Optional[bytes] = None
     template: Optional[bytes] = None
 
     def __repr__(self):
-        # the default dataclass repr would dump ~80 kB of raw bytes per
-        # stamp into the terminal; summarize instead
+        """Summarize each stamp as its byte count.
+
+        The default dataclass repr would dump ~80 kB of raw bytes per
+        stamp into the terminal.
+        """
         parts = (f"{f.name}=<FITS clip, {len(v)} bytes>" if v is not None
                  else f"{f.name}=None"
                  for f in dataclasses.fields(self)
@@ -278,11 +329,24 @@ WCS_CARD_PREFIXES = (
 
 
 def load_fits_image(path):
-    """Return (pixels, header) of a FITS image: the first HDU that has
-    pixel data (primary for the pipeline products; Roman L2 cal files keep
-    the pixels in a SCI extension). (None, None) if the file is missing,
-    unreadable, or has no image HDU -- the alert then carries a null
-    cutout."""
+    """Load the pixels and header of a FITS image.
+
+    Reads the first HDU that has pixel data (primary for the pipeline
+    products; Roman L2 cal files keep the pixels in a SCI extension).
+
+    Parameters
+    ----------
+    path : str or None
+        Path to the FITS file. None short-circuits to a missing image.
+
+    Returns
+    -------
+    pixels : numpy.ndarray or None
+        The image data, or None if the file is missing, unreadable, or
+        has no image HDU -- the alert then carries a null cutout.
+    header : fitsio.header.FITSHDR or None
+        The matching header, None whenever `pixels` is None.
+    """
     if path is None:
         return None, None
     try:
@@ -297,16 +361,32 @@ def load_fits_image(path):
 
 
 def extract_stamp(image_data, x, y, header=None, half_width=STAMP_HALF_WIDTH):
-    """Cut a square stamp centered on pixel (x, y) out of a full image and
-    return it as the bytes of a small single-HDU FITS file (which is what
-    the alert cutout params carry). With the parent image's header, the
-    stamp carries the parent WCS with CRPIX shifted to the stamp frame
-    (also valid for edge stamps: the shift is pure translation, on- or
-    off-chip). Stamp pixels beyond the chip edge are set to
-    STAMP_FILL_VALUE.
+    """Cut a square stamp around a pixel position, as FITS-file bytes.
 
-    Returns None if there is no image, or if the stamp would not overlap
-    the chip at all.
+    The returned bytes are a small single-HDU FITS file, which is what the
+    alert cutout params carry. Stamp pixels beyond the chip edge are set
+    to STAMP_FILL_VALUE.
+
+    Parameters
+    ----------
+    image_data : numpy.ndarray or None
+        The full chip image.
+    x, y : float or None
+        1-based FITS pixel coordinates of the stamp center.
+    header : fitsio.header.FITSHDR, optional
+        The parent image's header. If given, the stamp carries the parent
+        WCS cards (see WCS_CARD_PREFIXES) with CRPIX shifted to the stamp
+        frame -- also valid for edge stamps: the shift is pure
+        translation, on- or off-chip.
+    half_width : int, optional
+        Half the stamp side; the stamp is ``2 * half_width + 1`` pixels
+        square.
+
+    Returns
+    -------
+    bytes or None
+        The stamp as a complete FITS file, or None if there is no image
+        or the stamp would not overlap the chip at all.
     """
     #TODO: should we include edge stamps or not? What strategy?
     if image_data is None or x is None or y is None:
@@ -383,20 +463,58 @@ CATALOG_FILE = None
 
 
 def parse_catalog(path):
-    """STUB. Parse the auxiliary source catalog at `path` and return
-    (rows, index) for position matching -- e.g. a table of catalog rows plus
-    a spatial index (cKDTree) over their (x, y) pixel positions -- or
-    (None, None) if the file is missing or empty. Port from
-    generate_alerts.py:parse_sextractor / load_psf_catalog."""
+    """Parse the auxiliary source catalog for position matching (STUB).
+
+    Port from generate_alerts.py:parse_sextractor / load_psf_catalog.
+
+    Parameters
+    ----------
+    path : str
+        Path to the staged catalog file.
+
+    Returns
+    -------
+    rows : object or None
+        Table of catalog rows, or None if the file is missing or empty.
+    index : object or None
+        Spatial index (e.g. a cKDTree) over the rows' (x, y) pixel
+        positions, for nearest-neighbour lookup.
+
+    Raises
+    ------
+    NotImplementedError
+        Always, until the catalog product is chosen and this is ported.
+    """
     raise NotImplementedError(
         "catalog parsing not implemented yet; port from "
         "add-alert-generation:alerts/roman_rapid_alerts/generate_alerts.py")
 
 
 def match_catalog_row(x, y, index, rows, radius=3.0):
-    """STUB. Return the catalog row nearest to pixel (x, y) within `radius`
-    pixels, or None if there is no match. Port from
-    generate_alerts.py:match_psf."""
+    """Find the catalog row nearest to a pixel position (STUB).
+
+    Port from generate_alerts.py:match_psf.
+
+    Parameters
+    ----------
+    x, y : float
+        Pixel position to match.
+    index, rows : object
+        The spatial index and row table from parse_catalog().
+    radius : float, optional
+        Maximum match distance in pixels.
+
+    Returns
+    -------
+    object or None
+        The nearest catalog row within `radius`, or None if there is no
+        match.
+
+    Raises
+    ------
+    NotImplementedError
+        Always, until the catalog product is chosen and this is ported.
+    """
     raise NotImplementedError(
         "catalog position matching not implemented yet")
 
@@ -427,11 +545,19 @@ class AlertDataProvider:
 
     def __init__(self, db, diff_flavor="sfft"):
         """
-        Args:
-            db: RAPIDDB instance (rapid.database.modules.utils.rapid_db).
-            diff_flavor: which differencing algorithm's image feeds
-                cutoutDifference ("sfft" or "zogy"). The detections
-                themselves always come from the sources table regardless.
+        Parameters
+        ----------
+        db : database.modules.utils.rapid_db.RAPIDDB
+            The database connection (anything exposing ``.conn.cursor()``).
+        diff_flavor : {"sfft", "zogy"}, optional
+            Which differencing algorithm's image feeds ``cutoutDifference``.
+            The detections themselves always come from the sources table
+            regardless.
+
+        Raises
+        ------
+        ValueError
+            If `diff_flavor` is not a known flavor.
         """
         if diff_flavor not in DIFF_FLAVORS:
             raise ValueError(f"diff_flavor must be one of "
@@ -461,7 +587,20 @@ class AlertDataProvider:
         self._catalog = (None, None)  # (rows, index) from parse_catalog
 
     def _query(self, sql, params=None):
-        """Run one query and return rows as {column_name: value} dicts."""
+        """Run one query on a short-lived cursor.
+
+        Parameters
+        ----------
+        sql : str
+            The query, with ``%s`` placeholders.
+        params : tuple or list, optional
+            Values for the placeholders.
+
+        Returns
+        -------
+        list of dict
+            One ``{column_name: value}`` dict per result row.
+        """
         cur = self.db.conn.cursor()
         try:
             cur.execute(sql, params)
@@ -471,11 +610,25 @@ class AlertDataProvider:
             cur.close()
 
     def _partition_exists(self, field):
-        """merges/astroobjects are per-field partition tables, and a chip
+        """Check that a field's merges/astroobjects partitions exist.
+
+        merges/astroobjects are per-field partition tables, and a chip
         near a field boundary can carry sources whose field's partitions
         were never created (seen live: pid 339271 -> merges_4686817).
         Sources there have no associations by construction; queries
-        against the missing table would abort the whole transaction."""
+        against the missing table would abort the whole transaction.
+
+        Parameters
+        ----------
+        field : int
+            Roman field identifier.
+
+        Returns
+        -------
+        bool
+            True if ``merges_<field>`` exists (a warning is logged when it
+            does not).
+        """
         rows = self._query("SELECT to_regclass(%s) AS reg",
                            (f"merges_{int(field)}",))
         exists = bool(rows) and rows[0]["reg"] is not None
@@ -486,8 +639,7 @@ class AlertDataProvider:
         return exists
 
     def resolve_pid(self, expid, sca):
-        """Map (exposure, SCA) to the difference-image processing ID to
-        alert on.
+        """Map (exposure, SCA) to the difference-image pid to alert on.
 
         One pid is one processing of one (exposure, SCA), but the mapping
         back is not unique: reprocessing campaigns leave several
@@ -498,6 +650,23 @@ class AlertDataProvider:
         TODO: remove this workaround once the database standards for
         vbest/reprocessing are settled; vbest > 0 should then identify
         exactly one row per (expid, sca).
+
+        Parameters
+        ----------
+        expid : int
+            Exposure identifier (diffimages.expid).
+        sca : int
+            SCA number, 1-18 (diffimages.sca).
+
+        Returns
+        -------
+        int
+            The newest vbest>0 diffimages.pid for the pair.
+
+        Raises
+        ------
+        ValueError
+            If no vbest>0 difference image exists for the pair.
         """
         rows = self._query("""
             SELECT pid FROM diffimages
@@ -515,9 +684,32 @@ class AlertDataProvider:
         return int(rows[0]["pid"])
 
     def get_detection(self, sid):
-        # sources row -> Source, column names matching attribute names.
-        # The filters join resolves the numeric fid to the band string
-        # ("F158", ...).
+        """Fetch one detection by source ID.
+
+        The sources row maps onto Source with column names matching
+        attribute names; the filters join resolves the numeric fid to the
+        band string ("F158", ...).
+
+        Parameters
+        ----------
+        sid : int
+            Source ID (sources.sid).
+
+        Returns
+        -------
+        Source
+            The detection, with `aid` still None -- assemble_alert_for_source()
+            fills it in after get_object_for_source() resolves the
+            association.
+
+        Raises
+        ------
+        ValueError
+            If no source with this ID exists.
+        KeyError
+            If the sources row is missing an expected column (renamed or
+            dropped in storage).
+        """
         rows = self._query("""
             SELECT s.*, f.filter AS filter_name, e.exptime
             FROM sources s
@@ -529,18 +721,29 @@ class AlertDataProvider:
             raise ValueError(f"Source {sid} not found")
         row = rows[0]
         row["band"] = row.get("filter_name")
-        # Source.aid stays None here; assemble_alert() fills it in after
-        # get_object_for_source() resolves the association. strict=True makes
-        # a renamed/dropped sources column an error, not a null alert field.
         source = Source.from_row(row, strict=True)
         self._crossref(source)
         return source
 
     def iter_sources(self, pid):
-        # One chip = one difference image = one diffimages.pid. Fetch every
-        # detection on it with a single query, then prefetch the association
-        # and history rows for all of them at once (a handful of set-based
-        # queries instead of ~3 queries per alert).
+        """Iterate over every detection on one difference image (chip).
+
+        One chip = one difference image = one diffimages.pid. Fetches
+        every detection on it with a single query, then prefetches the
+        association and history rows for all of them at once (a handful
+        of set-based queries instead of ~3 queries per alert); the
+        per-source get_* calls then answer from that prefetch.
+
+        Parameters
+        ----------
+        pid : int
+            Processing ID of the difference image (diffimages.pid).
+
+        Yields
+        ------
+        Source
+            Each detection on the chip, in sid order.
+        """
         rows = self._query("""
             SELECT s.*, f.filter AS filter_name, e.exptime
             FROM sources s
@@ -559,8 +762,23 @@ class AlertDataProvider:
         yield from sources
 
     def _prefetch_chip(self, pid, sources, window_days=PRV_WINDOW_DAYS):
-        """Load the object associations and detection histories for a whole
-        chip into memory, so the per-source get_* calls don't hit the DB."""
+        """Load a whole chip's associations and histories into memory.
+
+        After this, the per-source get_* calls answer from memory instead
+        of hitting the DB, for as long as the queried source's pid matches
+        the prefetched chip.
+
+        Parameters
+        ----------
+        pid : int
+            Processing ID of the chip (diffimages.pid).
+        sources : list of Source
+            Every detection on the chip (from iter_sources()).
+        window_days : float, optional
+            Look-back window for detection histories. The prefetch cutoff
+            uses the earliest trigger on the chip; each
+            get_prv_detections() call then tightens it to its own trigger.
+        """
         objects_by_sid = {}
         history_by_aid = {}
         # merges/astroobjects are partitioned by Roman field, and sources
@@ -608,6 +826,26 @@ class AlertDataProvider:
         self._chip_window_days = window_days
 
     def get_object_for_source(self, detection):
+        """Resolve a detection's persistent-object association.
+
+        The merges/astroobjects tables are partitioned by Roman field, so
+        the detection's field number selects which pair to query:
+        ``merges_<field>`` links the sid to its persistent object (aid),
+        ``astroobjects_<field>`` supplies the object summary itself.
+
+        Parameters
+        ----------
+        detection : Source
+            The detection to resolve.
+
+        Returns
+        -------
+        ObjectRecord or None
+            A fresh ObjectRecord each call (assemble_alert_for_source()
+            fills in the first/last/validity MJDs, and two sources on the
+            same chip may share an object), or None for an unassociated
+            detection -- the alert then has no diaObject.
+        """
         # Batch flow: after iter_sources(pid), every association for the
         # chip is already in memory. An sid absent from the prefetch means
         # "no associated object" -- no fallback query needed.
@@ -615,19 +853,12 @@ class AlertDataProvider:
             row = self._chip_objects.get(detection.sid)
             if row is None:
                 return None
-            # Build a fresh ObjectRecord each time: assemble_alert() fills
-            # in the first/last/validity MJDs, and two sources on the same
-            # chip may share an object.
             return ObjectRecord.from_row(row, strict=True)
 
         # Single-alert flow: query for just this sid.
-        # The merges/astroobjects tables are partitioned by Roman field, so
-        # the detection's field number selects which pair to query.
         field = int(detection.field)
         if not self._partition_exists(field):
             return None  # no partition -> no association possible
-        # merges_<field> links this sid to its persistent object (aid);
-        # astroobjects_<field> supplies the object summary itself.
         rows = self._query(f"""
             SELECT m.aid, a.*
             FROM merges_{field} m
@@ -642,6 +873,28 @@ class AlertDataProvider:
         return ObjectRecord.from_row(rows[0], strict=True)
 
     def get_prv_detections(self, detection, obj, window_days=PRV_WINDOW_DAYS):
+        """Fetch an object's other detections before the trigger.
+
+        ``merges_<field>`` gathers every sid associated with the object,
+        minus the trigger itself, restricted to the look-back window
+        before the triggering detection. These become the alert's
+        prvDiaSources.
+
+        Parameters
+        ----------
+        detection : Source
+            The triggering detection.
+        obj : ObjectRecord
+            The object the trigger is associated with.
+        window_days : float, optional
+            Look-back window before the trigger's mjdobs.
+
+        Returns
+        -------
+        list of Source
+            The object's previous detections, oldest first; empty when
+            there are none (or the field has no partition tables).
+        """
         # Batch flow: filter this object's prefetched history down to this
         # trigger's window. Only usable when the prefetch covered at least
         # as long a look-back window as requested.
@@ -652,11 +905,7 @@ class AlertDataProvider:
                     if s.sid != detection.sid and s.mjdobs >= cutoff]
 
         # Single-alert flow: same sources -> Source mapping as
-        # get_detection(), but selecting
-        # the object's other detections: merges_<field> gathers every sid
-        # associated with this aid, minus the trigger itself, restricted to
-        # the look-back window before the triggering detection. These become
-        # the alert's prvDiaSources (oldest first).
+        # get_detection(), but selecting the object's other detections.
         field = int(detection.field)
         if not self._partition_exists(field):
             return []  # no partition -> no recorded history
@@ -678,10 +927,25 @@ class AlertDataProvider:
         return detections
 
     def get_forced_photometry(self, detection, obj):
-        # Forced photometry in RAPID produces FITS files, not DB records;
-        # integration with alert packets is not yet implemented. Log once
-        # per provider, not once per source -- a batch run reaches here
-        # tens of thousands of times.
+        """Fetch the forced-photometry history at an object position (STUB).
+
+        Forced photometry in RAPID produces FITS files, not DB records;
+        integration with alert packets is not yet implemented.
+
+        Parameters
+        ----------
+        detection : Source
+            The triggering detection.
+        obj : ObjectRecord
+            The object whose position the photometry was forced at.
+
+        Returns
+        -------
+        list of ForcedPhot
+            Always empty for now, so prvDiaForcedSources serializes null.
+        """
+        # Log once per provider, not once per source -- a batch run
+        # reaches here tens of thousands of times.
         if not self._forced_phot_logged:
             logger.info(
                 "Forced photometry not yet available for alert assembly")
@@ -689,11 +953,25 @@ class AlertDataProvider:
         return []
 
     def get_cutouts(self, detection):
-        # Cutouts are generated on the fly: stamps sliced out of the chip's
-        # full difference/science/template images at the source position
-        # (one shared pixel grid; see DIFF_FLAVORS/CUTOUT_FILES). The
-        # images are loaded once per chip and reused for every source on
-        # it, in both the batch and single-alert flows.
+        """Cut the three image stamps around a detection's position.
+
+        Cutouts are generated on the fly: stamps sliced out of the chip's
+        full difference/science/template images at the source position
+        (one shared pixel grid; see DIFF_FLAVORS/CUTOUT_FILES). The
+        images are loaded once per chip and reused for every source on
+        it, in both the batch and single-alert flows.
+
+        Parameters
+        ----------
+        detection : Source
+            The detection to cut stamps around.
+
+        Returns
+        -------
+        Cutouts
+            The three stamps as FITS bytes; any stamp whose image is
+            missing, unreadable, or off-grid is None.
+        """
         images = self._chip_images(detection.pid)
         # sources.xfit/yfit are 0-based (photutils PSF-fit convention);
         # extract_stamp takes 1-based FITS pixel coordinates. Verified
@@ -708,10 +986,20 @@ class AlertDataProvider:
                        template=stamps["ref"])
 
     def _stage(self, url):
-        """Make one image available locally, downloading s3:// URLs into
-        the staging directory (plain paths pass through). Returns the local
-        path, or None if the download failed -- that image's cutouts are
-        then null."""
+        """Make one product file available locally.
+
+        Parameters
+        ----------
+        url : str
+            An ``s3://`` URL (downloaded into the staging directory) or a
+            plain path (passed through untouched).
+
+        Returns
+        -------
+        str or None
+            The local path, or None if the download failed -- that
+            image's cutouts are then null.
+        """
         if not url.startswith("s3://"):
             return url
         parts = urlparse(url)
@@ -726,12 +1014,26 @@ class AlertDataProvider:
             return None
 
     def _chip_images(self, pid):
-        """Return the chip's {"diff", "sci", "ref"} (pixels, header) pairs,
-        staging and loading them on first use. diffimages.filename locates
-        the job directory; the three cutout images are the co-gridded
-        products in it (the DB's own diff filename is replaced by the
-        diff_flavor one). A missing/unreadable file loads as (None, None),
-        which extract_stamp() turns into a null cutout."""
+        """Load (and cache) the chip's three full cutout-source images.
+
+        diffimages.filename locates the job directory; the three cutout
+        images are the co-gridded products in it (the DB's own diff
+        filename is replaced by the diff_flavor one). Staged and loaded
+        on first use, held until a different chip is asked for.
+
+        Parameters
+        ----------
+        pid : int
+            Processing ID of the chip (diffimages.pid).
+
+        Returns
+        -------
+        dict
+            ``{"diff" | "sci" | "ref": (pixels, header)}``. A
+            missing/unreadable file loads as (None, None), which
+            extract_stamp() turns into a null cutout; a missing
+            diffimages row yields an empty dict.
+        """
         if self._images_pid == pid:
             return self._images
 
@@ -754,11 +1056,19 @@ class AlertDataProvider:
         return self._images
 
     def _check_grids_match(self, pid):
-        """Cutout positions assume the three images share one pixel grid.
+        """Drop loaded images whose pixel grid differs from the diff image.
+
+        Cutout positions assume the three images share one pixel grid.
         Verify it from the loaded WCS headers and drop (null) any image on
         a different grid rather than emit a cutout of the wrong sky
         position. Tolerances allow the header-writing rounding differences
-        between the products (~1e-10 deg)."""
+        between the products (~1e-10 deg).
+
+        Parameters
+        ----------
+        pid : int
+            Processing ID of the chip, for the warning message only.
+        """
         _, diff_header = self._images.get("diff", (None, None))
         if diff_header is None:
             return
@@ -784,12 +1094,26 @@ class AlertDataProvider:
     # -- Auxiliary-catalog cross-reference ---------------------------------
 
     def _load_catalog(self, pid):
-        """(rows, index) for this chip's auxiliary source catalog, staged and
-        parsed once per pid -- same lifetime as _images. Returns (None, None)
-        when cross-referencing is not wired up yet (CATALOG_FILE unset) or the
-        diffimages row / catalog file is missing, so _crossref() degrades to a
-        no-op (the null-cutout ladder). While CATALOG_FILE is None this
-        short-circuits before any query or stage."""
+        """Load (and cache) the chip's auxiliary source catalog.
+
+        Staged and parsed once per pid -- same lifetime as _images. While
+        CATALOG_FILE is None this short-circuits before any query or
+        stage.
+
+        Parameters
+        ----------
+        pid : int
+            Processing ID of the chip (diffimages.pid).
+
+        Returns
+        -------
+        rows : object or None
+        index : object or None
+            The pair from parse_catalog(), or (None, None) when
+            cross-referencing is not wired up yet (CATALOG_FILE unset) or
+            the diffimages row / catalog file is missing -- _crossref()
+            then degrades to a no-op (the null-cutout ladder).
+        """
         if self._catalog_pid == pid:
             return self._catalog
         self._catalog = (None, None)
@@ -809,17 +1133,24 @@ class AlertDataProvider:
         return self._catalog
 
     def _crossref(self, source):
-        """Cross-reference `source` against the chip's auxiliary source
-        catalog by position and pull extra per-source fields (apFlux, shape
-        moments, elong, raErr/decErr, ...) onto it. A no-op when the catalog
-        or a matching row is unavailable, so a source with no catalog
-        counterpart still yields a valid (stub-null) alert.
+        """Pull auxiliary-catalog fields onto a source by position match.
 
-        The attribute assignments are intentionally left as a TODO: they land
-        in lockstep with (a) new optional fields on Source and (b) flipping
-        the matching params to IMPLEMENTED in param_registry.py. See
-        generate_alerts.py:build_alert for a field->column mapping and the
-        FILTER_ZP_EFF nJy calibration.
+        Cross-references `source` against the chip's auxiliary source
+        catalog and would pull extra per-source fields (apFlux, shape
+        moments, elong, raErr/decErr, ...) onto it. A no-op when the
+        catalog or a matching row is unavailable, so a source with no
+        catalog counterpart still yields a valid (stub-null) alert.
+
+        The attribute assignments are intentionally left as a TODO: they
+        land in lockstep with (a) new optional fields on Source and (b)
+        flipping the matching params to IMPLEMENTED in param_registry.py.
+        See generate_alerts.py:build_alert for a field->column mapping and
+        the FILTER_ZP_EFF nJy calibration.
+
+        Parameters
+        ----------
+        source : Source
+            The detection to enrich, modified in place (once implemented).
         """
         rows, index = self._load_catalog(source.pid)
         if rows is None:

@@ -22,12 +22,12 @@ import io
 import fastavro
 import pytest
 
-from rapid_alerts.gen_schema import generate
-from rapid_alerts.param_registry import RECORDS, VERSION, Status
-from rapid_alerts.produce import (assemble_alert, build_dia_source,
+from alerts.gen_schema import generate
+from alerts.param_registry import RECORDS, VERSION, Status
+from alerts.produce import (assemble_alert, build_dia_source,
                                   build_dia_forced_source, load_schema,
                                   serialize_alert)
-from rapid_alerts.providers import (Cutouts, ForcedPhot,
+from alerts.providers import (Cutouts, ForcedPhot,
                                     ObjectRecord, Source)
 
 

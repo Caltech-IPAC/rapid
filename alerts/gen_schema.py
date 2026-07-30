@@ -10,9 +10,9 @@ Note: the generated files contain a "fields" array -- that token is Avro's,
 even though this codebase calls schema fields "params".
 
 Usage:
-    python -m rapid_alerts.gen_schema              # write current VERSION
-    python -m rapid_alerts.gen_schema 01.02        # write a new version
-    python -m rapid_alerts.gen_schema --check      # compare, don't write
+    python -m alerts.gen_schema              # write current VERSION
+    python -m alerts.gen_schema 01.02        # write a new version
+    python -m alerts.gen_schema --check      # compare, don't write
 """
 
 import argparse
@@ -21,13 +21,40 @@ import json
 import sys
 from pathlib import Path
 
-from .param_registry import RECORDS, VERSION, Status, is_nullable
+# Support both `python -m alerts.gen_schema` (module) and
+# `python gen_schema.py` (script), like cli.py.
+if __package__:
+    from .param_registry import RECORDS, VERSION, Status, is_nullable
+else:
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+    from alerts.param_registry import (RECORDS, VERSION, Status,
+                                       is_nullable)
 
-SCHEMA_ROOT = Path(__file__).resolve().parent.parent / "schema"
+SCHEMA_ROOT = Path(__file__).resolve().parent / "schema"
 
 
 def _resolve_type(avro_type, namespace):
-    """Expand "@record" references to namespace-qualified names."""
+    """Expand ``"@record"`` references to namespace-qualified names.
+
+    Parameters
+    ----------
+    avro_type : str or list or dict
+        Version-independent Avro type spec from the registry: a type name
+        (possibly ``"@record"``-style), a union list, or an array dict.
+    namespace : str
+        Schema namespace, e.g. ``"rapid.v01_01"``.
+
+    Returns
+    -------
+    str or list or dict
+        The same structure with every ``"@name"`` replaced by
+        ``"<namespace>.<name>"``.
+
+    Raises
+    ------
+    TypeError
+        If `avro_type` is not a str, list, or dict.
+    """
     if isinstance(avro_type, str):
         if avro_type.startswith("@"):
             return f"{namespace}.{avro_type[1:]}"
@@ -41,7 +68,23 @@ def _resolve_type(avro_type, namespace):
 
 
 def record_schema(record, version, namespace):
-    """Build the Avro schema dict for one registry record."""
+    """Build the Avro schema dict for one registry record.
+
+    Parameters
+    ----------
+    record : param_registry.Record
+        The record declaration to translate.
+    version : str
+        Schema version string written into the schema, e.g. ``"01.01"``.
+    namespace : str
+        Schema namespace, e.g. ``"rapid.v01_01"``.
+
+    Returns
+    -------
+    dict
+        The record's Avro schema, ready to be JSON-serialized as an
+        ``.avsc`` file. Params with status NOT_USED are excluded.
+    """
     avro_fields = []  # "fields" is the Avro spec's name for what we call params
     for p in record.params:
         if p.status is Status.NOT_USED:
@@ -64,11 +107,24 @@ def record_schema(record, version, namespace):
 def schema_problems(version=VERSION, schema_root=SCHEMA_ROOT):
     """Compare the on-disk .avsc files for a version against the registry.
 
-    Returns a list of problem strings, empty when everything is in sync.
     produce.load_schema() calls this so that stale files fail at load time
     with a clear message instead of a cryptic fastavro error (or a silently
-    mis-filled alert) at serialization time. --check prints full diffs and
-    stays the tool for humans; this is the cheap programmatic answer.
+    mis-filled alert) at serialization time. ``--check`` prints full diffs
+    and stays the tool for humans; this is the cheap programmatic answer.
+
+    Parameters
+    ----------
+    version : str, optional
+        Schema version to check. Defaults to the registry VERSION.
+    schema_root : str or pathlib.Path, optional
+        Directory holding ``<major>/<minor>/*.avsc`` and ``latest.txt``.
+
+    Returns
+    -------
+    list of str
+        One human-readable problem per missing or differing file (and for
+        a ``latest.txt`` that points at a different version); empty when
+        everything is in sync.
     """
     major, minor = version.split(".")
     namespace = f"rapid.v{major}_{minor}"
@@ -93,9 +149,24 @@ def schema_problems(version=VERSION, schema_root=SCHEMA_ROOT):
 
 
 def generate(version=VERSION, schema_root=SCHEMA_ROOT, check=False):
-    """Write (or with check=True, verify) the .avsc files for a version.
+    """Write (or with ``check=True``, verify) the .avsc files for a version.
 
-    Returns True if all files are up to date / were written successfully.
+    Parameters
+    ----------
+    version : str, optional
+        Schema version to write or check. Defaults to the registry VERSION.
+    schema_root : str or pathlib.Path, optional
+        Directory holding ``<major>/<minor>/*.avsc`` and ``latest.txt``.
+    check : bool, optional
+        If True, compare the existing files against the registry and print
+        per-file results (with diffs) instead of writing anything. If False
+        (the default), write the .avsc files and update ``latest.txt``.
+
+    Returns
+    -------
+    bool
+        True if all files are up to date (check mode) or were written
+        (write mode); False if check mode found missing/differing files.
     """
     major, minor = version.split(".")
     namespace = f"rapid.v{major}_{minor}"
@@ -136,6 +207,18 @@ def generate(version=VERSION, schema_root=SCHEMA_ROOT, check=False):
 
 
 def main(argv=None):
+    """Run schema generation (or --check) from the command line.
+
+    Parameters
+    ----------
+    argv : list of str, optional
+        Command-line arguments. None (the default) means ``sys.argv[1:]``.
+
+    Returns
+    -------
+    int
+        Process exit status: 0 on success, 1 if ``--check`` found problems.
+    """
     parser = argparse.ArgumentParser(
         description="Generate RAPID .avsc schema files from param_registry.py")
     parser.add_argument("version", nargs="?", default=VERSION,

@@ -61,7 +61,7 @@ import tempfile
 import time
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from benchmark import TimingLog, collect_meta, percentile, _mib
@@ -626,7 +626,7 @@ def main(argv=None):
         parser.error(f"--batches must be comma-separated integers, "
                      f"not {args.batches!r}")
 
-    from rapid_alerts.cli import make_provider
+    from alerts.cli import make_provider
     provider = make_provider()
     pid = (args.pid if args.pid is not None
            else provider.resolve_pid(args.exposure, args.sca))

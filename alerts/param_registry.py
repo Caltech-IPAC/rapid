@@ -12,7 +12,7 @@ Every param of every record in the alert packet is declared here once, with:
   - avro type + doc     -> gen_schema.py writes the .avsc files from these
   - status + source     -> the implemented/stub inventory; enforced by
                            produce.py (see Status below). Print it with:
-                           python -m rapid_alerts.param_registry [--summary]
+                           python -m alerts.param_registry [--summary]
   - attr / getter       -> how produce.py reads the value from the normalized
                            record (providers.Source etc.). Most params just
                            name an attribute via attr (default: the param's own
@@ -45,11 +45,18 @@ ROMAN_FILTERS = ["F062", "F087", "F106", "F129", "F146", "F158", "F184", "F213"]
 
 
 class Status(Enum):
-    # Statuses are enforced by produce.py, not just reported:
-    #   IMPLEMENTED: value is read from the record; an error or a None in a
-    #                non-nullable parameter raises instead of serializing null
-    #   STUB:        always serialized as null, even if attr/getter is staged
-    #   NOT_USED:    excluded from the .avsc schema and from built records
+    """Implementation status of a param, enforced by produce.py.
+
+    Statuses are enforced when records are built, not just reported:
+
+    IMPLEMENTED
+        Value is read from the normalized record; an error or a None in a
+        non-nullable param raises instead of serializing null.
+    STUB
+        Always serialized as null, even if attr/getter is staged.
+    NOT_USED
+        Excluded from the .avsc schema and from built records entirely.
+    """
     IMPLEMENTED = "implemented"
     STUB = "stub"
     NOT_USED = "not used"
@@ -57,26 +64,73 @@ class Status(Enum):
 
 @dataclass(frozen=True)
 class Param:
+    """Declaration of one alert-schema param (one Avro field).
+
+    Attributes
+    ----------
+    name : str
+        Param name as it appears in the .avsc schema and on the wire.
+    avro : str or list or dict
+        Version-independent Avro type: a type name, a union list (a leading
+        "null" makes the param nullable), or an array dict. A leading "@"
+        marks a reference to another record in this schema.
+    doc : str
+        The "doc" string written into the .avsc schema.
+    status : Status
+        Implementation status; see :class:`Status` for how each value is
+        enforced by produce.py.
+    source : str, optional
+        For IMPLEMENTED params, where the value comes from (e.g. the DB
+        column); for stubs, what work would fill it in. Report-only.
+    attr : str, optional
+        Attribute read from the normalized record (providers.Source etc.).
+        Defaults to `name`. Checked against the record class when
+        produce.py is imported.
+    getter : callable, optional
+        Escape hatch for computed values: called with the normalized record,
+        overrides `attr`.
+    """
     name: str
-    avro: Any                     # Avro type (str, union list, or dict)
+    avro: Any
     doc: str
     status: Status
-    source: Optional[str] = None  # implemented: where the value comes from
-                                  # stub: what work would fill it in
-    attr: Optional[str] = None    # attribute read from the normalized record
-                                  # (providers.Source etc.); default: name
-    getter: Optional[Callable] = None  # computed values; overrides attr
+    source: Optional[str] = None
+    attr: Optional[str] = None
+    getter: Optional[Callable] = None
 
 
 @dataclass(frozen=True)
 class Record:
+    """One record of the alert packet: a named group of params.
+
+    Attributes
+    ----------
+    name : str
+        Record name in the schema namespace (e.g. "diaSource").
+    doc : str
+        The "doc" string written into the record's .avsc schema.
+    params : tuple of Param
+        The record's params, in wire order.
+    """
     name: str
     doc: str
     params: tuple
 
 
 def is_nullable(avro_type):
-    """True if the Avro type is a union whose first member is null."""
+    """Report whether an Avro type spec is nullable.
+
+    Parameters
+    ----------
+    avro_type : str or list or dict
+        Version-independent Avro type spec from a :class:`Param`.
+
+    Returns
+    -------
+    bool
+        True if the type is a union whose first member is "null" (such
+        params get ``"default": null`` in the .avsc schema).
+    """
     return isinstance(avro_type, list) and bool(avro_type) and avro_type[0] == "null"
 
 
@@ -340,7 +394,14 @@ DIA_FORCED_SOURCE_PARAMS = (
 # ---------------------------------------------------------------------------
 
 def _per_filter_flux_params():
-    """The 8 filters x 8 statistics block of diaObject params."""
+    """Build the 8 filters x 8 statistics block of diaObject params.
+
+    Returns
+    -------
+    tuple of Param
+        One param per (Roman filter, flux statistic) pair, all stubs until
+        nJy flux calibration is available.
+    """
     src = ("per-filter statistics over associated sources; needs nJy flux "
            "calibration (see roman_rapid_alerts FILTER_ZP_EFF)")
     params = []
@@ -522,11 +583,18 @@ RECORDS = (
 
 
 # ---------------------------------------------------------------------------
-# Status report: python -m rapid_alerts.param_registry [--summary]
+# Status report: python -m alerts.param_registry [--summary]
 # ---------------------------------------------------------------------------
 
 def print_report(summary=False):
-    """Print the implemented/stub status of every param, per record."""
+    """Print the implemented/stub status of every param, per record.
+
+    Parameters
+    ----------
+    summary : bool, optional
+        If True, print only the per-record counts; if False (the default),
+        also list every param with its status mark and source.
+    """
     mark = {IMPLEMENTED: "x", STUB: " ", NOT_USED: "-"}
     total_implemented = total_stub = 0
 
