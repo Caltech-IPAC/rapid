@@ -53,23 +53,35 @@ GRANT USAGE ON SEQUENCE sources_sid_seq TO rapidporole;
 REVOKE ALL ON TABLE astroobjects FROM rapidreadrole;
 GRANT SELECT ON TABLE astroobjects TO GROUP rapidreadrole;
 
-REVOKE ALL ON SEQUENCE astroobjects_aid_seq FROM rapidreadrole;
-
 -- rapidadminrole
 
 REVOKE ALL ON TABLE astroobjects FROM rapidadminrole;
 GRANT ALL ON TABLE astroobjects TO GROUP rapidadminrole;
-
-REVOKE ALL ON SEQUENCE astroobjects_aid_seq FROM rapidadminrole;
-GRANT ALL ON SEQUENCE astroobjects_aid_seq TO GROUP rapidadminrole;
 
 -- rapidporole
 
 REVOKE ALL ON TABLE astroobjects FROM rapidporole;
 GRANT INSERT,UPDATE,SELECT,DELETE,TRUNCATE,TRIGGER,REFERENCES ON TABLE astroobjects TO rapidporole;
 
-REVOKE ALL ON SEQUENCE astroobjects_aid_seq FROM rapidporole;
-GRANT USAGE ON SEQUENCE astroobjects_aid_seq TO rapidporole;
+
+-------------------
+-- AstroObjectsMeta table
+-------------------
+
+-- rapidreadrole
+
+REVOKE ALL ON TABLE astroobjectsmeta FROM rapidreadrole;
+GRANT SELECT ON TABLE astroobjectsmeta TO GROUP rapidreadrole;
+
+-- rapidadminrole
+
+REVOKE ALL ON TABLE astroobjectsmeta FROM rapidadminrole;
+GRANT ALL ON TABLE astroobjectsmeta TO GROUP rapidadminrole;
+
+-- rapidporole
+
+REVOKE ALL ON TABLE astroobjectsmeta FROM rapidporole;
+GRANT INSERT,UPDATE,SELECT,DELETE,TRUNCATE,TRIGGER,REFERENCES ON TABLE astroobjectsmeta TO rapidporole;
 
 
 -------------------

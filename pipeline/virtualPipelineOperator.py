@@ -470,6 +470,8 @@ if __name__ == '__main__':
 
         # Register metadata from reference-image pipelines into operations database.
 
+        os.environ['MAKEREFIMAGESFLAG'] = "True"
+
         ppid_refimage = look_up_ppid_of_job_type(job_type)
         print("ppid_refimage =",ppid_refimage)
         os.environ['PIPEID'] = str(ppid_refimage)          # Required by register_reference_image_pipeline_jobs_code, which

@@ -1,7 +1,6 @@
 '''
 Load into database sources table the PSF-fit catalogs made by the
-Python photutils package from the SFFT difference images
-(until a final decision on which image-differencing method is best):
+Python photutils package from the SFFT difference images.
 '''
 
 import boto3
@@ -14,6 +13,7 @@ from datetime import datetime, timezone
 from dateutil import tz
 import time
 from concurrent.futures import ProcessPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor
 to_zone = tz.gettz('America/Los_Angeles')
 
 import database.modules.utils.rapid_db as db
@@ -44,7 +44,7 @@ start_time_benchmark_at_start = start_time_benchmark
 
 # Compute processing datetime (UT) and processing datetime (Pacific time).
 
-datetime_utc_now = datetime.utcnow()
+datetime_utc_now = datetime.now(timezone.utc)
 proc_utc_datetime = datetime_utc_now.strftime('%Y-%m-%dT%H:%M:%SZ')
 datetime_pt_now = datetime_utc_now.replace(tzinfo=timezone.utc).astimezone(tz=to_zone)
 proc_pt_datetime_started = datetime_pt_now.strftime('%Y-%m-%dT%H:%M:%S PT')
@@ -144,7 +144,7 @@ naxis2 = int(config_input['INSTRUMENT']['naxis2_sciimage'])
 ppid = int(config_input['SCI_IMAGE']['ppid'])
 
 
-# Open database connections for parallel access.
+# Get number of cores for parallel processing.
 
 num_cores = os.getenv('NUM_CORES')
 
@@ -154,17 +154,6 @@ else:
     num_cores = int(num_cores)
 
 print("num_cores =",num_cores)
-
-dbh_list = []
-
-for i in range(num_cores):
-
-    dbh = db.RAPIDDB()
-
-    if dbh.exit_code >= 64:
-        exit(dbh.exit_code)
-
-    dbh_list.append(dbh)
 
 
 # Get S3 client.
@@ -242,28 +231,42 @@ def run_single_core_job(jids,overlapping_fields_list,meta_list,negative_diffimg_
         fh = open(thread_work_file, 'w', encoding="utf-8")
     except:
         print(f"*** Error: Could not open output file {thread_work_file}; quitting...")
-        exit(64)
+        raise RuntimeError(f"*** Error: Could not open output file {thread_work_file}; quitting...")
 
-    dbh = dbh_list[index_thread]
+
+    # Open database connection.
+
+    dbh = db.RAPIDDB()
+
+    if dbh.exit_code >= 64:
+        fh.write(f"*** Error opening database connection (dbh.exit_code={dbh.exit_code}); quitting...\n")
+        fh.flush()
+        raise RuntimeError(f"*** Error opening database connection (dbh.exit_code={dbh.exit_code}); quitting...\n")
+
 
     fh.write(f"\nStart of run_single_core_job: index_thread={index_thread}, dbh={dbh}\n")
+    fh.write(f"negative_diffimg_flag = {negative_diffimg_flag}\n")
 
-    for index_job in range(njobs):
+    my_jobs = list(range(index_thread, njobs, num_cores))
+    for index_job in my_jobs:
 
         index_core = index_job % num_cores
-        if index_thread != index_core:
+        if index_thread != index_core:              # Always False since my_jobs has been partitioned
+                                                    # up front to eliminate iteration over all jobs.
             continue
 
         jid = jids[index_job]
         overlapping_fields = overlapping_fields_list[index_job]
         meta_dict = meta_list[index_job]
 
+        fh.write(f"Loop start: index_job,jid,overlapping_fields = {index_job},{jid},{overlapping_fields}\n")
+
         jid_from_dict = meta_dict["jid"]
 
         if jid != jid_from_dict:
             fh.write(f"*** Error: jid is not equal to jid from meta dictionary; quitting...\n")
             fh.flush()
-            exit(64)
+            raise RuntimeError(f"*** Error: jid is not equal to jid from meta dictionary; quitting...\n")
 
         expid = meta_dict["expid"]
         sca = meta_dict["sca"]
@@ -275,9 +278,6 @@ def run_single_core_job(jids,overlapping_fields_list,meta_list,negative_diffimg_
         pid = meta_dict["pid"]
 
 
-        fh.write(f"Loop start: index_job,jid,overlapping_fields = {index_job},{jid},{overlapping_fields}\n")
-
-
         # Check whether done file exists in S3 bucket for job, and skip if it exists.
         # This is done by attempting to download the done file.  Regardless the sub
         # always returns the filename and subdirs by parsing the s3_full_name.
@@ -286,36 +286,47 @@ def run_single_core_job(jids,overlapping_fields_list,meta_list,negative_diffimg_
         done_filename,subdirs_done,downloaded_from_bucket = util.download_file_from_s3_bucket(s3_client,s3_full_name_done_file)
 
         if do_done_check and downloaded_from_bucket:
+            os.remove(done_filename)
             fh.write("*** Warning: Done file exists ({}); skipping...\n".format(done_filename))
             fh.flush()
             continue
 
 
-        # Download SFFT-difference-image PSF-fit catalog file from S3 bucket.
+        # Parallel S3-bucket downloads:
+        # 1. SFFT-difference-image PSF-fit catalog file
+        # 2. SFFT-difference-image PSF-fit finder catalog file
+        #
+        # dl_executor returns tuples.  E.g.,
+        # ret_psfcat = ('sfftdiffimage_masked_psfcat_jid130875.txt', '20260722/jid130875', True)
+        # ret_finder = ('sfftdiffimage_masked_psfcat_finder_jid130875.txt', '20260722/jid130875', True)
 
         output_psfcat_filename_for_jid = output_psfcat_filename_to_use.replace(".txt",f"_jid{jid}.txt")
 
         s3_full_name_psfcat_file = "s3://" + product_s3_bucket_base + "/" + proc_date + '/jid' + str(jid) + "/" +  output_psfcat_filename_to_use
-        ret_filename,subdirs_done,downloaded_from_bucket = util.download_file_from_s3_bucket(s3_client,
-                                                                                             s3_full_name_psfcat_file,
-                                                                                             output_psfcat_filename_for_jid)
-
-        if not downloaded_from_bucket:
-            fh.write("*** Warning: PSF-fit catalog file does not exist ({}); skipping...\n".format(output_psfcat_filename_to_use))
-            fh.flush()
-            continue
-
-
-        # Download SFFT-difference-image PSF-fit finder catalog file from S3 bucket.
 
         output_psfcat_finder_filename_for_jid = output_psfcat_finder_filename_to_use.replace(".txt",f"_jid{jid}.txt")
 
         s3_full_name_psfcat_finder_file = "s3://" + product_s3_bucket_base + "/" + proc_date + '/jid' + str(jid) + "/" +  output_psfcat_finder_filename_to_use
-        ret_filename,subdirs_done,downloaded_from_bucket = util.download_file_from_s3_bucket(s3_client,
-                                                                                             s3_full_name_psfcat_finder_file,
-                                                                                             output_psfcat_finder_filename_for_jid)
 
-        if not downloaded_from_bucket:
+        with ThreadPoolExecutor(max_workers=2) as dl_executor:
+            future_psfcat = dl_executor.submit(util.download_file_from_s3_bucket, s3_client, s3_full_name_psfcat_file, output_psfcat_filename_for_jid)
+            future_finder = dl_executor.submit(util.download_file_from_s3_bucket, s3_client, s3_full_name_psfcat_finder_file, output_psfcat_finder_filename_for_jid)
+
+        ret_psfcat = future_psfcat.result()
+        ret_finder = future_finder.result()
+
+        fh.write(f"ret_psfcat = {ret_psfcat}\n")
+        fh.write(f"ret_finder = {ret_finder}\n")
+
+        downloaded_from_bucket_psfcat = ret_psfcat[2]
+        downloaded_from_bucket_finder = ret_finder[2]
+
+        if not downloaded_from_bucket_psfcat:
+            fh.write("*** Warning: PSF-fit catalog file does not exist ({}); skipping...\n".format(output_psfcat_filename_to_use))
+            fh.flush()
+            continue
+
+        if not downloaded_from_bucket_finder:
             fh.write("*** Warning: PSF-fit finder catalog file does not exist ({}); skipping...\n".format(output_psfcat_finder_filename_to_use))
             fh.flush()
             continue
@@ -332,9 +343,18 @@ def run_single_core_job(jids,overlapping_fields_list,meta_list,negative_diffimg_
         fh.write(f"nrows in PSF-fit catalog = {nrows}\n")
 
 
+        # Vectorize hp.ang2pix calls.
+
+        ra_arr = np.array(joined_table_inner['ra'], dtype=np.float64)
+        dec_arr = np.array(joined_table_inner['dec'], dtype=np.float64)
+
+        hp6_arr = hp.ang2pix(nside6, ra_arr, dec_arr, nest=True, lonlat=True)
+        hp9_arr = hp.ang2pix(nside9, ra_arr, dec_arr, nest=True, lonlat=True)
+
+
         # Here are what the columns in the photutils catalogs are called:
         # Main: id group_id group_size local_bkg x_init y_init flux_init x_fit y_fit flux_fit x_err y_err flux_err n_pixels_fit qfit cfit reduced_chi2 flags ra dec
-        # Finder: id xcentroid ycentroid sharpness roundness1 roundness2 npix peak flux mag daofind_mag
+        # Finder: id x_centroid y_centroid sharpness roundness1 roundness2 n_pixels peak flux mag daofind_mag
         # Note that some catalog-column names have underscores that need to be dealt with specially
         # because the database columns do not have underscores.
         #
@@ -345,7 +365,8 @@ def run_single_core_job(jids,overlapping_fields_list,meta_list,negative_diffimg_
 
         with open(sources_table_file, "w") as csv_fh:
 
-            for row in joined_table_inner:
+            for i, row in enumerate(joined_table_inner):
+
                 nums = ""
                 for col in cols:
 
@@ -400,8 +421,8 @@ def run_single_core_job(jids,overlapping_fields_list,meta_list,negative_diffimg_
                 dec = float(row["dec"])
                 roman_tessellation_db.get_rtid(ra,dec)
                 field = roman_tessellation_db.rtid
-                hp6 = hp.ang2pix(nside6,ra,dec,nest=True,lonlat=True)
-                hp9 = hp.ang2pix(nside9,ra,dec,nest=True,lonlat=True)
+                hp6 = hp6_arr[i]
+                hp9 = hp9_arr[i]
 
                 num = str(pid)
                 nums = nums + num + ","
@@ -429,26 +450,6 @@ def run_single_core_job(jids,overlapping_fields_list,meta_list,negative_diffimg_
                 csv_fh.write(line_to_write_to_file)
 
 
-        # Check whether database connection is still alive.
-
-        if dbh.is_connection_alive():
-
-            fh.write("Database is responsive!\n")
-
-        else:
-
-            fh.write("Database is not responsive! Connection is dead. Re-establishment required...\n")
-
-
-            # Open database connection.
-
-            dbh = db.RAPIDDB()
-
-            if dbh.exit_code >= 64:
-                fh.flush()
-                exit(dbh.exit_code)
-
-
         # Load records into sources database tables.
 
         dbh.copy_data_from_file_into_database(sources_table_file,sources_table,columns)
@@ -456,7 +457,7 @@ def run_single_core_job(jids,overlapping_fields_list,meta_list,negative_diffimg_
         if dbh.exit_code >= 64:
             fh.write(f"*** Error bulk-loading data from file ({sources_table_file}) into specified database table ({sources_table}); quitting...\n")
             fh.flush()
-            exit(dbh.exit_code)
+            raise RuntimeError(f"*** Error bulk-loading data from file ({sources_table_file}) into specified database table ({sources_table}); quitting...\n")
 
 
         # Touch done file.  Upload done file to S3 bucket.
@@ -478,12 +479,24 @@ def run_single_core_job(jids,overlapping_fields_list,meta_list,negative_diffimg_
 
             if os.path.exists(file_path):
                 os.remove(file_path)
-                print(f"File deleted successfully ({file_path}).")
+                fh.write(f"File deleted successfully ({file_path})...\n")
+                fh.flush()
             else:
-                print(f"The file does not exist({file_path}).")
+                fh.write(f"The file does not exist({file_path})...\n")
+                fh.flush()
 
 
         # End of loop over job ID.
+
+
+    # Close database connection.
+
+    dbh.close()
+
+    if dbh.exit_code >= 64:
+        fh.write(f"*** Error closing database connection (dbh.exit_code={dbh.exit_code}); quitting...\n")
+        fh.flush()
+        raise RuntimeError(f"*** Error closing database connection (dbh.exit_code={dbh.exit_code}); quitting...")
 
 
     fh.write(f"\nEnd of run_single_core_job: index_thread={index_thread}\n")
@@ -495,10 +508,7 @@ def run_single_core_job(jids,overlapping_fields_list,meta_list,negative_diffimg_
     return message
 
 
-def execute_parallel_processes(jids,rtids_list,meta_list,negative_diffimg_flag,num_cores=None):
-
-    if num_cores is None:
-        num_cores = os.cpu_count()  # Use all available cores if not specified
+def execute_parallel_processes(jids,rtids_list,meta_list,negative_diffimg_flag,num_cores):
 
     print("num_cores =",num_cores)
 
@@ -614,7 +624,7 @@ if __name__ == '__main__':
         x_list = [*range(0,naxis1,500)]
         y_list = [*range(0,naxis2,500)]
         x_list.append(naxis1)
-        y_list.append(naxis1)
+        y_list.append(naxis2)
 
         for y in y_list:
             for x in x_list:
@@ -636,7 +646,7 @@ if __name__ == '__main__':
 
         print("jid =",jid)
 
-    scas_list = scas_dict.keys()
+    scas_list = list(scas_dict.keys())
 
 
     # Code-timing benchmark.
@@ -783,18 +793,12 @@ if __name__ == '__main__':
         end_time_benchmark - start_time_benchmark_at_start)
 
 
-    # Close database connections.
+    # Close database connection.
 
     dbh.close()
 
     if dbh.exit_code >= 64:
         exit(dbh.exit_code)
-
-    for tdbh in dbh_list:
-        tdbh.close()
-
-        if tdbh.exit_code >= 64:
-            exit(tdbh.exit_code)
 
 
     # Termination.

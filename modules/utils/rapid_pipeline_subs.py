@@ -2529,58 +2529,94 @@ def convert_mjd_to_jd(mjd):
 
 
 ########################################
-# Update the average right ascension (RA)
-# when a new RA data point is added.
+# Compute  both meat and standard deviation of (ra,dec) near poles and
+# 360-0 boundary and return mean_ra, mean_dec, stddev_ra, stddev_dec,
+# and sky_position_spread.
+#
+# How it handles the edge cases:
+#
+# - 0/360 wrap: Converting to Cartesian (x, y, z) before averaging avoids the
+#   wrap problem entirely. arctan2 recovers the correct mean RA.
+# - Near poles: The mean position is still correct via the Cartesian mean.
+#               stddev_ra is multiplied by cos(dec) per-point, so near the pole it
+#               naturally shrinks toward zero (reflecting that RA spread doesn't
+#               correspond to real sky distance there). sky_position_spread uses true
+#               angular separation, so it's always meaningful regardless of pole proximity.
+# - Delta-RA: Uses arctan2(sin, cos) to get the shortest signed angular difference,
+#             avoiding the naive subtraction that breaks at the boundary.
 ########################################
 
-def update_meanra(ra1,nsources,ra2,debug=False):
+def compute_radec_statistics(ra_deg, dec_deg):
 
-    ras_list = [ra1,ra2]
+    """Compute mean and stddev of (RA, Dec) positions, handling poles and 0/360 wrap.
 
-    flag1 = False
-    flag2 = False
-    for ra in ras_list:
-        if ra < 10.0:
-            flag1 = True
-        elif ra > 350.0:
-            flag2 = True
+    Parameters
+    ----------
+    ra_deg, dec_deg : array-like
+        Right ascension and declination in degrees.
 
-    if flag1 and flag2:
-        i = 0
-        for ra in ras_list:
-            if ra > 350.0:
-                ras_list[i] -= 360.0
-            i += 1
+    Returns
+    -------
+    mean_ra, mean_dec, stddev_ra, stddev_dec, sky_position_spread : float
+        All values in degrees. stddev_ra is corrected for cos(dec).
+    """
+    ra = np.deg2rad(np.asarray(ra_deg, dtype=float))
+    dec = np.deg2rad(np.asarray(dec_deg, dtype=float))
 
-    ra1 = ras_list[0]
-    ra2 = ras_list[1]
+    # Convert to unit vectors on the sphere
+    cos_dec = np.cos(dec)
+    x = cos_dec * np.cos(ra)
+    y = cos_dec * np.sin(ra)
+    z = np.sin(dec)
 
-    meanra = (ra1 * nsources + ra2) / (nsources + 1)
+    # Mean Cartesian position
+    xm, ym, zm = x.mean(), y.mean(), z.mean()
+    r = np.sqrt(xm**2 + ym**2 + zm**2)
 
-    if meanra < 0.0:
-        meanra += 360.0
+    # Mean RA/Dec from mean vector
+    mean_dec = np.rad2deg(np.arcsin(np.clip(zm / r, -1, 1)))
+    mean_ra = np.rad2deg(np.arctan2(ym, xm)) % 360.0
 
-    if debug:
-        print(f"ras_list = {ras_list}")
-        print(f"ra1,ra2 = {ra1},{ra2}")
-        print(f"nsources = {nsources}")
-        print(f"meanra = {meanra}")
+    # Angular separation of each point from the mean position
+    # (dot product clamped for numerical safety)
+    xn, yn, zn = xm / r, ym / r, zm / r
+    dot = np.clip(x * xn + y * yn + z * zn, -1, 1)
+    ang_sep = np.arccos(dot)
 
-    return meanra
+    # Sky position spread: RMS angular distance from mean (degrees)
+    sky_position_spread = np.rad2deg(np.sqrt(np.mean(ang_sep**2)))
+
+    # Per-axis standard deviations via small-angle projection
+    # Delta-Dec
+    ddec = dec - np.deg2rad(mean_dec)
+    stddev_dec = np.rad2deg(np.std(ddec))
+
+    # Delta-RA: shortest signed difference, scaled by cos(dec)
+    dra = np.arctan2(np.sin(ra - np.deg2rad(mean_ra)),
+                     np.cos(ra - np.deg2rad(mean_ra)))
+    stddev_ra = np.rad2deg(np.std(dra * np.cos(dec)))
+
+    return mean_ra, mean_dec, stddev_ra, stddev_dec, sky_position_spread
 
 
 ########################################
-# Update the average declination (Dec)
-# when a new Dec data point is added.
+# Compute primary key aid for database AstroObjects records outside of the database with
+# a deterministic method based on (ra0,dec0).  Convert both coordinates to integer units
+# of 1/1000th arcsecond, then pack into a single 64-bit integer.
+# Works with scalars, lists, and numpy arrays. np.asarray is a no-op on existing arrays,
+# and np.rint + .astype(np.int64) replaces round() for vectorized rounding.
+#
+# Method radec_index computes the aid index.
+# Method index_to_radec converts the index back into (ra,dec).
 ########################################
 
-def update_meandec(dec1,nsources,dec2,debug=False):
+def radec_index(ra_deg, dec_deg):
+    ra_mas  = np.rint(np.asarray(ra_deg) * 3_600_000).astype(np.int64)
+    dec_mas = np.rint((np.asarray(dec_deg) + 90.0) * 3_600_000).astype(np.int64)
+    return ra_mas * 648_000_001 + dec_mas
 
-    meandec = (dec1 * nsources + dec2) / (nsources + 1)
-
-    if debug:
-        print(f"dec1,dec2 = {dec1},{dec2}")
-        print(f"nsources = {nsources}")
-        print(f"meandec = {meandec}")
-
-    return meandec
+def index_to_radec(idx):
+    idx = np.asarray(idx, dtype=np.int64)
+    dec_mas = idx % 648_000_001
+    ra_mas  = idx // 648_000_001
+    return ra_mas / 3_600_000, dec_mas / 3_600_000 - 90.0

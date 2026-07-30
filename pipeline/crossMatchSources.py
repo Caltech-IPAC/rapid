@@ -1,6 +1,4 @@
-import boto3
 import os
-import numpy as np
 import configparser
 from datetime import datetime, timezone
 from dateutil import tz
@@ -35,9 +33,9 @@ start_time_benchmark_at_start = start_time_benchmark
 
 # Compute processing datetime (UT) and processing datetime (Pacific time).
 
-datetime_utc_now = datetime.utcnow()
+datetime_utc_now = datetime.now(timezone.utc)
 proc_utc_datetime = datetime_utc_now.strftime('%Y-%m-%dT%H:%M:%SZ')
-datetime_pt_now = datetime_utc_now.replace(tzinfo=timezone.utc).astimezone(tz=to_zone)
+datetime_pt_now = datetime_utc_now.astimezone(tz=to_zone)
 proc_pt_datetime_started = datetime_pt_now.strftime('%Y-%m-%dT%H:%M:%S PT')
 
 print("proc_utc_datetime =",proc_utc_datetime)
@@ -68,7 +66,6 @@ if roman_tessellation_dbname is None:
     print("*** Error: Env. var. ROMANTESSELLATIONDBNAME not set; quitting...")
     exit(64)
 
-roman_tessellation_db = sqlite.RomanTessellationNSIDE512()
 
 
 # Other required environment variables.
@@ -104,14 +101,6 @@ product_s3_bucket_base = config_input['JOB_PARAMS']['product_s3_bucket_base']
 job_config_filename_base = config_input['JOB_PARAMS']['job_config_filename_base']
 product_config_filename_base = config_input['JOB_PARAMS']['product_config_filename_base']
 
-output_psfcat_filename = str(config_input['PSFCAT_DIFFIMAGE']['output_zogy_psfcat_filename'])
-output_psfcat_finder_filename = str(config_input['PSFCAT_DIFFIMAGE']['output_zogy_psfcat_finder_filename'])
-
-naxis1 = int(config_input['INSTRUMENT']['naxis1_sciimage'])
-naxis2 = int(config_input['INSTRUMENT']['naxis2_sciimage'])
-
-ppid = int(config_input['SCI_IMAGE']['ppid'])
-
 match_radius = float(config_input['SOURCE_MATCHING']['match_radius'])
 
 
@@ -126,44 +115,31 @@ else:
 
 print("num_cores =",num_cores)
 
-dbh_list = []
-
-for i in range(num_cores):
-
-    dbh = db.RAPIDDB()
-
-    if dbh.exit_code >= 64:
-        exit(dbh.exit_code)
-
-    dbh_list.append(dbh)
-
-
-# Get S3 client.
-
-s3_client = boto3.client('s3')
-
 
 # Define columns to be populated in AstroObjects tables.
 
-cols = []
-cols.append("ra0")
-cols.append("dec0")
-cols.append("flux0")
-cols.append("meanra")
-cols.append("stdefra")
-cols.append("meandec")
-cols.append("stdevdec")
-cols.append("meanflux")
-cols.append("stdevflux")
-cols.append("nsources")
-cols.append("field")
-cols.append("hp6")
-cols.append("hp9")
+astroobjects_cols = []
+astroobjects_cols.append("aid")
+astroobjects_cols.append("ra0")
+astroobjects_cols.append("dec0")
+astroobjects_cols.append("flux0")
 
-cols_comma_separated_string = ", ".join(cols)
-columns = tuple(cols)
+astroobjects_cols_comma_separated_string = ", ".join(astroobjects_cols)
+astroobjects_columns = tuple(astroobjects_cols)
 
-print(f"AstroObjects columns: {cols_comma_separated_string}")
+print(f"AstroObjects columns: {astroobjects_cols_comma_separated_string}")
+
+
+# Define columns to be populated in Merges tables.
+
+merges_cols = []
+merges_cols.append("aid")
+merges_cols.append("sid")
+
+merges_cols_comma_separated_string = ", ".join(merges_cols)
+merges_columns = tuple(merges_cols)
+
+print(f"Merges columns: {merges_cols_comma_separated_string}")
 
 
 #-------------------------------------------------------------------------------------------------------------
@@ -206,9 +182,18 @@ def run_single_core_job_stage_1_crossmatching(scas,fields,index_thread):
         fh = open(thread_work_file, 'w', encoding="utf-8")
     except:
         print(f"*** Error: Could not open output file {thread_work_file}; quitting...")
-        exit(64)
+        raise RuntimeError(f"*** Error: Could not open output file {thread_work_file}; quitting...")
 
-    dbh = dbh_list[index_thread]
+
+    # Open database connection.
+
+    dbh = db.RAPIDDB()
+
+    if dbh.exit_code >= 64:
+        fh.write(f"*** Error opening database connection (dbh.exit_code={dbh.exit_code}); quitting...\n")
+        fh.flush()
+        raise RuntimeError(f"*** Error opening database connection (dbh.exit_code={dbh.exit_code}); quitting...\n")
+
 
     fh.write(f"\nStart of run_single_core_job: index_thread={index_thread}, dbh={dbh}\n")
 
@@ -261,154 +246,228 @@ def run_single_core_job_stage_1_crossmatching(scas,fields,index_thread):
 
         for expid in expids_list:
 
-            for sca in scas:
+            astroobjects_table_file = f"astroobjects_{field}.csv"
+            merges_table_file = f"merges_{field}.csv"
 
-                sources_tablename = f"sources_{proc_date}_{sca}"
+            with (open(astroobjects_table_file, "w") as csv_astroobjects_fh,
+                 open(merges_table_file, "w") as csv_merges_fh):
 
-                query = f"SELECT a.sid,a.ra,a.dec,b.aid,b.meanra,b.meandec,b.nsources FROM {sources_tablename} AS a, " +\
-                    f"{astroobjects_tablename} AS b WHERE q3c_join(a.ra, a.dec, b.meanra, b.meandec, {match_radius}) " +\
-                    f"AND a.field = {field} AND a.expid = {expid} AND a.flags = 0;"
+                for sca in scas:
 
-                sql_queries = []
-                sql_queries.append(query)
-                records = dbh.execute_sql_queries(sql_queries,thread_debug)
+                    sources_tablename = f"sources_{proc_date}_{sca}"
 
+                    query = f"SELECT a.sid,b.aid FROM {sources_tablename} AS a, " +\
+                        f"{astroobjects_tablename} AS b " +\
+                        f"WHERE q3c_join(a.ra, a.dec, b.ra0, b.dec0, {match_radius}) " +\
+                        f"AND a.field = {field} AND a.expid = {expid} AND a.flags = 0;"
 
-                # Code-timing benchmark.
-
-                thread_end_time_benchmark = time.time()
-                diff_time_benchmark = thread_end_time_benchmark - thread_start_time_benchmark
-                fh.write(f"Elapsed time in seconds to cross-match {sources_tablename} and {astroobjects_tablename} database tables = {diff_time_benchmark}\n")
-                thread_start_time_benchmark = thread_end_time_benchmark
-
-
-                # For the sources that were matched, create Merges_<field> record.
-                # Also, update meanra, meandec, nsources in the AstroObjects_<field> record.
-
-                sid_dict = {}
-
-                for record in records:
-
-                    sid = record[0]
-                    source_ra = record[1]
-                    source_dec = record[2]
-                    aid = record[3]
-                    meanra = record[4]
-                    meandec = record[5]
-                    nsources = record[6]
-
-                    sid_dict[sid] = 1
-
-                    dbh.add_merge_to_field(merges_tablename,aid,sid)
-
-                    meanra = util.update_meanra(meanra,nsources,source_ra)
-                    meandec = util.update_meandec(meandec,nsources,source_dec)
-                    nsources += 1
-
-                    dbh.update_astroobject_mean_sky_position(astroobjects_tablename,
-                                                             aid,
-                                                             meanra,
-                                                             meandec,
-                                                             nsources,
-                                                             thread_debug)
+                    sql_queries = []
+                    sql_queries.append(query)
+                    records = dbh.execute_sql_queries(sql_queries,thread_debug)
 
 
-                # Code-timing benchmark.
+                    # Code-timing benchmark.
 
-                thread_end_time_benchmark = time.time()
-                diff_time_benchmark = thread_end_time_benchmark - thread_start_time_benchmark
-                fh.write(f"Elapsed time in seconds to insert {merges_tablename} database records for matched sources = {diff_time_benchmark}\n")
-                thread_start_time_benchmark = thread_end_time_benchmark
-
-
-                # Query for all sources for the field of interest in Sources_<proc_date>_<sca> and load into memory.
-                # Find those sources that were not matched.
-
-                query = f"SELECT sid FROM {sources_tablename} WHERE field = {field} AND expid = {expid} AND flags = 0;"
-
-                sql_queries = []
-                sql_queries.append(query)
-                records = dbh.execute_sql_queries(sql_queries,thread_debug)
-
-                sids_list = []
+                    thread_end_time_benchmark = time.time()
+                    diff_time_benchmark = thread_end_time_benchmark - thread_start_time_benchmark
+                    fh.write(f"Elapsed time in seconds to cross-match {sources_tablename} and {astroobjects_tablename} database tables = {diff_time_benchmark}\n")
+                    thread_start_time_benchmark = thread_end_time_benchmark
 
 
-                # For the sources that were not matched for the field of interest,
-                # create AstroObjects_<field> record and then Merges_<field> record.
+                    # For the sources that were matched, create Merges_<field> record.
 
-                for record in records:
+                    sid_dict = {}
 
-                    sid = record[0]
-                    sids_list.append(sid)
+                    for record in records:
 
-                for sid in sids_list:
+                        sid = record[0]
+                        aid = record[1]
 
-                    if sid not in sid_dict:
-
-
-                        # Source was not matched, so create AstroObjects_<field> record and then Merges_<field> record.
-
-                        query = f"SELECT ra,dec,field,hp6,hp9,fluxfit FROM {sources_tablename} WHERE sid = {sid};"
-
-                        sql_queries = []
-                        sql_queries.append(query)
-                        records = dbh.execute_sql_queries(sql_queries,thread_debug)
-
-                        for record in records:
-
-                            source_ra = record[0]
-                            source_dec = record[1]
-                            source_field = record[2]
-                            source_hp6 = record[3]
-                            source_hp9 = record[4]
-                            source_flux = record[5]
-
-                            if field != source_field:
-                                fh.write(f"*** Error: field ({field}) not equal to source_field ({source_field}); quitting...")
-                                print(f"*** Error: field ({field}) not equal to source_field ({source_field}); quitting...")
-                                raise Exception(f"*** Error: field ({field}) not equal to source_field ({source_field}); quitting...")
+                        sid_dict[sid] = 1
 
 
-                        # For now, set the lightcurve statistics to zero.              # TODO
+                        # Bulk copy is supposed to be much faster than row-by-row inserts,
+                        # even for unlogged table.
 
-                        meanra = source_ra
-                        stdevra = 0
-                        meandec = source_dec
-                        stdevdec = 0
-                        meanflux = 0
-                        stdevflux = 0
-                        nsources = 1
-
-                        aid = dbh.add_astro_object_to_field(astroobjects_tablename,
-                                                            source_ra,
-                                                            source_dec,
-                                                            source_flux,
-                                                            meanra,
-                                                            stdevra,
-                                                            meandec,
-                                                            stdevdec,
-                                                            meanflux,
-                                                            stdevflux,
-                                                            nsources,
-                                                            field,
-                                                            source_hp6,
-                                                            source_hp9,
-                                                            thread_debug)
-
-                        dbh.add_merge_to_field(merges_tablename,aid,sid,thread_debug)
+                        '''
+                        dbh.add_merge_to_field(merges_tablename,aid,sid)
+                        '''
 
 
-                # Code-timing benchmark.
+                        nums = ""
 
-                thread_end_time_benchmark = time.time()
-                diff_time_benchmark = thread_end_time_benchmark - thread_start_time_benchmark
-                fh.write(f"Elapsed time in seconds to insert {merges_tablename} and {astroobjects_tablename} database records for unmatched sources = {diff_time_benchmark}\n")
-                thread_start_time_benchmark = thread_end_time_benchmark
+                        num = str(aid)
+                        nums = nums + num + ","
+                        num = str(sid)
+                        nums = nums + num + ","
+
+                        # Slice the string to get all but the last character, then add the newline character
+                        newline_character = "\n"
+                        line_to_write_to_file = nums[:-1] + newline_character
+
+                        csv_merges_fh.write(line_to_write_to_file)
 
 
-                # End of loop over SCAs.
+                    # Code-timing benchmark.
 
-                fh.write(f"Loop end over SCAs: index_field,field,expid,sca = {index_field},{field},{expid},{sca}\n")
+                    thread_end_time_benchmark = time.time()
+                    diff_time_benchmark = thread_end_time_benchmark - thread_start_time_benchmark
+                    fh.write(f"Elapsed time in seconds to write bulk-copy records to {merges_table_file} for matched sources = {diff_time_benchmark}\n")
+                    thread_start_time_benchmark = thread_end_time_benchmark
+
+
+                    # Query for all sources for the field of interest in Sources_<proc_date>_<sca> and load into memory.
+                    # For the sources that were not matched for the field of interest,
+                    # create AstroObjects_<field> record and then Merges_<field> record.
+
+                    query = f"SELECT sid, ra, dec, fluxfit FROM {sources_tablename} " +\
+                        f"WHERE field = {field} AND expid = {expid} AND flags = 0;"
+
+                    sql_queries = []
+                    sql_queries.append(query)
+                    records = dbh.execute_sql_queries(sql_queries,thread_debug)
+
+                    for record in records:
+
+                        sid = record[0]
+
+                        if sid not in sid_dict:
+
+                            source_ra = record[1]
+                            source_dec = record[2]
+                            source_flux = record[3]
+
+
+                            # Insert records in AstroObjects_<field> and Merges_<field> tables.
+                            #
+                            # Removed columns field, hp6, and hp9 from AstroObjects_<field> as an optimization.
+                            #
+                            # Bulk copy is supposed to be much faster than row-by-row inserts,
+                            # even for unlogged table.
+                            #
+                            # Compute aid on job machine from deterministic method
+                            # (basically creating a unique 64-bit index from (ra,dec).
+
+                            aid = util.radec_index(source_ra, source_dec)
+
+
+                            '''
+                            These methods are deprecated.
+
+                            aid = dbh.add_astro_object_to_field(astroobjects_tablename,
+                                                                source_ra,
+                                                                source_dec,
+                                                                source_flux,
+                                                                field,
+                                                                source_hp6,
+                                                                source_hp9,
+                                                                thread_debug)
+
+                            dbh.add_merge_to_field(merges_tablename,aid,sid,thread_debug)
+                            '''
+
+
+                            nums = ""
+
+                            num = str(aid)
+                            nums = nums + num + ","
+                            num = str(source_ra)
+                            nums = nums + num + ","
+                            num = str(source_dec)
+                            nums = nums + num + ","
+                            num = str(source_flux)
+                            nums = nums + num + ","
+
+                            # Slice the string to get all but the last character, then add the newline character
+                            newline_character = "\n"
+                            line_to_write_to_file = nums[:-1] + newline_character
+
+                            csv_astroobjects_fh.write(line_to_write_to_file)
+
+
+                            nums = ""
+
+                            num = str(aid)
+                            nums = nums + num + ","
+                            num = str(sid)
+                            nums = nums + num + ","
+
+                            # Slice the string to get all but the last character, then add the newline character
+                            newline_character = "\n"
+                            line_to_write_to_file = nums[:-1] + newline_character
+
+                            csv_merges_fh.write(line_to_write_to_file)
+
+
+                    # Code-timing benchmark.
+
+                    thread_end_time_benchmark = time.time()
+                    diff_time_benchmark = thread_end_time_benchmark - thread_start_time_benchmark
+                    fh.write(f"Elapsed time in seconds to write bulk-copy records to {astroobjects_table_file} and {merges_table_file} for unmatched sources = {diff_time_benchmark}\n")
+                    thread_start_time_benchmark = thread_end_time_benchmark
+
+
+                    # End of loop over SCAs.
+
+                    fh.write(f"Loop end over SCAs: index_field,field,expid,sca = {index_field},{field},{expid},{sca}\n")
+
+
+            # Load records into AstroObjects_<field> database tables.
+
+            dbh.copy_data_from_file_into_database(astroobjects_table_file,astroobjects_tablename,astroobjects_columns)
+
+            if dbh.exit_code >= 64:
+                fh.write(f"*** Error bulk-loading data from file ({astroobjects_table_file}) " +
+                         f"into specified database table ({astroobjects_tablename}); quitting...\n")
+                fh.flush()
+                raise RuntimeError(f"*** Error bulk-loading data from file ({astroobjects_table_file}) " +
+                                   f"into specified database table ({astroobjects_tablename}); quitting...")
+
+
+            # Code-timing benchmark.
+
+            thread_end_time_benchmark = time.time()
+            diff_time_benchmark = thread_end_time_benchmark - thread_start_time_benchmark
+            fh.write(f"Elapsed time in seconds to bulk copy records into " +
+                     f"{astroobjects_tablename} database table = {diff_time_benchmark}\n")
+            fh.flush()
+            thread_start_time_benchmark = thread_end_time_benchmark
+
+
+            # Load records into Merges_<field> database tables.
+
+            dbh.copy_data_from_file_into_database(merges_table_file,merges_tablename,merges_columns)
+
+            if dbh.exit_code >= 64:
+                fh.write(f"*** Error bulk-loading data from file ({merges_table_file}) " +
+                         f"into specified database table ({merges_tablename}); quitting...\n")
+                fh.flush()
+                raise RuntimeError(f"*** Error bulk-loading data from file ({merges_table_file}) " +
+                                   f"into specified database table ({merges_tablename}); quitting...")
+
+
+            # Code-timing benchmark.
+
+            thread_end_time_benchmark = time.time()
+            diff_time_benchmark = thread_end_time_benchmark - thread_start_time_benchmark
+            fh.write(f"Elapsed time in seconds to bulk copy records into " +
+                     f"{merges_tablename} database table = {diff_time_benchmark}\n")
+            fh.flush()
+            thread_start_time_benchmark = thread_end_time_benchmark
+
+
+            # Remove no-longer-needed intermediate files.
+
+            file_paths = [astroobjects_table_file,merges_table_file]
+            for file_path in file_paths:
+
+                if os.path.exists(file_path):
+                    os.remove(file_path)
+                    fh.write(f"File deleted successfully ({file_path})...\n")
+                    fh.flush()
+                else:
+                    fh.write(f"The file does not exist({file_path})...\n")
+                    fh.flush()
 
 
             # End of loop over expids.
@@ -425,6 +484,15 @@ def run_single_core_job_stage_1_crossmatching(scas,fields,index_thread):
 
         fh.flush()
 
+
+    # Close database connection.
+
+    dbh.close()
+
+    if dbh.exit_code >= 64:
+        fh.write(f"*** Error closing database connection (dbh.exit_code={dbh.exit_code}); quitting...\n")
+        fh.flush()
+        raise RuntimeError(f"*** Error closing database connection (dbh.exit_code={dbh.exit_code}); quitting...")
 
     fh.write(f"\nEnd of run_single_core_job: index_thread={index_thread}\n")
 
@@ -470,9 +538,23 @@ def run_single_core_job_stage_2_crossmatching(scas,fields,index_thread):
         fh = open(thread_work_file, 'w', encoding="utf-8")
     except:
         print(f"*** Error: Could not open output file {thread_work_file}; quitting...")
-        exit(64)
+        raise RuntimeError(f"*** Error: Could not open output file {thread_work_file}; quitting...")
 
-    dbh = dbh_list[index_thread]
+
+    # Open database connection.
+
+    dbh = db.RAPIDDB()
+
+    if dbh.exit_code >= 64:
+        fh.write(f"*** Error opening database connection (dbh.exit_code={dbh.exit_code}); quitting...\n")
+        fh.flush()
+        raise RuntimeError(f"*** Error opening database connection (dbh.exit_code={dbh.exit_code}); quitting...\n")
+
+
+    # Open Roman tessellation database.
+
+    roman_tessellation_db = sqlite.RomanTessellationNSIDE512()
+
 
     fh.write(f"\nStart of run_single_core_job: index_thread={index_thread}, dbh={dbh}\n")
 
@@ -493,8 +575,7 @@ def run_single_core_job_stage_2_crossmatching(scas,fields,index_thread):
 
         fh.write(f"Loop start for adjacent fields (rtid is equivalent to field number): index_field,field = {index_field},{field}\n")
 
-        rtid = field
-        rtids_list = roman_tessellation_db.get_all_neighboring_rtids(rtid)
+        rtids_list = roman_tessellation_db.get_all_neighboring_rtids(field)
 
 
         # If away from poles, a sky tile will have 8 adjacent fields,
@@ -507,10 +588,10 @@ def run_single_core_job_stage_2_crossmatching(scas,fields,index_thread):
 
             # Get sky positions of center and four corners of sky tile.
 
-            roman_tessellation_db.get_center_sky_position(rtid)
+            roman_tessellation_db.get_center_sky_position(field)
             ra0_field = roman_tessellation_db.ra0
             dec0_field = roman_tessellation_db.dec0
-            roman_tessellation_db.get_corner_sky_positions(rtid)
+            roman_tessellation_db.get_corner_sky_positions(field)
             ra1_field = roman_tessellation_db.ra1
             dec1_field = roman_tessellation_db.dec1
             ra2_field = roman_tessellation_db.ra2
@@ -557,19 +638,19 @@ def run_single_core_job_stage_2_crossmatching(scas,fields,index_thread):
 
                 if n_adjacent_fields == 8:
 
-                    query = f"SELECT a.sid,a.ra,a.dec,b.aid,b.meanra,b.meandec,b.nsources " +\
+                    query = f"SELECT a.sid,b.aid " +\
                         f"FROM {sources_tablename} AS a, " +\
                         f"{astroobjects_tablename} AS b " +\
                         f"WHERE q3c_radial_query(a.ra, a.dec, {ra0_field}, {dec0_field}, {ang_sep}) " +\
-                        f"AND q3c_join(a.ra, a.dec, b.meanra, b.meandec, {match_radius}) " +\
+                        f"AND q3c_join(a.ra, a.dec, b.ra0, b.dec0, {match_radius}) " +\
                         f"AND a.field = {adjacent_field} AND a.flags = 0;"
 
                 else:
 
-                    query = f"SELECT a.sid,a.ra,a.dec,b.aid,b.meanra,b.meandec,b.nsources " +\
+                    query = f"SELECT a.sid,b.aid " +\
                         f"FROM {sources_tablename} AS a, " +\
                         f"{astroobjects_tablename} AS b " +\
-                        f"WHERE q3c_join(a.ra, a.dec, b.meanra, b.meandec, {match_radius}) " +\
+                        f"WHERE q3c_join(a.ra, a.dec, b.ra0, b.dec0, {match_radius}) " +\
                         f"AND a.field = {adjacent_field} AND a.flags = 0;"
 
                 sql_queries = []
@@ -586,30 +667,13 @@ def run_single_core_job_stage_2_crossmatching(scas,fields,index_thread):
 
 
                 # For the sources that were matched, create Merges_<field> record.
-                # Also, update meanra, meandec, nsources in the AstroObjects_<field> record.
 
                 for record in records:
 
                     sid = record[0]
-                    source_ra = record[1]
-                    source_dec = record[2]
-                    aid = record[3]
-                    meanra = record[4]
-                    meandec = record[5]
-                    nsources = record[6]
+                    aid = record[1]
 
                     dbh.add_merge_to_field(merges_tablename,aid,sid)
-
-                    meanra = util.update_meanra(meanra,nsources,source_ra)
-                    meandec = util.update_meandec(meandec,nsources,source_dec)
-                    nsources += 1
-
-                    dbh.update_astroobject_mean_sky_position(astroobjects_tablename,
-                                                             aid,
-                                                             meanra,
-                                                             meandec,
-                                                             nsources,
-                                                             thread_debug)
 
 
                 # Code-timing benchmark.
@@ -635,6 +699,17 @@ def run_single_core_job_stage_2_crossmatching(scas,fields,index_thread):
         fh.flush()
 
 
+    # Close database connections.
+
+    dbh.close()
+
+    if dbh.exit_code >= 64:
+        fh.write(f"*** Error closing database connection (dbh.exit_code={dbh.exit_code}); quitting...\n")
+        fh.flush()
+        raise RuntimeError(f"*** Error closing database connection (dbh.exit_code={dbh.exit_code}); quitting...")
+
+    roman_tessellation_db.close()
+
     fh.write(f"\nEnd of run_single_core_job: index_thread={index_thread}\n")
 
     fh.close()
@@ -644,10 +719,7 @@ def run_single_core_job_stage_2_crossmatching(scas,fields,index_thread):
     return message
 
 
-def execute_parallel_processes_stage_1_crossmatching(scas_list,fields_list,num_cores=None):
-
-    if num_cores is None:
-        num_cores = os.cpu_count()  # Use all available cores if not specified
+def execute_parallel_processes_stage_1_crossmatching(scas_list,fields_list,num_cores):
 
     print("num_cores =",num_cores)
 
@@ -668,10 +740,7 @@ def execute_parallel_processes_stage_1_crossmatching(scas_list,fields_list,num_c
             print(f"*** Error in thread index {index} = {e}")
 
 
-def execute_parallel_processes_stage_2_crossmatching(scas_list,fields_list,num_cores=None):
-
-    if num_cores is None:
-        num_cores = os.cpu_count()  # Use all available cores if not specified
+def execute_parallel_processes_stage_2_crossmatching(scas_list,fields_list,num_cores):
 
     print("num_cores =",num_cores)
 
@@ -823,10 +892,8 @@ if __name__ == '__main__':
 
         if table_exists_flag is False:        # The following is done once, when the tables are created.
 
-            sql_queries.append(f"CREATE INDEX {tablename1}_field_idx ON {tablename1} (field);")
-            sql_queries.append(f"CREATE INDEX {tablename1}_nsources_idx ON {tablename1} (nsources);")
             sql_queries.append(f"CREATE INDEX {tablename1}_aid_idx ON {tablename1} (aid);")
-            sql_queries.append(f"CREATE INDEX {tablename1}_radec_idx ON {tablename1} (q3c_ang2ipix(meanra, meandec));")
+            sql_queries.append(f"CREATE INDEX {tablename1}_radec_idx ON {tablename1} (q3c_ang2ipix(ra0, dec0));")
             sql_queries.append(f"CREATE INDEX {tablename2}_aid_idx ON {tablename2} USING btree (aid);")
             sql_queries.append(f"CREATE INDEX {tablename2}_sid_idx ON {tablename2} USING btree (sid);")
             sql_queries.append(f"REVOKE ALL ON TABLE {tablename1} FROM rapidreadrole;")
@@ -856,6 +923,14 @@ if __name__ == '__main__':
     start_time_benchmark = end_time_benchmark
 
 
+    # Close database connection.
+
+    dbh.close()
+
+    if dbh.exit_code >= 64:
+        exit(dbh.exit_code)
+
+
     #########################################################################################
     # Execute stage-1 source-matching tasks, which includes cross-matching sources and
     # astroobjects within field boundaries, making new merges records for sources that
@@ -881,6 +956,14 @@ if __name__ == '__main__':
     start_time_benchmark = end_time_benchmark
 
 
+    # Open database connection.
+
+    dbh = db.RAPIDDB()
+
+    if dbh.exit_code >= 64:
+        exit(dbh.exit_code)
+
+
     # Cluster and analyze astroobjects database tables for all fields associated with processing date.
 
     print("Clustering and analyzing astroobjects database tables for all fields associated with processing date...")
@@ -894,7 +977,7 @@ if __name__ == '__main__':
 
         tablename2 = f"merges_{field}"
 
-        sql_queries.append(f"CLUSTER {tablename1}_radec_idx ON {tablename1};")
+        sql_queries.append(f"CLUSTER {tablename1} USING {tablename1}_radec_idx;")
         sql_queries.append(f"ANALYZE {tablename1};")
         sql_queries.append(f"ANALYZE {tablename2};")
         #sql_queries.append(f"ALTER TABLE {tablename1} SET LOGGED;")                # For speed, do not log.
@@ -909,6 +992,14 @@ if __name__ == '__main__':
     print("Elapsed time in seconds to recluster and reanalyze astroobjects database tables =",
         end_time_benchmark - start_time_benchmark)
     start_time_benchmark = end_time_benchmark
+
+
+    # Close database connection.
+
+    dbh.close()
+
+    if dbh.exit_code >= 64:
+        exit(dbh.exit_code)
 
 
     #####################################################################################
@@ -941,20 +1032,6 @@ if __name__ == '__main__':
     end_time_benchmark = time.time()
     print(f"Elapsed time in seconds to cross-match all sources for {proc_date} =",
         end_time_benchmark - start_time_benchmark_at_start)
-
-
-    # Close database connections.
-
-    dbh.close()
-
-    if dbh.exit_code >= 64:
-        exit(dbh.exit_code)
-
-    for tdbh in dbh_list:
-        tdbh.close()
-
-        if tdbh.exit_code >= 64:
-            exit(tdbh.exit_code)
 
 
     # Termination.

@@ -89,26 +89,16 @@ class RomanTessellationNSIDE512:
         '''
 
 
-        # Define query template.
+        # Define query with ? placeholders that are substituted by SQLite's C engine
+        # directly, skipping all the Python regex machinery. The query string itself is
+        # a constant — no need to rebuild it each time.
 
-        query_template = "select rtid from vskytiles " +\
-                         "where decmin <= QUERY_DEC and decmax > QUERY_DEC " +\
-                         "and ramin <= QUERY_RA and ramax > QUERY_RA;"
-
-
-        # Substitute parameters into query template.
-
-        rep = {}
-        rep["QUERY_RA"] = str(ra)
-        rep["QUERY_DEC"] = str(dec)
-
-
-        rep = dict((re.escape(k), v) for k, v in rep.items())
-        pattern = re.compile("|".join(rep.keys()))
-        query = pattern.sub(lambda m: rep[re.escape(m.group(0))], query_template)
+        query = "select rtid from vskytiles " +\
+                "where decmin <= ? and decmax > ? " +\
+                "and ramin <= ? and ramax > ?;"
 
         if self.debug > 0:
-            print('query = {}'.format(query))
+            print(f"ra,dec,query = {ra},{dec},{query}")
 
 
         # Execute query.
@@ -116,7 +106,7 @@ class RomanTessellationNSIDE512:
         self.rtid = None
 
         try:
-            self.cur.execute(query)
+            self.cur.execute(query, (dec, dec, ra, ra))
 
             record = self.cur.fetchone()
 
@@ -129,12 +119,8 @@ class RomanTessellationNSIDE512:
 
                 bc_ra = str(ra - 360.0)
 
-                query = f"select rtid from vskytiles " +\
-                        f"where decmin <= {dec} and decmax > {dec} " +\
-                        f"and ramin <= {bc_ra} and ramax > {bc_ra};"
-
                 if self.debug > 0:
-                    print('query = {}'.format(query))
+                    print(f"Special handling near 360-0 boundary crossing: bc_ra,dec,query = {bc_ra},{dec},{query}")
 
 
                 # Execute query.
@@ -142,7 +128,7 @@ class RomanTessellationNSIDE512:
                 self.rtid = None
 
                 try:
-                    self.cur.execute(query)
+                    self.cur.execute(query, (dec, dec, bc_ra, bc_ra))
 
                     record = self.cur.fetchone()
 

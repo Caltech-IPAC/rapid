@@ -43,7 +43,7 @@ CREATE TABLE sources (
     npixfit smallint NOT NULL,                 -- Number of unmasked pixels used to fit the source
     qfit real NOT NULL,                        -- Sum of absolute-value fit residuals divided by fit flux
     cfit  real NOT NULL,                       -- Fit residual in initial central pixel value divided by fit flux
-    redchi real NOT NULL DEFAULT 0.0           -- Reduced chi2
+    redchi real NOT NULL DEFAULT 0.0,          -- Reduced chi2
     flags smallint NOT NULL,                   -- photutils bitwise flags
     sharpness real NOT NULL,                   -- Object sharpness
     roundness1 real NOT NULL,                  -- Object roundness based on symmetry
@@ -194,38 +194,14 @@ CREATE TABLE astroobjects (
     aid bigint NOT NULL,
     ra0 double precision NOT NULL,              -- RA corresponding to initial sky position
     dec0 double precision NOT NULL,             -- Dec corresponding to initial sky position
-    flux0 real NOT NULL,                        -- Flux of initial sky position
-    meanra double precision NOT NULL,           -- Mean RA
-    stdevra real NOT NULL,                      -- Standard deviation of RA
-    meandec double precision NOT NULL,          -- Mean Dec
-    stdevdec real NOT NULL,                     -- Standard deviation of Dec
-    meanflux real NOT NULL,                     -- Mean flux
-    stdevflux real NOT NULL,                    -- Standard deviation of flux
-    nsources smallint NOT NULL,                 -- Total number of sources (all filters)
-    field integer NOT NULL,                     -- Roman tessellation index for (ra,dec)
-    hp6 integer NOT NULL,                       -- Level-6 healpix index (NESTED) for (ra,dec)
-    hp9 integer NOT NULL                        -- Level-9 healpix index (NESTED) for (ra,dec)
+    flux0 real NOT NULL                         -- Flux of initial sky position
 );
 
 ALTER TABLE astroobjects OWNER TO rapidadminrole;
 
-CREATE SEQUENCE astroobjects_aid_seq
-    START WITH 1
-    INCREMENT BY 1
-    NO MAXVALUE
-    NO MINVALUE
-    CACHE 1;
-
-ALTER SEQUENCE astroobjects_aid_seq OWNER TO rapidadminrole;
-
-ALTER TABLE astroobjects ALTER COLUMN aid SET DEFAULT nextval('astroobjects_aid_seq'::regclass);
-
 SET default_tablespace = pipeline_indx_01;
 
 ALTER TABLE ONLY astroobjects ADD CONSTRAINT astroobjects_pkey PRIMARY KEY (aid);
-
-CREATE INDEX astroobjects_field_idx ON astroobjects (field);
-CREATE INDEX astroobjects_nsources_idx ON astroobjects (nsources);
 
 
 ------------------------------------------------------------
@@ -244,8 +220,6 @@ CREATE INDEX astroobjects_nsources_idx ON astroobjects (nsources);
 -- SET default_tablespace = pipeline_indx_01;
 -- CREATE INDEX merges_1_aid_idx ON merges_1 USING btree (aid);
 -- CREATE INDEX merges_1_sid_idx ON merges_1 USING btree (sid);
--- CREATE INDEX astroobjects_1_field_idx ON astroobjects_1 (field);
--- CREATE INDEX astroobjects_1_nsources_idx ON astroobjects_1 (nsources);
 
 -- The following is not automatically created for the astroobjects like-table just
 -- because aid is a primary key in the astroobjects prototype table.
@@ -291,4 +265,30 @@ CREATE INDEX astroobjects_nsources_idx ON astroobjects (nsources);
 -- WHERE q3c_radial_query(ra0, dec0, ra_, dec_, radius_)
 -- ORDER by dist;
 ------------------------------------------------------------
+
+
+-----------------------------
+-- TABLE: AstroObjectsMeta
+-----------------------------
+
+SET default_tablespace = pipeline_data_01;
+
+CREATE TABLE astroobjectsmeta (
+    aid bigint NOT NULL,
+    meanra double precision NOT NULL,           -- Mean RA
+    stdevra real NOT NULL,                      -- Standard deviation of RA
+    meandec double precision NOT NULL,          -- Mean Dec
+    stdevdec real NOT NULL,                     -- Standard deviation of Dec
+    meanflux real NOT NULL,                     -- Mean flux
+    stdevflux real NOT NULL,                    -- Standard deviation of flux
+    nsources smallint NOT NULL                  -- Total number of sources (all filters)
+);
+
+ALTER TABLE astroobjectsmeta OWNER TO rapidadminrole;
+
+SET default_tablespace = pipeline_indx_01;
+
+ALTER TABLE ONLY astroobjectsmeta ADD CONSTRAINT astroobjectsmeta_pkey PRIMARY KEY (aid);
+
+CREATE INDEX astroobjectsmeta_nsources_idx ON astroobjectsmeta (nsources);
 

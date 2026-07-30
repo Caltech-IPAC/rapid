@@ -249,14 +249,6 @@ if __name__ == '__main__':
     job_exitcode = int(db_jobs_rec_dict["exitcode"])
 
 
-    # Insert or update record in Jobs database table and return job ID.
-
-    jid_postproc = dbh.start_job(ppid_post_proc,fid,expid,field,sca,rid)
-
-    if dbh.exit_code >= 64:
-        exit(dbh.exit_code)
-
-
     # Because database records are updated only after a large number of science pipeline jobs have been run,
     # and jobs with the same field are possible, the situation of having multiple versions reference images
     # for the same field can occur, but only the last reference image registered in the database can be
@@ -282,12 +274,23 @@ if __name__ == '__main__':
     version_refimage = db_refimages_rec_dict["version"]
 
 
-    # Do not launch AWS Batch job only if status != 1 and job_exitcode >= 64.
+    # Do not launch AWS Batch job only if status != 1 or job_exitcode >= 64.
 
     if status != 1 or job_exitcode >= 64:
 
         print(f"*** Warning: Science-pipeline job did not finish normally (jid={jid}); quitting...")
         terminating_exitcode = 33
+        dbh.close()
+        exit(terminating_exitcode)
+
+
+    # Insert or update record in Jobs database table and return job ID.
+
+    jid_postproc = dbh.start_job(ppid_post_proc,fid,expid,field,sca,rid)
+
+    if dbh.exit_code >= 64:
+        dbh.close()
+        exit(dbh.exit_code)
 
 
     # Populate config-file dictionary for job.
@@ -400,6 +403,7 @@ if __name__ == '__main__':
         dbh.update_job_with_aws_batch_job_id(jid_postproc,aws_batch_job_id)
 
         if dbh.exit_code >= 64:
+            dbh.close()
             exit(dbh.exit_code)
 
     else:

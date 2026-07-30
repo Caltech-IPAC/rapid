@@ -583,7 +583,7 @@ if __name__ == '__main__':
     # A reference image depends only on pipeline number, field, filter, and version.
     # If a reference image does not exist, then aggregate all the inputs required to make one.
     # First, check for reference images made by the dedicated reference-image pipeline (ppid=12).
-    # If no reference imag is found, check whether there is one made by the science pipeline (ppid=15).
+    # If no reference image is found, check whether there is one made by the science pipeline (ppid=15).
 
     rfid = None
 
@@ -598,7 +598,6 @@ if __name__ == '__main__':
 
     if dbh.exit_code == 7:
         print("No database record from dbh.get_best_reference_image for ppid={} called by {}; continuing with rfid = None...".format(ppid,swname))
-        ppid_existing_refimg = ppid
     elif dbh.exit_code >= 64:
         print("*** Error from {}; quitting ".format(swname))
         exit(dbh.exit_code)

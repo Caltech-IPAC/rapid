@@ -1,4 +1,5 @@
 import os
+import ast
 import configparser
 from datetime import datetime, timezone
 from dateutil import tz
@@ -45,11 +46,6 @@ if proc_date is None:
     exit(64)
 
 
-# Print out basic information for log file.
-
-print("proc_date =",proc_date)
-
-
 # If RUNFID is set, then process just the specified filter.
 
 run_fid_str = os.getenv('RUNFID')
@@ -73,7 +69,11 @@ dry_run_str = os.getenv('DRYRUN')
 if dry_run_str is None:
     dry_run = False
 else:
-    dry_run = True
+    try:
+        dry_run = ast.literal_eval(dry_run_str)
+    except (ValueError, SyntaxError):
+        print(f"*** Error: dry_run_str is neither True nor False ({dry_run_str}); quitting...")
+        exit(64)
 
 
 # Determine number of parallel processes.
@@ -91,11 +91,11 @@ else:
         print(f"*** Error: num_cores cannot be converted to integer (num_cores_str={num_cores_str}); quitting...")
         exit(64)
 
+
+# Print out basic information for log file.
+
+print("proc_date =",proc_date)
 print("num_cores =",num_cores)
-
-
-# Print parameters.
-
 print("run_fid =",run_fid)
 print("dry_run =",dry_run)
 
@@ -182,8 +182,12 @@ def run_single_core_job(fields,fids,num_cores,index_thread):
 
                 if exitcode_from_launch_cmd == 0:
                     fh.write(f"Launched reference-image pipeline for dry_run,field,fid = {dry_run},{field},{fid}\n")
-                else:
+                elif exitcode_from_launch_cmd >= 64:
                     fh.write(f"*** Error from launch_cmd = {launch_cmd}: " +
+                             f"exitcode_from_launch_cmd,dry_run,field,fid = " +
+                             f"{exitcode_from_launch_cmd},{dry_run},{field},{fid}\n")
+                else:
+                    fh.write(f"*** Warning from launch_cmd = {launch_cmd}: " +
                              f"exitcode_from_launch_cmd,dry_run,field,fid = " +
                              f"{exitcode_from_launch_cmd},{dry_run},{field},{fid}\n")
 
@@ -211,12 +215,17 @@ def execute_parallel_processes(fields,fids,num_cores):
             index = futures.index(future)  # Find the original index/order of the completed future
             print(f"Completed: {i+1} processes, lastly for index={index}")
 
+    exitcode_execute_parallel_processes = 0
+
     for future in futures:
         index = futures.index(future)
         try:
             print(future.result())
         except Exception as e:
             print(f"*** Error in thread index {index} = {e}")
+            exitcode_execute_parallel_processes = 64
+
+    return exitcode_execute_parallel_processes
 
 
 #################
@@ -264,6 +273,7 @@ if __name__ == '__main__':
 
         if dbh.exit_code >= 64:
             print("*** Error from query for field/filter/nframes combinations {}; quitting ".format(swname))
+            dbh.close()
             exit(dbh.exit_code)
 
         for rec in recs:
@@ -278,9 +288,9 @@ if __name__ == '__main__':
             # Query RefImages database table for the best version of reference image
             # (which is usually the latest unless a prior version is locked).
             # A reference image depends only on pipeline number, field, filter, and version.
-            # If a reference image already exists, then do not launch a referene-image pipeline for it.
+            # If a reference image already exists, then do not launch a reference-image pipeline for it.
             # First, check for reference images made by the dedicated reference-image pipeline (ppid=12).
-            # If no reference imag is found, check whether there is one made by the science pipeline (ppid=15).
+            # If no reference image is found, check whether there is one made by the science pipeline (ppid=15).
 
             rfid = None
 
@@ -297,9 +307,9 @@ if __name__ == '__main__':
             if dbh.exit_code == 7:
                 print(f"No database record from dbh.get_best_reference_image for " +
                       f"ppid={ppid_sciimage} called by {swname}; continuing with rfid = None...")
-                ppid_existing_refimg = ppid_sciimage
             elif dbh.exit_code >= 64:
                 print("*** Error from {}; quitting ".format(swname))
+                dbh.close()
                 exit(dbh.exit_code)
             else:
                 rfid = db_refimages_rec_dict["rfid"]
@@ -309,7 +319,7 @@ if __name__ == '__main__':
 
             if rfid is not None:
                 print(f"*** Message: Reference image found in database for " +
-                      f"field,fid.ppid_existing_refimg={field},{fid},{ppid_existing_refimg} (rfid={rfid})")
+                      f"field,fid,ppid_existing_refimg={field},{fid},{ppid_existing_refimg} (rfid={rfid})")
                 continue
 
 
@@ -337,10 +347,11 @@ if __name__ == '__main__':
     number_pipeline_instances = len(field_list)
     print(f"number_pipeline_instances = {number_pipeline_instances}")
 
+    exitcode_execute_parallel_processes = 0
 
     if num_cores > 1:
         print(f"*** Message: Calling method execute_parallel_processes...")
-        execute_parallel_processes(field_list,fid_list,num_cores)
+        exitcode_execute_parallel_processes = execute_parallel_processes(field_list,fid_list,num_cores)
     else:
         thread_index = 0
         run_single_core_job(field_list,fid_list,num_cores,thread_index)
@@ -356,6 +367,9 @@ if __name__ == '__main__':
     # Termination.
 
     terminating_exitcode = 0
+
+    if exitcode_execute_parallel_processes >= 64:
+        terminating_exitcode = exitcode_execute_parallel_processes
 
     print("terminating_exitcode =",terminating_exitcode)
 
