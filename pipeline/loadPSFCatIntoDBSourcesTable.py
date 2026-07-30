@@ -330,6 +330,15 @@ def run_single_core_job(jids,overlapping_fields_list,meta_list,negative_diffimg_
         fh.write(f"nrows in PSF-fit catalog = {nrows}\n")
 
 
+        # Vectorize hp.ang2pix calls.
+
+        ra_arr = np.array(joined_table_inner['ra'], dtype=np.float64)
+        dec_arr = np.array(joined_table_inner['dec'], dtype=np.float64)
+
+        hp6_arr = hp.ang2pix(nside6, ra_arr, dec_arr, nest=True, lonlat=True)
+        hp9_arr = hp.ang2pix(nside9, ra_arr, dec_arr, nest=True, lonlat=True)
+
+
         # Here are what the columns in the photutils catalogs are called:
         # Main: id group_id group_size local_bkg x_init y_init flux_init x_fit y_fit flux_fit x_err y_err flux_err n_pixels_fit qfit cfit reduced_chi2 flags ra dec
         # Finder: id xcentroid ycentroid sharpness roundness1 roundness2 npix peak flux mag daofind_mag
@@ -343,7 +352,8 @@ def run_single_core_job(jids,overlapping_fields_list,meta_list,negative_diffimg_
 
         with open(sources_table_file, "w") as csv_fh:
 
-            for row in joined_table_inner:
+            for i, row in enumerate(joined_table_inner):
+
                 nums = ""
                 for col in cols:
 
@@ -398,8 +408,8 @@ def run_single_core_job(jids,overlapping_fields_list,meta_list,negative_diffimg_
                 dec = float(row["dec"])
                 roman_tessellation_db.get_rtid(ra,dec)
                 field = roman_tessellation_db.rtid
-                hp6 = hp.ang2pix(nside6,ra,dec,nest=True,lonlat=True)
-                hp9 = hp.ang2pix(nside9,ra,dec,nest=True,lonlat=True)
+                hp6 = hp6_arr[i]
+                hp9 = hp9_arr[i]
 
                 num = str(pid)
                 nums = nums + num + ","
