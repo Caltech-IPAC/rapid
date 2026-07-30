@@ -3242,7 +3242,7 @@ class RAPIDDB:
 
 ########################################################################################################
 
-    def execute_sql_queries(self,sql_queries,debug=1,commit=True):
+    def execute_sql_queries(self,sql_queries,debug=1):
 
         '''
         Execute list of SQL queries and commit transaction.
@@ -3250,9 +3250,6 @@ class RAPIDDB:
 
         self.exit_code = 0
 
-        if not commit:
-            self.conn.rollback()                        # Clear transaction state
-            self.conn.set_session(autocommit=True)
 
         for query in sql_queries:
 
@@ -3284,16 +3281,11 @@ class RAPIDDB:
             except (Exception, psycopg2.DatabaseError) as error:
                 print(f"*** Error executing query ({query}): {error}; quitting...")
                 self.exit_code = 67
-                if commit:
-                    self.conn.rollback()           # Rollback database transaction
+                self.conn.rollback()           # Rollback database transaction
                 return
 
-        if commit:
-            if self.exit_code == 0:
-                self.conn.commit()           # Commit database transaction
-        else:
-            self.conn.rollback()                        # Clear transaction state
-            self.conn.set_session(autocommit=False)
+        if self.exit_code == 0:
+            self.conn.commit()           # Commit database transaction
 
 
         # Return records for the last query executed.  This is done for convenience and code is not generalized.
