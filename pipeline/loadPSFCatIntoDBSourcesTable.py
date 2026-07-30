@@ -245,7 +245,7 @@ def run_single_core_job(jids,overlapping_fields_list,meta_list,negative_diffimg_
 
 
     fh.write(f"\nStart of run_single_core_job: index_thread={index_thread}, dbh={dbh}\n")
-    fh.write(f"negative_diffimg_flag = {negative_diffimg_flag\n")
+    fh.write(f"negative_diffimg_flag = {negative_diffimg_flag}\n")
 
     my_jobs = list(range(index_thread, njobs, num_cores))
     for index_job in my_jobs:
@@ -354,7 +354,7 @@ def run_single_core_job(jids,overlapping_fields_list,meta_list,negative_diffimg_
 
         # Here are what the columns in the photutils catalogs are called:
         # Main: id group_id group_size local_bkg x_init y_init flux_init x_fit y_fit flux_fit x_err y_err flux_err n_pixels_fit qfit cfit reduced_chi2 flags ra dec
-        # Finder: id xcentroid ycentroid sharpness roundness1 roundness2 npix peak flux mag daofind_mag
+        # Finder: id x_centroid y_centroid sharpness roundness1 roundness2 n_pixels peak flux mag daofind_mag
         # Note that some catalog-column names have underscores that need to be dealt with specially
         # because the database columns do not have underscores.
         #
@@ -624,7 +624,7 @@ if __name__ == '__main__':
         x_list = [*range(0,naxis1,500)]
         y_list = [*range(0,naxis2,500)]
         x_list.append(naxis1)
-        y_list.append(naxis1)
+        y_list.append(naxis2)
 
         for y in y_list:
             for x in x_list:
@@ -759,34 +759,42 @@ if __name__ == '__main__':
         sql_queries.append(f"CREATE INDEX CONCURRENTLY sources_{proc_date}_{sca}_pid_idx ON sources_{proc_date}_{sca} (pid);")
     dbh.execute_sql_queries(sql_queries)
 
+    sql_queries = []
     for sca in scas_list:
         sql_queries.append(f"CREATE INDEX CONCURRENTLY sources_{proc_date}_{sca}_expid_idx ON sources_{proc_date}_{sca} (expid);")
     dbh.execute_sql_queries(sql_queries)
 
+    sql_queries = []
     for sca in scas_list:
         sql_queries.append(f"CREATE INDEX CONCURRENTLY sources_{proc_date}_{sca}_sca_idx ON sources_{proc_date}_{sca} (sca);")
     dbh.execute_sql_queries(sql_queries)
 
+    sql_queries = []
     for sca in scas_list:
         sql_queries.append(f"CREATE INDEX CONCURRENTLY sources_{proc_date}_{sca}_field_idx ON sources_{proc_date}_{sca} (field);")
     dbh.execute_sql_queries(sql_queries)
 
+    sql_queries = []
     for sca in scas_list:
-         sql_queries.append(f"CREATE INDEX CONCURRENTLY sources_{proc_date}_{sca}_flags_idx ON sources_{proc_date}_{sca} (flags);")
-   dbh.execute_sql_queries(sql_queries)
+        sql_queries.append(f"CREATE INDEX CONCURRENTLY sources_{proc_date}_{sca}_flags_idx ON sources_{proc_date}_{sca} (flags);")
+    dbh.execute_sql_queries(sql_queries)
 
+    sql_queries = []
     for sca in scas_list:
         sql_queries.append(f"CREATE INDEX CONCURRENTLY sources_{proc_date}_{sca}_mjdobs_idx ON sources_{proc_date}_{sca} (mjdobs);")
     dbh.execute_sql_queries(sql_queries)
 
+    sql_queries = []
     for sca in scas_list:
         sql_queries.append(f"CREATE INDEX CONCURRENTLY sources_{proc_date}_{sca}_sid_idx ON sources_{proc_date}_{sca} (sid);")
     dbh.execute_sql_queries(sql_queries)
 
+    sql_queries = []
     for sca in scas_list:
         sql_queries.append(f"CREATE INDEX CONCURRENTLY sources_{proc_date}_{sca}_radec_idx ON sources_{proc_date}_{sca} (q3c_ang2ipix(ra, dec));")
     dbh.execute_sql_queries(sql_queries)
 
+    sql_queries = []
     for sca in scas_list:
 
         sql_queries.append(f"CLUSTER sources_{proc_date}_{sca}_radec_idx ON sources_{proc_date}_{sca};")
