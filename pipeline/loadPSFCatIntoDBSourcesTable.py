@@ -13,6 +13,7 @@ from datetime import datetime, timezone
 from dateutil import tz
 import time
 from concurrent.futures import ProcessPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor
 to_zone = tz.gettz('America/Los_Angeles')
 
 import database.modules.utils.rapid_db as db
@@ -246,15 +247,19 @@ def run_single_core_job(jids,overlapping_fields_list,meta_list,negative_diffimg_
     fh.write(f"\nStart of run_single_core_job: index_thread={index_thread}, dbh={dbh}\n")
     fh.write(f"negative_diffimg_flag = {negative_diffimg_flag\n")
 
-    for index_job in range(njobs):
+    my_jobs = list(range(index_thread, njobs, num_cores))
+    for index_job in my_jobs:
 
         index_core = index_job % num_cores
-        if index_thread != index_core:
+        if index_thread != index_core:              # Always False since my_jobs has been partitioned
+                                                    # up front to eliminate iteration over all jobs.
             continue
 
         jid = jids[index_job]
         overlapping_fields = overlapping_fields_list[index_job]
         meta_dict = meta_list[index_job]
+
+        fh.write(f"Loop start: index_job,jid,overlapping_fields = {index_job},{jid},{overlapping_fields}\n")
 
         jid_from_dict = meta_dict["jid"]
 
@@ -273,9 +278,6 @@ def run_single_core_job(jids,overlapping_fields_list,meta_list,negative_diffimg_
         pid = meta_dict["pid"]
 
 
-        fh.write(f"Loop start: index_job,jid,overlapping_fields = {index_job},{jid},{overlapping_fields}\n")
-
-
         # Check whether done file exists in S3 bucket for job, and skip if it exists.
         # This is done by attempting to download the done file.  Regardless the sub
         # always returns the filename and subdirs by parsing the s3_full_name.
@@ -284,36 +286,47 @@ def run_single_core_job(jids,overlapping_fields_list,meta_list,negative_diffimg_
         done_filename,subdirs_done,downloaded_from_bucket = util.download_file_from_s3_bucket(s3_client,s3_full_name_done_file)
 
         if do_done_check and downloaded_from_bucket:
+            os.remove(done_filename)
             fh.write("*** Warning: Done file exists ({}); skipping...\n".format(done_filename))
             fh.flush()
             continue
 
 
-        # Download SFFT-difference-image PSF-fit catalog file from S3 bucket.
+        # Parallel S3-bucket downloads:
+        # 1. SFFT-difference-image PSF-fit catalog file
+        # 2. SFFT-difference-image PSF-fit finder catalog file
+        #
+        # dl_executor returns tuples.  E.g.,
+        # ret_psfcat = ('sfftdiffimage_masked_psfcat_jid130875.txt', '20260722/jid130875', True)
+        # ret_finder = ('sfftdiffimage_masked_psfcat_finder_jid130875.txt', '20260722/jid130875', True)
 
         output_psfcat_filename_for_jid = output_psfcat_filename_to_use.replace(".txt",f"_jid{jid}.txt")
 
         s3_full_name_psfcat_file = "s3://" + product_s3_bucket_base + "/" + proc_date + '/jid' + str(jid) + "/" +  output_psfcat_filename_to_use
-        ret_filename,subdirs_done,downloaded_from_bucket = util.download_file_from_s3_bucket(s3_client,
-                                                                                             s3_full_name_psfcat_file,
-                                                                                             output_psfcat_filename_for_jid)
-
-        if not downloaded_from_bucket:
-            fh.write("*** Warning: PSF-fit catalog file does not exist ({}); skipping...\n".format(output_psfcat_filename_to_use))
-            fh.flush()
-            continue
-
-
-        # Download SFFT-difference-image PSF-fit finder catalog file from S3 bucket.
 
         output_psfcat_finder_filename_for_jid = output_psfcat_finder_filename_to_use.replace(".txt",f"_jid{jid}.txt")
 
         s3_full_name_psfcat_finder_file = "s3://" + product_s3_bucket_base + "/" + proc_date + '/jid' + str(jid) + "/" +  output_psfcat_finder_filename_to_use
-        ret_filename,subdirs_done,downloaded_from_bucket = util.download_file_from_s3_bucket(s3_client,
-                                                                                             s3_full_name_psfcat_finder_file,
-                                                                                             output_psfcat_finder_filename_for_jid)
 
-        if not downloaded_from_bucket:
+        with ThreadPoolExecutor(max_workers=2) as dl_executor:
+            future_psfcat = dl_executor.submit(util.download_file_from_s3_bucket, s3_client, s3_full_name_psfcat_file, output_psfcat_filename_for_jid)
+            future_finder = dl_executor.submit(util.download_file_from_s3_bucket, s3_client, s3_full_name_psfcat_finder_file, output_psfcat_finder_filename_for_jid)
+
+        ret_psfcat = future_psfcat.result()
+        ret_finder = future_finder.result()
+
+        fh.write(f"ret_psfcat = {ret_psfcat}\n")
+        fh.write(f"ret_finder = {ret_finder}\n")
+
+        downloaded_from_bucket_psfcat = ret_psfcat[2]
+        downloaded_from_bucket_finder = ret_finder[2]
+
+        if not downloaded_from_bucket_psfcat:
+            fh.write("*** Warning: PSF-fit catalog file does not exist ({}); skipping...\n".format(output_psfcat_filename_to_use))
+            fh.flush()
+            continue
+
+        if not downloaded_from_bucket_finder:
             fh.write("*** Warning: PSF-fit finder catalog file does not exist ({}); skipping...\n".format(output_psfcat_finder_filename_to_use))
             fh.flush()
             continue
@@ -435,26 +448,6 @@ def run_single_core_job(jids,overlapping_fields_list,meta_list,negative_diffimg_
                 line_to_write_to_file = nums[:-1] + new_character
 
                 csv_fh.write(line_to_write_to_file)
-
-
-        # Check whether database connection is still alive.
-
-        if dbh.is_connection_alive():
-
-            fh.write("Database is responsive!\n")
-
-        else:
-
-            fh.write("Database is not responsive! Connection is dead. Re-establishment required...\n")
-
-
-            # Open database connection.
-
-            dbh = db.RAPIDDB()
-
-            if dbh.exit_code >= 64:
-                fh.flush()
-                exit(dbh.exit_code)
 
 
         # Load records into sources database tables.
@@ -685,6 +678,7 @@ if __name__ == '__main__':
             sql_queries.append(f"SELECT to_regclass('public.{tablename}') IS NOT NULL;")
             sql_queries.append(f"CREATE TABLE {tablename} (LIKE sources INCLUDING DEFAULTS INCLUDING CONSTRAINTS);")
             sql_queries.append(f"ALTER TABLE {tablename} SET UNLOGGED;")
+            sql_queries.append(f"ALTER TABLE {tablename} INHERIT sources;")
 
         dbh.execute_sql_queries(sql_queries)
 
@@ -762,15 +756,39 @@ if __name__ == '__main__':
     sql_queries.append("SET default_tablespace = pipeline_indx_01;")
 
     for sca in scas_list:
+        sql_queries.append(f"CREATE INDEX CONCURRENTLY sources_{proc_date}_{sca}_pid_idx ON sources_{proc_date}_{sca} (pid);")
+    dbh.execute_sql_queries(sql_queries)
 
-        sql_queries.append(f"CREATE INDEX sources_{proc_date}_{sca}_pid_idx ON sources_{proc_date}_{sca} (pid);")
-        sql_queries.append(f"CREATE INDEX sources_{proc_date}_{sca}_expid_idx ON sources_{proc_date}_{sca} (expid);")
-        sql_queries.append(f"CREATE INDEX sources_{proc_date}_{sca}_sca_idx ON sources_{proc_date}_{sca} (sca);")
-        sql_queries.append(f"CREATE INDEX sources_{proc_date}_{sca}_field_idx ON sources_{proc_date}_{sca} (field);")
-        sql_queries.append(f"CREATE INDEX sources_{proc_date}_{sca}_flags_idx ON sources_{proc_date}_{sca} (flags);")
-        sql_queries.append(f"CREATE INDEX sources_{proc_date}_{sca}_mjdobs_idx ON sources_{proc_date}_{sca} (mjdobs);")
-        sql_queries.append(f"CREATE INDEX sources_{proc_date}_{sca}_sid_idx ON sources_{proc_date}_{sca} (sid);")
-        sql_queries.append(f"CREATE INDEX sources_{proc_date}_{sca}_radec_idx ON sources_{proc_date}_{sca} (q3c_ang2ipix(ra, dec));")
+    for sca in scas_list:
+        sql_queries.append(f"CREATE INDEX CONCURRENTLY sources_{proc_date}_{sca}_expid_idx ON sources_{proc_date}_{sca} (expid);")
+    dbh.execute_sql_queries(sql_queries)
+
+    for sca in scas_list:
+        sql_queries.append(f"CREATE INDEX CONCURRENTLY sources_{proc_date}_{sca}_sca_idx ON sources_{proc_date}_{sca} (sca);")
+    dbh.execute_sql_queries(sql_queries)
+
+    for sca in scas_list:
+        sql_queries.append(f"CREATE INDEX CONCURRENTLY sources_{proc_date}_{sca}_field_idx ON sources_{proc_date}_{sca} (field);")
+    dbh.execute_sql_queries(sql_queries)
+
+    for sca in scas_list:
+         sql_queries.append(f"CREATE INDEX CONCURRENTLY sources_{proc_date}_{sca}_flags_idx ON sources_{proc_date}_{sca} (flags);")
+   dbh.execute_sql_queries(sql_queries)
+
+    for sca in scas_list:
+        sql_queries.append(f"CREATE INDEX CONCURRENTLY sources_{proc_date}_{sca}_mjdobs_idx ON sources_{proc_date}_{sca} (mjdobs);")
+    dbh.execute_sql_queries(sql_queries)
+
+    for sca in scas_list:
+        sql_queries.append(f"CREATE INDEX CONCURRENTLY sources_{proc_date}_{sca}_sid_idx ON sources_{proc_date}_{sca} (sid);")
+    dbh.execute_sql_queries(sql_queries)
+
+    for sca in scas_list:
+        sql_queries.append(f"CREATE INDEX CONCURRENTLY sources_{proc_date}_{sca}_radec_idx ON sources_{proc_date}_{sca} (q3c_ang2ipix(ra, dec));")
+    dbh.execute_sql_queries(sql_queries)
+
+    for sca in scas_list:
+
         sql_queries.append(f"CLUSTER sources_{proc_date}_{sca}_radec_idx ON sources_{proc_date}_{sca};")
         sql_queries.append(f"ANALYZE sources_{proc_date}_{sca};")
         #sql_queries.append(f"ALTER TABLE sources_{proc_date}_{sca} SET LOGGED;")                  # For speed, do not log.
@@ -780,10 +798,8 @@ if __name__ == '__main__':
         sql_queries.append(f"GRANT ALL ON TABLE sources_{proc_date}_{sca} TO GROUP rapidadminrole;")
         sql_queries.append(f"REVOKE ALL ON TABLE sources_{proc_date}_{sca} FROM rapidporole;")
         sql_queries.append(f"GRANT INSERT,UPDATE,SELECT,DELETE,TRUNCATE,TRIGGER,REFERENCES ON TABLE sources_{proc_date}_{sca} TO rapidporole;")
-        sql_queries.append(f"ALTER TABLE {tablename} INHERIT sources;")
 
     dbh.execute_sql_queries(sql_queries)
-
 
     # Code-timing benchmark.
 
