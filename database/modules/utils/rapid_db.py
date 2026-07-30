@@ -3242,7 +3242,7 @@ class RAPIDDB:
 
 ########################################################################################################
 
-    def execute_sql_queries(self,sql_queries,debug=1):
+    def execute_sql_queries(self,sql_queries,debug=1,commit=True):
 
         '''
         Execute list of SQL queries and commit transaction.
@@ -3284,7 +3284,7 @@ class RAPIDDB:
                 self.conn.rollback()           # Rollback database transaction
                 return
 
-        if self.exit_code == 0:
+        if commit and self.exit_code == 0:
             self.conn.commit()           # Commit database transaction
 
 
