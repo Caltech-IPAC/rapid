@@ -266,7 +266,7 @@ def run_single_core_job(jids,overlapping_fields_list,meta_list,negative_diffimg_
         if jid != jid_from_dict:
             fh.write(f"*** Error: jid is not equal to jid from meta dictionary; quitting...\n")
             fh.flush()
-            exit(64)
+            raise RuntimeError(f"*** Error: jid is not equal to jid from meta dictionary; quitting...\n")
 
         expid = meta_dict["expid"]
         sca = meta_dict["sca"]
@@ -457,7 +457,7 @@ def run_single_core_job(jids,overlapping_fields_list,meta_list,negative_diffimg_
         if dbh.exit_code >= 64:
             fh.write(f"*** Error bulk-loading data from file ({sources_table_file}) into specified database table ({sources_table}); quitting...\n")
             fh.flush()
-            exit(dbh.exit_code)
+            raise RuntimeError(f"*** Error bulk-loading data from file ({sources_table_file}) into specified database table ({sources_table}); quitting...\n")
 
 
         # Touch done file.  Upload done file to S3 bucket.
@@ -646,7 +646,7 @@ if __name__ == '__main__':
 
         print("jid =",jid)
 
-    scas_list = scas_dict.keys()
+    scas_list = list(scas_dict.keys())
 
 
     # Code-timing benchmark.
