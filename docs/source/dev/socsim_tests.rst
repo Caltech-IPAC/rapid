@@ -386,3 +386,67 @@ A new Q3C index on the (meanra, meandec) columns is computed for all AstroObject
 and then these tables are set to logged, clustered, and analyzed.
 The AstroObjects_<fields> database tables are explicitly vacuumed at the end of this process.
 For this test, all of these items within the process took 15.9 hours with 8 parallel processes.
+
+
+7/22/2026
+************************************
+
+This test is similar to the 7/6/2026, with the following exceptions and annotations:
+
+* The SOC-sim ASDF images now have variable sources injected correctly, as well as
+  corrected WCS.  These are located in:
+
+.. code-block::
+
+    s3://socsims-fakesrc-asdf-20260709/
+
+* The ASDF image were converted to FITS files for input to the RAPID pipeline, with
+  5th-order TAN-SIP distortion.
+
+.. code-block::
+
+    s3://socsims-fakesrc-fits-20260709-lite/
+
+* A standalone RAPID reference-image pipeline has been implemented and integrated into the
+  VPO,and was executed successfully in this test to generate all required reference images,
+  before the RAPID science pipelines were run.  These reference image are registered in
+  the RAPID operations database under ``ppid = 12`` (i.e., socsimsdb).
+
+Here are details about how the reference images were configured:
+
+.. code-block::
+
+    [REF_IMAGE]
+    # Pipeline number of reference-image pipeline.
+    ppid = 12
+    # Size of reference image, if it is to be generated.
+    naxis1_refimage = 7000
+    naxis2_refimage = 7000
+    # SCA is 0.11 arcsec per pixel or 0.000030555555556 degrees
+    cdelt1_refimage = -0.000030555555556
+    cdelt2_refimage = 0.000030555555556
+    # Reference image is NOT rotated (CROTA2 = 0.0 degrees)
+    crota2_refimage = 0.0
+    # Need to limit number of reference-image input frames; otherwise AWS Batch job may time out.
+    min_n_images_to_coadd = 2
+    max_n_images_to_coadd = 25
+
+Here are details about how the test was executed via the Virtual Pipeline Operator (VPO):
+
+.. code-block::
+
+    export DBNAME=socsimsdb
+    export STARTDATETIME="2027-10-01 07:12:00"
+    export ENDDATETIME="2027-10-02 00:00:00"
+    export STARTREFIMMJDOBS=0.0
+    export ENDREFIMMJDOBS=999999.9
+    export RUNFID=8
+
+    python3.11 /code/pipeline/virtualPipelineOperator.py 20260706 >& virtualPipelineOperator_20260706.out &
+
+The pipeline product files are located in the usual place:
+
+.. code-block::
+
+    s3://rapid-product-files/20260722/
+
