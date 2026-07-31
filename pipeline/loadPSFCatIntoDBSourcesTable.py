@@ -291,7 +291,7 @@ def write_joined_table_inner_to_csv_file(isdiffpos,
     dec_arr = np.array(t['dec'], dtype=np.float64)
 
     # Vectorize the rtid lookup instead of one SQLite query per row
-    field_arr = np.array([roman_tessellation_db.get_rtid_value(ra, dec)
+    field_arr = np.array([roman_tessellation_db.get_rtid(ra, dec)
                           for ra, dec in zip(ra_arr, dec_arr)])
 
     # Build entire CSV block at once using numpy column stacking
