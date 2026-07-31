@@ -3322,6 +3322,7 @@ class RAPIDDB:
 
         except (Exception, psycopg2.DatabaseError) as error:
             print(f'*** Error bulk-loading data from file ({csv_file_path}) into specified database table ({table_name}); skipping...')
+            print(f'*** Exception: {error}')
             self.exit_code = 67
             exit(self.exit_code)
 
