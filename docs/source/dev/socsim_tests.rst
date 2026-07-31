@@ -408,7 +408,7 @@ This test is similar to the 7/6/2026, with the following exceptions and improvem
       s3://socsims-fakesrc-fits-20260709-lite/
 
 * A standalone RAPID reference-image pipeline has been implemented and integrated into the
-  VPO,and was executed successfully in this test to generate all required reference images,
+  VPO, and was executed successfully in this test to generate all required reference images,
   before the RAPID science pipelines were run.  These reference image are registered in
   the RAPID operations database under ``ppid = 12`` (i.e., socsimsdb).
 
@@ -449,4 +449,35 @@ The pipeline product files are located in the usual place:
 .. code-block::
 
     s3://rapid-product-files/20260722/
+
+Here is a summary of the pipeline exit codes after the test:
+
+.. code-block::
+
+    socsimsdb=> select ppid,exitcode,count(*) from jobs where cast(launched as date) = '20260706' group by ppid, exitcode order by ppid, exitcode;
+
+    socsimsdb=> select ppid,exitcode,count(*) from jobs where cast(launched as date) = '20260722' group by ppid, exitcode order by ppid, exitcode;
+     ppid | exitcode | count
+    ------+----------+-------
+       12 |        0 |   109
+       15 |        0 |  7272
+       17 |        0 |  7067
+       17 |          |   205
+    (4 rows)
+
+One of the AWS-Batch RAPID post-processing pipelines failed, presumably due to a network
+glitch, with the following error:
+
+.. code-block::
+
+    CannotPullContainerError: failed to resolve ref
+    public.ecr.aws/y9b1s7h8/rapid_science_pipeline:latest
+    for schema1 conversion: failed to do request:
+    Head "https://public.ecr.aws/v2/y9b1s7h8/rapid_science_pipeline/manifests/latest":
+    dial tcp 75.2.101.78:443: i/o timeout
+
+This caused the database-registration code to quit early (hence the 205 pipeline instances
+with null exitcodes).
+More work on the VPO and pipeline infrastructure are needed to identify and rerun failed pipelines.
+
 
