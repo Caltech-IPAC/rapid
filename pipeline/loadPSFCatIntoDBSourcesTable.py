@@ -74,29 +74,15 @@ if skip_done_check is None:
 
 print(f"do_done_check = {do_done_check}")
 
-
-# Set SKIPLOADING to skip sources child database table creation and bulk loading of sources records.
-
-skip_loading = os.getenv('SKIPLOADING')
-
-do_loading = False
-if skip_loading is None:
-    do_loading = True
-
-print(f"do_loading = {do_loading}")
-
-
 # Print out basic information for log file.
 
 print("proc_date =",proc_date)
 
 
 # Ensure sqlite database that defines the Roman sky tessellation is available.
-# TODO Decide if we need this
 roman_tessellation_dbname = os.getenv('ROMANTESSELLATIONDBNAME')
 
 if roman_tessellation_dbname is None:
-
     print("*** Error: Env. var. ROMANTESSELLATIONDBNAME not set; quitting...")
     exit(64)
 
@@ -127,7 +113,7 @@ print("cfg_path =",cfg_path)
 
 # Read input parameters from .ini file.
 
-config_input_filename = cfg_path + "/" + cfg_filename_only
+config_input_filename = os.path.join(cfg_path,cfg_filename_only)
 config_input = configparser.ConfigParser()
 config_input.read(config_input_filename)
 
@@ -153,7 +139,7 @@ num_cores = os.getenv('NUM_CORES')
 if num_cores is None:
     num_cores = os.cpu_count()
 else:
-    num_cores = int(num_cores) #TODO default to 18 max?
+    num_cores = int(num_cores)
 
 print("num_cores =",num_cores)
 
@@ -187,7 +173,7 @@ cols.append("npix")
 cols.append("peak")
 cols.append("pid")
 cols.append("isdiffpos")
-cols.append("field") #TODO decide if I want (or can get) this field
+cols.append("field")
 cols.append("hp6")
 cols.append("hp9")
 cols.append("expid")
@@ -494,7 +480,6 @@ def run_single_core_job(jids,meta_list,negative_diffimg_flag,index_thread):
             SET aid = nextval('astroobjects_aid_seq'),
                 is_new = true
             WHERE aid IS NULL;
-
             INSERT INTO astroobjects (aid, ra0, dec0, flux0, field, hp6, hp9)
             SELECT aid, ra, dec, fluxfit, field, hp6, hp9
             FROM {tablename}
@@ -618,7 +603,10 @@ def run_single_core_job(jids,meta_list,negative_diffimg_flag,index_thread):
 
 
 def execute_parallel_processes(jids,meta_list,negative_diffimg_flag,num_cores):
-
+    """
+    This does not currently work with the implementation because it is possible that the same object
+    detected in two different images could be added to the DB at the same time with different aids
+    """
     print("num_cores =",num_cores)
 
     with ProcessPoolExecutor(max_workers=num_cores) as executor:
