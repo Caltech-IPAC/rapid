@@ -148,6 +148,8 @@ class RomanTessellationNSIDE512:
             self.exit_code = 67
             return
 
+        return self.rtid
+
 
     def get_center_sky_position(self,rtid):
 
