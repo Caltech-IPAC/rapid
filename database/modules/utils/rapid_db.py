@@ -3188,7 +3188,7 @@ class RAPIDDB:
 
         query_template =\
             "select crval1,crval2,crpix1,crpix2,cd11,cd12,cd21,cd22, " +\
-            "expid,sca,fid,field,hp6,hp9,mjdobs " +\
+            "expid,sca,fid,field,hp6,hp9,mjdobs,dateobs " +\
             "from L2Files " +\
             "where rid = TEMPLATE_RID; "
 
@@ -3229,6 +3229,7 @@ class RAPIDDB:
             record_dict["hp6"] = record[12]
             record_dict["hp9"] = record[13]
             record_dict["mjdobs"] = record[14]
+            record_dict["dateobs"] = record[14]
 
         else:
             print("*** Error from get_l2file_recs_for_sources: " +
