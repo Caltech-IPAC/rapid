@@ -196,7 +196,7 @@ columns = tuple(cols)
 print(f"Sources columns: {cols_comma_separated_string}")
 
 
-# Get database connection parameters from environment concurrent index generation.
+# Get database connection parameters from environment parallel index generation.
 
 dbport = os.getenv('DBPORT')
 dbname = os.getenv('DBNAME')
@@ -231,10 +231,10 @@ if dbserver is None:
 # Custom methods for parallel processing, taking advantage of multiple cores on the job-launcher machine.
 #-------------------------------------------------------------------------------------------------------------
 
-def create_index_concurrently(sql_query):
+def execute_sql_queries_for_given_sca(sql_queries_dict,sca):
 
 
-    # Connect to database.  Each thread MUST have its own independent database connection.
+    # Connect to database.  Each thread MUST have its own independent database connection for parallelism.
 
     try:
         conn = psycopg2.connect(host=dbserver,database=dbname,port=dbport,user=dbuser,password=dbpass)
@@ -244,21 +244,23 @@ def create_index_concurrently(sql_query):
         return exitcode
 
 
-    # CREATE INDEX CONCURRENTLY cannot run inside a transaction block, so
-    # set autocommit mode to True.
-
-    conn.autocommit = True
-
-
-    # Execute the CREATE INDEX CONCURRENTLY query.
+    # Execute the SQL query.
 
     try:
-        with conn.cursor() as cur:
-            print(f"Starting: {sql_query}")
-            cur.execute(sql_query)
-            print(f"Finished: {sql_query}")
+
+        sql_queries = sql_queries_dict[sca]
+
+        for sql_query in sql_queries:
+
+            with conn.cursor() as cur:
+                print(f"Starting: {sql_query}")
+                cur.execute(sql_query)
+                print(f"Finished: {sql_query}")
+                conn.commit()           # Commit database transaction
+
     except Exception as e:
         print(f"Error running {sql_query}: {e}")
+        conn.rollback()                             # Rollback database transaction
         exitcode = 64
         return exitcode
     finally:
@@ -830,73 +832,35 @@ if __name__ == '__main__':
     if jid_list and scas_list:
 
 
-        # Index concurrently sources database tables for all SCAs associated with processing date.
+        # Index sources database tables for all SCAs associated with processing date.
 
-        print("Indexing concurrently sources database tables for all SCAs associated with processing date...")
+        print("Indexing sources database tables for all SCAs associated with processing date...")
 
         sql_queries = []
         sql_queries.append("SET default_tablespace = pipeline_indx_01;")
         dbh.execute_sql_queries(sql_queries)
 
 
-        # Define the various CREATE INDEX CONCURRENTLY queries for different tables.  These cannot
+        # Define the various CREATE INDEX queries for different tables.  These cannot be
         # run in parallel on the same table.  Execute them using parallel worker threads.
 
-        sql_queries = []
+        sql_queries_dict = {}
+
         for sca in scas_list:
-            sql_queries.append(f"CREATE INDEX CONCURRENTLY sources_{proc_date}_{sca}_pid_idx ON sources_{proc_date}_{sca} (pid);")
+            sql_queries = []
+            sql_queries.append(f"CREATE INDEX sources_{proc_date}_{sca}_pid_idx ON sources_{proc_date}_{sca} (pid);")
+            sql_queries.append(f"CREATE INDEX sources_{proc_date}_{sca}_expid_idx ON sources_{proc_date}_{sca} (expid);")
+            sql_queries.append(f"CREATE INDEX sources_{proc_date}_{sca}_sca_idx ON sources_{proc_date}_{sca} (sca);")
+            sql_queries.append(f"CREATE INDEX sources_{proc_date}_{sca}_field_idx ON sources_{proc_date}_{sca} (field);")
+            sql_queries.append(f"CREATE INDEX sources_{proc_date}_{sca}_flags_idx ON sources_{proc_date}_{sca} (flags);")
+            sql_queries.append(f"CREATE INDEX sources_{proc_date}_{sca}_mjdobs_idx ON sources_{proc_date}_{sca} (mjdobs);")
+            sql_queries.append(f"CREATE INDEX sources_{proc_date}_{sca}_sid_idx ON sources_{proc_date}_{sca} (sid);")
+            sql_queries.append(f"CREATE INDEX sources_{proc_date}_{sca}_radec_idx ON sources_{proc_date}_{sca} (q3c_ang2ipix(ra, dec));")
+            sql_queries_dict[sca] = sql_queries
 
         with ThreadPoolExecutor(max_workers = len(scas_list)) as executor:
-            executor.map(create_index_concurrently, sql_queries)
-
-        sql_queries = []
-        for sca in scas_list:
-            sql_queries.append(f"CREATE INDEX CONCURRENTLY sources_{proc_date}_{sca}_expid_idx ON sources_{proc_date}_{sca} (expid);")
-
-        with ThreadPoolExecutor(max_workers = len(scas_list)) as executor:
-            executor.map(create_index_concurrently, sql_queries)
-
-        sql_queries = []
-        for sca in scas_list:
-            sql_queries.append(f"CREATE INDEX CONCURRENTLY sources_{proc_date}_{sca}_sca_idx ON sources_{proc_date}_{sca} (sca);")
-
-        with ThreadPoolExecutor(max_workers = len(scas_list)) as executor:
-            executor.map(create_index_concurrently, sql_queries)
-
-        sql_queries = []
-        for sca in scas_list:
-            sql_queries.append(f"CREATE INDEX CONCURRENTLY sources_{proc_date}_{sca}_field_idx ON sources_{proc_date}_{sca} (field);")
-
-        with ThreadPoolExecutor(max_workers = len(scas_list)) as executor:
-            executor.map(create_index_concurrently, sql_queries)
-
-        sql_queries = []
-        for sca in scas_list:
-            sql_queries.append(f"CREATE INDEX CONCURRENTLY sources_{proc_date}_{sca}_flags_idx ON sources_{proc_date}_{sca} (flags);")
-
-        with ThreadPoolExecutor(max_workers = len(scas_list)) as executor:
-            executor.map(create_index_concurrently, sql_queries)
-
-        sql_queries = []
-        for sca in scas_list:
-            sql_queries.append(f"CREATE INDEX CONCURRENTLY sources_{proc_date}_{sca}_mjdobs_idx ON sources_{proc_date}_{sca} (mjdobs);")
-
-        with ThreadPoolExecutor(max_workers = len(scas_list)) as executor:
-            executor.map(create_index_concurrently, sql_queries)
-
-        sql_queries = []
-        for sca in scas_list:
-            sql_queries.append(f"CREATE INDEX CONCURRENTLY sources_{proc_date}_{sca}_sid_idx ON sources_{proc_date}_{sca} (sid);")
-
-        with ThreadPoolExecutor(max_workers = len(scas_list)) as executor:
-            executor.map(create_index_concurrently, sql_queries)
-
-        sql_queries = []
-        for sca in scas_list:
-            sql_queries.append(f"CREATE INDEX CONCURRENTLY sources_{proc_date}_{sca}_radec_idx ON sources_{proc_date}_{sca} (q3c_ang2ipix(ra, dec));")
-
-        with ThreadPoolExecutor(max_workers = len(scas_list)) as executor:
-            executor.map(create_index_concurrently, sql_queries)
+            for sca in scas_list:
+                executor.submit(execute_sql_queries_for_given_sca, sql_queries_dict, sca)
 
 
         # Cluster, analyze, and apply grants to sources database tables for all SCAs associated with processing date.
