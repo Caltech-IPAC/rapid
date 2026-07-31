@@ -281,89 +281,38 @@ def write_joined_table_inner_to_csv_file(isdiffpos,
                                          hp6_arr,
                                          hp9_arr):
 
-    for i, row in enumerate(joined_table_inner):
+    nrows = len(joined_table_inner)
+    if nrows == 0:
+        return
 
-        nums = ""
-        for col in cols:
+    # Column mapping (catalog name -> db name) applied once
+    t = joined_table_inner
+    ra_arr = np.array(t['ra'], dtype=np.float64)
+    dec_arr = np.array(t['dec'], dtype=np.float64)
 
-            cat_col = col
+    # Vectorize the rtid lookup instead of one SQLite query per row
+    field_arr = np.array([roman_tessellation_db.get_rtid_value(ra, dec)
+                          for ra, dec in zip(ra_arr, dec_arr)])
 
-            if cat_col == 'xfit':
-                cat_col = 'x_fit'
-            elif cat_col == 'yfit':
-                cat_col = 'y_fit'
-            elif cat_col == 'fluxfit':
-                cat_col = 'flux_fit'
-            elif cat_col == 'xerr':
-                cat_col = 'x_err'
-            elif cat_col == 'yerr':
-                cat_col = 'y_err'
-            elif cat_col == 'fluxerr':
-                cat_col = 'flux_err'
-            elif cat_col == 'npixfit':
-                cat_col = 'n_pixels_fit'
-            elif cat_col == 'redchi':
-                cat_col = 'reduced_chi2'
-            elif cat_col == 'npix':
-                cat_col = 'n_pixels'
+    # Build entire CSV block at once using numpy column stacking
+    data = np.column_stack([
+        np.array(t['id']),
+        ra_arr, dec_arr,
+        np.array(t['x_fit']), np.array(t['y_fit']), np.array(t['flux_fit']),
+        np.array(t['x_err']), np.array(t['y_err']), np.array(t['flux_err']),
+        np.array(t['n_pixels_fit']),
+        np.array(t['qfit']), np.array(t['cfit']),
+        np.array(t['reduced_chi2']),
+        np.array(t['flags']),
+        np.array(t['sharpness']), np.array(t['roundness1']), np.array(t['roundness2']),
+        np.array(t['n_pixels']), np.array(t['peak']),
+        np.full(nrows, pid), np.full(nrows, isdiffpos, dtype=object),
+        field_arr, hp6_arr, hp9_arr,
+        np.full(nrows, expid), np.full(nrows, fid),
+        np.full(nrows, sca), np.full(nrows, mjdobs),
+    ])
 
-            if cat_col == 'pid':
-                continue
-            if cat_col == 'isdiffpos':
-                continue
-            if cat_col == 'field':
-                continue
-            if cat_col == 'hp6':
-                continue
-            if cat_col == 'hp9':
-                continue
-            if cat_col == 'expid':
-                continue
-            if cat_col == 'fid':
-                continue
-            if cat_col == 'sca':
-                continue
-            if cat_col == 'mjdobs':
-                continue
-
-            num = str(row[cat_col])
-            nums = nums + num + ","
-
-
-        # The field,hp6,hp9 indexes must be overridden with
-        # the actual ra,dec position of the source.
-
-        ra = float(row["ra"])
-        dec = float(row["dec"])
-        roman_tessellation_db.get_rtid(ra,dec)
-        field = roman_tessellation_db.rtid
-        hp6 = hp6_arr[i]
-        hp9 = hp9_arr[i]
-
-        num = str(pid)
-        nums = nums + num + ","
-        num = str(isdiffpos)
-        nums = nums + num + ","
-        num = str(field)
-        nums = nums + num + ","
-        num = str(hp6)
-        nums = nums + num + ","
-        num = str(hp9)
-        nums = nums + num + ","
-        num = str(expid)
-        nums = nums + num + ","
-        num = str(fid)
-        nums = nums + num + ","
-        num = str(sca)
-        nums = nums + num + ","
-        num = str(mjdobs)
-        nums = nums + num + ","
-
-        # Slice the string to get all but the last character, then add the newline character
-        new_character = "\n"
-        line_to_write_to_file = nums[:-1] + new_character
-
-        csv_fh.write(line_to_write_to_file)
+    np.savetxt(csv_fh, data, delimiter=',', fmt='%s')
 
 
 def run_single_core_job(jids,overlapping_fields_list,meta_list,index_thread):
