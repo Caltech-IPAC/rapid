@@ -44,7 +44,7 @@ CREATE TABLE sources (
     npixfit smallint NOT NULL,                 -- Number of unmasked pixels used to fit the source
     qfit real NOT NULL,                        -- Sum of absolute-value fit residuals divided by fit flux
     cfit  real NOT NULL,                       -- Fit residual in initial central pixel value divided by fit flux
-    redchi real NOT NULL DEFAULT 0.0           -- Reduced chi2
+    redchi real NOT NULL DEFAULT 0.0,           -- Reduced chi2
     flags smallint NOT NULL,                   -- photutils bitwise flags
     sharpness real NOT NULL,                   -- Object sharpness
     roundness1 real NOT NULL,                  -- Object roundness based on symmetry
@@ -57,7 +57,7 @@ CREATE TABLE sources (
     expid integer NOT NULL,                    -- Exposures primary key
     fid smallint NOT NULL,                     -- Filter ID
     sca smallint NOT NULL,                     -- SCA number (1...18)
-    mjdobs double precision NOT NULL           -- MJD OBS of exposure
+    mjdobs double precision NOT NULL,           -- MJD OBS of exposure
     PRIMARY KEY (aid, sid)                     -- partition key must be in the PK
 ) PARTITION BY HASH (aid) ;
 
@@ -241,7 +241,7 @@ CREATE TABLE astroobjectsmeta (
     aid bigint NOT NULL,
     meanra double precision NOT NULL,           -- Mean RA
     cos_sum double precision NOT NULL,          -- sum(cos(RA)) used for circular mean to avoid 0/360 average issue
-    sin_sum double preciscion NOT NULL,         -- sum(sin(RA))
+    sin_sum double precision NOT NULL,         -- sum(sin(RA))
     stdevra real NOT NULL,                      -- Standard deviation of RA
     meandec double precision NOT NULL,          -- Mean Dec
     stdevdec real NOT NULL,                     -- Standard deviation of Dec
