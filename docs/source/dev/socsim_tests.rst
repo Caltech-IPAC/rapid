@@ -400,7 +400,7 @@ This test is similar to the 7/6/2026, with the following exceptions and improvem
 
       s3://socsims-fakesrc-asdf-20260709/
 
-* The ASDF image were converted to FITS files for input to the RAPID pipeline, with
+* The SOC-sim ASDF images were converted to FITS files for input to the RAPID pipeline, with
   5th-order TAN-SIP distortion.
 
   .. code-block::
@@ -408,7 +408,8 @@ This test is similar to the 7/6/2026, with the following exceptions and improvem
       s3://socsims-fakesrc-fits-20260709-lite/
 
 * A standalone RAPID reference-image pipeline has been implemented and integrated into the
-  VPO, and was executed successfully in this test to generate all required reference images,
+  VPO, and was executed successfully in this test to generate all required reference images
+  (109 in all for ``fid = 8``),
   before the RAPID science pipelines were run.  These reference image are registered in
   the RAPID operations database under ``ppid = 12`` (i.e., socsimsdb).
 
