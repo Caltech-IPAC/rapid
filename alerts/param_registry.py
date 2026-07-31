@@ -37,9 +37,12 @@ Nullable union types automatically get "default": null in the .avsc.
 
 from dataclasses import dataclass
 from enum import Enum
-from typing import Any, Callable, Optional
+from typing import Any, Callable, TypeAlias
 
-VERSION = "01.01"
+VERSION = "00.01"
+
+# Keep for type checking and function hints
+AvroType: TypeAlias = str | list["AvroType"] | dict[str, Any]
 
 ROMAN_FILTERS = ["F062", "F087", "F106", "F129", "F146", "F158", "F184", "F213"]
 
@@ -91,12 +94,12 @@ class Param:
         overrides `attr`.
     """
     name: str
-    avro: Any
+    avro: AvroType
     doc: str
     status: Status
-    source: Optional[str] = None
-    attr: Optional[str] = None
-    getter: Optional[Callable] = None
+    source: str | None = None
+    attr: str | None = None
+    getter: Callable[[Any], Any] | None = None
 
 
 @dataclass(frozen=True)
@@ -114,10 +117,10 @@ class Record:
     """
     name: str
     doc: str
-    params: tuple
+    params: tuple[Param, ...]
 
 
-def is_nullable(avro_type):
+def is_nullable(avro_type: AvroType) -> bool:
     """Report whether an Avro type spec is nullable.
 
     Parameters
@@ -586,7 +589,7 @@ RECORDS = (
 # Status report: python -m alerts.param_registry [--summary]
 # ---------------------------------------------------------------------------
 
-def print_report(summary=False):
+def print_report(summary: bool = False) -> None:
     """Print the implemented/stub status of every param, per record.
 
     Parameters

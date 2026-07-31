@@ -1,12 +1,15 @@
 """
+File    : cli.py
+Author  : Emily Everetts
+Date    : 07/26
+
 Command-line alert production.
 
-The selector implies the mode:
+Usage:
 
     python -m alerts.cli <source_id>                  # one alert
-    python -m alerts.cli --pid <pid>                  # one diff image
-    python -m alerts.cli --exposure <expid> --sca <n> # same, by
-                                                            # exposure + SCA
+    python -m alerts.cli --pid <pid>                  # one diff image by pid
+    python -m alerts.cli --exposure <expid> --sca <n> # one diff image by exposure + SCA
 """
 
 import argparse
@@ -28,12 +31,12 @@ else:
                                       produce_alert)
     from alerts.providers import AlertDataProvider
 
+from database.modules.utils.rapid_db import RAPIDDB
 
-def make_provider(diff_flavor="sfft"):
+
+def make_provider(diff_flavor: str = "sfft") -> AlertDataProvider:
     """Connect to the RAPID operations database and wrap it in a provider.
-
-    A future file-system or sqlite backend would be constructed here instead
-    (see the porting notes at the bottom of providers.py).
+    (see providers.py)
 
     Parameters
     ----------
@@ -51,30 +54,28 @@ def make_provider(diff_flavor="sfft"):
         If the database connection cannot be established (missing DB
         environment variables, or the database is unreachable).
     """
-    # RAPIDDB lives at <repo>/database/modules/utils/rapid_db.py
+    # RAPIDDB, from rapid/database/modules/utils/rapid_db.py
     repo_root = Path(__file__).resolve().parents[1]
     sys.path.insert(0, str(repo_root))
-    from database.modules.utils.rapid_db import RAPIDDB
     db = RAPIDDB()
     # RAPIDDB reports connection failure by exit_code/conn=None rather than
-    # raising; fail here with the actual problem, not an AttributeError on
-    # conn.cursor() at first query.
+    # raising; fail here with the actual problem.
     if getattr(db, "conn", None) is None or db.exit_code >= 64:
         raise SystemExit(
-            "cannot connect to the RAPID database: check that DBSERVER, "
+            "Cannot connect to the RAPID database: check that DBSERVER, "
             "DBPORT, DBNAME, DBUSER and DBPASS are set in this shell, and "
             "that this machine can reach the DB (VPN up / EC2 security "
             "group allows it)")
     return AlertDataProvider(db, diff_flavor=diff_flavor)
 
 
-def main(argv=None):
-    """Run one alert-production command.
+def main(argv: list[str] | None = None) -> int:
+    """Run alert-production command line options
 
     Parameters
     ----------
     argv : list of str, optional
-        Command-line arguments. None (the default) means ``sys.argv[1:]``.
+        Command-line arguments. None takes input from sys.argv
 
     Returns
     -------
@@ -118,11 +119,10 @@ def main(argv=None):
                              "(default: %(default)s)")
     args = parser.parse_args(argv)
 
-    # the CLI is the application, so logging policy is decided here (library
-    # modules only ever create loggers); log records go to stderr, the final
-    # result line goes to stdout
+    # Log records go to stderr, the final result line goes to stdout
     logging.basicConfig(level=getattr(logging, args.log_level))
 
+    # Validate arguments
     if (args.exposure is None) != (args.sca is None):
         parser.error("--exposure and --sca must be given together")
     selectors = (args.sid is not None) + (args.pid is not None) \
@@ -131,8 +131,10 @@ def main(argv=None):
         parser.error("give exactly one of: a source ID, --pid, or "
                      "--exposure with --sca")
 
+    # Make provider
     provider = make_provider(diff_flavor=args.diff_flavor)
 
+    # Make producer, if kafka arg is True
     producer = None
     if args.kafka:
         from confluent_kafka import Producer
@@ -142,10 +144,13 @@ def main(argv=None):
             "message.max.bytes": "15728640",
         })
 
+    # Alert archive (produce.py)
     archive_ctx = (open_alert_archive(
                        args.save,
                        codec="null" if args.no_compress else "deflate")
                    if args.save else contextlib.nullcontext())
+
+    # Produce alert to archive
     with archive_ctx as archive:
         if args.sid is not None:
             alert_bytes = produce_alert(provider, args.sid,
@@ -159,6 +164,8 @@ def main(argv=None):
                                   producer=producer, topic=args.topic,
                                   archive=archive)
             print(f"pid={pid}: {count} alerts produced")
+
+    # Save archive file to path
     if args.save:
         print(f"saved to {args.save}")
     return 0

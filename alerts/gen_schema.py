@@ -1,16 +1,13 @@
 """
+File    : gen_schema.py
+Author  : Emily Everetts
+Date    : 07/2026
+
 Generate the .avsc Avro schema files from the registry in param_registry.py.
-
-Replaces generate_schema.sh: the registry is the source of truth and the
-.avsc files are build products (still committed, since downstream consumers
-need them). --check verifies the committed files match the registry without
-writing anything, so drift is caught mechanically.
-
-Note: the generated files contain a "fields" array -- that token is Avro's,
-even though this codebase calls schema fields "params".
+Catches drift between schema and data loads automatically.
 
 Usage:
-    python -m alerts.gen_schema              # write current VERSION
+    python -m alerts.gen_schema              # write current VERSION (from registry)
     python -m alerts.gen_schema 01.02        # write a new version
     python -m alerts.gen_schema --check      # compare, don't write
 """
@@ -20,20 +17,28 @@ import difflib
 import json
 import sys
 from pathlib import Path
+from typing import TYPE_CHECKING, Any
 
 # Support both `python -m alerts.gen_schema` (module) and
-# `python gen_schema.py` (script), like cli.py.
+# `python gen_schema.py` (script)
 if __package__:
-    from .param_registry import RECORDS, VERSION, Status, is_nullable
+    from .param_registry import RECORDS, VERSION, Record, Status, is_nullable
 else:
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-    from alerts.param_registry import (RECORDS, VERSION, Status,
+    from alerts.param_registry import (RECORDS, VERSION, Record, Status,
                                        is_nullable)
+
+# Annotation-only: imported here (not in the dual runtime import above)
+# because Pyright only treats AvroType as a type alias while the symbol has
+# a single declaration -- one name imported on both `if __package__` branches
+# gets two and stops working in type expressions. (Classes such as Record
+# are not affected; only aliases are.)
+if TYPE_CHECKING:
+    from .param_registry import AvroType
 
 SCHEMA_ROOT = Path(__file__).resolve().parent / "schema"
 
-
-def _resolve_type(avro_type, namespace):
+def _resolve_type(avro_type: "AvroType", namespace: str) -> "AvroType":
     """Expand ``"@record"`` references to namespace-qualified names.
 
     Parameters
@@ -67,8 +72,11 @@ def _resolve_type(avro_type, namespace):
     raise TypeError(f"Unexpected avro type spec: {avro_type!r}")
 
 
-def record_schema(record, version, namespace):
-    """Build the Avro schema dict for one registry record.
+def record_schema(record: Record, version: str,
+                  namespace: str) -> dict[str, Any]:
+    """
+    Build the Avro schema dict for one registry record.
+    Note: Params with status NOT_USED are excluded.
 
     Parameters
     ----------
@@ -83,9 +91,11 @@ def record_schema(record, version, namespace):
     -------
     dict
         The record's Avro schema, ready to be JSON-serialized as an
-        ``.avsc`` file. Params with status NOT_USED are excluded.
+        ``.avsc`` file.
     """
-    avro_fields = []  # "fields" is the Avro spec's name for what we call params
+    # Avro schema have 'fields', which we call params
+    avro_fields = []
+    # Loop through
     for p in record.params:
         if p.status is Status.NOT_USED:
             continue
@@ -104,7 +114,8 @@ def record_schema(record, version, namespace):
     }
 
 
-def schema_problems(version=VERSION, schema_root=SCHEMA_ROOT):
+def schema_problems(version: str = VERSION,
+                    schema_root: str | Path = SCHEMA_ROOT) -> list[str]:
     """Compare the on-disk .avsc files for a version against the registry.
 
     produce.load_schema() calls this so that stale files fail at load time
@@ -148,7 +159,9 @@ def schema_problems(version=VERSION, schema_root=SCHEMA_ROOT):
     return problems
 
 
-def generate(version=VERSION, schema_root=SCHEMA_ROOT, check=False):
+def generate(version: str = VERSION,
+             schema_root: str | Path = SCHEMA_ROOT,
+             check: bool = False) -> bool:
     """Write (or with ``check=True``, verify) the .avsc files for a version.
 
     Parameters
@@ -206,7 +219,7 @@ def generate(version=VERSION, schema_root=SCHEMA_ROOT, check=False):
     return ok
 
 
-def main(argv=None):
+def main(argv: list[str] | None = None) -> int:
     """Run schema generation (or --check) from the command line.
 
     Parameters

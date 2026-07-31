@@ -81,15 +81,22 @@ import logging
 import os
 import tempfile
 from dataclasses import dataclass
-from typing import Optional
+from typing import TYPE_CHECKING, Any, Iterator, Sequence, TypeAlias
 from urllib.parse import urlparse
 
 import fitsio
 import numpy as np
 
+if TYPE_CHECKING:
+    from fitsio.header import FITSHDR
+
 logger = logging.getLogger(__name__)
 
 PRV_WINDOW_DAYS = 365.25  # default look-back window for previous detections
+
+#: One loaded full-chip image as (pixels, header); (None, None) when the
+#: file is missing, unreadable, or has no image HDU.
+LoadedImage: TypeAlias = "tuple[np.ndarray | None, FITSHDR | None]"
 
 
 # ---------------------------------------------------------------------------
@@ -114,29 +121,29 @@ class Source:
     xfit: float
     yfit: float
     band: str
-    aid: Optional[int] = None        # associated object; set once known
-    xerr: Optional[float] = None
-    yerr: Optional[float] = None
-    fluxfit: Optional[float] = None
-    fluxerr: Optional[float] = None
+    aid: int | None = None        # associated object; set once known
+    xerr: float | None = None
+    yerr: float | None = None
+    fluxfit: float | None = None
+    fluxerr: float | None = None
     flags: int = 0
     field: int = 0
     hp6: int = 0
     hp9: int = 0
     pid: int = 0
     isdiffpos: bool = True
-    qfit: Optional[float] = None
-    cfit: Optional[float] = None
-    redchi: Optional[float] = None
-    npixfit: Optional[int] = None
-    sharpness: Optional[float] = None
-    roundness1: Optional[float] = None
-    roundness2: Optional[float] = None
-    peak: Optional[float] = None
-    exptime: Optional[float] = None
+    qfit: float | None = None
+    cfit: float | None = None
+    redchi: float | None = None
+    npixfit: int | None = None
+    sharpness: float | None = None
+    roundness1: float | None = None
+    roundness2: float | None = None
+    peak: float | None = None
+    exptime: float | None = None
 
     @property
-    def snr(self):
+    def snr(self) -> float | None:
         """float or None: signal-to-noise ratio, fluxfit / fluxerr.
 
         None when the flux is missing or the uncertainty is zero/missing.
@@ -146,7 +153,7 @@ class Source:
         return None
 
     @classmethod
-    def from_row(cls, row, strict=False):
+    def from_row(cls, row: dict[str, Any], strict: bool = False) -> "Source":
         """Build a Source from a dict, ignoring keys that are not fields.
 
         Parameters
@@ -194,15 +201,16 @@ class ObjectRecord:
     stdevra: float
     stdevdec: float
     nsources: int
-    first_mjd: Optional[float] = None
-    last_mjd: Optional[float] = None
+    first_mjd: float | None = None
+    last_mjd: float | None = None
     validity_mjd: float = 0.0
 
     # fields assemble_alert() fills in later; never storage columns
     FILLED_LATER = frozenset({"first_mjd", "last_mjd", "validity_mjd"})
 
     @classmethod
-    def from_row(cls, row, strict=False):
+    def from_row(cls, row: dict[str, Any],
+                 strict: bool = False) -> "ObjectRecord":
         """Build an ObjectRecord from a dict, ignoring non-field keys.
 
         (A ``SELECT a.*`` row carries meanra, flux0, hp6, ... -- those are
@@ -258,9 +266,9 @@ class ForcedPhot:
     dec: float
     mjdobs: float
     time_processed: float
-    band: Optional[str] = None
-    flux: Optional[float] = None
-    fluxerr: Optional[float] = None
+    band: str | None = None
+    flux: float | None = None
+    fluxerr: float | None = None
 
 
 @dataclass
@@ -270,11 +278,11 @@ class Cutouts:
     Each non-None member is a complete little FITS file: parse with
     ``fits.open(io.BytesIO(cutouts.difference))`` or write it straight to
     disk for DS9."""
-    difference: Optional[bytes] = None
-    science: Optional[bytes] = None
-    template: Optional[bytes] = None
+    difference: bytes | None = None
+    science: bytes | None = None
+    template: bytes | None = None
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         """Summarize each stamp as its byte count.
 
         The default dataclass repr would dump ~80 kB of raw bytes per
@@ -328,7 +336,7 @@ WCS_CARD_PREFIXES = (
 )
 
 
-def load_fits_image(path):
+def load_fits_image(path: str | None) -> LoadedImage:
     """Load the pixels and header of a FITS image.
 
     Reads the first HDU that has pixel data (primary for the pipeline
@@ -360,7 +368,9 @@ def load_fits_image(path):
     return None, None
 
 
-def extract_stamp(image_data, x, y, header=None, half_width=STAMP_HALF_WIDTH):
+def extract_stamp(image_data: np.ndarray | None, x: float | None,
+                  y: float | None, header: "FITSHDR | None" = None,
+                  half_width: int = STAMP_HALF_WIDTH) -> bytes | None:
     """Cut a square stamp around a pixel position, as FITS-file bytes.
 
     The returned bytes are a small single-HDU FITS file, which is what the
@@ -462,7 +472,7 @@ def extract_stamp(image_data, x, y, header=None, half_width=STAMP_HALF_WIDTH):
 CATALOG_FILE = None
 
 
-def parse_catalog(path):
+def parse_catalog(path: str) -> tuple[Any, Any]:
     """Parse the auxiliary source catalog for position matching (STUB).
 
     Port from generate_alerts.py:parse_sextractor / load_psf_catalog.
@@ -490,7 +500,8 @@ def parse_catalog(path):
         "add-alert-generation:alerts/roman_rapid_alerts/generate_alerts.py")
 
 
-def match_catalog_row(x, y, index, rows, radius=3.0):
+def match_catalog_row(x: float, y: float, index: Any, rows: Any,
+                      radius: float = 3.0) -> Any:
     """Find the catalog row nearest to a pixel position (STUB).
 
     Port from generate_alerts.py:match_psf.
@@ -543,7 +554,7 @@ class AlertDataProvider:
     assemble_alert() cannot tell the difference, by design.
     """
 
-    def __init__(self, db, diff_flavor="sfft"):
+    def __init__(self, db: Any, diff_flavor: str = "sfft") -> None:
         """
         Parameters
         ----------
@@ -567,26 +578,27 @@ class AlertDataProvider:
         # Per-chip prefetch state, filled by iter_sources(pid). While the
         # current chip matches source.pid, get_object_for_source() and
         # get_prv_detections() answer from these dicts.
-        self._chip_pid = None
-        self._chip_objects = {}       # sid -> astroobjects row dict
-        self._chip_history = {}       # aid -> [Source, ...], oldest first
+        self._chip_pid: int | None = None
+        self._chip_objects: dict[int, dict[str, Any]] = {}  # sid -> astroobjects row dict
+        self._chip_history: dict[int, list[Source]] = {}    # aid -> [Source, ...], oldest first
         self._chip_window_days = 0.0  # look-back window the prefetch covers
         # Full chip images for cutouts, loaded lazily by get_cutouts() and
         # held until a source from a different chip comes along. S3 files
         # are staged here before loading; constant product basenames mean
         # each chip's downloads replace the previous chip's files.
-        self._images_pid = None
-        self._images = {}             # "diff"|"sci"|"ref" -> (pixels, header)
+        self._images_pid: int | None = None
+        self._images: dict[str, LoadedImage] = {}  # "diff"|"sci"|"ref" -> (pixels, header)
         self._staging_dir = tempfile.mkdtemp(prefix="rapid_cutouts_")
         self._forced_phot_logged = False  # log the not-implemented note once
         # Auxiliary-catalog cross-reference state. The catalog is staged and
         # parsed once per pid -- same lifetime as _images. While CATALOG_FILE
         # is unset, _load_catalog() short-circuits before any query or stage,
         # so cross-referencing costs nothing beyond a cache check per source.
-        self._catalog_pid = None
-        self._catalog = (None, None)  # (rows, index) from parse_catalog
+        self._catalog_pid: int | None = None
+        self._catalog: tuple[Any, Any] = (None, None)  # (rows, index) from parse_catalog
 
-    def _query(self, sql, params=None):
+    def _query(self, sql: str,
+               params: Sequence[Any] | None = None) -> list[dict[str, Any]]:
         """Run one query on a short-lived cursor.
 
         Parameters
@@ -609,7 +621,7 @@ class AlertDataProvider:
         finally:
             cur.close()
 
-    def _partition_exists(self, field):
+    def _partition_exists(self, field: int) -> bool:
         """Check that a field's merges/astroobjects partitions exist.
 
         merges/astroobjects are per-field partition tables, and a chip
@@ -638,7 +650,7 @@ class AlertDataProvider:
                 "treated as unassociated", int(field), field)
         return exists
 
-    def resolve_pid(self, expid, sca):
+    def resolve_pid(self, expid: int, sca: int) -> int:
         """Map (exposure, SCA) to the difference-image pid to alert on.
 
         One pid is one processing of one (exposure, SCA), but the mapping
@@ -683,7 +695,7 @@ class AlertDataProvider:
                 expid, sca, len(rows), rows[0]["pid"])
         return int(rows[0]["pid"])
 
-    def get_detection(self, sid):
+    def get_detection(self, sid: int) -> Source:
         """Fetch one detection by source ID.
 
         The sources row maps onto Source with column names matching
@@ -725,7 +737,7 @@ class AlertDataProvider:
         self._crossref(source)
         return source
 
-    def iter_sources(self, pid):
+    def iter_sources(self, pid: int) -> Iterator[Source]:
         """Iterate over every detection on one difference image (chip).
 
         One chip = one difference image = one diffimages.pid. Fetches
@@ -761,7 +773,8 @@ class AlertDataProvider:
         self._prefetch_chip(pid, sources)
         yield from sources
 
-    def _prefetch_chip(self, pid, sources, window_days=PRV_WINDOW_DAYS):
+    def _prefetch_chip(self, pid: int, sources: list[Source],
+                       window_days: float = PRV_WINDOW_DAYS) -> None:
         """Load a whole chip's associations and histories into memory.
 
         After this, the per-source get_* calls answer from memory instead
@@ -825,7 +838,7 @@ class AlertDataProvider:
         self._chip_history = history_by_aid
         self._chip_window_days = window_days
 
-    def get_object_for_source(self, detection):
+    def get_object_for_source(self, detection: Source) -> ObjectRecord | None:
         """Resolve a detection's persistent-object association.
 
         The merges/astroobjects tables are partitioned by Roman field, so
@@ -872,7 +885,8 @@ class AlertDataProvider:
         # flux0/meanflux/stdevflux, hp6/hp9.
         return ObjectRecord.from_row(rows[0], strict=True)
 
-    def get_prv_detections(self, detection, obj, window_days=PRV_WINDOW_DAYS):
+    def get_prv_detections(self, detection: Source, obj: ObjectRecord,
+                           window_days: float = PRV_WINDOW_DAYS) -> list[Source]:
         """Fetch an object's other detections before the trigger.
 
         ``merges_<field>`` gathers every sid associated with the object,
@@ -926,7 +940,8 @@ class AlertDataProvider:
             detections.append(Source.from_row(row, strict=True))
         return detections
 
-    def get_forced_photometry(self, detection, obj):
+    def get_forced_photometry(self, detection: Source,
+                              obj: ObjectRecord) -> list[ForcedPhot]:
         """Fetch the forced-photometry history at an object position (STUB).
 
         Forced photometry in RAPID produces FITS files, not DB records;
@@ -952,7 +967,7 @@ class AlertDataProvider:
             self._forced_phot_logged = True
         return []
 
-    def get_cutouts(self, detection):
+    def get_cutouts(self, detection: Source) -> Cutouts:
         """Cut the three image stamps around a detection's position.
 
         Cutouts are generated on the fly: stamps sliced out of the chip's
@@ -985,7 +1000,7 @@ class AlertDataProvider:
         return Cutouts(difference=stamps["diff"], science=stamps["sci"],
                        template=stamps["ref"])
 
-    def _stage(self, url):
+    def _stage(self, url: str) -> str | None:
         """Make one product file available locally.
 
         Parameters
@@ -1013,7 +1028,7 @@ class AlertDataProvider:
             logger.warning("Could not stage %s", url, exc_info=True)
             return None
 
-    def _chip_images(self, pid):
+    def _chip_images(self, pid: int) -> dict[str, LoadedImage]:
         """Load (and cache) the chip's three full cutout-source images.
 
         diffimages.filename locates the job directory; the three cutout
@@ -1055,7 +1070,7 @@ class AlertDataProvider:
         self._images_pid = pid
         return self._images
 
-    def _check_grids_match(self, pid):
+    def _check_grids_match(self, pid: int) -> None:
         """Drop loaded images whose pixel grid differs from the diff image.
 
         Cutout positions assume the three images share one pixel grid.
@@ -1079,8 +1094,11 @@ class AlertDataProvider:
             if header is None:
                 continue
             for card in grid_cards:
-                if np.isclose(header.get(card, np.nan),
-                              diff_header.get(card, np.nan),
+                # Any: FITSHDR.get is untyped (fitsio ships no type info);
+                # with the np.nan default these cards are always numeric
+                val: Any = header.get(card, np.nan)
+                ref: Any = diff_header.get(card, np.nan)
+                if np.isclose(float(val), float(ref),
                               rtol=1e-6, atol=1e-8):
                     continue
                 logger.warning(
@@ -1093,7 +1111,7 @@ class AlertDataProvider:
 
     # -- Auxiliary-catalog cross-reference ---------------------------------
 
-    def _load_catalog(self, pid):
+    def _load_catalog(self, pid: int) -> tuple[Any, Any]:
         """Load (and cache) the chip's auxiliary source catalog.
 
         Staged and parsed once per pid -- same lifetime as _images. While
@@ -1132,7 +1150,7 @@ class AlertDataProvider:
                            "cross-reference skipped", pid)
         return self._catalog
 
-    def _crossref(self, source):
+    def _crossref(self, source: Source) -> None:
         """Pull auxiliary-catalog fields onto a source by position match.
 
         Cross-references `source` against the chip's auxiliary source

@@ -20,13 +20,17 @@ import dataclasses
 import io
 import logging
 from pathlib import Path
+from typing import Any, Iterator, Sequence
 
 import fastavro
 import fastavro.schema
+import fastavro.write
+from fastavro.types import Schema
 
 from .param_registry import (ALERT_PARAMS, DIA_FORCED_SOURCE_PARAMS, DIA_OBJECT_PARAMS,
-                     DIA_SOURCE_PARAMS, RECORDS, VERSION, Status, is_nullable)
-from .providers import PRV_WINDOW_DAYS, Source, ForcedPhot, ObjectRecord
+                     DIA_SOURCE_PARAMS, RECORDS, VERSION, Param, Status, is_nullable)
+from .providers import (PRV_WINDOW_DAYS, AlertDataProvider, Source,
+                        ForcedPhot, ObjectRecord)
 
 logger = logging.getLogger(__name__)
 
@@ -47,7 +51,7 @@ BUILDER_DATA_CLASSES = {
 # declaration in param_registry.py fails loudly before any alert is built
 # ---------------------------------------------------------------------------
 
-def _available_attributes(data_cls):
+def _available_attributes(data_cls: type) -> set[str]:
     """Collect the names a Param.attr may reference on a record class.
 
     Parameters
@@ -67,7 +71,7 @@ def _available_attributes(data_cls):
     return field_names | property_names
 
 
-def _validate_registry():
+def _validate_registry() -> None:
     """Check every IMPLEMENTED param against its builder data class.
 
     Runs at import time so a bad declaration in param_registry.py (an attr
@@ -107,7 +111,7 @@ _validate_registry()
 # Record builders (registry-driven)
 # ---------------------------------------------------------------------------
 
-def build_record(param_list, data):
+def build_record(param_list: Sequence[Param], data: Any) -> dict[str, Any]:
     """Build a schema-conforming dict, enforcing each param's status.
 
     Parameters
@@ -156,7 +160,7 @@ def build_record(param_list, data):
     return out
 
 
-def build_dia_source(source):
+def build_dia_source(source: Source) -> dict[str, Any]:
     """Build a diaSource record dict from a providers.Source.
 
     Parameters
@@ -172,7 +176,7 @@ def build_dia_source(source):
     return build_record(DIA_SOURCE_PARAMS, source)
 
 
-def build_dia_object(obj):
+def build_dia_object(obj: ObjectRecord) -> dict[str, Any]:
     """Build a diaObject record dict from a providers.ObjectRecord.
 
     Parameters
@@ -189,7 +193,7 @@ def build_dia_object(obj):
     return build_record(DIA_OBJECT_PARAMS, obj)
 
 
-def build_dia_forced_source(forced_phot):
+def build_dia_forced_source(forced_phot: ForcedPhot) -> dict[str, Any]:
     """Build a diaForcedSource record dict from a providers.ForcedPhot.
 
     Parameters
@@ -210,7 +214,7 @@ def build_dia_forced_source(forced_phot):
 # Alert assembly
 # ---------------------------------------------------------------------------
 
-def assemble_alert(provider, sid):
+def assemble_alert(provider: AlertDataProvider, sid: int) -> dict[str, Any]:
     """Assemble a complete alert packet for a given source ID.
 
     Parameters
@@ -228,7 +232,8 @@ def assemble_alert(provider, sid):
     return assemble_alert_for_source(provider, provider.get_detection(sid))
 
 
-def assemble_alert_for_source(provider, source):
+def assemble_alert_for_source(provider: AlertDataProvider,
+                              source: Source) -> dict[str, Any]:
     """Assemble an alert packet for a Source already in hand.
 
     Used directly by the batch flow (batch_produce), where iter_sources()
@@ -315,7 +320,8 @@ def assemble_alert_for_source(provider, source):
 # Serialization and publishing
 # ---------------------------------------------------------------------------
 
-def schema_paths(version=None, schema_root=SCHEMA_ROOT):
+def schema_paths(version: str | None = None,
+                 schema_root: str | Path = SCHEMA_ROOT) -> list[Path]:
     """Return the .avsc file paths for a schema version, in load order.
 
     Parameters
@@ -343,7 +349,8 @@ def schema_paths(version=None, schema_root=SCHEMA_ROOT):
             for record in RECORDS]
 
 
-def load_schema(version=None, schema_root=SCHEMA_ROOT):
+def load_schema(version: str | None = None,
+                schema_root: str | Path = SCHEMA_ROOT) -> Schema:
     """Load and parse the RAPID alert schema.
 
     With no explicit version (the production path), the .avsc files are
@@ -387,7 +394,8 @@ def load_schema(version=None, schema_root=SCHEMA_ROOT):
     return fastavro.schema.load_schema_ordered(paths)
 
 
-def serialize_alert(alert_dict, schema=None):
+def serialize_alert(alert_dict: dict[str, Any],
+                    schema: Schema | None = None) -> bytes:
     """Serialize an alert dict to Avro bytes.
 
     Parameters
@@ -410,7 +418,8 @@ def serialize_alert(alert_dict, schema=None):
     return buf.getvalue()
 
 
-def publish_alert(alert_bytes, producer, topic="alerts", flush=True):
+def publish_alert(alert_bytes: bytes, producer: Any, topic: str = "alerts",
+                  flush: bool = True) -> None:
     """Publish serialized alert bytes to a Kafka topic.
 
     Parameters
@@ -439,7 +448,9 @@ def publish_alert(alert_bytes, producer, topic="alerts", flush=True):
 
 
 @contextlib.contextmanager
-def open_alert_archive(path, schema=None, codec="deflate"):
+def open_alert_archive(
+        path: str | Path, schema: Schema | None = None,
+        codec: str = "deflate") -> Iterator[fastavro.write.Writer]:
     """Open one run's alerts as one Avro object-container file.
 
     The container format embeds the schema (and codec) in the file header,
@@ -478,8 +489,10 @@ def open_alert_archive(path, schema=None, codec="deflate"):
             writer.flush()  # even on error: completed blocks stay readable
 
 
-def produce_alert(provider, sid, producer=None, topic="alerts", schema=None,
-                  archive=None):
+def produce_alert(provider: AlertDataProvider, sid: int,
+                  producer: Any = None, topic: str = "alerts",
+                  schema: Schema | None = None,
+                  archive: fastavro.write.Writer | None = None) -> bytes:
     """End-to-end: assemble, serialize, and optionally publish an alert.
 
     Parameters
@@ -517,8 +530,10 @@ def produce_alert(provider, sid, producer=None, topic="alerts", schema=None,
     return alert_bytes
 
 
-def batch_produce(provider, pid, producer=None, topic="alerts", schema=None,
-                  archive=None):
+def batch_produce(provider: AlertDataProvider, pid: int,
+                  producer: Any = None, topic: str = "alerts",
+                  schema: Schema | None = None,
+                  archive: fastavro.write.Writer | None = None) -> int:
     """Produce alerts for every source on one difference image.
 
     The batch unit is one exposure + SCA (chip), which is exactly what one
