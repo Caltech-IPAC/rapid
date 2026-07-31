@@ -229,7 +229,7 @@ def roman_tessellation_index(ra, dec):
 # Custom methods for parallel processing, taking advantage of multiple cores on the job-launcher machine.
 #-------------------------------------------------------------------------------------------------------------
 
-def run_single_core_job(jids,meta_list,negative_diffimg_flag,index_thread):
+def run_single_core_job(meta_list,negative_diffimg_flag,index_thread):
 
 
     # Handle sources from positive versus negative difference images.
@@ -247,7 +247,7 @@ def run_single_core_job(jids,meta_list,negative_diffimg_flag,index_thread):
         output_psfcat_finder_filename_to_use = output_psfcat_finder_filename
         done_suffix = ""
 
-    njobs = len(jids)
+    njobs = len(meta_list)
 
     print("index_thread,njobs =",index_thread,njobs)
 
@@ -273,8 +273,9 @@ def run_single_core_job(jids,meta_list,negative_diffimg_flag,index_thread):
     fh.write(f"\nStart of run_single_core_job: index_thread={index_thread}, dbh={dbh}\n")
 
     for index_job in range(njobs):
-        jid = jids[index_job]
+
         meta_dict = meta_list[index_job]
+        jid = meta_dict['jid']
         index_core = index_job % num_cores
         if index_thread != index_core:
             continue
@@ -291,13 +292,6 @@ def run_single_core_job(jids,meta_list,negative_diffimg_flag,index_thread):
                             ADD COLUMN is_new boolean NOT NULL DEFAULT false;"""
 
         dbh.execute_sql_queries(sql_queries)
-
-        jid_from_dict = meta_dict["jid"]
-
-        if jid != jid_from_dict:
-            fh.write(f"*** Error: jid is not equal to jid from meta dictionary; quitting...\n")
-            fh.flush()
-            exit(64)
 
         expid = meta_dict["expid"]
         sca = meta_dict["sca"]
@@ -717,9 +711,9 @@ if __name__ == '__main__':
     else:
         thread_index = 0
         negative_diffimg_flag = False
-        run_single_core_job(rec['jid'],meta_list,negative_diffimg_flag,thread_index)
+        run_single_core_job(meta_list,negative_diffimg_flag,thread_index)
         negative_diffimg_flag = True
-        run_single_core_job(rec['jid'],meta_list,negative_diffimg_flag,thread_index)
+        run_single_core_job(meta_list,negative_diffimg_flag,thread_index)
 
 
     # Code-timing benchmark.
