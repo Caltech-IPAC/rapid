@@ -391,21 +391,21 @@ For this test, all of these items within the process took 15.9 hours with 8 para
 7/22/2026
 ************************************
 
-This test is similar to the 7/6/2026, with the following exceptions and annotations:
+This test is similar to the 7/6/2026, with the following exceptions and improvements:
 
 * The SOC-sim ASDF images now have variable sources injected correctly, as well as
   corrected WCS.  These are located in:
 
-.. code-block::
+  .. code-block::
 
-    s3://socsims-fakesrc-asdf-20260709/
+      s3://socsims-fakesrc-asdf-20260709/
 
 * The ASDF image were converted to FITS files for input to the RAPID pipeline, with
   5th-order TAN-SIP distortion.
 
-.. code-block::
+  .. code-block::
 
-    s3://socsims-fakesrc-fits-20260709-lite/
+      s3://socsims-fakesrc-fits-20260709-lite/
 
 * A standalone RAPID reference-image pipeline has been implemented and integrated into the
   VPO,and was executed successfully in this test to generate all required reference images,
