@@ -717,9 +717,9 @@ if __name__ == '__main__':
     else:
         thread_index = 0
         negative_diffimg_flag = False
-        run_single_core_job(recs['jid'],meta_list,negative_diffimg_flag,thread_index)
+        run_single_core_job(rec['jid'],meta_list,negative_diffimg_flag,thread_index)
         negative_diffimg_flag = True
-        run_single_core_job(recs['jid'],meta_list,negative_diffimg_flag,thread_index)
+        run_single_core_job(rec['jid'],meta_list,negative_diffimg_flag,thread_index)
 
 
     # Code-timing benchmark.
