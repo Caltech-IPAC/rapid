@@ -1034,7 +1034,7 @@ CLUSTER fields_radec_idx ON fields;
 ANALYZE fields;
 
 -----------------------------
--- TABLE:
+-- TABLE: upload_psfcat_queue
 -----------------------------
 
 SET default_tablespace = pipeline_data_01;
@@ -1046,7 +1046,7 @@ CREATE TABLE upload_psfcat_queue (
     rid integer,
     fid smallint,
     sca smallint,
-    queued_at timestampz NOT NULL DEFAULT now(),
+    queued_at timestamptz NOT NULL DEFAULT now(),
     inserted_at timestamptz,
     PRIMARY KEY (pid));
 
