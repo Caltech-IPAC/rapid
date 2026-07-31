@@ -270,28 +270,113 @@ def execute_sql_queries_for_given_sca(sql_queries_dict,sca):
     return exitcode
 
 
-def run_single_core_job(jids,overlapping_fields_list,meta_list,negative_diffimg_flag,index_thread):
+def write_joined_table_inner_to_csv_file(isdiffpos,
+                                         expid,
+                                         sca,
+                                         fid,
+                                         mjdobs,
+                                         pid,
+                                         csv_fh,
+                                         joined_table_inner,
+                                         hp6_arr,
+                                         hp9_arr):
+
+    for i, row in enumerate(joined_table_inner):
+
+        nums = ""
+        for col in cols:
+
+            cat_col = col
+
+            if cat_col == 'xfit':
+                cat_col = 'x_fit'
+            elif cat_col == 'yfit':
+                cat_col = 'y_fit'
+            elif cat_col == 'fluxfit':
+                cat_col = 'flux_fit'
+            elif cat_col == 'xerr':
+                cat_col = 'x_err'
+            elif cat_col == 'yerr':
+                cat_col = 'y_err'
+            elif cat_col == 'fluxerr':
+                cat_col = 'flux_err'
+            elif cat_col == 'npixfit':
+                cat_col = 'n_pixels_fit'
+            elif cat_col == 'redchi':
+                cat_col = 'reduced_chi2'
+            elif cat_col == 'npix':
+                cat_col = 'n_pixels'
+
+            if cat_col == 'pid':
+                continue
+            if cat_col == 'isdiffpos':
+                continue
+            if cat_col == 'field':
+                continue
+            if cat_col == 'hp6':
+                continue
+            if cat_col == 'hp9':
+                continue
+            if cat_col == 'expid':
+                continue
+            if cat_col == 'fid':
+                continue
+            if cat_col == 'sca':
+                continue
+            if cat_col == 'mjdobs':
+                continue
+
+            num = str(row[cat_col])
+            nums = nums + num + ","
+
+
+        # The field,hp6,hp9 indexes must be overridden with
+        # the actual ra,dec position of the source.
+
+        ra = float(row["ra"])
+        dec = float(row["dec"])
+        roman_tessellation_db.get_rtid(ra,dec)
+        field = roman_tessellation_db.rtid
+        hp6 = hp6_arr[i]
+        hp9 = hp9_arr[i]
+
+        num = str(pid)
+        nums = nums + num + ","
+        num = str(isdiffpos)
+        nums = nums + num + ","
+        num = str(field)
+        nums = nums + num + ","
+        num = str(hp6)
+        nums = nums + num + ","
+        num = str(hp9)
+        nums = nums + num + ","
+        num = str(expid)
+        nums = nums + num + ","
+        num = str(fid)
+        nums = nums + num + ","
+        num = str(sca)
+        nums = nums + num + ","
+        num = str(mjdobs)
+        nums = nums + num + ","
+
+        # Slice the string to get all but the last character, then add the newline character
+        new_character = "\n"
+        line_to_write_to_file = nums[:-1] + new_character
+
+        csv_fh.write(line_to_write_to_file)
+
+
+def run_single_core_job(jids,overlapping_fields_list,meta_list,index_thread):
+
+    '''
+    For effficiency, this method handles both positive and negative difference-image
+    PSF-fits catalogs.
+    '''
 
 
     # Get S3 client.
 
     s3_client = boto3.client('s3')
-
-
-    # Handle sources from positive versus negative difference images.
-
-    print("negative_diffimg_flag =",negative_diffimg_flag)
-
-    if negative_diffimg_flag:
-        isdiffpos = "false"
-        output_psfcat_filename_to_use = output_psfcat_filename.replace(".txt","_negative.txt")
-        output_psfcat_finder_filename_to_use = output_psfcat_finder_filename.replace(".txt","_negative.txt")
-        done_suffix = "_negative"
-    else:
-        isdiffpos = "true"
-        output_psfcat_filename_to_use = output_psfcat_filename
-        output_psfcat_finder_filename_to_use = output_psfcat_finder_filename
-        done_suffix = ""
 
     njobs = len(jids)
 
@@ -317,7 +402,6 @@ def run_single_core_job(jids,overlapping_fields_list,meta_list,negative_diffimg_
 
 
         fh.write(f"\nStart of run_single_core_job: index_thread={index_thread}, dbh={dbh}\n")
-        fh.write(f"negative_diffimg_flag = {negative_diffimg_flag}\n")
 
         my_jobs = list(range(index_thread, njobs, num_cores))
         for index_job in my_jobs:
@@ -349,7 +433,7 @@ def run_single_core_job(jids,overlapping_fields_list,meta_list,negative_diffimg_
             # This is done by attempting to download the done file.  Regardless the sub
             # always returns the filename and subdirs by parsing the s3_full_name.
 
-            s3_full_name_done_file = "s3://" + product_s3_bucket_base + "/" + proc_date + '/jid' + str(jid) + "/source_dbload" + done_suffix + "_jid" +  str(jid)  + ".done"
+            s3_full_name_done_file = "s3://" + product_s3_bucket_base + "/" + proc_date + '/jid' + str(jid) + "/source_dbload"  + "_jid" +  str(jid)  + ".done"
             done_filename,subdirs_done,downloaded_from_bucket = util.download_file_from_s3_bucket(s3_client,s3_full_name_done_file)
 
             if do_done_check and downloaded_from_bucket:
@@ -360,12 +444,21 @@ def run_single_core_job(jids,overlapping_fields_list,meta_list,negative_diffimg_
 
 
             # Parallel S3-bucket downloads:
-            # 1. SFFT-difference-image PSF-fit catalog file
-            # 2. SFFT-difference-image PSF-fit finder catalog file
+            # 1. SFFT-difference-image PSF-fit catalog file for positive difference image
+            # 2. SFFT-difference-image PSF-fit finder catalog file for positive difference image
+            # 1. SFFT-difference-image PSF-fit catalog file for negative difference image
+            # 2. SFFT-difference-image PSF-fit finder catalog filefor negative difference image
             #
             # dl_executor returns tuples.  E.g.,
             # ret_psfcat = ('sfftdiffimage_masked_psfcat_jid130875.txt', '20260722/jid130875', True)
             # ret_finder = ('sfftdiffimage_masked_psfcat_finder_jid130875.txt', '20260722/jid130875', True)
+            # ret_psfcat = ('sfftdiffimage_masked_psfcat_negative_jid130875.txt', '20260722/jid130875', True)
+            # ret_finder = ('sfftdiffimage_masked_psfcat_finder_jid130875.txt', '20260722/jid130875', True)
+
+
+            # isdiffpos = "true"
+            output_psfcat_filename_to_use = output_psfcat_filename
+            output_psfcat_finder_filename_to_use = output_psfcat_finder_filename
 
             output_psfcat_filename_for_jid = output_psfcat_filename_to_use.replace(".txt",f"_jid{jid}.txt")
 
@@ -375,31 +468,66 @@ def run_single_core_job(jids,overlapping_fields_list,meta_list,negative_diffimg_
 
             s3_full_name_psfcat_finder_file = "s3://" + product_s3_bucket_base + "/" + proc_date + '/jid' + str(jid) + "/" +  output_psfcat_finder_filename_to_use
 
-            with ThreadPoolExecutor(max_workers=2) as dl_executor:
+
+            # isdiffpos = "false"
+            output_psfcat_filename_negative_to_use = output_psfcat_filename.replace(".txt","_negative.txt")
+            output_psfcat_finder_filename_negative_to_use = output_psfcat_finder_filename.replace(".txt","_negative.txt")
+
+
+            output_psfcat_filename_negative_for_jid = output_psfcat_filename_negative_to_use.replace(".txt",f"_jid{jid}.txt")
+
+            s3_full_name_psfcat_file_negative = "s3://" + product_s3_bucket_base + "/" + proc_date + '/jid' + str(jid) + "/" +  output_psfcat_filename_negative_to_use
+
+            output_psfcat_finder_filename_negative_for_jid = output_psfcat_finder_filename_negative_to_use.replace(".txt",f"_jid{jid}.txt")
+
+            s3_full_name_psfcat_finder_file_negative = "s3://" + product_s3_bucket_base + "/" + proc_date + '/jid' + str(jid) + "/" +  output_psfcat_finder_filename_negative_to_use
+
+
+            # Perform parallel S3-bucket downloads:
+
+            with ThreadPoolExecutor(max_workers=4) as dl_executor:
                 future_psfcat = dl_executor.submit(util.download_file_from_s3_bucket, s3_client, s3_full_name_psfcat_file, output_psfcat_filename_for_jid)
                 future_finder = dl_executor.submit(util.download_file_from_s3_bucket, s3_client, s3_full_name_psfcat_finder_file, output_psfcat_finder_filename_for_jid)
+                future_psfcat_negative = dl_executor.submit(util.download_file_from_s3_bucket, s3_client, s3_full_name_psfcat_file_negative, output_psfcat_filename_negative_for_jid)
+                future_finder_negative = dl_executor.submit(util.download_file_from_s3_bucket, s3_client, s3_full_name_psfcat_finder_file_negative, output_psfcat_finder_filename_negative_for_jid)
 
             ret_psfcat = future_psfcat.result()
             ret_finder = future_finder.result()
+            ret_psfcat_negative = future_psfcat_negative.result()
+            ret_finder_negative = future_finder_negative.result()
 
             fh.write(f"ret_psfcat = {ret_psfcat}\n")
             fh.write(f"ret_finder = {ret_finder}\n")
+            fh.write(f"ret_psfcat_negative = {ret_psfcat_negative}\n")
+            fh.write(f"ret_finder_negative = {ret_finder_negative}\n")
 
             downloaded_from_bucket_psfcat = ret_psfcat[2]
             downloaded_from_bucket_finder = ret_finder[2]
+            downloaded_from_bucket_psfcat_negative = ret_psfcat_negative[2]
+            downloaded_from_bucket_finder_negative = ret_finder_negative[2]
 
             if not downloaded_from_bucket_psfcat:
-                fh.write("*** Warning: PSF-fit catalog file does not exist ({}); skipping...\n".format(output_psfcat_filename_to_use))
+                fh.write("*** Warning: Positive difference-image PSF-fit catalog file does not exist ({}); skipping...\n".format(output_psfcat_filename_to_use))
                 fh.flush()
                 continue
 
             if not downloaded_from_bucket_finder:
-                fh.write("*** Warning: PSF-fit finder catalog file does not exist ({}); skipping...\n".format(output_psfcat_finder_filename_to_use))
+                fh.write("*** Warning:  Positive difference-image PSF-fit finder catalog file does not exist ({}); skipping...\n".format(output_psfcat_finder_filename_to_use))
+                fh.flush()
+                continue
+
+            if not downloaded_from_bucket_psfcat_negative:
+                fh.write("*** Warning: Negative difference-image PSF-fit catalog file does not exist ({}); skipping...\n".format(output_psfcat_filename_negative_to_use))
+                fh.flush()
+                continue
+
+            if not downloaded_from_bucket_finder_negative:
+                fh.write("*** Warning:  Negative difference-image PSF-fit finder catalog file does not exist ({}); skipping...\n".format(output_psfcat_finder_filename_negative_to_use))
                 fh.flush()
                 continue
 
 
-            # Join catalogs and extract columns for sources database tables.
+            # Join positive difference-image catalogs and extract columns for sources database tables.
 
             psfcat_qtable = QTable.read(output_psfcat_filename_for_jid,format='ascii')
             psfcat_finder_qtable = QTable.read(output_psfcat_finder_filename_for_jid,format='ascii')
@@ -407,16 +535,36 @@ def run_single_core_job(jids,overlapping_fields_list,meta_list,negative_diffimg_
             joined_table_inner = join(psfcat_qtable, psfcat_finder_qtable, keys='id', join_type='inner')
 
             nrows = len(joined_table_inner)
-            fh.write(f"nrows in PSF-fit catalog = {nrows}\n")
+            fh.write(f"nrows in positive difference-image PSF-fit catalog = {nrows}\n")
 
 
-            # Vectorize hp.ang2pix calls.
+            # Vectorize hp.ang2pix calls for positive difference-image catalogs.
 
             ra_arr = np.array(joined_table_inner['ra'], dtype=np.float64)
             dec_arr = np.array(joined_table_inner['dec'], dtype=np.float64)
 
             hp6_arr = hp.ang2pix(nside6, ra_arr, dec_arr, nest=True, lonlat=True)
             hp9_arr = hp.ang2pix(nside9, ra_arr, dec_arr, nest=True, lonlat=True)
+
+
+            # Join negative difference-image catalogs and extract columns for sources database tables.
+
+            psfcat_qtable_negative = QTable.read(output_psfcat_filename_negative_for_jid,format='ascii')
+            psfcat_finder_qtable_negative = QTable.read(output_psfcat_finder_filename_negative_for_jid,format='ascii')
+
+            joined_table_inner_negative = join(psfcat_qtable_negative, psfcat_finder_qtable_negative, keys='id', join_type='inner')
+
+            nrows = len(joined_table_inner_negative)
+            fh.write(f"nrows in negative difference-image PSF-fit catalog = {nrows}\n")
+
+
+            # Vectorize hp.ang2pix calls for negative difference-image catalogs.
+
+            ra_arr_negative = np.array(joined_table_inner_negative['ra'], dtype=np.float64)
+            dec_arr_negative = np.array(joined_table_inner_negative['dec'], dtype=np.float64)
+
+            hp6_arr_negative = hp.ang2pix(nside6, ra_arr_negative, dec_arr_negative, nest=True, lonlat=True)
+            hp9_arr_negative = hp.ang2pix(nside9, ra_arr_negative, dec_arr_negative, nest=True, lonlat=True)
 
 
             # Here are what the columns in the photutils catalogs are called:
@@ -432,89 +580,11 @@ def run_single_core_job(jids,overlapping_fields_list,meta_list,negative_diffimg_
 
             with open(sources_table_file, "w") as csv_fh:
 
-                for i, row in enumerate(joined_table_inner):
+                isdiffpos = "true"
+                write_joined_table_inner_to_csv_file(isdiffpos,expid,sca,fid,mjdobs,pid,csv_fh,joined_table_inner,hp6_arr,hp9_arr)
 
-                    nums = ""
-                    for col in cols:
-
-                        cat_col = col
-
-                        if cat_col == 'xfit':
-                            cat_col = 'x_fit'
-                        elif cat_col == 'yfit':
-                            cat_col = 'y_fit'
-                        elif cat_col == 'fluxfit':
-                            cat_col = 'flux_fit'
-                        elif cat_col == 'xerr':
-                            cat_col = 'x_err'
-                        elif cat_col == 'yerr':
-                            cat_col = 'y_err'
-                        elif cat_col == 'fluxerr':
-                            cat_col = 'flux_err'
-                        elif cat_col == 'npixfit':
-                            cat_col = 'n_pixels_fit'
-                        elif cat_col == 'redchi':
-                            cat_col = 'reduced_chi2'
-                        elif cat_col == 'npix':
-                            cat_col = 'n_pixels'
-
-                        if cat_col == 'pid':
-                            continue
-                        if cat_col == 'isdiffpos':
-                            continue
-                        if cat_col == 'field':
-                            continue
-                        if cat_col == 'hp6':
-                            continue
-                        if cat_col == 'hp9':
-                            continue
-                        if cat_col == 'expid':
-                            continue
-                        if cat_col == 'fid':
-                            continue
-                        if cat_col == 'sca':
-                            continue
-                        if cat_col == 'mjdobs':
-                            continue
-
-                        num = str(row[cat_col])
-                        nums = nums + num + ","
-
-
-                    # The field,hp6,hp9 indexes must be overridden with
-                    # the actual ra,dec position of the source.
-
-                    ra = float(row["ra"])
-                    dec = float(row["dec"])
-                    roman_tessellation_db.get_rtid(ra,dec)
-                    field = roman_tessellation_db.rtid
-                    hp6 = hp6_arr[i]
-                    hp9 = hp9_arr[i]
-
-                    num = str(pid)
-                    nums = nums + num + ","
-                    num = str(isdiffpos)
-                    nums = nums + num + ","
-                    num = str(field)
-                    nums = nums + num + ","
-                    num = str(hp6)
-                    nums = nums + num + ","
-                    num = str(hp9)
-                    nums = nums + num + ","
-                    num = str(expid)
-                    nums = nums + num + ","
-                    num = str(fid)
-                    nums = nums + num + ","
-                    num = str(sca)
-                    nums = nums + num + ","
-                    num = str(mjdobs)
-                    nums = nums + num + ","
-
-                    # Slice the string to get all but the last character, then add the newline character
-                    new_character = "\n"
-                    line_to_write_to_file = nums[:-1] + new_character
-
-                    csv_fh.write(line_to_write_to_file)
+                isdiffpos = "false"
+                write_joined_table_inner_to_csv_file(isdiffpos,expid,sca,fid,mjdobs,pid,csv_fh,joined_table_inner_negative,hp6_arr_negative,hp9_arr_negative)
 
 
             # Load records into sources database tables.
@@ -541,7 +611,11 @@ def run_single_core_job(jids,overlapping_fields_list,meta_list,negative_diffimg_
 
             # Remove no-longer-needed intermediate files.
 
-            file_paths = [output_psfcat_filename_for_jid,output_psfcat_finder_filename_for_jid,sources_table_file]
+            file_paths = [output_psfcat_filename_for_jid,
+                          output_psfcat_finder_filename_for_jid,
+                          output_psfcat_filename_negative_for_jid,
+                          output_psfcat_finder_filename_negative_for_jid,
+                          sources_table_file]
             for file_path in file_paths:
 
                 if os.path.exists(file_path):
@@ -584,13 +658,13 @@ def run_single_core_job(jids,overlapping_fields_list,meta_list,negative_diffimg_
     return message
 
 
-def execute_parallel_processes(jids,rtids_list,meta_list,negative_diffimg_flag,num_cores):
+def execute_parallel_processes(jids,rtids_list,meta_list,num_cores):
 
     print("num_cores =",num_cores)
 
     with ProcessPoolExecutor(max_workers=num_cores) as executor:
         # Submit all tasks to the executor and store the futures in a list
-        futures = [executor.submit(run_single_core_job,jids,rtids_list,meta_list,negative_diffimg_flag,thread_index) for thread_index in range(num_cores)]
+        futures = [executor.submit(run_single_core_job,jids,rtids_list,meta_list,thread_index) for thread_index in range(num_cores)]
 
         # Iterate over completed futures and update progress
         for i, future in enumerate(as_completed(futures)):
@@ -791,16 +865,10 @@ if __name__ == '__main__':
         ################################################################################
 
         if num_cores > 1:
-            negative_diffimg_flag = False
-            execute_parallel_processes(jid_list,overlapping_fields_list,meta_list,negative_diffimg_flag,num_cores)
-            negative_diffimg_flag = True
-            execute_parallel_processes(jid_list,overlapping_fields_list,meta_list,negative_diffimg_flag,num_cores)
+            execute_parallel_processes(jid_list,overlapping_fields_list,meta_list,num_cores)
         else:
             thread_index = 0
-            negative_diffimg_flag = False
-            run_single_core_job(jid_list,overlapping_fields_list,meta_list,negative_diffimg_flag,thread_index)
-            negative_diffimg_flag = True
-            run_single_core_job(jid_list,overlapping_fields_list,meta_list,negative_diffimg_flag,thread_index)
+            run_single_core_job(jid_list,overlapping_fields_list,meta_list,thread_index)
 
 
         # Code-timing benchmark.
