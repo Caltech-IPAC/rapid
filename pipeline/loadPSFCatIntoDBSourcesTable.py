@@ -14,6 +14,8 @@ from dateutil import tz
 import time
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from concurrent.futures import ThreadPoolExecutor
+import psycopg2
+
 to_zone = tz.gettz('America/Los_Angeles')
 
 import database.modules.utils.rapid_db as db
@@ -156,11 +158,6 @@ else:
 print("num_cores =",num_cores)
 
 
-# Get S3 client.
-
-s3_client = boto3.client('s3')
-
-
 # Define columns to be populated in sources tables.
 
 cols = []
@@ -199,11 +196,84 @@ columns = tuple(cols)
 print(f"Sources columns: {cols_comma_separated_string}")
 
 
+# Get database connection parameters from environment concurrent index generation.
+
+dbport = os.getenv('DBPORT')
+dbname = os.getenv('DBNAME')
+dbuser = os.getenv('DBUSER')
+dbpass = os.getenv('DBPASS')
+dbserver = os.getenv('DBSERVER')
+
+print("dbserver,dbname,dbport,dbuser =",dbserver,dbname,dbport,dbuser)
+
+if dbport is None:
+    print("*** Error: Env. var. DBPORT not set; quitting...")
+    exit(64)
+
+if dbname is None:
+    print("*** Error: Env. var. DBNAME not set; quitting...")
+    exit(64)
+
+if dbuser is None:
+    print("*** Error: Env. var. DBUSER not set; quitting...")
+    exit(64)
+
+if dbpass is None:
+    print("*** Error: Env. var. DBPASS not set; quitting...")
+    exit(64)
+
+if dbserver is None:
+    print("*** Error: Env. var. DBSERVER not set; quitting...")
+    exit(64)
+
+
 #-------------------------------------------------------------------------------------------------------------
 # Custom methods for parallel processing, taking advantage of multiple cores on the job-launcher machine.
 #-------------------------------------------------------------------------------------------------------------
 
+def create_index_concurrently(sql_query):
+
+
+    # Connect to database.  Each thread MUST have its own independent database connection.
+
+    try:
+        conn = psycopg2.connect(host=dbserver,database=dbname,port=dbport,user=dbuser,password=dbpass)
+    except Exception:
+        print("*** Error: Could not connect to database; quitting...")
+        exitcode = 64
+        return exitcode
+
+
+    # CREATE INDEX CONCURRENTLY cannot run inside a transaction block, so
+    # set autocommit mode to True.
+
+    conn.autocommit = True
+
+
+    # Execute the CREATE INDEX CONCURRENTLY query.
+
+    try:
+        with conn.cursor() as cur:
+            print(f"Starting: {sql_query}")
+            cur.execute(sql_query)
+            print(f"Finished: {sql_query}")
+    except Exception as e:
+        print(f"Error running {sql_query}: {e}")
+        exitcode = 64
+        return exitcode
+    finally:
+        conn.close()
+
+    exitcode = 0
+    return exitcode
+
+
 def run_single_core_job(jids,overlapping_fields_list,meta_list,negative_diffimg_flag,index_thread):
+
+
+    # Get S3 client.
+
+    s3_client = boto3.client('s3')
 
 
     # Handle sources from positive versus negative difference images.
@@ -227,281 +297,285 @@ def run_single_core_job(jids,overlapping_fields_list,meta_list,negative_diffimg_
 
     thread_work_file = swname.replace(".py","_thread") + str(index_thread) + ".out"
 
+    fh = None
+    dbh = None
+
     try:
         fh = open(thread_work_file, 'w', encoding="utf-8")
-    except:
-        print(f"*** Error: Could not open output file {thread_work_file}; quitting...")
-        raise RuntimeError(f"*** Error: Could not open output file {thread_work_file}; quitting...")
 
 
-    # Open database connection.
+        # Open database connection.
 
-    dbh = db.RAPIDDB()
-
-    if dbh.exit_code >= 64:
-        fh.write(f"*** Error opening database connection (dbh.exit_code={dbh.exit_code}); quitting...\n")
-        fh.flush()
-        raise RuntimeError(f"*** Error opening database connection (dbh.exit_code={dbh.exit_code}); quitting...\n")
-
-
-    fh.write(f"\nStart of run_single_core_job: index_thread={index_thread}, dbh={dbh}\n")
-    fh.write(f"negative_diffimg_flag = {negative_diffimg_flag}\n")
-
-    my_jobs = list(range(index_thread, njobs, num_cores))
-    for index_job in my_jobs:
-
-        index_core = index_job % num_cores
-        if index_thread != index_core:              # Always False since my_jobs has been partitioned
-                                                    # up front to eliminate iteration over all jobs.
-            continue
-
-        jid = jids[index_job]
-        overlapping_fields = overlapping_fields_list[index_job]
-        meta_dict = meta_list[index_job]
-
-        fh.write(f"Loop start: index_job,jid,overlapping_fields = {index_job},{jid},{overlapping_fields}\n")
-
-        jid_from_dict = meta_dict["jid"]
-
-        if jid != jid_from_dict:
-            fh.write(f"*** Error: jid is not equal to jid from meta dictionary; quitting...\n")
-            fh.flush()
-            raise RuntimeError(f"*** Error: jid is not equal to jid from meta dictionary; quitting...\n")
-
-        expid = meta_dict["expid"]
-        sca = meta_dict["sca"]
-        fid = meta_dict["fid"]
-        field = meta_dict["field"]
-        hp6 = meta_dict["hp6"]
-        hp9 = meta_dict["hp9"]
-        mjdobs = meta_dict["mjdobs"]
-        pid = meta_dict["pid"]
-
-
-        # Check whether done file exists in S3 bucket for job, and skip if it exists.
-        # This is done by attempting to download the done file.  Regardless the sub
-        # always returns the filename and subdirs by parsing the s3_full_name.
-
-        s3_full_name_done_file = "s3://" + product_s3_bucket_base + "/" + proc_date + '/jid' + str(jid) + "/source_dbload" + done_suffix + "_jid" +  str(jid)  + ".done"
-        done_filename,subdirs_done,downloaded_from_bucket = util.download_file_from_s3_bucket(s3_client,s3_full_name_done_file)
-
-        if do_done_check and downloaded_from_bucket:
-            os.remove(done_filename)
-            fh.write("*** Warning: Done file exists ({}); skipping...\n".format(done_filename))
-            fh.flush()
-            continue
-
-
-        # Parallel S3-bucket downloads:
-        # 1. SFFT-difference-image PSF-fit catalog file
-        # 2. SFFT-difference-image PSF-fit finder catalog file
-        #
-        # dl_executor returns tuples.  E.g.,
-        # ret_psfcat = ('sfftdiffimage_masked_psfcat_jid130875.txt', '20260722/jid130875', True)
-        # ret_finder = ('sfftdiffimage_masked_psfcat_finder_jid130875.txt', '20260722/jid130875', True)
-
-        output_psfcat_filename_for_jid = output_psfcat_filename_to_use.replace(".txt",f"_jid{jid}.txt")
-
-        s3_full_name_psfcat_file = "s3://" + product_s3_bucket_base + "/" + proc_date + '/jid' + str(jid) + "/" +  output_psfcat_filename_to_use
-
-        output_psfcat_finder_filename_for_jid = output_psfcat_finder_filename_to_use.replace(".txt",f"_jid{jid}.txt")
-
-        s3_full_name_psfcat_finder_file = "s3://" + product_s3_bucket_base + "/" + proc_date + '/jid' + str(jid) + "/" +  output_psfcat_finder_filename_to_use
-
-        with ThreadPoolExecutor(max_workers=2) as dl_executor:
-            future_psfcat = dl_executor.submit(util.download_file_from_s3_bucket, s3_client, s3_full_name_psfcat_file, output_psfcat_filename_for_jid)
-            future_finder = dl_executor.submit(util.download_file_from_s3_bucket, s3_client, s3_full_name_psfcat_finder_file, output_psfcat_finder_filename_for_jid)
-
-        ret_psfcat = future_psfcat.result()
-        ret_finder = future_finder.result()
-
-        fh.write(f"ret_psfcat = {ret_psfcat}\n")
-        fh.write(f"ret_finder = {ret_finder}\n")
-
-        downloaded_from_bucket_psfcat = ret_psfcat[2]
-        downloaded_from_bucket_finder = ret_finder[2]
-
-        if not downloaded_from_bucket_psfcat:
-            fh.write("*** Warning: PSF-fit catalog file does not exist ({}); skipping...\n".format(output_psfcat_filename_to_use))
-            fh.flush()
-            continue
-
-        if not downloaded_from_bucket_finder:
-            fh.write("*** Warning: PSF-fit finder catalog file does not exist ({}); skipping...\n".format(output_psfcat_finder_filename_to_use))
-            fh.flush()
-            continue
-
-
-        # Join catalogs and extract columns for sources database tables.
-
-        psfcat_qtable = QTable.read(output_psfcat_filename_for_jid,format='ascii')
-        psfcat_finder_qtable = QTable.read(output_psfcat_finder_filename_for_jid,format='ascii')
-
-        joined_table_inner = join(psfcat_qtable, psfcat_finder_qtable, keys='id', join_type='inner')
-
-        nrows = len(joined_table_inner)
-        fh.write(f"nrows in PSF-fit catalog = {nrows}\n")
-
-
-        # Vectorize hp.ang2pix calls.
-
-        ra_arr = np.array(joined_table_inner['ra'], dtype=np.float64)
-        dec_arr = np.array(joined_table_inner['dec'], dtype=np.float64)
-
-        hp6_arr = hp.ang2pix(nside6, ra_arr, dec_arr, nest=True, lonlat=True)
-        hp9_arr = hp.ang2pix(nside9, ra_arr, dec_arr, nest=True, lonlat=True)
-
-
-        # Here are what the columns in the photutils catalogs are called:
-        # Main: id group_id group_size local_bkg x_init y_init flux_init x_fit y_fit flux_fit x_err y_err flux_err n_pixels_fit qfit cfit reduced_chi2 flags ra dec
-        # Finder: id x_centroid y_centroid sharpness roundness1 roundness2 n_pixels peak flux mag daofind_mag
-        # Note that some catalog-column names have underscores that need to be dealt with specially
-        # because the database columns do not have underscores.
-        #
-        # Prepare records into sources database tables.
-
-        sources_table = f"sources_{proc_date}_{sca}"
-        sources_table_file = f"sources_{proc_date}_sca{sca}_jid{jid}" + ".csv"
-
-        with open(sources_table_file, "w") as csv_fh:
-
-            for i, row in enumerate(joined_table_inner):
-
-                nums = ""
-                for col in cols:
-
-                    cat_col = col
-
-                    if cat_col == 'xfit':
-                        cat_col = 'x_fit'
-                    elif cat_col == 'yfit':
-                        cat_col = 'y_fit'
-                    elif cat_col == 'fluxfit':
-                        cat_col = 'flux_fit'
-                    elif cat_col == 'xerr':
-                        cat_col = 'x_err'
-                    elif cat_col == 'yerr':
-                        cat_col = 'y_err'
-                    elif cat_col == 'fluxerr':
-                        cat_col = 'flux_err'
-                    elif cat_col == 'npixfit':
-                        cat_col = 'n_pixels_fit'
-                    elif cat_col == 'redchi':
-                        cat_col = 'reduced_chi2'
-                    elif cat_col == 'npix':
-                        cat_col = 'n_pixels'
-
-                    if cat_col == 'pid':
-                        continue
-                    if cat_col == 'isdiffpos':
-                        continue
-                    if cat_col == 'field':
-                        continue
-                    if cat_col == 'hp6':
-                        continue
-                    if cat_col == 'hp9':
-                        continue
-                    if cat_col == 'expid':
-                        continue
-                    if cat_col == 'fid':
-                        continue
-                    if cat_col == 'sca':
-                        continue
-                    if cat_col == 'mjdobs':
-                        continue
-
-                    num = str(row[cat_col])
-                    nums = nums + num + ","
-
-
-                # The field,hp6,hp9 indexes must be overridden with
-                # the actual ra,dec position of the source.
-
-                ra = float(row["ra"])
-                dec = float(row["dec"])
-                roman_tessellation_db.get_rtid(ra,dec)
-                field = roman_tessellation_db.rtid
-                hp6 = hp6_arr[i]
-                hp9 = hp9_arr[i]
-
-                num = str(pid)
-                nums = nums + num + ","
-                num = str(isdiffpos)
-                nums = nums + num + ","
-                num = str(field)
-                nums = nums + num + ","
-                num = str(hp6)
-                nums = nums + num + ","
-                num = str(hp9)
-                nums = nums + num + ","
-                num = str(expid)
-                nums = nums + num + ","
-                num = str(fid)
-                nums = nums + num + ","
-                num = str(sca)
-                nums = nums + num + ","
-                num = str(mjdobs)
-                nums = nums + num + ","
-
-                # Slice the string to get all but the last character, then add the newline character
-                new_character = "\n"
-                line_to_write_to_file = nums[:-1] + new_character
-
-                csv_fh.write(line_to_write_to_file)
-
-
-        # Load records into sources database tables.
-
-        dbh.copy_data_from_file_into_database(sources_table_file,sources_table,columns)
+        dbh = db.RAPIDDB()
 
         if dbh.exit_code >= 64:
-            fh.write(f"*** Error bulk-loading data from file ({sources_table_file}) into specified database table ({sources_table}); quitting...\n")
+            fh.write(f"*** Error opening database connection (dbh.exit_code={dbh.exit_code}); quitting...\n")
             fh.flush()
-            raise RuntimeError(f"*** Error bulk-loading data from file ({sources_table_file}) into specified database table ({sources_table}); quitting...\n")
+            raise RuntimeError(f"*** Error opening database connection (dbh.exit_code={dbh.exit_code}); quitting...\n")
 
 
-        # Touch done file.  Upload done file to S3 bucket.
+        fh.write(f"\nStart of run_single_core_job: index_thread={index_thread}, dbh={dbh}\n")
+        fh.write(f"negative_diffimg_flag = {negative_diffimg_flag}\n")
 
-        util.write_done_file_to_s3_bucket(done_filename,product_s3_bucket_base,proc_date,jid,s3_client)
+        my_jobs = list(range(index_thread, njobs, num_cores))
+        for index_job in my_jobs:
 
-        fh.write(f"Loop end: done_filename,product_s3_bucket_base,proc_date,jid = {done_filename},{product_s3_bucket_base},{proc_date},{jid}\n")
+            jid = jids[index_job]
+            overlapping_fields = overlapping_fields_list[index_job]
+            meta_dict = meta_list[index_job]
 
+            fh.write(f"Loop start: index_job,jid,overlapping_fields = {index_job},{jid},{overlapping_fields}\n")
 
-        # Flush write buffer.
+            jid_from_dict = meta_dict["jid"]
 
-        fh.flush()
-
-
-        # Remove no-longer-needed intermediate files.
-
-        file_paths = [output_psfcat_filename_for_jid,output_psfcat_finder_filename_for_jid,sources_table_file]
-        for file_path in file_paths:
-
-            if os.path.exists(file_path):
-                os.remove(file_path)
-                fh.write(f"File deleted successfully ({file_path})...\n")
+            if jid != jid_from_dict:
+                fh.write(f"*** Error: jid is not equal to jid from meta dictionary; quitting...\n")
                 fh.flush()
-            else:
-                fh.write(f"The file does not exist({file_path})...\n")
+                raise RuntimeError(f"*** Error: jid is not equal to jid from meta dictionary; quitting...\n")
+
+            expid = meta_dict["expid"]
+            sca = meta_dict["sca"]
+            fid = meta_dict["fid"]
+            field = meta_dict["field"]
+            hp6 = meta_dict["hp6"]
+            hp9 = meta_dict["hp9"]
+            mjdobs = meta_dict["mjdobs"]
+            pid = meta_dict["pid"]
+
+
+            # Check whether done file exists in S3 bucket for job, and skip if it exists.
+            # This is done by attempting to download the done file.  Regardless the sub
+            # always returns the filename and subdirs by parsing the s3_full_name.
+
+            s3_full_name_done_file = "s3://" + product_s3_bucket_base + "/" + proc_date + '/jid' + str(jid) + "/source_dbload" + done_suffix + "_jid" +  str(jid)  + ".done"
+            done_filename,subdirs_done,downloaded_from_bucket = util.download_file_from_s3_bucket(s3_client,s3_full_name_done_file)
+
+            if do_done_check and downloaded_from_bucket:
+                os.remove(done_filename)
+                fh.write("*** Warning: Done file exists ({}); skipping...\n".format(done_filename))
                 fh.flush()
+                continue
 
 
-        # End of loop over job ID.
+            # Parallel S3-bucket downloads:
+            # 1. SFFT-difference-image PSF-fit catalog file
+            # 2. SFFT-difference-image PSF-fit finder catalog file
+            #
+            # dl_executor returns tuples.  E.g.,
+            # ret_psfcat = ('sfftdiffimage_masked_psfcat_jid130875.txt', '20260722/jid130875', True)
+            # ret_finder = ('sfftdiffimage_masked_psfcat_finder_jid130875.txt', '20260722/jid130875', True)
+
+            output_psfcat_filename_for_jid = output_psfcat_filename_to_use.replace(".txt",f"_jid{jid}.txt")
+
+            s3_full_name_psfcat_file = "s3://" + product_s3_bucket_base + "/" + proc_date + '/jid' + str(jid) + "/" +  output_psfcat_filename_to_use
+
+            output_psfcat_finder_filename_for_jid = output_psfcat_finder_filename_to_use.replace(".txt",f"_jid{jid}.txt")
+
+            s3_full_name_psfcat_finder_file = "s3://" + product_s3_bucket_base + "/" + proc_date + '/jid' + str(jid) + "/" +  output_psfcat_finder_filename_to_use
+
+            with ThreadPoolExecutor(max_workers=2) as dl_executor:
+                future_psfcat = dl_executor.submit(util.download_file_from_s3_bucket, s3_client, s3_full_name_psfcat_file, output_psfcat_filename_for_jid)
+                future_finder = dl_executor.submit(util.download_file_from_s3_bucket, s3_client, s3_full_name_psfcat_finder_file, output_psfcat_finder_filename_for_jid)
+
+            ret_psfcat = future_psfcat.result()
+            ret_finder = future_finder.result()
+
+            fh.write(f"ret_psfcat = {ret_psfcat}\n")
+            fh.write(f"ret_finder = {ret_finder}\n")
+
+            downloaded_from_bucket_psfcat = ret_psfcat[2]
+            downloaded_from_bucket_finder = ret_finder[2]
+
+            if not downloaded_from_bucket_psfcat:
+                fh.write("*** Warning: PSF-fit catalog file does not exist ({}); skipping...\n".format(output_psfcat_filename_to_use))
+                fh.flush()
+                continue
+
+            if not downloaded_from_bucket_finder:
+                fh.write("*** Warning: PSF-fit finder catalog file does not exist ({}); skipping...\n".format(output_psfcat_finder_filename_to_use))
+                fh.flush()
+                continue
 
 
-    # Close database connection.
+            # Join catalogs and extract columns for sources database tables.
 
-    dbh.close()
+            psfcat_qtable = QTable.read(output_psfcat_filename_for_jid,format='ascii')
+            psfcat_finder_qtable = QTable.read(output_psfcat_finder_filename_for_jid,format='ascii')
 
-    if dbh.exit_code >= 64:
-        fh.write(f"*** Error closing database connection (dbh.exit_code={dbh.exit_code}); quitting...\n")
-        fh.flush()
-        raise RuntimeError(f"*** Error closing database connection (dbh.exit_code={dbh.exit_code}); quitting...")
+            joined_table_inner = join(psfcat_qtable, psfcat_finder_qtable, keys='id', join_type='inner')
+
+            nrows = len(joined_table_inner)
+            fh.write(f"nrows in PSF-fit catalog = {nrows}\n")
 
 
-    fh.write(f"\nEnd of run_single_core_job: index_thread={index_thread}\n")
+            # Vectorize hp.ang2pix calls.
 
-    fh.close()
+            ra_arr = np.array(joined_table_inner['ra'], dtype=np.float64)
+            dec_arr = np.array(joined_table_inner['dec'], dtype=np.float64)
+
+            hp6_arr = hp.ang2pix(nside6, ra_arr, dec_arr, nest=True, lonlat=True)
+            hp9_arr = hp.ang2pix(nside9, ra_arr, dec_arr, nest=True, lonlat=True)
+
+
+            # Here are what the columns in the photutils catalogs are called:
+            # Main: id group_id group_size local_bkg x_init y_init flux_init x_fit y_fit flux_fit x_err y_err flux_err n_pixels_fit qfit cfit reduced_chi2 flags ra dec
+            # Finder: id x_centroid y_centroid sharpness roundness1 roundness2 n_pixels peak flux mag daofind_mag
+            # Note that some catalog-column names have underscores that need to be dealt with specially
+            # because the database columns do not have underscores.
+            #
+            # Prepare records into sources database tables.
+
+            sources_table = f"sources_{proc_date}_{sca}"
+            sources_table_file = f"sources_{proc_date}_sca{sca}_jid{jid}" + ".csv"
+
+            with open(sources_table_file, "w") as csv_fh:
+
+                for i, row in enumerate(joined_table_inner):
+
+                    nums = ""
+                    for col in cols:
+
+                        cat_col = col
+
+                        if cat_col == 'xfit':
+                            cat_col = 'x_fit'
+                        elif cat_col == 'yfit':
+                            cat_col = 'y_fit'
+                        elif cat_col == 'fluxfit':
+                            cat_col = 'flux_fit'
+                        elif cat_col == 'xerr':
+                            cat_col = 'x_err'
+                        elif cat_col == 'yerr':
+                            cat_col = 'y_err'
+                        elif cat_col == 'fluxerr':
+                            cat_col = 'flux_err'
+                        elif cat_col == 'npixfit':
+                            cat_col = 'n_pixels_fit'
+                        elif cat_col == 'redchi':
+                            cat_col = 'reduced_chi2'
+                        elif cat_col == 'npix':
+                            cat_col = 'n_pixels'
+
+                        if cat_col == 'pid':
+                            continue
+                        if cat_col == 'isdiffpos':
+                            continue
+                        if cat_col == 'field':
+                            continue
+                        if cat_col == 'hp6':
+                            continue
+                        if cat_col == 'hp9':
+                            continue
+                        if cat_col == 'expid':
+                            continue
+                        if cat_col == 'fid':
+                            continue
+                        if cat_col == 'sca':
+                            continue
+                        if cat_col == 'mjdobs':
+                            continue
+
+                        num = str(row[cat_col])
+                        nums = nums + num + ","
+
+
+                    # The field,hp6,hp9 indexes must be overridden with
+                    # the actual ra,dec position of the source.
+
+                    ra = float(row["ra"])
+                    dec = float(row["dec"])
+                    roman_tessellation_db.get_rtid(ra,dec)
+                    field = roman_tessellation_db.rtid
+                    hp6 = hp6_arr[i]
+                    hp9 = hp9_arr[i]
+
+                    num = str(pid)
+                    nums = nums + num + ","
+                    num = str(isdiffpos)
+                    nums = nums + num + ","
+                    num = str(field)
+                    nums = nums + num + ","
+                    num = str(hp6)
+                    nums = nums + num + ","
+                    num = str(hp9)
+                    nums = nums + num + ","
+                    num = str(expid)
+                    nums = nums + num + ","
+                    num = str(fid)
+                    nums = nums + num + ","
+                    num = str(sca)
+                    nums = nums + num + ","
+                    num = str(mjdobs)
+                    nums = nums + num + ","
+
+                    # Slice the string to get all but the last character, then add the newline character
+                    new_character = "\n"
+                    line_to_write_to_file = nums[:-1] + new_character
+
+                    csv_fh.write(line_to_write_to_file)
+
+
+            # Load records into sources database tables.
+
+            dbh.copy_data_from_file_into_database(sources_table_file,sources_table,columns)
+
+            if dbh.exit_code >= 64:
+                fh.write(f"*** Error bulk-loading data from file ({sources_table_file}) into specified database table ({sources_table}); quitting...\n")
+                fh.flush()
+                raise RuntimeError(f"*** Error bulk-loading data from file ({sources_table_file}) into specified database table ({sources_table}); quitting...\n")
+
+
+            # Touch done file.  Upload done file to S3 bucket.
+
+            util.write_done_file_to_s3_bucket(done_filename,product_s3_bucket_base,proc_date,jid,s3_client)
+
+            fh.write(f"Loop end: done_filename,product_s3_bucket_base,proc_date,jid = {done_filename},{product_s3_bucket_base},{proc_date},{jid}\n")
+
+
+            # Flush write buffer.
+
+            fh.flush()
+
+
+            # Remove no-longer-needed intermediate files.
+
+            file_paths = [output_psfcat_filename_for_jid,output_psfcat_finder_filename_for_jid,sources_table_file]
+            for file_path in file_paths:
+
+                if os.path.exists(file_path):
+                    os.remove(file_path)
+                    fh.write(f"File deleted successfully ({file_path})...\n")
+                    fh.flush()
+                else:
+                    fh.write(f"The file does not exist({file_path})...\n")
+                    fh.flush()
+
+
+            # End of loop over job ID.
+
+
+    except Exception as e:
+        print(f"*** Error: Could not open output file {thread_work_file} ({e}); quitting...")
+        raise
+
+    finally:
+
+        if dbh is not None:
+
+            # Close database connection.
+
+            dbh.close()
+
+            if dbh.exit_code >= 64:
+                fh.write(f"*** Error closing database connection (dbh.exit_code={dbh.exit_code}); quitting...\n")
+                fh.flush()
+                fh.close()
+                raise RuntimeError(f"*** Error closing database connection (dbh.exit_code={dbh.exit_code}); quitting...")
+
+        if fh is not None:
+            fh.write(f"\nEnd of run_single_core_job: index_thread={index_thread}\n")
+            fh.close()
+
 
     message = f"Finish normally for index_thread = {index_thread}"
 
@@ -521,12 +595,17 @@ def execute_parallel_processes(jids,rtids_list,meta_list,negative_diffimg_flag,n
             index = futures.index(future)  # Find the original index/order of the completed future
             print(f"Completed: {i+1} processes, lastly for index={index}")
 
+    failures = []
     for future in futures:
         index = futures.index(future)
         try:
             print(future.result())
         except Exception as e:
+            failures.append(e)
             print(f"*** Error in thread index {index} = {e}")
+
+    if failures:
+        raise RuntimeError(f"{len(failures)} worker(s) failed")
 
 
 #################
@@ -637,11 +716,11 @@ if __name__ == '__main__':
 
                 rtid_dict[rtid] = 1
 
-        keys_view = rtid_dict.keys()
-        print("fields overlapping image =",keys_view)
+        keys_list = list(rtid_dict.keys())
+        print("fields overlapping image =",keys_list)
 
         jid_list.append(jid)
-        overlapping_fields_list.append(keys_view)
+        overlapping_fields_list.append(keys_list)
         meta_list.append(meta_dict)
 
         print("jid =",jid)
@@ -661,7 +740,7 @@ if __name__ == '__main__':
     # and just do the indexing, clustering, and applying grants to sources database tables for
     # all SCAs associated with processing date...")
 
-    if do_loading:
+    if do_loading and jid_list:
 
 
         # Create sources database tables for all SCAs associated with processing date.
@@ -675,8 +754,8 @@ if __name__ == '__main__':
 
             tablename = f"sources_{proc_date}_{sca}"
 
-            sql_queries.append(f"SELECT to_regclass('public.{tablename}') IS NOT NULL;")
-            sql_queries.append(f"CREATE TABLE {tablename} (LIKE sources INCLUDING DEFAULTS INCLUDING CONSTRAINTS);")
+            sql_queries.append(f"CREATE TABLE IF NOT EXISTS {tablename} (LIKE sources " +
+                               f"INCLUDING DEFAULTS INCLUDING CONSTRAINTS);")
             sql_queries.append(f"ALTER TABLE {tablename} SET UNLOGGED;")
             sql_queries.append(f"ALTER TABLE {tablename} INHERIT sources;")
 
@@ -748,42 +827,104 @@ if __name__ == '__main__':
         exit(dbh.exit_code)
 
 
-    # Index, cluster, and apply grants to sources database tables for all SCAs associated with processing date.
-
-    print("Indexing, clustering, and applying grants to sources database tables for all SCAs associated with processing date...")
-
-    sql_queries = []
-    sql_queries.append("SET default_tablespace = pipeline_indx_01;")
-
-    for sca in scas_list:
-
-        sql_queries.append(f"CREATE INDEX sources_{proc_date}_{sca}_pid_idx ON sources_{proc_date}_{sca} (pid);")
-        sql_queries.append(f"CREATE INDEX sources_{proc_date}_{sca}_expid_idx ON sources_{proc_date}_{sca} (expid);")
-        sql_queries.append(f"CREATE INDEX sources_{proc_date}_{sca}_sca_idx ON sources_{proc_date}_{sca} (sca);")
-        sql_queries.append(f"CREATE INDEX sources_{proc_date}_{sca}_field_idx ON sources_{proc_date}_{sca} (field);")
-        sql_queries.append(f"CREATE INDEX sources_{proc_date}_{sca}_flags_idx ON sources_{proc_date}_{sca} (flags);")
-        sql_queries.append(f"CREATE INDEX sources_{proc_date}_{sca}_mjdobs_idx ON sources_{proc_date}_{sca} (mjdobs);")
-        sql_queries.append(f"CREATE INDEX sources_{proc_date}_{sca}_sid_idx ON sources_{proc_date}_{sca} (sid);")
-        sql_queries.append(f"CREATE INDEX sources_{proc_date}_{sca}_radec_idx ON sources_{proc_date}_{sca} (q3c_ang2ipix(ra, dec));")
-        sql_queries.append(f"CLUSTER sources_{proc_date}_{sca}_radec_idx ON sources_{proc_date}_{sca};")
-        sql_queries.append(f"ANALYZE sources_{proc_date}_{sca};")
-        #sql_queries.append(f"ALTER TABLE sources_{proc_date}_{sca} SET LOGGED;")                  # For speed, do not log.
-        sql_queries.append(f"REVOKE ALL ON TABLE sources_{proc_date}_{sca} FROM rapidreadrole;")
-        sql_queries.append(f"GRANT SELECT ON TABLE sources_{proc_date}_{sca} TO GROUP rapidreadrole;")
-        sql_queries.append(f"REVOKE ALL ON TABLE sources_{proc_date}_{sca} FROM rapidadminrole;")
-        sql_queries.append(f"GRANT ALL ON TABLE sources_{proc_date}_{sca} TO GROUP rapidadminrole;")
-        sql_queries.append(f"REVOKE ALL ON TABLE sources_{proc_date}_{sca} FROM rapidporole;")
-        sql_queries.append(f"GRANT INSERT,UPDATE,SELECT,DELETE,TRUNCATE,TRIGGER,REFERENCES ON TABLE sources_{proc_date}_{sca} TO rapidporole;")
-
-    dbh.execute_sql_queries(sql_queries)
+    if jid_list and scas_list:
 
 
-    # Code-timing benchmark.
+        # Index concurrently sources database tables for all SCAs associated with processing date.
 
-    end_time_benchmark = time.time()
-    print("Elapsed time in seconds to index, cluster, and apply grants to sources database tables for all SCAs associated with processing date =",
-        end_time_benchmark - start_time_benchmark)
-    start_time_benchmark = end_time_benchmark
+        print("Indexing concurrently sources database tables for all SCAs associated with processing date...")
+
+        sql_queries = []
+        sql_queries.append("SET default_tablespace = pipeline_indx_01;")
+        dbh.execute_sql_queries(sql_queries)
+
+
+        # Define the various CREATE INDEX CONCURRENTLY queries for different tables.  These cannot
+        # run in parallel on the same table.  Execute them using parallel worker threads.
+
+        sql_queries = []
+        for sca in scas_list:
+            sql_queries.append(f"CREATE INDEX CONCURRENTLY sources_{proc_date}_{sca}_pid_idx ON sources_{proc_date}_{sca} (pid);")
+
+        with ThreadPoolExecutor(max_workers = len(scas_list)) as executor:
+            executor.map(create_index_concurrently, sql_queries)
+
+        sql_queries = []
+        for sca in scas_list:
+            sql_queries.append(f"CREATE INDEX CONCURRENTLY sources_{proc_date}_{sca}_expid_idx ON sources_{proc_date}_{sca} (expid);")
+
+        with ThreadPoolExecutor(max_workers = len(scas_list)) as executor:
+            executor.map(create_index_concurrently, sql_queries)
+
+        sql_queries = []
+        for sca in scas_list:
+            sql_queries.append(f"CREATE INDEX CONCURRENTLY sources_{proc_date}_{sca}_sca_idx ON sources_{proc_date}_{sca} (sca);")
+
+        with ThreadPoolExecutor(max_workers = len(scas_list)) as executor:
+            executor.map(create_index_concurrently, sql_queries)
+
+        sql_queries = []
+        for sca in scas_list:
+            sql_queries.append(f"CREATE INDEX CONCURRENTLY sources_{proc_date}_{sca}_field_idx ON sources_{proc_date}_{sca} (field);")
+
+        with ThreadPoolExecutor(max_workers = len(scas_list)) as executor:
+            executor.map(create_index_concurrently, sql_queries)
+
+        sql_queries = []
+        for sca in scas_list:
+            sql_queries.append(f"CREATE INDEX CONCURRENTLY sources_{proc_date}_{sca}_flags_idx ON sources_{proc_date}_{sca} (flags);")
+
+        with ThreadPoolExecutor(max_workers = len(scas_list)) as executor:
+            executor.map(create_index_concurrently, sql_queries)
+
+        sql_queries = []
+        for sca in scas_list:
+            sql_queries.append(f"CREATE INDEX CONCURRENTLY sources_{proc_date}_{sca}_mjdobs_idx ON sources_{proc_date}_{sca} (mjdobs);")
+
+        with ThreadPoolExecutor(max_workers = len(scas_list)) as executor:
+            executor.map(create_index_concurrently, sql_queries)
+
+        sql_queries = []
+        for sca in scas_list:
+            sql_queries.append(f"CREATE INDEX CONCURRENTLY sources_{proc_date}_{sca}_sid_idx ON sources_{proc_date}_{sca} (sid);")
+
+        with ThreadPoolExecutor(max_workers = len(scas_list)) as executor:
+            executor.map(create_index_concurrently, sql_queries)
+
+        sql_queries = []
+        for sca in scas_list:
+            sql_queries.append(f"CREATE INDEX CONCURRENTLY sources_{proc_date}_{sca}_radec_idx ON sources_{proc_date}_{sca} (q3c_ang2ipix(ra, dec));")
+
+        with ThreadPoolExecutor(max_workers = len(scas_list)) as executor:
+            executor.map(create_index_concurrently, sql_queries)
+
+
+        # Cluster, analyze, and apply grants to sources database tables for all SCAs associated with processing date.
+
+        print("Clustering, analyzing, and applying grants to sources database tables for all SCAs associated with processing date...")
+
+        sql_queries = []
+        for sca in scas_list:
+
+            sql_queries.append(f"CLUSTER sources_{proc_date}_{sca} USING sources_{proc_date}_{sca}_radec_idx;")
+            sql_queries.append(f"ANALYZE sources_{proc_date}_{sca};")
+            #sql_queries.append(f"ALTER TABLE sources_{proc_date}_{sca} SET LOGGED;")                  # For speed, do not log.
+            sql_queries.append(f"REVOKE ALL ON TABLE sources_{proc_date}_{sca} FROM rapidreadrole;")
+            sql_queries.append(f"GRANT SELECT ON TABLE sources_{proc_date}_{sca} TO GROUP rapidreadrole;")
+            sql_queries.append(f"REVOKE ALL ON TABLE sources_{proc_date}_{sca} FROM rapidadminrole;")
+            sql_queries.append(f"GRANT ALL ON TABLE sources_{proc_date}_{sca} TO GROUP rapidadminrole;")
+            sql_queries.append(f"REVOKE ALL ON TABLE sources_{proc_date}_{sca} FROM rapidporole;")
+            sql_queries.append(f"GRANT INSERT,UPDATE,SELECT,DELETE,TRUNCATE,TRIGGER,REFERENCES ON TABLE sources_{proc_date}_{sca} TO rapidporole;")
+
+        dbh.execute_sql_queries(sql_queries)
+
+
+        # Code-timing benchmark.
+
+        end_time_benchmark = time.time()
+        print("Elapsed time in seconds to index, cluster, and apply grants to sources database tables for all SCAs associated with processing date =",
+            end_time_benchmark - start_time_benchmark)
+        start_time_benchmark = end_time_benchmark
 
 
     # Code-timing benchmark overall.
