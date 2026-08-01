@@ -294,8 +294,6 @@ def write_joined_table_inner_to_csv_file(isdiffpos,
     field_arr = np.array([roman_tessellation_db.get_rtid(ra, dec)
                           for ra, dec in zip(ra_arr, dec_arr)])
 
-    # This works, but claude says below is faster.
-    '''
     # Build entire CSV block at once using numpy column stacking
     data = np.column_stack([
         np.array(t['id']),
@@ -315,41 +313,6 @@ def write_joined_table_inner_to_csv_file(isdiffpos,
     ])
 
     np.savetxt(csv_fh, data, delimiter=',', fmt='%s')
-    '''
-
-
-    # Write CSV rows directly with f-strings to avoid slow object-array creation.
-    id_arr = np.array(t['id'])
-    xfit_arr = np.array(t['x_fit'])
-    yfit_arr = np.array(t['y_fit'])
-    fluxfit_arr = np.array(t['flux_fit'])
-    xerr_arr = np.array(t['x_err'])
-    yerr_arr = np.array(t['y_err'])
-    fluxerr_arr = np.array(t['flux_err'])
-    npixfit_arr = np.array(t['n_pixels_fit'])
-    qfit_arr = np.array(t['qfit'])
-    cfit_arr = np.array(t['cfit'])
-    redchi_arr = np.array(t['reduced_chi2'])
-    flags_arr = np.array(t['flags'])
-    sharp_arr = np.array(t['sharpness'])
-    round1_arr = np.array(t['roundness1'])
-    round2_arr = np.array(t['roundness2'])
-    npix_arr = np.array(t['n_pixels'])
-    peak_arr = np.array(t['peak'])
-
-    lines = [
-        f"{id_arr[i]},{ra_arr[i]},{dec_arr[i]},"
-        f"{xfit_arr[i]},{yfit_arr[i]},{fluxfit_arr[i]},"
-        f"{xerr_arr[i]},{yerr_arr[i]},{fluxerr_arr[i]},"
-        f"{npixfit_arr[i]},{qfit_arr[i]},{cfit_arr[i]},"
-        f"{redchi_arr[i]},{flags_arr[i]},"
-        f"{sharp_arr[i]},{round1_arr[i]},{round2_arr[i]},"
-        f"{npix_arr[i]},{peak_arr[i]},"
-        f"{pid},{isdiffpos},{field_arr[i]},{hp6_arr[i]},{hp9_arr[i]},"
-        f"{expid},{fid},{sca},{mjdobs}\n"
-        for i in range(nrows)
-    ]
-    csv_fh.writelines(lines)
 
 
 def run_single_core_job(jids,overlapping_fields_list,meta_list,index_thread):
@@ -897,11 +860,6 @@ if __name__ == '__main__':
 
         # Define the various CREATE INDEX queries for different tables.  These cannot be
         # run in parallel on the same table.  Execute them using parallel worker threads.
-        # Also, cluster, analyze, and apply grants to sources database tables for all
-        # SCAs associated with processing date.
-
-        print("Creating indexes, clustering, analyzing, and applying grants to " +
-              "sources database tables for all SCAs associated with processing date...")
 
         sql_queries_dict = {}
 
@@ -915,6 +873,20 @@ if __name__ == '__main__':
             sql_queries.append(f"CREATE INDEX sources_{proc_date}_{sca}_mjdobs_idx ON sources_{proc_date}_{sca} (mjdobs);")
             sql_queries.append(f"CREATE INDEX sources_{proc_date}_{sca}_sid_idx ON sources_{proc_date}_{sca} (sid);")
             sql_queries.append(f"CREATE INDEX sources_{proc_date}_{sca}_radec_idx ON sources_{proc_date}_{sca} (q3c_ang2ipix(ra, dec));")
+            sql_queries_dict[sca] = sql_queries
+
+        with ThreadPoolExecutor(max_workers = len(scas_list)) as executor:
+            for sca in scas_list:
+                executor.submit(execute_sql_queries_for_given_sca, sql_queries_dict, sca)
+
+
+        # Cluster, analyze, and apply grants to sources database tables for all SCAs associated with processing date.
+
+        print("Clustering, analyzing, and applying grants to sources database tables for all SCAs associated with processing date...")
+
+        sql_queries = []
+        for sca in scas_list:
+
             sql_queries.append(f"CLUSTER sources_{proc_date}_{sca} USING sources_{proc_date}_{sca}_radec_idx;")
             sql_queries.append(f"ANALYZE sources_{proc_date}_{sca};")
             #sql_queries.append(f"ALTER TABLE sources_{proc_date}_{sca} SET LOGGED;")                  # For speed, do not log.
@@ -925,11 +897,7 @@ if __name__ == '__main__':
             sql_queries.append(f"REVOKE ALL ON TABLE sources_{proc_date}_{sca} FROM rapidporole;")
             sql_queries.append(f"GRANT INSERT,UPDATE,SELECT,DELETE,TRUNCATE,TRIGGER,REFERENCES ON TABLE sources_{proc_date}_{sca} TO rapidporole;")
 
-            sql_queries_dict[sca] = sql_queries
-
-        with ThreadPoolExecutor(max_workers = len(scas_list)) as executor:
-            for sca in scas_list:
-                executor.submit(execute_sql_queries_for_given_sca, sql_queries_dict, sca)
+        dbh.execute_sql_queries(sql_queries)
 
 
         # Code-timing benchmark.
