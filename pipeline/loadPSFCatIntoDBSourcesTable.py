@@ -389,7 +389,6 @@ def run_single_core_job(meta_list,negative_diffimg_flag,index_thread):
                                         'daofind_mag'])
         joined_table_inner['pid']=pid
         joined_table_inner['isdiffpos']=isdiffpos
-        joined_table_inner['field']=field
         joined_table_inner['expid']=expid
         joined_table_inner['fid']=fid
         joined_table_inner['sca'] = sca
