@@ -290,8 +290,7 @@ def run_single_core_job(meta_list,negative_diffimg_flag,index_thread):
                         ALTER TABLE {tablename} DROP sid,
                             ADD COLUMN aid bigint,
                             ADD COLUMN is_new boolean NOT NULL DEFAULT false;"""
-
-        dbh.execute_sql_queries(sql_queries)
+        dbh.execute_sql_queries([sql_queries])
 
         expid = meta_dict["expid"]
         sca = meta_dict["sca"]
@@ -438,8 +437,8 @@ def run_single_core_job(meta_list,negative_diffimg_flag,index_thread):
         # match_dist = m.dist * 3600 #Add later, in arcsec
         cross_match_time_benchmark_start = time.time()
         #can remove if s2.flags filter R/B first
-        cross_match_sql = f"""ANALYZE {tablename};
-            UPDATE {tablename} s
+        cross_match_sql = [f"ANALYZE {tablename};"
+            """UPDATE {tablename} s
             SET aid = m.aid
             FROM (
                 SELECT DISTINCT ON (s2.id)
@@ -452,7 +451,7 @@ def run_single_core_job(meta_list,negative_diffimg_flag,index_thread):
                 WHERE s2.flags=0
                 ORDER BY s2.id, dist
                 ) m
-            WHERE s.id = m.id;"""
+            WHERE s.id = m.id;"""]
         dbh.execute_sql_queries(cross_match_sql)
         cross_match_time_benchmark_end = time.time()
         fh.write(f"Elapsed time in seconds to crossmatch = {cross_match_time_benchmark_end-cross_match_time_benchmark_start}\n")
@@ -468,7 +467,7 @@ def run_single_core_job(meta_list,negative_diffimg_flag,index_thread):
             SELECT aid, ra, dec, fluxfit, field, hp6, hp9
             FROM {tablename}
             WHERE is_new;"""
-        dbh.execute_sql_queries(create_new_aid_sql)
+        dbh.execute_sql_queries([create_new_aid_sql])
         update_astrobjects_time_benchmark_end = time.time()
         fh.write(f"Elapsed time in seconds to update astroobjects Table = {update_astrobjects_time_benchmark_end-update_astroobjects_time_benchmark_start}\n")
 
@@ -487,7 +486,7 @@ def run_single_core_job(meta_list,negative_diffimg_flag,index_thread):
                 sharpness, roundness1, roundness2, npix, peak,
                 field, hp6, hp9, expid, fid, sca, mjdobs
             FROM {tablename};"""
-        dbh.execute_sql_queries(update_source_table_sql)
+        dbh.execute_sql_queries([update_source_table_sql])
         insert_sources_time_benchmark_end = time.time()
         fh.write(f"Elapsed time in seconds to insert new detections into Source table = {insert_sources_time_benchmark_end-insert_sources_time_benchmark_start}\n")
 
@@ -500,7 +499,7 @@ def run_single_core_job(meta_list,negative_diffimg_flag,index_thread):
             SELECT aid, 0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, NULL, NULL
             FROM {tablename}
             WHERE is_new;"""
-        dbh.execute_sql_queries(create_new_aid_to_astroobjectmeta_sql)
+        dbh.execute_sql_queries([create_new_aid_to_astroobjectmeta_sql])
 
         #----------------------------------
         # Update astroobjectmeta table with temp_sources
@@ -536,7 +535,7 @@ def run_single_core_job(meta_list,negative_diffimg_flag,index_thread):
                     GROUP BY aid
                 ) agg
                 WHERE m.aid = agg.aid;"""
-        dbh.execute_sql_queries(update_existing_astroobjectmeta_sql)
+        dbh.execute_sql_queries([update_existing_astroobjectmeta_sql])
         update_astroobjectsmeta_time_benchmark_end = time.time()
         fh.write(f"Elapsed time in seconds to update the AstroObjectsMeta table = {update_astroobjectsmeta_time_benchmark_end-update_astroobjectsmeta_time_benchmark_start}\n")
         # Touch done file.  Upload done file to S3 bucket.
