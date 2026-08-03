@@ -124,7 +124,7 @@ print(f"AstroObjectsMeta columns: {astroobjectsmeta_cols_comma_separated_string}
 # Custom methods for parallel processing, taking advantage of multiple cores on the job-launcher machine.
 #-------------------------------------------------------------------------------------------------------------
 
-def run_single_core_job(fields,index_thread):
+def run_single_core_job(fields,source_child_tables,index_thread):
 
     '''
     Update lightcurve statistics in AstroObjectsMeta_<field> database tables, omitting sources that
@@ -167,27 +167,20 @@ def run_single_core_job(fields,index_thread):
     fh.write(f"\nStart of run_single_core_job: index_thread={index_thread}, dbh={dbh}\n")
 
 
-    # Requires all sources child tables be tied to parent sources table through inheritance.
-
-    sources_tablename = f"sources"
-
-
     # Loop over all fields associated with this thread and compute statistics for astroobjects:
-    # 0. Delete AstroObjects_<field> and AstroObjectsMeta_<field>  database records that
+    # 1. Remove AstroObjects_<field> database records with redundant aids (keep latest).
+    # 2. Delete AstroObjects_<field> and AstroObjectsMeta_<field>  database records that
     #    do not have corresponding Merges_<field> record(s).
-    # 1. Query for records in each Merges_<field> database table joined with sources table.
-    # 2. Determine unique pids (primary key of DiffImages table).
-    # 3. Determine unique aids (primary key of AstroObjects_<field> table).
-    # 4. Check associated DiffImages records for those that are best (vbest>0).
-    # 5. Populate vbest dictionary keyed by unique pid.
-    # 6. Compute statistics for all Merges_<field> records with best sources.
-    # 7. Populate AstroObjectsMeta_<field> database records
+    # 3. Query for records in each Merges_<field> database table joined with sources table.
+    # 4. Determine unique pids (primary key of DiffImages table).
+    # 5. Determine unique aids (primary key of AstroObjects_<field> table).
+    # 6. Check associated DiffImages records for those that are best (vbest>0).
+    # 7. Populate vbest dictionary keyed by unique pid.
+    # 8. Compute statistics for all Merges_<field> records with best sources.
+    # 9. Populate AstroObjectsMeta_<field> database records
 
-    for index_field in range(nfields):
-
-        index_core = index_field % num_cores
-        if index_thread != index_core:
-            continue
+    my_fields = list(range(index_thread, nfields, num_cores))
+    for index_field in my_fields:
 
         field = fields[index_field]
 
@@ -198,6 +191,26 @@ def run_single_core_job(fields,index_thread):
         merges_tablename = f"merges_{field}"
         astroobjects_tablename = f"astroobjects_{field}"
         astroobjectsmeta_tablename = f"astroobjectsmeta_{field}"
+
+
+        # Remove redundant-aid AstroObjects_<field> database records (keeping latest).
+
+        fh.write(f"Removing redundant-aid AstroObjects_<field> database records (keeping latest)...\n")
+
+        query = f"DELETE FROM {astroobjects_tablename} " +\
+                f"WHERE ctid NOT IN (SELECT MAX(ctid) " +\
+                f"FROM {astroobjects_tablename} " +\
+                f"GROUP BY aid);"
+
+        fh.write(f"query = {query}\n")
+        fh.flush()
+
+        sql_queries = []
+        sql_queries.append(query)
+        records = dbh.execute_sql_queries(sql_queries,thread_debug)
+
+        for record in records:
+            fh.write(f"record = {record}\n")
 
 
         # Delete astroobjects/astroobjectsmeta records that do not have corresponding
@@ -219,17 +232,45 @@ def run_single_core_job(fields,index_thread):
         sql_queries.append(query)
         records = dbh.execute_sql_queries(sql_queries,thread_debug)
 
+        aids_list = []
         for record in records:
 
             aid = record[0]
+            aids_list.append(aid)
 
-            fh.write(f"Deleting records for aid = {aid} in {astroobjects_tablename} and " +
-                     f"{astroobjectsmeta_tablename} database tables...\n")
-            fh.flush()
+            aids_comma_separated_string = ",".join(aids_list)
 
-            dbh.delete_astroobject_from_field(astroobjects_tablename,aid,thread_debug)
-            # Call same method with different tablename.
-            dbh.delete_astroobject_from_field(astroobjectsmeta_tablename,aid,thread_debug)
+        fh.write(f"Deleting records for aid = {aid} in {astroobjects_tablename} database table...\n")
+        fh.flush()
+
+        query = f"DELETE FROM {astroobjects_tablename} " +\
+                f"WHERE aid IN ({aids_comma_separated_string});"
+
+        fh.write(f"query = {query}\n")
+        fh.flush()
+
+        sql_queries = []
+        sql_queries.append(query)
+        records = dbh.execute_sql_queries(sql_queries,thread_debug)
+
+        for record in records:
+            fh.write(f"record = {record}\n")
+
+        fh.write(f"Deleting records for aid = {aid} in {astroobjectsmeta_tablename} database table...\n")
+        fh.flush()
+
+        query = f"DELETE FROM {astroobjectsmeta_tablename} " +\
+                f"WHERE aid IN ({aids_comma_separated_string});"
+
+        fh.write(f"query = {query}\n")
+        fh.flush()
+
+        sql_queries = []
+        sql_queries.append(query)
+        records = dbh.execute_sql_queries(sql_queries,thread_debug)
+
+        for record in records:
+            fh.write(f"record = {record}\n")
 
 
         # Code-timing benchmark.
@@ -244,23 +285,30 @@ def run_single_core_job(fields,index_thread):
 
         # Process astroobjects/astroobjectsmeta records that do indeed have corresponding
         # record(s) in the merges_<field> database table and Sources database table.
+        # Query each source child table directly instead of the parent sources table
+        # (avoids expensive inheritance scan across all child tables).
+        # The vbest > 0 filter is folded into the JOIN to avoid N+1 pid lookups.
 
-        query = f"SELECT a.aid,b.ra,b.dec,b.fluxfit FROM {merges_tablename} AS a " +\
-            f"JOIN {sources_tablename} AS b ON a.sid = b.sid " +\
-            f"JOIN diffimages AS d ON b.pid = d.pid " +\
-            f"WHERE d.vbest > 0;"
+        all_records = []
+        for sources_tablename in source_child_tables:
+            query = f"SELECT a.aid,b.ra,b.dec,b.fluxfit FROM {merges_tablename} AS a " +\
+                f"JOIN {sources_tablename} AS b ON a.sid = b.sid " +\
+                f"JOIN diffimages AS d ON b.pid = d.pid " +\
+                f"WHERE d.vbest > 0;"
 
-        fh.write(f"query = {query}\n")
+            sql_queries = []
+            sql_queries.append(query)
+            child_records = dbh.execute_sql_queries(sql_queries,thread_debug)
+            all_records.extend(child_records)
 
-        sql_queries = []
-        sql_queries.append(query)
-        records = dbh.execute_sql_queries(sql_queries,thread_debug)
+        fh.write(f"Queried {len(source_child_tables)} source child tables for {merges_tablename}; " +
+                 f"total records = {len(all_records)}\n")
 
         ras_for_aid_dict = {}
         decs_for_aid_dict = {}
         fluxes_for_aid_dict = {}
 
-        for record in records:
+        for record in all_records:
 
             aid = record[0]
             ra = record[1]
@@ -282,7 +330,7 @@ def run_single_core_job(fields,index_thread):
         thread_end_time_benchmark = time.time()
         diff_time_benchmark = thread_end_time_benchmark - thread_start_time_benchmark
         fh.write(f"Elapsed time in seconds to select best records from {merges_tablename}, " +
-                 f"{sources_tablename}, and diffimages database tables = {diff_time_benchmark}\n")
+                 f"source child tables, and diffimages = {diff_time_benchmark}\n")
         fh.flush()
         thread_start_time_benchmark = thread_end_time_benchmark
 
@@ -301,7 +349,7 @@ def run_single_core_job(fields,index_thread):
         for record in all_aids_records:
             aid = record[0]
             if aid not in best_aids:
-                fh.write(f"Deleting records for aid = {aid} (no best sources) in " +
+                fh.write(f"Deleting records for aid = {aid} (not-best sources) in " +
                          f"{astroobjects_tablename} and {astroobjectsmeta_tablename} database tables...\n")
                 fh.flush()
                 dbh.delete_astroobject_from_field(astroobjects_tablename,aid,thread_debug)
@@ -336,23 +384,6 @@ def run_single_core_job(fields,index_thread):
                     fh.write(f"Inserting AstroObjectsMeta record: astroobjectsmeta_tablename,aid," +
                              f"meanra,meandec,nsources={astroobjectsmeta_tablename},{aid},{meanra},{meandec},{nsources}\n")
                     fh.flush()
-
-
-                # Bulk copy is supposed to be much faster than row-by-row inserts,
-                # even for unlogged table.
-
-                '''
-                dbh.insert_astroobjectsmeta_statistics(astroobjectsmeta_tablename,
-                                                       aid,
-                                                       meanra,
-                                                       stdra,
-                                                       meandec,
-                                                       stddec,
-                                                       meanflux,
-                                                       stdflux,
-                                                       nsources,
-                                                       thread_debug)
-                '''
 
 
                 nums = ""
@@ -506,13 +537,13 @@ def run_single_core_job(fields,index_thread):
     return message
 
 
-def execute_parallel_processes(fields_list,num_cores):
+def execute_parallel_processes(fields_list,source_child_tables,num_cores):
 
     print("num_cores =",num_cores)
 
     with ProcessPoolExecutor(max_workers=num_cores) as executor:
         # Submit all tasks to the executor and store the futures in a list
-        futures = [executor.submit(run_single_core_job,fields_list,thread_index) for thread_index in range(num_cores)]
+        futures = [executor.submit(run_single_core_job,fields_list,source_child_tables,thread_index) for thread_index in range(num_cores)]
 
         # Iterate over completed futures and update progress
         for i, future in enumerate(as_completed(futures)):
@@ -556,6 +587,17 @@ if __name__ == '__main__':
     for record in records:
         field = record[0].replace("astroobjects_","")
         fields_list.append(field)
+
+
+    # Get all source child table names for querying directly
+    # (avoids expensive inheritance scan across all child tables).
+
+    sql_queries = []
+    sql_queries.append("SELECT tablename FROM pg_tables WHERE schemaname='public' AND tablename ~ '^sources_[0-9]+_[0-9]+$' ORDER BY tablename;")
+    records = dbh.execute_sql_queries(sql_queries,debug)
+
+    source_child_tables = [record[0] for record in records]
+    print(f"Number of source child tables = {len(source_child_tables)}")
 
 
     # Code-timing benchmark.
@@ -613,10 +655,10 @@ if __name__ == '__main__':
     ################################################################################
 
     if num_cores > 1:
-        execute_parallel_processes(fields_list,num_cores)
+        execute_parallel_processes(fields_list,source_child_tables,num_cores)
     else:
         thread_index = 0
-        run_single_core_job(fields_list,thread_index)
+        run_single_core_job(fields_list,source_child_tables,thread_index)
 
 
     # Code-timing benchmark.
