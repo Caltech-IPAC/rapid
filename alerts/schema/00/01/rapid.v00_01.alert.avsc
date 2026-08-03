@@ -1,0 +1,133 @@
+{
+    "namespace": "rapid.v00_01",
+    "name": "alert",
+    "doc": "RAPID alert schema: top-level alert record",
+    "version": "00.01",
+    "type": "record",
+    "fields": [
+        {
+            "name": "schemaVersion",
+            "type": [
+                "null",
+                "string"
+            ],
+            "default": null,
+            "doc": "Version of the alert schema used to serialize this packet"
+        },
+        {
+            "name": "pipelineVersion",
+            "type": [
+                "null",
+                "string"
+            ],
+            "default": null,
+            "doc": "Version of the RAPID pipeline that produced this alert (stub)"
+        },
+        {
+            "name": "diaSourceId",
+            "type": "long",
+            "doc": "Identifier for the triggering diaSource"
+        },
+        {
+            "name": "diaSource",
+            "type": "rapid.v00_01.diaSource",
+            "doc": "Triggering source detection"
+        },
+        {
+            "name": "prvDiaSources",
+            "type": [
+                "null",
+                {
+                    "type": "array",
+                    "items": "rapid.v00_01.diaSource"
+                }
+            ],
+            "default": null,
+            "doc": "Previous detections of the same object within 12 months"
+        },
+        {
+            "name": "diaObject",
+            "type": [
+                "null",
+                "rapid.v00_01.diaObject"
+            ],
+            "default": null,
+            "doc": "Summary object record"
+        },
+        {
+            "name": "prvDiaForcedSources",
+            "type": [
+                "null",
+                {
+                    "type": "array",
+                    "items": "rapid.v00_01.diaForcedSource"
+                }
+            ],
+            "default": null,
+            "doc": "Forced photometry history at the object position"
+        },
+        {
+            "name": "ssSource",
+            "type": [
+                "null",
+                "rapid.v00_01.ssSource"
+            ],
+            "default": null,
+            "doc": "Solar system source association (stub)"
+        },
+        {
+            "name": "mpc_orbits",
+            "type": [
+                "null",
+                "rapid.v00_01.mpc_orbits"
+            ],
+            "default": null,
+            "doc": "MPC orbital elements (stub)"
+        },
+        {
+            "name": "cutoutDifference",
+            "type": [
+                "null",
+                "bytes"
+            ],
+            "default": null,
+            "doc": "FITS cutout of difference image"
+        },
+        {
+            "name": "cutoutScience",
+            "type": [
+                "null",
+                "bytes"
+            ],
+            "default": null,
+            "doc": "FITS cutout of science image"
+        },
+        {
+            "name": "cutoutTemplate",
+            "type": [
+                "null",
+                "bytes"
+            ],
+            "default": null,
+            "doc": "FITS cutout of template image"
+        },
+        {
+            "name": "observation_reason",
+            "type": [
+                "null",
+                "string"
+            ],
+            "default": null,
+            "doc": "Reason for observation (e.g. survey, ToO)"
+        },
+        {
+            "name": "target_name",
+            "type": [
+                "null",
+                "string"
+            ],
+            "default": null,
+            "doc": "Target name if targeted observation"
+        }
+    ]
+}
