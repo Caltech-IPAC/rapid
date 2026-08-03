@@ -197,11 +197,8 @@ def run_single_core_job_stage_1_crossmatching(scas,fields,index_thread):
 
     fh.write(f"\nStart of run_single_core_job: index_thread={index_thread}, dbh={dbh}\n")
 
-    for index_field in range(nfields):
-
-        index_core = index_field % num_cores
-        if index_thread != index_core:
-            continue
+    my_fields = list(range(index_thread, nfields, num_cores))
+    for index_field in my_fields:
 
         field = fields[index_field]
 
@@ -558,11 +555,8 @@ def run_single_core_job_stage_2_crossmatching(scas,fields,index_thread):
 
     fh.write(f"\nStart of run_single_core_job: index_thread={index_thread}, dbh={dbh}\n")
 
-    for index_field in range(nfields):
-
-        index_core = index_field % num_cores
-        if index_thread != index_core:
-            continue
+    my_fields = list(range(index_thread, nfields, num_cores))
+    for index_field in my_fields:
 
         field = fields[index_field]
 
