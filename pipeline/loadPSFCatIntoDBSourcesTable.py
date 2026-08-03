@@ -287,8 +287,8 @@ def run_single_core_job(meta_list,negative_diffimg_flag,index_thread):
         sql_queries = [f"DROP TABLE IF EXISTS {tablename};",
                         f"""CREATE UNLOGGED TABLE {tablename}
                         (LIKE sources INCLUDING DEFAULTS INCLUDING CONSTRAINTS);""",
-                        f"ALTER COLUMN aid DROP NOT NULL;",
-                        f"ADD COLUMN is_new boolean NOT NULL DEFAULT false;"]
+                        f"""ALTER TABLE {tablename} ALTER COLUMN aid DROP NOT NULL,
+                        ADD COLUMN is_new boolean NOT NULL DEFAULT false;"""]
         dbh.execute_sql_queries(sql_queries)
 
         expid = meta_dict["expid"]
