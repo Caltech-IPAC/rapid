@@ -214,9 +214,9 @@ DIA_SOURCE_PARAMS = (
                     STUB, _FP),
     Param("scienceFluxErr", ["null", "float"], "Uncertainty in scienceFlux (stub) [nJy]",
                     STUB, _FP),
-    Param("templateFlux",  ["null", "float"],  "Forced PSF flux on template image (stub) [nJy]",
+    Param("refFlux",  ["null", "float"],  "Forced PSF flux on reference image (stub) [nJy]",
                     STUB, _FP),
-    Param("templateFluxErr", ["null", "float"], "Uncertainty in templateFlux (stub) [nJy]",
+    Param("refFluxErr", ["null", "float"], "Uncertainty in reference Flux (stub) [nJy]",
                     STUB, _FP),
     Param("diffimglimmag", ["null", "float"],  "Expected 5-sigma limiting magnitude of difference image (stub) [mag]",
                     STUB, "difference-image depth estimate (not computed)"), #TODO: do we need this?
@@ -230,7 +230,7 @@ DIA_SOURCE_PARAMS = (
                     IMPLEMENTED, "sources.redchi", attr="redchi"),
     Param("psfNdata",       ["null", "int"],    "Number of pixels used in  PSF fit", #TODO: used to be npixfit
                     IMPLEMENTED, "sources.npixfit", attr="npixfit"),
-    Param("sharpness",     ["null", "float"],  "PSF-fit sharpness parameter", #TODO: should we add PSF as prefix?
+    Param("sharpness",     ["null", "float"],  "PSF-fit sharpness parameter",
                     IMPLEMENTED, "sources.sharpness"),
     Param("roundness1",    ["null", "float"],  "PSF-fit roundness parameter 1", #TODO: better description
                     IMPLEMENTED, "sources.roundness1"),
@@ -252,24 +252,26 @@ DIA_SOURCE_PARAMS = (
                     STUB, "from real/bogus classifier version (not run)"),
 
     # --- Trailed-source fit (all stubs) --------------------------------------
+    # Unsure if we will have these in v1
     Param("trailFlux",     ["null", "float"],  "Trail-fit flux (stub) [nJy]",
-                    STUB, "trailed-source fitting (not run)"),
+                    NOT_USED, "trailed-source fitting (not run)"),
     Param("trailFluxErr",  ["null", "float"],  "Uncertainty in trailFlux (stub) [nJy]",
-                    STUB, "trailed-source fitting (not run)"),
+                    NOT_USED, "trailed-source fitting (not run)"),
     Param("trailLength",   ["null", "float"],  "Trail length (stub) [arcsec]",
-                    STUB, "trailed-source fitting (not run)"),
+                    NOT_USED, "trailed-source fitting (not run)"),
     Param("trailAngle",    ["null", "float"],  "Trail angle (stub) [deg]",
-                    STUB, "trailed-source fitting (not run)"),
+                    NOT_USED, "trailed-source fitting (not run)"),
 
     # --- Dipole fit (all stubs) -----------------------------------------------
+    # Unsure if we will have these in v1
     Param("dipoleMeanFlux", ["null", "float"], "Dipole mean flux (stub) [nJy]",
-                    STUB, "dipole analysis (not run)"),
+                    NOT_USED, "dipole analysis (not run)"),
     Param("dipoleFluxErr", ["null", "float"],  "Uncertainty in dipoleMeanFlux (stub) [nJy]",
-                    STUB, "dipole analysis (not run)"),
+                    NOT_USED, "dipole analysis (not run)"),
     Param("dipoleLength",  ["null", "float"],  "Dipole separation (stub) [arcsec]",
-                    STUB, "dipole analysis (not run)"),
+                    NOT_USED, "dipole analysis (not run)"),
     Param("dipoleAngle",   ["null", "float"],  "Dipole orientation (stub) [deg]",
-                    STUB, "dipole analysis (not run)"),
+                    NOT_USED, "dipole analysis (not run)"),
 
     # --- Shape moments (all stubs) --------------------------------------------
     Param("ixx",           ["null", "float"],  "Adaptive second moment Ixx (stub) [arcsec^2]",
@@ -289,7 +291,7 @@ DIA_SOURCE_PARAMS = (
 
     # --- Flags -----------------------------------------------------------------
     Param("flags",         "long",             "Bitmask of processing flags",
-                    IMPLEMENTED, "sources.flags"),
+                    IMPLEMENTED, "sources.flags"), #TODO: expand this into indv. flags
     Param("pixelFlags_saturated", ["null", "boolean"], "Source has saturated pixels (stub)",
                     STUB, "pixel-mask analysis (not run)"),
     Param("pixelFlags_bad",       ["null", "boolean"], "Source has bad pixels (stub)",
@@ -322,8 +324,8 @@ DIA_SOURCE_PARAMS = (
                     STUB, "cross-match to reference-image catalog (not run)"),
 
     # --- Roman-specific identifiers & tiling ------------------------------------
-    Param("sca",           "int",              "Roman SCA detector number",
-                    NOT_USED, "sources.sca"), # duplicate from detector
+    # Param("sca",           "int",              "Roman SCA detector number",
+    #                 NOT_USED, "sources.sca"), # duplicate from detector
     Param("field",         "int",              "Roman field identifier",
                     IMPLEMENTED, "sources.field"),
     Param("hp6",           "int",              "HEALPix index at nside=64 (order 6)",
@@ -332,16 +334,16 @@ DIA_SOURCE_PARAMS = (
                     IMPLEMENTED, "sources.hp9"),
     Param("pid",           "long",             "Processing ID for science image",
                     IMPLEMENTED, "sources.pid"),
-    Param("expid",         "int",              "Exposure identifier",
-                    NOT_USED, "sources.expid"), # duplicate from visit/expId above
+    # Param("expid",         "int",              "Exposure identifier",
+    #                 NOT_USED, "sources.expid"), # duplicate from visit/expId above
     Param("pass",          ["null", "int"],    "Roman survey pass number (stub)",
-                    NOT_USED, "Roman observation ID components (exposure metadata; not in sources table)"),
+                    STUB, "Roman observation ID components (exposure metadata; not in sources table)"),
     Param("segment",       ["null", "int"],    "Roman survey segment number (stub)",
-                    NOT_USED, "Roman observation ID components (exposure metadata; not in sources table)"),
+                    STUB, "Roman observation ID components (exposure metadata; not in sources table)"),
     Param("program",       ["null", "int"],    "Roman program identifier (stub)",
-                    NOT_USED, "Roman observation ID components (exposure metadata; not in sources table)"),
+                    STUB, "Roman observation ID components (exposure metadata; not in sources table)"),
     Param("survey",        ["null", "string"], "Survey name (stub)",
-                    NOT_USED, "observation metadata (not available)"),
+                    STUB, "observation metadata (not available)"),
 )
 
 
@@ -356,9 +358,9 @@ DIA_SOURCE_PARAMS = (
 DIA_FORCED_SOURCE_PARAMS = (
     # --- Identifiers & associations ---
     Param("diaForcedSourceId", "long",            "Unique identifier for this forced source measurement",
-                        STUB, _FP, attr="forced_id"),
+                        STUB, _FP, attr="forced_id"), #TODO: separate ID for forced source?
     Param("diaObjectId",       "long",            "Associated diaObject identifier",
-                        STUB, _FP, attr="aid"),
+                        STUB, _FP, attr="aid"), #TODO: already in diaSource?
     Param("visit",             "long",            "Visit (exposure) identifier",
                         STUB, _FP, attr="expid"),
     Param("detector",          "int",             "Detector (SCA) number",
@@ -435,10 +437,14 @@ DIA_OBJECT_PARAMS = (
     # --- Identifier & position -------------------------------------------
     Param("diaObjectId",   "long",             "Unique identifier for this object",
                         IMPLEMENTED, "astroobjects_<field>.aid",  attr="aid"),
-    Param("ra",            "double",           "Right ascension of object centroid; ICRS [deg]",
+    Param("ra0",            "double",           "First measured right ascension of object centroid; ICRS [deg]",
                         IMPLEMENTED, "astroobjects_<field>.ra0",  attr="ra0"),
-    Param("dec",           "double",           "Declination of object centroid; ICRS [deg]", #TODO should these be mean?
+    Param("dec0",           "double",           "First measured declination of object centroid; ICRS [deg]",
                         IMPLEMENTED, "astroobjects_<field>.dec0", attr="dec0"),
+    Param("meanRa",            "double",           "Mean right ascension of object centroid; ICRS [deg]",
+                        STUB, "in astroobjects_meta"),
+    Param("meanDec",           "double",           "Mean declination of object centroid; ICRS [deg]",
+                        STUB, "in astroobjects_meta"),
     Param("raErr",         ["null", "float"],  "Uncertainty in ra [deg]", # TODO: on-sky error or std dev in degrees? Need cos(dec) factor if former
                         IMPLEMENTED, "astroobjects_<field> stdevra", attr="stdevra"),
     Param("decErr",        ["null", "float"],  "Uncertainty in dec [deg]",
@@ -560,14 +566,14 @@ ALERT_PARAMS = (
                         IMPLEMENTED, "provider get_cutouts()"),
     Param("cutoutScience",      ["null", "bytes"],   "FITS cutout of science image",
                         IMPLEMENTED, "provider get_cutouts()"),
-    Param("cutoutTemplate",     ["null", "bytes"],   "FITS cutout of template image",
+    Param("cutoutReference",     ["null", "bytes"],   "FITS cutout of reference image",
                         IMPLEMENTED, "provider get_cutouts()"),
 
     # --- Observation metadata (all stubs) ----------------------------------------
     Param("observation_reason", ["null", "string"],     "Reason for observation (e.g. survey, ToO)",
-                        STUB, "observation metadata (not available)"),
+                        STUB, "observation metadata (not propagated in pipeline)"),
     Param("target_name",        ["null", "string"],     "Target name if targeted observation",
-                        STUB, "observation metadata (not available)"),
+                        STUB, "observation metadata (not propagated in pipeline)"),
 )
 
 

@@ -103,13 +103,13 @@
             "doc": "FITS cutout of science image"
         },
         {
-            "name": "cutoutTemplate",
+            "name": "cutoutReference",
             "type": [
                 "null",
                 "bytes"
             ],
             "default": null,
-            "doc": "FITS cutout of template image"
+            "doc": "FITS cutout of reference image"
         },
         {
             "name": "observation_reason",

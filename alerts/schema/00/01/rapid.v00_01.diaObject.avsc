@@ -11,14 +11,24 @@
             "doc": "Unique identifier for this object"
         },
         {
-            "name": "ra",
+            "name": "ra0",
             "type": "double",
-            "doc": "Right ascension of object centroid; ICRS [deg]"
+            "doc": "First measured right ascension of object centroid; ICRS [deg]"
         },
         {
-            "name": "dec",
+            "name": "dec0",
             "type": "double",
-            "doc": "Declination of object centroid; ICRS [deg]"
+            "doc": "First measured declination of object centroid; ICRS [deg]"
+        },
+        {
+            "name": "meanRa",
+            "type": "double",
+            "doc": "Mean right ascension of object centroid; ICRS [deg]"
+        },
+        {
+            "name": "meanDec",
+            "type": "double",
+            "doc": "Mean declination of object centroid; ICRS [deg]"
         },
         {
             "name": "raErr",

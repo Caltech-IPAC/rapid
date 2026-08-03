@@ -186,22 +186,22 @@
             "doc": "Uncertainty in scienceFlux (stub) [nJy]"
         },
         {
-            "name": "templateFlux",
+            "name": "refFlux",
             "type": [
                 "null",
                 "float"
             ],
             "default": null,
-            "doc": "Forced PSF flux on template image (stub) [nJy]"
+            "doc": "Forced PSF flux on reference image (stub) [nJy]"
         },
         {
-            "name": "templateFluxErr",
+            "name": "refFluxErr",
             "type": [
                 "null",
                 "float"
             ],
             "default": null,
-            "doc": "Uncertainty in templateFlux (stub) [nJy]"
+            "doc": "Uncertainty in reference Flux (stub) [nJy]"
         },
         {
             "name": "diffimglimmag",
@@ -310,78 +310,6 @@
             ],
             "default": null,
             "doc": "Reliability code version"
-        },
-        {
-            "name": "trailFlux",
-            "type": [
-                "null",
-                "float"
-            ],
-            "default": null,
-            "doc": "Trail-fit flux (stub) [nJy]"
-        },
-        {
-            "name": "trailFluxErr",
-            "type": [
-                "null",
-                "float"
-            ],
-            "default": null,
-            "doc": "Uncertainty in trailFlux (stub) [nJy]"
-        },
-        {
-            "name": "trailLength",
-            "type": [
-                "null",
-                "float"
-            ],
-            "default": null,
-            "doc": "Trail length (stub) [arcsec]"
-        },
-        {
-            "name": "trailAngle",
-            "type": [
-                "null",
-                "float"
-            ],
-            "default": null,
-            "doc": "Trail angle (stub) [deg]"
-        },
-        {
-            "name": "dipoleMeanFlux",
-            "type": [
-                "null",
-                "float"
-            ],
-            "default": null,
-            "doc": "Dipole mean flux (stub) [nJy]"
-        },
-        {
-            "name": "dipoleFluxErr",
-            "type": [
-                "null",
-                "float"
-            ],
-            "default": null,
-            "doc": "Uncertainty in dipoleMeanFlux (stub) [nJy]"
-        },
-        {
-            "name": "dipoleLength",
-            "type": [
-                "null",
-                "float"
-            ],
-            "default": null,
-            "doc": "Dipole separation (stub) [arcsec]"
-        },
-        {
-            "name": "dipoleAngle",
-            "type": [
-                "null",
-                "float"
-            ],
-            "default": null,
-            "doc": "Dipole orientation (stub) [deg]"
         },
         {
             "name": "ixx",
@@ -596,6 +524,42 @@
             "name": "pid",
             "type": "long",
             "doc": "Processing ID for science image"
+        },
+        {
+            "name": "pass",
+            "type": [
+                "null",
+                "int"
+            ],
+            "default": null,
+            "doc": "Roman survey pass number (stub)"
+        },
+        {
+            "name": "segment",
+            "type": [
+                "null",
+                "int"
+            ],
+            "default": null,
+            "doc": "Roman survey segment number (stub)"
+        },
+        {
+            "name": "program",
+            "type": [
+                "null",
+                "int"
+            ],
+            "default": null,
+            "doc": "Roman program identifier (stub)"
+        },
+        {
+            "name": "survey",
+            "type": [
+                "null",
+                "string"
+            ],
+            "default": null,
+            "doc": "Survey name (stub)"
         }
     ]
 }
