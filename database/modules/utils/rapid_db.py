@@ -3405,7 +3405,7 @@ class RAPIDDB:
             self.conn.commit()           # Commit database transaction
 
         except (Exception, psycopg2.DatabaseError) as error:
-            print(f'*** Error bulk-loading data from buffer into specified database table ({table_name}); skipping...')
+            print(f'*** Error bulk-loading data from buffer into specified database table ({table_name}): {error}; skipping...')
             self.exit_code = 67
             exit(self.exit_code)
 
