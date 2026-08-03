@@ -1,4 +1,5 @@
 import os
+import json
 import psycopg2
 import re
 import hashlib
@@ -85,15 +86,52 @@ class RAPIDDB:
         self.conn = None
 
 
-        # Get database connection parameters from environment.
+        # Get database connection parameters from environment. DBSERVER/
+        # DBPORT/DBNAME are always config, not secret, and stay plain env
+        # reads with no hardcoded value: at scale, connections go through
+        # a pgbouncer pooler on the DB host (port 6432) rather than
+        # PostgreSQL directly (port 5432), so DBPORT must keep pointing at
+        # whichever is correct for the deployment — set it in the caller's
+        # environment, not defaulted here.
+        #
+        # Credentials: if RAPID_DB_SECRET_ID is set, fetch username/password
+        # from AWS Secrets Manager (boto3 default credential chain — under
+        # Batch this is the job role reading rapid/db/service/pipeline);
+        # otherwise fall back to DBUSER/DBPASS env vars so local/dev usage
+        # is unchanged.
 
+        dbserver = os.getenv('DBSERVER')
         dbport = os.getenv('DBPORT')
         dbname = os.getenv('DBNAME')
-        dbuser = os.getenv('DBUSER')
-        dbpass = os.getenv('DBPASS')
-        dbserver = os.getenv('DBSERVER')
+
+        dbuser = None
+        dbpass = None
+
+        db_secret_id = os.getenv('RAPID_DB_SECRET_ID')
+
+        if db_secret_id is not None:
+
+            try:
+                import boto3
+                secrets_client = boto3.client('secretsmanager')
+                secret_value = secrets_client.get_secret_value(SecretId=db_secret_id)
+                secret_dict = json.loads(secret_value['SecretString'])
+                dbuser = secret_dict['username']
+                dbpass = secret_dict['password']
+            except Exception:
+                print("*** Error: Could not fetch DB credentials from Secrets Manager secret {}; quitting...".format(db_secret_id))
+                self.exit_code = 64
+                return
+
+        else:
+            dbuser = os.getenv('DBUSER')
+            dbpass = os.getenv('DBPASS')
 
         print("dbserver,dbname,dbport,dbuser =",dbserver,dbname,dbport,dbuser)
+
+        if dbserver is None:
+            print("*** Error: Env. var. DBSERVER not set; quitting...")
+            exit(64)
 
         if dbport is None:
             print("*** Error: Env. var. DBPORT not set; quitting...")
@@ -104,15 +142,11 @@ class RAPIDDB:
             exit(64)
 
         if dbuser is None:
-            print("*** Error: Env. var. DBUSER not set; quitting...")
+            print("*** Error: Env. var. DBUSER not set (or RAPID_DB_SECRET_ID secret missing 'username'); quitting...")
             exit(64)
 
         if dbpass is None:
-            print("*** Error: Env. var. DBPASS not set; quitting...")
-            exit(64)
-
-        if dbserver is None:
-            print("*** Error: Env. var. DBSERVER not set; quitting...")
+            print("*** Error: Env. var. DBPASS not set (or RAPID_DB_SECRET_ID secret missing 'password'); quitting...")
             exit(64)
 
 
