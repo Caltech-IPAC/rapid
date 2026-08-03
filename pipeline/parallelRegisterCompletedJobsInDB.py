@@ -98,20 +98,8 @@ print("rapid_sw =",rapid_sw)
 print("cfg_path =",cfg_path)
 
 
-# Other required environment variables.
-
-aws_access_key_id = os.getenv('AWS_ACCESS_KEY_ID')
-aws_secret_access_key = os.getenv('AWS_SECRET_ACCESS_KEY')
-
-if aws_access_key_id is None:
-
-    print("*** Error: Env. var. AWS_ACCESS_KEY_ID not set; quitting...")
-    exit(64)
-
-if aws_secret_access_key is None:
-
-    print("*** Error: Env. var. AWS_SECRET_ACCESS_KEY not set; quitting...")
-    exit(64)
+# AWS credentials come from boto3's default chain (job role, instance
+# role, or SSO) — no explicit key pair needed or read here.
 
 make_refimages_flag_str = os.getenv('MAKEREFIMAGESFLAG')
 
@@ -960,39 +948,6 @@ if __name__ == '__main__':
         # Do not iterate, after all.
 
         break
-
-
-
-
-
-        # Test code.
-
-        a = 1
-        for n in range(10):
-            a = a + 1
-            print("n,a =",n,a)
-
-        print("Sleeping 30 seconds...")
-        time.sleep(30)
-        print("Waking up...")
-
-        if i == 3:
-            #os.kill(os.getpid(), signal.SIGQUIT)          # Quits gracefully via signal handler upon receiving control-/
-            #os.kill(os.getpid(), signal.SIGINT)           # Quits gracefully via signal handler upon receiving control-c
-            os.kill(os.getpid(), signal.SIGSTOP)           # Quits unconditionally and immediately.
-
-        if istop == 1:
-            print("Terminating gracefully now...")
-            exitcode = 7
-            exit(exitcode)
-
-        i += 1
-        print("i = ",i)
-
-
-        #
-        # End of open loop (but we are not iterating because of break above).
-        #
 
 
     # Code-timing benchmark.

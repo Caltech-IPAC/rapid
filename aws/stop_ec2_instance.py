@@ -3,21 +3,11 @@ import time
 import boto3
 
 
-aws_access_key_id = os.getenv('AWS_ACCESS_KEY_ID')
-aws_secret_access_key = os.getenv('AWS_SECRET_ACCESS_KEY')
+# AWS credentials come from boto3's default chain (job role, instance
+# role, or SSO) — no explicit key pair needed or read here.
 aws_ec2_instance_id = os.getenv('AWS_EC2_INSTANCE_ID')
 aws_ec2_volume_id = os.getenv('AWS_EC2_VOLUME_ID')
 aws_ec2_volume_device = os.getenv('AWS_EC2_VOLUME_DEVICE')
-
-if aws_access_key_id is None:
-
-    print("*** Error: Env. var. AWS_ACCESS_KEY_ID not set; quitting...")
-    exit(64)
-
-if aws_secret_access_key is None:
-
-    print("*** Error: Env. var. AWS_SECRET_ACCESS_KEY not set; quitting...")
-    exit(64)
 
 if aws_ec2_instance_id is None:
 

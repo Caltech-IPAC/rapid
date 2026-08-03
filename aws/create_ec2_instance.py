@@ -30,10 +30,9 @@ key_pair_name = "RussBuildMachine"                     # This is Russ's key-pair
 boot_disk_volume_size = 128                            # Size in GB
 
 
-# Overrides from environment variables.
-
-aws_access_key_id = os.getenv('AWS_ACCESS_KEY_ID')
-aws_secret_access_key = os.getenv('AWS_SECRET_ACCESS_KEY')
+# Overrides from environment variables. AWS credentials come from
+# boto3's default chain (job role, instance role, or SSO) — no explicit
+# key pair needed or read here.
 aws_unique_machine_name = os.getenv('AWS_UNIQUE_MACHINE_NAME')
 aws_ami_id = os.getenv('AWS_AMI_ID')
 aws_instance_type = os.getenv('AWS_INSTANCE_TYPE')
@@ -41,16 +40,6 @@ aws_subnet_id = os.getenv('AWS_SUBNET_ID')
 aws_security_group_id = os.getenv('AWS_SECURITY_GROUP_ID')
 aws_key_pair_name = os.getenv('AWS_KEY_PAIR_NAME')
 aws_boot_disk_volume_size = os.getenv('AWS_AMI_ID')
-
-if aws_access_key_id is None:
-
-    print("*** Error: Env. var. AWS_ACCESS_KEY_ID not set; quitting...")
-    exit(64)
-
-if aws_secret_access_key is None:
-
-    print("*** Error: Env. var. AWS_SECRET_ACCESS_KEY not set; quitting...")
-    exit(64)
 
 if aws_unique_machine_name is not None:
     unique_machine_name = aws_unique_machine_name

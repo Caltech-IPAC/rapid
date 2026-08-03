@@ -105,23 +105,8 @@ if roman_tessellation_dbname is None:
 roman_tessellation_db = sqlite.RomanTessellationNSIDE512()
 
 
-# Other required inputs.
-
-aws_access_key_id = os.getenv('AWS_ACCESS_KEY_ID')
-aws_secret_access_key = os.getenv('AWS_SECRET_ACCESS_KEY')
-
-if aws_access_key_id is None:
-
-    print("*** Error: Env. var. AWS_ACCESS_KEY_ID not set; quitting...")
-    exit(64)
-
-if aws_secret_access_key is None:
-
-    print("*** Error: Env. var. AWS_SECRET_ACCESS_KEY not set; quitting...")
-    exit(64)
-
-#print("aws_access_key_id =",aws_access_key_id)
-#print("aws_secret_access_key =",aws_secret_access_key)
+# AWS credentials come from boto3's default chain (job role, instance
+# role, or SSO) — no explicit key pair needed or read here.
 
 rapid_sw = os.getenv('RAPID_SW')
 
