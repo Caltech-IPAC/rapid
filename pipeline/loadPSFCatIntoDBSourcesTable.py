@@ -307,15 +307,6 @@ def run_single_core_job(meta_list,negative_diffimg_flag,index_thread):
         # This is done by attempting to download the done file.  Regardless the sub
         # always returns the filename and subdirs by parsing the s3_full_name.
 
-        s3_full_name_done_file = "s3://" + product_s3_bucket_base + "/" + proc_date + '/jid' + str(jid) + "/source_dbload" + done_suffix + "_jid" +  str(jid)  + ".done"
-        done_filename,subdirs_done,downloaded_from_bucket = util.download_file_from_s3_bucket(s3_client,s3_full_name_done_file)
-
-        if do_done_check and downloaded_from_bucket:
-            fh.write("*** Warning: Done file exists ({}); skipping...\n".format(done_filename))
-            fh.flush()
-            continue
-
-
         # Download SFFT-difference-image PSF-fit catalog file from S3 bucket.
 
         output_psfcat_filename_for_jid = output_psfcat_filename_to_use.replace(".txt",f"_jid{jid}.txt")
