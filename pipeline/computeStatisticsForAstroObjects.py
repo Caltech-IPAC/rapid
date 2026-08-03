@@ -150,9 +150,9 @@ def run_single_core_job(fields,source_child_tables,index_thread):
 
     try:
         fh = open(thread_work_file, 'w', encoding="utf-8")
-    except:
-        print(f"*** Error: Could not open output file {thread_work_file}; quitting...")
-        raise RuntimeError(f"*** Error: Could not open output file {thread_work_file}; quitting...")
+    except Exception as e:
+        print(f"*** Error: Could not open output file {thread_work_file} ({e}); quitting...")
+        raise
 
 
     # Open database connection.
@@ -238,39 +238,43 @@ def run_single_core_job(fields,source_child_tables,index_thread):
             aid = record[0]
             aids_list.append(aid)
 
+        n_aids_list = len(aids_list)
+
+        if n_aids_list > 0:
+
             aids_comma_separated_string = ",".join(aids_list)
 
-        fh.write(f"Deleting records for aid = {aid} in {astroobjects_tablename} database table...\n")
-        fh.flush()
+            fh.write(f"Deleting records for aid = {aid} in {astroobjects_tablename} database table...\n")
+            fh.flush()
 
-        query = f"DELETE FROM {astroobjects_tablename} " +\
-                f"WHERE aid IN ({aids_comma_separated_string});"
+            query = f"DELETE FROM {astroobjects_tablename} " +\
+                    f"WHERE aid IN ({aids_comma_separated_string});"
 
-        fh.write(f"query = {query}\n")
-        fh.flush()
+            fh.write(f"query = {query}\n")
+            fh.flush()
 
-        sql_queries = []
-        sql_queries.append(query)
-        records = dbh.execute_sql_queries(sql_queries,thread_debug)
+            sql_queries = []
+            sql_queries.append(query)
+            records = dbh.execute_sql_queries(sql_queries,thread_debug)
 
-        for record in records:
-            fh.write(f"record = {record}\n")
+            for record in records:
+                fh.write(f"record = {record}\n")
 
-        fh.write(f"Deleting records for aid = {aid} in {astroobjectsmeta_tablename} database table...\n")
-        fh.flush()
+            fh.write(f"Deleting records for aid = {aid} in {astroobjectsmeta_tablename} database table...\n")
+            fh.flush()
 
-        query = f"DELETE FROM {astroobjectsmeta_tablename} " +\
-                f"WHERE aid IN ({aids_comma_separated_string});"
+            query = f"DELETE FROM {astroobjectsmeta_tablename} " +\
+                    f"WHERE aid IN ({aids_comma_separated_string});"
 
-        fh.write(f"query = {query}\n")
-        fh.flush()
+            fh.write(f"query = {query}\n")
+            fh.flush()
 
-        sql_queries = []
-        sql_queries.append(query)
-        records = dbh.execute_sql_queries(sql_queries,thread_debug)
+            sql_queries = []
+            sql_queries.append(query)
+            records = dbh.execute_sql_queries(sql_queries,thread_debug)
 
-        for record in records:
-            fh.write(f"record = {record}\n")
+            for record in records:
+                fh.write(f"record = {record}\n")
 
 
         # Code-timing benchmark.
@@ -291,6 +295,8 @@ def run_single_core_job(fields,source_child_tables,index_thread):
 
         all_records = []
         for sources_tablename in source_child_tables:
+            fh.write(f"sources_tablename = {sources_tablename}\n")
+            fh.flush()
             query = f"SELECT a.aid,b.ra,b.dec,b.fluxfit FROM {merges_tablename} AS a " +\
                 f"JOIN {sources_tablename} AS b ON a.sid = b.sid " +\
                 f"JOIN diffimages AS d ON b.pid = d.pid " +\
@@ -550,12 +556,18 @@ def execute_parallel_processes(fields_list,source_child_tables,num_cores):
             index = futures.index(future)  # Find the original index/order of the completed future
             print(f"Completed: {i+1} processes, lastly for index={index}")
 
+    failures = []
     for future in futures:
         index = futures.index(future)
         try:
             print(future.result())
         except Exception as e:
+            failures.append(e)
             print(f"*** Error in thread index {index} = {e}")
+
+    if failures:
+        print(f"*** Error(s) from {len(failures)} worker(s); quitting...")
+        exit(64)
 
 
 #################
