@@ -22,12 +22,20 @@
         },
         {
             "name": "meanRa",
-            "type": "double",
+            "type": [
+                "null",
+                "double"
+            ],
+            "default": null,
             "doc": "Mean right ascension of object centroid; ICRS [deg]"
         },
         {
             "name": "meanDec",
-            "type": "double",
+            "type": [
+                "null",
+                "double"
+            ],
+            "default": null,
             "doc": "Mean declination of object centroid; ICRS [deg]"
         },
         {
