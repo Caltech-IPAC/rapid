@@ -197,7 +197,7 @@ def table_to_buffer(tbl, colnames, null_string=r"\N", separator=","):
     for name in colnames:
         column_data = np.asarray(tbl[name])
         #use %r to create a string with minimum number of digits
-        column_data_str = np.char.mod('%r', column_data) if column_data.dtype.kind == 'f' else column_data.astype(str)
+        column_data_str = np.char.mod('%s', column_data) if column_data.dtype.kind == 'f' else column_data.astype(str)
         if column_data.dtype.kind == 'f':
             column_data_str = np.where(np.isnan(column_data), null_string, column_data_str)      # NaN -> NULL at the source
         cols.append(column_data_str)
