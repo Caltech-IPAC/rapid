@@ -3400,7 +3400,7 @@ class RAPIDDB:
         # Open the CSV file in read mode and bulk-load specified database table.
 
         try:
-            sql = f"COPY {table_name} ({', '.join(columns)}) FROM STDIN WITH (FORMAT text, DELIMITER {separator}, NULL {null_string})"
+            sql = f"COPY {table_name} ({', '.join(columns)}) FROM STDIN WITH (FORMAT text, DELIMITER '{separator}', NULL '{null_string}')"
             self.cur.copy_expert(sql, buffer)
             self.conn.commit()           # Commit database transaction
 
