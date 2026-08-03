@@ -284,12 +284,12 @@ def run_single_core_job(meta_list,negative_diffimg_flag,index_thread):
         tablename = f"temp_sources_{jid}"
         #Create a temporary table that mirrors sources table for light-weight cross-matching to AstroObjects
         #don't worry about a unique sid, that will be added when injected into full table
-        sql_queries = f"""DROP TABLE IF EXISTS {tablename} ;
-                        CREATE UNLOGGED TABLE {tablename}
-                        (LIKE sources INCLUDING DEFAULTS INCLUDING CONSTRAINTS);
-                        ALTER COLUMN aid DROP NOT NULL,
-                            ADD COLUMN is_new boolean NOT NULL DEFAULT false;"""
-        dbh.execute_sql_queries([sql_queries])
+        sql_queries = [f"DROP TABLE IF EXISTS {tablename};",
+                        f"""CREATE UNLOGGED TABLE {tablename}
+                        (LIKE sources INCLUDING DEFAULTS INCLUDING CONSTRAINTS);""",
+                        f"ALTER COLUMN aid DROP NOT NULL;",
+                        f"ADD COLUMN is_new boolean NOT NULL DEFAULT false;"]
+        dbh.execute_sql_queries(sql_queries)
 
         expid = meta_dict["expid"]
         sca = meta_dict["sca"]
@@ -437,7 +437,7 @@ def run_single_core_job(meta_list,negative_diffimg_flag,index_thread):
         cross_match_time_benchmark_start = time.time()
         #can remove if s2.flags filter R/B first
         cross_match_sql = [f"ANALYZE {tablename};"
-            """UPDATE {tablename} s
+            f"""UPDATE {tablename} s
             SET aid = m.aid
             FROM (
                 SELECT DISTINCT ON (s2.id)
