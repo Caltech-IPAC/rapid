@@ -2,7 +2,9 @@
 
 date
 
-env
+echo "AWS_BATCH_JOB_ID = $AWS_BATCH_JOB_ID"
+echo "AWS_BATCH_JOB_ATTEMPT = $AWS_BATCH_JOB_ATTEMPT"
+echo "AWS_DEFAULT_REGION = $AWS_DEFAULT_REGION"
 echo "AWS Batch job to run single RAPID-reference-image pipeline instance."
 
 

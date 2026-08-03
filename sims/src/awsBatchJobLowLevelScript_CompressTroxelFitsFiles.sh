@@ -24,7 +24,9 @@ if [ -z $var ]; then
     var=2;
 fi
 
-env
+echo "AWS_BATCH_JOB_ID = $AWS_BATCH_JOB_ID"
+echo "AWS_BATCH_JOB_ATTEMPT = $AWS_BATCH_JOB_ATTEMPT"
+echo "AWS_DEFAULT_REGION = $AWS_DEFAULT_REGION"
 echo "AWS Batch job to compress OpenUniverse simulated FITS file."
 
 
