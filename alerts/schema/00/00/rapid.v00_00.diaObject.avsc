@@ -1,8 +1,8 @@
 {
-	"namespace": "rapid.v01_00",
+	"namespace": "rapid.v00_00",
 	"name": "diaObject",
 	"doc": "RAPID alert schema: astronomical object derived from DIASources",
-	"version": "01.00",
+	"version": "00.00",
 	"type": "record",
 	"fields": [
 		{"name": "diaObjectId",            "type": "long",              "doc": "Unique identifier for this object"},
