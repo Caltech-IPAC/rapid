@@ -23,6 +23,7 @@ RUN yum -y install git
 RUN yum -y install sqlite
 RUN yum -y install diffutils
 RUN yum -y install file
+RUN yum -y install patch
 
 # Install fftw3-devel
 RUN yum install -y fftw3-devel && \
@@ -78,6 +79,10 @@ RUN python3.11 -m pip install --upgrade scikit-image
 RUN python3.11 -m pip install --upgrade pysiaf
 RUN python3.11 -m pip install --upgrade roman_datamodels
 RUN python3.11 -m pip install --upgrade romancal
+RUN python3.11 -m pip install --upgrade fitsio
+RUN python3.11 -m pip install --upgrade fastavro
+RUN python3.11 -m pip install --upgrade pytest
+RUN python3.11 -m pip install --upgrade psutil
 
 # Set up separate Python 3.11 venv under root directory for sfft.
 
