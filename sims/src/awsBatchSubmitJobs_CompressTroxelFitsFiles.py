@@ -26,18 +26,8 @@ filter_substring_for_dir = filterstring.lower()
 bucket_name_input = 'sims-sn-' + filter_substring_for_dir
 bucket_name_output = 'sims-sn-' + filter_substring_for_dir +'-lite'
 
-aws_access_key_id = os.getenv('AWS_ACCESS_KEY_ID')
-aws_secret_access_key = os.getenv('AWS_SECRET_ACCESS_KEY')
-
-if aws_access_key_id is None:
-
-    print("*** Error: Env. var. AWS_ACCESS_KEY_ID not set; quitting...")
-    exit(64)
-
-if aws_secret_access_key is None:
-
-    print("*** Error: Env. var. AWS_SECRET_ACCESS_KEY not set; quitting...")
-    exit(64)
+# Credentials come from boto3's default chain (job role, instance role,
+# or SSO) — no explicit key pair needed or read here.
 
 
 # Set up AWS Batch.
@@ -45,14 +35,18 @@ if aws_secret_access_key is None:
 client = boto3.client('batch')
 
 
-# Define job definition.  Use AWS Batch Console to set this up once.
+# Define job definition. Bare name, not an account/region-qualified ARN
+# (boto3 accepts either) — portable across environments. Override via
+# env var for a non-default job definition; falls back to the smoke-test
+# name until this sims tool gets its own job definition. Use AWS Batch
+# Console to set this up once.
 
-job_definition = "arn:aws:batch:us-west-2:891377127831:job-definition/Fetch_and_run:3"
+job_definition = os.getenv('COMPRESS_JOB_DEFINITION', 'Fetch_and_run')
 
 
-# Define job queue.  Use AWS Batch Console to set this up once.
+# Define job queue. Same bare-name/env-var-override approach as above.
 
-job_queue = 'arn:aws:batch:us-west-2:891377127831:job-queue/getting-started-wizard-job-queue'
+job_queue = os.getenv('COMPRESS_JOB_QUEUE', 'rapid-queue')
 
 
 # Define job name.
