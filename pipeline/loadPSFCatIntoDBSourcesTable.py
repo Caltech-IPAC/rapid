@@ -287,8 +287,7 @@ def run_single_core_job(meta_list,negative_diffimg_flag,index_thread):
         sql_queries = f"""DROP TABLE IF EXISTS {tablename} ;
                         CREATE UNLOGGED TABLE {tablename}
                         (LIKE sources INCLUDING DEFAULTS INCLUDING CONSTRAINTS);
-                        ALTER TABLE {tablename} DROP sid,
-                            ADD COLUMN aid bigint,
+                        ALTER COLUMN aid DROP NOT NULL,
                             ADD COLUMN is_new boolean NOT NULL DEFAULT false;"""
         dbh.execute_sql_queries([sql_queries])
 
@@ -480,7 +479,7 @@ def run_single_core_job(meta_list,negative_diffimg_flag,index_thread):
                 npixfit, qfit, cfit, redchi, flags,
                 sharpness, roundness1, roundness2, npix, peak,
                 field, hp6, hp9, expid, fid, sca, mjdobs)
-            SELECT nextval('sources_sid_seq'), aid, id, pid, isdiffpos, ra, dec,
+            SELECT sid, aid, id, pid, isdiffpos, ra, dec,
                 xfit, yfit, fluxfit, xerr, yerr, fluxerr,
                 npixfit, qfit, cfit, redchi, flags,
                 sharpness, roundness1, roundness2, npix, peak,
