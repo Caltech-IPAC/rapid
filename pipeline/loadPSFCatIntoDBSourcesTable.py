@@ -318,7 +318,7 @@ def write_joined_table_inner_to_csv_file(isdiffpos,
 def run_single_core_job(jids,overlapping_fields_list,meta_list,index_thread):
 
     '''
-    For effficiency, this method handles both positive and negative difference-image
+    For efficiency, this method handles both positive and negative difference-image
     PSF-fits catalogs.
     '''
 
