@@ -188,6 +188,7 @@ print("register_postproc_pipeline_jobs_code =", register_postproc_pipeline_jobs_
 
 signal.signal(signal.SIGINT, signal_handler)
 signal.signal(signal.SIGQUIT, signal_handler)
+signal.signal(signal.SIGTERM, signal_handler)
 
 
 #-------------------------------------------------------------------------------------------------------------
@@ -788,22 +789,9 @@ if __name__ == '__main__':
             break
 
 
-        # Test code.
-
-        a = 1
-        for n in range(10):
-            a = a + 1
-            print("n,a =",n,a)
-
         print("Sleeping 30 seconds...")
         time.sleep(30)
         print("Waking up...")
-
-        if i == 3:
-            #os.kill(os.getpid(), signal.SIGQUIT)          # Quits gracefully via signal handler upon receiving control-/
-            os.kill(os.getpid(), signal.SIGINT)           # Quits gracefully via signal handler upon receiving control-c
-            #os.kill(os.getpid(), signal.SIGSTOP)          # Pauses the process so it cannot be caught or ignored, and will hang indefinitely.
-            #os.kill(os.getpid(), signal.SIGKILL)           # Quits unconditionally and immediately.
 
         if istop == 1:
             print("Terminating gracefully now...")
