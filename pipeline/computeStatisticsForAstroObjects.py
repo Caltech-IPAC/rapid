@@ -36,7 +36,7 @@ start_time_benchmark_at_start = start_time_benchmark
 
 datetime_utc_now = datetime.now(timezone.utc)
 proc_utc_datetime = datetime_utc_now.strftime('%Y-%m-%dT%H:%M:%SZ')
-datetime_pt_now = datetime_utc_now.replace(tzinfo=timezone.utc).astimezone(tz=to_zone)
+datetime_pt_now = datetime_utc_now.astimezone(tz=to_zone)
 proc_pt_datetime_started = datetime_pt_now.strftime('%Y-%m-%dT%H:%M:%S PT')
 
 print("proc_utc_datetime =",proc_utc_datetime)
