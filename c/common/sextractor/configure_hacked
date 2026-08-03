@@ -16491,8 +16491,6 @@ printf "%s\n" "#define ATLAS_LAPACK_H \"${acx_atlas_incdir}clapack.h\"" >>confde
   { printf "%s\n" "$as_me:${as_lineno-$LINENO}: checking for library containing clapack_dpotrf" >&5
 printf %s "checking for library containing clapack_dpotrf... " >&6; }
 
-#ac_cv_search_clapack_dpotrf="/Users/laher/Documents/rapid/git/rapid/c/atlas/lib/liblapack.a /Users/laher/Documents/rapid/git/rapid/c/atlas/lib/libatlas.a /Users/laher/Documents/rapid/git/rapid/c/atlas/lib/libcblas.a /Users/laher/Documents/rapid/git/rapid/c/atlas/lib/libf77blas.a /Users/laher/Documents/rapid/git/rapid/c/atlas/lib/libptcblas.a /Users/laher/Documents/rapid/git/rapid/c/atlas/lib/libptf77blas.a"
-
 ac_cv_search_clapack_dpotrf="$RAPID_SW/c/atlas/lib/liblapack.a $RAPID_SW/c/atlas/lib/libatlas.a $RAPID_SW/c/atlas/lib/libcblas.a $RAPID_SW/c/atlas/lib/libf77blas.a $RAPID_SW/c/atlas/lib/libptcblas.a $RAPID_SW/c/atlas/lib/libptf77blas.a"
 
 echo ""

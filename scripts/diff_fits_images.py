@@ -3,13 +3,21 @@
 # and then output result as FITS file.
 ####################################################################################################################
 
+import argparse
 import numpy as np
 from astropy.io import fits
 
-input_file_1 = "/Users/laher/git/rapid/c/common/awaicgen/awaicgen-5.2/output.fits"
-input_file_2 = "/Users/laher/git/rapid/c/common/awaicgen/awaicgen-5.2/output2.fits"
+parser = argparse.ArgumentParser(description=__doc__)
+parser.add_argument("input_file_1", help="First input FITS file (subtracted from input_file_2).")
+parser.add_argument("input_file_2", help="Second input FITS file.")
+parser.add_argument("-o", "--output", dest="output_diff_file", default="diff_image.fits",
+                     help="Output difference FITS file (default: diff_image.fits).")
+args = parser.parse_args()
 
-output_diff_file = "diff_image.fits"
+input_file_1 = args.input_file_1
+input_file_2 = args.input_file_2
+
+output_diff_file = args.output_diff_file
 
 hdul_1 = fits.open(input_file_1)
 hdul_2 = fits.open(input_file_2)

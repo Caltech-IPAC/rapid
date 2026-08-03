@@ -1,7 +1,7 @@
 10/17/22
 
-export DYLD_LIBRARY_PATH=${ZTF_SW}/ztf/lib:/Users/laher/Files/laher/rlaher/git/ext/lib
-export CFITSIO=/Users/laher/Files/laher/rlaher/git/ext
+export DYLD_LIBRARY_PATH=${ZTF_SW}/ztf/lib:${ZTF_EXT}/lib
+export CFITSIO=${ZTF_EXT}
 
 make clean
 make

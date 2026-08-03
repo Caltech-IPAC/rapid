@@ -4,10 +4,11 @@ Usage:
 python -m venv ./hats_env
 source ./hats_env/bin/activate
 which python
-python /Users/laher/git/rapid/scripts/convert_photutils_catalog_to_hats_catalog.py
+python scripts/convert_photutils_catalog_to_hats_catalog.py
 deactivate
 '''
 
+import os
 import glob
 from pathlib import Path
 from dask.distributed import Client
@@ -22,9 +23,11 @@ if __name__ == '__main__':
     output_path = Path.cwd()
     tmp_dir = "tmp"
 
-    # Input path where PhotUtils catalog files are stored with unique filename suffixes.
+    # Input path where PhotUtils catalog files are stored with unique
+    # filename suffixes. TESTDATADIR env var overrides; cwd-relative
+    # default (no personal path).
 
-    test_data_dir = "/Users/laher/Folks/rapid/hats-import-parquet"
+    test_data_dir = os.getenv('TESTDATADIR', os.path.join(os.getcwd(), "hats-import-parquet"))
     catalog_csv_path = glob.glob(f"{test_data_dir}/sfftdiffimage_masked_psfcat*.txt")
 
     print(f"catalog_csv_path={catalog_csv_path}")

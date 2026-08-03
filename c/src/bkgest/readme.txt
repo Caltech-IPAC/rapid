@@ -14,7 +14,7 @@ export RAPID_SW=~/git/rapid_abandon_20240426
 export DYLD_LIBRARY_PATH=~/git/rapid_abandon_20240426/c/lib
 export PATH=~/git/rapid_abandon_20240426/c/bin:$PATH
 
-cd /Users/laher/git/rapid/c/src/bkgest
+cd $RAPID_SW/c/src/bkgest
 make
 
 
@@ -80,7 +80,7 @@ Program bkgest, version 1.3, terminated.
 
 
 
-time bkgest -i diffimage_masked.fits -f 3 -c 1 -g 100 -w 201 -o1 localClippedMean.fits -o2 backgroundSubtracted.fits -o3 skyScale.fits -a /Users/laher/git/rapid_abandon_20240426/c/include
+time bkgest -i diffimage_masked.fits -f 3 -c 1 -g 100 -w 201 -o1 localClippedMean.fits -o2 backgroundSubtracted.fits -o3 skyScale.fits -a $RAPID_SW/c/include
 echo $?
 
 Processing time: 6.468094 seconds
@@ -119,7 +119,7 @@ Image: localClippedMean.fits [1:1]
 
 12/16/24
 
-time bkgest -i Roman_TDS_simple_model_F184_1856_2_lite_reformatted.fits -f 3 -c 1 -g 500 -w 501 -o1 localClippedMean.fits -o2 backgroundSubtracted.fits -o3 skyScale.fits -a /Users/laher/git/rapid_abandon_20240426/c/include
+time bkgest -i Roman_TDS_simple_model_F184_1856_2_lite_reformatted.fits -f 3 -c 1 -g 500 -w 501 -o1 localClippedMean.fits -o2 backgroundSubtracted.fits -o3 skyScale.fits -a $RAPID_SW/c/include
 echo $?
 
 bkgest_parse_namelist: Information only: Namelist not specified.

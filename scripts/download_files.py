@@ -5,7 +5,8 @@ import re
 s3_client = boto3.client('s3')
 product_s3_bucket = "rapid-product-files"
 
-product_listing = "/Users/laher/Folks/rapid/rapid-product-files_20250927.txt"
+# PRODUCTLISTING env var overrides; cwd-relative default (no personal path).
+product_listing = os.getenv('PRODUCTLISTING', os.path.join(os.getcwd(), "rapid-product-files.txt"))
 
 filename_diffimage_sextractor_catalog = "diffimage_masked.txt"
 

@@ -8,7 +8,8 @@ my %fids = ("184" => 1, "158" => 2,"129" => 3,"213" => 4,"062" => 5,"106" => 6,"
 my $sqlfile = "psfs.sql";
 open(OUT, ">$sqlfile");
 
-opendir(THISDIR, "/Users/laher/Folks/rapid/psfs/PSFs");
+my $psfs_dir = $ENV{'PSFSDIR'} // "PSFs";
+opendir(THISDIR, $psfs_dir);
 my @files=sort readdir THISDIR;
 closedir THISDIR;
 

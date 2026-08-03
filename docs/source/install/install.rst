@@ -89,7 +89,7 @@ To run a binary executable, the run-time environment must be set up with the lib
 
 .. code-block::
 
-   export DYLD_LIBRARY_PATH=/Users/laher/git/rapid/c/lib
+   export DYLD_LIBRARY_PATH=$RAPID_SW/c/lib
 
 .. warning::
 

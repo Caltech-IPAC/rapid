@@ -36,7 +36,9 @@ class RomanTessellationNSIDE512:
 
         if dbname is None:
 
-            dbname = "/Users/laher/Documents/rapid/" + sqlite_dbname
+            # cwd-relative default (no personal path): callers that need
+            # a different location set ROMANTESSELLATIONDBNAME instead.
+            dbname = sqlite_dbname
 
         print("dbname =",dbname)
 

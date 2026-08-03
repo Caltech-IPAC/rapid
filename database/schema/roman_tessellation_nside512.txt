@@ -5,7 +5,7 @@ This is one and you're done, and then copy it to an S3 bucket for safekeeping.
 
 Start with FITS file from running the skymap code:
 
-/Users/laher/Folks/rapid/romantessellation_nside512.fits
+<path-to>/romantessellation_nside512.fits
 
 Use Thoth to convert it into a SQLite database.  This executes
 the following operations SQL statements:
@@ -20,7 +20,7 @@ numberOfColumns, numberOfRows = 7, 6291458
 Confirmed number of rows in SQLite database table Thoth1 = 6291458
 Finished adding new table to SQLite database.
 
-cd /Users/laher/git/rapid/database/schema
+cd $RAPID_SW/database/schema
 cp -p ~/.Thoth/thoth.db roman_tessellation_nside512.db
 
 Now fix the problems present in the original FITS file:

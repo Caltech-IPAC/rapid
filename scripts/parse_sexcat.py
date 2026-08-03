@@ -1,8 +1,20 @@
+import os
+import argparse
 import numpy as np
 import modules.utils.rapid_pipeline_subs as util
 
-datafile="/Users/laher/Folks/rapid/awaicgen_output_mosaic_image_resampled_refgainmatchsexcat.txt";
-paramsfile="/Users/laher/git/rapid/cdf/rapidSexParamsGainMatch.inp";
+# Repo root, two levels up from this file (scripts/parse_sexcat.py).
+_repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+parser = argparse.ArgumentParser(description="Parse a SExtractor-format catalog.")
+parser.add_argument("-d", "--datafile", default="awaicgen_output_mosaic_image_resampled_refgainmatchsexcat.txt",
+                     help="Input SExtractor catalog file.")
+parser.add_argument("-p", "--paramsfile", default=os.path.join(_repo_root, "cdf", "rapidSexParamsGainMatch.inp"),
+                     help="SExtractor params file (default: cdf/rapidSexParamsGainMatch.inp).")
+args = parser.parse_args()
+
+datafile = args.datafile
+paramsfile = args.paramsfile
 
 params_to_get = ["XWIN_IMAGE","YWIN_IMAGE","FLUX_APER_6","MAG_APER_6",
                  "CLASS_STAR","ISOAREAF_IMAGE","AWIN_WORLD","BWIN_WORLD"]

@@ -9,7 +9,12 @@
 #
 
 #--------Configure build environment--------------------------
-setenv RAPID_SW /Users/laher/git/rapid
+# RAPID_SW must be set in the caller's environment before running this
+# script (no personal-path default); it is the repo's top-level checkout.
+if (! $?RAPID_SW) then
+    echo "*** Error: env var RAPID_SW not set (repo checkout path); quitting..."
+    exit 64
+endif
 # A well-defined path is essential.
 setenv PATH /opt/homebrew/bin:/bin:/usr/local/bin:/usr/bin:/usr/sbin:/sbin:/opt/X11/bin
 

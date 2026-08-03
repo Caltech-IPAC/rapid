@@ -55,7 +55,12 @@ os.environ['DISPLAYPLOT'] = "False"
 directory_paths = os.listdir('.')
 #print(directory_paths)
 
-main_path = "/Users/laher/Folks/rapid/download_files_20250927"
+# MAINPATH env var overrides; cwd-relative default (no personal path).
+main_path = os.getenv('MAINPATH', os.path.join(os.getcwd(), "download_files"))
+
+# Sibling scripts invoked below are resolved relative to this script's own
+# directory (no personal path), overridable via SCRIPTSDIR.
+scripts_dir = os.getenv('SCRIPTSDIR', os.path.dirname(os.path.abspath(__file__)))
 
 nsources_sexcat_list = []
 ns_true_list = []
@@ -135,7 +140,7 @@ for directory_path in directory_paths:
             if not os.path.exists(new_path):
                 print("Generating PhotUtils catalog...")
                 try:
-                    code_to_execute_object = subprocess.run(['python', '/Users/laher/git/rapid/scripts/generate_psfcat.py'], capture_output=True, text=True, check=True)
+                    code_to_execute_object = subprocess.run(['python', os.path.join(scripts_dir, 'generate_psfcat.py')], capture_output=True, text=True, check=True)
 
                     returncode = code_to_execute_object.returncode
                     print("returncode =",returncode)
@@ -190,7 +195,7 @@ for directory_path in directory_paths:
 
             try:
                 print("Performing source matching and scoring...")
-                code_to_execute_object = subprocess.run(['python', '/Users/laher/git/rapid/scripts/plot_detections.py'], capture_output=True, text=True, check=True)
+                code_to_execute_object = subprocess.run(['python', os.path.join(scripts_dir, 'plot_detections.py')], capture_output=True, text=True, check=True)
 
                 returncode = code_to_execute_object.returncode
                 print("returncode =",returncode)

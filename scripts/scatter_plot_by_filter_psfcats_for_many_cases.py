@@ -26,7 +26,8 @@ n_catalogs = 1000
 
 match_radius_pixels = 1.0
 
-main_path = "/Users/laher/Folks/rapid/download_files_20250927"
+# MAINPATH env var overrides; cwd-relative default (no personal path).
+main_path = os.getenv('MAINPATH', os.path.join(os.getcwd(), "download_files"))
 input_fits_file = "diffimage_masked.fits"
 
 case_list = ["PU1","PU2","PU3","PU4","PU5","PU6","PU7","PU8","PU9","PU10"]
