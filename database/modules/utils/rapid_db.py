@@ -4194,13 +4194,13 @@ class RAPIDDB:
         except errors.UniqueViolation:
             self.conn.rollback()
             self.exit_code = 67
-            self.logger.error("pid %s already queued in upload_psfcat_queue "
+            print("pid %s already queued in upload_psfcat_queue "
                             "(pipeline double-enqueue?)", pid)
             raise
         except (Exception, psycopg2.DatabaseError):
             self.conn.rollback()
             self.exit_code = 67
-            self.logger.exception("Failed to enqueue pid %s", pid)
+            print("Failed to enqueue pid %s", pid)
             raise
     def get_pending_psfcat_uploads(self):
         '''
@@ -4222,7 +4222,7 @@ class RAPIDDB:
         except (Exception, psycopg2.DatabaseError):
             self.conn.rollback()
             self.exit_code = 67
-            self.logger.exception("Failed to fetch pending psfcat uploads")
+            print("Failed to fetch pending psfcat uploads")
             raise
 
 
@@ -4240,11 +4240,13 @@ class RAPIDDB:
             AND inserted_at IS NULL
             RETURNING qid;
         """
+        if type(qids) is int:
+            qids = [qids]
         try:
             self.cur.execute(sql, {"qids": list(qids)})
             n = len(self.cur.fetchall())
             if n != len(qids):
-                self.logger.warning("mark_psfcat_uploaded: %d of %d qids updated "
+                print("mark_psfcat_uploaded: %d of %d qids updated "
                                     "(rest missing or already stamped)", n, len(qids))
             if commit:
                 self.conn.commit()
@@ -4252,5 +4254,5 @@ class RAPIDDB:
         except (Exception, psycopg2.DatabaseError):
             self.conn.rollback()
             self.exit_code = 67
-            self.logger.exception("Failed to mark psfcat uploads complete")
+            print("Failed to mark psfcat uploads complete")
             raise
