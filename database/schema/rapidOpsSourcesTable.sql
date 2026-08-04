@@ -244,6 +244,7 @@ CREATE TABLE astroobjectsmeta (
     sin_sum double precision NOT NULL,         -- sum(sin(RA))
     stdevra real NOT NULL,                      -- Standard deviation of RA
     meandec double precision NOT NULL,          -- Mean Dec
+    decsum2 double precision NOT NULL,          -- sum(dec^2)
     stdevdec real NOT NULL,                     -- Standard deviation of Dec
     meanflux real NOT NULL,                     -- Mean flux
     fluxsum2 real NOT NULL,                     -- sum(flux^2)

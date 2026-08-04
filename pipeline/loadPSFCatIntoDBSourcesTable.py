@@ -492,8 +492,8 @@ def run_single_core_job(meta_list,negative_diffimg_flag,index_thread):
         # For temp_sources not cross-matched, create new astroobjectmeta rows
         #----------------------------------
         update_astroobjectsmeta_time_benchmark_start = time.time()
-        create_new_aid_to_astroobjectmeta_sql = f"""INSERT INTO astroobjectsmeta (aid, nsources, meanflux, fluxsum2, stdevflux, cos_sum, sin_sum, meanra, meandec, mjdmin, mjdmax)
-            SELECT aid, 0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, NULL, NULL
+        create_new_aid_to_astroobjectmeta_sql = f"""INSERT INTO astroobjectsmeta (aid, nsources, meanflux, fluxsum2, stdevflux, cos_sum, sin_sum, meanra, meandec, stdevra, stdevdec, decsum2, mjdmin, mjdmax)
+            SELECT aid, 0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, NULL, NULL
             FROM {tablename}
             WHERE is_new;"""
         dbh.execute_sql_queries([create_new_aid_to_astroobjectmeta_sql])
@@ -516,6 +516,16 @@ def run_single_core_job(meta_list,negative_diffimg_flag,index_thread):
                     meanra    = mod(degrees(atan2(m.sin_sum + agg.sinsum,
                                   m.cos_sum + agg.cossum)) + 360.0, 360.0),
                     meandec   = (m.meandec*m.nsources + agg.sumdec) / (m.nsources + agg.n),
+                    stdevra   = degrees(sqrt(-2.0 * ln(
+                                        LEAST(GREATEST(
+                                            sqrt((m.cos_sum + agg.cossum)^2 + (m.sin_sum + agg.sinsum)^2)
+                                            / (m.nsources + agg.n),
+                                            1e-12), 1.0)))),
+                    decsum2  = m.decsum2 + agg.dsum2,
+                    stdevdec  = sqrt(GREATEST(
+                                    (m.decsum2 + agg.dsum2) / (m.nsources + agg.n)
+                                    - ((m.meandec*m.nsources + agg.sumdec) / (m.nsources + agg.n))^2,
+                                    0.0)),
                     mjdmin    = LEAST(m.mjdmin, agg.minmjd),
                     mjdmax    = GREATEST(m.mjdmax, agg.maxmjd)
                 FROM (
@@ -526,6 +536,7 @@ def run_single_core_job(meta_list,negative_diffimg_flag,index_thread):
                         sum(sind(ra))                   AS sinsum,
                         sum(cosd(ra))                   AS cossum,
                         sum(dec::float8)                AS sumdec,
+                        sum(dec::float8 * dec)          AS dsum2,
                         min(mjdobs)                     AS minmjd,
                         max(mjdobs)                     AS maxmjd
                     FROM {tablename}
