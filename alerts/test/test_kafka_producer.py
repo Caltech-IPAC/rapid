@@ -183,6 +183,77 @@ def test_batch_publish_flushes_once(producer):
     assert producer.transport.flushes == 1
 
 
+class ResolvingFuture:
+    """A future that reports its outcome, as kafka-python's does.
+
+    FakeFuture deliberately does not implement succeeded()/exception —
+    it stands in for the callback surface only. These tests need the
+    delivery-outcome surface, which is what flush() now inspects.
+    """
+
+    def __init__(self, error=None):
+        self.error = error
+        self.exception = error
+
+    def succeeded(self):
+        return self.error is None
+
+
+class ResolvingTransport(FakeTransport):
+    """FakeTransport whose sends resolve to a stated outcome."""
+
+    def __init__(self, error=None):
+        super().__init__()
+        self.error = error
+
+    def send(self, topic, value):
+        self.sent.append((topic, value))
+        return ResolvingFuture(self.error)
+
+
+def _resolving_producer(error=None):
+    return GlueFramingProducer(transport=ResolvingTransport(error),
+                               registry=FakeRegistry(),
+                               schema_version="00.01")
+
+
+def test_flush_raises_when_delivery_failed():
+    # The regression this guards: flush() used to drain the futures and
+    # discard them unexamined, so a run in which EVERY send failed
+    # reported a clean publish. Found live 2026-08-04 — the producer
+    # reported publishing its alerts while the topic's end offset stayed
+    # at 0 (ClusterAuthorizationFailedError on InitProducerId).
+    producer = _resolving_producer(error=RuntimeError("broker said no"))
+    producer.produce("rapid.test.alerts", b"payload")
+    with pytest.raises(RuntimeError, match="1 of 1 alert"):
+        producer.flush()
+
+
+def test_flush_reports_how_many_of_how_many_failed():
+    producer = _resolving_producer(error=RuntimeError("broker said no"))
+    for _ in range(3):
+        producer.produce("rapid.test.alerts", b"payload")
+    with pytest.raises(RuntimeError, match="3 of 3 alert"):
+        producer.flush()
+
+
+def test_flush_is_quiet_when_every_delivery_succeeded():
+    producer = _resolving_producer()
+    producer.produce("rapid.test.alerts", b"payload")
+    producer.flush()          # must not raise
+    assert producer.transport.flushes == 1
+
+
+def test_flush_clears_pending_so_a_failure_is_reported_once():
+    # A second flush with nothing newly produced must be quiet — otherwise
+    # one failure would raise on every subsequent flush of the process.
+    producer = _resolving_producer(error=RuntimeError("broker said no"))
+    producer.produce("rapid.test.alerts", b"payload")
+    with pytest.raises(RuntimeError):
+        producer.flush()
+    producer.flush()          # must not raise
+
+
 def test_delivery_callback_is_attached_to_the_future(producer):
     # kafka-python has no per-message callback argument; produce.py passes
     # one, so it must land on the future or delivery errors go unreported.

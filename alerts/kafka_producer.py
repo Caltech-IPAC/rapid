@@ -286,10 +286,29 @@ def make_transport(bootstrap_servers: str, region: str | None = None,
     """
     from kafka import KafkaProducer
     from aws_msk_iam_sasl_signer import MSKAuthTokenProvider
+    # The provider MUST subclass AbstractTokenProvider. kafka-python
+    # type-checks the object it is handed: a duck-typed class with a
+    # token() method is silently ignored, the OAUTHBEARER handshake never
+    # completes, and the client fails with KafkaTimeoutError "Unable to
+    # bootstrap" — an error that names the brokers and says nothing about
+    # authentication, so it reads as a network problem.
+    #
+    # Found live 2026-08-04 by the Q7 publication readback: this module's
+    # provider was a bare class, so every produce attempt against MSK
+    # timed out at bootstrap while the schema lookup beside it succeeded.
+    # The class moved in kafka-python 3.x (kafka.sasl.oauth ->
+    # kafka.net.sasl.oauth), so both paths are tried — the same shape
+    # cloudformation/msk_alert_test.py and t2_glue_roundtrip.py in the
+    # infrastructure repo have always used, and whose comments recorded
+    # this exact trap.
+    try:
+        from kafka.net.sasl.oauth import AbstractTokenProvider   # 3.x
+    except ImportError:                                  # pragma: no cover
+        from kafka.sasl.oauth import AbstractTokenProvider       # older
 
     resolved_region = region or _default_region()
 
-    class _TokenProvider:
+    class _TokenProvider(AbstractTokenProvider):
         """kafka-python's OAuth token hook, backed by the MSK signer.
 
         kafka-python calls ``token()`` on every re-authentication, so the
@@ -365,9 +384,53 @@ class GlueFramingProducer:
             future.add_errback(lambda exc: callback(exc, None))
 
     def flush(self) -> None:
-        """Block until every produced message has resolved."""
+        """Block until every produced message has resolved, and RAISE if
+        any of them failed.
+
+        The raise is the point. ``transport.flush()`` waits for the send
+        futures to resolve but does not report their outcome, so a flush
+        that returns tells you the producer is drained — not that anything
+        was delivered. This class collected the futures and then discarded
+        them unexamined, which meant a total delivery failure looked
+        exactly like a clean publish.
+
+        Found live 2026-08-04 by the Q7 publication readback: every send
+        failed ClusterAuthorizationFailedError on the idempotent
+        producer's InitProducerId handshake, the run reported publishing
+        its alerts, and the topic's end offset was still 0. A pipeline
+        that reports published alerts while publishing nothing is worse
+        than one that crashes, so the failure is now loud.
+
+        Raises
+        ------
+        RuntimeError
+            If any message produced since the last flush failed. The
+            first underlying error is chained as the cause; the message
+            counts how many of how many failed.
+        """
         self.transport.flush()
+
+        failures = []
+        for future in self._pending:
+            # A test fake's "future" need not implement this surface; only
+            # inspect what can actually report an outcome.
+            if not hasattr(future, "succeeded"):
+                continue
+            try:
+                if not future.succeeded():
+                    failures.append(future.exception)
+            except Exception as exc:               # noqa: BLE001
+                failures.append(exc)
+
+        produced = len(self._pending)
         self._pending.clear()
+
+        if failures:
+            raise RuntimeError(
+                f"{len(failures)} of {produced} alert(s) failed to publish; "
+                f"first error: {failures[0]!r}") from (
+                    failures[0] if isinstance(failures[0], BaseException)
+                    else None)
 
     def close(self) -> None:
         """Flush and release the transport."""
