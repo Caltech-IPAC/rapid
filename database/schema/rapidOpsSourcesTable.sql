@@ -249,8 +249,8 @@ CREATE TABLE astroobjectsmeta (
     meanflux real NOT NULL,                     -- Mean flux
     fluxsum2 real NOT NULL,                     -- sum(flux^2)
     stdevflux real NOT NULL,                    -- Standard deviation of flux
-    mjdmin double precision NOT NULL,
-    mjdmax double precision NOT NULL,
+    mjdmin double precision,                    -- seed with NULL so SQL ignores it in LEAST and GREATEST on data INSERT
+    mjdmax double precision,                    -- seed with NULL so SQL ignores it in LEAST and GREATEST on data INSERT
     nsources smallint NOT NULL                  -- Total number of sources (all filters)
 );
 
