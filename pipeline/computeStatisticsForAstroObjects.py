@@ -185,7 +185,6 @@ def run_single_core_job(fields,source_child_tables,index_thread):
 
         field = fields[index_field]
 
-
         fh.write(f"Loop start: index_field,field = {index_field},{field}\n")
         fh.flush()
 
@@ -195,13 +194,15 @@ def run_single_core_job(fields,source_child_tables,index_thread):
 
 
         # Remove redundant-aid AstroObjects_<field> database records (keeping latest).
+        # This deletes every row where a row with the same aid but higher ctid exists.
+        # PostgreSQL can execute this as a merge/hash join, which is much faster than the
+        # anti-join pattern of NOT IN.
 
         fh.write(f"Removing redundant-aid AstroObjects_<field> database records (keeping latest)...\n")
 
-        query = f"DELETE FROM {astroobjects_tablename} " +\
-                f"WHERE ctid NOT IN (SELECT MAX(ctid) " +\
-                f"FROM {astroobjects_tablename} " +\
-                f"GROUP BY aid);"
+        query = f"DELETE FROM {astroobjects_tablename} a " +\
+                f"USING {astroobjects_tablename} b " +\
+                f"WHERE a.aid = b.aid AND a.ctid < b.ctid;"
 
         fh.write(f"query = {query}\n")
         fh.flush()
