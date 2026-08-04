@@ -1,0 +1,105 @@
+#!/bin/bash
+#
+# pre-push: block internal identifiers from reaching the public remote.
+# smdc-migration tooling. Install with `git config core.hooksPath .githooks`
+# (see README.md).
+#
+# For each ref being pushed, git-greps the pushed tree (by SHA) for:
+#   1. SMDC AWS account 855590908525        -> hard block, no allowlist
+#   2. sciencecloud.nasa.gov hostnames      -> hard block, no allowlist
+#   3. any 12-digit AWS-account-like number -> block unless allowlisted
+#   4. /Users/<name> personal paths         -> block unless allowlisted
+#
+# stdin (from git): <local ref> <local sha> <remote ref> <remote sha>
+#
+# Test mode (run the scan directly, no push):
+#   .githooks/pre-push --scan <sha-or-ref>
+
+set -u
+
+ZERO=0000000000000000000000000000000000000000
+
+# ---------------------------------------------------------------------------
+# Allowlist: one entry per line, "path<TAB>allowed-match-prefix".
+# These are the bounded legacy exposures already public on origin/dev
+# (scanned 2026-08-02 on the smdc integration branch), queued for cleanup
+# in a later migration step:
+#   5261331000xx   example injected-source IDs in comments, not accounts
+#   /Users/laher   personal paths in verbatim historical terminal-session
+#                  transcripts (readme.txt/.rst "Code Output" blocks) —
+#                  rewriting would falsify the record of what actually ran;
+#                  the 891377127831 IMSS-account and 16 other /Users/laher
+#                  entries were parameterized/genericized 2026-08-03 and
+#                  dropped from this list (SMDC decoupling migration step 6).
+# A hit is allowed only if its file matches exactly AND the matched string
+# starts with the listed prefix. Anything new blocks the push.
+ALLOWLIST="$(cat <<'EOF'
+modules/fake_src/generateInjectionCatalogForField.py	526133100000
+modules/fake_src/generateInjectionCatalogForField.py	526133100001
+c/src/bkgest/readme.txt	/Users/laher
+docs/source/analyses/count_fields_imaged/count_fields_imaged.rst	/Users/laher
+EOF
+)"
+
+is_allowed() {  # $1 = file path, $2 = matched string
+    local path pat
+    while IFS=$'\t' read -r path pat; do
+        [ -n "$path" ] || continue
+        if [ "$1" = "$path" ]; then
+            case "$2" in "$pat"*) return 0 ;; esac
+        fi
+    done <<EOF
+$ALLOWLIST
+EOF
+    return 1
+}
+
+# scan_sha <sha>: grep the tree at <sha>, print violations, return 1 if any.
+scan_sha() {
+    local sha=$1 bad=0 label allow regex file line match
+    while IFS='|' read -r label allow regex; do
+        while IFS=: read -r file line match; do
+            [ -n "$file" ] || continue
+            if [ "$allow" = "yes" ] && is_allowed "$file" "$match"; then
+                continue
+            fi
+            echo "pre-push: BLOCKED [$label] $file:$line: $match" >&2
+            bad=1
+        done <<EOF
+$(git grep -nIoP -e "$regex" "$sha" -- 2>/dev/null | sed "s/^$sha://")
+EOF
+    done <<'PATTERNS'
+smdc-account|no|855590908525
+sciencecloud-host|no|sciencecloud\.nasa\.gov
+aws-account-12digit|yes|(?<![0-9.])[0-9]{12}(?![0-9])
+users-path|yes|/Users/[A-Za-z0-9_.-]+
+PATTERNS
+    return $bad
+}
+
+# --- test mode -------------------------------------------------------------
+if [ "${1:-}" = "--scan" ]; then
+    sha="${2:?usage: pre-push --scan <sha-or-ref>}"
+    if scan_sha "$sha"; then
+        echo "pre-push: scan of $sha clean"
+        exit 0
+    fi
+    echo "pre-push: scan of $sha found violations" >&2
+    exit 1
+fi
+
+# --- hook mode -------------------------------------------------------------
+fail=0
+while read -r local_ref local_sha remote_ref remote_sha; do
+    [ "$local_sha" = "$ZERO" ] && continue    # ref deletion: nothing to scan
+    if ! scan_sha "$local_sha"; then
+        echo "pre-push: refusing to push $local_ref ($local_sha)" >&2
+        fail=1
+    fi
+done
+
+if [ "$fail" -ne 0 ]; then
+    echo "pre-push: push blocked — remove the identifiers above or extend the allowlist in .githooks/pre-push" >&2
+    exit 1
+fi
+exit 0

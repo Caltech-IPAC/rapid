@@ -57,6 +57,42 @@ def compute_checksum(fname,dbcksum=None):
     return cksum
 
 
+def get_db_credentials():
+
+    """
+    Resolve DB username/password the same way RAPIDDB.__init__ does: if
+    RAPID_DB_SECRET_ID is set, fetch from AWS Secrets Manager (boto3 default
+    credential chain); otherwise fall back to DBUSER/DBPASS env vars.
+
+    Returns (dbuser,dbpass), or (None,None) if credentials could not be
+    resolved.
+    """
+
+    dbuser = None
+    dbpass = None
+
+    db_secret_id = os.getenv('RAPID_DB_SECRET_ID')
+
+    if db_secret_id is not None:
+
+        try:
+            import boto3
+            secrets_client = boto3.client('secretsmanager')
+            secret_value = secrets_client.get_secret_value(SecretId=db_secret_id)
+            secret_dict = json.loads(secret_value['SecretString'])
+            dbuser = secret_dict['username']
+            dbpass = secret_dict['password']
+        except Exception:
+            print("*** Error: Could not fetch DB credentials from Secrets Manager secret {}; quitting...".format(db_secret_id))
+            return None,None
+
+    else:
+        dbuser = os.getenv('DBUSER')
+        dbpass = os.getenv('DBPASS')
+
+    return dbuser,dbpass
+
+
 ########################################################################################################
 ########################################################################################################
 ########################################################################################################
@@ -104,28 +140,11 @@ class RAPIDDB:
         dbport = os.getenv('DBPORT')
         dbname = os.getenv('DBNAME')
 
-        dbuser = None
-        dbpass = None
+        dbuser,dbpass = get_db_credentials()
 
-        db_secret_id = os.getenv('RAPID_DB_SECRET_ID')
-
-        if db_secret_id is not None:
-
-            try:
-                import boto3
-                secrets_client = boto3.client('secretsmanager')
-                secret_value = secrets_client.get_secret_value(SecretId=db_secret_id)
-                secret_dict = json.loads(secret_value['SecretString'])
-                dbuser = secret_dict['username']
-                dbpass = secret_dict['password']
-            except Exception:
-                print("*** Error: Could not fetch DB credentials from Secrets Manager secret {}; quitting...".format(db_secret_id))
-                self.exit_code = 64
-                return
-
-        else:
-            dbuser = os.getenv('DBUSER')
-            dbpass = os.getenv('DBPASS')
+        if dbuser is None and dbpass is None and os.getenv('RAPID_DB_SECRET_ID') is not None:
+            self.exit_code = 64
+            return
 
         print("dbserver,dbname,dbport,dbuser =",dbserver,dbname,dbport,dbuser)
 

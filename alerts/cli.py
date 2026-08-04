@@ -63,9 +63,10 @@ def make_provider(diff_flavor: str = "sfft") -> AlertDataProvider:
     if getattr(db, "conn", None) is None or db.exit_code >= 64:
         raise SystemExit(
             "Cannot connect to the RAPID database: check that DBSERVER, "
-            "DBPORT, DBNAME, DBUSER and DBPASS are set in this shell, and "
-            "that this machine can reach the DB (VPN up / EC2 security "
-            "group allows it)")
+            "DBPORT, DBNAME are set in this shell, that credentials are "
+            "available via RAPID_DB_SECRET_ID (or DBUSER/DBPASS as a "
+            "fallback), and that this machine can reach the DB (VPN up / "
+            "EC2 security group allows it)")
     return AlertDataProvider(db, diff_flavor=diff_flavor)
 
 

@@ -200,9 +200,8 @@ print(f"Sources columns: {cols_comma_separated_string}")
 
 dbport = os.getenv('DBPORT')
 dbname = os.getenv('DBNAME')
-dbuser = os.getenv('DBUSER')
-dbpass = os.getenv('DBPASS')
 dbserver = os.getenv('DBSERVER')
+dbuser,dbpass = db.get_db_credentials()
 
 print("dbserver,dbname,dbport,dbuser =",dbserver,dbname,dbport,dbuser)
 
@@ -215,11 +214,11 @@ if dbname is None:
     exit(64)
 
 if dbuser is None:
-    print("*** Error: Env. var. DBUSER not set; quitting...")
+    print("*** Error: Env. var. DBUSER not set (or RAPID_DB_SECRET_ID secret missing 'username'); quitting...")
     exit(64)
 
 if dbpass is None:
-    print("*** Error: Env. var. DBPASS not set; quitting...")
+    print("*** Error: Env. var. DBPASS not set (or RAPID_DB_SECRET_ID secret missing 'password'); quitting...")
     exit(64)
 
 if dbserver is None:

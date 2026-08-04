@@ -48,9 +48,6 @@ print("proc_pt_datetime_started =",proc_pt_datetime_started)
 bucket_name_input = "socsims-fakesrc-fits-20260709-lite"
 subdir_work = "/work"
 
-aws_access_key_id = os.getenv('AWS_ACCESS_KEY_ID')
-aws_secret_access_key = os.getenv('AWS_SECRET_ACCESS_KEY')
-
 # Global variables.
 
 level6 = 6

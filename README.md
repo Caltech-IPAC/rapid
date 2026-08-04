@@ -11,6 +11,14 @@ Install instructions and documentation are available on [ReadTheDocs](https://ca
 
 Contributions are welcome! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines on how to get involved. All participants are expected to follow our [Code of Conduct](CODE_OF_CONDUCT.md).
 
+### Git hooks
+
+`.githooks/pre-push` blocks internal identifiers (SMDC account ID, internal
+hostnames, AWS-account-shaped numbers, personal `/Users/<name>` paths) from
+reaching the public remote. Install it once per clone:
+
+    git config core.hooksPath .githooks
+
 ## License
 
 This project is licensed under the BSD 3-Clause License. See [LICENSE](LICENSE) for details.

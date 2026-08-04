@@ -39,7 +39,8 @@ print("proc_pt_datetime_started =",proc_pt_datetime_started)
 
 
 # Ensure the following environment variables are set:
-# DBPORT,DBNAME,DBUSER,DBPASS,DBSERVER,PYTHONPATH.
+# DBPORT,DBNAME,DBSERVER,PYTHONPATH (plus either RAPID_DB_SECRET_ID or
+# DBUSER/DBPASS, resolved by db.RAPIDDB()).
 
 dbport = os.getenv('DBPORT')
 if dbport is None:
@@ -49,16 +50,6 @@ if dbport is None:
 dbname = os.getenv('DBNAME')
 if dbname is None:
     print("*** Error: Env. var. DBNAME not set; quitting...")
-    exit(64)
-
-dbuser = os.getenv('DBUSER')
-if dbuser is None:
-    print("*** Error: Env. var. DBUSER not set; quitting...")
-    exit(64)
-
-dbpass = os.getenv('DBPASS')
-if dbpass is None:
-    print("*** Error: Env. var. DBPASS not set; quitting...")
     exit(64)
 
 dbserver = os.getenv('DBSERVER')

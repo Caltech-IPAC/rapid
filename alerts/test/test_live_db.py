@@ -1,7 +1,9 @@
 """Section D of the test plan: live-database integration tests.
 
-These need the DB environment variables (DBSERVER/DBPORT/DBNAME/DBUSER/
-DBPASS) and AWS credentials for the product bucket. When those are
+These need the DB environment variables (DBSERVER/DBPORT/DBNAME), DB
+credentials (RAPID_DB_SECRET_ID, or DBUSER/DBPASS as a fallback), and AWS
+credentials for the product bucket (the ambient role/profile -- never
+AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY env vars). When those are
 missing, or the database cannot be reached (VPN down, security group,
 ...), the tests emit a visible pytest WARNING and then skip -- a quiet
 skip could hide the fact that the live invariants have not been checked
@@ -24,14 +26,18 @@ TODO (test plan, not yet implemented):
 """
 
 import os
+import sys
 import warnings
+from pathlib import Path
 
 import pytest
 
 from wcs_eval import separation_mas, tpv_pixel_to_sky
 
-DB_ENV_VARS = ("DBSERVER", "DBPORT", "DBNAME", "DBUSER", "DBPASS")
-AWS_ENV_VARS = ("AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY")
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+from database.modules.utils.rapid_db import get_db_credentials
+
+DB_ENV_VARS = ("DBSERVER", "DBPORT", "DBNAME")
 
 # how closely TPV(xfit+1, yfit+1) must reproduce sources.ra/dec; measured
 # at 0.0 mas on real sources, so 20 mas is generous slack for float32
@@ -43,10 +49,11 @@ N_SOURCES = 20
 def connect_db():
     """One psycopg2 connection from the environment, 5 s timeout."""
     import psycopg2
+    dbuser, dbpass = get_db_credentials()
     return psycopg2.connect(
         host=os.environ["DBSERVER"], port=os.environ["DBPORT"],
-        dbname=os.environ["DBNAME"], user=os.environ["DBUSER"],
-        password=os.environ["DBPASS"], connect_timeout=5)
+        dbname=os.environ["DBNAME"], user=dbuser,
+        password=dbpass, connect_timeout=5)
 
 
 # Availability is checked once per pytest run and cached: every dependent
@@ -58,7 +65,10 @@ _db_status = {}
 def db_unavailable_reason():
     """None if the live DB is usable, else a human-readable reason."""
     if "reason" not in _db_status:
-        missing = [v for v in DB_ENV_VARS + AWS_ENV_VARS if not os.getenv(v)]
+        missing = [v for v in DB_ENV_VARS if not os.getenv(v)]
+        dbuser, dbpass = get_db_credentials()
+        if dbuser is None or dbpass is None:
+            missing.append("RAPID_DB_SECRET_ID (or DBUSER/DBPASS)")
         if missing:
             _db_status["reason"] = ("environment variables not set: "
                                     + ", ".join(missing))

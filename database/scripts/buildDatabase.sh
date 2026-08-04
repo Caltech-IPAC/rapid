@@ -1,4 +1,4 @@
-#! /bin/bash -x
+#! /bin/bash
 
 #
 # Script to build PostgreSQL database software (v. 15.2) from source code, start
@@ -10,6 +10,10 @@
 # in the psql client for non-superuser database querying.
 # A non-superuser database user called apollo is created for use by pipeline operations.
 #
+# DB_ACTUAL_PGPASSWORD and DB_USER_APOLLO_PW must be set in the calling
+# environment (e.g. from Secrets Manager, matching rapid_db.py's
+# RAPID_DB_SECRET_ID path) -- this script never hardcodes passwords.
+#
 
 #####################################################
 # Parameters.
@@ -19,9 +23,17 @@ RAPID_PIPELINE_GIT_REPO=/home/ubuntu/rapid
 PGPORT=5432
 DB_ACTUAL_DATABASE_PATH=/data/db
 DB_ACTUAL_DBNAME=rapidopsdb
-DB_ACTUAL_PGPASSWORD=testpassword
 DB_USER_APOLLO=apollo
-DB_USER_APOLLO_PW=Arrow
+
+if [ -z "$DB_ACTUAL_PGPASSWORD" ]; then
+    echo "*** Error: Env. var. DB_ACTUAL_PGPASSWORD not set; quitting..."
+    exit 64
+fi
+
+if [ -z "$DB_USER_APOLLO_PW" ]; then
+    echo "*** Error: Env. var. DB_USER_APOLLO_PW not set; quitting..."
+    exit 64
+fi
 
 DB_VERS=15.2
 DB_FILE=postgresql-$DB_VERS
@@ -93,10 +105,6 @@ cd $DB_BUILD_BASE
 echo PWD = $PWD
 
 echo Building Postrgres database on $(date +\%Y\%m\%d)
-
-printenv > buildDatabase.env
-
-
 
 wget --no-check-certificate $DB_TAR_GZ_FILE_URL
 

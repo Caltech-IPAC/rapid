@@ -65,6 +65,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from benchmark import TimingLog, collect_meta, percentile, _mib
+from database.modules.utils.rapid_db import get_db_credentials
 
 logger = logging.getLogger(__name__)
 
@@ -245,9 +246,13 @@ def require_fp_environment():
     run fails in seconds, not after an hour of S3 downloads."""
     problems = []
     for var in ("RAPID_SW", "RAPID_WORK", "ROMANTESSELLATIONDBNAME",
-                "DBSERVER", "DBNAME", "DBUSER", "DBPASS"):
+                "DBSERVER", "DBNAME"):
         if not os.environ.get(var):
             problems.append(f"environment variable {var} is not set")
+    dbuser, dbpass = get_db_credentials()
+    if dbuser is None or dbpass is None:
+        problems.append("DB credentials not resolvable (set "
+                        "RAPID_DB_SECRET_ID, or DBUSER/DBPASS as a fallback)")
     dbfile = os.environ.get("ROMANTESSELLATIONDBNAME")
     if dbfile and not os.path.isfile(dbfile):
         problems.append(f"ROMANTESSELLATIONDBNAME file missing: {dbfile}")

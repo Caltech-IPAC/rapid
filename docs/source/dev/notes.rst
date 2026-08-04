@@ -452,6 +452,10 @@ so there is no need to mount an external volume for /code.
 The container name is arbitrary, and is set to "russ-test-jobsubmit" in the example below.
 Since this Docker image contains the ENTRYPOINT instruction, you must override it  with the ``--entrypoint bash`` option
 (and do not put ``bash`` at the end of the command).
+Database credentials come from AWS Secrets Manager via ``RAPID_DB_SECRET_ID``
+(see ``rapid_db.py``); AWS credentials come from the container/instance role
+or an active ``aws sso login`` session — never export
+``AWS_ACCESS_KEY_ID``/``AWS_SECRET_ACCESS_KEY`` directly.
 
 .. code-block::
 
@@ -468,12 +472,9 @@ Since this Docker image contains the ENTRYPOINT instruction, you must override i
 
    export DBPORT=5432
    export DBNAME=rapidopsdb
-   export DBUSER=rapidporuss
    export DBSERVER=35.165.53.98
-   export DBPASS="????"
+   export RAPID_DB_SECRET_ID=<Secrets Manager secret ID for this DB>
    export AWS_DEFAULT_REGION=us-west-2
-   export AWS_SECRET_ACCESS_KEY=????
-   export AWS_ACCESS_KEY_ID=????
    export LD_LIBRARY_PATH=/code/c/lib
    export PATH=/code/c/bin:$PATH
    export export RAPID_SW=/code
