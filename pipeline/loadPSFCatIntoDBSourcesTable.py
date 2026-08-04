@@ -284,6 +284,7 @@ def run_single_core_job(meta_list,negative_diffimg_flag,index_thread):
         fid = meta_dict["fid"]
         mjdobs = meta_dict["mjdobs"]
         pid = meta_dict["pid"]
+        qid = meta_dict['qid']
 
 
         fh.write(f"Loop start: index_job,jid= {index_job},{jid}\n")
@@ -537,7 +538,7 @@ def run_single_core_job(meta_list,negative_diffimg_flag,index_thread):
         update_astroobjectsmeta_time_benchmark_end = time.time()
         fh.write(f"Elapsed time in seconds to update the AstroObjectsMeta table = {update_astroobjectsmeta_time_benchmark_end-update_astroobjectsmeta_time_benchmark_start}\n")
         # Touch done file.  Upload done file to S3 bucket.
-        dbh.mark_psfcat_uploaded(rec['qid'])
+        dbh.mark_psfcat_uploaded(qid)
 
         fh.write(f"Loop end: product_s3_bucket_base,proc_date,jid = {product_s3_bucket_base},{proc_date},{jid}\n")
 
