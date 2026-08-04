@@ -1,8 +1,8 @@
 {
-	"namespace": "rapid.v01_00",
+	"namespace": "rapid.v00_00",
 	"name": "diaForcedSource",
 	"doc": "RAPID alert schema: forced photometry measurement at a diaObject position",
-	"version": "01.00",
+	"version": "00.00",
 	"type": "record",
 	"fields": [
 		{"name": "diaForcedSourceId",  "type": "long",              "doc": "Unique identifier for this forced source measurement"},

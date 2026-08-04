@@ -1,8 +1,8 @@
 {
-	"namespace": "rapid.v01_00",
+	"namespace": "rapid.v00_00",
 	"name": "ssSource",
 	"doc": "RAPID alert schema: solar system source association (stub)",
-	"version": "01.00",
+	"version": "00.00",
 	"type": "record",
 	"fields": [
 		{"name": "ssSourceId",    "type": "long",              "doc": "Unique identifier for this solar system source"},
