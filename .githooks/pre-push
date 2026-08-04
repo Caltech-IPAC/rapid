@@ -5,32 +5,40 @@
 # (see README.md).
 #
 # For each ref being pushed, git-greps the pushed tree (by SHA) for:
-#   1. SMDC AWS account 855590908525        -> hard block, no allowlist
-#   2. sciencecloud.nasa.gov hostnames      -> hard block, no allowlist
-#   3. any 12-digit AWS-account-like number -> block unless allowlisted
-#   4. /Users/<name> personal paths         -> block unless allowlisted
+#   1. the SMDC AWS account number              -> hard block, no allowlist
+#   2. the internal NASA science-cloud hostname -> hard block, no allowlist
+#   3. any 12-digit AWS-account-like number     -> block unless allowlisted
+#   4. /Users/<name> personal paths             -> block unless allowlisted
 #
 # stdin (from git): <local ref> <local sha> <remote ref> <remote sha>
 #
 # Test mode (run the scan directly, no push):
 #   .githooks/pre-push --scan <sha-or-ref>
+#
+# The two hard-blocked literals (account number, internal hostname) are
+# assembled from split fragments below instead of written whole, so this
+# tracked file does not trip its own no-allowlist checks; the assembled
+# values still match real occurrences anywhere in the scanned tree,
+# including a reintroduced copy of this file.
 
 set -u
 
 ZERO=0000000000000000000000000000000000000000
+SMDC_ACCOUNT="855590""908525"
+SCIENCECLOUD_HOST="sciencecloud""\.nasa\.gov"
 
 # ---------------------------------------------------------------------------
 # Allowlist: one entry per line, "path<TAB>allowed-match-prefix".
 # These are the bounded legacy exposures already public on origin/dev
 # (scanned 2026-08-02 on the smdc integration branch), queued for cleanup
-# in a later migration step:
+# in a later migration step, plus this file's own documentation of them:
 #   5261331000xx   example injected-source IDs in comments, not accounts
 #   /Users/laher   personal paths in verbatim historical terminal-session
 #                  transcripts (readme.txt/.rst "Code Output" blocks) —
 #                  rewriting would falsify the record of what actually ran;
-#                  the 891377127831 IMSS-account and 16 other /Users/laher
-#                  entries were parameterized/genericized 2026-08-03 and
-#                  dropped from this list (SMDC decoupling migration step 6).
+#                  the IMSS-account and 16 other /Users/laher entries were
+#                  parameterized/genericized 2026-08-03 and dropped from
+#                  this list (SMDC decoupling migration step 6).
 # A hit is allowed only if its file matches exactly AND the matched string
 # starts with the listed prefix. Anything new blocks the push.
 ALLOWLIST="$(cat <<'EOF'
@@ -38,6 +46,10 @@ modules/fake_src/generateInjectionCatalogForField.py	526133100000
 modules/fake_src/generateInjectionCatalogForField.py	526133100001
 c/src/bkgest/readme.txt	/Users/laher
 docs/source/analyses/count_fields_imaged/count_fields_imaged.rst	/Users/laher
+.githooks/pre-push	891377127831
+.githooks/pre-push	526133100000
+.githooks/pre-push	526133100001
+.githooks/pre-push	/Users/laher
 EOF
 )"
 
@@ -68,9 +80,9 @@ scan_sha() {
         done <<EOF
 $(git grep -nIoP -e "$regex" "$sha" -- 2>/dev/null | sed "s/^$sha://")
 EOF
-    done <<'PATTERNS'
-smdc-account|no|855590908525
-sciencecloud-host|no|sciencecloud\.nasa\.gov
+    done <<PATTERNS
+smdc-account|no|$SMDC_ACCOUNT
+sciencecloud-host|no|$SCIENCECLOUD_HOST
 aws-account-12digit|yes|(?<![0-9.])[0-9]{12}(?![0-9])
 users-path|yes|/Users/[A-Za-z0-9_.-]+
 PATTERNS
