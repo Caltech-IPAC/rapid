@@ -129,7 +129,7 @@ def compute_diffimage_uncertainty(sca_gain,
     hdr_sci = hdul_sci[0].header
     data_sci = hdul_sci[0].data
     np_data_sci = np.array(data_sci)
-    pos_np_data_sci = np.abs(np_data_sci)
+    pos_np_data_sci = np.maximum(np_data_sci, 0.0)   # non-negative source-excess flux only: on the bkg-subbed science image, blank-sky noise -> 0 (avoids re-adding sky Poisson already carried by std_dif_img)
 
     hdul_ref = fits.open(reference_image_filename)
     hdr_ref = hdul_ref[0].header
