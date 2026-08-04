@@ -48,7 +48,7 @@ start_time_benchmark_at_start = start_time_benchmark
 
 datetime_utc_now = datetime.now(timezone.utc)
 proc_utc_datetime = datetime_utc_now.strftime('%Y-%m-%dT%H:%M:%SZ')
-datetime_pt_now = datetime_utc_now.replace(tzinfo=timezone.utc).astimezone(tz=to_zone)
+datetime_pt_now = datetime_utc_now.astimezone(tz=to_zone)
 proc_pt_datetime_started = datetime_pt_now.strftime('%Y-%m-%dT%H:%M:%S PT')
 
 print("proc_utc_datetime =",proc_utc_datetime)
@@ -318,7 +318,7 @@ def write_joined_table_inner_to_csv_file(isdiffpos,
 def run_single_core_job(jids,overlapping_fields_list,meta_list,index_thread):
 
     '''
-    For effficiency, this method handles both positive and negative difference-image
+    For efficiency, this method handles both positive and negative difference-image
     PSF-fits catalogs.
     '''
 
@@ -630,7 +630,8 @@ def execute_parallel_processes(jids,rtids_list,meta_list,num_cores):
             print(f"*** Error in thread index {index} = {e}")
 
     if failures:
-        raise RuntimeError(f"{len(failures)} worker(s) failed")
+        print(f"*** Error(s) from {len(failures)} worker(s); quitting...")
+        exit(64)
 
 
 #################

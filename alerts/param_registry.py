@@ -1,38 +1,33 @@
 """
-Single source of truth for the RAPID alert schema (current version: VERSION below).
+File:     param_registry.py
+Author:   Emily Everetts
+Date:     07/2026
 
-A "param" here is one Avro schema field. We say param instead of field
-because "field" is overloaded in RAPID (it usually means the Roman sky
-field / tessellation index -- there is even a schema param literally named
-"field"). The generated .avsc files still contain a "fields" array because
-that token belongs to the Avro specification.
-
-Every param of every record in the alert packet is declared here once, with:
+Generates RAPID alert schema (current version: VERSION below).
+Every schema record and parameter is declared here once, with:
 
   - avro type + doc     -> gen_schema.py writes the .avsc files from these
-  - status + source     -> the implemented/stub inventory; enforced by
-                           produce.py (see Status below). Print it with:
-                           python -m alerts.param_registry [--summary]
+  - status + source     -> the IMPLEMENTED/STUB inventory; enforced by
+                           produce.py.
   - attr / getter       -> how produce.py reads the value from the normalized
-                           record (providers.Source etc.). Most params just
-                           name an attribute via attr (default: the param's own
-                           name); getter is the escape hatch for computed
-                           values. Only runs for IMPLEMENTED params, and attr
-                           names are checked against the record classes when
-                           produce.py is imported.
-
-To change the schema: edit this file, re-run gen_schema.py, and bump VERSION
-if the change is not backward compatible. Do NOT edit the .avsc files by hand.
-
-Params are grouped into commented blocks (identifiers, position, photometry,
-...) with implemented params first and stubs at the end of each block.
-NOTE: the declaration order here IS the Avro field order on the wire, so
-reordering params is a schema change -- regenerate the .avsc files and treat
-it like any other schema edit.
+                           record (providers.Source, Object,...). Default attr
+                           is the parameter name, while getter must be set for
+                           computed values. Checked against the record classes
+                           when produce.py is imported.
 
 Avro types are given version-independently; a leading "@" marks a reference
 to another record in this schema ("@diaSource" -> "rapid.v01_01.diaSource").
 Nullable union types automatically get "default": null in the .avsc.
+
+To change the schema: edit this file, re-run gen_schema.py, and bump VERSION
+if the change is not backward compatible. Do NOT edit the .avsc files by hand.
+
+NOTE: declaration order matters -- if order changes, regenerate the .avsc files
+
+Usage:
+    python -m alerts.param_registry [--summary]
+
+Gives a summary of fields and statuses in this file.
 """
 
 from dataclasses import dataclass
@@ -49,8 +44,6 @@ ROMAN_FILTERS = ["F062", "F087", "F106", "F129", "F146", "F158", "F184", "F213"]
 
 class Status(Enum):
     """Implementation status of a param, enforced by produce.py.
-
-    Statuses are enforced when records are built, not just reported:
 
     IMPLEMENTED
         Value is read from the normalized record; an error or a None in a
@@ -74,24 +67,19 @@ class Param:
     name : str
         Param name as it appears in the .avsc schema and on the wire.
     avro : str or list or dict
-        Version-independent Avro type: a type name, a union list (a leading
-        "null" makes the param nullable), or an array dict. A leading "@"
+        Version-independent Avro type, or an array dict. A leading "@"
         marks a reference to another record in this schema.
     doc : str
-        The "doc" string written into the .avsc schema.
+        Description string written into the .avsc schema.
     status : Status
-        Implementation status; see :class:`Status` for how each value is
-        enforced by produce.py.
+        Implementation status (enum)
     source : str, optional
-        For IMPLEMENTED params, where the value comes from (e.g. the DB
-        column); for stubs, what work would fill it in. Report-only.
+        Description of where the data comes from (not written to schema).
     attr : str, optional
-        Attribute read from the normalized record (providers.Source etc.).
-        Defaults to `name`. Checked against the record class when
-        produce.py is imported.
+        Attribute read from the normalized record in providers.py.
+        Default: `name`.
     getter : callable, optional
-        Escape hatch for computed values: called with the normalized record,
-        overrides `attr`.
+        Getter for computed values, overrides `attr`.
     """
     name: str
     avro: AvroType
@@ -111,7 +99,7 @@ class Record:
     name : str
         Record name in the schema namespace (e.g. "diaSource").
     doc : str
-        The "doc" string written into the record's .avsc schema.
+        The description written into the record's .avsc schema.
     params : tuple of Param
         The record's params, in wire order.
     """
@@ -148,7 +136,7 @@ _MPC = "MPC orbit ingest (not run)"
 
 
 # ---------------------------------------------------------------------------
-# diaSource -- built from a providers.Source
+# diaSource -- built from providers.Source
 # ---------------------------------------------------------------------------
 
 DIA_SOURCE_PARAMS = (
@@ -214,9 +202,9 @@ DIA_SOURCE_PARAMS = (
                     STUB, _FP),
     Param("scienceFluxErr", ["null", "float"], "Uncertainty in scienceFlux (stub) [nJy]",
                     STUB, _FP),
-    Param("templateFlux",  ["null", "float"],  "Forced PSF flux on template image (stub) [nJy]",
+    Param("refFlux",  ["null", "float"],  "Forced PSF flux on reference image (stub) [nJy]",
                     STUB, _FP),
-    Param("templateFluxErr", ["null", "float"], "Uncertainty in templateFlux (stub) [nJy]",
+    Param("refFluxErr", ["null", "float"], "Uncertainty in reference Flux (stub) [nJy]",
                     STUB, _FP),
     Param("diffimglimmag", ["null", "float"],  "Expected 5-sigma limiting magnitude of difference image (stub) [mag]",
                     STUB, "difference-image depth estimate (not computed)"), #TODO: do we need this?
@@ -230,7 +218,7 @@ DIA_SOURCE_PARAMS = (
                     IMPLEMENTED, "sources.redchi", attr="redchi"),
     Param("psfNdata",       ["null", "int"],    "Number of pixels used in  PSF fit", #TODO: used to be npixfit
                     IMPLEMENTED, "sources.npixfit", attr="npixfit"),
-    Param("sharpness",     ["null", "float"],  "PSF-fit sharpness parameter", #TODO: should we add PSF as prefix?
+    Param("sharpness",     ["null", "float"],  "PSF-fit sharpness parameter",
                     IMPLEMENTED, "sources.sharpness"),
     Param("roundness1",    ["null", "float"],  "PSF-fit roundness parameter 1", #TODO: better description
                     IMPLEMENTED, "sources.roundness1"),
@@ -252,24 +240,26 @@ DIA_SOURCE_PARAMS = (
                     STUB, "from real/bogus classifier version (not run)"),
 
     # --- Trailed-source fit (all stubs) --------------------------------------
+    # Unsure if we will have these in v1
     Param("trailFlux",     ["null", "float"],  "Trail-fit flux (stub) [nJy]",
-                    STUB, "trailed-source fitting (not run)"),
+                    NOT_USED, "trailed-source fitting (not run)"),
     Param("trailFluxErr",  ["null", "float"],  "Uncertainty in trailFlux (stub) [nJy]",
-                    STUB, "trailed-source fitting (not run)"),
+                    NOT_USED, "trailed-source fitting (not run)"),
     Param("trailLength",   ["null", "float"],  "Trail length (stub) [arcsec]",
-                    STUB, "trailed-source fitting (not run)"),
+                    NOT_USED, "trailed-source fitting (not run)"),
     Param("trailAngle",    ["null", "float"],  "Trail angle (stub) [deg]",
-                    STUB, "trailed-source fitting (not run)"),
+                    NOT_USED, "trailed-source fitting (not run)"),
 
     # --- Dipole fit (all stubs) -----------------------------------------------
+    # Unsure if we will have these in v1
     Param("dipoleMeanFlux", ["null", "float"], "Dipole mean flux (stub) [nJy]",
-                    STUB, "dipole analysis (not run)"),
+                    NOT_USED, "dipole analysis (not run)"),
     Param("dipoleFluxErr", ["null", "float"],  "Uncertainty in dipoleMeanFlux (stub) [nJy]",
-                    STUB, "dipole analysis (not run)"),
+                    NOT_USED, "dipole analysis (not run)"),
     Param("dipoleLength",  ["null", "float"],  "Dipole separation (stub) [arcsec]",
-                    STUB, "dipole analysis (not run)"),
+                    NOT_USED, "dipole analysis (not run)"),
     Param("dipoleAngle",   ["null", "float"],  "Dipole orientation (stub) [deg]",
-                    STUB, "dipole analysis (not run)"),
+                    NOT_USED, "dipole analysis (not run)"),
 
     # --- Shape moments (all stubs) --------------------------------------------
     Param("ixx",           ["null", "float"],  "Adaptive second moment Ixx (stub) [arcsec^2]",
@@ -289,7 +279,7 @@ DIA_SOURCE_PARAMS = (
 
     # --- Flags -----------------------------------------------------------------
     Param("flags",         "long",             "Bitmask of processing flags",
-                    IMPLEMENTED, "sources.flags"),
+                    IMPLEMENTED, "sources.flags"), #TODO: expand this into indv. flags
     Param("pixelFlags_saturated", ["null", "boolean"], "Source has saturated pixels (stub)",
                     STUB, "pixel-mask analysis (not run)"),
     Param("pixelFlags_bad",       ["null", "boolean"], "Source has bad pixels (stub)",
@@ -322,8 +312,8 @@ DIA_SOURCE_PARAMS = (
                     STUB, "cross-match to reference-image catalog (not run)"),
 
     # --- Roman-specific identifiers & tiling ------------------------------------
-    Param("sca",           "int",              "Roman SCA detector number",
-                    NOT_USED, "sources.sca"), # duplicate from detector
+    # Param("sca",           "int",              "Roman SCA detector number",
+    #                 NOT_USED, "sources.sca"), # duplicate from detector
     Param("field",         "int",              "Roman field identifier",
                     IMPLEMENTED, "sources.field"),
     Param("hp6",           "int",              "HEALPix index at nside=64 (order 6)",
@@ -332,33 +322,29 @@ DIA_SOURCE_PARAMS = (
                     IMPLEMENTED, "sources.hp9"),
     Param("pid",           "long",             "Processing ID for science image",
                     IMPLEMENTED, "sources.pid"),
-    Param("expid",         "int",              "Exposure identifier",
-                    NOT_USED, "sources.expid"), # duplicate from visit/expId above
+    # Param("expid",         "int",              "Exposure identifier",
+    #                 NOT_USED, "sources.expid"), # duplicate from visit/expId above
     Param("pass",          ["null", "int"],    "Roman survey pass number (stub)",
-                    NOT_USED, "Roman observation ID components (exposure metadata; not in sources table)"),
+                    STUB, "Roman observation ID components (exposure metadata; not in sources table)"),
     Param("segment",       ["null", "int"],    "Roman survey segment number (stub)",
-                    NOT_USED, "Roman observation ID components (exposure metadata; not in sources table)"),
+                    STUB, "Roman observation ID components (exposure metadata; not in sources table)"),
     Param("program",       ["null", "int"],    "Roman program identifier (stub)",
-                    NOT_USED, "Roman observation ID components (exposure metadata; not in sources table)"),
+                    STUB, "Roman observation ID components (exposure metadata; not in sources table)"),
     Param("survey",        ["null", "string"], "Survey name (stub)",
-                    NOT_USED, "observation metadata (not available)"),
+                    STUB, "observation metadata (not available)"),
 )
 
 
 # ---------------------------------------------------------------------------
-# diaForcedSource -- built from a providers.ForcedPhot
-#
-# The whole record is a stub: attrs are staged, but RAPID forced photometry
-# currently produces FITS files rather than DB records, so no provider
-# supplies ForcedPhot yet and prvDiaForcedSources is always null.
+# diaForcedSource -- built from providers.ForcedPhot
 # ---------------------------------------------------------------------------
 
 DIA_FORCED_SOURCE_PARAMS = (
     # --- Identifiers & associations ---
     Param("diaForcedSourceId", "long",            "Unique identifier for this forced source measurement",
-                        STUB, _FP, attr="forced_id"),
+                        STUB, _FP, attr="forced_id"), #TODO: separate ID for forced source?
     Param("diaObjectId",       "long",            "Associated diaObject identifier",
-                        STUB, _FP, attr="aid"),
+                        STUB, _FP, attr="aid"), #TODO: already in diaSource?
     Param("visit",             "long",            "Visit (exposure) identifier",
                         STUB, _FP, attr="expid"),
     Param("detector",          "int",             "Detector (SCA) number",
@@ -393,7 +379,7 @@ DIA_FORCED_SOURCE_PARAMS = (
 
 
 # ---------------------------------------------------------------------------
-# diaObject -- built from a providers.ObjectRecord
+# diaObject -- built from providers.ObjectRecord
 # ---------------------------------------------------------------------------
 
 def _per_filter_flux_params():
@@ -435,10 +421,14 @@ DIA_OBJECT_PARAMS = (
     # --- Identifier & position -------------------------------------------
     Param("diaObjectId",   "long",             "Unique identifier for this object",
                         IMPLEMENTED, "astroobjects_<field>.aid",  attr="aid"),
-    Param("ra",            "double",           "Right ascension of object centroid; ICRS [deg]",
+    Param("ra0",            "double",           "First measured right ascension of object centroid; ICRS [deg]",
                         IMPLEMENTED, "astroobjects_<field>.ra0",  attr="ra0"),
-    Param("dec",           "double",           "Declination of object centroid; ICRS [deg]", #TODO should these be mean?
+    Param("dec0",           "double",           "First measured declination of object centroid; ICRS [deg]",
                         IMPLEMENTED, "astroobjects_<field>.dec0", attr="dec0"),
+    Param("meanRa",            ["null", "double"], "Mean right ascension of object centroid; ICRS [deg]",
+                        STUB, "in astroobjects_meta"),
+    Param("meanDec",           ["null", "double"], "Mean declination of object centroid; ICRS [deg]",
+                        STUB, "in astroobjects_meta"),
     Param("raErr",         ["null", "float"],  "Uncertainty in ra [deg]", # TODO: on-sky error or std dev in degrees? Need cos(dec) factor if former
                         IMPLEMENTED, "astroobjects_<field> stdevra", attr="stdevra"),
     Param("decErr",        ["null", "float"],  "Uncertainty in dec [deg]",
@@ -522,8 +512,7 @@ MPC_ORBITS_PARAMS = (
 
 
 # ---------------------------------------------------------------------------
-# alert (top level) -- structural params, filled directly by
-# produce.assemble_alert(), which also verifies its keys match this list
+# alert (top level) -- structural params, filled by produce.assemble_alert(),
 # ---------------------------------------------------------------------------
 
 ALERT_PARAMS = (
@@ -560,14 +549,14 @@ ALERT_PARAMS = (
                         IMPLEMENTED, "provider get_cutouts()"),
     Param("cutoutScience",      ["null", "bytes"],   "FITS cutout of science image",
                         IMPLEMENTED, "provider get_cutouts()"),
-    Param("cutoutTemplate",     ["null", "bytes"],   "FITS cutout of template image",
+    Param("cutoutReference",     ["null", "bytes"],   "FITS cutout of reference image",
                         IMPLEMENTED, "provider get_cutouts()"),
 
     # --- Observation metadata (all stubs) ----------------------------------------
     Param("observation_reason", ["null", "string"],     "Reason for observation (e.g. survey, ToO)",
-                        STUB, "observation metadata (not available)"),
+                        STUB, "observation metadata (not propagated in pipeline)"),
     Param("target_name",        ["null", "string"],     "Target name if targeted observation",
-                        STUB, "observation metadata (not available)"),
+                        STUB, "observation metadata (not propagated in pipeline)"),
 )
 
 

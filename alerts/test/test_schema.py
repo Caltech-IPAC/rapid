@@ -91,7 +91,7 @@ def test_assembled_alert_semantics(alert):
     assert len(alert["prvDiaSources"]) == 2
     assert alert["prvDiaForcedSources"] is None
     assert alert["cutoutDifference"] == b"FAKE_DIFF"
-    assert alert["cutoutTemplate"] is None
+    assert alert["cutoutReference"] is None
 
 
 def test_stub_params_stay_null(alert):

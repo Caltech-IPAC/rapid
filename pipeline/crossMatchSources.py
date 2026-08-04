@@ -197,11 +197,8 @@ def run_single_core_job_stage_1_crossmatching(scas,fields,index_thread):
 
     fh.write(f"\nStart of run_single_core_job: index_thread={index_thread}, dbh={dbh}\n")
 
-    for index_field in range(nfields):
-
-        index_core = index_field % num_cores
-        if index_thread != index_core:
-            continue
+    my_fields = list(range(index_thread, nfields, num_cores))
+    for index_field in my_fields:
 
         field = fields[index_field]
 
@@ -558,11 +555,8 @@ def run_single_core_job_stage_2_crossmatching(scas,fields,index_thread):
 
     fh.write(f"\nStart of run_single_core_job: index_thread={index_thread}, dbh={dbh}\n")
 
-    for index_field in range(nfields):
-
-        index_core = index_field % num_cores
-        if index_thread != index_core:
-            continue
+    my_fields = list(range(index_thread, nfields, num_cores))
+    for index_field in my_fields:
 
         field = fields[index_field]
 
@@ -732,12 +726,18 @@ def execute_parallel_processes_stage_1_crossmatching(scas_list,fields_list,num_c
             index = futures.index(future)  # Find the original index/order of the completed future
             print(f"Completed: {i+1} processes, lastly for index={index}")
 
+    failures = []
     for future in futures:
         index = futures.index(future)
         try:
             print(future.result())
         except Exception as e:
+            failures.append(e)
             print(f"*** Error in thread index {index} = {e}")
+
+    if failures:
+        print(f"*** Error(s) from {len(failures)} worker(s); quitting...")
+        exit(64)
 
 
 def execute_parallel_processes_stage_2_crossmatching(scas_list,fields_list,num_cores):
@@ -753,12 +753,18 @@ def execute_parallel_processes_stage_2_crossmatching(scas_list,fields_list,num_c
             index = futures.index(future)  # Find the original index/order of the completed future
             print(f"Completed: {i+1} processes, lastly for index={index}")
 
+    failures = []
     for future in futures:
         index = futures.index(future)
         try:
             print(future.result())
         except Exception as e:
+            failures.append(e)
             print(f"*** Error in thread index {index} = {e}")
+
+    if failures:
+        print(f"*** Error(s) from {len(failures)} worker(s); quitting...")
+        exit(64)
 
 
 #################

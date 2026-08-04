@@ -1,4 +1,8 @@
 """
+File:    produce.py
+Author:  Emily Everetts
+Date:    07/26
+
 The complete alert-production path, from provider data to published bytes:
 
     provider.get_*()   ->  Source / ObjectRecord / ...  (providers.py)
@@ -7,12 +11,22 @@ The complete alert-production path, from provider data to published bytes:
     serialize_alert()  ->  Avro bytes (schema loaded from the .avsc files)
     publish_alert()    ->  Kafka topic
 
-produce_alert() chains all of these for one source ID; batch_produce()
-does the same for every source on one difference image -- one exposure +
-SCA, keyed by its processing ID (diffimages.pid) -- letting the provider
-prefetch that image's data once. This module knows nothing about where
-the data lives -- it only talks to the AlertDataProvider interface and
-the param registry.
+NOTE: Does not interface with data directly, only AlertDataProvider and param_registry.
+
+Usage:
+
+    from alerts.cli import make_provider
+    from alerts.produce import batch_produce, open_alert_archive, produce_alert
+
+    provider = make_provider()
+    produce_alert(provider, sid)    # one alert, by source ID (sources.sid)
+    batch_produce(provider, pid)    # every source on one difference image
+                                    # (diffimages.pid)
+
+    # Optionally publish to Kafka and/or archive the run to one Avro
+    # object-container file:
+    with open_alert_archive("run.avro") as archive:
+        batch_produce(provider, pid, producer=producer, archive=archive)
 """
 
 import contextlib
@@ -74,9 +88,8 @@ def _available_attributes(data_cls: type) -> set[str]:
 def _validate_registry() -> None:
     """Check every IMPLEMENTED param against its builder data class.
 
-    Runs at import time so a bad declaration in param_registry.py (an attr
-    naming a nonexistent record attribute, or an IMPLEMENTED param on a
-    record with no builder class) fails loudly before any alert is built.
+    Runs at import time so a bad declaration in param_registry.py fails
+    before any alert is built.
 
     Raises
     ------
@@ -182,8 +195,7 @@ def build_dia_object(obj: ObjectRecord) -> dict[str, Any]:
     Parameters
     ----------
     obj : providers.ObjectRecord
-        The persistent object, with first_mjd/last_mjd/validity_mjd
-        already filled in by assemble_alert_for_source().
+        The persistent AstroObject.
 
     Returns
     -------
@@ -204,8 +216,7 @@ def build_dia_forced_source(forced_phot: ForcedPhot) -> dict[str, Any]:
     Returns
     -------
     dict
-        diaForcedSource param name -> value, per the registry (all None
-        while the record is a stub).
+        diaForcedSource param name -> value, per the registry.
     """
     return build_record(DIA_FORCED_SOURCE_PARAMS, forced_phot)
 
@@ -234,16 +245,12 @@ def assemble_alert(provider: AlertDataProvider, sid: int) -> dict[str, Any]:
 
 def assemble_alert_for_source(provider: AlertDataProvider,
                               source: Source) -> dict[str, Any]:
-    """Assemble an alert packet for a Source already in hand.
-
-    Used directly by the batch flow (batch_produce), where iter_sources()
-    has already fetched every Source on the chip -- re-querying each one
-    by sid would defeat the point of batching.
+    """Assemble an alert packet for a Source data object.
 
     Parameters
     ----------
     provider : providers.AlertDataProvider
-        Where the object, history, forced photometry, and cutouts come from.
+        Data provider for object, history, forced photometry, and cutouts.
     source : providers.Source
         The triggering detection.
 
@@ -256,8 +263,7 @@ def assemble_alert_for_source(provider: AlertDataProvider,
     ------
     RuntimeError
         If the assembled packet's keys disagree with ALERT_PARAMS in
-        param_registry.py (guards the hand-written dict below against
-        registry drift).
+        param_registry.py (guards against registry drift).
     """
     obj = provider.get_object_for_source(source)
 
@@ -298,7 +304,7 @@ def assemble_alert_for_source(provider: AlertDataProvider,
         "mpc_orbits": None,
         "cutoutDifference": cutouts.difference,
         "cutoutScience": cutouts.science,
-        "cutoutTemplate": cutouts.template,
+        "cutoutReference": cutouts.template,
         "observation_reason": None,
         "target_name": None,
     }
@@ -327,17 +333,14 @@ def schema_paths(version: str | None = None,
     Parameters
     ----------
     version : str, optional
-        Schema version, e.g. ``"01.01"``. None (the default) means the
-        version named by ``latest.txt``, falling back to the registry
-        VERSION.
+        Schema version, e.g. ``"01.01"``. Defaults to ``latest.txt``.
     schema_root : str or pathlib.Path, optional
         Directory holding ``<major>/<minor>/*.avsc`` and ``latest.txt``.
 
     Returns
     -------
     list of pathlib.Path
-        One path per schema record, referenced records before the records
-        that use them (the order fastavro needs).
+        One path per schema record, in the correct referenced order.
     """
     if version is None:
         latest = Path(schema_root) / "latest.txt"
@@ -355,18 +358,14 @@ def load_schema(version: str | None = None,
 
     With no explicit version (the production path), the .avsc files are
     first verified against param_registry.py and loading fails with a
-    clear message if they have drifted. Alerts are built from the
-    registry, so serializing them with stale files would otherwise
-    surface as a cryptic fastavro error -- or worse, serialize "fine"
-    with renamed/added params silently dropped or defaulted to null.
-    An explicit version skips the check: that is for reading back
-    alerts written under an older schema, not for producing new ones.
+    clear message if they have drifted. An explicit version skips the
+    check: that is for reading back older alerts, not producing new ones.
 
     Parameters
     ----------
     version : str, optional
-        Schema version to load. None (the default) means the current
-        production version, verified against the registry first.
+        Schema version to load. Defaults to current production version,
+        verified against the registry.
     schema_root : str or pathlib.Path, optional
         Directory holding ``<major>/<minor>/*.avsc`` and ``latest.txt``.
 
@@ -431,9 +430,8 @@ def publish_alert(alert_bytes: bytes, producer: Any, topic: str = "alerts",
     topic : str, optional
         Kafka topic name.
     flush : bool, optional
-        Wait for delivery before returning. Right for one-off alerts;
-        batch callers (batch_produce) pass False and flush once at the
-        end instead.
+        Wait for delivery before returning. True for one-off alerts,
+        False for batch callers.
     """
     def delivery_callback(err, msg):
         if err:
@@ -451,7 +449,7 @@ def publish_alert(alert_bytes: bytes, producer: Any, topic: str = "alerts",
 def open_alert_archive(
         path: str | Path, schema: Schema | None = None,
         codec: str = "deflate") -> Iterator[fastavro.write.Writer]:
-    """Open one run's alerts as one Avro object-container file.
+    """Open one run's batch alerts as an Avro object-container file.
 
     The container format embeds the schema (and codec) in the file header,
     so the file is self-describing: read it back with
@@ -493,12 +491,12 @@ def produce_alert(provider: AlertDataProvider, sid: int,
                   producer: Any = None, topic: str = "alerts",
                   schema: Schema | None = None,
                   archive: fastavro.write.Writer | None = None) -> bytes:
-    """End-to-end: assemble, serialize, and optionally publish an alert.
+    """Assemble, serialize, and optionally publish an alert.
 
     Parameters
     ----------
     provider : providers.AlertDataProvider
-        Where the alert's data comes from.
+        Data provider object.
     sid : int
         Source ID (sources.sid).
     producer : confluent_kafka.Producer, optional
@@ -508,8 +506,7 @@ def produce_alert(provider: AlertDataProvider, sid: int,
     schema : dict, optional
         Parsed fastavro schema; loaded via load_schema() if not provided.
     archive : fastavro.write.Writer, optional
-        Writer from open_alert_archive(); the alert is appended as one
-        record.
+        Alert writer; the alert is appended as one record.
 
     Returns
     -------
@@ -536,14 +533,9 @@ def batch_produce(provider: AlertDataProvider, pid: int,
                   archive: fastavro.write.Writer | None = None) -> int:
     """Produce alerts for every source on one difference image.
 
-    The batch unit is one exposure + SCA (chip), which is exactly what one
-    diffimages.pid identifies. Use AlertDataProvider.resolve_pid(expid,
-    sca) to obtain the pid for an exposure + SCA pair.
-
     Batch counterpart of produce_alert(): the provider fetches the
-    image's DB rows and pixels up front (see
-    AlertDataProvider.iter_sources), and Kafka is flushed once at the end
-    instead of per message.
+    image's DB rows and pixels up front (see AlertDataProvider.iter_sources),
+    and Kafka is flushed once at the end instead of per message.
 
     Parameters
     ----------
@@ -558,8 +550,7 @@ def batch_produce(provider: AlertDataProvider, pid: int,
     schema : dict, optional
         Parsed fastavro schema; loaded via load_schema() if not provided.
     archive : fastavro.write.Writer, optional
-        Writer from open_alert_archive(); every alert of the run is
-        appended to the one container file.
+        Alert writer; every alert of the run is appended to a container file.
 
     Returns
     -------

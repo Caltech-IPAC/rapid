@@ -1,8 +1,8 @@
 {
-	"namespace": "rapid.v01_00",
+	"namespace": "rapid.v00_00",
 	"name": "mpc_orbits",
 	"doc": "RAPID alert schema: MPC orbital elements (stub)",
-	"version": "01.00",
+	"version": "00.00",
 	"type": "record",
 	"fields": [
 		{"name": "id",            "type": "string",             "doc": "MPC designation or packed designation"},
