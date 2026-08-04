@@ -513,8 +513,8 @@ def run_single_core_job(meta_list,negative_diffimg_flag,index_thread):
                                     0.0)),
                     cos_sum   = m.cos_sum + agg.cossum,
                     sin_sum   = m.sin_sum + agg.sinsum,
-                    meanra    = mod(degrees(atan2(m.sin_sum + agg.sinsum,
-                                  m.cos_sum + agg.cossum)) + 360.0, 360.0),
+                    meanra = mod((degrees(atan2(m.sin_sum + agg.sinsum, m.cos_sum + agg.cossum)) + 360.0)::numeric,
+                                    360.0),
                     meandec   = (m.meandec*m.nsources + agg.sumdec) / (m.nsources + agg.n),
                     stdevra   = degrees(sqrt(-2.0 * ln(
                                         LEAST(GREATEST(
