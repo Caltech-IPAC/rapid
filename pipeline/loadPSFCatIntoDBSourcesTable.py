@@ -492,7 +492,7 @@ def run_single_core_job(meta_list,negative_diffimg_flag,index_thread):
         # For temp_sources not cross-matched, create new astroobjectmeta rows
         #----------------------------------
         update_astroobjectsmeta_time_benchmark_start = time.time()
-        create_new_aid_to_astroobjectmeta_sql = f"""INSERT INTO astroobjectsmeta (aid, nsources, fluxmean, fluxsum2, stdevflux, cos_sum, sin_sum, meanra, meandec, mjdmin, mjdmax)
+        create_new_aid_to_astroobjectmeta_sql = f"""INSERT INTO astroobjectsmeta (aid, nsources, meanflux, fluxsum2, stdevflux, cos_sum, sin_sum, meanra, meandec, mjdmin, mjdmax)
             SELECT aid, 0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, NULL, NULL
             FROM {tablename}
             WHERE is_new;"""
@@ -505,11 +505,11 @@ def run_single_core_job(meta_list,negative_diffimg_flag,index_thread):
         # for stdev - use GREATEST to protect against really small neg numbers blowing up
         update_existing_astroobjectmeta_sql = f"""UPDATE astroobjectsmeta m
                 SET nsources  = m.nsources + agg.n,
-                    fluxmean  = (m.fluxmean*m.nsources + agg.fsum) / (m.nsources + agg.n),
+                    meanflux  = (m.meanflux*m.nsources + agg.fsum) / (m.nsources + agg.n),
                     fluxsum2  = m.fluxsum2 + agg.fsum2,
                     stdevflux = sqrt(GREATEST(
                                     (m.fluxsum2 + agg.fsum2) / (m.nsources + agg.n)
-                                    - ((m.fluxmean*m.nsources + agg.fsum) / (m.nsources + agg.n))^2,
+                                    - ((m.meanflux*m.nsources + agg.fsum) / (m.nsources + agg.n))^2,
                                     0.0)),
                     cos_sum   = m.cos_sum + agg.cossum,
                     sin_sum   = m.sin_sum + agg.sinsum,
