@@ -634,95 +634,97 @@ if __name__ == '__main__':
 
     recs = dbh.get_pending_psfcat_uploads()
 
+
     if dbh.exit_code >= 64:
         print("*** Error from {}; quitting ".format(swname))
         exit(dbh.exit_code)
 
+    if len(recs) > 0: #Only run if there are uningested PSF catalogs
 
-    # Set up to launch multi-processing for loading sources database tables.
+        # Set up to launch multi-processing for loading sources database tables.
 
-    meta_list = []
+        meta_list = []
 
-    for rec in recs:
-        l2file_dict = dbh.get_l2file_info_for_sources(rec['rid'])
-        meta_dict = rec
-        meta_dict['expid'] = l2file_dict["expid"]
-        meta_dict['mjdobs'] = l2file_dict["mjdobs"]
-        # Load Sources record metadata into a dictionary that can be appended to a list,
-        # and then unpacked later.
-        meta_list.append(meta_dict)
+        for rec in recs:
+            l2file_dict = dbh.get_l2file_info_for_sources(rec['rid'])
+            meta_dict = rec
+            meta_dict['expid'] = l2file_dict["expid"]
+            meta_dict['mjdobs'] = l2file_dict["mjdobs"]
+            # Load Sources record metadata into a dictionary that can be appended to a list,
+            # and then unpacked later.
+            meta_list.append(meta_dict)
 
-        print(f"jid ={rec['jid']}")
+            print(f"jid ={rec['jid']}")
 
-    # Code-timing benchmark.
+        # Code-timing benchmark.
 
-    end_time_benchmark = time.time()
-    print("Elapsed time in seconds to collect inputs =",
-        end_time_benchmark - start_time_benchmark)
-    start_time_benchmark = end_time_benchmark
-
-
-
-    dbh.close()
-
-    if dbh.exit_code >= 64:
-        exit(dbh.exit_code)
+        end_time_benchmark = time.time()
+        print("Elapsed time in seconds to collect inputs =",
+            end_time_benchmark - start_time_benchmark)
+        start_time_benchmark = end_time_benchmark
 
 
-    # Code-timing benchmark.
 
-    end_time_benchmark = time.time()
-    print("Elapsed time in seconds to create sources database tables for all SCAs associated with processing date =",
-        end_time_benchmark - start_time_benchmark)
-    start_time_benchmark = end_time_benchmark
+        dbh.close()
 
-
-    ################################################################################
-    # Execute sources-table-loading tasks for all science-pipeline jobs with jids on
-    # a given processing date.  Parallel execution should not be performed at this time
-    # as there is no check for two different files creating an aid on the same object
-    # detected in two images. If this is overcome, the execution is done in parallel, with the number
-    # of parallel threads equal to the number of cores on the job-launcher machine.
-    # First do for sources from positive difference images, and then from negative.
-    ################################################################################
-
-    if num_cores > 1:
-        raise NotImplementedError("Work needs to be done to handle ingestion of the same field and " \
-        "and therefore potentially same object at the same time, creating multiple aids")
-        negative_diffimg_flag = False
-        #AZ: Unit to parallelize over will be Exposure
-        execute_parallel_processes(recs['jid'],meta_list,negative_diffimg_flag,num_cores)
-        negative_diffimg_flag = True
-        execute_parallel_processes(recs['jid'],meta_list,negative_diffimg_flag,num_cores)
-    else:
-        thread_index = 0
-        negative_diffimg_flag = False
-        run_single_core_job(meta_list,negative_diffimg_flag,thread_index)
-        negative_diffimg_flag = True
-        run_single_core_job(meta_list,negative_diffimg_flag,thread_index)
+        if dbh.exit_code >= 64:
+            exit(dbh.exit_code)
 
 
-    # Code-timing benchmark.
+        # Code-timing benchmark.
 
-    end_time_benchmark = time.time()
-    print("Elapsed time in seconds to load all sources database tables =",
-        end_time_benchmark - start_time_benchmark)
-    start_time_benchmark = end_time_benchmark
-
-
-    # Reopen main-program database connection.
-
-    dbh = db.RAPIDDB()
-
-    if dbh.exit_code >= 64:
-        exit(dbh.exit_code)
+        end_time_benchmark = time.time()
+        print("Elapsed time in seconds to create sources database tables for all SCAs associated with processing date =",
+            end_time_benchmark - start_time_benchmark)
+        start_time_benchmark = end_time_benchmark
 
 
-    # Code-timing benchmark overall.
+        ################################################################################
+        # Execute sources-table-loading tasks for all science-pipeline jobs with jids on
+        # a given processing date.  Parallel execution should not be performed at this time
+        # as there is no check for two different files creating an aid on the same object
+        # detected in two images. If this is overcome, the execution is done in parallel, with the number
+        # of parallel threads equal to the number of cores on the job-launcher machine.
+        # First do for sources from positive difference images, and then from negative.
+        ################################################################################
 
-    end_time_benchmark = time.time()
-    print(f"Elapsed time in seconds to load all sources into database for {proc_date} =",
-        end_time_benchmark - start_time_benchmark_at_start)
+        if num_cores > 1:
+            raise NotImplementedError("Work needs to be done to handle ingestion of the same field and " \
+            "and therefore potentially same object at the same time, creating multiple aids")
+            negative_diffimg_flag = False
+            #AZ: Unit to parallelize over will be Exposure
+            execute_parallel_processes(recs['jid'],meta_list,negative_diffimg_flag,num_cores)
+            negative_diffimg_flag = True
+            execute_parallel_processes(recs['jid'],meta_list,negative_diffimg_flag,num_cores)
+        else:
+            thread_index = 0
+            negative_diffimg_flag = False
+            run_single_core_job(meta_list,negative_diffimg_flag,thread_index)
+            negative_diffimg_flag = True
+            run_single_core_job(meta_list,negative_diffimg_flag,thread_index)
+
+
+        # Code-timing benchmark.
+
+        end_time_benchmark = time.time()
+        print("Elapsed time in seconds to load all sources database tables =",
+            end_time_benchmark - start_time_benchmark)
+        start_time_benchmark = end_time_benchmark
+
+
+        # Reopen main-program database connection.
+
+        dbh = db.RAPIDDB()
+
+        if dbh.exit_code >= 64:
+            exit(dbh.exit_code)
+
+
+        # Code-timing benchmark overall.
+
+        end_time_benchmark = time.time()
+        print(f"Elapsed time in seconds to load all sources into database for {proc_date} =",
+            end_time_benchmark - start_time_benchmark_at_start)
 
 
     # Close database connection.
