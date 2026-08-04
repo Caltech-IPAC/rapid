@@ -726,12 +726,18 @@ def execute_parallel_processes_stage_1_crossmatching(scas_list,fields_list,num_c
             index = futures.index(future)  # Find the original index/order of the completed future
             print(f"Completed: {i+1} processes, lastly for index={index}")
 
+    failures = []
     for future in futures:
         index = futures.index(future)
         try:
             print(future.result())
         except Exception as e:
+            failures.append(e)
             print(f"*** Error in thread index {index} = {e}")
+
+    if failures:
+        print(f"*** Error(s) from {len(failures)} worker(s); quitting...")
+        exit(64)
 
 
 def execute_parallel_processes_stage_2_crossmatching(scas_list,fields_list,num_cores):
@@ -747,12 +753,18 @@ def execute_parallel_processes_stage_2_crossmatching(scas_list,fields_list,num_c
             index = futures.index(future)  # Find the original index/order of the completed future
             print(f"Completed: {i+1} processes, lastly for index={index}")
 
+    failures = []
     for future in futures:
         index = futures.index(future)
         try:
             print(future.result())
         except Exception as e:
+            failures.append(e)
             print(f"*** Error in thread index {index} = {e}")
+
+    if failures:
+        print(f"*** Error(s) from {len(failures)} worker(s); quitting...")
+        exit(64)
 
 
 #################
