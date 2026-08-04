@@ -189,20 +189,21 @@ a final decision on which image-differencing method is best):
 
 * Sources (extracted/selected from catalogs)
 * AstroObjects (astronomical objects for which time-dependent sources form light curves)
-* Merges (associations between Sources and AstroObjects)
+* Merges (associations between Sources and AstroObjects via source-matching)
+* AstroObjectsMeta (statistics on astronomical-object lightcurves that can be added after source-matching)
 
 A diagram of the source-matching database-table schema is given as follows:
 
 .. image:: source_matching.png
 
 As indicated in the diagram, there will be several Sources tables
-named differently (according to the processing-date and SCA parameters).
-Same for Merges and AstroObjects tables.
+named differently, according to the observing-date and SCA parameters.
+Same for Merges, AstroObjects, and AstroObjectsMeta tables, according to field number.
 This is to partition the data into manageable chunks.
 The partitioning schemes for these tables are discussed below in more detail.
 
-The parent or prototype tables have the generic names: Sources, Merges, and AstroObjects.
-No actual records are stored here.
+The parent or prototype tables have the generic names: Sources, Merges, AstroObjects, and AstroObjectsMeta.
+No actual records are stored in prototype tables.
 
 Database-table inheritance is or can be used to tie child tables, which store the actual records,
 to the parent table.
@@ -210,7 +211,7 @@ At this time, only the Sources tables utilize inheritance.  This is because the 
 in the Merges table can be most easily associated with a record in the correct child-table name
 by querying the Sources parent table.
 
-A Sources child table is created for each processing date and SCA.
+A Sources child table is created for each observation date and SCA.
 Thus the partitioning scheme for sources is by time and chip number.
 This design strikes a balance between partitioning for parallel processing
 and non-proliferation of Sources tables.  It is anticipated that most of
@@ -218,16 +219,16 @@ sources to be matched are spurious, and so this partitioning scheme will
 have to be reassessed after the actual number of sources involved can be
 better estimated.
 PhotUtils-catalog source extractions are loaded into the Sources tables via
-parallel processes that are not necessarily in observation-date-time order.
+parallel processes in observation-date-time order.
 This includes all sources, regardless of their bit-wise ``flags`` attribute.
 
-AstroObjects tables are created for each Roman-tessellation sky tile.
-Merges tables are also created for each Roman-tessellation sky tile.
+AstroObjects and AstroObjectsMeta tables are created for each Roman-tessellation sky tile or field.
+Merges tables are also created for each Roman-tessellation sky tile or field.
 Thus the partitioning scheme for astronomical objects and associated cross-matching with
 sources (via Merges tables) are by sky position.
 
 Sources and AstroObjects tables are cross-matched for the appropriate partitions,
-in processing-date-time order, using the join function from the Q3C-library PostgreSQL extension,
+in observing-time order, using the join function from the Q3C-library PostgreSQL extension,
 and records in the associated Merges tables are then populated.
 Only sources with ``flags = 0`` are considered.
 A given Sources child table can contain records for different fields, filters, and exposures.
@@ -238,27 +239,31 @@ The cross-matching is done for all sources in one observation at a time, for all
 
 Source matching is done in parallel by field.  Thus multiple cores
 on the database-server machine will be utilized, and scaling up the architecture is possible
-by moving the database server to a machine with more cores and memory (if it can be afforded).
+by moving the database server to a machine with more cores and memory (as can be afforded).
+Cross-matching the sources results in records loaded into the Merges_<field> and
+AstroObjects_<fields> database tables.
+The source cross-matching extends across field boundaries for sources near field edges.
 
 The RAPID pipeline makes PSF-fit catalogs for both positive difference images (i,e, "science image
 minus reference image") and negative difference image (i,e, "reference image minus science image").
 The Sources database table has the boolean ``isdiffpos`` column to indicate for a given source
 from which type of source extraction it originated.
 
-Cross-matching the sources results in records loaded into the Merges_<field> and
-AstroObjects_<fields> database tables.  For the 2025-09-27 test, this took 3.5 hours with 8 parallel processes.
-This includes cross-matching across field boundaries for sources near field edges.
-A match radius of 0.1 arcsec (a Roman WFI pixel) was used.
-For the 2025-09-27 test, there were 3,269,268 AstroObjects records and 58,913,016 Merges records loaded
-into the PostgreSQL database.  Of those merges (a.k.a. lightcurve data points), 15,449 merges
+For the 2026-07-22 test with SOC sims, ~250 million sources were loaded into
+Sources_20260722_<sca> child tables in 1.3 hours with 8 parallel processes
+(regardless of ``flags`` value).
+Source cross-matching took 37 minutes with 8 parallel processes
+for ~90 million sources (with ``flags = 0``).  The test covered 360 different fields.
+A match radius of 0.55 arcsec or half a Roman WFI pixel was used.
+There were ~99 million AstroObjects records and 211,394,526 Merges records loaded
+into the PostgreSQL database.  Of those merges (a.k.a. lightcurve data points), 33,223 merges
 resulted from cross-matching across field boundaries (i.e., the match radius can extend
-across a field boundary), which is an increase of 0.02623% in terms of number of merges.
+across a field boundary), which is an increase of 0.0157% in terms of number of merges.
 
-The lightcurve statistics stored in the AstroObjects_<fields> database tables are updated after the
-cross-matching.  This is done as a separate process.
-The AstroObjects_<fields> database tables are explicitly vacuumed and analyzed at the end of this process.
-For the 2025-09-27 test, all of this took 11 minutes.
+The lightcurve statistics are stored in the AstroObjectsMeta_<fields> database tables, and are inserted after the
+cross-matching.  This is done as a separate process, after the source cross-matching.
+The AstroObjectsMeta_<fields> database tables are explicitly vacuumed and analyzed at the end of this process.
 
-Because reprocessing results in new product versions (usually latest is best), there is a
-separate process that removes not-best lightcurve data points from the Merges_<field> database tables,
-and then explicitly vacuums and analyzes these database tables.
+Because reprocessing results in new product versions (usually latest is best), there are
+separate process that remove not-best lightcurve data points from the Sources and Merges_<field> database tables,
+and then explicitly clusters, vacuums, and analyzes these database tables.
