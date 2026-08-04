@@ -64,16 +64,6 @@ if proc_date is None:
     exit(64)
 
 
-# Set DONTCHECKDONEFILE to skip existence-checking of the source_dbload_jid<jid>.done S3 bucket file.
-
-skip_done_check = os.getenv('DONTCHECKDONEFILE')
-
-do_done_check = False
-if skip_done_check is None:
-    do_done_check = True
-
-print(f"do_done_check = {do_done_check}")
-
 # Print out basic information for log file.
 
 print("proc_date =",proc_date)
@@ -238,12 +228,12 @@ def run_single_core_job(meta_list,negative_diffimg_flag,index_thread):
         isdiffpos = "false"
         output_psfcat_filename_to_use = output_psfcat_filename.replace(".txt","_negative.txt")
         output_psfcat_finder_filename_to_use = output_psfcat_finder_filename.replace(".txt","_negative.txt")
-        done_suffix = "_negative"
+
     else:
         isdiffpos = "true"
         output_psfcat_filename_to_use = output_psfcat_filename
         output_psfcat_finder_filename_to_use = output_psfcat_finder_filename
-        done_suffix = ""
+
 
     njobs = len(meta_list)
 
@@ -548,9 +538,8 @@ def run_single_core_job(meta_list,negative_diffimg_flag,index_thread):
         fh.write(f"Elapsed time in seconds to update the AstroObjectsMeta table = {update_astroobjectsmeta_time_benchmark_end-update_astroobjectsmeta_time_benchmark_start}\n")
         # Touch done file.  Upload done file to S3 bucket.
         dbh.mark_psfcat_uploaded(rec['qid'])
-        util.write_done_file_to_s3_bucket(done_filename,product_s3_bucket_base,proc_date,jid,s3_client)
 
-        fh.write(f"Loop end: done_filename,product_s3_bucket_base,proc_date,jid = {done_filename},{product_s3_bucket_base},{proc_date},{jid}\n")
+        fh.write(f"Loop end: product_s3_bucket_base,proc_date,jid = {product_s3_bucket_base},{proc_date},{jid}\n")
 
 
         # Flush write buffer.
