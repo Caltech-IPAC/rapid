@@ -630,7 +630,8 @@ def execute_parallel_processes(jids,rtids_list,meta_list,num_cores):
             print(f"*** Error in thread index {index} = {e}")
 
     if failures:
-        raise RuntimeError(f"{len(failures)} worker(s) failed")
+        print(f"*** Error(s) from {len(failures)} worker(s); quitting...")
+        exit(64)
 
 
 #################
