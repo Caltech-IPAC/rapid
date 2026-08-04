@@ -152,7 +152,7 @@ def test_s3_staging_failure_degrades_to_null_cutouts(make_provider,
 # ---------------------------------------------------------------------------
 
 class CapturingProducer:
-    """Stands in for confluent_kafka.Producer; keeps the alert bytes."""
+    """Stands in for the injected producer; keeps the alert bytes."""
 
     def __init__(self):
         self.messages = []

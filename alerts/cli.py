@@ -135,15 +135,20 @@ def main(argv: list[str] | None = None) -> int:
     # Make provider
     provider = make_provider(diff_flavor=args.diff_flavor)
 
-    # Make producer, if kafka arg is True
+    # Make producer, if kafka arg is True. kafka-python with Glue framing
+    # under MSK IAM auth (decisions.md § Pipeline Kafka client); the
+    # producer is injected from here into produce.py exactly as before.
     producer = None
     if args.kafka:
-        from confluent_kafka import Producer
-        producer = Producer({
-            "bootstrap.servers": os.environ.get("KAFKA_BROKER",
-                                                "localhost:9092"),
-            "message.max.bytes": "15728640",
-        })
+        if __package__:
+            from .kafka_producer import make_producer
+        else:
+            from alerts.kafka_producer import make_producer
+        broker = os.environ.get("KAFKA_BROKER")
+        if not broker:
+            parser.error("--kafka needs KAFKA_BROKER set to the MSK IAM "
+                         "bootstrap brokers (port 9098)")
+        producer = make_producer(broker)
 
     # Alert archive (produce.py)
     archive_ctx = (open_alert_archive(

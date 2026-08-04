@@ -425,7 +425,7 @@ def publish_alert(alert_bytes: bytes, producer: Any, topic: str = "alerts",
     ----------
     alert_bytes : bytes
         Avro-serialized alert.
-    producer : confluent_kafka.Producer
+    producer : kafka_producer.GlueFramingProducer
         The Kafka producer to publish with.
     topic : str, optional
         Kafka topic name.
@@ -499,7 +499,7 @@ def produce_alert(provider: AlertDataProvider, sid: int,
         Data provider object.
     sid : int
         Source ID (sources.sid).
-    producer : confluent_kafka.Producer, optional
+    producer : kafka_producer.GlueFramingProducer, optional
         If given, the alert is published to `topic`.
     topic : str, optional
         Kafka topic name.
@@ -543,7 +543,7 @@ def batch_produce(provider: AlertDataProvider, pid: int,
         Must support iter_sources().
     pid : int
         Processing ID of the difference image (diffimages.pid).
-    producer : confluent_kafka.Producer, optional
+    producer : kafka_producer.GlueFramingProducer, optional
         If given, every alert is published to `topic`.
     topic : str, optional
         Kafka topic name.

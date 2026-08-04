@@ -1,2 +1,5 @@
 numpy>=1.25
 fastavro
+kafka-python
+aws-msk-iam-sasl-signer-python
+boto3

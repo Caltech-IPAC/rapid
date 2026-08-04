@@ -49,7 +49,12 @@ below) — a skipped run is normal and not a failure.
 |------|------|
 | `benchmark.py` | Timing + memory + output-size benchmark of batch production against the live database. |
 | `benchmark_forced_phot.py` | Forced-photometry cost benchmark: decision data for alert-time FP vs storing FP products (see below). |
-| `avro_producer.py`, `avro_consumer.py` | Standalone Kafka publish/consume smoke scripts (require a running broker and `confluent_kafka`). Legacy manual utilities, not maintained by the suite. |
+
+Retired: `avro_producer.py` and `avro_consumer.py`, the standalone
+`confluent_kafka` smoke scripts. The producer is kafka-python now
+(`alerts/kafka_producer.py`, decisions.md § Pipeline Kafka client), and
+the framing/dispatch path they exercised by hand against a live broker is
+covered by `test_kafka_producer.py` with no broker at all.
 
 ## Running subsets
 
