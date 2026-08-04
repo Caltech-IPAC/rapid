@@ -5,6 +5,7 @@ import configparser
 from datetime import datetime, timezone
 from dateutil import tz
 import time
+from collections import defaultdict
 from concurrent.futures import ProcessPoolExecutor, as_completed
 to_zone = tz.gettz('America/Los_Angeles')
 
@@ -289,46 +290,36 @@ def run_single_core_job(fields,source_child_tables,index_thread):
 
         # Process astroobjects/astroobjectsmeta records that do indeed have corresponding
         # record(s) in the merges_<field> database table and Sources database table.
-        # Query each source child table directly instead of the parent sources table
-        # (avoids expensive inheritance scan across all child tables).
+        # Query all source child tables in a single UNION ALL query instead of one
+        # round trip per child table.
         # The vbest > 0 filter is folded into the JOIN to avoid N+1 pid lookups.
 
-        all_records = []
+        union_parts = []
         for sources_tablename in source_child_tables:
-            fh.write(f"sources_tablename = {sources_tablename}\n")
-            fh.flush()
-            query = f"SELECT a.aid,b.ra,b.dec,b.fluxfit FROM {merges_tablename} AS a " +\
-                f"JOIN {sources_tablename} AS b ON a.sid = b.sid " +\
-                f"JOIN diffimages AS d ON b.pid = d.pid " +\
-                f"WHERE d.vbest > 0;"
+            union_parts.append(
+                f"SELECT a.aid,b.ra,b.dec,b.fluxfit FROM {merges_tablename} AS a "
+                f"JOIN {sources_tablename} AS b ON a.sid = b.sid "
+                f"JOIN diffimages AS d ON b.pid = d.pid "
+                f"WHERE d.vbest > 0"
+            )
+        query = " UNION ALL ".join(union_parts) + ";"
 
-            sql_queries = []
-            sql_queries.append(query)
-            child_records = dbh.execute_sql_queries(sql_queries,thread_debug)
-            all_records.extend(child_records)
+        fh.write(f"Querying {len(source_child_tables)} source child tables for {merges_tablename} via UNION ALL\n")
+        fh.flush()
 
-        fh.write(f"Queried {len(source_child_tables)} source child tables for {merges_tablename}; " +
-                 f"total records = {len(all_records)}\n")
+        sql_queries = [query]
+        all_records = dbh.execute_sql_queries(sql_queries,thread_debug)
 
-        ras_for_aid_dict = {}
-        decs_for_aid_dict = {}
-        fluxes_for_aid_dict = {}
+        fh.write(f"Total records from UNION ALL query = {len(all_records)}\n")
+
+        ras_for_aid_dict = defaultdict(list)
+        decs_for_aid_dict = defaultdict(list)
+        fluxes_for_aid_dict = defaultdict(list)
 
         for record in all_records:
-
-            aid = record[0]
-            ra = record[1]
-            dec = record[2]
-            fluxfit = record[3]
-
-            try:
-                ras_for_aid_dict[aid].append(ra)
-                decs_for_aid_dict[aid].append(dec)
-                fluxes_for_aid_dict[aid].append(fluxfit)
-            except:
-                ras_for_aid_dict[aid] = [ra]
-                decs_for_aid_dict[aid] = [dec]
-                fluxes_for_aid_dict[aid] = [fluxfit]
+            ras_for_aid_dict[record[0]].append(record[1])
+            decs_for_aid_dict[record[0]].append(record[2])
+            fluxes_for_aid_dict[record[0]].append(record[3])
 
 
         # Code-timing benchmark.
@@ -343,23 +334,28 @@ def run_single_core_job(fields,source_child_tables,index_thread):
 
         # Delete astroobjects/astroobjectsmeta records for aids that have merges
         # but no best sources (all associated diffimages have vbest=0).
+        # Uses a single batched DELETE instead of one DELETE per aid.
 
         best_aids = set(ras_for_aid_dict.keys())
 
         query = f"SELECT DISTINCT aid FROM {merges_tablename};"
 
-        sql_queries = []
-        sql_queries.append(query)
+        sql_queries = [query]
         all_aids_records = dbh.execute_sql_queries(sql_queries,thread_debug)
 
-        for record in all_aids_records:
-            aid = record[0]
-            if aid not in best_aids:
-                fh.write(f"Deleting records for aid = {aid} (not-best sources) in " +
-                         f"{astroobjects_tablename} and {astroobjectsmeta_tablename} database tables...\n")
-                fh.flush()
-                dbh.delete_astroobject_from_field(astroobjects_tablename,aid,thread_debug)
-                dbh.delete_astroobject_from_field(astroobjectsmeta_tablename,aid,thread_debug)
+        not_best_aids = [str(record[0]) for record in all_aids_records if record[0] not in best_aids]
+
+        if not_best_aids:
+            not_best_aids_str = ",".join(not_best_aids)
+            fh.write(f"Deleting {len(not_best_aids)} not-best-source aids from " +
+                     f"{astroobjects_tablename} and {astroobjectsmeta_tablename} database tables...\n")
+            fh.flush()
+
+            sql_queries = [
+                f"DELETE FROM {astroobjects_tablename} WHERE aid IN ({not_best_aids_str});",
+                f"DELETE FROM {astroobjectsmeta_tablename} WHERE aid IN ({not_best_aids_str});"
+            ]
+            dbh.execute_sql_queries(sql_queries,thread_debug)
 
 
         # Loop over astroobjects for current field:
@@ -392,30 +388,7 @@ def run_single_core_job(fields,source_child_tables,index_thread):
                     fh.flush()
 
 
-                nums = ""
-
-                num = str(aid)
-                nums = nums + num + ","
-                num = str(meanra)
-                nums = nums + num + ","
-                num = str(stdra)
-                nums = nums + num + ","
-                num = str(meandec)
-                nums = nums + num + ","
-                num = str(stddec)
-                nums = nums + num + ","
-                num = str(meanflux)
-                nums = nums + num + ","
-                num = str(stdflux)
-                nums = nums + num + ","
-                num = str(nsources)
-                nums = nums + num + ","
-
-                # Slice the string to get all but the last character, then add the newline character
-                new_character = "\n"
-                line_to_write_to_file = nums[:-1] + new_character
-
-                csv_fh.write(line_to_write_to_file)
+                csv_fh.write(",".join(str(v) for v in (aid, meanra, stdra, meandec, stddec, meanflux, stdflux, nsources)) + "\n")
 
 
         # Load records into AstroObjectsMeta_<field> database tables.
