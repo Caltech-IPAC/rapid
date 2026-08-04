@@ -61,7 +61,7 @@ def reformat_simdata_fits_file_and_compute_uncertainty_image_via_simple_model(in
     # Ensure data are positive for uncertainty calculations.
 
     pos_np_data = np.abs(new_np_data_norm)
-    data_unc = np.sqrt(pos_np_data * exptime / sca_gain + sca_readout_noise ** 2) / exptime
+    data_unc = np.sqrt(pos_np_data * exptime / sca_gain + sca_readout_noise ** 2 / sca_gain ** 2) / exptime   # read noise is in electrons; convert to DN variance with /sca_gain**2 (inert at gain=1)
 
     hdu_unc = fits.PrimaryHDU(header=hdr,data=data_unc.astype(np.float32))
     hdu_list_unc = []
