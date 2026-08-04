@@ -252,10 +252,10 @@ from which type of source extraction it originated.
 For the 2026-07-22 test with SOC sims, ~250 million sources were loaded into
 Sources_20260722_<sca> child tables in 1.3 hours with 8 parallel processes
 (regardless of ``flags`` value).
-Source cross-matching took 37 minutes with 8 parallel processes
+Source cross-matching took 35 minutes with 8 parallel processes
 for ~90 million sources (with ``flags = 0``).  The test covered 360 different fields.
 A match radius of 0.55 arcsec or half a Roman WFI pixel was used.
-There were ~99 million AstroObjects records and 211,394,526 Merges records loaded
+There were ~90 million AstroObjects records and 211,394,526 Merges records loaded
 into the PostgreSQL database.  Of those merges (a.k.a. lightcurve data points), 33,223 merges
 resulted from cross-matching across field boundaries (i.e., the match radius can extend
 across a field boundary), which is an increase of 0.0157% in terms of number of merges.
@@ -263,6 +263,8 @@ across a field boundary), which is an increase of 0.0157% in terms of number of 
 The lightcurve statistics are stored in the AstroObjectsMeta_<fields> database tables, and are inserted after the
 cross-matching.  This is done as a separate process, after the source cross-matching.
 The AstroObjectsMeta_<fields> database tables are explicitly vacuumed and analyzed at the end of this process.
+For the 2026-07-22 test with SOC sims, it took 1.6 hours with 8 parallel processes to compute
+statistics for ~90 million AstroObjects.
 
 Because reprocessing results in new product versions (usually latest is best), there are
 separate process that remove not-best lightcurve data points from the Sources and Merges_<field> database tables,
