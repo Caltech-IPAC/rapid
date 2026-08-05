@@ -61,7 +61,7 @@ def reformat_simdata_fits_file_and_compute_uncertainty_image_via_simple_model(in
     # Ensure data are positive for uncertainty calculations.
 
     pos_np_data = np.abs(new_np_data_norm)
-    data_unc = np.sqrt(pos_np_data * exptime / sca_gain + sca_readout_noise ** 2) / exptime
+    data_unc = np.sqrt(pos_np_data * exptime / sca_gain + sca_readout_noise ** 2 / sca_gain ** 2) / exptime   # read noise is in electrons; convert to DN variance with /sca_gain**2 (inert at gain=1)
 
     hdu_unc = fits.PrimaryHDU(header=hdr,data=data_unc.astype(np.float32))
     hdu_list_unc = []
@@ -129,7 +129,7 @@ def compute_diffimage_uncertainty(sca_gain,
     hdr_sci = hdul_sci[0].header
     data_sci = hdul_sci[0].data
     np_data_sci = np.array(data_sci)
-    pos_np_data_sci = np.abs(np_data_sci)
+    pos_np_data_sci = np.maximum(np_data_sci, 0.0)   # non-negative source-excess flux only: on the bkg-subbed science image, blank-sky noise -> 0 (avoids re-adding sky Poisson already carried by std_dif_img)
 
     hdul_ref = fits.open(reference_image_filename)
     hdr_ref = hdul_ref[0].header

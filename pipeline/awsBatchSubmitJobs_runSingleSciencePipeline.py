@@ -1323,7 +1323,7 @@ if __name__ == '__main__':
     filename_diffimage_unc_masked = filename_diffimage_masked.replace("masked.fits","uncert_masked.fits")
 
     dfis.compute_diffimage_uncertainty(sca_gain * exptime_sciimage,
-                                       reformatted_science_image_filename,
+                                       filename_bkg_subbed_science_image,
                                        output_resampled_gainmatched_reference_image,
                                        output_resampled_reference_cov_map,
                                        post_zogy_keep_diffimg_lower_cov_map_thresh,
@@ -1974,7 +1974,7 @@ if __name__ == '__main__':
             filename_sfftdiffimage_unc_masked = 'sfftdiffimage_uncert_masked.fits'
 
             dfis.compute_diffimage_uncertainty(sca_gain * exptime_sciimage,
-                                               reformatted_science_image_filename,
+                                               filename_bkg_subbed_science_image,
                                                output_resampled_gainmatched_reference_image,
                                                output_resampled_reference_cov_map,
                                                post_zogy_keep_diffimg_lower_cov_map_thresh,
@@ -2529,7 +2529,7 @@ if __name__ == '__main__':
         filename_naive_diffimage_unc_masked = filename_naive_diffimage_masked.replace("masked.fits","uncert_masked.fits")
 
         dfis.compute_diffimage_uncertainty(sca_gain * exptime_sciimage,
-                                           reformatted_science_image_filename,
+                                           filename_bkg_subbed_science_image,
                                            output_resampled_gainmatched_reference_image,
                                            output_resampled_reference_cov_map,
                                            post_zogy_keep_diffimg_lower_cov_map_thresh,
