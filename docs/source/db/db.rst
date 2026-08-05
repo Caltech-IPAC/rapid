@@ -260,7 +260,7 @@ Sources_<yyyymmdd>_<sca> child database tables in 1.3 hours with 8 parallel proc
 (regardless of ``flags`` value).
 Source cross-matching took 35 minutes with 8 parallel processes
 for ~198 million sources (with ``flags = 0``).  The test covered 360 different fields.
-A match radius of 0.55 arcsec or half a Roman WFI pixel was used.
+A match radius of 0.055 arcsec or half a Roman WFI pixel was used.
 There were ~90 million AstroObjects records and 211,394,526 Merges records loaded
 into the PostgreSQL database.  Of those merges (a.k.a. lightcurve data points), 33,223 merges
 resulted from cross-matching across field boundaries (i.e., the match radius can extend
