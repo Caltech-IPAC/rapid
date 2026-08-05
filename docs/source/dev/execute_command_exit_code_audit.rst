@@ -169,7 +169,12 @@ None of the following were changed:
    ``execute_command`` copies.
 #. ``database/sims/db_register_rimtimsim_files.py``, which has the same
    download-and-swallow shape that this audit's companion fix removed from the
-   socsim registration script.
+   socsim registration script — **and the same destination-path mismatch**: its
+   ``aws s3 cp`` writes to the bare filename (the process working directory)
+   while ``get_fits_header`` and ``compute_checksum`` read
+   ``subdir_work + "/" + file``, i.e. ``/work/``. That script would fail to
+   find its downloads even with the AWS CLI on the ``PATH``. Not fixed here,
+   as this session's scope was the socsim registration path.
 #. Adding an ``ENV PATH`` to the container image, or moving the remaining bare
    binary names to absolute paths. This one is a ``rapid_systems`` change, not
    a change in this repo.

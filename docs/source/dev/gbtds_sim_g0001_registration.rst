@@ -261,6 +261,13 @@ propagates failures. Current behavior:
   removes the external-CLI dependency rather than working around the
   ``PATH``. The local copy is still the basename of the S3 key, and the
   ``INPUTBUCKET``/``INPUTPREFIX`` contract is unchanged.
+* The download now writes to ``/work/<basename>``. This corrects a second,
+  latent defect that the ``PATH`` failure masked: the ``aws s3 cp``
+  invocation passed the bare basename as its destination, so the file landed
+  in the process working directory, while every reader in the script
+  (``get_fits_header``, ``compute_checksum``) opens ``subdir_work + "/" +
+  name``. Even with the AWS CLI on the ``PATH``, every FITS read would have
+  failed on a missing file. The container's ``WORKDIR`` is not ``/work``.
 * Each worker thread counts ``n_registered`` and ``n_failed`` and returns
   the pair. Download failures and registration failures are caught per file,
   logged to the per-thread output file and to stdout, and counted; the loop
