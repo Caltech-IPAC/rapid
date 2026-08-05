@@ -189,8 +189,8 @@ a final decision on which image-differencing method is best):
 
 * Sources (extracted/selected from catalogs)
 * AstroObjects (astronomical objects for which time-dependent sources form light curves)
-* Merges (associations between Sources and AstroObjects via source-matching)
-* AstroObjectsMeta (statistics on astronomical-object lightcurves that can be added after source-matching)
+* Merges (associations between Sources and AstroObjects via source cross-matching)
+* AstroObjectsMeta (statistics on astronomical-object lightcurves added after source matching)
 
 A diagram of the source-matching database-table schema is given as follows:
 
@@ -249,8 +249,8 @@ minus reference image") and negative difference image (i,e, "reference image min
 The Sources database table has the boolean ``isdiffpos`` column to indicate for a given source
 from which type of source extraction it originated.
 
-For the 2026-07-22 test with SOC sims, ~250 million sources were loaded into
-Sources_20260722_<sca> child tables in 1.3 hours with 8 parallel processes
+For the 7/22/2026 test with SOC sims, ~250 million sources were loaded into
+Sources_<yyyymmdd>_<sca> child tables in 1.3 hours with 8 parallel processes
 (regardless of ``flags`` value).
 Source cross-matching took 35 minutes with 8 parallel processes
 for ~90 million sources (with ``flags = 0``).  The test covered 360 different fields.
@@ -263,7 +263,7 @@ across a field boundary), which is an increase of 0.0157% in terms of number of 
 The lightcurve statistics are stored in the AstroObjectsMeta_<fields> database tables, and are inserted after the
 cross-matching.  This is done as a separate process, after the source cross-matching.
 The AstroObjectsMeta_<fields> database tables are explicitly vacuumed and analyzed at the end of this process.
-For the 2026-07-22 test with SOC sims, it took 1.6 hours with 8 parallel processes to compute
+For the 7/22/2026 test with SOC sims, it took 1.6 hours with 8 parallel processes to compute
 statistics for ~90 million AstroObjects.
 
 Because reprocessing results in new product versions (usually latest is best), there are
