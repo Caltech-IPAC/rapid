@@ -223,12 +223,17 @@ PhotUtils-catalog source extractions are loaded into the Sources tables via
 parallel processes in observation-date-time order.
 This includes all sources, regardless of their bit-wise ``flags`` attribute.
 
-AstroObjects and AstroObjectsMeta tables are created for each Roman-tessellation sky tile or field.
+AstroObjects and AstroObjectsMeta database tables are created for each Roman-tessellation sky tile or field.
 Merges tables are also created for each Roman-tessellation sky tile or field.
 Thus the partitioning scheme for astronomical objects and associated cross-matching with
 sources (via Merges tables) are by sky position.
 
-Sources and AstroObjects tables are cross-matched for the appropriate partitions,
+A unique index, called ``aid``, for each AstroObjects_<field> database record is computed,
+not via a database sequence, but by a deterministic method that scales (ra, dec) to have
+1/3300-arcsecond precision and then concatenates these scaled sky coordinates together.
+This index fits within an ``int64`` data type.
+
+Sources and AstroObjects database tables are cross-matched for the appropriate partitions,
 in observing-time order, using the join function from the Q3C-library PostgreSQL extension,
 and records in the associated Merges tables are then populated.
 Only sources with ``flags = 0`` are considered.
