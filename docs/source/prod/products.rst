@@ -270,12 +270,9 @@ package, and consists of the following records:
   detection, object history, and image cutouts.
 - ``diaSource`` -- the triggering source detection on a difference image,
   including astrometry, PSF-fit photometry, and fit-quality parameters.
+- ``diaForcedSource`` -- forced photometry at the object position
 - ``diaObject`` -- the associated astronomical object, aggregated from all
   of its constituent detections.
-- ``diaForcedSource`` -- forced photometry at the object position
-  (currently all stubs; forced-photometry products are not yet integrated).
-- ``ssSource`` / ``mpc_orbits`` -- solar-system association and MPC orbital
-  elements (currently all stubs; solar-system processing is not yet run).
 
 Alert Packet Contents
 ==================================
