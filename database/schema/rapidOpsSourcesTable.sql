@@ -79,7 +79,7 @@ SET default_tablespace = pipeline_indx_01;
 
 ALTER TABLE ONLY sources ADD CONSTRAINT sources_pkey PRIMARY KEY (sid);
 
-ALTER TABLE ONLY sources ADD CONSTRAINT sourcespk UNIQUE (pid, id);
+ALTER TABLE ONLY sources ADD CONSTRAINT sourcespk UNIQUE (pid, id, isdiffpos);
 
 ALTER TABLE ONLY sources ADD CONSTRAINT sources_pid_fk FOREIGN KEY (pid) REFERENCES diffimages(pid);
 
