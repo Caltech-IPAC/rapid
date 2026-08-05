@@ -28,6 +28,25 @@ STATUS_LABEL = {
     Status.NOT_USED: "*not used*",
 }
 
+# Records to document, in presentation order (top-level alert first). Registry
+# records not named here are omitted from the docs entirely. (The registry
+# itself lists records in Avro dependency order, which gen_schema.py needs.)
+DISPLAY_ORDER = (
+    "alert",
+    "diaSource",
+    "diaForcedSource",
+    "diaObject",
+)
+
+
+def records_in_display_order():
+    """Return the DISPLAY_ORDER records from the registry, in that order."""
+    by_name = {r.name: r for r in RECORDS}
+    unknown = [n for n in DISPLAY_ORDER if n not in by_name]
+    if unknown:
+        raise ValueError(f"DISPLAY_ORDER names not in param_registry: {unknown}")
+    return [by_name[n] for n in DISPLAY_ORDER]
+
 
 def format_avro(avro) -> str:
     """Render a version-independent Avro type spec as a short string."""
@@ -99,11 +118,11 @@ def write_alert_params(outfile: Path = OUTPUT) -> None:
         "  the schema and from built alert packets entirely.",
         "",
     ]
-    for record in RECORDS:
+    for record in records_in_display_order():
         lines += record_section(record)
     outfile.write_text("\n".join(lines) + "\n")
     print(f"gen_alert_params: wrote {outfile.relative_to(REPO_ROOT)} "
-          f"(schema version {VERSION}, {len(RECORDS)} records)")
+          f"(schema version {VERSION}, {len(DISPLAY_ORDER)} records)")
 
 
 if __name__ == "__main__":
