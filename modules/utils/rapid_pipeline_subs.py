@@ -2602,7 +2602,7 @@ def compute_radec_statistics(ra_deg, dec_deg):
 ########################################
 # Compute primary key aid for database AstroObjects records outside of the database with
 # a deterministic method based on (ra0,dec0).  Convert both coordinates to integer units
-# of 1/1000th arcsecond, then pack into a single 64-bit integer.
+# that are exactly 1/3300 arcsecond precision, then pack into a single 64-bit integer.
 # Works with scalars, lists, and numpy arrays. np.asarray is a no-op on existing arrays,
 # and np.rint + .astype(np.int64) replaces round() for vectorized rounding.
 #
@@ -2611,12 +2611,12 @@ def compute_radec_statistics(ra_deg, dec_deg):
 ########################################
 
 def radec_index(ra_deg, dec_deg):
-    ra_mas  = np.rint(np.asarray(ra_deg) * 3_600_000).astype(np.int64)
-    dec_mas = np.rint((np.asarray(dec_deg) + 90.0) * 3_600_000).astype(np.int64)
-    return ra_mas * 648_000_001 + dec_mas
+    ra_units  = np.rint(np.asarray(ra_deg) * 11_880_000).astype(np.int64)
+    dec_units = np.rint((np.asarray(dec_deg) + 90.0) * 11_880_000).astype(np.int64)
+    return ra_units * 2_138_400_001 + dec_units
 
 def index_to_radec(idx):
     idx = np.asarray(idx, dtype=np.int64)
-    dec_mas = idx % 648_000_001
-    ra_mas  = idx // 648_000_001
-    return ra_mas / 3_600_000, dec_mas / 3_600_000 - 90.0
+    dec_units = idx % 2_138_400_001
+    ra_units  = idx // 2_138_400_001
+    return ra_units / 11_880_000, dec_units / 11_880_000 - 90.0
