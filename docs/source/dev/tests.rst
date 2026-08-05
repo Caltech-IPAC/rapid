@@ -112,3 +112,4 @@ Tests
    openuniv_tests.rst
    rimtimsim_tests.rst
    socsim_tests.rst
+   gbtds_sim_g0001_registration.rst

@@ -45,7 +45,24 @@ print("proc_utc_datetime =",proc_utc_datetime)
 print("proc_pt_datetime_started =",proc_pt_datetime_started)
 
 
-bucket_name_input = "socsims-fakesrc-fits-20260709-lite"
+# Input S3 bucket, and optional key prefix within it (e.g. "g0001/" for a
+# single generation staged alongside others in a shared bucket).  Both are
+# env-var overridable so a new staging area does not require a code change;
+# the defaults preserve the original SOC-sims behavior.
+
+bucket_name_input = os.getenv('INPUTBUCKET')
+
+if bucket_name_input is None:
+    bucket_name_input = "socsims-fakesrc-fits-20260709-lite"
+
+prefix_input = os.getenv('INPUTPREFIX')
+
+if prefix_input is None:
+    prefix_input = ""
+
+print("bucket_name_input =",bucket_name_input)
+print("prefix_input =",prefix_input)
+
 subdir_work = "/work"
 
 # Global variables.
@@ -163,24 +180,29 @@ def run_single_core_job(fits_files,index_thread):
         fh.write(f"i,input_fits_file = {i},{input_fits_file}\n")
 
 
-        # Download file from input S3 bucket to local machine.
+        # Download file from input S3 bucket to local machine.  The S3 key may
+        # contain a prefix, but the local copy is always just the basename, so
+        # the work directory stays flat.
+
+        local_fits_file = input_fits_file.split("/")[-1]
 
         s3_object_input_fits_file = "s3://" + bucket_name_input + "/" + input_fits_file
-        download_cmd = ['aws','s3','cp',s3_object_input_fits_file,input_fits_file]
+        download_cmd = ['aws','s3','cp',s3_object_input_fits_file,local_fits_file]
         exitcode_from_download_cmd = util.execute_command(download_cmd)
 
         fh.write(f"exitcode_from_download_cmd = {exitcode_from_download_cmd}\n")
 
 
-        # Register L2 FITS file in database.
+        # Register L2 FITS file in database.  The local basename is used to read
+        # the file, while the full S3 key is what gets recorded in the database.
 
-        header = get_fits_header(input_fits_file)
+        header = get_fits_header(local_fits_file)
 
         wcs = WCS(header)
 
         expid,fid = register_exposure(dbh,header,wcs)
 
-        rid,version,filename,checksum = register_l2file(dbh,header,wcs,input_fits_file,expid,fid)
+        rid,version,filename,checksum = register_l2file(dbh,header,wcs,input_fits_file,expid,fid,local_fits_file)
 
         finalize_l2file(dbh,rid,version,filename,checksum)     # Keep same filename and version for now.
 
@@ -189,7 +211,7 @@ def run_single_core_job(fits_files,index_thread):
 
         # Clean up work directory.
 
-        rm_cmd = ['rm','-f',subdir_work + "/" + input_fits_file]
+        rm_cmd = ['rm','-f',subdir_work + "/" + local_fits_file]
         exitcode_from_rm = util.execute_command(rm_cmd)
 
 
@@ -450,7 +472,7 @@ def register_exposure(dbh,header,wcs):
     return expid,fid
 
 
-def register_l2file(dbh,header,wcs,file,expid,fid):
+def register_l2file(dbh,header,wcs,file,expid,fid,local_file=None):
 
     #print("header =",header)
 
@@ -654,8 +676,14 @@ def register_l2file(dbh,header,wcs,file,expid,fid):
 
     # Compute file checksum.
 
+    # The checksum is computed from the local copy, whose name is the basename
+    # of the S3 key; file itself may still carry a key prefix.
+
+    if local_file is None:
+        local_file = file.split("/")[-1]
+
     print("file =",file)
-    checksum = db.compute_checksum(subdir_work + "/" + file)
+    checksum = db.compute_checksum(subdir_work + "/" + local_file)
 
     if checksum == 65 or checksum == 68 or checksum == 66:
         print("*** Error: Unexpected value for checksum =",checksum)
@@ -815,16 +843,31 @@ if __name__ == '__main__':
     sca_nums = []
     root_names = []
 
-    for my_bucket_input_object in my_bucket_input.objects.all():
+    for my_bucket_input_object in my_bucket_input.objects.filter(Prefix=prefix_input):
 
         fname_input = str(my_bucket_input_object.key)
 
-        if do_already_ingested_check and (fname_input in already_ingested_fits_files):
+
+        # Skip anything that is not an L2 FITS file, such as the generation
+        # manifest that may be staged alongside the data under the same prefix.
+
+        if not re.match(r".+\.fits(\.gz)?$", fname_input):
+            print(f"Skipping non-FITS object: {fname_input}")
+            continue
+
+
+        # The already-ingested list holds basenames (the database query strips
+        # the S3 bucket and any key prefix off the stored filename), so compare
+        # against the basename, not the full key.
+
+        basename_input = fname_input.split("/")[-1]
+
+        if do_already_ingested_check and (basename_input in already_ingested_fits_files):
             continue
 
         print(f"fname_input = {fname_input}")
 
-        fname_fields = fname_input.split("_")
+        fname_fields = basename_input.split("_")
 
         print(f"fname_fields = {fname_fields}")
 
