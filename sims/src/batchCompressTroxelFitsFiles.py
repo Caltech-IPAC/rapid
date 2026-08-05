@@ -196,7 +196,7 @@ def compress_files():
 
         if subdir_only_just_this_one is None:
             pass
-        else
+        else:
             if subdir_only_just_this_one != subdir_only:
                 continue
 
