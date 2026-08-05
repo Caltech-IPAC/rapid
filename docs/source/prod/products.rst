@@ -244,3 +244,40 @@ for scoring purposes, relative to 5 times the total number of pixels in the imag
 Here is a histogram of cov5percent for our current set of 1696 reference images:
 
 .. image:: rapid_refimmeta_cov5percent_1dhist.png
+
+
+Alerts
+************************************
+
+.. warning::
+
+   **The RAPID alert schema are under initial development**
+
+   The records, parameter names, types, and semantics documented below are a
+   work in progress and may change -- including in backward-incompatible
+   ways -- without notice. Many parameters are currently stubs that are
+   always serialized as null. Do not build production consumers against
+   this schema yet.
+
+Current State of the Alert Schema
+==================================
+
+RAPID produces alerts for source detections on difference images. Each alert
+is a single Apache Avro packet, assembled and serialized by the ``alerts``
+package, and consists of the following records:
+
+- ``alert`` -- the top-level record: provenance, the triggering source
+  detection, object history, and image cutouts.
+- ``diaSource`` -- the triggering source detection on a difference image,
+  including astrometry, PSF-fit photometry, and fit-quality parameters.
+- ``diaObject`` -- the associated astronomical object, aggregated from all
+  of its constituent detections.
+- ``diaForcedSource`` -- forced photometry at the object position
+  (currently all stubs; forced-photometry products are not yet integrated).
+- ``ssSource`` / ``mpc_orbits`` -- solar-system association and MPC orbital
+  elements (currently all stubs; solar-system processing is not yet run).
+
+Alert Packet Contents
+==================================
+
+.. include:: alert_params.inc

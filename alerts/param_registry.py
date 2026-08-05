@@ -565,12 +565,12 @@ ALERT_PARAMS = (
 # ---------------------------------------------------------------------------
 
 RECORDS = (
-    Record("diaSource",       "RAPID alert schema: individual source detection on a difference image",       DIA_SOURCE_PARAMS),
-    Record("diaForcedSource", "RAPID alert schema: forced photometry measurement at a diaObject position",   DIA_FORCED_SOURCE_PARAMS),
-    Record("diaObject",       "RAPID alert schema: astronomical object derived from DIASources",             DIA_OBJECT_PARAMS),
-    Record("ssSource",        "RAPID alert schema: solar system source association (stub)",                  SS_SOURCE_PARAMS),
-    Record("mpc_orbits",      "RAPID alert schema: MPC orbital elements (stub)",                             MPC_ORBITS_PARAMS),
-    Record("alert",           "RAPID alert schema: top-level alert record",                                  ALERT_PARAMS),
+    Record("diaSource",       "Individual source detection on a difference image",       DIA_SOURCE_PARAMS),
+    Record("diaForcedSource", "Forced photometry measurement at a diaObject position",   DIA_FORCED_SOURCE_PARAMS),
+    Record("diaObject",       "Astronomical object derived from DIASources",             DIA_OBJECT_PARAMS),
+    Record("ssSource",        "Solar system source association (stub)",                  SS_SOURCE_PARAMS),
+    Record("mpc_orbits",      "MPC orbital elements (stub)",                             MPC_ORBITS_PARAMS),
+    Record("alert",           "Top-level alert record",                                  ALERT_PARAMS),
 )
 
 
