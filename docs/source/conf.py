@@ -13,7 +13,25 @@
 # import os
 # import sys
 # sys.path.insert(0, os.path.abspath('.'))
+import os
+import sys
+
 import sphinx_rtd_theme
+
+# -- Generated content --------------------------------------------------------
+
+# Regenerate the alert-schema parameter tables (prod/alert_params.inc,
+# included by prod/products.rst) from alerts/param_registry.py on every
+# build, so the documented schema cannot drift from the code.
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from gen_alert_params import write_alert_params, VERSION as ALERT_SCHEMA_VERSION
+
+write_alert_params()
+
+# Makes |alert_schema_version| usable as a substitution in any .rst file.
+rst_epilog = f"""
+.. |alert_schema_version| replace:: {ALERT_SCHEMA_VERSION}
+"""
 
 
 # -- Project information -----------------------------------------------------
