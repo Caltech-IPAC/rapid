@@ -58,7 +58,7 @@ Date              Software modification
 9/25/2025         Added new method normalize_image to normalize science-image PSFs (required by ZOGY).
 10/10/2025        Added source matching within/without field boundaries to populate Sources, Merges, and AstroObjects database tables.
 10/11/2025        Added methods to compute statistics for AstroObjects database tables.
-10/29/2025        Set ``min_separation = 1.0`` pixel for PhotUtils catalog generation.
+10/29/2025        Set ``min_separation = 0.0`` pixels for PhotUtils catalog generation.
 11/19/2025        Upgraded to SExtractor 2.28.2.
 11/25/2025        Modified ``awaicgen`` for execution on Mac laptop (compiler is more strict than Linux).
 12/4/2025         Explicitly cast data and uncertainty images as ndarrays when passed to PhotUtils methods (not sure whether this actually caused any problems).
@@ -74,7 +74,7 @@ Date              Software modification
 2/11/2026         Scaled reference-image inputs so that reference image has fixed zero point = 17 mag.
 2/12/2026         Modified to generate PhotUtils catalog for reference image.
 3/24/2026         Completed upgrade/debugging fake-source injection for variable sources with fixed sky positions.
-4/7/2026          Modified SFFT code to output a difference-image PSF
+4/7/2026          Modified SFFT code to output a difference-image PSF.
 4/9/2026          Changes to how the uncertainty images are calculated (for science image and refimage inputs).
 4/13/2026         Replaces hard-wired value 1750.0 with ``saturation_value_rate_sciimage`` for processing rimtimsims.
 4/16/2026         Modified crossMatchSources.py to only cross-match sources with ``flags = 0``.
@@ -102,6 +102,7 @@ Date              Software modification
 7/8/2026          Modified to replace NaNs in difference-image inputs with zeros.
 8/5/2026          Made correction to ``data_unc`` formula (line 64 of ``pipeline/differenceImageSubs.py``).
 8/5/2026          Modified to feed ``dfis.compute_diffimage_uncertainty method`` background-subtracted ``filename_bkg_subbed_science_image`` instead of ``reformatted_science_image_filename`` (with background).
+8/5/2026          Set ``min_separation = 1.0`` pixels for PhotUtils catalog generation.
 ===============   ===============================================================================================================================================================================================================================
 
 
