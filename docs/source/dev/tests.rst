@@ -100,6 +100,8 @@ Date              Software modification
 6/2/2026          Updated L2Files database table for 5th-order SIP distortion.
 6/23/2026         Upgraded awaicgen version from 5.2 to 5.4 (fixed bug in handling SIP distortion).
 7/8/2026          Modified to replace NaNs in difference-image inputs with zeros.
+8/5/2026          Made correction to ``data_unc`` formula (line 64 of ``pipeline/differenceImageSubs.py``).
+8/5/2026          Modified to feed ``dfis.compute_diffimage_uncertainty method`` background-subtracted ``filename_bkg_subbed_science_image`` instead of ``reformatted_science_image_filename`` (with background).
 ===============   ===============================================================================================================================================================================================================================
 
 
