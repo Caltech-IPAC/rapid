@@ -268,5 +268,5 @@ For the 7/22/2026 test with SOC sims, it took 1.6 hours with 8 parallel processe
 statistics for ~90 million AstroObjects.
 
 Because reprocessing generates new product versions (usually latest is best), there are
-separate process that remove not-best lightcurve data points from the Sources and Merges_<field> database tables,
+separate processes that remove not-best lightcurve data points from the Sources and Merges_<field> database tables,
 and then explicitly clusters, vacuums, and analyzes these database tables.
