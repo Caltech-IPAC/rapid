@@ -170,9 +170,10 @@ Rev-6 retry (2026-08-05): tessellation fixed, two new blockers found
 ***************************************************************************************
 
 Job definitions ``rapid-pipeline-science``/``rapid-pipeline-bulk`` were
-rebuilt at **revision 6** (image digest
-``sha256:c14590d080b17554f189a762b03d3a389284688286f52e6bf294b16c66eef247``)
-with ``/work/roman_tessellation_nside512.db`` baked in and
+rebuilt at **revision 6** (image digest as recorded on the job definition
+itself — see ``aws batch describe-job-definitions --job-definition-name
+rapid-pipeline-science --status ACTIVE``) with
+``/work/roman_tessellation_nside512.db`` baked in and
 ``ROMANTESSELLATIONDBNAME`` set at the job-definition level. A diagnostic
 task confirmed the fix (``select count(*) from decbins`` returned 2049
 rows).
