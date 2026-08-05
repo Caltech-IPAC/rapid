@@ -391,13 +391,23 @@ Over the five-year mission this yields an estimated **12.5 billion alerts** tota
 Light Curves
 ************************************
 
-RAPID builds light curves by cross-matching candidates from successive observations. The matching engine uses the Q3C spatial-indexing library in PostgreSQL with a match radius of 0.1 arcsec (one WFI pixel). Three database tables underpin the light-curve system:
+RAPID builds light curves by cross-matching candidates from successive observations. The matching engine uses the Q3C spatial-indexing library in PostgreSQL with a match radius of 0.055 arcsec (half a Roman WFI pixel). Three database tables underpin the light-curve system:
 
 * **Sources** --- individual detections from difference-image catalogs, partitioned by processing date and SCA
 * **AstroObjects** --- unique astronomical objects, partitioned by Roman-tessellation sky tile
 * **Merges** --- associations linking Sources to AstroObjects
 
-In the 2025-09-27 large-scale test (2,000 SCA images), source matching produced 3.27 M AstroObjects and 58.9 M Merges records in 3.5 hours using 8 parallel processes, including cross-matching across field boundaries.
+In the 2026-07-22 large-scale test (7,272 SCA SOC-sim images), 
+~250 million sources were loaded into
+Sources_<yyyymmdd>_<sca> child database tables in 1.3 hours with 8 parallel processes
+(regardless of ``flags`` value).
+Source cross-matching took 35 minutes with 8 parallel processes
+for ~198 million sources (with ``flags = 0``).  The test covered 360 different fields.
+There were ~90 million AstroObjects records and 211,394,526 Merges records loaded
+into the PostgreSQL database.
+Of those merges (a.k.a. lightcurve data points), 33,223 merges
+resulted from cross-matching across field boundaries (i.e., the match radius can extend
+across a field boundary), which is an increase of 0.0157% in terms of number of merges.
 
 Light-curve data are stored in the PostgreSQL operations database and periodically exported to Apache Parquet for delivery to MAST. HATS partitioning for compatibility with LINCC is under evaluation.
 
