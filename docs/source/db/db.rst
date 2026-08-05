@@ -183,9 +183,10 @@ The DiffImMeta database table stores various QA measures for difference images.
 Source Matching
 ************************************
 
-Three basic PostgreSQL tables are used for source matching PSF-fit catalogs
-made by the Python photutils package from the SFFT difference images (until
-a final decision on which image-differencing method is best):
+Four basic PostgreSQL database tables are used for source cross-matching PSF-fit catalogs
+made by the Python photutils package from the SFFT difference images and curating
+source-extracted lightcurves (until a final decision on which image-differencing and
+source-extraction methods are best):
 
 * Sources (extracted/selected from catalogs)
 * AstroObjects (astronomical objects for which time-dependent sources form light curves)
@@ -250,7 +251,7 @@ The Sources database table has the boolean ``isdiffpos`` column to indicate for 
 from which type of source extraction it originated.
 
 For the 7/22/2026 test with SOC sims, ~250 million sources were loaded into
-Sources_<yyyymmdd>_<sca> child tables in 1.3 hours with 8 parallel processes
+Sources_<yyyymmdd>_<sca> child database tables in 1.3 hours with 8 parallel processes
 (regardless of ``flags`` value).
 Source cross-matching took 35 minutes with 8 parallel processes
 for ~90 million sources (with ``flags = 0``).  The test covered 360 different fields.
@@ -266,6 +267,6 @@ The AstroObjectsMeta_<fields> database tables are explicitly vacuumed and analyz
 For the 7/22/2026 test with SOC sims, it took 1.6 hours with 8 parallel processes to compute
 statistics for ~90 million AstroObjects.
 
-Because reprocessing results in new product versions (usually latest is best), there are
+Because reprocessing generates new product versions (usually latest is best), there are
 separate process that remove not-best lightcurve data points from the Sources and Merges_<field> database tables,
 and then explicitly clusters, vacuums, and analyzes these database tables.
