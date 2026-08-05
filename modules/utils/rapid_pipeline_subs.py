@@ -2602,7 +2602,7 @@ def compute_radec_statistics(ra_deg, dec_deg):
 ########################################
 # Compute primary key aid for database AstroObjects records outside of the database with
 # a deterministic method based on (ra0,dec0).  Convert both coordinates to integer units
-# that are exactly 1/3300 arcsecond precision, then pack into a single 64-bit integer.
+# that have exactly 1/3300 arcsecond precision, then pack into a single 64-bit integer.
 # Works with scalars, lists, and numpy arrays. np.asarray is a no-op on existing arrays,
 # and np.rint + .astype(np.int64) replaces round() for vectorized rounding.
 #
