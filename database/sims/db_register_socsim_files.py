@@ -3,7 +3,6 @@ import os
 import time
 import numpy as np
 import re
-import subprocess
 import healpy as hp
 from astropy.io import fits
 from astropy.wcs import WCS
@@ -127,6 +126,20 @@ for i in range(num_cores):
 s3_resource = boto3.resource('s3')
 
 
+def download_s3_file(bucket_name,key,local_path):
+
+    '''
+    Download a single object from S3 to a local path, raising on failure.
+
+    A separate client is made per call because boto3 clients are not safe to
+    share across the processes forked by ProcessPoolExecutor.
+    '''
+
+    s3_client = boto3.client('s3')
+
+    s3_client.download_file(bucket_name,key,local_path)
+
+
 #-------------------------------------------------------------------------------------------------------------
 # Custom methods for parallel processing, taking advantage of multiple cores on the job-launcher machine.
 #-------------------------------------------------------------------------------------------------------------
@@ -167,6 +180,13 @@ def run_single_core_job(fits_files,index_thread):
     fh.write(f"\nStart of run_single_core_job: index_thread={index_thread}\n")
 
 
+    # Per-thread outcome counters.  These are returned to the parent process so
+    # that a run which registers nothing cannot report success.
+
+    n_registered = 0
+    n_failed = 0
+
+
     # Loop over input FITS files.
 
     for index_fits_file in range(n_fits_files):
@@ -183,36 +203,63 @@ def run_single_core_job(fits_files,index_thread):
         # Download file from input S3 bucket to local machine.  The S3 key may
         # contain a prefix, but the local copy is always just the basename, so
         # the work directory stays flat.
+        #
+        # The download goes through boto3 rather than an "aws s3 cp" subprocess:
+        # the AWS CLI is not on the PATH that subprocess sees inside the Batch
+        # container, and the resulting per-file failures did not reach the job
+        # exit code.  boto3 is already a dependency (the listing below uses it),
+        # so this drops the external-CLI dependency entirely.
 
         local_fits_file = input_fits_file.split("/")[-1]
 
         s3_object_input_fits_file = "s3://" + bucket_name_input + "/" + input_fits_file
-        download_cmd = ['aws','s3','cp',s3_object_input_fits_file,local_fits_file]
-        exitcode_from_download_cmd = util.execute_command(download_cmd)
 
-        fh.write(f"exitcode_from_download_cmd = {exitcode_from_download_cmd}\n")
+        try:
+            download_s3_file(bucket_name_input,input_fits_file,subdir_work + "/" + local_fits_file)
+        except Exception as e:
+            n_failed += 1
+            fh.write(f"*** Error: Download failed for {s3_object_input_fits_file}: {e}\n")
+            fh.flush()
+            print(f"*** Error: Download failed for {s3_object_input_fits_file}: {e}")
+            continue
+
+        fh.write(f"Downloaded {s3_object_input_fits_file}\n")
 
 
         # Register L2 FITS file in database.  The local basename is used to read
         # the file, while the full S3 key is what gets recorded in the database.
+        # A registration failure for one file must not be mistaken for success:
+        # it is counted here and reported to the parent process, which turns a
+        # nonzero total into a nonzero process exit.
 
-        header = get_fits_header(local_fits_file)
+        try:
+            header = get_fits_header(local_fits_file)
 
-        wcs = WCS(header)
+            wcs = WCS(header)
 
-        expid,fid = register_exposure(dbh,header,wcs)
+            expid,fid = register_exposure(dbh,header,wcs)
 
-        rid,version,filename,checksum = register_l2file(dbh,header,wcs,input_fits_file,expid,fid,local_fits_file)
+            rid,version,filename,checksum = register_l2file(dbh,header,wcs,input_fits_file,expid,fid,local_fits_file)
 
-        finalize_l2file(dbh,rid,version,filename,checksum)     # Keep same filename and version for now.
+            finalize_l2file(dbh,rid,version,filename,checksum)     # Keep same filename and version for now.
 
-        compute_and_register_l2filemeta(dbh,header,wcs,rid,fid)
+            compute_and_register_l2filemeta(dbh,header,wcs,rid,fid)
+
+            n_registered += 1
+        except Exception as e:
+            n_failed += 1
+            fh.write(f"*** Error: Registration failed for {input_fits_file}: {e}\n")
+            fh.flush()
+            print(f"*** Error: Registration failed for {input_fits_file}: {e}")
 
 
-        # Clean up work directory.
+        # Clean up work directory.  Best-effort: a leftover file in the work
+        # directory is not a registration failure, so it is not counted as one.
 
-        rm_cmd = ['rm','-f',subdir_work + "/" + local_fits_file]
-        exitcode_from_rm = util.execute_command(rm_cmd)
+        try:
+            os.remove(subdir_work + "/" + local_fits_file)
+        except OSError as e:
+            fh.write(f"*** Warning: Could not remove {local_fits_file}: {e}\n")
 
 
         # Code-timing benchmark.
@@ -229,15 +276,22 @@ def run_single_core_job(fits_files,index_thread):
 
 
     fh.write(f"\nEnd of run_single_core_job: index_thread={index_thread}\n")
+    fh.write(f"n_registered,n_failed = {n_registered},{n_failed}\n")
 
     fh.close()
 
-    message = f"Finish normally for index_thread = {index_thread}"
+    print(f"Finish for index_thread = {index_thread}: n_registered,n_failed = {n_registered},{n_failed}")
 
-    return message
+    return n_registered,n_failed
 
 
 def execute_parallel_processes(fits_files_list,num_cores=None):
+
+    '''
+    Run the registration threads and return the (n_registered,n_failed) totals
+    summed over all threads.  A thread that dies outright counts as a failure,
+    so an unhandled worker exception cannot be logged and then forgotten.
+    '''
 
     if num_cores is None:
         num_cores = os.cpu_count()  # Use all available cores if not specified
@@ -253,52 +307,25 @@ def execute_parallel_processes(fits_files_list,num_cores=None):
             index = futures.index(future)  # Find the original index/order of the completed future
             print(f"Completed: {i+1} processes, lastly for index={index}")
 
+    n_registered_total = 0
+    n_failed_total = 0
+
     for future in futures:
         index = futures.index(future)
         try:
-            print(future.result())
+            n_registered,n_failed = future.result()
+            n_registered_total += n_registered
+            n_failed_total += n_failed
         except Exception as e:
             print(f"*** Error in thread index {index} = {e}")
+            n_failed_total += 1
+
+    return n_registered_total,n_failed_total
 
 
 #-------------------------------------------------------------------------------------------------------------
 # Methods for L2-file database registration.
 #-------------------------------------------------------------------------------------------------------------
-
-def execute_command(cmd,no_check=False):
-
-    max_ntries = 5
-
-    ntries = 0
-    while ntries < max_ntries:
-
-        print("ntries = ",ntries)
-        print("Executing cmd = ",cmd)
-
-        p = subprocess.Popen(cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
-        for line in p.stdout.readlines():
-            print("--->",line)
-            strvalue = line.decode('utf-8').strip()
-            print(strvalue)
-        retval = p.wait()
-        print("retval =",retval)
-
-        if (retval == 0):
-            break
-        elif no_check:
-            break
-
-        print("Sleeping 30 seconds, then try again (up to {} tries)...".format(max_ntries))
-        time.sleep(30)
-        ntries += 1
-
-    if not no_check:
-        if (retval != 0):
-            print("*** Error from execute_command; quitting...")
-            exit(1)
-
-    return retval
-
 
 def get_keyword_value(header,key):
 
@@ -907,11 +934,13 @@ if __name__ == '__main__':
     # with the number of parallel threads equal to the number of cores on the job-launcher machine.
     ###############################################################################################
 
+    n_to_register = len(sorted_input_fits_files)
+
     if num_cores > 1:
-        execute_parallel_processes(sorted_input_fits_files,num_cores)
+        n_registered,n_failed = execute_parallel_processes(sorted_input_fits_files,num_cores)
     else:
         thread_index = 0
-        run_single_core_job(sorted_input_fits_files,thread_index)
+        n_registered,n_failed = run_single_core_job(sorted_input_fits_files,thread_index)
 
 
     # Code-timing benchmark.
@@ -922,7 +951,19 @@ if __name__ == '__main__':
     start_time_benchmark = end_time_benchmark
 
 
-    # Termination.
+    # Termination.  A run that had work to do and registered nothing, or that
+    # had any per-file failure, must not report success: a green job that wrote
+    # zero rows is indistinguishable from a real run to everything downstream.
+
+    print(f"n_to_register,n_registered,n_failed = {n_to_register},{n_registered},{n_failed}")
+
+    if n_failed > 0:
+        print(f"*** Error: {n_failed} of {n_to_register} file(s) failed to download or register; quitting...")
+        exit(65)
+
+    if n_to_register > 0 and n_registered == 0:
+        print(f"*** Error: {n_to_register} file(s) were listed but none were registered; quitting...")
+        exit(65)
 
     exit(0)
 
