@@ -171,6 +171,7 @@ def run_single_core_job_stage_1_crossmatching(scas,fields,index_thread):
     # that are anything but short tests.
 
     thread_debug = 0
+    newline_character = "\n"
 
     nfields = len(fields)
 
@@ -342,8 +343,8 @@ def run_single_core_job_stage_1_crossmatching(scas,fields,index_thread):
                             # Bulk copy is supposed to be much faster than row-by-row inserts,
                             # even for unlogged table.
                             #
-                            # Compute aid on job machine from deterministic method
-                            # (basically creating a unique 64-bit index from (ra,dec).
+                            # Compute aid on job machine from deterministic method, which is
+                            # basically a unique 64-bit index from the concatention of (ra,dec).
 
                             aid = util.radec_index(source_ra, source_dec)
 
@@ -376,7 +377,6 @@ def run_single_core_job_stage_1_crossmatching(scas,fields,index_thread):
                             nums = nums + num + ","
 
                             # Slice the string to get all but the last character, then add the newline character
-                            newline_character = "\n"
                             line_to_write_to_file = nums[:-1] + newline_character
 
                             csv_astroobjects_fh.write(line_to_write_to_file)
@@ -390,7 +390,6 @@ def run_single_core_job_stage_1_crossmatching(scas,fields,index_thread):
                             nums = nums + num + ","
 
                             # Slice the string to get all but the last character, then add the newline character
-                            newline_character = "\n"
                             line_to_write_to_file = nums[:-1] + newline_character
 
                             csv_merges_fh.write(line_to_write_to_file)
