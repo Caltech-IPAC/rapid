@@ -10,6 +10,7 @@ import io
 import numpy as np
 import healpy as hp
 import configparser
+from astropy import table
 from astropy.table import QTable, join
 from datetime import datetime, timezone
 from dateutil import tz
@@ -217,22 +218,8 @@ def roman_tessellation_index(ra, dec):
 # Custom methods for parallel processing, taking advantage of multiple cores on the job-launcher machine.
 #-------------------------------------------------------------------------------------------------------------
 
-def run_single_core_job(meta_list,negative_diffimg_flag,index_thread):
+def run_single_core_job(meta_list,index_thread):
 
-
-    # Handle sources from positive versus negative difference images.
-
-    print("negative_diffimg_flag =",negative_diffimg_flag)
-
-    if negative_diffimg_flag:
-        isdiffpos = "false"
-        output_psfcat_filename_to_use = output_psfcat_filename.replace(".txt","_negative.txt")
-        output_psfcat_finder_filename_to_use = output_psfcat_finder_filename.replace(".txt","_negative.txt")
-
-    else:
-        isdiffpos = "true"
-        output_psfcat_filename_to_use = output_psfcat_filename
-        output_psfcat_finder_filename_to_use = output_psfcat_finder_filename
 
 
     njobs = len(meta_list)
@@ -261,7 +248,6 @@ def run_single_core_job(meta_list,negative_diffimg_flag,index_thread):
     fh.write(f"\nStart of run_single_core_job: index_thread={index_thread}, dbh={dbh}\n")
 
     for index_job in range(njobs):
-
         meta_dict = meta_list[index_job]
         jid = meta_dict['jid']
         index_core = index_job % num_cores
@@ -288,104 +274,110 @@ def run_single_core_job(meta_list,negative_diffimg_flag,index_thread):
 
 
         fh.write(f"Loop start: index_job,jid= {index_job},{jid}\n")
+        # Handle sources from positive versus negative difference images.
+
+        joined_table_list = []
+        for isdiffpos in ['true', 'false']:
+            if isdiffpos == 'false':
+                output_psfcat_filename_to_use = output_psfcat_filename.replace(".txt","_negative.txt")
+                output_psfcat_finder_filename_to_use = output_psfcat_finder_filename.replace(".txt","_negative.txt")
+            else:
+                output_psfcat_filename_to_use = output_psfcat_filename
+                output_psfcat_finder_filename_to_use = output_psfcat_finder_filename
+            output_psfcat_filename_for_jid = output_psfcat_filename_to_use.replace(".txt",f"_jid{jid}.txt")
+            # Download SFFT-difference-image PSF-fit catalog file from S3 bucket.
 
 
-        # Check whether done file exists in S3 bucket for job, and skip if it exists.
-        # This is done by attempting to download the done file.  Regardless the sub
-        # always returns the filename and subdirs by parsing the s3_full_name.
 
-        # Download SFFT-difference-image PSF-fit catalog file from S3 bucket.
+            s3_full_name_psfcat_file = "s3://" + product_s3_bucket_base + "/" + proc_date + '/jid' + str(jid) + "/" +  output_psfcat_filename_to_use
+            ret_filename,subdirs_done,downloaded_from_bucket = util.download_file_from_s3_bucket(s3_client,
+                                                                                                s3_full_name_psfcat_file,
+                                                                                                output_psfcat_filename_for_jid)
 
-        output_psfcat_filename_for_jid = output_psfcat_filename_to_use.replace(".txt",f"_jid{jid}.txt")
+            if not downloaded_from_bucket:
+                fh.write("*** Warning: PSF-fit catalog file does not exist ({}); skipping...\n".format(output_psfcat_filename_to_use))
+                fh.flush()
+                continue
 
-        s3_full_name_psfcat_file = "s3://" + product_s3_bucket_base + "/" + proc_date + '/jid' + str(jid) + "/" +  output_psfcat_filename_to_use
-        ret_filename,subdirs_done,downloaded_from_bucket = util.download_file_from_s3_bucket(s3_client,
-                                                                                             s3_full_name_psfcat_file,
-                                                                                             output_psfcat_filename_for_jid)
+            # Download SFFT-difference-image PSF-fit finder catalog file from S3 bucket.
 
-        if not downloaded_from_bucket:
-            fh.write("*** Warning: PSF-fit catalog file does not exist ({}); skipping...\n".format(output_psfcat_filename_to_use))
-            fh.flush()
-            continue
+            output_psfcat_finder_filename_for_jid = output_psfcat_finder_filename_to_use.replace(".txt",f"_jid{jid}.txt")
 
+            s3_full_name_psfcat_finder_file = "s3://" + product_s3_bucket_base + "/" + proc_date + '/jid' + str(jid) + "/" +  output_psfcat_finder_filename_to_use
+            ret_filename,subdirs_done,downloaded_from_bucket = util.download_file_from_s3_bucket(s3_client,
+                                                                                                s3_full_name_psfcat_finder_file,
+                                                                                                output_psfcat_finder_filename_for_jid)
 
-        # Download SFFT-difference-image PSF-fit finder catalog file from S3 bucket.
-
-        output_psfcat_finder_filename_for_jid = output_psfcat_finder_filename_to_use.replace(".txt",f"_jid{jid}.txt")
-
-        s3_full_name_psfcat_finder_file = "s3://" + product_s3_bucket_base + "/" + proc_date + '/jid' + str(jid) + "/" +  output_psfcat_finder_filename_to_use
-        ret_filename,subdirs_done,downloaded_from_bucket = util.download_file_from_s3_bucket(s3_client,
-                                                                                             s3_full_name_psfcat_finder_file,
-                                                                                             output_psfcat_finder_filename_for_jid)
-
-        if not downloaded_from_bucket:
-            fh.write("*** Warning: PSF-fit finder catalog file does not exist ({}); skipping...\n".format(output_psfcat_finder_filename_to_use))
-            fh.flush()
-            continue
+            if not downloaded_from_bucket:
+                fh.write("*** Warning: PSF-fit finder catalog file does not exist ({}); skipping...\n".format(output_psfcat_finder_filename_to_use))
+                fh.flush()
+                continue
 
 
-        # Join catalogs and extract columns for sources database tables.
+            # Join catalogs and extract columns for sources database tables.
 
-        psfcat_qtable = QTable.read(output_psfcat_filename_for_jid,format='ascii')
-        psfcat_finder_qtable = QTable.read(output_psfcat_finder_filename_for_jid,format='ascii')
+            psfcat_qtable = QTable.read(output_psfcat_filename_for_jid,format='ascii')
+            psfcat_finder_qtable = QTable.read(output_psfcat_finder_filename_for_jid,format='ascii')
 
-        joined_table_inner = join(psfcat_qtable, psfcat_finder_qtable, keys='id', join_type='inner')
+            joined_table_inner = join(psfcat_qtable, psfcat_finder_qtable, keys='id', join_type='inner')
 
-        nrows = len(joined_table_inner)
-        fh.write(f"nrows in PSF-fit catalog = {nrows}\n")
+            nrows = len(joined_table_inner)
+            fh.write(f"nrows in PSF-fit catalog = {nrows}\n")
 
 
-        # Here are what the columns in the photutils catalogs are called:
-        # Main: id group_id group_size local_bkg x_init y_init flux_init x_fit y_fit flux_fit x_err y_err flux_err n_pixels_fit qfit cfit reduced_chi2 flags ra dec
-        # Finder: id xcentroid ycentroid sharpness roundness1 roundness2 npix peak flux mag daofind_mag
-        # Note that some catalog-column names have underscores that need to be dealt with specially
-        # because the database columns do not have underscores.
-        #
-        # Prepare records into sources database tables.
+            # Here are what the columns in the photutils catalogs are called:
+            # Main: id group_id group_size local_bkg x_init y_init flux_init x_fit y_fit flux_fit x_err y_err flux_err n_pixels_fit qfit cfit reduced_chi2 flags ra dec
+            # Finder: id xcentroid ycentroid sharpness roundness1 roundness2 npix peak flux mag daofind_mag
+            # Note that some catalog-column names have underscores that need to be dealt with specially
+            # because the database columns do not have underscores.
+            #
+            # Prepare records into sources database tables.
 
-        joined_table_inner.rename_columns(['x_fit',
-                                        'y_fit',
-                                        'flux_fit',
-                                        'x_err',
-                                        'y_err',
-                                        'flux_err',
-                                        'n_pixels_fit',
-                                        'reduced_chi2',
-                                        'n_pixels'],
-                                        ['xfit',
-                                        'yfit',
-                                        'fluxfit',
-                                        'xerr',
-                                        'yerr',
-                                        'fluxerr',
-                                        'npixfit',
-                                        'redchi',
-                                        'npix'
-                                        ])
+            joined_table_inner.rename_columns(['x_fit',
+                                            'y_fit',
+                                            'flux_fit',
+                                            'x_err',
+                                            'y_err',
+                                            'flux_err',
+                                            'n_pixels_fit',
+                                            'reduced_chi2',
+                                            'n_pixels'],
+                                            ['xfit',
+                                            'yfit',
+                                            'fluxfit',
+                                            'xerr',
+                                            'yerr',
+                                            'fluxerr',
+                                            'npixfit',
+                                            'redchi',
+                                            'npix'
+                                            ])
 
-        joined_table_inner.remove_columns(['group_id',
-                                        'group_size',
-                                        'local_bkg',
-                                        'x_init',
-                                        'y_init',
-                                        'flux_init',
-                                        'x_centroid',
-                                        'y_centroid',
-                                        'flux',
-                                        'mag',
-                                        'daofind_mag'])
-        joined_table_inner['pid']=pid
-        joined_table_inner['isdiffpos']=isdiffpos
-        joined_table_inner['expid']=expid
-        joined_table_inner['fid']=fid
-        joined_table_inner['sca'] = sca
-        joined_table_inner['mjdobs']= mjdobs
-        # The field,hp6,hp9 indexes must be overridden with
-        # the actual ra,dec position of the source.
-        joined_table_inner['hp6']   = hp.ang2pix(2**6, joined_table_inner['ra'], joined_table_inner['dec'], nest=True, lonlat=True)
-        joined_table_inner['hp9']   = hp.ang2pix(2**9, joined_table_inner['ra'], joined_table_inner['dec'], nest=True, lonlat=True)
-        joined_table_inner['field'] = roman_tessellation_index(joined_table_inner['ra'], joined_table_inner['dec'])   # vectorized
-        nums = joined_table_inner.colnames
+            joined_table_inner.remove_columns(['group_id',
+                                            'group_size',
+                                            'local_bkg',
+                                            'x_init',
+                                            'y_init',
+                                            'flux_init',
+                                            'x_centroid',
+                                            'y_centroid',
+                                            'flux',
+                                            'mag',
+                                            'daofind_mag'])
+            joined_table_inner['pid']=pid
+            joined_table_inner['isdiffpos']=isdiffpos
+            joined_table_inner['expid']=expid
+            joined_table_inner['fid']=fid
+            joined_table_inner['sca'] = sca
+            joined_table_inner['mjdobs']= mjdobs
+            # The field,hp6,hp9 indexes must be overridden with
+            # the actual ra,dec position of the source.
+            joined_table_inner['hp6']   = hp.ang2pix(2**6, joined_table_inner['ra'], joined_table_inner['dec'], nest=True, lonlat=True)
+            joined_table_inner['hp9']   = hp.ang2pix(2**9, joined_table_inner['ra'], joined_table_inner['dec'], nest=True, lonlat=True)
+            joined_table_inner['field'] = roman_tessellation_index(joined_table_inner['ra'], joined_table_inner['dec'])   # vectorized
+            nums = joined_table_inner.colnames
+            joined_table_list.append(joined_table_inner)
+        joined_table_inner = table.vstack(joined_table_list)
         buffer = table_to_buffer(joined_table_inner, nums)
 
         # Check whether database connection is still alive.
@@ -549,7 +541,7 @@ def run_single_core_job(meta_list,negative_diffimg_flag,index_thread):
 
 
         # Remove no-longer-needed intermediate files.
-        file_paths = [output_psfcat_filename_for_jid,output_psfcat_finder_filename_for_jid]
+        file_paths = [output_psfcat_filename_for_jid,output_psfcat_finder_filename_for_jid,output_psfcat_filename_for_jid.replace('.txt', '_negative.txt'),output_psfcat_finder_filename_for_jid.replace('.txt', '_negative.txt')]
         for file_path in file_paths:
 
             if os.path.exists(file_path):
@@ -583,7 +575,7 @@ def run_single_core_job(meta_list,negative_diffimg_flag,index_thread):
     return message
 
 
-def execute_parallel_processes(jids,meta_list,negative_diffimg_flag,num_cores):
+def execute_parallel_processes(jids,meta_list,num_cores):
     """
     This does not currently work with the implementation because it is possible that the same object
     detected in two different images could be added to the DB at the same time with different aids
@@ -592,7 +584,7 @@ def execute_parallel_processes(jids,meta_list,negative_diffimg_flag,num_cores):
 
     with ProcessPoolExecutor(max_workers=num_cores) as executor:
         # Submit all tasks to the executor and store the futures in a list
-        futures = [executor.submit(run_single_core_job,jids,meta_list,negative_diffimg_flag,thread_index) for thread_index in range(num_cores)]
+        futures = [executor.submit(run_single_core_job,jids,meta_list,thread_index) for thread_index in range(num_cores)]
 
         # Iterate over completed futures and update progress
         for i, future in enumerate(as_completed(futures)):
@@ -692,17 +684,12 @@ if __name__ == '__main__':
         if num_cores > 1:
             raise NotImplementedError("Work needs to be done to handle ingestion of the same field and " \
             "and therefore potentially same object at the same time, creating multiple aids")
-            negative_diffimg_flag = False
             #AZ: Unit to parallelize over will be Exposure
-            execute_parallel_processes(recs['jid'],meta_list,negative_diffimg_flag,num_cores)
-            negative_diffimg_flag = True
-            execute_parallel_processes(recs['jid'],meta_list,negative_diffimg_flag,num_cores)
+            execute_parallel_processes(recs['jid'],meta_list,num_cores)
+
         else:
             thread_index = 0
-            negative_diffimg_flag = False
-            run_single_core_job(meta_list,negative_diffimg_flag,thread_index)
-            negative_diffimg_flag = True
-            run_single_core_job(meta_list,negative_diffimg_flag,thread_index)
+            run_single_core_job(meta_list,thread_index)
 
 
         # Code-timing benchmark.
