@@ -162,3 +162,93 @@ contains ``exposures``, ``l2files`` and ``l2filemeta`` along with the
 ``registerL2FileMeta`` functions; as of this writing all three tables have
 zero rows matching ``g0001``, so registration still needs DML only and there
 are no pre-existing rows to reconcile.
+
+
+.. _g0001-registration-rev6-attempts:
+
+Rev-6 retry (2026-08-05): tessellation fixed, two new blockers found
+***************************************************************************************
+
+Job definitions ``rapid-pipeline-science``/``rapid-pipeline-bulk`` were
+rebuilt at **revision 6** (image digest
+``sha256:c14590d080b17554f189a762b03d3a389284688286f52e6bf294b16c66eef247``)
+with ``/work/roman_tessellation_nside512.db`` baked in and
+``ROMANTESSELLATIONDBNAME`` set at the job-definition level. A diagnostic
+task confirmed the fix (``select count(*) from decbins`` returned 2049
+rows).
+
+**Attempt 1** (job ``2069131e-669b-4811-b284-6c913162216d``,
+``g0001-registration-rev6``) reused the rev-5 ``container-overrides`` shape
+verbatim (only ``INPUTBUCKET``/``INPUTPREFIX`` in ``environment``) and
+**FAILED** in 2s, exit 64::
+
+    dbserver,dbname,dbport,dbuser = None None None None
+    *** Error: Env. var. DBSERVER not set; quitting...
+
+``DBSERVER``/``DBPORT``/``DBNAME`` are plain config env vars
+(``database/modules/utils/rapid_db.py``) that are never baked into either
+job-definition revision and were never present in the rev-5
+``container-overrides`` either — the rev-5 attempt never reached this check
+because it failed earlier, at the tessellation-DB check, so this gap was
+latent. Only ``RAPID_DB_SECRET_ID`` resolves credentials from Secrets
+Manager; the connection target must always be passed explicitly.
+
+**Attempt 2** (job ``4f96b68f-a0dc-4fed-bf5a-21d9697cd9f8``,
+``g0001-registration-rev6-retry``), submitted with the full connection
+environment added to ``container-overrides``::
+
+    "environment": [
+        {"name": "INPUTBUCKET", "value": "roman-rapid-inputs-gbtds-sim"},
+        {"name": "INPUTPREFIX", "value": "g0001/"},
+        {"name": "DBSERVER", "value": "10.100.150.208"},
+        {"name": "DBPORT", "value": "6432"},
+        {"name": "DBNAME", "value": "rapid"},
+        {"name": "RAPID_DB_SECRET_ID", "value": "rapid/db/service/pipeline"}
+    ]
+
+(``10.100.150.208`` is ``rapid-db``'s private IP, confirmed live via the
+``pooler-canary-20260805``/``pooler-canary-postfix-20260805`` Batch jobs,
+which connected successfully with that same host.)
+
+This job reported **SUCCEEDED**, exit 0, in ~4s — but the log
+(CloudWatch ``/rapid/batch/rapid-queue-prompt``, stream
+``science/default/cd3a90dba7464ca3bc3577bf40a6aee4``) shows it did **not**
+register any rows. The tessellation DB and Postgres connections both
+succeeded (``PostgreSQL 18.4``, ``current_user = rapid_pipeline``), and the
+script correctly enumerated and queued all 5,166 input files, but every
+per-file S3 download failed::
+
+    execute_command: code_to_execute_args = ['aws', 's3', 'cp',
+        's3://roman-rapid-inputs-gbtds-sim/g0001/...', '...']
+    *** Error in thread index 0 = [Errno 2] No such file or directory: 'aws'
+    *** Error in thread index 1 = [Errno 2] No such file or directory: 'aws'
+    *** Error in thread index 2 = [Errno 2] No such file or directory: 'aws'
+    *** Error in thread index 3 = [Errno 2] No such file or directory: 'aws'
+    Elapsed time in seconds to register database records = 2.76
+
+``db_register_socsim_files.py`` shells out to the bare ``aws`` binary
+(``download_cmd = ['aws','s3','cp',...]``, no shell, no absolute path) to
+fetch each FITS file before registering it; the process exits 0 because the
+per-file download failure is caught and logged per-thread rather than
+propagated as the job's exit status, so **Batch reports success on a run
+that wrote zero rows.** The rev-6 image evidently does not have the AWS
+CLI on the ``PATH`` seen by this subprocess call — either it is not
+installed, or it lives outside the environment inherited by
+``subprocess.Popen`` (e.g. only inside the ``/opt/rapid/conda/envs/rapid``
+activation, which a non-shell ``Popen`` call does not source). Verified via
+direct DB check after this run: ``l2files`` matching ``g0001`` and the
+``_manifest.json`` guard both remained at zero rows — no partial or
+corrupt writes occurred.
+
+This is a container-image/PATH defect (or, alternately, an
+``execute_command``/exit-code-swallowing defect in this script that let a
+zero-row run report success) — not a command-override reshape and not
+something a resubmission can route around. Fixing it needs either the
+``rapid_systems`` image build to put the AWS CLI on the container's default
+``PATH``, or a repo-side change to invoke the CLI via an absolute path /
+have ``execute_command`` propagate per-thread failures into a nonzero exit
+code (or both, since a script that can silently no-op on a "success" job is
+its own hazard independent of the immediate PATH cause). The registration
+submission budget for the session that found this was exhausted at 2/2;
+resolving the underlying defect and getting a fresh submission budget is
+needed before the next attempt.
