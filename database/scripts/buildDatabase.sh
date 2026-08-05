@@ -10,9 +10,10 @@
 # in the psql client for non-superuser database querying.
 # A non-superuser database user called apollo is created for use by pipeline operations.
 #
-# DB_ACTUAL_PGPASSWORD and DB_USER_APOLLO_PW must be set in the calling
-# environment (e.g. from Secrets Manager, matching rapid_db.py's
-# RAPID_DB_SECRET_ID path) -- this script never hardcodes passwords.
+# DB_ACTUAL_PGPASSWORD and DB_USER_APOLLO_PW are fetched from AWS Secrets
+# Manager below (rapid/db/user/$USER and rapid/db/service/pipeline,
+# the same secrets the rapid_systems migration applier's roster uses) --
+# this script never takes passwords via env var or hardcodes them.
 #
 
 #####################################################
@@ -25,13 +26,18 @@ DB_ACTUAL_DATABASE_PATH=/data/db
 DB_ACTUAL_DBNAME=rapidopsdb
 DB_USER_APOLLO=apollo
 
+DB_ACTUAL_PGPASSWORD_SECRET_ID=rapid/db/user/$USER
+DB_USER_APOLLO_PW_SECRET_ID=rapid/db/service/pipeline
+
+DB_ACTUAL_PGPASSWORD=$(aws secretsmanager get-secret-value --secret-id "$DB_ACTUAL_PGPASSWORD_SECRET_ID" --query SecretString --output text 2>/dev/null | jq -r .password)
 if [ -z "$DB_ACTUAL_PGPASSWORD" ]; then
-    echo "*** Error: Env. var. DB_ACTUAL_PGPASSWORD not set; quitting..."
+    echo "*** Error: Could not fetch password from Secrets Manager secret $DB_ACTUAL_PGPASSWORD_SECRET_ID; quitting..."
     exit 64
 fi
 
+DB_USER_APOLLO_PW=$(aws secretsmanager get-secret-value --secret-id "$DB_USER_APOLLO_PW_SECRET_ID" --query SecretString --output text 2>/dev/null | jq -r .password)
 if [ -z "$DB_USER_APOLLO_PW" ]; then
-    echo "*** Error: Env. var. DB_USER_APOLLO_PW not set; quitting..."
+    echo "*** Error: Could not fetch password from Secrets Manager secret $DB_USER_APOLLO_PW_SECRET_ID; quitting..."
     exit 64
 fi
 
