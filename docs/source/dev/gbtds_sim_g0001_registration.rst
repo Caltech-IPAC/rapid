@@ -241,15 +241,88 @@ direct DB check after this run: ``l2files`` matching ``g0001`` and the
 ``_manifest.json`` guard both remained at zero rows — no partial or
 corrupt writes occurred.
 
-This is a container-image/PATH defect (or, alternately, an
-``execute_command``/exit-code-swallowing defect in this script that let a
-zero-row run report success) — not a command-override reshape and not
-something a resubmission can route around. Fixing it needs either the
-``rapid_systems`` image build to put the AWS CLI on the container's default
-``PATH``, or a repo-side change to invoke the CLI via an absolute path /
-have ``execute_command`` propagate per-thread failures into a nonzero exit
-code (or both, since a script that can silently no-op on a "success" job is
-its own hazard independent of the immediate PATH cause). The registration
-submission budget for the session that found this was exhausted at 2/2;
-resolving the underlying defect and getting a fresh submission budget is
-needed before the next attempt.
+Two independent defects produced that outcome: the container's ``PATH`` did
+not expose the AWS CLI to ``subprocess``, and the script could not turn a
+per-file failure into a nonzero job exit. The second is the more serious of
+the pair — a script that silently no-ops on a "success" job is a hazard
+regardless of what made the downloads fail — and both are addressed
+repo-side below.
+
+Resolution
+==========
+
+``database/sims/db_register_socsim_files.py`` now downloads with boto3 and
+propagates failures. Current behavior:
+
+* The per-file download calls ``boto3`` ``download_file`` through a module
+  -level ``download_s3_file`` helper, with a client constructed per call
+  (boto3 clients are not safe to share across ``ProcessPoolExecutor``
+  processes). The script already used boto3 to list the bucket, so this
+  removes the external-CLI dependency rather than working around the
+  ``PATH``. The local copy is still the basename of the S3 key, and the
+  ``INPUTBUCKET``/``INPUTPREFIX`` contract is unchanged.
+* Each worker thread counts ``n_registered`` and ``n_failed`` and returns
+  the pair. Download failures and registration failures are caught per file,
+  logged to the per-thread output file and to stdout, and counted; the loop
+  continues to the next file rather than aborting the thread.
+* ``execute_parallel_processes`` sums the per-thread counts and counts a
+  thread that died outright as one failure, so an unhandled worker exception
+  can no longer be printed and forgotten.
+* Termination exits **65** if ``n_failed > 0``, or if files were listed but
+  none were registered. A zero-row run against a non-empty listing cannot
+  exit 0.
+* Work-directory cleanup uses ``os.remove`` instead of an ``rm -f``
+  subprocess, and stays best-effort: a leftover file is not a registration
+  failure. This also removes the last external-binary dependency from the
+  registration path.
+* The file-local ``execute_command`` copy was deleted. It was dead code —
+  every call in the file went to ``util.execute_command`` — and its
+  ``shell=True``-with-a-list body would have run only the first argument had
+  anything called it.
+
+``database/sims/probe_register_socsim_exit_logic.py`` is an offline probe of
+the termination rule, covering the outcome combinations above including the
+one this run hit. It needs no AWS and no database:
+
+.. code-block::
+
+    $ python3 database/sims/probe_register_socsim_exit_logic.py
+    ok    exit= 0 (expected  0)  nothing listed, nothing done: nothing to do
+    ok    exit= 0 (expected  0)  all files registered
+    ok    exit=65 (expected 65)  g0001 rev-6: all listed, all downloads failed
+    ok    exit=65 (expected 65)  zero rows written but no failure counted
+    ok    exit=65 (expected 65)  partial failure: most registered, some failed
+    ok    exit=65 (expected 65)  single file failed
+
+    n_cases,n_bad = 6,0
+
+The probe restates the rule rather than importing it: the registration
+script opens the tessellation sqlite database and the RAPID Postgres
+database at import time, so it cannot be imported without live
+infrastructure. Keep the two in sync by hand if the termination block
+changes.
+
+Runtime environment
+===================
+
+The DB-connection variables are pure runtime inputs — they are not baked
+into any job-definition revision and must be passed in
+``container-overrides`` on every submission. The set proven to work against
+``rapid-db`` through the pooler:
+
+.. code-block::
+
+    INPUTBUCKET         roman-rapid-inputs-gbtds-sim
+    INPUTPREFIX         g0001/
+    DBSERVER            10.100.150.208
+    DBPORT              6432
+    DBNAME              rapid
+    RAPID_DB_SECRET_ID  rapid/db/service/pipeline
+
+Only ``RAPID_DB_SECRET_ID`` resolves credentials from Secrets Manager; the
+connection target is always explicit. ``ROMANTESSELLATIONDBNAME`` is baked
+into the image and checked at startup.
+
+Next step: the fix ships in the repo, so the image must be rebuilt before
+the next submission — the failing behavior is baked into rev 6. The
+resubmission itself is a separate task, with a fresh submission budget.

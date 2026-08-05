@@ -113,3 +113,4 @@ Tests
    rimtimsim_tests.rst
    socsim_tests.rst
    gbtds_sim_g0001_registration.rst
+   execute_command_exit_code_audit.rst
