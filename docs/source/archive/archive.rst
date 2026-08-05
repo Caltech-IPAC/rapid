@@ -397,7 +397,7 @@ RAPID builds light curves by cross-matching candidates from successive observati
 * **AstroObjects** --- unique astronomical objects, partitioned by Roman-tessellation sky tile
 * **Merges** --- associations linking Sources to AstroObjects
 
-In the 2026-07-22 large-scale test (7,272 SCA SOC-sim images), 
+In the 2026-07-22 large-scale test (7,272 SCA SOC-sim images),
 ~250 million sources were loaded into
 Sources_<yyyymmdd>_<sca> child database tables in 1.3 hours with 8 parallel processes
 (regardless of ``flags`` value).
