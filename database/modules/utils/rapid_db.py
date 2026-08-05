@@ -820,7 +820,7 @@ class RAPIDDB:
             "cast(TEMPLATE_DEC3 as double precision)," +\
             "cast(TEMPLATE_RA4 as double precision)," +\
             "cast(TEMPLATE_DEC4 as double precision)," +\
-            "cast(TEMPLATE_Z as double precision)," +\
+            "cast(TEMPLATE_X as double precision)," +\
             "cast(TEMPLATE_Y as double precision)," +\
             "cast(TEMPLATE_Z AS double precision)," +\
             "cast(TEMPLATE_HP6 AS integer)," +\
