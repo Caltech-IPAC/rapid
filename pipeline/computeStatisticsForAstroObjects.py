@@ -170,6 +170,11 @@ def run_single_core_job(fields,source_child_tables,index_thread):
 
     # Loop over all fields associated with this thread and compute statistics for astroobjects:
     # 1. Remove AstroObjects_<field> database records with redundant aids (keep latest).
+    #    This is an artifact of bulk-copying records into the PostgreSQL database for the case
+    #    that there is more than one source near by in the same difference image that is
+    #    assigned the same aid because of close proximity (this would not happen if
+    #    row-by-row inserts were used, which, of course, would be too slow).  This may be
+    #    worked around for PhotUtils catalogs computed with min_separation = 1.0 pixels.
     # 2. Delete AstroObjects_<field> and AstroObjectsMeta_<field>  database records that
     #    do not have corresponding Merges_<field> record(s).
     # 3. Query for records in each Merges_<field> database table joined with sources table.
