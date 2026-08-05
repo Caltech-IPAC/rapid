@@ -79,43 +79,86 @@ After a run, the expected state for g0001 is::
     select count(*) from l2files where filename like '%_manifest.json%';
 
 
-.. _g0001-registration-blocker:
+.. _g0001-registration-batch-run:
 
-Open issue: the registration host cannot reach the database
+Executed path: AWS Batch job (2026-08-05)
 ***************************************************************
 
-As of 2026-08-05 this registration **cannot be executed** from either RAPID
-instance, because the prerequisites are split across two hosts that cannot
-communicate:
+The host-to-host networking blocker described in earlier revisions of this
+page (``rapid-admin`` unable to reach ``rapid-db``) was resolved by the
+``rapid_systems`` stream: the ``rapid-db`` firewalld ``public`` zone now
+admits ``6432/tcp`` from ``10.100.0.0/16`` (the Batch task subnet range), and
+a canary Batch task successfully connected through the pgbouncer pooler as
+``rapid_pipeline`` and ran ``SELECT 1``. This unblocked running the
+registration as a Batch job instead of from either standalone host.
 
-* ``rapid-admin`` (``i-0ce2eebb8133ab63d``) can read the input bucket and can
-  run the pipeline container, but cannot reach the database. Connections to
-  ``rapid-db`` on ports 5432 and 6432 fail with "No route to host". The
-  security group ``rapid-internal-sg`` permits all traffic between its members,
-  so this is host-level ``firewalld`` on ``rapid-db``, whose ``public`` zone
-  admits only ``cockpit``, ``dhcpv6-client`` and ``ssh``. ICMP and port 22 do
-  pass, confirming the SG is not the cause.
+Registration was submitted as a single (non-array) job on the
+``rapid-queue-prompt`` queue using the ``rapid-pipeline-science:5`` job
+definition (image digest
+``sha256:aa460f9c7bf88cee3f31a2ac4b27163a3f89706d87e3e214e7ecd38ceb8a2bac``,
+built from smdc tip ``684ab4a``), with a container-overrides command running
+the baked registration script via the image's conda env python::
 
-* ``rapid-db`` (``i-058372e2eca78efff``) reaches the database over loopback,
-  but its instance role has no access to the input bucket: both ``ListBucket``
-  and ``HeadObject`` on ``roman-rapid-inputs-gbtds-sim`` are denied.
+    aws batch submit-job \
+        --job-name g0001-registration \
+        --job-queue rapid-queue-prompt \
+        --job-definition rapid-pipeline-science:5 \
+        --container-overrides '{
+            "environment": [
+                {"name": "INPUTBUCKET", "value": "roman-rapid-inputs-gbtds-sim"},
+                {"name": "INPUTPREFIX", "value": "g0001/"}
+            ],
+            "command": ["-c",
+                "cd /code && PYTHONPATH=/code /opt/rapid/conda/envs/rapid/bin/python3 database/sims/db_register_socsim_files.py"]
+        }'
 
-Two further items block the pooler path even if the port were open:
+Note the image's ``ENTRYPOINT`` is ``bash``, so the container-overrides
+``command`` is interpreted as *bash's own arguments* (``-c '<script>'``),
+not appended after a bare ``python3`` invocation.
 
-* ``/etc/pgbouncer/pgbouncer.ini`` has ``listen_addr = localhost``, so
-  pgbouncer accepts loopback connections only.
+Batch job logs land in CloudWatch log group ``/rapid/batch/rapid-queue-prompt``
+(stream prefix ``science/default/<task-id>``) — **not** ``/aws/batch/job``.
 
-* Its ``[databases]`` section is still the stock sample, entirely commented
-  out, so no database — including ``rapid`` — is routable through the pooler.
+.. _g0001-registration-blocker-tessellation:
 
-Separately, ``rapid-admin``'s instance role is denied ``GetSecretValue`` on
-``rapid/db/service/pipeline``, so it cannot obtain database credentials.
+Open issue: ``ROMANTESSELLATIONDBNAME`` target is missing from the production image
+***************************************************************************************
 
-The database itself is ready: the ``rapid`` database contains ``exposures``,
-``l2files`` and ``l2filemeta`` along with the ``addExposure``, ``addL2File``
-(4th- and 5th-order), ``updateL2File`` and ``registerL2FileMeta`` functions,
-and all three tables are empty, so registration needs DML only and there are no
-pre-existing rows to reconcile.
+As of 2026-08-05 the submitted registration job (id
+``3cb96393-81ab-4a1a-8b90-47c8d4f81394``) **FAILED** at startup, exit code 64,
+before making any database changes::
 
-Resolving this requires host network and IAM configuration changes, which are
-owned by the ``rapid_systems`` stream rather than this repository.
+    *** Error: Env. var. ROMANTESSELLATIONDBNAME not set; quitting...
+
+Every usage of ``ROMANTESSELLATIONDBNAME`` in this repository (this doc,
+``fp_backend.rst``, ``count_fields_imaged.rst``, ``bulk_run.rst``,
+``notes.rst``) converges on the same convention: ``/work/roman_tessellation_
+nside512.db``. Setting that value and resubmitting is not enough, though: a
+diagnostic Batch task (job definition ``rapid-pipeline-science:5``, same
+image) confirmed **``/work/`` is empty in the production image** — the
+``roman_tessellation_nside512.db`` SQLite artifact described in
+``database/schema/roman_tessellation_nside512.txt`` ("build it once ... then
+copy it to an S3 bucket for safekeeping") is not present at that path, and no
+S3 bucket in the SMDC account was found to hold it — the
+buckets prefixed ``roman-rapid-*`` and ``rapid-*`` were enumerated directly
+and ``roman-rapid-references`` (the most likely candidate by name) is empty.
+
+Since ``sqlite3.connect()`` (used by
+``database/modules/utils/roman_tessellation_db.py``) does not error on a
+missing file — it silently creates an empty one — pointing
+``ROMANTESSELLATIONDBNAME`` at a nonexistent path would not reproduce this
+exact failure on retry; it would instead fail later, at the
+``select count(*) from decbins`` sanity query the class runs on connect.
+
+This is a missing build/deployment artifact, not a registration-script or
+command-override defect, and resolving it (locating or rebuilding
+``roman_tessellation_nside512.db`` and baking or mounting it into the
+pipeline image at ``/work/``) is owned by the ``rapid_systems`` stream rather
+than this repository.
+
+The database itself remains ready and untouched: the ``rapid`` database
+contains ``exposures``, ``l2files`` and ``l2filemeta`` along with the
+``addExposure``, ``addL2File`` (4th- and 5th-order), ``updateL2File`` and
+``registerL2FileMeta`` functions; as of this writing all three tables have
+zero rows matching ``g0001``, so registration still needs DML only and there
+are no pre-existing rows to reconcile.
