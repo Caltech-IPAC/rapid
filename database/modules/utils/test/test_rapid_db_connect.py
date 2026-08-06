@@ -593,12 +593,28 @@ class ConnectionExecutorTests(unittest.TestCase):
         self.assertEqual(executor.execute("SELECT id FROM attempts", None),
                          [(1,), (2,)])
 
-    def test_none_is_returned_when_there_is_no_result_set(self):
+    def test_the_rowcount_is_returned_when_there_is_no_result_set(self):
         # An UPDATE has no description; fetchall would raise on a real cursor,
-        # so the branch must not be taken at all.
+        # so that branch must not be taken at all.
+        #
+        # Amended by W2 (charge 4, docs/source/dev/attempt_writer_review.rst):
+        # this used to assert None. Returning None is what let a lifecycle
+        # transition matching zero rows look exactly like a successful one —
+        # the writer had nothing to check. The contract is now: rows for a
+        # statement with a result set, cursor.rowcount for one without.
         self.cur.description = None
+        self.cur.rowcount = 1
         executor = ConnectionExecutor(self.conn)
-        self.assertIsNone(executor.execute("UPDATE attempts SET x = 1", None))
+        self.assertEqual(executor.execute("UPDATE attempts SET x = 1", None), 1)
+        self.cur.fetchall.assert_not_called()
+
+    def test_a_zero_rowcount_is_reported_as_zero(self):
+        # The case the whole change exists for: an UPDATE that matched
+        # nothing must be distinguishable from one that matched a row.
+        self.cur.description = None
+        self.cur.rowcount = 0
+        executor = ConnectionExecutor(self.conn)
+        self.assertEqual(executor.execute("UPDATE attempts SET x = 1", None), 0)
         self.cur.fetchall.assert_not_called()
 
     def test_commits_after_a_successful_statement_by_default(self):

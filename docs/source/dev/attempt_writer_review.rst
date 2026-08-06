@@ -174,3 +174,63 @@ connect retry in ``rapid_db_connect.connect`` does *not* cover — that
 retry wraps the initial connect, not a mid-transaction loss. If this
 recurs at scale, the helper may need a retry-the-transaction wrapper as
 well, which is a design question rather than a bug fix.
+
+Charge 4, closed by W2
+----------------------
+
+The looseness recorded above as "left in place" is now fixed, by the
+worker whose runtime consumes those paths — the review's own
+recommendation, taken verbatim.
+
+``ConnectionExecutor.execute`` returns ``cursor.rowcount`` for a
+statement with no result set, and rows as before for one with. Every
+row-targeted transition in ``AttemptWriter`` checks the count and raises
+``AttemptNotFound`` when it matched none. ``backfill_scheduler_job_ids``
+returns rows updated rather than statements issued; the two differ
+exactly when the WHERE guard does its job, and the old count reported
+success for both.
+
+An executor that reports no usable count raises rather than being read
+as zero or one. "No count available" and "no rows matched" are different
+facts and only one of them is a caller bug, so guessing between them
+would reintroduce the ambiguity the change removes.
+
+Two test doubles had to gain the behaviour before the writer's check
+could be exercised: ``observability/test/test_attempts.py``'s
+``RecordingExecutor`` (its assertions are untouched — only the double's
+return value changed) and one case in
+``test_rapid_db_connect.py`` that asserted the old ``None`` contract
+directly. A stub that cannot report a row count cannot test a writer
+that checks one.
+
+Proven live on rapid-db against psycopg2's real ``cursor.rowcount``: an
+UPDATE naming an attempt id that cannot exist reports 0, and
+``mark_application_closed`` against it raises ``AttemptNotFound``.
+
+A schema property worth recording: a resolved row cannot be closed as
+terminal-without-start
+-----------------------------------------------------------------------
+
+Found while writing W2's live proof, which initially tried to leave a
+resolved-but-unstarted retry row tidy by closing it with
+``mark_terminal_without_start``. The database refused:
+
+.. code-block:: text
+
+   new row for relation "attempts" violates check constraint
+   "attempts_state_terminal_without_start_check"
+
+The constraint requires ``application_attempt_index IS NULL``, and the
+resolver *sets* that index as part of claiming or creating the row. The
+constraint is right and the call was wrong: ``terminal_without_start``
+means the application never touched this attempt, so a row the runtime
+resolved can never legally reach it. The schema makes "the application
+was here" and "the application never ran" mutually exclusive, which is
+the property the two-writer division depends on.
+
+The consequence for callers: a resolved attempt that never starts is
+closed by the RECONCILER, through ``terminal_after_start`` or
+``missing_or_contradictory``, from scheduler state the application does
+not have. Its non-terminal state beside a sibling row is itself the
+reconciliation signal. W2's live proof now asserts the refusal rather
+than working around it, and leaves the row open deliberately.
