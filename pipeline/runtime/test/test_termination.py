@@ -35,6 +35,7 @@ inverse — a row citing a record that does not exist — is proven impossible b
 import datetime
 import json
 import os
+import shutil
 import tarfile
 import tempfile
 import unittest
@@ -630,3 +631,52 @@ class _SimulatedDeath(BaseException):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TerminalRecordAndBundleStoresTest(unittest.TestCase):
+    """The two artifacts go to two stores.
+
+    Regression for the first W5 canary (2026-08-06): the entrypoint passed
+    only `store`, so the terminal record was written into the DIAGNOSTICS
+    bucket under the right key. The log line said "terminal record
+    attempts/records/.../seq-0000.json (written)" and was true — the key was
+    correct and the object existed. Only the BUCKET was wrong, which no key
+    assertion could see, and which the live canary found by listing both.
+
+    They are different buckets because their lifecycles differ: a bundle
+    expires on a reconciled retention class, a terminal record is provenance
+    kept at least product lifetime. One bucket would force one policy on both.
+    """
+
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmpdir, True)
+
+    def test_record_and_bundle_go_to_their_own_stores(self):
+        harness = _Harness(self.tmpdir)
+        records = InMemoryObjectStore()
+
+        result = termination.terminate(
+            harness.writer, harness.store, harness.ownership, harness.job_env,
+            harness.workdir, PREFIX,
+            outcome="success", product_disposition="published",
+            started_at=harness.started_at, config_digest=harness.digest,
+            snapshot_key_value=harness.snapshot_key, stages=[],
+            provenance=harness.provenance, record_store=records)
+
+        self.assertIsNotNone(harness.store.head(result.bundle_key))
+        self.assertIsNone(
+            harness.store.head(result.record_key),
+            "the terminal record must not land in the diagnostics store")
+        self.assertIsNotNone(records.head(result.record_key))
+        self.assertIsNone(
+            records.head(result.bundle_key),
+            "the bundle must not land in the records store")
+
+    def test_one_store_still_serves_both(self):
+        # The default keeps every single-store caller working, which is what
+        # every other test in this module is.
+        harness = _Harness(self.tmpdir)
+        result = harness.terminate()
+        self.assertIsNotNone(harness.store.head(result.bundle_key))
+        self.assertIsNotNone(harness.store.head(result.record_key))

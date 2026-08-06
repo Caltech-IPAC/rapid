@@ -361,7 +361,8 @@ def _run(workload_class: str) -> int:
 
         # 8. The termination protocol, in its stated order.
         result = terminate(
-            writer=writer, store=diagnostics_store, ownership=ownership,
+            writer=writer, store=diagnostics_store,
+            record_store=records_store, ownership=ownership,
             job_env=job_env, workdir=workdir, records_prefix=records_prefix,
             outcome=outcome, product_disposition=disposition,
             started_at=startup.started_at, config_digest=digest,

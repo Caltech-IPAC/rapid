@@ -541,8 +541,21 @@ def terminate(writer: Any, store: Any, ownership: Any, job_env: Any,
               started_at: Any, config_digest: str, snapshot_key_value: str,
               stages: list, provenance: Any = None,
               error: Any = None, now: datetime.datetime | None = None,
-              on_step: Any = None) -> TerminationResult:
+              on_step: Any = None, record_store: Any = None) -> TerminationResult:
     """Run the ordered closing sequence. Raises `RecordsError` if any step fails.
+
+    `store` receives the diagnostics bundle; `record_store` receives the
+    terminal record. **They are different buckets in production** — the bundle
+    expires on a reconciled retention class, the record is provenance kept at
+    least product lifetime, and one bucket would force one lifecycle policy
+    over both (design/storage.md; the third ratification amendment).
+
+    `record_store` defaults to `store` so a caller with one store — every unit
+    test, which uses one `InMemoryObjectStore` and asserts on keys rather than
+    buckets — keeps working. The default is a convenience, not the contract:
+    the first live canary wrote its terminal record into the diagnostics
+    bucket because the entrypoint passed only `store`, and the key looked
+    right in the log while the bucket was wrong.
 
     The order, and what each adjacency means on a crash, is the module
     docstring's table. `on_step(name)` is a test hook invoked BEFORE each
@@ -558,6 +571,7 @@ def terminate(writer: Any, store: Any, ownership: Any, job_env: Any,
     recorded, nothing else — that no recovery rule covers.
     """
     moment = now or datetime.datetime.now(datetime.timezone.utc)
+    records = record_store if record_store is not None else store
     serialized = None
     if error is not None:
         serialized = (error if hasattr(error, "error_category")
@@ -589,7 +603,7 @@ def terminate(writer: Any, store: Any, ownership: Any, job_env: Any,
     record_key = terminal_record_key(
         records_prefix, ownership.run_id, ownership.logical_job_id,
         ownership.attempt_id, APPLICATION_RECORD_SEQUENCE)
-    written = write_terminal_record(store, record_key, record)
+    written = write_terminal_record(records, record_key, record)
 
     _step(on_step, "mark_application_closed")
     from observability.attempts import ProductDisposition, RapidOutcome
