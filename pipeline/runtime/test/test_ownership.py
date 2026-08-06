@@ -149,7 +149,10 @@ class TestRefusedStates(unittest.TestCase):
         self.executor.rows[500] = {
             "attempt_id": 500,
             "logical_job_id": "batch-1:0",
-            "application_attempt_index": 1,
+            # The resolver claims via application_claim_index since FixA
+            # (review finding #9); the started CAS writes the attempt
+            # index. A seeded row the resolver must FIND carries the claim.
+            "application_claim_index": 1,
             "lifecycle_state":
                 LifecycleState.MISSING_OR_CONTRADICTORY.value,
         }
@@ -167,7 +170,10 @@ class TestRefusedStates(unittest.TestCase):
                 executor.rows[600] = {
                     "attempt_id": 600,
                     "logical_job_id": "batch-1:0",
-                    "application_attempt_index": 1,
+                    # The resolver claims via application_claim_index since FixA
+            # (review finding #9); the started CAS writes the attempt
+            # index. A seeded row the resolver must FIND carries the claim.
+            "application_claim_index": 1,
                     "lifecycle_state": state.value,
                 }
                 with self.assertRaises(RecordsError):

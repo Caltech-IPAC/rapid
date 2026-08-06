@@ -31,7 +31,7 @@ from observability.attempts import (
     AttemptWriter, ExecutionBinding, LifecycleState)
 from submission.batching import Batch
 from submission.manifest import Manifest
-from submission.submit import S3ManifestStore, submit_batch
+from submission.submit import S3ManifestStore, publish_manifest, submit_batch
 
 logger = logging.getLogger("rapid.seams")
 
@@ -73,6 +73,28 @@ class CompletionTimeout(RuntimeError):
         self.outstanding = outstanding
 
 
+class SubmissionFailed(RuntimeError):
+    """`SubmitJob` failed after the attempt rows were pre-created.
+
+    Not a lost-work case and deliberately not a rollback: the rows exist and
+    are correct, they simply have no scheduler job to point at. They sit in
+    `submitted` with a NULL scheduler_job_id and are classified by the
+    reconciler at the submission-anchored horizon — which is exactly the case
+    that horizon was built for ("a pre-created child whose scheduler
+    identifier never resolves is bounded by a submission-anchored horizon").
+
+    Deleting the rows instead would be the wrong repair: it destroys the only
+    evidence that work was intended, and it races a child that may in fact be
+    running (a `submit_job` that times out on the client side may well have
+    been accepted).
+    """
+
+    def __init__(self, message, run_id=None, attempt_ids=()):
+        super().__init__(message)
+        self.run_id = run_id
+        self.attempt_ids = tuple(attempt_ids)
+
+
 def submit_units(units, job_type, queue, job_definition, binding,
                  manifest_bucket, manifest_prefix, s3_client, batch_client,
                  execute, run_id=None, reason="vpo", job_name=None,
@@ -86,8 +108,22 @@ def submit_units(units, job_type, queue, job_definition, binding,
     flagged `missing_or_contradictory` by the resolver — correct behaviour on
     the resolver's part, and a self-inflicted wound on the submitter's.
 
-    The manifest is published first so its checksum is known; the rows carry
-    that checksum in their execution binding, so an attempt always knows
+    That was the stated contract and the code did the opposite (review finding
+    #2): `submit_batch` ran first and `_precreate` after it, so the race this
+    function exists to prevent was live. The order below is now the documented
+    one, and the ordering itself is asserted by a test.
+
+    **The scheduler job ids therefore arrive second, and that is the point.**
+    A row cannot carry a child job id that Batch has not assigned yet, so the
+    rows are created without one and backfilled after `SubmitJob` returns —
+    the ordering `observability.attempts` was built for and documents ("Array
+    children are rows at submission time... then backfilled by
+    `backfill_scheduler_job_ids`. That ordering is the point: a child whose
+    identifier never resolves is left as a detectable reconciliation case
+    rather than never existing at all").
+
+    The manifest is published first, before the rows, because the rows carry
+    its checksum in their execution binding — an attempt must always know
     exactly which manifest it was submitted under.
     """
     moment = now or datetime.datetime.now(datetime.timezone.utc)
@@ -96,20 +132,45 @@ def submit_units(units, job_type, queue, job_definition, binding,
 
     store = S3ManifestStore(manifest_bucket, prefix=manifest_prefix,
                             client=s3_client)
-    submission = submit_batch(
-        batch=batch, job_queue=queue, job_definition=job_definition,
-        store=store, client=batch_client, job_name=job_name)
+
+    # 1. Publish the manifest. Its checksum is part of the binding the rows
+    #    carry, so it has to exist before they do.
+    manifest_uri = publish_manifest(batch.manifest, store)
 
     bound = ExecutionBinding(
         job_definition_arn=binding.job_definition_arn,
         job_definition_rev=binding.job_definition_rev,
         image_digest=binding.image_digest,
         release_identity=binding.release_identity,
-        manifest_checksum=submission.manifest_checksum,
+        manifest_checksum=batch.manifest.checksum(),
     )
 
+    # 2. The rows, BEFORE SubmitJob. No scheduler job ids yet — nothing has
+    #    assigned any.
     writer = AttemptWriter(execute)
-    attempt_ids = _precreate(writer, submission, bound, moment)
+    attempt_ids = _precreate(writer, batch.manifest, run_id, bound, moment)
+
+    # 3. Submit. A failure here leaves the rows as reconciliation cases, not
+    #    orphans: they are correct, they simply never got a scheduler job.
+    try:
+        submission = submit_batch(
+            batch=batch, job_queue=queue, job_definition=job_definition,
+            store=store, client=batch_client, job_name=job_name,
+            manifest_uri=manifest_uri)
+    except Exception as exc:
+        logger.error(
+            "SubmitJob failed for run %s after %d attempt row(s) were "
+            "pre-created; the rows remain as reconciliation cases and are "
+            "classified at the submission-anchored horizon: %s",
+            batch.manifest.batch_id, len(attempt_ids), exc)
+        raise SubmissionFailed(
+            f"SubmitJob failed for run {batch.manifest.batch_id} after "
+            f"{len(attempt_ids)} attempt row(s) were pre-created: {exc}",
+            run_id=batch.manifest.batch_id,
+            attempt_ids=attempt_ids) from exc
+
+    # 4. Backfill the child job ids the scheduler has now assigned.
+    _bind_scheduler_jobs(writer, submission, attempt_ids)
 
     logger.info("submitted %s batch %s as job %s (%d children, %d rows)",
                 job_type, submission.batch_id, submission.job_id,
@@ -117,38 +178,77 @@ def submit_units(units, job_type, queue, job_definition, binding,
     return submission, attempt_ids
 
 
-def _precreate(writer, submission, binding, moment):
-    """One logical job and one attempt row per array child.
+def _precreate(writer, manifest, run_id, binding, moment):
+    """One logical job and one attempt row per array child, before SubmitJob.
 
     The logical_job_id MUST be the id the runtime will resolve with — the
-    manifest unit's key — because `resolve_attempt` claims the pre-created row
-    by matching on it. A submitter that keys rows differently (by batch and
-    index, say) creates rows the runtime can never claim: every child then
-    makes a second row, and every pre-created row is orphaned in `submitted`
-    until a horizon classifies it. The two sides agreeing is the whole
-    mechanism.
+    manifest unit's RUN-SCOPED key — because `resolve_attempt` claims the
+    pre-created row by matching on it. A submitter that keys rows differently
+    creates rows the runtime can never claim: every child then makes a second
+    row, and every pre-created row is orphaned in `submitted` until a horizon
+    classifies it. The two sides agreeing is the whole mechanism.
+
+    **The key is run-scoped (review finding #3).** It used to be `unit.key` —
+    exposure/SCA — which is a global identity: `logical_jobs` has a global
+    primary key on it, so reprocessing one exposure/SCA under a second run hit
+    the `ON CONFLICT DO NOTHING` and silently retained the FIRST run's
+    execution binding. A scheduler retry then copied that stale manifest,
+    image, release and run identity onto a row belonging to the new run. The
+    key now carries the run, so two runs over one exposure/SCA are two logical
+    jobs, which is what they are.
+
+    No `scheduler_job_id` is passed: Batch has not assigned one yet, and that
+    is precisely why this runs before `SubmitJob`. `_bind_scheduler_jobs`
+    fills them in afterwards.
     """
+    from observability.attempts import AttemptIdentity
+
     attempt_ids = []
-    for index, unit in enumerate(submission.manifest.units):
-        logical_job_id = unit.key
-        child = submission.child_job_id(index) if submission.array_size > 1 \
-            else submission.job_id
+    for index, unit in enumerate(manifest.units):
+        logical_job_id = unit.logical_job_key(manifest.batch_id)
 
         writer.create_logical_job(
-            logical_job_id, submission.batch_id, binding,
-            scheduler_job_id=child)
-
-        from observability.attempts import AttemptIdentity
+            logical_job_id, manifest.batch_id, binding)
 
         attempt_ids.append(writer.create_submitted(
             AttemptIdentity(
-                run_id=submission.batch_id,
+                run_id=manifest.batch_id,
                 logical_job_id=logical_job_id,
                 exposure_id=unit.exposure, sca=unit.sca,
                 sky_tile=getattr(unit.facts, "rtid", None)),
             created_at=moment, submitted_at=moment,
-            scheduler_job_id=child, binding=binding))
+            binding=binding))
     return attempt_ids
+
+
+def _bind_scheduler_jobs(writer, submission, attempt_ids):
+    """Backfill the child job ids Batch assigned, after SubmitJob returned.
+
+    Batch names array children `<parent>:<index>`, so the ids are derivable
+    from the parent and the index. A single-unit batch is a plain job (Batch
+    rejects arraySize 1) and its one row takes the parent id itself.
+
+    The backfill is guarded in SQL (`WHERE scheduler_job_id IS NULL`), so a
+    replayed submission cannot overwrite an id already recorded, and the
+    writer raises if it cannot verify the row count — an unverifiable backfill
+    is not a backfill.
+    """
+    assignments = []
+    for index, attempt_id in enumerate(attempt_ids):
+        child = submission.child_job_id(index) if submission.array_size > 1 \
+            else submission.job_id
+        assignments.append((attempt_id, child))
+
+    updated = writer.backfill_scheduler_job_ids(assignments)
+    if updated != len(assignments):
+        # Not fatal: the rows exist and the reconciler can still find them by
+        # logical job. But it means some child is unaddressable by scheduler
+        # id until it resolves itself, which is worth saying loudly.
+        logger.warning(
+            "backfilled %d of %d scheduler job ids for run %s; the remainder "
+            "are reconciliation cases until their runtimes resolve them",
+            updated, len(assignments), submission.batch_id)
+    return updated
 
 
 def wait_for_completion(conn, run_id, timeout=DEFAULT_COMPLETION_TIMEOUT,

@@ -162,49 +162,81 @@ def describe_in_batches(client, job_ids, chunk=DESCRIBE_CHUNK):
 
 
 def derive_attempt_indices(attempts):
-    """Number a job's attempt history one-based, in start-time order.
+    """Number a job's attempt history one-based, in the order Batch lists it.
 
     THE FLAGGED API DEPENDENCY. Batch's attempt history carries no ordinal, so
-    the index is inferred from ordering. Two properties make the inference
-    safe, and both are asserted by the tests:
+    the index has to be derived — and the derivation is LIST POSITION, because
+    Batch appends each attempt to `attempts` as it is made. The list is
+    therefore already in scheduler order, which is precisely the order the
+    index is supposed to agree with.
 
-    - Attempts of one job cannot overlap in time — the scheduler starts a retry
-      only after the prior attempt has stopped — so start-time order is a total
-      order on a real history.
-    - An attempt that never started has no `startedAt`. Those sort *after* the
-      started ones rather than being dropped, because a never-started attempt
-      still consumed an ordinal from the scheduler's point of view, and the
-      whole point of numbering is to agree with the scheduler.
+    **This used to sort by start time, and that was wrong** (review finding
+    #4). An attempt that never started has no `startedAt`, and the old key
+    sorted those *after* the started ones — so the reviewer's case, attempt 1
+    failing during provisioning without a start and attempt 2 running
+    successfully, numbered the SUCCESSFUL SECOND attempt 1 and the failed
+    first attempt 2. Every existing row then paired with the wrong
+    observation. The old docstring argued a never-started attempt "still
+    consumed an ordinal", which is true and is exactly why it must keep its
+    POSITION rather than being pushed to the end.
 
-    Ties (equal or absent start times) keep the scheduler's own list order,
-    which `sorted` guarantees by being stable. Returns a list of
-    (index, attempt) pairs, index from 1.
+    Start-time order and list order agree on any history where every attempt
+    started, which is why this went unnoticed: the two derivations differ only
+    in the never-started case, which is the case retries exist for.
+
+    Returns a list of (index, attempt) pairs, index from 1.
     """
     if not attempts:
         return []
-
-    def sort_key(item):
-        position, attempt = item
-        started = attempt.get("startedAt")
-        # Absent start times sort last, keeping list order among themselves.
-        return (started is None, started if started is not None else 0, position)
-
-    ordered = sorted(enumerate(attempts), key=sort_key)
-    return [(index, attempt) for index, (_, attempt) in enumerate(ordered, start=1)]
+    return [(index, attempt)
+            for index, attempt in enumerate(attempts, start=1)]
 
 
-def observation_from_job(job, attempt_index=None, attempt=None):
+def _attempt_state(job, attempt, exit_code, is_final):
+    """The scheduler state of ONE attempt in a job's history.
+
+    Batch labels the JOB, not each attempt, so this derives the attempt's own
+    outcome (review finding #4 — the job's status was being handed to every
+    attempt, which reported a failed first attempt as SUCCEEDED).
+
+    The final attempt is the one the job's status is actually about: a job is
+    SUCCEEDED because its last attempt succeeded, FAILED because its last
+    attempt failed and no retry remained. So it takes the job's state, and
+    a job still running takes it too — that attempt is not over.
+
+    Every EARLIER attempt is over by construction (Batch starts a retry only
+    after the previous one stopped) and is a retry's cause, so it failed:
+    that is what "there was another attempt after this one" means.
+    """
+    if is_final:
+        return job.get("status")
+    # A superseded attempt. It stopped, and something came after it.
+    if exit_code == 0:
+        # A zero exit with a retry after it is contradictory — Batch does not
+        # retry a clean exit under the pinned retry contract. Report what the
+        # attempt itself produced and let reconciliation flag the disagreement
+        # rather than resolving it here.
+        return "SUCCEEDED"
+    return "FAILED"
+
+
+def observation_from_job(job, attempt_index=None, attempt=None,
+                         is_final=True):
     """Build the observation for one job, optionally scoped to one attempt.
 
     Where `attempt` is supplied, the per-attempt facts (its own start/stop, its
-    container's exit code and reason) come from it and the job supplies only
-    what is job-scoped. Where it is not, the job's own top-level view is used —
-    correct for a job with a single attempt, which is the common case.
+    container's exit code and reason, and its own derived STATE) come from it
+    and the job supplies only what is job-scoped. Where it is not, the job's
+    own top-level view is used — correct for a job with a single attempt,
+    which is the common case.
+
+    `is_final` says whether this is the last attempt in the history; the job's
+    status describes that one and no other.
     """
-    state = job.get("status")
-    if state not in KNOWN_STATES:
+    job_state = job.get("status")
+    if job_state not in KNOWN_STATES:
         logger.warning("unknown scheduler state %r for job %s",
-                       state, job.get("jobId"))
+                       job_state, job.get("jobId"))
 
     container = (attempt or job).get("container", {}) or {}
     exit_code = container.get("exitCode")
@@ -213,10 +245,29 @@ def observation_from_job(job, attempt_index=None, attempt=None):
         started_at = _millis_to_datetime(attempt.get("startedAt"))
         stopped_at = _millis_to_datetime(attempt.get("stoppedAt"))
         status_reason = attempt.get("statusReason") or job.get("statusReason")
+        # THE ATTEMPT'S OWN STATE, not the job's (review finding #4).
+        #
+        # `status` is the JOB's status. Handing it to every attempt
+        # observation meant a job that failed once and then succeeded reported
+        # SUCCEEDED for BOTH attempts — so the failed one looked like a
+        # success, and a started-then-reclaimed attempt was classified
+        # `internal_error` rather than `scheduler_reclaimed`, because the
+        # reconciler-authored categories are only returned for observations
+        # that look like they never ran.
+        #
+        # Batch does not label an attempt's state either, but an attempt in
+        # the history is over — the scheduler only appends the next one after
+        # the previous stopped — so its outcome is derivable from what it
+        # actually produced. A zero exit is the only thing that means success;
+        # everything else (a nonzero code, or no code at all because the
+        # container never ran) is a failed attempt. The FINAL attempt is the
+        # one whose fate the job's own status describes, so it takes it.
+        state = _attempt_state(job, attempt, exit_code, is_final=is_final)
     else:
         started_at = _millis_to_datetime(job.get("startedAt"))
         stopped_at = _millis_to_datetime(job.get("stoppedAt"))
         status_reason = job.get("statusReason")
+        state = job_state
 
     return SchedulerObservation(
         scheduler_job_id=job.get("jobId"),
@@ -243,5 +294,8 @@ def observations_for_job(job):
     attempts = job.get("attempts") or []
     if not attempts:
         return [observation_from_job(job)]
-    return [observation_from_job(job, attempt_index=index, attempt=attempt)
-            for index, attempt in derive_attempt_indices(attempts)]
+    numbered = derive_attempt_indices(attempts)
+    final_index = numbered[-1][0]
+    return [observation_from_job(job, attempt_index=index, attempt=attempt,
+                                 is_final=(index == final_index))
+            for index, attempt in numbered]

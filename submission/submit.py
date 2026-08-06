@@ -173,7 +173,8 @@ def build_submit_kwargs(batch: Batch, job_queue: str, job_definition: str,
 def submit_batch(batch: Batch, job_queue: str, job_definition: str,
                  store: ManifestStore, client: Any,
                  environment: dict[str, str] | None = None,
-                 job_name: str | None = None) -> Submission:
+                 job_name: str | None = None,
+                 manifest_uri: str | None = None) -> Submission:
     """Publish a batch's manifest and submit it as one array job.
 
     Parameters
@@ -190,12 +191,20 @@ def submit_batch(batch: Batch, job_queue: str, job_definition: str,
     environment : dict, optional
         Extra container environment. Identifiers only — anything that is
         configuration belongs in the parameter tree.
+    manifest_uri : str, optional
+        A manifest already published by the caller. The submission seam
+        publishes the manifest itself, because the attempt rows it creates
+        BEFORE this call carry the manifest checksum in their execution
+        binding (review finding #2 — the rows must precede `SubmitJob`).
+        Passing the URI in avoids a second, redundant publish of identical
+        bytes. Absent, the manifest is published here as before.
 
     Returns
     -------
     Submission
     """
-    manifest_uri = publish_manifest(batch.manifest, store)
+    if manifest_uri is None:
+        manifest_uri = publish_manifest(batch.manifest, store)
     kwargs = build_submit_kwargs(batch, job_queue, job_definition,
                                  manifest_uri, environment=environment,
                                  job_name=job_name)

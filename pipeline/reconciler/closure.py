@@ -28,6 +28,7 @@ had authored it.
 import dataclasses
 import json
 import logging
+from typing import Any
 
 from pipeline.runtime import termination
 from pipeline.runtime.boundaries import checksum as body_checksum
@@ -176,14 +177,26 @@ def build_closure_record(attempt_row, observation, sequence,
     if reconciler_first:
         # The adopted marked-reconstruction rule: say what was reconstructed
         # and from what, in the record itself.
+        #
+        # `reconstructed_from` names the sources actually READ (review finding
+        # #14). It used to list "log_stream" whenever the observation carried a
+        # `logStreamName`, while no CloudWatch content was ever fetched — so
+        # the record asserted evidence nobody had looked at, which is worse
+        # than omitting it: a consumer trusting the claim would believe the
+        # stage boundaries had been recovered. The stream's NAME is recorded
+        # separately below, as a pointer for a human, which is what it is.
         body["reconstructed"] = True
         body["reconstructed_from"] = sorted(
             source for source in
             (("attempt_row" if attempt_row else None),
-             ("scheduler" if observation is not None else None),
-             ("log_stream" if (observation is not None
-                               and observation.log_stream) else None))
+             ("scheduler" if observation is not None else None))
             if source)
+        if observation is not None and observation.log_stream:
+            # A pointer, explicitly not a source: nothing here read it.
+            body["safety_stream"] = {
+                "log_stream": observation.log_stream,
+                "read": False,
+            }
         if rejected_key:
             body["rejected_predecessor"] = {
                 "key": rejected_key,
@@ -208,14 +221,37 @@ def build_closure_record(attempt_row, observation, sequence,
 
 
 def _from_row(attempt_row):
-    """The application facts a never-started attempt still has: its identity
-    and the submission-time binding copied onto it at creation.
+    """Every application fact the ROW carries, for a reconciler-first record.
 
-    Runtime-selected provenance (configuration digest, resolved reference
-    identities) is deliberately absent rather than sentinel-valued — the
-    attempt never started, so it never selected any.
+    A complete canonical snapshot means complete (review finding #14): this
+    used to serialize identity and the submission binding only, so a
+    reconciler-first record for a STARTED attempt that died before writing its
+    own record dropped the runtime provenance the row demonstrably held — the
+    source sha, the container digest, the configuration digest and the
+    snapshot key that names the configuration it ran against, plus whatever
+    application outcome it had already recorded. Those are exactly the facts
+    such a record exists to preserve, and the row is the only place left
+    holding them.
+
+    Runtime-selected provenance stays ABSENT rather than sentinel-valued where
+    the row does not carry it: an attempt that never started never selected
+    any, and NULL says that (the adopted absent-not-sentinel rule). The filter
+    at the end is what implements it — a key whose value is None is dropped,
+    so a never-started attempt's record is exactly as thin as it should be
+    and a started one's is as complete as the row allows.
     """
     row = attempt_row or {}
+    runtime_provenance = {
+        "source_sha": row.get("source_sha"),
+        "container_digest": row.get("container_digest"),
+        "job_definition_rev": row.get("job_definition_rev"),
+        "config_digest": row.get("config_digest"),
+        "config_snapshot_key": row.get("config_snapshot_key"),
+    }
+    runtime_provenance = {key: value
+                          for key, value in runtime_provenance.items()
+                          if value is not None}
+
     body = {
         "attempt_id": row.get("attempt_id"),
         "run_id": row.get("run_id"),
@@ -227,6 +263,15 @@ def _from_row(attempt_row):
         "sky_tile": row.get("sky_tile"),
         "submitted_at": _iso(row.get("submitted_at")),
         "started_at": _iso(row.get("started_at")),
+        "ended_at": _iso(row.get("ended_at")),
+        # The application's own account, where it got as far as writing one.
+        "rapid_outcome": row.get("rapid_outcome"),
+        "product_disposition": row.get("product_disposition"),
+        "application_intended_exit": row.get("application_intended_exit"),
+        "error_category": row.get("error_category"),
+        "terminal_record_key": row.get("terminal_record_key"),
+        "terminal_record_sequence": row.get("terminal_record_sequence"),
+        "terminal_record_checksum": row.get("terminal_record_checksum"),
         "provenance": {
             "job_definition_arn": row.get("binding_job_definition_arn"),
             "job_definition_rev": row.get("binding_job_definition_rev"),
@@ -235,6 +280,8 @@ def _from_row(attempt_row):
             "manifest_checksum": row.get("binding_manifest_checksum"),
         },
     }
+    if runtime_provenance:
+        body["runtime_provenance"] = runtime_provenance
     return {key: value for key, value in body.items() if value is not None}
 
 
@@ -258,15 +305,23 @@ def publish_closure_record(store, prefix, attempt_row, record):
     content" at every sequence is a fault to surface, not to loop on.
     """
     attempt_id = attempt_row.get("attempt_id")
-    body = record.to_bytes()
     sequence = record.sequence
 
     for offset in range(MAX_SUPERSESSION_CLIMB):
+        actual_sequence = sequence + offset
+        # THE BODY IS RE-SERIALIZED AT EACH SEQUENCE (review finding #15).
+        # It used to be serialized ONCE, before the loop, so a climb wrote the
+        # new account at the sequence-2 key while its `record_sequence` field
+        # still declared 1 — and the DB then stored the stale sequence too. A
+        # consumer selecting "the highest sequence" would read a record that
+        # says it is a lower one, which is exactly the ambiguity the monotonic
+        # sequence exists to remove.
+        published = _at_sequence(record, actual_sequence)
         key = termination.terminal_record_key(
             prefix, attempt_row.get("run_id"),
-            attempt_row.get("logical_job_id"), attempt_id, sequence + offset)
+            attempt_row.get("logical_job_id"), attempt_id, actual_sequence)
         try:
-            result = store.put_if_absent(key, body,
+            result = store.put_if_absent(key, published.to_bytes(),
                                          content_type="application/json")
         except Exception as exc:  # noqa: BLE001 - only the divergence case
             if not _is_content_divergence(exc):
@@ -274,18 +329,69 @@ def publish_closure_record(store, prefix, attempt_row, record):
             logger.info(
                 "sequence %d for attempt %s already holds a different "
                 "account; superseding at %d",
-                sequence + offset, attempt_id, sequence + offset + 1)
+                actual_sequence, attempt_id, actual_sequence + 1)
             continue
 
         logger.info("closure record %s (%s) sequence %d for attempt %s",
                     key, "written" if result.created else "already present",
-                    sequence + offset, attempt_id)
-        return result
+                    actual_sequence, attempt_id)
+        return PublishedRecord(result=result, key=result.key or key,
+                               sequence=actual_sequence,
+                               record=published)
 
     raise RecordsError(
         f"could not publish a closure record for attempt {attempt_id}: "
         f"sequences {sequence}..{sequence + MAX_SUPERSESSION_CLIMB - 1} all "
         f"hold different accounts")
+
+
+def _at_sequence(record, sequence):
+    """The same record, declaring the sequence it is actually written at."""
+    if sequence == record.sequence:
+        return record
+    body = dict(record.body)
+    body["record_sequence"] = sequence
+    return dataclasses.replace(record, body=body, sequence=sequence)
+
+
+@dataclasses.dataclass(frozen=True)
+class PublishedRecord:
+    """What was actually written, and where.
+
+    Carries the sequence the record LANDED at rather than the one it was built
+    for: after a supersession climb those differ, and the caller writes the
+    landed one onto the row (review finding #15 — the DB stored the stale
+    sequence for the same reason the body did).
+    """
+
+    result: Any
+    key: str
+    sequence: int
+    record: "ClosureRecord"
+
+    @property
+    def created(self):
+        return getattr(self.result, "created", None)
+
+    @property
+    def checksum(self):
+        return getattr(self.result, "checksum", None)
+
+    def __getattr__(self, name):
+        """Forward anything else to the store's own result.
+
+        This wrapper exists only to add the LANDED sequence (review finding
+        #15 — a supersession climb makes it differ from the one the record was
+        built for). Everything a caller previously read off the store result
+        must keep working, so unknown attributes pass through rather than
+        making every call site learn about the wrapper.
+        """
+        try:
+            return getattr(object.__getattribute__(self, "result"), name)
+        except AttributeError:
+            raise AttributeError(
+                f"{type(self).__name__!s} has no attribute {name!r}, and "
+                f"neither does the store result it wraps") from None
 
 
 _DIVERGENCE_PHRASE = "already exists with different content"

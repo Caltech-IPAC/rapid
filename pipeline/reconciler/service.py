@@ -49,6 +49,36 @@ OPEN_STATES = (
     LifecycleState.APPLICATION_CLOSED.value,
 )
 
+# Terminal states a correction may still reach (review finding #15).
+#
+# Supersession was unreachable: polling selected only the open states, so a
+# terminal or flagged row was never reconsidered and "corrected scheduler
+# facts produce sequence 2" could not happen. The design requires records to
+# "supersede deterministically", which needs the row to be revisitable.
+#
+# The requery is BOUNDED rather than a second full scan of history: only rows
+# whose scheduler facts could still change are candidates, which means rows
+# closed recently enough that Batch still knows about them. Batch's own
+# retention is the natural bound — beyond it there are no new facts to learn,
+# so a row out there can never be superseded by anything.
+SUPERSEDABLE_STATES = (
+    LifecycleState.TERMINAL_AFTER_START.value,
+    LifecycleState.TERMINAL_WITHOUT_START.value,
+    LifecycleState.MISSING_OR_CONTRADICTORY.value,
+)
+
+#: How far back a terminal row is still revisited for supersession. Batch
+#: retains job detail for 24 hours after completion; past that a requery
+#: learns nothing, so the window closes.
+SUPERSESSION_WINDOW = datetime.timedelta(hours=24)
+
+#: Consecutive poll failures after which the service reports itself unhealthy
+#: (review finding #24). Three is one bad minute at the 60s cadence — long
+#: enough that a single transient does not flap the service, short enough that
+#: a dead connection or an expired credential is caught in minutes rather than
+#: never.
+POLL_FAILURE_THRESHOLD = 3
+
 # Classifications this service records, so a row says *why* it was closed.
 CLASS_AGREED = "agreed"
 CLASS_MATERIALIZED = "materialized_from_record"
@@ -56,13 +86,34 @@ CLASS_ABRUPT_LOSS = "abrupt_loss"
 CLASS_NEVER_STARTED = "never_started"
 CLASS_NEVER_RESOLVED = "never_resolved"
 
+# Every column a closure record may need to fold in. Completeness here is not
+# cosmetic (review finding #14): a reconciler-first record is built FROM THE
+# ROW, so a column the reconciler does not select is a fact the record cannot
+# carry — and the runtime provenance columns were missing, which meant a
+# started attempt that died before writing its own record got a closure record
+# with no source sha, no container digest, no configuration digest and no
+# snapshot key. The row held all four.
+#
+# `config_digest` in particular was already being READ by `_attempt_ran`
+# without ever being selected, so that evidence branch could never fire.
 _OPEN_COLUMNS = (
     "attempt_id", "run_id", "logical_job_id", "scheduler_job_id",
     "lifecycle_state", "application_attempt_index", "scheduler_attempt_index",
+    "application_claim_index",
     "exposure_id", "sca", "sky_tile", "submitted_at", "started_at", "ended_at",
     "rapid_outcome", "product_disposition", "application_intended_exit",
     "error_category", "terminal_record_key", "terminal_record_sequence",
-    "terminal_record_checksum", "binding_job_definition_arn",
+    "terminal_record_checksum",
+    # Runtime-selected provenance: what the attempt itself observed and bound.
+    "source_sha", "container_digest", "job_definition_rev", "config_digest",
+    "config_snapshot_key",
+    # The reconciler's own closure-record citation.
+    "closure_record_key", "closure_record_sequence", "reconciler_materialized",
+    # The scheduler-observed facts already recorded, so a supersession pass
+    # can tell a changed fact from an unchanged one (#15).
+    "scheduler_state", "scheduler_observed_exit",
+    # The submission-time execution binding, copied on at row creation.
+    "binding_job_definition_arn",
     "binding_job_definition_rev", "binding_image_digest",
     "binding_release_identity", "binding_manifest_checksum",
 )
@@ -77,6 +128,17 @@ _OPEN_COLUMNS = (
 _OPEN_SET_SQL = (
     "SELECT " + ", ".join(_OPEN_COLUMNS) +
     " FROM attempts WHERE lifecycle_state = ANY(%s) ORDER BY attempt_id"
+)
+
+# The bounded supersession requery (review finding #15). Terminal rows whose
+# scheduler facts could still change — closed inside the window, and carrying
+# a scheduler job id there is anything to re-ask about.
+_SUPERSEDABLE_SQL = (
+    "SELECT " + ", ".join(_OPEN_COLUMNS) +
+    " FROM attempts WHERE lifecycle_state = ANY(%s)"
+    "   AND scheduler_job_id IS NOT NULL"
+    "   AND ended_at IS NOT NULL AND ended_at >= %s"
+    " ORDER BY attempt_id"
 )
 
 
@@ -100,6 +162,41 @@ class ReconcilerService:
         self.diagnostics_bucket = diagnostics_bucket
         self._now = now or (
             lambda: datetime.datetime.now(datetime.timezone.utc))
+        #: Consecutive polls that raised. Reset by any poll that completes.
+        #: The health gate reads this (review finding #24).
+        self.consecutive_poll_failures = 0
+        #: Closure steps that failed and deferred their attempt (#16). A
+        #: persistent nonzero here means the reconciler is running but not
+        #: closing anything — work-incapable while process-alive.
+        self._closure_failures = 0
+
+    # -- health ----------------------------------------------------------
+
+    @property
+    def healthy(self):
+        """Is this service CAPABLE OF WORK, not merely running?
+
+        Review finding #24: the supervised loop caught every poll exception,
+        logged, slept and continued indefinitely, so a dead database
+        connection or an expired rotated credential made every poll fail
+        forever while systemd saw a healthy process and never restarted it.
+        The reconciler exists to catch exactly the conditions likeliest to
+        make a cycle throw, so "still running" is the wrong health signal.
+
+        The bounded mechanism the observability policy asks for: consecutive
+        failures, a stated threshold, and a state change when it is crossed —
+        not an unbounded retry that never reports.
+        """
+        return self.consecutive_poll_failures < POLL_FAILURE_THRESHOLD
+
+    def health(self):
+        """The health facts, for a log line or a metric."""
+        return {
+            "healthy": self.healthy,
+            "consecutive_poll_failures": self.consecutive_poll_failures,
+            "closure_failures": self._closure_failures,
+            "poll_failure_threshold": POLL_FAILURE_THRESHOLD,
+        }
 
     # -- the open set ----------------------------------------------------
 
@@ -108,9 +205,27 @@ class ReconcilerService:
 
         Read outside any lease: this is the candidate list, and each candidate
         is rechecked under its own lock before anything is written.
+
+        Includes the bounded supersession requery (review finding #15):
+        terminal and flagged rows closed inside `SUPERSESSION_WINDOW` are
+        revisited, because corrected scheduler facts must be able to produce a
+        higher-sequence record. Without it, "records supersede
+        deterministically" was unreachable — polling selected only the open
+        states, so a terminal row was never reconsidered at all.
         """
+        rows = self._select(_OPEN_SET_SQL, (list(OPEN_STATES),))
+        rows.extend(self._supersedable())
+        return rows
+
+    def _supersedable(self):
+        """Terminal rows whose scheduler facts could still change."""
+        horizon = self._now() - SUPERSESSION_WINDOW
+        return self._select(_SUPERSEDABLE_SQL,
+                            (list(SUPERSEDABLE_STATES), horizon))
+
+    def _select(self, sql, params):
         with self.conn.cursor() as cur:
-            cur.execute(_OPEN_SET_SQL, (list(OPEN_STATES),))
+            cur.execute(sql, params)
             names = [description[0] for description in cur.description]
             rows = [dict(zip(names, row)) for row in cur.fetchall()]
         self.conn.rollback()  # a read-only snapshot; do not hold a transaction
@@ -277,12 +392,47 @@ class ReconcilerService:
 
             current = reread_attempt(self.conn, attempt_id,
                                      columns=_OPEN_COLUMNS)
-            if current is None or current["lifecycle_state"] not in OPEN_STATES:
-                # Someone else closed it between the poll and the lease.
+            if current is None:
                 return "skipped"
+
+            state = current["lifecycle_state"]
+            if state not in OPEN_STATES:
+                # A terminal row reached here through the supersession requery
+                # (review finding #15). It is reconsidered only if the
+                # scheduler now says something the row does not already
+                # record; otherwise this is the ordinary case of re-observing
+                # an attempt that is genuinely finished, and re-publishing an
+                # identical record every minute would be noise.
+                if state not in SUPERSEDABLE_STATES:
+                    return "skipped"
+                if not self._facts_changed(current, observation):
+                    return "skipped"
+                logger.info(
+                    "attempt %s is %s but the scheduler's facts have changed; "
+                    "superseding", attempt_id, state)
 
             writer = AttemptWriter(_Executor(self.conn))
             return self._close(current, observation, writer)
+
+    @staticmethod
+    def _facts_changed(row, observation):
+        """Does the scheduler now say something the row does not record?
+
+        The supersession trigger (review finding #15). Deliberately narrow:
+        only the scheduler-observed facts a correction could actually change,
+        compared against what the row already stores. Anything wider would
+        re-close every terminal attempt on every poll.
+        """
+        if observation is None:
+            return False
+        comparisons = (
+            (row.get("scheduler_state"), observation.state),
+            (row.get("scheduler_observed_exit"), observation.exit_code),
+        )
+        for recorded, observed in comparisons:
+            if observed is not None and recorded != observed:
+                return True
+        return False
 
     def _close(self, row, observation, writer):
         """Publish the closure record, stamp retention, transition the row."""
@@ -330,10 +480,40 @@ class ReconcilerService:
             classification=classification,
             error_category=error_category,
             now=self._now())
-        written = closure_mod.publish_closure_record(
-            self.records_store, self.records_prefix, row, record)
 
-        self._stamp_bundle(row, observation, predecessor)
+        # THE CLOSURE STEPS NO LONGER FAIL OPEN (review finding #16).
+        #
+        # Publishing the record and stamping the bundle's retention are both
+        # part of closing an attempt, and both used to be able to fail while
+        # the row was terminalized anyway — the tagging failure was caught,
+        # logged, and the attempt marked terminal, never to be revisited,
+        # because terminal rows are outside the open set. A bundle whose
+        # retention was never stamped then expires under the wrong lifecycle
+        # rule with nothing left to notice.
+        #
+        # A failure now DEFERS the attempt: the row stays open, the next poll
+        # retries it, and the failure is counted so service health can see a
+        # persistent one. Every step here is idempotent by identity, so a
+        # retry re-derives the same key and either creates or validates.
+        try:
+            written = closure_mod.publish_closure_record(
+                self.records_store, self.records_prefix, row, record)
+        except Exception:  # noqa: BLE001 - deferred, not swallowed
+            self._closure_failures += 1
+            logger.exception(
+                "could not publish the closure record for attempt %s; the row "
+                "stays open and the next poll retries it", attempt_id)
+            return "deferred"
+
+        try:
+            self._stamp_bundle(row, observation, predecessor)
+        except Exception:  # noqa: BLE001 - deferred, not swallowed
+            self._closure_failures += 1
+            logger.exception(
+                "could not stamp retention for attempt %s; the closure record "
+                "is published (idempotently re-derivable) but the row stays "
+                "open so the tag is retried rather than lost", attempt_id)
+            return "deferred"
 
         self._transition(row, observation, writer, record, written,
                          classification, error_category)
@@ -424,21 +604,27 @@ class ReconcilerService:
                    termination.APPLICATION_RECORD_SEQUENCE + 1)
 
     def _stamp_bundle(self, row, observation, predecessor):
-        """Stamp the reconciled retention class onto the attempt's bundle."""
+        """Stamp the reconciled retention class onto the attempt's bundle.
+
+        RAISES on failure (review finding #16). This used to catch everything
+        and continue to the row transition, so a tagging failure terminalized
+        the attempt with an unstamped bundle and no way back — terminal rows
+        are outside the open set, so nothing ever revisited it. The caller now
+        defers the attempt instead, and the next poll retries the stamp.
+
+        An ABSENT bundle is still not a failure: an attempt that died before
+        uploading one has nothing to tag, and that is a recorded fact rather
+        than an error. `stamp_retention` distinguishes the two.
+        """
         key = termination.bundle_key(
             self.records_prefix, row["run_id"], row["logical_job_id"],
             row["attempt_id"])
         outcome = (predecessor or {}).get("rapid_outcome") or row.get(
             "rapid_outcome")
         retention_class = retention_mod.retention_class_for(
-            outcome, observation.state)
-        try:
-            retention_mod.stamp_retention(
-                self.s3, self.diagnostics_bucket, key, row, retention_class)
-        except Exception:  # noqa: BLE001 - a missing bundle is a recorded
-            # reconciliation fact, not a reason to abandon the closure.
-            logger.warning("could not stamp retention on %s/%s",
-                           self.diagnostics_bucket, key, exc_info=True)
+            outcome, observation.state if observation is not None else None)
+        return retention_mod.stamp_retention(
+            self.s3, self.diagnostics_bucket, key, row, retention_class)
 
     def _transition(self, row, observation, writer, record, written,
                     classification, error_category):
@@ -465,11 +651,22 @@ class ReconcilerService:
                 "state", attempt_id)
             return
 
+        # The sequence the record actually LANDED at, which differs from the
+        # one it was built for whenever a supersession climb happened (review
+        # finding #15 — the row used to store the pre-climb sequence, so it
+        # cited a key holding a record that declares a different one).
+        landed_sequence = written.sequence
+
         if classification == CLASS_NEVER_STARTED:
+            # The closure record IS cited now (review finding #14): 013 left
+            # the reconciler's record unreferenced from the row it accounts
+            # for, so it was findable only by reconstructing its key.
             writer.mark_terminal_without_start(
                 attempt_id, ended_at=ended_at,
                 scheduler_state=observation.state,
-                error_category=error_category)
+                error_category=error_category,
+                closure_record_key=written.key,
+                closure_record_sequence=landed_sequence)
             return
 
         if classification == CLASS_ABRUPT_LOSS:
@@ -479,10 +676,34 @@ class ReconcilerService:
                 error_category=error_category,
                 scheduler_observed_exit=observation.exit_code,
                 terminal_record_key=written.key,
-                terminal_record_sequence=record.sequence)
+                terminal_record_sequence=landed_sequence)
             return
 
-        body = record.body
+        body = written.record.body
+
+        # MATERIALIZATION IS RECORDED (review finding #14). Where the row is
+        # still `started` and the reconciler is projecting the application's
+        # own facts onto it from a validated record, that projection is "the
+        # one sanctioned projection of application facts by another writer"
+        # and the row must say so. Nothing set the flag before, so a
+        # reconciler-materialized row was indistinguishable from one the
+        # application closed itself.
+        if classification == CLASS_MATERIALIZED:
+            writer.mark_application_closed(
+                attempt_id, ended_at=ended_at,
+                application_intended_exit=body.get(
+                    "application_intended_exit") or 0,
+                rapid_outcome=_enum(RapidOutcome, body.get("rapid_outcome")),
+                product_disposition=_enum(
+                    ProductDisposition, body.get("product_disposition")),
+                terminal_record_key=body.get("terminal_record_key")
+                or row.get("terminal_record_key"),
+                terminal_record_sequence=body.get(
+                    "terminal_record_sequence") or 0,
+                terminal_record_checksum=body.get("terminal_record_checksum"),
+                error_category=error_category,
+                reconciler_materialized=True)
+
         writer.mark_terminal_after_start(
             attempt_id, ended_at=ended_at,
             scheduler_observed_exit=observation.exit_code,
@@ -493,7 +714,7 @@ class ReconcilerService:
             application_intended_exit=body.get("application_intended_exit"),
             error_category=error_category,
             terminal_record_key=written.key,
-            terminal_record_sequence=record.sequence)
+            terminal_record_sequence=landed_sequence)
 
     # -- the never-resolved case -----------------------------------------
 
@@ -525,8 +746,16 @@ class ReconcilerService:
                 classification=CLASS_NEVER_RESOLVED,
                 error_category="scheduler_provisioning",
                 now=self._now())
-            closure_mod.publish_closure_record(
-                self.records_store, self.records_prefix, current, record)
+            try:
+                written = closure_mod.publish_closure_record(
+                    self.records_store, self.records_prefix, current, record)
+            except Exception:  # noqa: BLE001 - deferred, not swallowed (#16)
+                self._closure_failures += 1
+                logger.exception(
+                    "could not publish the closure record for unresolved "
+                    "attempt %s; it stays open and the next poll retries it",
+                    attempt_id)
+                return "deferred"
 
             writer = AttemptWriter(_Executor(self.conn))
 
@@ -555,9 +784,12 @@ class ReconcilerService:
             writer.mark_terminal_without_start(
                 attempt_id, ended_at=self._now(),
                 scheduler_state="FAILED",
-                error_category="scheduler_provisioning")
+                error_category="scheduler_provisioning",
+                closure_record_key=written.key,
+                closure_record_sequence=written.sequence)
             logger.info("attempt %s classified never-resolved at the "
-                        "submission-anchored horizon", attempt_id)
+                        "submission-anchored horizon (closure %s)",
+                        attempt_id, written.key)
             return "classified"
 
 
@@ -596,20 +828,64 @@ def _enum(enum_class, value):
         return None
 
 
-def run_forever(service, poll_seconds=POLL_SECONDS, sleep=time.sleep,
-                should_continue=None):
-    """Poll until told to stop. A cycle that raises is logged, not fatal.
+class ReconcilerUnhealthy(RuntimeError):
+    """Consecutive polls failed past the threshold: the service cannot work.
 
-    A reconciler that exits on error is worse than useless: the failures it
-    exists to catch are exactly the conditions likely to make a cycle throw.
+    Raised out of `run_forever` so the process EXITS and its supervisor
+    restarts it (review finding #24). A reconciler that stays up while every
+    poll fails is the failure mode this replaces: systemd saw a running
+    process, the service saw a dead database connection or an expired rotated
+    credential, and nothing reconciled anything for as long as that lasted.
+
+    A restart is the right response because the conditions that produce it —
+    a stale connection, a rotated credential, a broken client — are exactly
+    the ones a fresh process re-establishes. Tolerating a bounded number of
+    transients first is what keeps that from flapping.
+    """
+
+
+def run_forever(service, poll_seconds=POLL_SECONDS, sleep=time.sleep,
+                should_continue=None,
+                failure_threshold=POLL_FAILURE_THRESHOLD):
+    """Poll until told to stop, or until the service cannot do its work.
+
+    A cycle that raises is logged and retried — the failures the reconciler
+    exists to catch are exactly the conditions likely to make one throw, so a
+    single exception must not take the service down.
+
+    But CONSECUTIVE failures are different (review finding #24). This loop
+    used to catch every poll exception forever, so "the process is alive" and
+    "the service is working" came apart with nothing to notice. Past
+    `failure_threshold` consecutive failures the service is not doing its job
+    and says so by exiting, which is the bounded mechanism the observability
+    policy asks for: a stated threshold, a state change when it is crossed,
+    and a supervisor that acts on it.
     """
     should_continue = should_continue or (lambda: True)
     while should_continue():
         started = time.monotonic()
         try:
             service.poll_once()
-        except Exception:  # noqa: BLE001 - deliberately never fatal
-            logger.exception("reconciler poll failed; continuing")
+        except Exception:  # noqa: BLE001 - retried, but counted
+            service.consecutive_poll_failures += 1
+            logger.exception(
+                "reconciler poll failed (%d consecutive, threshold %d)",
+                service.consecutive_poll_failures, failure_threshold)
+            if service.consecutive_poll_failures >= failure_threshold:
+                raise ReconcilerUnhealthy(
+                    f"{service.consecutive_poll_failures} consecutive poll "
+                    f"failures (threshold {failure_threshold}); the "
+                    f"reconciler is running but reconciling nothing. Exiting "
+                    f"so the supervisor restarts it — a stale connection or a "
+                    f"rotated credential is re-established by a fresh "
+                    f"process, and staying up would mean no attempt is "
+                    f"classified for as long as this lasts.")
+        else:
+            if service.consecutive_poll_failures:
+                logger.info("reconciler recovered after %d failed poll(s)",
+                            service.consecutive_poll_failures)
+            service.consecutive_poll_failures = 0
+
         elapsed = time.monotonic() - started
         remaining = poll_seconds - elapsed
         if remaining > 0:

@@ -342,10 +342,16 @@ def _run(workload_class: str) -> int:
 
     with _database(route, job_env) as (writer, execute):
         # 4. Attempt ownership, through W1's one resolver.
+        #
+        # The logical-job key is RUN-SCOPED and comes from the one function
+        # both sides share (review finding #3): the submitter writes the row
+        # under this key and the resolver claims it by matching on it, so a
+        # second copy of the format string here is how the two would stop
+        # agreeing.
         ownership = resolve_ownership(
             writer, job_env,
             run_id=manifest.batch_id,
-            logical_job_id=unit.key,
+            logical_job_id=unit.logical_job_key(manifest.batch_id),
             identity_extra={"exposure_id": unit.exposure, "sca": unit.sca,
                             "sky_tile": getattr(unit.facts, "rtid", None)},
             lifecycle_reader=lifecycle_reader_for(execute))

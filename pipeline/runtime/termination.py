@@ -248,11 +248,21 @@ def start_attempt(writer: Any, attempt_id: Any, provenance: Any,
             f"bind a digest whose object is not the one this attempt read",
             config_digest=config_digest)
 
+    if not snapshot_key_value:
+        raise RecordsError(
+            f"attempt {attempt_id} cannot be marked started without the "
+            f"configuration snapshot's key: the binding is one write carrying "
+            f"both the digest and the key, and a row bound to a digest whose "
+            f"object cannot be named is the half-bound state this transition "
+            f"exists to prevent",
+            attempt_id=attempt_id, config_digest=config_digest)
+
     try:
         writer.mark_started(
             attempt_id, started_at=moment, provenance=provenance,
             scheduler_job_id=scheduler_job_id,
-            application_attempt_index=application_attempt_index)
+            application_attempt_index=application_attempt_index,
+            config_snapshot_key=snapshot_key_value)
     except Exception as exc:  # noqa: BLE001 - translated
         raise RecordsError(
             f"could not mark attempt {attempt_id} started: {exc}",

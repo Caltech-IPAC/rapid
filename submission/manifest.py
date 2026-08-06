@@ -260,8 +260,32 @@ class ProcessingUnit:
 
     @property
     def key(self) -> str:
-        """Stable string identity for this unit, for dedup and logging."""
+        """Stable string identity for this unit, for dedup and logging.
+
+        NOT a database identity: it names a processing unit, and the same
+        exposure/SCA is processed by every run that reprocesses it. Use
+        `logical_job_key` for anything that has to be unique across runs.
+        """
         return f"{self.exposure}/{self.sca}"
+
+    def logical_job_key(self, run_id: Any) -> str:
+        """This unit's RUN-SCOPED logical-job identity (review finding #3).
+
+        `logical_jobs.logical_job_id` is a global primary key, so keying it on
+        `key` alone collided across runs — and collided SILENTLY, because
+        `create_logical_job` writes `ON CONFLICT DO NOTHING` precisely so that
+        a replayed submission cannot rewrite a binding a running attempt
+        believes in. Both halves are correct alone; together they meant
+        reprocessing an exposure/SCA under a second run retained the FIRST
+        run's execution binding, and a scheduler retry copied that stale
+        manifest, image, release and run identity onto the new run's row.
+
+        Defined here, on the unit, because BOTH sides must agree on it: the
+        submitter writing the pre-created row and the runtime claiming it
+        through the resolver. A second copy of this format string elsewhere is
+        exactly how the two would drift apart.
+        """
+        return f"{run_id}:{self.key}"
 
     def to_dict(self) -> dict[str, Any]:
         facts = self.facts.to_dict()

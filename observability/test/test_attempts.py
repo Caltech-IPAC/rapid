@@ -33,6 +33,7 @@ from observability.attempts import (
     AttemptWriter,
     ExecutionBinding,
     LifecycleState,
+    LogicalJobConflict,
     ProductDisposition,
     Provenance,
     RapidOutcome,
@@ -555,13 +556,51 @@ class StartedTests(unittest.TestCase):
         self.assertIn("application_attempt_index", sql)
         self.assertIn(2, params)
 
-    def test_a_claimed_rows_attempt_index_is_never_re_indexed(self):
-        # COALESCE(application_attempt_index, %s): the resolver's value wins,
-        # so re-supplying the same index at start is harmless.
+    def test_the_started_index_falls_back_to_the_resolvers_claim(self):
+        # AMENDED by FixA (review finding #9). The resolver no longer writes
+        # application_attempt_index — it writes application_claim_index, so
+        # that a container killed between claim and start leaves a row the
+        # DDL can still close as terminal_without_start. The started
+        # compare-and-set is where the claim becomes a start, and it COALESCEs
+        # the caller's value over the claim over whatever is already there.
         self.writer.mark_started(1, started_at=at(5), provenance=self.provenance,
-                                 application_attempt_index=2)
+                                 application_attempt_index=2,
+                                 config_snapshot_key="k")
         sql, _ = self.execute.only()
-        self.assertIn("COALESCE(application_attempt_index,", sql)
+        self.assertIn("application_claim_index", sql)
+        self.assertIn("COALESCE(", sql)
+
+    def test_started_is_a_compare_and_set_on_the_submitted_state(self):
+        # Review finding #10: the statement matched on attempt_id alone, so
+        # two startup writers could both "start" one row and the later one
+        # would overwrite the first's start time and provenance.
+        self.writer.mark_started(1, started_at=at(5), provenance=self.provenance,
+                                 config_snapshot_key="k")
+        sql, params = self.execute.only()
+        self.assertIn("WHERE attempt_id = %s AND lifecycle_state = %s", sql)
+        self.assertEqual(LifecycleState.SUBMITTED.value, params[-1])
+
+    def test_started_binds_the_configuration_snapshot_key(self):
+        # Review finding #10: start_attempt took the key and only logged it,
+        # so the row bound the digest and not the object holding it — the key
+        # then had to be re-derived from the mutable records prefix.
+        self.writer.mark_started(1, started_at=at(5), provenance=self.provenance,
+                                 config_snapshot_key="records/snap/abc.json")
+        sql, params = self.execute.only()
+        self.assertIn("config_snapshot_key = %s", sql)
+        self.assertIn("records/snap/abc.json", params)
+
+    def test_a_started_row_that_left_submitted_is_not_overwritten(self):
+        # The compare-and-set holding, end to end: the executor reports zero
+        # rows matched (the row is no longer `submitted`) and the writer
+        # raises rather than reporting a start that did not happen.
+        execute = RecordingExecutor(affected=0)
+        writer = AttemptWriter(execute)
+        with self.assertRaises(AttemptNotFound) as caught:
+            writer.mark_started(1, started_at=at(5),
+                                provenance=self.provenance,
+                                config_snapshot_key="k")
+        self.assertIn("already left that state", str(caught.exception))
 
     def test_attempt_index_is_null_when_the_runtime_did_not_read_one(self):
         self.writer.mark_started(1, started_at=at(5), provenance=self.provenance)
@@ -745,6 +784,121 @@ class TerminalTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.writer.mark_terminal_without_start(
                 1, ended_at=at(9), scheduler_state="EXPLODED")
+
+    def test_a_never_started_attempt_cites_its_closure_record(self):
+        # Review finding #14: "the reconciler closes EVERY attempt with a
+        # closure record" — including one that never started. 013 forbade
+        # terminal_record_key here (correctly: that is the APPLICATION's
+        # sequence-0 record, which such an attempt never wrote), which left
+        # the reconciler's closure record unreferenced from the row it
+        # accounts for. Migration 017's reconciler-authored pair fixes it.
+        self.writer.mark_terminal_without_start(
+            1, ended_at=at(9), scheduler_state="FAILED",
+            error_category="scheduler_provisioning",
+            closure_record_key="records/run/lj/attempt-1/seq-0001.json",
+            closure_record_sequence=1)
+        sql, params = self.execute.only()
+        self.assertIn("closure_record_key = %s", sql)
+        self.assertIn("closure_record_sequence = %s", sql)
+        self.assertIn("records/run/lj/attempt-1/seq-0001.json", params)
+        # And it is still NOT the application's record column.
+        self.assertNotIn("terminal_record_key", sql)
+
+    def test_a_closure_record_is_cited_by_key_and_sequence_or_neither(self):
+        with self.assertRaises(ValueError):
+            self.writer.mark_terminal_without_start(
+                1, ended_at=at(9), scheduler_state="FAILED",
+                closure_record_key="records/x.json")
+        with self.assertRaises(ValueError):
+            self.writer.mark_terminal_without_start(
+                1, ended_at=at(9), scheduler_state="FAILED",
+                closure_record_sequence=1)
+
+    def test_a_closure_record_never_claims_the_applications_sequence(self):
+        # The application owns sequence 0; only the reconciler writes higher.
+        with self.assertRaises(ValueError):
+            self.writer.mark_terminal_without_start(
+                1, ended_at=at(9), scheduler_state="FAILED",
+                closure_record_key="records/x.json",
+                closure_record_sequence=0)
+
+
+class LogicalJobConflictTests(unittest.TestCase):
+    """A logical-job conflict is verified, never ignored (review finding #3).
+
+    `ON CONFLICT DO NOTHING` is the right write — a replayed submission must
+    not rewrite a binding a running attempt believes in — but combined with a
+    key that was not run-scoped it meant reprocessing an exposure/SCA under a
+    second run silently retained the FIRST run's binding, and a scheduler
+    retry copied that stale manifest, image, release and run identity forward.
+    """
+
+    def setUp(self):
+        self.binding = ExecutionBinding(
+            job_definition_arn="arn:aws:batch:us-east-1:1:job-definition/x:10",
+            image_digest="sha256:abc",
+            manifest_checksum="sha256:def",
+            release_identity="rel-1")
+
+    def test_an_insert_that_lands_records_the_binding(self):
+        execute = RecordingExecutor()
+        writer = AttemptWriter(execute)
+        writer.create_logical_job("run-1:90000/1", "run-1", self.binding)
+        sql, _ = execute.calls[0]
+        self.assertIn("ON CONFLICT (logical_job_id) DO NOTHING", sql)
+        self.assertIn("RETURNING logical_job_id", sql)
+
+    def test_a_conflict_with_an_identical_binding_is_a_replay(self):
+        execute = _ConflictingExecutor(existing={
+            "run_id": "run-1",
+            "job_definition_arn": self.binding.job_definition_arn,
+            "image_digest": self.binding.image_digest,
+            "manifest_checksum": self.binding.manifest_checksum,
+            "release_identity": self.binding.release_identity,
+        })
+        writer = AttemptWriter(execute)
+        # No exception: the same submission replayed is fine.
+        writer.create_logical_job("run-1:90000/1", "run-1", self.binding)
+
+    def test_a_conflict_with_a_different_binding_raises(self):
+        execute = _ConflictingExecutor(existing={
+            "run_id": "run-0",                      # <- another run
+            "job_definition_arn": self.binding.job_definition_arn,
+            "image_digest": "sha256:STALE",         # <- another image
+            "manifest_checksum": self.binding.manifest_checksum,
+            "release_identity": self.binding.release_identity,
+        })
+        writer = AttemptWriter(execute)
+        with self.assertRaises(LogicalJobConflict) as caught:
+            writer.create_logical_job("run-1:90000/1", "run-1", self.binding)
+        message = str(caught.exception)
+        self.assertIn("run_id", message)
+        self.assertIn("image_digest", message)
+        self.assertIn("sha256:STALE", message)
+
+
+class _ConflictingExecutor:
+    """An executor whose logical-job insert always conflicts.
+
+    Returns no rows for the INSERT (the `ON CONFLICT DO NOTHING` case) and the
+    supplied row for the verification SELECT that follows.
+    """
+
+    def __init__(self, existing):
+        self.existing = existing
+        self.calls = []
+
+    def __call__(self, sql, params):
+        self.calls.append((" ".join(sql.split()), list(params)))
+        if "INSERT INTO logical_jobs" in sql:
+            return []
+        if "FROM logical_jobs" in sql:
+            return [(self.existing["run_id"],
+                     self.existing["job_definition_arn"],
+                     self.existing["image_digest"],
+                     self.existing["manifest_checksum"],
+                     self.existing["release_identity"])]
+        return 1
 
 
 class ErrorCategoryTests(unittest.TestCase):

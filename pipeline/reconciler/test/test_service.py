@@ -51,19 +51,61 @@ def seed_record(store, row, body, sequence=0):
 
 
 class OpenSetTests(unittest.TestCase):
-    def test_only_nonterminal_states_are_polled(self):
+    def test_every_nonterminal_state_is_polled(self):
         rows = [
             attempt_row(1, lifecycle_state="submitted"),
             attempt_row(2, lifecycle_state="started"),
             attempt_row(3, lifecycle_state="application_closed"),
-            attempt_row(4, lifecycle_state="terminal_after_start"),
-            attempt_row(5, lifecycle_state="terminal_without_start"),
         ]
         svc, _, _, _, _ = build(rows, jobs=[])
 
         open_rows = svc.open_attempts()
 
         self.assertEqual([1, 2, 3], [r["attempt_id"] for r in open_rows])
+
+    def test_terminal_rows_outside_the_window_are_not_revisited(self):
+        # AMENDED by FixA (review finding #15). Terminal rows ARE revisited
+        # now — supersession was otherwise unreachable, because polling
+        # selected only the open states and a corrected scheduler fact could
+        # never produce a sequence-2 record. But the requery is BOUNDED: past
+        # Batch's own retention there are no new facts to learn, so a row out
+        # there can never be superseded by anything.
+        old = utc(2026, 8, 4, 10, 0, 0)      # two days before "now"
+        rows = [
+            attempt_row(1, lifecycle_state="submitted"),
+            attempt_row(4, lifecycle_state="terminal_after_start",
+                        ended_at=old),
+            attempt_row(5, lifecycle_state="terminal_without_start",
+                        ended_at=old),
+        ]
+        svc, _, _, _, _ = build(rows, jobs=[])
+
+        open_rows = svc.open_attempts()
+
+        self.assertEqual([1], [r["attempt_id"] for r in open_rows])
+
+    def test_a_recently_closed_terminal_row_is_revisited(self):
+        # Inside the window: the scheduler may still have something to say,
+        # so the row is a supersession candidate.
+        recent = utc(2026, 8, 6, 11, 30, 0)
+        rows = [
+            attempt_row(1, lifecycle_state="submitted"),
+            attempt_row(4, lifecycle_state="terminal_after_start",
+                        ended_at=recent),
+        ]
+        svc, _, _, _, _ = build(rows, jobs=[])
+
+        open_rows = svc.open_attempts()
+
+        self.assertEqual([1, 4], sorted(r["attempt_id"] for r in open_rows))
+
+    def test_a_flagged_row_is_revisited_so_a_correction_can_reach_it(self):
+        recent = utc(2026, 8, 6, 11, 30, 0)
+        rows = [attempt_row(7, lifecycle_state="missing_or_contradictory",
+                            ended_at=recent)]
+        svc, _, _, _, _ = build(rows, jobs=[])
+
+        self.assertEqual([7], [r["attempt_id"] for r in svc.open_attempts()])
 
     def test_the_open_set_read_holds_no_transaction(self):
         svc, conn, _, _, _ = build([attempt_row(1)], jobs=[])
@@ -351,7 +393,15 @@ class LeaseTests(unittest.TestCase):
 
         def steal():
             rows = original()
+            # The other reconciler closed it with THESE facts — the same ones
+            # this pass observed. Recording them is what makes the row
+            # genuinely closed rather than a supersession candidate: since
+            # FixA (review finding #15) a terminal row inside the window is
+            # revisited, and it is re-closed only where the scheduler now says
+            # something the row does not already record.
             conn.rows[1]["lifecycle_state"] = "terminal_after_start"
+            conn.rows[1]["scheduler_state"] = "FAILED"
+            conn.rows[1]["scheduler_observed_exit"] = 1
             return rows
 
         svc.open_attempts = steal
@@ -359,6 +409,50 @@ class LeaseTests(unittest.TestCase):
         summary = svc.poll_once()
 
         self.assertEqual(1, summary["skipped"])
+
+    def test_a_terminal_row_whose_facts_changed_is_superseded(self):
+        # Review finding #15: supersession was unreachable, so "corrected
+        # scheduler facts produce sequence 2" could not happen at all. The row
+        # below is terminal and recorded exit 1; the scheduler now says exit
+        # 0, which is a fact the row does not carry.
+        row = attempt_row(1, lifecycle_state="terminal_after_start",
+                          started_at=utc(2026, 8, 6, 11, 0, 0),
+                          ended_at=utc(2026, 8, 6, 11, 30, 0),
+                          scheduler_state="FAILED",
+                          scheduler_observed_exit=1,
+                          terminal_record_sequence=1)
+        jobs = [batch_job(status="SUCCEEDED", exit_code=0,
+                          started=utc(2026, 8, 6, 11, 0, 0),
+                          stopped=utc(2026, 8, 6, 11, 5, 0))]
+        svc, _conn, _batch, store, _tag = build([row], jobs)
+
+        summary = svc.poll_once()
+
+        self.assertEqual(1, summary["classified"])
+        # A higher sequence than the one already on the row.
+        sequences = sorted(int(key.rsplit("seq-", 1)[1].split(".")[0])
+                           for key in store.objects
+                           if "seq-" in key)
+        self.assertTrue(sequences, "no closure record was published")
+        self.assertGreaterEqual(max(sequences), 2)
+
+    def test_a_terminal_row_whose_facts_agree_is_left_alone(self):
+        # The bound on the other side: revisiting must not re-close every
+        # finished attempt on every poll.
+        row = attempt_row(1, lifecycle_state="terminal_after_start",
+                          started_at=utc(2026, 8, 6, 11, 0, 0),
+                          ended_at=utc(2026, 8, 6, 11, 30, 0),
+                          scheduler_state="SUCCEEDED",
+                          scheduler_observed_exit=0)
+        jobs = [batch_job(status="SUCCEEDED", exit_code=0,
+                          started=utc(2026, 8, 6, 11, 0, 0),
+                          stopped=utc(2026, 8, 6, 11, 5, 0))]
+        svc, _conn, _batch, store, _tag = build([row], jobs)
+
+        summary = svc.poll_once()
+
+        self.assertEqual(1, summary["skipped"])
+        self.assertEqual({}, dict(store.objects))
 
 
 class SequenceTests(unittest.TestCase):
@@ -445,7 +539,11 @@ class ResilienceTests(unittest.TestCase):
         finally:
             service.closure_mod.publish_closure_record = real_publish
 
-        self.assertEqual(1, summary["errors"])
+        # AMENDED by FixA (#16): a closure failure defers rather than
+        # erroring — the row stays open for the next poll instead of being
+        # terminalized with its closure half-done. What this test is about is
+        # unchanged: attempt 2 still got through.
+        self.assertEqual(1, summary["deferred"])
         self.assertEqual(1, summary["classified"])
 
     def test_a_submitted_row_is_not_given_a_scheduler_state(self):
@@ -495,24 +593,122 @@ class ResilienceTests(unittest.TestCase):
         finally:
             service.closure_mod.publish_closure_record = real_publish
 
-        self.assertEqual(1, summary["errors"])
+        # AMENDED by FixA (review finding #16): a closure failure DEFERS its
+        # attempt rather than terminalizing it, so it is counted as deferred
+        # rather than as an error. The row stays open and the next poll
+        # retries it — the whole point of not failing open.
+        self.assertEqual(1, summary["deferred"])
         # The second attempt still got through — the point of the rollback.
         self.assertEqual(1, summary["classified"])
         self.assertGreater(conn.rollbacks, rollbacks_before)
+
+    def test_a_closure_failure_leaves_the_row_open_rather_than_terminal(self):
+        # Review finding #16's core: the reconciler used to publish the
+        # record, catch a tagging or recovery failure, terminalize the row
+        # anyway, and never revisit it — terminal rows are outside the open
+        # set, so a bundle whose retention was never stamped then expires
+        # under the wrong lifecycle rule with nothing left to notice.
+        rows = [attempt_row(1, lifecycle_state="started",
+                            started_at=utc(2026, 8, 6, 11, 0, 0))]
+        jobs = [batch_job(status="FAILED", exit_code=1,
+                          started=utc(2026, 8, 6, 11, 0, 0),
+                          stopped=utc(2026, 8, 6, 11, 5, 0))]
+        svc, conn, _, _, tagging = build(rows, jobs)
+
+        def explode(**_kwargs):
+            raise RuntimeError("tagging is down")
+
+        tagging.put_object_tagging = explode
+
+        summary = svc.poll_once()
+
+        self.assertEqual(1, summary["deferred"])
+        self.assertEqual(0, summary.get("classified", 0))
+        self.assertEqual("started", conn.rows[1]["lifecycle_state"],
+                         "a failed closure must not terminalize the row")
 
     def test_run_forever_survives_a_failing_cycle(self):
         cycles = {"n": 0}
 
         class Exploding:
+            consecutive_poll_failures = 0
+
             def poll_once(self):
                 cycles["n"] += 1
                 raise RuntimeError("boom")
 
+        # A high threshold: this test is about surviving transients, which is
+        # still the behaviour below the threshold.
         service.run_forever(
             Exploding(), poll_seconds=0, sleep=lambda _: None,
-            should_continue=lambda: cycles["n"] < 3)
+            should_continue=lambda: cycles["n"] < 3,
+            failure_threshold=99)
 
         self.assertEqual(3, cycles["n"])
+
+
+class HealthTests(unittest.TestCase):
+    """Health is WORK-CAPABLE, not process-alive (review finding #24).
+
+    The loop used to catch every poll exception forever, so a dead database
+    connection or an expired rotated credential made every poll fail while
+    systemd saw a running process and never restarted it. The reconciler
+    exists to catch exactly the conditions likeliest to make a cycle throw,
+    which is why "still running" is the wrong signal.
+    """
+
+    class Exploding:
+        consecutive_poll_failures = 0
+
+        def __init__(self):
+            self.calls = 0
+
+        def poll_once(self):
+            self.calls += 1
+            raise RuntimeError("the database is gone")
+
+    def test_consecutive_failures_past_the_threshold_exit_the_loop(self):
+        exploding = self.Exploding()
+
+        with self.assertRaises(service.ReconcilerUnhealthy) as caught:
+            service.run_forever(exploding, poll_seconds=0,
+                                sleep=lambda _: None,
+                                failure_threshold=3)
+
+        self.assertEqual(3, exploding.calls)
+        self.assertIn("reconciling nothing", str(caught.exception))
+
+    def test_a_successful_poll_resets_the_failure_count(self):
+        # A transient must not accumulate toward the threshold across
+        # unrelated minutes, or a service that works fine will eventually
+        # exit for reasons long past.
+        class Flaky:
+            consecutive_poll_failures = 0
+
+            def __init__(self):
+                self.calls = 0
+
+            def poll_once(self):
+                self.calls += 1
+                if self.calls % 2:
+                    raise RuntimeError("transient")
+                return {}
+
+        flaky = Flaky()
+        service.run_forever(flaky, poll_seconds=0, sleep=lambda _: None,
+                            should_continue=lambda: flaky.calls < 6,
+                            failure_threshold=3)
+
+        self.assertEqual(6, flaky.calls)
+        self.assertEqual(0, flaky.consecutive_poll_failures)
+
+    def test_the_service_reports_its_own_health(self):
+        svc, _, _, _, _ = build([], jobs=[])
+
+        self.assertTrue(svc.healthy)
+        svc.consecutive_poll_failures = service.POLL_FAILURE_THRESHOLD
+        self.assertFalse(svc.healthy)
+        self.assertFalse(svc.health()["healthy"])
 
 
 if __name__ == "__main__":

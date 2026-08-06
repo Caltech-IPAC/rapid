@@ -114,9 +114,40 @@ class StampTests(unittest.TestCase):
         self.assertEqual("rel-1",
                          self.client.tags[(BUCKET, KEY)]["producing-release"])
 
-    def test_an_unreadable_object_reads_as_untagged(self):
+    def test_an_absent_object_reads_as_untagged(self):
+        # Absence is a real answer: an attempt that died before uploading a
+        # bundle has nothing to tag.
         client = FakeS3Tagging(missing={KEY})
         self.assertIsNone(retention.read_retention_class(client, BUCKET, KEY))
+
+    def test_an_unreadable_tag_set_raises_rather_than_reading_as_untagged(self):
+        # REVIEW FINDING #16. This used to convert EVERY exception into "no
+        # retention tag" — and `stamp_retention` reads that as "nothing to
+        # protect" and writes whatever class it was given. So a transient or
+        # permission failure reading an existing FAILURE tag permitted it to
+        # be replaced with the shorter SUCCESS expiry, silently defeating the
+        # monotonic rule under the one condition it most needs to survive.
+        client = FakeS3Tagging(unreadable={KEY})
+        with self.assertRaises(retention.TagsUnreadable):
+            retention.read_retention_class(client, BUCKET, KEY)
+
+    def test_an_unreadable_tag_set_never_permits_a_shortening_rewrite(self):
+        # The consequence, end to end: with the read failing, nothing is
+        # written at all, so a longer-retention class cannot be shortened by
+        # a reader that could not find out what was there.
+        client = FakeS3Tagging(unreadable={KEY})
+        with self.assertRaises(retention.TagsUnreadable):
+            retention.stamp_retention(client, BUCKET, KEY, {"attempt_id": 1},
+                                      retention.CLASS_SUCCESS)
+        self.assertEqual([], client.put_calls)
+
+    def test_an_absent_bundle_is_not_an_error_to_stamp(self):
+        # Nothing to tag is not a failure — it is a recorded fact. The
+        # reconciler must still close the attempt.
+        client = FakeS3Tagging(missing={KEY})
+        self.assertIsNone(
+            retention.stamp_retention(client, BUCKET, KEY, {"attempt_id": 1},
+                                      retention.CLASS_FAILURE))
 
 
 if __name__ == "__main__":

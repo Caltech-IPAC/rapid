@@ -107,17 +107,67 @@ def _from_tag_set(tag_set):
     return {tag["Key"]: tag["Value"] for tag in tag_set or ()}
 
 
+class TagsUnreadable(RuntimeError):
+    """The object's tags could not be read, as distinct from being absent.
+
+    The distinction is the whole point (review finding #16). `read_retention_class`
+    used to convert EVERY exception — a throttle, a permission error, a
+    transient network fault — into "no retention tag", and `stamp_retention`
+    reads that as "nothing to protect" and writes whatever class it was given.
+    So a transient failure reading an existing FAILURE tag permitted it to be
+    replaced with the shorter SUCCESS expiry, silently, and the monotonic rule
+    that is supposed to make correction safe was defeated by the one condition
+    it most needs to survive.
+
+    Absence still returns None. Only "I could not find out" raises.
+    """
+
+
+#: The S3 error codes that mean the object genuinely has no tag set, as
+#: opposed to the call having failed. NoSuchTagSet is the documented answer
+#: for an object with no tags; NoSuchKey is an absent object, which the caller
+#: (not this function) decides how to treat.
+_ABSENCE_CODES = frozenset({"NoSuchTagSet", "NoSuchKey", "404"})
+
+
+def _error_code(exc):
+    """The S3 error code from a botocore ClientError, if this is one."""
+    response = getattr(exc, "response", None)
+    if isinstance(response, dict):
+        error = response.get("Error") or {}
+        code = error.get("Code")
+        if code is not None:
+            return str(code)
+        status = (response.get("ResponseMetadata") or {}).get("HTTPStatusCode")
+        if status is not None:
+            return str(status)
+    return None
+
+
 def read_retention_class(client, bucket, key):
     """The retention class currently on an object, or None if it has no tags.
 
-    A missing object is not an error here: the caller decides whether an absent
-    bundle is a fault, and this function only reports what tagging says.
+    A missing object or a missing tag set is not an error here: the caller
+    decides whether an absent bundle is a fault, and this function only
+    reports what tagging says.
+
+    **An unreadable tag set IS an error** (review finding #16). Absence and
+    failure are different facts and only one of them means "nothing to
+    protect" — see `TagsUnreadable`.
     """
     try:
         response = client.get_object_tagging(Bucket=bucket, Key=key)
-    except Exception as exc:  # noqa: BLE001 - absent or unreadable, same answer
-        logger.debug("no readable tags on %s/%s: %s", bucket, key, exc)
-        return None
+    except Exception as exc:  # noqa: BLE001 - classified, not swallowed
+        code = _error_code(exc)
+        if code in _ABSENCE_CODES:
+            logger.debug("no tag set on %s/%s (%s)", bucket, key, code)
+            return None
+        raise TagsUnreadable(
+            f"could not read the retention tag on {bucket}/{key}: {exc}. "
+            f"Absence and failure are different facts: treating this as "
+            f"'no retention tag' would permit a longer-retention class to be "
+            f"replaced with a shorter one."
+        ) from exc
     return _from_tag_set(response.get("TagSet")).get(TAG_RETENTION)
 
 
@@ -125,11 +175,31 @@ def stamp_retention(client, bucket, key, attempt_row, retention_class,
                     extra=None):
     """Write the canonical full tag set, refusing a shortening correction.
 
-    Returns the tag set written, or None when the write was skipped because the
-    object already carries a longer-retention class — the monotonic rule
-    holding, which is a normal outcome under replay and not an error.
+    Returns the tag set written, or None when nothing was written — either
+    because the object already carries a longer-retention class (the monotonic
+    rule holding, a normal outcome under replay) or because there is no bundle
+    to tag (an attempt that died before uploading one has nothing to stamp,
+    which is a recorded fact rather than a failure).
+
+    RAISES on anything else (review finding #16): a tag set that could not be
+    READ, or a tagging call that failed. The caller defers the attempt and
+    retries on the next poll rather than terminalizing a row whose bundle was
+    never stamped — a terminal row is outside the open set, so an unstamped
+    bundle would then expire under the wrong lifecycle rule with nothing left
+    to notice.
     """
-    current = read_retention_class(client, bucket, key)
+    try:
+        current = read_retention_class(client, bucket, key)
+    except TagsUnreadable:
+        raise
+    except Exception as exc:  # noqa: BLE001 - absent object, nothing to tag
+        code = _error_code(exc)
+        if code in _ABSENCE_CODES:
+            logger.info("no bundle at %s/%s to stamp; nothing to retain",
+                        bucket, key)
+            return None
+        raise
+
     if not is_monotonic(current, retention_class):
         logger.info(
             "retention for %s/%s stays %s; refusing to shorten it to %s",
@@ -137,8 +207,15 @@ def stamp_retention(client, bucket, key, attempt_row, retention_class,
         return None
 
     tags = canonical_tag_set(attempt_row, retention_class, extra=extra)
-    client.put_object_tagging(Bucket=bucket, Key=key,
-                              Tagging={"TagSet": _to_tag_set(tags)})
+    try:
+        client.put_object_tagging(Bucket=bucket, Key=key,
+                                  Tagging={"TagSet": _to_tag_set(tags)})
+    except Exception as exc:  # noqa: BLE001 - classified
+        if _error_code(exc) in _ABSENCE_CODES:
+            logger.info("no bundle at %s/%s to stamp; nothing to retain",
+                        bucket, key)
+            return None
+        raise
     logger.info("stamped %s/%s retention=%s (%d tags)",
                 bucket, key, retention_class, len(tags))
     return tags

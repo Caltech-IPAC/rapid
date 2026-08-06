@@ -338,6 +338,50 @@ class PublishTests(unittest.TestCase):
         self.assertEqual(checksum(raw), result.checksum)
         self.assertEqual(1, json.loads(raw)["record_sequence"])
 
+    def test_a_superseded_record_declares_the_sequence_it_landed_at(self):
+        # REVIEW FINDING #15. The body was serialized ONCE before the climb
+        # loop, so when sequence 1 already held different bytes the new
+        # account was written at the sequence-2 KEY while its
+        # `record_sequence` field still said 1 — and the row stored the stale
+        # sequence too. A consumer selecting "the highest sequence" would read
+        # a record that says it is a lower one.
+        occupied = closure.build_closure_record(
+            self.row, None, sequence=1, predecessor=None,
+            classification="never_resolved")
+        closure.publish_closure_record(self.store, PREFIX, self.row, occupied)
+
+        # A DIFFERENT account for the same attempt at the same sequence.
+        superseding = closure.build_closure_record(
+            self.row, None, sequence=1, predecessor=None,
+            classification="abrupt_loss", error_category="scheduler_reclaimed")
+        result = closure.publish_closure_record(
+            self.store, PREFIX, self.row, superseding)
+
+        self.assertEqual(2, result.sequence)
+        self.assertIn("seq-0002", result.key)
+        body = json.loads(self.store.get(result.key))
+        self.assertEqual(2, body["record_sequence"],
+                         "the record must declare the sequence it is stored "
+                         "at, not the one it was built for")
+
+    def test_the_original_record_at_the_lower_sequence_is_untouched(self):
+        # Records are immutable: superseding publishes alongside, never over.
+        first = closure.build_closure_record(
+            self.row, None, sequence=1, predecessor=None,
+            classification="never_resolved")
+        first_result = closure.publish_closure_record(
+            self.store, PREFIX, self.row, first)
+
+        second = closure.build_closure_record(
+            self.row, None, sequence=1, predecessor=None,
+            classification="abrupt_loss", error_category="scheduler_reclaimed")
+        closure.publish_closure_record(self.store, PREFIX, self.row, second)
+
+        kept = json.loads(self.store.get(first_result.key))
+        self.assertEqual(1, kept["record_sequence"])
+        self.assertEqual("never_resolved",
+                         kept["reconciliation_classification"])
+
 
 if __name__ == "__main__":
     unittest.main()

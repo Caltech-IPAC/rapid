@@ -34,17 +34,40 @@ class FakeBatch:
         return {"jobs": [self.jobs[i] for i in jobs if i in self.jobs]}
 
 
+class FakeClientError(Exception):
+    """A botocore ClientError's shape, as the retention code reads it.
+
+    Carries `response["Error"]["Code"]`, which is how absence (NoSuchKey,
+    NoSuchTagSet) is told from failure (AccessDenied, throttling, a network
+    fault). That distinction is review finding #16: the code used to convert
+    EVERY exception to "no retention tag", and a "no tag" answer lets a
+    shortening rewrite through — so a transient read failure could replace a
+    failure-class bundle's retention with the shorter success expiry.
+
+    The stub raised a bare KeyError before, which is not a shape any
+    classifier could act on.
+    """
+
+    def __init__(self, code, message="stubbed s3 error"):
+        super().__init__(f"{code}: {message}")
+        self.response = {"Error": {"Code": code, "Message": message}}
+
+
 class FakeS3Tagging:
     """The tagging subset of an S3 client, with the real replace-whole-set rule."""
 
-    def __init__(self, missing=()):
+    def __init__(self, missing=(), unreadable=()):
         self.tags = {}
         self.missing = set(missing)
+        #: Keys whose tag read FAILS, as distinct from having no tags.
+        self.unreadable = set(unreadable)
         self.put_calls = []
 
     def get_object_tagging(self, Bucket, Key):  # noqa: N803 - boto3 casing
+        if Key in self.unreadable:
+            raise FakeClientError("AccessDenied", "tag read refused")
         if Key in self.missing:
-            raise KeyError(f"no such object {Key}")
+            raise FakeClientError("NoSuchKey", f"no such object {Key}")
         stored = self.tags.get((Bucket, Key))
         if stored is None:
             return {"TagSet": []}
@@ -53,7 +76,7 @@ class FakeS3Tagging:
 
     def put_object_tagging(self, Bucket, Key, Tagging):  # noqa: N803
         if Key in self.missing:
-            raise KeyError(f"no such object {Key}")
+            raise FakeClientError("NoSuchKey", f"no such object {Key}")
         self.put_calls.append((Bucket, Key, Tagging))
         # Replace the whole set, exactly as S3 does.
         self.tags[(Bucket, Key)] = {
@@ -74,8 +97,8 @@ class FakeCursor:
         return False
 
     def execute(self, statement, params=None):
-        text = statement if isinstance(statement, str) else statement.as_string(
-            self.conn)
+        text = statement if isinstance(statement, str) \
+            else _render_composed(statement)
         self.conn.statements.append((text, params))
         handler = self.conn.route(text, params)
         if handler is None:
@@ -145,10 +168,24 @@ class FakeConnection:
 
     def _select_attempts(self, text, params):
         columns = _columns_of(text)
-        if "lifecycle_state = any" in text.lower():
+        lowered = text.lower()
+        if "lifecycle_state = any" in lowered:
             wanted = set(params[0])
             matched = [row for row in self.rows.values()
                        if row.get("lifecycle_state") in wanted]
+            # The bounded supersession requery (FixA, review finding #15)
+            # carries two more predicates. Modelling them is the point: a stub
+            # that returned every terminal row whatever the WHERE clause said
+            # could not tell a bounded requery from an unbounded rescan of all
+            # history, which is the thing the bound exists to prevent.
+            if "scheduler_job_id is not null" in lowered:
+                matched = [row for row in matched
+                           if row.get("scheduler_job_id") is not None]
+            if "ended_at is not null and ended_at >= %s" in lowered:
+                horizon = params[1]
+                matched = [row for row in matched
+                           if row.get("ended_at") is not None
+                           and row["ended_at"] >= horizon]
             matched.sort(key=lambda row: row["attempt_id"])
         else:
             attempt_id = params[0]
@@ -158,6 +195,36 @@ class FakeConnection:
         description = [(name,) for name in columns]
         return ([tuple(row.get(name) for name in columns) for row in matched],
                 description)
+
+
+def _render_composed(statement):
+    """Render a `psycopg2.sql.Composed` without a live connection.
+
+    `Composed.as_string()` needs a real connection or cursor to quote
+    identifiers — it calls into libpq — and `FakeConnection` is not one, so
+    passing it raised `TypeError: argument 2 must be a connection or a
+    cursor`. That made every test whose path reaches `lease.reread_attempt`
+    fail on import of the SQL, not on anything the test was about.
+
+    (Found by FixA, 2026-08-06, and PRE-EXISTING: the same failure reproduces
+    on the unmodified branch. The reconciler suite was never run by W5's
+    in-image runner, which is how a red suite stayed invisible — FixA's runner
+    adds it.)
+
+    Identifiers here are internal column names from a module-level tuple, so
+    rendering them with plain double quotes is faithful to what psycopg2 would
+    produce and needs no connection.
+    """
+    from psycopg2 import sql
+
+    if isinstance(statement, sql.Identifier):
+        return ".".join('"' + part.replace('"', '""') + '"'
+                        for part in statement.strings)
+    if isinstance(statement, sql.SQL):
+        return statement.string
+    if isinstance(statement, sql.Composed):
+        return "".join(_render_composed(item) for item in statement.seq)
+    return str(statement)
 
 
 def _columns_of(text):

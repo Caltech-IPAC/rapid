@@ -63,8 +63,15 @@ class RecordingExecutor:
         if text.strip().upper().startswith("SELECT"):
             return self._select(text, params)
         if "INSERT INTO logical_jobs" in text:
+            # `ON CONFLICT DO NOTHING RETURNING logical_job_id` (FixA, #3):
+            # one row back when the insert landed, none when it conflicted.
+            # The writer verifies a conflict against the recorded binding
+            # rather than ignoring it, so the two cases must be
+            # distinguishable here.
+            if params[0] in self.logical_jobs:
+                return []
             self.logical_jobs[params[0]] = list(params)
-            return 1
+            return [(params[0],)]
         if "INSERT INTO attempt_stages" in text:
             self.stages.append(list(params))
             return 1
@@ -79,12 +86,22 @@ class RecordingExecutor:
     # -- simulated behaviour -------------------------------------------------
 
     def _resolve(self, params: Any) -> Any:
+        """Model migration 017's resolver, claim/index split included.
+
+        The claim lands in `application_claim_index`, NOT
+        `application_attempt_index` (review finding #9): the latter is the
+        DDL's evidence the application RAN, and writing it at claim time was
+        what made a container killed between claim and start unclosable as
+        terminal-without-start. The started compare-and-set copies the claim
+        forward, so a row claimed here is still `submitted` with a NULL
+        attempt index — which is exactly the state the started CAS requires.
+        """
         run_id, logical_job_id, scheduler_job_id = params[0], params[1], params[2]
         app_index = params[3]
 
         for attempt_id, row in self.rows.items():
             if (row.get("logical_job_id") == logical_job_id
-                    and row.get("application_attempt_index") == app_index):
+                    and row.get("application_claim_index") == app_index):
                 return [(attempt_id,)]
 
         attempt_id = self._next_attempt_id
@@ -94,7 +111,8 @@ class RecordingExecutor:
             "run_id": run_id,
             "logical_job_id": logical_job_id,
             "scheduler_job_id": scheduler_job_id,
-            "application_attempt_index": app_index,
+            "application_claim_index": app_index,
+            "application_attempt_index": None,
             "scheduler_attempt_index": params[4],
             "lifecycle_state": ("submitted" if logical_job_id in self.logical_jobs
                                 or not self.logical_jobs
@@ -113,11 +131,34 @@ class RecordingExecutor:
         return [(attempt_id,)]
 
     def _update_attempt(self, text: str, params: Any) -> int:
-        attempt_id = params[-1]
+        # A compare-and-set transition ends `WHERE attempt_id = %s AND
+        # lifecycle_state = %s`, so the attempt id is the second-to-last
+        # parameter and the required state is the last. An unconditional
+        # transition ends `WHERE attempt_id = %s` and the id is last.
+        #
+        # Modelling the guard is the point (FixA, review finding #10): the
+        # started and application-closed transitions became real
+        # compare-and-sets, and a stub that returned 1 whatever the WHERE
+        # clause said could not tell a CAS from the unconditional UPDATE it
+        # replaced — so the tests asserting "a second writer does not
+        # overwrite the first" would pass against either.
+        guarded = text.rstrip().endswith("AND lifecycle_state = %s")
+        if guarded:
+            attempt_id = params[-2]
+            required_state = params[-1]
+        else:
+            attempt_id = params[-1]
+            required_state = None
+
         if attempt_id in self.missing_attempt_ids:
             return 0
         row = self.rows.get(attempt_id)
         if row is None:
+            return 0
+        if required_state is not None \
+                and row.get("lifecycle_state") != required_state:
+            # The row has left the state this transition may leave. Zero rows
+            # matched, which is what the database would report.
             return 0
 
         # The lifecycle state is the first parameter of every transition

@@ -238,6 +238,22 @@ class AttemptWriter:
         overwrite a binding already recorded. The binding is written once and
         never updated, so a replayed submission cannot silently rewrite what a
         running attempt believes it is executing.
+
+        **A conflict is checked, not ignored (review finding #3).** The
+        `ON CONFLICT DO NOTHING` above is the right write — a replayed
+        submission must not rewrite a live binding — but combined with a
+        logical-job key that was not run-scoped it meant reprocessing an
+        exposure/SCA under a second run silently kept the FIRST run's binding,
+        and a scheduler retry copied that stale manifest, image, release and
+        run identity forward. The key is run-scoped now
+        (`ProcessingUnit.logical_job_key`), so a conflict can only mean a
+        genuine replay of the same submission — and this verifies that is what
+        it is, rather than trusting it.
+
+        A conflict whose recorded binding DISAGREES with the one offered is a
+        `LogicalJobConflict`: two different submissions have claimed one
+        identity, and continuing would attach attempts to a binding that does
+        not describe them.
         """
         sql = (
             "INSERT INTO logical_jobs ("
@@ -246,15 +262,75 @@ class AttemptWriter:
             "  scheduler_job_id"
             ") VALUES (%s, %s, %s, %s, %s, %s, %s, %s)"
             " ON CONFLICT (logical_job_id) DO NOTHING"
+            " RETURNING logical_job_id"
         )
-        self._execute(sql, [
+        inserted = self._execute(sql, [
             logical_job_id, run_id, binding.job_definition_arn,
             binding.job_definition_rev, binding.image_digest,
             binding.release_identity, binding.manifest_checksum,
             scheduler_job_id,
         ])
+
+        if _rowcount(inserted, "create_logical_job") == 0:
+            self._verify_logical_job(logical_job_id, run_id, binding)
+            return
+
         logger.info("recorded logical job %s (image %s)",
                     logical_job_id, binding.image_digest)
+
+    def _verify_logical_job(self, logical_job_id: str, run_id: str,
+                            binding: ExecutionBinding) -> None:
+        """Confirm an existing logical job is the one we meant to write.
+
+        Reached only when the insert conflicted. A replay of the same
+        submission agrees on every binding field and is fine; anything else is
+        two submissions contending for one identity, which the run-scoped key
+        is supposed to make impossible — so if it happens, it is a defect
+        somewhere upstream and must not be absorbed.
+        """
+        rows = self._execute(
+            "SELECT run_id, job_definition_arn, image_digest,"
+            "       manifest_checksum, release_identity"
+            " FROM logical_jobs WHERE logical_job_id = %s",
+            [logical_job_id])
+        if not rows:
+            raise LogicalJobConflict(
+                f"logical job {logical_job_id!r} conflicted on insert but "
+                f"cannot be read back; the row was created and removed "
+                f"concurrently, or the executor does not return result sets")
+
+        row = rows[0]
+        existing = (row if isinstance(row, dict) else {
+            name: value for name, value in zip(
+                ("run_id", "job_definition_arn", "image_digest",
+                 "manifest_checksum", "release_identity"), row)})
+
+        offered = {
+            "run_id": run_id,
+            "job_definition_arn": binding.job_definition_arn,
+            "image_digest": binding.image_digest,
+            "manifest_checksum": binding.manifest_checksum,
+            "release_identity": binding.release_identity,
+        }
+        disagreements = {
+            field: (existing.get(field), value)
+            for field, value in offered.items()
+            if existing.get(field) != value
+        }
+        if disagreements:
+            detail = "; ".join(
+                f"{field}: recorded {recorded!r}, offered {new!r}"
+                for field, (recorded, new) in sorted(disagreements.items()))
+            raise LogicalJobConflict(
+                f"logical job {logical_job_id!r} already exists with a "
+                f"different execution binding ({detail}). Two submissions "
+                f"have claimed one logical-job identity; attempts created "
+                f"under this id would carry a binding that does not describe "
+                f"them.")
+
+        logger.info("logical job %s already recorded with an identical "
+                    "binding; treating as a replayed submission",
+                    logical_job_id)
 
     def resolve_attempt(self, identity: AttemptIdentity, created_at: Any,
                         submitted_at: Any,
@@ -461,37 +537,63 @@ class AttemptWriter:
     def mark_started(self, attempt_id: int, started_at: Any,
                      provenance: Provenance,
                      scheduler_job_id: str | None = None,
-                     application_attempt_index: int | None = None) -> None:
-        """Advance a row to `started`.
+                     application_attempt_index: int | None = None,
+                     config_snapshot_key: str | None = None) -> None:
+        """Advance a row to `started`. A real compare-and-set.
 
         Provenance is required here, not optional: the DDL will reject a
         `started` row without it. `scheduler_job_id` may be supplied for a row
         that was created without one and never backfilled — it is never absent
         once a row reaches `started`.
 
-        `application_attempt_index` is required at schema_version >= 2 unless
-        the row already carries one from `resolve_attempt` (the normal path —
-        the resolver sets it as part of claiming). It is written with COALESCE
-        so re-supplying the same value is harmless and a claimed row is never
-        re-indexed.
+        **This is the transition that binds the configuration snapshot**
+        (review finding #10). The adopted design: "The attempt→snapshot
+        binding is a single database write: the same compare-and-set that
+        marks the attempt started carries the digest and snapshot key, so
+        there is no bound-but-unpersisted or worked-but-unbound state."
+        `start_attempt` passed the key and it was only logged — the row bound
+        the digest and not the object holding it, so the key had to be
+        re-derived from the mutable records prefix afterwards. Migration 017
+        adds the column; this writes it.
+
+        **It is a compare-and-set, not an unconditional UPDATE** (review
+        finding #10). The statement used to match on `attempt_id` alone, so two
+        startup writers could both "start" one row and the later one would
+        overwrite the first's start time and provenance. The WHERE clause now
+        requires the row to still be in a state a start may leave — `submitted`
+        — so exactly one writer wins and a second gets `AttemptNotFound`
+        rather than silently clobbering.
+
+        **`application_attempt_index` is written HERE, not at claim time**
+        (review finding #9). It is the DDL's evidence that the application
+        ran: `terminal_without_start` forbids it. Migration 017 moved the
+        resolver's claim into `application_claim_index` so that a container
+        killed between claim and start leaves a row that can still be closed
+        as never-started — the specification's own legal window. This
+        transition is where the claim becomes a start.
         """
         sql = (
             "UPDATE attempts SET lifecycle_state = %s, started_at = %s,"
             "  source_sha = %s, container_digest = %s,"
             "  job_definition_rev = %s, config_digest = %s,"
+            "  config_snapshot_key = %s,"
             "  scheduler_job_id = COALESCE(%s, scheduler_job_id),"
-            "  application_attempt_index ="
-            "    COALESCE(application_attempt_index, %s)"
-            " WHERE attempt_id = %s"
+            "  application_attempt_index = COALESCE("
+            "    %s, application_claim_index, application_attempt_index)"
+            " WHERE attempt_id = %s AND lifecycle_state = %s"
         )
         result = self._execute(sql, [
             LifecycleState.STARTED.value, started_at,
             provenance.source_sha, provenance.container_digest,
             provenance.job_definition_rev, provenance.config_digest,
+            config_snapshot_key,
             scheduler_job_id, application_attempt_index, attempt_id,
+            LifecycleState.SUBMITTED.value,
         ])
-        _require_one_row(result, "mark_started", attempt_id)
-        logger.info("attempt %s started", attempt_id)
+        _require_one_row(result, "mark_started", attempt_id,
+                         expected_state=LifecycleState.SUBMITTED.value)
+        logger.info("attempt %s started (snapshot %s)",
+                    attempt_id, config_snapshot_key)
 
     def mark_application_closed(self, attempt_id: int, ended_at: Any,
                                 application_intended_exit: int,
@@ -522,6 +624,13 @@ class AttemptWriter:
         `reconciler_materialized` is set only by the reconciler, when it
         projects this transition from a validated S3 record — the one
         sanctioned projection of application facts by another writer.
+
+        **A real compare-and-set (review finding #10).** The statement used to
+        match on `attempt_id` alone, so a replayed or concurrent close could
+        overwrite an already-closed row's outcome. It now requires the row to
+        still be `started` — the only state an application-close may leave —
+        so a second closer gets `AttemptNotFound` instead of silently
+        rewriting the first one's account.
         """
         if terminal_record_sequence < 0:
             raise ValueError(
@@ -535,7 +644,7 @@ class AttemptWriter:
             "  product_disposition = %s, error_category = %s,"
             "  terminal_record_key = %s, terminal_record_sequence = %s,"
             "  terminal_record_checksum = %s, reconciler_materialized = %s"
-            " WHERE attempt_id = %s"
+            " WHERE attempt_id = %s AND lifecycle_state = %s"
         )
         result = self._execute(sql, [
             LifecycleState.APPLICATION_CLOSED.value, ended_at,
@@ -543,8 +652,10 @@ class AttemptWriter:
             _value(product_disposition), error_category,
             terminal_record_key, terminal_record_sequence,
             terminal_record_checksum, reconciler_materialized, attempt_id,
+            LifecycleState.STARTED.value,
         ])
-        _require_one_row(result, "mark_application_closed", attempt_id)
+        _require_one_row(result, "mark_application_closed", attempt_id,
+                         expected_state=LifecycleState.STARTED.value)
         logger.info(
             "attempt %s application-closed (intended exit %s, outcome %s, "
             "record %s seq %s%s)",
@@ -618,26 +729,50 @@ class AttemptWriter:
 
     def mark_terminal_without_start(self, attempt_id: int, ended_at: Any,
                                     scheduler_state: str,
-                                    error_category: str | None = None) -> None:
+                                    error_category: str | None = None,
+                                    closure_record_key: str | None = None,
+                                    closure_record_sequence: int | None = None,
+                                    ) -> None:
         """Close an attempt that never ran.
 
         No exit code, no application outcome, no product disposition — nothing
         ran, so none of those facts exist. They are left NULL rather than
         zero-filled, and the DDL forbids them in this state.
+
+        **The closure record IS cited (review finding #14).** "The reconciler
+        closes *every* attempt with a closure record" — including this one.
+        013 forbade `terminal_record_key` here, correctly: that column is the
+        APPLICATION's sequence-0 record, which a never-started attempt indeed
+        never wrote. But it left the RECONCILER's closure record with nowhere
+        to be cited from, so the published object was unreferenced from the
+        row it accounts for and findable only by reconstructing its key.
+        Migration 017 adds the reconciler-authored pair; this writes it.
         """
         _validate_scheduler_state(scheduler_state)
+        if (closure_record_key is None) != (closure_record_sequence is None):
+            raise ValueError(
+                "a closure record is cited by key AND sequence or by neither; "
+                f"got key={closure_record_key!r} "
+                f"sequence={closure_record_sequence!r}")
+        if closure_record_sequence is not None and closure_record_sequence < 1:
+            raise ValueError(
+                f"the application owns sequence 0; a reconciler closure "
+                f"record is sequence >= 1, got {closure_record_sequence}")
+
         sql = (
             "UPDATE attempts SET lifecycle_state = %s, ended_at = %s,"
-            "  scheduler_state = %s, error_category = %s"
+            "  scheduler_state = %s, error_category = %s,"
+            "  closure_record_key = %s, closure_record_sequence = %s"
             " WHERE attempt_id = %s"
         )
         result = self._execute(sql, [
             LifecycleState.TERMINAL_WITHOUT_START.value, ended_at,
-            scheduler_state, error_category, attempt_id,
+            scheduler_state, error_category,
+            closure_record_key, closure_record_sequence, attempt_id,
         ])
         _require_one_row(result, "mark_terminal_without_start", attempt_id)
-        logger.info("attempt %s terminal without start (%s)",
-                    attempt_id, scheduler_state)
+        logger.info("attempt %s terminal without start (%s, closure %s)",
+                    attempt_id, scheduler_state, closure_record_key)
 
     def mark_abrupt_loss(self, attempt_id: int, ended_at: Any,
                          scheduler_state: str,
@@ -802,6 +937,18 @@ class AttemptWriter:
 _SIGKILL_EXIT_CODE = 137
 
 
+class LogicalJobConflict(RuntimeError):
+    """Two submissions claimed one logical-job identity with different bindings.
+
+    Raised by `create_logical_job` when its insert conflicted and the recorded
+    binding disagrees with the one offered (W-FixA, review finding #3). Under
+    the run-scoped logical-job key this should be unreachable — which is why it
+    raises rather than warns: reaching it means the key stopped being unique
+    per submission, and every attempt created afterwards would carry a binding
+    that does not describe it.
+    """
+
+
 class AttemptNotFound(RuntimeError):
     """A lifecycle transition matched no row.
 
@@ -850,10 +997,27 @@ def _rowcount(result: Any, operation: str) -> int:
         f"cannot say is not usable for one.")
 
 
-def _require_one_row(result: Any, operation: str, attempt_id: Any) -> None:
-    """Assert that a transition advanced exactly the one row it named."""
+def _require_one_row(result: Any, operation: str, attempt_id: Any,
+                     expected_state: str | None = None) -> None:
+    """Assert that a transition advanced exactly the one row it named.
+
+    `expected_state` names the lifecycle state a compare-and-set transition
+    required. Where one is given, a zero-row result has two possible causes —
+    the attempt does not exist, or it is no longer in the state the transition
+    may leave — and the message says both, because the second is the
+    interesting one: it means another writer got there first, which is the
+    compare-and-set doing its job rather than a caller bug.
+    """
     count = _rowcount(result, operation)
     if count == 0:
+        if expected_state is not None:
+            raise AttemptNotFound(
+                f"{operation}: no attempt row with attempt_id={attempt_id!r} "
+                f"in lifecycle state {expected_state!r}. Either the attempt "
+                f"does not exist, or it has already left that state — a "
+                f"concurrent or replayed writer reached it first. Nothing was "
+                f"written, which is the compare-and-set holding: this "
+                f"transition never overwrites another writer's account.")
         raise AttemptNotFound(
             f"{operation}: no attempt row with attempt_id={attempt_id!r}. A "
             f"lifecycle transition against a nonexistent attempt is a caller "
