@@ -83,9 +83,14 @@ def now():
 
 def binding_for(suffix="1"):
     """A COMPLETE execution binding — every field, per finding #11."""
+    # The account segment is a non-numeric placeholder deliberately: this repo
+    # is PUBLIC and .githooks/pre-push hard-blocks any 12-digit account-shaped
+    # literal with no allowlist. Nothing here resolves an ARN — the probe only
+    # compares bindings for equality — so a placeholder is the whole
+    # requirement.
     return ExecutionBinding(
         job_definition_arn=(
-            "arn:aws:batch:us-east-1:000000000000:job-definition/"
+            "arn:aws:batch:us-east-1:ACCOUNT:job-definition/"
             f"rapid-pipeline-science:{suffix}"),
         image_digest="sha256:" + "0" * 64,
         manifest_checksum="sha256:" + "1" * 64,
