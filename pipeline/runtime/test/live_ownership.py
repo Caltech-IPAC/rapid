@@ -210,7 +210,7 @@ def main():
             job_definition_rev="7",
             config_digest=config_digest,
         )
-        started = termination.start_attempt(
+        termination.start_attempt(
             writer, ownership.attempt_id, provenance, config_digest,
             "records/config-snapshots/sha256/deadbeef.json",
             scheduler_job_id=scheduler_job_id,
