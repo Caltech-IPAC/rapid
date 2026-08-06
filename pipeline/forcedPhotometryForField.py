@@ -57,7 +57,7 @@ from astropy.table import QTable, join
 
 import database.modules.utils.rapid_db as db
 import modules.utils.rapid_pipeline_subs as util
-import database.modules.utils.roman_tessellation_db as sqlite
+import database.modules.utils.roman_tessellation_db as tessellation
 from pipeline.runtime.process import run_tool
 
 
@@ -104,16 +104,11 @@ if sky_positions_csv_file is None:
     exit(64)
 
 
-# Ensure sqlite database that defines the Roman sky tessellation is available.
+# Sky tessellation: closed form, no database file (W7). Centre and corner
+# queries are arithmetic, so there is nothing to open and no
+# ROMANTESSELLATIONDBNAME to check.
 
-roman_tessellation_dbname = os.getenv('ROMANTESSELLATIONDBNAME')
-
-if roman_tessellation_dbname is None:
-
-    print("*** Error: Env. var. ROMANTESSELLATIONDBNAME not set; quitting...")
-    exit(64)
-
-roman_tessellation_db = sqlite.RomanTessellationNSIDE512()
+roman_tessellation_db = tessellation.RomanTessellationClosedForm()
 
 
 # Other required environment variables.

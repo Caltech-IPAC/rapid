@@ -21,7 +21,7 @@ to_zone = tz.gettz('America/Los_Angeles')
 
 import database.modules.utils.rapid_db as db
 import modules.utils.rapid_pipeline_subs as util
-import database.modules.utils.roman_tessellation_db as sqlite
+import database.modules.utils.roman_tessellation_db as tessellation
 
 level6 = 6
 nside6 = 2**level6
@@ -93,16 +93,14 @@ print(f"do_loading = {do_loading}")
 print("proc_date =",proc_date)
 
 
-# Ensure sqlite database that defines the Roman sky tessellation is available.
+# Sky tessellation: closed form, no database file (W7).
+#
+# Certification proved the tessellation regular, so rtid(ra, dec) is
+# arithmetic. There is nothing to open, so no ROMANTESSELLATIONDBNAME and
+# no exit(64) path — the 1.4 GiB SQLite file this used to require is not
+# consulted at runtime any more.
 
-roman_tessellation_dbname = os.getenv('ROMANTESSELLATIONDBNAME')
-
-if roman_tessellation_dbname is None:
-
-    print("*** Error: Env. var. ROMANTESSELLATIONDBNAME not set; quitting...")
-    exit(64)
-
-roman_tessellation_db = sqlite.RomanTessellationNSIDE512()
+roman_tessellation_db = tessellation.RomanTessellationClosedForm()
 
 
 # Other required environment variables.
@@ -290,9 +288,11 @@ def write_joined_table_inner_to_csv_file(isdiffpos,
     ra_arr = np.array(t['ra'], dtype=np.float64)
     dec_arr = np.array(t['dec'], dtype=np.float64)
 
-    # Vectorize the rtid lookup instead of one SQLite query per row
-    field_arr = np.array([roman_tessellation_db.get_rtid(ra, dec)
-                          for ra, dec in zip(ra_arr, dec_arr)])
+    # rtid for every source in one vectorized pass. This was a list
+    # comprehension over an R-tree query per source — thousands per SCA,
+    # each a round trip into SQLite. It is now arithmetic over the whole
+    # catalog at once, with no I/O (W7).
+    field_arr = roman_tessellation_db.get_rtid_array(ra_arr, dec_arr)
 
     # Build entire CSV block at once using numpy column stacking
     data = np.column_stack([

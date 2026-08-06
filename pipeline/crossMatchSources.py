@@ -10,7 +10,7 @@ from psycopg2 import sql
 
 import database.modules.utils.rapid_db as db
 import modules.utils.rapid_pipeline_subs as util
-import database.modules.utils.roman_tessellation_db as sqlite
+import database.modules.utils.roman_tessellation_db as tessellation
 
 
 swname = "crossMatchSources.py"
@@ -59,14 +59,9 @@ if proc_date is None:
 print("proc_date =",proc_date)
 
 
-# Ensure sqlite database that defines the Roman sky tessellation is available.
-
-roman_tessellation_dbname = os.getenv('ROMANTESSELLATIONDBNAME')
-
-if roman_tessellation_dbname is None:
-
-    print("*** Error: Env. var. ROMANTESSELLATIONDBNAME not set; quitting...")
-    exit(64)
+# Sky tessellation: closed form, no database file (W7). Neighbour,
+# centre and corner queries are arithmetic, so there is nothing to open
+# and no ROMANTESSELLATIONDBNAME to check.
 
 
 
@@ -587,7 +582,7 @@ def run_single_core_job_stage_2_crossmatching(scas,fields,index_thread):
 
     # Open Roman tessellation database.
 
-    roman_tessellation_db = sqlite.RomanTessellationNSIDE512()
+    roman_tessellation_db = tessellation.RomanTessellationClosedForm()
 
 
     fh.write(f"\nStart of run_single_core_job: index_thread={index_thread}, dbh={dbh}\n")

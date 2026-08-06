@@ -218,10 +218,13 @@ class RoundTripAgainstTheMasterIniTests(unittest.TestCase):
         self.assertTrue(self.ini.sections())
 
     def test_every_extracted_value_equals_the_ini(self):
-        # `release` and `science` are W4-authored, not extracted: the
-        # first is new, the second was relocated from SSM rather than
-        # from the .ini. Everything else must round-trip exactly.
-        authored = {"release", "science"}
+        # `release`, `science` and `tessellation` are authored, not
+        # extracted: the first is new, the second was relocated from SSM
+        # rather than from the .ini, and the third (W7) pins the sky
+        # tessellation version, which the .ini never carried at all — the
+        # tessellation was identified only by the SQLite file baked into
+        # the image. Everything else must round-trip exactly.
+        authored = {"release", "science", "tessellation"}
         compared = 0
         for name, values in self.toml.items():
             if name in authored:

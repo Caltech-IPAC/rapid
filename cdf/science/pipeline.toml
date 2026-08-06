@@ -54,6 +54,35 @@
 # image digest that identifies the file byte-for-byte.
 schema_version = 1
 
+[tessellation]
+# THE ACTIVE SKY-TESSELLATION VERSION (W7, 2026-08-06).
+#
+# The tessellation assigns every source to a sky tile (rtid), so it is
+# science-affecting by the plainest reading of the placement criterion: a
+# different tessellation puts the same source in a different field, which
+# changes what is coadded, what is matched, and what is forced-photometered.
+# Switching versions is therefore a RELEASE change, pinned here — never
+# in the mutable parameter tree, where a product's scientific identity
+# could change without any release changing.
+#
+# `version` selects rows from rapid-db's `tessellation` table (see
+# rapid_systems cloudformation/db-migrations/015-tessellation.sql).
+# `digest` is the canonical content digest the builder produced for that
+# version (rapid_systems tools/tessellation/build.py); it is recorded in
+# provenance and is what a consumer checks the loaded rows against.
+#
+# Certification (rapid_systems tools/tessellation/certification-2026-08-06.txt)
+# proved this tessellation REGULAR: rtid(ra, dec) is closed-form
+# computable, so the pipeline computes it arithmetically and never queries
+# a table on the hot path. The version pin still governs — it says WHICH
+# rule and which row set the products were made against, and the access
+# module refuses to run if the constants it computes from disagree with
+# the pinned digest.
+version = "nside512-v2"
+digest = "ee5b7a614de1ca9a57483660ab47338219932bed9447a9345c48c360c8767cd9"
+nside = 512
+nrows = 6291458
+
 [science]
 # Relocated from the /rapid/pipeline/science/* parameter tree by W4
 # (2026-08-06) — both failed the placement criterion.
