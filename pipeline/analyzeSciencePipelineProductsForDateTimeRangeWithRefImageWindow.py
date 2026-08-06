@@ -10,6 +10,8 @@ to_zone = tz.gettz('America/Los_Angeles')
 import database.modules.utils.rapid_db as db
 from pipeline.runtime.process import run_shell
 from pipeline.runtime.errors import ToolError
+from submission.routes import JOB_TYPE_SCIENCE, ppid_for
+from submission.startup import fetch_parameters
 
 swname = "analyzeSciencePipelineProductsForDateTimeRangeWithRefImageWindow.py"
 swvers = "1.0"
@@ -135,6 +137,18 @@ cfg_path = rapid_sw + "/cdf"
 
 print("rapid_sw =",rapid_sw)
 print("cfg_path =",cfg_path)
+
+
+# Single-homed facts (W4 sweep). The products bucket is operational
+# configuration and lives in the parameter tree; the science pipeline's
+# ppid is routing and lives in the route matrix. Both used to be literals
+# further down this file.
+
+science_ppid = ppid_for(JOB_TYPE_SCIENCE)
+products_bucket = fetch_parameters()["s3/products-bucket"]
+
+print("science_ppid =",science_ppid)
+print("products_bucket =",products_bucket)
 
 
 # Read input parameters from .ini file.
@@ -271,8 +285,12 @@ if __name__ == '__main__':
 
     for rid in rid_list:
 
+        # ppid from the route matrix, not a literal (W4 single-homing
+        # sweep). It is an int from a validated map, so interpolating it
+        # into this query string introduces nothing execute_sql_queries
+        # could not already be handed.
         query = f"SELECT jid FROM jobs " +\
-            f"WHERE rid = {rid} AND ppid = 15;"
+            f"WHERE rid = {rid} AND ppid = {science_ppid};"
 
         sql_queries = []
         sql_queries.append(query)
@@ -286,7 +304,7 @@ if __name__ == '__main__':
         for record in records:
             jid = record[0]
 
-        s3_url = f"s3://rapid-product-files/{proc_date}/jid{jid}"
+        s3_url = f"s3://{products_bucket}/{proc_date}/jid{jid}"
 
         print(f"=====>s3_url = {s3_url}")
 

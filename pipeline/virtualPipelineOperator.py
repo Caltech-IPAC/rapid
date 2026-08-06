@@ -18,6 +18,7 @@ to_zone = tz.gettz('America/Los_Angeles')
 
 import database.modules.utils.rapid_db as db
 from pipeline.runtime.process import run_tool
+from submission import routes
 from pipeline.runtime.errors import ToolError
 
 
@@ -27,20 +28,17 @@ cfg_filename_only = "awsBatchSubmitJobs_launchSingleSciencePipeline.ini"
 
 
 # Specify python command to use for executing Python scripts.
+#
+# The interpreter is invoked by bare name against the image's controlled
+# PATH rather than by absolute path (co-design, "Also reconsidered":
+# interpreter invocation unified).
+python_cmd = 'python3.11'
 
-python_cmd = '/usr/bin/python3.11'
-launch_science_pipelines_code = '/code/pipeline/launchSciencePipelinesForDateTimeRangeWithRefImageWindow.py'
-register_science_pipeline_jobs_code = '/code/pipeline/parallelRegisterCompletedJobsInDB.py'
-launch_postproc_pipelines_code = '/code/pipeline/awsBatchSubmitJobs_launchPostProcPipelinesForProcDate.py'
-register_postproc_pipeline_jobs_code = '/code/pipeline/parallelRegisterCompletedJobsInDBAfterPostProc.py'
-load_psfcat_into_db_sources_code = '/code/pipeline/loadPSFCatIntoDBSourcesTable.py'
-crossmatch_sources_code = '/code/pipeline/crossMatchSources.py'
-compute_statistics_for_astroobjects_code = '/code/pipeline/computeStatisticsForAstroObjects.py'
-prune_notbest_merges_code = '/code/pipeline/pruneNotBestMerges.py'
-launch_reference_image_pipelines_code = '/code/pipeline/launchBunchOfReferenceImagePipelines.py'
-# Python script /code/pipeline/parallelRegisterCompletedJobsInDB.py is dual purposed to
-# handle both reference-image pipeline jobs and science pipeline jobs, with PIPEID as parameter.
-register_reference_image_pipeline_jobs_code = register_science_pipeline_jobs_code
+# Script paths are derived from RAPID_SW below, once it has been read.
+# They used to be nine '/code/pipeline/...' literals here — a second home
+# for the software root that this script ALSO reads from RAPID_SW twenty
+# lines further down, so the two could disagree and the literals would
+# silently win.
 
 
 # Print diagnostics.
@@ -109,6 +107,25 @@ cfg_path = rapid_sw + "/cdf"
 
 print("rapid_sw =",rapid_sw)
 print("cfg_path =",cfg_path)
+
+
+# Script paths, derived from the one software root rather than repeating
+# it (W4 single-homing sweep).
+
+pipeline_code = os.path.join(rapid_sw, "pipeline")
+launch_science_pipelines_code = os.path.join(pipeline_code, 'launchSciencePipelinesForDateTimeRangeWithRefImageWindow.py')
+register_science_pipeline_jobs_code = os.path.join(pipeline_code, 'parallelRegisterCompletedJobsInDB.py')
+launch_postproc_pipelines_code = os.path.join(pipeline_code, 'awsBatchSubmitJobs_launchPostProcPipelinesForProcDate.py')
+register_postproc_pipeline_jobs_code = os.path.join(pipeline_code, 'parallelRegisterCompletedJobsInDBAfterPostProc.py')
+load_psfcat_into_db_sources_code = os.path.join(pipeline_code, 'loadPSFCatIntoDBSourcesTable.py')
+crossmatch_sources_code = os.path.join(pipeline_code, 'crossMatchSources.py')
+compute_statistics_for_astroobjects_code = os.path.join(pipeline_code, 'computeStatisticsForAstroObjects.py')
+prune_notbest_merges_code = os.path.join(pipeline_code, 'pruneNotBestMerges.py')
+launch_reference_image_pipelines_code = os.path.join(pipeline_code, 'launchBunchOfReferenceImagePipelines.py')
+# parallelRegisterCompletedJobsInDB.py is dual purposed to handle both
+# reference-image pipeline jobs and science pipeline jobs, with PIPEID as
+# parameter.
+register_reference_image_pipeline_jobs_code = register_science_pipeline_jobs_code
 
 
 # AWS credentials come from boto3's default chain (job role, instance
@@ -186,17 +203,24 @@ signal.signal(signal.SIGTERM, signal_handler)
 
 def look_up_ppid_of_job_type(job_type):
 
-    if job_type == "science":
-        ppid = 15
-    elif job_type == "postproc":
-        ppid = 17
-    elif job_type == "refimage":
-        ppid = 12
-    else:
-        print(f"Job type undefined ({job_type}); quitting")
+    # Single-homed in submission/routes.py (W4): the ppid map used to be
+    # this if/elif, three `ppid` keys in the master .ini, and bare integer
+    # literals in SQL. A ppid is a routing fact — it says which pipeline a
+    # row belongs to — so it lives with the rest of the routing
+    # vocabulary.
+    #
+    # This function's own names are kept as an alias layer: the VPO's
+    # callers say "postproc" and "refimage" where the manifest vocabulary
+    # says "post-process" and "reference-image". Both spellings resolve
+    # here, so converting the callers is a separate change and neither
+    # spelling is a second home for the number.
+    aliases = {"postproc": routes.JOB_TYPE_POST_PROCESS,
+               "refimage": routes.JOB_TYPE_REFERENCE_IMAGE}
+    try:
+        return routes.ppid_for(aliases.get(job_type, job_type))
+    except routes.RouteError as exc:
+        print(f"Job type undefined ({job_type}): {exc}; quitting")
         exit(64)
-
-    return ppid
 
 
 #-------------------------------------------------------------------------------------------------------------

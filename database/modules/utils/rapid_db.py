@@ -2578,13 +2578,19 @@ class RAPIDDB:
 
         # Define query.
 
+        # The science pipeline's ppid is read from the route matrix, not
+        # written as a literal here (W4 single-homing sweep): it was 15
+        # in this string, 15 in the master .ini, and 15 in an if/elif in
+        # virtualPipelineOperator, with nothing keeping the three equal.
+        from submission.routes import JOB_TYPE_SCIENCE, ppid_for
+
         query = "select jid from Jobs " +\
-                "where ppid = 15 " +\
+                "where ppid = %s " +\
                 "and ended >= cast(%s as timestamp) " +\
                 "and ended < cast(%s as timestamp) + cast('1 day' as interval) " +\
                 "and status > 0 " +\
                 "and exitcode <= 32;"
-        params = (proc_date, proc_date)
+        params = (ppid_for(JOB_TYPE_SCIENCE), proc_date, proc_date)
 
 
         # Query database.

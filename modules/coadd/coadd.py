@@ -20,6 +20,8 @@ from astropy.wcs import WCS
 from reproject import reproject_adaptive, reproject_exact
 from reproject.mosaicking import reproject_and_coadd, find_optimal_celestial_wcs
 
+from pipeline.runtime import science_config
+
 
 # ---------------------------------------------------------------------------
 # Create WCS for output coadd.
@@ -268,12 +270,21 @@ def parse_args():
         "-d", "--dec", type=float, required=True, metavar="DEC",
         help="Declination of coadd center (required)",
     )
+    # The reference-image pixel scale is science content: it fixes the
+    # geometry of every coadd made with it. Its single home is
+    # cdf/science/pipeline.toml, read here rather than repeated as a
+    # literal (W4 single-homing sweep). An explicit --cdelt1/--cdelt2
+    # still overrides, for the one-off reprojection this tool also serves.
+    ref_image = science_config.section(
+        science_config.load(), "ref_image")
     p.add_argument(
-        "--cdelt1", type=float, default=-0.000030555555556, metavar="CDELT1",
+        "--cdelt1", type=float, default=ref_image["cdelt1_refimage"],
+        metavar="CDELT1",
         help="CDELT1 for WCS (negative value okay for standard sky view)",
     )
     p.add_argument(
-        "--cdelt2", type=float, default=0.000030555555556, metavar="CDELT2",
+        "--cdelt2", type=float, default=ref_image["cdelt2_refimage"],
+        metavar="CDELT2",
         help="CDELT2 for WCS (negative value okay for sky view)",
     )
     p.add_argument(
