@@ -69,13 +69,16 @@ def check(path: pathlib.Path) -> list:
     """Findings for one module. Empty means clean."""
     findings = []
     try:
-        # `encoding="utf-8"` is not decoration. Bare `read_text()` decodes with
-        # the *locale's* encoding, and under SSM's non-interactive shell that is
-        # not always UTF-8 — these modules carry em-dashes in their docstrings,
-        # so the proof died with an unhandled UnicodeDecodeError partway through
-        # its module list. The runner then masked the failure (see the verdict
-        # comment in run-w5-on-rapid-admin.sh) and the suite reported success.
-        # The source is UTF-8 by Python's own default for .py files; say so.
+        # A file that is not valid UTF-8 is a FINDING, not a crash. Bare
+        # `read_text()` raised UnicodeDecodeError out of `main`, killing the
+        # proof partway through its module list — and the runner then masked
+        # the non-zero exit (see the verdict comment in
+        # run-w5-on-rapid-admin.sh), so the suite reported success while the
+        # proof had not run. The live cause was AppleDouble `._*.py` sidecars
+        # that macOS tar wrote into the staging tarball; that is fixed at
+        # source in the runner, and this is the belt to its braces. Python
+        # source is UTF-8 by language definition, so naming the encoding is
+        # also simply correct.
         source = path.read_text(encoding="utf-8")
     except UnicodeDecodeError as exc:
         return [f"{path}: is not valid UTF-8 ({exc})"]

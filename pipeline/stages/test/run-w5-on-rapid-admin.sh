@@ -61,7 +61,15 @@ trap 'rm -f "$tarball"' EXIT
 # — its test failed with ImportError on a module that exists in the tree and
 # not in the tarball. A staging list that enumerates files has to be edited
 # every time a sibling appears, and nothing fails until one does.
-tar czf "$tarball" \
+# COPYFILE_DISABLE stops macOS bsdtar writing an AppleDouble `._name` sidecar
+# for every file carrying an extended attribute — which, on this laptop, is
+# every file (`com.apple.provenance`). They are invisible here, because macOS
+# tar folds them back into xattrs on extraction; GNU tar on the Linux side does
+# not, and materializes them as real `._*.py` files. `rglob("*.py")` in the
+# exit-code proof then picked up fifteen of them and died on the first, because
+# an AppleDouble is binary and not UTF-8. Setting this is why the staged tree
+# now matches the worktree file-for-file.
+COPYFILE_DISABLE=1 tar czf "$tarball" \
     cdf \
     database/modules/utils \
     modules \
