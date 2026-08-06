@@ -211,6 +211,29 @@ class SqliteEquivalence(unittest.TestCase):
             self.assertEqual(self.closed.get_rtid(cra, cdec),
                              self.legacy.get_rtid(cra, cdec))
 
+    def test_overlapping_rtids_agree(self):
+        """Overlap answers match exactly, across sizes and the RA wrap.
+
+        This is the path where the closed form does the most work of its
+        own — it computes which RA bins of which rings can overlap rather
+        than scanning, which is what makes it ~1000x faster than walking
+        whole rings. Equivalence therefore has to be checked, not assumed.
+        """
+        import math
+        import random
+        rng = random.Random(99)
+        for _ in range(60):
+            ra0 = rng.uniform(0.0, 360.0)
+            dec0 = math.degrees(math.asin(rng.uniform(-0.999, 0.999)))
+            h = rng.choice([0.055, 0.2, 0.5])
+            args = (ra0, dec0,
+                    ra0 - h, dec0 - h, ra0 + h, dec0 - h,
+                    ra0 + h, dec0 + h, ra0 - h, dec0 + h)
+            self.assertEqual(
+                sorted(r[0] for r in self.closed.get_overlapping_rtids(*args)),
+                sorted(r[0] for r in self.legacy.get_overlapping_rtids(*args)),
+                "overlap differs at ra0=%.6f dec0=%.6f h=%s" % (ra0, dec0, h))
+
     def test_neighbours_agree(self):
         rng = np.random.default_rng(6)
         sample = [int(r) for r in rng.integers(2, tess.NROWS, 150)]

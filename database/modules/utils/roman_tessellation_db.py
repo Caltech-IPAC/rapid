@@ -10,6 +10,7 @@ See rapid_systems `tools/tessellation/` for the canonical builder, the
 certification battery, and the versioned PostgreSQL installation.
 """
 
+import math
 import os
 import re
 import sqlite3
@@ -199,7 +200,18 @@ class RomanTessellationClosedForm:
             bot = tess.NRINGS
 
         for i in range(max(top, 1), min(bot, tess.NRINGS) + 1):
-            for k in range(tess.nrabins(i)):
+            n = tess.nrabins(i)
+            # Only the RA bins that can overlap, computed from the query
+            # span rather than by scanning the ring. A ring holds up to
+            # 4,096 tiles and an SCA footprint touches a handful of them,
+            # so scanning was ~35 ms per call for a 6-tile answer.
+            if wrap:
+                bins = range(n)
+            else:
+                first = int(math.floor(ramin_q * n / 360.0 + 0.5)) - 1
+                last = int(math.floor(ramax_q * n / 360.0 + 0.5)) + 1
+                bins = (b % n for b in range(first, last + 1))
+            for k in bins:
                 rtid = tess._OFFSET[i] + k
                 ramin, ramax, dmin, dmax = tess.corners_of(rtid)
                 if dmax <= decmin_q or dmin >= decmax_q:
