@@ -55,11 +55,15 @@ echo ">> image: $IMAGE"
 
 tarball=$(mktemp "${TMPDIR:-/tmp}/w5-tests.XXXXXX.tar.gz")
 trap 'rm -f "$tarball"' EXIT
+# database/modules/utils WHOLE, not a hand-picked pair of files. W4E's
+# runner listed rapid_db.py and rapid_db_connect.py individually, which was
+# accurate then and silently wrong the moment W7 added roman_tessellation.py
+# — its test failed with ImportError on a module that exists in the tree and
+# not in the tarball. A staging list that enumerates files has to be edited
+# every time a sibling appears, and nothing fails until one does.
 tar czf "$tarball" \
     cdf \
-    database/modules/utils/rapid_db.py \
-    database/modules/utils/rapid_db_connect.py \
-    database/modules/utils/test \
+    database/modules/utils \
     modules \
     observability \
     pipeline \
