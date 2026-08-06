@@ -299,6 +299,72 @@ error produced exit 70, a started row with its snapshot bound, and a
 scheduler observation — exactly the sequence the design specifies for a job
 that dies before it can record its own account.
 
+**The fix is proven in the image, but the image does not carry it.** W8's
+rebuild budget is two iterations and both were spent (the tessellation
+retirement, then the reconciler and test-collection fixes). Rather than take
+a third, the fix was proven the same way the reconciler's was — staged over
+the pinned image on rapid-admin:
+
+* ``RomanTessellationClosedForm`` resolves, and carries ``check_version``;
+* ``get_rtid(11.1, -43.8)`` returns **5321355**, the value the 2024
+  conversion note works through by hand and W6b's state summary cites — so
+  the closed form is semantically right, not merely importable;
+* ``tessellation_provenance`` imports the closed-form class.
+
+A second live job was NOT submitted. Running one would have meant pushing a
+scratch image and creating a job-definition revision pinned to it — live
+state beyond what this job is authorized to create, for a marginal gain,
+since the first job already proved submission ordering, the claim, the
+snapshot binding and reconciliation. **Proposed:** the next rebuild picks up
+``df214ff`` and one registration job is submitted against it, which closes
+the lifecycle to ``application_closed`` and a terminal record.
+
+
+The pooler RPM: still not published
+-----------------------------------
+
+W6b's dnf-transaction hypothesis is **applied but untested**, and the one
+authorized promoter run was consumed without exercising it.
+
+The hypothesis, from W6b: ``rpms/smoke-test.sh`` installed everything in one
+dnf transaction, and that list contained both ``rapid-release`` and three
+third-party repo-definition packages. Installing a repo definition
+mid-transaction lands a new ``.repo`` file, dnf imports that repo's GPG key,
+and the cache directory the pending packages were downloaded into is
+invalidated underneath the running transaction — ``rapid-release`` being
+simply the first file it then cannot find. The fix moves those three into
+their own transaction after the rest, the same ordering fix as
+``rapid-fleet-config`` already being last.
+
+The run itself failed in **75 seconds**, nowhere near the ~50 minutes a
+smoke-test failure takes, and for a reason that has nothing to do with the
+hypothesis::
+
+    FAIL: a newer build-rpms.yml run is in flight — deferring to it rather
+    than racing: 31122582925#1 (queued)
+
+That is the promoter's own guard behaving correctly. The push carrying the
+smoke-test fix triggered ``build-rpms.yml`` at 17:15:13Z; the promoter
+started at 17:14:58Z and deferred to it. The two raced by fifteen seconds.
+The triggered CI run was still ``queued`` — no runner had picked it up —
+more than ten minutes later, so waiting it out was not available inside this
+job's window either.
+
+**Verdict: not proven, not disproven.** The consequence is unchanged from
+W6b: ``rapid-pgbouncer`` 1.0-4 is still unpublished, rapid-db still runs
+1.0-2, ``rpm -V`` still reports ``S.5....T.`` on
+``/etc/pgbouncer/pgbouncer.rapid.ini``, and the three ``.bak`` files stay in
+``/etc/pgbouncer`` because the package still does not match the live file.
+
+**Proposed:** re-run the promoter once ``build-rpms.yml`` #31122582925 is
+green, with no push in flight. Nothing else is needed — the fix is committed.
+
+One thing W8 did establish that changes the urgency: the pooler line for
+``rapid_orchestrator`` is **not** a blocker. The reconciler authenticates
+through the pooler on 6432 today, with 1.0-2 installed and no per-user line
+at all, because ``auth_query`` resolves it. The RPM's users line is a
+pool-sizing refinement, not a gate.
+
 
 What could NOT be proven, and why
 ---------------------------------
