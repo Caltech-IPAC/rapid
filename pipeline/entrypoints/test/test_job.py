@@ -453,5 +453,49 @@ class RequiredParameterTests(unittest.TestCase):
             job._required({"s3/records-bucket": ""}, "s3/records-bucket")
 
 
+# ---------------------------------------------------------------------------
+# The tessellation import actually resolves
+# ---------------------------------------------------------------------------
+
+class TessellationProvenanceImportTests(unittest.TestCase):
+    """The name `tessellation_provenance` imports must EXIST.
+
+    W8 found this live, and it is worth stating why nothing caught it
+    earlier: the import is function-local, and every suite in this tree
+    stubs `database.modules.utils.roman_tessellation_db`, so an import of a
+    name the module does not define resolved happily against a stub that
+    answers to anything. The first real job got as far as claiming its
+    pre-created attempt row and binding its configuration snapshot, then
+    died with ImportError, exit 70 — and it would have done that for every
+    job of every type.
+
+    So this test deliberately reaches past the stubs to the REAL module. It
+    asserts the name, not the behaviour: the behaviour is W7's and is tested
+    there, but nothing else asserts that the entrypoint and the module agree
+    on what the class is called.
+    """
+
+    def test_the_closed_form_class_the_entrypoint_imports_exists(self):
+        import importlib
+
+        spec = importlib.util.find_spec(
+            "database.modules.utils.roman_tessellation_db")
+        self.assertIsNotNone(
+            spec, "the tessellation module is not importable at all")
+
+        real = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(real)
+        self.assertTrue(
+            hasattr(real, "RomanTessellationClosedForm"),
+            "roman_tessellation_db does not define RomanTessellationClosedForm, "
+            "which pipeline.entrypoints.job.tessellation_provenance imports")
+
+        tessellation = real.RomanTessellationClosedForm()
+        self.assertTrue(
+            hasattr(tessellation, "check_version"),
+            "the class exists but has no check_version, which is the only "
+            "method the entrypoint calls on it")
+
+
 if __name__ == "__main__":
     unittest.main()

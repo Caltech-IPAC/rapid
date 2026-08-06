@@ -277,7 +277,18 @@ def tessellation_provenance(parameters, science, logger):
     version is pinned by RELEASE CONTENT (never the mutable parameter tree)
     because reference data alters science products.
     """
-    from database.modules.utils.roman_tessellation_db import RomanTessellation
+    # The CLOSED-FORM class, by its real name. This import read
+    # `RomanTessellation`, which does not exist and never has — the module
+    # defines `RomanTessellationClosedForm` (W7's) and the deprecated
+    # `RomanTessellationNSIDE512`. Because the import is function-local and
+    # every unit suite stubs this module, nothing caught it until a real job
+    # ran: W8's first live submission got as far as claiming its pre-created
+    # attempt row and binding its config snapshot, then died here with
+    # ImportError, exit 70, internal_error. It would have failed EVERY job of
+    # EVERY type identically.
+    from database.modules.utils.roman_tessellation_db import (
+        RomanTessellationClosedForm,
+    )
 
     pinned = (science or {}).get("tessellation") or {}
     version = pinned.get("version")
@@ -297,7 +308,7 @@ def tessellation_provenance(parameters, science, logger):
     # (#13), so nothing decided anything. This is that caller, and it fails
     # loud: a mismatch means the products would be tiled differently from
     # what the release says.
-    tessellation = RomanTessellation()
+    tessellation = RomanTessellationClosedForm()
     accepted = tessellation.check_version(
         version=version, digest=digest,
         nside=pinned.get("nside"), nrows=pinned.get("nrows"))
