@@ -305,3 +305,69 @@ pre-existing unused-import and unused-variable findings remain, all present
 before this sweep touched those files). The full test suite — W1's three
 suites, W2's runtime suite, and this sweep's ``test_rapid_db.py`` — ran
 in-image on ``rapid-admin`` via SSM; see the ledger for exit codes.
+
+Closed by W5 (2026-08-06)
+-------------------------
+
+The three excluded entrypoint scripts are **deleted**, and with them the
+last unconverted ``execute_command`` call sites this audit found.
+
+``pipeline/awsBatchSubmitJobs_runSingle{Science,ReferenceImage,PostProc}Pipeline.py``
+and their three ``.sh`` wrappers are replaced by
+``pipeline/entrypoints/job.py`` over ``pipeline/stages/``. W3 deliberately
+left them alone — converting call sites in files already slated for
+replacement would have been work done twice — so between W3 and W5 they
+carried twelve calls to helpers that no longer existed. **They were dead
+code on ``smdc`` for that interval**: ``util.execute_command`` and
+``util.execute_command_in_shell`` were removed by W3 sweep A, so any of
+these scripts would have raised ``AttributeError`` at its first tool
+invocation. Deleting them removes code that could not have run.
+
+Each of the audit's numbered findings, and where it now stands:
+
+1. **A science job cannot fail.** Gone with ``terminating_exitcode``.
+   The SFFT branch that mapped to exit 4 — which the ``>= 64`` test then
+   discarded and the wrapper flattened to 64 — is now a ``ToolError``
+   raised by ``run_tool``, recorded as ``tool_failure`` in the attempt
+   record with the job exiting 0. Scheduler-SUCCEEDED with
+   application-failure is the representable combination the schema was
+   built for.
+
+2. **~60 unchecked ``execute_command`` sites.** Closed by W3 for the
+   helper layer and by W5 for the three entrypoints. Zero call sites
+   remain.
+
+3. **The ``.sh`` wrappers, and no ``ENV PATH``.** Both closed. The
+   wrappers are deleted — stdout and stderr flow to the CloudWatch safety
+   stream through the awslogs driver, and the diagnostics bundle replaces
+   the hand-uploaded logfile, removing the exit-66 inversion where a
+   failed log upload outranked a successful science run.
+   ``ENV PATH`` and ``ENV LD_LIBRARY_PATH`` are set explicitly in
+   ``containers/rapid-pipeline/Containerfile`` (rapid_systems).
+
+4. **Registration by log-grep.** Not closed here. The record-consuming
+   registration path is W6's, behind the cutover fence; W5's entrypoint
+   routes the registration job type but refuses to run it rather than
+   dispatching to the legacy log-parsing script.
+
+5. **``print()``-only, no ``logging``.** Closed for the converted layer:
+   the entrypoint and every stage log through the runtime's configured
+   logger, with job and attempt identifiers on every line.
+
+6. **Bifurcated configuration.** Closed by W4's three homes and W5's
+   consumption of them. No per-job ``.ini`` is downloaded, and none is
+   written: what the product ``.ini`` carried is in the terminal record,
+   keyed by attempt identity and immutable.
+
+7. **``rapid_db.py``.** Parameterized by W3.
+
+8, 9. **The VPO, and ``ProcessPoolExecutor`` swallowing.** The VPO
+   touchpoints are W6's; the pool sites were fixed by W3.
+
+10. **The tessellation.** W7's, running in parallel with this work. The
+    bake stays in the Containerfile for now.
+
+One correction this sweep's own record needs: the note above about
+``pipeline/runtime/process.py``'s docstring naming ``exc.returncode``
+where the attribute is ``exc.details["returncode"]`` still stands — W5
+did not touch it either, for the same reason W3 did not.

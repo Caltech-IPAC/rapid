@@ -49,16 +49,20 @@ post_process
     The post-process pipeline's stages.
 sequences
     The per-job-type stage sequences the entrypoint dispatches to.
+
+**Nothing heavy is imported here.** `StageContext` is re-exported because it
+is the package's interface and costs nothing; the stage modules and the
+sequence table are NOT, because importing them pulls in numpy, astropy, scipy
+and photutils. Re-exporting `sequence_for` would mean that reading a
+processing unit's identity, or testing the context object, required the whole
+scientific stack — and it would make `pipeline.stages.test` uncollectable
+anywhere those are absent, since Python executes a package's `__init__` before
+anything inside it. Import the sequences from `pipeline.stages.sequences`
+directly; the entrypoint does.
 """
 
 from pipeline.stages.context import StageContext  # noqa: F401
-from pipeline.stages.sequences import (  # noqa: F401
-    SEQUENCES,
-    sequence_for,
-)
 
 __all__ = [
-    "SEQUENCES",
     "StageContext",
-    "sequence_for",
 ]

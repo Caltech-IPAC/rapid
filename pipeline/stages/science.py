@@ -44,6 +44,7 @@ protocol authors the outcome.
 """
 
 import os
+import sys
 
 import numpy as np
 
@@ -60,11 +61,19 @@ from pipeline.runtime.process import run_shell, run_tool
 SOFTWARE_ROOT = os.environ.get("RAPID_SW", "/code")
 CFG_PATH = os.environ.get("RAPID_CFG", os.path.join(SOFTWARE_ROOT, "cdf"))
 
-# The interpreter for the bundled tool scripts. The monolith hardcoded
-# '/usr/bin/python3.11' at three sites; the co-design's "Also reconsidered"
-# inventory calls for unified interpreter invocation, and the Containerfile's
-# ENV PATH now makes the bare name resolve to the image's interpreter.
-PYTHON = "python3.11"
+# The interpreter for the bundled tool scripts (ZOGY, SFFT, the fake-source
+# injector). The monolith hardcoded '/usr/bin/python3.11' at three sites; the
+# co-design's "Also reconsidered" inventory calls for unified interpreter
+# invocation, and `sys.executable` is that — the child runs under exactly the
+# interpreter the parent is running under, whatever the image calls it.
+#
+# The name matters here. `/usr/bin/python3.11` in the current image is a
+# symlink the Containerfile creates to /opt/rapid/conda/envs/rapid/bin/python,
+# which is **Python 3.14** — the "3.11" is a legacy name kept only because the
+# deleted shell wrappers hardcoded it. Naming a version that is not the
+# version is how a future image bump silently runs a tool on a different
+# interpreter than the pipeline; `sys.executable` cannot drift that way.
+PYTHON = sys.executable
 
 # Infobits set when a PSF-catalogue variant fails. One bit per variant, exactly
 # as the monolith assigned them (2**0 at line 1471 through 2**5 at line 2770).
