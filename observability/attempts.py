@@ -884,10 +884,28 @@ class AttemptWriter:
             raise ValueError(
                 "reconciliation_sources cannot be empty: a flagged row must "
                 "record which stores were compared")
+        # `reconciler_materialized` is cleared with the transition, and that
+        # is required rather than tidy: migration 013's
+        # attempts_reconciler_materialized_check permits the flag ONLY in
+        # application_closed or terminal_after_start, so leaving it set while
+        # moving to missing_or_contradictory violates the constraint and the
+        # row can never be classified at all.
+        #
+        # Found live 2026-08-06 (W8), on the running service: an attempt that
+        # had been legitimately materialized from its record, and whose
+        # scheduler observation later disagreed, failed EVERY poll with
+        # CheckViolation — permanently unclassifiable, and counted as a poll
+        # error forever.
+        #
+        # Clearing it is also the honest value. The flag says "this row's
+        # application facts were projected from the record by another
+        # writer"; a row being flagged missing-or-contradictory is precisely
+        # the case where that projection is no longer what the row asserts.
         sql = (
             "UPDATE attempts SET lifecycle_state = %s,"
             "  reconciliation_class = %s, reconciliation_sources = %s,"
-            "  reconciliation_detected_at = %s"
+            "  reconciliation_detected_at = %s,"
+            "  reconciler_materialized = false"
             " WHERE attempt_id = %s"
         )
         result = self._execute(sql, [

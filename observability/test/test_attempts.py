@@ -1096,6 +1096,20 @@ class ReconciliationTests(unittest.TestCase):
                 1, reconciliation_class=ReconciliationClass.CONTRADICTORY,
                 reconciliation_sources=[], detected_at=at(20))
 
+    def test_the_materialized_flag_is_cleared_with_the_transition(self):
+        # Migration 013 permits `reconciler_materialized` ONLY in
+        # application_closed or terminal_after_start, so leaving it set while
+        # moving to missing_or_contradictory violates the constraint and the
+        # row can never be classified at all. Found live on the running
+        # service (W8, 2026-08-06): an attempt materialized from its record,
+        # whose scheduler observation later disagreed, failed EVERY poll with
+        # CheckViolation — permanently unclassifiable.
+        self.writer.mark_missing_or_contradictory(
+            1, reconciliation_class=ReconciliationClass.CONTRADICTORY,
+            reconciliation_sources=["postgres", "batch"], detected_at=at(20))
+        statement, _ = self.execute.only()
+        self.assertIn("reconciler_materialized = false", statement)
+
 
 class SchedulerObservationTests(unittest.TestCase):
     """The reconciler-written columns sit BESIDE the application's, never on top."""
