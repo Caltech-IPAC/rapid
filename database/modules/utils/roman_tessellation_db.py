@@ -27,13 +27,24 @@ class RomanTessellationClosedForm:
     ring structure instead of querying the baked SQLite file.
 
     Certification (rapid_systems
-    `tools/tessellation/certification-2026-08-06.txt`) established that
-    the tessellation is regular: `rtid(ra, dec)` was proved closed-form
-    computable by exhaustive equivalence over all 6,291,458 tiles, and
-    the neighbour expansion here was checked tile-for-tile against the
-    SQLite class's own answers. This class is therefore not an
-    approximation of the old one — it returns the same values, without
-    the file.
+    `tools/tessellation/certification-2026-08-06.txt`) covers the two
+    halves of this class to two different depths, and the difference
+    matters to anyone relying on it:
+
+    * **Tile identity is exhaustive.** Every one of the 6,291,458
+      generated rows was compared against the baked SQLite file column
+      for column, and each tile's own centre resolves to its own rtid.
+    * **Neighbour expansion is sampled, not exhaustive.** The battery
+      draws 3,004 tiles (`certify.py:check_adjacency`) and checks
+      *invariants* on them — that neighbour relations are symmetric,
+      that no tile is its own neighbour, and that every neighbour's
+      declination span touches the tile's own. It does not compare
+      neighbour sets against the SQLite class's answers, tile-for-tile
+      or otherwise. An earlier version of this docstring claimed it did.
+
+    So: identity is proved, adjacency is evidenced. See "Open: what the
+    certification does not prove" in the certification note for the
+    mathematical-completeness question that sampling cannot close.
 
     Why this matters on the hot path: `loadPSFCatIntoDBSourcesTable`
     resolved one R-tree query per detected source, thousands per SCA.

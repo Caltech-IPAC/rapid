@@ -182,9 +182,16 @@ run sh -c 'grep -rnE "execute_command(_in_shell)?[[:space:]]*\\(" --include="*.p
 sites=\${PIPESTATUS[0]}
 run python3.11 -m pipeline.stages.test.prove_no_exit_code_convention
 proof=\${PIPESTATUS[0]}
+# The verdict is the AND of the two proofs, and nothing may overwrite it.
+# This line used to be followed by \`grp=\\\${PIPESTATUS[0]}\`, which clobbered
+# the verdict just computed with the exit status of the \`[\` test above it —
+# and that status is 0 whenever the \`|| grp=1\` branch runs, so a FAILING
+# proof reported grp=0 and the suite printed W5-UNITS-OK. Found live: the
+# exit-code proof was dying with an unhandled UnicodeDecodeError on every run
+# of this script, on the base branch as well as on FixB's, and the run still
+# reported success. A gate that cannot fail is not a gate.
 grp=0
 [ "\$sites" -eq 0 ] && [ "\$proof" -eq 0 ] || grp=1
-grp=\${PIPESTATUS[0]}
 echo ">> grep proof exit code: \$grp"
 
 echo

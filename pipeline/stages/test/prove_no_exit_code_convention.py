@@ -69,7 +69,18 @@ def check(path: pathlib.Path) -> list:
     """Findings for one module. Empty means clean."""
     findings = []
     try:
-        code = compile(path.read_text(), str(path), "exec")
+        # `encoding="utf-8"` is not decoration. Bare `read_text()` decodes with
+        # the *locale's* encoding, and under SSM's non-interactive shell that is
+        # not always UTF-8 — these modules carry em-dashes in their docstrings,
+        # so the proof died with an unhandled UnicodeDecodeError partway through
+        # its module list. The runner then masked the failure (see the verdict
+        # comment in run-w5-on-rapid-admin.sh) and the suite reported success.
+        # The source is UTF-8 by Python's own default for .py files; say so.
+        source = path.read_text(encoding="utf-8")
+    except UnicodeDecodeError as exc:
+        return [f"{path}: is not valid UTF-8 ({exc})"]
+    try:
+        code = compile(source, str(path), "exec")
     except SyntaxError as exc:
         return [f"{path}: does not compile ({exc})"]
 
