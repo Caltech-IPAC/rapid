@@ -186,13 +186,29 @@ type this database can support today**, and it is the one that ran.
 The blocking item is a PSF set and a first reference image for g0001.
 Producing them is science work.
 
-**The pooler RPM is still unpublished.** W6b's dnf-transaction hypothesis is
-applied to ``rpms/smoke-test.sh`` but **untested**: the one authorized
-promoter run failed in 75 seconds because a newer ``build-rpms.yml`` run was
-in flight — the push carrying the fix triggered CI fifteen seconds after the
-promoter started, and the promoter's guard correctly deferred rather than
-racing. rapid-db still runs 1.0-2, ``rpm -V`` still reports ``S.5....T.``,
-and the three ``.bak`` files stay.
+**The pooler RPM is still unpublished, and the CI path to publishing it is
+BROKEN.** W6b's dnf-transaction hypothesis is applied to
+``rpms/smoke-test.sh`` but **untestable, not merely untested**.
+
+The one authorized promoter run failed in 75 seconds because a newer
+``build-rpms.yml`` run was in flight — the push carrying the fix triggered
+CI fifteen seconds after the promoter started, and the promoter's guard
+correctly deferred rather than racing.
+
+That CI run then could not complete, for a reason that outlives this job:
+**the repository has zero registered self-hosted runners**
+(``gh api repos/…/actions/runners`` → ``total_count: 0``), and
+``build-rpms.yml`` requires them. Both the original run and a rerun sat
+exactly 15 min 02 s with **no step ever recorded** before GitHub cancelled
+them on runner-acquisition timeout; every downstream job was skipped.
+
+The consequence chains: main is red, a red main blocks the promoter from
+publishing, and the promoter also defers to any in-flight run. **Until a
+runner is registered, the promoter cannot be retried at all.** That is the
+blocking item — not the hypothesis, which remains untried.
+
+rapid-db still runs 1.0-2, ``rpm -V`` still reports ``S.5....T.``, and the
+three ``.bak`` files stay.
 
 One thing W8 established that changes the urgency: the missing pooler line
 for ``rapid_orchestrator`` is **not** a blocker. The reconciler authenticates

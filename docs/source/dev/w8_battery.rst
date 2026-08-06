@@ -379,9 +379,20 @@ hypothesis::
 That is the promoter's own guard behaving correctly. The push carrying the
 smoke-test fix triggered ``build-rpms.yml`` at 17:15:13Z; the promoter
 started at 17:14:58Z and deferred to it. The two raced by fifteen seconds.
-The triggered CI run was still ``queued`` — no runner had picked it up —
-more than ten minutes later, so waiting it out was not available inside this
-job's window either.
+
+**And that CI run could never have gone green, for a reason worth recording
+separately: the repository has ZERO registered self-hosted runners.**
+``build-rpms.yml``'s jobs require them, so both the original run and the
+rerun sat exactly 15 min 02 s — ``scope`` and ``lint`` from 17:39:21Z to
+17:54:23Z on the second attempt — with **no step ever recorded**, and were
+then cancelled by GitHub's runner-acquisition timeout. Every downstream job
+was skipped. Nothing in the workflow executed on either attempt.
+
+This is not transient contention, and waiting longer would not have helped:
+``gh api repos/…/actions/runners`` reports ``total_count: 0``. The promoter
+defers to any in-flight run and refuses to publish while main is red, so
+until a runner is registered, **the promoter cannot be retried at all** —
+the smoke-test hypothesis is untestable, not merely untested.
 
 **Verdict: not proven, not disproven.** The consequence is unchanged from
 W6b: ``rapid-pgbouncer`` 1.0-4 is still unpublished, rapid-db still runs
