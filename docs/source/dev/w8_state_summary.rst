@@ -213,11 +213,11 @@ the register path is not. It is gated on the same rebuild.
 Ephemeral state left behind
 ---------------------------
 
-Three staging objects sit under ``s3://rapid-build-artifacts-855590908525/
-w8-scratch/`` — two git bundles and one module — used to move code onto
-rapid-admin, which holds no git credential for either repo. They are safe to
-delete; W8's authorization did not extend to object deletion, so they were
-left rather than removed.
+Three staging objects sit under the ``w8-scratch/`` prefix of the
+build-artifacts bucket (``rapid-build-artifacts-<account>``) — two git
+bundles and one module — used to move code onto rapid-admin, which holds no
+git credential for either repo. They are safe to delete; W8's authorization
+did not extend to object deletion, so they were left rather than removed.
 
 Every throwaway container and image cleaned up by its own EXIT trap, verified
 after the fact: no ``w8``-named containers or images remain on rapid-admin,
