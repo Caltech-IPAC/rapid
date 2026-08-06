@@ -133,6 +133,26 @@ NOT_USED = Status.NOT_USED
 _FP = "forced photometry (products not integrated)"
 _SS = "KONA solar-system association (not integrated)"
 
+# PhotUtils PSFPhotometry bitwise fit-condition flags (sources.flags), as
+# defined in photutils/psf/_components.py define_flags() for photutils 3.0.0.
+# The pipeline installs photutils unpinned, so revisit these on upgrades.
+# Bits not named here: 1 partial fit region, 64 no overlap with data,
+# 128 fully masked, 256 too few pixels, 2048 non-finite local background.
+_PSF_FLAG_POS_OUTSIDE_IMAGE = 1 << 1   # fitted position outside image bounds
+_PSF_FLAG_NONPOS_FLUX = 1 << 2         # non-positive flux
+_PSF_FLAG_NO_CONVERGENCE = 1 << 3      # possible non-convergence
+_PSF_FLAG_NO_COVARIANCE = 1 << 4       # missing parameter covariance
+_PSF_FLAG_POS_AT_BOUND = 1 << 5        # position near a positional bound
+_PSF_FLAG_NONFINITE_POS = 1 << 9       # non-finite fitted position
+_PSF_FLAG_NONFINITE_FLUX = 1 << 10     # non-finite fitted flux
+
+# RAPID-defined semantics for the derived boolean flag params; keeps alert
+# consumers insulated from photutils bit-layout changes.
+_CENTROID_FAIL_BITS = (_PSF_FLAG_POS_OUTSIDE_IMAGE | _PSF_FLAG_POS_AT_BOUND
+                       | _PSF_FLAG_NONFINITE_POS)
+_PSFFLUX_FAIL_BITS = (_PSF_FLAG_NONPOS_FLUX | _PSF_FLAG_NO_CONVERGENCE
+                      | _PSF_FLAG_NO_COVARIANCE | _PSF_FLAG_NONFINITE_FLUX)
+
 
 # ---------------------------------------------------------------------------
 # diaSource -- built from providers.Source
@@ -277,8 +297,9 @@ DIA_SOURCE_PARAMS = (
                     STUB, "shape measurement (SExtractor ELONGATION in file flow)"),
 
     # --- Flags -----------------------------------------------------------------
-    Param("flags",         "long",             "Bitmask of processing flags",
-                    IMPLEMENTED, "sources.flags"), #TODO: expand this into indv. flags
+    Param("psfFitFlags",   "long",             "Bitmask of PhotUtils PSFPhotometry fit-condition flags; "
+                                                "bit definitions follow the photutils version used by the pipeline",
+                    IMPLEMENTED, "sources.flags (PhotUtils PSFPhotometry bitmask)", attr="flags"),
     Param("pixelFlags_saturated", ["null", "boolean"], "Source has saturated pixels (stub)",
                     STUB, "pixel-mask analysis (not run)"),
     Param("pixelFlags_bad",       ["null", "boolean"], "Source has bad pixels (stub)",
@@ -287,11 +308,19 @@ DIA_SOURCE_PARAMS = (
                     STUB, "pixel-mask analysis (not run)"),
     Param("pixelFlags_cr",        ["null", "boolean"], "Source has cosmic ray pixels (stub)",
                     STUB, "pixel-mask analysis (not run)"),
-    Param("centroid_flag", ["null", "boolean"], "Centroid measurement failed (stub)",
-                    STUB, "may fold into flags bitmask (spreadsheet: 'flags dict?')"),
+    Param("centroid_flag", ["null", "boolean"], "Centroid measurement failed (position outside image, "
+                                                "at a fit bound, or non-finite)",
+                    IMPLEMENTED, "derived from sources.flags (PhotUtils bits 2|32|512)",
+                    getter=lambda d: bool(d.flags & _CENTROID_FAIL_BITS)),
     Param("apFlux_flag",   ["null", "boolean"], "Aperture flux measurement failed (stub)",
                     STUB, "may fold into flags bitmask (spreadsheet: 'flags dict?')"),
-    Param("psfFlux_flag",  ["null", "boolean"], "PSF flux measurement failed (stub)",
+    Param("psfFlux_flag",  ["null", "boolean"], "PSF flux measurement failed (non-positive or non-finite "
+                                                "flux, non-convergence, or missing covariance)",
+                    IMPLEMENTED, "derived from sources.flags (PhotUtils bits 4|8|16|1024)",
+                    getter=lambda d: bool(d.flags & _PSFFLUX_FAIL_BITS)),
+    Param("scienceFlux_flag",  ["null", "boolean"], "Science flux measurement failed (stub)",
+                    STUB, "may fold into flags bitmask (spreadsheet: 'flags dict?')"),
+    Param("refFlux_flag",  ["null", "boolean"], "Reference flux measurement failed (stub)",
                     STUB, "may fold into flags bitmask (spreadsheet: 'flags dict?')"),
     Param("isSSCandidate", ["null", "boolean"], "Suspected solar system object: a known SS object is predicted "
                                                 "within the separation cut of this source (see ssMatches); "
@@ -299,20 +328,20 @@ DIA_SOURCE_PARAMS = (
                     STUB, _SS), #TODO: state the separation cut in the doc once chosen
 
     # --- Nearest reference-image source (all stubs) ------------------------------
-    Param("distnr",        ["null", "float"],  "Distance to nearest reference-image source (stub) [arcsec]",
-                    STUB, "cross-match to reference-image catalog (not run)"),
-    Param("ranr",          ["null", "double"], "RA of nearest reference-image source (stub) [deg]",
-                    STUB, "cross-match to reference-image catalog (not run)"),
-    Param("decnr",         ["null", "double"], "Dec of nearest reference-image source (stub) [deg]",
-                    STUB, "cross-match to reference-image catalog (not run)"),
-    Param("magnr",         ["null", "float"],  "Magnitude of nearest reference-image source (stub) [mag]",
-                    STUB, "cross-match to reference-image catalog (not run)"),
-    Param("sigmagnr",      ["null", "float"],  "1-sigma uncertainty in magnr (stub) [mag]",
-                    STUB, "cross-match to reference-image catalog (not run)"),
-    Param("chinr",         ["null", "float"],  "Chi parameter of nearest reference-image source (stub)",
-                    STUB, "cross-match to reference-image catalog (not run)"),
-    Param("sharpnr",       ["null", "float"],  "Sharpness parameter of nearest reference-image source (stub)",
-                    STUB, "cross-match to reference-image catalog (not run)"),
+    # Param("distnr",        ["null", "float"],  "Distance to nearest reference-image source (stub) [arcsec]",
+    #                 STUB, "cross-match to reference-image catalog (not run)"),
+    # Param("ranr",          ["null", "double"], "RA of nearest reference-image source (stub) [deg]",
+    #                 STUB, "cross-match to reference-image catalog (not run)"),
+    # Param("decnr",         ["null", "double"], "Dec of nearest reference-image source (stub) [deg]",
+    #                 STUB, "cross-match to reference-image catalog (not run)"),
+    # Param("magnr",         ["null", "float"],  "Magnitude of nearest reference-image source (stub) [mag]",
+    #                 STUB, "cross-match to reference-image catalog (not run)"),
+    # Param("sigmagnr",      ["null", "float"],  "1-sigma uncertainty in magnr (stub) [mag]",
+    #                 STUB, "cross-match to reference-image catalog (not run)"),
+    # Param("chinr",         ["null", "float"],  "Chi parameter of nearest reference-image source (stub)",
+    #                 STUB, "cross-match to reference-image catalog (not run)"),
+    # Param("sharpnr",       ["null", "float"],  "Sharpness parameter of nearest reference-image source (stub)",
+    #                 STUB, "cross-match to reference-image catalog (not run)"),
 
     # --- Roman-specific identifiers & tiling ------------------------------------
     # Param("sca",           "int",              "Roman SCA detector number",

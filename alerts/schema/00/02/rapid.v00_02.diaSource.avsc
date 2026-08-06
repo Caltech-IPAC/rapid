@@ -366,9 +366,9 @@
             "doc": "Elongation of source: ratio of major to minor axis (stub)"
         },
         {
-            "name": "flags",
+            "name": "psfFitFlags",
             "type": "long",
-            "doc": "Bitmask of processing flags"
+            "doc": "Bitmask of PhotUtils PSFPhotometry fit-condition flags; bit definitions follow the photutils version used by the pipeline"
         },
         {
             "name": "pixelFlags_saturated",
@@ -413,7 +413,7 @@
                 "boolean"
             ],
             "default": null,
-            "doc": "Centroid measurement failed (stub)"
+            "doc": "Centroid measurement failed (position outside image, at a fit bound, or non-finite)"
         },
         {
             "name": "apFlux_flag",
@@ -431,7 +431,25 @@
                 "boolean"
             ],
             "default": null,
-            "doc": "PSF flux measurement failed (stub)"
+            "doc": "PSF flux measurement failed (non-positive or non-finite flux, non-convergence, or missing covariance)"
+        },
+        {
+            "name": "scienceFlux_flag",
+            "type": [
+                "null",
+                "boolean"
+            ],
+            "default": null,
+            "doc": "Science flux measurement failed (stub)"
+        },
+        {
+            "name": "refFlux_flag",
+            "type": [
+                "null",
+                "boolean"
+            ],
+            "default": null,
+            "doc": "Reference flux measurement failed (stub)"
         },
         {
             "name": "isSSCandidate",
@@ -441,69 +459,6 @@
             ],
             "default": null,
             "doc": "Suspected solar system object: a known SS object is predicted within the separation cut of this source (see ssMatches); null if association was not run (stub)"
-        },
-        {
-            "name": "distnr",
-            "type": [
-                "null",
-                "float"
-            ],
-            "default": null,
-            "doc": "Distance to nearest reference-image source (stub) [arcsec]"
-        },
-        {
-            "name": "ranr",
-            "type": [
-                "null",
-                "double"
-            ],
-            "default": null,
-            "doc": "RA of nearest reference-image source (stub) [deg]"
-        },
-        {
-            "name": "decnr",
-            "type": [
-                "null",
-                "double"
-            ],
-            "default": null,
-            "doc": "Dec of nearest reference-image source (stub) [deg]"
-        },
-        {
-            "name": "magnr",
-            "type": [
-                "null",
-                "float"
-            ],
-            "default": null,
-            "doc": "Magnitude of nearest reference-image source (stub) [mag]"
-        },
-        {
-            "name": "sigmagnr",
-            "type": [
-                "null",
-                "float"
-            ],
-            "default": null,
-            "doc": "1-sigma uncertainty in magnr (stub) [mag]"
-        },
-        {
-            "name": "chinr",
-            "type": [
-                "null",
-                "float"
-            ],
-            "default": null,
-            "doc": "Chi parameter of nearest reference-image source (stub)"
-        },
-        {
-            "name": "sharpnr",
-            "type": [
-                "null",
-                "float"
-            ],
-            "default": null,
-            "doc": "Sharpness parameter of nearest reference-image source (stub)"
         },
         {
             "name": "field",
