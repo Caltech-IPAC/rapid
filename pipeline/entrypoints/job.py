@@ -562,13 +562,21 @@ def _run(workload_class: str) -> int:
 
         # 8. The termination protocol, in its stated order.
         #
-        #    `context.provenance` and `context.products` are passed (review
-        #    finding #6). Stages accumulate checksums, source counts and
-        #    product facts there, and only the runtime `Provenance` was
+        #    `context.provenance` and the PUBLISHED products are passed
+        #    (review findings #6 and #18). Stages accumulate checksums, source
+        #    counts and product facts, and only the runtime `Provenance` was
         #    reaching termination — so files were uploaded but sequence 0
         #    carried no authoritative product list, URIs, checksums, input or
-        #    reference identities. A registration callback cannot register
-        #    from a record that does not have them.
+        #    reference identities.
+        #
+        #    `context.published_products`, NOT `context.products`: the latter
+        #    is the stage-to-stage channel and holds downloaded inputs and
+        #    scratch paths alongside real outputs, serialized as local paths
+        #    and scalars. A registrar reading that could not tell which
+        #    canonical S3 objects were final products, nor verify their bytes.
+        #    The published mapping holds exactly the objects the upload stages
+        #    wrote, each with its immutable URI and the checksum of the bytes
+        #    uploaded.
         result = terminate(
             writer=writer, store=diagnostics_store,
             record_store=records_store, ownership=ownership,
@@ -578,7 +586,7 @@ def _run(workload_class: str) -> int:
             snapshot_key_value=snapshot_key_value,
             stages=recorder.as_list(), provenance=provenance, error=error,
             science_provenance=dict(context.provenance),
-            products=dict(context.products))
+            products=dict(context.published_products))
 
     logger.info("terminated: outcome=%s disposition=%s record=%s exit=%d",
                 result.outcome, result.product_disposition,

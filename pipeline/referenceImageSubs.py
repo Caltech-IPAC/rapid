@@ -1,4 +1,5 @@
 import csv
+import os
 import re
 import boto3
 from botocore.exceptions import ClientError
@@ -10,6 +11,7 @@ import time
 
 import modules.utils.rapid_pipeline_subs as util
 import database.modules.utils.rapid_db as db
+from pipeline.runtime.errors import StorageError
 from pipeline.runtime.process import run_tool
 
 
@@ -35,7 +37,8 @@ def generateReferenceImage(s3_client,
                            inject_fake_sources_flag,
                            fake_sources_dict,
                            rapid_sw,
-                           overlapping_fields):
+                           overlapping_fields,
+                           upload_key_prefix=None):
 
 
     start_time_benchmark = time.time()
@@ -327,10 +330,33 @@ def generateReferenceImage(s3_client,
     # Optionally upload reformatted awaicgen input image and uncertainty files to S3 bucket for off-line analysis.
     # Also upload the reference-image-input fake-source injection catalogs if fake sources were indeed injected.
     # The upload_inputs flag is only to be set to True temporarily as it increases the number of uploaded files.
+    #
+    # DIAGNOSTIC INPUTS, NOT PRODUCTS (review finding #18). These are the
+    # awaicgen inputs, uploaded for off-line analysis — they are not published
+    # products and must not be keyed as though they were. Two defects were
+    # here, both latent behind the flag and both traps for whoever next set it:
+    #
+    #   * the key was the legacy `<date>/jid<jid>/…`, which carries no run or
+    #     attempt identity, so a retry or reprocessing overwrote the previous
+    #     attempt's objects; and
+    #   * the `ClientError` was caught and printed, so a failed upload was
+    #     indistinguishable from a successful one to everything downstream.
+    #
+    # The key is now run- and attempt-scoped under a `refiminputs/` segment
+    # that says what these are, and a failure raises. `upload_key_prefix` is
+    # supplied by the stage from `StageContext.product_prefix()`; without one
+    # there is no identity to key by and the upload is refused rather than
+    # silently written to a colliding legacy key.
 
     upload_inputs = False
 
     if upload_inputs:
+
+        if not upload_key_prefix:
+            raise ValueError(
+                "diagnostic input upload was requested without an attempt-scoped "
+                "key prefix; refusing to write to a legacy jid-keyed path that "
+                "another attempt would overwrite")
 
         files_to_upload = refimage_input_filenames_reformatted +\
                           refimage_input_filenames_reformatted_unc +\
@@ -343,25 +369,22 @@ def generateReferenceImage(s3_client,
 
         for fname in files_to_upload:
 
-            s3_bucket_object_name = job_proc_date + "/jid" + str(jid) + "/refiminputs/" + fname
-
-            uploaded_to_bucket = True
+            s3_bucket_object_name = upload_key_prefix + "/refiminputs/" + os.path.basename(fname)
 
             try:
-                response = s3_client.upload_file(fname,
-                                                 product_s3_bucket,
-                                                 s3_bucket_object_name)
-
-                print("response =",response)
+                s3_client.upload_file(fname,
+                                      product_s3_bucket,
+                                      s3_bucket_object_name)
 
             except ClientError as e:
-                print("*** Error: Failed to upload {} to s3://{}/{}"\
-                    .format(fname,product_s3_bucket,s3_bucket_object_name))
-                uploaded_to_bucket = False
+                raise StorageError(
+                    "could not upload the diagnostic reference-image input "
+                    "{} to s3://{}/{}: {}".format(
+                        fname, product_s3_bucket, s3_bucket_object_name, e)
+                ) from e
 
-            if uploaded_to_bucket:
-                print("Successfully uploaded {} to s3://{}/{}"\
-                    .format(fname,product_s3_bucket,s3_bucket_object_name))
+            print("Successfully uploaded {} to s3://{}/{}"\
+                .format(fname,product_s3_bucket,s3_bucket_object_name))
 
 
     # Set filenames and S3 object names for reference-image products.

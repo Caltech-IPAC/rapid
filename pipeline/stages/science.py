@@ -53,6 +53,7 @@ import pipeline.differenceImageSubs as dfis
 import pipeline.referenceImageSubs as rfis
 from pipeline.runtime.errors import InputError
 from pipeline.runtime.process import run_shell, run_tool
+from pipeline.stages.publishing import publish_products
 
 # The release-content tree inside the image. The monolith hardcoded "/code" as
 # `rapid_sw` and "/code/cdf" as `cfg_path` at module scope; they are the
@@ -224,6 +225,9 @@ def _build_reference_image(context, awaicgen) -> None:
         fake_sources,
         SOFTWARE_ROOT,
         context.optional_fact("reference_overlapping_fields", []),
+        # Any diagnostic input upload keys under THIS attempt, never the
+        # legacy jid path a retry would overwrite (#18).
+        upload_key_prefix=context.product_prefix(),
     )
 
     (infobits_refimage, checksum_refimage,
@@ -1317,30 +1321,22 @@ def upload_products(context) -> None:
     registration reads reconciled records rather than parsing a config file.
     """
     bucket = context.parameter("s3/products-bucket")
-    # Run- and attempt-scoped (review finding #18). This was
-    # `job_type/exposure/sca`, which carries no run or attempt identity — so
-    # reprocessing or retrying one exposure/SCA overwrote the earlier
-    # attempt's objects and left old records and checksums pointing at keys
-    # whose bytes had changed. `product_prefix` is the one place that key is
-    # built; see `StageContext.product_prefix`.
-    prefix = context.product_prefix()
 
-    uploadable = [(name, value) for name, value in sorted(context.products.items())
-                  if isinstance(value, str) and os.path.isfile(value)]
-    if not uploadable:
-        raise InputError(
-            "no product files exist to upload; every stage either skipped or "
-            "produced nothing on disk")
+    # Run- and attempt-scoped keys, uploads that fail loudly, and one recorded
+    # entry per published object (review findings #6 and #18) — all of it in
+    # `publish_products`, which the reference path uses too so the three upload
+    # stages cannot answer "what is a published product" differently.
+    #
+    # `util.upload_files_to_s3_bucket` is deliberately no longer the caller: it
+    # returned a boolean nobody read, so an upload could fail while this stage
+    # recorded a successful publication and the attempt closed `published` over
+    # objects that were never written.
+    published = publish_products(context, bucket, context.publishable())
 
-    filenames = [value for _name, value in uploadable]
-    objectnames = [f"{prefix}/{os.path.basename(value)}"
-                   for _name, value in uploadable]
-
-    util.upload_files_to_s3_bucket(context.s3, bucket, filenames, objectnames)
-
-    context.record(product_bucket=bucket, product_prefix=prefix,
-                   products_uploaded=len(filenames),
+    context.record(product_bucket=bucket,
+                   product_prefix=context.product_prefix(),
+                   products_uploaded=len(published),
                    diffimage_infobits=context.products.get(
                        "diffimage_infobits", 0))
     context.logger.info("uploaded %d products to s3://%s/%s",
-                        len(filenames), bucket, prefix)
+                        len(published), bucket, context.product_prefix())

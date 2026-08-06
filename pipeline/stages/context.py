@@ -73,7 +73,14 @@ class StageContext:
         A boto3 S3 client, injected so a stage never constructs one.
     products : dict
         Stage outputs by name — the explicit replacement for rebinding shared
-        globals. Written through `produce`, read through `product`.
+        globals. Written through `produce`, read through `product`. This is the
+        stage-to-stage channel and holds downloaded INPUTS and intermediates as
+        well as final outputs; it is not the published-product list.
+    published_products : dict
+        The products actually uploaded, by name, each with the immutable S3 URI
+        and the checksum of the bytes uploaded (review finding #18). Written
+        through `publish` after the upload succeeds, and serialized into the
+        terminal record as what a registrar registers.
     provenance : dict
         Facts the terminal record should carry: checksums, infobits, counts.
     """
@@ -86,6 +93,7 @@ class StageContext:
     logger: Any
     s3: Any = None
     products: dict = dataclasses.field(default_factory=dict)
+    published_products: dict = dataclasses.field(default_factory=dict)
     provenance: dict = dataclasses.field(default_factory=dict)
     started_at: datetime.datetime = dataclasses.field(
         default_factory=lambda: datetime.datetime.now(datetime.timezone.utc))
@@ -233,6 +241,49 @@ class StageContext:
     def has_product(self, name: str) -> bool:
         """Whether an earlier stage produced this, without requiring it."""
         return name in self.products
+
+    # -- published products --------------------------------------------------
+    #
+    # THE SPLIT (review finding #18). `products` is the stage-to-stage channel:
+    # downloaded inputs, scratch files and intermediates all live there, because
+    # a later stage consumes them by name. The upload stage published EVERY
+    # on-disk entry of it, and the terminal record serialized the same mapping
+    # as local paths and scalars. So the record listed scratch paths beside real
+    # outputs, with no way to tell which canonical S3 objects were final
+    # products, and no URI or checksum to verify their bytes.
+    #
+    # A published product is a different thing from a stage output, and it is
+    # now recorded as one: named, uploaded under a run/attempt-scoped key, and
+    # carried into the terminal record as an immutable URI plus the checksum of
+    # the bytes that were uploaded. Registration reads those entries; it never
+    # has to guess which of a stage's filenames mattered.
+
+    def publish(self, name: str, uri: str, checksum: str,
+                size: int | None = None,
+                product_type: str | None = None) -> dict:
+        """Record that `name` was uploaded to `uri` with `checksum`.
+
+        Called by the upload stages after the bytes are durable — never before,
+        because an entry here asserts the object exists. Returns the entry.
+        """
+        entry = {"uri": uri, "checksum": checksum}
+        if size is not None:
+            entry["size"] = size
+        if product_type is not None:
+            entry["product_type"] = product_type
+        self.published_products[name] = entry
+        return entry
+
+    def publishable(self) -> list:
+        """The `products` entries that are real files, as (name, path) pairs.
+
+        The upload stages' one source of truth for what to upload. Entries that
+        are not paths on disk — infobits, counts, resolved identities — are
+        provenance, not products, and are recorded through `record`.
+        """
+        import os
+        return [(name, value) for name, value in sorted(self.products.items())
+                if isinstance(value, str) and os.path.isfile(value)]
 
     def record(self, **facts: Any) -> None:
         """Add facts to the attempt's provenance.

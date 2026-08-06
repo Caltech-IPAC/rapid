@@ -27,6 +27,7 @@ import numpy as np
 import modules.utils.rapid_pipeline_subs as util
 import pipeline.referenceImageSubs as rfis
 from pipeline.runtime.errors import InputError
+from pipeline.stages.publishing import publish_products
 
 SOFTWARE_ROOT = os.environ.get("RAPID_SW", "/code")
 CFG_PATH = os.environ.get("RAPID_CFG", os.path.join(SOFTWARE_ROOT, "cdf"))
@@ -75,6 +76,9 @@ def build_reference_image(context) -> None:
         fake_sources,
         SOFTWARE_ROOT,
         context.optional_fact("reference_overlapping_fields", []),
+        # Any diagnostic input upload keys under THIS attempt, never the
+        # legacy jid path a retry would overwrite (#18).
+        upload_key_prefix=context.product_prefix(),
     )
 
     (infobits_refimage, checksum_refimage,
@@ -243,22 +247,27 @@ def upload_products(context) -> None:
     The monolith's three upload sites each caught `ClientError`, printed it,
     and carried on — so a job whose products never reached the bucket still
     reported success and still wrote a product `.ini` claiming they were there.
-    `upload_files_to_s3_bucket` raises; the outcome follows.
+
+    TWO defects this docstring used to describe away (review finding #18).
+
+    The key was `job_type/unit`, carrying neither run nor attempt identity, so
+    a reference retry or a reprocessing run OVERWROTE the previous attempt's
+    objects and left earlier records citing keys whose bytes had changed. It is
+    now `context.product_prefix()`, the same run/attempt-scoped builder the
+    science path uses — the one place product keys are built.
+
+    And `upload_files_to_s3_bucket` did NOT raise: it returned a boolean nobody
+    read, so exactly the swallow this docstring claimed was fixed was still
+    there, one layer down. `publish_products` raises, and records each object's
+    URI and checksum so the terminal record names what was actually published.
     """
     bucket = context.parameter("s3/products-bucket")
-    prefix = f"{context.job_type}/{context.unit.key}"
 
-    uploadable = [value for _name, value in sorted(context.products.items())
-                  if isinstance(value, str) and os.path.isfile(value)]
-    if not uploadable:
-        raise InputError(
-            "no reference-image products exist to upload")
+    published = publish_products(context, bucket, context.publishable(),
+                                 product_type="reference")
 
-    objectnames = [f"{prefix}/{os.path.basename(value)}"
-                   for value in uploadable]
-    util.upload_files_to_s3_bucket(context.s3, bucket, uploadable, objectnames)
-
-    context.record(product_bucket=bucket, product_prefix=prefix,
-                   products_uploaded=len(uploadable))
+    context.record(product_bucket=bucket,
+                   product_prefix=context.product_prefix(),
+                   products_uploaded=len(published))
     context.logger.info("uploaded %d products to s3://%s/%s",
-                        len(uploadable), bucket, prefix)
+                        len(published), bucket, context.product_prefix())
