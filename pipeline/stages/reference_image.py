@@ -116,10 +116,13 @@ def coverage_and_uncertainty_statistics(context) -> None:
     stats_unc = util.fits_data_statistics_with_clipping(
         uncert_image, n_sigma, hdu_index)
 
+    # `gmed` is the clipped median the statistics helper actually returns
+    # (`modules/utils/rapid_pipeline_subs.py:295`); the monolith read it under
+    # that name at lines 476 and 482. There is no `clippedmed` key.
     context.produce("cov5percent", cov5percent)
     context.record(reference_cov5percent=cov5percent,
-                   reference_medncov=stats_cov["clippedmed"],
-                   reference_medpixunc=stats_unc["clippedmed"])
+                   reference_medncov=stats_cov["gmed"],
+                   reference_medpixunc=stats_unc["gmed"])
 
 
 def sextractor_catalog(context) -> None:
@@ -180,16 +183,23 @@ def image_statistics(context) -> None:
         context.product("reference_image"), 3.0, 0,
         saturation_level_refimage_rate)
 
+    # The key names are the statistics helper's own
+    # (`modules/utils/rapid_pipeline_subs.py:291-301`), read here under exactly
+    # the names the monolith read them under at lines 448-454: `gsigma` is what
+    # it called `datascale`, `gdatamin`/`gdatamax` what it called `gmin`/`gmax`,
+    # and `satcount`/`nancount` what it called `npixsat`/`npixnan`. The
+    # provenance field names below keep the monolith's vocabulary; only the
+    # lookups are corrected.
     context.record(
         reference_avg=stats["clippedavg"],
         reference_std=stats["clippedstd"],
         reference_noutliers=stats["noutliers"],
         reference_gmed=stats["gmed"],
-        reference_datascale=stats["datascale"],
-        reference_gmin=stats["gmin"],
-        reference_gmax=stats["gmax"],
-        reference_npixsat=stats["npixsat"],
-        reference_npixnan=stats["npixnan"],
+        reference_datascale=stats["gsigma"],
+        reference_gmin=stats["gdatamin"],
+        reference_gmax=stats["gdatamax"],
+        reference_npixsat=stats["satcount"],
+        reference_npixnan=stats["nancount"],
     )
 
 

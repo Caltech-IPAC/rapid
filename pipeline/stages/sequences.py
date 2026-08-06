@@ -38,6 +38,12 @@ SCIENCE_SEQUENCE = (
     ("gunzip_science_image", science.gunzip_science_image),
     ("resolve_reference_image", science.resolve_reference_image),
     ("measure_reference_fwhm", science.measure_reference_fwhm),
+    # `science_image_statistics` must stay ahead of `inject_fake_sources`: the
+    # clipped average it produces feeds the uncertainty model in
+    # `reformat_science_image`, and the monolith computed it over the
+    # *pre-injection* image (lines 788-798, injection opening at 806). Moving
+    # it after injection changes the noise term for injection-enabled runs.
+    ("science_image_statistics", science.science_image_statistics),
     ("inject_fake_sources", science.inject_fake_sources),
     ("reformat_science_image", science.reformat_science_image),
     ("science_image_catalog", science.science_image_catalog),

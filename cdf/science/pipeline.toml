@@ -140,11 +140,21 @@ max_n_images_to_coadd = 25
 
 [naive_diffimage]
 naive_diffimage_flag = true
+# The masked naive difference image's filename, from [NAIVE_DIFFIMAGE] in the
+# master .ini (`5664024^:cdf/awsBatchSubmitJobs_launchSingleSciencePipeline.ini:128`).
+# Dropped by the W4B migration; `naive_difference` reads it by name.
+naive_output_diffimage_file = "naive_diffimage_masked.fits"
 
 [zogy]
 astrometric_uncert_x = 0.05
 astrometric_uncert_y = 0.05
 post_zogy_keep_diffimg_lower_cov_map_thresh = 0.5
+# ZOGY's three output filenames, from [ZOGY] in the master .ini
+# (`5664024^:cdf/awsBatchSubmitJobs_launchSingleSciencePipeline.ini:138-140`).
+# Dropped by the W4B migration; `run_zogy` reads all three by name.
+zogy_output_diffimage_file = "zogy_diffimage.fits"
+zogy_output_diffpsf_file = "diffpsf.fits"
+zogy_output_scorrimage_file = "scorrimage.fits"
 
 [sfft]
 run_sfft = true
@@ -161,12 +171,25 @@ awaicgen_pixelflux_scale_flag = 1
 awaicgen_simple_coadd_flag = 1
 awaicgen_unc_sigfigs_retained = 1
 zprefimg = 17.0
+# The coadd's three output filenames, from [AWAICGEN] in the master .ini
+# (`5664024^:cdf/awsBatchSubmitJobs_launchSingleSciencePipeline.ini:170-172`).
+# Dropped by the W4B migration; the download branch of `resolve_reference_image`
+# names the sibling objects with them, and `rfis.generateReferenceImage` reads
+# them out of the same section.
+awaicgen_output_mosaic_image_file = "awaicgen_output_mosaic_image.fits"
+awaicgen_output_mosaic_cov_map_file = "awaicgen_output_mosaic_cov_map.fits"
+awaicgen_output_mosaic_uncert_image_file = "awaicgen_output_mosaic_uncert_image.fits"
 
 [bkgest]
 clippedmean_calc_type = 3
 output_image_type = 2
 local_clippedmean_grid_spacing = 500
 local_clippedmean_input_window = 501
+# bkgest's two output filenames, from [BKGEST] in the master .ini
+# (`5664024^:cdf/awsBatchSubmitJobs_launchSingleSciencePipeline.ini:199-200`).
+# Dropped by the W4B migration; `subtract_background` reads both by name.
+filename_bkg_subbed_science_image = "bkg_subbed_science_image.fits"
+filename_global_clippedmean_sciimage_tbl = "global_clippedmean_science_image.tbl"
 
 [gainmatch]
 zero_point_sci_keyword = "ZPTMAG"
@@ -193,6 +216,22 @@ sharphi = 1.0
 roundlo = -1.0
 roundhi = 1.0
 min_separation = 1.0
+# The PSF-fit catalogue output filenames, one triple per difference-image
+# variant. Carried over verbatim from [PSFCAT_DIFFIMAGE] in the master .ini
+# (`5664024^:cdf/awsBatchSubmitJobs_launchSingleSciencePipeline.ini:262-278`);
+# the W4B config migration dropped them, and every psf_catalog stage reads
+# them by name. The negative variants derive their names from these by
+# `.replace(".txt", "_negative.txt")` in the stage, exactly as the monolith
+# did — the `.ini` carried only the positive names too.
+output_zogy_psfcat_filename = "zogy_diffimage_masked_psfcat.txt"
+output_zogy_psfcat_finder_filename = "zogy_diffimage_masked_psfcat_finder.txt"
+output_zogy_psfcat_residual_filename = "zogy_diffimage_masked_psfcat_residual.fits"
+output_sfft_psfcat_filename = "sfftdiffimage_masked_psfcat.txt"
+output_sfft_psfcat_finder_filename = "sfftdiffimage_masked_psfcat_finder.txt"
+output_sfft_psfcat_residual_filename = "sfftdiffimage_masked_psfcat_residual.fits"
+output_naive_psfcat_filename = "naive_diffimage_masked_psfcat.txt"
+output_naive_psfcat_finder_filename = "naive_diffimage_masked_psfcat_finder.txt"
+output_naive_psfcat_residual_filename = "naive_diffimage_masked_psfcat_residual.fits"
 
 [sextractor_diffimage]
 sextractor_detect_type = "CCD"
@@ -471,3 +510,11 @@ sharphi = 1.0
 roundlo = -1.0
 roundhi = 1.0
 min_separation = 1.0
+# Read by `generatePhotUtilsReferenceImageCatalog`
+# (`pipeline/referenceImageSubs.py:665-667`), and carried over from
+# [PSFCAT_REFIMAGE] in the master .ini
+# (`5664024^:cdf/awsBatchSubmitJobs_launchSingleSciencePipeline.ini:746-748`).
+# Dropped by the W4B migration alongside the diffimage triples.
+output_psfcat_filename = "refimage_psfcat.txt"
+output_psfcat_finder_filename = "refimage_psfcat_finder.txt"
+output_psfcat_residual_filename = "refimage_psfcat_residual.fits"

@@ -31,11 +31,27 @@ import os
 import modules.utils.rapid_pipeline_subs as util
 from database.modules.utils.rapid_db import compute_checksum
 from pipeline.runtime.errors import InputError
+from submission.routes import JOB_TYPE_SCIENCE, ppid_for
 
 # `compute_checksum` signals failure by returning one of these instead of a
 # digest — the monolith checked for them at line 1668 of the science script and
 # not at all here. Named rather than repeated as bare integers.
 CHECKSUM_ERROR_CODES = (65, 66, 68)
+
+# The PPID stamped into both products' headers. The monolith read a single
+# `ppid` from `[SCI_IMAGE]` of the job's .ini
+# (`5664024^:pipeline/...PostProcPipeline.py:158`, value 15 in
+# `...launchSingleSciencePipeline.ini:95`) and stamped that one value into the
+# reference image's header at line 238 and the difference image's at line 297.
+# It is the identifier of the pipeline that *produced the difference image* —
+# the science pipeline — which is why the same value goes into both.
+#
+# The first extraction read a `reference_image_ppid` manifest fact instead, with
+# different per-header defaults (12 and 15): the difference image was labelled
+# as produced by pipeline 12, the dedicated reference-image pipeline, whenever
+# the fact was present. `ppid_for` is the route matrix's own map and needs no
+# manifest fact — the value is a property of the pipeline, not of the unit.
+SCIENCE_PPID = ppid_for(JOB_TYPE_SCIENCE)
 
 
 def stamp_reference_image(context) -> None:
@@ -52,7 +68,7 @@ def stamp_reference_image(context) -> None:
                os.path.basename(filename),
                ctx.optional_fact("reference_image_infobits", 0),
                ctx.optional_fact("reference_image_version", 1),
-               ctx.optional_fact("reference_image_ppid", 12),
+               SCIENCE_PPID,
                ctx.started_at.isoformat(),
            ],
            checksum_fact="reference_image_checksum")
@@ -73,7 +89,7 @@ def stamp_difference_image(context) -> None:
                os.path.basename(filename),
                ctx.optional_fact("infobits", 0),
                ctx.optional_fact("difference_image_version", 1),
-               ctx.optional_fact("reference_image_ppid", 15),
+               SCIENCE_PPID,
                ctx.fact("rid"),
                ctx.fact("expid"),
                ctx.fact("fid"),

@@ -253,9 +253,36 @@ def _build_reference_image(context, awaicgen) -> None:
         sextractor_refimage, True)
     context.produce("reference_sexcat", filename_sex_refimage_catalog)
 
+    # The PhotUtils reference-image catalogue (monolith lines 508-529). The
+    # first extraction dropped this call, so a science job that had to build
+    # its own reference produced no reference PSF/finder catalogues at all —
+    # while the dedicated reference-image pipeline, which runs the same coadd,
+    # did produce them. The reference PSF is an input to this job type, so it
+    # is available here by the same name the download branch produces.
+    psfcat_refimage = context.science_section("psfcat_refimage")
+    refimage_psfcat = rfis.generatePhotUtilsReferenceImageCatalog(
+        context.s3, context.parameter("s3/products-bucket"), context.unit.key,
+        context.job_type, mosaic_image_file, mosaic_uncert_image_file,
+        context.product("reference_psf"), psfcat_refimage, True)
+
+    (flag_psf_refimage_catalog, checksum_psf_refimage_catalog,
+     checksum_psf_finder_refimage_catalog, filename_psf_refimage_catalog,
+     filename_psf_finder_refimage_catalog, _obj_psfcat, _obj_finder,
+     _uploaded_psfcat, _uploaded_finder) = refimage_psfcat
+
+    context.produce("reference_psfcat", filename_psf_refimage_catalog)
+    context.produce("reference_psfcat_finder",
+                    filename_psf_finder_refimage_catalog)
+
     saturation_level_refimage = float(
         sextractor_refimage["sextractor_satur_level"])
-    saturation_level_refimage_rate = saturation_level_refimage / 60.0
+    # The science monolith divided by the science image's exposure time here
+    # (line 549), where the dedicated reference-image pipeline divides by a
+    # literal 60.0 (its line 428). Both carry the same TODO calling the
+    # stopgap incorrect; each is reproduced against its own authority rather
+    # than unified, because unifying them would be a science change.
+    saturation_level_refimage_rate = (saturation_level_refimage
+                                      / float(context.fact("exptime")))
 
     stats_ref = util.fits_data_statistics_with_clipping(
         mosaic_image_file, n_sigma, hdu_index, saturation_level_refimage_rate)
@@ -265,10 +292,13 @@ def _build_reference_image(context, awaicgen) -> None:
         reference_image_infobits=infobits_refimage,
         reference_image_checksum=checksum_refimage,
         reference_sexcat_checksum=checksum_sex_refimage_catalog,
+        reference_psfcat_ok=bool(flag_psf_refimage_catalog),
+        reference_psfcat_checksum=checksum_psf_refimage_catalog,
+        reference_psfcat_finder_checksum=checksum_psf_finder_refimage_catalog,
         reference_nframes=nframes,
         reference_cov5percent=cov5percent,
-        reference_medncov=stats_cov["clippedmed"],
-        reference_medpixunc=stats_unc["clippedmed"],
+        reference_medncov=stats_cov["gmed"],
+        reference_medpixunc=stats_unc["gmed"],
         reference_jdstart=jdstart,
         reference_jdend=jdend,
         reference_zeropoint=zprefimg,
@@ -299,6 +329,37 @@ def measure_reference_fwhm(context) -> None:
 # ---------------------------------------------------------------------------
 # Science-image preparation
 # ---------------------------------------------------------------------------
+
+def science_image_statistics(context) -> None:
+    """Clipped statistics for image resizing. (Monolith stage K, 788-798.)
+
+    Its own stage, and it must stay ahead of `inject_fake_sources` in the
+    sequence. The monolith computed `avg_sci_img` here — at line 798, eight
+    lines *before* the injection block opens at 806 — and passed that
+    pre-injection value into the reformat at line 912, after injection had
+    rebound `science_image_filename` to the injected image. Injected pixels
+    therefore never entered this average.
+
+    The first extraction folded this into `reformat_science_image`, which runs
+    after injection, so the average was taken over the injected image and the
+    uncertainty model shifted for injection-enabled runs only. Splitting the
+    stage out is what makes the monolith's ordering expressible: a sequence
+    position is visible, an inline computation's position is not.
+
+    `hdu_index` is 1 here — the science image at this point is the raw
+    downloaded FITS, whose data live in the first extension, not the PRIMARY.
+    It is the reformat that moves them to PRIMARY.
+    """
+    saturation_level_sciimage = context.science_value(
+        "sci_image", "saturation_level")
+
+    stats_sci_img = util.fits_data_statistics_with_clipping(
+        context.product("science_image"), 3.0, 1, saturation_level_sciimage)
+
+    context.produce("avg_sci_img", stats_sci_img["clippedavg"])
+    context.record(sci_image_avg_preinjection=stats_sci_img["clippedavg"],
+                   sci_image_std_preinjection=stats_sci_img["clippedstd"])
+
 
 def inject_fake_sources(context) -> None:
     """Optional fake-source injection. (Monolith stage L, lines 806-893.)
@@ -373,18 +434,13 @@ def inject_fake_sources(context) -> None:
 def reformat_science_image(context) -> None:
     """Reformat and build the uncertainty image. (Monolith stage M, 899-914.)
 
-    Also the pre-reformat statistics the reformat consumes (stage K, 788-798),
-    which the monolith computed on the pre-injection image; that ordering is
-    preserved by computing here, after injection, exactly as the monolith did.
+    `avg_sci_img` comes from `science_image_statistics`, which ran before
+    injection — the monolith's ordering, and the reason that stage is separate.
+    Everything else here is stage M's body.
     """
     instrument = context.science_section("instrument")
     science_image_filename = context.product("science_image")
-    saturation_level_sciimage = context.science_value(
-        "sci_image", "saturation_level")
-
-    stats_sci_img = util.fits_data_statistics_with_clipping(
-        science_image_filename, 3.0, 1, saturation_level_sciimage)
-    avg_sci_img = stats_sci_img["clippedavg"]
+    avg_sci_img = context.product("avg_sci_img")
 
     reformatted = science_image_filename.replace(".fits", "_reformatted.fits")
     reformatted_unc = science_image_filename.replace(
@@ -578,11 +634,20 @@ def prepare_zogy_inputs(context) -> None:
     stats_sci_img = util.fits_data_statistics_with_clipping(
         context.product("science_image_reformatted"), n_sigma, hdu_index,
         context.science_value("sci_image", "saturation_level"))
+    # The **undivided** reference-image saturation level, read straight from
+    # release content exactly as the monolith read it once at line 304 and used
+    # it here at line 1117. The first extraction reached for the
+    # `saturation_level_refimage` product instead — which is the *rate*, the
+    # saturation level already divided by an exposure time — so ZOGY's input
+    # reference statistics clipped at a threshold some tens of times too low,
+    # and only when the reference had been built inline (the download branch
+    # never produces that product, so the lookup fell through to a
+    # `ref_image.saturation_level` key that does not exist in release content).
+    saturation_level_refimage = float(
+        context.science_section("sextractor_refimage")["sextractor_satur_level"])
     stats_ref_img = util.fits_data_statistics_with_clipping(
         context.product("resampled_reference_image"), n_sigma, hdu_index,
-        context.products.get("saturation_level_refimage",
-                             context.science_value("ref_image",
-                                                   "saturation_level")))
+        saturation_level_refimage)
 
     std_sci_img = stats_sci_img["clippedstd"]
     std_ref_img = stats_ref_img["clippedstd"]
@@ -756,7 +821,7 @@ def run_sfft(context) -> None:
     science_image = context.product("science_image")
 
     crossconv_flag = context.science_value("sfft", "crossconv_flag")
-    if "rimtimsim" in os.path.basename(science_image):
+    if "rimtimsim" in science_image:
         # rimtimsim data: cross-convolution is off regardless of the release
         # setting (monolith lines 1832-1834).
         crossconv_flag = False
@@ -778,30 +843,76 @@ def run_sfft(context) -> None:
     else:
         run_tool(argv, capture_path=capture, logger=context.logger)
 
-    context.produce("sfft_diffimage", context.scratch(
-        context.science_value("sfft", "sfft_output_diffimage_file")))
+    # SFFT's output filenames are a function of the cross-convolution flag, and
+    # the tool writes them beside its science-image argument
+    # (`modules/sfft/sfft_rapid_rimtimsim.py:206-217`) — which is in scratch,
+    # so they land there. The monolith named them at lines 1837-1846; the same
+    # four names, derived the same way.
+    if crossconv_flag:
+        diffimage = context.scratch("sfftdiffimage_dconv_masked.fits")
+        soln = context.scratch("sfftsoln_cconv.fits")
+        diffpsf = context.scratch("sfftdiffpsf_dconv.fits")
+        context.produce("sfft_cconv_diffimage",
+                        context.scratch("sfftdiffimage_cconv_masked.fits"))
+    else:
+        diffimage = context.scratch("sfftdiffimage_masked.fits")
+        soln = context.scratch("sfftsoln.fits")
+        diffpsf = context.scratch("sfftdiffpsf.fits")
+
+    context.produce("sfft_diffimage", diffimage)
+    context.produce("sfft_soln", soln)
+    context.produce("sfft_diffpsf", diffpsf)
+    context.produce("sfft_crossconv_flag", crossconv_flag)
 
 
 def _sfft_argv(context, sfft_code, science_image, crossconv_flag) -> list:
-    """Build SFFT's argument vector. (Monolith lines 1820-1895.)
+    """Build SFFT's argument vector. (Monolith lines 1849-1892.)
 
-    The monolith selected between two argv shapes on whether the science image
-    filename began with "r" (line 1851) — the rimtimsim case, which supplies
-    the gain-match catalogues as star lists. Preserved.
+    Every token here is checked against the tool's own parser
+    (`modules/sfft/sfft_rapid_rimtimsim.py:312-328`). The first extraction
+    invented a vocabulary — six positional inputs and `--sci_star_list`,
+    `--ref_star_list`, `--crossconv_flag` — that the parser rejects with status
+    2, so every SFFT-enabled science job failed in argparse before SFFT ran.
+
+    The real shape: two positionals (science, reference), and the branch is on
+    whether the science image filename begins with "r" — the rimtimsim case,
+    which passes **no** catalogues and masks bright sources hard (20000.0 over
+    30 pixels), where the OpenUniverse case passes the gain-match catalogues as
+    `--scicat`/`--refcat` and masks gently (50.0 over 100 pixels). The first
+    extraction had this branch inverted as well as misnamed.
+
+    `--crossconv` is `action="store_true"`, so it is present or absent — never
+    given a value — and it brings `--refpsf`, `--scisegm` and `--refsegm` with
+    it. `--scipsf` is passed unconditionally.
     """
-    argv = [PYTHON, sfft_code,
-            context.product("science_image_bkg_subbed"),
-            context.product("gainmatched_reference_image"),
-            context.product("science_psf_normalized"),
-            context.product("reference_psf"),
-            context.product("science_uncert_image"),
-            context.product("gainmatched_reference_uncert_image")]
+    filename_scifile = context.product("science_image_bkg_subbed")
+    filename_reffile = context.product("gainmatched_reference_image")
 
     if os.path.basename(science_image).startswith("r"):
-        argv += ["--sci_star_list", context.product("science_gainmatch_sexcat"),
-                 "--ref_star_list", context.product("reference_gainmatch_sexcat")]
+        argv = [PYTHON, sfft_code,
+                filename_scifile,
+                filename_reffile,
+                "--bsmaskvalue", "20000.0",
+                "--bsmaskradius", "30.0"]
+    else:
+        argv = [PYTHON, sfft_code,
+                filename_scifile,
+                filename_reffile,
+                "--scicat", context.product("science_gainmatch_sexcat"),
+                "--refcat", context.product("reference_gainmatch_sexcat"),
+                "--bsmaskvalue", "50.0",
+                "--bsmaskradius", "100.0"]
 
-    argv += ["--crossconv_flag", str(crossconv_flag)]
+    # If crossconv is off, the SFFT difference-image PSF is just the science
+    # image's PSF — which is why --scipsf is unconditional (monolith 1880-1883).
+    argv += ["--scipsf", context.product("science_psf_normalized")]
+
+    if crossconv_flag:
+        argv += ["--crossconv",
+                 "--refpsf", context.product("reference_psf"),
+                 "--scisegm", context.scratch("sfftscisegm.fits"),
+                 "--refsegm", context.scratch("sfftrefsegm.fits")]
+
     return argv
 
 
@@ -811,6 +922,7 @@ def _sfft_argv(context, sfft_code, science_image, crossconv_flag) -> list:
 
 def sextractor_on_difference_image(context, variant: str, image: str,
                                    detection_image: str,
+                                   weight_image: str | None = None,
                                    override_weighting: bool = True) -> dict:
     """SExtractor on one difference image. (Six monolith blocks, ~50 lines each.)
 
@@ -837,7 +949,13 @@ def sextractor_on_difference_image(context, variant: str, image: str,
         # override these two, and did not revert them either.
         sextractor["sextractor_weight_type"] = "NONE,MAP_RMS"
         sextractor["sextractor_filter"] = "N"
-    sextractor["sextractor_weight_image"] = context.product("weight_image")
+    # Each difference-image variant weights with its own uncertainty image;
+    # `weight_image` is the monolith's `filename_weight_image`, which it
+    # reassigned per variant (1329 for ZOGY, 1984 for SFFT, 2539 for naive).
+    # Defaulting to the ZOGY product keeps the ZOGY call sites unchanged.
+    sextractor["sextractor_weight_image"] = (
+        weight_image if weight_image is not None
+        else context.product("weight_image"))
     sextractor["sextractor_parameters_name"] = paramsfile
     sextractor["sextractor_filter_name"] = \
         CFG_PATH + "/rapidSexDiffImageFilter.conv"
@@ -862,20 +980,47 @@ def sextractor_on_difference_image(context, variant: str, image: str,
 def psf_catalog_for_difference_image(context, variant: str, image: str,
                                      uncert_image: str, psf: str,
                                      output_prefix: str,
+                                     negative: bool = False,
                                      with_parquet: bool = True) -> None:
     """PSF-fit catalogue for one difference image, via photutils.
 
     Six monolith blocks (~110 lines each) at 1439-1548, 1551-1660, 2158-2269,
     2272-2383, 2638-2734 and 2737-2833, differing in inputs, the output key
-    prefix, the infobit set on failure, and — for the naive pair — the absence
-    of the parquet/join step. No background subtraction is done.
+    prefix, whether the variant is the negative one, the infobit set on
+    failure, and — for the naive pair — the absence of the parquet/join step.
+    No background subtraction is done.
 
-    On failure the monolith OR-ed a per-variant infobit into
-    `output_diffimage_file_infobits` and continued, rather than failing the
-    job. That is preserved: a PSF-catalogue failure is a product-quality fact
-    carried in infobits, not a job outcome — and unlike the monolith, the
-    infobits now reach the terminal record rather than only a `.ini` on S3.
+    **The output schema is the monolith's, and it is not just `phot`.** Each
+    block computed sky coordinates for the fitted pixel positions and added
+    `ra`/`dec` columns (1500-1509), wrote the photometry table with
+    `ascii.write`, wrote `psfphot.finder_results` as a *second* catalogue
+    (1519-1523), and — for the ZOGY and SFFT variants — inner-joined photometry
+    with finder results on `id` before writing the parquet (1526-1537). The
+    first extraction wrote `phot` alone in a different ascii format, dropped
+    the finder catalogue entirely, and parqueted the unjoined table: downstream
+    readers lost both the sky coordinates and every finder column.
+
+    **The negative variants get their own filenames.** The monolith derived
+    them by `.replace(".txt", "_negative.txt")` on the same configured name
+    (1551-1562, 2286-2288, 2751-2753). The first extraction passed the same
+    `output_prefix` for both signs, so both resolved to one configured
+    filename and the negative invocation overwrote the positive catalogue —
+    then uploaded negative bytes under both product names.
+
+    The monolith wrapped everything after `compute_psf_catalog` in a bare
+    `except Exception` that printed and continued. That is preserved in effect
+    but not in form: a failure to build the catalogue's columns sets the
+    variant's infobit, which reaches the terminal record, rather than printing
+    into a log nobody reads.
+
+    On failure of `compute_psf_catalog` itself the monolith OR-ed a per-variant
+    infobit into `output_diffimage_file_infobits` and continued rather than
+    failing the job. Preserved: a PSF-catalogue failure is a product-quality
+    fact carried in infobits, not a job outcome.
     """
+    from astropy.io import ascii
+    from astropy.table import join
+
     psfcat = context.science_section("psfcat_diffimage")
 
     n_clip_sigma = float(psfcat["n_clip_sigma"])
@@ -887,37 +1032,73 @@ def psf_catalog_for_difference_image(context, variant: str, image: str,
                       .replace(" ", "").split(","))
     aperture_radius = float(psfcat["aperture_radius"])
 
-    output_psfcat_filename = context.scratch(
-        psfcat[f"output_{output_prefix}_psfcat_filename"])
-    output_psfcat_residual_filename = context.scratch(
-        psfcat[f"output_{output_prefix}_psfcat_residual_filename"])
+    catalog_name = psfcat[f"output_{output_prefix}_psfcat_filename"]
+    finder_name = psfcat[f"output_{output_prefix}_psfcat_finder_filename"]
+    residual_name = psfcat[f"output_{output_prefix}_psfcat_residual_filename"]
+    if negative:
+        catalog_name = catalog_name.replace(".txt", "_negative.txt")
+        finder_name = finder_name.replace(".txt", "_negative.txt")
+        residual_name = residual_name.replace(".fits", "_negative.fits")
 
-    psfcat_flag, phot, _psfphot = util.compute_psf_catalog(
+    output_psfcat_filename = context.scratch(catalog_name)
+    output_psfcat_finder_filename = context.scratch(finder_name)
+    output_psfcat_residual_filename = context.scratch(residual_name)
+
+    psfcat_flag, phot, psfphot = util.compute_psf_catalog(
         n_clip_sigma, n_thresh_sigma, fwhm, fit_shape, aperture_radius,
         image, uncert_image, psf, output_psfcat_residual_filename)
 
     if not psfcat_flag:
-        infobits = context.products.get("diffimage_infobits", 0)
-        context.produce("diffimage_infobits",
-                        infobits | PSFCAT_INFOBIT[variant])
-        context.logger.warning(
-            "PSF catalog failed for %s; infobit %d set", variant,
-            PSFCAT_INFOBIT[variant])
+        _set_psfcat_infobit(context, variant)
         return
 
-    phot.write(output_psfcat_filename, format="ascii.fixed_width_two_line",
-               overwrite=True)
-    context.produce(f"psfcat_{variant}", output_psfcat_filename)
+    try:
+        # Sky coordinates for the fitted pixel positions, from the reformatted
+        # science image's WCS (monolith 1500-1509). Both `ra` and `dec` become
+        # catalogue columns; without them the parquet carries pixel coordinates
+        # alone and nothing downstream can position a candidate on the sky.
+        ra, dec = util.computeSkyCoordsFromPixelCoords(
+            context.product("science_image_reformatted"),
+            list(phot["x_fit"]), list(phot["y_fit"]))
+        phot.add_column(ra, name="ra")
+        phot.add_column(dec, name="dec")
 
-    if with_parquet:
-        # The naive-difference variants stop at the ascii write (monolith
-        # 2638-2734, 2737-2833); only the ZOGY and SFFT variants carry sky
-        # coordinates and a parquet twin downstream.
-        parquet = output_psfcat_filename.replace(".txt", ".parquet")
-        phot.to_pandas().to_parquet(parquet)
-        context.produce(f"psfcat_parquet_{variant}", parquet)
+        ascii.write(phot, output_psfcat_filename, overwrite=True)
+        context.produce(f"psfcat_{variant}", output_psfcat_filename)
 
-    context.record(**{f"psfcat_sources_{variant}": len(phot)})
+        ascii.write(psfphot.finder_results, output_psfcat_finder_filename,
+                    overwrite=True)
+        context.produce(f"psfcat_finder_{variant}",
+                        output_psfcat_finder_filename)
+
+        if with_parquet:
+            # The naive-difference variants stop at the two ascii writes
+            # (monolith 2686-2726, 2755-2833); only the ZOGY and SFFT variants
+            # join and write parquet.
+            joined = join(phot, psfphot.finder_results, keys="id",
+                          join_type="inner")
+            parquet = output_psfcat_filename.replace(".txt", ".parquet")
+            joined.to_pandas().to_parquet(parquet, engine="pyarrow")
+            context.produce(f"psfcat_parquet_{variant}", parquet)
+            context.record(**{f"psfcat_joined_rows_{variant}": len(joined)})
+
+        context.record(**{f"psfcat_sources_{variant}": len(phot)})
+    except Exception as exc:
+        # The monolith's bare `except Exception: print(...)` (1539-1540 and its
+        # five twins). The job continues, but the failure is now a recorded
+        # product-quality fact rather than a line of stdout.
+        context.logger.warning(
+            "PSF-fit catalog columns failed for %s: %s", variant, exc)
+        _set_psfcat_infobit(context, variant)
+
+
+def _set_psfcat_infobit(context, variant: str) -> None:
+    """OR one variant's failure bit into the difference-image infobits."""
+    infobits = context.products.get("diffimage_infobits", 0)
+    context.produce("diffimage_infobits", infobits | PSFCAT_INFOBIT[variant])
+    context.logger.warning(
+        "PSF catalog failed for %s; infobit %d set", variant,
+        PSFCAT_INFOBIT[variant])
 
 
 # ---------------------------------------------------------------------------
@@ -944,47 +1125,142 @@ def catalog_zogy(context) -> None:
         context, "zogy_negative",
         context.product("zogy_diffimage_masked_negative"),
         context.product("zogy_diffimage_unc_masked"),
-        context.product("zogy_diffpsf"), "zogy")
+        context.product("zogy_diffpsf"), "zogy", negative=True)
 
 
 def catalog_sfft(context) -> None:
-    """The SFFT variants' catalogues, when SFFT ran."""
+    """The SFFT variants' catalogues, when SFFT ran. (Monolith 1921-2431.)
+
+    Every input here is SFFT's own. The first extraction detected on ZOGY's
+    Scorr image and fitted with ZOGY's uncertainty image and ZOGY's difference
+    PSF, so the SFFT candidates, their weights and their fitted fluxes were
+    ZOGY's answers wearing SFFT's product names. The monolith built an SFFT
+    uncertainty image (1974-1984), used the SFFT difference PSF (2171), and
+    detected on the cross-convolved image when crossconv was on and the SFFT
+    difference image when it was off (2031-2034, 2084-2087).
+    """
     from pipeline.runtime.stages import SKIPPED
 
     if not context.has_product("sfft_diffimage"):
         return SKIPPED
 
     sfft_image = context.product("sfft_diffimage")
+    crossconv_flag = context.product("sfft_crossconv_flag")
+
+    # Record the fake-source injection in SFFT's difference-image headers, as
+    # the monolith did for both the deconvolved and cross-convolved images
+    # (1926-1954), before anything reads them.
+    if context.has_product("injection_catalog"):
+        fake_sources = context.science_section("fake_sources")
+        targets = [sfft_image]
+        if crossconv_flag:
+            targets.append(context.product("sfft_cconv_diffimage"))
+        for target in targets:
+            util.addHistoryLinesToFITSHeader(
+                target, ["Fake sources were injected into science image."], 0)
+            util.addKeywordsToFITSHeader(
+                target, ["NINJECT", "MNMAGINJ", "MXMAGINJ"],
+                [fake_sources["num_injections"], fake_sources["mag_min"],
+                 fake_sources["mag_max"]], 0, target)
+
+    # Replace NaNs in the SFFT difference image with zeros (monolith 1957-1959).
+    util.replace_nans_with_value(sfft_image, 0.0)
+
     sfft_negative = sfft_image.replace(".fits", "_negative.fits")
     util.scale_image_data(sfft_image, -1.0, sfft_negative)
+    context.produce("sfft_diffimage_negative", sfft_negative)
 
-    for variant, image in (("sfft_positive", sfft_image),
-                           ("sfft_negative", sfft_negative)):
+    if crossconv_flag:
+        cconv = context.product("sfft_cconv_diffimage")
+        cconv_negative = cconv.replace(".fits", "_negative.fits")
+        util.scale_image_data(cconv, -1.0, cconv_negative)
+        context.produce("sfft_cconv_diffimage_negative", cconv_negative)
+        detection_positive = cconv
+        detection_negative = cconv_negative
+    else:
+        detection_positive = sfft_image
+        detection_negative = sfft_negative
+
+    # SFFT's own uncertainty image, which is also its SExtractor weight image
+    # (monolith 1972-1984). ZOGY's was a different image over a different
+    # difference.
+    sfft_unc_masked = context.scratch("sfftdiffimage_uncert_masked.fits")
+    instrument = context.science_section("instrument")
+    dfis.compute_diffimage_uncertainty(
+        float(instrument["sca_gain"]) * context.fact("exptime"),
+        context.product("science_image_reformatted"),
+        context.product("gainmatched_reference_image"),
+        context.product("resampled_reference_cov_map"),
+        context.science_value("zogy",
+                              "post_zogy_keep_diffimg_lower_cov_map_thresh"),
+        sfft_image,
+        sfft_unc_masked)
+    context.produce("sfft_diffimage_unc_masked", sfft_unc_masked)
+
+    sfft_diffpsf = context.product("sfft_diffpsf")
+
+    for variant, image, detection, is_negative in (
+            ("sfft_positive", sfft_image, detection_positive, False),
+            ("sfft_negative", sfft_negative, detection_negative, True)):
         sextractor_on_difference_image(
-            context, variant, image, context.product("zogy_scorrimage_masked"))
+            context, variant, image, detection,
+            weight_image=sfft_unc_masked)
         psf_catalog_for_difference_image(
-            context, variant, image,
-            context.product("zogy_diffimage_unc_masked"),
-            context.product("zogy_diffpsf"), "sfft")
+            context, variant, image, sfft_unc_masked, sfft_diffpsf, "sfft",
+            negative=is_negative)
     return None
 
 
 def naive_difference(context) -> None:
-    """The naive difference image and its catalogues. (Stage AG, 2433-2870.)"""
+    """The naive difference image and its catalogues. (Stage AG, 2437-2870.)
+
+    The monolith's ordering, restored. The first extraction skipped the
+    coverage-map masking entirely — differencing straight into the catalogues —
+    and then detected on ZOGY's Scorr image, weighted with ZOGY's uncertainty
+    image, and fitted with ZOGY's difference PSF. The monolith masked with the
+    resampled reference coverage map (2469-2476), built a naive uncertainty
+    image (2527-2539), detected on the naive image itself (2547-2548,
+    2581-2582), and fitted with the **reference** image's PSF (2651, 2750 —
+    both carrying its `# TODO`).
+    """
     from pipeline.runtime.stages import SKIPPED
 
     if not context.science_value("naive_diffimage", "naive_diffimage_flag"):
         return SKIPPED
 
-    naive = context.scratch(context.science_value(
-        "naive_diffimage", "naive_output_diffimage_file"))
+    # The unmasked difference first; the configured name belongs to the masked
+    # product (monolith 2441, 2471).
+    naive_raw = context.scratch("naive_diffimage.fits")
     util.compute_naive_difference_image(
         context.product("science_image_bkg_subbed"),
         context.product("gainmatched_reference_image"),
-        naive)
+        naive_raw)
 
-    util.restore_nans(naive, context.product("nan_indices_sciimage"))
-    util.restore_nans(naive, context.product("nan_indices_refimage"))
+    # Record the fake-source injection in the header (monolith 2448-2466).
+    if context.has_product("injection_catalog"):
+        fake_sources = context.science_section("fake_sources")
+        util.addHistoryLinesToFITSHeader(
+            naive_raw, ["Fake sources were injected into science image."], 0)
+        util.addKeywordsToFITSHeader(
+            naive_raw, ["NINJECT", "MNMAGINJ", "MXMAGINJ"],
+            [fake_sources["num_injections"], fake_sources["mag_min"],
+             fake_sources["mag_max"]], 0, naive_raw)
+
+    threshold = context.science_value(
+        "zogy", "post_zogy_keep_diffimg_lower_cov_map_thresh")
+    cov_map = context.product("resampled_reference_cov_map")
+
+    naive = context.scratch(context.science_value(
+        "naive_diffimage", "naive_output_diffimage_file"))
+    dfis.mask_difference_image_with_resampled_reference_cov_map(
+        naive_raw, cov_map, naive, threshold)
+
+    nan_sci = context.product("nan_indices_sciimage")
+    nan_ref = context.product("nan_indices_refimage")
+    if nan_sci:
+        util.restore_nans(naive, nan_sci)
+    if nan_ref:
+        util.restore_nans(naive, nan_ref)
 
     naive_negative = naive.replace(".fits", "_negative.fits")
     util.scale_image_data(naive, -1.0, naive_negative)
@@ -992,17 +1268,34 @@ def naive_difference(context) -> None:
     context.produce("naive_diffimage", naive)
     context.produce("naive_diffimage_negative", naive_negative)
 
-    for variant, image in (("naive_positive", naive),
-                           ("naive_negative", naive_negative)):
+    # The naive difference's own uncertainty image, and its weight image.
+    naive_unc_masked = naive.replace("masked.fits", "uncert_masked.fits")
+    instrument = context.science_section("instrument")
+    dfis.compute_diffimage_uncertainty(
+        float(instrument["sca_gain"]) * context.fact("exptime"),
+        context.product("science_image_reformatted"),
+        context.product("gainmatched_reference_image"),
+        cov_map,
+        threshold,
+        naive,
+        naive_unc_masked)
+    context.produce("naive_diffimage_unc_masked", naive_unc_masked)
+
+    reference_psf = context.product("reference_psf")
+
+    for variant, image, is_negative in (("naive_positive", naive, False),
+                                        ("naive_negative", naive_negative,
+                                         True)):
+        # Detection runs on the naive image itself, not on a Scorr image —
+        # the naive difference has none. The monolith also left WEIGHT_TYPE
+        # and FILTER at their release-content values for this pair alone.
         sextractor_on_difference_image(
-            context, variant, image,
-            context.product("zogy_scorrimage_masked"),
+            context, variant, image, image,
+            weight_image=naive_unc_masked,
             override_weighting=False)
         psf_catalog_for_difference_image(
-            context, variant, image,
-            context.product("zogy_diffimage_unc_masked"),
-            context.product("zogy_diffpsf"), "naive",
-            with_parquet=False)
+            context, variant, image, naive_unc_masked, reference_psf, "naive",
+            negative=is_negative, with_parquet=False)
     return None
 
 
