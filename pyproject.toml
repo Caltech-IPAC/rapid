@@ -1,0 +1,113 @@
+# Lint configuration for the RAPID repository.
+#
+# Created by W2 of the Batch payload co-design, for one purpose: the adopted
+# code standards ban print() from the operational layer and require it
+# lint-enforced (ruff T201) on the converted modules. There was no
+# pyproject.toml in this repo, so this file is new — and deliberately narrow.
+#
+# WHAT THIS FILE IS NOT: it declares no [build-system] and no [project]. Adding
+# either would change how the package is built and installed, and the payload
+# design has that as W5's work ("PYTHONPATH replaced by installing the package
+# into the image environment"). A lint config that quietly turned the repo into
+# an installable distribution would be a change nobody asked for, landing in
+# the worker least equipped to prove it.
+#
+# WHY THE BAN IS PER-PATH: the repo has 2,126 print() calls across the
+# pipeline, modules, database and sims trees. A global T201 would fail on all
+# of them and be switched off within a day. The ban therefore applies to the
+# converted modules only, and grows one directory at a time as each is
+# converted — W3 adds the payload scripts it converts, W5 the entrypoint. A
+# rule that is enforced on a small area and expanding beats one that is
+# declared everywhere and ignored.
+
+[tool.ruff]
+# Match the line length the existing code is written to.
+line-length = 88
+target-version = "py311"
+
+[tool.ruff.lint]
+# T201 is selected repo-wide and then ignored everywhere it has not yet been
+# earned. Ruff has no "select for these paths only" directive — per-file-ignores
+# is the mechanism — so the ban is expressed as: on by default, waived on the
+# unconverted trees. Each conversion worker deletes one waiver line, which
+# makes the remaining waivers an accurate, shrinking inventory of what is still
+# print()-based.
+#
+# "F" is pyflakes: real errors (undefined names, unused imports), safe to apply
+# to code this old.
+select = ["F", "T201"]
+
+[tool.ruff.lint.per-file-ignores]
+# --- T201 waivers: the unconverted trees --------------------------------
+# 2,126 print() calls live under these paths. Enforcing the ban on all of them
+# today would fail on every file and be switched off within a day; the ban is
+# therefore enforced where the conversion has landed and waived where it has
+# not. W3 converts the payload call sites, W5 the entrypoints — each deletes
+# the waiver it makes obsolete.
+# The payload scripts, which live directly in pipeline/ and are W3/W5's to
+# convert.
+#
+# The pattern keys on the payload scripts' camelCase names — every one of
+# them contains a capital (awsBatchSubmitJobs_*, registerCompletedJobsInDB,
+# virtualPipelineOperator, ...) — because `runtime` does not, and a pattern
+# that cannot match this package is the only kind that stays waived-off it.
+#
+# Three glob facts forced that shape, each established with
+# `ruff check --verbose` (which names the pattern donating each ignore)
+# against a probe file holding a bare print(), never assumed:
+#   * ruff ACCUMULATES per-file-ignores across every matching pattern, so a
+#     later entry — even an empty list — cannot subtract a waiver an earlier
+#     pattern donated;
+#   * `*` crosses directory separators here, so `pipeline/*.py` and
+#     `pipeline/[a-z]*.py` both reach pipeline/runtime/;
+#   * a `!`-negated key negates the file match, not the waiver, so it does
+#     not carve an exception out either.
+#
+# If a payload script is ever added whose name is all-lowercase, this pattern
+# will not waive it and its print() calls will fail the lint — the safe
+# direction to be wrong in, and the fix is to name the file here explicitly
+# rather than to widen the glob back over pipeline/runtime/.
+"pipeline/?*[A-Z]*.py" = ["T201"]
+"modules/**/*.py" = ["T201"]
+"database/**/*.py" = ["T201"]
+"sims/**/*.py" = ["T201"]
+"alerts/**/*.py" = ["T201"]
+"submission/**/*.py" = ["T201"]
+"observability/**/*.py" = ["T201"]
+"soc/**/*.py" = ["T201"]
+"scripts/**/*.py" = ["T201"]
+"c/**/*.py" = ["T201"]
+"cdf/**/*.py" = ["T201"]
+"aws/**/*.py" = ["T201"]
+"RuBR/**/*.py" = ["T201"]
+
+# Test and live-proof modules print deliberately: a live proof script's output
+# IS its result, read by a human from an SSM invocation. Not the operational
+# layer, so the ban does not apply.
+"**/test/**" = ["T201"]
+"**/tests/**" = ["T201"]
+
+# --- pipeline/runtime/ is where the ban BITES ---------------------------
+#
+# There is deliberately NO entry for pipeline/runtime/ here. That is the whole
+# mechanism: every waiver above is written so it cannot match this package,
+# because ruff ACCUMULATES per-file-ignores across matching patterns and an
+# empty list added later subtracts nothing. A waiver that reaches this
+# directory can never be taken back — it has to not match in the first place.
+#
+# This was verified rather than assumed. A probe file containing a bare
+# print() under pipeline/runtime/ passed `ruff check` cleanly while the
+# waiver read `pipeline/*.py`, and `--verbose` named the pattern donating the
+# ignore. Without that check the entire configuration would have been
+# decoration: T201 selected, waived everywhere it could fire, enforced
+# nowhere.
+#
+# Why the ban belongs here specifically: the runtime owns the one logging
+# configuration (UTC timestamps, level, job/attempt identifiers via adapter,
+# stdout stream handler plus per-stage file handlers). A print() here would
+# bypass the safety stream, the per-stage bundle capture, and the redaction
+# that travels with them — output invisible to an operator querying the stream
+# live, and absent from the diagnostics bundle that outlives the container.
+
+[tool.ruff.lint.isort]
+known-first-party = ["pipeline", "observability", "submission", "database"]

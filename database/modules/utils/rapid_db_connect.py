@@ -335,16 +335,38 @@ class ConnectionExecutor:
         return self.execute(statement, params)
 
     def execute(self, statement, params):
-        """Run one parameterized statement; return its rows, or None.
+        """Run one parameterized statement; return its rows, or its rowcount.
 
         ``statement`` may be a ``str`` or a ``psycopg2.sql.Composable``.
         Values are ALWAYS passed as ``params`` — this method has no branch
         that puts one into the statement text.
+
+        Return shape, and why it is two things (W2, closing the charge-4
+        looseness recorded in docs/source/dev/attempt_writer_review.rst):
+
+        - A statement that produced a result set (``cur.description`` is not
+          None — a SELECT, or an INSERT/UPDATE with RETURNING) returns its
+          rows, as before.
+        - A statement that produced none returns ``cur.rowcount``: an int.
+
+        Returning None for the second case is what let a lifecycle transition
+        against a nonexistent attempt look exactly like a successful one. The
+        writer now checks the count and raises, so "UPDATE ... WHERE
+        attempt_id = <wrong id>" fails where it happens instead of silently
+        doing nothing and letting the job carry on believing its row advanced.
+
+        An int is a truthy-when-nonzero, falsy-when-zero value, which is the
+        one shape that would be ambiguous if a caller wrote ``if
+        execute(...)``. No caller does — every consumer either reads rows or
+        passes the value to ``_require_rowcount`` — and the alternative
+        (a wrapper object) would break the ``Executor`` protocol the attempt
+        writer's stubs implement.
         """
         cur = self._conn.cursor()
         try:
             cur.execute(statement, params)
-            rows = cur.fetchall() if cur.description is not None else None
+            rows = (cur.fetchall() if cur.description is not None
+                    else cur.rowcount)
         except Exception:
             if self._autocommit_each:
                 try:

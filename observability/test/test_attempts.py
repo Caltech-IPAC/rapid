@@ -29,6 +29,7 @@ from observability.attempts import (
     RECONCILER_ERROR_CATEGORIES,
     SCHEMA_VERSION,
     AttemptIdentity,
+    AttemptNotFound,
     AttemptWriter,
     ExecutionBinding,
     LifecycleState,
@@ -47,6 +48,17 @@ def at(second: int) -> datetime.datetime:
     return datetime.datetime(2026, 8, 4, 12, 0, second, tzinfo=UTC)
 
 
+def make_provenance(**overrides) -> Provenance:
+    fields = {
+        "source_sha": "abc123",
+        "container_digest": "sha256:image",
+        "job_definition_rev": "7",
+        "config_digest": "sha256:config",
+    }
+    fields.update(overrides)
+    return Provenance(**fields)
+
+
 def binding(**overrides) -> ExecutionBinding:
     """The submission-time binding every version-2 attempt row carries."""
     fields = dict(
@@ -61,11 +73,28 @@ def binding(**overrides) -> ExecutionBinding:
 
 
 class RecordingExecutor:
-    """Stands in for the database, recording every statement."""
+    """Stands in for the database, recording every statement.
 
-    def __init__(self, returning: int = 1):
+    Implements the executor contract as ``ConnectionExecutor`` does: rows for
+    a statement with a result set, and an affected-ROW COUNT (an int) for one
+    without.
+
+    Amended by W2, closing the charge-4 looseness this file's own review note
+    recorded: the stub previously returned ``None`` for every non-RETURNING
+    statement, which is what let a lifecycle transition matching zero rows
+    look exactly like a successful one. A stub that cannot report a row count
+    cannot exercise a writer that checks it — so the double had to gain the
+    behaviour before the writer's check could be tested at all.
+
+    ``affected`` is the count reported for a plain statement. Tests that need
+    a transition to match nothing set it to 0, which is how the
+    ``AttemptNotFound`` path is exercised without a database.
+    """
+
+    def __init__(self, returning: int = 1, affected: int = 1):
         self.calls: list[tuple[str, list]] = []
         self._next_id = returning
+        self.affected = affected
 
     def __call__(self, sql, params):
         self.calls.append((" ".join(sql.split()), list(params)))
@@ -73,7 +102,7 @@ class RecordingExecutor:
             value = self._next_id
             self._next_id += 1
             return [(value,)]
-        return None
+        return self.affected
 
     @property
     def statements(self):
@@ -420,6 +449,79 @@ class BackfillTests(unittest.TestCase):
         count = self.writer.backfill_scheduler_job_ids([])
         self.assertEqual(count, 0)
         self.assertEqual(self.execute.calls, [])
+
+    def test_the_count_is_rows_updated_not_statements_issued(self):
+        # W2, closing charge 4. The two differ exactly when the WHERE guard
+        # does its job — a row that already carries an id, or an attempt id
+        # that does not exist — and the old count reported success for both.
+        # A caller reconciling "40 children, 40 backfilled" needs the number
+        # to mean rows.
+        execute = RecordingExecutor(affected=0)
+        writer = AttemptWriter(execute)
+        count = writer.backfill_scheduler_job_ids(
+            [(1, "job-abc:0"), (2, "job-abc:1")])
+        self.assertEqual(count, 0, "two statements were issued but no row "
+                                   "was updated")
+        self.assertEqual(len(execute.calls), 2)
+
+
+class RowCountTests(unittest.TestCase):
+    """A lifecycle transition that matched no row must not look like success.
+
+    W2, closing the charge-4 looseness recorded in
+    docs/source/dev/attempt_writer_review.rst. A transition against a
+    nonexistent attempt id is a caller bug every time; before this, the
+    executor returned None, the writer ignored it, and the log cheerfully
+    announced a state change that never happened.
+    """
+
+    def test_a_transition_matching_zero_rows_raises(self):
+        execute = RecordingExecutor(affected=0)
+        writer = AttemptWriter(execute)
+        with self.assertRaises(AttemptNotFound):
+            writer.mark_started(999, started_at=at(1),
+                                provenance=make_provenance())
+
+    def test_every_row_targeted_transition_checks_its_count(self):
+        execute = RecordingExecutor(affected=0)
+        writer = AttemptWriter(execute)
+
+        transitions = [
+            lambda: writer.mark_started(9, started_at=at(1),
+                                        provenance=make_provenance()),
+            lambda: writer.mark_application_closed(
+                9, ended_at=at(2), application_intended_exit=0,
+                rapid_outcome=RapidOutcome.SUCCESS,
+                product_disposition=ProductDisposition.PUBLISHED,
+                terminal_record_key="k"),
+            lambda: writer.mark_terminal_after_start(
+                9, ended_at=at(3), scheduler_observed_exit=0,
+                scheduler_state="SUCCEEDED"),
+            lambda: writer.mark_terminal_without_start(
+                9, ended_at=at(4), scheduler_state="FAILED"),
+            lambda: writer.mark_missing_or_contradictory(
+                9, reconciliation_class=ReconciliationClass.MISSING,
+                reconciliation_sources=["postgres"], detected_at=at(5)),
+            lambda: writer.record_scheduler_observation(
+                9, scheduler_state="RUNNING"),
+        ]
+        for index, transition in enumerate(transitions):
+            with self.subTest(transition=index):
+                with self.assertRaises(AttemptNotFound):
+                    transition()
+
+    def test_an_executor_that_reports_no_count_is_refused(self):
+        # "No count available" and "no rows matched" are different facts, and
+        # only one is a caller bug. Guessing between them would reintroduce
+        # exactly the ambiguity this change removes.
+        class CountlessExecutor:
+            def __call__(self, sql, params):
+                return None
+
+        writer = AttemptWriter(CountlessExecutor())
+        with self.assertRaises(RuntimeError):
+            writer.mark_started(1, started_at=at(1),
+                                provenance=make_provenance())
 
 
 class StartedTests(unittest.TestCase):

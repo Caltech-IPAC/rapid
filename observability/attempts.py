@@ -426,14 +426,34 @@ class AttemptWriter:
         in the WHERE clause, so a re-run cannot overwrite an id that is already
         recorded, and a child that never resolves simply keeps its NULL and is
         found by reconciliation.
+
+        Returns the number of rows actually updated, NOT the number of
+        statements issued (W2, closing the charge-4 looseness recorded in
+        docs/source/dev/attempt_writer_review.rst). The two differ exactly
+        when the guard does its job — a row whose id is already recorded, or
+        an attempt id that does not exist — and the old count reported
+        success for both. A caller reconciling "I had 40 children, 40 were
+        backfilled" needs the row count to mean that.
+
+        An executor that returns no usable count (a stub, or a driver that
+        does not report one) makes this raise rather than guess: an
+        unverifiable backfill is not a backfill.
         """
         sql = ("UPDATE attempts SET scheduler_job_id = %s"
                " WHERE attempt_id = %s AND scheduler_job_id IS NULL")
         updated = 0
+        issued = 0
         for attempt_id, scheduler_job_id in assignments:
-            self._execute(sql, [scheduler_job_id, attempt_id])
-            updated += 1
-        logger.info("backfilled %d scheduler job ids", updated)
+            result = self._execute(sql, [scheduler_job_id, attempt_id])
+            issued += 1
+            updated += _rowcount(result, "backfill_scheduler_job_ids")
+        if issued != updated:
+            logger.warning(
+                "backfilled %d of %d scheduler job ids; %d row(s) already "
+                "carried an id or did not exist",
+                updated, issued, issued - updated)
+        else:
+            logger.info("backfilled %d scheduler job ids", updated)
         return updated
 
     # -- lifecycle transitions ----------------------------------------------
@@ -464,12 +484,13 @@ class AttemptWriter:
             "    COALESCE(application_attempt_index, %s)"
             " WHERE attempt_id = %s"
         )
-        self._execute(sql, [
+        result = self._execute(sql, [
             LifecycleState.STARTED.value, started_at,
             provenance.source_sha, provenance.container_digest,
             provenance.job_definition_rev, provenance.config_digest,
             scheduler_job_id, application_attempt_index, attempt_id,
         ])
+        _require_one_row(result, "mark_started", attempt_id)
         logger.info("attempt %s started", attempt_id)
 
     def mark_application_closed(self, attempt_id: int, ended_at: Any,
@@ -516,13 +537,14 @@ class AttemptWriter:
             "  terminal_record_checksum = %s, reconciler_materialized = %s"
             " WHERE attempt_id = %s"
         )
-        self._execute(sql, [
+        result = self._execute(sql, [
             LifecycleState.APPLICATION_CLOSED.value, ended_at,
             application_intended_exit, _value(rapid_outcome),
             _value(product_disposition), error_category,
             terminal_record_key, terminal_record_sequence,
             terminal_record_checksum, reconciler_materialized, attempt_id,
         ])
+        _require_one_row(result, "mark_application_closed", attempt_id)
         logger.info(
             "attempt %s application-closed (intended exit %s, outcome %s, "
             "record %s seq %s%s)",
@@ -582,13 +604,14 @@ class AttemptWriter:
             "    COALESCE(%s, terminal_record_sequence)"
             " WHERE attempt_id = %s"
         )
-        self._execute(sql, [
+        result = self._execute(sql, [
             LifecycleState.TERMINAL_AFTER_START.value, ended_at,
             scheduler_observed_exit, scheduler_state,
             application_intended_exit, _value(rapid_outcome),
             _value(product_disposition), error_category,
             terminal_record_key, terminal_record_sequence, attempt_id,
         ])
+        _require_one_row(result, "mark_terminal_after_start", attempt_id)
         logger.info(
             "attempt %s terminal after start (scheduler exit %s, state %s)",
             attempt_id, scheduler_observed_exit, scheduler_state)
@@ -608,10 +631,11 @@ class AttemptWriter:
             "  scheduler_state = %s, error_category = %s"
             " WHERE attempt_id = %s"
         )
-        self._execute(sql, [
+        result = self._execute(sql, [
             LifecycleState.TERMINAL_WITHOUT_START.value, ended_at,
             scheduler_state, error_category, attempt_id,
         ])
+        _require_one_row(result, "mark_terminal_without_start", attempt_id)
         logger.info("attempt %s terminal without start (%s)",
                     attempt_id, scheduler_state)
 
@@ -682,11 +706,12 @@ class AttemptWriter:
             "  reconciliation_detected_at = %s"
             " WHERE attempt_id = %s"
         )
-        self._execute(sql, [
+        result = self._execute(sql, [
             LifecycleState.MISSING_OR_CONTRADICTORY.value,
             _value(reconciliation_class), list(reconciliation_sources),
             detected_at, attempt_id,
         ])
+        _require_one_row(result, "mark_missing_or_contradictory", attempt_id)
         logger.warning("attempt %s flagged %s from sources %s", attempt_id,
                        _value(reconciliation_class),
                        ",".join(reconciliation_sources))
@@ -724,8 +749,9 @@ class AttemptWriter:
             "  scheduler_attempt_index = COALESCE(%s, scheduler_attempt_index)"
             " WHERE attempt_id = %s"
         )
-        self._execute(sql, [scheduler_state, created_at, started_at,
-                            stopped_at, attempt_index, attempt_id])
+        result = self._execute(sql, [scheduler_state, created_at, started_at,
+                                     stopped_at, attempt_index, attempt_id])
+        _require_one_row(result, "record_scheduler_observation", attempt_id)
 
     # -- stages and milestones ----------------------------------------------
 
@@ -774,6 +800,69 @@ class AttemptWriter:
 # Conventional exit code for a SIGKILLed process (128 + 9). Batch reports 137
 # for an OOM-killed container; this is the fallback when no code was observed.
 _SIGKILL_EXIT_CODE = 137
+
+
+class AttemptNotFound(RuntimeError):
+    """A lifecycle transition matched no row.
+
+    Raised where a transition's UPDATE affected zero rows (W2, closing the
+    charge-4 looseness). A transition against a nonexistent attempt id is a
+    caller bug every time — there is no legitimate path that advances a row
+    that is not there — and it must not be able to look like success. The old
+    behaviour returned None from the executor and logged "attempt N started"
+    for an attempt that did not exist.
+    """
+
+
+def _rowcount(result: Any, operation: str) -> int:
+    """Read the affected-row count from an executor result.
+
+    The executor contract (``rapid_db_connect.ConnectionExecutor``) returns
+    rows for a statement with a result set and ``cursor.rowcount`` — an int —
+    for one without. This helper accepts the int, and also accepts a
+    result-set shape for the case of an ``UPDATE ... RETURNING``, where the
+    number of returned rows IS the affected-row count.
+
+    A result that is neither (notably ``None``, which is what an executor
+    that does not report counts returns) raises rather than being read as
+    zero or as one. Guessing here would reintroduce exactly the ambiguity
+    this change removes: "no count available" and "no rows matched" are
+    different facts, and only one of them is a bug in the caller.
+    """
+    if isinstance(result, bool):
+        raise TypeError(
+            f"{operation}: executor returned a bool where a row count was "
+            f"expected")
+    if isinstance(result, int):
+        if result < 0:
+            raise RuntimeError(
+                f"{operation}: executor reported row count {result}; a "
+                f"negative count means the driver did not track the "
+                f"statement, which cannot be distinguished from no rows "
+                f"matching")
+        return result
+    if isinstance(result, (list, tuple)):
+        return len(result)
+    raise RuntimeError(
+        f"{operation}: executor returned {type(result).__name__}, which "
+        f"carries no affected-row count. A lifecycle transition must be able "
+        f"to tell 'advanced one row' from 'matched nothing'; an executor that "
+        f"cannot say is not usable for one.")
+
+
+def _require_one_row(result: Any, operation: str, attempt_id: Any) -> None:
+    """Assert that a transition advanced exactly the one row it named."""
+    count = _rowcount(result, operation)
+    if count == 0:
+        raise AttemptNotFound(
+            f"{operation}: no attempt row with attempt_id={attempt_id!r}. A "
+            f"lifecycle transition against a nonexistent attempt is a caller "
+            f"bug; nothing was written.")
+    if count > 1:
+        raise RuntimeError(
+            f"{operation}: {count} rows matched attempt_id={attempt_id!r}, "
+            f"which is impossible under the primary key — the statement did "
+            f"not filter on the attempt id it claimed to")
 
 
 def _validate_error_category(category: str | None) -> None:
