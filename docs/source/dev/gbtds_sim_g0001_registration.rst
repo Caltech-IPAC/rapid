@@ -333,3 +333,66 @@ into the image and checked at startup.
 Next step: the fix ships in the repo, so the image must be rebuilt before
 the next submission — the failing behavior is baked into rev 6. The
 resubmission itself is a separate task, with a fresh submission budget.
+
+
+.. _g0001-registration-rev7-success:
+
+Rev-7 run (2026-08-05): successful registration
+***************************************************************************************
+
+Job definitions ``rapid-pipeline-science``/``rapid-pipeline-bulk`` were
+rebuilt at **revision 7** with the boto3-download fix from the Resolution_
+section above baked in, and ``ROMANTESSELLATIONDBNAME`` remains set at the
+job-definition level as of revision 6.
+
+Pre-submission check (SSM ``AWS-RunShellScript`` on ``rapid-admin``, ``psql``
+through the pgbouncer pooler) confirmed both ``l2files`` rows matching
+``g0001`` and rows matching ``_manifest.json`` were zero, so registration
+started from a clean slate.
+
+Submitted as a single (non-array) job on ``rapid-queue-prompt`` using
+``rapid-pipeline-science:7``, with the same ``container-overrides`` shape and
+runtime environment as the rev-6 retry (`Runtime environment`_ above)::
+
+    aws batch submit-job \
+        --job-name g0001-registration-rev7 \
+        --job-queue rapid-queue-prompt \
+        --job-definition rapid-pipeline-science:7 \
+        --container-overrides '{
+            "environment": [
+                {"name": "INPUTBUCKET", "value": "roman-rapid-inputs-gbtds-sim"},
+                {"name": "INPUTPREFIX", "value": "g0001/"},
+                {"name": "DBSERVER", "value": "10.100.150.208"},
+                {"name": "DBPORT", "value": "6432"},
+                {"name": "DBNAME", "value": "rapid"},
+                {"name": "RAPID_DB_SECRET_ID", "value": "rapid/db/service/pipeline"}
+            ],
+            "command": ["-c",
+                "cd /code && PYTHONPATH=/code /opt/rapid/conda/envs/rapid/bin/python3 database/sims/db_register_socsim_files.py"]
+        }'
+
+Job ``a7229e99-3471-4391-b393-c471e3ae5906`` (``g0001-registration-rev7``)
+reported **SUCCEEDED**, exit 0, in 23m56s (started 17:31:13 PDT, stopped
+17:55:09 PDT). The log (CloudWatch ``/rapid/batch/rapid-queue-prompt``, log
+stream discoverable from the job's ECS task ARN via ``describe-jobs`` — see
+`Executed path: AWS Batch job (2026-08-05)`_ above for the stream-naming
+convention) shows every per-file ``boto3`` download succeeded and the
+script's own summary line confirms a clean run::
+
+    Elapsed time in seconds to register database records = 1434.172563791275
+    n_to_register,n_registered,n_failed = 5166,5166,0
+
+Post-run verification (same SSM/``psql`` path) confirmed all expected
+counts:
+
+* ``l2files`` rows matching ``g0001``: **5166**.
+* Distinct exposures: **287**, each with **18** SCA rows (checked via a
+  ``group by sca`` breakdown — every SCA 1-18 shows exactly 287 rows,
+  18 x 287 = 5166).
+* Rows matching ``_manifest.json``: **0**.
+* Three registered S3 URIs sampled at random and confirmed live via
+  ``aws s3api head-object`` (``roman-rapid-inputs-gbtds-sim``, each
+  returning a ``ContentLength`` around 59 MB).
+
+The g0001 smoke-run input set is fully registered; no further action is
+needed on this dataset.
