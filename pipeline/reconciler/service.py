@@ -2,7 +2,8 @@
 
 Structure, top down:
 
-  run_forever            the supervised loop — poll, sleep, repeat, never exit
+  run_forever            the supervised loop — poll, sleep, repeat; exits only
+                         when it cannot do its work, for the supervisor to act
     ReconcilerService.poll_once      one cycle over the open set
       _reconcile_attempt             one attempt, under its lease
 
@@ -321,12 +322,18 @@ class ReconcilerService:
         # what make a reconciler-discovered retry and a late-starting runtime
         # resolve to the same row instead of racing to two.
         try:
-            discovered = self._resolve_discovered(by_job, observations)
+            discovered, resolve_errors = self._resolve_discovered(
+                by_job, observations)
         except Exception:  # noqa: BLE001 - discovery must not kill the cycle
             self._safe_rollback()
             logger.exception("resolving scheduler-discovered attempts failed")
             summary["errors"] += 1
             discovered = 0
+        else:
+            # Per-attempt resolution failures count too (round-3 finding #6):
+            # this used to see only a total collapse of the whole call, so a
+            # resolver failing every single attempt individually was invisible.
+            summary["errors"] += resolve_errors
         summary["discovered"] = discovered
         if discovered:
             # Re-read so the new rows are reconciled in this same cycle rather
@@ -424,8 +431,18 @@ class ReconcilerService:
 
         Resolution is per attempt and failures are per attempt: one index that
         cannot be resolved must not stop the others from getting their rows.
+
+        Returns `(resolved, errors)`. The error count is not decoration
+        (round-3 finding #6): every other per-row loop in this class reports its
+        failures into `summary["errors"]`, and this one alone swallowed them
+        internally. Because unproductive-poll health is computed from
+        `classified + deferred + errors`, resolution failures that never reached
+        the summary could not make a poll look unproductive — so a reconciler
+        failing to resolve every discovered attempt, poll after poll, still
+        counted as perfectly healthy.
         """
         resolved = 0
+        errors = 0
         for job_id, rows in by_job.items():
             attempt_observations = observations.get(job_id) or []
             if len(attempt_observations) < 2:
@@ -447,6 +464,7 @@ class ReconcilerService:
                     attempt_id = self._resolve_one(template, job_id, index)
                 except Exception:  # noqa: BLE001 - per attempt, not per job
                     self._safe_rollback()
+                    errors += 1
                     logger.exception(
                         "could not resolve a row for scheduler attempt %s of "
                         "job %s; the next poll retries it", index, job_id)
@@ -456,7 +474,7 @@ class ReconcilerService:
                 logger.info(
                     "resolved attempt row %s for scheduler-discovered attempt "
                     "%s of job %s", attempt_id, index, job_id)
-        return resolved
+        return resolved, errors
 
     def _resolve_one(self, template, job_id, scheduler_attempt_index):
         """Claim-or-create one scheduler-discovered attempt's row."""
@@ -1212,6 +1230,15 @@ def run_forever(service, poll_seconds=POLL_SECONDS, sleep=time.sleep,
     and says so by exiting, which is the bounded mechanism the observability
     policy asks for: a stated threshold, a state change when it is crossed,
     and a supervisor that acts on it.
+
+    A POLL THAT RAISES IS NOT THE ONLY WAY TO STOP WORKING (round-3 finding
+    #6). A poll can return perfectly normally having classified nothing — every
+    row it touched deferred or errored — and repeat that forever. Round 2 added
+    `consecutive_unproductive_polls` and folded it into `service.healthy`, but
+    nothing ever READ the property, so the second threshold governed nothing and
+    the unit stayed up with `CLOSURE_FAILURE_POLL_THRESHOLD`'s stated purpose
+    ("the unit flips within a knowable time") unrealized. The check belongs on
+    the SUCCESS path, because that is the path the condition occurs on.
     """
     should_continue = should_continue or (lambda: True)
     while should_continue():
@@ -1237,6 +1264,17 @@ def run_forever(service, poll_seconds=POLL_SECONDS, sleep=time.sleep,
                 logger.info("reconciler recovered after %d failed poll(s)",
                             service.consecutive_poll_failures)
             service.consecutive_poll_failures = 0
+
+            # The poll returned, and the service may still be incapable of
+            # work. `healthy` is the whole judgement — both thresholds — so it
+            # is asked rather than re-deriving one of its terms here.
+            if not service.healthy:
+                raise ReconcilerUnhealthy(
+                    f"the reconciler polled successfully but is not healthy: "
+                    f"{service.health()}. Attempts are being reached and none "
+                    f"is being classified, which is a working process doing no "
+                    f"work — the exact condition a liveness check cannot see. "
+                    f"Exiting so the supervisor restarts it.")
 
         elapsed = time.monotonic() - started
         remaining = poll_seconds - elapsed

@@ -810,6 +810,31 @@ class SchedulerDiscoveryTests(unittest.TestCase):
         # The scheduler index it was missing, one-based as stored.
         self.assertIn(1, resolved[-1][1])
 
+    def test_a_failing_resolver_counts_its_failures_as_errors(self):
+        """Swallowed per-attempt failures were invisible to the health gate.
+
+        Every other per-row loop in the service reports its failures into
+        `summary["errors"]`; `_resolve_discovered` alone caught them and moved
+        on. Because unproductive-poll health is computed from classified +
+        deferred + errors, a resolver failing EVERY attempt, poll after poll,
+        contributed nothing to the count and the service went on calling itself
+        healthy (round-3 finding #6).
+        """
+        rows = [attempt_row(2, lifecycle_state="started",
+                            application_attempt_index=2)]
+        svc, _, _, _, _ = build(rows, [self._retry_job()])
+
+        def refuse(*_args, **_kwargs):
+            raise RuntimeError("resolve_attempt is unavailable")
+
+        svc._resolve_one = refuse
+
+        summary = svc.poll_once()
+
+        self.assertEqual(0, summary["discovered"])
+        self.assertTrue(summary["errors"],
+                        "the resolution failure must be counted, not swallowed")
+
     def test_rows_that_already_exist_are_not_re_resolved(self):
         rows = [attempt_row(1, lifecycle_state="started",
                             application_attempt_index=1),
@@ -993,6 +1018,10 @@ class ResilienceTests(unittest.TestCase):
 
         class Exploding:
             consecutive_poll_failures = 0
+            healthy = True
+
+            def health(self):
+                return {"healthy": self.healthy}
 
             def poll_once(self):
                 cycles["n"] += 1
@@ -1020,9 +1049,13 @@ class HealthTests(unittest.TestCase):
 
     class Exploding:
         consecutive_poll_failures = 0
+        healthy = True
 
         def __init__(self):
             self.calls = 0
+
+        def health(self):
+            return {"healthy": self.healthy}
 
         def poll_once(self):
             self.calls += 1
@@ -1045,9 +1078,13 @@ class HealthTests(unittest.TestCase):
         # exit for reasons long past.
         class Flaky:
             consecutive_poll_failures = 0
+            healthy = True
 
             def __init__(self):
                 self.calls = 0
+
+            def health(self):
+                return {"healthy": self.healthy}
 
             def poll_once(self):
                 self.calls += 1
@@ -1121,7 +1158,68 @@ class HealthTests(unittest.TestCase):
         for _ in range(service.CLOSURE_FAILURE_POLL_THRESHOLD + 2):
             svc.poll_once()
 
-        self.assertTrue(svc.healthy)
+    def test_the_loop_exits_when_a_successful_poll_leaves_it_unhealthy(self):
+        """Round 3 of #24: the property existed and nothing ever read it.
+
+        Rounds 1 and 2 built the whole mechanism — two counters, two
+        thresholds, `healthy`, `health()` — and then `run_forever` checked only
+        the exception path. A poll that returns normally having classified
+        nothing, over and over, is precisely the shape of failure the second
+        counter was added for, and it went unnoticed because the loop's only
+        question was whether `poll_once` threw.
+        """
+        class Unproductive:
+            consecutive_poll_failures = 0
+
+            def __init__(self):
+                self.calls = 0
+                self.healthy = True
+
+            def health(self):
+                return {"healthy": self.healthy,
+                        "consecutive_unproductive_polls": self.calls}
+
+            def poll_once(self):
+                # Returns normally every time — never raises. Health degrades
+                # the way a real run of closure failures degrades it.
+                self.calls += 1
+                if self.calls >= service.CLOSURE_FAILURE_POLL_THRESHOLD:
+                    self.healthy = False
+                return {}
+
+        unproductive = Unproductive()
+        with self.assertRaises(service.ReconcilerUnhealthy) as caught:
+            service.run_forever(unproductive, poll_seconds=0,
+                                sleep=lambda _: None)
+
+        self.assertEqual(service.CLOSURE_FAILURE_POLL_THRESHOLD,
+                         unproductive.calls)
+        self.assertEqual(0, unproductive.consecutive_poll_failures,
+                         "no poll ever raised; this is the success path")
+        self.assertIn("not healthy", str(caught.exception))
+
+    def test_a_healthy_successful_poll_keeps_the_loop_running(self):
+        # The gate must not fire on the ordinary case, or the service
+        # restart-loops forever and the cure is worse than the disease.
+        class Fine:
+            consecutive_poll_failures = 0
+            healthy = True
+
+            def __init__(self):
+                self.calls = 0
+
+            def health(self):
+                return {"healthy": self.healthy}
+
+            def poll_once(self):
+                self.calls += 1
+                return {}
+
+        fine = Fine()
+        service.run_forever(fine, poll_seconds=0, sleep=lambda _: None,
+                            should_continue=lambda: fine.calls < 4)
+
+        self.assertEqual(4, fine.calls)
 
 
 if __name__ == "__main__":

@@ -3,11 +3,15 @@
 What the systemd unit runs. Everything configurable comes from the parameter
 tree or the environment the unit sets; nothing is a constant here.
 
-The loop never exits on error — `run_forever` logs a failed cycle and carries
-on — so the only paths out of this module are a signal or a failure to start
-at all. A start-time failure exits nonzero and systemd's `Restart=always`
-retries it with backoff, which is the right behaviour for the case that
-actually happens: the database or the parameter tree is briefly unreachable.
+A single failed cycle never exits — `run_forever` logs it and carries on,
+because the failures the reconciler exists to catch are the ones likely to
+make one throw. There are three ways out: a signal, a failure to start at all
+(exit 70), and the service becoming unable to do its work (exit 71) — either
+consecutive poll exceptions or polls that keep reaching attempts and
+classifying none. systemd's `Restart=always` retries all of them with backoff,
+which is the right behaviour for the cases that actually happen: the database
+or the parameter tree briefly unreachable, a stale connection, a rotated
+credential.
 """
 
 import json
@@ -16,12 +20,17 @@ import os
 import signal
 import sys
 
-from pipeline.reconciler.service import POLL_SECONDS, ReconcilerService, run_forever
+from pipeline.reconciler.service import (POLL_SECONDS, ReconcilerService,
+                                         ReconcilerUnhealthy, run_forever)
 from pipeline.runtime.boundaries import S3ObjectStore
 
 logger = logging.getLogger("rapid.reconciler.main")
 
 EXIT_START_FAILED = 70
+# Distinct from a start failure so the journal, and anything reading exit
+# codes, can tell "never got going" from "was working and stopped being able
+# to" — two different operator responses (round-3 finding #6).
+EXIT_UNHEALTHY = 71
 
 
 def _configure_logging():
@@ -185,6 +194,17 @@ def main():
             service = build_service(session, parameters, conn)
             run_forever(service, poll_seconds=poll_seconds,
                         should_continue=lambda: running["go"])
+    except ReconcilerUnhealthy:
+        # NOT a start failure (round-3 finding #6). `ReconcilerUnhealthy`
+        # subclasses RuntimeError, so the handler below caught it and told the
+        # journal "the reconciler could not start" about a service that had
+        # been running and polling for hours. The restart was right; the
+        # explanation an operator reads was wrong, and it pointed at
+        # credentials and the parameter tree instead of at whatever is
+        # actually blocking classification.
+        logger.exception("the reconciler is unhealthy and is exiting so the "
+                         "supervisor restarts it")
+        return EXIT_UNHEALTHY
     except Exception:  # noqa: BLE001 - a start failure is worth exiting for
         logger.exception("the reconciler could not start")
         return EXIT_START_FAILED
