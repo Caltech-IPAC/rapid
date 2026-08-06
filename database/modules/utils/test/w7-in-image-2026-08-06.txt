@@ -1,5 +1,5 @@
 >> target: rapid-admin (i-0ce2eebb8133ab63d)
->> image: 855590908525.dkr.ecr.us-east-1.amazonaws.com/rapid-pipeline@sha256:0a1dd132e52880eaca00e9c7d6cca2091b68e2010bf07aef7e8f84b477bc62e1
+>> image: <account>.dkr.ecr.us-east-1.amazonaws.com/rapid-pipeline@sha256:0a1dd132e52880eaca00e9c7d6cca2091b68e2010bf07aef7e8f84b477bc62e1
 >> staged repo.tar (d408918d01c488851f612af35a34ae81813395f3eefb15ad7309a633399fb771)
 >> running on rapid-admin via SSM...
 >> command id: 397d781c-84ed-41d7-883b-e53f553dc509

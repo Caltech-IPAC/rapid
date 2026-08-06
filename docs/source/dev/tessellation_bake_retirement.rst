@@ -65,7 +65,7 @@ as the change that added it — two ``Modify`` / ``Replacement False``,
 nothing wider.
 
 **4. Leave the S3 copy in place.**
-``s3://rapid-build-artifacts-855590908525/tessellation/roman_tessellation_nside512.db``
+``s3://rapid-build-artifacts-<account>/tessellation/roman_tessellation_nside512.db``
 should NOT be deleted. It is the artifact the builder was proved
 row-identical against, and that proof is re-runnable
 (``certify.py --compare-sqlite``) only while the file exists. It costs
