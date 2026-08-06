@@ -88,7 +88,8 @@ def _product(products, name, attempt_id=None):
     return entry
 
 
-def register_reference_image(dbh, record, science, attempt_id=None):
+def register_reference_image(dbh, record, science, attempt_id=None,
+                             record_sequence=None):
     """The reference-image body. (Legacy `registerCompletedJobsInDB.py`.)
 
     Order is the legacy order and it matters: `add_refimage` inserts the row
@@ -96,6 +97,15 @@ def register_reference_image(dbh, record, science, attempt_id=None):
     `vbest = 1` points at this version. Splitting those was the legacy design —
     the insert cannot know it is best until it exists — and the catalogues that
     follow are keyed by the rfid it returned.
+
+    `record_sequence` is the attempt's `terminal_record_sequence`, and together
+    with `attempt_id` it is what makes the insert idempotent under replay
+    (migration 018, round-3 finding #8). The pair travels down to `addRefImage`,
+    which finds-or-inserts on it before minting a version: registering the same
+    attempt twice at the same sequence returns the row it already has, while a
+    supersession at a higher sequence still mints a new version. Both are
+    optional here only so a caller mid-port is not broken — production always
+    has them, because the candidate query selects both columns.
     """
     products = published(record, attempt_id)
     image = _product(products, "reference_image", attempt_id)
@@ -109,7 +119,8 @@ def register_reference_image(dbh, record, science, attempt_id=None):
     status = science.get("reference_image_status", 1)
 
     dbh.add_refimage(ppid, field, fid, hp6, hp9, infobits, status,
-                     image["uri"], image["checksum"])
+                     image["uri"], image["checksum"],
+                     attempt_id, record_sequence)
     _check(dbh, "add_refimage", attempt_id)
 
     rfid = dbh.rfid
@@ -148,7 +159,8 @@ def register_reference_image(dbh, record, science, attempt_id=None):
     return registered
 
 
-def register_difference_image(dbh, record, science, attempt_id=None):
+def register_difference_image(dbh, record, science, attempt_id=None,
+                              record_sequence=None):
     """The difference-image body. (Legacy `registerCompletedJobsInDB.py`.)
 
     Same shape as the reference body — `add_diffimage`, then `update_diffimage`
@@ -159,6 +171,13 @@ def register_difference_image(dbh, record, science, attempt_id=None):
     the tile centre and all four corners, and a difference image registered
     with a partial or zeroed footprint is one that later spatial queries will
     silently mis-match.
+
+    `record_sequence` carries the same idempotence as in the reference body:
+    the (attempt_id, sequence) pair reaches `addDiffImage`, which finds-or-
+    inserts on it rather than blindly minting `max(version)+1`. That is what
+    stops a replayed pass from writing a second difference image for work that
+    was already registered — and it is only half the fix, because the rows and
+    the watermark still have to commit together; see `registrar`.
     """
     products = published(record, attempt_id)
     difference = _product(products, "difference_image", attempt_id)
@@ -188,7 +207,8 @@ def register_difference_image(dbh, record, science, attempt_id=None):
     status = science.get("difference_image_status", 1)
 
     dbh.add_diffimage(rid, ppid, rfid, infobits_sci, infobits_ref, *corners,
-                      status, difference["uri"], difference["checksum"])
+                      status, difference["uri"], difference["checksum"],
+                      attempt_id, record_sequence)
     _check(dbh, "add_diffimage", attempt_id)
 
     pid = dbh.pid
@@ -342,12 +362,20 @@ def registrar(dbh, store):
         # anyway — registration reads the record and nothing else.
         job_type = body["job_type"]
 
+        # The sequence comes off the ROW, not the record: it is the reconciler's
+        # count of closure records published for this attempt, and the same
+        # number the consumer is about to write as the watermark. Reading it
+        # from one place is what makes "the row the registrar inserts and the
+        # watermark the consumer writes describe the same registration" true by
+        # construction rather than by two call sites agreeing.
+        record_sequence = row.get("terminal_record_sequence")
+
         if job_type == JOB_TYPE_REFERENCE_IMAGE:
             return register_reference_image(resolve(), body, science,
-                                            attempt_id)
+                                            attempt_id, record_sequence)
         if job_type == JOB_TYPE_SCIENCE:
             return register_difference_image(resolve(), body, science,
-                                             attempt_id)
+                                             attempt_id, record_sequence)
         # Unreachable while `REGISTRABLE_JOB_TYPES` and the two branches above
         # agree — `is_registrable` has already returned for anything else. It
         # is kept as the guard for exactly that disagreement: a type added to

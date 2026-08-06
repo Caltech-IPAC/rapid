@@ -680,5 +680,111 @@ class RegistrarDispatchTests(unittest.TestCase):
         self.assertEqual([True], opened)
 
 
+class AttemptIdentityThreadingTests(unittest.TestCase):
+    """ROUND-3 FINDING #8: the insert knows which registration it belongs to.
+
+    Migration 018 gave `refimages` and `diffimages` an `attempt_id` and a
+    `registered_record_sequence`, paired by a CHECK and made unique by a
+    partial index, and taught `addRefImage`/`addDiffImage` to find-or-insert on
+    that pair BEFORE minting `max(version)+1`. That is what makes a replayed
+    registration return the row it already wrote instead of a second copy at a
+    new version — but only if the pair actually arrives.
+
+    These tests are the Python half of that contract: the identity reaches the
+    call, in the trailing positions the stored function declares, and it is the
+    SAME on a replay and HIGHER on a supersession. Without them the two new
+    parameters could sit in the signature unpassed and every assertion above
+    would still be green, because the legacy argument list is unchanged and
+    every one of those tests only ever looked at it.
+    """
+
+    def _register(self, row_sequence, attempt_id=2):
+        """Register a difference image through the real registrar seam.
+
+        Deliberately NOT by calling `register_difference_image` directly: the
+        sequence has to come off the candidate ROW and be threaded down by
+        `registrar`, and calling the body directly would let the test supply
+        what the production path is supposed to derive. The row is shaped as
+        `consumer._COLUMNS` selects it.
+        """
+        dbh = FakeDB()
+        register = products.registrar(dbh, InMemoryObjectStore())
+        register({"attempt_id": attempt_id,
+                  "terminal_record_sequence": row_sequence},
+                 None, record=difference_record())
+        return dbh
+
+    def test_the_identity_reaches_add_diffimage_in_the_trailing_positions(self):
+        dbh = self._register(1)
+
+        name, args = dbh.calls[0]
+        self.assertEqual("add_diffimage", name)
+        # addDiffImage's last two declared arguments, so the last two here.
+        self.assertEqual((2, 1), args[-2:],
+                         "the attempt identity did not reach add_diffimage; "
+                         "the stored function cannot deduplicate a replay "
+                         "without it")
+
+    def test_the_identity_reaches_add_refimage_in_the_trailing_positions(self):
+        dbh = FakeDB()
+        register = products.registrar(dbh, InMemoryObjectStore())
+        register({"attempt_id": 5, "terminal_record_sequence": 3}, None,
+                 record=reference_record())
+
+        name, args = dbh.calls[0]
+        self.assertEqual("add_refimage", name)
+        self.assertEqual((5, 3), args[-2:])
+
+    def test_a_replay_at_the_same_sequence_presents_the_same_identity(self):
+        # Same attempt, same record sequence, twice. The stored function
+        # deduplicates on exactly this pair, so presenting the same pair is
+        # what makes the second pass write no second set of rows. A pass that
+        # sent nothing, or sent something different each time, would mint a new
+        # version every time — which is what the unfixed code did.
+        first = self._register(1)
+        second = self._register(1)
+
+        self.assertEqual(first.calls[0][1][-2:], second.calls[0][1][-2:])
+        self.assertEqual((2, 1), second.calls[0][1][-2:])
+
+    def test_a_supersession_at_a_higher_sequence_presents_the_higher_one(self):
+        # Idempotence must not swallow a genuine re-registration. A superseding
+        # classification raises `terminal_record_sequence`, the pair differs,
+        # and the stored function mints a new version as it should.
+        first = self._register(1)
+        superseding = self._register(2)
+
+        self.assertEqual((2, 1), first.calls[0][1][-2:])
+        self.assertEqual((2, 2), superseding.calls[0][1][-2:],
+                         "the supersession presented the earlier sequence, so "
+                         "the stored function would return the existing row "
+                         "and the new products would never be registered")
+
+    def test_the_legacy_arguments_are_undisturbed_ahead_of_the_identity(self):
+        # The two new parameters are TRAILING and optional, which is the whole
+        # reason nothing else that calls these methods breaks. If they had been
+        # inserted anywhere else, every legacy argument after them would shift
+        # by two and the stored function would silently reinterpret a checksum
+        # as a status.
+        dbh = self._register(1)
+        _name, args = dbh.calls[0]
+
+        difference = products.published(difference_record(), 2)["difference_image"]
+        self.assertEqual(difference["uri"], args[-4])
+        self.assertEqual(difference["checksum"], args[-3])
+
+    def test_the_bodies_still_work_with_no_identity_at_all(self):
+        # Optional means optional: a caller that passes neither gets the legacy
+        # behaviour, which is what keeps every other caller of add_diffimage
+        # working. The stored function defaults them too.
+        dbh = FakeDB()
+        record = difference_record()
+
+        products.register_difference_image(
+            dbh, record, record["science_provenance"], 2)
+
+        self.assertEqual((None,), dbh.calls[0][1][-1:])
+
+
 if __name__ == "__main__":
     unittest.main()

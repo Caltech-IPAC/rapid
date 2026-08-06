@@ -19,8 +19,20 @@ an attempt already registered at sequence 1 becomes a candidate again at
 sequence 2. The registered-watermark column is what makes that idempotent —
 an attempt is skipped when its registered sequence already matches the current
 one, and re-registered when it does not.
+
+ONE TRANSACTION PER ATTEMPT (round-3 finding #8). The watermark only means
+what the paragraph above says if it moves in the same transaction as the
+product rows it is a watermark FOR. It did not: the registrar wrote products
+on its own autocommitting connection and this module committed the watermark
+on another, so between the two there was a durable window in which the rows
+existed and the attempt was still a candidate. Every crash in that window
+produced a duplicate registration on the next pass. `register_batch` now wraps
+each attempt's registration and its watermark in one `transaction(conn)`, and
+the registrar borrows this connection rather than opening its own — the two
+halves of the same fix, neither of which works alone.
 """
 
+import contextlib
 import datetime
 import logging
 
@@ -85,6 +97,46 @@ _MARK_REGISTERED_SQL = (
 )
 
 
+@contextlib.contextmanager
+def _transaction(conn):
+    """`rapid_db_connect.transaction`, resolved at call time.
+
+    The sanctioned unit-of-work context manager lives in
+    `database.modules.utils.rapid_db_connect`, which imports psycopg2 at module
+    scope. This module does not otherwise need a driver — it is handed a
+    connection — and importing one at the top would make the consumer
+    unimportable anywhere psycopg2 is absent, which is most of the test suite
+    and every reader trying to run it on a laptop. So the import happens on
+    first use.
+
+    The fallback is not a convenience: it is the same contract written out, so
+    a caller passing a plain connection object gets commit-on-success and
+    rollback-and-re-raise-on-error whether or not the driver module could be
+    loaded. A silently weaker boundary here would be the defect this fix exists
+    to close, arriving by a different door.
+    """
+    try:
+        from database.modules.utils.rapid_db_connect import transaction
+    except ImportError:
+        cur = conn.cursor()
+        try:
+            yield cur
+        except Exception:
+            try:
+                conn.rollback()
+            except Exception:  # noqa: BLE001
+                logger.exception("rollback failed; the original error follows")
+            raise
+        else:
+            conn.commit()
+        finally:
+            cur.close()
+        return
+
+    with transaction(conn) as cur:
+        yield cur
+
+
 class _Row:
     """Attribute access over a result row, which is what `decide` expects."""
 
@@ -132,7 +184,18 @@ class RegistrationRun:
 
 
 def candidates(conn, states=RECONCILED_STATES):
-    """Attempts the reconciler has closed and published a closure record for."""
+    """Attempts the reconciler has closed and published a closure record for.
+
+    The `rollback()` here is still right, and is worth saying why now that the
+    registration below runs inside an explicit transaction. This read is the
+    only thing that has touched the connection at this point, it wrote nothing,
+    and psycopg2 has nonetheless opened a transaction to do it. Ending it means
+    each attempt's `transaction(conn)` block starts from no transaction at all,
+    so the unit of work it commits contains that attempt's writes and nothing
+    else — not a snapshot taken minutes earlier when the candidate list was
+    read. Leaving it open would also hold a snapshot for the whole pass, which
+    on a pass over many attempts is a long idle-in-transaction.
+    """
     with conn.cursor() as cur:
         cur.execute(_CANDIDATE_SQL, (list(states),))
         names = [description[0] for description in cur.description]
@@ -141,20 +204,40 @@ def candidates(conn, states=RECONCILED_STATES):
     return rows
 
 
-def mark_registered(conn, attempt_id, record_sequence, now=None):
+def mark_registered(conn, attempt_id, record_sequence, now=None, cursor=None):
     """Record that this attempt was registered at `record_sequence`.
 
     The watermark write (review finding #5). Guarded so a replay or a
     concurrent pass cannot move the watermark backwards — the sequence only
     ever advances, which is what makes "reprocesses on a later supersession"
-    safe to run repeatedly.
+    safe to run repeatedly. That CAS predicate is untouched by the change
+    below; it is the reason two passes racing on the same attempt cannot
+    disagree about what has been registered.
+
+    **THIS NO LONGER COMMITS** (round-3 finding #8). It used to end with
+    `conn.commit()`, which made the watermark its own transaction — separate
+    from the transaction the product rows were written in, on a separate
+    connection. The two could not be atomic by construction, so the comment in
+    `register_batch` promising that "a failure leaves the attempt a candidate
+    rather than marking work that did not happen" was false in the one
+    direction that matters: the product rows were already durable, and only the
+    watermark was lost. The caller now owns the boundary and commits both
+    together, so the honest version of that promise holds.
+
+    `cursor` lets the caller pass the cursor its `transaction(conn)` block
+    already yielded, rather than opening a second one on the same connection.
+    Either works — cursors on one connection share its transaction — but
+    reusing it keeps the whole unit of work visibly on one cursor.
     """
     moment = now or datetime.datetime.now(datetime.timezone.utc)
     sequence = int(record_sequence if record_sequence is not None else 1)
+    if cursor is not None:
+        cursor.execute(_MARK_REGISTERED_SQL,
+                       (moment, sequence, attempt_id, sequence))
+        return sequence
     with conn.cursor() as cur:
         cur.execute(_MARK_REGISTERED_SQL,
                     (moment, sequence, attempt_id, sequence))
-    conn.commit()
     return sequence
 
 
@@ -222,29 +305,51 @@ def register_batch(conn, rows, register=None, run=None, dry_run=False):
                         verdict.attempt_id, verdict.reason)
             continue
 
+        # ALL OR NOTHING, PER ATTEMPT (round-3 finding #8).
+        #
+        # These two statements used to be two transactions, and worse than
+        # that, two transactions on two CONNECTIONS. `registrar_for` handed the
+        # product bodies `rapid_db.RAPIDDB` as a factory, and that class opens
+        # its own psycopg2 connection and commits after every single call — so
+        # by the time `register()` returned, the reference image or difference
+        # image and its catalogues were already durable. The watermark write
+        # that followed was on this connection, and committed separately. A
+        # crash, a lost connection or a failing watermark UPDATE in between
+        # left the product rows written and the attempt still a candidate, so
+        # the next pass registered the same products again.
+        #
+        # The comment that used to sit here said a failure "leaves the attempt
+        # a candidate rather than marking work that did not happen". The
+        # attempt did stay a candidate — but the work HAD happened, and saying
+        # otherwise is what let the duplicate registration look impossible.
+        #
+        # `transaction(conn)` commits on the way out and rolls back and
+        # re-raises on the way through, and the registrar now writes on THIS
+        # connection (see `products.registrar` and `job.registrar_for`), so
+        # everything inside the block is one unit: the product rows and the
+        # watermark commit together, or neither does and the attempt is a
+        # candidate with nothing written.
+        #
+        # The `except` is still per-attempt rather than around the whole pass.
+        # One attempt whose record is incomplete must not roll back the
+        # registrations of the attempts before it — those are finished units of
+        # work, already committed by their own blocks.
         try:
-            register(row, verdict)
+            with _transaction(conn) as cur:
+                register(row, verdict)
+                mark_registered(conn, verdict.attempt_id,
+                                row.get("terminal_record_sequence"),
+                                cursor=cur)
         except Exception:  # noqa: BLE001 - counted, not swallowed
             run.failed += 1
-            logger.exception("registering attempt %s failed",
-                             verdict.attempt_id)
+            logger.exception(
+                "registering attempt %s failed; its transaction was rolled "
+                "back, so no product rows and no watermark were written and "
+                "it remains a candidate", verdict.attempt_id)
         else:
-            # The watermark is written only after the registration itself
-            # succeeded, so a failure leaves the attempt a candidate for the
-            # next pass rather than marking work that did not happen.
-            try:
-                mark_registered(conn, verdict.attempt_id,
-                                row.get("terminal_record_sequence"))
-            except Exception:  # noqa: BLE001 - counted, not swallowed
-                run.failed += 1
-                logger.exception(
-                    "attempt %s was registered but its watermark could not "
-                    "be written; it will be re-selected next pass",
-                    verdict.attempt_id)
-            else:
-                run.registered += 1
-                logger.info("attempt %s registered: %s",
-                            verdict.attempt_id, verdict.reason)
+            run.registered += 1
+            logger.info("attempt %s registered: %s",
+                        verdict.attempt_id, verdict.reason)
 
     logger.info("registration pass: %s", run.as_dict())
     return run

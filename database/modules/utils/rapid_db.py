@@ -98,6 +98,88 @@ def get_db_credentials():
 ########################################################################################################
 ########################################################################################################
 
+class BorrowedConnection:
+
+    """
+    Wrapper around a psycopg2 connection that this class does NOT own.
+
+    Every method in RAPIDDB below ends with the same two lines --
+
+        if self.exit_code == 0:
+            self.conn.commit()           # Commit database transaction
+
+    -- and there are thirty-two of them.  That per-call commit is the whole
+    contract of this module: each call is its own transaction, and when the
+    call returns the row is durable.  It is a perfectly reasonable contract
+    for a script that adds one exposure and exits.
+
+    It is the WRONG contract when a caller needs several of these calls to
+    land together or not at all.  Product registration is exactly that
+    caller.  Registering a difference image is add_diffimage, then
+    update_diffimage to set vBest, then register_diffimmeta -- and then, on
+    a DIFFERENT connection held by the registration consumer, the watermark
+    UPDATE that says this attempt has been registered.  With the per-call
+    commit the product rows were committed the instant add_diffimage
+    returned, so a crash before the watermark left the rows written and the
+    attempt still a candidate.  The next pass registered them all over
+    again, and minted a fresh version each time.  Two connections cannot be
+    one transaction by construction, so the fix has two halves: the caller
+    hands its own connection in (below), and this wrapper stops the commits
+    that would break its unit of work apart.
+
+    commit() and rollback() are therefore swallowed and counted, not
+    forwarded.  The count is not decoration -- a test asserting that a
+    registration wrote nothing outside its transaction needs to see that the
+    calls were made and refused.  close() is swallowed for the same reason:
+    the borrower does not get to close a connection it was lent.
+
+    Why a wrapper rather than a flag the thirty-two commit sites consult:
+    the sites are identical and uninteresting, and rewriting all of them
+    would be thirty-two chances to miss one and thirty-two lines of diff
+    over code that is not otherwise being touched.  More to the point, a
+    flag only protects the sites that remember to check it -- the
+    thirty-third, added later by someone who never read this comment, would
+    silently reopen the defect.  Interposing at the connection means there
+    is no commit path that bypasses the guard, because there is no other way
+    to reach the driver.  Everything else (cursor(), isolation_level, the
+    autocommit dance in vacuum_analyze_table) passes straight through by
+    __getattr__, so the borrowed handle behaves like the real one in every
+    respect except the one that matters.
+    """
+
+    def __init__(self,conn):
+
+        self._conn = conn
+        self.commits_suppressed = 0
+        self.rollbacks_suppressed = 0
+
+    def commit(self):
+
+        # The borrower owns the transaction boundary.  Committing here would
+        # end its unit of work in the middle, which is the defect.
+
+        self.commits_suppressed += 1
+
+    def rollback(self):
+
+        # Equally not ours to call: rolling back here would discard work the
+        # borrower did before it handed the connection over, and would do it
+        # silently, since these methods report through self.exit_code rather
+        # than by raising.  The borrower's own error path rolls back.
+
+        self.rollbacks_suppressed += 1
+
+    def close(self):
+
+        # A borrowed connection is closed by whoever opened it.
+
+        pass
+
+    def __getattr__(self,name):
+
+        return getattr(self._conn,name)
+
+
 class RAPIDDB:
 
     """
@@ -112,15 +194,44 @@ class RAPIDDB:
         66 = File checksum does not match database checksum
         67 = Could not execute database query or no record(s) returned.
         68 = Could not open file to compute checksum.
+
+    A caller that already holds a connection passes it as conn=; see
+    BorrowedConnection above and the borrowing() classmethod below.  In that
+    mode nothing here commits, nothing here rolls back, and nothing here
+    calls exit() -- the caller owns the transaction and the process.
     """
 
 
 ########################################################################################################
 
-    def __init__(self):
+    def __init__(self,conn=None):
 
         self.exit_code = 0
         self.conn = None
+
+
+        # THE BORROWED-CONNECTION PATH.  Taken before any of the environment
+        # reading below, and deliberately so: the env-var checks further down
+        # call exit(64) straight out of library code, which takes the whole
+        # process with them.  A caller that already has a working connection
+        # has already proved the configuration is fine, and must never be at
+        # risk of a hard exit for a variable it does not need.  This is also
+        # why the credential lookup is skipped -- there is nothing to
+        # authenticate, the connection is already open and authenticated.
+        #
+        # self.owns_connection records which mode we are in so close() can
+        # tell "close the connection I opened" from "leave alone the
+        # connection I was lent".
+
+        if conn is not None:
+
+            self.owns_connection = False
+            self.conn = BorrowedConnection(conn)
+            self.cur = self.conn.cursor()
+            return
+
+        self.owns_connection = True
+
 
 
         # Get database connection parameters from environment. DBSERVER/
@@ -205,10 +316,34 @@ class RAPIDDB:
 
 ########################################################################################################
 
+    @classmethod
+    def borrowing(cls,conn):
+
+        '''
+        Build a handle over a connection the caller already owns.
+
+        The named form of RAPIDDB(conn=...), for call sites where "borrowing"
+        says what is happening more plainly than a keyword does -- notably the
+        registrar factory in pipeline/registration, which hands the
+        registration consumer's own connection to the ported product bodies so
+        the product rows and the registered-watermark write land in one
+        transaction instead of two.
+        '''
+
+        return cls(conn=conn)
+
+
+########################################################################################################
+
     def close(self):
 
         '''
         Close database cursor and then connection.
+
+        A BORROWED connection is not closed: its close() is a no-op (see
+        BorrowedConnection), because whoever opened it is still using it and
+        will close it when its own block ends.  The cursor IS closed either
+        way -- that one we opened.
         '''
 
         try:
@@ -219,7 +354,10 @@ class RAPIDDB:
         finally:
             if self.conn is not None:
                 self.conn.close()
-                print('Database connection closed.')
+                if getattr(self,'owns_connection',True):
+                    print('Database connection closed.')
+                else:
+                    print('Borrowed database connection left open for its owner.')
 
 ########################################################################################################
 
@@ -1611,10 +1749,29 @@ class RAPIDDB:
 
 ########################################################################################################
 
-    def add_refimage(self,ppid,field,fid,hp6,hp9,infobits,status,filename,checksum):
+    def add_refimage(self,ppid,field,fid,hp6,hp9,infobits,status,filename,checksum,
+        attempt_id=None,registered_record_sequence=None):
 
         '''
         Add record in RefImages database table.
+
+        attempt_id and registered_record_sequence are the ATTEMPT IDENTITY of
+        the registration that is inserting this row, and they are what makes a
+        replayed registration idempotent (migration 018).  Passed through, the
+        stored function looks for an existing RefImages row carrying that same
+        pair BEFORE it mints max(version)+1: the same attempt registered again
+        at the same record sequence gets the row it already has, and only a
+        HIGHER sequence -- a supersession, which is a genuinely new
+        registration -- mints a new version.  Without them the second pass over
+        the same attempt inserted a duplicate reference image at version+1 and
+        pointed vBest at it.
+
+        Both default to None so every existing caller is unaffected: the stored
+        function defaults them too, and a call that omits them behaves exactly
+        as it did before -- mint a version, insert, return.  That is the right
+        default for callers that are not registering an attempt's products,
+        because there is no attempt for the row to be idempotent with respect
+        to.
         '''
 
         self.exit_code = 0
@@ -1632,7 +1789,9 @@ class RAPIDDB:
             "cast(%s as integer)," +\
             "cast(%s as character varying(255))," +\
             "cast(%s as character varying(32))," +\
-            "cast(%s as smallint)) as " +\
+            "cast(%s as smallint)," +\
+            "cast(%s as bigint)," +\
+            "cast(%s as integer)) as " +\
             "(rfid integer," +\
             " version smallint);"
 
@@ -1642,9 +1801,12 @@ class RAPIDDB:
         print('----> ppid = {}'.format(ppid))
         print('----> field = {}'.format(field))
         print('----> filename = {}'.format(filename))
+        print('----> attempt_id = {}'.format(attempt_id))
+        print('----> registered_record_sequence = {}'.format(registered_record_sequence))
 
 
-        params = (field, hp6, hp9, fid, ppid, infobits, filename, checksum, status)
+        params = (field, hp6, hp9, fid, ppid, infobits, filename, checksum, status,
+                  attempt_id, registered_record_sequence)
 
         print('query = {}, params = {}'.format(query, params))
 
@@ -1833,10 +1995,20 @@ class RAPIDDB:
 ########################################################################################################
 
     def add_diffimage(self,rid,ppid,rfid,infobitssci,infobitsref,
-        ra0,dec0,ra1,dec1,ra2,dec2,ra3,dec3,ra4,dec4,status,filename,checksum):
+        ra0,dec0,ra1,dec1,ra2,dec2,ra3,dec3,ra4,dec4,status,filename,checksum,
+        attempt_id=None,registered_record_sequence=None):
 
         '''
         Add record in DiffImages database table.
+
+        attempt_id and registered_record_sequence carry the same meaning here
+        as in add_refimage: the identity of the registration inserting the row,
+        used by the stored function to find-or-insert on that pair before
+        minting max(version)+1, so a replayed registration returns the row it
+        already wrote instead of a duplicate at a new version.  A higher
+        sequence still mints a new version, which is how supersession keeps
+        working.  Both optional, so callers that are not registering an
+        attempt's products are unchanged.
         '''
 
         self.exit_code = 0
@@ -1863,7 +2035,9 @@ class RAPIDDB:
             "cast(%s as double precision)," +\
             "cast(%s as character varying(255))," +\
             "cast(%s as character varying(32))," +\
-            "cast(%s as smallint)) as " +\
+            "cast(%s as smallint)," +\
+            "cast(%s as bigint)," +\
+            "cast(%s as integer)) as " +\
             "(pid integer," +\
             " version smallint);"
 
@@ -1874,9 +2048,12 @@ class RAPIDDB:
         print('----> ppid = {}'.format(ppid))
         print('----> rfid = {}'.format(rfid))
         print('----> filename = {}'.format(filename))
+        print('----> attempt_id = {}'.format(attempt_id))
+        print('----> registered_record_sequence = {}'.format(registered_record_sequence))
 
 
-        params = (rid, ppid, rfid, infobitssci, infobitsref, ra0, dec0, ra1, dec1, ra2, dec2, ra3, dec3, ra4, dec4, filename, checksum, status)
+        params = (rid, ppid, rfid, infobitssci, infobitsref, ra0, dec0, ra1, dec1, ra2, dec2, ra3, dec3, ra4, dec4, filename, checksum, status,
+                  attempt_id, registered_record_sequence)
 
         print('query = {}, params = {}'.format(query, params))
 

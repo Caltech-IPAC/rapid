@@ -96,22 +96,224 @@ class WatermarkTests(unittest.TestCase):
                       " ".join(consumer._MARK_REGISTERED_SQL.split()))
 
 
+def product_writer(conn, rows=None, fail_after_write=False):
+    """A `register` callback that writes its product rows on `conn`.
+
+    This is the fixture the whole finding turns on, so it is worth saying what
+    it models and what it deliberately does not. The real registrar calls
+    `dbh.add_diffimage` and friends, and after the fix the handle those calls go
+    through is `RAPIDDB.borrowing(conn)` — the consumer's own connection, with
+    its per-call commits suppressed. So from this module's point of view a
+    registration is exactly this: some statements executed on the connection it
+    was handed, and nothing committed.
+
+    A callback that wrote nowhere, or wrote to a second connection of its own,
+    could not tell the fixed code from the broken code — which is what the old
+    suite's `lambda row, verdict: None` could not do. Writing HERE is what lets
+    `conn.committed` answer the only question that matters: when the watermark
+    fails, are the product rows still there?
+    """
+    rows = rows if rows is not None else []
+
+    def register(row, verdict):
+        with conn.cursor() as cur:
+            cur.execute("select * from addDiffImage(...)",
+                        (row["attempt_id"],
+                         row.get("terminal_record_sequence")))
+        rows.append((row["attempt_id"], row.get("terminal_record_sequence")))
+        if fail_after_write:
+            # The crash window. Under the old two-connection design the
+            # product rows were already committed by the time control reached
+            # here, and nothing downstream could take them back.
+            raise RuntimeError("the registrar died after writing its products")
+
+    return register
+
+
+class OneTransactionPerAttemptTests(unittest.TestCase):
+    """ROUND-3 FINDING #8: the product rows and the watermark are one unit.
+
+    The defect these pin: `registrar_for` handed the product bodies
+    `rapid_db.RAPIDDB` as a factory, and that class opens its own psycopg2
+    connection and commits after every call. The watermark was written on the
+    consumer's connection and committed separately. Two connections cannot be
+    one transaction by construction, so between the product write and the
+    watermark there was a durable window — rows written, attempt still a
+    candidate — and every crash in it produced a duplicate registration on the
+    next pass.
+
+    The module docstring used to promise that "a failure leaves the attempt a
+    candidate rather than marking work that did not happen". Half of that was
+    true and the important half was not: the work HAD happened.
+    """
+
+    def test_a_failure_after_the_product_write_commits_no_product_rows(self):
+        # THE WHOLE FINDING. The registrar writes its rows and then dies —
+        # which is the crash window — and nothing may survive it. Under the old
+        # code the rows were committed by the registrar's own connection before
+        # this callback even returned, so they survived, the watermark did not,
+        # and the next pass registered them again.
+        conn = FakeConn()
+        written = []
+
+        consumer.register_batch(
+            conn, [reconciled(1)],
+            register=product_writer(conn, written, fail_after_write=True))
+
+        self.assertEqual([(1, 1)], written,
+                         "the registrar must actually have written, or this "
+                         "test proves nothing about rolling writes back")
+        self.assertEqual([], conn.committed,
+                         "product rows were committed despite the failure: "
+                         "the registration is not all-or-nothing")
+        self.assertEqual(0, conn.commits)
+        self.assertGreaterEqual(conn.rollbacks, 1)
+
+    def test_the_watermark_and_the_product_rows_commit_together(self):
+        # One commit for the pair, and both statements inside it. Two commits,
+        # or a commit containing only one of them, is the split boundary.
+        conn = FakeConn()
+        consumer.register_batch(conn, [reconciled(1)],
+                                register=product_writer(conn))
+
+        self.assertEqual(1, conn.commits,
+                         "one attempt is one transaction, so one commit")
+        committed = " ".join(statement for statement, _ in conn.committed)
+        self.assertIn("addDiffImage", committed,
+                      "the product write is not in the committed transaction")
+        self.assertIn("registered_record_sequence", committed,
+                      "the watermark is not in the committed transaction")
+        self.assertEqual(0, conn.rollbacks)
+
+    def test_the_watermark_is_not_committed_before_the_registration_returns(self):
+        # The ORDERING half of the boundary, which a count of commits at the
+        # end of the pass cannot see. `mark_registered` used to commit the
+        # moment it was called; here the registrar checks, from inside its own
+        # callback, that nothing has been committed yet. Under the old code the
+        # registrar's own connection had already committed its product rows by
+        # this point too — the observation this makes is that on ONE connection
+        # there is nothing durable until the whole unit of work ends.
+        conn = FakeConn()
+        seen = []
+
+        def register(row, verdict):
+            with conn.cursor() as cur:
+                cur.execute("select * from addDiffImage(...)", (1,))
+            seen.append((conn.commits, list(conn.committed)))
+
+        consumer.register_batch(conn, [reconciled(1)], register=register)
+
+        self.assertEqual([(0, [])], seen,
+                         "something was already durable while the "
+                         "registration was still in progress")
+        self.assertEqual(1, conn.commits)
+
+    def test_a_failed_attempt_does_not_roll_back_the_ones_before_it(self):
+        # The `except` is per-attempt on purpose: an attempt whose record is
+        # incomplete must not discard registrations that already committed.
+        conn = FakeConn()
+
+        def flaky(row, verdict):
+            with conn.cursor() as cur:
+                cur.execute("select * from addDiffImage(...)",
+                            (row["attempt_id"],))
+            if row["attempt_id"] == 2:
+                raise RuntimeError("this one's record is incomplete")
+
+        run = consumer.register_batch(
+            conn, [reconciled(1), reconciled(2), reconciled(3)],
+            register=flaky)
+
+        self.assertEqual(2, run.registered)
+        self.assertEqual(1, run.failed)
+        committed = [params for _, params in conn.committed]
+        self.assertNotIn((2,), committed,
+                         "the failed attempt's product write survived")
+        self.assertEqual(2, conn.commits)
+
+    def test_the_watermark_write_no_longer_commits_on_its_own(self):
+        # `mark_registered` used to end with `conn.commit()`, which is what
+        # made the watermark a transaction of its own no matter what the caller
+        # wrapped it in. A caller owning the boundary cannot own it if the
+        # callee keeps ending it.
+        conn = FakeConn()
+        consumer.mark_registered(conn, 1, 1)
+
+        self.assertEqual(0, conn.commits,
+                         "mark_registered committed by itself; the caller no "
+                         "longer owns the transaction boundary")
+        self.assertEqual(1, len(conn.statements))
+
+    def test_the_watermark_reuses_the_transaction_cursor_when_given_one(self):
+        # Passed the cursor its `transaction(conn)` block yielded, the write
+        # goes there rather than onto a second cursor — same transaction
+        # either way, but it keeps the unit of work visibly on one cursor.
+        conn = FakeConn()
+        cur = conn.cursor()
+        consumer.mark_registered(conn, 7, 3, cursor=cur)
+
+        statement, params = conn.statements[-1]
+        self.assertIn("registered_record_sequence", statement)
+        self.assertEqual((7, 3), (params[2], params[1]))
+
+
+class WatermarkSequenceTests(unittest.TestCase):
+    """The watermark records the sequence it registered at, not a boolean.
+
+    The product-row half of replay and supersession — that the same
+    (attempt_id, sequence) pair reaches the stored function on a replay, and a
+    higher one on a supersession — is asserted in `test_products.py`, against
+    the real registrar and the real `add_diffimage` argument list. What belongs
+    here is the watermark that has to agree with it.
+    """
+
+    def test_the_watermark_carries_the_record_sequence_it_registered_at(self):
+        conn = FakeConn()
+        consumer.register_batch(conn, [reconciled(1)],
+                                register=product_writer(conn))
+        consumer.register_batch(conn,
+                                [reconciled(1, terminal_record_sequence=2)],
+                                register=product_writer(conn))
+
+        watermarks = [params for statement, params in conn.committed
+                      if "registered_record_sequence" in statement]
+        self.assertEqual([1, 2], [params[1] for params in watermarks],
+                         "a supersession must advance the watermark to its "
+                         "own sequence, or it stays a candidate forever")
+        # The CAS bound is the same sequence, so the guard is `< that`.
+        self.assertEqual([1, 2], [params[3] for params in watermarks])
+
+
 class FakeConn:
     """The connection the watermark write needs (review finding #5).
 
     `register_batch` marks each successful registration with the record
     sequence it registered at, so a later pass does not re-register the same
     attempt — and re-registers it only when a superseding record raises the
-    sequence. That write needs a cursor; these tests do not care what it
-    contains, only that it happens.
+    sequence.
+
+    AMENDED for round-3 finding #8. The registration and its watermark are now
+    one transaction, so this fake has to model a transaction boundary rather
+    than just count `commit()` calls: `statements` is everything the connection
+    was ever handed, and `committed` is only what a commit made durable. The
+    difference between those two lists is the whole property under test — under
+    the old code the product rows were durable the moment the registrar wrote
+    them, and a failure before the watermark could not take them back.
     """
 
     def __init__(self):
         self.statements = []
+        self.committed = []
         self.commits = 0
+        self.rollbacks = 0
+        self.closed_cursors = 0
+        self._pending = []
 
     def cursor(self):
         return self
+
+    def close(self):
+        self.closed_cursors += 1
 
     def __enter__(self):
         return self
@@ -121,9 +323,16 @@ class FakeConn:
 
     def execute(self, statement, params=None):
         self.statements.append((statement, params))
+        self._pending.append((statement, params))
 
     def commit(self):
         self.commits += 1
+        self.committed.extend(self._pending)
+        self._pending = []
+
+    def rollback(self):
+        self.rollbacks += 1
+        self._pending = []
 
 
 class DecisionTests(unittest.TestCase):

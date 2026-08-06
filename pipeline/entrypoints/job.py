@@ -328,7 +328,7 @@ def tessellation_provenance(parameters, science, logger):
             "tessellation_digest": digest}
 
 
-def registrar_for(context):
+def registrar_for(context, conn=None):
     """The product-registration callback.
 
     What registering *means* — which operation-table rows a registered product
@@ -352,6 +352,30 @@ def registrar_for(context):
     store is built here from the same parameter the runtime reads it from
     rather than taken off the context: a registration job does not run stages
     and has no record store of its own to reuse.
+
+    `conn` IS THE FIX for round-3 finding #8, and it is not optional in
+    production. Passing `rapid_db.RAPIDDB` bare — the class, as a factory —
+    meant the registrar opened a SECOND database connection of its own, one
+    that autocommits after every call. The consumer's watermark write was on
+    the first connection. Two connections cannot be one transaction, so the
+    product rows were durable before the watermark was even attempted, and a
+    crash between them left rows written with the attempt still a candidate:
+    the next pass registered the same products all over again.
+
+    Handed a connection, the registrar builds its handle over that one instead
+    (`RAPIDDB.borrowing`), whose commits are suppressed — the consumer's
+    `transaction(conn)` block owns the boundary and commits the product rows
+    and the watermark together.
+
+    THE LAZINESS SURVIVES, and it is worth being precise about what is lazy
+    now. It was never the connection that mattered to defer — it is opened by
+    `dispatch_registration` for the candidate query regardless, before any of
+    this. What the factory defers is the RAPIDDB handle: its `__init__` runs
+    `SELECT version()` and `SELECT current_user` on construction, so a pass
+    with no candidates, or one whose every candidate the taxonomy refuses,
+    still costs no cursor and no round trips. The closure below is what keeps
+    that, and it costs the transaction boundary nothing because the connection
+    it borrows is the one already in hand.
     """
     import boto3
 
@@ -361,10 +385,16 @@ def registrar_for(context):
 
     store = S3ObjectStore(context.parameter(PARAM_RECORDS_BUCKET),
                           client=boto3.client("s3"))
-    # The handle is passed as a FACTORY, so the connection opens on the first
-    # attempt that actually registers. A pass with no candidates, or one whose
-    # every candidate the taxonomy refuses, then costs no connection.
-    return registrar(rapid_db.RAPIDDB, store)
+
+    if conn is None:
+        # No connection to borrow: the legacy shape, kept so a caller outside
+        # the registration pass can still build a registrar. It opens its own
+        # connection and commits per call, which is NOT transactional with any
+        # watermark — which is why `dispatch_registration` never takes this
+        # branch.
+        return registrar(rapid_db.RAPIDDB, store)
+
+    return registrar(lambda: rapid_db.RAPIDDB.borrowing(conn), store)
 
 
 def dispatch_registration(context) -> None:
@@ -388,6 +418,15 @@ def dispatch_registration(context) -> None:
     pass over *other* attempts and is a distinct component at the pooler door,
     with its own `application_name` for attribution.
 
+    ONE connection, not two (round-3 finding #8). The registrar is built INSIDE
+    the connection block and handed that same connection, because the product
+    rows it writes and the watermark the consumer writes have to be one
+    transaction. Built outside, the registrar opened a second connection of its
+    own — `rapid_db.RAPIDDB` connects in `__init__` and commits after every
+    call — and the product rows were durable before the watermark was even
+    attempted. That is why `register` is resolved here rather than a line
+    earlier: the ordering is the fix.
+
     What this replaced: four `__main__`-only scripts that downloaded each job's
     stdout log from S3 and regex-grepped `terminating_exitcode` out of it,
     wrote `.done` sentinels on failure paths as well as success ones, and
@@ -398,21 +437,23 @@ def dispatch_registration(context) -> None:
 
     logger = context.logger
 
-    # THE REGISTRAR IS REAL NOW (round 2). `registrar_for` used to return None
-    # unconditionally, so this ran as a labelled decision pass in production —
-    # honest about writing nothing, but the ratified registration consumer was
-    # still missing and a successful science attempt stayed a candidate
-    # forever. It now resolves the ported product-registration bodies.
-    #
-    # The dry-run machinery stays, because it is what makes a rehearsal
-    # possible ON PURPOSE and keeps its counts apart from real registrations
-    # (review finding #5): `register_batch` refuses a missing callback unless
-    # `dry_run=True` says the caller meant it, a rehearsal's candidates count
-    # into `would_register` rather than `registered`, and the watermark
-    # advances only on a registration that actually happened.
-    register = registrar_for(context)
-
     with connection("rapid-registration", lane="transaction") as conn:
+        # THE REGISTRAR IS REAL NOW (round 2). `registrar_for` used to return
+        # None unconditionally, so this ran as a labelled decision pass in
+        # production — honest about writing nothing, but the ratified
+        # registration consumer was still missing and a successful science
+        # attempt stayed a candidate forever. It now resolves the ported
+        # product-registration bodies, over THIS connection.
+        #
+        # The dry-run machinery stays, because it is what makes a rehearsal
+        # possible ON PURPOSE and keeps its counts apart from real
+        # registrations (review finding #5): `register_batch` refuses a missing
+        # callback unless `dry_run=True` says the caller meant it, a
+        # rehearsal's candidates count into `would_register` rather than
+        # `registered`, and the watermark advances only on a registration that
+        # actually happened.
+        register = registrar_for(context, conn=conn)
+
         rows = candidates(conn)
         logger.info("registration: %d reconciled attempt(s) to consider",
                     len(rows))
