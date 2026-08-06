@@ -1,6 +1,7 @@
 import os
 import json
 import psycopg2
+import psycopg2.sql as sql
 import re
 import hashlib
 
@@ -234,13 +235,13 @@ class RAPIDDB:
 
 ########################################################################################################
 
-    def _doQuery(self, query):
+    def _doQuery(self, query, params=None):
         # This is a protected, internal method.
         # It handles the low-level details of executing the query.
 
-        print('query = {}'.format(query))
+        print('query = {}, params = {}'.format(query, params))
 
-        self.cur.execute(query)
+        self.cur.execute(query, params)
 
         try:
             records = self.cur.fetchall()
@@ -255,7 +256,7 @@ class RAPIDDB:
     def vacuum_analyze_table(self,tablename):
         old_isolation_level = self.conn.isolation_level
         self.conn.set_isolation_level(psycopg2.extensions.ISOLATION_LEVEL_AUTOCOMMIT)
-        query = f"VACUUM ANALYZE {tablename};"
+        query = sql.SQL("VACUUM ANALYZE {tbl};").format(tbl=sql.Identifier(tablename))
 
         try:
 
@@ -282,17 +283,17 @@ class RAPIDDB:
 
         # Define query template.
 
-        query_template =\
+        query =\
             "select * from addExposure(" +\
-            "cast('TEMPLATE_DATEOBS' as timestamp)," +\
-            "cast(TEMPLATE_MJDOBS as double precision)," +\
-            "cast(TEMPLATE_FIELD as integer)," +\
-            "cast(TEMPLATE_HP6 as integer)," +\
-            "cast(TEMPLATE_HP9 as integer)," +\
-            "cast('TEMPLATE_FILTER' as character varying(16))," +\
-            "cast(TEMPLATE_EXPTIME as real), " +\
-            "cast(TEMPLATE_INFOBITS as integer), " +\
-            "cast(TEMPLATE_STATUS as smallint)) as " +\
+            "cast(%s as timestamp)," +\
+            "cast(%s as double precision)," +\
+            "cast(%s as integer)," +\
+            "cast(%s as integer)," +\
+            "cast(%s as integer)," +\
+            "cast(%s as character varying(16))," +\
+            "cast(%s as real), " +\
+            "cast(%s as integer), " +\
+            "cast(%s as smallint)) as " +\
             "(expid integer," +\
             " fid smallint);"
 
@@ -309,32 +310,11 @@ class RAPIDDB:
         print('----> infobits = {}'.format(infobits))
         print('----> status = {}'.format(status))
 
-        mjdobs_str = str(mjdobs)
-        field_str = str(field)
-        hp6_str = str(hp6)
-        hp9_str = str(hp9)
-        exptime_str = str(exptime)
-        infobits_str = str(infobits)
-        status_str = str(status)
+        params = (dateobs, mjdobs, field, hp6, hp9, filter, exptime, infobits, status)
 
-        rep = {"TEMPLATE_DATEOBS": dateobs,
-               "TEMPLATE_MJDOBS": mjdobs_str,
-               "TEMPLATE_FIELD": field_str,
-               "TEMPLATE_HP6": hp6_str,
-               "TEMPLATE_HP9": hp9_str,
-               "TEMPLATE_FILTER": filter,
-               "TEMPLATE_EXPTIME": exptime_str}
+        print('query = {}, params = {}'.format(query, params))
 
-        rep["TEMPLATE_INFOBITS"] = infobits_str
-        rep["TEMPLATE_STATUS"] = status_str
-
-        rep = dict((re.escape(k), v) for k, v in rep.items())
-        pattern = re.compile("|".join(rep.keys()))
-        query = pattern.sub(lambda m: rep[re.escape(m.group(0))], query_template)
-
-        print('query = {}'.format(query))
-
-        self.cur.execute(query)
+        self.cur.execute(query, params)
         record = self.cur.fetchone()
 
         if record is not None:
@@ -370,66 +350,66 @@ class RAPIDDB:
 
         # Define query template.
 
-        query_template =\
+        query =\
             "select * from addL2File(" +\
-            "cast(TEMPLATE_EXPID as integer)," +\
-            "cast(TEMPLATE_SCA as smallint)," +\
-            "cast(TEMPLATE_FIELD as integer)," +\
-            "cast(TEMPLATE_HP6 as integer)," +\
-            "cast(TEMPLATE_HP9 as integer)," +\
-            "cast(TEMPLATE_FID as smallint)," +\
-            "cast('TEMPLATE_DATEOBS' as timestamp without time zone)," +\
-            "cast(TEMPLATE_MJDOBS as double precision)," +\
-            "cast(TEMPLATE_EXPTIME as real)," +\
-            "cast(TEMPLATE_INFOBITS as integer)," +\
-            "cast('TEMPLATE_FILENAME' as character varying(255))," +\
-            "cast('TEMPLATE_CHECKSUM' as character varying(32))," +\
-            "cast(TEMPLATE_STATUS as smallint)," +\
-            "cast(TEMPLATE_CRVAL1 as double precision)," +\
-            "cast(TEMPLATE_CRVAL2 as double precision)," +\
-            "cast(TEMPLATE_CRPIX1 as real)," +\
-            "cast(TEMPLATE_CRPIX2 as real)," +\
-            "cast(TEMPLATE_CD11 as double precision)," +\
-            "cast(TEMPLATE_CD12 as double precision)," +\
-            "cast(TEMPLATE_CD21 as double precision)," +\
-            "cast(TEMPLATE_CD22 as double precision)," +\
-            "cast('TEMPLATE_CTYPE1' as character varying(16))," +\
-            "cast('TEMPLATE_CTYPE2' as character varying(16))," +\
-            "cast('TEMPLATE_CUNIT1' as character varying(16))," +\
-            "cast('TEMPLATE_CUNIT2' as character varying(16))," +\
-            "cast(TEMPLATE_A_ORDER as smallint)," +\
-            "cast(TEMPLATE_A_0_2 as double precision)," +\
-            "cast(TEMPLATE_A_0_3 as double precision)," +\
-            "cast(TEMPLATE_A_0_4 as double precision)," +\
-            "cast(TEMPLATE_A_1_1 as double precision)," +\
-            "cast(TEMPLATE_A_1_2 as double precision)," +\
-            "cast(TEMPLATE_A_1_3 as double precision)," +\
-            "cast(TEMPLATE_A_2_0 as double precision)," +\
-            "cast(TEMPLATE_A_2_1 as double precision)," +\
-            "cast(TEMPLATE_A_2_2 as double precision)," +\
-            "cast(TEMPLATE_A_3_0 as double precision)," +\
-            "cast(TEMPLATE_A_3_1 as double precision)," +\
-            "cast(TEMPLATE_A_4_0 as double precision)," +\
-            "cast(TEMPLATE_B_ORDER as smallint)," +\
-            "cast(TEMPLATE_B_0_2 as double precision)," +\
-            "cast(TEMPLATE_B_0_3 as double precision)," +\
-            "cast(TEMPLATE_B_0_4 as double precision)," +\
-            "cast(TEMPLATE_B_1_1 as double precision)," +\
-            "cast(TEMPLATE_B_1_2 as double precision)," +\
-            "cast(TEMPLATE_B_1_3 as double precision)," +\
-            "cast(TEMPLATE_B_2_0 as double precision)," +\
-            "cast(TEMPLATE_B_2_1 as double precision)," +\
-            "cast(TEMPLATE_B_2_2 as double precision)," +\
-            "cast(TEMPLATE_B_3_0 as double precision)," +\
-            "cast(TEMPLATE_B_3_1 as double precision)," +\
-            "cast(TEMPLATE_B_4_0 as double precision)," +\
-            "cast(TEMPLATE_EQUINOX as real)," +\
-            "cast(TEMPLATE_RA as double precision)," +\
-            "cast(TEMPLATE_DEC as double precision)," +\
-            "cast(TEMPLATE_PAOBSY as real)," +\
-            "cast(TEMPLATE_PAFPA as real)," +\
-            "cast(TEMPLATE_ZPTMAG as real)," +\
-            "cast(TEMPLATE_SKYMEAN AS real)) as " +\
+            "cast(%s as integer)," +\
+            "cast(%s as smallint)," +\
+            "cast(%s as integer)," +\
+            "cast(%s as integer)," +\
+            "cast(%s as integer)," +\
+            "cast(%s as smallint)," +\
+            "cast(%s as timestamp without time zone)," +\
+            "cast(%s as double precision)," +\
+            "cast(%s as real)," +\
+            "cast(%s as integer)," +\
+            "cast(%s as character varying(255))," +\
+            "cast(%s as character varying(32))," +\
+            "cast(%s as smallint)," +\
+            "cast(%s as double precision)," +\
+            "cast(%s as double precision)," +\
+            "cast(%s as real)," +\
+            "cast(%s as real)," +\
+            "cast(%s as double precision)," +\
+            "cast(%s as double precision)," +\
+            "cast(%s as double precision)," +\
+            "cast(%s as double precision)," +\
+            "cast(%s as character varying(16))," +\
+            "cast(%s as character varying(16))," +\
+            "cast(%s as character varying(16))," +\
+            "cast(%s as character varying(16))," +\
+            "cast(%s as smallint)," +\
+            "cast(%s as double precision)," +\
+            "cast(%s as double precision)," +\
+            "cast(%s as double precision)," +\
+            "cast(%s as double precision)," +\
+            "cast(%s as double precision)," +\
+            "cast(%s as double precision)," +\
+            "cast(%s as double precision)," +\
+            "cast(%s as double precision)," +\
+            "cast(%s as double precision)," +\
+            "cast(%s as double precision)," +\
+            "cast(%s as double precision)," +\
+            "cast(%s as double precision)," +\
+            "cast(%s as smallint)," +\
+            "cast(%s as double precision)," +\
+            "cast(%s as double precision)," +\
+            "cast(%s as double precision)," +\
+            "cast(%s as double precision)," +\
+            "cast(%s as double precision)," +\
+            "cast(%s as double precision)," +\
+            "cast(%s as double precision)," +\
+            "cast(%s as double precision)," +\
+            "cast(%s as double precision)," +\
+            "cast(%s as double precision)," +\
+            "cast(%s as double precision)," +\
+            "cast(%s as double precision)," +\
+            "cast(%s as real)," +\
+            "cast(%s as double precision)," +\
+            "cast(%s as double precision)," +\
+            "cast(%s as real)," +\
+            "cast(%s as real)," +\
+            "cast(%s as real)," +\
+            "cast(%s AS real)) as " +\
             "(rid integer," +\
             " version smallint);"
 
@@ -440,73 +420,16 @@ class RAPIDDB:
         print('----> sca = {}'.format(sca))
         print('----> filename = {}'.format(filename))
 
-        rep = {"TEMPLATE_EXPID": str(expid),
-               "TEMPLATE_SCA": str(sca),
-               "TEMPLATE_FIELD": str(field),
-               "TEMPLATE_HP6": str(hp6),
-               "TEMPLATE_HP9": str(hp9),
-               "TEMPLATE_FID": str(fid),
-               "TEMPLATE_DATEOBS": dateobs}
+        params = (expid, sca, field, hp6, hp9, fid, dateobs, mjdobs, exptime, infobits,
+                  filename, checksum, status, crval1, crval2, crpix1, crpix2, cd11, cd12, cd21, cd22,
+                  ctype1, ctype2, cunit1, cunit2, a_order, a_0_2, a_0_3, a_0_4, a_1_1,
+                  a_1_2, a_1_3, a_2_0, a_2_1, a_2_2, a_3_0, a_3_1, a_4_0, b_order, b_0_2, b_0_3,
+                  b_0_4, b_1_1, b_1_2, b_1_3, b_2_0, b_2_1, b_2_2, b_3_0, b_3_1,
+                  b_4_0, equinox, ra, dec, paobsy, pafpa, zptmag, skymean)
 
-        rep["TEMPLATE_MJDOBS"] = str(mjdobs)
-        rep["TEMPLATE_EXPTIME"] = str(exptime)
-        rep["TEMPLATE_INFOBITS"] = str(infobits)
-        rep["TEMPLATE_FILENAME"] = filename
-        rep["TEMPLATE_CHECKSUM"] = checksum
-        rep["TEMPLATE_STATUS"] = str(status)
-        rep["TEMPLATE_CRVAL1"] = str(crval1)
-        rep["TEMPLATE_CRVAL2"] = str(crval2)
-        rep["TEMPLATE_CRPIX1"] = str(crpix1)
-        rep["TEMPLATE_CRPIX2"] = str(crpix2)
-        rep["TEMPLATE_CD11"] = str(cd11)
-        rep["TEMPLATE_CD12"] = str(cd12)
-        rep["TEMPLATE_CD21"] = str(cd21)
-        rep["TEMPLATE_CD22"] = str(cd22)
-        rep["TEMPLATE_CTYPE1"] = ctype1
-        rep["TEMPLATE_CTYPE2"] = ctype2
-        rep["TEMPLATE_CUNIT1"] = cunit1
-        rep["TEMPLATE_CUNIT2"] = cunit2
-        rep["TEMPLATE_A_ORDER"] = str(a_order)
-        rep["TEMPLATE_A_0_2"] = str(a_0_2)
-        rep["TEMPLATE_A_0_3"] = str(a_0_3)
-        rep["TEMPLATE_A_0_4"] = str(a_0_4)
-        rep["TEMPLATE_A_1_1"] = str(a_1_1)
-        rep["TEMPLATE_A_1_2"] = str(a_1_2)
-        rep["TEMPLATE_A_1_3"] = str(a_1_3)
-        rep["TEMPLATE_A_2_0"] = str(a_2_0)
-        rep["TEMPLATE_A_2_1"] = str(a_2_1)
-        rep["TEMPLATE_A_2_2"] = str(a_2_2)
-        rep["TEMPLATE_A_3_0"] = str(a_3_0)
-        rep["TEMPLATE_A_3_1"] = str(a_3_1)
-        rep["TEMPLATE_A_4_0"] = str(a_4_0)
-        rep["TEMPLATE_B_ORDER"] = str(b_order)
-        rep["TEMPLATE_B_0_2"] = str(b_0_2)
-        rep["TEMPLATE_B_0_3"] = str(b_0_3)
-        rep["TEMPLATE_B_0_4"] = str(b_0_4)
-        rep["TEMPLATE_B_1_1"] = str(b_1_1)
-        rep["TEMPLATE_B_1_2"] = str(b_1_2)
-        rep["TEMPLATE_B_1_3"] = str(b_1_3)
-        rep["TEMPLATE_B_2_0"] = str(b_2_0)
-        rep["TEMPLATE_B_2_1"] = str(b_2_1)
-        rep["TEMPLATE_B_2_2"] = str(b_2_2)
-        rep["TEMPLATE_B_3_0"] = str(b_3_0)
-        rep["TEMPLATE_B_3_1"] = str(b_3_1)
-        rep["TEMPLATE_B_4_0"] = str(b_4_0)
-        rep["TEMPLATE_EQUINOX"] = str(equinox)
-        rep["TEMPLATE_RA"] = str(ra)
-        rep["TEMPLATE_DEC"] = str(dec)
-        rep["TEMPLATE_PAOBSY"] = str(paobsy)
-        rep["TEMPLATE_PAFPA"] = str(pafpa)
-        rep["TEMPLATE_ZPTMAG"] = str(zptmag)
-        rep["TEMPLATE_SKYMEAN"] = str(skymean)
+        print('query = {}, params = {}'.format(query, params))
 
-        rep = dict((re.escape(k), v) for k, v in rep.items())
-        pattern = re.compile("|".join(rep.keys()))
-        query = pattern.sub(lambda m: rep[re.escape(m.group(0))], query_template)
-
-        print('query = {}'.format(query))
-
-        self.cur.execute(query)
+        self.cur.execute(query, params)
         record = self.cur.fetchone()
 
         if record is not None:
@@ -521,6 +444,7 @@ class RAPIDDB:
 
         if self.exit_code == 0:
             self.conn.commit()           # Commit database transaction
+
 
 
 ########################################################################################################
@@ -543,82 +467,82 @@ class RAPIDDB:
 
         # Define query template.
 
-        query_template =\
+        query =\
             "select * from addL2File(" +\
-            "cast(TEMPLATE_EXPID as integer)," +\
-            "cast(TEMPLATE_SCA as smallint)," +\
-            "cast(TEMPLATE_FIELD as integer)," +\
-            "cast(TEMPLATE_HP6 as integer)," +\
-            "cast(TEMPLATE_HP9 as integer)," +\
-            "cast(TEMPLATE_FID as smallint)," +\
-            "cast('TEMPLATE_DATEOBS' as timestamp without time zone)," +\
-            "cast(TEMPLATE_MJDOBS as double precision)," +\
-            "cast(TEMPLATE_EXPTIME as real)," +\
-            "cast(TEMPLATE_INFOBITS as integer)," +\
-            "cast('TEMPLATE_FILENAME' as character varying(255))," +\
-            "cast('TEMPLATE_CHECKSUM' as character varying(32))," +\
-            "cast(TEMPLATE_STATUS as smallint)," +\
-            "cast(TEMPLATE_CRVAL1 as double precision)," +\
-            "cast(TEMPLATE_CRVAL2 as double precision)," +\
-            "cast(TEMPLATE_CRPIX1 as real)," +\
-            "cast(TEMPLATE_CRPIX2 as real)," +\
-            "cast(TEMPLATE_CD11 as double precision)," +\
-            "cast(TEMPLATE_CD12 as double precision)," +\
-            "cast(TEMPLATE_CD21 as double precision)," +\
-            "cast(TEMPLATE_CD22 as double precision)," +\
-            "cast('TEMPLATE_CTYPE1' as character varying(16))," +\
-            "cast('TEMPLATE_CTYPE2' as character varying(16))," +\
-            "cast('TEMPLATE_CUNIT1' as character varying(16))," +\
-            "cast('TEMPLATE_CUNIT2' as character varying(16))," +\
-            "cast(TEMPLATE_A_ORDER as smallint)," +\
-            "cast(TEMPLATE_A_0_1 as double precision)," +\
-            "cast(TEMPLATE_A_0_2 as double precision)," +\
-            "cast(TEMPLATE_A_0_3 as double precision)," +\
-            "cast(TEMPLATE_A_0_4 as double precision)," +\
-            "cast(TEMPLATE_A_0_5 as double precision)," +\
-            "cast(TEMPLATE_A_1_0 as double precision)," +\
-            "cast(TEMPLATE_A_1_1 as double precision)," +\
-            "cast(TEMPLATE_A_1_2 as double precision)," +\
-            "cast(TEMPLATE_A_1_3 as double precision)," +\
-            "cast(TEMPLATE_A_1_4 as double precision)," +\
-            "cast(TEMPLATE_A_2_0 as double precision)," +\
-            "cast(TEMPLATE_A_2_1 as double precision)," +\
-            "cast(TEMPLATE_A_2_2 as double precision)," +\
-            "cast(TEMPLATE_A_2_3 as double precision)," +\
-            "cast(TEMPLATE_A_3_0 as double precision)," +\
-            "cast(TEMPLATE_A_3_1 as double precision)," +\
-            "cast(TEMPLATE_A_3_2 as double precision)," +\
-            "cast(TEMPLATE_A_4_0 as double precision)," +\
-            "cast(TEMPLATE_A_4_1 as double precision)," +\
-            "cast(TEMPLATE_A_5_0 as double precision)," +\
-            "cast(TEMPLATE_B_ORDER as smallint)," +\
-            "cast(TEMPLATE_B_0_1 as double precision)," +\
-            "cast(TEMPLATE_B_0_2 as double precision)," +\
-            "cast(TEMPLATE_B_0_3 as double precision)," +\
-            "cast(TEMPLATE_B_0_4 as double precision)," +\
-            "cast(TEMPLATE_B_0_5 as double precision)," +\
-            "cast(TEMPLATE_B_1_0 as double precision)," +\
-            "cast(TEMPLATE_B_1_1 as double precision)," +\
-            "cast(TEMPLATE_B_1_2 as double precision)," +\
-            "cast(TEMPLATE_B_1_3 as double precision)," +\
-            "cast(TEMPLATE_B_1_4 as double precision)," +\
-            "cast(TEMPLATE_B_2_0 as double precision)," +\
-            "cast(TEMPLATE_B_2_1 as double precision)," +\
-            "cast(TEMPLATE_B_2_2 as double precision)," +\
-            "cast(TEMPLATE_B_2_3 as double precision)," +\
-            "cast(TEMPLATE_B_3_0 as double precision)," +\
-            "cast(TEMPLATE_B_3_1 as double precision)," +\
-            "cast(TEMPLATE_B_3_2 as double precision)," +\
-            "cast(TEMPLATE_B_4_0 as double precision)," +\
-            "cast(TEMPLATE_B_4_1 as double precision)," +\
-            "cast(TEMPLATE_B_5_0 as double precision)," +\
-            "cast(TEMPLATE_EQUINOX as real)," +\
-            "cast(TEMPLATE_RA as double precision)," +\
-            "cast(TEMPLATE_DEC as double precision)," +\
-            "cast(TEMPLATE_PAOBSY as real)," +\
-            "cast(TEMPLATE_PAFPA as real)," +\
-            "cast(TEMPLATE_ZPTMAG as real)," +\
-            "cast(TEMPLATE_SKYMEAN AS real)) as " +\
+            "cast(%s as integer)," +\
+            "cast(%s as smallint)," +\
+            "cast(%s as integer)," +\
+            "cast(%s as integer)," +\
+            "cast(%s as integer)," +\
+            "cast(%s as smallint)," +\
+            "cast(%s as timestamp without time zone)," +\
+            "cast(%s as double precision)," +\
+            "cast(%s as real)," +\
+            "cast(%s as integer)," +\
+            "cast(%s as character varying(255))," +\
+            "cast(%s as character varying(32))," +\
+            "cast(%s as smallint)," +\
+            "cast(%s as double precision)," +\
+            "cast(%s as double precision)," +\
+            "cast(%s as real)," +\
+            "cast(%s as real)," +\
+            "cast(%s as double precision)," +\
+            "cast(%s as double precision)," +\
+            "cast(%s as double precision)," +\
+            "cast(%s as double precision)," +\
+            "cast(%s as character varying(16))," +\
+            "cast(%s as character varying(16))," +\
+            "cast(%s as character varying(16))," +\
+            "cast(%s as character varying(16))," +\
+            "cast(%s as smallint)," +\
+            "cast(%s as double precision)," +\
+            "cast(%s as double precision)," +\
+            "cast(%s as double precision)," +\
+            "cast(%s as double precision)," +\
+            "cast(%s as double precision)," +\
+            "cast(%s as double precision)," +\
+            "cast(%s as double precision)," +\
+            "cast(%s as double precision)," +\
+            "cast(%s as double precision)," +\
+            "cast(%s as double precision)," +\
+            "cast(%s as double precision)," +\
+            "cast(%s as double precision)," +\
+            "cast(%s as double precision)," +\
+            "cast(%s as double precision)," +\
+            "cast(%s as double precision)," +\
+            "cast(%s as double precision)," +\
+            "cast(%s as double precision)," +\
+            "cast(%s as double precision)," +\
+            "cast(%s as double precision)," +\
+            "cast(%s as double precision)," +\
+            "cast(%s as smallint)," +\
+            "cast(%s as double precision)," +\
+            "cast(%s as double precision)," +\
+            "cast(%s as double precision)," +\
+            "cast(%s as double precision)," +\
+            "cast(%s as double precision)," +\
+            "cast(%s as double precision)," +\
+            "cast(%s as double precision)," +\
+            "cast(%s as double precision)," +\
+            "cast(%s as double precision)," +\
+            "cast(%s as double precision)," +\
+            "cast(%s as double precision)," +\
+            "cast(%s as double precision)," +\
+            "cast(%s as double precision)," +\
+            "cast(%s as double precision)," +\
+            "cast(%s as double precision)," +\
+            "cast(%s as double precision)," +\
+            "cast(%s as double precision)," +\
+            "cast(%s as double precision)," +\
+            "cast(%s as double precision)," +\
+            "cast(%s as double precision)," +\
+            "cast(%s as real)," +\
+            "cast(%s as double precision)," +\
+            "cast(%s as double precision)," +\
+            "cast(%s as real)," +\
+            "cast(%s as real)," +\
+            "cast(%s as real)," +\
+            "cast(%s AS real)) as " +\
             "(rid integer," +\
             " version smallint);"
 
@@ -629,89 +553,18 @@ class RAPIDDB:
         print('----> sca = {}'.format(sca))
         print('----> filename = {}'.format(filename))
 
-        rep = {"TEMPLATE_EXPID": str(expid),
-               "TEMPLATE_SCA": str(sca),
-               "TEMPLATE_FIELD": str(field),
-               "TEMPLATE_HP6": str(hp6),
-               "TEMPLATE_HP9": str(hp9),
-               "TEMPLATE_FID": str(fid),
-               "TEMPLATE_DATEOBS": dateobs}
+        params = (expid, sca, field, hp6, hp9, fid, dateobs, mjdobs, exptime, infobits,
+                  filename, checksum, status, crval1, crval2, crpix1, crpix2, cd11, cd12, cd21, cd22,
+                  ctype1, ctype2, cunit1, cunit2,
+                  a_order, a_0_1, a_0_2, a_0_3, a_0_4, a_0_5, a_1_0, a_1_1, a_1_2, a_1_3, a_1_4,
+                  a_2_0, a_2_1, a_2_2, a_2_3, a_3_0, a_3_1, a_3_2, a_4_0, a_4_1, a_5_0,
+                  b_order, b_0_1, b_0_2, b_0_3, b_0_4, b_0_5, b_1_0, b_1_1, b_1_2, b_1_3, b_1_4,
+                  b_2_0, b_2_1, b_2_2, b_2_3, b_3_0, b_3_1, b_3_2, b_4_0, b_4_1, b_5_0,
+                  equinox, ra, dec, paobsy, pafpa, zptmag, skymean)
 
-        rep["TEMPLATE_MJDOBS"] = str(mjdobs)
-        rep["TEMPLATE_EXPTIME"] = str(exptime)
-        rep["TEMPLATE_INFOBITS"] = str(infobits)
-        rep["TEMPLATE_FILENAME"] = filename
-        rep["TEMPLATE_CHECKSUM"] = checksum
-        rep["TEMPLATE_STATUS"] = str(status)
-        rep["TEMPLATE_CRVAL1"] = str(crval1)
-        rep["TEMPLATE_CRVAL2"] = str(crval2)
-        rep["TEMPLATE_CRPIX1"] = str(crpix1)
-        rep["TEMPLATE_CRPIX2"] = str(crpix2)
-        rep["TEMPLATE_CD11"] = str(cd11)
-        rep["TEMPLATE_CD12"] = str(cd12)
-        rep["TEMPLATE_CD21"] = str(cd21)
-        rep["TEMPLATE_CD22"] = str(cd22)
-        rep["TEMPLATE_CTYPE1"] = ctype1
-        rep["TEMPLATE_CTYPE2"] = ctype2
-        rep["TEMPLATE_CUNIT1"] = cunit1
-        rep["TEMPLATE_CUNIT2"] = cunit2
-        rep["TEMPLATE_A_ORDER"] = str(a_order)
-        rep["TEMPLATE_A_0_1"] = str(a_0_1)
-        rep["TEMPLATE_A_0_2"] = str(a_0_2)
-        rep["TEMPLATE_A_0_3"] = str(a_0_3)
-        rep["TEMPLATE_A_0_4"] = str(a_0_4)
-        rep["TEMPLATE_A_0_5"] = str(a_0_5)
-        rep["TEMPLATE_A_1_0"] = str(a_1_0)
-        rep["TEMPLATE_A_1_1"] = str(a_1_1)
-        rep["TEMPLATE_A_1_2"] = str(a_1_2)
-        rep["TEMPLATE_A_1_3"] = str(a_1_3)
-        rep["TEMPLATE_A_1_4"] = str(a_1_4)
-        rep["TEMPLATE_A_2_0"] = str(a_2_0)
-        rep["TEMPLATE_A_2_1"] = str(a_2_1)
-        rep["TEMPLATE_A_2_2"] = str(a_2_2)
-        rep["TEMPLATE_A_2_3"] = str(a_2_3)
-        rep["TEMPLATE_A_3_0"] = str(a_3_0)
-        rep["TEMPLATE_A_3_1"] = str(a_3_1)
-        rep["TEMPLATE_A_3_2"] = str(a_3_2)
-        rep["TEMPLATE_A_4_0"] = str(a_4_0)
-        rep["TEMPLATE_A_4_1"] = str(a_4_1)
-        rep["TEMPLATE_A_5_0"] = str(a_5_0)
-        rep["TEMPLATE_B_ORDER"] = str(b_order)
-        rep["TEMPLATE_B_0_1"] = str(b_0_1)
-        rep["TEMPLATE_B_0_2"] = str(b_0_2)
-        rep["TEMPLATE_B_0_3"] = str(b_0_3)
-        rep["TEMPLATE_B_0_4"] = str(b_0_4)
-        rep["TEMPLATE_B_0_5"] = str(b_0_5)
-        rep["TEMPLATE_B_1_0"] = str(b_1_0)
-        rep["TEMPLATE_B_1_1"] = str(b_1_1)
-        rep["TEMPLATE_B_1_2"] = str(b_1_2)
-        rep["TEMPLATE_B_1_3"] = str(b_1_3)
-        rep["TEMPLATE_B_1_4"] = str(b_1_4)
-        rep["TEMPLATE_B_2_0"] = str(b_2_0)
-        rep["TEMPLATE_B_2_1"] = str(b_2_1)
-        rep["TEMPLATE_B_2_2"] = str(b_2_2)
-        rep["TEMPLATE_B_2_3"] = str(b_2_3)
-        rep["TEMPLATE_B_3_0"] = str(b_3_0)
-        rep["TEMPLATE_B_3_1"] = str(b_3_1)
-        rep["TEMPLATE_B_3_2"] = str(b_3_2)
-        rep["TEMPLATE_B_4_0"] = str(b_4_0)
-        rep["TEMPLATE_B_4_1"] = str(b_4_1)
-        rep["TEMPLATE_B_5_0"] = str(b_5_0)
-        rep["TEMPLATE_EQUINOX"] = str(equinox)
-        rep["TEMPLATE_RA"] = str(ra)
-        rep["TEMPLATE_DEC"] = str(dec)
-        rep["TEMPLATE_PAOBSY"] = str(paobsy)
-        rep["TEMPLATE_PAFPA"] = str(pafpa)
-        rep["TEMPLATE_ZPTMAG"] = str(zptmag)
-        rep["TEMPLATE_SKYMEAN"] = str(skymean)
+        print('query = {}, params = {}'.format(query, params))
 
-        rep = dict((re.escape(k), v) for k, v in rep.items())
-        pattern = re.compile("|".join(rep.keys()))
-        query = pattern.sub(lambda m: rep[re.escape(m.group(0))], query_template)
-
-        print('query = {}'.format(query))
-
-        self.cur.execute(query)
+        self.cur.execute(query, params)
         record = self.cur.fetchone()
 
         if record is not None:
@@ -741,13 +594,13 @@ class RAPIDDB:
 
         # Define query template.
 
-        query_template =\
+        query =\
             "select * from updateL2File(" +\
-            "cast(TEMPLATE_RID as integer)," +\
-            "cast('TEMPLATE_FILENAME' as character varying(255))," +\
-            "cast('TEMPLATE_CHECKSUM' as character varying(32))," +\
-            "cast(TEMPLATE_STATUS as smallint)," +\
-            "cast(TEMPLATE_VERSION AS smallint));"
+            "cast(%s as integer)," +\
+            "cast(%s as character varying(255))," +\
+            "cast(%s as character varying(32))," +\
+            "cast(%s as smallint)," +\
+            "cast(%s AS smallint));"
 
 
         # Query database.
@@ -758,24 +611,15 @@ class RAPIDDB:
         print('----> status = {}'.format(status))
         print('----> version = {}'.format(version))
 
-        rep = {"TEMPLATE_RID": str(rid),
-               "TEMPLATE_FILENAME": filename,
-               "TEMPLATE_CHECKSUM": checksum}
+        params = (rid, filename, checksum, status, version)
 
-        rep["TEMPLATE_STATUS"] = str(status)
-        rep["TEMPLATE_VERSION"] = str(version)
-
-        rep = dict((re.escape(k), v) for k, v in rep.items())
-        pattern = re.compile("|".join(rep.keys()))
-        query = pattern.sub(lambda m: rep[re.escape(m.group(0))], query_template)
-
-        print('query = {}'.format(query))
+        print('query = {}, params = {}'.format(query, params))
 
 
         # Execute query.
 
         try:
-            self.cur.execute(query)
+            self.cur.execute(query, params)
 
             try:
                 for record in self.cur:
@@ -805,27 +649,27 @@ class RAPIDDB:
 
         # Define query template.
 
-        query_template =\
+        query =\
             "select * from registerL2FileMeta(" +\
-            "cast(TEMPLATE_RID as integer)," +\
-            "cast(TEMPLATE_FID as smallint)," +\
-            "cast(TEMPLATE_SCA as smallint)," +\
-            "cast(TEMPLATE_RA0 as double precision)," +\
-            "cast(TEMPLATE_DEC0 as double precision)," +\
-            "cast(TEMPLATE_RA1 as double precision)," +\
-            "cast(TEMPLATE_DEC1 as double precision)," +\
-            "cast(TEMPLATE_RA2 as double precision)," +\
-            "cast(TEMPLATE_DEC2 as double precision)," +\
-            "cast(TEMPLATE_RA3 as double precision)," +\
-            "cast(TEMPLATE_DEC3 as double precision)," +\
-            "cast(TEMPLATE_RA4 as double precision)," +\
-            "cast(TEMPLATE_DEC4 as double precision)," +\
-            "cast(TEMPLATE_X as double precision)," +\
-            "cast(TEMPLATE_Y as double precision)," +\
-            "cast(TEMPLATE_Z AS double precision)," +\
-            "cast(TEMPLATE_HP6 AS integer)," +\
-            "cast(TEMPLATE_HP9 AS integer)," +\
-            "cast(TEMPLATE_MJDOBS as double precision));"
+            "cast(%s as integer)," +\
+            "cast(%s as smallint)," +\
+            "cast(%s as smallint)," +\
+            "cast(%s as double precision)," +\
+            "cast(%s as double precision)," +\
+            "cast(%s as double precision)," +\
+            "cast(%s as double precision)," +\
+            "cast(%s as double precision)," +\
+            "cast(%s as double precision)," +\
+            "cast(%s as double precision)," +\
+            "cast(%s as double precision)," +\
+            "cast(%s as double precision)," +\
+            "cast(%s as double precision)," +\
+            "cast(%s as double precision)," +\
+            "cast(%s as double precision)," +\
+            "cast(%s AS double precision)," +\
+            "cast(%s AS integer)," +\
+            "cast(%s AS integer)," +\
+            "cast(%s as double precision));"
 
 
         # Query database.
@@ -836,39 +680,16 @@ class RAPIDDB:
         print('----> ra0 = {}'.format(ra0))
         print('----> dec0 = {}'.format(dec0))
 
-        rep = {"TEMPLATE_RID": str(rid)}
 
-        rep["TEMPLATE_FID"] = str(fid)
-        rep["TEMPLATE_SCA"] = str(sca)
+        params = (rid, fid, sca, ra0, dec0, ra1, dec1, ra2, dec2, ra3, dec3, ra4, dec4, x, y, z, hp6, hp9, mjdobs)
 
-        rep["TEMPLATE_RA0"] = str(ra0)
-        rep["TEMPLATE_DEC0"] = str(dec0)
-        rep["TEMPLATE_RA1"] = str(ra1)
-        rep["TEMPLATE_DEC1"] = str(dec1)
-        rep["TEMPLATE_RA2"] = str(ra2)
-        rep["TEMPLATE_DEC2"] = str(dec2)
-        rep["TEMPLATE_RA3"] = str(ra3)
-        rep["TEMPLATE_DEC3"] = str(dec3)
-        rep["TEMPLATE_RA4"] = str(ra4)
-        rep["TEMPLATE_DEC4"] = str(dec4)
-        rep["TEMPLATE_X"] = str(x)
-        rep["TEMPLATE_Y"] = str(y)
-        rep["TEMPLATE_Z"] = str(z)
-        rep["TEMPLATE_HP6"] = str(hp6)
-        rep["TEMPLATE_HP9"] = str(hp9)
-        rep["TEMPLATE_MJDOBS"] = str(mjdobs)
-
-        rep = dict((re.escape(k), v) for k, v in rep.items())
-        pattern = re.compile("|".join(rep.keys()))
-        query = pattern.sub(lambda m: rep[re.escape(m.group(0))], query_template)
-
-        print('query = {}'.format(query))
+        print('query = {}, params = {}'.format(query, params))
 
 
         # Execute query.
 
         try:
-            self.cur.execute(query)
+            self.cur.execute(query, params)
 
             try:
                 for record in self.cur:
@@ -944,7 +765,8 @@ class RAPIDDB:
 
         # Define query.
 
-        query = "update L2FileMeta set hp6 = " + str(hp6) + " where rid = " + str(rid) + ";"
+        query = "update L2FileMeta set hp6 = %s where rid = %s;"
+        params = (hp6, rid)
 
 
         # Query database.
@@ -952,13 +774,13 @@ class RAPIDDB:
         print('----> rid = {}'.format(rid))
         print('----> hp6 = {}'.format(hp6))
 
-        print('query = {}'.format(query))
+        print('query = {}, params = {}'.format(query, params))
 
 
         # Execute query.
 
         try:
-            self.cur.execute(query)
+            self.cur.execute(query, params)
 
             try:
                 records = []
@@ -1035,7 +857,8 @@ class RAPIDDB:
 
         # Define query.
 
-        query = "update L2FileMeta set fid = " + str(fid) + ", sca = " + str(sca) + " where rid = " + str(rid) + ";"
+        query = "update L2FileMeta set fid = %s, sca = %s where rid = %s;"
+        params = (fid, sca, rid)
 
 
         # Query database.
@@ -1044,13 +867,13 @@ class RAPIDDB:
         print('----> fid = {}'.format(fid))
         print('----> sca = {}'.format(sca))
 
-        print('query = {}'.format(query))
+        print('query = {}, params = {}'.format(query, params))
 
 
         # Execute query.
 
         try:
-            self.cur.execute(query)
+            self.cur.execute(query, params)
 
             try:
                 records = []
@@ -1079,7 +902,8 @@ class RAPIDDB:
 
         # Define query.
 
-        query = "update L2FileMeta set hp9 = " + str(hp9) + " where rid = " + str(rid) + ";"
+        query = "update L2FileMeta set hp9 = %s where rid = %s;"
+        params = (hp9, rid)
 
 
         # Query database.
@@ -1087,13 +911,13 @@ class RAPIDDB:
         print('----> rid = {}'.format(rid))
         print('----> hp9 = {}'.format(hp9))
 
-        print('query = {}'.format(query))
+        print('query = {}, params = {}'.format(query, params))
 
 
         # Execute query.
 
         try:
-            self.cur.execute(query)
+            self.cur.execute(query, params)
 
             try:
                 records = []
@@ -1170,10 +994,8 @@ class RAPIDDB:
 
         # Define query.
 
-        query = "update L2Files set field = " + str(field) +\
-            ", hp6 = " + str(hp6) +\
-            ", hp9 = " + str(hp9) +\
-            " where rid = " + str(rid) + ";"
+        query = "update L2Files set field = %s, hp6 = %s, hp9 = %s where rid = %s;"
+        params = (field, hp6, hp9, rid)
 
 
         # Query database.
@@ -1183,13 +1005,13 @@ class RAPIDDB:
         print('----> hp6 = {}'.format(hp6))
         print('----> hp9 = {}'.format(hp9))
 
-        print('query = {}'.format(query))
+        print('query = {}, params = {}'.format(query, params))
 
 
         # Execute query.
 
         try:
-            self.cur.execute(query)
+            self.cur.execute(query, params)
 
             try:
                 records = []
@@ -1268,10 +1090,8 @@ class RAPIDDB:
 
         # Define query.
 
-        query = "update Exposures set field = " + str(field) +\
-            ", hp6 = " + str(hp6) +\
-            ", hp9 = " + str(hp9) +\
-            " where expid = " + str(expid) + ";"
+        query = "update Exposures set field = %s, hp6 = %s, hp9 = %s where expid = %s;"
+        params = (field, hp6, hp9, expid)
 
 
         # Query database.
@@ -1281,13 +1101,13 @@ class RAPIDDB:
         print('----> hp6 = {}'.format(hp6))
         print('----> hp9 = {}'.format(hp9))
 
-        print('query = {}'.format(query))
+        print('query = {}, params = {}'.format(query, params))
 
 
         # Execute query.
 
         try:
-            self.cur.execute(query)
+            self.cur.execute(query, params)
 
             try:
                 records = []
@@ -1318,28 +1138,22 @@ class RAPIDDB:
 
         # Define query template.
 
-        query_template =\
-            "select sca,fid,ra0,dec0,ra1,dec1,ra2,dec2,ra3,dec3,ra4,dec4 from L2FileMeta where rid=TEMPLATE_RID;"
+        query =\
+            "select sca,fid,ra0,dec0,ra1,dec1,ra2,dec2,ra3,dec3,ra4,dec4 from L2FileMeta where rid=%s;"
 
 
         # Query database.
 
         print('----> rid = {}'.format(rid))
 
-        rid_str = str(rid)
+        params = (rid,)
 
-        rep = {"TEMPLATE_RID": rid_str}
-
-        rep = dict((re.escape(k), v) for k, v in rep.items())
-        pattern = re.compile("|".join(rep.keys()))
-        query = pattern.sub(lambda m: rep[re.escape(m.group(0))], query_template)
-
-        print('query = {}'.format(query))
+        print('query = {}, params = {}'.format(query, params))
 
 
         # Execute query.
 
-        self.cur.execute(query)
+        self.cur.execute(query, params)
         record = self.cur.fetchone()
 
         if record is not None:
@@ -1409,43 +1223,43 @@ class RAPIDDB:
         # TODO: This query will not actually give all overlapping images (however small a chance this may be).
         #       For example, an image corner may overlap on a sky tile that does not cover a tile center or corner.
 
-        query_template =\
+        query =\
             "select a.rid,ra0,dec0,ra1,dec1,ra2,dec2,ra3,dec3,ra4,dec4,field, " +\
-            "q3c_dist(ra0, dec0, cast(TEMPLATE_RA0 as double precision), cast(TEMPLATE_DEC0 as double precision)) as dist " +\
+            "q3c_dist(ra0, dec0, cast(%s as double precision), cast(%s as double precision)) as dist " +\
             "from L2FileMeta a, L2Files b " +\
             "where a.rid = b.rid " +\
-            "and a.fid = TEMPLATE_FID " +\
+            "and a.fid = %s " +\
             "and status > 0 " +\
             "and vbest > 0 " +\
-            "and q3c_radial_query(ra0, dec0, cast(TEMPLATE_RA0 as double precision), cast(TEMPLATE_DEC0 as double precision), cast(TEMPLATE_RADIUS as double precision)) " +\
-            "and (q3c_poly_query(ra1, dec1, array[cast(TEMPLATE_RA1 as double precision), cast(TEMPLATE_DEC1 as double precision)," +\
-                                                 "cast(TEMPLATE_RA2 as double precision), cast(TEMPLATE_DEC2 as double precision)," +\
-                                                 "cast(TEMPLATE_RA3 as double precision), cast(TEMPLATE_DEC3 as double precision)," +\
-                                                 "cast(TEMPLATE_RA4 as double precision), cast(TEMPLATE_DEC4 as double precision)]) " +\
-            "or q3c_poly_query(ra2, dec2, array[cast(TEMPLATE_RA1 as double precision), cast(TEMPLATE_DEC1 as double precision)," +\
-                                               "cast(TEMPLATE_RA2 as double precision), cast(TEMPLATE_DEC2 as double precision)," +\
-                                               "cast(TEMPLATE_RA3 as double precision), cast(TEMPLATE_DEC3 as double precision)," +\
-                                               "cast(TEMPLATE_RA4 as double precision), cast(TEMPLATE_DEC4 as double precision)]) " +\
-            "or q3c_poly_query(ra3, dec3, array[cast(TEMPLATE_RA1 as double precision), cast(TEMPLATE_DEC1 as double precision)," +\
-                                               "cast(TEMPLATE_RA2 as double precision), cast(TEMPLATE_DEC2 as double precision)," +\
-                                               "cast(TEMPLATE_RA3 as double precision), cast(TEMPLATE_DEC3 as double precision)," +\
-                                               "cast(TEMPLATE_RA4 as double precision), cast(TEMPLATE_DEC4 as double precision)]) " +\
-            "or q3c_poly_query(ra4, dec4, array[cast(TEMPLATE_RA1 as double precision), cast(TEMPLATE_DEC1 as double precision)," +\
-                                               "cast(TEMPLATE_RA2 as double precision), cast(TEMPLATE_DEC2 as double precision)," +\
-                                               "cast(TEMPLATE_RA3 as double precision), cast(TEMPLATE_DEC3 as double precision)," +\
-                                               "cast(TEMPLATE_RA4 as double precision), cast(TEMPLATE_DEC4 as double precision)]) " +\
-            "or q3c_poly_query(ra0, dec0, array[cast(TEMPLATE_RA1 as double precision), cast(TEMPLATE_DEC1 as double precision)," +\
-                                               "cast(TEMPLATE_RA2 as double precision), cast(TEMPLATE_DEC2 as double precision)," +\
-                                               "cast(TEMPLATE_RA3 as double precision), cast(TEMPLATE_DEC3 as double precision)," +\
-                                               "cast(TEMPLATE_RA4 as double precision), cast(TEMPLATE_DEC4 as double precision)])) " +\
-            "and a.mjdobs >= TEMPLATE_STARTMJDOBS " +\
-            "and a.mjdobs < TEMPLATE_ENDMJDOBS "
+            "and q3c_radial_query(ra0, dec0, cast(%s as double precision), cast(%s as double precision), cast(%s as double precision)) " +\
+            "and (q3c_poly_query(ra1, dec1, array[cast(%s as double precision), cast(%s as double precision)," +\
+                                                 "cast(%s as double precision), cast(%s as double precision)," +\
+                                                 "cast(%s as double precision), cast(%s as double precision)," +\
+                                                 "cast(%s as double precision), cast(%s as double precision)]) " +\
+            "or q3c_poly_query(ra2, dec2, array[cast(%s as double precision), cast(%s as double precision)," +\
+                                               "cast(%s as double precision), cast(%s as double precision)," +\
+                                               "cast(%s as double precision), cast(%s as double precision)," +\
+                                               "cast(%s as double precision), cast(%s as double precision)]) " +\
+            "or q3c_poly_query(ra3, dec3, array[cast(%s as double precision), cast(%s as double precision)," +\
+                                               "cast(%s as double precision), cast(%s as double precision)," +\
+                                               "cast(%s as double precision), cast(%s as double precision)," +\
+                                               "cast(%s as double precision), cast(%s as double precision)]) " +\
+            "or q3c_poly_query(ra4, dec4, array[cast(%s as double precision), cast(%s as double precision)," +\
+                                               "cast(%s as double precision), cast(%s as double precision)," +\
+                                               "cast(%s as double precision), cast(%s as double precision)," +\
+                                               "cast(%s as double precision), cast(%s as double precision)]) " +\
+            "or q3c_poly_query(ra0, dec0, array[cast(%s as double precision), cast(%s as double precision)," +\
+                                               "cast(%s as double precision), cast(%s as double precision)," +\
+                                               "cast(%s as double precision), cast(%s as double precision)," +\
+                                               "cast(%s as double precision), cast(%s as double precision)])) " +\
+            "and a.mjdobs >= %s " +\
+            "and a.mjdobs < %s "
 
         if rid == 'null':
-            query_template += "and a.rid is not TEMPLATE_RID " +\
+            query += "and a.rid is not %s " +\
                               "order by dist; "
         else:
-            query_template += "and a.rid != TEMPLATE_RID " +\
+            query += "and a.rid != %s " +\
                               "order by dist; "
 
 
@@ -1471,40 +1285,28 @@ class RAPIDDB:
             end_mjdobs = mjdobs
 
 
-        # Formulate query by substituting parameters into query template.
+        # Formulate query params.
 
         print('----> rid = {}'.format(rid))
         print('----> fid = {}'.format(fid))
         print('----> radius_of_initial_cone_search = {}'.format(radius_of_initial_cone_search))
 
-        rep = {"TEMPLATE_RID": str(rid)}
+        params = (field_ra0, field_dec0, fid,
+                  field_ra0, field_dec0, radius_of_initial_cone_search,
+                  field_ra1, field_dec1, field_ra2, field_dec2, field_ra3, field_dec3, field_ra4, field_dec4,
+                  field_ra1, field_dec1, field_ra2, field_dec2, field_ra3, field_dec3, field_ra4, field_dec4,
+                  field_ra1, field_dec1, field_ra2, field_dec2, field_ra3, field_dec3, field_ra4, field_dec4,
+                  field_ra1, field_dec1, field_ra2, field_dec2, field_ra3, field_dec3, field_ra4, field_dec4,
+                  field_ra1, field_dec1, field_ra2, field_dec2, field_ra3, field_dec3, field_ra4, field_dec4,
+                  start_mjdobs, end_mjdobs, rid)
 
-        rep["TEMPLATE_FID"] = str(fid)
-        rep["TEMPLATE_STARTMJDOBS"] = str(start_mjdobs)
-        rep["TEMPLATE_ENDMJDOBS"] = str(end_mjdobs)
-        rep["TEMPLATE_RA0"] = str(field_ra0)
-        rep["TEMPLATE_DEC0"] = str(field_dec0)
-        rep["TEMPLATE_RA1"] = str(field_ra1)
-        rep["TEMPLATE_DEC1"] = str(field_dec1)
-        rep["TEMPLATE_RA2"] = str(field_ra2)
-        rep["TEMPLATE_DEC2"] = str(field_dec2)
-        rep["TEMPLATE_RA3"] = str(field_ra3)
-        rep["TEMPLATE_DEC3"] = str(field_dec3)
-        rep["TEMPLATE_RA4"] = str(field_ra4)
-        rep["TEMPLATE_DEC4"] = str(field_dec4)
-        rep["TEMPLATE_RADIUS"] = str(radius_of_initial_cone_search)
-
-        rep = dict((re.escape(k), v) for k, v in rep.items())
-        pattern = re.compile("|".join(rep.keys()))
-        query = pattern.sub(lambda m: rep[re.escape(m.group(0))], query_template)
-
-        print('query = {}'.format(query))
+        print('query = {}, params = {}'.format(query, params))
 
 
         # Execute query.
 
         try:
-            self.cur.execute(query)
+            self.cur.execute(query, params)
 
             try:
                 records = []
@@ -1539,28 +1341,25 @@ class RAPIDDB:
 
         # Define query template.
 
-        query_template =\
+        query =\
             "select filename,expid,sca,field,mjdobs,exptime,infobits,status,vbest,version " +\
             "from L2Files " +\
-            "where rid = TEMPLATE_RID; "
+            "where rid = %s; "
 
 
         # Formulate query by substituting parameters into query template.
 
         print('----> rid = {}'.format(rid))
 
-        rep = {"TEMPLATE_RID": str(rid)}
 
-        rep = dict((re.escape(k), v) for k, v in rep.items())
-        pattern = re.compile("|".join(rep.keys()))
-        query = pattern.sub(lambda m: rep[re.escape(m.group(0))], query_template)
+        params = (rid,)
 
-        print('query = {}'.format(query))
+        print('query = {}, params = {}'.format(query, params))
 
 
         # Execute query.
 
-        self.cur.execute(query)
+        self.cur.execute(query, params)
         record = self.cur.fetchone()
 
         if record is not None:
@@ -1606,14 +1405,14 @@ class RAPIDDB:
 
         # Define query template.
 
-        query_template =\
+        query =\
             "select rfid,filename,infobits,version " +\
             "from RefImages " +\
             "where vbest > 0 " +\
             "and status > 0 " +\
-            "and ppid = TEMPLATE_PPID " +\
-            "and field = TEMPLATE_FIELD " +\
-            "and fid = TEMPLATE_FID; "
+            "and ppid = %s " +\
+            "and field = %s " +\
+            "and fid = %s; "
 
 
         # Formulate query by substituting parameters into query template.
@@ -1622,21 +1421,15 @@ class RAPIDDB:
         print('----> field = {}'.format(field))
         print('----> fid = {}'.format(fid))
 
-        rep = {"TEMPLATE_PPID": str(ppid)}
 
-        rep["TEMPLATE_FIELD"] = str(field)
-        rep["TEMPLATE_FID"] = str(fid)
+        params = (ppid, field, fid)
 
-        rep = dict((re.escape(k), v) for k, v in rep.items())
-        pattern = re.compile("|".join(rep.keys()))
-        query = pattern.sub(lambda m: rep[re.escape(m.group(0))], query_template)
-
-        print('query = {}'.format(query))
+        print('query = {}, params = {}'.format(query, params))
 
 
         # Execute query.
 
-        self.cur.execute(query)
+        self.cur.execute(query, params)
         record = self.cur.fetchone()
 
         record_dict = {}
@@ -1668,16 +1461,16 @@ class RAPIDDB:
 
         # Define query template.
 
-        query_template =\
+        query =\
             "select jid from startJob(" +\
-            "cast('TEMPLATE_PPID' as smallint)," +\
-            "cast(TEMPLATE_FID as smallint)," +\
-            "cast(TEMPLATE_EXPID as integer)," +\
-            "cast(TEMPLATE_FIELD as integer)," +\
-            "cast(TEMPLATE_SCA as smallint)," +\
-            "cast(TEMPLATE_RID as integer), " +\
-            "cast(TEMPLATE_MACHINE as smallint), " +\
-            "cast(TEMPLATE_SLURM as integer)) as jid;"
+            "cast(%s as smallint)," +\
+            "cast(%s as smallint)," +\
+            "cast(%s as integer)," +\
+            "cast(%s as integer)," +\
+            "cast(%s as smallint)," +\
+            "cast(%s as integer), " +\
+            "cast(%s as smallint), " +\
+            "cast(%s as integer)) as jid;"
 
 
         # Query database.
@@ -1689,30 +1482,11 @@ class RAPIDDB:
         print('----> sca = {}'.format(sca))
         print('----> rid = {}'.format(rid))
 
-        ppid_str = str(ppid)
-        fid_str = str(fid)
-        expid_str = str(expid)
-        field_str = str(field)
-        sca_str = str(sca)
-        rid_str = str(rid)
+        params = (ppid, fid, expid, field, sca, rid, machine, slurm)
 
-        rep = {"TEMPLATE_PPID": ppid_str,
-               "TEMPLATE_FID": fid_str,
-               "TEMPLATE_EXPID": expid_str,
-               "TEMPLATE_FIELD": field_str}
+        print('query = {}, params = {}'.format(query, params))
 
-        rep["TEMPLATE_SCA"] = sca_str
-        rep["TEMPLATE_RID"] = rid_str
-        rep["TEMPLATE_MACHINE"] = str(machine)
-        rep["TEMPLATE_SLURM"] = str(slurm)
-
-        rep = dict((re.escape(k), v) for k, v in rep.items())
-        pattern = re.compile("|".join(rep.keys()))
-        query = pattern.sub(lambda m: rep[re.escape(m.group(0))], query_template)
-
-        print('query = {}'.format(query))
-
-        self.cur.execute(query)
+        self.cur.execute(query, params)
         record = self.cur.fetchone()
 
         if record is not None:
@@ -1744,21 +1518,25 @@ class RAPIDDB:
 
         if ended is None:
 
-            query_template =\
+            query =\
                 "select from endJob(" +\
-                "cast(TEMPLATE_JID as integer)," +\
-                "cast(TEMPLATE_EXITCODE as smallint)," +\
-                "cast('TEMPLATE_AWSBATJOBID' as varchar(64)));"
+                "cast(%s as integer)," +\
+                "cast(%s as smallint)," +\
+                "cast(%s as varchar(64)));"
+
+            params = (jid, job_exitcode, aws_batch_job_id)
 
         else:
 
-            query_template =\
+            query =\
                 "select from endJob(" +\
-                "cast(TEMPLATE_JID as integer)," +\
-                "cast(TEMPLATE_EXITCODE as smallint)," +\
-                "cast('TEMPLATE_AWSBATJOBID' as varchar(64)),"+\
-                "cast('TEMPLATE_STARTED' as timestamp),"+\
-                "cast('TEMPLATE_ENDED' as timestamp));"
+                "cast(%s as integer)," +\
+                "cast(%s as smallint)," +\
+                "cast(%s as varchar(64)),"+\
+                "cast(%s as timestamp),"+\
+                "cast(%s as timestamp));"
+
+            params = (jid, job_exitcode, aws_batch_job_id, started, ended)
 
 
         # Query database.
@@ -1766,26 +1544,9 @@ class RAPIDDB:
         print('----> jid = {}'.format(jid))
         print('----> job_exitcode = {}'.format(job_exitcode))
 
-        jid_str = str(jid)
-        job_exitcode_str = str(job_exitcode)
+        print('query = {}, params = {}'.format(query, params))
 
-        rep = {"TEMPLATE_JID": jid_str,
-               "TEMPLATE_EXITCODE": job_exitcode_str}
-
-        rep["TEMPLATE_AWSBATJOBID"] = aws_batch_job_id
-
-        if ended is not None:
-            rep["TEMPLATE_STARTED"] = started
-            rep["TEMPLATE_ENDED"] = ended
-
-
-        rep = dict((re.escape(k), v) for k, v in rep.items())
-        pattern = re.compile("|".join(rep.keys()))
-        query = pattern.sub(lambda m: rep[re.escape(m.group(0))], query_template)
-
-        print('query = {}'.format(query))
-
-        self.cur.execute(query)
+        self.cur.execute(query, params)
         record = self.cur.fetchone()
 
         if record is not None:
@@ -1815,7 +1576,8 @@ class RAPIDDB:
 
         # Define query.
 
-        query = "update Jobs set awsbatchjobid = '" + str(aws_batch_job_id) + "' where jid = " + str(jid) + ";"
+        query = "update Jobs set awsbatchjobid = %s where jid = %s;"
+        params = (aws_batch_job_id, jid)
 
 
         # Query database.
@@ -1823,13 +1585,13 @@ class RAPIDDB:
         print('----> jid = {}'.format(jid))
         print('----> awsbatchjobid = {}'.format(aws_batch_job_id))
 
-        print('query = {}'.format(query))
+        print('query = {}, params = {}'.format(query, params))
 
 
         # Execute query.
 
         try:
-            self.cur.execute(query)
+            self.cur.execute(query, params)
 
             try:
                 records = []
@@ -1860,17 +1622,17 @@ class RAPIDDB:
 
         # Define query template.
 
-        query_template =\
+        query =\
             "select * from addRefImage(" +\
-            "cast(TEMPLATE_FIELD as integer)," +\
-            "cast(TEMPLATE_HP6 as integer)," +\
-            "cast(TEMPLATE_HP9 as integer)," +\
-            "cast(TEMPLATE_FID as smallint)," +\
-            "cast(TEMPLATE_PPID as smallint)," +\
-            "cast(TEMPLATE_INFOBITS as integer)," +\
-            "cast('TEMPLATE_FILENAME' as character varying(255))," +\
-            "cast('TEMPLATE_CHECKSUM' as character varying(32))," +\
-            "cast(TEMPLATE_STATUS as smallint)) as " +\
+            "cast(%s as integer)," +\
+            "cast(%s as integer)," +\
+            "cast(%s as integer)," +\
+            "cast(%s as smallint)," +\
+            "cast(%s as smallint)," +\
+            "cast(%s as integer)," +\
+            "cast(%s as character varying(255))," +\
+            "cast(%s as character varying(32))," +\
+            "cast(%s as smallint)) as " +\
             "(rfid integer," +\
             " version smallint);"
 
@@ -1881,25 +1643,12 @@ class RAPIDDB:
         print('----> field = {}'.format(field))
         print('----> filename = {}'.format(filename))
 
-        rep = {"TEMPLATE_PPID": str(ppid),
-               "TEMPLATE_FIELD": str(field),
-               "TEMPLATE_HP6": str(hp6),
-               "TEMPLATE_HP9": str(hp9),
-               "TEMPLATE_FID": str(fid)}
 
-        rep["TEMPLATE_INFOBITS"] = str(infobits)
-        rep["TEMPLATE_FILENAME"] = filename
-        rep["TEMPLATE_CHECKSUM"] = checksum
-        rep["TEMPLATE_STATUS"] = str(status)
+        params = (field, hp6, hp9, fid, ppid, infobits, filename, checksum, status)
 
+        print('query = {}, params = {}'.format(query, params))
 
-        rep = dict((re.escape(k), v) for k, v in rep.items())
-        pattern = re.compile("|".join(rep.keys()))
-        query = pattern.sub(lambda m: rep[re.escape(m.group(0))], query_template)
-
-        print('query = {}'.format(query))
-
-        self.cur.execute(query)
+        self.cur.execute(query, params)
         record = self.cur.fetchone()
 
         if record is not None:
@@ -1929,13 +1678,13 @@ class RAPIDDB:
 
         # Define query template.
 
-        query_template =\
+        query =\
             "select * from updateRefImage(" +\
-            "cast(TEMPLATE_RFID as integer)," +\
-            "cast('TEMPLATE_FILENAME' as character varying(255))," +\
-            "cast('TEMPLATE_CHECKSUM' as character varying(32))," +\
-            "cast(TEMPLATE_STATUS as smallint)," +\
-            "cast(TEMPLATE_VERSION AS smallint));"
+            "cast(%s as integer)," +\
+            "cast(%s as character varying(255))," +\
+            "cast(%s as character varying(32))," +\
+            "cast(%s as smallint)," +\
+            "cast(%s AS smallint));"
 
 
         # Query database.
@@ -1946,24 +1695,16 @@ class RAPIDDB:
         print('----> status = {}'.format(status))
         print('----> version = {}'.format(version))
 
-        rep = {"TEMPLATE_RFID": str(rfid),
-               "TEMPLATE_FILENAME": filename,
-               "TEMPLATE_CHECKSUM": checksum}
 
-        rep["TEMPLATE_STATUS"] = str(status)
-        rep["TEMPLATE_VERSION"] = str(version)
+        params = (rfid, filename, checksum, status, version)
 
-        rep = dict((re.escape(k), v) for k, v in rep.items())
-        pattern = re.compile("|".join(rep.keys()))
-        query = pattern.sub(lambda m: rep[re.escape(m.group(0))], query_template)
-
-        print('query = {}'.format(query))
+        print('query = {}, params = {}'.format(query, params))
 
 
         # Execute query.
 
         try:
-            self.cur.execute(query)
+            self.cur.execute(query, params)
 
             try:
                 for record in self.cur:
@@ -1993,13 +1734,13 @@ class RAPIDDB:
 
         # Define query template.
 
-        query_template =\
+        query =\
             "select psfid,filename " +\
             "from PSFs " +\
             "where vbest > 0 " +\
             "and status > 0 " +\
-            "and sca = TEMPLATE_SCA " +\
-            "and fid = TEMPLATE_FID; "
+            "and sca = %s " +\
+            "and fid = %s; "
 
 
         # Formulate query by substituting parameters into query template.
@@ -2007,20 +1748,15 @@ class RAPIDDB:
         print('----> sca = {}'.format(sca))
         print('----> fid = {}'.format(fid))
 
-        rep = {"TEMPLATE_SCA": str(sca)}
 
-        rep["TEMPLATE_FID"] = str(fid)
+        params = (sca, fid)
 
-        rep = dict((re.escape(k), v) for k, v in rep.items())
-        pattern = re.compile("|".join(rep.keys()))
-        query = pattern.sub(lambda m: rep[re.escape(m.group(0))], query_template)
-
-        print('query = {}'.format(query))
+        print('query = {}, params = {}'.format(query, params))
 
 
         # Execute query.
 
-        self.cur.execute(query)
+        self.cur.execute(query, params)
         record = self.cur.fetchone()
 
         if record is not None:
@@ -2051,28 +1787,25 @@ class RAPIDDB:
 
         # Define query template.
 
-        query_template =\
+        query =\
             "select ppid,rid,expid,sca,field,fid,started,ended,status,exitcode " +\
             "from Jobs " +\
-            "where jid = TEMPLATE_JID; "
+            "where jid = %s; "
 
 
         # Formulate query by substituting parameters into query template.
 
         print('----> jid = {}'.format(jid))
 
-        rep = {"TEMPLATE_JID": str(jid)}
 
-        rep = dict((re.escape(k), v) for k, v in rep.items())
-        pattern = re.compile("|".join(rep.keys()))
-        query = pattern.sub(lambda m: rep[re.escape(m.group(0))], query_template)
+        params = (jid,)
 
-        print('query = {}'.format(query))
+        print('query = {}, params = {}'.format(query, params))
 
 
         # Execute query.
 
-        self.cur.execute(query)
+        self.cur.execute(query, params)
         record = self.cur.fetchone()
 
         record_dict = {}
@@ -2111,26 +1844,26 @@ class RAPIDDB:
 
         # Define query template.
 
-        query_template =\
+        query =\
             "select * from addDiffImage(" +\
-            "cast(TEMPLATE_RID as integer)," +\
-            "cast(TEMPLATE_PPID as smallint)," +\
-            "cast(TEMPLATE_RFID as integer)," +\
-            "cast(TEMPLATE_INFOBITSSCI as integer)," +\
-            "cast(TEMPLATE_INFOBITSREF as integer)," +\
-            "cast(TEMPLATE_RA0 as double precision)," +\
-            "cast(TEMPLATE_DEC0 as double precision)," +\
-            "cast(TEMPLATE_RA1 as double precision)," +\
-            "cast(TEMPLATE_DEC1 as double precision)," +\
-            "cast(TEMPLATE_RA2 as double precision)," +\
-            "cast(TEMPLATE_DEC2 as double precision)," +\
-            "cast(TEMPLATE_RA3 as double precision)," +\
-            "cast(TEMPLATE_DEC3 as double precision)," +\
-            "cast(TEMPLATE_RA4 as double precision)," +\
-            "cast(TEMPLATE_DEC4 as double precision)," +\
-            "cast('TEMPLATE_FILENAME' as character varying(255))," +\
-            "cast('TEMPLATE_CHECKSUM' as character varying(32))," +\
-            "cast(TEMPLATE_STATUS as smallint)) as " +\
+            "cast(%s as integer)," +\
+            "cast(%s as smallint)," +\
+            "cast(%s as integer)," +\
+            "cast(%s as integer)," +\
+            "cast(%s as integer)," +\
+            "cast(%s as double precision)," +\
+            "cast(%s as double precision)," +\
+            "cast(%s as double precision)," +\
+            "cast(%s as double precision)," +\
+            "cast(%s as double precision)," +\
+            "cast(%s as double precision)," +\
+            "cast(%s as double precision)," +\
+            "cast(%s as double precision)," +\
+            "cast(%s as double precision)," +\
+            "cast(%s as double precision)," +\
+            "cast(%s as character varying(255))," +\
+            "cast(%s as character varying(32))," +\
+            "cast(%s as smallint)) as " +\
             "(pid integer," +\
             " version smallint);"
 
@@ -2142,35 +1875,12 @@ class RAPIDDB:
         print('----> rfid = {}'.format(rfid))
         print('----> filename = {}'.format(filename))
 
-        rep = {"TEMPLATE_RID": str(rid),
-               "TEMPLATE_PPID": str(ppid),
-               "TEMPLATE_RFID": str(rfid),
-               "TEMPLATE_INFOBITSSCI": str(infobitssci),
-               "TEMPLATE_INFOBITSREF": str(infobitsref)}
 
-        rep["TEMPLATE_RA0"] = str(ra0)
-        rep["TEMPLATE_DEC0"] = str(dec0)
-        rep["TEMPLATE_RA1"] = str(ra1)
-        rep["TEMPLATE_DEC1"] = str(dec1)
-        rep["TEMPLATE_RA2"] = str(ra2)
-        rep["TEMPLATE_DEC2"] = str(dec2)
-        rep["TEMPLATE_RA3"] = str(ra3)
-        rep["TEMPLATE_DEC3"] = str(dec3)
-        rep["TEMPLATE_RA4"] = str(ra4)
-        rep["TEMPLATE_DEC4"] = str(dec4)
+        params = (rid, ppid, rfid, infobitssci, infobitsref, ra0, dec0, ra1, dec1, ra2, dec2, ra3, dec3, ra4, dec4, filename, checksum, status)
 
-        rep["TEMPLATE_FILENAME"] = filename
-        rep["TEMPLATE_CHECKSUM"] = checksum
-        rep["TEMPLATE_STATUS"] = str(status)
+        print('query = {}, params = {}'.format(query, params))
 
-
-        rep = dict((re.escape(k), v) for k, v in rep.items())
-        pattern = re.compile("|".join(rep.keys()))
-        query = pattern.sub(lambda m: rep[re.escape(m.group(0))], query_template)
-
-        print('query = {}'.format(query))
-
-        self.cur.execute(query)
+        self.cur.execute(query, params)
         record = self.cur.fetchone()
 
         if record is not None:
@@ -2200,13 +1910,13 @@ class RAPIDDB:
 
         # Define query template.
 
-        query_template =\
+        query =\
             "select * from updateDiffImage(" +\
-            "cast(TEMPLATE_PID as integer)," +\
-            "cast('TEMPLATE_FILENAME' as character varying(255))," +\
-            "cast('TEMPLATE_CHECKSUM' as character varying(32))," +\
-            "cast(TEMPLATE_STATUS as smallint)," +\
-            "cast(TEMPLATE_VERSION AS smallint));"
+            "cast(%s as integer)," +\
+            "cast(%s as character varying(255))," +\
+            "cast(%s as character varying(32))," +\
+            "cast(%s as smallint)," +\
+            "cast(%s AS smallint));"
 
 
         # Query database.
@@ -2217,24 +1927,16 @@ class RAPIDDB:
         print('----> status = {}'.format(status))
         print('----> version = {}'.format(version))
 
-        rep = {"TEMPLATE_PID": str(pid),
-               "TEMPLATE_FILENAME": filename,
-               "TEMPLATE_CHECKSUM": checksum}
 
-        rep["TEMPLATE_STATUS"] = str(status)
-        rep["TEMPLATE_VERSION"] = str(version)
+        params = (pid, filename, checksum, status, version)
 
-        rep = dict((re.escape(k), v) for k, v in rep.items())
-        pattern = re.compile("|".join(rep.keys()))
-        query = pattern.sub(lambda m: rep[re.escape(m.group(0))], query_template)
-
-        print('query = {}'.format(query))
+        print('query = {}, params = {}'.format(query, params))
 
 
         # Execute query.
 
         try:
-            self.cur.execute(query)
+            self.cur.execute(query, params)
 
             try:
                 for record in self.cur:
@@ -2264,10 +1966,10 @@ class RAPIDDB:
 
         # Define query template.
 
-        query_template =\
+        query =\
             "select * from registerRefImImage(" +\
-            "cast(TEMPLATE_RFID as integer)," +\
-            "cast(TEMPLATE_RID AS integer));"
+            "cast(%s as integer)," +\
+            "cast(%s AS integer));"
 
 
         # Query database.
@@ -2275,22 +1977,16 @@ class RAPIDDB:
         print('----> rfid = {}'.format(rfid))
         print('----> rid = {}'.format(rid))
 
-        rep = {"TEMPLATE_RFID": str(rfid)}
 
-        rep["TEMPLATE_RID"] = str(rid)
+        params = (rfid, rid)
 
-
-        rep = dict((re.escape(k), v) for k, v in rep.items())
-        pattern = re.compile("|".join(rep.keys()))
-        query = pattern.sub(lambda m: rep[re.escape(m.group(0))], query_template)
-
-        print('query = {}'.format(query))
+        print('query = {}, params = {}'.format(query, params))
 
 
         # Execute query.
 
         try:
-            self.cur.execute(query)
+            self.cur.execute(query, params)
 
             try:
                 for record in self.cur:
@@ -2376,18 +2072,18 @@ class RAPIDDB:
 
         # Define query template.
 
-        query_template =\
+        query =\
             "select * from registerRefImCatalog(" +\
-            "cast(TEMPLATE_RFID as integer)," +\
-            "cast(TEMPLATE_PPID as smallint)," +\
-            "cast(TEMPLATE_CATTYPE as smallint)," +\
-            "cast(TEMPLATE_FIELD as integer)," +\
-            "cast(TEMPLATE_HP6 as integer)," +\
-            "cast(TEMPLATE_HP9 as integer)," +\
-            "cast(TEMPLATE_FID as smallint)," +\
-            "cast('TEMPLATE_FILENAME' as character varying(255))," +\
-            "cast('TEMPLATE_CHECKSUM' as character varying(32))," +\
-            "cast(TEMPLATE_STATUS as smallint)) as " +\
+            "cast(%s as integer)," +\
+            "cast(%s as smallint)," +\
+            "cast(%s as smallint)," +\
+            "cast(%s as integer)," +\
+            "cast(%s as integer)," +\
+            "cast(%s as integer)," +\
+            "cast(%s as smallint)," +\
+            "cast(%s as character varying(255))," +\
+            "cast(%s as character varying(32))," +\
+            "cast(%s as smallint)) as " +\
             "(rfcatid integer," +\
             " svid smallint);"
 
@@ -2400,26 +2096,12 @@ class RAPIDDB:
         print('----> field = {}'.format(field))
         print('----> filename = {}'.format(filename))
 
-        rep = {"TEMPLATE_RFID": str(rfid),
-               "TEMPLATE_PPID": str(ppid),
-               "TEMPLATE_CATTYPE": str(cattype),
-               "TEMPLATE_FIELD": str(field),
-               "TEMPLATE_HP6": str(hp6),
-               "TEMPLATE_HP9": str(hp9)}
 
-        rep["TEMPLATE_FID"] = str(fid)
-        rep["TEMPLATE_FILENAME"] = filename
-        rep["TEMPLATE_CHECKSUM"] = checksum
-        rep["TEMPLATE_STATUS"] = str(status)
+        params = (rfid, ppid, cattype, field, hp6, hp9, fid, filename, checksum, status)
 
+        print('query = {}, params = {}'.format(query, params))
 
-        rep = dict((re.escape(k), v) for k, v in rep.items())
-        pattern = re.compile("|".join(rep.keys()))
-        query = pattern.sub(lambda m: rep[re.escape(m.group(0))], query_template)
-
-        print('query = {}'.format(query))
-
-        self.cur.execute(query)
+        self.cur.execute(query, params)
         record = self.cur.fetchone()
 
         if record is not None:
@@ -2461,20 +2143,20 @@ class RAPIDDB:
 
         # Define query template.
 
-        query_template =\
+        query =\
             "select * from registerDiffImMeta(" +\
-            "cast(TEMPLATE_PID as integer)," +\
-            "cast(TEMPLATE_FID as smallint)," +\
-            "cast(TEMPLATE_SCA as smallint)," +\
-            "cast(TEMPLATE_FIELD AS integer)," +\
-            "cast(TEMPLATE_HP6 AS integer)," +\
-            "cast(TEMPLATE_HP9 AS integer)," +\
-            "cast(TEMPLATE_NSEXCATSOURCES AS integer)," +\
-            "cast(TEMPLATE_REFSCALEFAC AS real)," +\
-            "cast(TEMPLATE_DXRMSFIN AS real)," +\
-            "cast(TEMPLATE_DYRMSFIN AS real)," +\
-            "cast(TEMPLATE_DXMEDIANFIN AS real)," +\
-            "cast(TEMPLATE_DYMEDIANFIN AS real));"
+            "cast(%s as integer)," +\
+            "cast(%s as smallint)," +\
+            "cast(%s as smallint)," +\
+            "cast(%s AS integer)," +\
+            "cast(%s AS integer)," +\
+            "cast(%s AS integer)," +\
+            "cast(%s AS integer)," +\
+            "cast(%s AS real)," +\
+            "cast(%s AS real)," +\
+            "cast(%s AS real)," +\
+            "cast(%s AS real)," +\
+            "cast(%s AS real));"
 
 
         # Query database.
@@ -2492,31 +2174,16 @@ class RAPIDDB:
         print('----> dxmedianfin = {}'.format(dxmedianfin))
         print('----> dymedianfin = {}'.format(dymedianfin))
 
-        rep = {"TEMPLATE_PID": str(pid)}
 
-        rep["TEMPLATE_FID"] = str(fid)
-        rep["TEMPLATE_SCA"] = str(sca)
-        rep["TEMPLATE_FIELD"] = str(field)
-        rep["TEMPLATE_HP6"] = str(hp6)
-        rep["TEMPLATE_HP9"] = str(hp9)
-        rep["TEMPLATE_NSEXCATSOURCES"] = str(nsexcatsources)
-        rep["TEMPLATE_REFSCALEFAC"] = str(scalefacref)
-        rep["TEMPLATE_DXRMSFIN"] = str(dxrmsfin)
-        rep["TEMPLATE_DYRMSFIN"] = str(dyrmsfin)
-        rep["TEMPLATE_DXMEDIANFIN"] = str(dxmedianfin)
-        rep["TEMPLATE_DYMEDIANFIN"] = str(dymedianfin)
+        params = (pid, fid, sca, field, hp6, hp9, nsexcatsources, scalefacref, dxrmsfin, dyrmsfin, dxmedianfin, dymedianfin)
 
-        rep = dict((re.escape(k), v) for k, v in rep.items())
-        pattern = re.compile("|".join(rep.keys()))
-        query = pattern.sub(lambda m: rep[re.escape(m.group(0))], query_template)
-
-        print('query = {}'.format(query))
+        print('query = {}, params = {}'.format(query, params))
 
 
         # Execute query.
 
         try:
-            self.cur.execute(query)
+            self.cur.execute(query, params)
 
             try:
                 for record in self.cur:
@@ -2546,18 +2213,19 @@ class RAPIDDB:
 
         # Define query.
 
-        query = "select rid,sca,fid,mjdobs from L2Files where expid = " + expid + " and vbest > 0;"
+        query = "select rid,sca,fid,mjdobs from L2Files where expid = %s and vbest > 0;"
+        params = (expid,)
 
 
         # Query database.
 
-        print('query = {}'.format(query))
+        print('query = {}, params = {}'.format(query, params))
 
 
         # Execute query.
 
         try:
-            self.cur.execute(query)
+            self.cur.execute(query, params)
 
             try:
                 records = []
@@ -2616,32 +2284,32 @@ class RAPIDDB:
 
         # Define query template.
 
-        query_template =\
+        query =\
             "select * from registerRefImMeta(" +\
-            "cast(TEMPLATE_RFID as integer)," +\
-            "cast(TEMPLATE_FID as smallint)," +\
-            "cast(TEMPLATE_FIELD AS integer)," +\
-            "cast(TEMPLATE_HP6 AS integer)," +\
-            "cast(TEMPLATE_HP9 AS integer)," +\
-            "cast(TEMPLATE_NFRAMES AS smallint)," +\
-            "cast(TEMPLATE_MJDOBSMIN AS double precision)," +\
-            "cast(TEMPLATE_MJDOBSMAX AS double precision)," +\
-            "cast(TEMPLATE_NPIXSAT AS integer)," +\
-            "cast(TEMPLATE_NPIXNAN AS integer)," +\
-            "cast(TEMPLATE_CLMEAN AS real)," +\
-            "cast(TEMPLATE_CLSTDDEV AS real)," +\
-            "cast(TEMPLATE_CLNOUTLIERS AS integer)," +\
-            "cast(TEMPLATE_GMEDIAN AS real)," +\
-            "cast(TEMPLATE_DATASCALE AS real)," +\
-            "cast(TEMPLATE_GMIN AS real)," +\
-            "cast(TEMPLATE_GMAX AS real)," +\
-            "cast(TEMPLATE_COV5PERCENT AS real)," +\
-            "cast(TEMPLATE_MEDNCOV AS real)," +\
-            "cast(TEMPLATE_MEDPIXUNC AS real)," +\
-            "cast(TEMPLATE_FWHMMEDPIX AS real)," +\
-            "cast(TEMPLATE_FWHMMINPIX AS real)," +\
-            "cast(TEMPLATE_FWHMMAXPIX AS real)," +\
-            "cast(TEMPLATE_NSEXCATSOURCES AS integer));"
+            "cast(%s as integer)," +\
+            "cast(%s as smallint)," +\
+            "cast(%s AS integer)," +\
+            "cast(%s AS integer)," +\
+            "cast(%s AS integer)," +\
+            "cast(%s AS smallint)," +\
+            "cast(%s AS double precision)," +\
+            "cast(%s AS double precision)," +\
+            "cast(%s AS integer)," +\
+            "cast(%s AS integer)," +\
+            "cast(%s AS real)," +\
+            "cast(%s AS real)," +\
+            "cast(%s AS integer)," +\
+            "cast(%s AS real)," +\
+            "cast(%s AS real)," +\
+            "cast(%s AS real)," +\
+            "cast(%s AS real)," +\
+            "cast(%s AS real)," +\
+            "cast(%s AS real)," +\
+            "cast(%s AS real)," +\
+            "cast(%s AS real)," +\
+            "cast(%s AS real)," +\
+            "cast(%s AS real)," +\
+            "cast(%s AS integer));"
 
 
         # Query database.
@@ -2671,43 +2339,16 @@ class RAPIDDB:
         print('----> fwhmmaxpix = {}'.format(fwhmmaxpix))
         print('----> nsexcatsources = {}'.format(nsexcatsources))
 
-        rep = {"TEMPLATE_RFID": str(rfid)}
 
-        rep["TEMPLATE_FID"] = str(fid)
-        rep["TEMPLATE_FIELD"] = str(field)
-        rep["TEMPLATE_HP6"] = str(hp6)
-        rep["TEMPLATE_HP9"] = str(hp9)
-        rep["TEMPLATE_NFRAMES"] = str(nframes)
-        rep["TEMPLATE_MJDOBSMIN"] = str(mjdobsmin)
-        rep["TEMPLATE_MJDOBSMAX"] = str(mjdobsmax)
-        rep["TEMPLATE_NPIXSAT"] = str(npixsat)
-        rep["TEMPLATE_NPIXNAN"] = str(npixnan)
-        rep["TEMPLATE_CLMEAN"] = str(clmean)
-        rep["TEMPLATE_CLSTDDEV"] = str(clstddev)
-        rep["TEMPLATE_CLNOUTLIERS"] = str(clnoutliers)
-        rep["TEMPLATE_GMEDIAN"] = str(gmedian)
-        rep["TEMPLATE_DATASCALE"] = str(datascale)
-        rep["TEMPLATE_GMIN"] = str(gmin)
-        rep["TEMPLATE_GMAX"] = str(gmax)
-        rep["TEMPLATE_COV5PERCENT"] = str(cov5percent)
-        rep["TEMPLATE_MEDNCOV"] = str(medncov)
-        rep["TEMPLATE_MEDPIXUNC"] = str(medpixunc)
-        rep["TEMPLATE_FWHMMEDPIX"] = str(fwhmmedpix)
-        rep["TEMPLATE_FWHMMINPIX"] = str(fwhmminpix)
-        rep["TEMPLATE_FWHMMAXPIX"] = str(fwhmmaxpix)
-        rep["TEMPLATE_NSEXCATSOURCES"] = str(nsexcatsources)
+        params = (rfid, fid, field, hp6, hp9, nframes, mjdobsmin, mjdobsmax, npixsat, npixnan, clmean, clstddev, clnoutliers, gmedian, datascale, gmin, gmax, cov5percent, medncov, medpixunc, fwhmmedpix, fwhmminpix, fwhmmaxpix, nsexcatsources)
 
-        rep = dict((re.escape(k), v) for k, v in rep.items())
-        pattern = re.compile("|".join(rep.keys()))
-        query = pattern.sub(lambda m: rep[re.escape(m.group(0))], query_template)
-
-        print('query = {}'.format(query))
+        print('query = {}, params = {}'.format(query, params))
 
 
         # Execute query.
 
         try:
-            self.cur.execute(query)
+            self.cur.execute(query, params)
 
             try:
                 for record in self.cur:
@@ -2737,19 +2378,19 @@ class RAPIDDB:
 
         # Define query.
 
-        query = "select rid,sca,fid,mjdobs from L2Files where dateobs >= '" +\
-                startdatetime + "' and dateobs < '" + enddatetime + "' and vbest > 0 order by mjdobs;"
+        query = "select rid,sca,fid,mjdobs from L2Files where dateobs >= %s and dateobs < %s and vbest > 0 order by mjdobs;"
+        params = (startdatetime, enddatetime)
 
 
         # Query database.
 
-        print('query = {}'.format(query))
+        print('query = {}, params = {}'.format(query, params))
 
 
         # Execute query.
 
         try:
-            self.cur.execute(query)
+            self.cur.execute(query, params)
 
             try:
                 records = []
@@ -2784,28 +2425,22 @@ class RAPIDDB:
 
         # Define query template.
 
-        query_template =\
-            "select filter from Filters where fid=TEMPLATE_FID;"
+        query =\
+            "select filter from Filters where fid=%s;"
 
 
         # Query database.
 
         print('----> fid = {}'.format(fid))
 
-        fid_str = str(fid)
+        params = (fid,)
 
-        rep = {"TEMPLATE_FID": fid_str}
-
-        rep = dict((re.escape(k), v) for k, v in rep.items())
-        pattern = re.compile("|".join(rep.keys()))
-        query = pattern.sub(lambda m: rep[re.escape(m.group(0))], query_template)
-
-        print('query = {}'.format(query))
+        print('query = {}, params = {}'.format(query, params))
 
 
         # Execute query.
 
-        self.cur.execute(query)
+        self.cur.execute(query, params)
         record = self.cur.fetchone()
 
         if record is not None:
@@ -2836,13 +2471,13 @@ class RAPIDDB:
 
         # Define query template.
 
-        query_template =\
+        query =\
             "select pid,rfid,filename,infobitssci,version " +\
             "from DiffImages " +\
             "where vbest > 0 " +\
             "and status > 0 " +\
-            "and rid = TEMPLATE_RID " +\
-            "and ppid = TEMPLATE_PPID; "
+            "and rid = %s " +\
+            "and ppid = %s; "
 
 
         # Formulate query by substituting parameters into query template.
@@ -2850,20 +2485,15 @@ class RAPIDDB:
         print('----> rid = {}'.format(rid))
         print('----> ppid = {}'.format(ppid))
 
-        rep = {"TEMPLATE_RID": str(rid)}
 
-        rep["TEMPLATE_PPID"] = str(ppid)
+        params = (rid, ppid)
 
-        rep = dict((re.escape(k), v) for k, v in rep.items())
-        pattern = re.compile("|".join(rep.keys()))
-        query = pattern.sub(lambda m: rep[re.escape(m.group(0))], query_template)
-
-        print('query = {}'.format(query))
+        print('query = {}, params = {}'.format(query, params))
 
 
         # Execute query.
 
-        self.cur.execute(query)
+        self.cur.execute(query, params)
         record = self.cur.fetchone()
 
         record_dict = {}
@@ -2897,28 +2527,25 @@ class RAPIDDB:
 
         # Define query template.
 
-        query_template =\
+        query =\
             "select rfid,filename,infobits,version " +\
             "from RefImages " +\
-            "where rfid = TEMPLATE_RFID; "
+            "where rfid = %s; "
 
 
         # Formulate query by substituting parameters into query template.
 
         print('----> rfid = {}'.format(rfid))
 
-        rep = {"TEMPLATE_RFID": str(rfid)}
 
-        rep = dict((re.escape(k), v) for k, v in rep.items())
-        pattern = re.compile("|".join(rep.keys()))
-        query = pattern.sub(lambda m: rep[re.escape(m.group(0))], query_template)
+        params = (rfid,)
 
-        print('query = {}'.format(query))
+        print('query = {}, params = {}'.format(query, params))
 
 
         # Execute query.
 
-        self.cur.execute(query)
+        self.cur.execute(query, params)
         record = self.cur.fetchone()
 
         record_dict = {}
@@ -2953,21 +2580,22 @@ class RAPIDDB:
 
         query = "select jid from Jobs " +\
                 "where ppid = 15 " +\
-                "and ended >= cast('" + proc_date + "' as timestamp) " +\
-                "and ended < cast('" + proc_date + "' as timestamp) + cast('1 day' as interval) " +\
+                "and ended >= cast(%s as timestamp) " +\
+                "and ended < cast(%s as timestamp) + cast('1 day' as interval) " +\
                 "and status > 0 " +\
                 "and exitcode <= 32;"
+        params = (proc_date, proc_date)
 
 
         # Query database.
 
-        print('query = {}'.format(query))
+        print('query = {}, params = {}'.format(query, params))
 
 
         # Execute query.
 
         try:
-            self.cur.execute(query)
+            self.cur.execute(query, params)
 
             try:
                 records = []
@@ -3006,23 +2634,24 @@ class RAPIDDB:
         # Define query.
 
         query = "select jid,awsbatchjobid from Jobs " +\
-                "where ppid = " + str(ppid) + " " +\
-                "and launched >= cast('" + proc_date + "' as timestamp) " +\
-                "and launched < cast('" + proc_date + "' as timestamp) + cast('1 day' as interval) " +\
+                "where ppid = %s " +\
+                "and launched >= cast(%s as timestamp) " +\
+                "and launched < cast(%s as timestamp) + cast('1 day' as interval) " +\
                 "and status = 0 " +\
                 "and ended is null " +\
                 "and exitcode is null;"
+        params = (ppid, proc_date, proc_date)
 
 
         # Query database.
 
-        print('query = {}'.format(query))
+        print('query = {}, params = {}'.format(query, params))
 
 
         # Execute query.
 
         try:
-            self.cur.execute(query)
+            self.cur.execute(query, params)
 
             try:
                 records = []
@@ -3070,22 +2699,23 @@ class RAPIDDB:
                 "and a.vbest > 0 " +\
                 "and b.status > 0 " +\
                 "and b.vbest > 0 " +\
-                "and cov5percent >= " + str(cov5percent) + " " +\
-                "and nframes >= " + str(nframes) + " " +\
-                "and a.dateobs >= '" + startdatetime + "' " +\
-                "and a.dateobs < '" + enddatetime + "' " +\
+                "and cov5percent >= %s " +\
+                "and nframes >= %s " +\
+                "and a.dateobs >= %s " +\
+                "and a.dateobs < %s " +\
                 "order by a.mjdobs,a.sca;"
+        params = (cov5percent, nframes, startdatetime, enddatetime)
 
 
         # Query database.
 
-        print('query = {}'.format(query))
+        print('query = {}, params = {}'.format(query, params))
 
 
         # Execute query.
 
         try:
-            self.cur.execute(query)
+            self.cur.execute(query, params)
 
             try:
                 records = []
@@ -3124,34 +2754,36 @@ class RAPIDDB:
         if fid is None:
 
             query =\
-                f"select field,fid,count(*) from l2files " +\
-                f"where mjdobs >= {start_refimage_mjdobs} " +\
-                f"and mjdobs < {end_refimage_mjdobs} " +\
-                f"and vbest > 0 " +\
-                f"group by field,fid " +\
-                f"having count(*) >= {min_refimage_nframes} " +\
-                f"order by field,fid;"
+                "select field,fid,count(*) from l2files " +\
+                "where mjdobs >= %s " +\
+                "and mjdobs < %s " +\
+                "and vbest > 0 " +\
+                "group by field,fid " +\
+                "having count(*) >= %s " +\
+                "order by field,fid;"
+            params = (start_refimage_mjdobs, end_refimage_mjdobs, min_refimage_nframes)
 
         else:
 
             query =\
-                f"select field,fid,count(*) from l2files " +\
-                f"where mjdobs >= {start_refimage_mjdobs} " +\
-                f"and mjdobs < {end_refimage_mjdobs} " +\
-                f"and vbest > 0 " +\
-                f"and fid = {fid} " +\
-                f"group by field,fid " +\
-                f"having count(*) >= {min_refimage_nframes} " +\
-                f"order by field,fid;"
+                "select field,fid,count(*) from l2files " +\
+                "where mjdobs >= %s " +\
+                "and mjdobs < %s " +\
+                "and vbest > 0 " +\
+                "and fid = %s " +\
+                "group by field,fid " +\
+                "having count(*) >= %s " +\
+                "order by field,fid;"
+            params = (start_refimage_mjdobs, end_refimage_mjdobs, fid, min_refimage_nframes)
 
 
-        print('query = {}'.format(query))
+        print('query = {}, params = {}'.format(query, params))
 
 
         # Execute query.
 
         try:
-            self.cur.execute(query)
+            self.cur.execute(query, params)
 
             try:
                 records = []
@@ -3187,24 +2819,25 @@ class RAPIDDB:
         # Define query.
 
         query =\
-            f"select rid,sca,field,fid,mjdobs from L2Files " +\
-            f"where dateobs >= '{startdatetime}' " +\
-            f"and dateobs < '{enddatetime}' " +\
-            f"and field = {field} " +\
-            f"and fid = {fid} " +\
-            f"and vbest > 0 " +\
-            f"order by mjdobs,sca;"
+            "select rid,sca,field,fid,mjdobs from L2Files " +\
+            "where dateobs >= %s " +\
+            "and dateobs < %s " +\
+            "and field = %s " +\
+            "and fid = %s " +\
+            "and vbest > 0 " +\
+            "order by mjdobs,sca;"
+        params = (startdatetime, enddatetime, field, fid)
 
 
         # Query database.
 
-        print('query = {}'.format(query))
+        print('query = {}, params = {}'.format(query, params))
 
 
         # Execute query.
 
         try:
-            self.cur.execute(query)
+            self.cur.execute(query, params)
 
             try:
                 records = []
@@ -3239,29 +2872,26 @@ class RAPIDDB:
 
         # Define query template.
 
-        query_template =\
+        query =\
             "select crval1,crval2,crpix1,crpix2,cd11,cd12,cd21,cd22, " +\
             "expid,sca,fid,field,hp6,hp9,mjdobs,dateobs " +\
             "from L2Files " +\
-            "where rid = TEMPLATE_RID; "
+            "where rid = %s; "
 
 
         # Formulate query by substituting parameters into query template.
 
         print('----> rid = {}'.format(rid))
 
-        rep = {"TEMPLATE_RID": str(rid)}
 
-        rep = dict((re.escape(k), v) for k, v in rep.items())
-        pattern = re.compile("|".join(rep.keys()))
-        query = pattern.sub(lambda m: rep[re.escape(m.group(0))], query_template)
+        params = (rid,)
 
-        print('query = {}'.format(query))
+        print('query = {}, params = {}'.format(query, params))
 
 
         # Execute query.
 
-        self.cur.execute(query)
+        self.cur.execute(query, params)
         record = self.cur.fetchone()
 
         record_dict = {}
@@ -3295,25 +2925,30 @@ class RAPIDDB:
 
 ########################################################################################################
 
-    def execute_sql_queries(self,sql_queries,debug=1):
+    def execute_sql_queries(self,sql_queries,params_list=None,debug=1):
 
         '''
-        Execute list of SQL queries and commit transaction.
+        Execute list of SQL queries and commit transaction.  If params_list
+        is given, params_list[i] are the params for sql_queries[i]; if None
+        (default), queries are executed with no params (backward-compatible
+        with callers that build complete query text themselves).
         '''
 
         self.exit_code = 0
 
 
-        for query in sql_queries:
+        for i,query in enumerate(sql_queries):
+
+            params = params_list[i] if params_list is not None else None
 
             if debug == 1:
-                print('query = {}'.format(query))
+                print('query = {}, params = {}'.format(query, params))
 
 
             # Execute query.
 
             try:
-                self.cur.execute(query)
+                self.cur.execute(query, params)
 
                 try:
                     records = []
@@ -3377,7 +3012,7 @@ class RAPIDDB:
             print(f'*** Error bulk-loading data from file ({csv_file_path}) into specified database table ({table_name}); skipping...')
             print(f'*** Exception: {error}')
             self.exit_code = 67
-            exit(self.exit_code)
+            raise
 
         return None
 
@@ -3391,31 +3026,33 @@ class RAPIDDB:
 
         # Define query.
 
-        query =\
-            f"insert into {tablename}" +\
-            f"            (ra0," +\
-            f"             dec0," +\
-            f"             flux0," +\
-            f"             field," +\
-            f"             hp6," +\
-            f"             hp9" +\
-            f"            )" +\
-            f"            values" +\
-            f"            ({str(ra0)}," +\
-            f"             {str(dec0)}," +\
-            f"             {str(flux0)}," +\
-            f"             {str(field)}," +\
-            f"             {str(hp6)}," +\
-            f"             {str(hp9)})" +\
-            f"             RETURNING aid;"
+        query = sql.SQL(
+            "insert into {tbl}"
+            "            (ra0,"
+            "             dec0,"
+            "             flux0,"
+            "             field,"
+            "             hp6,"
+            "             hp9"
+            "            )"
+            "            values"
+            "            (%s,"
+            "             %s,"
+            "             %s,"
+            "             %s,"
+            "             %s,"
+            "             %s)"
+            "             RETURNING aid;"
+        ).format(tbl=sql.Identifier(tablename))
+        params = (ra0, dec0, flux0, field, hp6, hp9)
 
         if debug == 1:
-            print('query = {}'.format(query))
+            print('query = {}, params = {}'.format(query, params))
 
 
         # Execute query.
 
-        self.cur.execute(query)
+        self.cur.execute(query, params)
         record = self.cur.fetchone()
 
         if record is not None:
@@ -3440,22 +3077,24 @@ class RAPIDDB:
 
         # Define query.
 
-        query =\
-            f"insert into {tablename}" +\
-            f"            (aid," +\
-            f"             sid" +\
-            f"            )" +\
-            f"            values" +\
-            f"            ({str(aid)}," +\
-            f"             {str(sid)});"
+        query = sql.SQL(
+            "insert into {tbl}"
+            "            (aid,"
+            "             sid"
+            "            )"
+            "            values"
+            "            (%s,"
+            "             %s);"
+        ).format(tbl=sql.Identifier(tablename))
+        params = (aid, sid)
 
         if debug == 1:
-            print('query = {}'.format(query))
+            print('query = {}, params = {}'.format(query, params))
 
 
         # Execute query.
 
-        self.cur.execute(query)
+        self.cur.execute(query, params)
 
         try:
             record = self.cur.fetchone()
@@ -3476,16 +3115,17 @@ class RAPIDDB:
 
         # Define query.
 
-        query = f"DELETE FROM {tablename} WHERE sid = {sid};"
+        query = sql.SQL("DELETE FROM {tbl} WHERE sid = %s;").format(tbl=sql.Identifier(tablename))
+        params = (sid,)
 
         if debug == 1:
-            print('query = {}'.format(query))
+            print('query = {}, params = {}'.format(query, params))
 
 
         # Execute query.
 
         try:
-            self.cur.execute(query)
+            self.cur.execute(query, params)
 
             if debug == 1:
                 rows_affected = self.cur.rowcount
@@ -3509,16 +3149,17 @@ class RAPIDDB:
 
         # Define query.
 
-        query = f"DELETE FROM {child_tablename} WHERE sid = {sid};"
+        query = sql.SQL("DELETE FROM {tbl} WHERE sid = %s;").format(tbl=sql.Identifier(child_tablename))
+        params = (sid,)
 
         if debug == 1:
-            print('query = {}'.format(query))
+            print('query = {}, params = {}'.format(query, params))
 
 
         # Execute query.
 
         try:
-            self.cur.execute(query)
+            self.cur.execute(query, params)
 
             if debug == 1:
                 rows_affected = self.cur.rowcount
@@ -3559,22 +3200,22 @@ class RAPIDDB:
 
         # Define query template.
 
-        query_template =\
+        query =\
             "select pid,expid,sca,a.fid,a.field,jd,ra0,dec0,ra1,dec1,ra2,dec2,ra3,dec3,ra4,dec4, " +\
             "a.filename,a.checksum,infobitssci,infobitsref,a.rfid,b.filename,b.checksum,b.ppid, " +\
-            "q3c_dist(ra0, dec0, cast(TEMPLATE_RA0 as double precision), cast(TEMPLATE_DEC0 as double precision)) as dist " +\
+            "q3c_dist(ra0, dec0, cast(%s as double precision), cast(%s as double precision)) as dist " +\
             "from DiffImages a, RefImages b " +\
             "where a.rfid = b.rfid " +\
-            "and a.ppid = TEMPLATE_PPID " +\
-            "and jd >= TEMPLATE_JDEARLIEST " +\
+            "and a.ppid = %s " +\
+            "and jd >= %s " +\
             "and a.status > 0 " +\
             "and b.status > 0 " +\
             "and a.vbest > 0 " +\
             "and b.vbest > 0 " +\
             "and q3c_radial_query(ra0, dec0, " +\
-            "cast(TEMPLATE_RA0 as double precision), " +\
-            "cast(TEMPLATE_DEC0 as double precision), " +\
-            "cast(TEMPLATE_RADIUS as double precision)) " +\
+            "cast(%s as double precision), " +\
+            "cast(%s as double precision), " +\
+            "cast(%s as double precision)) " +\
             "order by jd; "
 
 
@@ -3587,24 +3228,16 @@ class RAPIDDB:
         print(f'----> radius_of_initial_cone_search = {radius_of_initial_cone_search}')
         print(f'----> ppid = {ppid}')
 
-        rep = {"TEMPLATE_JDEARLIEST": str(jd_earliest)}
 
-        rep["TEMPLATE_RA0"] = str(field_ra0)
-        rep["TEMPLATE_DEC0"] = str(field_dec0)
-        rep["TEMPLATE_RADIUS"] = str(radius_of_initial_cone_search)
-        rep["TEMPLATE_PPID"] = str(ppid)
+        params = (field_ra0, field_dec0, ppid, jd_earliest, field_ra0, field_dec0, radius_of_initial_cone_search)
 
-        rep = dict((re.escape(k), v) for k, v in rep.items())
-        pattern = re.compile("|".join(rep.keys()))
-        query = pattern.sub(lambda m: rep[re.escape(m.group(0))], query_template)
-
-        print('query = {}'.format(query))
+        print('query = {}, params = {}'.format(query, params))
 
 
         # Execute query.
 
         try:
-            self.cur.execute(query)
+            self.cur.execute(query, params)
 
             try:
                 records = []
@@ -3681,16 +3314,17 @@ class RAPIDDB:
 
         # Define query.
 
-        query = f"DELETE FROM {tablename} WHERE aid = {aid};"
+        query = sql.SQL("DELETE FROM {tbl} WHERE aid = %s;").format(tbl=sql.Identifier(tablename))
+        params = (aid,)
 
         if debug == 1:
-            print('query = {}'.format(query))
+            print('query = {}, params = {}'.format(query, params))
 
 
         # Execute query.
 
         try:
-            self.cur.execute(query)
+            self.cur.execute(query, params)
 
             if debug == 1:
                 rows_affected = self.cur.rowcount
@@ -3724,23 +3358,26 @@ class RAPIDDB:
 
         # Define query.
 
-        query = f"update {astroobjects_tablename} " +\
-            f"set meanra = {meanra}, " +\
-            f"meandec = {meandec}, " +\
-            f"nsources = {nsources} " +\
-            f" where aid = {aid};"
+        query = sql.SQL(
+            "update {tbl} "
+            "set meanra = %s, "
+            "meandec = %s, "
+            "nsources = %s "
+            " where aid = %s;"
+        ).format(tbl=sql.Identifier(astroobjects_tablename))
+        params = (meanra, meandec, nsources, aid)
 
 
         # Query database.
 
         if debug == 1:
-            print('query = {}'.format(query))
+            print('query = {}, params = {}'.format(query, params))
 
 
         # Execute query.
 
         try:
-            self.cur.execute(query)
+            self.cur.execute(query, params)
 
             try:
                 records = []
@@ -3768,21 +3405,24 @@ class RAPIDDB:
 
         # Define query.
 
-        query = f"DELETE FROM {tablename} " +\
-            f"WHERE aid = {aid} " +\
-            f"AND ctid NOT IN " +\
-            f"(SELECT MIN(ctid) " +\
-            f"FROM {tablename} " +\
-            f"GROUP BY aid,sid);"
+        query = sql.SQL(
+            "DELETE FROM {tbl} "
+            "WHERE aid = %s "
+            "AND ctid NOT IN "
+            "(SELECT MIN(ctid) "
+            "FROM {tbl} "
+            "GROUP BY aid,sid);"
+        ).format(tbl=sql.Identifier(tablename))
+        params = (aid,)
 
         if debug == 1:
-            print('query = {}'.format(query))
+            print('query = {}, params = {}'.format(query, params))
 
 
         # Execute query.
 
         try:
-            self.cur.execute(query)
+            self.cur.execute(query, params)
 
             n_rows_deleted = self.cur.rowcount
 
@@ -3809,11 +3449,13 @@ class RAPIDDB:
 
         # Define query.
 
-        query = f"DELETE FROM {tablename} " +\
-            f"WHERE ctid NOT IN " +\
-            f"(SELECT MIN(ctid) " +\
-            f"FROM {tablename} " +\
-            f"GROUP BY aid,sid);"
+        query = sql.SQL(
+            "DELETE FROM {tbl} "
+            "WHERE ctid NOT IN "
+            "(SELECT MIN(ctid) "
+            "FROM {tbl} "
+            "GROUP BY aid,sid);"
+        ).format(tbl=sql.Identifier(tablename))
 
         if debug == 1:
             print('query = {}'.format(query))
@@ -3857,30 +3499,32 @@ class RAPIDDB:
         if fid is None:
 
             query =\
-                f"select field,fid,count(*) from l2files " +\
-                f"where vbest > 0 " +\
-                f"group by field,fid " +\
-                f"having count(*) >= {min_refimage_nframes} " +\
-                f"order by field,fid;"
+                "select field,fid,count(*) from l2files " +\
+                "where vbest > 0 " +\
+                "group by field,fid " +\
+                "having count(*) >= %s " +\
+                "order by field,fid;"
+            params = (min_refimage_nframes,)
 
         else:
 
             query =\
-                f"select field,fid,count(*) from l2files " +\
-                f"where vbest > 0 " +\
-                f"and fid = {fid} " +\
-                f"group by field,fid " +\
-                f"having count(*) >= {min_refimage_nframes} " +\
-                f"order by field,fid;"
+                "select field,fid,count(*) from l2files " +\
+                "where vbest > 0 " +\
+                "and fid = %s " +\
+                "group by field,fid " +\
+                "having count(*) >= %s " +\
+                "order by field,fid;"
+            params = (fid, min_refimage_nframes)
 
 
-        print('query = {}'.format(query))
+        print('query = {}, params = {}'.format(query, params))
 
 
         # Execute query.
 
         try:
-            self.cur.execute(query)
+            self.cur.execute(query, params)
 
             try:
                 records = []
@@ -3925,21 +3569,24 @@ class RAPIDDB:
 
         # Define query.
 
-        query = f"INSERT INTO {astroobjectsmeta_tablename} " +\
-            f"(aid,meanra,stdevra,meandec,stdevdec,meanflux,stdevflux,nsources) " +\
-            f"VALUES ({aid},{meanra},{stdevra},{meandec},{stdevdec},{meanflux},{stdevflux},{nsources});"
+        query = sql.SQL(
+            "INSERT INTO {tbl} "
+            "(aid,meanra,stdevra,meandec,stdevdec,meanflux,stdevflux,nsources) "
+            "VALUES (%s,%s,%s,%s,%s,%s,%s,%s);"
+        ).format(tbl=sql.Identifier(astroobjectsmeta_tablename))
+        params = (aid, meanra, stdevra, meandec, stdevdec, meanflux, stdevflux, nsources)
 
 
         # Query database.
 
         if debug == 1:
-            print('query = {}'.format(query))
+            print('query = {}, params = {}'.format(query, params))
 
 
         # Execute query.
 
         try:
-            self.cur.execute(query)
+            self.cur.execute(query, params)
 
             try:
                 records = []
