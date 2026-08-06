@@ -140,6 +140,15 @@ class UnitFacts:
         image is being reused.
     coadd_inputs_uri : str, optional
         S3 location of the CSV listing those inputs.
+    coadd_inputs_checksum : str, optional
+        SHA-256, hex, of exactly the CSV bytes `coadd_inputs_uri` named when
+        the unit was gathered. A URI on its own is not a citation — it names a
+        key, and the coadd-input object is the one thing here whose bytes could
+        legitimately differ between two gathering passes, because the overlap
+        query sees more frames as the survey advances. Without this the
+        consuming stages downloaded whatever was at the key and could not tell
+        it apart from what was published. Absent means the manifest predates
+        this fact, which the stages treat as legacy and do not fail on.
     sky_position : dict, optional
         The science image's own centre and corners:
         ``{"ra0":..., "dec0":..., "ra1".."ra4":..., "dec1".."dec4":...}``
@@ -198,6 +207,7 @@ class UnitFacts:
     difference_image_version: int | None = None
     images_to_coadd: int | None = None
     coadd_inputs_uri: str | None = None
+    coadd_inputs_checksum: str | None = None
     sky_position: dict[str, float] | None = None
     tile_position: dict[str, float] | None = None
     reference_position: dict[str, float] | None = None

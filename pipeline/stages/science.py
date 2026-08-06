@@ -53,7 +53,7 @@ import pipeline.differenceImageSubs as dfis
 import pipeline.referenceImageSubs as rfis
 from pipeline.runtime.errors import InputError
 from pipeline.runtime.process import run_shell, run_tool
-from pipeline.stages.publishing import publish_products
+from pipeline.stages.publishing import publish_products, verify_downloaded_input
 
 # The release-content tree inside the image. The monolith hardcoded "/code" as
 # `rapid_sw` and "/code/cdf" as `cfg_path` at module scope; they are the
@@ -224,6 +224,18 @@ def _build_reference_image(context, awaicgen) -> None:
     job_bucket = context.parameter("s3/inputs-bucket")
     coadd_inputs_object = coadd_inputs_uri.split(f"{job_bucket}/", 1)[-1]
     coadd_inputs_local = context.scratch(os.path.basename(coadd_inputs_uri))
+
+    # Same fetch-then-verify as `reference_image.build_reference_image`, and
+    # for the same reason (review finding #9): the coadd-input object is the
+    # one input whose bytes can legitimately differ between two gathering
+    # passes, so the list is checked against the manifest's citation before it
+    # is coadded rather than after. `generateReferenceImage` downloads this
+    # object to this path itself, so nothing extra is being fetched.
+    context.s3.download_file(job_bucket, coadd_inputs_object,
+                             coadd_inputs_local)
+    verify_downloaded_input(
+        context, "coadd-input list", coadd_inputs_local,
+        context.optional_fact("coadd_inputs_checksum"))
 
     generated = rfis.generateReferenceImage(
         context.s3,

@@ -49,19 +49,40 @@ class ManifestConflict(RuntimeError):
     """
 
 
-def _is_precondition_failed(exc: Exception) -> bool:
+def is_precondition_failed(exc: Exception) -> bool:
     """Is this the conditional-put refusal, as opposed to a real fault?
 
     Matched on the error code rather than the exception type so the store keeps
     working against botocore, a stubbed client in the suites, and moto: all
     three surface `PreconditionFailed` (S3 answers 412 to a failed
     `IfNoneMatch`), but not through one common exception class.
+
+    **The one copy** (review finding #9). `pipeline.runtime.boundaries` grew a
+    second, stricter version that tested only the error code — so a stubbed
+    client raising a bare `PreconditionFailed` class, which is exactly what the
+    suites and moto do, fell through to the transport branch and a replay was
+    reported as a write failure. Two predicates deciding "is this a collision
+    or a fault" is one predicate too many when the whole point of the
+    conditional put is that the answer changes what the caller does. Everything
+    that writes conditionally imports THIS one; `boundaries` re-exports it
+    under its private name so the pipeline side keeps its local vocabulary
+    without keeping a local implementation.
+
+    It lives here rather than in `boundaries` because the dependency runs one
+    way: `pipeline` imports `submission` in nine places and `submission`
+    imports `pipeline` in none. Putting the shared helper in the lower layer is
+    what keeps it that way.
     """
     code = getattr(exc, "response", {}).get("Error", {}).get("Code")
     if code in ("PreconditionFailed", "ConditionalRequestConflict"):
         return True
     return type(exc).__name__ in ("PreconditionFailed",
                                   "ConditionalRequestConflict")
+
+
+#: The former private spelling, kept because this module's own call sites and
+#: tests were written against it.
+_is_precondition_failed = is_precondition_failed
 
 
 class ManifestStore(Protocol):

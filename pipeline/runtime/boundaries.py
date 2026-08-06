@@ -258,7 +258,24 @@ def _error_code(exc: Exception) -> str:
 
 
 def _is_precondition_failed(exc: Exception) -> bool:
-    return _error_code(exc) in ("PreconditionFailed", "ConditionalRequestConflict")
+    """Is this S3 refusing a conditional create, or a real transport fault?
+
+    Delegates to `submission.submit.is_precondition_failed` rather than keeping
+    a second copy (review finding #9). The copy that used to live here matched
+    only on `exc.response["Error"]["Code"]`, which botocore supplies and a
+    stubbed client generally does not — so against the suites' fakes and moto a
+    refused create looked like an unknown failure, and an ordinary replay was
+    translated into `StorageError` instead of returning `created=False`. The
+    shared version also matches by exception TYPE NAME, which is what those
+    clients actually raise.
+
+    Imported inside the function because `boundaries` is otherwise stdlib-only
+    by design, and the import direction matters: `pipeline` depends on
+    `submission`, never the reverse.
+    """
+    from submission.submit import is_precondition_failed
+
+    return is_precondition_failed(exc)
 
 
 def _is_not_found(exc: Exception) -> bool:

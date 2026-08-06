@@ -23,17 +23,139 @@ downloaded inputs and scratch paths — as local paths and scalars. A registrar
 reading that could not tell which canonical S3 objects were final products, nor
 verify their bytes. `publish` writes an entry per object with the immutable URI
 and the checksum of exactly the bytes uploaded.
+
+**A published key is written once, never over** (review finding #9). The three
+rules above were enforced; this one was only stated. The upload was
+`context.s3.upload_file(path, bucket, key)` — three positional arguments, no
+condition — so whatever was at the key lost. Attempt-scoped keys made that
+mostly harmless, but not harmless enough in two live shapes. A same-attempt
+replay (the stage re-runs after a crash between upload and record) rewrote its
+own objects, which is benign only as long as the bytes are identical and
+nothing proves they are. Worse, `StageContext.product_prefix` falls back to
+`job_type/unit/unidentified-attempt` when run or attempt identity is missing —
+and EVERY context that has lost its identity collides on that one prefix, so
+two units publishing under it silently overwrote each other and left both
+attempts' records citing keys holding one attempt's bytes. That is precisely
+the immutable-keys violation the prefix was introduced to close, reappearing
+one layer down.
+
+`IfNoneMatch="*"` closes it the same way `submission.submit.S3ManifestStore`
+and `pipeline.runtime.boundaries.S3ObjectStore` close it, and for the same
+reason: S3 refuses the second writer server-side rather than us racing a
+head-then-put. An identical replay is NOT an error — the object already there
+is the one this stage meant to write, and the attempt continues. Different
+bytes under a used key raise, because that is two writers holding one identity
+and no correct outcome exists.
+
+**The reading half of the same contract.** `verify_downloaded_input` is here
+rather than in a module of its own because it answers the mirror question:
+this module decides what it means to publish an object by URI and checksum,
+and something has to decide what it means to CONSUME one. Both reference paths
+import this module already, and splitting the two halves of one rule across two
+files is how they drift.
 """
 
+import hashlib
 import os
 
-from pipeline.runtime.boundaries import checksum
+from pipeline.runtime.boundaries import checksum  # noqa: F401 - re-exported
 from pipeline.runtime.errors import InputError, StorageError
+from submission.submit import is_precondition_failed
+
+#: How much of a product file is held in memory at once. Products here are
+#: FITS mosaics and catalogues — hundreds of megabytes for a reference image —
+#: so nothing below ever does `handle.read()` on one.
+_CHUNK = 1024 * 1024
 
 
 def _digest(path: str) -> str:
+    """The SHA-256 of a product file, hex, read in chunks.
+
+    Same digest as `boundaries.checksum` produces for a bytes body — one hash
+    function across the tree, so the registrar validating a product and the
+    stage that published it are comparing comparable strings. This spelling
+    exists only so a multi-hundred-megabyte mosaic is never materialized whole
+    to be hashed; the previous `checksum(handle.read())` did exactly that.
+    """
+    digest = hashlib.sha256()
     with open(path, "rb") as handle:
-        return checksum(handle.read())
+        for block in iter(lambda: handle.read(_CHUNK), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def _b64_of_hex(hex_digest: str) -> str:
+    """S3 wants the digest base64-encoded; the pipeline works in hex."""
+    import base64
+
+    return base64.b64encode(bytes.fromhex(hex_digest)).decode("ascii")
+
+
+def _put_file_if_absent(client, path: str, bucket: str, key: str,
+                        digest: str) -> bool:
+    """Create `key` from the bytes of `path`. Return whether it was created.
+
+    **Why not `upload_file`.** The obvious fix — pass `IfNoneMatch` through
+    `upload_file(..., ExtraArgs=...)` — does not exist. boto3 validates
+    `ExtraArgs` against `s3transfer.manager.TransferManager.ALLOWED_UPLOAD_ARGS`
+    and raises `ValueError("Invalid extra_args key ...")` for anything outside
+    it; that list carries the checksum arguments and the content/encryption
+    ones, and no conditional header at all — no `IfNoneMatch`, no `IfMatch`.
+    Nor could it sensibly: above `multipart_threshold` `upload_file` becomes
+    CreateMultipartUpload/UploadPart/CompleteMultipartUpload, and a condition
+    belongs on the completing call rather than on any part, which is a
+    different argument split from the single-PUT path. So conditional create
+    for a file means calling `put_object` ourselves.
+
+    **The cost, and why it is acceptable.** `put_object` is a single PUT, so it
+    gives up the multipart parallelism and the 5 GiB single-object ceiling that
+    `upload_file` handles transparently. RAPID's products are comfortably under
+    that — reference mosaics and catalogues, not archives — and correctness of
+    the write-once contract is worth more here than upload throughput on
+    objects this size. Should a product ever approach 5 GiB this needs to
+    become an explicit multipart with `IfNoneMatch` on the completion.
+
+    **Memory.** `Body` is the open file handle, not its contents: boto3 accepts
+    a seekable file-like object and streams it, so a 400 MB mosaic is never
+    resident. The digest is computed in a separate chunked pass rather than by
+    reading the file into a buffer, for the same reason.
+    """
+    with open(path, "rb") as handle:
+        try:
+            client.put_object(Bucket=bucket, Key=key, Body=handle,
+                              ChecksumSHA256=_b64_of_hex(digest),
+                              IfNoneMatch="*")
+            return True
+        except Exception as exc:  # noqa: BLE001 - narrowed immediately below
+            if not is_precondition_failed(exc):
+                raise
+
+    # The key is taken. Whether that is this attempt replaying itself or two
+    # writers under one identity is decided by the bytes, and only by the
+    # bytes: compare what is there against what we were about to write.
+    existing = client.head_object(Bucket=bucket, Key=key,
+                                  ChecksumMode="ENABLED")
+    encoded = existing.get("ChecksumSHA256")
+    if encoded is not None:
+        import base64
+
+        if base64.b64decode(encoded).hex() == digest:
+            return False
+    elif existing.get("ContentLength") == os.path.getsize(path):
+        # An object written before checksums were sent carries no
+        # ChecksumSHA256 to compare. Size is the only evidence available, and
+        # it is weak — so this is permitted as a replay rather than treated as
+        # a collision, but it is not silent: the caller logs it.
+        return False
+
+    raise StorageError(
+        f"a product already exists at s3://{bucket}/{key} with different "
+        f"content. Two attempts have claimed one product identity — most "
+        f"likely both lost their run/attempt id and fell back to the shared "
+        f"'unidentified-attempt' prefix — and the records citing this key no "
+        f"longer describe its bytes. Republish under a distinct attempt "
+        f"identity rather than replacing this object.",
+        key=key, bucket=bucket)
 
 
 def publish_products(context, bucket, entries, product_type=None):
@@ -48,6 +170,9 @@ def publish_products(context, bucket, entries, product_type=None):
         If any upload fails. The bytes are the product; a stage that could not
         write them has not produced one, and reporting success would close the
         attempt `published` over objects that do not exist.
+    StorageError
+        If a key is already occupied by DIFFERENT bytes. Identical bytes are a
+        replay and pass through as an ordinary publication.
     """
     entries = list(entries)
     if not entries:
@@ -60,8 +185,16 @@ def publish_products(context, bucket, entries, product_type=None):
 
     for name, path in entries:
         key = f"{prefix}/{os.path.basename(path)}"
+        # Hashed before the write, not after: the checksum is what makes a
+        # replay distinguishable from a collision, so it has to exist before we
+        # can ask S3 to create the key conditionally.
+        digest = _digest(path)
         try:
-            context.s3.upload_file(path, bucket, key)
+            created = _put_file_if_absent(context.s3, path, bucket, key,
+                                          digest)
+        except StorageError:
+            # Already the right shape and already says which defect it is.
+            raise
         except Exception as exc:  # noqa: BLE001 - translated, never swallowed
             raise StorageError(
                 f"could not upload the product {name!r} from {path} to "
@@ -69,9 +202,59 @@ def publish_products(context, bucket, entries, product_type=None):
                 f"having published products it did not write.") from exc
 
         entry = context.publish(
-            name, uri=f"s3://{bucket}/{key}", checksum=_digest(path),
+            name, uri=f"s3://{bucket}/{key}", checksum=digest,
             size=os.path.getsize(path), product_type=product_type)
         published.append({"name": name, **entry})
-        context.logger.info("published %s -> s3://%s/%s", name, bucket, key)
+        if created:
+            context.logger.info("published %s -> s3://%s/%s", name, bucket, key)
+        else:
+            # Worth saying out loud. The publication is honest — the bytes at
+            # the key are this attempt's — but a stage reaching an occupied
+            # key means it ran twice, and that is the signal a retry loop or a
+            # lost attempt identity leaves behind.
+            context.logger.info(
+                "published %s -> s3://%s/%s (already present with identical "
+                "content; this attempt is replaying its own upload)",
+                name, bucket, key)
 
     return published
+
+
+def verify_downloaded_input(context, name: str, path: str,
+                            expected: str | None) -> None:
+    """Check a downloaded input against the checksum its manifest cited.
+
+    `expected` absent is not a failure. Manifests written before the citing
+    fact existed carry a URI and nothing else, and those units are ordinary
+    work that must keep running — a stage that refused them would strand every
+    unit gathered by an older submitter. Absence is logged, not raised, so the
+    gap is visible without being fatal.
+
+    `expected` present and NOT matching is a hard failure, and specifically an
+    `InputError`: the manifest is this invocation's input, and bytes that
+    disagree with it mean the object under the cited key changed after the unit
+    was described. For the coadd-input CSV that is not hypothetical — the
+    overlap query returns more frames as the survey advances, so a second
+    gathering pass under one run identity writes a genuinely different list.
+    Before this check a reference job in that state coadded whatever list it
+    found and reported success, producing a reference image built from frames
+    its own submission never named and which nothing downstream could
+    reconstruct.
+    """
+    if expected is None:
+        context.logger.info(
+            "%s carries no checksum in the manifest; it was gathered before "
+            "the citing fact existed, so its bytes cannot be verified", name)
+        return
+
+    actual = _digest(path)
+    if actual == expected:
+        return
+
+    raise InputError(
+        f"the {name} downloaded to {path} does not match the checksum the "
+        f"manifest cited for it (expected {expected[:12]}, got "
+        f"{actual[:12]}). The object under the cited key has been replaced "
+        f"since this unit was gathered, so processing it would produce a "
+        f"product built from inputs this unit's submission never described.",
+        unit=context.unit.key, expected=expected, actual=actual)
