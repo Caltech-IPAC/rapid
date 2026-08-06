@@ -1446,6 +1446,12 @@ if __name__ == '__main__':
     fit_shape = tuple(int(x) for x in fit_shape_str.replace("(","").replace(")","").replace(" ", "").split(','))
     aperture_radius = float(psfcat_diffimage_dict["aperture_radius"])
 
+    sharplo = float(psfcat_diffimage_dict["sharplo"])
+    sharphi = float(psfcat_diffimage_dict["sharphi"])
+    roundlo = float(psfcat_diffimage_dict["roundlo"])
+    roundhi = float(psfcat_diffimage_dict["roundhi"])
+    min_separation = float(psfcat_diffimage_dict["min_separation"])
+
     input_img_filename = filename_diffimage_masked
     input_unc_filename = filename_diffimage_unc_masked
     input_psf_filename = filename_diffpsf
@@ -1462,7 +1468,12 @@ if __name__ == '__main__':
                                                         input_img_filename,
                                                         input_unc_filename,
                                                         input_psf_filename,
-                                                        output_psfcat_residual_filename)
+                                                        output_psfcat_residual_filename,
+                                                        sharplo=sharplo,
+                                                        sharphi=sharphi,
+                                                        roundlo=roundlo,
+                                                        roundhi=roundhi,
+                                                        min_separation=min_separation)
 
     print("psfcat_flag =",psfcat_flag)
 
@@ -1558,6 +1569,12 @@ if __name__ == '__main__':
     fit_shape = tuple(int(x) for x in fit_shape_str.replace("(","").replace(")","").replace(" ", "").split(','))
     aperture_radius = float(psfcat_diffimage_dict["aperture_radius"])
 
+    sharplo = float(psfcat_diffimage_dict["sharplo"])
+    sharphi = float(psfcat_diffimage_dict["sharphi"])
+    roundlo = float(psfcat_diffimage_dict["roundlo"])
+    roundhi = float(psfcat_diffimage_dict["roundhi"])
+    min_separation = float(psfcat_diffimage_dict["min_separation"])
+
     input_img_filename = filename_diffimage_masked_negative
     input_unc_filename = filename_diffimage_unc_masked
     input_psf_filename = filename_diffpsf
@@ -1574,7 +1591,12 @@ if __name__ == '__main__':
                                                         input_img_filename,
                                                         input_unc_filename,
                                                         input_psf_filename,
-                                                        output_psfcat_residual_filename_negative)
+                                                        output_psfcat_residual_filename_negative,
+                                                        sharplo=sharplo,
+                                                        sharphi=sharphi,
+                                                        roundlo=roundlo,
+                                                        roundhi=roundhi,
+                                                        min_separation=min_separation)
 
     print("psfcat_flag =",psfcat_flag)
 
@@ -2165,6 +2187,11 @@ if __name__ == '__main__':
             fit_shape = tuple(int(x) for x in fit_shape_str.replace("(","").replace(")","").replace(" ", "").split(','))
             aperture_radius = float(psfcat_diffimage_dict["aperture_radius"])
 
+            sharplo = float(psfcat_diffimage_dict["sharplo"])
+            sharphi = float(psfcat_diffimage_dict["sharphi"])
+            roundlo = float(psfcat_diffimage_dict["roundlo"])
+            roundhi = float(psfcat_diffimage_dict["roundhi"])
+            min_separation = float(psfcat_diffimage_dict["min_separation"])
 
             input_img_filename = filename_sfftdiffimage
             input_unc_filename = filename_sfftdiffimage_unc_masked
@@ -2182,7 +2209,12 @@ if __name__ == '__main__':
                                                                 input_img_filename,
                                                                 input_unc_filename,
                                                                 input_psf_filename,
-                                                                output_psfcat_residual_filename)
+                                                                output_psfcat_residual_filename,
+                                                                sharplo=sharplo,
+                                                                sharphi=sharphi,
+                                                                roundlo=roundlo,
+                                                                roundhi=roundhi,
+                                                                min_separation=min_separation)
 
             print("psfcat_flag =",psfcat_flag)
 
@@ -2279,6 +2311,11 @@ if __name__ == '__main__':
             fit_shape = tuple(int(x) for x in fit_shape_str.replace("(","").replace(")","").replace(" ", "").split(','))
             aperture_radius = float(psfcat_diffimage_dict["aperture_radius"])
 
+            sharplo = float(psfcat_diffimage_dict["sharplo"])
+            sharphi = float(psfcat_diffimage_dict["sharphi"])
+            roundlo = float(psfcat_diffimage_dict["roundlo"])
+            roundhi = float(psfcat_diffimage_dict["roundhi"])
+            min_separation = float(psfcat_diffimage_dict["min_separation"])
 
             input_img_filename = filename_sfftdiffimage_negative
             input_unc_filename = filename_sfftdiffimage_unc_masked
@@ -2296,7 +2333,12 @@ if __name__ == '__main__':
                                                                 input_img_filename,
                                                                 input_unc_filename,
                                                                 input_psf_filename,
-                                                                output_psfcat_residual_filename_negative)
+                                                                output_psfcat_residual_filename_negative,
+                                                                sharplo=sharplo,
+                                                                sharphi=sharphi,
+                                                                roundlo=roundlo,
+                                                                roundhi=roundhi,
+                                                                min_separation=min_separation)
 
             print("psfcat_flag =",psfcat_flag)
 
@@ -2645,6 +2687,11 @@ if __name__ == '__main__':
         fit_shape = tuple(int(x) for x in fit_shape_str.replace("(","").replace(")","").replace(" ", "").split(','))
         aperture_radius = float(psfcat_diffimage_dict["aperture_radius"])
 
+        sharplo = float(psfcat_diffimage_dict["sharplo"])
+        sharphi = float(psfcat_diffimage_dict["sharphi"])
+        roundlo = float(psfcat_diffimage_dict["roundlo"])
+        roundhi = float(psfcat_diffimage_dict["roundhi"])
+        min_separation = float(psfcat_diffimage_dict["min_separation"])
 
         input_img_filename = filename_naive_diffimage_masked
         input_unc_filename = filename_naive_diffimage_unc_masked
@@ -2661,7 +2708,12 @@ if __name__ == '__main__':
                                                             input_img_filename,
                                                             input_unc_filename,
                                                             input_psf_filename,
-                                                            output_psfcat_residual_filename)
+                                                            output_psfcat_residual_filename,
+                                                            sharplo=sharplo,
+                                                            sharphi=sharphi,
+                                                            roundlo=roundlo,
+                                                            roundhi=roundhi,
+                                                            min_separation=min_separation)
 
         print("psfcat_flag =",psfcat_flag)
 
@@ -2744,6 +2796,11 @@ if __name__ == '__main__':
         fit_shape = tuple(int(x) for x in fit_shape_str.replace("(","").replace(")","").replace(" ", "").split(','))
         aperture_radius = float(psfcat_diffimage_dict["aperture_radius"])
 
+        sharplo = float(psfcat_diffimage_dict["sharplo"])
+        sharphi = float(psfcat_diffimage_dict["sharphi"])
+        roundlo = float(psfcat_diffimage_dict["roundlo"])
+        roundhi = float(psfcat_diffimage_dict["roundhi"])
+        min_separation = float(psfcat_diffimage_dict["min_separation"])
 
         input_img_filename = filename_naive_diffimage_masked_negative
         input_unc_filename = filename_naive_diffimage_unc_masked
@@ -2760,7 +2817,12 @@ if __name__ == '__main__':
                                                             input_img_filename,
                                                             input_unc_filename,
                                                             input_psf_filename,
-                                                            output_psfcat_residual_filename_negative)
+                                                            output_psfcat_residual_filename_negative,
+                                                            sharplo=sharplo,
+                                                            sharphi=sharphi,
+                                                            roundlo=roundlo,
+                                                            roundhi=roundhi,
+                                                            min_separation=min_separation)
 
         print("psfcat_flag =",psfcat_flag)
 
