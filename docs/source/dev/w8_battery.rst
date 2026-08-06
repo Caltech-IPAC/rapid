@@ -232,6 +232,39 @@ The table
      - the image digest survives into the record
 
 
+A third defect, found by the RUNNING service
+--------------------------------------------
+
+Worth separating from the battery's two, because nothing in the battery
+found it and nothing could have: it appeared only once the reconciler was
+running as a service, against rows a previous step had left in a particular
+state.
+
+``mark_missing_or_contradictory`` moved a row's lifecycle state but left
+``reconciler_materialized`` at whatever it already was. Migration 013's
+``attempts_reconciler_materialized_check`` permits that flag ONLY in
+``application_closed`` or ``terminal_after_start`` — so a row that had been
+legitimately materialized from its record, and whose scheduler observation
+later disagreed, hit ``CheckViolation`` on **every** poll: permanently
+unclassifiable, and counted as a poll error forever.
+
+The service's own log is what surfaced it — ``poll: {… 'errors': 3}``, then
+``'errors': 4`` as more rows reached that state. A stub cannot refuse a
+state; a constraint can, which is why the unit suite was silent.
+
+Fixed by clearing the flag with the transition, which is also the honest
+value: it says "this row's application facts were projected from the record
+by another writer", and a row being flagged missing-or-contradictory is
+exactly the case where that projection is no longer what the row asserts.
+
+**Proven live, not just unit-tested.** The service was stopped, the fixed
+tree staged over the pinned image, and four consecutive cycles run against
+the same rows that had been failing: ``errors: 0`` on every one, and zero
+``CheckViolation`` in the log. The service was then restarted on the
+deployed image. Like the tessellation fix, it is committed and pushed but
+not yet in an image — the same rebuild picks up both.
+
+
 Two defects the battery found
 -----------------------------
 

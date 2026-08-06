@@ -156,8 +156,23 @@ that reaches past the stubs to the real module, and proven in-image by
 staging: the class resolves, and ``get_rtid(11.1, -43.8)`` returns
 **5321355**, the value the 2024 conversion note works through by hand.
 
-*The next rebuild picks up ``df214ff``.* Until then a submitted job will die
-at exit 70 exactly as the live proof's did.
+*The next rebuild picks up smdc tip.* Until then a submitted job will die at
+exit 70 exactly as the live proof's did.
+
+**A second fix is in the same position.** ``mark_missing_or_contradictory``
+left ``reconciler_materialized`` set while moving the lifecycle state, which
+migration 013's constraint forbids outside ``application_closed`` and
+``terminal_after_start`` — so a materialized row whose scheduler observation
+later disagreed was permanently unclassifiable, failing every poll with
+``CheckViolation``. Found by the RUNNING service (``poll: {… 'errors': 3}``,
+then 4), which is why no test caught it: a stub cannot refuse a state.
+Fixed, and proven live by staging the fix over the pinned image — four
+consecutive cycles, ``errors: 0``, zero ``CheckViolation`` — then the
+service restarted on the deployed image.
+
+The reconciler is therefore running with a known, recorded defect that
+costs it those rows' classification and nothing else; it polls, observes and
+closes everything else normally.
 
 **The per-type live proof is blocked on DATA, not on this layer.** g0001 is
 fully registered — 5,166 ``l2files`` with matching ``l2filemeta``, fid 8, 109
