@@ -15,6 +15,7 @@ import time
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from concurrent.futures import ThreadPoolExecutor
 import psycopg2
+from psycopg2 import sql
 
 to_zone = tz.gettz('America/Los_Angeles')
 
@@ -318,7 +319,8 @@ def run_single_core_job(jids,overlapping_fields_list,meta_list,index_thread):
 
     '''
     For efficiency, this method handles both positive and negative difference-image
-    PSF-fits catalogs.
+    PSF-fits catalogs.  Returns (n_ok,n_failed) counts so that a job which raises
+    partway through cannot be logged and then forgotten.
     '''
 
 
@@ -351,6 +353,13 @@ def run_single_core_job(jids,overlapping_fields_list,meta_list,index_thread):
 
         fh.write(f"\nStart of run_single_core_job: index_thread={index_thread}, dbh={dbh}\n")
 
+
+        # Per-thread outcome counters.  These are returned to the parent process so
+        # that a run which loads nothing due to per-job failures cannot report success.
+
+        n_ok = 0
+        n_failed = 0
+
         my_jobs = list(range(index_thread, njobs, num_cores))
         for index_job in my_jobs:
 
@@ -360,219 +369,233 @@ def run_single_core_job(jids,overlapping_fields_list,meta_list,index_thread):
 
             fh.write(f"Loop start: index_job,jid,overlapping_fields = {index_job},{jid},{overlapping_fields}\n")
 
-            jid_from_dict = meta_dict["jid"]
 
-            if jid != jid_from_dict:
-                fh.write(f"*** Error: jid is not equal to jid from meta dictionary; quitting...\n")
-                fh.flush()
-                raise RuntimeError(f"*** Error: jid is not equal to jid from meta dictionary; quitting...\n")
+            # A per-job failure is caught and counted here rather than allowed to
+            # abort the thread's remaining jobs.
 
-            expid = meta_dict["expid"]
-            sca = meta_dict["sca"]
-            fid = meta_dict["fid"]
-            field = meta_dict["field"]
-            hp6 = meta_dict["hp6"]
-            hp9 = meta_dict["hp9"]
-            mjdobs = meta_dict["mjdobs"]
-            pid = meta_dict["pid"]
+            try:
 
+                jid_from_dict = meta_dict["jid"]
 
-            # Check whether done file exists in S3 bucket for job, and skip if it exists.
-            # This is done by attempting to download the done file.  Regardless the sub
-            # always returns the filename and subdirs by parsing the s3_full_name.
-
-            s3_full_name_done_file = "s3://" + product_s3_bucket_base + "/" + proc_date + '/jid' + str(jid) + "/source_dbload"  + "_jid" +  str(jid)  + ".done"
-            done_filename,subdirs_done,downloaded_from_bucket = util.download_file_from_s3_bucket(s3_client,s3_full_name_done_file)
-
-            if do_done_check and downloaded_from_bucket:
-                os.remove(done_filename)
-                fh.write("*** Warning: Done file exists ({}); skipping...\n".format(done_filename))
-                fh.flush()
-                continue
-
-
-            # Parallel S3-bucket downloads:
-            # 1. SFFT-difference-image PSF-fit catalog file for positive difference image
-            # 2. SFFT-difference-image PSF-fit finder catalog file for positive difference image
-            # 1. SFFT-difference-image PSF-fit catalog file for negative difference image
-            # 2. SFFT-difference-image PSF-fit finder catalog filefor negative difference image
-            #
-            # dl_executor returns tuples.  E.g.,
-            # ret_psfcat = ('sfftdiffimage_masked_psfcat_jid130875.txt', '20260722/jid130875', True)
-            # ret_finder = ('sfftdiffimage_masked_psfcat_finder_jid130875.txt', '20260722/jid130875', True)
-            # ret_psfcat = ('sfftdiffimage_masked_psfcat_negative_jid130875.txt', '20260722/jid130875', True)
-            # ret_finder = ('sfftdiffimage_masked_psfcat_finder_jid130875.txt', '20260722/jid130875', True)
-
-
-            # isdiffpos = "true"
-            output_psfcat_filename_to_use = output_psfcat_filename
-            output_psfcat_finder_filename_to_use = output_psfcat_finder_filename
-
-            output_psfcat_filename_for_jid = output_psfcat_filename_to_use.replace(".txt",f"_jid{jid}.txt")
-
-            s3_full_name_psfcat_file = "s3://" + product_s3_bucket_base + "/" + proc_date + '/jid' + str(jid) + "/" +  output_psfcat_filename_to_use
-
-            output_psfcat_finder_filename_for_jid = output_psfcat_finder_filename_to_use.replace(".txt",f"_jid{jid}.txt")
-
-            s3_full_name_psfcat_finder_file = "s3://" + product_s3_bucket_base + "/" + proc_date + '/jid' + str(jid) + "/" +  output_psfcat_finder_filename_to_use
-
-
-            # isdiffpos = "false"
-            output_psfcat_filename_negative_to_use = output_psfcat_filename.replace(".txt","_negative.txt")
-            output_psfcat_finder_filename_negative_to_use = output_psfcat_finder_filename.replace(".txt","_negative.txt")
-
-
-            output_psfcat_filename_negative_for_jid = output_psfcat_filename_negative_to_use.replace(".txt",f"_jid{jid}.txt")
-
-            s3_full_name_psfcat_file_negative = "s3://" + product_s3_bucket_base + "/" + proc_date + '/jid' + str(jid) + "/" +  output_psfcat_filename_negative_to_use
-
-            output_psfcat_finder_filename_negative_for_jid = output_psfcat_finder_filename_negative_to_use.replace(".txt",f"_jid{jid}.txt")
-
-            s3_full_name_psfcat_finder_file_negative = "s3://" + product_s3_bucket_base + "/" + proc_date + '/jid' + str(jid) + "/" +  output_psfcat_finder_filename_negative_to_use
-
-
-            # Perform parallel S3-bucket downloads:
-
-            with ThreadPoolExecutor(max_workers=4) as dl_executor:
-                future_psfcat = dl_executor.submit(util.download_file_from_s3_bucket, s3_client, s3_full_name_psfcat_file, output_psfcat_filename_for_jid)
-                future_finder = dl_executor.submit(util.download_file_from_s3_bucket, s3_client, s3_full_name_psfcat_finder_file, output_psfcat_finder_filename_for_jid)
-                future_psfcat_negative = dl_executor.submit(util.download_file_from_s3_bucket, s3_client, s3_full_name_psfcat_file_negative, output_psfcat_filename_negative_for_jid)
-                future_finder_negative = dl_executor.submit(util.download_file_from_s3_bucket, s3_client, s3_full_name_psfcat_finder_file_negative, output_psfcat_finder_filename_negative_for_jid)
-
-            ret_psfcat = future_psfcat.result()
-            ret_finder = future_finder.result()
-            ret_psfcat_negative = future_psfcat_negative.result()
-            ret_finder_negative = future_finder_negative.result()
-
-            fh.write(f"ret_psfcat = {ret_psfcat}\n")
-            fh.write(f"ret_finder = {ret_finder}\n")
-            fh.write(f"ret_psfcat_negative = {ret_psfcat_negative}\n")
-            fh.write(f"ret_finder_negative = {ret_finder_negative}\n")
-
-            downloaded_from_bucket_psfcat = ret_psfcat[2]
-            downloaded_from_bucket_finder = ret_finder[2]
-            downloaded_from_bucket_psfcat_negative = ret_psfcat_negative[2]
-            downloaded_from_bucket_finder_negative = ret_finder_negative[2]
-
-            if not downloaded_from_bucket_psfcat:
-                fh.write("*** Warning: Positive difference-image PSF-fit catalog file does not exist ({}); skipping...\n".format(output_psfcat_filename_to_use))
-                fh.flush()
-                continue
-
-            if not downloaded_from_bucket_finder:
-                fh.write("*** Warning:  Positive difference-image PSF-fit finder catalog file does not exist ({}); skipping...\n".format(output_psfcat_finder_filename_to_use))
-                fh.flush()
-                continue
-
-            if not downloaded_from_bucket_psfcat_negative:
-                fh.write("*** Warning: Negative difference-image PSF-fit catalog file does not exist ({}); skipping...\n".format(output_psfcat_filename_negative_to_use))
-                fh.flush()
-                continue
-
-            if not downloaded_from_bucket_finder_negative:
-                fh.write("*** Warning:  Negative difference-image PSF-fit finder catalog file does not exist ({}); skipping...\n".format(output_psfcat_finder_filename_negative_to_use))
-                fh.flush()
-                continue
-
-
-            # Join positive difference-image catalogs and extract columns for sources database tables.
-
-            psfcat_qtable = QTable.read(output_psfcat_filename_for_jid,format='ascii', fast_reader=True)
-            psfcat_finder_qtable = QTable.read(output_psfcat_finder_filename_for_jid,format='ascii', fast_reader=True)
-
-            joined_table_inner = join(psfcat_qtable, psfcat_finder_qtable, keys='id', join_type='inner')
-
-            nrows = len(joined_table_inner)
-            fh.write(f"nrows in positive difference-image PSF-fit catalog = {nrows}\n")
-
-
-            # Vectorize hp.ang2pix calls for positive difference-image catalogs.
-
-            ra_arr = np.array(joined_table_inner['ra'], dtype=np.float64)
-            dec_arr = np.array(joined_table_inner['dec'], dtype=np.float64)
-
-            hp6_arr = hp.ang2pix(nside6, ra_arr, dec_arr, nest=True, lonlat=True)
-            hp9_arr = hp.ang2pix(nside9, ra_arr, dec_arr, nest=True, lonlat=True)
-
-
-            # Join negative difference-image catalogs and extract columns for sources database tables.
-
-            psfcat_qtable_negative = QTable.read(output_psfcat_filename_negative_for_jid,format='ascii', fast_reader=True)
-            psfcat_finder_qtable_negative = QTable.read(output_psfcat_finder_filename_negative_for_jid,format='ascii', fast_reader=True)
-
-            joined_table_inner_negative = join(psfcat_qtable_negative, psfcat_finder_qtable_negative, keys='id', join_type='inner')
-
-            nrows = len(joined_table_inner_negative)
-            fh.write(f"nrows in negative difference-image PSF-fit catalog = {nrows}\n")
-
-
-            # Vectorize hp.ang2pix calls for negative difference-image catalogs.
-
-            ra_arr_negative = np.array(joined_table_inner_negative['ra'], dtype=np.float64)
-            dec_arr_negative = np.array(joined_table_inner_negative['dec'], dtype=np.float64)
-
-            hp6_arr_negative = hp.ang2pix(nside6, ra_arr_negative, dec_arr_negative, nest=True, lonlat=True)
-            hp9_arr_negative = hp.ang2pix(nside9, ra_arr_negative, dec_arr_negative, nest=True, lonlat=True)
-
-
-            # Here are what the columns in the photutils catalogs are called:
-            # Main: id group_id group_size local_bkg x_init y_init flux_init x_fit y_fit flux_fit x_err y_err flux_err n_pixels_fit qfit cfit reduced_chi2 flags ra dec
-            # Finder: id x_centroid y_centroid sharpness roundness1 roundness2 n_pixels peak flux mag daofind_mag
-            # Note that some catalog-column names have underscores that need to be dealt with specially
-            # because the database columns do not have underscores.
-            #
-            # Prepare records into sources database tables.
-
-            sources_table = f"sources_{proc_date}_{sca}"
-            sources_table_file = f"sources_{proc_date}_sca{sca}_jid{jid}" + ".csv"
-
-            with open(sources_table_file, "w") as csv_fh:
-
-                isdiffpos = "true"
-                write_joined_table_inner_to_csv_file(isdiffpos,expid,sca,fid,mjdobs,pid,csv_fh,joined_table_inner,hp6_arr,hp9_arr)
-
-                isdiffpos = "false"
-                write_joined_table_inner_to_csv_file(isdiffpos,expid,sca,fid,mjdobs,pid,csv_fh,joined_table_inner_negative,hp6_arr_negative,hp9_arr_negative)
-
-
-            # Load records into sources database tables.
-
-            dbh.copy_data_from_file_into_database(sources_table_file,sources_table,columns)
-
-            if dbh.exit_code >= 64:
-                fh.write(f"*** Error bulk-loading data from file ({sources_table_file}) into specified database table ({sources_table}); quitting...\n")
-                fh.flush()
-                raise RuntimeError(f"*** Error bulk-loading data from file ({sources_table_file}) into specified database table ({sources_table}); quitting...\n")
-
-
-            # Touch done file.  Upload done file to S3 bucket.
-
-            util.write_done_file_to_s3_bucket(done_filename,product_s3_bucket_base,proc_date,jid,s3_client)
-
-            fh.write(f"Loop end: done_filename,product_s3_bucket_base,proc_date,jid = {done_filename},{product_s3_bucket_base},{proc_date},{jid}\n")
-
-
-            # Flush write buffer.
-
-            fh.flush()
-
-
-            # Remove no-longer-needed intermediate files.
-
-            file_paths = [output_psfcat_filename_for_jid,
-                          output_psfcat_finder_filename_for_jid,
-                          output_psfcat_filename_negative_for_jid,
-                          output_psfcat_finder_filename_negative_for_jid,
-                          sources_table_file]
-            for file_path in file_paths:
-
-                if os.path.exists(file_path):
-                    os.remove(file_path)
-                    fh.write(f"File deleted successfully ({file_path})...\n")
+                if jid != jid_from_dict:
+                    fh.write(f"*** Error: jid is not equal to jid from meta dictionary; quitting...\n")
                     fh.flush()
-                else:
-                    fh.write(f"The file does not exist({file_path})...\n")
+                    raise RuntimeError(f"*** Error: jid is not equal to jid from meta dictionary; quitting...\n")
+
+                expid = meta_dict["expid"]
+                sca = meta_dict["sca"]
+                fid = meta_dict["fid"]
+                field = meta_dict["field"]
+                hp6 = meta_dict["hp6"]
+                hp9 = meta_dict["hp9"]
+                mjdobs = meta_dict["mjdobs"]
+                pid = meta_dict["pid"]
+
+
+                # Check whether done file exists in S3 bucket for job, and skip if it exists.
+                # This is done by attempting to download the done file.  Regardless the sub
+                # always returns the filename and subdirs by parsing the s3_full_name.
+
+                s3_full_name_done_file = "s3://" + product_s3_bucket_base + "/" + proc_date + '/jid' + str(jid) + "/source_dbload"  + "_jid" +  str(jid)  + ".done"
+                done_filename,subdirs_done,downloaded_from_bucket = util.download_file_from_s3_bucket(s3_client,s3_full_name_done_file)
+
+                if do_done_check and downloaded_from_bucket:
+                    os.remove(done_filename)
+                    fh.write("*** Warning: Done file exists ({}); skipping...\n".format(done_filename))
                     fh.flush()
+                    continue
+
+
+                # Parallel S3-bucket downloads:
+                # 1. SFFT-difference-image PSF-fit catalog file for positive difference image
+                # 2. SFFT-difference-image PSF-fit finder catalog file for positive difference image
+                # 1. SFFT-difference-image PSF-fit catalog file for negative difference image
+                # 2. SFFT-difference-image PSF-fit finder catalog filefor negative difference image
+                #
+                # dl_executor returns tuples.  E.g.,
+                # ret_psfcat = ('sfftdiffimage_masked_psfcat_jid130875.txt', '20260722/jid130875', True)
+                # ret_finder = ('sfftdiffimage_masked_psfcat_finder_jid130875.txt', '20260722/jid130875', True)
+                # ret_psfcat = ('sfftdiffimage_masked_psfcat_negative_jid130875.txt', '20260722/jid130875', True)
+                # ret_finder = ('sfftdiffimage_masked_psfcat_finder_jid130875.txt', '20260722/jid130875', True)
+
+
+                # isdiffpos = "true"
+                output_psfcat_filename_to_use = output_psfcat_filename
+                output_psfcat_finder_filename_to_use = output_psfcat_finder_filename
+
+                output_psfcat_filename_for_jid = output_psfcat_filename_to_use.replace(".txt",f"_jid{jid}.txt")
+
+                s3_full_name_psfcat_file = "s3://" + product_s3_bucket_base + "/" + proc_date + '/jid' + str(jid) + "/" +  output_psfcat_filename_to_use
+
+                output_psfcat_finder_filename_for_jid = output_psfcat_finder_filename_to_use.replace(".txt",f"_jid{jid}.txt")
+
+                s3_full_name_psfcat_finder_file = "s3://" + product_s3_bucket_base + "/" + proc_date + '/jid' + str(jid) + "/" +  output_psfcat_finder_filename_to_use
+
+
+                # isdiffpos = "false"
+                output_psfcat_filename_negative_to_use = output_psfcat_filename.replace(".txt","_negative.txt")
+                output_psfcat_finder_filename_negative_to_use = output_psfcat_finder_filename.replace(".txt","_negative.txt")
+
+
+                output_psfcat_filename_negative_for_jid = output_psfcat_filename_negative_to_use.replace(".txt",f"_jid{jid}.txt")
+
+                s3_full_name_psfcat_file_negative = "s3://" + product_s3_bucket_base + "/" + proc_date + '/jid' + str(jid) + "/" +  output_psfcat_filename_negative_to_use
+
+                output_psfcat_finder_filename_negative_for_jid = output_psfcat_finder_filename_negative_to_use.replace(".txt",f"_jid{jid}.txt")
+
+                s3_full_name_psfcat_finder_file_negative = "s3://" + product_s3_bucket_base + "/" + proc_date + '/jid' + str(jid) + "/" +  output_psfcat_finder_filename_negative_to_use
+
+
+                # Perform parallel S3-bucket downloads:
+
+                with ThreadPoolExecutor(max_workers=4) as dl_executor:
+                    future_psfcat = dl_executor.submit(util.download_file_from_s3_bucket, s3_client, s3_full_name_psfcat_file, output_psfcat_filename_for_jid)
+                    future_finder = dl_executor.submit(util.download_file_from_s3_bucket, s3_client, s3_full_name_psfcat_finder_file, output_psfcat_finder_filename_for_jid)
+                    future_psfcat_negative = dl_executor.submit(util.download_file_from_s3_bucket, s3_client, s3_full_name_psfcat_file_negative, output_psfcat_filename_negative_for_jid)
+                    future_finder_negative = dl_executor.submit(util.download_file_from_s3_bucket, s3_client, s3_full_name_psfcat_finder_file_negative, output_psfcat_finder_filename_negative_for_jid)
+
+                ret_psfcat = future_psfcat.result()
+                ret_finder = future_finder.result()
+                ret_psfcat_negative = future_psfcat_negative.result()
+                ret_finder_negative = future_finder_negative.result()
+
+                fh.write(f"ret_psfcat = {ret_psfcat}\n")
+                fh.write(f"ret_finder = {ret_finder}\n")
+                fh.write(f"ret_psfcat_negative = {ret_psfcat_negative}\n")
+                fh.write(f"ret_finder_negative = {ret_finder_negative}\n")
+
+                downloaded_from_bucket_psfcat = ret_psfcat[2]
+                downloaded_from_bucket_finder = ret_finder[2]
+                downloaded_from_bucket_psfcat_negative = ret_psfcat_negative[2]
+                downloaded_from_bucket_finder_negative = ret_finder_negative[2]
+
+                if not downloaded_from_bucket_psfcat:
+                    fh.write("*** Warning: Positive difference-image PSF-fit catalog file does not exist ({}); skipping...\n".format(output_psfcat_filename_to_use))
+                    fh.flush()
+                    continue
+
+                if not downloaded_from_bucket_finder:
+                    fh.write("*** Warning:  Positive difference-image PSF-fit finder catalog file does not exist ({}); skipping...\n".format(output_psfcat_finder_filename_to_use))
+                    fh.flush()
+                    continue
+
+                if not downloaded_from_bucket_psfcat_negative:
+                    fh.write("*** Warning: Negative difference-image PSF-fit catalog file does not exist ({}); skipping...\n".format(output_psfcat_filename_negative_to_use))
+                    fh.flush()
+                    continue
+
+                if not downloaded_from_bucket_finder_negative:
+                    fh.write("*** Warning:  Negative difference-image PSF-fit finder catalog file does not exist ({}); skipping...\n".format(output_psfcat_finder_filename_negative_to_use))
+                    fh.flush()
+                    continue
+
+
+                # Join positive difference-image catalogs and extract columns for sources database tables.
+
+                psfcat_qtable = QTable.read(output_psfcat_filename_for_jid,format='ascii', fast_reader=True)
+                psfcat_finder_qtable = QTable.read(output_psfcat_finder_filename_for_jid,format='ascii', fast_reader=True)
+
+                joined_table_inner = join(psfcat_qtable, psfcat_finder_qtable, keys='id', join_type='inner')
+
+                nrows = len(joined_table_inner)
+                fh.write(f"nrows in positive difference-image PSF-fit catalog = {nrows}\n")
+
+
+                # Vectorize hp.ang2pix calls for positive difference-image catalogs.
+
+                ra_arr = np.array(joined_table_inner['ra'], dtype=np.float64)
+                dec_arr = np.array(joined_table_inner['dec'], dtype=np.float64)
+
+                hp6_arr = hp.ang2pix(nside6, ra_arr, dec_arr, nest=True, lonlat=True)
+                hp9_arr = hp.ang2pix(nside9, ra_arr, dec_arr, nest=True, lonlat=True)
+
+
+                # Join negative difference-image catalogs and extract columns for sources database tables.
+
+                psfcat_qtable_negative = QTable.read(output_psfcat_filename_negative_for_jid,format='ascii', fast_reader=True)
+                psfcat_finder_qtable_negative = QTable.read(output_psfcat_finder_filename_negative_for_jid,format='ascii', fast_reader=True)
+
+                joined_table_inner_negative = join(psfcat_qtable_negative, psfcat_finder_qtable_negative, keys='id', join_type='inner')
+
+                nrows = len(joined_table_inner_negative)
+                fh.write(f"nrows in negative difference-image PSF-fit catalog = {nrows}\n")
+
+
+                # Vectorize hp.ang2pix calls for negative difference-image catalogs.
+
+                ra_arr_negative = np.array(joined_table_inner_negative['ra'], dtype=np.float64)
+                dec_arr_negative = np.array(joined_table_inner_negative['dec'], dtype=np.float64)
+
+                hp6_arr_negative = hp.ang2pix(nside6, ra_arr_negative, dec_arr_negative, nest=True, lonlat=True)
+                hp9_arr_negative = hp.ang2pix(nside9, ra_arr_negative, dec_arr_negative, nest=True, lonlat=True)
+
+
+                # Here are what the columns in the photutils catalogs are called:
+                # Main: id group_id group_size local_bkg x_init y_init flux_init x_fit y_fit flux_fit x_err y_err flux_err n_pixels_fit qfit cfit reduced_chi2 flags ra dec
+                # Finder: id x_centroid y_centroid sharpness roundness1 roundness2 n_pixels peak flux mag daofind_mag
+                # Note that some catalog-column names have underscores that need to be dealt with specially
+                # because the database columns do not have underscores.
+                #
+                # Prepare records into sources database tables.
+
+                sources_table = f"sources_{proc_date}_{sca}"
+                sources_table_file = f"sources_{proc_date}_sca{sca}_jid{jid}" + ".csv"
+
+                with open(sources_table_file, "w") as csv_fh:
+
+                    isdiffpos = "true"
+                    write_joined_table_inner_to_csv_file(isdiffpos,expid,sca,fid,mjdobs,pid,csv_fh,joined_table_inner,hp6_arr,hp9_arr)
+
+                    isdiffpos = "false"
+                    write_joined_table_inner_to_csv_file(isdiffpos,expid,sca,fid,mjdobs,pid,csv_fh,joined_table_inner_negative,hp6_arr_negative,hp9_arr_negative)
+
+
+                # Load records into sources database tables.
+
+                dbh.copy_data_from_file_into_database(sources_table_file,sources_table,columns)
+
+                if dbh.exit_code >= 64:
+                    fh.write(f"*** Error bulk-loading data from file ({sources_table_file}) into specified database table ({sources_table}); quitting...\n")
+                    fh.flush()
+                    raise RuntimeError(f"*** Error bulk-loading data from file ({sources_table_file}) into specified database table ({sources_table}); quitting...\n")
+
+
+                # Touch done file.  Upload done file to S3 bucket.
+
+                util.write_done_file_to_s3_bucket(done_filename,product_s3_bucket_base,proc_date,jid,s3_client)
+
+                fh.write(f"Loop end: done_filename,product_s3_bucket_base,proc_date,jid = {done_filename},{product_s3_bucket_base},{proc_date},{jid}\n")
+
+
+                # Flush write buffer.
+
+                fh.flush()
+
+
+                # Remove no-longer-needed intermediate files.
+
+                file_paths = [output_psfcat_filename_for_jid,
+                              output_psfcat_finder_filename_for_jid,
+                              output_psfcat_filename_negative_for_jid,
+                              output_psfcat_finder_filename_negative_for_jid,
+                              sources_table_file]
+                for file_path in file_paths:
+
+                    if os.path.exists(file_path):
+                        os.remove(file_path)
+                        fh.write(f"File deleted successfully ({file_path})...\n")
+                        fh.flush()
+                    else:
+                        fh.write(f"The file does not exist({file_path})...\n")
+                        fh.flush()
+
+                n_ok += 1
+
+            except Exception as e:
+                n_failed += 1
+                fh.write(f"*** Error: Loading PSF catalog failed for jid={jid}: {e}\n")
+                fh.flush()
+                print(f"*** Error: Loading PSF catalog failed for jid={jid}: {e}")
 
 
             # End of loop over job ID.
@@ -598,15 +621,21 @@ def run_single_core_job(jids,overlapping_fields_list,meta_list,index_thread):
 
         if fh is not None:
             fh.write(f"\nEnd of run_single_core_job: index_thread={index_thread}\n")
+            fh.write(f"n_ok,n_failed = {n_ok},{n_failed}\n")
             fh.close()
 
+    print(f"Finish for index_thread = {index_thread}: n_ok,n_failed = {n_ok},{n_failed}")
 
-    message = f"Finish normally for index_thread = {index_thread}"
-
-    return message
+    return n_ok,n_failed
 
 
 def execute_parallel_processes(jids,rtids_list,meta_list,num_cores):
+
+    '''
+    Run the PSF-catalog-loading threads and return the (n_ok,n_failed) totals summed
+    over all threads.  A thread that dies outright counts as a failure, so an unhandled
+    worker exception cannot be logged and then forgotten.
+    '''
 
     print("num_cores =",num_cores)
 
@@ -619,18 +648,20 @@ def execute_parallel_processes(jids,rtids_list,meta_list,num_cores):
             index = futures.index(future)  # Find the original index/order of the completed future
             print(f"Completed: {i+1} processes, lastly for index={index}")
 
-    failures = []
+    n_ok_total = 0
+    n_failed_total = 0
+
     for future in futures:
         index = futures.index(future)
         try:
-            print(future.result())
+            n_ok,n_failed = future.result()
+            n_ok_total += n_ok
+            n_failed_total += n_failed
         except Exception as e:
-            failures.append(e)
             print(f"*** Error in thread index {index} = {e}")
+            n_failed_total += 1
 
-    if failures:
-        print(f"*** Error(s) from {len(failures)} worker(s); quitting...")
-        exit(64)
+    return n_ok_total,n_failed_total
 
 
 #################
@@ -765,6 +796,10 @@ if __name__ == '__main__':
     # and just do the indexing, clustering, and applying grants to sources database tables for
     # all SCAs associated with processing date...")
 
+    n_to_load = len(jid_list)
+    n_ok = 0
+    n_failed = 0
+
     if do_loading and jid_list:
 
 
@@ -772,19 +807,22 @@ if __name__ == '__main__':
 
         print("Creating sources database tables for all SCAs associated with processing date...")
 
-        sql_queries = []
-        sql_queries.append("SET default_tablespace = pipeline_data_01;")
+        sql_queries = [sql.SQL("SET default_tablespace = pipeline_data_01")]
+        params_list = [None]
 
         for sca in scas_list:
 
             tablename = f"sources_{proc_date}_{sca}"
 
-            sql_queries.append(f"CREATE TABLE IF NOT EXISTS {tablename} (LIKE sources " +
-                               f"INCLUDING DEFAULTS INCLUDING CONSTRAINTS);")
-            sql_queries.append(f"ALTER TABLE {tablename} SET UNLOGGED;")
-            sql_queries.append(f"ALTER TABLE {tablename} INHERIT sources;")
+            sql_queries.append(sql.SQL("CREATE TABLE IF NOT EXISTS {tbl} (LIKE sources " +
+                               "INCLUDING DEFAULTS INCLUDING CONSTRAINTS)").format(tbl=sql.Identifier(tablename)))
+            params_list.append(None)
+            sql_queries.append(sql.SQL("ALTER TABLE {tbl} SET UNLOGGED").format(tbl=sql.Identifier(tablename)))
+            params_list.append(None)
+            sql_queries.append(sql.SQL("ALTER TABLE {tbl} INHERIT sources").format(tbl=sql.Identifier(tablename)))
+            params_list.append(None)
 
-        dbh.execute_sql_queries(sql_queries)
+        dbh.execute_sql_queries(sql_queries,params_list)
 
         if dbh.exit_code >= 64:
             exit(dbh.exit_code)
@@ -814,10 +852,10 @@ if __name__ == '__main__':
         ################################################################################
 
         if num_cores > 1:
-            execute_parallel_processes(jid_list,overlapping_fields_list,meta_list,num_cores)
+            n_ok,n_failed = execute_parallel_processes(jid_list,overlapping_fields_list,meta_list,num_cores)
         else:
             thread_index = 0
-            run_single_core_job(jid_list,overlapping_fields_list,meta_list,thread_index)
+            n_ok,n_failed = run_single_core_job(jid_list,overlapping_fields_list,meta_list,thread_index)
 
 
         # Code-timing benchmark.
@@ -885,19 +923,31 @@ if __name__ == '__main__':
         print("Clustering, analyzing, and applying grants to sources database tables for all SCAs associated with processing date...")
 
         sql_queries = []
+        params_list = []
         for sca in scas_list:
 
-            sql_queries.append(f"CLUSTER sources_{proc_date}_{sca} USING sources_{proc_date}_{sca}_radec_idx;")
-            sql_queries.append(f"ANALYZE sources_{proc_date}_{sca};")
-            #sql_queries.append(f"ALTER TABLE sources_{proc_date}_{sca} SET LOGGED;")                  # For speed, do not log.
-            sql_queries.append(f"REVOKE ALL ON TABLE sources_{proc_date}_{sca} FROM rapidreadrole;")
-            sql_queries.append(f"GRANT SELECT ON TABLE sources_{proc_date}_{sca} TO GROUP rapidreadrole;")
-            sql_queries.append(f"REVOKE ALL ON TABLE sources_{proc_date}_{sca} FROM rapidadminrole;")
-            sql_queries.append(f"GRANT ALL ON TABLE sources_{proc_date}_{sca} TO GROUP rapidadminrole;")
-            sql_queries.append(f"REVOKE ALL ON TABLE sources_{proc_date}_{sca} FROM rapidporole;")
-            sql_queries.append(f"GRANT INSERT,UPDATE,SELECT,DELETE,TRUNCATE,TRIGGER,REFERENCES ON TABLE sources_{proc_date}_{sca} TO rapidporole;")
+            tablename = f"sources_{proc_date}_{sca}"
+            radec_idx = f"{tablename}_radec_idx"
 
-        dbh.execute_sql_queries(sql_queries)
+            sql_queries.append(sql.SQL("CLUSTER {tbl} USING {idx}").format(tbl=sql.Identifier(tablename), idx=sql.Identifier(radec_idx)))
+            params_list.append(None)
+            sql_queries.append(sql.SQL("ANALYZE {tbl}").format(tbl=sql.Identifier(tablename)))
+            params_list.append(None)
+            #sql_queries.append(f"ALTER TABLE sources_{proc_date}_{sca} SET LOGGED;")                  # For speed, do not log.
+            sql_queries.append(sql.SQL("REVOKE ALL ON TABLE {tbl} FROM rapidreadrole").format(tbl=sql.Identifier(tablename)))
+            params_list.append(None)
+            sql_queries.append(sql.SQL("GRANT SELECT ON TABLE {tbl} TO GROUP rapidreadrole").format(tbl=sql.Identifier(tablename)))
+            params_list.append(None)
+            sql_queries.append(sql.SQL("REVOKE ALL ON TABLE {tbl} FROM rapidadminrole").format(tbl=sql.Identifier(tablename)))
+            params_list.append(None)
+            sql_queries.append(sql.SQL("GRANT ALL ON TABLE {tbl} TO GROUP rapidadminrole").format(tbl=sql.Identifier(tablename)))
+            params_list.append(None)
+            sql_queries.append(sql.SQL("REVOKE ALL ON TABLE {tbl} FROM rapidporole").format(tbl=sql.Identifier(tablename)))
+            params_list.append(None)
+            sql_queries.append(sql.SQL("GRANT INSERT,UPDATE,SELECT,DELETE,TRUNCATE,TRIGGER,REFERENCES ON TABLE {tbl} TO rapidporole").format(tbl=sql.Identifier(tablename)))
+            params_list.append(None)
+
+        dbh.execute_sql_queries(sql_queries,params_list)
 
 
         # Code-timing benchmark.
@@ -923,7 +973,19 @@ if __name__ == '__main__':
         exit(dbh.exit_code)
 
 
-    # Termination.
+    # Termination.  A run that had jobs to load and failed on all of them, or that had
+    # any per-job failure, must not report success.  do_loading=False (or an empty
+    # jid_list) is a legitimate skip, not a failure, so it is not judged against n_to_load.
+
+    print(f"n_to_load,n_ok,n_failed = {n_to_load},{n_ok},{n_failed}")
+
+    if n_failed > 0:
+        print(f"*** Error: {n_failed} of {n_to_load} job(s) failed to load; quitting...")
+        exit(65)
+
+    if do_loading and n_to_load > 0 and n_ok == 0:
+        print(f"*** Error: {n_to_load} job(s) were listed but none were loaded; quitting...")
+        exit(65)
 
     terminating_exitcode = 0
 

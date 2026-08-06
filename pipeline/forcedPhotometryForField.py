@@ -58,6 +58,7 @@ from astropy.table import QTable, join
 import database.modules.utils.rapid_db as db
 import modules.utils.rapid_pipeline_subs as util
 import database.modules.utils.roman_tessellation_db as sqlite
+from pipeline.runtime.process import run_tool
 
 
 swname = "forcedPhotometryForField.py"
@@ -1139,23 +1140,9 @@ if __name__ == '__main__':
 
     fh_cforcepsfaper.close()
 
-    run_chmod_was_successful = True
+    run_tool(['chmod', '+x', cforcepsfaper_bash_script])
 
-    exitcode_from_chmod,_ = util.execute_command_in_shell(f"chmod +x {cforcepsfaper_bash_script}")
-
-    if int(exitcode_from_chmod) != 0:
-        run_chmod_was_successful = False
-
-    print(f"run_chmod_was_successful = {run_chmod_was_successful}")
-
-    run_cforcepsfaper_was_successful = True
-
-    exitcode_from_cforcepsfaper,_ = util.execute_command_in_shell(f"./{cforcepsfaper_bash_script}","cforcepsfaper_sh.out")
-
-    if int(exitcode_from_cforcepsfaper) != 0:
-        run_cforcepsfaper_was_successful = False
-
-    print(f"run_cforcepsfaper_was_successful = {run_cforcepsfaper_was_successful}")
+    run_tool([f"./{cforcepsfaper_bash_script}"], capture_path="cforcepsfaper_sh.out")
 
 
     # Code-timing benchmark.

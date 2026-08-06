@@ -12,6 +12,8 @@ import time
 from concurrent.futures import ProcessPoolExecutor, as_completed
 to_zone = tz.gettz('America/Los_Angeles')
 
+from psycopg2 import sql
+
 import database.modules.utils.rapid_db as db
 import modules.utils.rapid_pipeline_subs as util
 
@@ -129,7 +131,9 @@ def run_single_core_job(sources_table_names,index_thread):
 
     '''
     Remove records from Sources_<proc_date>_<sca> database tables associated with sources
-    that are no longer best (vbest=0 in associated Diffimages table).
+    that are no longer best (vbest=0 in associated Diffimages table).  Returns
+    (n_tables_ok,n_tables_failed) counts so that a table which raises partway through
+    cannot be logged and then forgotten.
     '''
 
 
@@ -160,6 +164,13 @@ def run_single_core_job(sources_table_names,index_thread):
     fh.write(f"\nStart of run_single_core_job: index_thread={index_thread}, dbh={dbh}\n")
 
 
+    # Per-thread outcome counters.  These are returned to the parent process so
+    # that a run which prunes nothing due to per-table failures cannot report success.
+
+    n_tables_ok = 0
+    n_tables_failed = 0
+
+
     # Loop over all sources_<proc_date>_* database tables associated with this thread and prune not-best sources:
     # 1. Query for all records in each sources_{proc_date}_* database table.
     # 2. Determine unique pids (primary key of DiffImages table).
@@ -179,73 +190,86 @@ def run_single_core_job(sources_table_names,index_thread):
         fh.write(f"Loop start: index_sources_table_names,sources_tablename = {index_sources_table_names},{sources_tablename}\n")
 
 
-        query = f"SELECT sid,pid FROM {sources_tablename};"
+        # A per-table failure is caught and counted here rather than allowed to
+        # abort the thread's remaining tables.
 
-        sql_queries = []
-        sql_queries.append(query)
-        records = dbh.execute_sql_queries(sql_queries,thread_debug)
+        try:
 
-        sids_list = []
-        pids_list = []
-        pids_dict = {}
+            query = sql.SQL("SELECT sid,pid FROM {tbl}").format(tbl=sql.Identifier(sources_tablename))
 
-        for record in records:
+            sql_queries = [query]
+            params_list = [None]
+            records = dbh.execute_sql_queries(sql_queries,params_list,thread_debug)
 
-            sid = record[0]
-            pid = record[1]
+            sids_list = []
+            pids_list = []
+            pids_dict = {}
 
-            sids_list.append(sid)
-            pids_list.append(pid)
-            pids_dict[pid] = 1
+            for record in records:
 
+                sid = record[0]
+                pid = record[1]
 
-        # Code-timing benchmark.
-
-        thread_end_time_benchmark = time.time()
-        diff_time_benchmark = thread_end_time_benchmark - thread_start_time_benchmark
-        fh.write(f"Elapsed time in seconds to select all records from {sources_tablename} database tables = {diff_time_benchmark}\n")
-        thread_start_time_benchmark = thread_end_time_benchmark
+                sids_list.append(sid)
+                pids_list.append(pid)
+                pids_dict[pid] = 1
 
 
-        # Query for all DiffImages records associated with unique list of pids.
+            # Code-timing benchmark.
 
-        unique_pids_list = list(pids_dict.keys())
-
-        vbest_dict = {}
-
-        for pid in unique_pids_list:
-
-            query = f"SELECT vbest FROM diffimages WHERE pid = {pid};"
-
-            sql_queries = []
-            sql_queries.append(query)
-            records = dbh.execute_sql_queries(sql_queries,thread_debug)
-
-            vbest = records[0][0]
-
-            vbest_dict[pid] = vbest
+            thread_end_time_benchmark = time.time()
+            diff_time_benchmark = thread_end_time_benchmark - thread_start_time_benchmark
+            fh.write(f"Elapsed time in seconds to select all records from {sources_tablename} database tables = {diff_time_benchmark}\n")
+            thread_start_time_benchmark = thread_end_time_benchmark
 
 
-        # Check each source is associated with a not-best DiffImages record.
+            # Query for all DiffImages records associated with unique list of pids.
 
-        for sid,pid in zip(sids_list,pids_list):
+            unique_pids_list = list(pids_dict.keys())
 
-            vbest = vbest_dict[pid]
+            vbest_dict = {}
 
-            if vbest == 0:
+            for pid in unique_pids_list:
+
+                query = "SELECT vbest FROM diffimages WHERE pid = %s"
+
+                sql_queries = [query]
+                params_list = [(pid,)]
+                records = dbh.execute_sql_queries(sql_queries,params_list,thread_debug)
+
+                vbest = records[0][0]
+
+                vbest_dict[pid] = vbest
 
 
-                # Source is not best, so delete sources_<proc_date>_<sca> record.
+            # Check each source is associated with a not-best DiffImages record.
 
-                dbh.delete_source(sources_tablename,sid,thread_debug)
+            for sid,pid in zip(sids_list,pids_list):
+
+                vbest = vbest_dict[pid]
+
+                if vbest == 0:
 
 
-        # Code-timing benchmark.
+                    # Source is not best, so delete sources_<proc_date>_<sca> record.
 
-        thread_end_time_benchmark = time.time()
-        diff_time_benchmark = thread_end_time_benchmark - thread_start_time_benchmark
-        fh.write(f"Elapsed time in seconds to delete not-best record(s) from {sources_tablename} database table\n")
-        thread_start_time_benchmark = thread_end_time_benchmark
+                    dbh.delete_source(sources_tablename,sid,thread_debug)
+
+
+            # Code-timing benchmark.
+
+            thread_end_time_benchmark = time.time()
+            diff_time_benchmark = thread_end_time_benchmark - thread_start_time_benchmark
+            fh.write(f"Elapsed time in seconds to delete not-best record(s) from {sources_tablename} database table\n")
+            thread_start_time_benchmark = thread_end_time_benchmark
+
+            n_tables_ok += 1
+
+        except Exception as e:
+            n_tables_failed += 1
+            fh.write(f"*** Error: Pruning not-best sources failed for {sources_tablename}: {e}\n")
+            fh.flush()
+            print(f"*** Error: Pruning not-best sources failed for {sources_tablename}: {e}")
 
 
         # End of loop over sources_table_names.
@@ -259,15 +283,20 @@ def run_single_core_job(sources_table_names,index_thread):
 
 
     fh.write(f"\nEnd of run_single_core_job: index_thread={index_thread}\n")
+    fh.write(f"n_tables_ok,n_tables_failed = {n_tables_ok},{n_tables_failed}\n")
 
     fh.close()
 
-    message = f"Finish normally for index_thread = {index_thread}"
-
-    return message
+    return n_tables_ok,n_tables_failed
 
 
 def execute_parallel_processes(sources_table_names,num_cores=None):
+
+    '''
+    Run the pruning threads and return the (n_tables_ok,n_tables_failed) totals summed
+    over all threads.  A thread that dies outright counts as a failure, so an unhandled
+    worker exception cannot be logged and then forgotten.
+    '''
 
     if num_cores is None:
         num_cores = os.cpu_count()  # Use all available cores if not specified
@@ -283,12 +312,20 @@ def execute_parallel_processes(sources_table_names,num_cores=None):
             index = futures.index(future)  # Find the original index/order of the completed future
             print(f"Completed: {i+1} processes, lastly for index={index}")
 
+    n_tables_ok_total = 0
+    n_tables_failed_total = 0
+
     for future in futures:
         index = futures.index(future)
         try:
-            print(future.result())
+            n_tables_ok,n_tables_failed = future.result()
+            n_tables_ok_total += n_tables_ok
+            n_tables_failed_total += n_tables_failed
         except Exception as e:
             print(f"*** Error in thread index {index} = {e}")
+            n_tables_failed_total += 1
+
+    return n_tables_ok_total,n_tables_failed_total
 
 
 #################
@@ -311,9 +348,10 @@ if __name__ == '__main__':
     if dbh.exit_code >= 64:
         exit(dbh.exit_code)
 
-    sql_queries = []
-    sql_queries.append(f"select tablename from pg_tables where schemaname='public' and tablename like 'sources_{proc_date}%';")
-    records = dbh.execute_sql_queries(sql_queries,debug)
+    query = "select tablename from pg_tables where schemaname='public' and tablename like %s"
+    sql_queries = [query]
+    params_list = [(f"sources_{proc_date}%",)]
+    records = dbh.execute_sql_queries(sql_queries,params_list,debug)
 
     sources_table_names = []
     for record in records:
@@ -334,11 +372,13 @@ if __name__ == '__main__':
     # equal to the number of cores on the job-launcher machine.
     ################################################################################
 
+    n_tables_to_prune = len(sources_table_names)
+
     if num_cores > 1:
-        execute_parallel_processes(sources_table_names,num_cores)
+        n_tables_ok,n_tables_failed = execute_parallel_processes(sources_table_names,num_cores)
     else:
         thread_index = 0
-        run_single_core_job(sources_table_names,thread_index)
+        n_tables_ok,n_tables_failed = run_single_core_job(sources_table_names,thread_index)
 
 
     # Code-timing benchmark.
@@ -353,13 +393,13 @@ if __name__ == '__main__':
 
     for tablename in sources_table_names:
 
-        query = f"SELECT count(*) FROM {tablename};"
+        query = sql.SQL("SELECT count(*) FROM {tbl}").format(tbl=sql.Identifier(tablename))
 
-        print(f"query = {query}")
+        print("query =", query)
 
-        sql_queries = []
-        sql_queries.append(query)
-        records = dbh.execute_sql_queries(sql_queries,debug)
+        sql_queries = [query]
+        params_list = [None]
+        records = dbh.execute_sql_queries(sql_queries,params_list,debug)
 
         print(f"records = {records}")
 
@@ -369,11 +409,11 @@ if __name__ == '__main__':
 
             print("Dropping {tablename} database table...")
 
-            query = f"DROP TABLE {tablename};"
+            query = sql.SQL("DROP TABLE {tbl}").format(tbl=sql.Identifier(tablename))
 
-            sql_queries = []
-            sql_queries.append(query)
-            records = dbh.execute_sql_queries(sql_queries,debug)
+            sql_queries = [query]
+            params_list = [None]
+            records = dbh.execute_sql_queries(sql_queries,params_list,debug)
 
         else:
 
@@ -411,7 +451,18 @@ if __name__ == '__main__':
             exit(tdbh.exit_code)
 
 
-    # Termination.
+    # Termination.  A run that had tables to prune and failed on all of them, or that
+    # had any per-table failure, must not report success.
+
+    print(f"n_tables_to_prune,n_tables_ok,n_tables_failed = {n_tables_to_prune},{n_tables_ok},{n_tables_failed}")
+
+    if n_tables_failed > 0:
+        print(f"*** Error: {n_tables_failed} of {n_tables_to_prune} table(s) failed while pruning not-best sources; quitting...")
+        exit(65)
+
+    if n_tables_to_prune > 0 and n_tables_ok == 0:
+        print(f"*** Error: {n_tables_to_prune} table(s) were listed but none were pruned; quitting...")
+        exit(65)
 
     terminating_exitcode = 0
 

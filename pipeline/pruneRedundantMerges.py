@@ -8,6 +8,8 @@ import time
 from concurrent.futures import ProcessPoolExecutor, as_completed
 to_zone = tz.gettz('America/Los_Angeles')
 
+from psycopg2 import sql
+
 import database.modules.utils.rapid_db as db
 import modules.utils.rapid_pipeline_subs as util
 
@@ -115,7 +117,9 @@ def run_single_core_job(fields,index_thread):
 
     '''
     Remove redundant records from Merges_<field> database tables associated with an
-    AstroObject, for all AstroObjects_<field> database tables in this thread.
+    AstroObject, for all AstroObjects_<field> database tables in this thread.  Returns
+    (n_fields_ok,n_fields_failed,n_total_redundant_rows_deleted) so that a field which
+    raises partway through cannot be logged and then forgotten.
     '''
 
 
@@ -149,6 +153,8 @@ def run_single_core_job(fields,index_thread):
     # Loop over all fields associated with this thread and prune redundant merges.
 
     n_total_redundant_rows_deleted = 0
+    n_fields_ok = 0
+    n_fields_failed = 0
 
     for index_field in range(nfields):
 
@@ -162,11 +168,23 @@ def run_single_core_job(fields,index_thread):
 
         merges_tablename = f"merges_{field}"
 
-        n_redundant_rows_deleted = dbh.delete_redundant_merges_for_field(merges_tablename,1)
 
-        fh.write(f"Number of redundant records removed from {merges_tablename} database table = {n_redundant_rows_deleted}\n")
+        # A per-field failure is caught and counted here rather than allowed to
+        # abort the thread's remaining fields.
 
-        n_total_redundant_rows_deleted += n_redundant_rows_deleted
+        try:
+            n_redundant_rows_deleted = dbh.delete_redundant_merges_for_field(merges_tablename,1)
+
+            fh.write(f"Number of redundant records removed from {merges_tablename} database table = {n_redundant_rows_deleted}\n")
+
+            n_total_redundant_rows_deleted += n_redundant_rows_deleted
+            n_fields_ok += 1
+
+        except Exception as e:
+            n_fields_failed += 1
+            fh.write(f"*** Error: Pruning redundant merges failed for {merges_tablename}: {e}\n")
+            fh.flush()
+            print(f"*** Error: Pruning redundant merges failed for {merges_tablename}: {e}")
 
 
         # Code-timing benchmark.
@@ -188,15 +206,24 @@ def run_single_core_job(fields,index_thread):
 
 
     fh.write(f"\nEnd of run_single_core_job: index_thread={index_thread}\n")
+    fh.write(f"n_fields_ok,n_fields_failed,n_total_redundant_rows_deleted = {n_fields_ok},{n_fields_failed},{n_total_redundant_rows_deleted}\n")
 
     fh.close()
 
-    message = f"Finish normally for index_thread = {index_thread}: n_total_redundant_rows_deleted = {n_total_redundant_rows_deleted}"
+    print(f"Finish for index_thread = {index_thread}: n_fields_ok,n_fields_failed,n_total_redundant_rows_deleted = " +
+          f"{n_fields_ok},{n_fields_failed},{n_total_redundant_rows_deleted}")
 
-    return message,n_total_redundant_rows_deleted
+    return n_fields_ok,n_fields_failed,n_total_redundant_rows_deleted
 
 
 def execute_parallel_processes(fields_list,num_cores=None):
+
+    '''
+    Run the pruning threads and return the (n_fields_ok,n_fields_failed,
+    n_total_redundant_rows_deleted) totals summed over all threads.  A thread that
+    dies outright counts as a failure, so an unhandled worker exception cannot be
+    logged and then forgotten.
+    '''
 
     if num_cores is None:
         num_cores = os.cpu_count()  # Use all available cores if not specified
@@ -212,14 +239,23 @@ def execute_parallel_processes(fields_list,num_cores=None):
             index = futures.index(future)  # Find the original index/order of the completed future
             print(f"Completed: {i+1} processes, lastly for index={index}")
 
+    n_fields_ok_total = 0
+    n_fields_failed_total = 0
+    n_total_redundant_rows_deleted_total = 0
+
     for future in futures:
         index = futures.index(future)
         try:
-            message,n_total_redundant_rows_deleted = future.result()
-            print(message)
+            n_fields_ok,n_fields_failed,n_total_redundant_rows_deleted = future.result()
+            n_fields_ok_total += n_fields_ok
+            n_fields_failed_total += n_fields_failed
+            n_total_redundant_rows_deleted_total += n_total_redundant_rows_deleted
             print(f"n_total_redundant_rows_deleted for this thread = {n_total_redundant_rows_deleted}")
         except Exception as e:
             print(f"*** Error in thread index {index} = {e}")
+            n_fields_failed_total += 1
+
+    return n_fields_ok_total,n_fields_failed_total,n_total_redundant_rows_deleted_total
 
 
 #################
@@ -243,7 +279,7 @@ if __name__ == '__main__':
 
     sql_queries = []
     sql_queries.append(f"select tablename from pg_tables where schemaname='public' and tablename like 'merges_%';")
-    records = dbh.execute_sql_queries(sql_queries,debug)
+    records = dbh.execute_sql_queries(sql_queries,None,debug)
 
     fields_list = []
     for record in records:
@@ -264,11 +300,13 @@ if __name__ == '__main__':
     # equal to the number of cores on the job-launcher machine.
     ################################################################################
 
+    n_fields_to_prune = len(fields_list)
+
     if num_cores > 1:
-        execute_parallel_processes(fields_list,num_cores)
+        n_fields_ok,n_fields_failed,n_total_redundant_rows_deleted = execute_parallel_processes(fields_list,num_cores)
     else:
         thread_index = 0
-        run_single_core_job(fields_list,thread_index)
+        n_fields_ok,n_fields_failed,n_total_redundant_rows_deleted = run_single_core_job(fields_list,thread_index)
 
 
     # Code-timing benchmark.
@@ -287,13 +325,13 @@ if __name__ == '__main__':
 
         tablename = f"merges_{field}"
 
-        query = f"SELECT count(*) FROM {tablename};"
+        query = sql.SQL("SELECT count(*) FROM {tbl}").format(tbl=sql.Identifier(tablename))
 
-        print(f"query = {query}")
+        print("query =", query)
 
-        sql_queries = []
-        sql_queries.append(query)
-        records = dbh.execute_sql_queries(sql_queries,debug)
+        sql_queries = [query]
+        params_list = [None]
+        records = dbh.execute_sql_queries(sql_queries,params_list,debug)
 
         print(f"records = {records}")
 
@@ -303,11 +341,11 @@ if __name__ == '__main__':
 
             print("Dropping {tablename} database table...")
 
-            query = f"DROP TABLE {tablename};"
+            query = sql.SQL("DROP TABLE {tbl}").format(tbl=sql.Identifier(tablename))
 
-            sql_queries = []
-            sql_queries.append(query)
-            records = dbh.execute_sql_queries(sql_queries,debug)
+            sql_queries = [query]
+            params_list = [None]
+            records = dbh.execute_sql_queries(sql_queries,params_list,debug)
 
         else:
 
@@ -345,7 +383,21 @@ if __name__ == '__main__':
             exit(tdbh.exit_code)
 
 
-    # Termination.
+    # Termination.  A run that had fields to prune and failed on all of them, or that
+    # had any per-field failure, must not report success.  n_total_redundant_rows_deleted
+    # is not itself a success signal: zero redundant rows is a legitimate outcome when
+    # there is nothing to prune, so success is judged by n_fields_ok, not by that count.
+
+    print(f"n_fields_to_prune,n_fields_ok,n_fields_failed,n_total_redundant_rows_deleted = " +
+          f"{n_fields_to_prune},{n_fields_ok},{n_fields_failed},{n_total_redundant_rows_deleted}")
+
+    if n_fields_failed > 0:
+        print(f"*** Error: {n_fields_failed} of {n_fields_to_prune} field(s) failed while pruning redundant merges; quitting...")
+        exit(65)
+
+    if n_fields_to_prune > 0 and n_fields_ok == 0:
+        print(f"*** Error: {n_fields_to_prune} field(s) were listed but none were processed; quitting...")
+        exit(65)
 
     terminating_exitcode = 0
 

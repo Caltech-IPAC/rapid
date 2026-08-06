@@ -8,6 +8,8 @@ import time
 from concurrent.futures import ProcessPoolExecutor, as_completed
 to_zone = tz.gettz('America/Los_Angeles')
 
+from psycopg2 import sql
+
 import database.modules.utils.rapid_db as db
 import modules.utils.rapid_pipeline_subs as util
 
@@ -115,7 +117,8 @@ def run_single_core_job(fields,index_thread):
 
     '''
     Remove records from Merges_<field> database tables associated with sources that are no longer best
-    (vbest=0 in associated Diffimages table).
+    (vbest=0 in associated Diffimages table).  Returns (n_fields_ok,n_fields_failed) counts so that a
+    field which raises partway through cannot be logged and then forgotten.
     '''
 
 
@@ -151,6 +154,13 @@ def run_single_core_job(fields,index_thread):
     sources_tablename = f"sources"
 
 
+    # Per-thread outcome counters.  These are returned to the parent process so
+    # that a run which prunes nothing due to per-field failures cannot report success.
+
+    n_fields_ok = 0
+    n_fields_failed = 0
+
+
     # Loop over all fields associated with this thread and prune not-best merges:
     # 1. Query for all records in each Merges_<field> table.
     # 2. Determine unique pids (primary key of DiffImages table).
@@ -172,78 +182,94 @@ def run_single_core_job(fields,index_thread):
         merges_tablename = f"merges_{field}"
 
 
-        query = f"SELECT a.sid,b.pid FROM {merges_tablename} AS a, " +\
-            f"{sources_tablename} AS b " +\
-            f"WHERE a.sid = b.sid;"
+        # A per-field failure is caught and counted here rather than allowed to
+        # abort the thread's remaining fields.
 
-        sql_queries = []
-        sql_queries.append(query)
-        records = dbh.execute_sql_queries(sql_queries,thread_debug)
+        try:
 
-        sids_list = []
-        pids_list = []
-        pids_dict = {}
+            query = sql.SQL("SELECT a.sid,b.pid FROM {merges_tbl} AS a, " +
+                "{sources_tbl} AS b " +
+                "WHERE a.sid = b.sid").format(
+                merges_tbl=sql.Identifier(merges_tablename),
+                sources_tbl=sql.Identifier(sources_tablename),
+            )
 
-        for record in records:
+            sql_queries = [query]
+            params_list = [None]
+            records = dbh.execute_sql_queries(sql_queries,params_list,thread_debug)
 
-            sid = record[0]
-            pid = record[1]
+            sids_list = []
+            pids_list = []
+            pids_dict = {}
 
-            sids_list.append(sid)
-            pids_list.append(pid)
-            pids_dict[pid] = 1
+            for record in records:
 
+                sid = record[0]
+                pid = record[1]
 
-        # Code-timing benchmark.
-
-        thread_end_time_benchmark = time.time()
-        diff_time_benchmark = thread_end_time_benchmark - thread_start_time_benchmark
-        fh.write(f"Elapsed time in seconds to select all records from {merges_tablename} and {sources_tablename} database tables = {diff_time_benchmark}\n")
-        thread_start_time_benchmark = thread_end_time_benchmark
-
-
-        # Query for all DiffImages records associated with unique list of pids.
-
-        unique_pids_list = list(pids_dict.keys())
-
-        vbest_dict = {}
-
-        for pid in unique_pids_list:
-
-            query = f"SELECT vbest FROM diffimages WHERE pid = {pid};"
-
-            sql_queries = []
-            sql_queries.append(query)
-            records = dbh.execute_sql_queries(sql_queries,thread_debug)
-
-            vbest = records[0][0]
-
-            vbest_dict[pid] = vbest
+                sids_list.append(sid)
+                pids_list.append(pid)
+                pids_dict[pid] = 1
 
 
-        # Check each source is associated with a not-best DiffImages record.
+            # Code-timing benchmark.
 
-        n_deleted = 0
-
-        for sid,pid in zip(sids_list,pids_list):
-
-            vbest = vbest_dict[pid]
-
-            if vbest == 0:
+            thread_end_time_benchmark = time.time()
+            diff_time_benchmark = thread_end_time_benchmark - thread_start_time_benchmark
+            fh.write(f"Elapsed time in seconds to select all records from {merges_tablename} and {sources_tablename} database tables = {diff_time_benchmark}\n")
+            thread_start_time_benchmark = thread_end_time_benchmark
 
 
-                # Source is not best, so delete Merges_<field> record.
+            # Query for all DiffImages records associated with unique list of pids.
 
-                dbh.delete_merge_from_field(merges_tablename,sid,thread_debug)
-                n_deleted += 1
+            unique_pids_list = list(pids_dict.keys())
+
+            vbest_dict = {}
+
+            for pid in unique_pids_list:
+
+                query = "SELECT vbest FROM diffimages WHERE pid = %s"
+
+                sql_queries = [query]
+                params_list = [(pid,)]
+                records = dbh.execute_sql_queries(sql_queries,params_list,thread_debug)
+
+                vbest = records[0][0]
+
+                vbest_dict[pid] = vbest
 
 
-        # Code-timing benchmark.
+            # Check each source is associated with a not-best DiffImages record.
 
-        thread_end_time_benchmark = time.time()
-        diff_time_benchmark = thread_end_time_benchmark - thread_start_time_benchmark
-        fh.write(f"Elapsed time in seconds to delete {n_deleted} not-best record(s) from {merges_tablename} database table = {diff_time_benchmark}\\n")
-        thread_start_time_benchmark = thread_end_time_benchmark
+            n_deleted = 0
+
+            for sid,pid in zip(sids_list,pids_list):
+
+                vbest = vbest_dict[pid]
+
+                if vbest == 0:
+
+
+                    # Source is not best, so delete Merges_<field> record.
+
+                    dbh.delete_merge_from_field(merges_tablename,sid,thread_debug)
+                    n_deleted += 1
+
+
+            # Code-timing benchmark.
+
+            thread_end_time_benchmark = time.time()
+            diff_time_benchmark = thread_end_time_benchmark - thread_start_time_benchmark
+            fh.write(f"Elapsed time in seconds to delete {n_deleted} not-best record(s) from {merges_tablename} database table = {diff_time_benchmark}\\n")
+            thread_start_time_benchmark = thread_end_time_benchmark
+
+            n_fields_ok += 1
+
+        except Exception as e:
+            n_fields_failed += 1
+            fh.write(f"*** Error: Pruning not-best merges failed for {merges_tablename}: {e}\n")
+            fh.flush()
+            print(f"*** Error: Pruning not-best merges failed for {merges_tablename}: {e}")
 
 
         # End of loop over fields.
@@ -257,15 +283,22 @@ def run_single_core_job(fields,index_thread):
 
 
     fh.write(f"\nEnd of run_single_core_job: index_thread={index_thread}\n")
+    fh.write(f"n_fields_ok,n_fields_failed = {n_fields_ok},{n_fields_failed}\n")
 
     fh.close()
 
-    message = f"Finish normally for index_thread = {index_thread}"
+    print(f"Finish for index_thread = {index_thread}: n_fields_ok,n_fields_failed = {n_fields_ok},{n_fields_failed}")
 
-    return message
+    return n_fields_ok,n_fields_failed
 
 
 def execute_parallel_processes(fields_list,num_cores=None):
+
+    '''
+    Run the pruning threads and return the (n_fields_ok,n_fields_failed) totals summed
+    over all threads.  A thread that dies outright counts as a failure, so an unhandled
+    worker exception cannot be logged and then forgotten.
+    '''
 
     if num_cores is None:
         num_cores = os.cpu_count()  # Use all available cores if not specified
@@ -281,12 +314,20 @@ def execute_parallel_processes(fields_list,num_cores=None):
             index = futures.index(future)  # Find the original index/order of the completed future
             print(f"Completed: {i+1} processes, lastly for index={index}")
 
+    n_fields_ok_total = 0
+    n_fields_failed_total = 0
+
     for future in futures:
         index = futures.index(future)
         try:
-            print(future.result())
+            n_fields_ok,n_fields_failed = future.result()
+            n_fields_ok_total += n_fields_ok
+            n_fields_failed_total += n_fields_failed
         except Exception as e:
             print(f"*** Error in thread index {index} = {e}")
+            n_fields_failed_total += 1
+
+    return n_fields_ok_total,n_fields_failed_total
 
 
 #################
@@ -311,7 +352,7 @@ if __name__ == '__main__':
 
     sql_queries = []
     sql_queries.append(f"select tablename from pg_tables where schemaname='public' and tablename like 'merges_%';")
-    records = dbh.execute_sql_queries(sql_queries,debug)
+    records = dbh.execute_sql_queries(sql_queries,None,debug)
 
     fields_list = []
     for record in records:
@@ -332,11 +373,13 @@ if __name__ == '__main__':
     # equal to the number of cores on the job-launcher machine.
     ################################################################################
 
+    n_fields_to_prune = len(fields_list)
+
     if num_cores > 1:
-        execute_parallel_processes(fields_list,num_cores)
+        n_fields_ok,n_fields_failed = execute_parallel_processes(fields_list,num_cores)
     else:
         thread_index = 0
-        run_single_core_job(fields_list,thread_index)
+        n_fields_ok,n_fields_failed = run_single_core_job(fields_list,thread_index)
 
 
     # Code-timing benchmark.
@@ -355,13 +398,13 @@ if __name__ == '__main__':
 
         tablename = f"merges_{field}"
 
-        query = f"SELECT count(*) FROM {tablename};"
+        query = sql.SQL("SELECT count(*) FROM {tbl}").format(tbl=sql.Identifier(tablename))
 
-        print(f"query = {query}")
+        print("query =", query)
 
-        sql_queries = []
-        sql_queries.append(query)
-        records = dbh.execute_sql_queries(sql_queries,debug)
+        sql_queries = [query]
+        params_list = [None]
+        records = dbh.execute_sql_queries(sql_queries,params_list,debug)
 
         print(f"records = {records}")
 
@@ -371,11 +414,11 @@ if __name__ == '__main__':
 
             print("Dropping {tablename} database table...")
 
-            query = f"DROP TABLE {tablename};"
+            query = sql.SQL("DROP TABLE {tbl}").format(tbl=sql.Identifier(tablename))
 
-            sql_queries = []
-            sql_queries.append(query)
-            records = dbh.execute_sql_queries(sql_queries,debug)
+            sql_queries = [query]
+            params_list = [None]
+            records = dbh.execute_sql_queries(sql_queries,params_list,debug)
 
         else:
 
@@ -413,7 +456,18 @@ if __name__ == '__main__':
             exit(tdbh.exit_code)
 
 
-    # Termination.
+    # Termination.  A run that had fields to prune and failed on all of them, or that
+    # had any per-field failure, must not report success.
+
+    print(f"n_fields_to_prune,n_fields_ok,n_fields_failed = {n_fields_to_prune},{n_fields_ok},{n_fields_failed}")
+
+    if n_fields_failed > 0:
+        print(f"*** Error: {n_fields_failed} of {n_fields_to_prune} field(s) failed while pruning not-best merges; quitting...")
+        exit(65)
+
+    if n_fields_to_prune > 0 and n_fields_ok == 0:
+        print(f"*** Error: {n_fields_to_prune} field(s) were listed but none were pruned; quitting...")
+        exit(65)
 
     terminating_exitcode = 0
 
