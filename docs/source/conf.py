@@ -56,7 +56,17 @@ extensions = [
     'sphinx.ext.mathjax',
     'sphinx.ext.viewcode',
     'sphinx.ext.githubpages',
+    'sphinx_last_updated_by_git',
 ]
+
+# Per-page "Last updated" footer date, taken from the last git commit that
+# touched each page's .rst source (sphinx_last_updated_by_git), rather than
+# the build date.
+html_last_updated_fmt = '%b %d, %Y'
+
+# The generated alert-schema include is untracked and rewritten every build;
+# without this, its timestamp would drag products.rst's date to "today".
+git_exclude_patterns = ['prod/alert_params.inc']
 
 # Add any paths that contain templates here, relative to this directory.
 templates_path = ['_templates']
