@@ -178,3 +178,130 @@ None of the following were changed:
 #. Adding an ``ENV PATH`` to the container image, or moving the remaining bare
    binary names to absolute paths. This one is a ``rapid_systems`` change, not
    a change in this repo.
+
+W3: the sweep closing this audit
+*********************************
+
+The Batch payload co-design (``rapid_plan/research/batch-payload-proposal.md``)
+named this audit's call-site inventory and risk table as W3's worklist. That
+sweep landed on ``smdc`` via branch ``w3-swallow-sweep`` and resolves the
+items above as follows.
+
+**Item 1 — resolved.** ``execute_command``/``execute_command_and_return_stdout``/
+``execute_command_in_shell`` are deleted from ``rapid_pipeline_subs.py``.
+Every call site across ``pipeline/``, ``sims/``, and ``database/sims/`` — the
+three excluded Batch payload entrypoint scripts and their ``.sh`` wrappers
+aside, which are W5's scope — now goes through
+``pipeline.runtime.process.run_tool`` or its named shell variant,
+``run_shell``. Both raise ``pipeline.runtime.errors.ToolError`` on a nonzero
+exit, a missing binary, or a non-executable target; there is no
+``check=False`` and no way to call either without checking. This closes the
+question of a ``check`` parameter by removing the unchecked path entirely
+rather than adding an opt-in.
+
+**Item 2 — resolved by the same conversion.** The ``>= 64`` convention in
+``virtualPipelineOperator.py`` and the launcher scripts is gone along with the
+return-code checks it lived in: a ``run_tool``/``run_shell`` failure now
+raises, so a caller that used to compare a return code against 64 either lets
+the exception propagate (the launcher scripts, whose previously-unchecked
+submissions now fail loud by construction) or catches ``ToolError``
+explicitly where the file already had catch-and-continue infrastructure
+(``virtualPipelineOperator.py``'s ten sub-stage sites, ``launchBunchOf
+ReferenceImagePipelines.py``, ``launchSciencePipelinesForDateTimeRangeWith
+RefImageWindow.py``), replicating the prior failure handling instead of the
+prior threshold.
+
+**Item 3 — resolved.** All five file-local ``Popen(cmd, shell=True)``-with-a-list
+copies (``sims/src/awsBatchJobLowLevelScript_CompressTroxelFitsFiles.py``,
+``awsBatchSubmitJobs_CompressTroxelFitsFiles.py``, ``batchCompress
+TroxelFitsFiles.py``, ``compressTroxelFitsFiles.py``,
+``database/sims/db_register_troxel_sim_files.py``) are deleted along with
+their local ``execute_command`` definitions; call sites route through
+``run_tool``/``run_shell``. None of these five files' own call sites had
+passed a genuine multi-argument list into the buggy shape (each call was
+either a single-token command or already a string), so no silently-dropped
+argument was found to have been actually executing differently — the risk was
+latent, not triggered, at every site checked.
+
+**Item 4 — resolved.** ``db_register_rimtimsim_files.py``'s dead local
+``execute_command`` copy is deleted. Its live download path is rewritten from
+an ``aws s3 cp`` subprocess call to a per-call boto3 client (workers are
+forked by ``ProcessPoolExecutor``, so clients cannot be shared), writing
+directly to ``subdir_work + "/" + file``, closing the destination-path
+mismatch — the download now lands where ``get_fits_header`` and
+``compute_checksum`` actually read from. This mirrors the pattern already
+used by the fixed ``db_register_socsim_files.py``.
+
+Two more files carrying the identical dead/live shape,
+``sims/src/socsims/convert_socsims.py`` and
+``sims/src/socsims/inject_fake_sources_into_l2_asdf_files.py``, were found
+during this sweep's verification pass (they had not been named in the
+original audit's inventory) and converted the same way: local
+``execute_command_in_shell`` copies deleted, call sites moved to
+``run_tool``/``run_shell``. Likewise
+``sims/src/rimtimsim/convert_rimtimsim.py``, which called the shared
+``rapid_pipeline_subs.execute_command`` (now deleted) directly.
+
+**Item 5 — out of scope, unchanged.** The container image's ``ENV PATH`` is a
+``rapid_systems`` change and remains for that repo. It is a hard dependency
+of this sweep's fail-loud posture actually working in production (a missing
+binary now raises instead of silently returning garbage, but the binary
+still needs to be found), tracked in the batch-payload-proposal under
+"Entrypoint, override, and environment contract".
+
+**Also landed in this sweep, beyond the audit's own inventory:**
+
+- The ``aws s3 ls``/``aws s3 cp``/``touch``-based helpers in
+  ``rapid_pipeline_subs.py`` (``get_datetime_of_last_file_written_to_bucket``,
+  ``write_done_file_to_s3_bucket``) are rewritten to boto3-native,
+  raising implementations — no subprocess involved at all, closing the
+  "failed CLI returns empty stdout, parsed as empty bucket" failure mode this
+  audit named as the highest-risk pattern's sibling case.
+- The ``ProcessPoolExecutor`` print-and-forget pattern (this audit's sibling
+  finding, not itself enumerated here since it is a different failure class)
+  is fixed at all ≥13 remaining sites: workers return ``(n_ok, n_failed)``,
+  orchestrators sum across futures and count a future that raised outright as
+  a failure, and the four registration scripts' hardcoded ``exit(0)`` is
+  replaced with a real conditional exit.
+- ``database/modules/utils/rapid_db.py``'s string-substituted SQL (a separate
+  defect from this audit's subprocess focus, named by the same co-design
+  proposal) is fully parameterized: every method converts from an f-string or
+  regex-template query to ``%s`` placeholders and ``psycopg2.sql.Identifier``
+  composition for dynamic table/column names. Seven post-DB pipeline scripts
+  building raw SQL through ``dbh.execute_sql_queries`` are parameterized the
+  same way. Each method's ``exit_code``-member error contract is preserved
+  unchanged; migrating that contract to raise-on-error rides the W5/W6
+  call-path conversion.
+
+**Left for later work, recorded rather than fixed in this sweep:**
+
+- ``db_register_rimtimsim_files.py``'s per-file registration loop has no
+  try/except around download/registration — a single file's failure raises
+  uncaught and aborts the whole run. This is the same *shape* of issue the
+  ``ProcessPoolExecutor`` fix addresses elsewhere, but this loop is plain
+  sequential, not pooled, so it fell outside this sweep's ProcessPoolExecutor
+  mandate.
+- ``pipeline/parallelRegisterCompletedJobsInDBAfterPostProc.py`` references an
+  undefined name ``done_filename`` in one warning message (it should read
+  ``science_pipeline_done_filename``), a pre-existing latent bug unrelated to
+  subprocess/ProcessPool/SQL, found by this sweep's ruff pass but out of its
+  mechanical scope.
+- ``copy_data_from_file_into_database`` in ``rapid_db.py`` no longer calls
+  ``exit()`` on failure (it raises instead), which means any out-of-file
+  caller relying on process termination there now needs its own
+  ``try/except``. Those callers were not located or modified in this sweep.
+- The module docstring for ``pipeline/runtime/process.py`` states a caller
+  "catches ``ToolError`` and reads ``exc.returncode``"; the actual attribute
+  is ``exc.details["returncode"]`` (``ToolError`` has no top-level
+  ``returncode``). Found live during this sweep; not fixed here since
+  ``pipeline/runtime/`` is W2's module, not W3's.
+
+Verification for this sweep: repo-wide grep confirms zero remaining call
+sites of the deleted helper trio and the five file-local copies (outside the
+three excluded entrypoint scripts), and zero ``shell=True`` outside
+``pipeline/runtime/process.py``'s own checked ``run_shell``. ``ruff`` on every
+touched file shows no new findings against the pre-sweep baseline (several
+pre-existing unused-import and unused-variable findings remain, all present
+before this sweep touched those files). The full test suite — W1's three
+suites, W2's runtime suite, and this sweep's ``test_rapid_db.py`` — ran
+in-image on ``rapid-admin`` via SSM; see the ledger for exit codes.
