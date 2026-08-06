@@ -36,6 +36,7 @@ DISPLAY_ORDER = (
     "diaSource",
     "diaForcedSource",
     "diaObject",
+    "ssMatch",
 )
 
 

@@ -1,10 +1,14 @@
 #!/usr/bin/env python
 
 import io
+import sys
 from pathlib import Path
+
 from confluent_kafka import Consumer
 import fastavro
-import fastavro.schema
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+from alerts.produce import load_schema
 
 if __name__ == '__main__':
 
@@ -21,16 +25,9 @@ if __name__ == '__main__':
     # Subscribe to topic
     topic = "alerts"
 
-    # Load v01.00 schema
-    schema_dir = Path(__file__).parent.parent / 'schema' / '01' / '00'
-    schema = fastavro.schema.load_schema_ordered([
-        str(schema_dir / 'rapid.v01_00.diaSource.avsc'),
-        str(schema_dir / 'rapid.v01_00.diaForcedSource.avsc'),
-        str(schema_dir / 'rapid.v01_00.diaObject.avsc'),
-        str(schema_dir / 'rapid.v01_00.ssSource.avsc'),
-        str(schema_dir / 'rapid.v01_00.mpc_orbits.avsc'),
-        str(schema_dir / 'rapid.v01_00.alert.avsc'),
-    ])
+    # Load the current schema (version from schema/latest.txt, verified
+    # against param_registry.py)
+    schema = load_schema()
 
     consumer.subscribe([topic])
 

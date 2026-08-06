@@ -273,6 +273,8 @@ package, and consists of the following records:
 - ``diaForcedSource`` -- forced photometry at the object position
 - ``diaObject`` -- the associated astronomical object, aggregated from all
   of its constituent detections.
+- ``ssMatch`` -- an associated solar system source: will contain MPC designation,
+  info about the position, and the predicted V-band magnitude.
 
 Alert Packet Contents
 ==================================

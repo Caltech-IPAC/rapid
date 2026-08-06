@@ -1,0 +1,43 @@
+{
+    "namespace": "rapid.v00_02",
+    "name": "ssMatch",
+    "doc": "Known solar system object predicted near the triggering source (stub)",
+    "version": "00.02",
+    "type": "record",
+    "fields": [
+        {
+            "name": "designation",
+            "type": "string",
+            "doc": "MPC designation of the solar system object"
+        },
+        {
+            "name": "ra",
+            "type": "double",
+            "doc": "Predicted right ascension of the object at midpointMjd; ICRS [deg]"
+        },
+        {
+            "name": "dec",
+            "type": "double",
+            "doc": "Predicted declination of the object at midpointMjd; ICRS [deg]"
+        },
+        {
+            "name": "sep",
+            "type": "float",
+            "doc": "Angular separation from the diaObject position [arcsec]"
+        },
+        {
+            "name": "pa",
+            "type": "float",
+            "doc": "Position angle from the diaObject to the object, East of North [deg]"
+        },
+        {
+            "name": "predVMag",
+            "type": [
+                "null",
+                "float"
+            ],
+            "default": null,
+            "doc": "Predicted V-band magnitude from MPC H/G photometric parameters [mag]"
+        }
+    ]
+}

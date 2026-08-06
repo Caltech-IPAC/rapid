@@ -1,0 +1,691 @@
+{
+    "namespace": "rapid.v00_02",
+    "name": "diaObject",
+    "doc": "Astronomical object derived from DIASources",
+    "version": "00.02",
+    "type": "record",
+    "fields": [
+        {
+            "name": "diaObjectId",
+            "type": "long",
+            "doc": "Unique identifier for this object"
+        },
+        {
+            "name": "ra0",
+            "type": "double",
+            "doc": "First measured right ascension of object centroid; ICRS [deg]"
+        },
+        {
+            "name": "dec0",
+            "type": "double",
+            "doc": "First measured declination of object centroid; ICRS [deg]"
+        },
+        {
+            "name": "meanRa",
+            "type": [
+                "null",
+                "double"
+            ],
+            "default": null,
+            "doc": "Mean right ascension of object centroid; ICRS [deg]"
+        },
+        {
+            "name": "meanDec",
+            "type": [
+                "null",
+                "double"
+            ],
+            "default": null,
+            "doc": "Mean declination of object centroid; ICRS [deg]"
+        },
+        {
+            "name": "raErr",
+            "type": [
+                "null",
+                "float"
+            ],
+            "default": null,
+            "doc": "Uncertainty in ra [deg]"
+        },
+        {
+            "name": "decErr",
+            "type": [
+                "null",
+                "float"
+            ],
+            "default": null,
+            "doc": "Uncertainty in dec [deg]"
+        },
+        {
+            "name": "nDiaSources",
+            "type": "int",
+            "doc": "Total number of associated DIASources"
+        },
+        {
+            "name": "firstDiaSourceMjd",
+            "type": [
+                "null",
+                "double"
+            ],
+            "default": null,
+            "doc": "MJD of earliest associated diaSource (UTC scale) [MJD]"
+        },
+        {
+            "name": "lastDiaSourceMjd",
+            "type": [
+                "null",
+                "double"
+            ],
+            "default": null,
+            "doc": "MJD of latest associated diaSource (UTC scale) [MJD]"
+        },
+        {
+            "name": "validityStartMjd",
+            "type": "double",
+            "doc": "Start of validity interval for this object summary (UTC scale) [MJD]"
+        },
+        {
+            "name": "ncovhist",
+            "type": [
+                "null",
+                "int"
+            ],
+            "default": null,
+            "doc": "Number of times the object position fell on an observed image (stub)"
+        },
+        {
+            "name": "firstRefMjd",
+            "type": [
+                "null",
+                "double"
+            ],
+            "default": null,
+            "doc": "MJD of earliest exposure in the reference image (UTC scale) [MJD] (stub)"
+        },
+        {
+            "name": "lastRefMjd",
+            "type": [
+                "null",
+                "double"
+            ],
+            "default": null,
+            "doc": "MJD of latest exposure in the reference image (UTC scale) [MJD] (stub)"
+        },
+        {
+            "name": "F062PsfFluxMean",
+            "type": [
+                "null",
+                "float"
+            ],
+            "default": null,
+            "doc": "Mean PSF flux in F062 [nJy]"
+        },
+        {
+            "name": "F062PsfFluxMeanErr",
+            "type": [
+                "null",
+                "float"
+            ],
+            "default": null,
+            "doc": "Uncertainty in F062PsfFluxMean [nJy]"
+        },
+        {
+            "name": "F062PsfFluxSigma",
+            "type": [
+                "null",
+                "float"
+            ],
+            "default": null,
+            "doc": "Std dev of PSF flux in F062 [nJy]"
+        },
+        {
+            "name": "F062PsfFluxNdata",
+            "type": [
+                "null",
+                "int"
+            ],
+            "default": null,
+            "doc": "Number of F062 measurements"
+        },
+        {
+            "name": "F062PsfFluxMin",
+            "type": [
+                "null",
+                "float"
+            ],
+            "default": null,
+            "doc": "Minimum PSF flux in F062 [nJy]"
+        },
+        {
+            "name": "F062PsfFluxMax",
+            "type": [
+                "null",
+                "float"
+            ],
+            "default": null,
+            "doc": "Maximum PSF flux in F062 [nJy]"
+        },
+        {
+            "name": "F062PsfFluxMaxSlope",
+            "type": [
+                "null",
+                "float"
+            ],
+            "default": null,
+            "doc": "Maximum slope of PSF flux between any two F062 epochs [nJy/day]"
+        },
+        {
+            "name": "F062PsfFluxErrMean",
+            "type": [
+                "null",
+                "float"
+            ],
+            "default": null,
+            "doc": "Mean of PSF flux errors in F062 [nJy]"
+        },
+        {
+            "name": "F087PsfFluxMean",
+            "type": [
+                "null",
+                "float"
+            ],
+            "default": null,
+            "doc": "Mean PSF flux in F087 [nJy]"
+        },
+        {
+            "name": "F087PsfFluxMeanErr",
+            "type": [
+                "null",
+                "float"
+            ],
+            "default": null,
+            "doc": "Uncertainty in F087PsfFluxMean [nJy]"
+        },
+        {
+            "name": "F087PsfFluxSigma",
+            "type": [
+                "null",
+                "float"
+            ],
+            "default": null,
+            "doc": "Std dev of PSF flux in F087 [nJy]"
+        },
+        {
+            "name": "F087PsfFluxNdata",
+            "type": [
+                "null",
+                "int"
+            ],
+            "default": null,
+            "doc": "Number of F087 measurements"
+        },
+        {
+            "name": "F087PsfFluxMin",
+            "type": [
+                "null",
+                "float"
+            ],
+            "default": null,
+            "doc": "Minimum PSF flux in F087 [nJy]"
+        },
+        {
+            "name": "F087PsfFluxMax",
+            "type": [
+                "null",
+                "float"
+            ],
+            "default": null,
+            "doc": "Maximum PSF flux in F087 [nJy]"
+        },
+        {
+            "name": "F087PsfFluxMaxSlope",
+            "type": [
+                "null",
+                "float"
+            ],
+            "default": null,
+            "doc": "Maximum slope of PSF flux between any two F087 epochs [nJy/day]"
+        },
+        {
+            "name": "F087PsfFluxErrMean",
+            "type": [
+                "null",
+                "float"
+            ],
+            "default": null,
+            "doc": "Mean of PSF flux errors in F087 [nJy]"
+        },
+        {
+            "name": "F106PsfFluxMean",
+            "type": [
+                "null",
+                "float"
+            ],
+            "default": null,
+            "doc": "Mean PSF flux in F106 [nJy]"
+        },
+        {
+            "name": "F106PsfFluxMeanErr",
+            "type": [
+                "null",
+                "float"
+            ],
+            "default": null,
+            "doc": "Uncertainty in F106PsfFluxMean [nJy]"
+        },
+        {
+            "name": "F106PsfFluxSigma",
+            "type": [
+                "null",
+                "float"
+            ],
+            "default": null,
+            "doc": "Std dev of PSF flux in F106 [nJy]"
+        },
+        {
+            "name": "F106PsfFluxNdata",
+            "type": [
+                "null",
+                "int"
+            ],
+            "default": null,
+            "doc": "Number of F106 measurements"
+        },
+        {
+            "name": "F106PsfFluxMin",
+            "type": [
+                "null",
+                "float"
+            ],
+            "default": null,
+            "doc": "Minimum PSF flux in F106 [nJy]"
+        },
+        {
+            "name": "F106PsfFluxMax",
+            "type": [
+                "null",
+                "float"
+            ],
+            "default": null,
+            "doc": "Maximum PSF flux in F106 [nJy]"
+        },
+        {
+            "name": "F106PsfFluxMaxSlope",
+            "type": [
+                "null",
+                "float"
+            ],
+            "default": null,
+            "doc": "Maximum slope of PSF flux between any two F106 epochs [nJy/day]"
+        },
+        {
+            "name": "F106PsfFluxErrMean",
+            "type": [
+                "null",
+                "float"
+            ],
+            "default": null,
+            "doc": "Mean of PSF flux errors in F106 [nJy]"
+        },
+        {
+            "name": "F129PsfFluxMean",
+            "type": [
+                "null",
+                "float"
+            ],
+            "default": null,
+            "doc": "Mean PSF flux in F129 [nJy]"
+        },
+        {
+            "name": "F129PsfFluxMeanErr",
+            "type": [
+                "null",
+                "float"
+            ],
+            "default": null,
+            "doc": "Uncertainty in F129PsfFluxMean [nJy]"
+        },
+        {
+            "name": "F129PsfFluxSigma",
+            "type": [
+                "null",
+                "float"
+            ],
+            "default": null,
+            "doc": "Std dev of PSF flux in F129 [nJy]"
+        },
+        {
+            "name": "F129PsfFluxNdata",
+            "type": [
+                "null",
+                "int"
+            ],
+            "default": null,
+            "doc": "Number of F129 measurements"
+        },
+        {
+            "name": "F129PsfFluxMin",
+            "type": [
+                "null",
+                "float"
+            ],
+            "default": null,
+            "doc": "Minimum PSF flux in F129 [nJy]"
+        },
+        {
+            "name": "F129PsfFluxMax",
+            "type": [
+                "null",
+                "float"
+            ],
+            "default": null,
+            "doc": "Maximum PSF flux in F129 [nJy]"
+        },
+        {
+            "name": "F129PsfFluxMaxSlope",
+            "type": [
+                "null",
+                "float"
+            ],
+            "default": null,
+            "doc": "Maximum slope of PSF flux between any two F129 epochs [nJy/day]"
+        },
+        {
+            "name": "F129PsfFluxErrMean",
+            "type": [
+                "null",
+                "float"
+            ],
+            "default": null,
+            "doc": "Mean of PSF flux errors in F129 [nJy]"
+        },
+        {
+            "name": "F146PsfFluxMean",
+            "type": [
+                "null",
+                "float"
+            ],
+            "default": null,
+            "doc": "Mean PSF flux in F146 [nJy]"
+        },
+        {
+            "name": "F146PsfFluxMeanErr",
+            "type": [
+                "null",
+                "float"
+            ],
+            "default": null,
+            "doc": "Uncertainty in F146PsfFluxMean [nJy]"
+        },
+        {
+            "name": "F146PsfFluxSigma",
+            "type": [
+                "null",
+                "float"
+            ],
+            "default": null,
+            "doc": "Std dev of PSF flux in F146 [nJy]"
+        },
+        {
+            "name": "F146PsfFluxNdata",
+            "type": [
+                "null",
+                "int"
+            ],
+            "default": null,
+            "doc": "Number of F146 measurements"
+        },
+        {
+            "name": "F146PsfFluxMin",
+            "type": [
+                "null",
+                "float"
+            ],
+            "default": null,
+            "doc": "Minimum PSF flux in F146 [nJy]"
+        },
+        {
+            "name": "F146PsfFluxMax",
+            "type": [
+                "null",
+                "float"
+            ],
+            "default": null,
+            "doc": "Maximum PSF flux in F146 [nJy]"
+        },
+        {
+            "name": "F146PsfFluxMaxSlope",
+            "type": [
+                "null",
+                "float"
+            ],
+            "default": null,
+            "doc": "Maximum slope of PSF flux between any two F146 epochs [nJy/day]"
+        },
+        {
+            "name": "F146PsfFluxErrMean",
+            "type": [
+                "null",
+                "float"
+            ],
+            "default": null,
+            "doc": "Mean of PSF flux errors in F146 [nJy]"
+        },
+        {
+            "name": "F158PsfFluxMean",
+            "type": [
+                "null",
+                "float"
+            ],
+            "default": null,
+            "doc": "Mean PSF flux in F158 [nJy]"
+        },
+        {
+            "name": "F158PsfFluxMeanErr",
+            "type": [
+                "null",
+                "float"
+            ],
+            "default": null,
+            "doc": "Uncertainty in F158PsfFluxMean [nJy]"
+        },
+        {
+            "name": "F158PsfFluxSigma",
+            "type": [
+                "null",
+                "float"
+            ],
+            "default": null,
+            "doc": "Std dev of PSF flux in F158 [nJy]"
+        },
+        {
+            "name": "F158PsfFluxNdata",
+            "type": [
+                "null",
+                "int"
+            ],
+            "default": null,
+            "doc": "Number of F158 measurements"
+        },
+        {
+            "name": "F158PsfFluxMin",
+            "type": [
+                "null",
+                "float"
+            ],
+            "default": null,
+            "doc": "Minimum PSF flux in F158 [nJy]"
+        },
+        {
+            "name": "F158PsfFluxMax",
+            "type": [
+                "null",
+                "float"
+            ],
+            "default": null,
+            "doc": "Maximum PSF flux in F158 [nJy]"
+        },
+        {
+            "name": "F158PsfFluxMaxSlope",
+            "type": [
+                "null",
+                "float"
+            ],
+            "default": null,
+            "doc": "Maximum slope of PSF flux between any two F158 epochs [nJy/day]"
+        },
+        {
+            "name": "F158PsfFluxErrMean",
+            "type": [
+                "null",
+                "float"
+            ],
+            "default": null,
+            "doc": "Mean of PSF flux errors in F158 [nJy]"
+        },
+        {
+            "name": "F184PsfFluxMean",
+            "type": [
+                "null",
+                "float"
+            ],
+            "default": null,
+            "doc": "Mean PSF flux in F184 [nJy]"
+        },
+        {
+            "name": "F184PsfFluxMeanErr",
+            "type": [
+                "null",
+                "float"
+            ],
+            "default": null,
+            "doc": "Uncertainty in F184PsfFluxMean [nJy]"
+        },
+        {
+            "name": "F184PsfFluxSigma",
+            "type": [
+                "null",
+                "float"
+            ],
+            "default": null,
+            "doc": "Std dev of PSF flux in F184 [nJy]"
+        },
+        {
+            "name": "F184PsfFluxNdata",
+            "type": [
+                "null",
+                "int"
+            ],
+            "default": null,
+            "doc": "Number of F184 measurements"
+        },
+        {
+            "name": "F184PsfFluxMin",
+            "type": [
+                "null",
+                "float"
+            ],
+            "default": null,
+            "doc": "Minimum PSF flux in F184 [nJy]"
+        },
+        {
+            "name": "F184PsfFluxMax",
+            "type": [
+                "null",
+                "float"
+            ],
+            "default": null,
+            "doc": "Maximum PSF flux in F184 [nJy]"
+        },
+        {
+            "name": "F184PsfFluxMaxSlope",
+            "type": [
+                "null",
+                "float"
+            ],
+            "default": null,
+            "doc": "Maximum slope of PSF flux between any two F184 epochs [nJy/day]"
+        },
+        {
+            "name": "F184PsfFluxErrMean",
+            "type": [
+                "null",
+                "float"
+            ],
+            "default": null,
+            "doc": "Mean of PSF flux errors in F184 [nJy]"
+        },
+        {
+            "name": "F213PsfFluxMean",
+            "type": [
+                "null",
+                "float"
+            ],
+            "default": null,
+            "doc": "Mean PSF flux in F213 [nJy]"
+        },
+        {
+            "name": "F213PsfFluxMeanErr",
+            "type": [
+                "null",
+                "float"
+            ],
+            "default": null,
+            "doc": "Uncertainty in F213PsfFluxMean [nJy]"
+        },
+        {
+            "name": "F213PsfFluxSigma",
+            "type": [
+                "null",
+                "float"
+            ],
+            "default": null,
+            "doc": "Std dev of PSF flux in F213 [nJy]"
+        },
+        {
+            "name": "F213PsfFluxNdata",
+            "type": [
+                "null",
+                "int"
+            ],
+            "default": null,
+            "doc": "Number of F213 measurements"
+        },
+        {
+            "name": "F213PsfFluxMin",
+            "type": [
+                "null",
+                "float"
+            ],
+            "default": null,
+            "doc": "Minimum PSF flux in F213 [nJy]"
+        },
+        {
+            "name": "F213PsfFluxMax",
+            "type": [
+                "null",
+                "float"
+            ],
+            "default": null,
+            "doc": "Maximum PSF flux in F213 [nJy]"
+        },
+        {
+            "name": "F213PsfFluxMaxSlope",
+            "type": [
+                "null",
+                "float"
+            ],
+            "default": null,
+            "doc": "Maximum slope of PSF flux between any two F213 epochs [nJy/day]"
+        },
+        {
+            "name": "F213PsfFluxErrMean",
+            "type": [
+                "null",
+                "float"
+            ],
+            "default": null,
+            "doc": "Mean of PSF flux errors in F213 [nJy]"
+        }
+    ]
+}

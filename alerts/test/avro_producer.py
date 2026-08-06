@@ -2,11 +2,14 @@
 
 import io
 import json
+import sys
 from pathlib import Path
 
 from confluent_kafka import Producer
 import fastavro
-import fastavro.schema
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+from alerts.produce import load_schema, schema_paths
 
 if __name__ == '__main__':
 
@@ -30,19 +33,12 @@ if __name__ == '__main__':
 
     topic = "alerts"
 
-    # Load v01.00 schema
-    schema_dir = Path(__file__).parent.parent / 'schema' / '01' / '00'
-    schema = fastavro.schema.load_schema_ordered([
-        str(schema_dir / 'rapid.v01_00.diaSource.avsc'),
-        str(schema_dir / 'rapid.v01_00.diaForcedSource.avsc'),
-        str(schema_dir / 'rapid.v01_00.diaObject.avsc'),
-        str(schema_dir / 'rapid.v01_00.ssSource.avsc'),
-        str(schema_dir / 'rapid.v01_00.mpc_orbits.avsc'),
-        str(schema_dir / 'rapid.v01_00.alert.avsc'),
-    ])
+    # Load the current schema (version from schema/latest.txt, verified
+    # against param_registry.py)
+    schema = load_schema()
 
-    # Load sample alert data
-    sample_data_path = schema_dir / 'sample_data' / 'alert.json'
+    # Load sample alert data from the same version's schema directory
+    sample_data_path = schema_paths()[0].parent / 'sample_data' / 'alert.json'
     with open(sample_data_path, 'r') as f:
         alert_data = json.load(f)
 
