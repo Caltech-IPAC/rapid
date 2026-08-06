@@ -144,9 +144,16 @@ What is not proven here
 
 - **The reconciler as a running service.** It has a systemd unit
   (rapid_systems ``rapid-reconciler-service.yaml``) and it is deployed
-  disabled, because ``rapid_orchestrator`` does not exist as a PostgreSQL
+  disabled, because ``rapid_orchestrator`` did not exist as a PostgreSQL
   role — see ``016-orchestrator-service-role.sql``. Every cycle above was
   driven as a one-shot under ``rapid_pipeline``.
+
+  **Updated 2026-08-06 (W6b): the role now exists** — 016 is applied and
+  the pooler carries its ``[users]`` line — but it is still ``NOLOGIN``,
+  so the service still cannot start. Flipping it needs one IAM grant that
+  no single host can currently make, and that grant is left proposed
+  rather than taken. The current state and the exact blocker are in
+  ``w6b_state_summary.rst``.
 - **A scheduler-retry child.** No pull failure was forced, so the
   attempt-index derivation is proven by unit test and by its
   single-attempt live behaviour, not against a real ≥2-attempt job. That

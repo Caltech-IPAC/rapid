@@ -1,0 +1,145 @@
+W6b: current state, as W8 inherits it
+=====================================
+
+An inventory, not a narrative: what is true of the live system on
+2026-08-06 after W6's three tails were closed. Everything below was
+observed, not inferred — the commands and their exit codes are in the W6b
+ledger. Where something is NOT done, it says so and says what blocks it.
+
+The database
+------------
+
+======================  ================================================
+Migrations applied      **000 through 016.** 016 is the last row in
+                        ``schema_migrations``; it was the only pending
+                        file and applied on the first attempt
+``rapid_orchestrator``  exists, ``NOLOGIN``, not superuser, not
+                        createrole, member of ``rapid_pipeline_write``
+                        (which carries SELECT/INSERT/UPDATE on
+                        ``attempts``). **Cannot authenticate yet** — see
+                        "What is still owed"
+``tessellation``        **6,291,458 rows**, version ``nside512-v2``,
+                        1928 MB. Loaded 2026-08-06, having been empty
+                        since 015 created it
+Tessellation digest     ``ee5b7a61…8767cd9``, verified by dumping the
+                        stored rows back out and re-digesting them
+                        through the builder's own serializer — not a row
+                        count, which would pass on 6.3M wrong rows
+======================  ================================================
+
+The tessellation's point predicate at catalog scale, against the live
+table: **Index Scan** on ``tessellation_bbox_idx``, 6.4 ms, 2433 shared
+buffer hits, returning **rtid 5321355** for (11.1, -43.8) — the value the
+2024 conversion note works through by hand, so the loaded rows are
+semantically right and not merely digest-identical. The batched-lookup
+shape recorded for comparison takes **12.4 s** for 5,000 points against
+25M buffer hits, which is the arithmetic case for the closed form.
+
+A duplicate ``(version, rtid)`` insert is refused, live.
+
+The pooler
+----------
+
+The ``client_idle_timeout`` defect is closed at both ends. It was fixed
+on the live host by W6 and is now in the packaged config as well
+(``rapid-pgbouncer`` 1.0-4), so a reinstall or a rebuilt host can no
+longer silently restore it. ``pgbouncer.rapid.ini`` also carries the
+``rapid_orchestrator`` line 016 needs, transaction-pooled like every
+automated identity.
+
+The upstream question stands and is labelled as such: that per-user
+``client_idle_timeout`` on five *human* logins reached ``rapid_pipeline``,
+which has no per-user line at all, is **unverified against the pgbouncer
+issue tracker**. The config says so where someone would re-add it. See
+``pooler_client_idle_timeout.rst``.
+
+The reconciler
+--------------
+
+Unchanged from W6: proven as a one-shot under ``rapid_pipeline``, with a
+systemd unit deployed **disabled**. It is not running as a service, and
+enabling it is not merely a systemctl call away — the service starts as
+``rapid_orchestrator``, which cannot log in yet.
+
+What is still owed
+------------------
+
+**One IAM grant blocks the reconciler service**, and everything else in
+that chain is done. ``rapid_orchestrator`` needs its password from
+``rapid/db/service/orchestrator`` to become ``LOGIN``, and the account's
+identity split means no single host can perform that step today:
+
+- ``rapid-migration-runner-role`` (the admin credential, the only identity
+  that may run DDL) trusts ``rapid-db-instance-role`` **only**;
+- ``rapid-orchestrator-role`` (the orchestrator secret) trusts
+  ``rapid-admin-instance-role`` **only**.
+
+Both verified live: rapid-admin got ``AccessDenied`` assuming the
+migration runner, and ``rapid-db-instance-role``'s attached policies
+include ``rapid-db-service-pipeline-read`` but no orchestrator
+equivalent. ``DbServiceOrchestratorReadPolicy`` attaches to
+``OrchestratorRole`` alone, where the pipeline equivalent
+(``DbServicePipelineReadPolicy``) also lists ``rapid-db-instance-role``.
+
+So the association step that would do this cannot be written either — it
+runs on rapid-db under the instance role and would fail ``AccessDenied``
+on every convergence pass. The fix is one line (add
+``rapid-db-instance-role`` to that managed policy's ``Roles``) plus a
+deploy of the live IAM stack, and it is left **proposed** rather than
+taken, being outside W6b's authorization.
+
+``pgbouncer.get_auth('rapid_orchestrator')`` reads ``NOT-RESOLVABLE``
+until it lands. That is correct, not a fault.
+
+Also still open, carried forward unchanged:
+
+- **A scheduler-retry child.** No pull failure has been forced, so the
+  attempt-index derivation is proven by unit test and by single-attempt
+  live behaviour, never against a real ≥2-attempt job.
+- **A successful registration.** Every live attempt is an application
+  failure, so the refusal path is proven and the register path is not.
+- **The master ``.ini`` and the baked tessellation constructors**, whose
+  deletions the W6 fence's own conditions refused: 23 and 11 surviving
+  readers respectively. See ``config_homes.rst`` and
+  ``tessellation_bake_retirement.rst``.
+
+Suites, as of this run
+----------------------
+
+All in-image on rapid-admin, against the pipeline image pinned by digest
+``sha256:8f42e92e…`` — the claim being that they pass where the code
+runs, not merely somewhere:
+
+=====================  =========================================
+W1 (``run-on-``)       ``W1-TESTS-OK`` — units plus a live
+                       round-trip against rapid-db
+W3 (``run-w3-``)       ``W3-TESTS-OK`` — 61 + 82 + 6 + 293 + 10
+                       tests, all OK
+W7 (``run-w7-``)       ``W7-UNITS-OK`` — 16 tests, 2 declared
+                       skips (cross-repo parity and the SQLite
+                       comparison, neither available in-image and
+                       both saying so rather than passing quietly)
+=====================  =========================================
+
+W3 needed a fix to get there, and it is worth knowing why: the runner
+staged ``pipeline/runtime`` but not the ``cdf/`` configuration files that
+W4B's science-config suite reads. Those tests assert **the shipped files**
+load, deliberately, and they arrived after the runner did — so five tests
+errored with "the release's science configuration is missing", an error
+correctly naming a staging gap that reads as a wrong image.
+
+One CI defect, found and fixed
+------------------------------
+
+``build-rpms.yml``'s ``sync-baseline`` job verified the baseline package
+set **before** pruning it, where every other merge point prunes first. The
+overlay it builds is a version-bumped duplicate factory by construction,
+so any release bump to an already-baselined package broke main on the next
+scoped run — and the failure is self-sustaining, because the promoter
+refuses to publish while a newer main run is red, so a red main blocks the
+release that would clear it.
+
+Found live: ``expected exactly one rapid-pgbouncer RPM (x86_64/noarch) in
+baseline; found 2``, two consecutive red runs on main, the first of them
+at 02:06Z on the rapid-ops drop — before W6b started. Fixed by pruning
+before the gate, which is what ``repo-and-smoke`` already does.
