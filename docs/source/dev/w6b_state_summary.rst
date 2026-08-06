@@ -175,9 +175,33 @@ defect below, which was fixed earlier in the same run and did not recur.
 It is a dnf cache miss on the canary, on ``rapid-release`` — the repo
 definition package — immediately after a GPG key import. The refusal to
 publish on it is correct behaviour: an unproven candidate set must not
-reach the repo. Whether it is a flake or a standing defect in the smoke
-harness was not established here; one retry was run and its outcome is in
-the W6b ledger.
+reach the repo.
+
+**It is reproducible, not a flake.** Two full promoter runs (46 and 50
+minutes, fresh canary each time) failed at the same step with the
+byte-identical message. Both downloaded all 28 packages successfully —
+964 MB, including ``rapid-release`` itself — and then failed the
+transaction.
+
+The mechanism, from the log ordering and **labelled a hypothesis: not
+proven by a probe**. ``rpms/smoke-test.sh`` installs everything in ONE
+dnf transaction, and that list contains both ``rapid-release`` and the
+third-party repo-definition packages (``rapid-pgadmin-repo``,
+``rapid-vscode-repo``, ``rapid-rpmfusion-repo``). Installing a repo
+definition mid-transaction lands a new ``.repo`` file, dnf then imports
+that repo's GPG key — the log shows the pgAdmin key import on the line
+immediately before the error — and the cache directory the pending
+packages were downloaded into is invalidated underneath the running
+transaction. ``rapid-release`` is simply the first file it then cannot
+find.
+
+If that reading is right the fix is to install the repo-definition
+packages in their own transaction, after the rest, the same way
+``rapid-fleet-config`` is already ordered last for a related resolution
+reason. **Not attempted here** — each verification cycle is a ~50-minute
+promoter run, and W6b had no room for one after the second failure.
+Whoever picks it up should confirm the cache-invalidation reading on a
+canary first rather than trusting this paragraph.
 
 One CI defect, found and fixed
 ------------------------------
