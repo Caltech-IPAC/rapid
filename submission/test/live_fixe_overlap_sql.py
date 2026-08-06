@@ -156,7 +156,11 @@ def _run(conn, schema):
                         + ", public")
         conn.commit()
 
-        corners = (10.01, 20.01, 10.01, 19.99, 9.99, 19.99, 9.99, 20.01)
+        # TEN values: the tile CENTRE (ra0/dec0) then the four corners, which
+        # is how the method spells its signature. The centre anchors the cone
+        # search; the corners are what the polygon predicates test.
+        corners = (10.0, 20.0,
+                   10.01, 20.01, 10.01, 19.99, 9.99, 19.99, 9.99, 20.01)
 
         # -- BRANCH 1: no exclusion (the branch that could not parse) ----
 

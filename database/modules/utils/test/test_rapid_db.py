@@ -190,7 +190,11 @@ class OverlapExclusionClauseTests(unittest.TestCase):
     all — including one that cannot parse.
     """
 
-    CORNERS = (10.01, 20.01, 10.01, 19.99, 9.99, 19.99, 9.99, 20.01)
+    #: TEN values: the tile CENTRE (ra0/dec0) followed by the four corners.
+    #: The method's signature spells them out individually, and it is the
+    #: centre that the cone search is anchored on.
+    CORNERS = (10.0, 20.0,
+               10.01, 20.01, 10.01, 19.99, 9.99, 19.99, 9.99, 20.01)
 
     def _execute(self, rid):
         db = make_db(iter_rows=[])
