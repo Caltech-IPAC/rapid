@@ -1,9 +1,10 @@
 pgbouncer closes RAPID payload connections at age=0s
 ====================================================
 
-**Status: OPEN, found live 2026-08-06 by the W5 canary. Not a payload
-defect — a pooler configuration defect. Routed to the database/operations
-owner; W6's reconciler and W8's live battery both depend on it.**
+**Status: RESOLVED on the live host 2026-08-06, verified by W6. NOT yet
+synced to the packaged config — see "The fix, and what is still owed".
+Found live by the W5 canary. Not a payload defect — a pooler configuration
+defect.**
 
 What happens
 ------------
@@ -73,20 +74,18 @@ So the global ``client_idle_timeout`` is what applies to payload
 connections, and pgbouncer's own default for it is ``0`` (disabled). The
 commented template line in ``/etc/pgbouncer/pgbouncer.ini`` also reads
 ``;client_idle_timeout = 0``. **A disabled timeout cannot fire, and it is
-firing** — so the running value is not the file value, or the timer is
-being applied against something other than idle time. Determining which
-needs ``SHOW CONFIG`` on the pgbouncer admin console, which needs the
-admin credential this investigation did not have.
+firing.**
 
-Two candidate explanations, neither verified:
-
-1. The running configuration differs from the file on disk — a reload
-   never happened after an edit, or an edit landed in one of the two
-   ``.bak`` siblings and the live file was reloaded from something else.
-2. ``client_idle_timeout`` is set globally somewhere not grepped, with a
-   value small enough that a sub-second client trips it. That would still
-   be wrong for the payload, whose connections are short but not
-   instantaneous.
+This section originally offered two candidate explanations — a stale
+running configuration, or an ungrepped global setting. **Both were wrong,
+and the answer turned out to be neither** (W6, 2026-08-06): the running
+configuration matched the file, and there was no global setting anywhere.
+What stopped the kills was removing ``client_idle_timeout`` from the five
+per-user lines belonging to *other* users — the human logins — none of
+which ``rapid_pipeline`` matches. See "The fix, and what is still owed"
+below. Kept here rather than deleted because the reasoning is a fair record
+of what the evidence supported at the time, and because "the obvious two
+explanations were both wrong" is worth knowing next time.
 
 What it blocks
 --------------
@@ -100,6 +99,12 @@ It also blocks W6 and W8 directly: the reconciler is a polling service
 holding pooled connections, and W8's battery asserts on exactly the
 lifecycle transitions that are failing here.
 
+**Unblocked 2026-08-06.** W6's probe children reached
+``application_closed`` — the transition this defect was preventing — and
+the reconciler then ran a full cycle over live attempts with zero
+connection failures. The clean full lifecycle the W5 evidence listed under
+"what is not proven" is now proven.
+
 Not to be worked around
 -----------------------
 
@@ -109,3 +114,53 @@ retry with backoff (W1); what is failing is not the connect but an
 established connection being closed under an in-flight statement. Papering
 over that would hide a pooler that drops payload connections, at a scale
 where ~1,000 concurrent jobs will each hold one.
+
+The fix, and what is still owed
+-------------------------------
+
+**What was wrong.** ``client_idle_timeout=7200`` was set on five *per-user*
+lines in ``/etc/pgbouncer/pgbouncer.rapid.ini`` — and every one of those
+five is a **human** login (bostroem, everetts, laher, rivera, rusholme).
+``rapid_pipeline`` has no per-user line at all; the file's own comment says
+automated jobs are deliberately not listed, and there is no
+``client_idle_timeout`` in the ``[pgbouncer]`` global section either.
+
+So a setting written for five human sessions was killing the payload's
+connections. That per-user settings on *other* users affect
+``rapid_pipeline`` at all looks like an upstream pgbouncer defect —
+**labelled unverified: not checked against the pgbouncer issue tracker.**
+Anyone adding a per-user line should check the tracker first.
+
+**The change**, applied live at 10:49Z (backup:
+``pgbouncer.rapid.ini.pre-idle-fix.bak``), was exactly and only the removal
+of ``client_idle_timeout=7200`` from those five lines. The per-user
+``idle_transaction_timeout=900`` entries were left alone, and did not need
+to be touched.
+
+**The evidence** (W6, 2026-08-06):
+
+============================  ==========================================
+Before the fix                6 ``client_idle_timeout`` closures in the
+                              journal, **all** of them ``rapid_pipeline``;
+                              last at 10:31:22Z
+After the fix                 **ZERO** closures, against 17+
+                              ``rapid_pipeline`` connections in the same
+                              window — so the zero is not vacuous
+Connection close reason       now ``client close request`` (the client's
+                              own disconnect), never ``client_idle_timeout``
+Probe children                SUCCEEDED, where the canary hit exit 70
+============================  ==========================================
+
+The probe reused the canary's submission shape — short-lived VPC clients
+through the pooler as ``rapid_pipeline`` — spread across submissions at
+11:13, 11:15, 11:28, 11:33 and 12:30, comfortably past the fifteen minutes
+required to call it.
+
+**The gap that remains.** The live file is fixed; the *packaged* one is not.
+``rpm -V rapid-pgbouncer`` reports ``S.5....T.`` on
+``/etc/pgbouncer/pgbouncer.rapid.ini`` — the live file has drifted from the
+RPM that owns it, so a package reinstall or a rebuilt host would silently
+restore the defect. Closing that drift means the same change in the
+rapid_systems pgbouncer source, an RPM rebuild published through the
+promoter's manual start-build, ``dnf update rapid-pgbouncer`` on rapid-db,
+and an ``rpm -V`` that comes back clean. **Owed, not done.**
