@@ -3,7 +3,7 @@
 import json
 import unittest
 
-from pipeline.reconciler import service
+from pipeline.reconciler import reconstruction, service
 from pipeline.reconciler.test.stubs import (
     FakeBatch, FakeConnection, FakeS3Tagging, attempt_row, batch_job, ms, utc)
 from pipeline.runtime import boundaries
@@ -824,7 +824,14 @@ class ReconstructionCompletenessTests(unittest.TestCase):
                          "an attempt whose evidence is missing and "
                          "unrecoverable must not be terminalized")
 
-    def test_a_never_started_attempt_has_genuinely_nothing_to_retain(self):
+    def test_a_never_started_attempt_is_not_counted_as_a_missing_bundle(self):
+        """It is reconstructed, not counted.
+
+        `missing_bundles` means "an attempt that RAN has lost its evidence",
+        which is a different and worse condition than an attempt that never
+        produced any. The never-started case still gets a bundle (below); it
+        just is not this alarm.
+        """
         row = attempt_row(1, lifecycle_state="submitted")
         jobs = [batch_job(status="FAILED", exit_code=None, started=None,
                           stopped=utc(2026, 8, 6, 11, 0, 0))]
@@ -840,6 +847,140 @@ class ReconstructionCompletenessTests(unittest.TestCase):
         svc.poll_once()
 
         self.assertEqual(0, svc.health()["missing_bundles"])
+
+    def test_a_never_started_attempt_still_gets_a_bundle(self):
+        """Round-4 finding #5: the rule is unconditional.
+
+        A never-started attempt used to close with no bundle at all, on the
+        reasoning that it had no container in which to build one. The adopted
+        design names "abrupt loss, or never started" as the reconstruction
+        cases together and puts the bundle before EVERY close — and it is the
+        more useful truth: what is retained is the account of the
+        non-execution, which is otherwise nowhere, because terminal rows are
+        outside the open set.
+        """
+        row = attempt_row(1, lifecycle_state="submitted")
+        jobs = [batch_job(status="FAILED", exit_code=None, started=None,
+                          stopped=utc(2026, 8, 6, 11, 0, 0))]
+        conn = FakeConnection(rows=[row])
+        key = self._absent_bundle(row)
+        diagnostics = InMemoryObjectStore()
+        svc = service.ReconcilerService(
+            conn=conn, batch_client=FakeBatch(jobs=jobs),
+            records_store=InMemoryObjectStore(),
+            diagnostics_store=diagnostics,
+            s3_client=FakeS3Tagging(missing=[key]),
+            records_prefix=PREFIX, diagnostics_bucket=DIAGNOSTICS,
+            now=lambda: utc(2026, 8, 6, 12, 0, 0))
+
+        svc.poll_once()
+
+        self.assertIsNotNone(
+            diagnostics.head(key),
+            "a never-started attempt closed with no bundle at its key")
+        self.assertNotEqual("submitted", conn.rows[1]["lifecycle_state"],
+                            "it must still reach a terminal state")
+
+    def test_the_never_started_bundle_records_why_it_never_ran(self):
+        """A minimal bundle, but not an empty one.
+
+        Marked reconstructed, and carrying the submission facts and whatever
+        the scheduler said — which for this class of attempt is the entire
+        content of the diagnosis.
+        """
+        import io
+        import json
+        import tarfile
+
+        row = attempt_row(1, lifecycle_state="submitted")
+        jobs = [batch_job(status="FAILED", exit_code=None, started=None,
+                          stopped=utc(2026, 8, 6, 11, 0, 0))]
+        conn = FakeConnection(rows=[row])
+        key = self._absent_bundle(row)
+        diagnostics = InMemoryObjectStore()
+        svc = service.ReconcilerService(
+            conn=conn, batch_client=FakeBatch(jobs=jobs),
+            records_store=InMemoryObjectStore(),
+            diagnostics_store=diagnostics,
+            s3_client=FakeS3Tagging(missing=[key]),
+            records_prefix=PREFIX, diagnostics_bucket=DIAGNOSTICS,
+            now=lambda: utc(2026, 8, 6, 12, 0, 0))
+
+        svc.poll_once()
+
+        raw = diagnostics.get(key)
+        with tarfile.open(fileobj=io.BytesIO(raw), mode="r:gz") as tar:
+            manifest = json.loads(
+                tar.extractfile(reconstruction.MANIFEST_MEMBER)
+                .read().decode("utf-8"))
+
+        self.assertTrue(manifest["reconstructed"])
+        self.assertEqual(row["run_id"], manifest["run_id"])
+        self.assertEqual(row["attempt_id"], manifest["attempt_id"])
+
+    def test_a_never_resolved_attempt_gets_its_bundle_before_it_closes(self):
+        """The path finding #5 named: no scheduler observation at all.
+
+        `_reconcile_unresolved` published a closure record and transitioned
+        the row without invoking bundle handling at ALL — so the one class of
+        attempt the design explicitly names for reconstruction was the one
+        class that closed with no diagnostics whatsoever.
+        """
+        row = attempt_row(1, scheduler_job_id=None,
+                          submitted_at=utc(2026, 8, 6, 11, 0, 0))
+        conn = FakeConnection(rows=[row])
+        key = self._absent_bundle(row)
+        diagnostics = InMemoryObjectStore()
+        svc = service.ReconcilerService(
+            conn=conn, batch_client=FakeBatch(jobs=[]),
+            records_store=InMemoryObjectStore(),
+            diagnostics_store=diagnostics,
+            s3_client=FakeS3Tagging(missing=[key]),
+            records_prefix=PREFIX, diagnostics_bucket=DIAGNOSTICS,
+            now=lambda: utc(2026, 8, 6, 12, 0, 0))
+
+        summary = svc.poll_once()
+
+        self.assertEqual(1, summary["classified"])
+        self.assertIsNotNone(
+            diagnostics.head(key),
+            "the never-resolved path closed the attempt with no bundle")
+        self.assertEqual("terminal_without_start",
+                         conn.rows[1]["lifecycle_state"])
+
+    def test_a_never_resolved_attempt_defers_if_its_bundle_cannot_be_written(
+            self):
+        """The bundle comes BEFORE the closure record, so a failure here
+        leaves nothing published and the attempt open for the next poll.
+
+        The reverse order would publish a closure citing an attempt whose
+        bundle never appeared — the exactly-one-bundle-before-close rule
+        broken in a way no later poll could repair.
+        """
+        row = attempt_row(1, scheduler_job_id=None,
+                          submitted_at=utc(2026, 8, 6, 11, 0, 0))
+        conn = FakeConnection(rows=[row])
+        key = self._absent_bundle(row)
+        records = InMemoryObjectStore()
+        diagnostics = InMemoryObjectStore()
+
+        def refuse(*_args, **_kwargs):
+            raise RuntimeError("the diagnostics bucket denies writes")
+
+        diagnostics.put_if_absent = refuse
+        svc = service.ReconcilerService(
+            conn=conn, batch_client=FakeBatch(jobs=[]),
+            records_store=records, diagnostics_store=diagnostics,
+            s3_client=FakeS3Tagging(missing=[key]),
+            records_prefix=PREFIX, diagnostics_bucket=DIAGNOSTICS,
+            now=lambda: utc(2026, 8, 6, 12, 0, 0))
+
+        summary = svc.poll_once()
+
+        self.assertEqual(1, summary["deferred"])
+        self.assertEqual("submitted", conn.rows[1]["lifecycle_state"])
+        # Nothing published: no closure record citing a bundle that is absent.
+        self.assertEqual([], list(records.objects))
 
 
 class SchedulerDiscoveryTests(unittest.TestCase):

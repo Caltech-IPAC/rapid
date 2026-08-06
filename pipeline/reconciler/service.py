@@ -953,13 +953,35 @@ class ReconcilerService:
         stamped = retention_mod.stamp_retention(
             self.s3, self.diagnostics_bucket, key, row, retention_class)
 
-        if stamped is None and self._attempt_ran(row, predecessor, observation):
-            self._missing_bundles += 1
-            logger.warning(
-                "attempt %s ran but has no diagnostics bundle at %s; the "
-                "evidence for a real execution is absent, which is NOT the "
-                "never-started 'nothing to retain' case",
-                row["attempt_id"], key)
+        if stamped is None:
+            ran = self._attempt_ran(row, predecessor, observation)
+            if ran:
+                self._missing_bundles += 1
+                logger.warning(
+                    "attempt %s ran but has no diagnostics bundle at %s; the "
+                    "evidence for a real execution is absent, which is NOT the "
+                    "never-started 'nothing to retain' case",
+                    row["attempt_id"], key)
+            else:
+                # THE RULE HAS NO EXCEPTION IN IT (round-4 finding #5). A
+                # never-started attempt used to be left with no bundle at all,
+                # on the reasoning that it had no container in which to build
+                # one and so "nothing to retain" was the literal truth. The
+                # adopted design says otherwise — it names "abrupt loss, or
+                # never started" as the reconstruction cases together, and
+                # puts the bundle before EVERY close.
+                #
+                # It is also the more useful truth. What is retained for an
+                # attempt that never started is not its output but the account
+                # of its non-execution: what was submitted, what the scheduler
+                # said (or that it said nothing), and why the reconciler closed
+                # it. Without that the only trace of a provisioning failure is
+                # a terminal row, and terminal rows are outside the open set —
+                # nothing ever comes back to explain them.
+                logger.info(
+                    "attempt %s never started and has no diagnostics bundle "
+                    "at %s; building the minimal reconstructed bundle that "
+                    "records its non-execution", row["attempt_id"], key)
 
             # AND THEN BUILD ONE (round-3 finding #5). Noticing the gap and
             # continuing to the terminal transition is what left abruptly
@@ -982,7 +1004,8 @@ class ReconcilerService:
                 self.logs, self.log_group, now=self._now())
             if rebuilt is None:
                 raise BundleReconstructionFailed(
-                    f"attempt {row['attempt_id']} ran, has no diagnostics "
+                    f"attempt {row['attempt_id']} "
+                    f"{'ran' if ran else 'never started'}, has no diagnostics "
                     f"bundle at {key}, and one could not be written there. "
                     f"Deferring rather than closing an attempt whose evidence "
                     f"is missing and unrecoverable.")
@@ -1145,6 +1168,30 @@ class ReconcilerService:
                                      columns=_OPEN_COLUMNS)
             if current is None or current["lifecycle_state"] not in OPEN_STATES:
                 return "skipped"
+
+            # THE BUNDLE COMES FIRST, AND IT IS NOT OPTIONAL (round-4 finding
+            # #5). This path used to publish a closure record and transition
+            # the row without invoking bundle handling at all — so the one
+            # class of attempt the design explicitly names for reconstruction,
+            # "never started", was the one class that closed with no
+            # diagnostics whatsoever. The rule the design states is
+            # unconditional: the bundle exists before the attempt is closed.
+            #
+            # BEFORE the closure record, not after, so the ordering matches
+            # the rule rather than merely satisfying it by coincidence. If the
+            # bundle cannot be written the attempt defers with nothing
+            # published, which is recoverable; the reverse order would leave a
+            # published closure citing an attempt whose bundle never appeared.
+            try:
+                self._stamp_bundle(current, None, None)
+            except Exception:  # noqa: BLE001 - deferred, not swallowed (#16)
+                self._closure_failures += 1
+                logger.exception(
+                    "could not write or stamp the diagnostics bundle for "
+                    "unresolved attempt %s; it stays open and the next poll "
+                    "retries it rather than closing with no evidence",
+                    attempt_id)
+                return "deferred"
 
             record = closure_mod.build_closure_record(
                 current, None,
