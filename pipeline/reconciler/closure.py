@@ -185,11 +185,75 @@ def _iso(value):
     return value.isoformat()
 
 
+def read_attempt_stages(conn, attempt_id):
+    """The attempt's own stage rows, for a reconciler-first record.
+
+    A started attempt that died before writing sequence 0 still left
+    `attempt_stages` rows behind — the runtime writes each one as the stage
+    finishes, precisely so the boundaries survive a crash. The reconstruction
+    read only the attempt row and the scheduler observation, so those rows were
+    on the other side of the same transaction and never folded in: the
+    published record claimed to be the complete terminal account while the
+    stage detail sat in a table nobody asked (review finding #16).
+
+    Returns a list in stage order. A query failure returns None — DISTINCT from
+    an empty list, which means the attempt genuinely recorded no stages — so
+    the caller can say which of the two the record reflects.
+    """
+    if conn is None or attempt_id is None:
+        return None
+    sql = ("SELECT stage_name, outcome, started_at, duration_ms,"
+           "       error_category"
+           "  FROM attempt_stages WHERE attempt_id = %s"
+           " ORDER BY started_at, stage_name")
+    try:
+        with conn.cursor() as cur:
+            cur.execute(sql, (attempt_id,))
+            names = [description[0] for description in cur.description]
+            rows = [dict(zip(names, row)) for row in cur.fetchall()]
+    except Exception as exc:  # noqa: BLE001 - absence and failure differ
+        logger.warning("could not read attempt_stages for %s: %s",
+                       attempt_id, exc)
+        return None
+    for row in rows:
+        row["started_at"] = _iso(row.get("started_at"))
+    return rows
+
+
+def read_log_stream(logs_client, log_group, log_stream, limit=200):
+    """The tail of the attempt's CloudWatch stream, as a safety net.
+
+    The record used to CLAIM the stream as a source while never fetching a byte
+    of it, which is worse than omitting it — a consumer trusting the claim
+    would believe the stage boundaries had been recovered (that half was fixed
+    in FixA by demoting it to a pointer). This reads it for real, so the claim
+    and the content agree.
+
+    Deliberately the TAIL and deliberately bounded: what a reconstruction needs
+    is how the attempt ended, and a record is not a log archive. Returns None
+    if it cannot be read — a missing log is not a reason to fail a closure.
+    """
+    if logs_client is None or not log_stream or not log_group:
+        return None
+    try:
+        response = logs_client.get_log_events(
+            logGroupName=log_group, logStreamName=log_stream,
+            limit=limit, startFromHead=False)
+    except Exception as exc:  # noqa: BLE001 - a safety net, not a dependency
+        logger.warning("could not read log stream %s/%s: %s",
+                       log_group, log_stream, exc)
+        return None
+    return [{"timestamp": event.get("timestamp"),
+             "message": event.get("message")}
+            for event in response.get("events", ())]
+
+
 def build_closure_record(attempt_row, observation, sequence,
                          predecessor=None, rejected_key=None,
                          rejected_reason=None, classification=None,
                          error_category=None, bundle=None,
-                         binding_drift=None, now=None):
+                         binding_drift=None, stages=None, log_tail=None,
+                         now=None):
     """Build the complete canonical snapshot for one classification.
 
     `attempt_row` is a mapping of the attempt's database columns — the fallback
@@ -247,14 +311,27 @@ def build_closure_record(attempt_row, observation, sequence,
         body["reconstructed_from"] = sorted(
             source for source in
             (("attempt_row" if attempt_row else None),
-             ("scheduler" if observation is not None else None))
+             ("scheduler" if observation is not None else None),
+             # Named only where they were actually read, which is the whole
+             # rule: `stages` is None when the query failed and a list (even
+             # an empty one) when it answered.
+             ("attempt_stages" if stages is not None else None),
+             ("log_stream" if log_tail else None))
             if source)
+
+        # The attempt's own stage rows (review finding #16). A started attempt
+        # that died before writing sequence 0 still left these behind — the
+        # runtime writes each as the stage finishes, precisely so the
+        # boundaries survive a crash — and the reconstruction never asked.
+        if stages is not None:
+            body["stages"] = stages
         if observation is not None and observation.log_stream:
-            # A pointer, explicitly not a source: nothing here read it.
             body["safety_stream"] = {
                 "log_stream": observation.log_stream,
-                "read": False,
+                "read": bool(log_tail),
             }
+            if log_tail:
+                body["safety_stream"]["events"] = log_tail
         if rejected_key:
             body["rejected_predecessor"] = {
                 "key": rejected_key,

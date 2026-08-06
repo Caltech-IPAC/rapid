@@ -464,6 +464,20 @@ def case_crash_between_record_and_row(writer, conn, store, prefix):
     account; the reconciler materializes the row FROM it, values verbatim,
     marked reconciler-materialized. That mark is the row-level analog of
     the adopted marked-reconstruction rule.
+
+    REWRITTEN in round 2. This case used to write sequence 0 and then call
+    `writer.mark_application_closed` ITSELF, passing the key and checksum it
+    happened to be holding — so it proved the DDL accepts that transition, and
+    nothing about whether the reconciler can perform it. The real defect lived
+    exactly in the gap the case stepped over: in this crash state the row's
+    `terminal_record_key` and `terminal_record_checksum` are NULL, the record
+    body cannot carry either, and PostgreSQL requires a non-null key. Every
+    real reconciliation pass attempted an illegal transition and left the
+    attempt `started` forever (review finding #14).
+
+    So the case now drives `ReconcilerService.poll_once` against the real row,
+    the real record and the real constraints, and asserts the row ends up
+    citing the key and checksum the reconciler derived for itself.
     """
     attempt_id, identity, _ = new_attempt(writer, conn, "1", 999104, 4)
     writer.mark_started(attempt_id, now(), provenance_for(),
@@ -479,24 +493,72 @@ def case_crash_between_record_and_row(writer, conn, store, prefix):
               "application_intended_exit": 0, "record_sequence": 0}
     written = termination.write_terminal_record(store, key, record)
 
-    # The crash is here: the record exists, the row is still `started`.
+    # The crash is here: the record exists, the row is still `started`, and
+    # NEITHER citation column is set — which is the whole point.
     state_before = row_of(conn, attempt_id, "lifecycle_state")
+    key_before = row_of(conn, attempt_id, "terminal_record_key")
 
-    writer.mark_application_closed(
-        attempt_id, now(), 0, RapidOutcome.SUCCESS,
-        ProductDisposition.PUBLISHED, key,
-        terminal_record_sequence=0,
-        terminal_record_checksum=written["checksum"],
-        reconciler_materialized=True)
+    scheduler_job_id = row_of(conn, attempt_id, "scheduler_job_id")
+    service = ReconcilerService(
+        conn=conn,
+        batch_client=_SucceededBatch(scheduler_job_id),
+        records_store=store, diagnostics_store=store,
+        s3_client=boto3.client("s3"),
+        records_prefix=prefix,
+        diagnostics_bucket=os.environ.get("RAPID_DIAGNOSTICS_BUCKET",
+                                          "roman-rapid-diagnostics"))
+    summary = service.poll_once()
 
     state_after = row_of(conn, attempt_id, "lifecycle_state")
     materialized = row_of(conn, attempt_id, "reconciler_materialized")
-    check("12/materialized-from-a-valid-record",
+    key_after = row_of(conn, attempt_id, "terminal_record_key")
+    checksum_after = row_of(conn, attempt_id, "terminal_record_checksum")
+
+    check("12/materialized-by-the-reconciler-from-a-valid-record",
           state_before == LifecycleState.STARTED.value
-          and state_after == LifecycleState.APPLICATION_CLOSED.value
-          and materialized is True,
-          f"{state_before} -> {state_after}, reconciler_materialized={materialized}")
+          and key_before is None
+          and materialized is True
+          and state_after in (LifecycleState.APPLICATION_CLOSED.value,
+                              LifecycleState.TERMINAL_AFTER_START.value),
+          f"{state_before} -> {state_after}, "
+          f"reconciler_materialized={materialized}, summary={summary}")
+
+    # The CHECKSUM is the evidence, not the key. Materialization supplies
+    # sequence 0's key and checksum — both NULL on the row and absent from the
+    # body, which is what made the transition illegal — and then
+    # `mark_terminal_after_start` advances the row's key citation to the
+    # reconciler's own sequence-1 record, which is by then the authoritative
+    # account. The checksum survives that write because sequence 1 folds the
+    # predecessor's facts in verbatim.
+    check("12b/materialization-supplied-the-checksum-it-computed",
+          checksum_after == written["checksum"],
+          f"row cites checksum={checksum_after!r} "
+          f"(expected sequence 0's {written['checksum']!r}); "
+          f"key now cites {key_after!r}")
+
     return attempt_id, key, written["checksum"]
+
+
+class _SucceededBatch:
+    """A Batch client that reports one job SUCCEEDED, for the battery.
+
+    The battery's rows carry synthetic scheduler job ids that Batch has never
+    heard of, so a real `describe_jobs` returns nothing and the attempt goes
+    down the unresolved path instead of the one under test. This answers for
+    exactly the job id asked about and nothing else.
+    """
+
+    def __init__(self, job_id):
+        self.job_id = job_id
+
+    def describe_jobs(self, jobs):
+        return {"jobs": [{"jobId": job_id,
+                          "status": "SUCCEEDED",
+                          "createdAt": 1,
+                          "startedAt": 2,
+                          "stoppedAt": 3,
+                          "container": {"exitCode": 0}}
+                         for job_id in jobs if job_id == self.job_id]}
 
 
 def case_no_retry_on_clean_application_failure(writer, conn):
@@ -635,11 +697,11 @@ def case_checksum_invalid_predecessor(store, prefix, writer, conn):
     termination.write_terminal_record(store, key,
                                       {"attempt_id": attempt_id + 90000,
                                        "run_id": RUN, "record_sequence": 0})
-    body, reason = read_predecessor(store, key, attempt_id)
+    read = read_predecessor(store, key, attempt_id)
     check("18/invalid-predecessor-rejected-by-name",
-          body is None and reason is not None,
-          f"rejected: {reason}")
-    return attempt_id, key, reason
+          read.body is None and read.reason is not None and not read.deferred,
+          f"rejected: {read.reason}")
+    return attempt_id, key, read.reason
 
 
 def case_reconciler_first_on_never_started(store, records_prefix, writer, conn):

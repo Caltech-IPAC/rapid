@@ -67,6 +67,11 @@ def build_service(session, parameters, conn):
         s3_client=s3,
         records_prefix=parameters["s3/records-prefix"],
         diagnostics_bucket=diagnostics_bucket,
+        # CloudWatch, for reconstructing a record with no predecessor (#16).
+        # The log group is a parameter rather than a constant because it is
+        # the Batch job definition's, and the definition owns that name.
+        logs_client=session.client("logs"),
+        log_group=parameters.get("logs/job-log-group", "/aws/batch/job"),
     )
 
 

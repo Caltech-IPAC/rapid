@@ -630,6 +630,152 @@ class StoreFaultTests(unittest.TestCase):
         self.assertEqual(1, svc.poll_once()["classified"])
 
 
+class ReconstructionCompletenessTests(unittest.TestCase):
+    """A reconstruction reads what the attempt left behind (#16).
+
+    The record used to be built from the attempt row and the scheduler
+    observation alone, while a started attempt that died before writing
+    sequence 0 had also left `attempt_stages` rows — the runtime writes each
+    as the stage finishes, precisely so the boundaries survive a crash — and a
+    CloudWatch stream the record NAMED but never read.
+    """
+
+    STAGES = [("download", "success", utc(2026, 8, 6, 11, 0, 0), 1200, None),
+              ("difference", "failure", utc(2026, 8, 6, 11, 1, 0), 900,
+               "tool_failure")]
+
+    def _build(self, logs=None, stage_rows=None):
+        row = attempt_row(1, lifecycle_state="started",
+                          started_at=utc(2026, 8, 6, 11, 0, 0))
+        jobs = [batch_job(status="FAILED", exit_code=137,
+                          started=utc(2026, 8, 6, 11, 0, 0),
+                          stopped=utc(2026, 8, 6, 11, 5, 0))]
+        svc, conn, _, store, _ = build([row], jobs)
+        svc.logs = logs
+        svc.log_group = "/aws/batch/job"
+
+        original = conn.route
+        rows = self.STAGES if stage_rows is None else stage_rows
+
+        def route(text, params):
+            if "attempt_stages" in text.lower():
+                return (list(rows),
+                        [("stage_name",), ("outcome",), ("started_at",),
+                         ("duration_ms",), ("error_category",)])
+            return original(text, params)
+
+        conn.route = route
+        return svc, store
+
+    def _record(self, store):
+        return json.loads(store.get(
+            "attempts/records/run-1/90000_1/attempt-1/seq-0001.json"))
+
+    def test_the_attempts_own_stages_are_folded_in(self):
+        svc, store = self._build()
+
+        svc.poll_once()
+
+        body = self._record(store)
+        self.assertEqual([stage["stage_name"] for stage in body["stages"]],
+                         ["download", "difference"])
+        self.assertIn("attempt_stages", body["reconstructed_from"])
+
+    def test_the_log_stream_is_read_not_merely_named(self):
+        class FakeLogs:
+            def get_log_events(self, **_kwargs):
+                return {"events": [{"timestamp": 1, "message": "boom"}]}
+
+        svc, store = self._build(logs=FakeLogs())
+
+        svc.poll_once()
+
+        body = self._record(store)
+        self.assertTrue(body["safety_stream"]["read"])
+        self.assertEqual([e["message"] for e in
+                          body["safety_stream"]["events"]], ["boom"])
+        self.assertIn("log_stream", body["reconstructed_from"])
+
+    def test_an_unreadable_log_is_not_claimed_as_a_source(self):
+        # Claiming evidence nobody read is worse than omitting it: a consumer
+        # trusting the claim believes the boundaries were recovered.
+        class Broken:
+            def get_log_events(self, **_kwargs):
+                raise RuntimeError("AccessDenied")
+
+        svc, store = self._build(logs=Broken())
+
+        svc.poll_once()
+
+        body = self._record(store)
+        self.assertFalse(body["safety_stream"]["read"])
+        self.assertNotIn("log_stream", body["reconstructed_from"])
+
+    def test_an_agreed_closure_does_not_re_read_what_it_already_has(self):
+        # A predecessor folds in the application's own stages verbatim; going
+        # back to the tables would be a second, disagreeing source.
+        row = attempt_row(1, lifecycle_state="application_closed",
+                          started_at=utc(2026, 8, 6, 11, 0, 0))
+        store = InMemoryObjectStore()
+        seed_record(store, row, application_record(
+            1, stages=[{"stage_name": "authored", "outcome": "success"}]))
+        jobs = [batch_job(status="SUCCEEDED", exit_code=0,
+                          started=utc(2026, 8, 6, 11, 0, 0),
+                          stopped=utc(2026, 8, 6, 11, 5, 0))]
+        svc, _, _, _, _ = build([row], jobs, records=store)
+
+        svc.poll_once()
+
+        body = self._record(store)
+        self.assertEqual([s["stage_name"] for s in body["stages"]],
+                         ["authored"])
+
+    def _absent_bundle(self, row):
+        from pipeline.runtime import termination
+        return termination.bundle_key(
+            PREFIX, row["run_id"], row["logical_job_id"], row["attempt_id"])
+
+    def test_a_missing_bundle_for_an_attempt_that_ran_is_counted(self):
+        # "Nothing to retain" is the literal truth only for an attempt that
+        # never started. For one that ran, an absent bundle means the
+        # diagnostics for a real execution are gone, and accepting that
+        # silently is how that evidence disappears with nothing recorded.
+        row = attempt_row(1, lifecycle_state="started",
+                          started_at=utc(2026, 8, 6, 11, 0, 0))
+        jobs = [batch_job(status="FAILED", exit_code=137,
+                          started=utc(2026, 8, 6, 11, 0, 0),
+                          stopped=utc(2026, 8, 6, 11, 5, 0))]
+        conn = FakeConnection(rows=[row])
+        tagging = FakeS3Tagging(missing=[self._absent_bundle(row)])
+        svc = service.ReconcilerService(
+            conn=conn, batch_client=FakeBatch(jobs=jobs),
+            records_store=InMemoryObjectStore(),
+            diagnostics_store=InMemoryObjectStore(), s3_client=tagging,
+            records_prefix=PREFIX, diagnostics_bucket=DIAGNOSTICS,
+            now=lambda: utc(2026, 8, 6, 12, 0, 0))
+
+        svc.poll_once()
+
+        self.assertEqual(1, svc.health()["missing_bundles"])
+
+    def test_a_never_started_attempt_has_genuinely_nothing_to_retain(self):
+        row = attempt_row(1, lifecycle_state="submitted")
+        jobs = [batch_job(status="FAILED", exit_code=None, started=None,
+                          stopped=utc(2026, 8, 6, 11, 0, 0))]
+        conn = FakeConnection(rows=[row])
+        tagging = FakeS3Tagging(missing=[self._absent_bundle(row)])
+        svc = service.ReconcilerService(
+            conn=conn, batch_client=FakeBatch(jobs=jobs),
+            records_store=InMemoryObjectStore(),
+            diagnostics_store=InMemoryObjectStore(), s3_client=tagging,
+            records_prefix=PREFIX, diagnostics_bucket=DIAGNOSTICS,
+            now=lambda: utc(2026, 8, 6, 12, 0, 0))
+
+        svc.poll_once()
+
+        self.assertEqual(0, svc.health()["missing_bundles"])
+
+
 class SchedulerDiscoveryTests(unittest.TestCase):
     """Every scheduler attempt gets a row, through the resolver (#4)."""
 

@@ -169,6 +169,7 @@ class ReconcilerService:
 
     def __init__(self, conn, batch_client, records_store, diagnostics_store,
                  s3_client, records_prefix, diagnostics_bucket,
+                 logs_client=None, log_group=None,
                  now=None):
         self.conn = conn
         self.batch = batch_client
@@ -177,6 +178,12 @@ class ReconcilerService:
         self.s3 = s3_client
         self.records_prefix = records_prefix
         self.diagnostics_bucket = diagnostics_bucket
+        #: CloudWatch Logs, read only when reconstructing a record with no
+        #: predecessor (#16). Optional: a missing log is a thinner
+        #: reconstruction, not a failed closure, so the service works without
+        #: one and says so in `reconstructed_from`.
+        self.logs = logs_client
+        self.log_group = log_group
         self._now = now or (
             lambda: datetime.datetime.now(datetime.timezone.utc))
         #: Consecutive polls that raised. Reset by any poll that completes.
@@ -193,6 +200,10 @@ class ReconcilerService:
         #: none of them (#24). Reset by any poll that closes something, or that
         #: had nothing to close.
         self.consecutive_unproductive_polls = 0
+        #: Attempts that RAN but had no diagnostics bundle to stamp (#16).
+        #: Distinct from the never-started case, where there is genuinely
+        #: nothing to retain.
+        self._missing_bundles = 0
 
     # -- health ----------------------------------------------------------
 
@@ -232,6 +243,7 @@ class ReconcilerService:
             "consecutive_unproductive_polls":
                 self.consecutive_unproductive_polls,
             "binding_drift": self._binding_drift,
+            "missing_bundles": self._missing_bundles,
             "poll_failure_threshold": POLL_FAILURE_THRESHOLD,
             "unproductive_poll_threshold": CLOSURE_FAILURE_POLL_THRESHOLD,
         }
@@ -717,6 +729,21 @@ class ReconcilerService:
             classification = CLASS_ABRUPT_LOSS
             error_category = observation.reconciler_category() or "internal_error"
 
+        # A RECONSTRUCTION READS WHAT SURVIVED (review finding #16). Where
+        # there is no predecessor to fold in, the record is built from
+        # whatever the attempt left behind — and the attempt left more than
+        # the row: `attempt_stages` rows written as each stage finished, and
+        # the CloudWatch stream. Reading them is what makes "complete
+        # canonical snapshot" true of a reconstructed record rather than
+        # merely claimed by it.
+        stages = None
+        log_tail = None
+        if predecessor is None:
+            stages = closure_mod.read_attempt_stages(self.conn, attempt_id)
+            log_tail = closure_mod.read_log_stream(
+                self.logs, self.log_group,
+                observation.log_stream if observation is not None else None)
+
         record = closure_mod.build_closure_record(
             row, observation,
             sequence=self._next_sequence(row),
@@ -725,6 +752,7 @@ class ReconcilerService:
             rejected_reason=rejected,
             classification=classification,
             error_category=error_category,
+            stages=stages, log_tail=log_tail,
             # Drift goes INTO the record, not only into a log line (#11): the
             # closure record is the durable terminal account, and "this
             # attempt ran under a definition nobody recorded" belongs in it.
@@ -862,9 +890,15 @@ class ReconcilerService:
         are outside the open set, so nothing ever revisited it. The caller now
         defers the attempt instead, and the next poll retries the stamp.
 
-        An ABSENT bundle is still not a failure: an attempt that died before
-        uploading one has nothing to tag, and that is a recorded fact rather
-        than an error. `stamp_retention` distinguishes the two.
+        An absent bundle is not a failure — but only for an attempt that
+        genuinely NEVER STARTED (round 2 of #16). Such an attempt had no
+        container in which to build one, so "nothing to retain" is the literal
+        truth. For an attempt that DID run, an absent bundle means the
+        diagnostics for a real execution are gone, and accepting that silently
+        is how the evidence for a failed attempt disappears with nothing
+        recorded. It is noted on the row's own closure account instead, so the
+        gap is visible rather than indistinguishable from the never-started
+        case.
         """
         key = termination.bundle_key(
             self.records_prefix, row["run_id"], row["logical_job_id"],
@@ -873,8 +907,17 @@ class ReconcilerService:
             "rapid_outcome")
         retention_class = retention_mod.retention_class_for(
             outcome, observation.state if observation is not None else None)
-        return retention_mod.stamp_retention(
+        stamped = retention_mod.stamp_retention(
             self.s3, self.diagnostics_bucket, key, row, retention_class)
+
+        if stamped is None and self._attempt_ran(row, predecessor, observation):
+            self._missing_bundles += 1
+            logger.warning(
+                "attempt %s ran but has no diagnostics bundle at %s; the "
+                "evidence for a real execution is absent, which is NOT the "
+                "never-started 'nothing to retain' case",
+                row["attempt_id"], key)
+        return stamped
 
     def _transition(self, row, observation, writer, record, written,
                     classification, error_category, read=None):
