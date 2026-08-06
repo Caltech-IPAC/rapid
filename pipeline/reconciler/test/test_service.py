@@ -6,6 +6,7 @@ import unittest
 from pipeline.reconciler import service
 from pipeline.reconciler.test.stubs import (
     FakeBatch, FakeConnection, FakeS3Tagging, attempt_row, batch_job, ms, utc)
+from pipeline.runtime import boundaries
 from pipeline.runtime.boundaries import InMemoryObjectStore
 
 PREFIX = "attempts"
@@ -204,6 +205,43 @@ class AgreedClosureTests(unittest.TestCase):
         # ...beside the scheduler's contradicting exit code, preserved.
         self.assertEqual(70, body["scheduler_observed_exit"])
         self.assertFalse(body["reconstructed"])
+
+    def test_materialization_supplies_the_key_and_checksum_it_validated(self):
+        """The record-written/row-not-closed crash boundary (#14).
+
+        The row is `started` with NULL terminal_record_key and NULL checksum —
+        the application sets both in the transition that never landed — and the
+        record BODY cannot carry them either, because a record cannot contain
+        its own key or the checksum of its own bytes. PostgreSQL requires a
+        non-null key for `application_closed`, so reading them from the body or
+        the row attempted an illegal transition on every pass and left the
+        attempt `started` forever.
+        """
+        row = attempt_row(1, lifecycle_state="started",
+                          started_at=utc(2026, 8, 6, 11, 0, 0),
+                          terminal_record_key=None,
+                          terminal_record_checksum=None)
+        store = InMemoryObjectStore()
+        key = seed_record(store, row, application_record(1))
+        jobs = [batch_job(status="SUCCEEDED", exit_code=0,
+                          started=utc(2026, 8, 6, 11, 0, 0),
+                          stopped=utc(2026, 8, 6, 11, 5, 0))]
+        svc, conn, _, _, _ = build([row], jobs, records=store)
+
+        summary = svc.poll_once()
+
+        self.assertEqual(1, summary["classified"])
+        closed = [params for text, params in conn.statements
+                  if "reconciler_materialized" in text and params
+                  and "application_closed" in params]
+        self.assertTrue(closed, "no application_closed transition was written")
+        params = closed[-1]
+        # The key it read from, and the checksum it computed over those bytes.
+        # Both were NULL on the row and absent from the body — the illegal
+        # transition PostgreSQL rejects on every pass.
+        expected = boundaries.checksum(store.get(key))
+        self.assertIn(key, params)
+        self.assertIn(expected, params)
 
 
 class ReconcilerFirstTests(unittest.TestCase):
@@ -510,6 +548,183 @@ class RetryHistoryTests(unittest.TestCase):
         self.assertEqual(0, second["scheduler_observed_exit"])
 
 
+class StoreFaultTests(unittest.TestCase):
+    """A store that cannot answer is not evidence about the attempt (#16)."""
+
+    def _faulting_store(self, seeded_row, on):
+        store = InMemoryObjectStore()
+        seed_record(store, seeded_row, application_record(1))
+        original = getattr(store, on)
+
+        def explode(*args, **kwargs):
+            if args and str(args[0]).endswith("seq-0000.json"):
+                raise RuntimeError("AccessDenied")
+            return original(*args, **kwargs)
+
+        setattr(store, on, explode)
+        return store
+
+    def test_a_head_fault_defers_rather_than_closing(self):
+        # The failure the review named: sequence 0 exists with product and
+        # stage details, a transient GetObject failure occurs, and the
+        # reconciler publishes an authoritative record WITHOUT those facts and
+        # terminalizes the row — which nothing revisits, because terminal rows
+        # are outside the open set.
+        row = attempt_row(1, lifecycle_state="started",
+                          started_at=utc(2026, 8, 6, 11, 0, 0))
+        store = self._faulting_store(row, "head")
+        jobs = [batch_job(status="SUCCEEDED", exit_code=0,
+                          started=utc(2026, 8, 6, 11, 0, 0),
+                          stopped=utc(2026, 8, 6, 11, 5, 0))]
+        svc, conn, _, _, _ = build([row], jobs, records=store)
+
+        summary = svc.poll_once()
+
+        self.assertEqual(1, summary["deferred"])
+        self.assertEqual(0, summary["classified"])
+        # Nothing was terminalized. (Recording the scheduler's observation is
+        # not a transition: it is this service's own fact to author, and the
+        # row stays open either way.)
+        transitions = [text for text, _ in conn.statements
+                       if "lifecycle_state = %s" in text]
+        self.assertEqual([], transitions)
+        # ...and no lossy record was published in place of the real one.
+        self.assertIsNone(store.head(
+            "attempts/records/run-1/90000_1/attempt-1/seq-0001.json"))
+
+    def test_a_get_fault_defers_too(self):
+        row = attempt_row(1, lifecycle_state="started",
+                          started_at=utc(2026, 8, 6, 11, 0, 0))
+        store = self._faulting_store(row, "get")
+        jobs = [batch_job(status="SUCCEEDED", exit_code=0,
+                          started=utc(2026, 8, 6, 11, 0, 0),
+                          stopped=utc(2026, 8, 6, 11, 5, 0))]
+        svc, _, _, _, _ = build([row], jobs, records=store)
+
+        self.assertEqual(1, svc.poll_once()["deferred"])
+
+    def test_a_deferral_is_counted_so_a_persistent_fault_is_visible(self):
+        row = attempt_row(1, lifecycle_state="started",
+                          started_at=utc(2026, 8, 6, 11, 0, 0))
+        store = self._faulting_store(row, "head")
+        jobs = [batch_job(status="SUCCEEDED", exit_code=0,
+                          started=utc(2026, 8, 6, 11, 0, 0),
+                          stopped=utc(2026, 8, 6, 11, 5, 0))]
+        svc, _, _, _, _ = build([row], jobs, records=store)
+
+        svc.poll_once()
+
+        self.assertEqual(1, svc.health()["closure_failures"])
+
+    def test_a_genuinely_absent_record_still_closes(self):
+        # The deferral must not swallow the real absent case: an attempt that
+        # died before writing sequence 0 has no record to wait for, and its
+        # reconciler-first closure is the designed outcome.
+        row = attempt_row(1, lifecycle_state="started",
+                          started_at=utc(2026, 8, 6, 11, 0, 0))
+        jobs = [batch_job(status="FAILED", exit_code=137,
+                          started=utc(2026, 8, 6, 11, 0, 0),
+                          stopped=utc(2026, 8, 6, 11, 5, 0))]
+        svc, _, _, _, _ = build([row], jobs)
+
+        self.assertEqual(1, svc.poll_once()["classified"])
+
+
+class SchedulerDiscoveryTests(unittest.TestCase):
+    """Every scheduler attempt gets a row, through the resolver (#4)."""
+
+    def _retry_job(self):
+        return batch_job(status="SUCCEEDED", attempts=[
+            {"startedAt": ms(utc(2026, 8, 6, 10, 0, 0)),
+             "stoppedAt": ms(utc(2026, 8, 6, 10, 2, 0)),
+             "statusReason": "Host EC2 instance terminated",
+             "container": {"exitCode": 137}},
+            {"startedAt": ms(utc(2026, 8, 6, 10, 10, 0)),
+             "stoppedAt": ms(utc(2026, 8, 6, 10, 12, 0)),
+             "container": {"exitCode": 0}},
+        ])
+
+    def test_an_attempt_with_no_row_is_resolved_one(self):
+        # Attempt 1 failed during provisioning and attempt 2 ran. Only attempt
+        # 2's row exists; attempt 1 received no row, no binding, no category,
+        # no closure record and no retention account.
+        rows = [attempt_row(2, lifecycle_state="started",
+                            application_attempt_index=2)]
+        svc, conn, _, _, _ = build(rows, [self._retry_job()])
+
+        summary = svc.poll_once()
+
+        self.assertEqual(1, summary["discovered"])
+        resolved = [(text, params) for text, params in conn.statements
+                    if "resolve_attempt" in text]
+        self.assertTrue(resolved, "the resolver was never called")
+        # Acquisition goes through the resolver and never a bare INSERT.
+        self.assertFalse([text for text, _ in conn.statements
+                          if "insert into attempts" in text.lower()])
+        # The scheduler index it was missing, one-based as stored.
+        self.assertIn(1, resolved[-1][1])
+
+    def test_rows_that_already_exist_are_not_re_resolved(self):
+        rows = [attempt_row(1, lifecycle_state="started",
+                            application_attempt_index=1),
+                attempt_row(2, lifecycle_state="started",
+                            application_attempt_index=2)]
+        svc, conn, _, _, _ = build(rows, [self._retry_job()])
+
+        summary = svc.poll_once()
+
+        self.assertEqual(0, summary["discovered"])
+        self.assertFalse([text for text, _ in conn.statements
+                          if "resolve_attempt" in text])
+
+    def test_a_single_attempt_job_resolves_nothing(self):
+        rows = [attempt_row(1, lifecycle_state="started")]
+        jobs = [batch_job(status="SUCCEEDED", exit_code=0,
+                          started=utc(2026, 8, 6, 11, 0, 0),
+                          stopped=utc(2026, 8, 6, 11, 5, 0))]
+        svc, _, _, _, _ = build(rows, jobs)
+
+        self.assertEqual(0, svc.poll_once()["discovered"])
+
+    def test_a_resolver_failure_does_not_take_the_cycle_down(self):
+        rows = [attempt_row(2, lifecycle_state="started",
+                            application_attempt_index=2)]
+        svc, conn, _, _, _ = build(rows, [self._retry_job()])
+        original = conn.route
+
+        def route(text, params):
+            if "resolve_attempt" in text:
+                raise RuntimeError("deadlock detected")
+            return original(text, params)
+
+        conn.route = route
+
+        summary = svc.poll_once()
+
+        self.assertEqual(0, summary["discovered"])
+        # The attempt that DOES have a row is still reconciled.
+        self.assertEqual(1, summary["classified"])
+
+    def test_an_unindexed_row_picks_the_first_attempt_deterministically(self):
+        # The pre-created-row case: created at submission, before any attempt
+        # existed, so it carries no index. Returning None sent it down the
+        # unresolved path, which eventually closed it `never_resolved` —
+        # asserting it never ran while the scheduler's history says otherwise.
+        rows = [attempt_row(1, lifecycle_state="submitted",
+                            application_attempt_index=None,
+                            scheduler_attempt_index=None)]
+        svc, _, _, store, _ = build(rows, [self._retry_job()])
+
+        svc.poll_once()
+
+        body = json.loads(store.get(
+            "attempts/records/run-1/90000_1/attempt-1/seq-0001.json"))
+        # The submitter's row stands for the job's FIRST attempt: exit 137,
+        # not the final attempt's 0.
+        self.assertEqual(1, body["scheduler_attempt_index"])
+        self.assertEqual(137, body["scheduler_observed_exit"])
+
+
 class ResilienceTests(unittest.TestCase):
     def test_one_bad_attempt_does_not_take_the_cycle_down(self):
         rows = [attempt_row(1, lifecycle_state="started"),
@@ -709,6 +924,58 @@ class HealthTests(unittest.TestCase):
         svc.consecutive_poll_failures = service.POLL_FAILURE_THRESHOLD
         self.assertFalse(svc.healthy)
         self.assertFalse(svc.health()["healthy"])
+
+    def test_persistent_per_row_failure_flips_the_unit(self):
+        """Round 2 of #24: closing NOTHING, forever, while reporting healthy.
+
+        `poll_once` catches every per-attempt exception by design — one bad row
+        must not take the cycle down — so a service whose every closure failed
+        returned normally each minute and the poll-failure counter never left
+        zero. Persistent per-row failure is as fatal as a failing poll: the
+        attempts never close and registration never sees them.
+        """
+        row = attempt_row(1, lifecycle_state="started",
+                          started_at=utc(2026, 8, 6, 11, 0, 0))
+        jobs = [batch_job(status="SUCCEEDED", exit_code=0,
+                          started=utc(2026, 8, 6, 11, 0, 0),
+                          stopped=utc(2026, 8, 6, 11, 5, 0))]
+        store = InMemoryObjectStore()
+
+        def refuse(*_args, **_kwargs):
+            raise RuntimeError("the records bucket denies writes")
+
+        store.put_if_absent = refuse
+        svc, _, _, _, _ = build([row], jobs, records=store)
+
+        for poll in range(service.CLOSURE_FAILURE_POLL_THRESHOLD):
+            self.assertTrue(svc.healthy, f"flipped early, after poll {poll}")
+            svc.poll_once()
+
+        self.assertFalse(svc.healthy)
+        health = svc.health()
+        self.assertFalse(health["healthy"])
+        self.assertEqual(service.CLOSURE_FAILURE_POLL_THRESHOLD,
+                         health["consecutive_unproductive_polls"])
+
+    def test_one_successful_closure_clears_the_unproductive_count(self):
+        # A single classified attempt proves the service can still work, so a
+        # run of deferrals must not accumulate toward the threshold across
+        # unrelated minutes.
+        svc, _, _, _, _ = build([], jobs=[])
+        svc.consecutive_unproductive_polls = 4
+
+        svc.poll_once()
+
+        self.assertEqual(0, svc.consecutive_unproductive_polls)
+
+    def test_an_idle_poll_is_not_an_unproductive_one(self):
+        # Nothing to close is not a failure to close.
+        svc, _, _, _, _ = build([], jobs=[])
+
+        for _ in range(service.CLOSURE_FAILURE_POLL_THRESHOLD + 2):
+            svc.poll_once()
+
+        self.assertTrue(svc.healthy)
 
 
 if __name__ == "__main__":

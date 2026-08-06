@@ -45,6 +45,17 @@ REJECTED_CHECKSUM = "checksum_invalid"
 REJECTED_IDENTITY = "identity_mismatch"
 REJECTED_UNREADABLE = "unreadable"
 
+#: A store fault, as distinct from a rejection. `read_predecessor` used to
+#: collapse the two: any exception from HEAD or GET became REJECTED_UNREADABLE,
+#: so an AccessDenied, a throttle or a timeout produced a reconciler-first
+#: record that terminalized the attempt *while the real sequence-0 record sat
+#: intact in the bucket* (review finding #16). The record is authoritative and
+#: complete-snapshot, so publishing one without facts that exist is
+#: unrecoverable — nothing revisits a terminal row. Transient faults now DEFER.
+#: Only a record that was genuinely read and genuinely failed validation is
+#: rejected.
+DEFERRED_STORE_FAULT = "store_fault"
+
 
 @dataclasses.dataclass(frozen=True)
 class ClosureRecord:
@@ -61,48 +72,94 @@ class ClosureRecord:
                           ensure_ascii=False).encode("utf-8")
 
 
+@dataclasses.dataclass(frozen=True)
+class Predecessor:
+    """The outcome of trying to read the application's sequence-0 record.
+
+    Exactly one of three shapes, and the caller must distinguish all three:
+
+    * **usable** — `body` is set. `key` and `checksum` are the record's own
+      identity, computed from the bytes just read.
+    * **rejected** — `reason` is a REJECTED_* constant. The record was read (or
+      definitively absent) and cannot be trusted; a reconciler-first record
+      cites it and the attempt closes.
+    * **deferred** — `reason` is `DEFERRED_STORE_FAULT`. Nothing is known: the
+      store could not answer. The attempt must NOT be closed on this evidence.
+    """
+
+    body: dict | None = None
+    reason: str | None = None
+    key: str | None = None
+    checksum: str | None = None
+
+    @property
+    def usable(self):
+        return self.body is not None
+
+    @property
+    def deferred(self):
+        return self.reason == DEFERRED_STORE_FAULT
+
+
 def read_predecessor(store, key, attempt_id):
     """Fetch and validate the application's sequence-0 record.
 
-    Returns (body, None) when it is usable, or (None, reason) when it is not.
-    Validation is by identity and checksum, never by mere presence — a record
-    that exists but describes a different attempt, or whose stored checksum
-    disagrees with its bytes, is *rejected*, and the caller writes a
-    reconciler-first record citing it.
+    Returns a `Predecessor`. Validation is by identity and checksum, never by
+    mere presence — a record that exists but describes a different attempt, or
+    whose stored checksum disagrees with its bytes, is *rejected*, and the
+    caller writes a reconciler-first record citing it.
+
+    A store that cannot answer is neither of those (review finding #16): it is
+    a deferral, because "the bucket refused the read" is not evidence about the
+    attempt. See `DEFERRED_STORE_FAULT`.
+
+    The returned `key` and `checksum` matter beyond validation. In the
+    record-written/row-not-closed crash state the application died between
+    writing sequence 0 and `mark_application_closed`, so the ROW's
+    `terminal_record_key` and `terminal_record_checksum` are both NULL — and
+    the body does not carry them either, since they only exist once the object
+    is written. PostgreSQL requires a non-null key for `application_closed`, so
+    materialization was attempting an illegal transition on every pass and the
+    attempt stayed `started` forever (review finding #14). This function has
+    just read and checksummed those exact bytes: it knows both, and hands them
+    to the caller so materialization can supply them.
     """
     try:
         head = store.head(key)
-    except Exception as exc:  # noqa: BLE001 - a store fault is a rejection
-        logger.warning("could not head predecessor %s: %s", key, exc)
-        return None, REJECTED_UNREADABLE
+    except Exception as exc:  # noqa: BLE001 - a store fault is NOT a rejection
+        logger.warning("could not head predecessor %s: %s; deferring", key, exc)
+        return Predecessor(reason=DEFERRED_STORE_FAULT, key=key)
     if head is None:
-        return None, REJECTED_ABSENT
+        return Predecessor(reason=REJECTED_ABSENT, key=key)
 
     try:
         raw = store.get(key)
     except Exception as exc:  # noqa: BLE001
-        logger.warning("could not read predecessor %s: %s", key, exc)
-        return None, REJECTED_UNREADABLE
+        logger.warning("could not read predecessor %s: %s; deferring", key, exc)
+        return Predecessor(reason=DEFERRED_STORE_FAULT, key=key)
 
-    stored = head.get("checksum")
     computed = body_checksum(raw)
+    stored = head.get("checksum")
     if stored and stored != computed:
         logger.warning("predecessor %s failed checksum: stored %s computed %s",
                        key, stored, computed)
-        return None, REJECTED_CHECKSUM
+        return Predecessor(reason=REJECTED_CHECKSUM, key=key)
 
     try:
         body = json.loads(raw.decode("utf-8"))
     except Exception as exc:  # noqa: BLE001
         logger.warning("predecessor %s is not readable json: %s", key, exc)
-        return None, REJECTED_UNREADABLE
+        return Predecessor(reason=REJECTED_UNREADABLE, key=key)
 
     if str(body.get("attempt_id")) != str(attempt_id):
         logger.warning("predecessor %s belongs to attempt %s, not %s",
                        key, body.get("attempt_id"), attempt_id)
-        return None, REJECTED_IDENTITY
+        return Predecessor(reason=REJECTED_IDENTITY, key=key)
 
-    return body, None
+    # The checksum is the one just computed over the bytes, deliberately not
+    # `stored`: a HEAD that omits the checksum metadata must still yield a
+    # usable identity, and where both exist they have just been proven equal.
+    return Predecessor(body=body, key=key, checksum=computed)
 
 
 def _scheduler_facts(observation):

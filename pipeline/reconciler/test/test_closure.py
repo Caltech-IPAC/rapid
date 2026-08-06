@@ -49,25 +49,40 @@ class PredecessorValidationTests(unittest.TestCase):
     def test_a_valid_record_is_returned(self):
         put_record(self.store, self.key, application_record())
 
-        body, reason = closure.read_predecessor(self.store, self.key, 1)
+        read = closure.read_predecessor(self.store, self.key, 1)
 
-        self.assertIsNone(reason)
-        self.assertEqual("failure", body["rapid_outcome"])
+        self.assertIsNone(read.reason)
+        self.assertTrue(read.usable)
+        self.assertEqual("failure", read.body["rapid_outcome"])
+
+    def test_a_usable_record_carries_its_own_key_and_checksum(self):
+        # Review finding #14: in the record-written/row-not-closed crash state
+        # neither the row nor the body holds these, and `application_closed`
+        # requires a non-null key. The reader has just read and checksummed the
+        # bytes, so it is the one component that knows both.
+        put_record(self.store, self.key, application_record())
+
+        read = closure.read_predecessor(self.store, self.key, 1)
+
+        self.assertEqual(self.key, read.key)
+        self.assertEqual(closure.body_checksum(self.store.objects[self.key]["body"]),
+                         read.checksum)
 
     def test_absent_is_reported_as_absent_not_as_an_error(self):
-        body, reason = closure.read_predecessor(self.store, self.key, 1)
+        read = closure.read_predecessor(self.store, self.key, 1)
 
-        self.assertIsNone(body)
-        self.assertEqual(closure.REJECTED_ABSENT, reason)
+        self.assertIsNone(read.body)
+        self.assertEqual(closure.REJECTED_ABSENT, read.reason)
+        self.assertFalse(read.deferred)
 
     def test_a_record_for_a_different_attempt_is_rejected(self):
         # Validation is by identity, never by mere presence.
         put_record(self.store, self.key, application_record(attempt_id=999))
 
-        body, reason = closure.read_predecessor(self.store, self.key, 1)
+        read = closure.read_predecessor(self.store, self.key, 1)
 
-        self.assertIsNone(body)
-        self.assertEqual(closure.REJECTED_IDENTITY, reason)
+        self.assertIsNone(read.body)
+        self.assertEqual(closure.REJECTED_IDENTITY, read.reason)
 
     def test_a_checksum_mismatch_is_rejected(self):
         put_record(self.store, self.key, application_record())
@@ -77,19 +92,48 @@ class PredecessorValidationTests(unittest.TestCase):
         stored = self.store.objects[self.key]
         stored["body"] = b'{"attempt_id": 1, "tampered": true}'
 
-        body, reason = closure.read_predecessor(self.store, self.key, 1)
+        read = closure.read_predecessor(self.store, self.key, 1)
 
-        self.assertIsNone(body)
-        self.assertEqual(closure.REJECTED_CHECKSUM, reason)
+        self.assertIsNone(read.body)
+        self.assertEqual(closure.REJECTED_CHECKSUM, read.reason)
 
     def test_unreadable_json_is_rejected(self):
         body = b"this is not json"
         self.store.put_if_absent(self.key, body)
 
-        result, reason = closure.read_predecessor(self.store, self.key, 1)
+        read = closure.read_predecessor(self.store, self.key, 1)
 
-        self.assertIsNone(result)
-        self.assertEqual(closure.REJECTED_UNREADABLE, reason)
+        self.assertIsNone(read.body)
+        self.assertEqual(closure.REJECTED_UNREADABLE, read.reason)
+
+    def test_a_store_fault_defers_rather_than_rejecting(self):
+        # Review finding #16. A HEAD or GET that raises says nothing about the
+        # attempt — the record may be sitting there intact. Rejecting on it
+        # published a lossy authoritative record and terminalized the row.
+        put_record(self.store, self.key, application_record())
+
+        def explode(_key):
+            raise RuntimeError("AccessDenied")
+
+        self.store.head = explode
+
+        read = closure.read_predecessor(self.store, self.key, 1)
+
+        self.assertIsNone(read.body)
+        self.assertTrue(read.deferred)
+        self.assertEqual(closure.DEFERRED_STORE_FAULT, read.reason)
+
+    def test_a_get_fault_defers_too(self):
+        put_record(self.store, self.key, application_record())
+
+        def explode(_key):
+            raise RuntimeError("connection reset")
+
+        self.store.get = explode
+
+        read = closure.read_predecessor(self.store, self.key, 1)
+
+        self.assertTrue(read.deferred)
 
 
 class AgreedClosureTests(unittest.TestCase):

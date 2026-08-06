@@ -79,6 +79,23 @@ SUPERSESSION_WINDOW = datetime.timedelta(hours=24)
 #: never.
 POLL_FAILURE_THRESHOLD = 3
 
+#: Consecutive polls in which EVERY attempt that reached a closure step failed
+#: it, after which the service reports itself unhealthy (review finding #24).
+#:
+#: The poll-failure counter above only sees exceptions that escape the whole
+#: cycle, and `poll_once` catches every per-attempt exception by design — one
+#: bad row must not take the cycle down. The consequence was a service that
+#: could fail to close every single attempt, forever, while reporting healthy:
+#: the records bucket denied writes, or every materialization transition was
+#: rejected, and each poll dutifully logged errors and returned normally.
+#:
+#: "Running" was never the health question; "capable of work" is. A poll that
+#: attempted closures and completed none of them is a poll that did no work,
+#: and enough of those in a row is a unit that needs restarting. The bound is
+#: stated rather than open-ended so the unit flips within a knowable time —
+#: five minutes at the 60s cadence.
+CLOSURE_FAILURE_POLL_THRESHOLD = 5
+
 # Classifications this service records, so a row says *why* it was closed.
 CLASS_AGREED = "agreed"
 CLASS_MATERIALIZED = "materialized_from_record"
@@ -172,6 +189,10 @@ class ReconcilerService:
         #: Attempts whose observed job definition disagreed with their
         #: recorded execution binding (#11).
         self._binding_drift = 0
+        #: Consecutive polls that attempted at least one closure and completed
+        #: none of them (#24). Reset by any poll that closes something, or that
+        #: had nothing to close.
+        self.consecutive_unproductive_polls = 0
 
     # -- health ----------------------------------------------------------
 
@@ -189,8 +210,18 @@ class ReconcilerService:
         The bounded mechanism the observability policy asks for: consecutive
         failures, a stated threshold, and a state change when it is crossed —
         not an unbounded retry that never reports.
+
+        TWO counters, because there are two ways to be work-incapable, and the
+        original only saw one (review finding #24 again, round 2). A cycle that
+        raises is caught above; a cycle in which every closure fails returns
+        normally, so the poll counter stays at zero forever. Persistent
+        per-row failure is exactly as fatal as a failing poll — the attempts
+        never close, registration never sees them — so it flips the unit too,
+        within `CLOSURE_FAILURE_POLL_THRESHOLD` polls.
         """
-        return self.consecutive_poll_failures < POLL_FAILURE_THRESHOLD
+        return (self.consecutive_poll_failures < POLL_FAILURE_THRESHOLD
+                and self.consecutive_unproductive_polls
+                < CLOSURE_FAILURE_POLL_THRESHOLD)
 
     def health(self):
         """The health facts, for a log line or a metric."""
@@ -198,8 +229,11 @@ class ReconcilerService:
             "healthy": self.healthy,
             "consecutive_poll_failures": self.consecutive_poll_failures,
             "closure_failures": self._closure_failures,
+            "consecutive_unproductive_polls":
+                self.consecutive_unproductive_polls,
             "binding_drift": self._binding_drift,
             "poll_failure_threshold": POLL_FAILURE_THRESHOLD,
+            "unproductive_poll_threshold": CLOSURE_FAILURE_POLL_THRESHOLD,
         }
 
     # -- the open set ----------------------------------------------------
@@ -241,8 +275,10 @@ class ReconcilerService:
         """One reconciliation cycle. Returns a summary dict for the log."""
         rows = self.open_attempts()
         summary = {"open": len(rows), "observed": 0, "classified": 0,
-                   "skipped": 0, "deferred": 0, "errors": 0}
+                   "skipped": 0, "deferred": 0, "errors": 0, "discovered": 0}
         if not rows:
+            # Nothing to do is not a failure to work (#24).
+            self.consecutive_unproductive_polls = 0
             return summary
 
         by_job = {}
@@ -256,6 +292,43 @@ class ReconcilerService:
 
         observations = self._observe(list(by_job))
         summary["observed"] = len(observations)
+
+        # EVERY SCHEDULER ATTEMPT GETS A ROW (review finding #4).
+        #
+        # The loop below iterates rows that are ALREADY in PostgreSQL, so an
+        # attempt the scheduler performed but that no row represents was
+        # invisible: it received no row, no binding, no category, no closure
+        # record and no retention account. That is the ordinary retry shape —
+        # attempt 1 fails during provisioning and attempt 2 runs — and the
+        # design requires one row per attempt, not one per job.
+        #
+        # Migration 017 states this wiring as part of this round in so many
+        # words ("#4 wires the reconciler through the resolver"). Acquisition
+        # goes through `resolve_attempt` and nowhere else: it is the only
+        # sanctioned path, and its advisory lock plus partial unique indexes are
+        # what make a reconciler-discovered retry and a late-starting runtime
+        # resolve to the same row instead of racing to two.
+        try:
+            discovered = self._resolve_discovered(by_job, observations)
+        except Exception:  # noqa: BLE001 - discovery must not kill the cycle
+            self._safe_rollback()
+            logger.exception("resolving scheduler-discovered attempts failed")
+            summary["errors"] += 1
+            discovered = 0
+        summary["discovered"] = discovered
+        if discovered:
+            # Re-read so the new rows are reconciled in this same cycle rather
+            # than waiting a poll: they are already terminal at the scheduler.
+            rows = self.open_attempts()
+            by_job = {}
+            unresolved = []
+            for row in rows:
+                job_id = row.get("scheduler_job_id")
+                if job_id:
+                    by_job.setdefault(job_id, []).append(row)
+                else:
+                    unresolved.append(row)
+            summary["open"] = len(rows)
 
         for job_id, attempts in by_job.items():
             for row in attempts:
@@ -286,6 +359,24 @@ class ReconcilerService:
             else:
                 summary[outcome] = summary.get(outcome, 0) + 1
 
+        # Did this cycle actually DO anything (review finding #24)? A poll that
+        # tried to close attempts and completed none of them is work-incapable,
+        # however calmly it returned. Deferrals and errors both count as
+        # failures to close; a single classified attempt proves the service can
+        # still work and clears the counter.
+        attempted = summary["classified"] + summary["deferred"] \
+            + summary["errors"]
+        if attempted and not summary["classified"]:
+            self.consecutive_unproductive_polls += 1
+            logger.warning(
+                "poll closed nothing while attempting %s (deferred=%s "
+                "errors=%s); %s consecutive unproductive polls, threshold %s",
+                attempted, summary["deferred"], summary["errors"],
+                self.consecutive_unproductive_polls,
+                CLOSURE_FAILURE_POLL_THRESHOLD)
+        else:
+            self.consecutive_unproductive_polls = 0
+
         logger.info("poll: %s", summary)
         return summary
 
@@ -305,6 +396,75 @@ class ReconcilerService:
             for job in chunk.jobs:
                 found[job.get("jobId")] = observations_for_job(job)
         return found
+
+    def _resolve_discovered(self, by_job, observations):
+        """Give every scheduler attempt a row (review finding #4).
+
+        For each open job, compare the attempt indexes the scheduler reports
+        against the indexes the rows already carry, and resolve a row for each
+        one that is missing. Returns how many were newly resolved.
+
+        The identity comes from an EXISTING row of the same job — same run,
+        same logical job, same exposure/sca/sky_tile — because a retry is
+        another attempt at that same logical job, and the reconciler has no
+        other way to learn those fields. A job with no row at all is not
+        reachable here: the open set is what named the job in the first place.
+
+        Resolution is per attempt and failures are per attempt: one index that
+        cannot be resolved must not stop the others from getting their rows.
+        """
+        resolved = 0
+        for job_id, rows in by_job.items():
+            attempt_observations = observations.get(job_id) or []
+            if len(attempt_observations) < 2:
+                # One observation is the no-retry case: whatever row exists
+                # already accounts for it, and a job whose history Batch does
+                # not break out gives nothing to reconcile against.
+                continue
+
+            known = {row.get("application_attempt_index") for row in rows}
+            known.update(row.get("scheduler_attempt_index") for row in rows)
+            known.discard(None)
+
+            template = rows[0]
+            for observation in attempt_observations:
+                index = observation.attempt_index
+                if index is None or index in known:
+                    continue
+                try:
+                    attempt_id = self._resolve_one(template, job_id, index)
+                except Exception:  # noqa: BLE001 - per attempt, not per job
+                    self._safe_rollback()
+                    logger.exception(
+                        "could not resolve a row for scheduler attempt %s of "
+                        "job %s; the next poll retries it", index, job_id)
+                    continue
+                known.add(index)
+                resolved += 1
+                logger.info(
+                    "resolved attempt row %s for scheduler-discovered attempt "
+                    "%s of job %s", attempt_id, index, job_id)
+        return resolved
+
+    def _resolve_one(self, template, job_id, scheduler_attempt_index):
+        """Claim-or-create one scheduler-discovered attempt's row."""
+        from observability.attempts import AttemptIdentity
+
+        identity = AttemptIdentity(
+            run_id=template["run_id"],
+            logical_job_id=template["logical_job_id"],
+            exposure_id=template.get("exposure_id"),
+            sca=template.get("sca"),
+            sky_tile=template.get("sky_tile"))
+        writer = AttemptWriter(_Executor(self.conn))
+        attempt_id = writer.resolve_attempt(
+            identity,
+            created_at=template.get("submitted_at") or self._now(),
+            submitted_at=template.get("submitted_at") or self._now(),
+            scheduler_job_id=job_id,
+            scheduler_attempt_index=scheduler_attempt_index)
+        self.conn.commit()
+        return attempt_id
 
     # -- one attempt -----------------------------------------------------
 
@@ -329,7 +489,27 @@ class ReconcilerService:
             # through to the single-observation case only when there is one.
         if len(observations) == 1:
             return observations[0]
-        return None
+
+        # SEVERAL OBSERVATIONS, AN UNINDEXED ROW (review finding #4).
+        #
+        # Returning None here sent the row down the unresolved path, where the
+        # submission-anchored horizon eventually closed it `never_resolved` —
+        # asserting the attempt never ran while the scheduler's own history
+        # says otherwise. That is the pre-created-row case: a row created at
+        # submission, before any attempt existed, so it carries no index.
+        #
+        # The pick must be deterministic, and one choice is: the row was
+        # created by the submitter, so it stands for the job's FIRST attempt.
+        # Every later attempt is a retry, and retries get their own rows from
+        # `_resolve_discovered` above rather than competing for this one.
+        # Choosing the lowest index is therefore not a heuristic tiebreak — it
+        # is the same rule the resolver applies, so both agree about which row
+        # means which attempt.
+        indexed = [observation for observation in observations
+                   if observation.attempt_index is not None]
+        if not indexed:
+            return None
+        return min(indexed, key=lambda observation: observation.attempt_index)
 
     def _reconcile_attempt(self, row, observations):
         attempt_id = row["attempt_id"]
@@ -491,8 +671,25 @@ class ReconcilerService:
         predecessor_key = termination.terminal_record_key(
             self.records_prefix, row["run_id"], row["logical_job_id"],
             attempt_id, termination.APPLICATION_RECORD_SEQUENCE)
-        predecessor, rejected = closure_mod.read_predecessor(
+        read = closure_mod.read_predecessor(
             self.records_store, predecessor_key, attempt_id)
+
+        # A store that could not answer is not evidence (review finding #16).
+        # Closing here would publish an authoritative reconciler-first record
+        # that omits facts which exist and are readable a second later, and
+        # terminalize the row so nothing ever revisits it. Defer instead: the
+        # row stays open, the next poll retries, and the failure is counted so
+        # a PERSISTENT store fault is visible in health rather than silently
+        # converting every attempt into a lossy record.
+        if read.deferred:
+            self._closure_failures += 1
+            logger.warning(
+                "the records store could not be read for attempt %s (%s); "
+                "deferring rather than closing on absent evidence",
+                attempt_id, predecessor_key)
+            return "deferred"
+
+        predecessor, rejected = read.body, read.reason
 
         # Did this attempt ever start? Both stores get a say, and the ROW is
         # decisive where they disagree. The scheduler's per-job view can show
@@ -569,7 +766,7 @@ class ReconcilerService:
             return "deferred"
 
         self._transition(row, observation, writer, record, written,
-                         classification, error_category)
+                         classification, error_category, read)
         return "classified"
 
     @staticmethod
@@ -680,7 +877,7 @@ class ReconcilerService:
             self.s3, self.diagnostics_bucket, key, row, retention_class)
 
     def _transition(self, row, observation, writer, record, written,
-                    classification, error_category):
+                    classification, error_category, read=None):
         attempt_id = row["attempt_id"]
         ended_at = (observation.stopped_at or row.get("ended_at")
                     or self._now())
@@ -742,6 +939,32 @@ class ReconcilerService:
         # reconciler-materialized row was indistinguishable from one the
         # application closed itself.
         if classification == CLASS_MATERIALIZED:
+            # THE CRASH BOUNDARY THIS EXISTS FOR (review finding #14).
+            #
+            # Materialization is reached precisely when sequence 0 was written
+            # and `mark_application_closed` did not land. In that state the row
+            # holds NULL for both `terminal_record_key` and
+            # `terminal_record_checksum` — the application sets them in the very
+            # transition that failed — and the record BODY has never carried
+            # them either, because a record cannot contain its own key or the
+            # checksum of its own bytes. Reading them from the body or the row
+            # therefore yielded NULL exactly here, and 013 requires a non-null
+            # key for `application_closed`: every pass attempted an illegal
+            # transition, caught it as a per-row error, and left the attempt
+            # `started` forever. Registration never saw it.
+            #
+            # The reconciler does not need either value handed to it. It just
+            # located that object, read its bytes and checksummed them to
+            # validate it — so it KNOWS the key it read from and the checksum it
+            # computed. Those are supplied here, with the row and body only as
+            # fallbacks for the ordinary already-closed case.
+            key = (read.key if read is not None and read.usable else None) \
+                or body.get("terminal_record_key") \
+                or row.get("terminal_record_key")
+            checksum = (read.checksum
+                        if read is not None and read.usable else None) \
+                or body.get("terminal_record_checksum") \
+                or row.get("terminal_record_checksum")
             writer.mark_application_closed(
                 attempt_id, ended_at=ended_at,
                 application_intended_exit=body.get(
@@ -749,11 +972,11 @@ class ReconcilerService:
                 rapid_outcome=_enum(RapidOutcome, body.get("rapid_outcome")),
                 product_disposition=_enum(
                     ProductDisposition, body.get("product_disposition")),
-                terminal_record_key=body.get("terminal_record_key")
-                or row.get("terminal_record_key"),
+                terminal_record_key=key,
                 terminal_record_sequence=body.get(
-                    "terminal_record_sequence") or 0,
-                terminal_record_checksum=body.get("terminal_record_checksum"),
+                    "terminal_record_sequence")
+                or termination.APPLICATION_RECORD_SEQUENCE,
+                terminal_record_checksum=checksum,
                 error_category=error_category,
                 reconciler_materialized=True)
 

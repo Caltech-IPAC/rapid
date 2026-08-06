@@ -48,9 +48,18 @@ DEFAULT_COMPLETION_TIMEOUT = 6 * 60 * 60
 DEFAULT_POLL_SECONDS = 60
 
 #: Lifecycle states that mean the reconciler is done with an attempt.
+#:
+#: `missing_or_contradictory` belongs here. It is not an open state waiting to
+#: resolve: it is the design's FINAL outcome for stores that disagree — the
+#: reconciler has published the closure record, made its decision, and flagged
+#: the attempt for a human. No ordinary transition follows it. Omitting it
+#: meant a correctly-flagged attempt stayed "outstanding" forever, so the VPO
+#: waited out the full six hours and raised `CompletionTimeout` over work the
+#: reconciler had already finished deciding.
 _TERMINAL = (
     LifecycleState.TERMINAL_AFTER_START.value,
     LifecycleState.TERMINAL_WITHOUT_START.value,
+    LifecycleState.MISSING_OR_CONTRADICTORY.value,
 )
 
 _PROGRESS_SQL = (

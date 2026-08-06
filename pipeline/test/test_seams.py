@@ -1,10 +1,12 @@
 """The VPO's three seams: pre-creation order, bounded wait, consumer call."""
 
+import io
 import unittest
 
 from observability.attempts import ExecutionBinding
 from pipeline import seams
 from pipeline.reconciler.test.stubs import FakeConnection, attempt_row, utc
+from submission import submit
 from submission.manifest import ProcessingUnit, UnitFacts
 
 
@@ -52,12 +54,38 @@ class FakeBatchClient:
         return {"jobId": "job-parent", "jobName": kwargs.get("jobName")}
 
 
+class PreconditionFailed(Exception):
+    """What S3 raises for a failed `IfNoneMatch` (HTTP 412).
+
+    Shaped like botocore's error so `_is_precondition_failed` recognises it the
+    same way here as against the real client.
+    """
+
+    def __init__(self):
+        super().__init__("At least one of the pre-conditions you specified "
+                         "did not hold")
+        self.response = {"Error": {"Code": "PreconditionFailed"}}
+
+
 class FakeS3:
+    """An object store that ENFORCES create-once, because the real one does.
+
+    A fake that accepted every `put_object` could not tell a store that
+    overwrites from one that refuses to, so the manifest's write-once contract
+    was untestable here — and untested, it was not implemented.
+    """
+
     def __init__(self):
         self.objects = {}
 
-    def put_object(self, Bucket, Key, Body, ContentType=None):  # noqa: N803
+    def put_object(self, Bucket, Key, Body, ContentType=None,  # noqa: N803
+                   IfNoneMatch=None):  # noqa: N803
+        if IfNoneMatch == "*" and (Bucket, Key) in self.objects:
+            raise PreconditionFailed()
         self.objects[(Bucket, Key)] = Body
+
+    def get_object(self, Bucket, Key):  # noqa: N803
+        return {"Body": io.BytesIO(self.objects[(Bucket, Key)])}
 
 
 class RecordingExecute:
@@ -287,6 +315,76 @@ class WaitForCompletionTests(unittest.TestCase):
         conn = self._conn({})
         self.assertEqual({}, seams.wait_for_completion(
             conn, "run-1", sleep=lambda _: None))
+
+    def test_a_contradictory_attempt_is_finished_not_outstanding(self):
+        # missing_or_contradictory is the reconciler's FINAL decision for
+        # stores that disagree, not a state on its way somewhere. Treating it
+        # as open made the VPO wait out the whole timeout over an attempt whose
+        # reconciliation had already completed.
+        conn = self._conn({"missing_or_contradictory": 1,
+                           "terminal_after_start": 2})
+        slept = []
+
+        counts = seams.wait_for_completion(conn, "run-1", sleep=slept.append)
+
+        self.assertEqual({"missing_or_contradictory": 1,
+                          "terminal_after_start": 2}, counts)
+        self.assertEqual([], slept)
+
+    def test_a_contradictory_attempt_alone_does_not_time_out(self):
+        conn = self._conn({"missing_or_contradictory": 1})
+        seams.wait_for_completion(conn, "run-1", sleep=lambda _: None,
+                                  timeout=50)
+
+
+class ManifestStoreTests(unittest.TestCase):
+    """The manifest is created once and never overwritten."""
+
+    def setUp(self):
+        self.s3 = FakeS3()
+        self.store = submit.S3ManifestStore("bucket", "submissions",
+                                            client=self.s3)
+        self.key = self.store.key_for("batch-1")
+
+    def test_the_first_write_creates_it(self):
+        uri = self.store.put(self.key, b'{"units": 1}')
+
+        self.assertEqual(f"s3://bucket/{self.key}", uri)
+        self.assertEqual(b'{"units": 1}', self.s3.objects[("bucket", self.key)])
+
+    def test_an_identical_replay_is_accepted(self):
+        # Re-submitting the SAME manifest is an ordinary replay: the object
+        # already there is the intended one, and there is nothing to correct.
+        self.store.put(self.key, b'{"units": 1}')
+
+        uri = self.store.put(self.key, b'{"units": 1}')
+
+        self.assertEqual(f"s3://bucket/{self.key}", uri)
+
+    def test_different_content_under_one_identity_is_refused(self):
+        # The defect: an unconditional put replaced the manifest while
+        # already-submitted children held the old checksum. Those children then
+        # fail startup — or, without the checksum guard, resolve the wrong
+        # array-index mapping and process another unit's inputs.
+        self.store.put(self.key, b'{"units": 1}')
+
+        with self.assertRaises(submit.ManifestConflict) as caught:
+            self.store.put(self.key, b'{"units": 2}')
+
+        self.assertIn("different content", str(caught.exception))
+        # The original survives: a refused write changes nothing.
+        self.assertEqual(b'{"units": 1}', self.s3.objects[("bucket", self.key)])
+
+    def test_a_real_store_fault_is_not_swallowed_as_a_conflict(self):
+        def explode(**_kwargs):
+            raise RuntimeError("AccessDenied")
+
+        self.s3.put_object = explode
+
+        with self.assertRaises(RuntimeError) as caught:
+            self.store.put(self.key, b'{"units": 1}')
+
+        self.assertIn("AccessDenied", str(caught.exception))
 
 
 class RunRegistrationTests(unittest.TestCase):

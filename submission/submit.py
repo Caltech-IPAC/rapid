@@ -39,6 +39,31 @@ logger = logging.getLogger(__name__)
 DEFAULT_MANIFEST_PREFIX = "submissions"
 
 
+class ManifestConflict(RuntimeError):
+    """A batch identity was reused for a manifest with different content.
+
+    The manifest binds array indexes to units for the life of a batch, and
+    children read it by identity. Replacing one under a live identity is not a
+    recoverable state — it is two submissions disagreeing about what index N
+    means — so it is refused rather than merged.
+    """
+
+
+def _is_precondition_failed(exc: Exception) -> bool:
+    """Is this the conditional-put refusal, as opposed to a real fault?
+
+    Matched on the error code rather than the exception type so the store keeps
+    working against botocore, a stubbed client in the suites, and moto: all
+    three surface `PreconditionFailed` (S3 answers 412 to a failed
+    `IfNoneMatch`), but not through one common exception class.
+    """
+    code = getattr(exc, "response", {}).get("Error", {}).get("Code")
+    if code in ("PreconditionFailed", "ConditionalRequestConflict"):
+        return True
+    return type(exc).__name__ in ("PreconditionFailed",
+                                  "ConditionalRequestConflict")
+
+
 class ManifestStore(Protocol):
     """Publishes a manifest where the array's children can read it."""
 
@@ -75,9 +100,45 @@ class S3ManifestStore:
         return f"{self.prefix}/{batch_id}/manifest.json"
 
     def put(self, key: str, body: bytes) -> str:
-        self.client.put_object(Bucket=self.bucket, Key=key, Body=body,
-                               ContentType="application/json")
-        return f"s3://{self.bucket}/{key}"
+        """Create the manifest. NEVER overwrite one.
+
+        The class contract above says "written once and never updated", and an
+        unconditional `put_object` did not enforce it. A replay or a second
+        batch reusing a batch/run identity with DIFFERENT units silently
+        replaced the object while already-submitted children retained the old
+        checksum — so those children fail startup on the checksum guard, and
+        without that guard they would resolve the wrong array-index mapping and
+        process another unit's inputs under their own identity.
+
+        `IfNoneMatch` makes the store enforce it: the first writer creates, and
+        a second writer under the same identity is refused by S3 rather than
+        winning. An identical body is not an error — that is an ordinary replay
+        of the same submission, and the object already there IS the intended
+        one. Different content under a used identity is the real defect, and it
+        raises here instead of corrupting the batch.
+        """
+        try:
+            self.client.put_object(Bucket=self.bucket, Key=key, Body=body,
+                                   ContentType="application/json",
+                                   IfNoneMatch="*")
+            return f"s3://{self.bucket}/{key}"
+        except Exception as exc:  # noqa: BLE001 - narrowed by inspection below
+            if not _is_precondition_failed(exc):
+                raise
+        # The identity is taken. Whether that is benign depends entirely on
+        # whether the bytes match.
+        existing = self.client.get_object(Bucket=self.bucket, Key=key)
+        current = existing["Body"].read()
+        if current == body:
+            logger.info("manifest %s already published with identical "
+                        "content; treating as a replayed submission", key)
+            return f"s3://{self.bucket}/{key}"
+        raise ManifestConflict(
+            f"a manifest already exists at {key} with different content. Two "
+            f"submissions have claimed one batch identity; children already "
+            f"submitted under it hold the checksum of the other manifest and "
+            f"would resolve the wrong array-index mapping. Submit under a new "
+            f"batch identity rather than replacing this one.")
 
     def get(self, uri: str) -> bytes:
         bucket, _, key = uri.removeprefix("s3://").partition("/")
