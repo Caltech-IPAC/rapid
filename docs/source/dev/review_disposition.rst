@@ -12,6 +12,10 @@ submission and observability), **FixB** owns the science-fidelity findings
 (the extracted stage bodies) and the tessellation certification honesty item.
 Rows below are grouped by owner; each round appends its own.
 
+A **second external review** then read that implementation and found six of
+those dispositions incomplete, plus new findings. **FixC** owns round 2; its
+section is at the end of this page.
+
 .. note::
 
    Where a finding says the extracted code deviates from the deleted monolith,
@@ -676,3 +680,188 @@ on rapid-db because that is where the pooler is. The orchestrator host is not
 currently running. The cycle is attempted and its absence REPORTED by the
 probe rather than skipped silently; widening a role for a probe would have
 been the wrong trade. **W8 owns running it on the orchestrator host.**
+
+FixC — round-2 external review
+------------------------------
+
+A second external review read the round-1 implementation and found **six
+dispositions incomplete** (#4, #6, #14, #16, #18, #24), plus new findings and
+the still-absent registrar. FixC owns them. Every citation was re-verified
+against the code before anything was changed — the round-1 lesson was that a
+review summary can be imprecise while the defect it points at is real, and in
+this round every cited line was accurate.
+
+.. list-table::
+   :header-rows: 1
+   :widths: 8 32 60
+
+   * - #
+     - What round 1 left incomplete
+     - What round 2 did
+   * - 14
+     - The reconciler could not recover the record-written/row-not-closed
+       crash boundary. It read ``terminal_record_key`` and
+       ``terminal_record_checksum`` from the sequence-0 body or the row —
+       both NULL in precisely that state, because the application sets them
+       in the transition that just failed and a record cannot contain its own
+       key or the checksum of its own bytes. 013 requires a non-null key for
+       ``application_closed``, so every pass attempted an illegal transition
+       and left the attempt ``started`` forever. Registration never saw it.
+     - ``read_predecessor`` returns a ``Predecessor`` carrying the key it read
+       from and the checksum it computed over those bytes; materialization
+       supplies both. The reconciler already knew them — it had just located,
+       read and checksummed that object to validate it. **Proven live**:
+       ``live_fixc_crash_boundary.py``, 6/6 on rapid-db.
+   * - 4
+     - Scheduler retries still did not acquire one row per attempt. The
+       service iterated rows already in PostgreSQL and never called
+       ``resolve_attempt`` for a scheduler-discovered attempt, so an attempt
+       Batch performed but no row represented got no binding, no category, no
+       closure record and no retention account. Migration 017 says this round
+       wires it ("#4 wires the reconciler through the resolver").
+     - ``_resolve_discovered`` compares the scheduler's attempt indexes
+       against the rows' and resolves one row per missing index — through
+       ``resolve_attempt``, never a bare INSERT. Failures are per attempt.
+       ``_pick_observation`` now resolves the several-observations /
+       unindexed-row case deterministically to the FIRST attempt, which is
+       the same rule the resolver applies, rather than returning None and
+       letting the row be closed ``never_resolved``.
+   * - 16
+     - Recovery still failed open. Any S3 HEAD/GET exception — AccessDenied,
+       a timeout, a throttle — became a rejected "unreadable" predecessor, so
+       the service published an authoritative reconciler-first record WITHOUT
+       facts sitting intact in the bucket and terminalized the row, which
+       nothing revisits. Reconstructions also read neither ``attempt_stages``
+       nor the CloudWatch stream, and an absent bundle was accepted as
+       "nothing to retain" for any attempt.
+     - Store faults DEFER (bounded, counted, visible in ``health()``); only a
+       record that was read and failed validation is rejected. Reconstructions
+       read ``attempt_stages`` and the log stream, and ``reconstructed_from``
+       names each only where it actually answered. "Nothing to retain" is now
+       gated on the attempt genuinely never having started; a missing bundle
+       for an attempt that RAN is counted and surfaced.
+   * - 24
+     - Health still reported healthy during persistent per-row failure.
+       ``poll_once`` catches every per-attempt exception by design, so a
+       service that closed NOTHING returned normally each minute and the
+       poll-failure counter never left zero.
+     - A poll that attempts closures and completes none is unproductive;
+       ``CLOSURE_FAILURE_POLL_THRESHOLD`` consecutive unproductive polls flip
+       ``healthy``. Five polls at the 60s cadence is the stated bound.
+   * - 6, 18
+     - Product identity and terminal provenance remained unsafe.
+       ``StageContext.products`` is the stage-to-stage channel — downloaded
+       inputs and scratch files included — and the upload stages published
+       every on-disk entry of it while the terminal record serialized the
+       same mapping as local paths and scalars. The reference path keyed its
+       uploads ``job_type/unit`` (no run, no attempt), and its helper's
+       diagnostic uploads used legacy ``jid`` keys with a swallowed
+       ``ClientError``.
+     - Published products are a distinct thing: ``publish`` records one entry
+       per uploaded object with its immutable URI and the checksum of the
+       bytes uploaded, and sequence 0 serializes THAT. One helper
+       (``pipeline/stages/publishing.py``) uploads for every job type, keys
+       from ``product_prefix()`` and nowhere else, and RAISES on a failed
+       upload. The reference stage's docstring already claimed that last
+       property; it did not hold.
+   * - 5
+     - Registration remained a labelled no-op: ``registrar_for`` returned
+       None unconditionally and production dispatch ran
+       ``register_batch(..., dry_run=True)``. Honest reporting, but a
+       successful science attempt stayed a candidate forever.
+     - ``pipeline/registration/products.py`` ports the registration bodies
+       from the four ``__main__``-only scripts deleted at the W6D fence
+       (``e03f22c^``), call sequence and argument order preserved. Re-keyed
+       off the attempt's terminal record — fetched by the cited key and
+       VERIFIED against the cited checksum — instead of the per-job ``.ini``,
+       the product-bucket listing and the stdout log those scripts read.
+   * - new
+     - Submission manifests were overwriteable: ``S3ManifestStore.put`` used
+       an unconditional ``put_object`` despite its own write-once contract.
+     - Conditional put (``IfNoneMatch``). An identical body is an ordinary
+       replay; different content under a used batch identity raises
+       ``ManifestConflict``. The seams suite's ``FakeS3`` now enforces
+       create-once too — a fake that accepted every put could not tell a
+       store that overwrites from one that refuses, which is why the contract
+       went unimplemented.
+   * - new
+     - Completion waits timed out on a final contradiction:
+       ``missing_or_contradictory`` was absent from the terminal set, so a
+       correctly-flagged attempt stayed "outstanding" and the VPO waited out
+       all six hours over a decision the reconciler had already made.
+     - It joins ``_TERMINAL``. It is the design's final outcome for stores
+       that disagree, not a state on the way somewhere.
+   * - new
+     - The real-work submission path was neither connected nor runnable: the
+       production VPO exited 64 immediately, reference units never populated
+       ``coadd_inputs_uri`` (mandatory in their second stage), the science
+       no-reference path required ``reference_image_uri`` two stages BEFORE
+       the branch meant to build a missing reference, and post-process
+       gathering built ``UnitFacts()`` with nothing in it while its first
+       stage requires both products' URIs and six identities.
+     - ``gather_reference_units`` aggregates and publishes the coadd inputs
+       (the launcher's overlap query, status/vbest exclusions and field
+       sanity check preserved). ``download_inputs`` takes the reference URI
+       optionally. ``post_process_facts`` derives from real queries.
+       ``submit_gathered`` batches a gathered list and submits each batch, and
+       the VPO's early exit is gone.
+
+Findings recorded rather than fixed
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+**The terminal record carried neither ``job_type`` nor ``ppid``.** Found while
+porting the registrar: registration dispatches on the job type, and every
+operations-table insert takes a ppid. The legacy bodies read both from the
+per-job ``.ini`` they were handed. A registrar reading records alone could not
+have told a reference-image attempt from a science one. Fixed through the
+provenance path — both are authored into sequence 0 — rather than reconstructed
+at registration time from a route matrix consulted later, which would be a
+second home for a value nothing keeps equal to the first.
+
+**The manifest vocabulary had no home for four post-process facts.**
+``pipeline/stages/post_process.py`` requires ``pid`` and
+``difference_image_uri`` through ``context.fact``, and ``UnitFacts`` carried
+neither — so the facts the stage demanded could not have been supplied by any
+gatherer. Added, with the two version facts the header stamps need.
+
+**``RAPIDDB.get_job_record`` did not exist.** ``gather_post_process_units``
+called it behind a ``hasattr`` guard that was therefore ALWAYS false against
+the real handle, so every post-process unit fell back to the jid-as-exposure
+degenerate case. Added, its column order verified against the deployed table.
+
+Live evidence, and what it could not cover
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+``live_fixc_crash_boundary.py`` on **rapid-db**, 6/6: the #14 P0 proven against
+the real database, the real lifecycle constraints, a real S3 record store and
+the real ``ReconcilerService.poll_once``. The attempt went ``started ->
+terminal_after_start`` where it previously stayed ``started`` forever, carrying
+``reconciler_materialized=True`` and the checksum the reconciler computed.
+
+**One probe assertion of mine was wrong before the code was.** I expected the
+row to end citing sequence 0. It should not: ``mark_terminal_after_start`` runs
+immediately after materialization and advances the citation to the reconciler's
+own sequence-1 closure record, which is by then the highest-sequence and
+therefore authoritative account. The checksum is the evidence that
+materialization happened, and it survives that later write because sequence 1
+folds the predecessor's facts in verbatim.
+
+``live_fixc_schema_probe.py`` on rapid-db, query-only: 5166 ``l2files`` rows,
+and the ``Jobs`` / ``DiffImages`` / ``RefImages`` / ``RefImCatalogs`` /
+``DiffImMeta`` column sets the ported bodies write. **``PSFs`` is EMPTY (0
+rows)**, so the reference-image live probe this round was gated on was not
+possible; those paths are unit-tested only.
+
+**PROPOSED DECISION — the full W8 battery cannot complete from rapid-db.** The
+pooler is host-local there (5432 is not reachable off-host by design), so the
+battery must run on that host; but ``rapid-db-instance-role`` has no grant on
+``roman-rapid-records`` and can assume only ``rapid-migration-runner-role``,
+not ``rapid-orchestrator-role``. Pointed at the real records bucket the battery
+403s on its first record write — and does so on the UNMODIFIED ``smdc``
+baseline too, verified against a staged checkout at the same line. Pointed at
+``rapid-build-artifacts`` it reaches case 6c and then needs
+``s3:GetObjectTagging``, which that policy does not carry. Either a grant delta
+on the identity stack or a host with both the pooler route and records access
+would close it. Both are beyond what this round was authorized to change, so
+the gap is recorded rather than worked around, and the one case the round-2
+review named — the crash boundary — was proven by the narrower probe above.
