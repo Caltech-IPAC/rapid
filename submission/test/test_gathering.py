@@ -11,6 +11,7 @@ cover is everything between a row and a unit, which is where a fact can be
 silently dropped, defaulted, or put in a second home.
 """
 
+import hashlib
 import unittest
 
 from submission import gathering
@@ -415,6 +416,60 @@ class PostProcessFactsTests(unittest.TestCase):
             gathering.post_process_facts(self.Source(failure=67), self.JOB)
 
 
+class FakeConditionalS3:
+    """Just enough S3 to exercise the conditional put, semantics not calls.
+
+    It genuinely refuses to overwrite when `IfNoneMatch="*"` is sent, and
+    genuinely serves the existing bytes back on `get_object` — so a test that
+    passes here is a test of publish-once behaviour rather than of which
+    keyword arguments were assembled. A store that only recorded the call
+    could not tell the replay case from the collision case at all, and those
+    are the two outcomes that matter.
+
+    `bare_exception` raises `PreconditionFailed` with no `response` mapping,
+    which is what a stubbed client and moto actually do — the shape the
+    stricter code-only predicate used to miss.
+    """
+
+    def __init__(self, bare_exception=False):
+        self.objects = {}
+        self.put_kwargs = []
+        self._bare = bare_exception
+
+    def put_object(self, Bucket, Key, Body, ContentType=None, **kwargs):
+        self.put_kwargs.append({"Bucket": Bucket, "Key": Key,
+                                "ContentType": ContentType, **kwargs})
+        if kwargs.get("IfNoneMatch") == "*" and Key in self.objects:
+            raise self._refusal()
+        self.objects[Key] = Body
+
+    def get_object(self, Bucket, Key):
+        return {"Body": _Body(self.objects[Key])}
+
+    def _refusal(self):
+        if self._bare:
+            return PreconditionFailed("the key is taken")
+        return _ClientError("PreconditionFailed")
+
+
+class PreconditionFailed(Exception):
+    """A refusal identifiable only by its class name — no `response` dict."""
+
+
+class _ClientError(Exception):
+    def __init__(self, code):
+        super().__init__(code)
+        self.response = {"Error": {"Code": code}}
+
+
+class _Body:
+    def __init__(self, data):
+        self._data = data
+
+    def read(self):
+        return self._data
+
+
 class CoaddInputsTests(unittest.TestCase):
     """Reference units carry the coadd inputs their first stage requires.
 
@@ -429,14 +484,25 @@ class CoaddInputsTests(unittest.TestCase):
            "ra4": 10.4, "dec4": -5.4}
 
     class Source:
-        exit_code = 0
-
-        def __init__(self, overlapping=(), info=None):
+        def __init__(self, overlapping=(), info=None, overlap_failure=None):
+            self.exit_code = 0
             self.overlapping = list(overlapping)
             self.info = info or {}
+            #: The exit_code the overlap query leaves behind. `rapid_db`
+            #: reports a failed query as 67 and returns None SILENTLY, so a
+            #: stub that only ever returns rows cannot exercise the path
+            #: that mattered.
+            self.overlap_failure = overlap_failure
+            #: (rid, mjdobs) as the query actually received them — the two
+            #: arguments whose values ARE the query's semantics.
+            self.overlap_calls = []
 
         def get_overlapping_l2files(self, rid, fid, mjdobs, *corners,
                                     radius_of_initial_cone_search=None):
+            self.overlap_calls.append((rid, mjdobs))
+            if self.overlap_failure is not None:
+                self.exit_code = self.overlap_failure
+                return None
             return self.overlapping
 
         def get_info_for_l2file(self, rid):
@@ -486,10 +552,78 @@ class CoaddInputsTests(unittest.TestCase):
         source = self.Source(overlapping=[self._overlap_row(1)],
                              info={1: self._info("a.fits")})
 
-        with self.assertRaises(gathering.GatheringError):
+        with self.assertRaises(gathering.NotReadyYet):
             gathering.coadd_input_rows(
                 source, rid=9, fid=1, mjdobs=61679.1, sky_position=self.SKY,
                 min_images_to_coadd=5)
+
+    def test_the_overlap_query_runs_over_the_open_window(self):
+        # `mjdobs` is the EXCLUSIVE upper bound of the query's own window,
+        # not a description of the representative image. The representative
+        # is the earliest frame in time order, so forwarding its mjdobs asks
+        # for frames observed strictly before the earliest frame — empty by
+        # construction, which is why every field looked unready. The deleted
+        # launcher passed 999999.9 to mean "everything ever observed"; so do
+        # we, and the caller's mjdobs must not reach the query.
+        source = self.Source(
+            overlapping=[self._overlap_row(1), self._overlap_row(2)],
+            info={1: self._info("a.fits"), 2: self._info("b.fits")})
+
+        gathering.coadd_input_rows(
+            source, rid=9, fid=1, mjdobs=61679.1, sky_position=self.SKY,
+            min_images_to_coadd=2)
+
+        _, mjdobs = source.overlap_calls[0]
+        self.assertEqual(mjdobs, gathering.REFERENCE_OVERLAP_OPEN_MJDOBS)
+        self.assertNotEqual(mjdobs, 61679.1)
+
+    def test_the_representative_image_is_not_excluded_from_its_own_coadd(self):
+        # A real rid in the tail parameter renders as `a.rid != %s` and drops
+        # the representative from the coadd it is an input to. The string
+        # 'null' takes the other branch, `a.rid is not %s`, which is a type
+        # predicate that is always true for an integer column and so excludes
+        # nothing — the accident the launcher relied on.
+        source = self.Source(overlapping=[self._overlap_row(1)],
+                             info={1: self._info("a.fits")})
+
+        gathering.coadd_input_rows(
+            source, rid=9, fid=1, mjdobs=61679.1, sky_position=self.SKY,
+            min_images_to_coadd=1)
+
+        rid, _ = source.overlap_calls[0]
+        self.assertEqual(rid, gathering.REFERENCE_OVERLAP_NO_EXCLUSION)
+        self.assertNotEqual(rid, 9)
+
+    def test_exactly_min_images_to_coadd_inputs_is_enough(self):
+        # The off-by-one this closes. `min_n_images_to_coadd` is 2 in the
+        # release content, and with the representative excluded a field
+        # holding exactly two good frames returned one row and was skipped
+        # every night for the life of the survey.
+        source = self.Source(
+            overlapping=[self._overlap_row(1), self._overlap_row(2)],
+            info={1: self._info("a.fits"), 2: self._info("b.fits")})
+
+        rows = gathering.coadd_input_rows(
+            source, rid=1, fid=1, mjdobs=61679.1, sky_position=self.SKY,
+            min_images_to_coadd=2)
+
+        self.assertEqual([row[11] for row in rows], ["a.fits", "b.fits"])
+
+    def test_a_failed_overlap_query_raises_rather_than_reading_as_unready(self):
+        # `get_overlapping_l2files` reports failure by setting exit_code 67
+        # and returning None SILENTLY — no exception, so the try/except that
+        # used to guard this call never saw it. None then iterated as nothing
+        # and a database outage was reported as "this field is not ready".
+        # The deleted launcher checked `>= 64` after every such call.
+        source = self.Source(overlap_failure=67)
+
+        with self.assertRaises(gathering.GatheringError) as ctx:
+            gathering.coadd_input_rows(
+                source, rid=9, fid=1, mjdobs=61679.1, sky_position=self.SKY,
+                min_images_to_coadd=2)
+
+        self.assertNotIsInstance(ctx.exception, gathering.NotReadyYet)
+        self.assertIn("67", str(ctx.exception))
 
     def test_disagreeing_field_identities_refuse_to_coadd(self):
         source = self.Source(
@@ -508,22 +642,14 @@ class CoaddInputsTests(unittest.TestCase):
                 sky_position={"ra0": 10.0}, min_images_to_coadd=1)
 
     def test_publishing_returns_the_uri_the_stage_downloads(self):
-        class FakeS3:
-            def __init__(self):
-                self.objects = {}
-
-            def put_object(self, Bucket, Key, Body, ContentType=None):
-                self.objects[(Bucket, Key)] = Body
-
-        s3 = FakeS3()
-        uri = gathering.publish_coadd_inputs(
+        s3 = FakeConditionalS3()
+        uri, _checksum = gathering.publish_coadd_inputs(
             s3, "job-info", "coadd-inputs/run-1/u/in.csv",
             [[1, "a.fits"], [2, "b.fits"]])
 
         self.assertEqual(uri, "s3://job-info/coadd-inputs/run-1/u/in.csv")
-        self.assertEqual(
-            s3.objects[("job-info", "coadd-inputs/run-1/u/in.csv")],
-            b"1,a.fits\n2,b.fits\n")
+        self.assertEqual(s3.objects["coadd-inputs/run-1/u/in.csv"],
+                         b"1,a.fits\n2,b.fits\n")
 
     def test_a_failed_publish_raises_rather_than_yielding_a_dead_uri(self):
         class Broken:
@@ -532,6 +658,149 @@ class CoaddInputsTests(unittest.TestCase):
 
         with self.assertRaises(gathering.GatheringError):
             gathering.publish_coadd_inputs(Broken(), "b", "k", [[1]])
+
+    # -- write-once (review finding #9) --------------------------------------
+
+    def test_the_create_is_conditional_server_side(self):
+        """`IfNoneMatch="*"`, so S3 refuses a second writer rather than us
+        racing a head-then-put."""
+        s3 = FakeConditionalS3()
+        gathering.publish_coadd_inputs(s3, "b", "k", [[1, "a.fits"]])
+
+        self.assertEqual(s3.put_kwargs[0]["IfNoneMatch"], "*")
+
+    def test_a_checksum_is_sent_with_the_put(self):
+        s3 = FakeConditionalS3()
+        gathering.publish_coadd_inputs(s3, "b", "k", [[1, "a.fits"]])
+
+        self.assertIn("ChecksumSHA256", s3.put_kwargs[0])
+
+    def test_the_returned_checksum_is_of_exactly_the_published_bytes(self):
+        """What the manifest will cite has to hash the object that exists,
+        not the rows it was built from — those are different artifacts."""
+        s3 = FakeConditionalS3()
+        _uri, digest = gathering.publish_coadd_inputs(
+            s3, "b", "k", [[1, "a.fits"], [2, "b.fits"]])
+
+        self.assertEqual(digest, hashlib.sha256(s3.objects["k"]).hexdigest())
+
+    def test_republishing_identical_rows_is_an_ordinary_replay(self):
+        """A resumed submission that re-gathers the same overlap set is not a
+        defect: the object already there IS the one this pass meant to
+        write."""
+        s3 = FakeConditionalS3()
+        rows = [[1, "a.fits"], [2, "b.fits"]]
+        first = gathering.publish_coadd_inputs(s3, "b", "k", rows)
+        second = gathering.publish_coadd_inputs(s3, "b", "k", rows)
+
+        self.assertEqual(first, second)
+
+    def test_republishing_different_rows_raises_rather_than_replacing(self):
+        """The sharp case. The overlap query returns more frames as the survey
+        advances, so a second pass under one run identity genuinely disagrees
+        with the first — and units already submitted cite this key."""
+        s3 = FakeConditionalS3()
+        gathering.publish_coadd_inputs(s3, "b", "k", [[1, "a.fits"]])
+
+        with self.assertRaises(gathering.GatheringError) as ctx:
+            gathering.publish_coadd_inputs(
+                s3, "b", "k", [[1, "a.fits"], [2, "b.fits"]])
+        self.assertIn("DIFFERENT images", str(ctx.exception))
+
+    def test_the_refused_object_keeps_the_first_pass_bytes(self):
+        """Refusing has to mean the object is untouched. A version that raised
+        after writing would be no better than the unconditional put."""
+        s3 = FakeConditionalS3()
+        gathering.publish_coadd_inputs(s3, "b", "k", [[1, "a.fits"]])
+
+        with self.assertRaises(gathering.GatheringError):
+            gathering.publish_coadd_inputs(s3, "b", "k", [[9, "z.fits"]])
+
+        self.assertEqual(s3.objects["k"], b"1,a.fits\n")
+
+    def test_a_conflict_reported_only_by_exception_type_is_recognized(self):
+        """Stubbed clients and moto raise a bare `PreconditionFailed` with no
+        `response` mapping. Matching on the error code alone treated that as a
+        transport fault, so a replay was reported as a publish failure."""
+        s3 = FakeConditionalS3(bare_exception=True)
+        rows = [[1, "a.fits"]]
+        gathering.publish_coadd_inputs(s3, "b", "k", rows)
+
+        # Does not raise: recognized as the conditional refusal it is.
+        uri, _digest = gathering.publish_coadd_inputs(s3, "b", "k", rows)
+        self.assertEqual(uri, "s3://b/k")
+
+
+# ---------------------------------------------------------------------------
+# Reference units end to end: which failures are ordinary and which travel
+# ---------------------------------------------------------------------------
+
+class GatherReferenceUnitsTests(unittest.TestCase):
+    """The catch site, which decides what an operator gets told.
+
+    `gather_reference_units` skips a field that cannot yet support a
+    reference image, and must: it is the ordinary state early in the
+    survey. It used to skip on `GatheringError`, which is every failure
+    this module raises, so an unreachable database produced a night of
+    "not yet" at INFO and no reference images.
+    """
+
+    class Source(StubSource):
+        def __init__(self, overlapping=(), overlap_failure=None, **overrides):
+            super().__init__(**overrides)
+            self.overlapping = list(overlapping)
+            self.overlap_failure = overlap_failure
+
+        def get_overlapping_l2files(self, rid, fid, mjdobs, *corners,
+                                    radius_of_initial_cone_search=None):
+            if self.overlap_failure is not None:
+                self.exit_code = self.overlap_failure
+                return None
+            return self.overlapping
+
+    def _gather(self, source, min_images_to_coadd=2):
+        # The shared create-once double, not a permissive local one: a stub
+        # that accepted any keyword and overwrote silently would pass whether
+        # or not the conditional create survived.
+        return list(gathering.gather_reference_units(
+            source, "2026-01-01", "2026-12-31",
+            start_mjdobs=61600.0, end_mjdobs=61700.0,
+            min_images_to_coadd=min_images_to_coadd,
+            s3_client=FakeConditionalS3(), job_bucket="job-info",
+            run_id="run-1", fids=[8]))
+
+    def _overlap_row(self, rid):
+        return [rid, 10.0, -43.0, 10.1, -43.1, 10.2, -43.2, 10.3, -43.3,
+                10.4, -43.4, 4678622, 0.01]
+
+    def test_a_field_with_exactly_enough_frames_yields_a_unit(self):
+        # min_n_images_to_coadd is 2 in the release content. The
+        # representative is rid 101, and it counts itself: with the
+        # exclusion removed the query returns both frames, and the field
+        # that used to be skipped forever now produces its reference.
+        source = self.Source(
+            overlapping=[self._overlap_row(101), self._overlap_row(102)])
+
+        units = self._gather(source)
+
+        self.assertEqual([unit.facts.rid for unit in units], [101])
+        self.assertTrue(units[0].facts.coadd_inputs_uri.startswith("s3://"))
+
+    def test_a_genuinely_unready_field_is_skipped_not_fatal(self):
+        source = self.Source(overlapping=[self._overlap_row(101)])
+        self.assertEqual(self._gather(source), [])
+
+    def test_a_failed_overlap_query_is_not_reported_as_an_unready_field(self):
+        # The distinction the narrowed catch exists for. A night in which
+        # every field was skipped because the database stopped answering
+        # must not read the same as a night early in the survey.
+        source = self.Source(overlap_failure=67)
+
+        with self.assertRaises(gathering.GatheringError) as ctx:
+            self._gather(source)
+
+        self.assertNotIsInstance(ctx.exception, gathering.NotReadyYet)
+        self.assertIn("67", str(ctx.exception))
 
 
 if __name__ == "__main__":

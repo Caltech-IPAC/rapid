@@ -38,13 +38,16 @@ a parameter is what lets the unit tests drive real gathering logic against
 a stub that returns rows, with no database and no monkeypatching.
 """
 
+import base64
 import dataclasses
+import hashlib
 import logging
 from typing import Any, Iterable, Iterator, Protocol, Sequence
 
 from .manifest import ProcessingUnit, UnitFacts
 from .routes import (JOB_TYPE_POST_PROCESS, JOB_TYPE_REFERENCE_IMAGE,
                      JOB_TYPE_SCIENCE, ppid_for)
+from .submit import is_precondition_failed
 
 logger = logging.getLogger(__name__)
 
@@ -60,6 +63,24 @@ class GatheringError(RuntimeError):
     Raised rather than returning an empty list: "no ready work" and "the
     query could not run" are different answers, and a submitter that
     cannot tell them apart submits nothing and reports success.
+    """
+
+
+class NotReadyYet(GatheringError):
+    """This field cannot support the product asked of it — yet.
+
+    The other half of the distinction `GatheringError`'s own docstring
+    names. One class carrying both meanings was enough while nothing
+    caught it, but `gather_reference_units` does catch it, and it caught
+    the pair: a field with two frames instead of three and a database
+    that had stopped answering both arrived as `GatheringError` and were
+    both logged "no reference image for this unit yet" at INFO. The
+    survey then ran a night with zero reference images and no ERROR
+    anywhere in the log.
+
+    Only a shortfall of ready inputs is this. Everything a query does
+    wrong stays a bare `GatheringError`, so the catch can be narrowed to
+    the one case that is genuinely ordinary and the other case travels.
     """
 
 
@@ -91,7 +112,10 @@ class UnitSource(Protocol):
     def get_best_reference_image(self, ppid: int, field: int,
                                  fid: int) -> Any: ...
 
-    def get_overlapping_l2files(self, rid: int, fid: int, mjdobs: float,
+    # `rid` is typed loosely because it is not a rid in the caller that
+    # matters: `_overlapping_l2files` passes the string 'null' to select the
+    # branch of the query that excludes no row. See that function.
+    def get_overlapping_l2files(self, rid: Any, fid: int, mjdobs: float,
                                 *corners: float,
                                 radius_of_initial_cone_search: float | None
                                 = ...) -> Sequence[Any]: ...
@@ -316,6 +340,83 @@ COADD_INPUT_COLUMNS = (
     "infobits", "status", "vbest", "version",
 )
 
+# The two sentinels the deleted launcher passed into `get_overlapping_l2files`,
+# named here because they are the query's semantics and not placeholder values
+# somebody forgot to fill in. See `_overlapping_l2files` for why each is what
+# the reference stage wants.
+#
+# MJD 999999.9 is 4692-05-11; the query's window is `[start, mjdobs)` and the
+# launcher's own comment says this is how you ask for "everything ever
+# observed", the start being 0.0 in the same branch.
+REFERENCE_OVERLAP_OPEN_MJDOBS = 999999.9
+#: The string 'null', not None and not a real rid — `rapid_db` switches on it
+#: by identity of value, so it must arrive spelled exactly this way.
+REFERENCE_OVERLAP_NO_EXCLUSION = 'null'
+
+
+def _overlapping_l2files(handle: UnitSource, rid: int, fid: int,
+                         corners: Sequence[Any],
+                         radius: float | None) -> Sequence[Any]:
+    """`get_overlapping_l2files` asked the way the reference stage means it.
+
+    Two defects are closed here, and both are the same mistake: the legacy
+    method's arguments were read as descriptions of the representative image
+    when they are in fact controls on the query, and passing the
+    representative's own values turned each control on.
+
+    **The window.** `rid`/`fid`/`mjdobs` are not "the image we are building
+    around". `mjdobs` is the EXCLUSIVE upper bound of the query's own MJD
+    window, whose lower bound is 0.0 unless STARTREFIMMJDOBS/ENDREFIMMJDOBS
+    say otherwise. Handing it the representative's `mjdobs` asks for "frames
+    observed strictly before the representative" — and the representative is
+    `rows[0]`, the EARLIEST frame in time order, so that window is empty by
+    construction. Every field returned zero coadd inputs, every reference
+    unit was logged "not ready yet", and no reference image was ever built.
+    The launcher passed 999999.9 for exactly this reason and said so in a
+    comment. So do we; the environment-variable override still wins inside
+    `rapid_db`, which is where operations expects to set it.
+
+    **The exclusion.** The tail parameter renders as `a.rid != %s` for a real
+    rid — which drops the representative from its own coadd. It is an input
+    to the coadd like any other frame, so with N frames available the query
+    returned N-1 and a field with exactly `min_images_to_coadd` frames was
+    skipped forever. Passing the string 'null' takes `rapid_db`'s other
+    branch, `a.rid is not %s`, and that is a PostgreSQL type predicate, not a
+    comparison: `is not 'null'` asks whether the row's rid is distinguishable
+    from the literal string, which for an integer column is always true, so
+    the clause excludes nothing. Confusing, and an accident rather than a
+    design — but it is the accident the launcher relied on, it lives in
+    `rapid_db`, and it is not this module's to correct. Wrapping here rather
+    than editing the query keeps the legacy method byte-identical for the
+    legacy callers that still run against it, and puts the explanation at the
+    one call site whose meaning depends on it.
+
+    **The exit code.** `get_overlapping_l2files` reports a failed query by
+    setting `exit_code = 67` and returning None — silently, no exception. The
+    launcher checked `>= 64` after every such call and exited; gathering did
+    not, so None flowed into `overlapping or ()`, iterated as nothing, and the
+    short-row check downstream reported a database outage as "this field is
+    not ready". Checked here, as `_best_reference` and the `get_info_for_l2file`
+    call below already do, and raised as a bare `GatheringError` so it is NOT
+    the `NotReadyYet` that `gather_reference_units` swallows.
+    """
+    try:
+        overlapping = handle.get_overlapping_l2files(
+            REFERENCE_OVERLAP_NO_EXCLUSION, fid,
+            REFERENCE_OVERLAP_OPEN_MJDOBS, *corners,
+            radius_of_initial_cone_search=radius)
+    except Exception as exc:  # noqa: BLE001
+        raise GatheringError(
+            f"overlap query failed for rid {rid} fid {fid}: {exc}") from exc
+
+    code = getattr(handle, "exit_code", 0)
+    if code >= 64:
+        raise GatheringError(
+            f"overlap query failed for rid {rid} fid {fid}: rapid_db "
+            f"exit_code {code}. This is a query failure, not an unready "
+            f"field, and must not be reported as one")
+    return overlapping or ()
+
 
 def coadd_input_rows(handle: UnitSource, rid: int, fid: int, mjdobs: float,
                      sky_position: dict, min_images_to_coadd: int,
@@ -323,17 +424,25 @@ def coadd_input_rows(handle: UnitSource, rid: int, fid: int, mjdobs: float,
     """The reference image's coadd inputs, as CSV rows.
 
     The launcher's aggregation, preserved because it is science logic: every
-    L2 file overlapping this one's sky tile in the same filter, acquired
-    earlier, ordered by distance from tile centre — then filtered to the rows
-    that may actually be coadded.
+    L2 file overlapping this one's sky tile in the same filter, ordered by
+    distance from tile centre — then filtered to the rows that may actually
+    be coadded.
 
     The two exclusions are the launcher's and are not optional. `status == 0`
     is a file marked bad; `vbest == 0` is a superseded version. Coadding
     either would build a reference from images the database says not to use.
 
-    Raises `GatheringError` rather than returning a short list when there are
-    too few inputs: "this field cannot support a reference image yet" and
-    "the query failed" must not look the same to the submitter.
+    `mjdobs` is taken but NOT forwarded to the overlap query, which is the
+    fix rather than an oversight: it names the representative image for the
+    error messages, while the query itself runs over the open window
+    `_overlapping_l2files` documents. Passing it through was what made every
+    field look unready.
+
+    Raises `NotReadyYet` rather than returning a short list when there are
+    too few inputs, and a bare `GatheringError` when a query failed: "this
+    field cannot support a reference image yet" and "the query failed" must
+    not look the same to the submitter, which is the whole reason the
+    submitter catches only the first.
     """
     corners = [sky_position.get(key) for key in
                ("ra0", "dec0", "ra1", "dec1", "ra2", "dec2", "ra3", "dec3",
@@ -343,15 +452,10 @@ def coadd_input_rows(handle: UnitSource, rid: int, fid: int, mjdobs: float,
             f"rid {rid} has no complete sky position; the overlap query is a "
             f"cone search about the tile corners and cannot run without them")
 
-    try:
-        overlapping = handle.get_overlapping_l2files(
-            rid, fid, mjdobs, *corners, radius_of_initial_cone_search=radius)
-    except Exception as exc:  # noqa: BLE001
-        raise GatheringError(
-            f"overlap query failed for rid {rid} fid {fid}: {exc}") from exc
+    overlapping = _overlapping_l2files(handle, rid, fid, corners, radius)
 
     rows: list[list[Any]] = []
-    for image in overlapping or ():
+    for image in overlapping:
         input_rid = int(image[0])
         field_from_overlap = image[11]
         info = handle.get_info_for_l2file(input_rid)
@@ -384,7 +488,12 @@ def coadd_input_rows(handle: UnitSource, rid: int, fid: int, mjdobs: float,
                      image_mjdobs, exptime, infobits, status, vbest, version])
 
     if len(rows) < min_images_to_coadd:
-        raise GatheringError(
+        # `NotReadyYet`, specifically: the query ran and answered, the sky
+        # simply has not been visited enough times. With the window and the
+        # exclusion both fixed the representative counts itself, so a field
+        # holding exactly `min_images_to_coadd` frames now passes here — it
+        # used to arrive one short and be skipped for the life of the survey.
+        raise NotReadyYet(
             f"rid {rid} has {len(rows)} coaddable inputs, fewer than the "
             f"{min_images_to_coadd} the release requires for a reference "
             f"image")
@@ -392,28 +501,95 @@ def coadd_input_rows(handle: UnitSource, rid: int, fid: int, mjdobs: float,
 
 
 def publish_coadd_inputs(s3_client, bucket: str, key: str,
-                         rows: Iterable[Sequence[Any]]) -> str:
-    """Write the coadd-inputs CSV to S3 and return its URI.
+                         rows: Iterable[Sequence[Any]]) -> tuple[str, str]:
+    """Write the coadd-inputs CSV to S3. Return `(uri, checksum)`.
 
     The reference stage reads `coadd_inputs_uri`, splits the bucket off, and
     downloads the object — so the URI must name an object that exists before
     the job starts. Gathering publishes it because gathering is what knows the
     rows; the stage only consumes.
+
+    **Created, never overwritten** (review finding #9). This was an
+    unconditional `put_object`, and of everything in the tree that wrote
+    without a condition it was the sharpest case, because the bytes genuinely
+    change. `rows` come from a live overlap query over images that are still
+    arriving: two gathering passes under ONE run_id — a resumed submission, a
+    rerun after a partial failure — legitimately see different sets of
+    overlapping L2 files, and the key is built from run_id and unit alone. So
+    the second pass silently replaced an object that units already submitted
+    were citing through `coadd_inputs_uri`, and those jobs then coadded a
+    different set of frames than the one their submission described. Nothing
+    downstream could notice: the consuming stages split the bucket off the URI
+    and download whatever is there.
+
+    `IfNoneMatch="*"` makes S3 refuse the second writer instead of letting it
+    win. An identical body is an ordinary replay of the same gathering pass and
+    is not an error. A different body under a used key is the defect above, and
+    it raises here — where the submitter can pick a fresh run identity — rather
+    than at read time in a job that has no way to tell.
+
+    The checksum comes back with the URI because a URI alone is not a citation:
+    it names a key, and this fix is precisely about a key whose bytes could
+    change. The caller threads it into `UnitFacts.coadd_inputs_checksum` so the
+    consuming stage can verify what it downloaded is what was published.
     """
     body = "\n".join(",".join("" if value is None else str(value)
                               for value in row)
                      for row in rows)
     if body:
         body += "\n"
+    payload = body.encode("utf-8")
+    digest = hashlib.sha256(payload).hexdigest()
+    uri = f"s3://{bucket}/{key}"
+
     try:
-        s3_client.put_object(Bucket=bucket, Key=key,
-                             Body=body.encode("utf-8"),
-                             ContentType="text/csv")
+        s3_client.put_object(Bucket=bucket, Key=key, Body=payload,
+                             ContentType="text/csv",
+                             ChecksumSHA256=base64.b64encode(
+                                 hashlib.sha256(payload).digest()
+                             ).decode("ascii"),
+                             IfNoneMatch="*")
+        return uri, digest
+    except Exception as exc:  # noqa: BLE001 - narrowed immediately below
+        if not is_precondition_failed(exc):
+            raise GatheringError(
+                f"could not publish the coadd inputs to {uri}: {exc}") from exc
+
+    # The key is taken. Only the bytes decide whether that is this same pass
+    # replaying or a second pass with a different answer, so read them.
+    try:
+        existing = s3_client.get_object(Bucket=bucket, Key=key)
+        current = existing["Body"].read()
     except Exception as exc:  # noqa: BLE001
         raise GatheringError(
-            f"could not publish the coadd inputs to s3://{bucket}/{key}: "
-            f"{exc}") from exc
-    return f"s3://{bucket}/{key}"
+            f"the coadd inputs at {uri} already exist but could not be read "
+            f"back to check whether this pass agrees with them: {exc}") from exc
+
+    if current == payload:
+        logger.info("coadd inputs %s already published with identical "
+                    "content; treating as a replayed gathering pass", key)
+        return uri, digest
+
+    raise GatheringError(
+        f"coadd inputs already exist at {uri} listing DIFFERENT images than "
+        f"this gathering pass found. The overlap query returns more frames as "
+        f"the survey advances, so a second pass under one run identity does "
+        f"not agree with the first — and units already submitted cite this "
+        f"key, so replacing it would make them coadd a set their submission "
+        f"never described. Gather under a new run identity instead.")
+
+
+# `publish_coadd_inputs` returns `(uri, checksum)` rather than a bare URI
+# because a URI is not a citation on its own — it names a key, and the key's
+# bytes are exactly what review finding #9 established could change underneath
+# a submitted unit. `gather_reference_units` below is the sole caller and
+# threads both halves into the facts; `UnitFacts.coadd_inputs_checksum` is the
+# second half's home.
+#
+# The consuming stages (`pipeline/stages/reference_image.py` and
+# `pipeline/stages/science.py`) verify the checksum when the fact is present
+# and skip verification when it is absent, so a manifest written before the
+# fact existed is legacy work that still runs rather than a failure.
 
 
 def gather_reference_units(handle: UnitSource, start, end,
@@ -435,7 +611,16 @@ def gather_reference_units(handle: UnitSource, start, end,
 
     A field that cannot yet support a reference image is SKIPPED, not fatal:
     it is the ordinary state of a field early in the survey, and one such
-    field must not stop the others being submitted.
+    field must not stop the others being submitted. Only `NotReadyYet` is
+    that state. A query that failed raises past this loop, because a night
+    in which every field was skipped because the database was unreachable
+    must not read the same as a night early in the survey.
+
+    `start_mjdobs`/`end_mjdobs` bound which frames are gathered as UNITS and
+    are passed on for that; they are deliberately not the coadd window. The
+    coadd's inputs are every good frame ever taken of that tile, which is
+    what a reference image is, and `_overlapping_l2files` is where that
+    window is set.
     """
     for unit in gather_science_units(handle, start, end, start_mjdobs,
                                      end_mjdobs, min_images_to_coadd,
@@ -451,19 +636,29 @@ def gather_reference_units(handle: UnitSource, start, end,
             rows = coadd_input_rows(
                 handle, int(rid), int(facts.fid), float(facts.mjdobs),
                 facts.sky_position or {}, min_images_to_coadd, radius=radius)
-        except GatheringError as exc:
+        except NotReadyYet as exc:
+            # Narrowed from `GatheringError` on purpose. The broad catch
+            # swallowed every failure this module raises — a stale sky
+            # position, disagreeing field identities, an unreachable database
+            # — and logged all of them at INFO as "not yet", which is the
+            # sentence an operator reads and does nothing about.
             logger.info("no reference image for unit %s yet: %s",
                         unit.key, exc)
             continue
 
         key = (f"coadd-inputs/{run_id}/{unit.key}/"
                f"input_images_for_refimage_rid{int(rid)}.csv")
-        uri = publish_coadd_inputs(s3_client, job_bucket, key, rows)
+        # The checksum travels with the URI (review finding #9). A URI names a
+        # key, and the whole point of the conditional create above is that a
+        # key's bytes could change; the consuming stage can only tell it got
+        # what was published if the manifest says what that was.
+        uri, checksum = publish_coadd_inputs(s3_client, job_bucket, key, rows)
         logger.info("unit %s: %d coadd inputs at %s",
                     unit.key, len(rows), uri)
 
         yield dataclasses.replace(
-            unit, facts=_replace(facts, coadd_inputs_uri=uri))
+            unit, facts=_replace(facts, coadd_inputs_uri=uri,
+                                 coadd_inputs_checksum=checksum))
 
 
 def gather_post_process_units(handle: Any, proc_date: str
