@@ -25,7 +25,6 @@ the other's tables.
 """
 
 import dataclasses
-import json
 import logging
 from typing import Any, Protocol
 

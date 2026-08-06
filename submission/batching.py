@@ -39,6 +39,7 @@ import logging
 from typing import Callable, Iterable, Iterator
 
 from .manifest import MAX_ARRAY_SIZE, Manifest, ProcessingUnit
+from .routes import JOB_TYPE_SCIENCE, route_for
 
 logger = logging.getLogger(__name__)
 
@@ -84,12 +85,18 @@ class ReadyWorkAccumulator:
         Returns monotonic seconds. Defaults to ``time.monotonic``.
     batch_id_factory : callable, optional
         Returns a unique id per cut batch, stamped into the manifest.
+    job_type : str, optional
+        What kind of work this accumulator batches. One accumulator holds
+        one job type: the type fixes the route (class, queue, database
+        lane), so units of two types cannot share an array job. Defaults
+        to science, the only type the orchestrator batches today.
     """
 
     def __init__(self, max_batch_size: int = DEFAULT_MAX_BATCH_SIZE,
                  max_wait_seconds: float = DEFAULT_MAX_WAIT_SECONDS,
                  clock: Callable[[], float] | None = None,
-                 batch_id_factory: Callable[[], str] | None = None):
+                 batch_id_factory: Callable[[], str] | None = None,
+                 job_type: str = JOB_TYPE_SCIENCE):
         if max_batch_size < 1:
             raise ValueError("max_batch_size must be at least 1")
         if max_batch_size > MAX_ARRAY_SIZE:
@@ -101,6 +108,10 @@ class ReadyWorkAccumulator:
 
         self.max_batch_size = max_batch_size
         self.max_wait_seconds = max_wait_seconds
+        # Validated here rather than at the first cut: an accumulator
+        # built with an unknown job type should fail when it is built,
+        # not an hour later when a batch is ready.
+        self.job_type = route_for(job_type).job_type
 
         if clock is None:
             import time
@@ -196,7 +207,8 @@ class ReadyWorkAccumulator:
         self._oldest_at = self._clock() if self._waiting else None
 
         reason = "size" if full else ("age" if stale else "forced")
-        manifest = Manifest(units, batch_id=self._batch_id_factory())
+        manifest = Manifest(units, batch_id=self._batch_id_factory(),
+                            job_type=self.job_type)
         logger.info("cut batch %s: %d units (%s)",
                     manifest.batch_id, len(units), reason)
         return Batch(manifest=manifest, reason=reason)
