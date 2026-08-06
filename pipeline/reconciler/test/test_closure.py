@@ -225,6 +225,108 @@ class PublishTests(unittest.TestCase):
         self.assertFalse(second.created)
         self.assertEqual(first.checksum, second.checksum)
 
+    def test_the_same_classification_rebuilds_byte_identically(self):
+        # The record store is create-once, so a replayed lease must re-derive
+        # the SAME object or the conditional put fails as "already exists with
+        # different content". Found live: a wall-clock `reconciled_at` made
+        # every replay a different object and turned idempotence into an
+        # error. Two builds an hour apart must still be identical.
+        first = closure.build_closure_record(
+            self.row, None, sequence=1, predecessor=None,
+            classification="never_resolved", now=utc(2026, 8, 6, 12, 0, 0))
+        second = closure.build_closure_record(
+            self.row, None, sequence=1, predecessor=None,
+            classification="never_resolved", now=utc(2026, 8, 6, 13, 0, 0))
+
+        self.assertEqual(first.to_bytes(), second.to_bytes())
+
+    def test_republishing_after_a_later_build_still_dedupes(self):
+        first = closure.build_closure_record(
+            self.row, None, sequence=1, predecessor=None,
+            classification="never_resolved", now=utc(2026, 8, 6, 12, 0, 0))
+        closure.publish_closure_record(self.store, PREFIX, self.row, first)
+
+        later = closure.build_closure_record(
+            self.row, None, sequence=1, predecessor=None,
+            classification="never_resolved", now=utc(2026, 8, 6, 14, 0, 0))
+        result = closure.publish_closure_record(
+            self.store, PREFIX, self.row, later)
+
+        self.assertFalse(result.created)
+
+    def test_a_divergent_existing_record_is_superseded_not_overwritten(self):
+        # Records are immutable. When a sequence already holds a DIFFERENT
+        # account — an older reconciler's, or one built before a fix — the
+        # new account goes to the next free sequence rather than overwriting.
+        # Every record is a complete snapshot, so the highest sequence is
+        # still the full terminal account.
+        stale = closure.build_closure_record(
+            self.row, None, sequence=1, predecessor=None,
+            classification="never_resolved")
+        stale.body["a_stale_field"] = "from an older build"
+        closure.publish_closure_record(self.store, PREFIX, self.row, stale)
+
+        fresh = closure.build_closure_record(
+            self.row, None, sequence=1, predecessor=None,
+            classification="never_resolved")
+        result = closure.publish_closure_record(
+            self.store, PREFIX, self.row, fresh)
+
+        self.assertTrue(result.created)
+        self.assertTrue(result.key.endswith("seq-0002.json"))
+        # The stale record was left exactly as it was.
+        stale_body = json.loads(self.store.get(
+            "attempts/records/run-1/90000_1/attempt-1/seq-0001.json"))
+        self.assertEqual("from an older build", stale_body["a_stale_field"])
+
+    def test_supersession_also_fires_on_the_S3_stores_error_shape(self):
+        # The two stores report divergence differently: InMemoryObjectStore
+        # attaches existing/new checksums, S3ObjectStore attaches only key and
+        # bucket and says it in the message. Matching on the details alone
+        # passed the suite and did nothing in production — this pins the real
+        # S3 shape so that cannot recur.
+        from pipeline.runtime.errors import StorageError
+
+        class S3Shaped:
+            def __init__(self):
+                self.keys = []
+
+            def put_if_absent(self, key, body, content_type=None):
+                self.keys.append(key)
+                if key.endswith("seq-0001.json"):
+                    raise StorageError(
+                        f"object s3://bucket/{key} already exists with "
+                        f"different content: two writers under one attempt "
+                        f"identity", key=key, bucket="bucket")
+                from pipeline.runtime.boundaries import PutResult
+                return PutResult(key=key, checksum="x", created=True, size=1)
+
+        store = S3Shaped()
+        record = closure.build_closure_record(
+            self.row, None, sequence=1, predecessor=None,
+            classification="never_resolved")
+
+        result = closure.publish_closure_record(store, PREFIX, self.row, record)
+
+        self.assertTrue(result.key.endswith("seq-0002.json"))
+
+    def test_the_supersession_climb_is_bounded(self):
+        class AlwaysDivergent:
+            def put_if_absent(self, key, body, content_type=None):
+                from pipeline.runtime.errors import StorageError
+                raise StorageError("already exists with different content",
+                                   key=key, existing_checksum="a",
+                                   new_checksum="b")
+
+        record = closure.build_closure_record(
+            self.row, None, sequence=1, predecessor=None,
+            classification="never_resolved")
+
+        with self.assertRaises(Exception) as caught:
+            closure.publish_closure_record(
+                AlwaysDivergent(), PREFIX, self.row, record)
+        self.assertIn("all", str(caught.exception).lower())
+
     def test_the_body_round_trips_through_the_store(self):
         record = closure.build_closure_record(
             self.row, None, sequence=1, predecessor=None,

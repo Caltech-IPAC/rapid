@@ -108,7 +108,10 @@ class DeferralTests(unittest.TestCase):
 
 class AgreedClosureTests(unittest.TestCase):
     def test_an_application_closed_attempt_gets_an_agreed_closure_record(self):
+        # An application_closed row always carries its own started_at: the
+        # runtime writes it in the started-CAS long before it can close.
         row = attempt_row(1, lifecycle_state="application_closed",
+                          started_at=utc(2026, 8, 6, 11, 0, 0),
                           rapid_outcome="failure", product_disposition="none",
                           terminal_record_sequence=0)
         store = InMemoryObjectStore()
@@ -231,6 +234,88 @@ class ReconcilerFirstTests(unittest.TestCase):
 
 def closure_reason(body):
     return body.get("rejected_predecessor", {}).get("reason")
+
+
+class ConstraintFidelityTests(unittest.TestCase):
+    """States the DDL forbids must never be attempted. All found live."""
+
+    def test_a_row_with_no_start_is_never_closed_as_terminal_after_start(self):
+        # terminal_after_start requires started_at IS NOT NULL. The scheduler
+        # reporting a start for the JOB does not mean this attempt started.
+        row = attempt_row(1, lifecycle_state="submitted", started_at=None)
+        jobs = [batch_job(status="FAILED", exit_code=126,
+                          started=utc(2026, 8, 6, 11, 0, 0),
+                          stopped=utc(2026, 8, 6, 11, 5, 0))]
+        svc, conn, _, _, _ = build([row], jobs)
+
+        svc.poll_once()
+
+        self.assertEqual("terminal_without_start",
+                         conn.rows[1]["lifecycle_state"])
+
+    def test_application_facts_with_no_start_are_flagged_contradictory(self):
+        # terminal_without_start forbids rapid_outcome/product_disposition;
+        # terminal_after_start requires started_at. A row with an outcome and
+        # no start satisfies neither and must not be forced into either.
+        row = attempt_row(1, lifecycle_state="submitted", started_at=None,
+                          rapid_outcome="success",
+                          product_disposition="published")
+        jobs = [batch_job(status="FAILED", exit_code=None, started=None,
+                          stopped=utc(2026, 8, 6, 11, 5, 0))]
+        svc, conn, _, _, _ = build([row], jobs)
+
+        svc.poll_once()
+
+        self.assertEqual("missing_or_contradictory",
+                         conn.rows[1]["lifecycle_state"])
+
+    def test_an_unresolvable_id_on_a_row_that_ran_is_contradictory(self):
+        # The scheduler knows nothing about the job (a wrong id, or one aged
+        # out of Batch's retention) but the row carries a full application
+        # account. terminal_without_start forbids those fields, so asserting
+        # "never started" would contradict the row's own evidence.
+        row = attempt_row(1, lifecycle_state="application_closed",
+                          started_at=utc(2026, 8, 6, 11, 0, 0),
+                          rapid_outcome="success",
+                          product_disposition="published",
+                          application_intended_exit=0,
+                          scheduler_job_id="an-id-batch-never-heard-of",
+                          submitted_at=utc(2026, 8, 6, 10, 0, 0))
+        svc, conn, _, _, _ = build([row], jobs=[],
+                                   now=utc(2026, 8, 6, 12, 0, 0))
+
+        summary = svc.poll_once()
+
+        self.assertEqual(1, summary["classified"])
+        self.assertEqual("missing_or_contradictory",
+                         conn.rows[1]["lifecycle_state"])
+
+    def test_an_unresolvable_id_on_a_row_that_never_ran_is_never_started(self):
+        row = attempt_row(1, lifecycle_state="submitted", started_at=None,
+                          scheduler_job_id="an-id-batch-never-heard-of",
+                          submitted_at=utc(2026, 8, 6, 10, 0, 0))
+        svc, conn, _, _, _ = build([row], jobs=[],
+                                   now=utc(2026, 8, 6, 12, 0, 0))
+
+        summary = svc.poll_once()
+
+        self.assertEqual(1, summary["classified"])
+        self.assertEqual("terminal_without_start",
+                         conn.rows[1]["lifecycle_state"])
+
+    def test_a_started_row_is_closed_as_terminal_after_start(self):
+        row = attempt_row(1, lifecycle_state="started",
+                          started_at=utc(2026, 8, 6, 11, 0, 0))
+        jobs = [batch_job(status="FAILED", exit_code=137,
+                          started=utc(2026, 8, 6, 11, 0, 0),
+                          stopped=utc(2026, 8, 6, 11, 5, 0),
+                          status_reason="Host EC2 instance terminated")]
+        svc, conn, _, _, _ = build([row], jobs)
+
+        svc.poll_once()
+
+        self.assertEqual("terminal_after_start",
+                         conn.rows[1]["lifecycle_state"])
 
 
 class LeaseTests(unittest.TestCase):
@@ -362,6 +447,58 @@ class ResilienceTests(unittest.TestCase):
 
         self.assertEqual(1, summary["errors"])
         self.assertEqual(1, summary["classified"])
+
+    def test_a_submitted_row_is_not_given_a_scheduler_state(self):
+        # The DDL forbids scheduler_state on a `submitted` row, and it is
+        # right to: a row still claiming nothing has started must not carry a
+        # scheduler verdict beside that claim. Found live — the first real
+        # cycle raised CheckViolation on attempts_state_submitted_check.
+        row = attempt_row(1, lifecycle_state="submitted")
+        jobs = [batch_job(status="RUNNING", started=utc(2026, 8, 6, 11, 0, 0))]
+        svc, conn, _, _, _ = build([row], jobs)
+
+        svc.poll_once()
+
+        observations = [(text, params) for text, params in conn.statements
+                        if "scheduler_state" in text and text.startswith("UPDATE")]
+        self.assertTrue(observations, "the observation was not recorded at all")
+        for _, params in observations:
+            # The state parameter is first in record_scheduler_observation.
+            self.assertIsNone(params[0])
+
+    def test_a_failing_attempt_rolls_back_so_the_next_one_still_runs(self):
+        # PostgreSQL aborts the whole transaction on a failed statement:
+        # without a rollback, every later attempt dies with
+        # InFailedSqlTransaction and one bad row kills the cycle. Found live.
+        rows = [attempt_row(1, lifecycle_state="started"),
+                attempt_row(2, lifecycle_state="started",
+                            scheduler_job_id="job-two")]
+        jobs = [batch_job(status="FAILED", exit_code=1,
+                          started=utc(2026, 8, 6, 11, 0, 0),
+                          stopped=utc(2026, 8, 6, 11, 5, 0)),
+                batch_job(job_id="job-two", status="FAILED", exit_code=1,
+                          started=utc(2026, 8, 6, 11, 0, 0),
+                          stopped=utc(2026, 8, 6, 11, 5, 0))]
+        svc, conn, _, store, _ = build(rows, jobs)
+
+        real_publish = service.closure_mod.publish_closure_record
+
+        def flaky(store_, prefix, row, record):
+            if row["attempt_id"] == 1:
+                raise RuntimeError("simulated statement failure")
+            return real_publish(store_, prefix, row, record)
+
+        rollbacks_before = conn.rollbacks
+        service.closure_mod.publish_closure_record = flaky
+        try:
+            summary = svc.poll_once()
+        finally:
+            service.closure_mod.publish_closure_record = real_publish
+
+        self.assertEqual(1, summary["errors"])
+        # The second attempt still got through — the point of the rollback.
+        self.assertEqual(1, summary["classified"])
+        self.assertGreater(conn.rollbacks, rollbacks_before)
 
     def test_run_forever_survives_a_failing_cycle(self):
         cycles = {"n": 0}

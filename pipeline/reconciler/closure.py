@@ -26,13 +26,12 @@ had authored it.
 """
 
 import dataclasses
-import datetime
 import json
 import logging
-from typing import Any
 
 from pipeline.runtime import termination
 from pipeline.runtime.boundaries import checksum as body_checksum
+from pipeline.runtime.errors import RecordsError
 
 logger = logging.getLogger("rapid.reconciler.closure")
 
@@ -139,7 +138,9 @@ def build_closure_record(attempt_row, observation, sequence,
     `predecessor` is the validated sequence-0 body, or None for the
     reconciler-first form.
     """
-    moment = now or datetime.datetime.now(datetime.timezone.utc)
+    # `now` is accepted for signature stability with the rest of the package
+    # and is deliberately unused: see the determinism note below.
+    del now
     reconciler_first = predecessor is None
 
     if predecessor is not None:
@@ -152,12 +153,22 @@ def build_closure_record(attempt_row, observation, sequence,
     else:
         body = _from_row(attempt_row)
 
+    # NOTE the absent `reconciled_at`. A closure record must be BYTE-IDENTICAL
+    # for a given classification, because the record store is create-once: a
+    # replayed lease, a retried cycle, or a second reconciler must re-derive
+    # exactly the same object or the conditional put fails as "already exists
+    # with different content" — which is the store correctly refusing two
+    # writers under one identity. Stamping wall-clock time here made every
+    # replay a different object and turned idempotence into a hard error
+    # (found live, 2026-08-06, on the first cycle over an existing record).
+    # Nothing is lost: *when* the attempt happened is carried by the
+    # scheduler's own timestamps below, which are facts about the attempt
+    # rather than about when someone looked at it.
     body.update({
         "schema_version": termination.RECORD_SCHEMA_VERSION,
         "record_sequence": sequence,
         "record_author": RECORD_AUTHOR,
         "reconciler_first": reconciler_first,
-        "reconciled_at": _iso(moment),
         "reconciliation_classification": classification,
     })
     body.update(_scheduler_facts(observation))
@@ -227,22 +238,75 @@ def _from_row(attempt_row):
     return {key: value for key, value in body.items() if value is not None}
 
 
+MAX_SUPERSESSION_CLIMB = 8
+
+
 def publish_closure_record(store, prefix, attempt_row, record):
     """Write the closure record at its sequence's key. Create-once.
 
-    Returns the store's put result. A key that already exists is *not* an
-    error: the reconciler is idempotent under replay, and an identical record
-    at the same sequence is the expected outcome of a retried lease.
+    Returns the store's put result. A key that already exists holding the
+    *same* content is not an error — the reconciler is idempotent under
+    replay, and an identical record at the same sequence is the expected
+    outcome of a retried lease.
+
+    A key that already exists holding *different* content is the supersession
+    case. Records are immutable, so the answer is never to overwrite: the new
+    account is published at the next free sequence, and the highest sequence
+    remains the full terminal account (every record here is a complete
+    canonical snapshot, so a consumer reading only the highest still sees
+    everything). The climb is bounded — a store that answers "different
+    content" at every sequence is a fault to surface, not to loop on.
     """
-    key = termination.terminal_record_key(
-        prefix,
-        attempt_row.get("run_id"),
-        attempt_row.get("logical_job_id"),
-        attempt_row.get("attempt_id"),
-        record.sequence)
-    result = store.put_if_absent(key, record.to_bytes(),
-                                 content_type="application/json")
-    logger.info("closure record %s (%s) sequence %d for attempt %s",
-                key, "written" if result.created else "already present",
-                record.sequence, attempt_row.get("attempt_id"))
-    return result
+    attempt_id = attempt_row.get("attempt_id")
+    body = record.to_bytes()
+    sequence = record.sequence
+
+    for offset in range(MAX_SUPERSESSION_CLIMB):
+        key = termination.terminal_record_key(
+            prefix, attempt_row.get("run_id"),
+            attempt_row.get("logical_job_id"), attempt_id, sequence + offset)
+        try:
+            result = store.put_if_absent(key, body,
+                                         content_type="application/json")
+        except Exception as exc:  # noqa: BLE001 - only the divergence case
+            if not _is_content_divergence(exc):
+                raise
+            logger.info(
+                "sequence %d for attempt %s already holds a different "
+                "account; superseding at %d",
+                sequence + offset, attempt_id, sequence + offset + 1)
+            continue
+
+        logger.info("closure record %s (%s) sequence %d for attempt %s",
+                    key, "written" if result.created else "already present",
+                    sequence + offset, attempt_id)
+        return result
+
+    raise RecordsError(
+        f"could not publish a closure record for attempt {attempt_id}: "
+        f"sequences {sequence}..{sequence + MAX_SUPERSESSION_CLIMB - 1} all "
+        f"hold different accounts")
+
+
+_DIVERGENCE_PHRASE = "already exists with different content"
+
+
+def _is_content_divergence(exc):
+    """Is this the store refusing to overwrite an object holding other content?
+
+    Both stores raise `StorageError` for several conditions; only this one is
+    recoverable by climbing a sequence.
+
+    Two signals, because the two stores report it differently — a difference
+    that first showed up as this check passing in the unit suite and doing
+    nothing in production. `InMemoryObjectStore` attaches structured
+    `existing_checksum`/`new_checksum` details; `S3ObjectStore` attaches only
+    key and bucket and says it in the message. Checking both means neither
+    store can drift out of this predicate silently.
+    """
+    details = getattr(exc, "details", None) or {}
+    existing = details.get("existing_checksum")
+    new = details.get("new_checksum")
+    if existing and new and existing != new:
+        return True
+    return _DIVERGENCE_PHRASE in str(exc)

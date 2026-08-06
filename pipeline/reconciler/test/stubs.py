@@ -182,7 +182,12 @@ def attempt_row(attempt_id=1, **overrides):
         "logical_job_id": "90000/1",
         "scheduler_job_id": "job-abc",
         "lifecycle_state": "submitted",
-        "application_attempt_index": 1,
+        # A pre-created row has NO application-observed index: the submission
+        # layer cannot know it, and the runtime writes it only when it claims
+        # the row from inside a running container. Its presence is therefore
+        # evidence the attempt ran, which is why the DDL forbids it in
+        # terminal_without_start — tests that need a claimed row set it.
+        "application_attempt_index": None,
         "scheduler_attempt_index": None,
         "exposure_id": 90000,
         "sca": 1,

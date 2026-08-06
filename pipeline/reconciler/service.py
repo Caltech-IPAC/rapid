@@ -144,7 +144,12 @@ class ReconcilerService:
                     outcome = self._reconcile_attempt(
                         row, observations.get(job_id, []))
                 except Exception:  # noqa: BLE001 - one bad attempt must not
-                    # take the cycle down; the next poll retries it.
+                    # take the cycle down; the next poll retries it. The
+                    # rollback is not optional: without it a failed statement
+                    # leaves the transaction aborted and every subsequent
+                    # attempt fails with InFailedSqlTransaction, turning one
+                    # bad row into a dead cycle.
+                    self._safe_rollback()
                     logger.exception("reconciling attempt %s failed",
                                      row.get("attempt_id"))
                     summary["errors"] += 1
@@ -154,7 +159,8 @@ class ReconcilerService:
         for row in unresolved:
             try:
                 outcome = self._reconcile_unresolved(row)
-            except Exception:  # noqa: BLE001
+            except Exception:  # noqa: BLE001 - same reasoning as above
+                self._safe_rollback()
                 logger.exception("reconciling unresolved attempt %s failed",
                                  row.get("attempt_id"))
                 summary["errors"] += 1
@@ -163,6 +169,15 @@ class ReconcilerService:
 
         logger.info("poll: %s", summary)
         return summary
+
+    def _safe_rollback(self):
+        """Clear an aborted transaction. A rollback that itself fails (the
+        connection is gone) must not mask the error being handled."""
+        try:
+            self.conn.rollback()
+        except Exception:  # noqa: BLE001
+            logger.debug("rollback after a failed attempt also failed",
+                         exc_info=True)
 
     def _observe(self, job_ids):
         """Describe every open job, batched, and index observations by job id."""
@@ -209,7 +224,8 @@ class ReconcilerService:
         # Scheduler observations are recorded whatever the state — they are
         # this service's to author, and recording them early means an operator
         # can see queue and start times before anything terminal happens.
-        self._record_observation(attempt_id, observation)
+        self._record_observation(attempt_id, row["lifecycle_state"],
+                                 observation)
 
         if not observation.is_terminal:
             return "deferred"
@@ -221,16 +237,35 @@ class ReconcilerService:
 
         return self._classify(row, observation)
 
-    def _record_observation(self, attempt_id, observation):
+    def _record_observation(self, attempt_id, lifecycle_state, observation):
+        """Record what the scheduler saw, without violating the row's state.
+
+        A `submitted` row must have `scheduler_state IS NULL` — the DDL says
+        so, and it is right: a row that still claims nothing has started must
+        not carry a scheduler verdict beside that claim. The scheduler
+        *timestamps* are permitted there and are worth having early (they are
+        the queue interval), so they are written and the state is withheld
+        until the same pass that transitions the row out of `submitted`.
+        """
         writer = AttemptWriter(_Executor(self.conn))
-        writer.record_scheduler_observation(
-            attempt_id,
-            scheduler_state=observation.state,
-            created_at=observation.created_at,
-            started_at=observation.started_at,
-            stopped_at=observation.stopped_at,
-            attempt_index=observation.attempt_index)
-        self.conn.commit()
+        state = (None if lifecycle_state == LifecycleState.SUBMITTED.value
+                 else observation.state)
+        try:
+            writer.record_scheduler_observation(
+                attempt_id,
+                scheduler_state=state,
+                created_at=observation.created_at,
+                started_at=observation.started_at,
+                stopped_at=observation.stopped_at,
+                attempt_index=observation.attempt_index)
+            self.conn.commit()
+        except Exception:
+            # A failed statement poisons the whole transaction in PostgreSQL:
+            # every later statement raises InFailedSqlTransaction until the
+            # block ends. Rolling back here is what keeps one bad row from
+            # taking down the rest of the cycle.
+            self.conn.rollback()
+            raise
 
     # -- classification, under the lease ---------------------------------
 
@@ -260,14 +295,28 @@ class ReconcilerService:
         predecessor, rejected = closure_mod.read_predecessor(
             self.records_store, predecessor_key, attempt_id)
 
+        # Did this attempt ever start? Both stores get a say, and the ROW is
+        # decisive where they disagree. The scheduler's per-job view can show
+        # a start time that belongs to a different attempt of the same job,
+        # and a row carrying application facts — an outcome, a disposition, a
+        # config digest — has demonstrably run whatever the scheduler says.
+        # Getting this wrong writes a state the DDL forbids:
+        # terminal_without_start requires started_at IS NULL *and* no
+        # application-authored fields at all. (Found live, 2026-08-06: rows
+        # with rapid_outcome=success were being classified never-started, and
+        # attempts whose own started_at was NULL were being classified as
+        # abrupt losses.)
+        ran = self._attempt_ran(row, predecessor, observation)
+
         if predecessor is not None:
             classification = (CLASS_AGREED if state ==
                               LifecycleState.APPLICATION_CLOSED.value
                               else CLASS_MATERIALIZED)
             error_category = predecessor.get("error_category")
-        elif observation.never_ran:
+        elif not ran:
             classification = CLASS_NEVER_STARTED
-            error_category = observation.reconciler_category()
+            error_category = observation.reconciler_category() or \
+                "scheduler_provisioning"
         else:
             classification = CLASS_ABRUPT_LOSS
             error_category = observation.reconciler_category() or "internal_error"
@@ -289,6 +338,76 @@ class ReconcilerService:
         self._transition(row, observation, writer, record, written,
                          classification, error_category)
         return "classified"
+
+    @staticmethod
+    def _attempt_ran(row, predecessor, observation):
+        """Did the application ever begin executing this attempt?
+
+        Evidence, strongest first:
+
+        1. The row's own `started_at`. The runtime writes it in the same
+           compare-and-set that marks the attempt started, so its presence is
+           first-hand and its absence means no started-CAS ever landed.
+        2. Any application-authored fact on the row or in a predecessor
+           record — an outcome, a disposition, a resolved config digest. None
+           of those can exist unless the application ran.
+        3. Only then the scheduler's start time, which is the weakest signal
+           because a job-scoped view can report a start belonging to a
+           different attempt of the same job.
+        """
+        if row.get("started_at") is not None:
+            return True
+        for field in ("rapid_outcome", "product_disposition", "config_digest",
+                      "application_intended_exit"):
+            if row.get(field) is not None:
+                return True
+        # An application-observed attempt index means the APPLICATION claimed
+        # this row — it read its own AWS_BATCH_JOB_ATTEMPT and wrote it, which
+        # it can only do from inside a running container. The DDL agrees:
+        # terminal_without_start requires application_attempt_index IS NULL,
+        # precisely because a claimed row is not one that never started.
+        if row.get("application_attempt_index") is not None:
+            return True
+        if predecessor:
+            return True
+        if row.get("lifecycle_state") in (
+                LifecycleState.STARTED.value,
+                LifecycleState.APPLICATION_CLOSED.value):
+            return True
+
+        # Nothing on the row says it ran, and the row is still `submitted` —
+        # meaning no started-CAS ever landed. The scheduler's start time is
+        # NOT enough to overrule that: on a job-scoped observation it may
+        # belong to a different attempt, and `terminal_after_start` would
+        # then be written for an attempt whose started_at is NULL, which the
+        # DDL rejects. Only a per-attempt observation (one carrying its own
+        # index, so it is scoped to this attempt) is trusted here.
+        if observation is None or observation.started_at is None:
+            return False
+        return observation.attempt_index is not None
+
+    @staticmethod
+    def _is_contradictory(row, classification):
+        """Application facts with no start time — neither terminal state fits.
+
+        `terminal_after_start` requires `started_at IS NOT NULL`;
+        `terminal_without_start` requires the application fields be NULL. A
+        row with an outcome but no start satisfies neither, and the disagreement
+        is real rather than a classification mistake.
+        """
+        if row.get("started_at") is not None:
+            return False
+        # From here the row has no start time, so `terminal_after_start` is
+        # unavailable whatever else is true — its constraint requires one.
+        # Any classification that would land there is a contradiction, as is
+        # any row carrying application facts it could only have authored by
+        # running.
+        if classification in (CLASS_AGREED, CLASS_MATERIALIZED,
+                              CLASS_ABRUPT_LOSS):
+            return True
+        return any(row.get(field) is not None
+                   for field in ("rapid_outcome", "product_disposition",
+                                 "application_intended_exit", "config_digest"))
 
     def _next_sequence(self, row):
         """The next record sequence for this attempt.
@@ -326,6 +445,25 @@ class ReconcilerService:
         attempt_id = row["attempt_id"]
         ended_at = (observation.stopped_at or row.get("ended_at")
                     or self._now())
+
+        # A row can be internally inconsistent: application facts present but
+        # no started_at, so neither terminal state's constraint can hold —
+        # terminal_after_start requires started_at, terminal_without_start
+        # forbids the application facts. Forcing it into either would mean
+        # deleting evidence to fit a state. The adopted state for stores that
+        # disagree is missing_or_contradictory, and that is what it gets:
+        # flagged for a human, with the closure record already published.
+        if self._is_contradictory(row, classification):
+            writer.mark_missing_or_contradictory(
+                attempt_id,
+                reconciliation_class="contradictory",
+                reconciliation_sources=["postgres", "batch"],
+                detected_at=self._now())
+            logger.warning(
+                "attempt %s carries application facts with no start time; "
+                "flagged contradictory rather than forced into a terminal "
+                "state", attempt_id)
+            return
 
         if classification == CLASS_NEVER_STARTED:
             writer.mark_terminal_without_start(
@@ -391,6 +529,29 @@ class ReconcilerService:
                 self.records_store, self.records_prefix, current, record)
 
             writer = AttemptWriter(_Executor(self.conn))
+
+            # An attempt the scheduler cannot account for is normally one that
+            # never ran — but not always. A row can carry a full application
+            # account (it started, it closed itself) while its scheduler id
+            # resolves to nothing: the id was wrong, or the job aged out of
+            # Batch's retention. `terminal_without_start` forbids exactly
+            # those application fields, so writing it would mean asserting the
+            # attempt never ran while the row proves it did. That is a genuine
+            # disagreement between the stores, and it gets the state the
+            # design has for disagreement. (Found live 2026-08-06 against
+            # W2-era rows whose synthetic job ids Batch never knew.)
+            if self._attempt_ran(current, None, None):
+                writer.mark_missing_or_contradictory(
+                    attempt_id,
+                    reconciliation_class="missing",
+                    reconciliation_sources=["postgres", "batch"],
+                    detected_at=self._now())
+                logger.warning(
+                    "attempt %s has an application account but its scheduler "
+                    "id %s resolves to nothing; flagged contradictory",
+                    attempt_id, current.get("scheduler_job_id"))
+                return "classified"
+
             writer.mark_terminal_without_start(
                 attempt_id, ended_at=self._now(),
                 scheduler_state="FAILED",
