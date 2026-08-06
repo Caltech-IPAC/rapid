@@ -1,0 +1,254 @@
+"""
+File:    reference_image.py
+
+The reference-image construction pipeline's stages.
+
+Extracted from `awsBatchSubmitJobs_runSingleReferenceImagePipeline.py` (734
+lines). The science here is a coadd and two catalogues over it, and every call
+below is that file's call.
+
+The operational skeleton it shed was almost the whole of the difference. That
+script's `terminating_exitcode` was assigned the literal `0` at line 720 and
+never set from any error condition — so an upload failure (three sites,
+logged and dropped), an `ls` failure, or a missing product all reported
+success, and the only nonzero exits were nine bare `exit(64)` calls in the
+environment-variable preamble. Under the runtime a stage that fails raises,
+and the outcome is authored from what actually happened.
+
+Also gone: the `chdir` into a coadd subdirectory followed by three
+`shutil.move` calls back up — a dance the cwd-relative filenames required. The
+per-attempt workdir makes the products absolutely named where they are built.
+"""
+
+import os
+
+import numpy as np
+
+import modules.utils.rapid_pipeline_subs as util
+import pipeline.referenceImageSubs as rfis
+from pipeline.runtime.errors import InputError
+
+SOFTWARE_ROOT = os.environ.get("RAPID_SW", "/code")
+CFG_PATH = os.environ.get("RAPID_CFG", os.path.join(SOFTWARE_ROOT, "cdf"))
+
+
+def download_reference_psf(context) -> None:
+    """Fetch the reference-image PSF. (Monolith stage S4, lines 235-247.)"""
+    psf_uri = context.fact("psf_uri")
+    psf, _subdirs, downloaded = util.download_file_from_s3_bucket(
+        context.s3, psf_uri,
+        outputfile=context.scratch(os.path.basename(psf_uri)))
+    if not downloaded:
+        # The monolith called `exit(64)` here (line 243), which the wrapper
+        # then reported as 64 with no record of why.
+        raise InputError(
+            f"the reference-image PSF at {psf_uri} could not be downloaded",
+            uri=psf_uri)
+    context.produce("reference_psf", psf)
+
+
+def build_reference_image(context) -> None:
+    """Coadd the input frames. (Monolith stage S5b-1, lines 305-353.)"""
+    awaicgen = context.science_section("awaicgen")
+    instrument = context.science_section("instrument")
+    fake_sources = context.science_section("fake_sources")
+
+    coadd_inputs_uri = context.fact("coadd_inputs_uri")
+    job_bucket = context.parameter("s3/inputs-bucket")
+    coadd_inputs_object = coadd_inputs_uri.split(f"{job_bucket}/", 1)[-1]
+    coadd_inputs_local = context.scratch(os.path.basename(coadd_inputs_uri))
+
+    generated = rfis.generateReferenceImage(
+        context.s3,
+        job_bucket,
+        coadd_inputs_object,
+        coadd_inputs_local,
+        context.unit.key,
+        context.job_type,
+        awaicgen,
+        context.science_value("ref_image", "max_n_images_to_coadd"),
+        float(instrument["sca_gain"]),
+        float(instrument["sca_readout_noise"]),
+        context.parameter("s3/products-bucket"),
+        True,
+        context.science_value("fake_sources", "inject_fake_sources_flag"),
+        fake_sources,
+        SOFTWARE_ROOT,
+        context.optional_fact("reference_overlapping_fields", []),
+    )
+
+    (infobits_refimage, checksum_refimage,
+     mosaic_image_file, mosaic_cov_map_file, mosaic_uncert_image_file,
+     _obj_image, _obj_cov, _obj_uncert,
+     nframes, refimage_input_filenames,
+     jdstart, jdend, zprefimg, total_refimage_exptime) = generated
+
+    context.produce("reference_image", mosaic_image_file)
+    context.produce("reference_cov_map", mosaic_cov_map_file)
+    context.produce("reference_uncert_image", mosaic_uncert_image_file)
+    context.produce("reference_input_filenames", refimage_input_filenames)
+    context.produce("reference_nframes", nframes)
+    context.produce("reference_jdstart", jdstart)
+    context.produce("reference_jdend", jdend)
+    context.produce("reference_zeropoint", zprefimg)
+    context.produce("reference_total_exptime", total_refimage_exptime)
+
+    context.record(reference_image_infobits=infobits_refimage,
+                   reference_image_checksum=checksum_refimage,
+                   reference_nframes=nframes,
+                   reference_jdstart=jdstart,
+                   reference_jdend=jdend,
+                   reference_zeropoint=zprefimg,
+                   reference_total_exptime=total_refimage_exptime)
+
+
+def coverage_and_uncertainty_statistics(context) -> None:
+    """Coverage fraction and clipped statistics. (Stages S5b-2, S5b-3.)"""
+    cov_map = context.product("reference_cov_map")
+    uncert_image = context.product("reference_uncert_image")
+
+    cov5percent = rfis.compute_cov5percent(cov_map)
+
+    n_sigma = 3.0
+    hdu_index = 0
+    stats_cov = util.fits_data_statistics_with_clipping(
+        cov_map, n_sigma, hdu_index)
+    stats_unc = util.fits_data_statistics_with_clipping(
+        uncert_image, n_sigma, hdu_index)
+
+    context.produce("cov5percent", cov5percent)
+    context.record(reference_cov5percent=cov5percent,
+                   reference_medncov=stats_cov["clippedmed"],
+                   reference_medpixunc=stats_unc["clippedmed"])
+
+
+def sextractor_catalog(context) -> None:
+    """SExtractor over the coadd. (Monolith stage S5b-4, lines 378-391.)"""
+    sextractor_refimage = context.science_section("sextractor_refimage")
+
+    (checksum, catalog, _obj) = rfis.generateSExtractorReferenceImageCatalog(
+        context.s3,
+        context.parameter("s3/products-bucket"),
+        context.unit.key,
+        context.job_type,
+        context.product("reference_image"),
+        context.product("reference_uncert_image"),
+        sextractor_refimage,
+        True)
+
+    context.produce("reference_sexcat", catalog)
+    context.record(reference_sexcat_checksum=checksum)
+
+
+def psf_catalog(context) -> None:
+    """PhotUtils PSF catalogue. (Monolith stage S5b-5, lines 394-415.)"""
+    psfcat_refimage = context.science_section("psfcat_refimage")
+
+    result = rfis.generatePhotUtilsReferenceImageCatalog(
+        context.s3,
+        context.parameter("s3/products-bucket"),
+        context.unit.key,
+        context.job_type,
+        context.product("reference_image"),
+        context.product("reference_uncert_image"),
+        context.product("reference_psf"),
+        psfcat_refimage,
+        True)
+
+    (flag_psf_refimage_catalog, checksum_psf_refimage_catalog,
+     _checksum_finder, filename_psf_catalog, _filename_finder,
+     obj_psf_catalog, _obj_finder, uploaded, _uploaded_finder) = result
+
+    context.produce("reference_psfcat", filename_psf_catalog)
+    context.record(reference_psfcat_ok=bool(flag_psf_refimage_catalog),
+                   reference_psfcat_checksum=checksum_psf_refimage_catalog,
+                   reference_psfcat_object=obj_psf_catalog,
+                   reference_psfcat_uploaded=bool(uploaded))
+
+
+def image_statistics(context) -> None:
+    """Clipped statistics over the coadd. (Stages S5b-6, S5b-7, 423-454.)"""
+    sextractor_refimage = context.science_section("sextractor_refimage")
+    saturation_level_refimage = float(
+        sextractor_refimage["sextractor_satur_level"])
+
+    # Stopgap: the saturation level is a per-exposure value and the coadd is in
+    # rate units. Carried over verbatim (monolith lines 423-428, with its TODO).
+    saturation_level_refimage_rate = saturation_level_refimage / 60.0
+
+    stats = util.fits_data_statistics_with_clipping(
+        context.product("reference_image"), 3.0, 0,
+        saturation_level_refimage_rate)
+
+    context.record(
+        reference_avg=stats["clippedavg"],
+        reference_std=stats["clippedstd"],
+        reference_noutliers=stats["noutliers"],
+        reference_gmed=stats["gmed"],
+        reference_datascale=stats["datascale"],
+        reference_gmin=stats["gmin"],
+        reference_gmax=stats["gmax"],
+        reference_npixsat=stats["npixsat"],
+        reference_npixnan=stats["npixnan"],
+    )
+
+
+def measure_fwhm(context) -> None:
+    """FWHM from the catalogue. (Monolith stage S6, lines 457-485.)"""
+    paramsfile = CFG_PATH + "/rapidSexParamsRefImage.inp"
+    vals = util.parse_ascii_text_sextractor_catalog(
+        context.product("reference_sexcat"), paramsfile, ["FWHM_IMAGE"])
+
+    fwhm_vals = np.array([float(val[0]) for val in vals])
+    fwhm_min = float(np.nanmin(fwhm_vals)) if len(fwhm_vals) else float("nan")
+    fwhm_max = float(np.nanmax(fwhm_vals)) if len(fwhm_vals) else float("nan")
+    fwhm_med = float(np.nanmedian(fwhm_vals)) if len(fwhm_vals) else float("nan")
+
+    context.record(reference_sexcat_sources=len(vals),
+                   fwhm_ref_minpix=fwhm_min,
+                   fwhm_ref_maxpix=fwhm_max,
+                   fwhm_ref_medpix=fwhm_med)
+
+
+def add_header_keywords(context) -> None:
+    """Stamp provenance into both images' headers. (Stage S9, lines 568-595.)"""
+    for product in ("reference_image", "reference_uncert_image"):
+        rfis.addKeywordsToReferenceImageHeader(
+            context.product(product),
+            context.fact("field"),
+            context.fact("fid"),
+            context.fact("filter_name"),
+            context.product("cov5percent"),
+            context.product("reference_nframes"),
+            context.product("reference_input_filenames"),
+            context.product("reference_jdstart"),
+            context.product("reference_jdend"),
+            context.product("reference_zeropoint"),
+            context.product("reference_total_exptime"))
+
+
+def upload_products(context) -> None:
+    """Upload the coadd and its companions. (Stages S9 upload block, S13.)
+
+    The monolith's three upload sites each caught `ClientError`, printed it,
+    and carried on — so a job whose products never reached the bucket still
+    reported success and still wrote a product `.ini` claiming they were there.
+    `upload_files_to_s3_bucket` raises; the outcome follows.
+    """
+    bucket = context.parameter("s3/products-bucket")
+    prefix = f"{context.job_type}/{context.unit.key}"
+
+    uploadable = [value for _name, value in sorted(context.products.items())
+                  if isinstance(value, str) and os.path.isfile(value)]
+    if not uploadable:
+        raise InputError(
+            "no reference-image products exist to upload")
+
+    objectnames = [f"{prefix}/{os.path.basename(value)}"
+                   for value in uploadable]
+    util.upload_files_to_s3_bucket(context.s3, bucket, uploadable, objectnames)
+
+    context.record(product_bucket=bucket, product_prefix=prefix,
+                   products_uploaded=len(uploadable))
+    context.logger.info("uploaded %d products to s3://%s/%s",
+                        len(uploadable), bucket, prefix)
