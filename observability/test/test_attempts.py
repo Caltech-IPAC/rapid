@@ -944,13 +944,34 @@ class ErrorCategoryTests(unittest.TestCase):
             APPLICATION_ERROR_CATEGORIES & RECONCILER_ERROR_CATEGORIES,
             frozenset())
 
-    def test_every_allowlisted_category_is_accepted(self):
-        for category in sorted(ERROR_CATEGORIES):
+    def test_every_application_category_is_accepted(self):
+        # The APPLICATION's half of the vocabulary, not the union. This
+        # looped over ERROR_CATEGORIES and therefore asserted that
+        # `mark_application_closed` accepts the two RECONCILER categories —
+        # encoding as a requirement exactly what the one-author-per-field
+        # rule forbids. W8's battery found the writer accepting them
+        # (2026-08-06); the writer is fixed and this is the contract it now
+        # holds to.
+        for category in sorted(APPLICATION_ERROR_CATEGORIES):
             with self.subTest(category=category):
                 self.execute.calls.clear()
                 self.close(category)
                 _, params = self.execute.only()
                 self.assertIn(category, params)
+
+    def test_a_reconciler_category_is_refused_to_the_application(self):
+        # `scheduler_reclaimed` and `scheduler_provisioning` are scheduler
+        # OBSERVATIONS. An application authoring one would be inventing an
+        # observation it never made, and the schema's foreign key cannot
+        # catch it — the column admits every category, because the
+        # reconciler writes the same column.
+        for category in sorted(RECONCILER_ERROR_CATEGORIES):
+            with self.subTest(category=category):
+                self.execute.calls.clear()
+                with self.assertRaises(ValueError) as ctx:
+                    self.close(category)
+                self.assertIn("reconciler-authored", str(ctx.exception))
+                self.assertEqual(self.execute.calls, [])
 
     def test_no_category_is_accepted_for_a_successful_attempt(self):
         self.close(None)
