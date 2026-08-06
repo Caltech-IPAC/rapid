@@ -176,3 +176,49 @@ def test_the_published_manifest_matches_the_submitted_checksum(store, client):
     published = json.loads(store.get(submission.manifest_uri).decode())
     assert Manifest.from_dict(published).checksum() \
         == env_of(client.calls[0])["RAPID_MANIFEST_CHECKSUM"]
+
+
+# --- The scheduler-retry contract (W5) ------------------------------------
+#
+# "The submission layer never passes a submit-time retryStrategy override
+# (validated in code and covered by a test); the job definition is the single
+# retry authority" — batch-payload co-design, § Scheduler-retry contract.
+#
+# The reason this needs a test rather than a reading is that it is an
+# invariant about what is ABSENT. Nothing fails today if someone adds a
+# retryStrategy here; the job definitions' careful EvaluateOnExit ordering
+# would simply stop being what governs retries, silently, and an application
+# failure that exits 0 cleanly could start being retried — the 2026-07-22
+# failure mode. An assertion on absence is the only thing that notices.
+
+def test_submission_passes_no_retry_strategy_override():
+    kwargs = build_submit_kwargs(make_batch(4), QUEUE, DEFINITION,
+                                 "s3://bucket/manifest.json")
+    assert "retryStrategy" not in kwargs, (
+        "the job definition is the single retry authority; a submit-time "
+        "override would silently replace its condition-gated EvaluateOnExit "
+        "rows and could start retrying clean application failures")
+
+
+def test_submitted_call_passes_no_retry_strategy_override(store, client):
+    # Asserted on the actual submit_job call, not only on the builder: a
+    # future submit_batch could add the key after build_submit_kwargs returns.
+    submit_batch(make_batch(4), QUEUE, DEFINITION, store, client)
+    assert "retryStrategy" not in client.calls[0]
+
+
+def test_submission_passes_no_command_override(store, client):
+    # "No command overrides exist at submit time" — the command is the
+    # workload-class discriminator, fixed per job definition, and overriding
+    # it at submit time would unbind the route the entrypoint validates.
+    submit_batch(make_batch(4), QUEUE, DEFINITION, store, client)
+    overrides = client.calls[0].get("containerOverrides", {})
+    assert "command" not in overrides
+
+
+def test_container_overrides_carry_environment_only(store, client):
+    # The per-invocation environment is the ONLY submit-time surface. Anything
+    # else here — resourceRequirements, command, instanceType — is a second
+    # place a job's shape is decided, competing with the job definition.
+    submit_batch(make_batch(4), QUEUE, DEFINITION, store, client)
+    assert set(client.calls[0]["containerOverrides"]) == {"environment"}
