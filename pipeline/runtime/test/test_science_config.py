@@ -172,9 +172,20 @@ class ShippedConfigurationTests(unittest.TestCase):
 
     def test_the_relocated_tree_parameters_are_present(self):
         # These two left the SSM tree in W4A; if they are not here, they
-        # are nowhere.
+        # are nowhere. PRESENCE is what this test is for.
+        #
+        # It used to pin `min_images_to_coadd` to 3 and broke when the release
+        # content moved to 2 (0f39ee6, Ben resolving the W4 divergence) — the
+        # commit changed the toml and nothing told it a test held the old
+        # number. An OPERATING VALUE is the release content's to state and an
+        # operator's to change; a unit test asserting one turns every such
+        # decision into a test failure, which teaches people to edit the test
+        # rather than to think about the change. The type and the presence are
+        # the contract here; `ref_image.min_n_images_to_coadd` is the value the
+        # gatherers actually read, and it lives in the same file.
         content = science_config.load(path=SCIENCE_TOML)
-        self.assertEqual(content["science"]["min_images_to_coadd"], 3)
+        self.assertIsInstance(content["science"]["min_images_to_coadd"], int)
+        self.assertGreater(content["science"]["min_images_to_coadd"], 0)
         self.assertEqual(content["science"]["diff_flavor"], "sfft")
 
     def test_no_placeholder_sentinels_survived_the_extraction(self):
@@ -250,14 +261,28 @@ class RoundTripAgainstTheMasterIniTests(unittest.TestCase):
         self.assertGreater(compared, 300,
                            "the round-trip compared implausibly few keys")
 
-    def test_the_known_divergence_is_the_only_one(self):
-        # min_n_images_to_coadd: the .ini says 2, the SSM tree said 3.
-        # The header records the divergence; this asserts it is still
-        # the shape the header describes, so a silent change to either
-        # side fails here.
-        self.assertEqual(int(self.ini["REF_IMAGE"]["min_n_images_to_coadd"]), 2)
-        self.assertEqual(self.toml["ref_image"]["min_n_images_to_coadd"], 2)
-        self.assertEqual(self.toml["science"]["min_images_to_coadd"], 3)
+    def test_the_known_divergence_is_resolved(self):
+        # THE DIVERGENCE IS GONE, and this test is what noticed.
+        #
+        # It used to assert the divergence's shape — .ini 2, ref_image 2,
+        # science 3 — so that a silent change to either side failed here. A
+        # change came (0f39ee6, "min_images_to_coadd operating value is 2",
+        # Ben resolving the W4 divergence): the toml moved to 2 and this test
+        # failed, which is exactly the job it was written for. It is NOT
+        # silent, so the assertion moves to the new state rather than the
+        # change being argued with.
+        #
+        # What it guards now is agreement: the two toml keys and the .ini all
+        # state one value, so a future edit that re-opens the gap between them
+        # fails here. The specific NUMBER is deliberately not pinned — that is
+        # an operating value and the release content's to state.
+        ini_value = int(self.ini["REF_IMAGE"]["min_n_images_to_coadd"])
+        self.assertEqual(ini_value,
+                         self.toml["ref_image"]["min_n_images_to_coadd"])
+        self.assertEqual(ini_value,
+                         self.toml["science"]["min_images_to_coadd"],
+                         "the W4 divergence has re-opened: the science and "
+                         "ref_image minimums no longer agree with the .ini")
 
 
 if __name__ == "__main__":

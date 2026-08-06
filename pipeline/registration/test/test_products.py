@@ -174,7 +174,13 @@ def _build(context, published, attempt_id, job_type):
 #: derivation itself is never asserted against these — `HealpixDerivationTests`
 #: checks it against healpy directly and skips without it, because a constant
 #: checked against itself would prove nothing.
-_HP6_FALLBACK, _HP9_FALLBACK = 21132, 1352509
+#:
+#: TAKEN FROM THE DEPLOYED healpy (1.20.0, in-image), not computed by hand:
+#: `ang2pix(2**6, 150.1163, 2.2008, nest=True, lonlat=True)` and the same at
+#: 2**9. The first values written here were guessed off-image and were wrong,
+#: and `test_the_fixture_fallback_matches_the_real_derivation` — which exists
+#: for exactly this — caught them on the first in-image run.
+_HP6_FALLBACK, _HP9_FALLBACK = 27258, 1744528
 
 
 def _seed_identity(context, unit, job_type):
@@ -341,8 +347,21 @@ class HealpixDerivationTests(unittest.TestCase):
 
         self.assertNotEqual(
             int(hp.ang2pix(2 ** 6, ra, dec, nest=False, lonlat=True)), hp6)
-        self.assertNotEqual(
-            int(hp.ang2pix(2 ** 6, ra, dec, nest=True, lonlat=False)), hp6)
+
+        # The lonlat half asserts DIFFERENCE, and healpy has two ways of being
+        # different: a different pixel, or a refusal. Read as radians, an RA of
+        # 150 is a colatitude far outside [0, pi] and healpy raises rather than
+        # returning anything — which is a stronger form of "not the same
+        # answer", not a reason for the guard to fail. Written to accept
+        # either, because which one you get depends on the sky position the
+        # fixture happens to use, and a guard that only holds for positions
+        # under pi radians is a guard that breaks on the next fixture.
+        try:
+            other = int(hp.ang2pix(2 ** 6, ra, dec, nest=True, lonlat=False))
+        except ValueError:
+            pass
+        else:
+            self.assertNotEqual(other, hp6)
 
     def test_an_absent_centre_derives_nothing_rather_than_zero(self):
         # Zero is a real healpix pixel. Deriving it from an absent position
