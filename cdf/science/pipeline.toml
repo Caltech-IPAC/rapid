@@ -102,7 +102,7 @@ nrows = 6291458
 # converge when W5 switches the payload onto this file and the .ini key
 # goes with the rest of the .ini at W6. Flagged for the owner: if 2 was
 # in fact the intended operating value, this is the line to change.
-min_images_to_coadd = 3
+min_images_to_coadd = 2
 
 # diff_flavor: which differencing algorithm's image feeds the alert
 # cutout — "sfft" or "zogy". Selects which science product a downstream
