@@ -10,6 +10,7 @@ retries it with backoff, which is the right behaviour for the case that
 actually happens: the database or the parameter tree is briefly unreachable.
 """
 
+import json
 import logging
 import os
 import signal
@@ -69,6 +70,83 @@ def build_service(session, parameters, conn):
     )
 
 
+# The parameter-tree names holding the database endpoint, and the
+# environment variables `rapid_db_connect` reads them from. That helper
+# deliberately refuses to compile in a default — "it is operational
+# configuration and must come from the parameter tree" — and the tree is
+# exactly where these live. What was missing is the bridge between them:
+# the reconciler fetched the tree, then called `connection()`, which read
+# an environment nobody had populated. Found live 2026-08-06 (W8), the
+# first time the service ran as a service: DBSERVER is not set, exit 70,
+# every 15 seconds.
+#
+# The payload does not need this because Batch job definitions carry the
+# same facts as container environment; a systemd unit has no equivalent,
+# and hardcoding them into the unit would put the endpoint in a second
+# home — the drift the tree exists to prevent.
+_DB_ENVIRONMENT = (
+    ("db/server", "DBSERVER"),
+    ("db/port", "DBPORT"),
+    ("db/name", "DBNAME"),
+)
+
+
+def _bind_database_environment(parameters):
+    """Publish the tree's database endpoint into the connection helper's env.
+
+    Only fills what is absent: an explicitly-set variable wins, so an
+    operator debugging against another endpoint is not silently overridden.
+    Missing names are left alone rather than defaulted — the helper's own
+    fail-loud check is the one that should report them, by name.
+    """
+    for parameter, variable in _DB_ENVIRONMENT:
+        value = parameters.get(parameter)
+        if value and not os.environ.get(variable):
+            os.environ[variable] = str(value)
+
+
+def _bind_database_credentials(session):
+    """Resolve the DB credential under the SERVICE role, not the host's.
+
+    `rapid_db.get_db_credentials` fetches RAPID_DB_SECRET_ID through boto3's
+    default credential chain, which inside this container is the host's
+    instance role — and that role is deliberately NOT granted the
+    orchestrator secret (rapid-db-instance-role reads it only on the DB host,
+    for the association pass). So the fetch failed with AccessDenied and the
+    service crashlooped on "could not resolve database credentials", found
+    live 2026-08-06 (W8) the first time it ran as a service.
+
+    The session passed here is already chained into
+    RAPID_RECONCILER_ROLE_ARN, which is the identity that may read the
+    secret. Resolving through it and handing the result to the helper as
+    DBUSER/DBPASS keeps the credential inside this process: it is never in
+    the unit file, never in the container's declared environment, and never
+    in the journal — the properties the unit's own "no credentials in the
+    environment" note is protecting.
+
+    Left alone when the secret id is unset or DBUSER/DBPASS are already
+    present, so an operator running against another credential still wins.
+
+    RAPID_DB_SECRET_ID is CLEARED once the credential is in hand, and that
+    is load-bearing rather than tidying: `get_db_credentials` takes the
+    secret branch whenever that variable is set at all, and would re-fetch
+    through the ambient chain — the very failure this works around —
+    ignoring the DBUSER/DBPASS it just received. Clearing it selects the
+    already-resolved branch.
+    """
+    secret_id = os.environ.get("RAPID_DB_SECRET_ID")
+    if not secret_id or os.environ.get("DBUSER"):
+        return
+    secret = session.client("secretsmanager").get_secret_value(
+        SecretId=secret_id)
+    credential = json.loads(secret["SecretString"])
+    os.environ["DBUSER"] = credential["username"]
+    os.environ["DBPASS"] = credential["password"]
+    os.environ.pop("RAPID_DB_SECRET_ID", None)
+    logger.info("database credential resolved under %s from secret %s",
+                "the service role", secret_id)
+
+
 def main():
     _configure_logging()
 
@@ -92,6 +170,8 @@ def main():
 
         session = _assumed_session(role_arn, region)
         parameters = fetch_parameters(client=session.client("ssm"))
+        _bind_database_environment(parameters)
+        _bind_database_credentials(session)
         logger.info("reconciler starting: poll=%ss records=%s diagnostics=%s",
                     poll_seconds, parameters["s3/records-bucket"],
                     parameters["s3/diagnostics-bucket"])
