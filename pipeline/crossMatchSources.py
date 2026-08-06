@@ -181,9 +181,9 @@ def run_single_core_job_stage_1_crossmatching(scas,fields,index_thread):
 
     try:
         fh = open(thread_work_file, 'w', encoding="utf-8")
-    except:
-        print(f"*** Error: Could not open output file {thread_work_file}; quitting...")
-        raise RuntimeError(f"*** Error: Could not open output file {thread_work_file}; quitting...")
+    except Exception as e:
+        print(f"*** Error: Could not open output file {thread_work_file} ({e}); quitting...")
+        raise
 
 
     # Open database connection.
@@ -523,6 +523,7 @@ def run_single_core_job_stage_2_crossmatching(scas,fields,index_thread):
     # that are anything but short tests.
 
     thread_debug = 0
+    newline_character = "\n"
 
     nfields = len(fields)
 
@@ -532,9 +533,9 @@ def run_single_core_job_stage_2_crossmatching(scas,fields,index_thread):
 
     try:
         fh = open(thread_work_file, 'w', encoding="utf-8")
-    except:
-        print(f"*** Error: Could not open output file {thread_work_file}; quitting...")
-        raise RuntimeError(f"*** Error: Could not open output file {thread_work_file}; quitting...")
+    except Exception as e:
+        print(f"*** Error: Could not open output file {thread_work_file} ({e}); quitting...")
+        raise
 
 
     # Open database connection.
@@ -554,6 +555,9 @@ def run_single_core_job_stage_2_crossmatching(scas,fields,index_thread):
 
     fh.write(f"\nStart of run_single_core_job: index_thread={index_thread}, dbh={dbh}\n")
 
+
+    # Loop over fields in thread.
+
     my_fields = list(range(index_thread, nfields, num_cores))
     for index_field in my_fields:
 
@@ -563,123 +567,182 @@ def run_single_core_job_stage_2_crossmatching(scas,fields,index_thread):
         merges_tablename = f"merges_{field}"
 
 
-        # Cross-match the current AstroObjects_<field> table with sources in all adjacent fields.
-        # Field boundaries are infinitesimally thin lines, and the match radius can extend across them.
+        # Prepare to bulk copy Merges_<field> records.
 
-        fh.write(f"Loop start for adjacent fields (rtid is equivalent to field number): index_field,field = {index_field},{field}\n")
+        merges_table_file = f"merges_{field}.csv"
 
-        rtids_list = roman_tessellation_db.get_all_neighboring_rtids(field)
-
-
-        # If away from poles, a sky tile will have 8 adjacent fields,
-        # and this can be exploited to speed up the cross-matching.
-
-        n_adjacent_fields = len(rtids_list)
-
-        if n_adjacent_fields == 8:
+        with open(merges_table_file, "w") as csv_merges_fh:
 
 
-            # Get sky positions of center and four corners of sky tile.
+            # Cross-match the current AstroObjects_<field> table with sources in all adjacent fields.
+            # Field boundaries are infinitesimally thin lines, and the match radius can extend across them.
 
-            roman_tessellation_db.get_center_sky_position(field)
-            ra0_field = roman_tessellation_db.ra0
-            dec0_field = roman_tessellation_db.dec0
-            roman_tessellation_db.get_corner_sky_positions(field)
-            ra1_field = roman_tessellation_db.ra1
-            dec1_field = roman_tessellation_db.dec1
-            ra2_field = roman_tessellation_db.ra2
-            dec2_field = roman_tessellation_db.dec2
-            ra3_field = roman_tessellation_db.ra3
-            dec3_field = roman_tessellation_db.dec3
-            ra4_field = roman_tessellation_db.ra4
-            dec4_field = roman_tessellation_db.dec4
+            fh.write(f"Loop start for adjacent fields (rtid is equivalent to field number): index_field,field = {index_field},{field}\n")
+
+            rtids_list = roman_tessellation_db.get_all_neighboring_rtids(field)
 
 
-            # Compute angular separation, in degrees, between field center and corner.
-            # Use this with some margin to compute a radius of inclusion for cross-matching.
-            # The tiles are not necessarily square or even rectangular, so choose maximum separation.
+            # If away from poles, a sky tile will have 8 adjacent fields,
+            # and this can be exploited to speed up the cross-matching.
 
-            ang_sep1 = util.compute_angular_separation(ra0_field, dec0_field, ra1_field, dec1_field)
-            ang_sep2 = util.compute_angular_separation(ra0_field, dec0_field, ra2_field, dec2_field)
-            ang_sep3 = util.compute_angular_separation(ra0_field, dec0_field, ra3_field, dec3_field)
-            ang_sep4 = util.compute_angular_separation(ra0_field, dec0_field, ra4_field, dec4_field)
+            n_adjacent_fields = len(rtids_list)
 
-            ang_sep = max(ang_sep1,ang_sep2,ang_sep3,ang_sep4)
+            if n_adjacent_fields == 8:
 
 
-            # Augment the angular separation with the match radius.
+                # Get sky positions of center and four corners of sky tile.
 
-            ang_sep += match_radius
-
-
-        # Loop over adjacent fields and perform cross-matching.
-
-        for rtid in rtids_list:
-            adjacent_field = rtid
-            fh.write(f"Cross-matching field = {field} with adjacent field = {adjacent_field}\n")
-
-
-            # For a given field pertinent to this parallel process, loop over all SCAs
-            # and perform source-matching:
-            # 1. Cross-match each source in an adjacent field with the AstroObjects_<field> table.
-            # 2. Speed it up by restricting cross-matching within the inclusion radius.
-            # 3. Register Merges_<field> records for cross-matches.
-
-            for sca in scas:
-
-                sources_tablename = f"sources_{proc_date}_{sca}"
-
-                if n_adjacent_fields == 8:
-
-                    query = f"SELECT a.sid,b.aid " +\
-                        f"FROM {sources_tablename} AS a, " +\
-                        f"{astroobjects_tablename} AS b " +\
-                        f"WHERE q3c_radial_query(a.ra, a.dec, {ra0_field}, {dec0_field}, {ang_sep}) " +\
-                        f"AND q3c_join(a.ra, a.dec, b.ra0, b.dec0, {match_radius}) " +\
-                        f"AND a.field = {adjacent_field} AND a.flags = 0;"
-
-                else:
-
-                    query = f"SELECT a.sid,b.aid " +\
-                        f"FROM {sources_tablename} AS a, " +\
-                        f"{astroobjects_tablename} AS b " +\
-                        f"WHERE q3c_join(a.ra, a.dec, b.ra0, b.dec0, {match_radius}) " +\
-                        f"AND a.field = {adjacent_field} AND a.flags = 0;"
-
-                sql_queries = []
-                sql_queries.append(query)
-                records = dbh.execute_sql_queries(sql_queries,thread_debug)
+                roman_tessellation_db.get_center_sky_position(field)
+                ra0_field = roman_tessellation_db.ra0
+                dec0_field = roman_tessellation_db.dec0
+                roman_tessellation_db.get_corner_sky_positions(field)
+                ra1_field = roman_tessellation_db.ra1
+                dec1_field = roman_tessellation_db.dec1
+                ra2_field = roman_tessellation_db.ra2
+                dec2_field = roman_tessellation_db.dec2
+                ra3_field = roman_tessellation_db.ra3
+                dec3_field = roman_tessellation_db.dec3
+                ra4_field = roman_tessellation_db.ra4
+                dec4_field = roman_tessellation_db.dec4
 
 
-                # Code-timing benchmark.
+                # Compute angular separation, in degrees, between field center and corner.
+                # Use this with some margin to compute a radius of inclusion for cross-matching.
+                # The tiles are not necessarily square or even rectangular, so choose maximum separation.
 
-                thread_end_time_benchmark = time.time()
-                diff_time_benchmark = thread_end_time_benchmark - thread_start_time_benchmark
-                fh.write(f"Elapsed time in seconds to cross-match adjacent {sources_tablename} and {astroobjects_tablename} database tables = {diff_time_benchmark}\n")
-                thread_start_time_benchmark = thread_end_time_benchmark
+                ang_sep1 = util.compute_angular_separation(ra0_field, dec0_field, ra1_field, dec1_field)
+                ang_sep2 = util.compute_angular_separation(ra0_field, dec0_field, ra2_field, dec2_field)
+                ang_sep3 = util.compute_angular_separation(ra0_field, dec0_field, ra3_field, dec3_field)
+                ang_sep4 = util.compute_angular_separation(ra0_field, dec0_field, ra4_field, dec4_field)
 
-
-                # For the sources that were matched, create Merges_<field> record.
-
-                for record in records:
-
-                    sid = record[0]
-                    aid = record[1]
-
-                    dbh.add_merge_to_field(merges_tablename,aid,sid)
+                ang_sep = max(ang_sep1,ang_sep2,ang_sep3,ang_sep4)
 
 
-                # Code-timing benchmark.
+                # Augment the angular separation with the match radius.
 
-                thread_end_time_benchmark = time.time()
-                diff_time_benchmark = thread_end_time_benchmark - thread_start_time_benchmark
-                fh.write(f"Elapsed time in seconds to insert {merges_tablename} database records for adjacent matched sources = {diff_time_benchmark}\n")
-                thread_start_time_benchmark = thread_end_time_benchmark
+                ang_sep += match_radius
 
 
-                # End of loop over scas.
+            # Loop over adjacent fields and perform cross-matching.
 
-                fh.write(f"Loop end: index_field,field,sca = {index_field},{field},{sca}\n")
+            for rtid in rtids_list:
+                adjacent_field = rtid
+                fh.write(f"Cross-matching field = {field} with adjacent field = {adjacent_field}\n")
+
+
+                # For a given field pertinent to this parallel process, loop over all SCAs
+                # and perform source-matching:
+                # 1. Cross-match each source in an adjacent field with the AstroObjects_<field> table.
+                # 2. Speed it up by restricting cross-matching within the inclusion radius.
+                # 3. Register Merges_<field> records for cross-matches.
+
+                for sca in scas:
+
+                    sources_tablename = f"sources_{proc_date}_{sca}"
+
+                    if n_adjacent_fields == 8:
+
+                        query = f"SELECT a.sid,b.aid " +\
+                            f"FROM {sources_tablename} AS a, " +\
+                            f"{astroobjects_tablename} AS b " +\
+                            f"WHERE q3c_radial_query(a.ra, a.dec, {ra0_field}, {dec0_field}, {ang_sep}) " +\
+                            f"AND q3c_join(a.ra, a.dec, b.ra0, b.dec0, {match_radius}) " +\
+                            f"AND a.field = {adjacent_field} AND a.flags = 0;"
+
+                    else:
+
+                        query = f"SELECT a.sid,b.aid " +\
+                            f"FROM {sources_tablename} AS a, " +\
+                            f"{astroobjects_tablename} AS b " +\
+                            f"WHERE q3c_join(a.ra, a.dec, b.ra0, b.dec0, {match_radius}) " +\
+                            f"AND a.field = {adjacent_field} AND a.flags = 0;"
+
+                    sql_queries = []
+                    sql_queries.append(query)
+                    records = dbh.execute_sql_queries(sql_queries,thread_debug)
+
+
+                    # Code-timing benchmark.
+
+                    thread_end_time_benchmark = time.time()
+                    diff_time_benchmark = thread_end_time_benchmark - thread_start_time_benchmark
+                    fh.write(f"Elapsed time in seconds to cross-match adjacent {sources_tablename} and {astroobjects_tablename} database tables = {diff_time_benchmark}\n")
+                    thread_start_time_benchmark = thread_end_time_benchmark
+
+
+                    # For the sources that were matched, create Merges_<field> record.
+
+                    for record in records:
+
+                        sid = record[0]
+                        aid = record[1]
+
+                        '''
+                        This method is deprecated.
+
+                        dbh.add_merge_to_field(merges_tablename,aid,sid,thread_debug)
+                        '''
+
+                        nums = ""
+
+                        num = str(aid)
+                        nums = nums + num + ","
+                        num = str(sid)
+                        nums = nums + num + ","
+
+                        # Slice the string to get all but the last character, then add the newline character
+                        line_to_write_to_file = nums[:-1] + newline_character
+
+                        csv_merges_fh.write(line_to_write_to_file)
+
+
+                    # Code-timing benchmark.
+
+                    thread_end_time_benchmark = time.time()
+                    diff_time_benchmark = thread_end_time_benchmark - thread_start_time_benchmark
+                    fh.write(f"Elapsed time in seconds to write bulk-copy records to {merges_table_file} for sources outside field = {diff_time_benchmark}\n")
+                    thread_start_time_benchmark = thread_end_time_benchmark
+
+
+                    # End of loop over scas.
+
+                    fh.write(f"Loop end: index_field,field,sca = {index_field},{field},{sca}\n")
+
+
+        # Load records into Merges_<field> database tables.
+
+        dbh.copy_data_from_file_into_database(merges_table_file,merges_tablename,merges_columns)
+
+        if dbh.exit_code >= 64:
+            fh.write(f"*** Error bulk-loading data from file ({merges_table_file}) " +
+                     f"into specified database table ({merges_tablename}); quitting...\n")
+            fh.flush()
+            raise RuntimeError(f"*** Error bulk-loading data from file ({merges_table_file}) " +
+                               f"into specified database table ({merges_tablename}); quitting...")
+
+
+        # Code-timing benchmark.
+
+        thread_end_time_benchmark = time.time()
+        diff_time_benchmark = thread_end_time_benchmark - thread_start_time_benchmark
+        fh.write(f"Elapsed time in seconds to bulk copy records into " +
+                 f"{merges_tablename} database table = {diff_time_benchmark}\n")
+        fh.flush()
+        thread_start_time_benchmark = thread_end_time_benchmark
+
+
+        # Remove no-longer-needed intermediate files.
+
+        file_paths = [merges_table_file]
+        for file_path in file_paths:
+
+            if os.path.exists(file_path):
+                os.remove(file_path)
+                fh.write(f"File deleted successfully ({file_path})...\n")
+                fh.flush()
+            else:
+                fh.write(f"The file does not exist({file_path})...\n")
+                fh.flush()
 
 
         # End of loop over fields.
