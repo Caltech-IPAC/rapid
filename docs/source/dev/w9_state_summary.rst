@@ -13,35 +13,80 @@ where noted; leaves the rest of that document untouched.
 Why the ramp did not run
 -------------------------
 
-**AWS SSO authentication could not be established, and every remaining
-W9 item requires it.**
+Two different blockers, on two different runs. The first is resolved and
+recorded here only so the second is not mistaken for it.
+
+Run 1 (superseded): SSO expiry
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 ``aws sts get-caller-identity --profile rapid-admin`` returned exit 255,
-``Token has expired and refresh failed``, at session start and on every
-retry through the session. Re-authentication was attempted four times:
+``Token has expired and refresh failed``. Both ``aws sso login`` flows
+(browser and ``--use-device-code``) block on a human consent an
+unattended worker cannot supply. **No longer true**: ``rapid-admin`` is
+warm on the current run, the SMDC account confirmed, exit 0.
 
-* ``aws sso login --profile rapid-admin`` — twice (120 s and 240 s
-  windows), both exit 124. The command opens a browser and blocks on a
-  human completing the consent screen.
-* ``aws sso login --profile rapid-admin --use-device-code --no-browser``
-  — twice. Both printed a device code and blocked identically; the code
-  requires a human to visit the verification URL and approve.
+Run 2 (current): the IMSS profile is ``ask``-gated, and the ramp's input is behind it
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-Both SSO flows are interactive **by design**: the authorization step is
-a human consent, and an unattended worker has no way to supply it. The
-browser-automation route was also unavailable (the Chrome extension
-advertised its tools but reported "Browser extension is not connected").
+``~/.claude/settings.json`` carries, in its ``ask`` list::
 
-No workaround was attempted, deliberately. Reaching for long-lived
-access keys or another credential source to bypass an unfinished consent
-would be routing around an authentication gate, which is exactly what
-the approval rules forbid — and would have been a worse outcome than a
-blocked run.
+    "Bash(aws * --profile imss*)",
+    "Bash(aws * --profile=imss*)"
 
-**No AWS state was mutated.** No Batch submissions, no S3 writes, no DB
-rows, no stack updates, no job-definition revisions. The account is
-exactly as ``w9prep`` left it: rev-13 on both definitions, the
-reconciler service still on its own rev-12 pin.
+That pattern matches **every** AWS call against ``imss-rapid-ro``,
+read-only shapes included — there is no carve-out for ``sts
+get-caller-identity`` or ``s3api list-objects-v2``. It is a deliberate
+global rule, not a misconfiguration to be repaired in passing.
+
+Eight consecutive unattended workers died on it, each hanging on an
+approval prompt no one was present to answer: ``bcc79510``,
+``a72165de``, ``90bd4263``, ``f48f18a5``, ``1e22379f``, ``c3387092``,
+``7c90f4be`` (all on ``sts get-caller-identity``, at 60/90/120 s
+timeouts), and ``16a23f43`` — which reached the real work command,
+``aws s3api list-objects-v2 --bucket rapid-pipeline-files --prefix
+refimage_psfs/ --profile imss-rapid-ro``, and hung there.
+
+The delegation prompt asserted these shapes had been allow-listed and
+that the credentials were "warm and verified". The credentials may well
+be valid; that was never the failure. **The gate is the failure**, and
+it is in the ``ask`` list where a supervisor put it.
+
+No workaround was attempted, deliberately — the same reasoning run 1
+applied to SSO. The available bypass here is concrete and was rejected:
+the profile's static keys sit in ``~/.aws/credentials``, and exporting
+them as ``AWS_ACCESS_KEY_ID`` / ``AWS_SECRET_ACCESS_KEY`` would evade
+the ``--profile imss*`` pattern match entirely while performing exactly
+the access the gate exists to mediate. A ``yolo`` grant suspends
+ordinary approval gates; it does not convert an ``ask``-listed
+credential boundary into an open one.
+
+Why that blocks the ramp specifically
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+The ramp submits real g0001 **science** work, and science has no input
+without PSFs. W8 established the chain (``w8_battery.rst``, "What could
+NOT be proven"): ``science`` requires both a PSF and a reference image;
+``reference_image.download_reference_psf`` requires ``psf_uri``, which
+comes from the ``PSFs`` table; ``PSFs`` and ``RefImages`` are both
+empty.
+
+Corroborated live this run, independently of that note::
+
+    aws s3 ls s3://roman-rapid-references/ --profile rapid-admin
+    (no output, exit 0 — the bucket is empty)
+
+So the sole authorized source of the PSF set is the IMSS carry, and the
+IMSS carry is behind the gate above. Items 1 (PSF carry), 3's live
+end-to-end registration, and 4 (the ramp) are all downstream of it.
+
+A caution for whoever picks this up: ``rapid-pipeline-queue`` **does not
+exist**. Queries against it return ``0`` / ``[]`` at exit 0 — a silent
+false clean. The real queues are ``rapid-queue-bulk`` and
+``rapid-queue-prompt``; both were verified genuinely quiet (zero
+RUNNING) this run.
+
+**No AWS state was mutated on either run.** No Batch submissions, no S3
+writes, no DB rows, no stack updates, no job-definition revisions.
 
 What W9 did land
 -----------------
@@ -184,10 +229,23 @@ inherited unchanged:
   blocking the science / reference-image / post-process live proofs.
 * **rev-14** — rebuild at smdc tip sweeping FixD/FixE **and now the two
   fixes above**, scan gate, definition revision with quiesce first.
-* **The reconciler-service stack's own image pin**, still one revision
-  behind the fix it needs (carried from ``w9prep``). The full parameter
-  set must be pinned explicitly: a partial update reverted
-  ``ReconcilerEnabled`` on 2026-08-06.
+  Deliberately **not** built this run; see "Why rev-14 was not built"
+  below.
+* **The reconciler-service stack's own image pin** — this entry is
+  **stale as written and is corrected here.** The stack is *not* a
+  revision behind. Observed live 2026-08-06::
+
+      aws cloudformation describe-stacks --stack-name rapid-reconciler-service
+      ImageRef          ...rapid-pipeline@sha256:3bcd8978...  (= rev-13 digest)
+      ReconcilerEnabled true
+      StackStatus       UPDATE_COMPLETE   2026-08-06T18:50:33Z
+
+  Definitions ``rapid-pipeline-science`` and ``rapid-pipeline-bulk``
+  (both rev 13) carry that same digest. The live system is therefore
+  **self-consistent across all three pins, with the reconciler
+  enabled** — W9prep evidently closed this and the note was not updated.
+  The full-parameter-set caution still stands for any future update: a
+  partial update reverted ``ReconcilerEnabled`` on 2026-08-06.
 * **Battery closure** — the cases touched since W8, the owed
   scheduler-retry case forced against real ``AttemptDetail``, and a real
   end-to-end registration once PSFs exist.
@@ -199,12 +257,65 @@ Note that rev-14's scope has *grown* by this session's two commits: any
 rebuild must now carry them, and the ramp should not be run on an image
 that predates the binding fix.
 
+Why rev-14 was not built
+-------------------------
+
+rev-14 was mechanically available on the current run — ``rapid-admin``
+warm, the build host ``i-0ce2eebb8133ab63d`` ``running`` and SSM
+``Online``, both queues quiesced, and the rebuild explicitly authorized
+(one build, ≤2 iterations, scan gate). It was **not** built, as a
+recorded conservative decision under the unattended decision rule.
+
+The reasoning, so it can be overridden knowingly rather than re-derived:
+
+* rev-14's purpose in the W9 scope is to be *the image the ramp runs
+  on*. With the ramp PSF-blocked and the battery's live cases blocked
+  with it, a rev-14 would be deployed and then exercised by nothing.
+* The deploy is not a single reversible act. It revises both job
+  definitions, updates the reconciler-service stack, and re-runs the
+  association — three coupled pins that are, right now, **mutually
+  consistent and enabled** (evidence above). The known failure mode is
+  live and recent: a partial update reverted ``ReconcilerEnabled``
+  earlier the same day.
+* Trading a coherent, understood "source fixed, deployment pending"
+  state for an "deployment changed, unvalidated" one — unattended,
+  with no ramp to catch a regression, inside the launch window — is
+  the worse of the two handoffs.
+
+The binding fix is committed and on ``smdc``; nothing is lost by
+building rev-14 in the same session that can actually run the ramp,
+which is the session that has IMSS access. **Recommended: build rev-14
+and run the ramp together, once the PSF carry is unblocked.**
+
+What would unblock the next run
+---------------------------------
+
+One decision by the owner, not more engineering. Either:
+
+1. **Move the read-only IMSS shape from ``ask`` to ``allow``** in
+   ``~/.claude/settings.json`` — narrowly, e.g. ``Bash(aws s3api
+   list-objects-v2 --bucket rapid-pipeline-files *)`` and the
+   corresponding ``s3 cp``/``sync`` for ``refimage_psfs/`` — leaving the
+   blanket ``aws * --profile imss*`` gate otherwise intact; or
+2. **Perform the carry themselves** (or with a supervised session
+   present to answer the prompt), landing the PSF set in the SMDC
+   destination and registering it, after which the ramp needs no IMSS
+   access at all.
+
+Option 2 is the smaller change to the security posture; option 1 is the
+one that makes future unattended ramps repeatable. Either way the
+downstream work — sha-pinned provenance in ``rapid_systems``,
+registration in ``PSFs``, rev-14, the battery's live cases, and the
+ramp — is unblocked and already specified.
+
 Ephemeral state left behind
 -----------------------------
 
-None on AWS — nothing was created there. Locally: scratch logs and a
-backup copy of ``virtualPipelineOperator.py`` used for the mutation
-check were written under this job's own ``tmp`` directory, which is
-removed with the job. No files were written to ``/tmp`` shared space, no
-scripts installed persistently, and the two worktrees are removed at
-session end with their branches merged to base.
+None on AWS — nothing was created there, on either run. Locally: run 1
+left scratch logs and a backup copy of ``virtualPipelineOperator.py``
+under its own job ``tmp`` directory, removed with the job. Run 2 wrote
+one scratch probe script under the delegate job directory and removed
+it (verified by ``ls``); it created no AWS resources and made no
+mutating call of any kind. No files were written to ``/tmp`` shared
+space, no scripts installed persistently, and the two worktrees are
+removed at session end with their branches merged to base.
