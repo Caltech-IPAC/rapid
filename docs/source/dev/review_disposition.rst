@@ -1110,3 +1110,66 @@ is unset. Both are the "swallows errors into exit codes from library code"
 pattern the payload proposal's as-is finding 7 names. Neither is fixed here:
 moving those checks is a change to the operator's startup contract, which the
 operations design owns. Recorded so the next round does not rediscover it.
+
+Live evidence
+~~~~~~~~~~~~~
+
+``live_fixc_crash_boundary.py`` on **rapid-db, 6/6**: the #1 P0 proven against
+the real database. Case 4 now asserts COHERENCE the way a consumer checks it —
+fetch the cited key, hash those bytes, compare to the cited checksum — and it
+passes, where before the fix the row cited a sequence-1 key beside a
+sequence-0 checksum and the registrar refused every such attempt. The probe's
+own assertion had to move with the code: it previously pinned the incoherent
+pair as intended behaviour.
+
+``live_fixd_mini_chain.py`` on **rapid-db, 9/9**: one unit from a terminal
+record to a registered product. The record is authored through the real
+serializer, a real ``ReconcilerService.poll_once`` classifies it to
+``terminal_after_start`` at sequence 1, the registrar writes a real
+``RefImages`` row through the real stored procedure, the watermark advances,
+and a replay writes NO second version — migration 018's guard proven against
+the live ``addRefImage`` rather than a fake.
+
+**The probe found a defect on its first complete run that nothing else could
+have.** ``refimcatalogs.cattype`` is a ``smallint`` and
+``registerRefImCatalog`` casts its third argument to one, but the ported
+registrar passed the strings ``"sextractor"`` and ``"photutils"``. PostgreSQL
+refused outright, so *every* reference-image registration failed at its first
+catalogue. The unit suite could not see it: its fake database accepts whatever
+it is handed, so a type the real column cannot hold looks exactly like one it
+can.
+
+.. warning::
+
+   **PROPOSED, needs ratification: the ``cattype`` numbering.** The legacy body
+   read these from ``product_config['REF_IMAGE'][...cattype]`` — a per-job
+   product config the W6 cutover deleted, which never lived in this repo — and
+   neither repo carries a lookup table, a CHECK constraint, or seeded values
+   for the column. ``1 = SExtractor, 2 = PhotUtils`` is therefore an ORDERING
+   chosen in ``pipeline/registration/products.py``, not a value recovered from
+   the operations schema. It is internally consistent and it registers. If the
+   archive already numbers these differently, those two constants are the only
+   place to change, and ``refimcatalogspk (rfid, ppid, cattype)`` means a wrong
+   number collides rather than silently duplicating.
+
+What the live evidence could not cover
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+**PSFs is still EMPTY on rapid-db** (0 rows, and RefImages/DiffImages were both
+0 before this round's probe). No genuine reference-image attempt is possible
+until the survey produces PSF data, so the mini-chain registers a
+battery-shaped SYNTHETIC product. What is synthetic is the science content —
+the FITS bytes are a placeholder — and not any part of the chain under test:
+the attempt row, the record, the reconciliation, the procedures and the S3
+objects are all real. The science-fidelity question of whether a *correct*
+reference image is built is a different one, and this probe does not touch it.
+
+**The grant gap FixC recorded is partly closed.** ``rapid-db-instance-role``
+still has no grant on ``roman-rapid-records``, so both live probes point at
+``rapid-build-artifacts`` as their records store. FixD added
+``s3:GetObjectTagging``/``s3:PutObjectTagging`` on THAT bucket, which is what
+the crash-boundary probe needed — it had been failing on AccessDenied from
+``GetObjectTagging``, invisible until round 3 made bundle reconstruction real
+and gave the tagging path something to tag. The records-bucket grant itself is
+still outstanding, and closing it is what would let these probes run against
+the production bucket.
