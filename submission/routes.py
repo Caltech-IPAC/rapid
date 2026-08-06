@@ -151,6 +151,33 @@ ROUTES: tuple[Route, ...] = (
 
 JOB_TYPES: tuple[str, ...] = tuple(route.job_type for route in ROUTES)
 
+# The job types this image can actually RUN, as against the ones the matrix
+# describes (review finding #12).
+#
+# The matrix is the design's vocabulary and deliberately names job types that
+# are planned — reprocessing, catalog-load, crossmatch. This is the subset
+# with a payload behind it: the three stage sequences plus registration, which
+# dispatches to the records-consumer path rather than to a sequence.
+#
+# The two lists are deliberately separate rather than the matrix being
+# trimmed. The matrix carries each type's class, queue and DB lane, which are
+# design facts that stay true while the implementation catches up; deleting
+# the rows would lose them and make adding the payload a bigger change than
+# it is. Adding a job type here is what turns a described route into a
+# runnable one.
+#
+# This must agree with `pipeline.stages.sequences.SEQUENCES` plus the
+# registration dispatch. It is asserted against that registry by a test rather
+# than derived from it, because `submission/` must not import the payload's
+# stage packages — the submission layer runs on hosts that have no science
+# stack at all.
+IMPLEMENTED_JOB_TYPES: frozenset = frozenset({
+    JOB_TYPE_SCIENCE,
+    JOB_TYPE_REFERENCE_IMAGE,
+    JOB_TYPE_POST_PROCESS,
+    JOB_TYPE_REGISTRATION,
+})
+
 _BY_TYPE = {route.job_type: route for route in ROUTES}
 
 
@@ -249,10 +276,32 @@ def validate_route(job_type: str,
     Raises
     ------
     RouteError
-        Job type unknown; job type incompatible with the class; or the
-        queue is not the one this route runs on.
+        Job type unknown; job type not implemented; job type incompatible
+        with the class; or the queue is not the one this route runs on.
     """
     route = route_for(job_type)
+
+    # THE VOCABULARY IS RESTRICTED TO WHAT IS IMPLEMENTED (review finding
+    # #12). The matrix accepts reprocessing, catalog-load and crossmatch
+    # because the design names them as job types — but no payload implements
+    # them. A manifest naming one used to pass validation, CLAIM AND START an
+    # attempt, and only then raise a route error from inside `_execute`,
+    # where it became an application failure: a row, a bundle, a terminal
+    # record and a failed attempt, all describing a submission that should
+    # never have been accepted.
+    #
+    # Rejecting here, at the route boundary and before ownership, is the
+    # design's own rule — "the entrypoint rejects at startup any manifest
+    # whose job type is incompatible with the definition's class", and a job
+    # type with no payload is the same kind of unroutable.
+    if job_type not in IMPLEMENTED_JOB_TYPES:
+        raise RouteError(
+            f"job type {job_type!r} is in the route matrix but has no "
+            f"implementation in this image; implemented job types are: "
+            + ", ".join(sorted(IMPLEMENTED_JOB_TYPES))
+            + ". Rejected at the route boundary rather than inside the "
+            "payload, so no attempt is claimed for a submission that cannot "
+            "run.")
 
     if workload_class not in WORKLOAD_CLASSES:
         raise RouteError(

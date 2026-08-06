@@ -360,7 +360,13 @@ class DispatchRegistrationTests(unittest.TestCase):
 
         context.record.assert_called_once()
         recorded = context.record.call_args.kwargs["registration"]
-        self.assertEqual(1, recorded["registered"])
+        # AMENDED by FixA (review finding #5). No registrar is installed, so
+        # this is a DECISION pass: the attempt is approved and counted into
+        # `would_register`, never into `registered`. Reporting approvals as
+        # registrations is what let the job return registered=N while writing
+        # no operation-table rows.
+        self.assertEqual(1, recorded["would_register"])
+        self.assertEqual(0, recorded["registered"])
         self.assertEqual(0, recorded["exit_code"])
 
     def test_a_failing_registration_raises_rather_than_exiting_zero(self):
@@ -373,7 +379,8 @@ class DispatchRegistrationTests(unittest.TestCase):
                  "sky_tile": None, "error_category": None,
                  "application_intended_exit": 0, "scheduler_observed_exit": 0}]
 
-        def failing(conn, candidate_rows, register=None, run=None):
+        def failing(conn, candidate_rows, register=None, run=None,
+                    dry_run=False):
             from pipeline.registration import RegistrationRun
             failed = RegistrationRun()
             failed.failed = 1

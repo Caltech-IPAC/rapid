@@ -131,7 +131,8 @@ def _iso(value):
 def build_closure_record(attempt_row, observation, sequence,
                          predecessor=None, rejected_key=None,
                          rejected_reason=None, classification=None,
-                         error_category=None, bundle=None, now=None):
+                         error_category=None, bundle=None,
+                         binding_drift=None, now=None):
     """Build the complete canonical snapshot for one classification.
 
     `attempt_row` is a mapping of the attempt's database columns — the fallback
@@ -205,6 +206,18 @@ def build_closure_record(attempt_row, observation, sequence,
     else:
         body["reconstructed"] = False
 
+    if binding_drift is not None:
+        # The scheduler ran this attempt under a definition that disagrees
+        # with its submission-time binding (#11). Recorded in the terminal
+        # account rather than only logged: it says the products were made by
+        # something other than what the submission says made them.
+        body["execution_binding_drift"] = {
+            "observed_job_definition": binding_drift,
+            "recorded_job_definition_arn":
+                (attempt_row or {}).get("binding_job_definition_arn"),
+            "recorded_job_definition_rev":
+                (attempt_row or {}).get("binding_job_definition_rev"),
+        }
     if error_category is not None:
         body["error_category"] = error_category
     if bundle is not None:

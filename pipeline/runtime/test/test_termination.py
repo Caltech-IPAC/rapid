@@ -93,7 +93,8 @@ class _Harness:
             handle.write("stage log line\n")
 
     def terminate(self, outcome="success", disposition="published",
-                  error=None, on_step=None):
+                  error=None, on_step=None, science_provenance=None,
+                  products=None):
         return termination.terminate(
             self.writer, self.store, self.ownership, self.job_env,
             self.workdir, PREFIX,
@@ -102,7 +103,8 @@ class _Harness:
             snapshot_key_value=self.snapshot_key,
             stages=[{"stage_name": "difference", "outcome": "success",
                      "duration_ms": 12.5}],
-            provenance=self.provenance, error=error, on_step=on_step)
+            provenance=self.provenance, error=error, on_step=on_step,
+            science_provenance=science_provenance, products=products)
 
     @property
     def bundle_key(self):
@@ -680,3 +682,60 @@ class TerminalRecordAndBundleStoresTest(unittest.TestCase):
         result = harness.terminate()
         self.assertIsNotNone(harness.store.head(result.bundle_key))
         self.assertIsNotNone(harness.store.head(result.record_key))
+
+
+class ScienceProvenanceAndProductsTests(unittest.TestCase):
+    """The stages' own account reaches the record (implementation review #6).
+
+    Stages accumulate checksums, source counts and product facts into
+    `StageContext`, and the entrypoint passed only the runtime `Provenance` —
+    so files were uploaded but sequence 0 carried no authoritative product
+    list, no URIs, no checksums and no input or reference identities. A
+    registration callback cannot register from a record that lacks them; it
+    would have to guess from mutable external state, which is what the record
+    exists to replace.
+    """
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.harness = _Harness(self._tmp.name)
+
+    def test_the_product_list_reaches_the_record(self):
+        self.harness.terminate(products={
+            "difference_image": {"uri": "s3://p/diff.fits",
+                                 "checksum": "sha256:diff"},
+            "psf_catalog": {"uri": "s3://p/psfcat.parquet",
+                            "checksum": "sha256:psf"},
+        })
+        record = json.loads(self.harness.store.get(self.harness.record_key))
+
+        self.assertIn("products", record)
+        names = [entry["name"] for entry in record["products"]]
+        self.assertEqual(["difference_image", "psf_catalog"], names)
+        first = record["products"][0]
+        self.assertEqual("s3://p/diff.fits", first["uri"])
+        self.assertEqual("sha256:diff", first["checksum"])
+
+    def test_science_provenance_reaches_the_record(self):
+        self.harness.terminate(science_provenance={
+            "release_content_digest": "sha256:release",
+            "tessellation_version": "nside512-v2",
+            "n_sources": 4242,
+        })
+        record = json.loads(self.harness.store.get(self.harness.record_key))
+
+        self.assertEqual("sha256:release",
+                         record["science_provenance"]["release_content_digest"])
+        self.assertEqual("nside512-v2",
+                         record["science_provenance"]["tessellation_version"])
+
+    def test_a_job_with_no_products_says_nothing_rather_than_nothing_found(self):
+        # Absent, not empty: a registration job has no science products, and
+        # `products: []` would claim it looked and found none where the truth
+        # is that the question does not apply (the absent-not-sentinel rule).
+        self.harness.terminate()
+        record = json.loads(self.harness.store.get(self.harness.record_key))
+
+        self.assertNotIn("products", record)
+        self.assertNotIn("science_provenance", record)

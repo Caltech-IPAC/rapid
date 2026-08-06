@@ -374,7 +374,9 @@ def build_terminal_record(ownership: Any, job_env: Any, outcome: str,
                           stages: list,
                           provenance: Any = None,
                           error: Any = None,
-                          sequence: int = APPLICATION_RECORD_SEQUENCE) -> dict:
+                          sequence: int = APPLICATION_RECORD_SEQUENCE,
+                          science_provenance: dict | None = None,
+                          products: dict | None = None) -> dict:
     """Assemble the application's terminal record (sequence 0).
 
     A complete, self-contained account: identity, the submission-time
@@ -387,6 +389,16 @@ def build_terminal_record(ownership: Any, job_env: Any, outcome: str,
     `error` is a `SerializedError` or None. Its category is the record's
     `error_category`; a successful attempt has none, absent rather than
     null-valued in spirit (the key is simply not present).
+
+    `science_provenance` and `products` are the STAGES' own accumulations —
+    checksums, source counts, product facts, resolved input and reference
+    identities (review finding #6). They were absent: stages recorded them
+    into `StageContext` and the entrypoint passed only the runtime
+    `Provenance`, so files were uploaded but sequence 0 carried no
+    authoritative product list, no URIs, no checksums and no input or
+    reference identities. A registration callback cannot register from a
+    record that lacks them — it would have to guess from mutable external
+    state, which is what the record exists to replace.
     """
     record = {
         "schema_version": RECORD_SCHEMA_VERSION,
@@ -421,10 +433,37 @@ def build_terminal_record(ownership: Any, job_env: Any, outcome: str,
             "job_definition_rev": provenance.job_definition_rev,
             "config_digest": provenance.config_digest,
         }
+    # The stages' own account (review finding #6). Absent rather than
+    # empty-valued where a job produced none: a registration job has no
+    # science products, and {} would claim it looked and found nothing where
+    # the truth is that the question does not apply.
+    if science_provenance:
+        record["science_provenance"] = dict(science_provenance)
+    if products:
+        record["products"] = _product_entries(products)
     if error is not None:
         record["error"] = error.as_dict()
         record["error_category"] = error.error_category
     return record
+
+
+def _product_entries(products: dict) -> list:
+    """The authoritative product list: one entry per named product.
+
+    A LIST of named entries rather than the raw mapping, because that is what
+    a consumer registers from — it iterates products, and each needs its name
+    beside its facts. Whatever a stage recorded (URI, checksum, size, type)
+    carries through verbatim; this shape is about making the list iterable,
+    not about deciding what a product is.
+    """
+    entries = []
+    for name in sorted(products):
+        value = products[name]
+        if isinstance(value, dict):
+            entries.append({"name": name, **value})
+        else:
+            entries.append({"name": name, "value": value})
+    return entries
 
 
 def write_terminal_record(store: Any, key: str, record: dict) -> dict:
@@ -551,7 +590,9 @@ def terminate(writer: Any, store: Any, ownership: Any, job_env: Any,
               started_at: Any, config_digest: str, snapshot_key_value: str,
               stages: list, provenance: Any = None,
               error: Any = None, now: datetime.datetime | None = None,
-              on_step: Any = None, record_store: Any = None) -> TerminationResult:
+              on_step: Any = None, record_store: Any = None,
+              science_provenance: dict | None = None,
+              products: dict | None = None) -> TerminationResult:
     """Run the ordered closing sequence. Raises `RecordsError` if any step fails.
 
     `store` receives the diagnostics bundle; `record_store` receives the
@@ -609,7 +650,8 @@ def terminate(writer: Any, store: Any, ownership: Any, job_env: Any,
         intended_exit=intended_exit, started_at=started_at, ended_at=moment,
         config_digest=config_digest, snapshot_key_value=snapshot_key_value,
         bundle=bundle, stages=stages, provenance=provenance,
-        error=serialized)
+        error=serialized,
+        science_provenance=science_provenance, products=products)
     record_key = terminal_record_key(
         records_prefix, ownership.run_id, ownership.logical_job_id,
         ownership.attempt_id, APPLICATION_RECORD_SEQUENCE)

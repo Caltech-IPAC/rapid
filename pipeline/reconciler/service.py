@@ -169,6 +169,9 @@ class ReconcilerService:
         #: persistent nonzero here means the reconciler is running but not
         #: closing anything — work-incapable while process-alive.
         self._closure_failures = 0
+        #: Attempts whose observed job definition disagreed with their
+        #: recorded execution binding (#11).
+        self._binding_drift = 0
 
     # -- health ----------------------------------------------------------
 
@@ -195,6 +198,7 @@ class ReconcilerService:
             "healthy": self.healthy,
             "consecutive_poll_failures": self.consecutive_poll_failures,
             "closure_failures": self._closure_failures,
+            "binding_drift": self._binding_drift,
             "poll_failure_threshold": POLL_FAILURE_THRESHOLD,
         }
 
@@ -352,6 +356,51 @@ class ReconcilerService:
 
         return self._classify(row, observation)
 
+    def _check_binding_drift(self, row, observation):
+        """Compare the recorded execution binding with the scheduler's view.
+
+        Review finding #11. The submission-time binding records the exact
+        job-definition ARN and revision the submitter intended; the scheduler
+        reports the definition a job actually ran under. Those disagreeing
+        means the job ran under a definition nobody recorded — a different
+        image, different resources, a different command — and the design
+        says the reconciler "cross-checks the binding against the scheduler's
+        view, flagging drift".
+
+        Flagged, not fatal: the attempt DID run, its outcome is real, and
+        refusing to close it would strand a finished job. What drift changes
+        is that the disagreement is recorded and visible rather than silently
+        absent.
+
+        Returns the observed identity when it disagrees, else None.
+        """
+        observed = getattr(observation, "job_definition", None)
+        if not observed:
+            return None
+
+        recorded_arn = row.get("binding_job_definition_arn")
+        recorded_rev = row.get("binding_job_definition_rev")
+        if not recorded_arn:
+            return None
+
+        base, _, suffix = recorded_arn.rpartition(":")
+        expected = recorded_arn if (base and suffix.isdigit()) \
+            else f"{recorded_arn}:{recorded_rev}"
+
+        # Batch may report the bare name rather than the full ARN depending on
+        # how the job was submitted; compare on the definition NAME and
+        # revision, which both forms carry, rather than on string equality
+        # that would flag a formatting difference as drift.
+        if _definition_identity(observed) == _definition_identity(expected):
+            return None
+
+        self._binding_drift += 1
+        logger.warning(
+            "attempt %s ran under job definition %s but its submission-time "
+            "binding records %s; recording drift",
+            row["attempt_id"], observed, expected)
+        return observed
+
     def _record_observation(self, attempt_id, lifecycle_state, observation):
         """Record what the scheduler saw, without violating the row's state.
 
@@ -479,6 +528,10 @@ class ReconcilerService:
             rejected_reason=rejected,
             classification=classification,
             error_category=error_category,
+            # Drift goes INTO the record, not only into a log line (#11): the
+            # closure record is the durable terminal account, and "this
+            # attempt ran under a definition nobody recorded" belongs in it.
+            binding_drift=self._check_binding_drift(row, observation),
             now=self._now())
 
         # THE CLOSURE STEPS NO LONGER FAIL OPEN (review finding #16).
@@ -818,6 +871,28 @@ def _Executor(conn):  # noqa: N802 - reads as a type at the call sites
 
 
 def _enum(enum_class, value):
+    if value is None:
+        return None
+    try:
+        return enum_class(value)
+    except ValueError:
+        logger.warning("ignoring unknown %s value %r",
+                       enum_class.__name__, value)
+        return None
+
+
+def _definition_identity(reference):
+    """`<name>:<revision>` from a job-definition ARN or bare name.
+
+    Batch reports `jobDefinition` as a full ARN or as `name:revision`
+    depending on how the job was submitted, and the binding records an ARN.
+    Comparing on name and revision means a formatting difference is not
+    mistaken for drift while a real difference still is (#11).
+    """
+    if not reference:
+        return None
+    tail = str(reference).rsplit("/", 1)[-1]
+    return tail
     if value is None:
         return None
     try:

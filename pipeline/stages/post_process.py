@@ -131,7 +131,9 @@ def _stamp(context, uri_fact, product, keywords, values, checksum_fact) -> None:
 def upload_products(context) -> None:
     """Re-upload the stamped products. (Stages S6a/S6b uploads, S9.)"""
     bucket = context.parameter("s3/products-bucket")
-    prefix = f"{context.job_type}/{context.unit.key}"
+    # Run- and attempt-scoped (review finding #18) — see
+    # `StageContext.product_prefix`, the one place this key is built.
+    prefix = context.product_prefix()
 
     uploadable = [value for _name, value in sorted(context.products.items())
                   if isinstance(value, str) and os.path.isfile(value)]

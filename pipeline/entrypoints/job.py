@@ -221,6 +221,132 @@ def run_sequence(context, job_type: str, recorder) -> None:
                   logger=context.logger)
 
 
+def stage_writer_for(writer, attempt_id, logger):
+    """The StageRecorder's live write callback (review finding #17).
+
+    Every completed stage becomes an `attempt_stages` row as it finishes, so
+    an attempt that dies abruptly still has queryable stage-boundary evidence
+    — which is the whole reason the span shape exists. Without this the
+    recorder accumulated spans in memory and wrote them only at termination,
+    so exactly the attempts that most need the evidence (the ones that never
+    reach termination) had none.
+
+    A failed span write does NOT fail the stage. The span is diagnostic
+    evidence about work that has already happened; losing one is worth a loud
+    log and nothing more, and raising here would turn a recording problem
+    into a science failure. The spans still reach the terminal record at
+    termination, so a lost row is not a lost fact.
+    """
+
+    def write(record):
+        try:
+            writer.record_stage(attempt_id, _stage_of(record))
+        except Exception:  # noqa: BLE001 - diagnostic, never fatal
+            logger.warning(
+                "could not write the stage span for %s; the span still "
+                "reaches the terminal record at termination",
+                getattr(record, "stage_name", "?"), exc_info=True)
+
+    return write
+
+
+def _stage_of(record):
+    """Adapt a runtime `StageRecord` to the writer's `Stage`."""
+    from observability.attempts import Stage, StageOutcome
+
+    outcome = getattr(record, "outcome", None)
+    value = getattr(outcome, "value", outcome)
+    return Stage(
+        stage_name=record.stage_name,
+        started_at=record.started_at,
+        duration_ms=record.duration_ms,
+        outcome=StageOutcome(value) if value else StageOutcome.SUCCESS)
+
+
+def tessellation_provenance(parameters, science, logger):
+    """The tessellation version and digest this attempt runs against.
+
+    Review finding #13: `check_version` ignored both its `version` and its
+    `digest` and compared only dimensions, and had no production caller — so
+    closed-form tessellation constants could change while keeping the same row
+    count and NSIDE, the products would change, and no attempt record could
+    identify or reject the different science content.
+
+    Recorded AND checked. "Every attempt records the tessellation version it
+    used" is the adopted reference-identity requirement, and the active
+    version is pinned by RELEASE CONTENT (never the mutable parameter tree)
+    because reference data alters science products.
+    """
+    from database.modules.utils.roman_tessellation_db import RomanTessellation
+
+    pinned = (science or {}).get("tessellation") or {}
+    version = pinned.get("version")
+    if not version:
+        raise ConfigError(
+            "the release content does not pin a tessellation version. "
+            "Reference data alters science products, so its version is "
+            "release content by the placement criterion — an attempt that "
+            "cannot say which tessellation it used cannot have complete "
+            "provenance.")
+
+    digest = pinned.get("digest")
+
+    # THE CHECK IS THE POINT. `check_version` returns False and sets its own
+    # exit_code rather than raising, "so the caller decides how loudly to
+    # fail — but it must not be ignored". It had no production caller at all
+    # (#13), so nothing decided anything. This is that caller, and it fails
+    # loud: a mismatch means the products would be tiled differently from
+    # what the release says.
+    tessellation = RomanTessellation()
+    accepted = tessellation.check_version(
+        version=version, digest=digest,
+        nside=pinned.get("nside"), nrows=pinned.get("nrows"))
+    if not accepted:
+        raise ConfigError(
+            f"the tessellation this image computes does not match the one "
+            f"release content pins (version {version!r}, digest "
+            f"{(digest or '')[:12]!r}). Products would be tiled differently "
+            f"from what the release says, so no work is started.",
+            tessellation_version=version)
+
+    logger.info("tessellation %s pinned by release content (digest %s)",
+                version, (digest or "")[:12])
+
+    return {"tessellation_version": version,
+            "tessellation_digest": digest}
+
+
+def registrar_for(context):
+    """The product-registration callback, or None when there is not one yet.
+
+    What registering *means* — which operation-table rows a registered
+    product becomes — is the science layer's business, and no registrar
+    exists in the tree yet. `register_batch` decides WHETHER each reconciled
+    attempt's products may be registered; this resolves the thing that would
+    then write them.
+
+    **Returning None here is not the defect the review found** (#5). The
+    defect was that a missing callback silently became a dry run whose
+    decisions were COUNTED AS REGISTRATIONS — so the job reported
+    `registered=N`, outcome success and exit 0 while writing nothing, and
+    every later pass re-selected the same attempts. Three things now make
+    that unreachable, and none of them requires inventing the science layer's
+    schema:
+
+    * `register_batch` refuses a missing callback unless `dry_run=True` says
+      the caller meant it, so a dry run can only happen on purpose;
+    * a dry run's candidates count into `would_register`, never `registered`,
+      so no log or metric can read a rehearsal as a registration;
+    * the registered watermark advances only on a real registration, so a
+      decision pass leaves every attempt a candidate rather than marking work
+      that never happened.
+
+    `dispatch_registration` therefore runs the decision pass deliberately and
+    labels it, which is an honest account of what this image can do.
+    """
+    return None
+
+
 def dispatch_registration(context) -> None:
     """The registration job type.
 
@@ -251,11 +377,30 @@ def dispatch_registration(context) -> None:
     from pipeline.registration import candidates, register_batch
 
     logger = context.logger
+
+    # THE DRY RUN IS ASKED FOR, AND LABELLED (review finding #5). This path
+    # called `register_batch(conn, rows)` with no callback at all, which
+    # silently became a dry run whose decisions were counted as
+    # registrations — so the job returned registered=N, outcome success and
+    # exit 0 while writing no operation-table rows, and every later pass
+    # re-selected the same attempts. The dry run is now explicit, its
+    # candidates count into `would_register` rather than `registered`, and
+    # the watermark advances only on a real registration.
+    register = registrar_for(context)
+
     with connection("rapid-registration", lane="transaction") as conn:
         rows = candidates(conn)
         logger.info("registration: %d reconciled attempt(s) to consider",
                     len(rows))
-        run = register_batch(conn, rows)
+        run = register_batch(conn, rows, register=register,
+                             dry_run=register is None)
+
+    if register is None and run.would_register:
+        logger.warning(
+            "registration ran as a DECISION PASS: %d attempt(s) are approved "
+            "for registration and NONE were registered, because no product "
+            "registrar is installed in this image. They remain candidates.",
+            run.would_register)
 
     context.record(registration=run.as_dict())
 
@@ -371,16 +516,48 @@ def _run(workload_class: str) -> int:
             scheduler_job_id=job_env.scheduler_job_id,
             application_attempt_index=ownership.attempt_index)
 
-        recorder = StageRecorder()
+        # 7. The stage recorder, WITH ITS WRITE CALLBACK (review finding #17).
+        #    Constructed bare, the recorder silently returns from `_write` and
+        #    no stage span ever reaches PostgreSQL — so an abrupt loss before
+        #    sequence 0 left no queryable stage-boundary evidence at all, and
+        #    the reconciler (which does not parse the safety stream) could not
+        #    tell which stage began or completed.
+        recorder = StageRecorder(
+            write=stage_writer_for(writer, ownership.attempt_id, logger))
+
+        # The release content and its DIGEST (review finding #13). The reader
+        # can return one and the entrypoint called plain `load()`, so the
+        # release science TOML could change while keeping the same shape and
+        # no attempt record could identify or reject the different content.
+        science, science_digest = science_config.load_with_digest()
+
         context = StageContext(
             workdir=workdir, unit=unit, job_type=manifest.job_type,
-            science=science_config.load(), parameters=parameters,
-            logger=logger, s3=s3_client, started_at=startup.started_at)
+            science=science, parameters=parameters,
+            logger=logger, s3=s3_client, started_at=startup.started_at,
+            # Product keys carry run and attempt identity (#18), so a
+            # reprocess or a retry cannot overwrite an earlier attempt's
+            # objects and leave old checksums pointing at changed bytes.
+            run_id=manifest.batch_id, attempt_id=ownership.attempt_id)
+
+        # Provenance the stages will extend, seeded with what startup resolved.
+        # The tessellation version and digest ride here too, and are CHECKED
+        # rather than merely recorded (#13).
+        context.record(release_content_digest=science_digest,
+                       **tessellation_provenance(parameters, science, logger))
 
         outcome, disposition, error = _execute(context, manifest.job_type,
                                                recorder, logger)
 
         # 8. The termination protocol, in its stated order.
+        #
+        #    `context.provenance` and `context.products` are passed (review
+        #    finding #6). Stages accumulate checksums, source counts and
+        #    product facts there, and only the runtime `Provenance` was
+        #    reaching termination — so files were uploaded but sequence 0
+        #    carried no authoritative product list, URIs, checksums, input or
+        #    reference identities. A registration callback cannot register
+        #    from a record that does not have them.
         result = terminate(
             writer=writer, store=diagnostics_store,
             record_store=records_store, ownership=ownership,
@@ -388,7 +565,9 @@ def _run(workload_class: str) -> int:
             outcome=outcome, product_disposition=disposition,
             started_at=startup.started_at, config_digest=digest,
             snapshot_key_value=snapshot_key_value,
-            stages=recorder.as_list(), provenance=provenance, error=error)
+            stages=recorder.as_list(), provenance=provenance, error=error,
+            science_provenance=dict(context.provenance),
+            products=dict(context.products))
 
     logger.info("terminated: outcome=%s disposition=%s record=%s exit=%d",
                 result.outcome, result.product_disposition,

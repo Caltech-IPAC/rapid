@@ -300,8 +300,31 @@ class RunRegistrationTests(unittest.TestCase):
 
         run = seams.run_registration(conn)
 
-        self.assertEqual(1, run.registered)
+        # AMENDED by FixA (review finding #5). With no registrar this is a
+        # DECISION pass: the attempt is approved, and approval counts into
+        # `would_register`. It must NOT count as `registered` — that
+        # conflation is what let the registration job report registered=N
+        # while writing nothing.
+        self.assertEqual(1, run.would_register)
+        self.assertEqual(0, run.registered)
         self.assertEqual(0, run.exit_code)
+
+    def test_a_decision_pass_leaves_every_attempt_a_candidate(self):
+        # The watermark advances only on a real registration, so nothing is
+        # marked as work that did not happen.
+        conn = FakeConnection(rows=[
+            attempt_row(1, lifecycle_state="terminal_after_start",
+                        started_at=utc(2026, 8, 6, 11, 0, 0),
+                        rapid_outcome="success",
+                        product_disposition="published",
+                        terminal_record_sequence=1)])
+
+        seams.run_registration(conn)
+
+        marks = [text for text, _ in conn.statements
+                 if "registered_record_sequence = %s" in text]
+        self.assertEqual([], marks,
+                         "a decision pass must not advance the watermark")
 
 
 if __name__ == "__main__":

@@ -317,4 +317,8 @@ def run_registration(conn, register=None):
 
     rows = candidates(conn)
     logger.info("registration: %d reconciled attempt(s) to consider", len(rows))
-    return register_batch(conn, rows, register=register)
+    # A caller with no registrar gets a DECISION pass, asked for explicitly
+    # (review finding #5): omitting the callback used to become a dry run
+    # whose decisions were reported as registrations.
+    return register_batch(conn, rows, register=register,
+                          dry_run=register is None)

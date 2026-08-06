@@ -167,3 +167,45 @@ def test_a_tree_missing_the_queue_parameter_is_a_route_error():
 def test_unknown_class_is_rejected_before_the_compatibility_check():
     with pytest.raises(RouteError, match="not a workload class"):
         routes.validate_route("science", "prompt-ish")
+
+
+# ---------------------------------------------------------------------------
+# Implemented vocabulary (implementation review #12)
+# ---------------------------------------------------------------------------
+
+def test_a_routable_but_unimplemented_job_type_is_rejected_at_the_boundary():
+    # REVIEW FINDING #12. The matrix accepts reprocessing, catalog-load and
+    # crossmatch because the design names them — but no payload implements
+    # them. A manifest naming one used to pass validation, CLAIM AND START an
+    # attempt, and only then raise a route error from inside `_execute`, where
+    # it became an application failure: a row, a bundle, a terminal record and
+    # a failed attempt, all describing a submission that should never have
+    # been accepted.
+    for job_type in ("reprocessing", "catalog-load", "crossmatch"):
+        with pytest.raises(RouteError, match="no implementation"):
+            routes.validate_route(job_type, routes.CLASS_BULK)
+
+
+def test_the_implemented_types_still_validate():
+    for job_type, workload_class in (("science", routes.CLASS_PROMPT),
+                                     ("reference-image", routes.CLASS_BULK),
+                                     ("post-process", routes.CLASS_PROMPT),
+                                     ("registration", routes.CLASS_PROMPT)):
+        assert routes.validate_route(job_type, workload_class).job_type \
+            == job_type
+
+
+def test_the_implemented_set_matches_what_the_payload_actually_has():
+    # The two lists are deliberately separate — the matrix carries design
+    # facts (class, queue, lane) for types whose payload has not landed — so
+    # something has to hold them together. This is that something: the
+    # implemented set is exactly the stage sequences plus registration, which
+    # dispatches to the records-consumer path rather than to a sequence.
+    from pipeline.stages.sequences import SEQUENCES
+
+    assert routes.IMPLEMENTED_JOB_TYPES == frozenset(SEQUENCES) | {
+        routes.JOB_TYPE_REGISTRATION}
+
+
+def test_every_implemented_type_is_in_the_matrix():
+    assert routes.IMPLEMENTED_JOB_TYPES <= set(routes.JOB_TYPES)

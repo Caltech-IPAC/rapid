@@ -89,6 +89,39 @@ class StageContext:
     provenance: dict = dataclasses.field(default_factory=dict)
     started_at: datetime.datetime = dataclasses.field(
         default_factory=lambda: datetime.datetime.now(datetime.timezone.utc))
+    #: This attempt's identity, for product keys (review finding #18). Set by
+    #: the entrypoint from the resolved ownership; absent in unit tests that
+    #: construct a bare context, where `product_prefix` falls back and says so.
+    run_id: Any = None
+    attempt_id: Any = None
+
+    # -- product keys --------------------------------------------------------
+
+    def product_prefix(self) -> str:
+        """The S3 key prefix this attempt's products are uploaded under.
+
+        **The one place product keys are built** (review finding #18). The
+        prefix used to be `job_type/exposure/sca`, carrying neither run nor
+        attempt identity — so reprocessing or retrying the same exposure/SCA
+        OVERWROTE the earlier attempt's objects, and every old record and
+        checksum then referred to keys whose bytes had changed. The storage
+        design's immutable-keys rule is what that violates: a key, once
+        written, names those bytes forever.
+
+        Run and attempt identity make each attempt's products their own
+        objects. The unit stays in the key because it is what a human looks
+        for, and the attempt id goes last because it is the part that
+        distinguishes two attempts at the same work.
+
+        A context with no attempt identity — a unit test constructing a bare
+        one — gets a prefix that says so rather than silently producing the
+        old colliding shape, so a production path that lost its identity fails
+        visibly instead of overwriting.
+        """
+        if self.run_id is None or self.attempt_id is None:
+            return f"{self.job_type}/{self.unit.key}/unidentified-attempt"
+        return (f"{self.job_type}/{self.run_id}/{self.unit.key}"
+                f"/attempt-{self.attempt_id}")
 
     # -- per-invocation facts ------------------------------------------------
 

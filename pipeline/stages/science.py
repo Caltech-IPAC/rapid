@@ -1317,7 +1317,13 @@ def upload_products(context) -> None:
     registration reads reconciled records rather than parsing a config file.
     """
     bucket = context.parameter("s3/products-bucket")
-    prefix = f"{context.job_type}/{context.unit.key}"
+    # Run- and attempt-scoped (review finding #18). This was
+    # `job_type/exposure/sca`, which carries no run or attempt identity — so
+    # reprocessing or retrying one exposure/SCA overwrote the earlier
+    # attempt's objects and left old records and checksums pointing at keys
+    # whose bytes had changed. `product_prefix` is the one place that key is
+    # built; see `StageContext.product_prefix`.
+    prefix = context.product_prefix()
 
     uploadable = [(name, value) for name, value in sorted(context.products.items())
                   if isinstance(value, str) and os.path.isfile(value)]

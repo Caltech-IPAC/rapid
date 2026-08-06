@@ -222,14 +222,31 @@ class ExecutionBindingTests(unittest.TestCase):
                       "sha256:image", "sha256:manifest", "rapid-2026.08.1", 7):
             self.assertIn(value, params)
 
-    def test_absent_release_identity_is_null_not_fabricated(self):
-        # The DDL requires only ARN, image digest and manifest checksum at
-        # submitted; a job predating release identification carries NULL.
+    def test_an_incomplete_binding_is_refused_at_construction(self):
+        # AMENDED by FixA (review finding #11). This used to assert that a
+        # binding with no release identity or job-definition revision was
+        # acceptable, on the grounds that "the DDL requires only ARN, image
+        # digest and manifest checksum at submitted".
+        #
+        # The DDL's minimum is not the design's requirement. The adopted text
+        # is "the COMPLETE submission-time execution binding: the exact
+        # job-definition ARN and revision, its pinned image digest, the
+        # release identity, and the manifest checksum" — every one a fact the
+        # submitter knows. Optional in practice meant a submission lacking
+        # them was accepted, its retries preserved the incomplete binding, and
+        # the reconciler recorded agreement because there was nothing to
+        # cross-check against.
+        with self.assertRaises(ValueError) as caught:
+            binding(release_identity=None, job_definition_rev=None)
+        message = str(caught.exception)
+        self.assertIn("job_definition_rev", message)
+        self.assertIn("release_identity", message)
+
+    def test_a_complete_binding_reaches_the_row(self):
         self.writer.create_submitted(
             self.identity, created_at=at(0), submitted_at=at(1),
-            binding=binding(release_identity=None, job_definition_rev=None))
+            binding=binding())
         _, params = self.execute.only()
-        self.assertNotIn("rapid-2026.08.1", params)
         self.assertIn("sha256:image", params)
 
     def test_binding_is_required_at_schema_version_2(self):
@@ -838,6 +855,7 @@ class LogicalJobConflictTests(unittest.TestCase):
             job_definition_arn="arn:aws:batch:us-east-1:1:job-definition/x:10",
             image_digest="sha256:abc",
             manifest_checksum="sha256:def",
+            job_definition_rev=10,
             release_identity="rel-1")
 
     def test_an_insert_that_lands_records_the_binding(self):

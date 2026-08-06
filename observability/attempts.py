@@ -174,9 +174,18 @@ class ExecutionBinding:
     of separate facts: disagreement between `image_digest` here and
     `container_digest` there is a reconciliation signal, not a duplicate.
 
-    `release_identity` may be absent on a job submitted before releases were
-    identified; the DDL requires only the ARN, image digest and manifest
-    checksum at `submitted`.
+    **COMPLETE means complete (review finding #11).** `job_definition_rev`
+    and `release_identity` were optional, so a submission lacking either was
+    accepted, its retries preserved the incomplete binding, and reconciliation
+    recorded agreement instead of drift — there was nothing to disagree with.
+    The design calls this "the COMPLETE submission-time execution binding: the
+    exact job-definition ARN and revision, its pinned image digest, the
+    release identity, and the manifest checksum", and every one of those is a
+    fact the submitter knows at submission time.
+
+    They are validated here rather than left to the DDL so the failure names
+    the missing field at the submitter, before any row exists, instead of
+    arriving as a constraint violation on the first insert.
     """
 
     job_definition_arn: str
@@ -184,6 +193,36 @@ class ExecutionBinding:
     manifest_checksum: str
     job_definition_rev: int | None = None
     release_identity: str | None = None
+
+    def __post_init__(self) -> None:
+        missing = [name for name in
+                   ("job_definition_arn", "image_digest", "manifest_checksum",
+                    "job_definition_rev", "release_identity")
+                   if getattr(self, name) in (None, "")]
+        if missing:
+            raise ValueError(
+                "the submission-time execution binding is incomplete; "
+                "missing: " + ", ".join(missing)
+                + ". Every field is a fact the submitter knows at submission "
+                "time, and an incomplete binding is copied onto every attempt "
+                "row and every retry — so reconciliation has nothing to "
+                "cross-check against and records agreement where it cannot "
+                "actually tell.")
+
+    @property
+    def definition_identity(self) -> str:
+        """`<arn>:<revision>` — what the scheduler reports as `jobDefinition`.
+
+        The reconciler compares its observation against this (#11). Batch
+        reports the definition ARN with its revision suffix, and the ARN
+        recorded at submission may or may not already carry one, so this
+        normalizes to the compared form in one place.
+        """
+        arn = self.job_definition_arn
+        base, _, suffix = arn.rpartition(":")
+        if base and suffix.isdigit():
+            return arn
+        return f"{arn}:{self.job_definition_rev}"
 
 
 @dataclasses.dataclass(frozen=True)

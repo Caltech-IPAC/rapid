@@ -355,3 +355,46 @@ class RecordTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ProductPrefixTests(unittest.TestCase):
+    """Product keys carry run and attempt identity (implementation review #18).
+
+    The prefix was `job_type/exposure/sca`, which carries neither — so
+    reprocessing or retrying the same exposure/SCA OVERWROTE the earlier
+    attempt's objects, and every old record and checksum then referred to keys
+    whose bytes had changed. That is what the storage design's immutable-keys
+    rule forbids: a key, once written, names those bytes forever.
+    """
+
+    def test_the_prefix_carries_run_and_attempt_identity(self):
+        context = make_context(run_id="run-1", attempt_id=4242)
+        prefix = context.product_prefix()
+
+        self.assertIn("run-1", prefix)
+        self.assertIn("attempt-4242", prefix)
+        self.assertIn(context.unit.key, prefix)
+        self.assertTrue(prefix.startswith(context.job_type))
+
+    def test_two_attempts_at_one_unit_do_not_share_a_prefix(self):
+        first = make_context(run_id="run-1", attempt_id=1).product_prefix()
+        retry = make_context(run_id="run-1", attempt_id=2).product_prefix()
+
+        self.assertNotEqual(first, retry)
+
+    def test_two_runs_over_one_unit_do_not_share_a_prefix(self):
+        first = make_context(run_id="run-1", attempt_id=1).product_prefix()
+        reprocess = make_context(run_id="run-2", attempt_id=9).product_prefix()
+
+        self.assertNotEqual(first, reprocess)
+
+    def test_a_context_with_no_identity_says_so_rather_than_colliding(self):
+        # A production path that lost its identity must fail visibly, not
+        # silently produce the old colliding shape.
+        prefix = make_context().product_prefix()
+
+        self.assertIn("unidentified-attempt", prefix)
+
+    def test_the_prefix_is_stable_for_one_attempt(self):
+        context = make_context(run_id="run-1", attempt_id=7)
+        self.assertEqual(context.product_prefix(), context.product_prefix())
