@@ -1345,6 +1345,29 @@ class RAPIDDB:
         overlap the sky tile associated with the input science image and its filter
         that were acquired before the input science image.
         Returned list is ordered by distance from tile center.
+
+        `rid` is the representative to EXCLUDE from the result, or None to
+        exclude nothing. It is a query control, not a description of the
+        image being built around — see `submission.gathering.
+        _overlapping_l2files`, whose docstring explains why the reference
+        stage wants no exclusion at all.
+
+        NONE, NOT THE STRING 'null' (round-4 finding #3). The open case used
+        to be asked for by passing the string, which selected a branch
+        emitting `a.rid is not %s`; once this query was parameterized, that
+        bound the string through the placeholder and PostgreSQL received
+        `a.rid IS NOT 'null'`, which is a syntax error — the whole overlap
+        query failed with exit_code 67 and the reference stage gathered
+        nothing. It parsed historically only because the value was
+        substituted literally, giving `IS NOT null`; the parameterization
+        that closed the injection seam changed that silently.
+
+        An open query now emits NO exclusion clause at all, which is what
+        "exclude nothing" means and what `IS NOT null` was standing in for:
+        rid is an integer column, so `IS NOT NULL` was true for every row it
+        was ever asked about. Expressing it as the absence of a predicate
+        rather than as a predicate that happens to be universally true also
+        makes the two branches say what they mean.
         '''
 
         self.exit_code = 0
@@ -1393,12 +1416,17 @@ class RAPIDDB:
             "and a.mjdobs >= %s " +\
             "and a.mjdobs < %s "
 
-        if rid == 'null':
-            query += "and a.rid is not %s " +\
-                              "order by dist; "
-        else:
+        # The exclusion is a clause or it is nothing. `exclude_rid` decides
+        # BOTH the SQL and whether a value is bound for it, so the query text
+        # and the parameter tuple cannot disagree about how many placeholders
+        # there are.
+        exclude_rid = rid is not None
+
+        if exclude_rid:
             query += "and a.rid != %s " +\
                               "order by dist; "
+        else:
+            query += "order by dist; "
 
 
         # Special logic for generating reference image from inputs observed within a certain observation date range.
@@ -1436,7 +1464,11 @@ class RAPIDDB:
                   field_ra1, field_dec1, field_ra2, field_dec2, field_ra3, field_dec3, field_ra4, field_dec4,
                   field_ra1, field_dec1, field_ra2, field_dec2, field_ra3, field_dec3, field_ra4, field_dec4,
                   field_ra1, field_dec1, field_ra2, field_dec2, field_ra3, field_dec3, field_ra4, field_dec4,
-                  start_mjdobs, end_mjdobs, rid)
+                  start_mjdobs, end_mjdobs)
+
+        # Bound only when the clause that reads it was emitted.
+        if exclude_rid:
+            params = params + (rid,)
 
         print('query = {}, params = {}'.format(query, params))
 

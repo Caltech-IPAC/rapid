@@ -349,9 +349,12 @@ COADD_INPUT_COLUMNS = (
 # launcher's own comment says this is how you ask for "everything ever
 # observed", the start being 0.0 in the same branch.
 REFERENCE_OVERLAP_OPEN_MJDOBS = 999999.9
-#: The string 'null', not None and not a real rid — `rapid_db` switches on it
-#: by identity of value, so it must arrive spelled exactly this way.
-REFERENCE_OVERLAP_NO_EXCLUSION = 'null'
+#: No representative exclusion: None, which `rapid_db` renders as the ABSENCE
+#: of an exclusion clause. It was the string 'null' until round-4 finding #3
+#: — a sentinel that selected a `a.rid is not %s` branch which, once the query
+#: was parameterized, sent PostgreSQL the invalid `a.rid IS NOT 'null'` and
+#: failed the whole overlap query with exit_code 67.
+REFERENCE_OVERLAP_NO_EXCLUSION = None
 
 
 def _overlapping_l2files(handle: UnitSource, rid: int, fid: int,
@@ -380,16 +383,20 @@ def _overlapping_l2files(handle: UnitSource, rid: int, fid: int,
     rid — which drops the representative from its own coadd. It is an input
     to the coadd like any other frame, so with N frames available the query
     returned N-1 and a field with exactly `min_images_to_coadd` frames was
-    skipped forever. Passing the string 'null' takes `rapid_db`'s other
-    branch, `a.rid is not %s`, and that is a PostgreSQL type predicate, not a
-    comparison: `is not 'null'` asks whether the row's rid is distinguishable
-    from the literal string, which for an integer column is always true, so
-    the clause excludes nothing. Confusing, and an accident rather than a
-    design — but it is the accident the launcher relied on, it lives in
-    `rapid_db`, and it is not this module's to correct. Wrapping here rather
-    than editing the query keeps the legacy method byte-identical for the
-    legacy callers that still run against it, and puts the explanation at the
-    one call site whose meaning depends on it.
+    skipped forever. The reference stage wants NO exclusion, and asks for it
+    with `REFERENCE_OVERLAP_NO_EXCLUSION` — None, which `rapid_db` renders as
+    no exclusion clause at all.
+
+    That sentinel was the string 'null' until round-4 finding #3, chosen
+    because the launcher passed it and the branch it selected —
+    `a.rid is not %s` — excluded nothing. It excluded nothing by accident: as
+    a literal substitution it read `IS NOT null`, a type predicate that is
+    true for every row of an integer column. Once the query was parameterized
+    the string was bound through the placeholder instead, PostgreSQL received
+    `a.rid IS NOT 'null'`, and the query failed outright — exit_code 67, no
+    coadd inputs, and (before the exit-code check below) reported as an
+    unready field. "Exclude nothing" is now the absence of a predicate, which
+    is what it means and cannot be broken by how the value is bound.
 
     **The exit code.** `get_overlapping_l2files` reports a failed query by
     setting `exit_code = 67` and returning None — silently, no exception. The

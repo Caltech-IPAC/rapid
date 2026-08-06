@@ -174,5 +174,71 @@ class IdentifierAndValuesInsertPatternRoundTripTests(unittest.TestCase):
         db.conn.commit.assert_called_once_with()
 
 
+class OverlapExclusionClauseTests(unittest.TestCase):
+    """Round-4 finding #3: what each exclusion branch actually emits.
+
+    THE PLACEHOLDER COUNT IS THE PROPERTY. The open branch used to emit
+    `a.rid is not %s` and bind the string 'null' through it, so PostgreSQL
+    parsed `a.rid IS NOT 'null'` and rejected the whole query — the reference
+    stage gathered nothing and reported exit_code 67. Historically it parsed
+    only because the value was substituted literally; the parameterization
+    sweep changed that silently, which is why nothing here caught it.
+
+    These assert the SHAPE cheaply and without a server. What the server makes
+    of the text is proven by `submission/test/live_fixe_overlap_sql.py`,
+    against a real PostgreSQL, because a mocked cursor accepts any string at
+    all — including one that cannot parse.
+    """
+
+    CORNERS = (10.01, 20.01, 10.01, 19.99, 9.99, 19.99, 9.99, 20.01)
+
+    def _execute(self, rid):
+        db = make_db(iter_rows=[])
+        db.get_overlapping_l2files(rid, 1, 999999.9, *self.CORNERS,
+                                   radius_of_initial_cone_search=0.18)
+        query, params = db.cur.execute.call_args.args
+        return literal_text(query), params
+
+    def test_the_open_branch_emits_no_exclusion_clause_at_all(self):
+        text, _ = self._execute(None)
+
+        # Neither spelling of the predicate. "Exclude nothing" is the ABSENCE
+        # of a clause, not a clause that happens to be universally true.
+        self.assertNotIn("is not", text.lower())
+        self.assertNotIn("a.rid !=", text)
+
+    def test_the_open_branch_binds_no_rid_parameter(self):
+        """The bug in one assertion.
+
+        A placeholder with no clause to read it, or a clause with no value
+        bound to it, is a query that cannot execute. The count of parameters
+        must match the placeholders the text actually carries.
+        """
+        text, params = self._execute(None)
+
+        self.assertEqual(text.count("%s"), len(params))
+
+    def test_the_exclusion_branch_emits_a_bound_inequality(self):
+        text, params = self._execute(9002)
+
+        self.assertIn("a.rid != %s", text)
+        self.assertEqual(text.count("%s"), len(params))
+        # The rid travels as a PARAMETER, never as query text.
+        self.assertEqual(params[-1], 9002)
+        self.assertNotIn("9002", text)
+
+    def test_the_string_sentinel_is_no_longer_a_special_case(self):
+        """'null' is now just a value, and an integer column will refuse it.
+
+        Kept as a regression guard: if the branch is ever keyed on the string
+        again, this stops emitting the exclusion clause and fails.
+        """
+        text, params = self._execute("null")
+
+        self.assertIn("a.rid != %s", text)
+        self.assertEqual(params[-1], "null")
+        self.assertNotIn("is not", text.lower())
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -579,10 +579,15 @@ class CoaddInputsTests(unittest.TestCase):
 
     def test_the_representative_image_is_not_excluded_from_its_own_coadd(self):
         # A real rid in the tail parameter renders as `a.rid != %s` and drops
-        # the representative from the coadd it is an input to. The string
-        # 'null' takes the other branch, `a.rid is not %s`, which is a type
-        # predicate that is always true for an integer column and so excludes
-        # nothing — the accident the launcher relied on.
+        # the representative from the coadd it is an input to. None takes the
+        # other branch, which emits no exclusion clause at all.
+        #
+        # It was the string 'null' until round-4 finding #3: that selected an
+        # `a.rid is not %s` branch which excluded nothing only by accident,
+        # and which — once the query was parameterized — sent PostgreSQL the
+        # invalid `a.rid IS NOT 'null'`. What that branch says is now checked
+        # against a real server by `live_fixe_overlap_sql`, because a stubbed
+        # source like this one cannot fail the way the defect failed.
         source = self.Source(overlapping=[self._overlap_row(1)],
                              info={1: self._info("a.fits")})
 
