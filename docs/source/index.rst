@@ -122,6 +122,7 @@ RAPID Pipeline Development
 
    dev/notes.rst
    dev/tests.rst
+   dev/tessellation_bake_retirement.rst
    analyses/analyses.rst
 
 RAPID Archive Deliveries
