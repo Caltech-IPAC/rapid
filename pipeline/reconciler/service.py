@@ -1023,6 +1023,16 @@ class ReconcilerService:
                 error_category=error_category,
                 reconciler_materialized=True)
 
+        # The CITATION MOVES AS A TRIPLE (round-3 finding #1). Materialization
+        # above cites sequence 0 — the record the application left behind — and
+        # this call then supersedes it with the reconciler's own closure
+        # record. It is NOT an `else`: both writers run on the crash boundary.
+        # Advancing key and sequence while leaving the sequence-0 checksum in
+        # place left every materialized row citing bytes that do not hash to
+        # the value beside them, and the registrar — which fetches
+        # `terminal_record_key` and checksums exactly those bytes — refused
+        # them all. Sequence 1 folding the predecessor's FACTS in verbatim does
+        # not make the two records' BYTES equal.
         writer.mark_terminal_after_start(
             attempt_id, ended_at=ended_at,
             scheduler_observed_exit=observation.exit_code,
@@ -1033,7 +1043,8 @@ class ReconcilerService:
             application_intended_exit=body.get("application_intended_exit"),
             error_category=error_category,
             terminal_record_key=written.key,
-            terminal_record_sequence=landed_sequence)
+            terminal_record_sequence=landed_sequence,
+            terminal_record_checksum=written.checksum)
 
     # -- the never-resolved case -----------------------------------------
 

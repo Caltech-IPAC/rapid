@@ -257,7 +257,14 @@ def read_record(store, row):
     raw = store.get(key)
     recorded = row.get("terminal_record_checksum")
     computed = body_checksum(raw)
-    if recorded and recorded != computed:
+    # A NULL checksum is the incomplete citation the docstring describes, and
+    # it was silently ACCEPTED here — `if recorded and ...` skipped
+    # verification entirely, so the one row shape least entitled to trust got
+    # the least checking. Enforced as the missing fact it is (round-3 #1).
+    if not recorded:
+        raise MissingRecordFact("terminal_record_checksum",
+                                attempt_id=attempt_id)
+    if recorded != computed:
         raise RegistrationFailed(
             f"the terminal record at {key} for attempt {attempt_id} does not "
             f"match the checksum the row cites (recorded {recorded}, computed "

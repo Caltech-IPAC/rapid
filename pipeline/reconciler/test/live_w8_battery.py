@@ -58,6 +58,7 @@ from pipeline.reconciler.closure import (
 from pipeline.reconciler.service import ReconcilerService
 from pipeline.runtime import termination
 from pipeline.runtime.boundaries import S3ObjectStore
+from pipeline.runtime.boundaries import checksum as body_checksum
 from pipeline.runtime.errors import (
     RecordsError,
     StorageError,
@@ -523,20 +524,29 @@ def case_crash_between_record_and_row(writer, conn, store, prefix):
           f"{state_before} -> {state_after}, "
           f"reconciler_materialized={materialized}, summary={summary}")
 
-    # The CHECKSUM is the evidence, not the key. Materialization supplies
-    # sequence 0's key and checksum — both NULL on the row and absent from the
-    # body, which is what made the transition illegal — and then
-    # `mark_terminal_after_start` advances the row's key citation to the
-    # reconciler's own sequence-1 record, which is by then the authoritative
-    # account. The checksum survives that write because sequence 1 folds the
-    # predecessor's facts in verbatim.
-    check("12b/materialization-supplied-the-checksum-it-computed",
-          checksum_after == written["checksum"],
-          f"row cites checksum={checksum_after!r} "
-          f"(expected sequence 0's {written['checksum']!r}); "
-          f"key now cites {key_after!r}")
+    # THE CITATION MUST BE COHERENT (round-3 finding #1). Materialization
+    # supplies sequence 0's key and checksum — both NULL on the row and absent
+    # from the body, which is what made the transition illegal — and then
+    # `mark_terminal_after_start` advances the citation to the reconciler's own
+    # sequence-1 record, which is by then the authoritative account.
+    #
+    # This case previously asserted that the sequence-0 CHECKSUM survived
+    # beside that advanced key, on the reasoning that sequence 1 folds the
+    # predecessor's facts in verbatim. It does — but folding FACTS does not
+    # make the two records' BYTES equal, and a checksum hashes bytes. So the
+    # assertion pinned a pair no consumer could validate: the registrar fetches
+    # the cited key and hashes exactly those bytes, and refused every
+    # materialized attempt. The triple now moves together, and this asserts it
+    # the way the registrar checks it.
+    cited_computed = body_checksum(store.get(key_after))
+    check("12b/the-citation-triple-is-coherent",
+          checksum_after is not None and checksum_after == cited_computed,
+          f"row cites checksum={checksum_after!r} for key {key_after!r}, "
+          f"whose bytes hash to {cited_computed!r}"
+          + ("" if checksum_after != written["checksum"]
+             else " — sequence 0's checksum, stranded beside a sequence-1 key"))
 
-    return attempt_id, key, written["checksum"]
+    return attempt_id, key, checksum_after
 
 
 class _SucceededBatch:

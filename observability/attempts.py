@@ -721,6 +721,7 @@ class AttemptWriter:
                                   error_category: str | None = None,
                                   terminal_record_key: str | None = None,
                                   terminal_record_sequence: int | None = None,
+                                  terminal_record_checksum: str | None = None,
                                   ) -> None:
         """Close an attempt fully — the RECONCILER's transition.
 
@@ -742,6 +743,18 @@ class AttemptWriter:
         is a representable, expected combination — the 2026-07-22 failure mode
         the taxonomy exists to expose. Callers pass what actually happened; this
         method never infers one field from the other.
+
+        The three `terminal_record_*` fields are ONE CITATION and move
+        together. They are deliberately NOT on the
+        `COALESCE(existing, new)` side of the rule above: the reconciler's
+        own record supersedes the application's, so a supplied value wins
+        (`COALESCE(new, existing)`), exactly as the key already did.
+        Omitting the checksum here is what left a row citing a sequence-1
+        key beside the sequence-0 checksum — a pair no reader can
+        validate, because folding the predecessor's FACTS in verbatim does
+        not make the two records' BYTES equal, and it is the bytes a
+        consumer checksums. The registrar verified that pair and refused
+        every materialized attempt (round-3 finding #1).
         """
         _validate_scheduler_state(scheduler_state)
         if scheduler_state is None:
@@ -761,7 +774,9 @@ class AttemptWriter:
             "  error_category = COALESCE(error_category, %s),"
             "  terminal_record_key = COALESCE(%s, terminal_record_key),"
             "  terminal_record_sequence ="
-            "    COALESCE(%s, terminal_record_sequence)"
+            "    COALESCE(%s, terminal_record_sequence),"
+            "  terminal_record_checksum ="
+            "    COALESCE(%s, terminal_record_checksum)"
             " WHERE attempt_id = %s"
         )
         result = self._execute(sql, [
@@ -769,12 +784,15 @@ class AttemptWriter:
             scheduler_observed_exit, scheduler_state,
             application_intended_exit, _value(rapid_outcome),
             _value(product_disposition), error_category,
-            terminal_record_key, terminal_record_sequence, attempt_id,
+            terminal_record_key, terminal_record_sequence,
+            terminal_record_checksum, attempt_id,
         ])
         _require_one_row(result, "mark_terminal_after_start", attempt_id)
         logger.info(
-            "attempt %s terminal after start (scheduler exit %s, state %s)",
-            attempt_id, scheduler_observed_exit, scheduler_state)
+            "attempt %s terminal after start (scheduler exit %s, state %s, "
+            "record %s seq %s)",
+            attempt_id, scheduler_observed_exit, scheduler_state,
+            terminal_record_key, terminal_record_sequence)
 
     def mark_terminal_without_start(self, attempt_id: int, ended_at: Any,
                                     scheduler_state: str,

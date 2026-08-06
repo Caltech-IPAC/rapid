@@ -51,6 +51,7 @@ from observability.attempts import (AttemptIdentity, AttemptWriter,
 from pipeline.reconciler.service import ReconcilerService
 from pipeline.runtime import termination
 from pipeline.runtime.boundaries import S3ObjectStore
+from pipeline.runtime.boundaries import checksum as body_checksum
 
 logging.basicConfig(level=logging.INFO,
                     format="%(asctime)s %(levelname)-8s %(message)s",
@@ -187,24 +188,39 @@ def main():
         # THE KEY THE MATERIALIZATION SUPPLIED is sequence 0's — the record it
         # read and validated — and that is what makes the transition legal
         # where the row and the body both held NULL. The row does NOT end
-        # citing it, and should not: `mark_terminal_after_start` runs
-        # immediately afterwards in the same closure and advances the citation
-        # to the reconciler's own sequence-1 closure record, which is by then
-        # the highest-sequence and therefore authoritative account. So the
-        # evidence that materialization happened at all is the checksum
-        # (unchanged by that later write, because sequence 1 folds the
-        # predecessor's facts in verbatim) plus the reconciler_materialized
-        # flag, which only the materialization branch sets.
+        # citing it: `mark_terminal_after_start` runs immediately afterwards in
+        # the same closure and advances the citation to the reconciler's own
+        # sequence-1 closure record, which is by then the highest-sequence and
+        # therefore authoritative account.
+        #
+        # THIS ASSERTION WAS WRONG BEFORE THE CODE WAS (round-3 finding #1).
+        # It previously expected the sequence-0 checksum to survive beside the
+        # advanced sequence-1 key, reasoning that sequence 1 folds the
+        # predecessor's facts in verbatim. It does — but folding FACTS does not
+        # make the two records' BYTES equal, and a checksum hashes bytes. The
+        # probe was therefore pinning an incoherent pair that the registrar,
+        # which fetches the cited key and hashes exactly those bytes, refused.
+        # What must hold is COHERENCE: the triple the row ends with must
+        # validate against itself. Asserted the way a consumer checks it.
         check("3/the-row-ends-citing-the-authoritative-record",
               key_after == termination.terminal_record_key(
                   prefix, RUN, logical_job_id, attempt_id, 1),
               f"row cites {key_after!r}")
 
-        check("4/materialization-supplied-the-checksum-it-computed",
-              checksum_after == written["checksum"],
-              f"row cites {checksum_after!r} "
-              f"(expected {written['checksum']!r}, sequence 0's — the value "
-              f"that was NULL on the row and absent from the body)")
+        try:
+            cited_bytes = store.get(key_after)
+            cited_computed = body_checksum(cited_bytes)
+        except Exception as exc:  # noqa: BLE001
+            check("4/the-citation-triple-is-coherent", False, str(exc)[:90])
+        else:
+            check("4/the-citation-triple-is-coherent",
+                  checksum_after is not None
+                  and checksum_after == cited_computed,
+                  f"row cites checksum {checksum_after!r} for key "
+                  f"{key_after!r}, whose bytes hash to {cited_computed!r}"
+                  + ("" if checksum_after != written["checksum"]
+                     else " — this is sequence 0's checksum, stranded beside "
+                          "the advanced sequence-1 key"))
 
         check("5/the-projection-is-marked-as-the-reconcilers",
               materialized is True,
