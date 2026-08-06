@@ -15,6 +15,7 @@ satisfy the import chain without asserting anything about the science
 those modules would do.
 """
 
+import importlib.util
 import sys
 import types
 import unittest
@@ -25,6 +26,16 @@ def _stub(name: str) -> types.ModuleType:
     sys.modules[name] = module
     return module
 
+
+def _module_or_stub(name):
+    """The module under `name` — the stub if one was installed, else the
+    real package, imported on demand. Written this way because the helper
+    no longer shadows installed packages (W8): indexing sys.modules would
+    raise KeyError for a real module nobody has imported yet."""
+    if name in sys.modules:
+        return sys.modules[name]
+    import importlib
+    return importlib.import_module(name)
 
 def _install_third_party_stubs() -> None:
     """See the identical helper in `pipeline.entrypoints.test.test_job` for
@@ -45,77 +56,91 @@ def _install_third_party_stubs() -> None:
         "photutils", "photutils.background", "photutils.segmentation",
         "injectionLightCurveModels",
     ]
+    # Stub only what is genuinely MISSING, judged by importability rather
+    # than by `sys.modules` membership (W8, 2026-08-06). In the image every
+    # name here except injectionLightCurveModels is real, and shadowing a
+    # real package with a bare ModuleType broke collection outright:
+    # `from astropy.wcs import WCS` found a stub with no WCS, and a stub at
+    # "numpy.ma" beneath the real numpy sent numpy 2.x's lazy __getattr__
+    # into unbounded recursion. Off a laptop with none of these installed
+    # the old form was fine, which is why it survived to be found here.
     for name in names:
-        if name not in sys.modules:
-            _stub(name)
+        if name in sys.modules:
+            continue
+        try:
+            if importlib.util.find_spec(name) is not None:
+                continue
+        except (ImportError, ValueError):
+            pass
+        _stub(name)
 
-    numpy = sys.modules["numpy"]
+    numpy = _module_or_stub("numpy")
     if not hasattr(numpy, "ma"):
-        numpy.ma = sys.modules["numpy.ma"]
+        numpy.ma = _module_or_stub("numpy.ma")
         numpy.array = lambda *a, **k: None
         numpy.nanmedian = lambda *a, **k: 0.0
         numpy.nanmin = lambda *a, **k: 0.0
         numpy.nanmax = lambda *a, **k: 0.0
         numpy.isnan = lambda *a, **k: False
 
-    astropy_io = sys.modules["astropy.io"]
+    astropy_io = _module_or_stub("astropy.io")
     if not hasattr(astropy_io, "fits"):
-        astropy_io.fits = sys.modules["astropy.io.fits"]
-        astropy_io.ascii = sys.modules["astropy.io.ascii"]
+        astropy_io.fits = _module_or_stub("astropy.io.fits")
+        astropy_io.ascii = _module_or_stub("astropy.io.ascii")
 
-    astropy_table = sys.modules["astropy.table"]
+    astropy_table = _module_or_stub("astropy.table")
     if not hasattr(astropy_table, "QTable"):
         astropy_table.QTable = object
         astropy_table.join = lambda *a, **k: None
         astropy_table.Table = object
 
-    astropy_wcs = sys.modules["astropy.wcs"]
+    astropy_wcs = _module_or_stub("astropy.wcs")
     if not hasattr(astropy_wcs, "WCS"):
         astropy_wcs.WCS = object
 
-    astropy_coordinates = sys.modules["astropy.coordinates"]
+    astropy_coordinates = _module_or_stub("astropy.coordinates")
     if not hasattr(astropy_coordinates, "SkyCoord"):
         astropy_coordinates.SkyCoord = object
 
-    scipy_ndimage = sys.modules["scipy.ndimage"]
+    scipy_ndimage = _module_or_stub("scipy.ndimage")
     if not hasattr(scipy_ndimage, "zoom"):
         scipy_ndimage.zoom = lambda *a, **k: None
         scipy_ndimage.gaussian_filter = lambda *a, **k: None
 
-    botocore_exceptions = sys.modules["botocore.exceptions"]
+    botocore_exceptions = _module_or_stub("botocore.exceptions")
     if not hasattr(botocore_exceptions, "ClientError"):
         botocore_exceptions.ClientError = Exception
 
-    psycopg2 = sys.modules["psycopg2"]
+    psycopg2 = _module_or_stub("psycopg2")
     if not hasattr(psycopg2, "sql"):
-        psycopg2.sql = sys.modules["psycopg2.sql"]
+        psycopg2.sql = _module_or_stub("psycopg2.sql")
 
-    galsim = sys.modules["galsim"]
+    galsim = _module_or_stub("galsim")
     if not hasattr(galsim, "wcs"):
-        galsim.wcs = sys.modules["galsim.wcs"]
-        galsim.roman = sys.modules["galsim.roman"]
+        galsim.wcs = _module_or_stub("galsim.wcs")
+        galsim.roman = _module_or_stub("galsim.roman")
 
-    photutils_background = sys.modules["photutils.background"]
+    photutils_background = _module_or_stub("photutils.background")
     if not hasattr(photutils_background, "Background2D"):
         photutils_background.Background2D = object
         photutils_background.MedianBackground = object
 
-    photutils_segmentation = sys.modules["photutils.segmentation"]
+    photutils_segmentation = _module_or_stub("photutils.segmentation")
     if not hasattr(photutils_segmentation, "detect_threshold"):
         photutils_segmentation.detect_threshold = lambda *a, **k: None
         photutils_segmentation.detect_sources = lambda *a, **k: None
         photutils_segmentation.deblend_sources = lambda *a, **k: None
         photutils_segmentation.SourceCatalog = object
 
-    injection_models = sys.modules["injectionLightCurveModels"]
+    injection_models = _module_or_stub("injectionLightCurveModels")
     if not hasattr(injection_models, "SinusoidalLightCurve"):
         injection_models.SinusoidalLightCurve = object
         injection_models.GaussianLightCurve = object
 
-    dateutil_tz = sys.modules["dateutil.tz"]
+    dateutil_tz = _module_or_stub("dateutil.tz")
     if not hasattr(dateutil_tz, "gettz"):
         dateutil_tz.gettz = lambda *a, **k: None
-    dateutil = sys.modules["dateutil"]
+    dateutil = _module_or_stub("dateutil")
     if not hasattr(dateutil, "tz"):
         dateutil.tz = dateutil_tz
 

@@ -30,6 +30,7 @@ import argparse
 import ast
 import inspect
 import os
+import importlib.util
 import sys
 import types
 import unittest
@@ -40,6 +41,16 @@ def _stub(name: str) -> types.ModuleType:
     sys.modules[name] = module
     return module
 
+
+def _module_or_stub(name):
+    """The module under `name` — the stub if one was installed, else the
+    real package, imported on demand. Written this way because the helper
+    no longer shadows installed packages (W8): indexing sys.modules would
+    raise KeyError for a real module nobody has imported yet."""
+    if name in sys.modules:
+        return sys.modules[name]
+    import importlib
+    return importlib.import_module(name)
 
 def _install_third_party_stubs() -> None:
     """See `test_sequences.py` for the full rationale."""
@@ -58,25 +69,39 @@ def _install_third_party_stubs() -> None:
         "photutils", "photutils.background", "photutils.segmentation",
         "injectionLightCurveModels",
     ]
+    # Stub only what is genuinely MISSING, judged by importability rather
+    # than by `sys.modules` membership (W8, 2026-08-06). In the image every
+    # name here except injectionLightCurveModels is real, and shadowing a
+    # real package with a bare ModuleType broke collection outright:
+    # `from astropy.wcs import WCS` found a stub with no WCS, and a stub at
+    # "numpy.ma" beneath the real numpy sent numpy 2.x's lazy __getattr__
+    # into unbounded recursion. Off a laptop with none of these installed
+    # the old form was fine, which is why it survived to be found here.
     for name in names:
-        if name not in sys.modules:
-            _stub(name)
+        if name in sys.modules:
+            continue
+        try:
+            if importlib.util.find_spec(name) is not None:
+                continue
+        except (ImportError, ValueError):
+            pass
+        _stub(name)
 
-    numpy = sys.modules["numpy"]
+    numpy = _module_or_stub("numpy")
     if not hasattr(numpy, "ma"):
-        numpy.ma = sys.modules["numpy.ma"]
+        numpy.ma = _module_or_stub("numpy.ma")
         numpy.array = lambda *a, **k: None
         numpy.nanmedian = lambda *a, **k: 0.0
         numpy.nanmin = lambda *a, **k: 0.0
         numpy.nanmax = lambda *a, **k: 0.0
         numpy.isnan = lambda *a, **k: False
 
-    astropy_io = sys.modules["astropy.io"]
+    astropy_io = _module_or_stub("astropy.io")
     if not hasattr(astropy_io, "fits"):
-        astropy_io.fits = sys.modules["astropy.io.fits"]
-        astropy_io.ascii = sys.modules["astropy.io.ascii"]
+        astropy_io.fits = _module_or_stub("astropy.io.fits")
+        astropy_io.ascii = _module_or_stub("astropy.io.ascii")
 
-    astropy_table = sys.modules["astropy.table"]
+    astropy_table = _module_or_stub("astropy.table")
     if not hasattr(astropy_table, "QTable"):
         astropy_table.QTable = object
         astropy_table.Table = object

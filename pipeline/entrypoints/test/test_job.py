@@ -22,6 +22,7 @@ import boundary crossable rather than mocking call-by-call.
 """
 
 import io
+import importlib.util
 import sys
 import types
 import unittest
@@ -61,79 +62,74 @@ def _install_third_party_stubs() -> None:
         "photutils", "photutils.background", "photutils.segmentation",
         "injectionLightCurveModels",
     ]
+    # Stub only what is genuinely MISSING, judged by importability rather
+    # than by `sys.modules` membership. The distinction is the whole bug
+    # (W8, 2026-08-06): not-yet-imported is not the same as not-installed,
+    # and in the image every name here except injectionLightCurveModels is
+    # real. Shadowing a real package with a bare ModuleType broke imports
+    # two ways — `from astropy.wcs import WCS` found a stub with no WCS,
+    # and a stub at "numpy.ma" beneath the real numpy sent numpy 2.x's
+    # lazy __getattr__ into unbounded recursion. Both surfaced at
+    # COLLECTION time, so the suites errored out whole rather than failing
+    # a test. Off a laptop with none of these installed the old code was
+    # fine, which is exactly why it survived to be found here.
+    stubbed: set[str] = set()
     for name in names:
-        if name not in sys.modules:
-            _stub(name)
+        if name in sys.modules:
+            continue
+        try:
+            if importlib.util.find_spec(name) is not None:
+                continue        # real and importable — leave it alone
+        except (ImportError, ValueError):
+            pass                # unimportable: a stub is what it needs
+        _stub(name)
+        stubbed.add(name)
 
-    numpy = sys.modules["numpy"]
-    if not hasattr(numpy, "ma"):
-        numpy.ma = sys.modules["numpy.ma"]
-        numpy.array = lambda *a, **k: None
-        numpy.nanmedian = lambda *a, **k: 0.0
-        numpy.nanmin = lambda *a, **k: 0.0
-        numpy.nanmax = lambda *a, **k: 0.0
-        numpy.isnan = lambda *a, **k: False
+    def _decorate(name, **attributes):
+        """Attach stub attributes, but only to a module we stubbed."""
+        if name not in stubbed:
+            return
+        module = sys.modules[name]
+        for attribute, value in attributes.items():
+            setattr(module, attribute, value)
 
-    astropy_io = sys.modules["astropy.io"]
-    if not hasattr(astropy_io, "fits"):
-        astropy_io.fits = sys.modules["astropy.io.fits"]
-        astropy_io.ascii = sys.modules["astropy.io.ascii"]
+    _decorate("numpy",
+              ma=sys.modules["numpy.ma"] if "numpy.ma" in stubbed else None,
+              array=lambda *a, **k: None,
+              nanmedian=lambda *a, **k: 0.0,
+              nanmin=lambda *a, **k: 0.0,
+              nanmax=lambda *a, **k: 0.0,
+              isnan=lambda *a, **k: False)
+    if "astropy.io" in stubbed:
+        _decorate("astropy.io",
+                  fits=sys.modules["astropy.io.fits"],
+                  ascii=sys.modules["astropy.io.ascii"])
+    _decorate("astropy.table", QTable=object,
+              join=lambda *a, **k: None, Table=object)
+    _decorate("astropy.wcs", WCS=object)
+    _decorate("astropy.coordinates", SkyCoord=object)
+    _decorate("scipy.ndimage",
+              zoom=lambda *a, **k: None,
+              gaussian_filter=lambda *a, **k: None)
 
-    astropy_table = sys.modules["astropy.table"]
-    if not hasattr(astropy_table, "QTable"):
-        astropy_table.QTable = object
-        astropy_table.join = lambda *a, **k: None
-        astropy_table.Table = object
-
-    astropy_wcs = sys.modules["astropy.wcs"]
-    if not hasattr(astropy_wcs, "WCS"):
-        astropy_wcs.WCS = object
-
-    astropy_coordinates = sys.modules["astropy.coordinates"]
-    if not hasattr(astropy_coordinates, "SkyCoord"):
-        astropy_coordinates.SkyCoord = object
-
-    scipy_ndimage = sys.modules["scipy.ndimage"]
-    if not hasattr(scipy_ndimage, "zoom"):
-        scipy_ndimage.zoom = lambda *a, **k: None
-        scipy_ndimage.gaussian_filter = lambda *a, **k: None
-
-    botocore_exceptions = sys.modules["botocore.exceptions"]
-    if not hasattr(botocore_exceptions, "ClientError"):
-        botocore_exceptions.ClientError = Exception
-
-    psycopg2 = sys.modules["psycopg2"]
-    if not hasattr(psycopg2, "sql"):
-        psycopg2.sql = sys.modules["psycopg2.sql"]
-
-    galsim = sys.modules["galsim"]
-    if not hasattr(galsim, "wcs"):
-        galsim.wcs = sys.modules["galsim.wcs"]
-        galsim.roman = sys.modules["galsim.roman"]
-
-    photutils_background = sys.modules["photutils.background"]
-    if not hasattr(photutils_background, "Background2D"):
-        photutils_background.Background2D = object
-        photutils_background.MedianBackground = object
-
-    photutils_segmentation = sys.modules["photutils.segmentation"]
-    if not hasattr(photutils_segmentation, "detect_threshold"):
-        photutils_segmentation.detect_threshold = lambda *a, **k: None
-        photutils_segmentation.detect_sources = lambda *a, **k: None
-        photutils_segmentation.deblend_sources = lambda *a, **k: None
-        photutils_segmentation.SourceCatalog = object
-
-    injection_models = sys.modules["injectionLightCurveModels"]
-    if not hasattr(injection_models, "SinusoidalLightCurve"):
-        injection_models.SinusoidalLightCurve = object
-        injection_models.GaussianLightCurve = object
-
-    dateutil_tz = sys.modules["dateutil.tz"]
-    if not hasattr(dateutil_tz, "gettz"):
-        dateutil_tz.gettz = lambda *a, **k: None
-    dateutil = sys.modules["dateutil"]
-    if not hasattr(dateutil, "tz"):
-        dateutil.tz = dateutil_tz
+    _decorate("botocore.exceptions", ClientError=Exception)
+    if "psycopg2.sql" in stubbed:
+        _decorate("psycopg2", sql=sys.modules["psycopg2.sql"])
+    if "galsim.wcs" in stubbed:
+        _decorate("galsim", wcs=sys.modules["galsim.wcs"],
+                  roman=sys.modules["galsim.roman"])
+    _decorate("photutils.background",
+              Background2D=object, MedianBackground=object)
+    _decorate("photutils.segmentation",
+              detect_threshold=lambda *a, **k: None,
+              detect_sources=lambda *a, **k: None,
+              deblend_sources=lambda *a, **k: None,
+              SourceCatalog=object)
+    _decorate("injectionLightCurveModels",
+              SinusoidalLightCurve=object, GaussianLightCurve=object)
+    _decorate("dateutil.tz", gettz=lambda *a, **k: None)
+    if "dateutil.tz" in stubbed:
+        _decorate("dateutil", tz=sys.modules["dateutil.tz"])
 
 
 _install_third_party_stubs()
