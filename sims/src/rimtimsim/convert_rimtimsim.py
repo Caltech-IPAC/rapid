@@ -24,6 +24,7 @@ import boto3
 import re
 
 import modules.utils.rapid_pipeline_subs as util
+from pipeline.runtime.process import run_tool
 
 
 bucket_name_input = "rimtimsim-251210"
@@ -67,7 +68,7 @@ for input_fits_file in input_fits_files:
 
     s3_object_input_fits_file = "s3://" + bucket_name_input + "/" + input_fits_file
     download_cmd = ['aws','s3','cp',s3_object_input_fits_file,input_fits_file]
-    exitcode_from_download_cmd = util.execute_command(download_cmd)
+    run_tool(download_cmd)
 
 
     # Create output FITS filename for working directory.
@@ -247,7 +248,7 @@ for input_fits_file in input_fits_files:
     # Gzip the output FITS file.
 
     gunzip_cmd = ['gzip', output_fits_file]
-    exitcode_from_gunzip = util.execute_command(gunzip_cmd)
+    run_tool(gunzip_cmd)
 
 
     # Upload gzipped file to output S3 bucket.
@@ -266,10 +267,10 @@ for input_fits_file in input_fits_files:
     # Clean up work directory.
 
     rm_cmd = ['rm','-f',input_fits_file]
-    exitcode_from_rm = util.execute_command(rm_cmd)
+    run_tool(rm_cmd)
 
     rm_cmd = ['rm','-f',output_fits_file]
-    exitcode_from_rm = util.execute_command(rm_cmd)
+    run_tool(rm_cmd)
 
 
 # Termination.

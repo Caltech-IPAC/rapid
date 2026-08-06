@@ -1,8 +1,9 @@
 import boto3
 import os
 from astropy.io import fits
-import subprocess
 import re
+
+from pipeline.runtime.process import run_tool
 
 swname = "awsBatchSubmitJobs_CompressTroxelFitsFiles.py"
 swvers = "1.0"
@@ -55,31 +56,11 @@ job_name_base = "rapid_compress_job"
 
 
 
-def execute_command(cmd,no_check=False):
-    print("cmd = ",cmd)
-    p = subprocess.Popen(cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
-    for line in p.stdout.readlines():
-        print("--->",line)
-        strvalue = line.decode('utf-8').strip()
-        print(strvalue)
-    retval = p.wait()
-    print("retval =",retval)
-
-    if not no_check:
-        if (retval != 0):
-            print("*** Error from execute_command; quitting...")
-            exit(1)
-
-    return retval
-
-
 def submit_jobs():
 
-    cmd = "mkdir " + subdir_input
-    execute_command(cmd)
+    run_tool(['mkdir', subdir_input])
 
-    cmd = "mkdir " + subdir_output
-    execute_command(cmd)
+    run_tool(['mkdir', subdir_output])
 
     s3 = boto3.resource('s3')
 

@@ -1,9 +1,7 @@
 import boto3
 import os
-import time
 import numpy as np
 import re
-import subprocess
 import healpy as hp
 from astropy.io import fits
 from astropy.wcs import WCS
@@ -27,39 +25,19 @@ nside9 = 2**level9
 roman_tessellation_db = sqlite.RomanTessellationNSIDE512()
 
 
-def execute_command(cmd,no_check=False):
+def download_s3_file(bucket_name,key,local_path):
 
-    max_ntries = 5
+    '''
+    Download a single object from S3 to a local path, raising on failure.
 
-    ntries = 0
-    while ntries < max_ntries:
+    Matches the helper in db_register_socsim_files.py: a client made per call
+    rather than a module-level one, since boto3 clients are not safe to share
+    across processes if this loop is ever parallelized the way that file's is.
+    '''
 
-        print("ntries = ",ntries)
-        print("Executing cmd = ",cmd)
+    s3_client = boto3.client('s3')
 
-        p = subprocess.Popen(cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
-        for line in p.stdout.readlines():
-            print("--->",line)
-            strvalue = line.decode('utf-8').strip()
-            print(strvalue)
-        retval = p.wait()
-        print("retval =",retval)
-
-        if (retval == 0):
-            break
-        elif no_check:
-            break
-
-        print("Sleeping 30 seconds, then try again (up to {} tries)...".format(max_ntries))
-        time.sleep(30)
-        ntries += 1
-
-    if not no_check:
-        if (retval != 0):
-            print("*** Error from execute_command; quitting...")
-            exit(1)
-
-    return retval
+    s3_client.download_file(bucket_name,key,local_path)
 
 
 def get_keyword_value(header,key):
@@ -542,13 +520,16 @@ def register_files():
 
         print("input_fits_file =",input_fits_file)
 
-        # Download file from input S3 bucket to local machine.
+        # Download file from input S3 bucket to local machine, straight to
+        # subdir_work.  The previous "aws s3 cp" downloaded to the bare
+        # filename (the process's cwd) while get_fits_header/compute_checksum
+        # read subdir_work + "/" + file, i.e. /work/ -- so this download
+        # could never be found by what read it, CLI-on-PATH or not.  Going
+        # through boto3 fixes both the missing-CLI risk and the destination
+        # mismatch in one move, matching db_register_socsim_files.py.
 
         s3_object_input_fits_file = "s3://" + bucket_name_input + "/" + input_fits_file
-        download_cmd = ['aws','s3','cp',s3_object_input_fits_file,input_fits_file]
-        exitcode_from_download_cmd = util.execute_command(download_cmd)
-
-        print(f"exitcode_from_download_cmd = {exitcode_from_download_cmd}")
+        download_s3_file(bucket_name_input,input_fits_file,subdir_work + "/" + input_fits_file)
 
 
         # Register metadata in database.
@@ -565,10 +546,13 @@ def register_files():
         compute_and_register_l2filemeta(dbh,header,wcs,rid,fid)
 
 
-        # Clean up work directory.
+        # Clean up work directory.  Best-effort: a leftover file here is not
+        # a registration failure, so it is not treated as one.
 
-        rm_cmd = ['rm','-f',subdir_work + "/" + input_fits_file]
-        exitcode_from_rm = util.execute_command(rm_cmd)
+        try:
+            os.remove(subdir_work + "/" + input_fits_file)
+        except OSError as e:
+            print(f"*** Warning: Could not remove {input_fits_file}: {e}")
 
         nfiles += 1
 

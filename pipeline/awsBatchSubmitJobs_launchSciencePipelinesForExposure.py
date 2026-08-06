@@ -6,7 +6,7 @@ import time
 to_zone = tz.gettz('America/Los_Angeles')
 
 import database.modules.utils.rapid_db as db
-import modules.utils.rapid_pipeline_subs as util
+from pipeline.runtime.process import run_tool
 
 swname = "awsBatchSubmitJobs_launchSciencePipelinesForExposure.py"
 swvers = "1.0"
@@ -88,7 +88,7 @@ if __name__ == '__main__':
         launch_cmd = [python_cmd,
                       launch_single_pipeline_instance_code]
 
-        exitcode_from_launch_cmd = util.execute_command(launch_cmd)
+        run_tool(launch_cmd)
 
 
     # Close database connection.

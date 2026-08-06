@@ -16,8 +16,9 @@ import time
 
 to_zone = tz.gettz('America/Los_Angeles')
 
-import modules.utils.rapid_pipeline_subs as util
 import database.modules.utils.rapid_db as db
+from pipeline.runtime.process import run_tool
+from pipeline.runtime.errors import ToolError
 
 
 swname = "virtualPipelineOperator.py"
@@ -422,10 +423,10 @@ if __name__ == '__main__':
         launch_reference_image_pipelines_cmd = [python_cmd,
                                                 launch_reference_image_pipelines_code]
 
-        exitcode_from_launch_reference_image_pipelines_cmd = util.execute_command(launch_reference_image_pipelines_cmd,fname_out)
-
-        if exitcode_from_launch_reference_image_pipelines_cmd >= 64:
-            print(f"*** Error: {launch_reference_image_pipelines_cmd} returned exit code = {exitcode_from_launch_reference_image_pipelines_cmd}; quitting...")
+        try:
+            run_tool(launch_reference_image_pipelines_cmd,capture_path=fname_out)
+        except ToolError as exc:
+            print(f"*** Error: {launch_reference_image_pipelines_cmd} failed ({exc}); quitting...")
             dbh.close()
             exit(64)
 
@@ -472,10 +473,10 @@ if __name__ == '__main__':
                                                       register_reference_image_pipeline_jobs_code,
                                                       proc_date]
 
-        exitcode_from_register_reference_image_pipeline_jobs_cmd = util.execute_command(register_reference_image_pipeline_jobs_cmd,fname_out)
-
-        if exitcode_from_register_reference_image_pipeline_jobs_cmd >= 64:
-            print(f"*** Error: {register_reference_image_pipeline_jobs_cmd} returned exit code = {exitcode_from_register_reference_image_pipeline_jobs_cmd}; quitting...")
+        try:
+            run_tool(register_reference_image_pipeline_jobs_cmd,capture_path=fname_out)
+        except ToolError as exc:
+            print(f"*** Error: {register_reference_image_pipeline_jobs_cmd} failed ({exc}); quitting...")
             dbh.close()
             exit(64)
 
@@ -532,10 +533,10 @@ if __name__ == '__main__':
             launch_science_pipelines_cmd = [python_cmd,
                                             launch_science_pipelines_code]
 
-            exitcode_from_launch_science_pipelines_cmd = util.execute_command(launch_science_pipelines_cmd,fname_out)
-
-            if exitcode_from_launch_science_pipelines_cmd >= 64:
-                print(f"*** Error: {launch_science_pipelines_cmd} returned exit code = {exitcode_from_launch_science_pipelines_cmd}; quitting...")
+            try:
+                run_tool(launch_science_pipelines_cmd,capture_path=fname_out)
+            except ToolError as exc:
+                print(f"*** Error: {launch_science_pipelines_cmd} failed ({exc}); quitting...")
                 dbh.close()
                 exit(64)
 
@@ -578,10 +579,10 @@ if __name__ == '__main__':
                                                   register_science_pipeline_jobs_code,
                                                   proc_date]
 
-            exitcode_from_register_science_pipeline_jobs_cmd = util.execute_command(register_science_pipeline_jobs_cmd,fname_out)
-
-            if exitcode_from_register_science_pipeline_jobs_cmd >= 64:
-                print(f"*** Error: {register_science_pipeline_jobs_cmd} returned exit code = {exitcode_from_register_science_pipeline_jobs_cmd}; quitting...")
+            try:
+                run_tool(register_science_pipeline_jobs_cmd,capture_path=fname_out)
+            except ToolError as exc:
+                print(f"*** Error: {register_science_pipeline_jobs_cmd} failed ({exc}); quitting...")
                 dbh.close()
                 exit(64)
 
@@ -610,10 +611,10 @@ if __name__ == '__main__':
         launch_postproc_pipelines_cmd = [python_cmd,
                                         launch_postproc_pipelines_code]
 
-        exitcode_from_launch_postproc_pipelines_cmd = util.execute_command(launch_postproc_pipelines_cmd,fname_out)
-
-        if exitcode_from_launch_postproc_pipelines_cmd >= 64:
-            print(f"*** Error: {launch_postproc_pipelines_cmd} returned exit code = {exitcode_from_launch_postproc_pipelines_cmd}; quitting...")
+        try:
+            run_tool(launch_postproc_pipelines_cmd,capture_path=fname_out)
+        except ToolError as exc:
+            print(f"*** Error: {launch_postproc_pipelines_cmd} failed ({exc}); quitting...")
             dbh.close()
             exit(64)
 
@@ -652,10 +653,10 @@ if __name__ == '__main__':
                                               register_postproc_pipeline_jobs_code,
                                               proc_date]
 
-        exitcode_from_register_postproc_pipeline_jobs_cmd = util.execute_command(register_postproc_pipeline_jobs_cmd,fname_out)
-
-        if exitcode_from_register_postproc_pipeline_jobs_cmd >= 64:
-            print(f"*** Error: {register_postproc_pipeline_jobs_cmd} returned exit code = {exitcode_from_register_postproc_pipeline_jobs_cmd}; quitting...")
+        try:
+            run_tool(register_postproc_pipeline_jobs_cmd,capture_path=fname_out)
+        except ToolError as exc:
+            print(f"*** Error: {register_postproc_pipeline_jobs_cmd} failed ({exc}); quitting...")
             dbh.close()
             exit(64)
 
@@ -676,10 +677,10 @@ if __name__ == '__main__':
         load_psfcat_into_db_sources_cmd = [python_cmd,
                                            load_psfcat_into_db_sources_code]
 
-        exitcode_from_load_psfcat_into_db_sources_cmd = util.execute_command(load_psfcat_into_db_sources_cmd,fname_out)
-
-        if exitcode_from_load_psfcat_into_db_sources_cmd >= 64:
-            print(f"*** Error: {load_psfcat_into_db_sources_cmd} returned exit code = {exitcode_from_load_psfcat_into_db_sources_cmd}; quitting...")
+        try:
+            run_tool(load_psfcat_into_db_sources_cmd,capture_path=fname_out)
+        except ToolError as exc:
+            print(f"*** Error: {load_psfcat_into_db_sources_cmd} failed ({exc}); quitting...")
             dbh.close()
             exit(64)
 
@@ -700,10 +701,10 @@ if __name__ == '__main__':
         crossmatch_sources_cmd = [python_cmd,
                                   crossmatch_sources_code]
 
-        exitcode_from_crossmatch_sources_cmd = util.execute_command(crossmatch_sources_cmd,fname_out)
-
-        if exitcode_from_crossmatch_sources_cmd >= 64:
-            print(f"*** Error: {crossmatch_sources_cmd} returned exit code = {exitcode_from_crossmatch_sources_cmd}; quitting...")
+        try:
+            run_tool(crossmatch_sources_cmd,capture_path=fname_out)
+        except ToolError as exc:
+            print(f"*** Error: {crossmatch_sources_cmd} failed ({exc}); quitting...")
             dbh.close()
             exit(64)
 
@@ -724,10 +725,10 @@ if __name__ == '__main__':
         compute_statistics_for_astroobjects_cmd = [python_cmd,
                                                    compute_statistics_for_astroobjects_code]
 
-        exitcode_from_compute_statistics_for_astroobjects_cmd = util.execute_command(compute_statistics_for_astroobjects_cmd,fname_out)
-
-        if exitcode_from_compute_statistics_for_astroobjects_cmd >= 64:
-            print(f"*** Error: {compute_statistics_for_astroobjects_cmd} returned exit code = {exitcode_from_compute_statistics_for_astroobjects_cmd}; quitting...")
+        try:
+            run_tool(compute_statistics_for_astroobjects_cmd,capture_path=fname_out)
+        except ToolError as exc:
+            print(f"*** Error: {compute_statistics_for_astroobjects_cmd} failed ({exc}); quitting...")
             dbh.close()
             exit(64)
 
@@ -746,10 +747,10 @@ if __name__ == '__main__':
         prune_notbest_merges_cmd = [python_cmd,
                                     prune_notbest_merges_code]
 
-        exitcode_from_prune_notbest_merges_cmd = util.execute_command(prune_notbest_merges_cmd,fname_out)
-
-        if exitcode_from_prune_notbest_merges_cmd >= 64:
-            print(f"*** Error: {prune_notbest_merges_cmd} returned exit code = {exitcode_from_prune_notbest_merges_cmd}; quitting...")
+        try:
+            run_tool(prune_notbest_merges_cmd,capture_path=fname_out)
+        except ToolError as exc:
+            print(f"*** Error: {prune_notbest_merges_cmd} failed ({exc}); quitting...")
             dbh.close()
             exit(64)
 

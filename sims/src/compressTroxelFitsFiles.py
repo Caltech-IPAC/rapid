@@ -2,31 +2,14 @@ import boto3
 import os
 import numpy as np
 from astropy.io import fits
-import subprocess
 import re
 
-
-def execute_command(cmd,no_check=False):
-    print("cmd = ",cmd)
-    p = subprocess.Popen(cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
-    for line in p.stdout.readlines():
-        print("--->",line)
-        strvalue = line.decode('utf-8').strip()
-        print(strvalue)
-    retval = p.wait()
-    print("retval =",retval)
-
-    if not no_check:
-        if (retval != 0):
-            print("*** Error from execute_command; quitting...")
-            exit(1)
-
-    return retval
+from pipeline.runtime.process import run_tool
+from pipeline.runtime.errors import ToolError
 
 bucket_name = 'sims-sn-h158'
 
-cmd = "mkdir new"
-execute_command(cmd)
+run_tool(['mkdir', 'new'])
 
 os.chdir('new')
 print("CWD =",os.getcwd())
@@ -74,21 +57,20 @@ for my_bucket_object in my_bucket.objects.all():
     # Check if lite FITS file already exists.
 
     file_to_check = "s3://" + bucket_name + "/" + subdir_only + "_lite/" + gzfname_output
-    cmd = "aws s3 ls " + file_to_check
-    retval = execute_command(cmd,no_check=True)
-
-    if (retval == 0):
+    try:
+        run_tool(['aws', 's3', 'ls', file_to_check])
+    except ToolError:
+        pass
+    else:
         print("*** Warning: File exists in S3 bucket ({}); skipping...".format(file_to_check))
         continue
 
     nfiles += 1
 
 
-    cmd = "aws s3 cp s3://" + bucket_name + "/" + subdir_only + "/" + only_gzfname_input + " ."
-    execute_command(cmd)
+    run_tool(['aws', 's3', 'cp', "s3://" + bucket_name + "/" + subdir_only + "/" + only_gzfname_input, '.'])
 
-    cmd = "gunzip " + only_gzfname_input
-    execute_command(cmd)
+    run_tool(['gunzip', only_gzfname_input])
 
 
     print("Reducing size of FITS file...")
@@ -113,14 +95,11 @@ for my_bucket_object in my_bucket.objects.all():
     hdu.writeto(fname_output,overwrite=True,checksum=True)
 
 
-    cmd = "rm " + fname_input
-    execute_command(cmd)
+    run_tool(['rm', fname_input])
 
-    cmd = "gzip " + fname_output
-    execute_command(cmd)
+    run_tool(['gzip', fname_output])
 
-    cmd = "aws s3 cp " + gzfname_output + " s3://" + bucket_name + "/" + subdir_only + "_lite/" + gzfname_output
-    execute_command(cmd)
+    run_tool(['aws', 's3', 'cp', gzfname_output,
+              "s3://" + bucket_name + "/" + subdir_only + "_lite/" + gzfname_output])
 
-    cmd = "rm " + gzfname_output
-    execute_command(cmd)
+    run_tool(['rm', gzfname_output])

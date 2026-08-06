@@ -12,6 +12,7 @@ to_zone = tz.gettz('America/Los_Angeles')
 import modules.utils.rapid_pipeline_subs as util
 import database.modules.utils.rapid_db as db
 import database.modules.utils.roman_tessellation_db as sqlite
+from pipeline.runtime.process import run_tool
 
 swname = "generateInjectionCatalogsForSims.py"
 swvers = "1.0"
@@ -188,7 +189,7 @@ if __name__ == '__main__':
                                               generate_injection_catalog_code,
                                               str(rtid)]
 
-            exitcode_from_generate_injection_catalog_cmd = util.execute_command(generate_injection_catalog_cmd)
+            run_tool(generate_injection_catalog_cmd)
 
 
             # Upload fake-source injection catalog to product S3 bucket.

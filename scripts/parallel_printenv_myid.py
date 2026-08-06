@@ -7,7 +7,7 @@ Companion code is rapid/scripts/printenv_myid.py
 import os
 from concurrent.futures import ProcessPoolExecutor, as_completed
 
-import modules.utils.rapid_pipeline_subs as util
+from pipeline.runtime.process import run_tool
 
 
 code_name = "asdf"
@@ -39,7 +39,7 @@ def run_script(code_name,myid):
     launch_cmd = [python_cmd,
                   launch_single_instance_code]
 
-    exitcode_from_launch_cmd = util.execute_command(launch_cmd)
+    run_tool(launch_cmd)
 
 
 def launch_parallel_processes(code_name,myids, num_cores=None):

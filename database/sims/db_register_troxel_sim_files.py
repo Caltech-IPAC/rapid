@@ -1,10 +1,8 @@
 import boto3
 import os
-import time
 import numpy as np
 from astropy.io import fits
 import re
-import subprocess
 import healpy as hp
 from astropy.io import fits
 from astropy.wcs import WCS
@@ -12,6 +10,8 @@ from astropy.wcs import WCS
 import modules.utils.rapid_pipeline_subs as util
 import database.modules.utils.rapid_db as db
 import database.modules.utils.roman_tessellation_db as sqlite
+from pipeline.runtime.process import run_tool, run_shell
+from pipeline.runtime.errors import ToolError
 
 
 # Input FILTERSTRING, such as 'J129' (needs to be uppercase as in the *.fits.gz filenames).
@@ -37,41 +37,6 @@ level9 = 9
 nside9 = 2**level9
 
 roman_tessellation_db = sqlite.RomanTessellationNSIDE512()
-
-
-def execute_command(cmd,no_check=False):
-
-    max_ntries = 5
-
-    ntries = 0
-    while ntries < max_ntries:
-
-        print("ntries = ",ntries)
-        print("Executing cmd = ",cmd)
-
-        p = subprocess.Popen(cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
-        for line in p.stdout.readlines():
-            print("--->",line)
-            strvalue = line.decode('utf-8').strip()
-            print(strvalue)
-        retval = p.wait()
-        print("retval =",retval)
-
-        if (retval == 0):
-            break
-        elif no_check:
-            break
-
-        print("Sleeping 30 seconds, then try again (up to {} tries)...".format(max_ntries))
-        time.sleep(30)
-        ntries += 1
-
-    if not no_check:
-        if (retval != 0):
-            print("*** Error from execute_command; quitting...")
-            exit(1)
-
-    return retval
 
 
 def get_keyword_value(header,key):
@@ -515,9 +480,10 @@ def register_files():
             files_input[subdir_only] = [only_gzfname_input]
 
 
-    cmd = "mkdir " + subdir_work
-
-    execute_command(cmd,no_check=True)
+    try:
+        run_tool(['mkdir', subdir_work])
+    except ToolError:
+        pass  # Best-effort: an already-existing work dir is not a failure.
 
 
     # Open database connection.
@@ -532,15 +498,17 @@ def register_files():
 
         print("subdir_only =",subdir_only)
 
-        # Check disk space.
+        # Check disk space.  Diagnostic only: `df` failing is never fatal.
 
-        cmd = "df -h " + subdir_work
-        execute_command(cmd,no_check=True)
+        try:
+            run_tool(['df', '-h', subdir_work])
+        except ToolError:
+            pass
 
         # Copy 18 input files from input S3 bucket to local machine.
 
-        cmd = "aws s3 cp --quiet --recursive s3://" + bucket_name_input + "/" + subdir_only + " " + subdir_work
-        execute_command(cmd)
+        run_tool(['aws', 's3', 'cp', '--quiet', '--recursive',
+                  "s3://" + bucket_name_input + "/" + subdir_only, subdir_work])
 
 
         # Loop over 18 input files in given exposure.
@@ -564,10 +532,9 @@ def register_files():
             compute_and_register_l2filemeta(dbh,header,wcs,rid,fid)
 
 
-        # Clean up work directory.
+        # Clean up work directory.  Glob (*fits.gz) needs the shell to expand it.
 
-        cmd = "rm -rf " + subdir_work + "/*fits.gz"
-        execute_command(cmd)
+        run_shell("rm -rf " + subdir_work + "/*fits.gz")
 
         nfiles += 1
 

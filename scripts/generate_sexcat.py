@@ -2,6 +2,7 @@ import os
 import configparser
 
 import modules.utils.rapid_pipeline_subs as util
+from pipeline.runtime.process import run_tool
 
 
 swname = "generate_sexcat.py"
@@ -138,7 +139,7 @@ if __name__ == '__main__':
     sextractor_diffimage_dict["sextractor_STARNNW_NAME".lower()] = cfg_path + "/rapidSexDiffImageStarGalaxyClassifier.nnw"
     sextractor_diffimage_dict["sextractor_CATALOG_NAME".lower()] = filename_diffimage_sextractor_catalog
     sextractor_cmd = util.build_sextractor_command_line_args(sextractor_diffimage_dict)
-    exitcode_from_sextractor = util.execute_command(sextractor_cmd)
+    run_tool(sextractor_cmd)
 
 
     # Parse SExtractor catalog for positive ZOGY masked difference image.

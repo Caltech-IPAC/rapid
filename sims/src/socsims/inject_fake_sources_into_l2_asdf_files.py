@@ -13,7 +13,6 @@ export CRDS_SERVER_URL=https://roman-crds.stsci.edu
 import os
 import boto3
 import re
-import subprocess
 import numpy as np
 import configparser
 import asdf
@@ -30,6 +29,8 @@ to_zone = tz.gettz('America/Los_Angeles')
 import modules.utils.rapid_pipeline_subs as util
 import modules.fake_src.rapid_l2_injections as fksrc
 import database.modules.utils.roman_tessellation_db as sqlite
+from pipeline.runtime.process import run_tool, run_shell
+from pipeline.runtime.errors import ToolError
 
 
 # Define code name and version.
@@ -155,7 +156,9 @@ def run_single_core_job(asdf_files,index_thread):
 
 
     '''
-    Convert a single ASDF file into an ASDF file with injected fake variables.
+    Convert a single ASDF file into an ASDF file with injected fake variables.  Returns
+    (n_ok,n_failed) counts so that a file which raises partway through cannot be logged
+    and then forgotten.
     '''
 
 
@@ -184,6 +187,13 @@ def run_single_core_job(asdf_files,index_thread):
     fh.write(f"\nStart of run_single_core_job: index_thread={index_thread}\n")
 
 
+    # Per-thread outcome counters.  These are returned to the parent process so
+    # that a run which converts nothing due to per-file failures cannot report success.
+
+    n_ok = 0
+    n_failed = 0
+
+
     # Loop over input ASDF files.
 
     for index_asdf_file in range(n_asdf_files):
@@ -200,78 +210,104 @@ def run_single_core_job(asdf_files,index_thread):
             continue
 
 
-        # Download file from input S3 bucket to local machine.
+        # A per-file failure is caught and counted here rather than allowed to
+        # abort the thread's remaining files.
 
-        s3_object_input_asdf_file = "s3://" + bucket_name_input + "/" + input_asdf_file
-        download_cmd = ['aws','s3','cp',s3_object_input_asdf_file,input_asdf_file]
-        exitcode_from_download_cmd = util.execute_command(download_cmd)
-
-
-        # Create output ASDF filename for working directory.
-
-        output_asdf_file = input_asdf_file.replace(".asdf","_lite.asdf")
+        try:
 
 
-        # Correct gWCS.  Inject fake variable sources.  Output local L2 ASDF file.
+            # Download file from input S3 bucket to local machine.
 
-        correct_gwcs_inject_fake_variable_sources_output_asdf_file(
-            fh,
-            input_asdf_file,
-            output_asdf_file
-            )
+            s3_object_input_asdf_file = "s3://" + bucket_name_input + "/" + input_asdf_file
+            download_cmd = ['aws','s3','cp',s3_object_input_asdf_file,input_asdf_file]
+            run_tool(download_cmd)
 
 
-        # Gzip the output ASDF file.
+            # Create output ASDF filename for working directory.
 
-        gunzip_cmd = ['gzip', output_asdf_file]
-        exitcode_from_gunzip = util.execute_command(gunzip_cmd)
-
-
-        # Upload gzipped file to output S3 bucket.
-
-        gzipped_output_asdf_file = output_asdf_file + ".gz"
-
-        s3_object_name = gzipped_output_asdf_file
-
-        filenames = [gzipped_output_asdf_file]
-
-        objectnames = [s3_object_name]
-
-        util.upload_files_to_s3_bucket(s3_client,bucket_name_output,filenames,objectnames)
+            output_asdf_file = input_asdf_file.replace(".asdf","_lite.asdf")
 
 
-        # Clean up work directory.
+            # Correct gWCS.  Inject fake variable sources.  Output local L2 ASDF file.
 
-        rm_cmd = ['rm','-f',input_asdf_file]
-        exitcode_from_rm = util.execute_command(rm_cmd)
-
-        rm_cmd = ['rm','-f',gzipped_output_asdf_file]
-        exitcode_from_rm = util.execute_command(rm_cmd)
-
-
-        # Code-timing benchmark.
-
-        thread_end_time_benchmark = time.time()
-        diff_time_benchmark = thread_end_time_benchmark - thread_start_time_benchmark
-        fh.write(f"Elapsed time in seconds to convert ASDF file to ASDF file with injected fake variables = {diff_time_benchmark}\n")
-        thread_start_time_benchmark = thread_end_time_benchmark
+            correct_gwcs_inject_fake_variable_sources_output_asdf_file(
+                fh,
+                input_asdf_file,
+                output_asdf_file
+                )
 
 
-        # End of loop over asdf_files.
+            # Gzip the output ASDF file.
 
-        fh.write(f"Loop end over asdf_files: index_asdf_file,input_asdf_file = {index_asdf_file},{input_asdf_file}\n")
+            gunzip_cmd = ['gzip', output_asdf_file]
+            run_tool(gunzip_cmd)
+
+
+            # Upload gzipped file to output S3 bucket.
+
+            gzipped_output_asdf_file = output_asdf_file + ".gz"
+
+            s3_object_name = gzipped_output_asdf_file
+
+            filenames = [gzipped_output_asdf_file]
+
+            objectnames = [s3_object_name]
+
+            util.upload_files_to_s3_bucket(s3_client,bucket_name_output,filenames,objectnames)
+
+
+            # Clean up work directory.
+
+            # Best-effort: a leftover work file is not an injection failure.
+            try:
+                run_tool(['rm','-f',input_asdf_file])
+            except ToolError as exc:
+                print(f"*** Warning: cleanup failed for {input_asdf_file}: {exc}")
+
+            try:
+                run_tool(['rm','-f',gzipped_output_asdf_file])
+            except ToolError as exc:
+                print(f"*** Warning: cleanup failed for {gzipped_output_asdf_file}: {exc}")
+
+
+            # Code-timing benchmark.
+
+            thread_end_time_benchmark = time.time()
+            diff_time_benchmark = thread_end_time_benchmark - thread_start_time_benchmark
+            fh.write(f"Elapsed time in seconds to convert ASDF file to ASDF file with injected fake variables = {diff_time_benchmark}\n")
+            thread_start_time_benchmark = thread_end_time_benchmark
+
+
+            # End of loop over asdf_files.
+
+            fh.write(f"Loop end over asdf_files: index_asdf_file,input_asdf_file = {index_asdf_file},{input_asdf_file}\n")
+
+            n_ok += 1
+
+        except Exception as e:
+            n_failed += 1
+            fh.write(f"*** Error: Fake-source injection failed for {input_asdf_file}: {e}\n")
+            fh.flush()
+            print(f"*** Error: Fake-source injection failed for {input_asdf_file}: {e}")
 
 
     fh.write(f"\nEnd of run_single_core_job: index_thread={index_thread}\n")
+    fh.write(f"n_ok,n_failed = {n_ok},{n_failed}\n")
 
     fh.close()
 
-    message = f"Finish normally for index_thread = {index_thread}"
+    print(f"Finish for index_thread = {index_thread}: n_ok,n_failed = {n_ok},{n_failed}")
 
-    return message
+    return n_ok,n_failed
 
 
 def execute_parallel_processes(asdf_files_list,num_cores=None):
+
+    '''
+    Run the injection threads and return the (n_ok,n_failed) totals summed over all
+    threads.  A thread that dies outright counts as a failure, so an unhandled worker
+    exception cannot be logged and then forgotten.
+    '''
 
     if num_cores is None:
         num_cores = os.cpu_count()  # Use all available cores if not specified
@@ -287,54 +323,25 @@ def execute_parallel_processes(asdf_files_list,num_cores=None):
             index = futures.index(future)  # Find the original index/order of the completed future
             print(f"Completed: {i+1} processes, lastly for index={index}")
 
+    n_ok_total = 0
+    n_failed_total = 0
+
     for future in futures:
         index = futures.index(future)
         try:
-            print(future.result())
+            n_ok,n_failed = future.result()
+            n_ok_total += n_ok
+            n_failed_total += n_failed
         except Exception as e:
             print(f"*** Error in thread index {index} = {e}")
+            n_failed_total += 1
+
+    return n_ok_total,n_failed_total
 
 
 #-------------------------------------------------------------------------------------------------------------
 # Methods for handling conversion from ASDF to ASDF with injected fake variables.
 #-------------------------------------------------------------------------------------------------------------
-
-def execute_command_in_shell(bash_command,fname_out=None):
-
-    '''
-    Execute a batch command (a string, not a list; can be multiple bash commands connected with &&).
-    '''
-
-    print("execute_command: bash_command =",bash_command)
-
-
-    # Execute code_to_execute.  Note that STDERR and STDOUT are merged into the same data stream.
-    # AWS Batch runs Python 3.9.  According to https://docs.python.org/3.9/library/subprocess.html#subprocess.run,
-    # if you wish to capture and combine both streams into one, use stdout=PIPE and stderr=STDOUT instead of capture_output.
-    # capture_output=False is the default.
-
-    code_to_execute_object = subprocess.run(bash_command,shell=True,text=True,stdout=subprocess.PIPE,stderr=subprocess.STDOUT)
-
-    returncode = code_to_execute_object.returncode
-    print("returncode =",returncode)
-
-    code_to_execute_stdout = code_to_execute_object.stdout
-    #print("code_to_execute_stdout =\n",code_to_execute_stdout)
-
-    if fname_out is not None:
-
-        try:
-            fh = open(fname_out, 'w', encoding="utf-8")
-            fh.write(code_to_execute_stdout)
-            fh.close()
-        except:
-            print(f"*** Warning from method execute_command: Could not open output file {fname_out}; quitting...")
-
-    code_to_execute_stderr = code_to_execute_object.stderr
-    #print("code_to_execute_stderr (should be empty since STDERR is combined with STDOUT) =\n",code_to_execute_stderr)
-
-    return returncode,code_to_execute_stdout
-
 
 def correct_gwcs_inject_fake_variable_sources_output_asdf_file(fh, input_asdf_path, output_asdf_path):
 
@@ -415,7 +422,7 @@ def correct_gwcs_inject_fake_variable_sources_output_asdf_file(fh, input_asdf_pa
                                               generate_injection_catalog_code,
                                               str(overlapping_field)]
 
-            exitcode_from_generate_injection_catalog_cmd = util.execute_command(generate_injection_catalog_cmd)
+            run_tool(generate_injection_catalog_cmd)
 
 
             # Add newly generated injection catalog to list.
@@ -454,9 +461,7 @@ def correct_gwcs_inject_fake_variable_sources_output_asdf_file(fh, input_asdf_pa
                         output_asdf_path,
                         '--fix-wcs']
 
-    exitcode_from_fake_sources = util.execute_command(fake_sources_cmd)
-
-    fh.write(f"exitcode_from_fake_sources={exitcode_from_fake_sources}\n")
+    run_tool(fake_sources_cmd)
 
     return
 
@@ -489,7 +494,14 @@ if __name__ == '__main__':
     input_asdf_files = []
 
     cp_cmd = f"aws s3 ls s3://{bucket_name_input}/ | grep cal.asdf"
-    exitcode_from_cp,code_to_execute_stdout = execute_command_in_shell(cp_cmd)
+    try:
+        code_to_execute_stdout = run_shell(cp_cmd).stdout
+    except ToolError as exc:
+        # grep exits 1 when nothing matches -- an empty listing, not a failure.
+        if exc.details.get("returncode") == 1:
+            code_to_execute_stdout = ""
+        else:
+            raise
     lines = code_to_execute_stdout.splitlines()
 
     i = 0
@@ -534,11 +546,13 @@ if __name__ == '__main__':
     # with the number of parallel threads equal to the number of cores on the job-launcher machine.
     #########################################################################################
 
+    n_to_convert = len(input_asdf_files)
+
     if num_cores > 1:
-        execute_parallel_processes(input_asdf_files,num_cores)
+        n_ok,n_failed = execute_parallel_processes(input_asdf_files,num_cores)
     else:
         thread_index = 0
-        run_single_core_job(input_asdf_files,thread_index)
+        n_ok,n_failed = run_single_core_job(input_asdf_files,thread_index)
 
 
     # Code-timing benchmark.
@@ -549,7 +563,18 @@ if __name__ == '__main__':
     start_time_benchmark = end_time_benchmark
 
 
-    # Termination.
+    # Termination.  A run that had files to convert and failed on all of them, or that
+    # had any per-file failure, must not report success.
+
+    print(f"n_to_convert,n_ok,n_failed = {n_to_convert},{n_ok},{n_failed}")
+
+    if n_failed > 0:
+        print(f"*** Error: {n_failed} of {n_to_convert} file(s) failed to convert; quitting...")
+        exit(65)
+
+    if n_to_convert > 0 and n_ok == 0:
+        print(f"*** Error: {n_to_convert} file(s) were listed but none were converted; quitting...")
+        exit(65)
 
     exit(0)
 

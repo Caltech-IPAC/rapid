@@ -10,6 +10,7 @@ import time
 
 import modules.utils.rapid_pipeline_subs as util
 import database.modules.utils.rapid_db as db
+from pipeline.runtime.process import run_tool
 
 
 # Subs used by the RAPID pipeline related to reference images and catalogs.
@@ -150,7 +151,7 @@ def generateReferenceImage(s3_client,
             # Unzip the gz file.
 
             gunzip_cmd = ['gunzip', '-f', refimage_input_filename]
-            exitcode_from_gunzip = util.execute_command(gunzip_cmd)
+            run_tool(gunzip_cmd)
 
             refimage_input_filename_gunzipped = refimage_input_filename.replace(".fits.gz",".fits")
 
@@ -189,7 +190,7 @@ def generateReferenceImage(s3_client,
                                     injection_catalog_list_filename,
                                     fname_input]
 
-                exitcode_from_fake_sources = util.execute_command(fake_sources_cmd)
+                run_tool(fake_sources_cmd)
 
                 filename_image_with_fake_sources = fname_input.replace(".fits","_inject.fits")
                 filename_injection_catalog = fname_input.replace(".fits","_inject.txt")
@@ -278,11 +279,11 @@ def generateReferenceImage(s3_client,
             # Delete the original FITS file locally to save disk space.
 
             rm_cmd = ['rm', '-f', refimage_input_filename_gunzipped]
-            exitcode_from_rm = util.execute_command(rm_cmd)
+            run_tool(rm_cmd)
 
             if inject_fake_sources_flag:
                 rm_cmd = ['rm', '-f', filename_image_with_fake_sources]
-                exitcode_from_rm = util.execute_command(rm_cmd)
+                run_tool(rm_cmd)
 
 
             # Increment refimage-input-file counter.
@@ -387,7 +388,7 @@ def generateReferenceImage(s3_client,
     # Execute awaicgen to generate reference image.
 
     awaicgen_cmd = util.build_awaicgen_command_line_args(awaicgen_dict)
-    exitcode_from_awaicgen = util.execute_command(awaicgen_cmd)
+    run_tool(awaicgen_cmd)
 
 
     # Code-timing benchmark.
@@ -480,7 +481,7 @@ def generateSExtractorReferenceImageCatalog(s3_client,
     sextractor_refimage_dict["sextractor_CATALOG_NAME".lower()] = filename_refimage_catalog
     sextractor_cmd = util.build_sextractor_command_line_args(sextractor_refimage_dict)
 
-    exitcode_from_sextractor = util.execute_command(sextractor_cmd)
+    run_tool(sextractor_cmd)
 
 
     # Upload reference-image catalog to S3 product bucket.

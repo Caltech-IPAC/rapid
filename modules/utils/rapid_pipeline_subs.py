@@ -8,12 +8,14 @@ from astropy.io import fits
 from astropy.wcs import WCS
 from astropy.coordinates import SkyCoord
 import re
-import subprocess
 import numpy as np
 import numpy.ma as ma
 import boto3
 from botocore.exceptions import ClientError
 from scipy.ndimage import zoom
+
+from pipeline.runtime.errors import StorageError
+from pipeline.runtime.process import run_tool
 
 plot_flag = False
 
@@ -35,147 +37,47 @@ def utc_to_local(utc_dt):
     return utc_dt.replace(tzinfo=timezone.utc).astimezone(tz=to_zone)
 
 
-def execute_command(code_to_execute_args,fname_out=None):
-
-    '''
-    Execute a command with options.
-    '''
-
-    print("execute_command: code_to_execute_args =",code_to_execute_args)
-
-
-    # Execute code_to_execute.  Note that STDERR and STDOUT are merged into the same data stream.
-    # AWS Batch runs Python 3.9.  According to https://docs.python.org/3.9/library/subprocess.html#subprocess.run,
-    # if you wish to capture and combine both streams into one, use stdout=PIPE and stderr=STDOUT instead of capture_output.
-    # capture_output=False is the default.
-
-    code_to_execute_object = subprocess.run(code_to_execute_args,text=True,stdout=subprocess.PIPE,stderr=subprocess.STDOUT)
-
-    returncode = code_to_execute_object.returncode
-    print("returncode =",returncode)
-
-    code_to_execute_stdout = code_to_execute_object.stdout
-    print("code_to_execute_stdout =\n",code_to_execute_stdout)
-
-    if fname_out is not None:
-
-        try:
-            fh = open(fname_out, 'w', encoding="utf-8")
-            fh.write(code_to_execute_stdout)
-            fh.close()
-        except:
-            print(f"*** Warning from method execute_command: Could not open output file {fname_out}; quitting...")
-
-    code_to_execute_stderr = code_to_execute_object.stderr
-    print("code_to_execute_stderr (should be empty since STDERR is combined with STDOUT) =\n",code_to_execute_stderr)
-
-    return returncode
-
-
-def execute_command_and_return_stdout(code_to_execute_args):
-
-    '''
-    Execute a command with options.
-    '''
-
-    print("execute_command: code_to_execute_args =",code_to_execute_args)
-
-
-    # Execute code_to_execute.  Note that STDERR and STDOUT are merged into the same data stream.
-    # AWS Batch runs Python 3.9.  According to https://docs.python.org/3.9/library/subprocess.html#subprocess.run,
-    # if you wish to capture and combine both streams into one, use stdout=PIPE and stderr=STDOUT instead of capture_output.
-    # capture_output=False is the default.
-
-    code_to_execute_object = subprocess.run(code_to_execute_args,text=True,stdout=subprocess.PIPE,stderr=subprocess.STDOUT)
-
-    returncode = code_to_execute_object.returncode
-    print("returncode =",returncode)
-
-    code_to_execute_stdout = code_to_execute_object.stdout
-    print("code_to_execute_stdout =\n",code_to_execute_stdout)
-
-    code_to_execute_stderr = code_to_execute_object.stderr
-    print("code_to_execute_stderr (should be empty since STDERR is combined with STDOUT) =\n",code_to_execute_stderr)
-
-    return returncode,code_to_execute_stdout
-
-
-#####################################################################################################
-# Example usage of method execute_command_in_shell:
-#
-#    cmd1 = "which python"
-#    cmd2 = "source ./hats_env/bin/activate"
-#    cmd3 = "deactivate"
-#
-#    cmd = cmd1 + " && " + cmd2 + " && " + cmd1 + " && " + cmd3 + " && " + cmd1
-
-#    execute_command_in_shell(cmd)
-#####################################################################################################
-
-def execute_command_in_shell(bash_command,fname_out=None,print_output=True):
-
-    '''
-    Execute a batch command (a string, not a list; can be multiple bash commands connected with &&).
-    '''
-
-    print("execute_command: bash_command =",bash_command)
-
-
-    # Execute code_to_execute.  Note that STDERR and STDOUT are merged into the same data stream.
-    # AWS Batch runs Python 3.9.  According to https://docs.python.org/3.9/library/subprocess.html#subprocess.run,
-    # if you wish to capture and combine both streams into one, use stdout=PIPE and stderr=STDOUT instead of capture_output.
-    # capture_output=False is the default.
-
-    code_to_execute_object = subprocess.run(bash_command,shell=True,text=True,stdout=subprocess.PIPE,stderr=subprocess.STDOUT)
-
-    returncode = code_to_execute_object.returncode
-    print("returncode =",returncode)
-
-    code_to_execute_stdout = code_to_execute_object.stdout
-
-    if print_output:
-        print("code_to_execute_stdout =\n",code_to_execute_stdout)
-
-    if fname_out is not None:
-
-        try:
-            fh = open(fname_out, 'w', encoding="utf-8")
-            fh.write(code_to_execute_stdout)
-            fh.close()
-        except:
-            print(f"*** Warning from method execute_command: Could not open output file {fname_out}; quitting...")
-
-    code_to_execute_stderr = code_to_execute_object.stderr
-
-    if print_output:
-        print("code_to_execute_stderr (should be empty since STDERR is combined with STDOUT) =\n",code_to_execute_stderr)
-
-    return returncode,code_to_execute_stdout
-
-
 def get_datetime_of_last_file_written_to_bucket(path):
+
+    '''
+    Find the most recently written object under an s3:// prefix (paginated
+    list_objects_v2; no subprocess). Raises StorageError on a client failure
+    or an empty listing rather than returning a value that reads as "bucket
+    is empty".
+    '''
 
     print("====================== Start sub get_datetime_of_last_file_written_to_bucket")
     print("S3 bucket path =",path)
 
-    cmd = ['aws','s3','ls','--recursive',path]
-    exitcode,listing = execute_command_and_return_stdout(cmd)
+    string_match = re.match(r"s3://([^/]+)/?(.*)", path)
+    if string_match is None:
+        raise StorageError(f"could not parse S3 path: {path!r}",
+                           category="storage_error", path=path)
 
-    print("exitcode =",exitcode)
+    bucket = string_match.group(1)
+    prefix = string_match.group(2)
+
+    s3_client = boto3.client('s3')
+    paginator = s3_client.get_paginator('list_objects_v2')
 
     file_datetime = []
     file_dict = {}
-    for line in listing.split('\n'):
-        line = line.strip()
-        if line != "":
-            print(line)
-            a = line.split()
-            my_date = a[0]
-            my_time = a[1]
-            my_datetime = my_date + " " + my_time
-            file_datetime.append(my_datetime)
-            print(my_date,my_time)
-            file_dict[my_datetime] = a[3]
+
+    try:
+        for page in paginator.paginate(Bucket=bucket, Prefix=prefix):
+            for obj in page.get('Contents', []):
+                my_datetime = obj['LastModified'].strftime('%Y-%m-%d %H:%M:%S')
+                file_datetime.append(my_datetime)
+                file_dict[my_datetime] = obj['Key']
+    except ClientError as e:
+        raise StorageError(f"failed to list s3://{bucket}/{prefix}: {e}",
+                           category="storage_error", bucket=bucket,
+                           prefix=prefix) from e
+
+    if not file_datetime:
+        raise StorageError(f"no objects found under s3://{bucket}/{prefix}",
+                           category="storage_error", bucket=bucket,
+                           prefix=prefix)
 
     s = sorted([datetime.strptime(dt, "%Y-%m-%d %H:%M:%S") for dt in file_datetime])
 
@@ -1119,7 +1021,7 @@ def resample_reference_image_to_science_image_with_pv_distortion(
     # Execute swarp for the reference image.
 
     swarp_cmd = build_swarp_command_line_args(swarp_dict)
-    exitcode_from_swarp = execute_command(swarp_cmd)
+    run_tool(swarp_cmd)
 
 
     # Override swarp-parameter dictionary to disable background subtraction
@@ -1148,7 +1050,7 @@ def resample_reference_image_to_science_image_with_pv_distortion(
     # Execute swarp for the reference coverage map.
 
     swarp_cmd = build_swarp_command_line_args(swarp_dict)
-    exitcode_from_swarp = execute_command(swarp_cmd)
+    run_tool(swarp_cmd)
 
 
     # Swarp the reference uncertainty image.
@@ -1165,7 +1067,7 @@ def resample_reference_image_to_science_image_with_pv_distortion(
     # Execute swarp for the reference uncertainty image.
 
     swarp_cmd = build_swarp_command_line_args(swarp_dict)
-    exitcode_from_swarp = execute_command(swarp_cmd)
+    run_tool(swarp_cmd)
 
 
     # Return select filenames (in case the files need to be uploaded to the S3 product bucket for examination).
@@ -1787,13 +1689,22 @@ def addHistoryLinesToFITSHeader(fits_filename,
 
 def write_done_file_to_s3_bucket(done_filename,product_s3_bucket_base,datearg,jid,s3_client):
 
-    touch_cmd = ['touch', done_filename]
-    exitcode_from_touch = execute_command(touch_cmd)
+    '''
+    Write the done-file sentinel directly to S3 (put_object; no local touch,
+    no subprocess). Raises StorageError on failure.
+    '''
 
     s3_object_name_done_filename = datearg + "/jid" + str(jid) + "/" + done_filename
-    filenames = [done_filename]
-    objectnames = [s3_object_name_done_filename]
-    upload_files_to_s3_bucket(s3_client,product_s3_bucket_base,filenames,objectnames)
+
+    try:
+        s3_client.put_object(Bucket=product_s3_bucket_base,
+                             Key=s3_object_name_done_filename,
+                             Body=b"")
+    except ClientError as e:
+        raise StorageError(
+            f"failed to write done file to s3://{product_s3_bucket_base}/{s3_object_name_done_filename}: {e}",
+            category="storage_error", bucket=product_s3_bucket_base,
+            key=s3_object_name_done_filename) from e
 
 
 ##################################################################################################
@@ -2155,7 +2066,7 @@ def generateScienceImageCatalog(filename_sciimage_image,
     sextractor_sciimage_dict["sextractor_STARNNW_NAME".lower()] = cfg_path + "/rapidSexSciImageStarGalaxyClassifier.nnw"
     sextractor_sciimage_dict["sextractor_CATALOG_NAME".lower()] = filename_sciimage_catalog
     sextractor_cmd = build_sextractor_command_line_args(sextractor_sciimage_dict)
-    exitcode_from_sextractor = execute_command(sextractor_cmd)
+    run_tool(sextractor_cmd)
 
 
     return
@@ -2411,9 +2322,8 @@ def compute_image_overlap_area(w_sci,
         f.write(f'{x4_refsci} {y4_refsci}\n')
 
     cmd = ['computeOverlapArea']
-    exitcode,listing = execute_command_and_return_stdout(cmd)
-
-    print("exitcode =",exitcode)
+    result = run_tool(cmd)
+    listing = result.stdout
 
     for line in listing.split('\n'):
         line = line.strip()

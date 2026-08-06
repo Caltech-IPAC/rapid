@@ -9,7 +9,8 @@ from concurrent.futures import ProcessPoolExecutor, as_completed
 to_zone = tz.gettz('America/Los_Angeles')
 
 import database.modules.utils.rapid_db as db
-import modules.utils.rapid_pipeline_subs as util
+from pipeline.runtime.process import run_tool
+from pipeline.runtime.errors import ToolError
 
 swname = "launchSciencePipelinesForDateTimeRangeWithRefImageWindow.py"
 swvers = "1.0"
@@ -225,19 +226,13 @@ def run_single_core_job(rids,num_cores,index_thread):
             if dry_run:
                 fh.write(f"Skipped launching science pipeline for dry_run,rid = {dry_run},{rid}\n")
             else:
-                exitcode_from_launch_cmd = util.execute_command(launch_cmd)
-
-
-                if exitcode_from_launch_cmd == 0:
+                try:
+                    run_tool(launch_cmd)
                     fh.write(f"Launched science pipeline for dry_run,rid = {dry_run},{rid}\n")
-                elif exitcode_from_launch_cmd >= 64:
+                except ToolError as exc:
                     fh.write(f"*** Error from launch_cmd = {launch_cmd}: " +
-                             f"exitcode_from_launch_cmd,dry_run,rid = " +
-                             f"{exitcode_from_launch_cmd},{dry_run},{rid}\n")
-                else:
-                    fh.write(f"*** Warning from launch_cmd = {launch_cmd}: " +
-                             f"exitcode_from_launch_cmd,dry_run,rid = " +
-                             f"{exitcode_from_launch_cmd},{dry_run},{rid}\n")
+                             f"exc,dry_run,rid = " +
+                             f"{exc},{dry_run},{rid}\n")
 
             fh.flush()
 

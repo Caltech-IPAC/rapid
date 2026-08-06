@@ -2,9 +2,11 @@ import boto3
 import os
 import numpy as np
 from astropy.io import fits
-import subprocess
 import re
 from multiprocessing import Process, Queue, current_process
+
+from pipeline.runtime.process import run_tool, run_shell
+from pipeline.runtime.errors import ToolError
 
 MULTIPROCESS = True
 NUMBER_OF_CPUS = 9
@@ -52,24 +54,6 @@ def calculate(func, args):
     return args,result
 
 
-def execute_command(cmd,no_check=False):
-    print("cmd = ",cmd)
-    p = subprocess.Popen(cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
-    for line in p.stdout.readlines():
-        print("--->",line)
-        strvalue = line.decode('utf-8').strip()
-        print(strvalue)
-    retval = p.wait()
-    print("retval =",retval)
-
-    if not no_check:
-        if (retval != 0):
-            print("*** Error from execute_command; quitting...")
-            exit(1)
-
-    return retval
-
-
 def process_fits_file_in_subdir(file):
 
     only_gzfname_input = file
@@ -82,11 +66,11 @@ def process_fits_file_in_subdir(file):
     print("fname_input =",fname_input)
     print("fname_output =",fname_output)
 
-    cmd = "gunzip " + subdir_input + "/" + only_gzfname_input
-    retval = execute_command(cmd,no_check=True)
-
-    if (retval != 0):
-        print("*** Error: Input file from S3 bucket could not be unzipped ({}); skipping...".format(cmd))
+    gunzip_argv = ['gunzip', subdir_input + "/" + only_gzfname_input]
+    try:
+        run_tool(gunzip_argv)
+    except ToolError:
+        print("*** Error: Input file from S3 bucket could not be unzipped ({}); skipping...".format(gunzip_argv))
         return(0)
 
     print("Reducing size of FITS file...")
@@ -110,19 +94,16 @@ def process_fits_file_in_subdir(file):
     hdu = fits.HDUList(hdu_list)
     hdu.writeto(subdir_output + "/" + fname_output,overwrite=True,checksum=True)
 
-    cmd = "gzip " + subdir_output + "/" + fname_output
-    execute_command(cmd)
+    run_tool(['gzip', subdir_output + "/" + fname_output])
 
     return(0)
 
 
 def compress_files():
 
-    cmd = "mkdir " + subdir_input
-    execute_command(cmd)
+    run_tool(['mkdir', subdir_input])
 
-    cmd = "mkdir " + subdir_output
-    execute_command(cmd)
+    run_tool(['mkdir', subdir_output])
 
     s3 = boto3.resource('s3')
 
@@ -214,8 +195,8 @@ def compress_files():
 
         # Copy 18 input files from input S3 bucket to local machine.
 
-        cmd = "aws s3 cp --quiet --recursive s3://" + bucket_name_input + "/" + subdir_only + " new"
-        execute_command(cmd)
+        run_tool(['aws', 's3', 'cp', '--quiet', '--recursive',
+                  "s3://" + bucket_name_input + "/" + subdir_only, 'new'])
 
         if MULTIPROCESS:
 
@@ -255,14 +236,13 @@ def compress_files():
 
         # Copy 18 output files from local machine to output S3 bucket.
 
-        cmd = "aws s3 cp --quiet --recursive new-lite s3://" + bucket_name_output + "/" + subdir_only
-        execute_command(cmd)
+        run_tool(['aws', 's3', 'cp', '--quiet', '--recursive', 'new-lite',
+                  "s3://" + bucket_name_output + "/" + subdir_only])
 
-        cmd = "rm -rf " + subdir_input + "/*fits"
-        execute_command(cmd)
+        # Glob (*fits / *fits.gz) needs the shell to expand it.
+        run_shell("rm -rf " + subdir_input + "/*fits")
 
-        cmd = "rm -rf " + subdir_output + "/*fits.gz"
-        execute_command(cmd)
+        run_shell("rm -rf " + subdir_output + "/*fits.gz")
 
         nfiles += 1
 

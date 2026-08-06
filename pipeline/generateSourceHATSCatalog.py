@@ -24,8 +24,8 @@ from hats_import.catalog.arguments import ImportArguments
 from hats_import.pipeline import pipeline_with_client
 from hats_import.catalog.file_readers import CsvReader
 
-import modules.utils.rapid_pipeline_subs as util
 import database.modules.utils.rapid_db as db
+from pipeline.runtime.process import run_tool
 
 
 swname = "generateSourceHATSCatalog.py"
@@ -244,8 +244,8 @@ if __name__ == '__main__':
 
     # Upload HATS catalog to S3 bucket.
 
-    hat_copy_cmd = f"aws s3 sync {filepath_hats_catalog} {s3_object_name_hats_catalog}"
-    util.execute_command_in_shell(hat_copy_cmd)
+    hat_copy_cmd = ['aws', 's3', 'sync', filepath_hats_catalog, s3_object_name_hats_catalog]
+    run_tool(hat_copy_cmd)
 
 
     # Code-timing benchmark.

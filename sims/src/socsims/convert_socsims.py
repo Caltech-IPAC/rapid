@@ -15,7 +15,6 @@ export CRDS_SERVER_URL=https://roman-crds.stsci.edu
 import os
 import boto3
 import re
-import subprocess
 import numpy as np
 import asdf
 import roman_datamodels as rdm
@@ -30,6 +29,8 @@ from concurrent.futures import ProcessPoolExecutor, as_completed
 to_zone = tz.gettz('America/Los_Angeles')
 
 import modules.utils.rapid_pipeline_subs as util
+from pipeline.runtime.process import run_tool, run_shell
+from pipeline.runtime.errors import ToolError
 
 
 # Define code name and version.
@@ -105,7 +106,8 @@ def run_single_core_job(asdf_files,index_thread):
 
 
     '''
-    Convert a single ASDF file into a FITS file.
+    Convert a single ASDF file into a FITS file.  Returns (n_ok,n_failed) counts so
+    that a file which raises partway through cannot be logged and then forgotten.
     '''
 
 
@@ -137,6 +139,13 @@ def run_single_core_job(asdf_files,index_thread):
         fh.write(f"\nStart of run_single_core_job: index_thread={index_thread}\n")
 
 
+    # Per-thread outcome counters.  These are returned to the parent process so
+    # that a run which converts nothing due to per-file failures cannot report success.
+
+    n_ok = 0
+    n_failed = 0
+
+
     # Loop over input ASDF files.
 
     for index_asdf_file in range(n_asdf_files):
@@ -156,107 +165,138 @@ def run_single_core_job(asdf_files,index_thread):
             continue
 
 
-        # Download file from input S3 bucket to local machine.
+        # A per-file failure is caught and counted here rather than allowed to
+        # abort the thread's remaining files.
 
-        s3_object_input_asdf_file = "s3://" + bucket_name_input + "/" + input_asdf_file
-        download_cmd = ['aws','s3','cp',s3_object_input_asdf_file,input_asdf_file]
-        exitcode_from_download_cmd = util.execute_command(download_cmd)
-
-
-        # Create output FITS filename for working directory.
-
-        #output_fits_file = input_asdf_file.replace(".asdf","_lite.fits")
-        output_fits_file = input_asdf_file.replace(".asdf.gz",".fits")
-        input_asdf_file_gunzipped = input_asdf_file.replace(".gz","")
+        try:
 
 
-        # Gunzip the input ASDF file.
+            # Download file from input S3 bucket to local machine.
 
-        gunzip_cmd = ['gunzip','-f', input_asdf_file]
-        exitcode_from_gunzip = util.execute_command(gunzip_cmd)
-
-
-        # Convert from ASDF format to FITS format, and add required FITS keywords.
-        # Define highest order for computing SIP distortion.
-
-        degree = 5
-
-        if num_cores == 1:
-            print(f"degree = {degree}\n")
-        else:
-            fh.write(f"degree = {degree}\n")
-
-        asdf_to_fits(
-            input_asdf_file_gunzipped,
-            output_fits_file,
-            sip_degree=degree
-            )
+            s3_object_input_asdf_file = "s3://" + bucket_name_input + "/" + input_asdf_file
+            download_cmd = ['aws','s3','cp',s3_object_input_asdf_file,input_asdf_file]
+            run_tool(download_cmd)
 
 
-        # Gzip the output FITS file.
+            # Create output FITS filename for working directory.
 
-        gzip_cmd = ['gzip','-f', output_fits_file]
-        exitcode_from_gzip = util.execute_command(gzip_cmd)
-
-
-        # Upload gzipped file to output S3 bucket.
-
-        gzipped_output_fits_file = output_fits_file + ".gz"
-
-        s3_object_name = gzipped_output_fits_file
-
-        filenames = [gzipped_output_fits_file]
-
-        objectnames = [s3_object_name]
-
-        util.upload_files_to_s3_bucket(s3_client,bucket_name_output,filenames,objectnames)
+            #output_fits_file = input_asdf_file.replace(".asdf","_lite.fits")
+            output_fits_file = input_asdf_file.replace(".asdf.gz",".fits")
+            input_asdf_file_gunzipped = input_asdf_file.replace(".gz","")
 
 
-        # Clean up work directory.
+            # Gunzip the input ASDF file.
 
-        rm_cmd = ['rm','-f',input_asdf_file_gunzipped]
-        exitcode_from_rm = util.execute_command(rm_cmd)
-
-        rm_cmd = ['rm','-f',gzipped_output_fits_file]
-        exitcode_from_rm = util.execute_command(rm_cmd)
+            gunzip_cmd = ['gunzip','-f', input_asdf_file]
+            run_tool(gunzip_cmd)
 
 
-        # Code-timing benchmark.
+            # Convert from ASDF format to FITS format, and add required FITS keywords.
+            # Define highest order for computing SIP distortion.
 
-        thread_end_time_benchmark = time.time()
-        diff_time_benchmark = thread_end_time_benchmark - thread_start_time_benchmark
-        if num_cores == 1:
-            print(f"Elapsed time in seconds to convert ASDF file to FITS file = {diff_time_benchmark}\n")
-        else:
-            fh.write(f"Elapsed time in seconds to convert ASDF file to FITS file = {diff_time_benchmark}\n")
-        thread_start_time_benchmark = thread_end_time_benchmark
+            degree = 5
+
+            if num_cores == 1:
+                print(f"degree = {degree}\n")
+            else:
+                fh.write(f"degree = {degree}\n")
+
+            asdf_to_fits(
+                input_asdf_file_gunzipped,
+                output_fits_file,
+                sip_degree=degree
+                )
 
 
-        # End of loop over asdf_files.
+            # Gzip the output FITS file.
 
-        if num_cores == 1:
-            print(f"Loop end over asdf_files: index_asdf_file,input_asdf_file_gunzipped = {index_asdf_file},{input_asdf_file_gunzipped}\n")
-        else:
-            fh.write(f"Loop end over asdf_files: index_asdf_file,input_asdf_file_gunzipped = {index_asdf_file},{input_asdf_file_gunzipped}\n")
+            gzip_cmd = ['gzip','-f', output_fits_file]
+            run_tool(gzip_cmd)
 
-        fh.flush()
+
+            # Upload gzipped file to output S3 bucket.
+
+            gzipped_output_fits_file = output_fits_file + ".gz"
+
+            s3_object_name = gzipped_output_fits_file
+
+            filenames = [gzipped_output_fits_file]
+
+            objectnames = [s3_object_name]
+
+            util.upload_files_to_s3_bucket(s3_client,bucket_name_output,filenames,objectnames)
+
+
+            # Clean up work directory.
+
+            # Best-effort: a leftover work file is not a conversion failure.
+            try:
+                run_tool(['rm','-f',input_asdf_file_gunzipped])
+            except ToolError as exc:
+                print(f"*** Warning: cleanup failed for {input_asdf_file_gunzipped}: {exc}")
+
+            try:
+                run_tool(['rm','-f',gzipped_output_fits_file])
+            except ToolError as exc:
+                print(f"*** Warning: cleanup failed for {gzipped_output_fits_file}: {exc}")
+
+
+            # Code-timing benchmark.
+
+            thread_end_time_benchmark = time.time()
+            diff_time_benchmark = thread_end_time_benchmark - thread_start_time_benchmark
+            if num_cores == 1:
+                print(f"Elapsed time in seconds to convert ASDF file to FITS file = {diff_time_benchmark}\n")
+            else:
+                fh.write(f"Elapsed time in seconds to convert ASDF file to FITS file = {diff_time_benchmark}\n")
+            thread_start_time_benchmark = thread_end_time_benchmark
+
+
+            # End of loop over asdf_files.
+
+            if num_cores == 1:
+                print(f"Loop end over asdf_files: index_asdf_file,input_asdf_file_gunzipped = {index_asdf_file},{input_asdf_file_gunzipped}\n")
+            else:
+                fh.write(f"Loop end over asdf_files: index_asdf_file,input_asdf_file_gunzipped = {index_asdf_file},{input_asdf_file_gunzipped}\n")
+
+            fh.flush()
+
+            n_ok += 1
+
+        except Exception as e:
+            n_failed += 1
+            message = f"*** Error: Conversion failed for {input_asdf_file}: {e}"
+            if num_cores == 1:
+                print(message)
+            else:
+                fh.write(message + "\n")
+                fh.flush()
+            print(message)
 
 
     # Outside of loop over asdf_files.
 
     if num_cores == 1:
         print(f"\nEnd of run_single_core_job: index_thread={index_thread}\n")
+        print(f"n_ok,n_failed = {n_ok},{n_failed}\n")
     else:
         fh.write(f"\nEnd of run_single_core_job: index_thread={index_thread}\n")
+        fh.write(f"n_ok,n_failed = {n_ok},{n_failed}\n")
 
     fh.close()
 
-    message = f"Finish normally for index_thread = {index_thread}"
+    print(f"Finish for index_thread = {index_thread}: n_ok,n_failed = {n_ok},{n_failed}")
 
-    return message
+    return n_ok,n_failed
 
 
 def execute_parallel_processes(asdf_files_list,num_cores=None):
+
+    '''
+    Run the conversion threads and return the (n_ok,n_failed) totals summed over all
+    threads.  A thread that dies outright counts as a failure, so an unhandled worker
+    exception cannot be logged and then forgotten.
+    '''
 
     if num_cores is None:
         num_cores = os.cpu_count()  # Use all available cores if not specified
@@ -272,54 +312,25 @@ def execute_parallel_processes(asdf_files_list,num_cores=None):
             index = futures.index(future)  # Find the original index/order of the completed future
             print(f"Completed: {i+1} processes, lastly for index={index}")
 
+    n_ok_total = 0
+    n_failed_total = 0
+
     for future in futures:
         index = futures.index(future)
         try:
-            print(future.result())
+            n_ok,n_failed = future.result()
+            n_ok_total += n_ok
+            n_failed_total += n_failed
         except Exception as e:
             print(f"*** Error in thread index {index} = {e}")
+            n_failed_total += 1
+
+    return n_ok_total,n_failed_total
 
 
 #-------------------------------------------------------------------------------------------------------------
 # Methods for handling ASDF-to-FITS conversion.
 #-------------------------------------------------------------------------------------------------------------
-
-def execute_command_in_shell(bash_command,fname_out=None):
-
-    '''
-    Execute a batch command (a string, not a list; can be multiple bash commands connected with &&).
-    '''
-
-    print("execute_command: bash_command =",bash_command)
-
-
-    # Execute code_to_execute.  Note that STDERR and STDOUT are merged into the same data stream.
-    # AWS Batch runs Python 3.9.  According to https://docs.python.org/3.9/library/subprocess.html#subprocess.run,
-    # if you wish to capture and combine both streams into one, use stdout=PIPE and stderr=STDOUT instead of capture_output.
-    # capture_output=False is the default.
-
-    code_to_execute_object = subprocess.run(bash_command,shell=True,text=True,stdout=subprocess.PIPE,stderr=subprocess.STDOUT)
-
-    returncode = code_to_execute_object.returncode
-    print("returncode =",returncode)
-
-    code_to_execute_stdout = code_to_execute_object.stdout
-    #print("code_to_execute_stdout =\n",code_to_execute_stdout)
-
-    if fname_out is not None:
-
-        try:
-            fh = open(fname_out, 'w', encoding="utf-8")
-            fh.write(code_to_execute_stdout)
-            fh.close()
-        except:
-            print(f"*** Warning from method execute_command: Could not open output file {fname_out}; quitting...")
-
-    code_to_execute_stderr = code_to_execute_object.stderr
-    #print("code_to_execute_stderr (should be empty since STDERR is combined with STDOUT) =\n",code_to_execute_stderr)
-
-    return returncode,code_to_execute_stdout
-
 
 def gwcs_to_fits_header(wcs_obj, shape, degree):
 
@@ -641,7 +652,14 @@ if __name__ == '__main__':
     input_asdf_files = []
 
     cp_cmd = f"aws s3 ls s3://{bucket_name_input}/ | grep cal_lite.asdf"
-    exitcode_from_cp,code_to_execute_stdout = execute_command_in_shell(cp_cmd)
+    try:
+        code_to_execute_stdout = run_shell(cp_cmd).stdout
+    except ToolError as exc:
+        # grep exits 1 when nothing matches -- an empty listing, not a failure.
+        if exc.details.get("returncode") == 1:
+            code_to_execute_stdout = ""
+        else:
+            raise
     lines = code_to_execute_stdout.splitlines()
 
     i = 0
@@ -679,11 +697,13 @@ if __name__ == '__main__':
     # with the number of parallel threads equal to the number of cores on the job-launcher machine.
     #########################################################################################
 
+    n_to_convert = len(input_asdf_files)
+
     if num_cores > 1:
-        execute_parallel_processes(input_asdf_files,num_cores)
+        n_ok,n_failed = execute_parallel_processes(input_asdf_files,num_cores)
     else:
         thread_index = 0
-        run_single_core_job(input_asdf_files,thread_index)
+        n_ok,n_failed = run_single_core_job(input_asdf_files,thread_index)
 
 
     # Code-timing benchmark.
@@ -694,7 +714,18 @@ if __name__ == '__main__':
     start_time_benchmark = end_time_benchmark
 
 
-    # Termination.
+    # Termination.  A run that had files to convert and failed on all of them, or that
+    # had any per-file failure, must not report success.
+
+    print(f"n_to_convert,n_ok,n_failed = {n_to_convert},{n_ok},{n_failed}")
+
+    if n_failed > 0:
+        print(f"*** Error: {n_failed} of {n_to_convert} file(s) failed to convert; quitting...")
+        exit(65)
+
+    if n_to_convert > 0 and n_ok == 0:
+        print(f"*** Error: {n_to_convert} file(s) were listed but none were converted; quitting...")
+        exit(65)
 
     exit(0)
 

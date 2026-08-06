@@ -3,6 +3,7 @@ from astropy.io import fits
 import numpy as np
 
 import modules.utils.rapid_pipeline_subs as util
+from pipeline.runtime.process import run_tool
 
 '''
 Subs used by the RAPID pipeline related to difference-image processing.
@@ -297,7 +298,7 @@ def gainMatchScienceAndReferenceImages(s3_client,
     sextractor_gainmatch_dict["sextractor_CATALOG_NAME".lower()] = filename_scigainmatchsexcat_catalog
     sextractor_gainmatch_dict["sextractor_SEEING_FWHM".lower()] = str(fwhm_sci)
     sextractor_cmd = util.build_sextractor_command_line_args(sextractor_gainmatch_dict)
-    exitcode_from_sextractor = util.execute_command(sextractor_cmd)
+    run_tool(sextractor_cmd)
 
 
     # Compute SExtractor catalog for reference image.
@@ -311,7 +312,7 @@ def gainMatchScienceAndReferenceImages(s3_client,
     sextractor_gainmatch_dict["sextractor_CATALOG_NAME".lower()] = filename_refgainmatchsexcat_catalog
     sextractor_gainmatch_dict["sextractor_SEEING_FWHM".lower()] = str(fwhm_ref)
     sextractor_cmd = util.build_sextractor_command_line_args(sextractor_gainmatch_dict)
-    exitcode_from_sextractor = util.execute_command(sextractor_cmd)
+    run_tool(sextractor_cmd)
 
 
     # Optionally upload SExtractor catalogs for science and reference images to S3 bucket.

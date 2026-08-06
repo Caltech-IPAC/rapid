@@ -8,7 +8,8 @@ import time
 to_zone = tz.gettz('America/Los_Angeles')
 
 import database.modules.utils.rapid_db as db
-import modules.utils.rapid_pipeline_subs as util
+from pipeline.runtime.process import run_shell
+from pipeline.runtime.errors import ToolError
 
 swname = "analyzeSciencePipelineProductsForDateTimeRangeWithRefImageWindow.py"
 swvers = "1.0"
@@ -290,7 +291,15 @@ if __name__ == '__main__':
         print(f"=====>s3_url = {s3_url}")
 
         ls_cmd = f"aws s3 ls {s3_url}/ | grep awaicgen"
-        exitcode_from_ls,code_to_execute_stdout = util.execute_command_in_shell(ls_cmd,print_output=False)
+        try:
+            code_to_execute_stdout = run_shell(ls_cmd).stdout
+        except ToolError as exc:
+            # grep exits 1 on no match, which is a legitimate "no awaicgen
+            # files" result here, not a tool failure.
+            if exc.details.get("returncode") == 1:
+                code_to_execute_stdout = ""
+            else:
+                raise
         lines = code_to_execute_stdout.splitlines()
 
         i = 0
