@@ -36,8 +36,33 @@ logger = logging.getLogger("rapid.registration.products")
 #: Catalogue types, as `register_refimcatalog` takes them. The legacy body
 #: registered the SExtractor and PhotUtils reference catalogues under distinct
 #: cattypes, and the PhotUtils one only where it had actually been uploaded.
-CATTYPE_SEXTRACTOR = "sextractor"
-CATTYPE_PHOTUTILS = "photutils"
+#: `refimcatalogs.cattype` is a **smallint** in the deployed schema
+#: (006-core-tables.sql:566), and `registerRefImCatalog` casts its third
+#: argument to smallint. These were the STRINGS "sextractor" and "photutils",
+#: which PostgreSQL refused outright:
+#:
+#:     InvalidTextRepresentation: invalid input syntax for type smallint:
+#:     "sextractor"
+#:
+#: so every reference-image registration failed at its first catalogue. Found
+#: by the FixD live mini-chain probe, and findable only there: the unit suite's
+#: fake database accepts whatever it is handed, so a type the real column
+#: cannot hold looks identical to one it can.
+#:
+#: PROPOSED VALUES, and they need Ben's ratification (recorded in the FixD
+#: ledger and the disposition page). The legacy body read these from
+#: `product_config['REF_IMAGE'][...cattype]` — a per-job product config that
+#: the W6 cutover deleted and that never lived in this repo — and neither
+#: repo carries a lookup table, a CHECK constraint, or a seeded vocabulary
+#: for the column. So the numbering below is an ORDERING chosen here (1 =
+#: SExtractor, the catalogue every reference image has; 2 = PhotUtils, the
+#: one registered only where it was produced), not a value recovered from
+#: the operations schema. It is internally consistent and it registers, but
+#: if the archive already numbers these differently, this is where to fix it
+#: — one constant each, and `refimcatalogspk (rfid, ppid, cattype)` means a
+#: wrong number collides rather than silently duplicating.
+CATTYPE_SEXTRACTOR = 1
+CATTYPE_PHOTUTILS = 2
 
 
 class MissingRecordFact(KeyError):
