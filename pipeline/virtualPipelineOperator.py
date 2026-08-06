@@ -18,10 +18,11 @@ to_zone = tz.gettz('America/Los_Angeles')
 
 import database.modules.utils.rapid_db as db
 from database.modules.utils.rapid_db_connect import ConnectionExecutor, connection
-from observability.attempts import ExecutionBinding
+from dataclasses import dataclass
 from pipeline.runtime.process import run_tool
 from pipeline.seams import submit_gathered
 from submission import gathering, routes
+from submission.startup import fetch_parameters
 from pipeline.runtime.errors import ToolError
 
 
@@ -274,26 +275,92 @@ def min_images_to_coadd():
 # Method to resolve the submission-time execution binding and its clients.
 #-------------------------------------------------------------------------------------------------------------
 
-def submission_env(job_type):
+@dataclass(frozen=True)
+class SubmissionBinding:
+
+    '''
+    The four binding facts the OPERATOR knows, before there is a manifest.
+
+    NOT an `ExecutionBinding`, and that is the point. `ExecutionBinding`
+    requires `manifest_checksum` and refuses to be constructed without it —
+    deliberately, because an attempt row must always name the manifest it was
+    submitted under. But the checksum is a property of a BATCH, and the
+    operator resolves its binding once per phase, before any batch has been
+    assembled. `submission_env` used to build an `ExecutionBinding` with
+    `manifest_checksum=None` anyway, which raised `ValueError` on every
+    production call — the operator could not submit anything at all. (Found
+    while writing the round-4 finding #1 routing tests, which construct this
+    binding for real rather than stubbing it.)
+
+    `submit_gathered` is where the two meet: it publishes the manifest, reads
+    these four fields off whatever it was handed, and builds the real
+    `ExecutionBinding` with the checksum it now has. So this carries exactly
+    what the operator can know and nothing it cannot, and the validation
+    stays where the complete fact exists.
+    '''
+
+    job_definition_arn: str
+    image_digest: str
+    job_definition_rev: int
+    release_identity: str
+
+    def __post_init__(self) -> None:
+        missing = [name for name in
+                   ("job_definition_arn", "image_digest",
+                    "job_definition_rev", "release_identity")
+                   if getattr(self, name) in (None, "")]
+        if missing:
+            raise ValueError(
+                "the submission binding is incomplete; missing: "
+                + ", ".join(missing)
+                + ". These are the facts the CI pipeline produces and the "
+                "attempt row must record to be reproducible.")
+
+
+def submission_env(job_type, parameters=None):
 
     '''
     The queue, job definition, binding and clients one submission needs.
 
-    Read from the ENVIRONMENT rather than the master .ini, because these are
-    deployment facts that change with every image build and stack update: the
-    job-definition ARN and revision, the image digest, and the release
-    identity are what the CI pipeline produces and what the attempt row must
-    record to be reproducible. Putting them in a checked-in .ini would make
-    the file wrong the moment the next revision lands.
+    THE QUEUE AND DEFINITION ARE PER JOB TYPE (round-4 finding #1), and they
+    come from the route matrix rather than from the environment. This function
+    used to take `job_type` and ignore it, returning one singular
+    `RAPID_JOB_QUEUE`/`RAPID_JOB_DEFINITION` pair to all three phases. The
+    matrix does not allow that: reference-image runs on the BULK class and
+    science and post-process on PROMPT, so whichever single pair was
+    configured, at least one phase was submitted to a queue whose job
+    definition names the other class — and `validate_route` rejects it at the
+    entrypoint, before any processing, exactly as it is designed to.
+
+    `routes.Route` names the parameter-tree KEYS (`batch/queue-bulk`,
+    `batch/job-definition-science`, ...) and deliberately does not carry the
+    names themselves, so this resolves them through `fetch_parameters` — the
+    same read the entrypoint validates against. One fact, one home: were the
+    names duplicated into the environment they could disagree with the tree
+    the entrypoint checks, and a disagreement there is a rejected submission.
+
+    The rest stay in the ENVIRONMENT, because they are deployment facts that
+    change with every image build: the job-definition revision, the image
+    digest, and the release identity are what the CI pipeline produces and
+    what the attempt row must record to be reproducible.
 
     Every one is REQUIRED. A submission that cannot name its own binding is
     exactly what migration 013's amended submitted-state constraint refuses,
     and defaulting any of them would create rows whose binding does not
     describe the job that ran.
+
+    Parameters
+    ----------
+    job_type : str
+        The phase being submitted. Selects the route, and through it the
+        queue and job definition.
+    parameters : dict, optional
+        Parameter-tree values, relative-keyed, as `fetch_parameters`
+        returns them. Injected by the tests and by a caller that has
+        already read the tree; fetched here when omitted.
     '''
 
-    required = ("RAPID_JOB_QUEUE", "RAPID_JOB_DEFINITION",
-                "RAPID_JOB_DEFINITION_REV", "RAPID_IMAGE_DIGEST",
+    required = ("RAPID_JOB_DEFINITION_REV", "RAPID_IMAGE_DIGEST",
                 "RAPID_RELEASE_IDENTITY", "RAPID_MANIFEST_BUCKET")
     missing = [name for name in required if not os.environ.get(name)]
     if missing:
@@ -301,17 +368,38 @@ def submission_env(job_type):
               "missing {}; quitting...".format(", ".join(missing)))
         exit(64)
 
-    job_definition = os.environ['RAPID_JOB_DEFINITION']
+    from submission.startup import fetch_parameters
+
+    if parameters is None:
+        parameters = fetch_parameters()
+
+    route = routes.route_for(job_type)
+
+    # A tree that does not carry this route's keys cannot bind the phase, and
+    # guessing one would submit to whatever the last phase happened to use —
+    # which is the defect this replaces. One clear message, before submission.
+    binding_names = {}
+    for kind, key in (("queue", route.queue_parameter),
+                      ("job_definition", route.definition_parameter)):
+        value = parameters.get(key)
+        if not value:
+            print("*** Error: the parameter tree does not carry {}, so the "
+                  "{} for job type {} cannot be resolved; quitting...".format(
+                      key, kind.replace("_", " "), job_type))
+            exit(64)
+        binding_names[kind] = value
+
+    job_definition = binding_names["job_definition"]
 
     return {
-        "queue": os.environ['RAPID_JOB_QUEUE'],
+        "queue": binding_names["queue"],
         "job_definition": job_definition,
-        "binding": ExecutionBinding(
+        "workload_class": route.workload_class,
+        "binding": SubmissionBinding(
             job_definition_arn=job_definition,
             job_definition_rev=int(os.environ['RAPID_JOB_DEFINITION_REV']),
             image_digest=os.environ['RAPID_IMAGE_DIGEST'],
-            release_identity=os.environ['RAPID_RELEASE_IDENTITY'],
-            manifest_checksum=None),
+            release_identity=os.environ['RAPID_RELEASE_IDENTITY']),
         "manifest_bucket": os.environ['RAPID_MANIFEST_BUCKET'],
         "manifest_prefix": os.environ.get('RAPID_MANIFEST_PREFIX',
                                           'submissions'),
@@ -432,7 +520,31 @@ def wait_for_submitted(submitted, timeout=None):
 
 
 def production_registrar():
-    """The real registration callback, wired without a StageContext.
+    """A factory for the real registration callback: connection -> callback.
+
+    IT TAKES THE PASS'S CONNECTION (round-4 finding #2), and that is the whole
+    point of the extra layer. This used to return a callback built over
+    `registrar(rapid_db.RAPIDDB, store)` — the class, as a factory — which
+    meant the registrar opened a SECOND, autocommitting connection of its own
+    while `run_registration(regconn, ...)` advanced the watermark on the
+    first. Two connections cannot be one transaction, so product rows became
+    durable before the watermark was attempted, and a crash between them left
+    rows written with the attempt still a candidate: the next pass registered
+    the same products all over again. That is round-3 finding #8, fixed in the
+    registration job and reintroduced here.
+
+    Handed a connection, the registrar builds its handle over that one
+    (`RAPIDDB.borrowing`), whose commits are suppressed, so the product rows
+    and the watermark land in one transaction — the same shape as
+    `entrypoints.job.registrar_for(context, conn)`, which is the pattern this
+    now follows deliberately rather than by coincidence.
+
+    A FACTORY rather than a callback because the operator's three phases each
+    open their own registration connection. One callback built once could only
+    ever borrow one of them, which would put the split back for the other two.
+    The expensive parts — reading the bucket name, building the S3 client and
+    the store — still happen once, here; only the per-connection binding is
+    deferred.
 
     `registrar` takes its database handle as a CALLABLE, so the VPO can build
     one from what it already has — a records bucket name and an S3 client —
@@ -441,9 +553,9 @@ def production_registrar():
     registration came to report success while writing no rows.
 
     The bucket is read from the environment like every other deployment fact
-    this module needs (see `submission_env`), and is REQUIRED: a registrar
-    that cannot find the records it registers from would fail per-attempt,
-    deep inside a pass, rather than here where it is one clear message.
+    this module needs, and is REQUIRED: a registrar that cannot find the
+    records it registers from would fail per-attempt, deep inside a pass,
+    rather than here where it is one clear message.
 
     Returns None where DRY-RUN is explicitly asked for. Production defaults to
     production — the flag has to be set to get a rehearsal, never the other
@@ -466,7 +578,27 @@ def production_registrar():
     from pipeline.runtime.boundaries import S3ObjectStore
 
     store = S3ObjectStore(records_bucket, client=boto3.client("s3"))
-    return registrar(rapid_db.RAPIDDB, store)
+
+    def for_connection(conn):
+        """The callback for ONE registration pass, on ITS connection."""
+        return registrar(lambda: rapid_db.RAPIDDB.borrowing(conn), store)
+
+    return for_connection
+
+
+def registration_callback(factory, conn):
+    """The callback `run_registration` should be given on `conn`.
+
+    A named seam rather than an inline conditional at three call sites: the
+    dry-run factory is None and must stay None (that is what makes
+    `run_registration` pass `dry_run=True`), while a production factory has to
+    be bound to the pass's own connection. Getting that wrong at any one of
+    the three sites reintroduces finding #2 for that phase alone, which is
+    precisely the kind of defect that hides.
+    """
+    if factory is None:
+        return None
+    return factory(conn)
 
 
 #-------------------------------------------------------------------------------------------------------------
@@ -526,14 +658,22 @@ if __name__ == '__main__':
         # for. The operations design still owns the ground-up VPO (workload
         # classes, versioned retry policy, the problems path); this is the
         # minimal loop that drives the seams, not that rebuild.
-        # The registrar is built ONCE for the whole operator loop and handed
-        # to every phase. Building it per phase would open a database handle
-        # per phase for no reason; building it here also means a
-        # misconfiguration is one message at the top rather than three
-        # identical ones spread through the run.
-        registrar_callback = production_registrar()
+        # The registrar FACTORY is built ONCE for the whole operator loop, and
+        # each phase binds it to that phase's own registration connection
+        # (round-4 finding #2). Building it here means a misconfiguration is
+        # one message at the top rather than three identical ones spread
+        # through the run; binding it per connection is what keeps the product
+        # rows and the watermark in one transaction.
+        registrar_factory = production_registrar()
 
-        submission_context = submission_env(routes.JOB_TYPE_REFERENCE_IMAGE)
+        # ONE parameter-tree read for the whole pass. All three phases resolve
+        # their queue and job definition from it, each through its own route,
+        # so the bindings differ by phase (finding #1) while the tree is read
+        # once rather than three times.
+        submission_parameters = fetch_parameters()
+
+        submission_context = submission_env(routes.JOB_TYPE_REFERENCE_IMAGE,
+                                            parameters=submission_parameters)
         run_id = f"vpo-{proc_date}-refimage-{datetime_utc_now:%H%M%S}"
 
         # The window in both forms the queries need. The (field, filter)
@@ -625,7 +765,9 @@ if __name__ == '__main__':
         from database.modules.utils.rapid_db_connect import connection
 
         with connection("rapid-vpo-registration", lane="transaction") as regconn:
-            reg_run = run_registration(regconn, register=registrar_callback)
+            reg_run = run_registration(
+                regconn,
+                register=registration_callback(registrar_factory, regconn))
         print("registration pass:", reg_run.as_dict())
         if reg_run.failed:
             print(f"*** Error: {reg_run.failed} registration(s) failed; quitting...")
@@ -706,7 +848,8 @@ if __name__ == '__main__':
                 min_images_to_coadd=min_images_to_coadd(),
                 make_references=(make_refimages_flag == "True"))
 
-            science_context = submission_env(routes.JOB_TYPE_SCIENCE)
+            science_context = submission_env(
+                routes.JOB_TYPE_SCIENCE, parameters=submission_parameters)
             science_run_id = (f"vpo-{proc_date}-science-{stage_label}-"
                               f"{datetime_utc_now:%H%M%S}")
             with connection("rapid-vpo-submit", lane="transaction") as subconn:
@@ -766,7 +909,10 @@ if __name__ == '__main__':
 
             with connection("rapid-vpo-registration",
                             lane="transaction") as regconn:
-                reg_run = run_registration(regconn, register=registrar_callback)
+                reg_run = run_registration(
+                    regconn,
+                    register=registration_callback(registrar_factory,
+                                                   regconn))
             print("registration pass:", reg_run.as_dict())
             if reg_run.failed:
                 print(f"*** Error: {reg_run.failed} registration(s) failed; quitting...")
@@ -811,7 +957,8 @@ if __name__ == '__main__':
         # gatherer takes the processing date and nothing else.
         postproc_units = gathering.gather_post_process_units(dbh, proc_date)
 
-        postproc_context = submission_env(routes.JOB_TYPE_POST_PROCESS)
+        postproc_context = submission_env(
+            routes.JOB_TYPE_POST_PROCESS, parameters=submission_parameters)
         postproc_run_id = (f"vpo-{proc_date}-postproc-"
                            f"{datetime_utc_now:%H%M%S}")
         with connection("rapid-vpo-submit", lane="transaction") as subconn:
@@ -869,7 +1016,9 @@ if __name__ == '__main__':
         from database.modules.utils.rapid_db_connect import connection
 
         with connection("rapid-vpo-registration", lane="transaction") as regconn:
-            reg_run = run_registration(regconn, register=registrar_callback)
+            reg_run = run_registration(
+                regconn,
+                register=registration_callback(registrar_factory, regconn))
         print("registration pass:", reg_run.as_dict())
         if reg_run.failed:
             print(f"*** Error: {reg_run.failed} registration(s) failed; quitting...")

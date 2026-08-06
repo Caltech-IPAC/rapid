@@ -210,5 +210,269 @@ class ProductionRegistrarTests(unittest.TestCase):
         self.assertEqual(64, caught.exception.code)
 
 
+class SubmissionEnvRoutingTests(unittest.TestCase):
+    """Round-4 finding #1: each phase submits to ITS OWN queue and definition.
+
+    `submission_env` took `job_type` and ignored it, returning one singular
+    `RAPID_JOB_QUEUE`/`RAPID_JOB_DEFINITION` pair to all three phases. The
+    route matrix does not allow that — reference-image runs on the BULK class
+    and science and post-process on PROMPT — so whichever pair was
+    configured, at least one phase was submitted to a queue whose job
+    definition names the other class, and `validate_route` rejects it at the
+    entrypoint before any processing.
+
+    Asserted at the SUBMIT-CALL BOUNDARY: what `submission_env` resolves is
+    what the three call sites pass straight into `submit_gathered` as `queue=`
+    and `job_definition=`, so nothing has to be submitted to AWS to know which
+    queue a phase would reach.
+    """
+
+    #: The tree as it really stands (verified live, 2026-08-06:
+    #: `aws ssm get-parameters-by-path --path /rapid/pipeline/batch`).
+    TREE = {
+        "batch/queue-bulk": "rapid-queue-bulk",
+        "batch/queue-prompt": "rapid-queue-prompt",
+        "batch/job-definition-bulk": "rapid-pipeline-bulk",
+        "batch/job-definition-science": "rapid-pipeline-science",
+    }
+
+    def setUp(self):
+        self._saved = {name: os.environ.get(name)
+                       for name in ("RAPID_JOB_DEFINITION_REV",
+                                    "RAPID_IMAGE_DIGEST",
+                                    "RAPID_RELEASE_IDENTITY",
+                                    "RAPID_MANIFEST_BUCKET",
+                                    "RAPID_JOB_QUEUE",
+                                    "RAPID_JOB_DEFINITION")}
+        os.environ["RAPID_JOB_DEFINITION_REV"] = "7"
+        os.environ["RAPID_IMAGE_DIGEST"] = "sha256:" + "0" * 64
+        os.environ["RAPID_RELEASE_IDENTITY"] = "w8-test"
+        os.environ["RAPID_MANIFEST_BUCKET"] = "rapid-manifests"
+        # The env vars this used to read are deliberately left UNSET: a
+        # binding resolved from them rather than from the tree would now be
+        # a silent regression, so the test would rather fail loudly.
+        os.environ.pop("RAPID_JOB_QUEUE", None)
+        os.environ.pop("RAPID_JOB_DEFINITION", None)
+
+    def tearDown(self):
+        for name, value in self._saved.items():
+            if value is None:
+                os.environ.pop(name, None)
+            else:
+                os.environ[name] = value
+
+    def _resolve(self, job_type):
+        return vpo.submission_env(job_type, parameters=dict(self.TREE))
+
+    # -- one test per phase, as the direction asks -------------------------
+
+    def test_reference_image_is_submitted_to_the_bulk_class(self):
+        context = self._resolve(vpo.routes.JOB_TYPE_REFERENCE_IMAGE)
+
+        self.assertEqual("rapid-queue-bulk", context["queue"])
+        self.assertEqual("rapid-pipeline-bulk", context["job_definition"])
+        self.assertEqual(vpo.routes.CLASS_BULK, context["workload_class"])
+
+    def test_science_is_submitted_to_the_prompt_class(self):
+        context = self._resolve(vpo.routes.JOB_TYPE_SCIENCE)
+
+        self.assertEqual("rapid-queue-prompt", context["queue"])
+        self.assertEqual("rapid-pipeline-science", context["job_definition"])
+        self.assertEqual(vpo.routes.CLASS_PROMPT, context["workload_class"])
+
+    def test_post_process_is_submitted_to_the_prompt_class(self):
+        context = self._resolve(vpo.routes.JOB_TYPE_POST_PROCESS)
+
+        self.assertEqual("rapid-queue-prompt", context["queue"])
+        self.assertEqual("rapid-pipeline-science", context["job_definition"])
+        self.assertEqual(vpo.routes.CLASS_PROMPT, context["workload_class"])
+
+    # -- and the property that makes those three a routing test ------------
+
+    def test_the_three_phases_do_not_share_one_binding(self):
+        """The defect stated directly: reference and science must differ.
+
+        Each assertion above would still pass if `submission_env` returned a
+        constant that happened to match — this is the one that cannot.
+        """
+        reference = self._resolve(vpo.routes.JOB_TYPE_REFERENCE_IMAGE)
+        science = self._resolve(vpo.routes.JOB_TYPE_SCIENCE)
+
+        self.assertNotEqual(reference["queue"], science["queue"])
+        self.assertNotEqual(reference["job_definition"],
+                            science["job_definition"])
+
+    def test_the_binding_recorded_is_the_definition_submitted_to(self):
+        """The attempt row's binding must describe the job that ran.
+
+        Migration 013's submitted-state constraint is what refuses a row whose
+        binding does not, so a definition resolved for the queue but recorded
+        from somewhere else would be a row that cannot be written.
+        """
+        for job_type in (vpo.routes.JOB_TYPE_REFERENCE_IMAGE,
+                         vpo.routes.JOB_TYPE_SCIENCE,
+                         vpo.routes.JOB_TYPE_POST_PROCESS):
+            with self.subTest(job_type=job_type):
+                context = self._resolve(job_type)
+                self.assertEqual(context["job_definition"],
+                                 context["binding"].job_definition_arn)
+
+    def test_every_resolved_queue_is_the_one_the_entrypoint_will_check(self):
+        """`validate_route` re-derives the queue from the SAME tree key.
+
+        Submitting to a queue the entrypoint's own check would reject is the
+        failure mode this finding describes, so the two are compared here
+        rather than assumed to agree.
+        """
+        for job_type in (vpo.routes.JOB_TYPE_REFERENCE_IMAGE,
+                         vpo.routes.JOB_TYPE_SCIENCE,
+                         vpo.routes.JOB_TYPE_POST_PROCESS):
+            with self.subTest(job_type=job_type):
+                context = self._resolve(job_type)
+                route = vpo.routes.validate_route(
+                    job_type, context["workload_class"],
+                    queue_name=context["queue"],
+                    queue_names=dict(self.TREE))
+                self.assertEqual(job_type, route.job_type)
+
+    def test_a_tree_without_this_route_s_keys_is_refused(self):
+        """Guessing would submit to whatever the last phase used — which is
+        the defect. One clear message, before any submission."""
+        with self.assertRaises(SystemExit) as caught:
+            vpo.submission_env(vpo.routes.JOB_TYPE_REFERENCE_IMAGE,
+                               parameters={"batch/queue-prompt": "q"})
+
+        self.assertEqual(64, caught.exception.code)
+
+
+class RegistrarConnectionTests(unittest.TestCase):
+    """Round-4 finding #2: the callback borrows the pass's OWN connection.
+
+    `production_registrar` returned a callback built over
+    `registrar(rapid_db.RAPIDDB, store)` — the class, as a factory — so the
+    registrar opened a SECOND, autocommitting connection while
+    `run_registration(regconn, ...)` advanced the watermark on the first. Two
+    connections cannot be one transaction: product rows became durable before
+    the watermark was attempted, and a crash between them left rows written
+    with the attempt still a candidate.
+
+    THIS TEST FAILS ON TWO CONNECTIONS. What it inspects is the database
+    handle the registrar would build — whether it is `RAPIDDB.borrowing(conn)`
+    over the connection the pass holds, or a fresh one of the registrar's own.
+    """
+
+    def setUp(self):
+        self._saved = {name: os.environ.get(name)
+                       for name in ("RAPID_VPO_DRY_RUN",
+                                    "RAPID_RECORDS_BUCKET")}
+        os.environ.pop("RAPID_VPO_DRY_RUN", None)
+        os.environ["RAPID_RECORDS_BUCKET"] = "roman-rapid-records"
+
+    def tearDown(self):
+        for name, value in self._saved.items():
+            if value is None:
+                os.environ.pop(name, None)
+            else:
+                os.environ[name] = value
+
+    def test_the_factory_binds_the_handle_to_the_connection_it_is_given(self):
+        from database.modules.utils import rapid_db
+
+        borrowed = []
+        opened = []
+
+        class FakeHandle:
+            pass
+
+        def fake_borrowing(conn):
+            borrowed.append(conn)
+            return FakeHandle()
+
+        def fake_construct(*args, **kwargs):
+            opened.append((args, kwargs))
+            return FakeHandle()
+
+        real_borrowing = rapid_db.RAPIDDB.borrowing
+        rapid_db.RAPIDDB.borrowing = staticmethod(fake_borrowing)
+        self.addCleanup(setattr, rapid_db.RAPIDDB, "borrowing", real_borrowing)
+
+        captured = {}
+
+        def fake_registrar(dbh, store):
+            captured["dbh"] = dbh
+            captured["store"] = store
+            return lambda *a, **k: None
+
+        import pipeline.registration.products as products_mod
+        real_registrar = products_mod.registrar
+        products_mod.registrar = fake_registrar
+        self.addCleanup(setattr, products_mod, "registrar", real_registrar)
+
+        factory = vpo.production_registrar()
+        self.assertIsNotNone(factory)
+
+        pass_connection = object()
+        callback = vpo.registration_callback(factory, pass_connection)
+        self.assertIsNotNone(callback)
+
+        # The registrar takes its handle as a CALLABLE; invoking it is what
+        # would open a connection, so that is where the split shows.
+        handle = captured["dbh"]()
+        self.assertIsInstance(handle, FakeHandle)
+
+        # THE ASSERTION THE OLD SHAPE FAILS. `registrar(rapid_db.RAPIDDB,
+        # store)` would have called the CLASS here — opening a second,
+        # autocommitting connection and recording nothing in `borrowed`.
+        self.assertEqual([pass_connection], borrowed,
+                         "the registrar must borrow the pass's connection, "
+                         "not open one of its own")
+
+    def test_each_phase_binds_to_its_own_connection(self):
+        """Three phases, three registration connections, three bindings.
+
+        One callback built once could only ever borrow one of them, which is
+        why the factory is a factory. A regression to a single shared callback
+        shows up here as the same connection borrowed three times.
+        """
+        from database.modules.utils import rapid_db
+
+        borrowed = []
+
+        real_borrowing = rapid_db.RAPIDDB.borrowing
+        rapid_db.RAPIDDB.borrowing = staticmethod(
+            lambda conn: borrowed.append(conn) or object())
+        self.addCleanup(setattr, rapid_db.RAPIDDB, "borrowing", real_borrowing)
+
+        captured = []
+
+        import pipeline.registration.products as products_mod
+        real_registrar = products_mod.registrar
+        products_mod.registrar = (
+            lambda dbh, store: captured.append(dbh) or (lambda *a, **k: None))
+        self.addCleanup(setattr, products_mod, "registrar", real_registrar)
+
+        factory = vpo.production_registrar()
+
+        connections = [object(), object(), object()]
+        for conn in connections:
+            vpo.registration_callback(factory, conn)
+
+        for dbh in captured:
+            dbh()
+
+        self.assertEqual(connections, borrowed)
+
+    def test_a_dry_run_factory_stays_none_through_the_seam(self):
+        """`run_registration` passes `dry_run=register is None`, so binding a
+        dry run to a connection must not manufacture a callback and turn a
+        rehearsal into a production write."""
+        os.environ["RAPID_VPO_DRY_RUN"] = "true"
+
+        factory = vpo.production_registrar()
+
+        self.assertIsNone(factory)
+        self.assertIsNone(vpo.registration_callback(factory, object()))
+
+
 if __name__ == "__main__":
     unittest.main()
