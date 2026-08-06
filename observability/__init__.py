@@ -23,6 +23,10 @@ of this is exercisable without a database — which is how it is tested.
 
 from .attempts import (
     SCHEMA_VERSION,
+    ERROR_CATEGORIES,
+    APPLICATION_ERROR_CATEGORIES,
+    RECONCILER_ERROR_CATEGORIES,
+    ExecutionBinding,
     AttemptIdentity,
     AttemptWriter,
     LifecycleState,
@@ -38,6 +42,10 @@ from .registration import RegistrationDecision, decide, decide_all
 
 __all__ = [
     "SCHEMA_VERSION",
+    "ERROR_CATEGORIES",
+    "APPLICATION_ERROR_CATEGORIES",
+    "RECONCILER_ERROR_CATEGORIES",
+    "ExecutionBinding",
     "AttemptIdentity",
     "AttemptWriter",
     "Decomposition",

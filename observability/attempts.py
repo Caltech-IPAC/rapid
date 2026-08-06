@@ -42,17 +42,45 @@ logger = logging.getLogger(__name__)
 # The schema version these writers produce. Bumped with the migration that
 # changes the record shape; producers and consumers declare what they support
 # (design/observability.md: "the record schema is versioned").
-SCHEMA_VERSION = 1
+#
+# Version 2 is migration 013's amended shape: the application-observed attempt
+# index, the atomic claim-or-create resolver, the logical-job execution
+# binding, the application-closed state with the intended/observed exit split,
+# and the error-category allowlist. Migration 013's constraints gate their new
+# requirements on schema_version >= 2, so a writer that declares 2 is a writer
+# that must supply them.
+SCHEMA_VERSION = 2
 
 
 class LifecycleState(str, enum.Enum):
-    """The five lifecycle states. Values match the DDL's CHECK vocabulary."""
+    """The six lifecycle states. Values match the DDL's CHECK vocabulary."""
 
     SUBMITTED = "submitted"
     STARTED = "started"
+    # Amended in (D:batch-payload-co-design): the application has written its
+    # outcome, product disposition, intended exit and terminal-record
+    # reference, but the scheduler-observed facts are not yet known. The
+    # reconciler's arrival with those facts is what advances the row to
+    # TERMINAL_AFTER_START.
+    APPLICATION_CLOSED = "application_closed"
     TERMINAL_AFTER_START = "terminal_after_start"
     TERMINAL_WITHOUT_START = "terminal_without_start"
     MISSING_OR_CONTRADICTORY = "missing_or_contradictory"
+
+
+# The v1 error-category allowlist (13 categories), mirroring migration 013's
+# attempt_error_categories table. Held here so a producer can validate before
+# the round trip; the database remains the authority — this is a copy for
+# early failure, never a second source of truth.
+APPLICATION_ERROR_CATEGORIES = frozenset({
+    "tool_failure", "input_missing", "input_invalid", "config_invalid",
+    "reference_missing", "db_unavailable", "db_error", "storage_error",
+    "records_error", "resource_exhausted", "internal_error",
+})
+RECONCILER_ERROR_CATEGORIES = frozenset({
+    "scheduler_reclaimed", "scheduler_provisioning",
+})
+ERROR_CATEGORIES = APPLICATION_ERROR_CATEGORIES | RECONCILER_ERROR_CATEGORIES
 
 
 class RapidOutcome(str, enum.Enum):
@@ -133,6 +161,32 @@ class Provenance:
 
 
 @dataclasses.dataclass(frozen=True)
+class ExecutionBinding:
+    """The complete submission-time execution binding.
+
+    Authored ONCE at logical-job scope by the submitter — it is provenance
+    only the submitter knows, and it outlives every attempt of the job — then
+    copied into each attempt row at creation, so a retry row and a
+    reconciler-authored record always carry it (D:batch-payload-co-design).
+
+    Deliberately distinct from `Provenance`, which is the runtime's own
+    startup observation of what it is executing. The two are separate writers
+    of separate facts: disagreement between `image_digest` here and
+    `container_digest` there is a reconciliation signal, not a duplicate.
+
+    `release_identity` may be absent on a job submitted before releases were
+    identified; the DDL requires only the ARN, image digest and manifest
+    checksum at `submitted`.
+    """
+
+    job_definition_arn: str
+    image_digest: str
+    manifest_checksum: str
+    job_definition_rev: int | None = None
+    release_identity: str | None = None
+
+
+@dataclasses.dataclass(frozen=True)
 class Stage:
     """One completed stage execution — span-shaped, written once.
 
@@ -170,9 +224,103 @@ class AttemptWriter:
 
     # -- creation -----------------------------------------------------------
 
+    def create_logical_job(self, logical_job_id: str, run_id: str,
+                           binding: ExecutionBinding,
+                           scheduler_job_id: str | None = None) -> None:
+        """Record the logical job and its execution binding.
+
+        Called ONCE per logical job by the submitter, before its attempt rows
+        are created — `resolve_attempt` copies the binding from here, so a row
+        created before this exists has nothing to copy and is flagged as a
+        reconciliation case rather than fabricated.
+
+        Idempotent by identity: re-submitting the same logical job does not
+        overwrite a binding already recorded. The binding is written once and
+        never updated, so a replayed submission cannot silently rewrite what a
+        running attempt believes it is executing.
+        """
+        sql = (
+            "INSERT INTO logical_jobs ("
+            "  logical_job_id, run_id, job_definition_arn, job_definition_rev,"
+            "  image_digest, release_identity, manifest_checksum,"
+            "  scheduler_job_id"
+            ") VALUES (%s, %s, %s, %s, %s, %s, %s, %s)"
+            " ON CONFLICT (logical_job_id) DO NOTHING"
+        )
+        self._execute(sql, [
+            logical_job_id, run_id, binding.job_definition_arn,
+            binding.job_definition_rev, binding.image_digest,
+            binding.release_identity, binding.manifest_checksum,
+            scheduler_job_id,
+        ])
+        logger.info("recorded logical job %s (image %s)",
+                    logical_job_id, binding.image_digest)
+
+    def resolve_attempt(self, identity: AttemptIdentity, created_at: Any,
+                        submitted_at: Any,
+                        scheduler_job_id: str | None = None,
+                        application_attempt_index: int | None = None,
+                        scheduler_attempt_index: int | None = None) -> int:
+        """Claim-or-create this attempt's row atomically; return its attempt_id.
+
+        The ONLY sanctioned way for the runtime or the reconciler to acquire an
+        attempt row (D:batch-payload-co-design). Neither ever bare-INSERTs:
+        acquisition goes through migration 013's `resolve_attempt` database
+        function, where a transaction-scoped advisory lock per logical job, a
+        post-lock recheck, and two partial unique indexes make a scheduler
+        retry, a reconciler-discovered retry, and a late-starting runtime all
+        resolve to one row.
+
+        Attempt indexes are ONE-BASED, the stored convention: the runtime
+        passes what it read from AWS_BATCH_JOB_ATTEMPT unchanged, and the
+        reconciler normalizes its start-time-ordered derivation to the same
+        origin. At least one index must be supplied — a caller that knows
+        neither is not identifying an attempt.
+        """
+        if application_attempt_index is None and scheduler_attempt_index is None:
+            raise ValueError(
+                "resolve_attempt needs at least one attempt index: an "
+                "application-observed index (the runtime's own "
+                "AWS_BATCH_JOB_ATTEMPT) or a scheduler-observed one (the "
+                "reconciler's normalized derivation)")
+        for name, index in (("application", application_attempt_index),
+                            ("scheduler", scheduler_attempt_index)):
+            if index is not None and index < 1:
+                raise ValueError(
+                    f"attempt indexes are one-based; got {name} index {index}")
+
+        # Every argument is explicitly cast. psycopg2 sends a Python None as
+        # an untyped NULL, which PostgreSQL reports as `unknown`, and a
+        # function call whose arguments are half `unknown` cannot be resolved
+        # to an overload — "function resolve_attempt(unknown, unknown, ...)
+        # does not exist", which is what this looked like live before the
+        # casts. Casting here rather than adding a second overload keeps one
+        # function with one signature.
+        sql = (
+            "SELECT resolve_attempt("
+            "  %s::text, %s::text, %s::text,"
+            "  %s::integer, %s::integer,"
+            "  %s::timestamptz, %s::timestamptz,"
+            "  %s::integer, %s::smallint, %s::text, %s::smallint"
+            ")"
+        )
+        rows = self._execute(sql, [
+            identity.run_id, identity.logical_job_id, scheduler_job_id,
+            application_attempt_index, scheduler_attempt_index,
+            created_at, submitted_at,
+            identity.exposure_id, identity.sca, identity.sky_tile,
+            self.schema_version,
+        ])
+        attempt_id = _single_value(rows)
+        logger.info("resolved attempt %s for %s/%s (app index %s, sched index %s)",
+                    attempt_id, identity.run_id, identity.logical_job_id,
+                    application_attempt_index, scheduler_attempt_index)
+        return attempt_id
+
     def create_submitted(self, identity: AttemptIdentity, created_at: Any,
                          submitted_at: Any,
-                         scheduler_job_id: str | None = None) -> int:
+                         scheduler_job_id: str | None = None,
+                         binding: ExecutionBinding | None = None) -> int:
         """Create one `submitted` row and return its attempt_id.
 
         `created_at` is logical-job creation; `submitted_at` is the moment the
@@ -183,13 +331,31 @@ class AttemptWriter:
 
         `scheduler_job_id` is optional because an array child does not have one
         yet at creation time; `backfill_scheduler_job_ids` fills it in.
+
+        `binding` is REQUIRED at schema_version >= 2: migration 013's amended
+        submitted-state constraint demands the execution binding, and a writer
+        declaring version 2 is one that must supply it. It is checked here
+        rather than left to the database so the failure names the missing
+        thing instead of arriving as a constraint violation.
         """
+        if binding is None and self.schema_version >= 2:
+            raise ValueError(
+                "an execution binding is required to create a submitted "
+                "attempt at schema_version >= 2: the submitted state carries "
+                "the submission-time binding (job-definition ARN, image "
+                "digest, manifest checksum), copied onto every attempt row at "
+                "creation")
+
         sql = (
             "INSERT INTO attempts ("
             "  schema_version, run_id, logical_job_id, scheduler_job_id,"
             "  exposure_id, sca, sky_tile, lifecycle_state,"
-            "  created_at, submitted_at"
-            ") VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)"
+            "  created_at, submitted_at,"
+            "  binding_job_definition_arn, binding_job_definition_rev,"
+            "  binding_image_digest, binding_release_identity,"
+            "  binding_manifest_checksum"
+            ") VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s,"
+            "          %s, %s, %s, %s, %s)"
             " RETURNING attempt_id"
         )
         params = [
@@ -197,6 +363,11 @@ class AttemptWriter:
             scheduler_job_id, identity.exposure_id, identity.sca,
             identity.sky_tile, LifecycleState.SUBMITTED.value,
             created_at, submitted_at,
+            binding.job_definition_arn if binding else None,
+            binding.job_definition_rev if binding else None,
+            binding.image_digest if binding else None,
+            binding.release_identity if binding else None,
+            binding.manifest_checksum if binding else None,
         ]
         rows = self._execute(sql, params)
         attempt_id = _single_value(rows)
@@ -206,6 +377,7 @@ class AttemptWriter:
 
     def create_submitted_for_submission(self, submission: Any, run_id: str,
                                         created_at: Any, submitted_at: Any,
+                                        binding: ExecutionBinding | None = None,
                                         ) -> list[int]:
         """Create one attempt row per array child of a `Submission`.
 
@@ -221,15 +393,25 @@ class AttemptWriter:
         """
         attempt_ids: list[int] = []
         for index, unit in enumerate(submission.manifest.units):
+            logical_job_id = f"{submission.batch_id}:{index}"
             identity = AttemptIdentity(
                 run_id=run_id,
-                logical_job_id=f"{submission.batch_id}:{index}",
+                logical_job_id=logical_job_id,
                 exposure_id=unit.exposure,
                 sca=unit.sca,
             )
+            # The logical job is recorded first, so the binding exists before
+            # any attempt row can need to copy it — and so a runtime that
+            # resolves its own row (rather than claiming this pre-created one)
+            # finds a binding to copy rather than being flagged as an orphan.
+            if binding is not None:
+                self.create_logical_job(
+                    logical_job_id, run_id, binding,
+                    scheduler_job_id=submission.child_job_id(index))
             attempt_ids.append(self.create_submitted(
                 identity, created_at=created_at, submitted_at=submitted_at,
-                scheduler_job_id=submission.child_job_id(index)))
+                scheduler_job_id=submission.child_job_id(index),
+                binding=binding))
         logger.info("created %d attempt rows for batch %s",
                     len(attempt_ids), submission.batch_id)
         return attempt_ids
@@ -258,36 +440,120 @@ class AttemptWriter:
 
     def mark_started(self, attempt_id: int, started_at: Any,
                      provenance: Provenance,
-                     scheduler_job_id: str | None = None) -> None:
+                     scheduler_job_id: str | None = None,
+                     application_attempt_index: int | None = None) -> None:
         """Advance a row to `started`.
 
         Provenance is required here, not optional: the DDL will reject a
         `started` row without it. `scheduler_job_id` may be supplied for a row
         that was created without one and never backfilled — it is never absent
         once a row reaches `started`.
+
+        `application_attempt_index` is required at schema_version >= 2 unless
+        the row already carries one from `resolve_attempt` (the normal path —
+        the resolver sets it as part of claiming). It is written with COALESCE
+        so re-supplying the same value is harmless and a claimed row is never
+        re-indexed.
         """
         sql = (
             "UPDATE attempts SET lifecycle_state = %s, started_at = %s,"
             "  source_sha = %s, container_digest = %s,"
             "  job_definition_rev = %s, config_digest = %s,"
-            "  scheduler_job_id = COALESCE(%s, scheduler_job_id)"
+            "  scheduler_job_id = COALESCE(%s, scheduler_job_id),"
+            "  application_attempt_index ="
+            "    COALESCE(application_attempt_index, %s)"
             " WHERE attempt_id = %s"
         )
         self._execute(sql, [
             LifecycleState.STARTED.value, started_at,
             provenance.source_sha, provenance.container_digest,
             provenance.job_definition_rev, provenance.config_digest,
-            scheduler_job_id, attempt_id,
+            scheduler_job_id, application_attempt_index, attempt_id,
         ])
         logger.info("attempt %s started", attempt_id)
 
+    def mark_application_closed(self, attempt_id: int, ended_at: Any,
+                                application_intended_exit: int,
+                                rapid_outcome: RapidOutcome,
+                                product_disposition: ProductDisposition,
+                                terminal_record_key: str,
+                                terminal_record_sequence: int = 0,
+                                terminal_record_checksum: str | None = None,
+                                error_category: str | None = None,
+                                reconciler_materialized: bool = False) -> None:
+        """Close the application-authored half of an attempt.
+
+        The termination protocol's final database step
+        (D:batch-payload-co-design): the S3 terminal record has ALREADY been
+        written — this transition cites it — so a crash between the two leaves
+        a started row beside a valid record, which the reconciler materializes
+        rather than a closed row citing a record that does not exist.
+
+        The scheduler-observed facts are deliberately not written here: they
+        are not yet known, which is what the state means. The reconciler's
+        `mark_terminal_after_start` supplies them.
+
+        `application_intended_exit` is an INTENT, not an observation — the
+        process has not exited yet when this is written. Under the fail-loud
+        posture a classified application failure still intends exit 0: a
+        nonzero exit is reserved for the unrecordable.
+
+        `reconciler_materialized` is set only by the reconciler, when it
+        projects this transition from a validated S3 record — the one
+        sanctioned projection of application facts by another writer.
+        """
+        if terminal_record_sequence < 0:
+            raise ValueError(
+                f"terminal record sequence is monotonic from 0; got "
+                f"{terminal_record_sequence}")
+        _validate_error_category(error_category)
+
+        sql = (
+            "UPDATE attempts SET lifecycle_state = %s, ended_at = %s,"
+            "  application_intended_exit = %s, rapid_outcome = %s,"
+            "  product_disposition = %s, error_category = %s,"
+            "  terminal_record_key = %s, terminal_record_sequence = %s,"
+            "  terminal_record_checksum = %s, reconciler_materialized = %s"
+            " WHERE attempt_id = %s"
+        )
+        self._execute(sql, [
+            LifecycleState.APPLICATION_CLOSED.value, ended_at,
+            application_intended_exit, _value(rapid_outcome),
+            _value(product_disposition), error_category,
+            terminal_record_key, terminal_record_sequence,
+            terminal_record_checksum, reconciler_materialized, attempt_id,
+        ])
+        logger.info(
+            "attempt %s application-closed (intended exit %s, outcome %s, "
+            "record %s seq %s%s)",
+            attempt_id, application_intended_exit, _value(rapid_outcome),
+            terminal_record_key, terminal_record_sequence,
+            ", reconciler-materialized" if reconciler_materialized else "")
+
     def mark_terminal_after_start(self, attempt_id: int, ended_at: Any,
-                                  process_exit_code: int,
-                                  rapid_outcome: RapidOutcome,
-                                  product_disposition: ProductDisposition,
+                                  scheduler_observed_exit: int,
+                                  scheduler_state: str,
+                                  rapid_outcome: RapidOutcome | None = None,
+                                  product_disposition: ProductDisposition | None = None,
+                                  application_intended_exit: int | None = None,
                                   error_category: str | None = None,
-                                  scheduler_state: str | None = None) -> None:
-        """Close a started attempt.
+                                  terminal_record_key: str | None = None,
+                                  terminal_record_sequence: int | None = None,
+                                  ) -> None:
+        """Close an attempt fully — the RECONCILER's transition.
+
+        Amended (D:batch-payload-co-design): this is no longer the
+        application's closing step. The application closes its own half with
+        `mark_application_closed`; this adds the scheduler-observed facts the
+        application could not know — the scheduler end state and the exit code
+        the container actually produced — and is therefore reconciler-authored.
+
+        `scheduler_observed_exit` and `scheduler_state` are required. The
+        application-authored fields are optional because the normal path
+        already wrote them at application-close; they are accepted here for
+        the case where the reconciler is closing an attempt that never wrote
+        its own record, and are applied with COALESCE so a reconciler pass
+        never overwrites what the application authored.
 
         `rapid_outcome` is the application's own verdict and is deliberately
         independent of `scheduler_state`: SUCCEEDED with rapid_outcome=failure
@@ -296,21 +562,36 @@ class AttemptWriter:
         method never infers one field from the other.
         """
         _validate_scheduler_state(scheduler_state)
+        if scheduler_state is None:
+            raise ValueError(
+                "scheduler_state is required to reach terminal_after_start: "
+                "it is the scheduler-observed fact that distinguishes this "
+                "state from application_closed")
+        _validate_error_category(error_category)
+
         sql = (
             "UPDATE attempts SET lifecycle_state = %s, ended_at = %s,"
-            "  process_exit_code = %s, rapid_outcome = %s,"
-            "  product_disposition = %s, error_category = %s,"
-            "  scheduler_state = COALESCE(%s, scheduler_state)"
+            "  scheduler_observed_exit = %s, scheduler_state = %s,"
+            "  application_intended_exit ="
+            "    COALESCE(application_intended_exit, %s),"
+            "  rapid_outcome = COALESCE(rapid_outcome, %s),"
+            "  product_disposition = COALESCE(product_disposition, %s),"
+            "  error_category = COALESCE(error_category, %s),"
+            "  terminal_record_key = COALESCE(%s, terminal_record_key),"
+            "  terminal_record_sequence ="
+            "    COALESCE(%s, terminal_record_sequence)"
             " WHERE attempt_id = %s"
         )
         self._execute(sql, [
             LifecycleState.TERMINAL_AFTER_START.value, ended_at,
-            process_exit_code, _value(rapid_outcome),
+            scheduler_observed_exit, scheduler_state,
+            application_intended_exit, _value(rapid_outcome),
             _value(product_disposition), error_category,
-            scheduler_state, attempt_id,
+            terminal_record_key, terminal_record_sequence, attempt_id,
         ])
-        logger.info("attempt %s terminal after start (exit %s, outcome %s)",
-                    attempt_id, process_exit_code, _value(rapid_outcome))
+        logger.info(
+            "attempt %s terminal after start (scheduler exit %s, state %s)",
+            attempt_id, scheduler_observed_exit, scheduler_state)
 
     def mark_terminal_without_start(self, attempt_id: int, ended_at: Any,
                                     scheduler_state: str,
@@ -339,7 +620,9 @@ class AttemptWriter:
                          error_category: str,
                          product_disposition: ProductDisposition
                          = ProductDisposition.NONE,
-                         process_exit_code: int | None = None) -> None:
+                         scheduler_observed_exit: int | None = None,
+                         terminal_record_key: str | None = None,
+                         terminal_record_sequence: int | None = None) -> None:
         """Close a started attempt that died without reporting — OOM kill, Spot
         reclaim, host death.
 
@@ -355,15 +638,28 @@ class AttemptWriter:
         conventional 128+SIGKILL rather than a fabricated zero. Passing a code
         that says "killed" is a statement about what happened; passing 0 would
         be a statement that it succeeded.
+
+        Amended (D:batch-payload-co-design): the exit code written here is the
+        SCHEDULER-observed one, because the reconciler is the writer and the
+        scheduler is where the observation came from. The
+        application-intended exit stays absent — the application never got to
+        state an intent, and NULL says exactly that where a fabricated value
+        would not. At schema_version >= 2 the reconciler supplies its
+        reconciler-first record's key and sequence, since a
+        terminal_after_start row must cite the record that accounts for it.
         """
         _validate_scheduler_state(scheduler_state)
-        exit_code = (process_exit_code if process_exit_code is not None
+        exit_code = (scheduler_observed_exit if scheduler_observed_exit is not None
                      else _SIGKILL_EXIT_CODE)
         self.mark_terminal_after_start(
-            attempt_id, ended_at=ended_at, process_exit_code=exit_code,
+            attempt_id, ended_at=ended_at,
+            scheduler_observed_exit=exit_code,
+            scheduler_state=scheduler_state,
             rapid_outcome=RapidOutcome.FAILURE,
             product_disposition=product_disposition,
-            error_category=error_category, scheduler_state=scheduler_state)
+            error_category=error_category,
+            terminal_record_key=terminal_record_key,
+            terminal_record_sequence=terminal_record_sequence)
         logger.warning("attempt %s closed as abrupt loss (%s, exit %s)",
                        attempt_id, error_category, exit_code)
 
@@ -478,6 +774,20 @@ class AttemptWriter:
 # Conventional exit code for a SIGKILLed process (128 + 9). Batch reports 137
 # for an OOM-killed container; this is the fallback when no code was observed.
 _SIGKILL_EXIT_CODE = 137
+
+
+def _validate_error_category(category: str | None) -> None:
+    """Reject a category outside migration 013's v1 allowlist.
+
+    The database's foreign key is the authority; this is an early, local
+    failure so a typo names itself instead of arriving as a 23503 after a
+    round trip. NULL is allowed — a successful attempt has no category.
+    """
+    if category is not None and category not in ERROR_CATEGORIES:
+        raise ValueError(
+            f"{category!r} is not in the v1 error-category allowlist; "
+            f"expected one of " + ", ".join(sorted(ERROR_CATEGORIES))
+            + " (extending the vocabulary is a schema-versioned change)")
 
 
 def _validate_scheduler_state(state: str | None) -> None:

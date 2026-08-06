@@ -22,7 +22,25 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from observability.attempts import AttemptWriter, LifecycleState
+from observability.attempts import (
+    AttemptWriter,
+    ExecutionBinding,
+    LifecycleState,
+)
+
+# The submission-time execution binding every attempt row carries from
+# creation (schema_version 2, migration 013). create_submitted_for_submission
+# records the logical job and copies this onto each child's row, so these
+# integration tests supply it exactly as the real submitter does.
+BINDING = ExecutionBinding(
+    job_definition_arn=(
+        "arn:aws:batch:us-east-1:ACCOUNT:job-definition/"
+        "rapid-science:7"),
+    job_definition_rev=7,
+    image_digest="sha256:" + "a" * 64,
+    release_identity="rapid-test",
+    manifest_checksum="sha256:" + "b" * 64,
+)
 from submission.batching import Batch
 from submission.manifest import Manifest, ProcessingUnit
 from submission.submit import submit_batch
@@ -86,6 +104,18 @@ class SubmissionToAttemptRowsTests(unittest.TestCase):
         self.client = FakeBatchClient()
         self.store = FakeStore()
 
+
+    def attempt_calls(self):
+        """Only the `attempts` INSERTs, in order.
+
+        create_submitted_for_submission interleaves a `logical_jobs` INSERT
+        per unit (the execution binding has to exist before the row that
+        copies it), so a bare walk of every recorded call would index the
+        wrong statement's params.
+        """
+        return [(sql, params) for sql, params in self.execute.calls
+                if "INSERT INTO attempts" in sql]
+
     def submit(self, units):
         return submit_batch(a_batch(units), job_queue="rapid-prompt",
                             job_definition="rapid-science",
@@ -94,7 +124,8 @@ class SubmissionToAttemptRowsTests(unittest.TestCase):
     def test_one_attempt_row_per_array_child_of_a_real_submission(self):
         submission = self.submit([(100, 1), (100, 2), (101, 3)])
         ids = self.writer.create_submitted_for_submission(
-            submission, run_id="run-1", created_at=at(0), submitted_at=at(1))
+            submission, run_id="run-1", created_at=at(0), submitted_at=at(1),
+            binding=BINDING)
 
         self.assertEqual(len(ids), 3)
         self.assertEqual(len(ids), submission.array_size)
@@ -102,16 +133,18 @@ class SubmissionToAttemptRowsTests(unittest.TestCase):
     def test_rows_are_created_in_submitted_state(self):
         submission = self.submit([(100, 1), (100, 2)])
         self.writer.create_submitted_for_submission(
-            submission, run_id="run-1", created_at=at(0), submitted_at=at(1))
-        for _, params in self.execute.calls:
+            submission, run_id="run-1", created_at=at(0), submitted_at=at(1),
+            binding=BINDING)
+        for _, params in self.attempt_calls():
             self.assertIn(LifecycleState.SUBMITTED.value, params)
 
     def test_child_job_ids_match_what_submission_derives(self):
         submission = self.submit([(100, 1), (100, 2), (101, 3)])
         self.writer.create_submitted_for_submission(
-            submission, run_id="run-1", created_at=at(0), submitted_at=at(1))
+            submission, run_id="run-1", created_at=at(0), submitted_at=at(1),
+            binding=BINDING)
 
-        recorded = [params[3] for _, params in self.execute.calls]
+        recorded = [params[3] for _, params in self.attempt_calls()]
         expected = [submission.child_job_id(i) for i in range(3)]
         self.assertEqual(recorded, expected)
 
@@ -120,19 +153,21 @@ class SubmissionToAttemptRowsTests(unittest.TestCase):
         # child job id is the job id itself. One attempt row either way.
         submission = self.submit([(100, 1)])
         ids = self.writer.create_submitted_for_submission(
-            submission, run_id="run-1", created_at=at(0), submitted_at=at(1))
+            submission, run_id="run-1", created_at=at(0), submitted_at=at(1),
+            binding=BINDING)
 
         self.assertEqual(len(ids), 1)
         self.assertFalse(submission.is_array)
-        self.assertEqual(self.execute.calls[0][1][3], submission.job_id)
+        self.assertEqual(self.attempt_calls()[0][1][3], submission.job_id)
 
     def test_unit_identity_is_carried_onto_each_row(self):
         submission = self.submit([(100, 1), (101, 17)])
         self.writer.create_submitted_for_submission(
-            submission, run_id="run-1", created_at=at(0), submitted_at=at(1))
+            submission, run_id="run-1", created_at=at(0), submitted_at=at(1),
+            binding=BINDING)
 
-        exposures = [params[4] for _, params in self.execute.calls]
-        scas = [params[5] for _, params in self.execute.calls]
+        exposures = [params[4] for _, params in self.attempt_calls()]
+        scas = [params[5] for _, params in self.attempt_calls()]
         self.assertEqual(exposures, [100, 101])
         self.assertEqual(scas, [1, 17])
 
@@ -144,7 +179,8 @@ class SubmissionToAttemptRowsTests(unittest.TestCase):
         self.assertEqual(len(self.client.calls), 1)
 
         ids = self.writer.create_submitted_for_submission(
-            submission, run_id="run-1", created_at=at(0), submitted_at=at(1))
+            submission, run_id="run-1", created_at=at(0), submitted_at=at(1),
+            binding=BINDING)
         self.assertEqual(len(ids), 3)
 
 
