@@ -432,11 +432,25 @@ class ExecuteOutcomeTests(unittest.TestCase):
         from pipeline.runtime.stages import StageRecorder
         return StageRecorder()
 
-    def test_a_clean_run_reports_success(self):
+    def _context(self, published=True):
+        """A context whose `published_products` is a REAL mapping.
+
+        `mock.Mock()` answers truthily to every attribute, so a bare Mock made
+        the disposition test below unfalsifiable — it would report `published`
+        whether or not anything was published. The one attribute the
+        disposition now depends on is set explicitly for that reason.
+        """
+        context = mock.Mock(job_type="science")
+        context.published_products = (
+            {"difference_image": {"uri": "s3://p/d.fits", "checksum": "s"}}
+            if published else {})
+        return context
+
+    def test_a_clean_run_that_published_reports_success_and_published(self):
         # `recorder.failed` is a PROPERTY. Calling it — `recorder.failed()` —
         # raised TypeError on every successful non-registration job, and was
         # unreached only because the sole canaried job type raises earlier.
-        context = mock.Mock(job_type="science")
+        context = self._context(published=True)
         recorder = self._recorder()
 
         with mock.patch.object(job, "run_sequence"):
@@ -447,10 +461,51 @@ class ExecuteOutcomeTests(unittest.TestCase):
         self.assertEqual("published", disposition)
         self.assertIsNone(error)
 
+    def test_a_run_that_published_nothing_reports_disposition_none(self):
+        # THE SELF-POISONING LOOP (round-3 finding #7). This returned
+        # `published` unconditionally, and `success`+`published` is the SOLE
+        # pair `observability.registration.decide` registers on — so a
+        # registration job, which publishes no science products, became a
+        # candidate the registrar could only refuse. The refusal counted as a
+        # failure, so the watermark never advanced and it stayed a candidate:
+        # every registration pass poisoned the next. Post-process did the same
+        # over an empty product set after its upload silently no-opped.
+        #
+        # `decide` already SKIPs `none` with "attempt succeeded but produced no
+        # products", so stating the truth needs no new vocabulary.
+        context = self._context(published=False)
+        recorder = self._recorder()
+
+        with mock.patch.object(job, "dispatch_registration"):
+            outcome, disposition, error = job._execute(
+                context, "registration", recorder, mock.Mock())
+
+        self.assertEqual("success", outcome)
+        self.assertEqual("none", disposition)
+        self.assertIsNone(error)
+
+    def test_the_disposition_follows_the_products_not_the_job_type(self):
+        # Derived from what the attempt DID rather than from what kind of job
+        # it was, so a science attempt whose upload stage published nothing is
+        # also kept out of the candidate set instead of being registered as a
+        # success with no products to register.
+        recorder = self._recorder()
+
+        with mock.patch.object(job, "run_sequence"):
+            _o, empty, _e = job._execute(
+                self._context(published=False), "science", recorder,
+                mock.Mock())
+            _o, full, _e = job._execute(
+                self._context(published=True), "science", recorder,
+                mock.Mock())
+
+        self.assertEqual("none", empty)
+        self.assertEqual("published", full)
+
     def test_a_recorded_stage_failure_reports_partial(self):
         from pipeline.runtime.stages import StageRecord
 
-        context = mock.Mock(job_type="science")
+        context = self._context(published=True)
         recorder = self._recorder()
         recorder.record(StageRecord(
             stage_name="one", started_at=None, duration_ms=1,

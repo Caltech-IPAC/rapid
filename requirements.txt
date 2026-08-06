@@ -3,3 +3,10 @@ fastavro
 kafka-python
 aws-msk-iam-sasl-signer-python
 boto3
+# Registration derives the hp6/hp9 healpix indices from the science image's
+# own centre, and both are NOT NULL columns on RefImages and DiffImages — so
+# an environment without healpy cannot register a product at all. It has
+# always been installed in the Dockerfiles and was never declared here, which
+# made "registration works" depend on a fact no dependency list stated
+# (round-3 #2). 1.20.0 is what the deployed image carries.
+healpy

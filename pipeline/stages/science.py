@@ -87,6 +87,13 @@ PSFCAT_INFOBIT = {
     "naive_negative": 2 ** 5,
 }
 
+# Which difference-image catalogue supplies the single `nsexcatsources` the
+# DiffImMeta row carries. The positive ZOGY one, because that is what the
+# monolith wrote into `product_config['ZOGY']['nsexcatsources']` (line 1801,
+# from the count at 1377) and what the legacy registration body read back out
+# of it. See the recording site in `sextractor_on_difference_image`.
+NSEXCATSOURCES_VARIANT = "zogy_positive"
+
 
 # ---------------------------------------------------------------------------
 # Inputs
@@ -665,11 +672,40 @@ def gain_match(context) -> None:
     context.produce("scalefacref", scalefacref)
     context.produce("dxmedianfin", dxmedianfin)
     context.produce("dymedianfin", dymedianfin)
-    context.record(gainmatch_scalefac=scalefac,
-                   gainmatch_dxrms_measured=dxrmsfin,
-                   gainmatch_dyrms_measured=dyrmsfin,
-                   gainmatch_dxmedian=dxmedianfin,
-                   gainmatch_dymedian=dymedianfin)
+    # RECORDED UNDER THE OPERATIONS SCHEMA'S OWN NAMES (round-3 finding #2).
+    #
+    # These five were recorded as `gainmatch_scalefac`,
+    # `gainmatch_dxrms_measured`, `gainmatch_dyrms_measured`,
+    # `gainmatch_dxmedian` and `gainmatch_dymedian` — a private spelling that
+    # matched nothing downstream. `register_diffimmeta` takes them as
+    # `scalefacref`, `dxrmsfin`, `dyrmsfin`, `dxmedianfin`, `dymedianfin`, and
+    # the registrar reads the record and nothing else, so every one of them
+    # raised `MissingRecordFact` on a real attempt. Renaming here rather than
+    # translating in the registrar keeps the record self-describing: a record
+    # whose keys are the schema's keys needs no glossary, and a second consumer
+    # does not have to learn the same five-way mapping to read it.
+    #
+    # **`scalefacref` IS THE RECIPROCAL, and this is the direction that
+    # matters.** `scalefac` is what `gainMatchScienceAndReferenceImages`
+    # returns; `scalefacref = 1./scalefac` is what the reference image is
+    # multiplied by (line 653 above, and the stage docstring). The monolith
+    # computed the same inversion at
+    # `awsBatchSubmitJobs_runSingleSciencePipeline.py:1076` and wrote THE
+    # INVERTED VALUE into `product_config['ZOGY']['scalefacref']` at line 1802
+    # — which is the exact key the legacy registration body read
+    # (`registerCompletedJobsInDB.py:688`) and passed straight into
+    # `register_diffimmeta`. So the DiffImMeta column is already populated with
+    # inverted values, and recording `scalefac` here would put numbers into it
+    # that disagree with every row already there — silently, since both are
+    # plausible positive floats. The un-inverted `scalefac` is kept alongside
+    # under its own name, because it is what the tool actually returned and a
+    # record that carries only a derived quantity cannot be checked.
+    context.record(scalefacref=scalefacref,
+                   gainmatch_scalefac=scalefac,
+                   dxrmsfin=dxrmsfin,
+                   dyrmsfin=dyrmsfin,
+                   dxmedianfin=dxmedianfin,
+                   dymedianfin=dymedianfin)
 
 
 def prepare_zogy_inputs(context) -> None:
@@ -1024,6 +1060,23 @@ def sextractor_on_difference_image(context, variant: str, image: str,
 
     context.produce(f"sexcat_{variant}", catalog)
     context.record(**{f"sexcat_sources_{variant}": len(vals)})
+    # THE ONE VARIANT THE OPERATIONS SCHEMA ASKS FOR (round-3 finding #2).
+    #
+    # `register_diffimmeta` takes a single `nsexcatsources`, and every variant
+    # here recorded its own count under a variant-suffixed name — so the record
+    # carried up to six counts and not the one the registrar names, which
+    # raised `MissingRecordFact` on every real difference image.
+    #
+    # WHICH count it wants is not a judgement call: the monolith wrote
+    # `product_config['ZOGY']['nsexcatsources'] = str(nsexcatsources_zogy_diffimage)`
+    # (`awsBatchSubmitJobs_runSingleSciencePipeline.py:1801`) from the POSITIVE
+    # ZOGY catalogue at line 1377, and the legacy registration body read that
+    # key straight into `register_diffimmeta`
+    # (`registerCompletedJobsInDB.py:687`). The negative, SFFT and naive counts
+    # were never the registered number. Recording any of them under this name
+    # would put a real count in the column that means a different catalogue.
+    if variant == NSEXCATSOURCES_VARIANT:
+        context.record(nsexcatsources=len(vals))
     context.logger.info("sexcat sources (%s) = %d", variant, len(vals))
     return {"catalog": catalog, "values": vals}
 

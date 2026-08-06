@@ -53,6 +53,7 @@ import os
 import sys
 import traceback
 
+from pipeline.registration.facts import unit_provenance
 from pipeline.runtime import environment, logging_setup, science_config
 from pipeline.runtime.boundaries import S3ObjectStore
 from pipeline.runtime.errors import (
@@ -569,6 +570,25 @@ def _run(workload_class: str) -> int:
         context.record(release_content_digest=science_digest,
                        **tessellation_provenance(parameters, science, logger))
 
+        # THE UNIT'S OWN IDENTITY (round-3 finding #2). Provenance carried
+        # three keys — the release digest and the two tessellation facts — and
+        # nothing whatever about WHICH piece of sky this attempt was. Every
+        # identity the registrar needs (`field`, `fid`, `rid`, `sca`, the
+        # reference identity, the ten sky-position numbers, and the healpix
+        # indices derived from the centre) was therefore missing from every
+        # record production could author, so the ported registrar could not
+        # have registered a single real attempt: the first candidate would
+        # raise `MissingRecordFact`, stay a candidate, and fail again on every
+        # later pass.
+        #
+        # Seeded HERE, beside the other submitter-established facts, rather
+        # than recorded by a stage. These are not measurements — they are what
+        # the manifest said this unit IS, known before any stage runs, and true
+        # even for an attempt that fails in its first stage. A failed attempt's
+        # record naming the sky it was about is worth having; one that only
+        # gets its identity if the pipeline reaches the end is not.
+        context.record(**unit_provenance(unit, manifest.job_type))
+
         outcome, disposition, error = _execute(context, manifest.job_type,
                                                recorder, logger)
 
@@ -638,6 +658,31 @@ def _execute(context, job_type, recorder, logger):
         return (RapidOutcome.FAILURE.value, ProductDisposition.NONE.value,
                 serialize_error(exc, redactor=redact))
 
+    # THE DISPOSITION IS WHAT THE ATTEMPT ACTUALLY PUBLISHED (round-3 finding
+    # #7). Both returns below said `published` unconditionally, and that closed
+    # a self-poisoning loop around the registrar.
+    #
+    # `success` + `published` is the SOLE pair `observability.registration
+    # .decide` registers on. A registration job publishes no science products —
+    # it is a pass over OTHER attempts' work — yet it closed with exactly that
+    # pair, so the reconciler made it a candidate and the registrar, which only
+    # knows how to register a reference image or a difference image, raised
+    # `MissingRecordFact("job_type")` on it. That counts as a failure, so the
+    # watermark never advanced, so it stayed a candidate: every registration
+    # pass poisoned the next one, and each pass accumulated another permanent
+    # failure. Post-process closed the same way over an empty product set.
+    #
+    # `decide` already SKIPs `none` with "attempt succeeded but produced no
+    # products", so the fix needs no new column and no new vocabulary — only
+    # for the disposition to state the truth. Deriving it from
+    # `published_products` rather than from the job type is deliberate: it is a
+    # fact about what this attempt did, so a science attempt whose upload stage
+    # somehow published nothing is also kept out of the candidate set rather
+    # than being registered as a success with no products to register.
+    disposition = (ProductDisposition.PUBLISHED.value
+                   if context.published_products
+                   else ProductDisposition.NONE.value)
+
     # `failed` is a property returning the list of failed stage records, not a
     # method — calling it raised TypeError on every successful non-registration
     # job. Unreached so far only because the sole canaried job type is
@@ -646,11 +691,9 @@ def _execute(context, job_type, recorder, logger):
     if failed_stages:
         # No stage raised, but one recorded a failure — a partial outcome, and
         # a real third state rather than a rounded-off success.
-        return (RapidOutcome.PARTIAL.value,
-                ProductDisposition.PUBLISHED.value, None)
+        return (RapidOutcome.PARTIAL.value, disposition, None)
 
-    return (RapidOutcome.SUCCESS.value, ProductDisposition.PUBLISHED.value,
-            None)
+    return (RapidOutcome.SUCCESS.value, disposition, None)
 
 
 # The connection helper (W1) reads the database endpoint from these

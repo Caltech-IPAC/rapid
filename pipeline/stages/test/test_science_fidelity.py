@@ -708,6 +708,129 @@ class PostProcessPpidTests(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
+# Round-3 finding #7 — post-process published nothing, loudly reporting success
+# ---------------------------------------------------------------------------
+
+class PostProcessPublicationTests(unittest.TestCase):
+    """The upload swallowed failures and nothing was ever published.
+
+    `upload_products` called `util.upload_files_to_s3_bucket` and discarded its
+    return. That helper does not raise — it returns a boolean nobody read,
+    prints on failure, and `continue`s over a file it cannot find. And because
+    nothing here ever called `publish_products` or `context.publish`,
+    `context.published_products` stayed `{}`, `build_terminal_record`'s
+    `if products:` guard was false, and the record carried no products key at
+    all — while the entrypoint still closed the attempt (success, published).
+    """
+
+    def test_the_upload_goes_through_publish_products(self):
+        from pipeline.stages import post_process
+
+        source = inspect.getsource(post_process.upload_products)
+        self.assertIn("publish_products", source)
+
+        # The swallow itself: this helper must no longer be CALLED. Checked
+        # against the parsed call names rather than the source text, because
+        # the docstring names the old helper to explain what it did wrong —
+        # a substring check would read the explanation as the defect.
+        tree = ast.parse(source.strip())
+        called = {ast.unparse(node.func) for node in ast.walk(tree)
+                  if isinstance(node, ast.Call)}
+        self.assertNotIn("util.upload_files_to_s3_bucket", called)
+        self.assertIn("publish_products", called)
+
+    def test_the_publishable_helper_selects_what_to_upload(self):
+        # `context.publishable()` rather than an ad-hoc on-disk filter, so all
+        # three upload stages answer "what is a published product" identically.
+        from pipeline.stages import post_process
+
+        source = inspect.getsource(post_process.upload_products)
+        self.assertIn("context.publishable()", source)
+
+    def test_s3objprf_names_the_prefix_the_bytes_land_under(self):
+        """The header pointed at a prefix nothing was ever written to.
+
+        S3OBJPRF was stamped as `f"{ctx.job_type}/{ctx.unit.key}"` — the OLD
+        product-key shape — while the upload has been run- and attempt-scoped
+        since review finding #18. The header is exactly what someone reads to
+        find the object again, so the two must agree.
+        """
+        from pipeline.stages import post_process
+
+        for stage in (post_process.stamp_reference_image,
+                      post_process.stamp_difference_image):
+            source = inspect.getsource(stage)
+            tree = ast.parse(source.strip())
+            keywords = values = None
+            for node in ast.walk(tree):
+                if isinstance(node, ast.keyword) and node.arg == "keywords":
+                    keywords = ast.literal_eval(node.value)
+                if isinstance(node, ast.keyword) and node.arg == "values":
+                    values = node.value.body.elts
+
+            with self.subTest(stage=stage.__name__):
+                slot = keywords.index("S3OBJPRF")
+                expression = ast.unparse(values[slot])
+                self.assertEqual("ctx.product_prefix()", expression)
+                # The old shape must be GONE from the stamped values, not
+                # merely joined by the new one. Checked over the parsed value
+                # expressions rather than the source text so a docstring may
+                # still name the defect it describes.
+                stamped = {ast.unparse(value) for value in values}
+                self.assertFalse(
+                    [text for text in stamped if "unit.key" in text],
+                    "the old job_type/unit key shape is still stamped")
+
+    def test_a_publishing_upload_failure_reaches_the_caller(self):
+        """`publish_products` raises; the old helper returned a boolean.
+
+        Asserted against the real helper rather than the source text, because
+        what matters is that a failed upload cannot be closed as a publication.
+        """
+        import os
+        import tempfile
+
+        from pipeline.runtime.errors import StorageError
+        from pipeline.stages import post_process
+
+        class RefusingS3:
+            def put_object(self, **kwargs):
+                raise RuntimeError("injected upload failure")
+
+        class Ctx:
+            job_type = "post-process"
+            s3 = RefusingS3()
+            logger = type("L", (), {"info": lambda *a, **k: None})()
+
+            def __init__(self, path):
+                self.products = {"difference_image": path}
+                self.published_products = {}
+
+            def parameter(self, name):
+                return "products-bucket"
+
+            def product_prefix(self):
+                return "post-process/run-1/90000/7/attempt-1"
+
+            def publishable(self):
+                return [(n, v) for n, v in sorted(self.products.items())
+                        if isinstance(v, str) and os.path.isfile(v)]
+
+            def publish(self, *a, **k):
+                raise AssertionError("must not publish after a failed upload")
+
+            def record(self, **facts):
+                raise AssertionError("must not record after a failed upload")
+
+        with tempfile.NamedTemporaryFile(suffix=".fits") as handle:
+            handle.write(b"stamped bytes")
+            handle.flush()
+
+            with self.assertRaises(StorageError):
+                post_process.upload_products(Ctx(handle.name))
+
+
+# ---------------------------------------------------------------------------
 # Release-content completeness — every key the stages read must exist
 # ---------------------------------------------------------------------------
 

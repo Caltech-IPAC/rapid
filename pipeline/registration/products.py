@@ -29,6 +29,8 @@ substituting a default is how the old chain registered products of failed runs.
 
 import logging
 
+from submission.routes import JOB_TYPE_REFERENCE_IMAGE, JOB_TYPE_SCIENCE
+
 logger = logging.getLogger("rapid.registration.products")
 
 #: Catalogue types, as `register_refimcatalog` takes them. The legacy body
@@ -298,8 +300,6 @@ def registrar(dbh, store):
     registers a reference and its catalogues, a science attempt registers a
     difference image and its measurements.
     """
-    from submission.routes import JOB_TYPE_REFERENCE_IMAGE, JOB_TYPE_SCIENCE
-
     handle = {"value": None if callable(dbh) else dbh}
 
     def resolve():
@@ -310,8 +310,37 @@ def registrar(dbh, store):
     def register(row, verdict, record=None):
         attempt_id = row.get("attempt_id")
         body = record if record is not None else read_record(store, row)
+
+        # A record carrying NO job type is still a missing fact, and is checked
+        # before the registrable gate: "the record does not say what this was"
+        # and "the record says what this was and it registers nothing" are
+        # different findings, and only the first means the record is
+        # incomplete. Records written before `job_type` was threaded (round 2)
+        # are the ones that land here.
+        if not body.get("job_type"):
+            raise MissingRecordFact("job_type", attempt_id=attempt_id)
+
+        # Filtered here, where the record body is first in hand, because the
+        # candidate query cannot filter on a column the attempts table does not
+        # have. Returning None rather than raising is what stops an
+        # unregistrable type from counting as a failure and staying a candidate
+        # forever — the consumer treats a return as success and advances the
+        # watermark, which is the correct account: there was nothing to
+        # register and that question is now settled for this record sequence.
+        if not is_registrable(body):
+            logger.info(
+                "attempt %s ran as job type %r, which produces no "
+                "operations-table rows; nothing to register",
+                attempt_id, body.get("job_type"))
+            return None
+
         science = body.get("science_provenance") or {}
-        job_type = body.get("job_type") or row.get("job_type")
+        # `row.get("job_type")` used to be a fallback here, to a column that
+        # does not exist: the attempts table has no job_type and
+        # `consumer._COLUMNS` selects none, so it read None on every row it was
+        # ever asked. The record body is the only source, which is the design
+        # anyway — registration reads the record and nothing else.
+        job_type = body["job_type"]
 
         if job_type == JOB_TYPE_REFERENCE_IMAGE:
             return register_reference_image(resolve(), body, science,
@@ -319,6 +348,65 @@ def registrar(dbh, store):
         if job_type == JOB_TYPE_SCIENCE:
             return register_difference_image(resolve(), body, science,
                                              attempt_id)
-        raise MissingRecordFact("job_type", attempt_id=attempt_id)
+        # Unreachable while `REGISTRABLE_JOB_TYPES` and the two branches above
+        # agree — `is_registrable` has already returned for anything else. It
+        # is kept as the guard for exactly that disagreement: a type added to
+        # the registrable set without a body would otherwise fall off the end
+        # of this function and return None, which the consumer would count as
+        # a successful registration that wrote nothing and then advance the
+        # watermark past it. Silent non-registration is the one outcome this
+        # module exists to prevent.
+        raise UnregistrableJobType(job_type, attempt_id=attempt_id)
 
     return register
+
+
+#: The job types that have a registration body. A record whose job type is not
+#: here describes work that produces no operations-table rows — a registration
+#: pass over other attempts, a post-process stamping run — and is not a
+#: candidate. See `is_registrable`.
+REGISTRABLE_JOB_TYPES = frozenset({JOB_TYPE_REFERENCE_IMAGE, JOB_TYPE_SCIENCE})
+
+
+class UnregistrableJobType(ValueError):
+    """The record names a job type that has no registration body.
+
+    Distinct from `MissingRecordFact`: the record is complete and says what
+    kind of work it was, and that kind produces nothing to register. Raised
+    rather than returned so a candidate that reached the registrar in this
+    state is still counted — but `is_registrable` should have filtered it out
+    upstream, so reaching this is itself the finding.
+    """
+
+    def __init__(self, job_type, attempt_id=None):
+        self.job_type = job_type
+        self.attempt_id = attempt_id
+        super().__init__(
+            f"attempt {attempt_id} ran as job type {job_type!r}, which has no "
+            f"registration body: it produces no operations-table rows. "
+            f"Registrable types are "
+            f"{', '.join(sorted(REGISTRABLE_JOB_TYPES)) or '(none resolved)'}.")
+
+
+def is_registrable(record):
+    """Whether this attempt's record describes work a body can register.
+
+    THE CANDIDATE FILTER (round-3 finding #7). The candidate query has no
+    job-type predicate — it cannot have one, because the attempts table has no
+    job_type column and `consumer._COLUMNS` selects none — so every reconciled
+    attempt of every type arrived at the registrar. Registration and
+    post-process attempts closed `(success, published)` just like science ones,
+    and `success`+`published` is the sole pair `decide` registers on, so they
+    became candidates the registrar could only refuse. Each refusal counted as
+    a failure and left the attempt a candidate, so a successful registration
+    pass poisoned every pass after it.
+
+    The disposition fix in the entrypoint closes that at the source — those
+    jobs now close `none`, which `decide` skips. This is the second gate, on
+    the record's own statement of what it was, because the two answer different
+    questions: the disposition says what an attempt produced, and this says
+    whether the registrar knows what to do with it. Attempts closed before the
+    disposition fix shipped are still out there carrying `published`, and this
+    is what keeps them from failing forever.
+    """
+    return (record or {}).get("job_type") in REGISTRABLE_JOB_TYPES
