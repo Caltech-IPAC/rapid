@@ -675,7 +675,17 @@ class AttemptWriter:
             raise ValueError(
                 f"terminal record sequence is monotonic from 0; got "
                 f"{terminal_record_sequence}")
-        _validate_error_category(error_category)
+        # APPLICATION-authored, so the application's half of the vocabulary
+        # is the allowlist here — not the union. `scheduler_reclaimed` and
+        # `scheduler_provisioning` describe things only the scheduler
+        # observer can know, and an application claiming one would be
+        # inventing an observation it never made. Found by W8's battery,
+        # 2026-08-06: `_validate_error_category` checks the union, so this
+        # writer accepted a reconciler category and the design's "no field
+        # has two writers" held only by convention on this path. A
+        # reconciler-materialized close is the same rule — it carries the
+        # APPLICATION's category, copied verbatim from the record.
+        _validate_application_error_category(error_category)
 
         sql = (
             "UPDATE attempts SET lifecycle_state = %s, ended_at = %s,"
@@ -1080,6 +1090,23 @@ def _validate_error_category(category: str | None) -> None:
             f"{category!r} is not in the v1 error-category allowlist; "
             f"expected one of " + ", ".join(sorted(ERROR_CATEGORIES))
             + " (extending the vocabulary is a schema-versioned change)")
+
+
+def _validate_application_error_category(category: str | None) -> None:
+    """Reject a category the APPLICATION is not entitled to author.
+
+    The union allowlist above is right for the reconciler's own writes and
+    for the schema's foreign key, which must admit every category. It is
+    wrong for an application-authored transition: the two reconciler
+    categories are scheduler OBSERVATIONS, and the whole one-author-per-field
+    rule is that the application does not make them.
+    """
+    if category is not None and category in RECONCILER_ERROR_CATEGORIES:
+        raise ValueError(
+            f"{category!r} is reconciler-authored and cannot be set by an "
+            f"application-closed transition; the application's categories "
+            f"are " + ", ".join(sorted(APPLICATION_ERROR_CATEGORIES)))
+    _validate_error_category(category)
 
 
 def _validate_scheduler_state(state: str | None) -> None:
