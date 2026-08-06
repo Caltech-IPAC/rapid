@@ -313,6 +313,10 @@ def _run(workload_class: str) -> int:
     diagnostics_bucket = _required(parameters, PARAM_DIAGNOSTICS_BUCKET)
     records_prefix = _required(parameters, PARAM_RECORDS_PREFIX)
 
+    # Before the first connection, and after the tree is read: the endpoint is
+    # a tree fact, and the connection helper reads it from the environment.
+    export_database_environment(parameters)
+
     workdir = WorkingDirectory.create(job_env.attempt_key)
     # Rebind the logging identifiers now that they are known: every line from
     # here on carries the scheduler job id and attempt index, which is what
@@ -405,6 +409,57 @@ def _execute(context, job_type, recorder, logger):
 
     return (RapidOutcome.SUCCESS.value, ProductDisposition.PUBLISHED.value,
             None)
+
+
+# The connection helper (W1) reads the database endpoint from these
+# environment variables, deliberately: it is used by hosts and services that
+# are not Batch jobs and have no parameter tree. The payload's endpoint is
+# operational configuration and lives in the tree — the co-design moved it
+# there precisely so it would stop depending "on someone remembering
+# job-definition env entries (the rev-5/rev-6 failure class)". This mapping is
+# the bridge, and it is one place rather than a job-definition Environment
+# block per definition.
+DB_PARAMETER_ENV = {
+    "db/server": "DBSERVER",
+    "db/port": "DBPORT",
+    "db/name": "DBNAME",
+    "db/secret-id": "RAPID_DB_SECRET_ID",
+}
+
+
+def export_database_environment(parameters: dict) -> dict:
+    """Map the tree's `db/*` entries onto the connection helper's contract.
+
+    Returns what was set, for the log. Raises `ConfigError` naming every
+    missing key at once rather than one per run — the same reasoning as the
+    per-invocation environment contract, and for the same reason: each
+    discovery otherwise costs a container start.
+
+    Values are exported into `os.environ` because the helper reads them
+    there. That is a process-global write, which is worth doing once at
+    startup in the entrypoint and nowhere else — a stage that wanted a
+    different database would be a stage with a bug.
+    """
+    missing = [key for key in DB_PARAMETER_ENV if not parameters.get(key)]
+    if missing:
+        raise ConfigError(
+            "the pipeline parameter tree does not carry the database "
+            "endpoint; missing: " + ", ".join(sorted(missing))
+            + ". The payload's endpoint is operational configuration and "
+            "lives in the tree, not in job-definition environment entries.",
+            missing=",".join(sorted(missing)))
+
+    exported = {}
+    for key, variable in DB_PARAMETER_ENV.items():
+        os.environ[variable] = parameters[key]
+        exported[variable] = parameters[key]
+    # The secret ID is an identifier, not a credential, so it is safe to log;
+    # the credential itself is fetched from Secrets Manager under the job role
+    # and never passes through here.
+    _logger.info("database endpoint from the parameter tree: %s:%s/%s "
+                 "(secret %s)", exported["DBSERVER"], exported["DBPORT"],
+                 exported["DBNAME"], exported["RAPID_DB_SECRET_ID"])
+    return exported
 
 
 @contextlib.contextmanager
