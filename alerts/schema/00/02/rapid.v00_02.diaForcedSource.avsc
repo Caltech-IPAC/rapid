@@ -1,0 +1,94 @@
+{
+    "namespace": "rapid.v00_02",
+    "name": "diaForcedSource",
+    "doc": "Forced photometry measurement at a diaObject position",
+    "version": "00.02",
+    "type": "record",
+    "fields": [
+        {
+            "name": "diaForcedSourceId",
+            "type": "long",
+            "doc": "Unique identifier for this forced source measurement"
+        },
+        {
+            "name": "diaObjectId",
+            "type": "long",
+            "doc": "Associated diaObject identifier"
+        },
+        {
+            "name": "visit",
+            "type": "long",
+            "doc": "Visit (exposure) identifier"
+        },
+        {
+            "name": "detector",
+            "type": "int",
+            "doc": "Detector (SCA) number"
+        },
+        {
+            "name": "ra",
+            "type": "double",
+            "doc": "Right ascension of forced measurement position; ICRS [deg]"
+        },
+        {
+            "name": "dec",
+            "type": "double",
+            "doc": "Declination of forced measurement position; ICRS [deg]"
+        },
+        {
+            "name": "band",
+            "type": [
+                "null",
+                "string"
+            ],
+            "default": null,
+            "doc": "Filter band name"
+        },
+        {
+            "name": "psfFlux",
+            "type": [
+                "null",
+                "float"
+            ],
+            "default": null,
+            "doc": "Forced PSF flux on difference image [nJy]"
+        },
+        {
+            "name": "psfFluxErr",
+            "type": [
+                "null",
+                "float"
+            ],
+            "default": null,
+            "doc": "Uncertainty in psfFlux [nJy]"
+        },
+        {
+            "name": "scienceFlux",
+            "type": [
+                "null",
+                "float"
+            ],
+            "default": null,
+            "doc": "Forced PSF flux on science image (stub) [nJy]"
+        },
+        {
+            "name": "scienceFluxErr",
+            "type": [
+                "null",
+                "float"
+            ],
+            "default": null,
+            "doc": "Uncertainty in scienceFlux (stub) [nJy]"
+        },
+        {
+            "name": "midpointMjd",
+            "type": "double",
+            "doc": "Effective mid-observation time (UTC scale) [MJD]"
+        },
+        {
+            "name": "timeProcessedMjd",
+            "type": "double",
+            "doc": "Time measurement was processed (UTC scale) [MJD]"
+        }
+    ]
+}

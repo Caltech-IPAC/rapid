@@ -34,7 +34,7 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Any, Callable, TypeAlias
 
-VERSION = "00.01"
+VERSION = "00.02"
 
 # Keep for type checking and function hints
 AvroType: TypeAlias = str | list["AvroType"] | dict[str, Any]
@@ -131,8 +131,7 @@ NOT_USED = Status.NOT_USED
 
 # Shared stub-source descriptions
 _FP = "forced photometry (products not integrated)"
-_SS = "solar-system processing (not run)"
-_MPC = "MPC orbit ingest (not run)"
+_SS = "KONA solar-system association (not integrated)"
 
 
 # ---------------------------------------------------------------------------
@@ -149,8 +148,8 @@ DIA_SOURCE_PARAMS = (
                     IMPLEMENTED, "sources.sca",    attr="sca"),
     Param("diaObjectId",   ["null", "long"],   "Associated diaObject identifier",
                     IMPLEMENTED, "merges_<field>.aid", attr="aid"),
-    Param("ssObjectId",    ["null", "long"],   "Associated solar system object identifier (stub)",
-                    STUB, "solar-system cross-matching (not run yet)"),
+    Param("ssObjectId",    ["null", "long"],   "Associated solar system object identifier",
+                    NOT_USED, "superseded by top-level ssMatches array (MPC designations are strings)"),
 
     # --- Time ------------------------------------------------------------
     #TODO - make sure final Roman decision is UTC, propagate to other times
@@ -294,6 +293,10 @@ DIA_SOURCE_PARAMS = (
                     STUB, "may fold into flags bitmask (spreadsheet: 'flags dict?')"),
     Param("psfFlux_flag",  ["null", "boolean"], "PSF flux measurement failed (stub)",
                     STUB, "may fold into flags bitmask (spreadsheet: 'flags dict?')"),
+    Param("isSSCandidate", ["null", "boolean"], "Suspected solar system object: a known SS object is predicted "
+                                                "within the separation cut of this source (see ssMatches); "
+                                                "null if association was not run (stub)",
+                    STUB, _SS), #TODO: state the separation cut in the doc once chosen
 
     # --- Nearest reference-image source (all stubs) ------------------------------
     Param("distnr",        ["null", "float"],  "Distance to nearest reference-image source (stub) [arcsec]",
@@ -455,59 +458,23 @@ DIA_OBJECT_PARAMS = (
 
 
 # ---------------------------------------------------------------------------
-# ssSource / mpc_orbits -- entire records are stubs
+# ssMatch -- known solar system object predicted near the triggering source
+# (entire record is stubs; filled from KONA per-visit output at assembly time)
 # ---------------------------------------------------------------------------
 
-SS_SOURCE_PARAMS = (
-    # --- Identifiers & associations ---
-    Param("ssSourceId",       "long",             "Unique identifier for this solar system source",
+SS_MATCH_PARAMS = (
+    Param("designation",   "string",           "MPC designation of the solar system object",
                         STUB, _SS),
-    Param("diaSourceId",      "long",             "Associated diaSource identifier",
+    Param("ra",            "double",           "Predicted right ascension of the object at midpointMjd; ICRS [deg]",
                         STUB, _SS),
-    Param("ssObjectId",       ["null", "long"],   "Associated solar system object identifier",
+    Param("dec",           "double",           "Predicted declination of the object at midpointMjd; ICRS [deg]",
                         STUB, _SS),
-
-    # --- Geometry ---
-    Param("heliocentricX",    ["null", "double"], "Heliocentric x position [AU]",
+    Param("sep",           "float",            "Angular separation from the diaObject position [arcsec]",
                         STUB, _SS),
-    Param("heliocentricY",    ["null", "double"], "Heliocentric y position [AU]",
+    Param("pa",            "float",            "Position angle from the diaObject to the object, East of North [deg]",
                         STUB, _SS),
-    Param("heliocentricZ",    ["null", "double"], "Heliocentric z position [AU]",
+    Param("predVMag",      ["null", "float"],  "Predicted V-band magnitude from MPC H/G photometric parameters [mag]",
                         STUB, _SS),
-    Param("phaseAngle",       ["null", "float"],  "Phase angle [deg]",
-                        STUB, _SS),
-    Param("heliocentricDist", ["null", "float"],  "Heliocentric distance [AU]",
-                        STUB, _SS),
-    Param("topocentricDist",  ["null", "float"],  "Topocentric distance [AU]",
-                        STUB, _SS),
-)
-
-MPC_ORBITS_PARAMS = (
-    # --- Identifier ---
-    Param("id",    "string",           "MPC designation or packed designation",
-                        STUB, _MPC),
-
-    # --- Orbital elements ---
-    Param("a",     ["null", "double"], "Semi-major axis [AU]",
-                        STUB, _MPC),
-    Param("e",     ["null", "double"], "Eccentricity",
-                        STUB, _MPC),
-    Param("incl",  ["null", "double"], "Inclination [deg]",
-                        STUB, _MPC),
-    Param("Omega", ["null", "double"], "Longitude of ascending node [deg]",
-                        STUB, _MPC),
-    Param("omega", ["null", "double"], "Argument of perihelion [deg]",
-                        STUB, _MPC),
-    Param("M",     ["null", "double"], "Mean anomaly [deg]",
-                        STUB, _MPC),
-    Param("epoch", ["null", "double"], "Epoch of orbital elements [MJD]",
-                        STUB, _MPC),
-
-    # --- Photometric parameters ---
-    Param("H",     ["null", "float"],  "Absolute magnitude [mag]",
-                        STUB, _MPC),
-    Param("G",     ["null", "float"],  "Slope parameter",
-                        STUB, _MPC),
 )
 
 
@@ -538,11 +505,11 @@ ALERT_PARAMS = (
                                  "Forced photometry history at the object position",
                         STUB, _FP),
 
-    # --- Solar system (all stubs) ---------------------------------------------
-    Param("ssSource",           ["null", "@ssSource"],   "Solar system source association (stub)",
+    # --- Solar system (stub) ---------------------------------------------------
+    Param("ssMatches",          ["null", {"type": "array", "items": "@ssMatch"}],
+                                "Nearest known solar system objects within the cutout at the triggering "
+                                "epoch; null if association was not run, empty if none found (stub)",
                         STUB, _SS),
-    Param("mpc_orbits",         ["null", "@mpc_orbits"], "MPC orbital elements (stub)",
-                        STUB, _MPC),
 
     # --- Image cutouts ----------------------------------------------------------
     Param("cutoutDifference",   ["null", "bytes"],   "FITS cutout of difference image",
@@ -568,8 +535,7 @@ RECORDS = (
     Record("diaSource",       "Individual source detection on a difference image",       DIA_SOURCE_PARAMS),
     Record("diaForcedSource", "Forced photometry measurement at a diaObject position",   DIA_FORCED_SOURCE_PARAMS),
     Record("diaObject",       "Astronomical object derived from DIASources",             DIA_OBJECT_PARAMS),
-    Record("ssSource",        "Solar system source association (stub)",                  SS_SOURCE_PARAMS),
-    Record("mpc_orbits",      "MPC orbital elements (stub)",                             MPC_ORBITS_PARAMS),
+    Record("ssMatch",         "Known solar system object predicted near the triggering source (stub)", SS_MATCH_PARAMS),
     Record("alert",           "Top-level alert record",                                  ALERT_PARAMS),
 )
 
