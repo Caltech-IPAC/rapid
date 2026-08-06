@@ -14,12 +14,20 @@ that cannot parse survived a green suite. A stub cannot fail this way and
 so cannot prove the fix; only a server can. This script therefore EXECUTES
 both branches against a real PostgreSQL and reports what the server said.
 
-It is deliberately additive and self-contained: it creates its own
-temporary table in a schema of its own, runs the two queries against it,
-and drops the schema. It never reads or writes L2Files or any other
-operational table — the fixture below carries only the columns this one
-query names, which is all that is needed to prove the SQL parses, binds
-and executes.
+READ-ONLY, and against the REAL ``l2files``. An earlier shape of this
+probe built its own fixture schema; ``rapid_pipeline`` has no CREATE
+privilege on the database (correctly — it is a least-privilege service
+role), and the fixture was never the point. What is under test is whether
+PostgreSQL ACCEPTS each branch, and the deployed table with the deployed
+q3c extension answers that better than a fixture would: it is the actual
+schema the query names, so a column or an operator that has drifted shows
+up here rather than being reproduced faithfully in a stand-in.
+
+It writes NOTHING. Both calls are SELECTs through the real method, and the
+transaction is rolled back before closing. The row COUNTS are whatever the
+table happens to hold — the assertions are about the server accepting the
+SQL and about the two branches differing in the documented direction, not
+about how much data exists.
 
 Run it on rapid-admin (team policy: never the laptop), inside the pipeline
 image, with DBSERVER/DBPORT/DBNAME and RAPID_DB_SECRET_ID set:
@@ -29,10 +37,7 @@ image, with DBSERVER/DBPORT/DBNAME and RAPID_DB_SECRET_ID set:
 Exit code is the result: 0 both branches proven, 1 something failed.
 """
 
-import datetime
-import os
 import sys
-import uuid
 
 from database.modules.utils import rapid_db_connect as dbc
 from submission.gathering import (
@@ -56,40 +61,43 @@ def fail(name, detail):
     failures.append(name)
 
 
-#: The columns the overlap query names, and nothing else. q3c is an
-#: extension the operational database has; this fixture is queried through
-#: the SAME method, so whether q3c is present is answered by the run
-#: rather than assumed here.
-FIXTURE_DDL = """
-create table {schema}.l2files (
-    rid        bigint primary key,
-    fid        integer,
-    ra0        double precision, dec0 double precision,
-    ra1        double precision, dec1 double precision,
-    ra2        double precision, dec2 double precision,
-    ra3        double precision, dec3 double precision,
-    ra4        double precision, dec4 double precision,
-    filename   text,
-    expid      bigint,
-    sca        integer,
-    field      integer,
-    mjdobs     double precision,
-    exptime    double precision,
-    infobits   integer,
-    status     integer,
-    vbest      integer,
-    version    integer
-)
-"""
+
+
+#: Half-width of the box put around a chosen row, in degrees. Small enough
+#: to be a plausible tile and large enough that a frame's own corners fall
+#: inside it, which is what makes the polygon predicates select the row.
+_BOX = 0.01
+
+#: Where to look when the table has no rows to point at. The assertions
+#: about PARSEABILITY hold at any position; only the exclusion semantics
+#: need real data.
+_FALLBACK = (10.0, 20.0)
+
+
+def _populated_position(conn):
+    """A sky position the deployed table actually has rows near, and its fid.
+
+    Chosen from the data rather than hard-coded, so this probe exercises
+    the EXCLUSION as well as the parse wherever it is run and whatever the
+    survey has produced by then. Returns (ra, dec, fid) or None.
+
+    The same predicates the query uses decide what counts as usable —
+    ``status > 0 and vbest > 0`` — so a position picked here is one the
+    method can genuinely return rows for.
+    """
+    with conn.cursor() as cur:
+        cur.execute(
+            "select ra0, dec0, a.fid from L2FileMeta a, L2Files b "
+            "where a.rid = b.rid and status > 0 and vbest > 0 "
+            "order by a.rid limit 1")
+        row = cur.fetchone()
+    if row is None:
+        return None
+    return float(row[0]), float(row[1]), int(row[2])
 
 
 def main():
-    stamp = datetime.datetime.now(datetime.timezone.utc).strftime(
-        "%Y%m%dT%H%M%SZ")
-    schema = f"fixe_overlap_{stamp}_{uuid.uuid4().hex[:6]}".lower()
-
     print("=== live: both branches of the overlap exclusion clause ===")
-    print(f">> schema  {schema}")
     print(f">> sentinel REFERENCE_OVERLAP_NO_EXCLUSION = "
           f"{REFERENCE_OVERLAP_NO_EXCLUSION!r}")
 
@@ -99,7 +107,15 @@ def main():
           None, REFERENCE_OVERLAP_NO_EXCLUSION)
 
     with dbc.connection("fixe-overlap-sql", lane="transaction") as conn:
-        _run(conn, schema)
+        try:
+            _run(conn)
+        finally:
+            # Nothing was written; the rollback is belt-and-braces so this
+            # can never be the probe that left a transaction open.
+            try:
+                conn.rollback()
+            except Exception:  # noqa: BLE001
+                pass
 
     print()
     if failures:
@@ -109,113 +125,84 @@ def main():
     return 0
 
 
-def _run(conn, schema):
+def _run(conn):
     from database.modules.utils import rapid_db
-    from database.modules.utils.rapid_db_connect import qualified_identifier
 
-    created = False
-    try:
-        with conn.cursor() as cur:
-            # `qualified_identifier` is the only sanctioned way to put a
-            # name into SQL text in this repo (rapid_db_connect), so the
-            # generated schema name goes through it rather than a format.
-            cur.execute("create schema " + qualified_identifier(schema).as_string(conn))
-            created = True
-            cur.execute(FIXTURE_DDL.format(
-                schema=qualified_identifier(schema).as_string(conn)))
+    handle = rapid_db.RAPIDDB.borrowing(conn)
 
-            # Three frames on one tile in one filter. Their absolute sky
-            # position does not matter — the cone/polygon predicates are
-            # given the same centre the rows carry, so all three are inside
-            # it and the EXCLUSION is the only thing that varies between
-            # the two branches.
-            for rid, mjd in ((9001, 60000.0), (9002, 60001.0),
-                             (9003, 60002.0)):
-                cur.execute(
-                    "insert into " + qualified_identifier(schema).as_string(conn)
-                    + ".l2files (rid, fid, ra0, dec0, ra1, dec1, ra2, dec2, "
-                      "ra3, dec3, ra4, dec4, filename, expid, sca, field, "
-                      "mjdobs, exptime, infobits, status, vbest, version) "
-                      "values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, "
-                      "%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
-                    (rid, 1,
-                     10.0, 20.0, 10.01, 20.01, 10.01, 19.99,
-                     9.99, 19.99, 9.99, 20.01,
-                     f"f{rid}.fits", rid, 1, 1, mjd, 100.0, 0, 1, 1, 1))
-        conn.commit()
-        print(">> fixture: 3 rows on one tile, filter 1")
+    found = _populated_position(conn)
+    if found is None:
+        ra, dec = _FALLBACK
+        fid = 1
+        print(f">> no usable L2 rows in the table; asking at "
+              f"({ra}, {dec}) fid {fid}. Both branches are still proven to "
+              f"PARSE, which is the whole of finding #3.")
+    else:
+        ra, dec, fid = found
+        print(f">> asking at ({ra}, {dec}) fid {fid}, taken from a real row")
 
-        handle = rapid_db.RAPIDDB.borrowing(conn)
+    # The centre, then a box of four corners around it — ten values, which
+    # is how the method spells its signature.
+    position = (ra, dec,
+                ra + _BOX, dec + _BOX, ra + _BOX, dec - _BOX,
+                ra - _BOX, dec - _BOX, ra - _BOX, dec + _BOX)
 
-        # The method reads the table by an unqualified name, so the
-        # fixture schema is put in front of the search path for this
-        # connection. Nothing operational is reachable ahead of it.
-        with conn.cursor() as cur:
-            cur.execute("set search_path to "
-                        + qualified_identifier(schema).as_string(conn)
-                        + ", public")
-        conn.commit()
+    # -- BRANCH 1: no exclusion — the branch that could not parse --------
 
-        # TEN values: the tile CENTRE (ra0/dec0) then the four corners, which
-        # is how the method spells its signature. The centre anchors the cone
-        # search; the corners are what the polygon predicates test.
-        corners = (10.0, 20.0,
-                   10.01, 20.01, 10.01, 19.99, 9.99, 19.99, 9.99, 20.01)
+    open_rows = handle.get_overlapping_l2files(
+        REFERENCE_OVERLAP_NO_EXCLUSION, fid,
+        REFERENCE_OVERLAP_OPEN_MJDOBS, *position,
+        radius_of_initial_cone_search=0.18)
+    open_code = getattr(handle, "exit_code", None)
 
-        # -- BRANCH 1: no exclusion (the branch that could not parse) ----
+    # THE ASSERTION THE DEFECT FAILS. Before the fix the server refused to
+    # parse `a.rid IS NOT 'null'`, `get_overlapping_l2files` caught the
+    # DatabaseError, set exit_code 67 and returned None — so gathering saw
+    # "no overlapping files" for every field, forever.
+    check("open branch: the server accepted the SQL (exit_code 0)",
+          0, open_code)
+    if open_rows is None:
+        fail("open branch: a result set was returned",
+             "None — the query failed, which is the finding itself")
+        return
+    print(f">> open branch returned {len(open_rows)} row(s)")
 
-        rows = handle.get_overlapping_l2files(
-            REFERENCE_OVERLAP_NO_EXCLUSION, 1,
-            REFERENCE_OVERLAP_OPEN_MJDOBS, *corners,
-            radius_of_initial_cone_search=0.18)
-        code = getattr(handle, "exit_code", None)
+    # -- BRANCH 2: a real rid is excluded --------------------------------
 
-        check("open branch: the server accepted the SQL (exit_code 0)",
-              0, code)
-        if rows is None:
-            fail("open branch: rows returned",
-                 "None — the query failed, which is the finding itself")
-        else:
-            check("open branch: excludes nothing (all 3 rows)",
-                  3, len(rows))
+    # Take the exclusion target from what the open branch actually
+    # returned, so this works against whatever the deployed table holds.
+    # With no rows there is nothing to exclude and the branch is exercised
+    # for PARSEABILITY alone, which is still the property under test.
+    excluded = int(open_rows[0][0]) if open_rows else 0
 
-        # -- BRANCH 2: a real rid is excluded ---------------------------
+    excl_rows = handle.get_overlapping_l2files(
+        excluded, fid, REFERENCE_OVERLAP_OPEN_MJDOBS, *position,
+        radius_of_initial_cone_search=0.18)
+    excl_code = getattr(handle, "exit_code", None)
 
-        rows = handle.get_overlapping_l2files(
-            9002, 1, REFERENCE_OVERLAP_OPEN_MJDOBS, *corners,
-            radius_of_initial_cone_search=0.18)
-        code = getattr(handle, "exit_code", None)
+    check("exclusion branch: the server accepted the SQL (exit_code 0)",
+          0, excl_code)
+    if excl_rows is None:
+        fail("exclusion branch: a result set was returned",
+             "None — the query failed")
+        return
+    print(f">> exclusion branch (rid {excluded}) returned "
+          f"{len(excl_rows)} row(s)")
 
-        check("exclusion branch: the server accepted the SQL (exit_code 0)",
-              0, code)
-        if rows is None:
-            fail("exclusion branch: rows returned", "None — the query failed")
-        else:
-            check("exclusion branch: drops exactly the named rid",
-                  2, len(rows))
-            returned = sorted(int(row[0]) for row in rows)
-            check("exclusion branch: the excluded rid is the one asked for",
-                  [9001, 9003], returned)
+    # -- and that the two branches genuinely differ ----------------------
 
-    except Exception as exc:  # noqa: BLE001 - reported, then cleaned up
-        fail("the probe itself", f"{type(exc).__name__}: {exc}")
-        try:
-            conn.rollback()
-        except Exception:  # noqa: BLE001
-            pass
-    finally:
-        if created:
-            try:
-                with conn.cursor() as cur:
-                    cur.execute("set search_path to public")
-                    cur.execute(
-                        "drop schema "
-                        + qualified_identifier(schema).as_string(conn)
-                        + " cascade")
-                conn.commit()
-                print(f">> dropped schema {schema}")
-            except Exception as exc:  # noqa: BLE001
-                print(f"!! could not drop schema {schema}: {exc}")
+    if not open_rows:
+        print(">> no rows near this position: both branches proven to "
+              "PARSE and execute, but the exclusion itself is untested "
+              "here. The unit suite covers the emitted shape.")
+        return
+
+    check("the exclusion branch drops exactly the rid it was given",
+          len(open_rows) - 1, len(excl_rows))
+    check("the excluded rid is absent from the exclusion branch",
+          False, excluded in {int(row[0]) for row in excl_rows})
+    check("the open branch excluded nothing",
+          True, excluded in {int(row[0]) for row in open_rows})
 
 
 if __name__ == "__main__":

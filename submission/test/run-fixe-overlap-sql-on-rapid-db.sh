@@ -19,10 +19,13 @@
 # the fix is proven by executing it, not by asserting its shape (the shape
 # is checked too, cheaply, in database/modules/utils/test/test_rapid_db.py).
 #
-# ADDITIVE AND SELF-CONTAINED. The probe creates its own schema and a
-# fixture table carrying only the columns this one query names, runs both
-# branches against it, and drops the schema. It never reads or writes
-# L2Files or any other operational table.
+# READ-ONLY, against the REAL l2files. An earlier shape built its own
+# fixture schema; rapid_pipeline has no CREATE privilege on the database
+# (correctly — least-privilege service role, and the first run of this
+# probe is what established that), and the fixture was never the point.
+# The deployed table with the deployed q3c extension is a better witness
+# than a stand-in: it is the actual schema the query names. Both calls are
+# SELECTs and the transaction is rolled back before closing.
 #
 # Usage: run-fixe-overlap-sql-on-rapid-db.sh [image-ref]
 # Exits 0 only if every assertion in the probe passed.

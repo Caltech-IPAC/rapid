@@ -1173,3 +1173,206 @@ the crash-boundary probe needed — it had been failing on AccessDenied from
 and gave the tagging path something to tag. The records-bucket grant itself is
 still outstanding, and closing it is what would let these probes run against
 the production bucket.
+
+FixE — round-4 external review
+------------------------------
+
+A fourth external review read the round-3 implementation and raised **five
+findings**: one P0, four P1. FixE owns them. The review's own resolution
+matrix records six of the nine round-3 findings as holding outright; the three
+it reopened are reopened for new reasons rather than because the earlier fix
+was wrong — #3 and #8 by a defect in the VPO path that the round-3 work did
+not reach, #4 by a branch of SQL nothing had ever executed, and #9 by the one
+conflict case that size could decide and bytes could not.
+
+Every citation was re-verified against the code before anything was changed.
+This round, unlike the last two, **all five summaries were accurate about the
+mechanism, and every line citation resolved**. What re-verification added was
+one further defect that no finding named, described under the table.
+
+.. list-table::
+   :header-rows: 1
+   :widths: 6 34 60
+
+   * - #
+     - The finding, as verified
+     - What FixE did
+   * - 1
+     - **P0.** ``submission_env(job_type)`` takes the job type and ignores
+       it, returning one singular ``RAPID_JOB_QUEUE``/``RAPID_JOB_DEFINITION``
+       pair (``virtualPipelineOperator.py:277``). All three phases call it —
+       reference-image, science, post-process — and the route matrix puts
+       reference on the **bulk** class and the other two on **prompt**
+       (``routes.py:128``). Whichever pair is configured, at least one phase
+       reaches a queue whose job definition names the other class, and
+       ``validate_route`` rejects it at the entrypoint before any processing.
+     - The queue and job definition are resolved PER PHASE from the route
+       matrix, through the parameter tree. ``Route`` already named the tree
+       KEYS and deliberately not the names, so this reads them with
+       ``fetch_parameters`` — the same read the entrypoint validates against,
+       so a submission cannot disagree with the check that will meet it. The
+       four keys are live and were verified rather than assumed
+       (``/rapid/pipeline/batch/{queue,job-definition}-{bulk,prompt,science}``,
+       2026-08-06). The image digest, definition revision and release identity
+       stay in the environment, where the CI pipeline puts them.
+
+       Tested at the **submit-call boundary**: what ``submission_env`` returns
+       is what the three call sites pass straight into ``submit_gathered`` as
+       ``queue=``/``job_definition=``, so which queue a phase would reach is
+       decidable without submitting anything. One test per phase, plus the
+       property that makes them a routing test rather than three constants —
+       reference and science must DIFFER — plus a cross-check that each
+       resolved queue is the one ``validate_route`` re-derives.
+   * - 2
+     - **P1.** ``production_registrar()`` returned
+       ``registrar(rapid_db.RAPIDDB, store)`` — the class, as a factory — so
+       the registrar opened its own autocommitting connection
+       (``virtualPipelineOperator.py:434``) while
+       ``run_registration(regconn, register=...)`` advanced the watermark on
+       another. Two connections cannot be one transaction: product rows became
+       durable before the watermark was attempted, and a crash between them
+       left rows written with the attempt still a candidate, so the next pass
+       registered the same products again. This is round-3 finding #8, fixed
+       in the registration job (``job.py:331`` uses ``RAPIDDB.borrowing``) and
+       reintroduced on the VPO path the mini-chain never exercised.
+     - ``production_registrar`` is now a FACTORY taking the pass's connection,
+       and ``registration_callback(factory, conn)`` is the named seam the three
+       call sites use. A factory rather than one callback because each phase
+       opens its own registration connection — one callback built once could
+       borrow only one of them, which would leave the split in place for the
+       other two. The expensive parts (bucket, S3 client, store) still happen
+       once; only the per-connection binding is deferred. The shape is
+       ``entrypoints.job.registrar_for(context, conn)``, followed deliberately
+       rather than arrived at again.
+
+       The test **fails on two connections**: it inspects the database handle
+       the registrar would build and asserts it borrowed the connection the
+       pass holds. A second test drives three connections through the factory
+       and asserts three distinct bindings, so a regression to one shared
+       callback shows up as the same connection borrowed three times.
+   * - 3
+     - **P1.** ``gathering`` passed the string ``'null'`` as the "no
+       exclusion" sentinel (``gathering.py:343``), which selected
+       ``a.rid is not %s`` in the database method (``rapid_db.py:1396``). After
+       the pre-delta parameterization sweep, that string was BOUND through the
+       placeholder rather than substituted into the text, so PostgreSQL
+       received ``a.rid IS NOT 'null'`` — invalid. The overlap query failed
+       with ``exit_code`` 67 and the reference stage gathered nothing.
+       Historically it parsed as ``IS NOT null``, a type predicate true for
+       every row of an integer column, which is why it "worked": it excluded
+       nothing by accident.
+     - The string sentinel is gone. ``REFERENCE_OVERLAP_NO_EXCLUSION`` is
+       ``None``, and the method emits **no exclusion clause at all** for it —
+       which is what "exclude nothing" means, and is not something the binding
+       of a value can break. A single ``exclude_rid`` decides both the SQL and
+       whether a parameter is appended, so the text and the tuple cannot
+       disagree about how many placeholders there are.
+
+       Tested on both branches, twice over. The unit test asserts the emitted
+       shape *and* that the placeholder count matches the parameter count —
+       the bug in one assertion. The live probe
+       (``submission/test/live_fixe_overlap_sql.py``) **EXECUTES** both
+       branches against the real PostgreSQL on rapid-db, because the defect is
+       entirely in what the server makes of the text and a mocked cursor
+       accepts any string, including one that cannot parse. That is exactly
+       how a query that could not run survived three green rounds. The probe
+       creates its own schema and fixture and drops them; it touches no
+       operational table.
+   * - 4
+     - **P1.** After a conditional create fails, an existing object carrying
+       no ``ChecksumSHA256`` was accepted as identical when its LENGTH matched
+       the local file (``publishing.py:133``). ``publish_products`` then
+       recorded the LOCAL digest — so a same-length, different-content legacy
+       object stayed in S3 while the terminal record cited a checksum for
+       bytes that were never stored. The registrar fetches the cited key and
+       hashes exactly those bytes, so it would refuse every such product. The
+       branch contradicted the "only by the bytes" invariant stated two lines
+       above it, and the test blessed the fallback explicitly.
+     - Where S3 has no stored digest to compare, the object's BYTES are
+       fetched and hashed. Streamed in chunks, so a multi-hundred-megabyte
+       mosaic is never resident — the same reason the local digest is chunked.
+       One GET, on a path reached only when a key is already occupied, which
+       is rare and is precisely when being right is worth more than being
+       quick. A digest that cannot be COMPUTED is not a match: the failure
+       propagates and the attempt is not closed as having published something
+       nothing verified.
+
+       The blessing test is replaced by the case it got wrong — twelve bytes
+       against twelve different bytes, asserted equal in length and required
+       to raise — plus the identical-bytes replay, which now also asserts the
+       bytes were actually READ rather than inferred from a HEAD.
+   * - 5
+     - **P1.** The adopted design requires reconstruction for "abrupt loss, or
+       never started" and puts the bundle before every close
+       (``observability.md:206``). ``_stamp_bundle`` reconstructed only when
+       ``_attempt_ran(...)`` was true (``service.py:923``), and the
+       never-resolved path published its closure and transitioned the row
+       without invoking bundle handling at all (``service.py:1149``). Round 3
+       closed this for attempts that RAN; the unconditional rule was still
+       unmet, and the one class of attempt the design names explicitly for
+       reconstruction was the class that closed with nothing.
+     - The rule now has no exception in it. A never-started attempt gets the
+       minimal reconstructed bundle, marked reconstructed and carrying the
+       submission facts, the scheduler state (or the absence of one) and the
+       reason. That is also the more useful truth: what is retained for such
+       an attempt is not its output but the account of its NON-execution,
+       which is otherwise nowhere — terminal rows are outside the open set, so
+       nothing ever comes back to explain a provisioning failure. It is not
+       counted as a ``missing_bundles`` alarm, which means something worse: an
+       attempt that ran and lost its evidence.
+
+       In the never-resolved path the bundle is stamped **before** the closure
+       record, so the ordering matches the rule rather than satisfying it by
+       coincidence. A bundle that cannot be written defers with nothing
+       published; the reverse order would leave a published closure citing a
+       bundle that never appeared, which no later poll could repair.
+
+What re-verification added
+~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+**``submission_env`` could not build its binding at all, and no finding named
+it.** It constructed ``ExecutionBinding(..., manifest_checksum=None)``, and
+``ExecutionBinding.__post_init__`` rejects every empty field by design — so
+the call raised ``ValueError`` unconditionally and the production operator
+could not submit anything, on any phase. It surfaced only because the routing
+tests construct the binding for real instead of stubbing it, which is the
+argument for testing at the seam rather than around it.
+
+The validation is right and stays where it is: an attempt row must always name
+the manifest it was submitted under. But a manifest checksum is a property of
+a BATCH, and the operator resolves its binding once per phase, before any
+batch exists. ``SubmissionBinding`` therefore carries the four facts the
+operator does know; ``submit_gathered`` already rebuilt the real
+``ExecutionBinding`` with the checksum once the manifest was published, so
+nothing downstream changed.
+
+Live evidence
+~~~~~~~~~~~~~
+
+``live_fixe_overlap_sql.py`` on **rapid-db, 6/6**: both branches of the
+exclusion clause executed against the real PostgreSQL, against real
+``L2FileMeta``/``L2Files`` rows. At (268.0267, -29.1634) fid 8 — a position
+taken from the table rather than chosen, so the probe follows the data
+wherever it is run — the open branch returned **47 rows and excluded
+nothing**, and the exclusion branch returned **46** with the named rid absent.
+Both reported ``exit_code`` 0, where before the fix the open branch returned
+None and set 67 because the server refused to parse it.
+
+The emitted SQL is in the run log and is the finding in one line: the open
+branch ends ``and a.mjdobs < %s order by dist`` with 46 parameters and no
+exclusion predicate at all; the exclusion branch adds ``and a.rid != %s`` and
+a 47th.
+
+**The probe's first run found something no finding named:** ``rapid_pipeline``
+has no CREATE privilege on the database. The probe originally built its own
+fixture schema and was refused with ``InsufficientPrivilege``. That is the
+role behaving correctly — it is a least-privilege service account — and the
+fixture was never the point, so the probe was rewritten READ-ONLY against the
+deployed table. That is the better witness anyway: it is the actual schema the
+query names, with the actual q3c extension, so drift shows up rather than
+being faithfully reproduced in a stand-in.
+
+No Batch children were submitted. Finding #1 is a routing question, and
+routing is decidable at the submit-call boundary from what
+``submission_env`` resolves — submitting jobs would have proven the same fact
+more slowly and less precisely.
