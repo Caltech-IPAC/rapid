@@ -91,6 +91,33 @@ def _b64_of_hex(hex_digest: str) -> str:
     return base64.b64encode(bytes.fromhex(hex_digest)).decode("ascii")
 
 
+def _stored_digest(client, bucket: str, key: str) -> str:
+    """The SHA-256 of the object already at `key`, hex, read in chunks.
+
+    For the objects S3 cannot answer for: one written before this pipeline
+    sent `ChecksumSHA256`, which therefore has no stored digest to compare
+    against. The bytes are the only evidence, so they are fetched and hashed.
+
+    STREAMED, not `read()`. `get_object` returns a `StreamingBody`, and
+    reading it whole would put a multi-hundred-megabyte mosaic in memory —
+    the same reason `_digest` chunks the local file. `iter_chunks` is boto3's
+    own chunked reader; the fallback covers the stubs and file-like bodies
+    that stand in for it in tests.
+
+    A failure to read is NOT a match. It propagates, and the caller defers
+    rather than citing bytes it could not verify.
+    """
+    body = client.get_object(Bucket=bucket, Key=key)["Body"]
+    digest = hashlib.sha256()
+    try:
+        chunks = body.iter_chunks(chunk_size=_CHUNK)
+    except AttributeError:
+        chunks = iter(lambda: body.read(_CHUNK), b"")
+    for block in chunks:
+        digest.update(block)
+    return digest.hexdigest()
+
+
 def _put_file_if_absent(client, path: str, bucket: str, key: str,
                         digest: str) -> bool:
     """Create `key` from the bytes of `path`. Return whether it was created.
@@ -141,11 +168,21 @@ def _put_file_if_absent(client, path: str, bucket: str, key: str,
 
         if base64.b64decode(encoded).hex() == digest:
             return False
-    elif existing.get("ContentLength") == os.path.getsize(path):
+    elif _stored_digest(client, bucket, key) == digest:
         # An object written before checksums were sent carries no
-        # ChecksumSHA256 to compare. Size is the only evidence available, and
-        # it is weak — so this is permitted as a replay rather than treated as
-        # a collision, but it is not silent: the caller logs it.
+        # ChecksumSHA256 to compare, so its digest is computed from the bytes
+        # themselves.
+        #
+        # SIZE IS NOT EVIDENCE (round-4 finding #4). This used to accept a
+        # length match as a replay, which is the one thing the invariant
+        # directly above forbids: a legacy object of the same length but
+        # different content was left in S3 while `publish_products` recorded
+        # the LOCAL digest, so the terminal record cited a checksum for bytes
+        # that were never stored — and the registrar, which validates a
+        # product by fetching the key and hashing what it gets, would refuse
+        # it. Reading the object costs one GET on a path taken only when a key
+        # is already occupied, which is rare and is exactly when being right
+        # matters more than being quick.
         return False
 
     raise StorageError(

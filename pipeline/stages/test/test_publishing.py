@@ -79,6 +79,22 @@ class ClientError(Exception):
         self.response = {"Error": {"Code": code}}
 
 
+class _StreamingBody:
+    """What `get_object` hands back, shaped like botocore's own.
+
+    Chunked, and deliberately WITHOUT a whole-body `read()`: the digest path
+    must not be able to fall back to materializing a product in memory
+    without this stub noticing.
+    """
+
+    def __init__(self, body: bytes):
+        self._body = body
+
+    def iter_chunks(self, chunk_size=1024):
+        for start in range(0, len(self._body), chunk_size):
+            yield self._body[start:start + chunk_size]
+
+
 class FakeS3:
     """Enforces conditional create for real. Semantics, not call recording.
 
@@ -90,6 +106,7 @@ class FakeS3:
     def __init__(self, bare_exception=False, omit_checksum=False):
         self.objects = {}
         self.put_kwargs = []
+        self.get_object_calls = []
         self._bare = bare_exception
         #: Serve objects with no `ChecksumSHA256`, as one written before
         #: checksums were sent would be.
@@ -111,6 +128,18 @@ class FakeS3:
             response["ChecksumSHA256"] = base64.b64encode(
                 hashlib.sha256(body).digest()).decode("ascii")
         return response
+
+    def get_object(self, Bucket, Key):
+        """The bytes, behind a `StreamingBody`-shaped reader.
+
+        `iter_chunks` rather than a plain `read`, because that is what the
+        real `StreamingBody` offers and what the digest path uses to avoid
+        holding a mosaic in memory.
+        """
+        if Key not in self.objects:
+            raise ClientError("404")
+        self.get_object_calls.append(Key)
+        return {"Body": _StreamingBody(self.objects[Key])}
 
     def download_file(self, Bucket, Key, path):
         with open(path, "wb") as handle:
@@ -323,10 +352,11 @@ class PublishProductsTests(unittest.TestCase):
                                      [("reference_image", path)])
         self.assertEqual(len(published), 1)
 
-    def test_an_object_with_no_stored_checksum_falls_back_to_size(self):
-        """Objects written before checksums were sent carry nothing to
-        compare. Size is weak evidence, so it permits the replay rather than
-        manufacturing a collision — but only when the sizes agree."""
+    def test_an_object_with_no_stored_checksum_is_compared_by_its_bytes(self):
+        """Objects written before checksums were sent carry no stored digest,
+        so the bytes are FETCHED and hashed. Identical content is the replay
+        it is, and the comparison is a real one rather than an inference from
+        the length."""
         s3 = FakeS3(omit_checksum=True)
         path = self.write("ref_image.fits", b"same length!")
         publish_products(make_context(s3=s3), BUCKET,
@@ -335,6 +365,33 @@ class PublishProductsTests(unittest.TestCase):
         published = publish_products(make_context(s3=s3), BUCKET,
                                      [("reference_image", path)])
         self.assertEqual(len(published), 1)
+        # The bytes were actually read; the decision was not made from HEAD.
+        self.assertTrue(s3.get_object_calls)
+
+    def test_same_length_different_content_is_a_collision_not_a_replay(self):
+        """Round-4 finding #4, and the case the size fallback got wrong.
+
+        A legacy object of the SAME LENGTH but different content used to be
+        accepted as a replay, after which `publish_products` recorded the
+        LOCAL digest — so the terminal record cited a checksum for bytes that
+        were never stored, and the registrar (which fetches the key and
+        hashes what it gets) would refuse the product. Same length is not
+        same bytes, and only the bytes decide.
+        """
+        s3 = FakeS3(omit_checksum=True)
+        path = self.write("ref_image.fits", b"aaaaaaaaaaaa")
+        publish_products(make_context(s3=s3), BUCKET,
+                         [("reference_image", path)])
+
+        with open(path, "wb") as handle:
+            handle.write(b"bbbbbbbbbbbb")  # same 12 bytes' length
+        self.assertEqual(len(s3.objects[next(iter(s3.objects))]),
+                         os.path.getsize(path))
+
+        with self.assertRaises(StorageError) as ctx:
+            publish_products(make_context(s3=s3), BUCKET,
+                             [("reference_image", path)])
+        self.assertIn("different", str(ctx.exception))
 
     def test_no_stored_checksum_and_a_different_size_still_raises(self):
         s3 = FakeS3(omit_checksum=True)
@@ -347,6 +404,30 @@ class PublishProductsTests(unittest.TestCase):
         with self.assertRaises(StorageError):
             publish_products(make_context(s3=s3), BUCKET,
                              [("reference_image", path)])
+
+    def test_an_unreadable_existing_object_raises_rather_than_citing_it(self):
+        """A digest that could not be computed is not a match.
+
+        Failing open here would be the finding in another form: the object
+        would be cited under the local digest without anything having
+        verified it.
+        """
+        class Unreadable(FakeS3):
+            def get_object(self, Bucket, Key):
+                raise RuntimeError("AccessDenied")
+
+        s3 = Unreadable(omit_checksum=True)
+        path = self.write("ref_image.fits", b"mosaic bytes")
+        publish_products(make_context(s3=s3), BUCKET,
+                         [("reference_image", path)])
+
+        # `publish_products` translates it, as it does every upload failure —
+        # what matters is that it RAISES rather than returning the entry as
+        # published under a digest nothing verified.
+        with self.assertRaises(StorageError) as ctx:
+            publish_products(make_context(s3=s3), BUCKET,
+                             [("reference_image", path)])
+        self.assertIn("AccessDenied", str(ctx.exception))
 
     # -- failures are raised, not counted ------------------------------------
 
