@@ -51,12 +51,24 @@ outside W6b's authorization.
 The pooler
 ----------
 
-The ``client_idle_timeout`` defect is closed at both ends. It was fixed
-on the live host by W6 and is now in the packaged config as well
-(``rapid-pgbouncer`` 1.0-4), so a reinstall or a rebuilt host can no
-longer silently restore it. ``pgbouncer.rapid.ini`` also carries the
-``rapid_orchestrator`` line 016 needs, transaction-pooled like every
-automated identity.
+The ``client_idle_timeout`` defect is fixed **on the live host** (W6) and
+fixed **in the config source** (W6b, ``rapid-pgbouncer`` 1.0-4, committed
+and pushed), which also carries the ``rapid_orchestrator`` line 016 needs.
+
+**The drift is not yet closed on the host.** rapid-db still runs
+``rapid-pgbouncer`` 1.0-2 and ``rpm -V`` still reports ``S.5....T.`` on
+``/etc/pgbouncer/pgbouncer.rapid.ini``, because 1.0-4 never published —
+the promoter's smoke gate refused the whole candidate set (see below). So
+a package reinstall or a rebuilt host would **still** restore the defect
+today. What changed is that the fix is now in git and in a built, signed
+RPM rather than existing only as a hand edit on one host; what remains is
+a green promoter run and ``dnf update rapid-pgbouncer``.
+
+Three ``.bak`` files sit in ``/etc/pgbouncer`` from the hand fixes
+(``pre-idle-fix``, ``pre-rapid-ops-drop``, ``pre-two-lanes``). They are
+ephemeral state, removable once the package matches the live file — which
+is exactly what has not happened yet, so they were deliberately left in
+place.
 
 The upstream question stands and is labelled as such: that per-user
 ``client_idle_timeout`` on five *human* logins reached ``rapid_pipeline``,
@@ -138,6 +150,34 @@ W4B's science-config suite reads. Those tests assert **the shipped files**
 load, deliberately, and they arrived after the runner did — so five tests
 errored with "the release's science configuration is missing", an error
 correctly naming a staging gap that reads as a wrong image.
+
+The promoter's smoke gate
+-------------------------
+
+Worth knowing before the next release attempt, because it is the last gate
+between a built package and a published one, and it is where W6b's RPM
+publish stopped.
+
+The promoter builds, signs, and then installs the whole signed candidate
+set on a **disposable canary** launched from the golden AMI. That smoke run
+failed on::
+
+    [Errno 2] No such file or directory:
+    '/var/cache/dnf/rapid-.../packages/rapid-release-1.1-2.el10.noarch.rpm'
+
+    FAIL: integration smoke failed on the signed candidate set — no publish
+
+Two things this is NOT: it is not a rapid-pgbouncer problem (the gate's own
+inventory line reports ``rapid-pgbouncer=true`` — the package built, signed,
+and is present in the candidate repo), and it is not the baseline-duplicate
+defect below, which was fixed earlier in the same run and did not recur.
+
+It is a dnf cache miss on the canary, on ``rapid-release`` — the repo
+definition package — immediately after a GPG key import. The refusal to
+publish on it is correct behaviour: an unproven candidate set must not
+reach the repo. Whether it is a flake or a standing defect in the smoke
+harness was not established here; one retry was run and its outcome is in
+the W6b ledger.
 
 One CI defect, found and fixed
 ------------------------------

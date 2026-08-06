@@ -1,11 +1,12 @@
 pgbouncer closes RAPID payload connections at age=0s
 ====================================================
 
-**Status: RESOLVED on the live host 2026-08-06 (W6) and SYNCED to the
-packaged config the same day (W6b, rapid-pgbouncer 1.0-4) — the drift is
-closed at both ends. Found live by the W5 canary. Not a payload defect —
-a pooler configuration defect. The upstream question below remains
-UNVERIFIED against the pgbouncer issue tracker.**
+**Status: RESOLVED on the live host 2026-08-06 (W6). The packaged fix is
+COMMITTED but NOT YET PUBLISHED (W6b, rapid-pgbouncer 1.0-4) — rapid-db
+still runs 1.0-2 and rpm -V still reports drift, because the promoter's
+smoke gate refused the candidate set. Found live by the W5 canary. Not a
+payload defect — a pooler configuration defect. The upstream question
+below remains UNVERIFIED against the pgbouncer issue tracker.**
 
 What happens
 ------------
@@ -157,20 +158,27 @@ through the pooler as ``rapid_pipeline`` — spread across submissions at
 11:13, 11:15, 11:28, 11:33 and 12:30, comfortably past the fifteen minutes
 required to call it.
 
-**The gap that remained, now closed (W6b, 2026-08-06).** The live file was
-fixed and the *packaged* one was not: ``rpm -V rapid-pgbouncer`` reported
-``S.5....T.`` on ``/etc/pgbouncer/pgbouncer.rapid.ini``, so a package
-reinstall or a rebuilt host would have silently restored the defect. The
-same removal is now in the rapid_systems pgbouncer source, published as
-``rapid-pgbouncer`` 1.0-4 through the promoter and installed on rapid-db.
-Evidence in the W6b ledger.
+**The gap that remains, now half closed (W6b, 2026-08-06).** The live file
+was fixed and the *packaged* one was not: ``rpm -V rapid-pgbouncer``
+reported ``S.5....T.`` on ``/etc/pgbouncer/pgbouncer.rapid.ini``, so a
+package reinstall or a rebuilt host would silently restore the defect.
 
-Publishing it surfaced a second, unrelated defect worth knowing about,
+The same removal is now in the rapid_systems pgbouncer source as
+``rapid-pgbouncer`` 1.0-4, committed and pushed, and it builds and signs
+cleanly. **It is not published, and rapid-db still runs 1.0-2**, so the
+drift is still open on the host. The promoter's integration smoke refused
+the whole signed candidate set on an unrelated dnf cache miss
+(``rapid-release``, on the disposable canary) — correctly, since an
+unproven set must not reach the repo. Remaining: a green promoter run,
+then ``dnf update rapid-pgbouncer`` and an ``rpm -V`` that comes back
+clean.
+
+Getting that far surfaced a second, unrelated defect worth knowing about,
 because it made the drift **unclosable until fixed**: ``build-rpms.yml``
 verified its baseline package set before pruning duplicates, so the
 release bump broke main, and the promoter refuses to publish while a
 newer main run is red. A red main blocked the release that would clear
-it. See ``w6b_state_summary.rst``.
+it. Fixed; see ``w6b_state_summary.rst``.
 
 **What is not closed** is the upstream question. That a per-user
 ``client_idle_timeout`` on five *human* logins reached ``rapid_pipeline``
