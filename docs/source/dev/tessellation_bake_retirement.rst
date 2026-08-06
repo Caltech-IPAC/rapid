@@ -78,17 +78,34 @@ What must NOT be removed
 
 ``database/modules/utils/roman_tessellation_db.py`` and its
 ``RomanTessellationNSIDE512`` class stay. The class is marked deprecated
-in its docstring, but it is still constructed by the legacy-fenced
-launcher scripts ``awsBatchSubmitJobs_launchSingleSciencePipeline.py``
-and ``awsBatchSubmitJobs_launchSingleReferenceImagePipeline.py``, and by
-``database/scripts/compute_fields.py``,
-``database/sims/db_register_socsim_files.py`` and
-``soc/apt/sca_breakdown_of_fields_imaged.py``.
+in its docstring, but eleven modules still construct it.
+
+**Corrected at W6 (2026-08-06).** This section previously said the class
+"goes when the legacy launchers go, behind W6's cutover fence" and listed
+three survivors. Both halves were wrong. The fence ran, the two legacy
+launchers that constructed it are deleted, and a repo-wide grep found
+eleven remaining constructors — not zero, and not three:
+
+- ``database/scripts/compute_fields.py``
+- ``database/sims/db_register_socsim_files.py``
+- ``database/sims/db_register_rimtimsim_files.py``
+- ``database/sims/db_register_troxel_sim_files.py``
+- ``database/sims/db_add_field_hp6_hp9.py``
+- ``soc/apt/sca_breakdown_of_fields_imaged.py``
+- ``scripts/plot_neighboring_sky_tiles.py``
+- ``modules/fake_src/generateInjectionCatalogForField.py``
+- ``sims/fake_src/generateInjectionCatalogsForSims.py``
+- ``sims/src/socsims/inject_fake_sources_into_l2_asdf_files.py``
+- ``database/modules/utils/test/test_roman_tessellation.py``
+  (the ``SqliteEquivalence`` class)
 
 Those all run **outside** the container, on hosts where the SQLite file
 is available by other means, so removing the bake does not break them —
-but removing the class would. The class goes when the legacy launchers
-go, behind W6's cutover fence, not with the image layer.
+but removing the class would. W6's fence is explicitly conditional on
+that grep ("delete if zero callers remain"), and the condition is not
+met. Retiring the class is its own work item: the eleven callers move to
+``RomanTessellationClosedForm`` or to the versioned Postgres install
+first.
 
 
 Expected effect

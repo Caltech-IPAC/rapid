@@ -113,19 +113,27 @@ print("cfg_path =",cfg_path)
 # it (W4 single-homing sweep).
 
 pipeline_code = os.path.join(rapid_sw, "pipeline")
-launch_science_pipelines_code = os.path.join(pipeline_code, 'launchSciencePipelinesForDateTimeRangeWithRefImageWindow.py')
-register_science_pipeline_jobs_code = os.path.join(pipeline_code, 'parallelRegisterCompletedJobsInDB.py')
-launch_postproc_pipelines_code = os.path.join(pipeline_code, 'awsBatchSubmitJobs_launchPostProcPipelinesForProcDate.py')
-register_postproc_pipeline_jobs_code = os.path.join(pipeline_code, 'parallelRegisterCompletedJobsInDBAfterPostProc.py')
 load_psfcat_into_db_sources_code = os.path.join(pipeline_code, 'loadPSFCatIntoDBSourcesTable.py')
 crossmatch_sources_code = os.path.join(pipeline_code, 'crossMatchSources.py')
 compute_statistics_for_astroobjects_code = os.path.join(pipeline_code, 'computeStatisticsForAstroObjects.py')
 prune_notbest_merges_code = os.path.join(pipeline_code, 'pruneNotBestMerges.py')
-launch_reference_image_pipelines_code = os.path.join(pipeline_code, 'launchBunchOfReferenceImagePipelines.py')
-# parallelRegisterCompletedJobsInDB.py is dual purposed to handle both
-# reference-image pipeline jobs and science pipeline jobs, with PIPEID as
-# parameter.
-register_reference_image_pipeline_jobs_code = register_science_pipeline_jobs_code
+
+# The launcher and registration script paths that used to live here are gone
+# with the scripts themselves (W6 cutover fence). Submission, the completion
+# wait and registration are now three function calls into `pipeline.seams`
+# rather than three subprocess execs:
+#
+#   launchSciencePipelinesForDateTimeRangeWithRefImageWindow.py  -> seams.submit_units
+#   awsBatchSubmitJobs_launchPostProcPipelinesForProcDate.py     -> seams.submit_units
+#   launchBunchOfReferenceImagePipelines.py                      -> seams.submit_units
+#   parallelRegisterCompletedJobsInDB.py                         -> seams.run_registration
+#   parallelRegisterCompletedJobsInDBAfterPostProc.py            -> seams.run_registration
+#   wait_until_aws_batch_jobs_finished (describe_jobs, one call
+#     per job per poll, no timeout)                              -> seams.wait_for_completion
+#
+# The four scripts still exec'd below (loadPSFCat, crossMatch,
+# computeStatistics, pruneNotBestMerges) are science-layer post-processing,
+# not part of the completion chain, and are untouched by this fence.
 
 
 # AWS credentials come from boto3's default chain (job role, instance
@@ -184,10 +192,8 @@ print("awaicgen_output_mosaic_image_file =",awaicgen_output_mosaic_image_file)
 print("zogy_output_diffimage_file =",zogy_output_diffimage_file)
 print("startdatetime =",startdatetime)
 print("enddatetime =",enddatetime)
-print("launch_science_pipelines_code =", launch_science_pipelines_code)
-print("register_science_pipeline_jobs_code =", register_science_pipeline_jobs_code)
-print("launch_postproc_pipelines_code =", launch_postproc_pipelines_code)
-print("register_postproc_pipeline_jobs_code =", register_postproc_pipeline_jobs_code)
+print("load_psfcat_into_db_sources_code =", load_psfcat_into_db_sources_code)
+print("crossmatch_sources_code =", crossmatch_sources_code)
 
 
 # Set signal hander.
@@ -227,174 +233,70 @@ def look_up_ppid_of_job_type(job_type):
 # Method to wait until common set of AWS Batch jobs have finished.
 #-------------------------------------------------------------------------------------------------------------
 
-def wait_until_aws_batch_jobs_finished(job_type,proc_date,config_input,dbh):
+def wait_until_aws_batch_jobs_finished(job_type, proc_date, config_input, dbh,
+                                       run_id=None, conn=None,
+                                       timeout=None):
 
     """
-    Wait until AWS Batch jobs of a given job type and processing date have finished.
+    Wait until the attempts of a submitted batch are reconciler-terminal.
+
+    W6 seam. What this replaced polled AWS Batch directly: one
+    `describe_jobs` call PER JOB per poll, from a one-shot database snapshot
+    taken before the loop (so a job that appeared later was never waited
+    for), with no timeout at all — a stuck job blocked the operator forever.
+
+    It now reads the attempt table the reconciler maintains. That table is the
+    reconciled view: an attempt is terminal in it only once its scheduler
+    truth is known, which is exactly the condition registration must wait for.
+    One query covers the whole batch.
+
+    The wait is bounded. On expiry the batch becomes a reconciliation case and
+    the operator moves on: the reconciler classifies the stragglers on its own
+    horizons whether or not anyone is waiting. That is a designed outcome, not
+    a failure, and it is returned rather than raised past the caller.
     """
+
+    from pipeline import seams
 
     print("Parameter values from method wait_until_aws_batch_jobs_finished:")
-    print("job_type =",job_type)
-    print("proc_date =",proc_date)
+    print("job_type =", job_type)
+    print("proc_date =", proc_date)
+    print("run_id =", run_id)
 
-    ppid = look_up_ppid_of_job_type(job_type)
+    if run_id is None:
+        print("no run_id given; nothing to wait for")
+        return {}
 
-    print("ppid =",ppid)
+    if conn is None:
+        from database.modules.utils.rapid_db_connect import connection
+        with connection("rapid-vpo-wait", lane="transaction") as owned:
+            return _wait_on(owned, run_id, timeout)
 
-
-    # Query database for Jobs records that are unclosed out on the given processing date.
-
-    jobs_records = dbh.get_unclosedout_jobs_for_processing_date(ppid,proc_date)
-
-    if dbh.exit_code >= 64:
-        dbh.close()
-        exit(dbh.exit_code)
-
-
-    # Count only Jobs records where awsbatchjobid is not None.
-    # Will make software changes elsewhere to ensure this never happens.
-
-    njobs_total = 0
-
-    for jobs_record in jobs_records:
-
-        jid = jobs_record[0]
-        awsbatchjobid = jobs_record[1]
-
-        if awsbatchjobid is not None:
-            njobs_total += 1
-
-    print("njobs_total =",njobs_total)
-
-    if njobs_total == 0:
-        return
+    return _wait_on(conn, run_id, timeout)
 
 
-    # Initialize iteration number.
+def _wait_on(conn, run_id, timeout):
+    from pipeline import seams
 
-    n_iter = 0
+    kwargs = {}
+    if timeout is not None:
+        kwargs["timeout"] = timeout
 
+    def report(counts, outstanding):
+        print("waiting on run", run_id, "outstanding =", outstanding,
+              "states =", counts)
 
-    # Define job definitions.    Use AWS Batch Console to set them up once.
+    try:
+        counts = seams.wait_for_completion(conn, run_id, on_poll=report,
+                                           **kwargs)
+    except seams.CompletionTimeout as exc:
+        # Bounded wait expiring is the designed outcome for a stuck job.
+        print("completion wait timed out:", exc)
+        print("the batch is a reconciliation case; moving on")
+        return {"timed_out": True, "outstanding": exc.outstanding}
 
-    if job_type == "science":
-        job_definition = config_input['AWS_BATCH']['job_definition']
-    elif job_type == "postproc":
-        job_definition = config_input['AWS_BATCH']['postproc_job_definition']
-    elif job_type == "refimage":
-        job_definition = config_input['AWS_BATCH']['refimage_job_definition']
-    else:
-        print(f"*** Error: job_type not recognized (job_type={job_type}); quitting...")
-        dbh.close()
-        exit(64)
-
-
-    # Define job queue.  Use AWS Batch Console to set this up once.
-
-    job_queue = config_input['AWS_BATCH']['job_queue']
-
-
-    # Get job name base.    Example job name: rapid_postproc_pipeline_20250404_jid997
-
-    if job_type == "science":
-        job_name_base = config_input['AWS_BATCH']['job_name_base']
-    elif job_type == "postproc":
-        job_name_base = config_input['AWS_BATCH']['postproc_job_name_base']
-    elif job_type == "refimage":
-        job_name_base = config_input['AWS_BATCH']['refimage_job_name_base']
-    else:
-        print(f"*** Error: job_type not recognized (job_type={job_type}); quitting...")
-        exit(64)
-
-
-    # Print more parameters.
-
-    print("job_type =",job_type)
-    print("job_queue =",job_queue)
-    print("job_definition =",job_definition)
-    print("job_name_base =",job_name_base)
-
-
-    # Get Batch.Client object.
-
-    client = boto3.client('batch')
-
-    while True:
-
-        # Get description of jobs.
-
-        n_succeeded = 0
-        n_failed = 0
-        n_checked = 0
-
-        for jobs_record in jobs_records:
-
-            jid = jobs_record[0]
-            awsbatchjobid = jobs_record[1]
-
-            if awsbatchjobid is None:
-                continue
-
-            if njobs_total < 3000 or n_checked % 100 == 0:
-                print(f"Calling client.describe_jobs for jobs={awsbatchjobid}, n_checked={n_checked}")
-
-            try:
-                response = client.describe_jobs(jobs=[awsbatchjobid,])
-
-                if n_checked < 5:
-                    print(f"response={response}")
-
-                n_checked += 1
-
-                try:
-                    job_status = response['jobs'][0]['status']
-                except IndexError as error:
-                    print(f'*** Error: IndexError raised because of empty jobs list (e.g., job ID not found or expired) ' +
-                          f'running client.describe_jobs (error={error},awsbatchjobid={awsbatchjobid}); quitting...')
-                    dbh.close()
-                    exit(64)
-
-                if njobs_total < 3000 or n_checked % 100 == 0:
-                    print("job_status =",job_status)
-
-                if job_status == "SUCCEEDED":
-                    n_succeeded += 1
-                elif job_status == "FAILED":
-                    n_failed += 1
-                elif job_status == "RUNNABLE":
-                    pass
-                elif job_status == "STARTING":
-                    pass
-                elif job_status == "RUNNING":
-                    pass
-                elif job_status == "SUBMITTED":
-                    pass
-                elif job_status == "PENDING":
-                    pass
-                else:
-                    print(f"*** Error: Unexpected job_status ({job_status}); quitting...")
-                    dbh.close()
-                    exit(64)
-
-            except Exception as error:
-                print('*** Error running client.describe_jobs ({}); continuing...'.format(error))
-
-
-        print(f"n_succeeded,n_failed = {n_succeeded},{n_failed}")
-
-        njobs_succeeded_failed = n_succeeded + n_failed
-
-        print("njobs_succeeded_failed =",njobs_succeeded_failed)
-
-        if njobs_total == njobs_succeeded_failed:
-            break
-
-        n_iter += 1
-        print(f"From method wait_until_aws_batch_jobs_finished after iteration n_iter={n_iter}: " +\
-               "Sleeping 60 seconds and then will check again...")
-        time.sleep(60)
-
-    return
+    print("run", run_id, "is reconciler-terminal:", counts)
+    return counts
 
 
 #-------------------------------------------------------------------------------------------------------------
@@ -443,16 +345,20 @@ if __name__ == '__main__':
 
         # Launch reference-image pipelines.
 
-        fname_out = "launch_reference_image_pipelines_code" + "_" + proc_date + ".out"
-        launch_reference_image_pipelines_cmd = [python_cmd,
-                                                launch_reference_image_pipelines_code]
-
-        try:
-            run_tool(launch_reference_image_pipelines_cmd,capture_path=fname_out)
-        except ToolError as exc:
-            print(f"*** Error: {launch_reference_image_pipelines_cmd} failed ({exc}); quitting...")
-            dbh.close()
-            exit(64)
+        # W6 seam: submission goes through pipeline.seams.submit_units,
+        # which publishes a manifest, submits ONE array job, and pre-creates
+        # the attempt rows before any child can start.
+        #
+        # What is not wired here is the unit-gathering query — deciding WHICH
+        # reference images to build is the launcher's science logic, and the
+        # operations design owns the VPO rebuild that re-homes it. Refusing
+        # loudly is the conservative option: fabricating a query here would
+        # submit the wrong work silently.
+        print("*** reference-image submission is not wired to the new "
+              "submission seam yet: pipeline.seams.submit_units needs the "
+              "unit list the deleted launcher computed. See W6 ledger.")
+        dbh.close()
+        exit(64)
 
 
         # Code-timing benchmark.
@@ -488,21 +394,21 @@ if __name__ == '__main__':
 
         ppid_refimage = look_up_ppid_of_job_type(job_type)
         print("ppid_refimage =",ppid_refimage)
-        os.environ['PIPEID'] = str(ppid_refimage)          # Required by register_reference_image_pipeline_jobs_code, which
-                                                           # is dual purposed to handle both reference-image pipeline jobs
-                                                           # and science pipeline jobs.
+        # W6 seam: registration is a function call into the records
+        # consumer, not a subprocess exec of a log-grep script. The four
+        # scripts it replaced had no importable entry point at all — each was
+        # a `__main__` block — which is exactly why this had to be an exec and
+        # why their exit codes were the only channel back.
+        from pipeline.seams import run_registration
+        from database.modules.utils.rapid_db_connect import connection
 
-        fname_out = "register_reference_image_pipeline_jobs_code" + "_" + proc_date + ".out"
-        register_reference_image_pipeline_jobs_cmd = [python_cmd,
-                                                      register_reference_image_pipeline_jobs_code,
-                                                      proc_date]
-
-        try:
-            run_tool(register_reference_image_pipeline_jobs_cmd,capture_path=fname_out)
-        except ToolError as exc:
-            print(f"*** Error: {register_reference_image_pipeline_jobs_cmd} failed ({exc}); quitting...")
+        with connection("rapid-vpo-registration", lane="transaction") as regconn:
+            reg_run = run_registration(regconn)
+        print("registration pass:", reg_run.as_dict())
+        if reg_run.failed:
+            print(f"*** Error: {reg_run.failed} registration(s) failed; quitting...")
             dbh.close()
-            exit(64)
+            exit(65)
 
 
         # Code-timing benchmark.
@@ -553,16 +459,16 @@ if __name__ == '__main__':
             os.environ['STARTDATETIME'] = startdatetime
             os.environ['ENDDATETIME'] = enddatetime
 
-            fname_out = "launch_science_pipelines_code" + "_" + stage_label + "_" + proc_date + ".out"
-            launch_science_pipelines_cmd = [python_cmd,
-                                            launch_science_pipelines_code]
-
-            try:
-                run_tool(launch_science_pipelines_cmd,capture_path=fname_out)
-            except ToolError as exc:
-                print(f"*** Error: {launch_science_pipelines_cmd} failed ({exc}); quitting...")
-                dbh.close()
-                exit(64)
+            # W6 seam: submission goes through pipeline.seams.submit_units.
+            # The unit-gathering query that decided WHICH work to submit was the
+            # deleted launcher's science logic; re-homing it belongs to the
+            # operations design's VPO rebuild. Refusing loudly beats fabricating
+            # a query that would submit the wrong work silently. See W6 ledger.
+            print("*** science submission is not wired to the new submission "
+            "seam yet: pipeline.seams.submit_units needs the unit list the "
+            "deleted launcher computed. See W6 ledger.")
+            dbh.close()
+            exit(64)
 
 
             # Code-timing benchmark.
@@ -595,20 +501,23 @@ if __name__ == '__main__':
             # Register metadata from science pipelines into operations database.
 
             ppid = look_up_ppid_of_job_type(job_type)
-            print("ppid =",ppid)
-            os.environ['PIPEID'] = str(ppid)              # Required by register_science_pipeline_jobs_code
+            # W6 seam: registration is a function call into the records
+            # consumer, not a subprocess exec of a log-grep script. The four
+            # scripts it replaced had no importable entry point at all — each
+            # was a `__main__` block — which is exactly why this had to be an
+            # exec and why their exit codes were the only channel back.
+            from pipeline.seams import run_registration
+            from database.modules.utils.rapid_db_connect import connection
 
-            fname_out = "register_science_pipeline_jobs_code" + "_" + stage_label + "_" + proc_date + ".out"
-            register_science_pipeline_jobs_cmd = [python_cmd,
-                                                  register_science_pipeline_jobs_code,
-                                                  proc_date]
-
-            try:
-                run_tool(register_science_pipeline_jobs_cmd,capture_path=fname_out)
-            except ToolError as exc:
-                print(f"*** Error: {register_science_pipeline_jobs_cmd} failed ({exc}); quitting...")
+            with connection("rapid-vpo-registration",
+                            lane="transaction") as regconn:
+                reg_run = run_registration(regconn)
+            print("registration pass:", reg_run.as_dict())
+            if reg_run.failed:
+                print(f"*** Error: {reg_run.failed} registration(s) failed; quitting...")
                 dbh.close()
-                exit(64)
+                exit(65)
+            exit(65)
 
 
             # Code-timing benchmark.
@@ -631,16 +540,16 @@ if __name__ == '__main__':
         #
         # Load environment variable JOBPROCDATE to specify processing date.
 
-        fname_out = "launch_postproc_pipelines_code" + "_" + proc_date + ".out"
-        launch_postproc_pipelines_cmd = [python_cmd,
-                                        launch_postproc_pipelines_code]
-
-        try:
-            run_tool(launch_postproc_pipelines_cmd,capture_path=fname_out)
-        except ToolError as exc:
-            print(f"*** Error: {launch_postproc_pipelines_cmd} failed ({exc}); quitting...")
-            dbh.close()
-            exit(64)
+        # W6 seam: submission goes through pipeline.seams.submit_units.
+        # The unit-gathering query that decided WHICH work to submit was the
+        # deleted launcher's science logic; re-homing it belongs to the
+        # operations design's VPO rebuild. Refusing loudly beats fabricating
+        # a query that would submit the wrong work silently. See W6 ledger.
+        print("*** post-process submission is not wired to the new submission "
+              "seam yet: pipeline.seams.submit_units needs the unit list the "
+              "deleted launcher computed. See W6 ledger.")
+        dbh.close()
+        exit(64)
 
 
         # Code-timing benchmark.
@@ -672,17 +581,21 @@ if __name__ == '__main__':
 
         # Register metadata from post-processing pipelines into operations database.
 
-        fname_out = "register_postproc_pipeline_jobs_code" + "_" + proc_date + ".out"
-        register_postproc_pipeline_jobs_cmd = [python_cmd,
-                                              register_postproc_pipeline_jobs_code,
-                                              proc_date]
+        # W6 seam: registration is a function call into the records
+        # consumer, not a subprocess exec of a log-grep script. The four
+        # scripts it replaced had no importable entry point at all — each was
+        # a `__main__` block — which is exactly why this had to be an exec and
+        # why their exit codes were the only channel back.
+        from pipeline.seams import run_registration
+        from database.modules.utils.rapid_db_connect import connection
 
-        try:
-            run_tool(register_postproc_pipeline_jobs_cmd,capture_path=fname_out)
-        except ToolError as exc:
-            print(f"*** Error: {register_postproc_pipeline_jobs_cmd} failed ({exc}); quitting...")
+        with connection("rapid-vpo-registration", lane="transaction") as regconn:
+            reg_run = run_registration(regconn)
+        print("registration pass:", reg_run.as_dict())
+        if reg_run.failed:
+            print(f"*** Error: {reg_run.failed} registration(s) failed; quitting...")
             dbh.close()
-            exit(64)
+            exit(65)
 
 
         # Code-timing benchmark.

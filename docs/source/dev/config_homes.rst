@@ -198,16 +198,36 @@ The fact table
 What was deliberately not converted
 -----------------------------------
 
-**The two payload scripts and the ``.sh`` wrappers.** They are rewritten
-at W5 and deleted at W6. Converting their literals now would be work
-thrown away, and it would put the old and new configuration paths in the
-same file at the same time.
+**The two payload scripts and the ``.sh`` wrappers.** Rewritten at W5 and
+deleted there; the nine legacy launcher scripts and the four log-grep
+registration scripts were deleted at W6's cutover fence.
 
-**The master ``.ini`` itself.** ``cdf/awsBatchSubmitJobs_launchSingleSciencePipeline.ini``
-is untouched and still functional; its deletion is W6's fence. While both
-it and the release content exist they cannot drift: the round-trip test
-in ``pipeline/runtime/test/test_science_config.py`` compares every
-extracted value against it.
+**The master ``.ini`` itself — still present after W6.**
+``cdf/awsBatchSubmitJobs_launchSingleSciencePipeline.ini`` was expected to
+go with the fence. It did not, and the reason is recorded here rather
+than left as a surprise.
+
+W6's fence makes that deletion conditional: *"the master .ini (science
+sections now in pipeline.toml — verify no surviving reader first,
+repo-wide grep)"*. The grep was run. Thirty-five files reference the
+file; removing the launchers, the four registration scripts and the VPO
+still leaves **twenty-three readers**, none of them in the completion
+chain — the science-layer scripts (``crossMatchSources``,
+``forcedPhotometryForField``, ``loadPSFCatIntoDBSourcesTable``, the
+``prune*`` and ``compute*`` and ``generate*HATSCatalog`` family), the
+``scripts/`` and ``sims/`` trees, three ``database/scripts`` utilities,
+and two test files.
+
+They read sections the release content does not carry — bucket names, the
+ppid map, database facts — so ``cdf/science/pipeline.toml`` does not
+substitute for them. Migrating twenty-three science-facing readers is its
+own work item with a real risk of silent behaviour change, and it belongs
+with the configuration re-homing rather than inside the completion
+chain's fence.
+
+While both it and the release content exist they cannot drift: the
+round-trip test in ``pipeline/runtime/test/test_science_config.py``
+compares every extracted value against it. That test therefore stays too.
 
 **The sims' own bucket names** (``sims-sn-*``, ``socsims-fakesrc-*``,
 ``rimtimsim-*``). Each names a specific simulation dataset, not a

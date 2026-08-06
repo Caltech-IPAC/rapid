@@ -139,7 +139,7 @@ def _install_third_party_stubs() -> None:
 _install_third_party_stubs()
 
 from pipeline.entrypoints import job  # noqa: E402
-from pipeline.runtime.errors import ConfigError  # noqa: E402
+from pipeline.runtime.errors import ConfigError, RecordsError  # noqa: E402
 from pipeline.runtime.test.stubs import make_job_environment  # noqa: E402
 from submission.manifest import (  # noqa: E402
     Manifest,
@@ -331,11 +331,103 @@ class BuildProvenanceTests(unittest.TestCase):
 # ---------------------------------------------------------------------------
 
 class DispatchRegistrationTests(unittest.TestCase):
+    """W6 replaced the refusal with the record-consuming implementation.
 
-    def test_raises_configerror(self):
+    Until W6 this function raised: wiring it to the legacy path would have
+    re-entered the log-grep chain on the wrong side of the cutover fence. It
+    now consumes reconciled outcomes, so what these tests pin is the contract
+    it consumes them under.
+    """
+
+    def _context(self):
         context = mock.Mock(job_type="registration")
-        with self.assertRaises(ConfigError):
+        context.logger = mock.Mock()
+        context.provenance = {}
+        return context
+
+    def test_consumes_reconciled_attempts_and_records_the_pass(self):
+        context = self._context()
+        rows = [{"attempt_id": 1, "lifecycle_state": "terminal_after_start",
+                 "rapid_outcome": "success", "product_disposition": "published",
+                 "scheduler_state": "SUCCEEDED", "exposure_id": 1, "sca": 1,
+                 "sky_tile": None, "error_category": None,
+                 "application_intended_exit": 0, "scheduler_observed_exit": 0}]
+
+        with mock.patch("database.modules.utils.rapid_db_connect.connection"), \
+                mock.patch("pipeline.registration.candidates",
+                           return_value=rows):
             job.dispatch_registration(context)
+
+        context.record.assert_called_once()
+        recorded = context.record.call_args.kwargs["registration"]
+        self.assertEqual(1, recorded["registered"])
+        self.assertEqual(0, recorded["exit_code"])
+
+    def test_a_failing_registration_raises_rather_than_exiting_zero(self):
+        # The defect in what this replaced: four scripts hardcoded exit 0, so
+        # a pass where every registration failed looked like a clean one.
+        context = self._context()
+        rows = [{"attempt_id": 1, "lifecycle_state": "terminal_after_start",
+                 "rapid_outcome": "success", "product_disposition": "published",
+                 "scheduler_state": "SUCCEEDED", "exposure_id": 1, "sca": 1,
+                 "sky_tile": None, "error_category": None,
+                 "application_intended_exit": 0, "scheduler_observed_exit": 0}]
+
+        def failing(conn, candidate_rows, register=None, run=None):
+            from pipeline.registration import RegistrationRun
+            failed = RegistrationRun()
+            failed.failed = 1
+            return failed
+
+        with mock.patch("database.modules.utils.rapid_db_connect.connection"), \
+                mock.patch("pipeline.registration.candidates",
+                           return_value=rows), \
+                mock.patch("pipeline.registration.register_batch",
+                           side_effect=failing):
+            with self.assertRaises(RecordsError):
+                job.dispatch_registration(context)
+
+
+# ---------------------------------------------------------------------------
+# _execute
+# ---------------------------------------------------------------------------
+
+class ExecuteOutcomeTests(unittest.TestCase):
+    """The success path, which no canary had ever reached."""
+
+    def _recorder(self):
+        from pipeline.runtime.stages import StageRecorder
+        return StageRecorder()
+
+    def test_a_clean_run_reports_success(self):
+        # `recorder.failed` is a PROPERTY. Calling it — `recorder.failed()` —
+        # raised TypeError on every successful non-registration job, and was
+        # unreached only because the sole canaried job type raises earlier.
+        context = mock.Mock(job_type="science")
+        recorder = self._recorder()
+
+        with mock.patch.object(job, "run_sequence"):
+            outcome, disposition, error = job._execute(
+                context, "science", recorder, mock.Mock())
+
+        self.assertEqual("success", outcome)
+        self.assertEqual("published", disposition)
+        self.assertIsNone(error)
+
+    def test_a_recorded_stage_failure_reports_partial(self):
+        from pipeline.runtime.stages import StageRecord
+
+        context = mock.Mock(job_type="science")
+        recorder = self._recorder()
+        recorder.record(StageRecord(
+            stage_name="one", started_at=None, duration_ms=1,
+            outcome="failure", error_category="tool_failure"))
+
+        with mock.patch.object(job, "run_sequence"):
+            outcome, _disposition, _error = job._execute(
+                context, "science", recorder, mock.Mock())
+
+        self.assertEqual("partial", outcome)
 
 
 # ---------------------------------------------------------------------------

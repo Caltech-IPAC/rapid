@@ -230,32 +230,47 @@ def dispatch_registration(context) -> None:
     registration manifest is accepted and validated like any other, and it
     runs as a job with a full attempt record.
 
-    **What it does not yet do is run.** The existing registration path is
-    `pipeline/registerCompletedJobsInDB.py`, which has no callable entry point
-    — it is a `__main__` block that downloads job logs and regex-greps
-    `terminating_exitcode` out of them. Wiring the entrypoint to that would
-    re-enter the log-grep chain this design deletes, on the wrong side of the
-    cutover fence. The record-consuming replacement is W6's deliverable, and
-    `observability.registration.decide` is the decision function it will
-    consume; until it lands, a registration submission is refused here rather
-    than silently running the legacy path.
+    It consumes *reconciled* outcomes only — attempts the reconciler has
+    moved to a terminal state and published a closure record for. That gate is
+    the reason a container killed after writing its own record cannot have its
+    products registered: until the reconciler has seen the scheduler's verdict,
+    the attempt is not a candidate.
 
-    Refusing is the conservative option and it is recorded as such: the route
-    stays in the matrix, the manifest vocabulary keeps the job type, and W6
-    replaces this body with the call. A canary of this job type therefore
-    exercises the whole surface — environment, manifest, route, ownership,
-    snapshot, started CAS, termination — and closes with a classified
-    application failure, which is a representable outcome and a real test of
-    the records path.
+    Registration opens its own database connection rather than reusing the
+    entrypoint's. The entrypoint's connection belongs to the attempt-record
+    writer and is scoped to this attempt's own lifecycle; registration is a
+    pass over *other* attempts and is a distinct component at the pooler door,
+    with its own `application_name` for attribution.
+
+    What this replaced: four `__main__`-only scripts that downloaded each job's
+    stdout log from S3 and regex-grepped `terminating_exitcode` out of it,
+    wrote `.done` sentinels on failure paths as well as success ones, and
+    hardcoded process exit 0. Deleted at the cutover fence.
     """
-    raise ConfigError(
-        "the registration job type has no payload yet: its record-consuming "
-        "implementation is W6's deliverable, behind the cutover fence. The "
-        "legacy path (pipeline/registerCompletedJobsInDB.py) parses job logs "
-        "for `terminating_exitcode`, which this design deletes, so it is not "
-        "dispatched to. The route, manifest vocabulary and attempt record for "
-        "this job type are in place.",
-        job_type=context.job_type)
+    from database.modules.utils.rapid_db_connect import connection
+    from pipeline.registration import candidates, register_batch
+
+    logger = context.logger
+    with connection("rapid-registration", lane="transaction") as conn:
+        rows = candidates(conn)
+        logger.info("registration: %d reconciled attempt(s) to consider",
+                    len(rows))
+        run = register_batch(conn, rows)
+
+    context.record(registration=run.as_dict())
+
+    if run.failed:
+        # This job's own failures are its own outcome — the counting pattern
+        # that closes the hardcoded-exit-0 defect. Raised so it is classified
+        # and recorded like any other application failure, rather than
+        # returned as a status nobody checks. `records_error` is the honest
+        # category: what failed was writing this pass's account of other
+        # attempts' products.
+        raise RecordsError(
+            f"{run.failed} of {len(rows)} registration(s) failed; "
+            f"registered {run.registered}, skipped {run.skipped}, "
+            f"deferred {run.deferred}",
+            failed=run.failed, considered=len(rows))
 
 
 def main(argv=None) -> int:
@@ -401,7 +416,11 @@ def _execute(context, job_type, recorder, logger):
         return (RapidOutcome.FAILURE.value, ProductDisposition.NONE.value,
                 serialize_error(exc, redactor=redact))
 
-    failed_stages = recorder.failed()
+    # `failed` is a property returning the list of failed stage records, not a
+    # method — calling it raised TypeError on every successful non-registration
+    # job. Unreached so far only because the sole canaried job type is
+    # `registration`, which raises before this line.
+    failed_stages = recorder.failed
     if failed_stages:
         # No stage raised, but one recorded a failure — a partial outcome, and
         # a real third state rather than a rounded-off success.

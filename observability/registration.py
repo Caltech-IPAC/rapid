@@ -63,9 +63,19 @@ class Registrable:
 
 
 #: States from which no registration decision can be made yet.
+#:
+#: `application_closed` belongs here even though the application has finished
+#: and stated its outcome. Registration consumes *reconciled* outcomes only: an
+#: application-closed row has no scheduler truth on it yet, so acting on it
+#: would mean registering products for an attempt whose container might have
+#: been killed after the record was written. The reconciler moves it to a
+#: terminal state within the grace horizon, and registration acts then.
+#: (This state was added after this module was first written; leaving it out
+#: let an unreconciled row fall through to the outcome branch and register.)
 _NON_TERMINAL = frozenset({
     LifecycleState.SUBMITTED.value,
     LifecycleState.STARTED.value,
+    LifecycleState.APPLICATION_CLOSED.value,
 })
 
 
@@ -83,8 +93,16 @@ def decide(attempt: Any) -> Registrable:
         "rapid_outcome": outcome,
         "product_disposition": disposition,
         # Recorded for operators, never for the decision — see module docstring.
+        # The exit code is TWO columns, not one: the application's intended
+        # exit and the scheduler's observed exit are separate facts with
+        # separate authors, and their disagreement is the thing worth seeing.
+        # (`process_exit_code` was the pre-amendment single column and had
+        # been reading None ever since the split.)
         "scheduler_state": _as_value(getattr(attempt, "scheduler_state", None)),
-        "process_exit_code": getattr(attempt, "process_exit_code", None),
+        "application_intended_exit": getattr(
+            attempt, "application_intended_exit", None),
+        "scheduler_observed_exit": getattr(
+            attempt, "scheduler_observed_exit", None),
         "error_category": _as_value(getattr(attempt, "error_category", None)),
     }
 

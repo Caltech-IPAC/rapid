@@ -345,10 +345,18 @@ Each of the audit's numbered findings, and where it now stands:
    ``ENV PATH`` and ``ENV LD_LIBRARY_PATH`` are set explicitly in
    ``containers/rapid-pipeline/Containerfile`` (rapid_systems).
 
-4. **Registration by log-grep.** Not closed here. The record-consuming
-   registration path is W6's, behind the cutover fence; W5's entrypoint
-   routes the registration job type but refuses to run it rather than
-   dispatching to the legacy log-parsing script.
+4. **Registration by log-grep. CLOSED at W6.** The four scripts that
+   downloaded each job's stdout log from S3 and regex-grepped
+   ``terminating_exitcode`` out of it are deleted, along with the nine
+   legacy launcher scripts that fed them. ``pipeline/registration/``
+   replaces them: it queries the attempt table for attempts the
+   *reconciler* has closed, decides by the adopted taxonomy, and exits
+   nonzero when its own work fails. A repo-wide grep finds no code that
+   searches for ``terminating_exitcode`` and no done-file write in the
+   registration chain. (The string still appears in science-layer scripts
+   that *print* their own exit code — that is the convention being
+   printed, not parsed, and those scripts are outside the completion
+   chain.)
 
 5. **``print()``-only, no ``logging``.** Closed for the converted layer:
    the entrypoint and every stage log through the runtime's configured
@@ -361,8 +369,17 @@ Each of the audit's numbered findings, and where it now stands:
 
 7. **``rapid_db.py``.** Parameterized by W3.
 
-8, 9. **The VPO, and ``ProcessPoolExecutor`` swallowing.** The VPO
-   touchpoints are W6's; the pool sites were fixed by W3.
+8, 9. **The VPO, and ``ProcessPoolExecutor`` swallowing.** The pool sites
+   were fixed by W3. The VPO's three touchpoints were taken at W6 and now
+   live in ``pipeline/seams.py``: submission through the manifest/array
+   layer with attempt rows pre-created before any child can start; a
+   completion wait that reads the attempt table the reconciler maintains,
+   with a stated timeout that turns a stuck job into a reconciliation case
+   instead of an infinite wait; and registration invoked as the records
+   consumer. The unit-gathering queries that decided *which* work to
+   submit stayed with the deleted launchers — re-homing them is the
+   operations design's VPO rebuild, and the three submission sites refuse
+   loudly rather than fabricating a query.
 
 10. **The tessellation.** W7's, running in parallel with this work. The
     bake stays in the Containerfile for now.
