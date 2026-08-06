@@ -35,7 +35,18 @@ semantically right and not merely digest-identical. The batched-lookup
 shape recorded for comparison takes **12.4 s** for 5,000 points against
 25M buffer hits, which is the arithmetic case for the closed form.
 
-A duplicate ``(version, rtid)`` insert is refused, live.
+A duplicate ``(version, rtid)`` insert is refused, live. So is a whole
+re-load: running ``load.sh --target rapid-db`` a second time fails with
+``tessellation version nside512-v2 is already installed`` and exits 1,
+rather than silently doubling 6.3M rows.
+
+Two staging prefixes are left in the build-artifacts bucket under
+``tessellation-staging/``: one from W6's stub run (11:26Z, 451 MB —
+the run that staged and exited 0 without loading) and one from the
+immutability re-run above (14:06Z, 79 MB). The second is the script's
+designed behaviour — a failed load leaves its prefix for diagnosis — and
+both are safe to delete once read. Not deleted here: object deletion was
+outside W6b's authorization.
 
 The pooler
 ----------
