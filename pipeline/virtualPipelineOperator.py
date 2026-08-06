@@ -317,7 +317,93 @@ class SubmissionBinding:
                 "attempt row must record to be reproducible.")
 
 
-def submission_env(job_type, parameters=None):
+def active_definition(batch_client, family):
+
+    '''
+    The one ACTIVE revisioned job-definition ARN for a definition family.
+
+    THE EXECUTION BINDING MUST NAME WHAT ACTUALLY RAN (round-5 finding). The
+    parameter tree carries a definition FAMILY — `rapid-pipeline-science` —
+    and submitting that bare name lets Batch resolve whichever revision is
+    ACTIVE at the instant of submission. Nothing records which one that was:
+    the revision was carried separately, as a process-wide
+    `RAPID_JOB_DEFINITION_REV`, and a single integer cannot be right for two
+    independently revisioned families at once. The science and bulk
+    definitions revise on their own schedules, so whichever number the
+    environment held, at least one class recorded a revision it did not run.
+
+    That is not a bookkeeping detail. `ExecutionBinding.definition_identity`
+    synthesizes `<name>:<rev>` from the recorded pair, and the reconciler
+    compares its observation of the real job against it — so a binding whose
+    revision came from the environment makes the reconciler record DRIFT on
+    attempts that ran under exactly the definition they were submitted to. At
+    ramp scale that is a false-positive per attempt, against a gate that
+    requires zero unexplained terminal records.
+
+    So the revision is RESOLVED, not declared, and resolved once per family at
+    env build. The `describe_job_definitions` call filters to ACTIVE and the
+    exact family name; Batch returns revisions oldest-first, so the last is
+    the one a bare-name submission would have reached — the same revision,
+    now named explicitly and recorded.
+
+    AMBIGUITY IS REFUSED rather than resolved by guessing. `jobDefinitionName`
+    is an exact-match filter, so more than one distinct family coming back
+    means the account holds something this code does not model, and picking
+    one would submit real work under a definition nobody chose. None coming
+    back means the family does not exist and every submission under it would
+    fail at Batch with a far less legible error.
+
+    Parameters
+    ----------
+    batch_client : botocore client
+        Batch client, injected so the tests can drive this without AWS.
+    family : str
+        The definition family name from the parameter tree.
+
+    Returns
+    -------
+    dict
+        `arn` (the versioned ARN), `revision` (int), and `image_digest`
+        (the digest the definition's container actually names).
+
+    Raises
+    ------
+    RuntimeError
+        No ACTIVE revision, or more than one family in the response.
+    '''
+
+    described = batch_client.describe_job_definitions(
+        jobDefinitionName=family, status="ACTIVE")
+    definitions = described.get("jobDefinitions", [])
+
+    if not definitions:
+        raise RuntimeError(
+            "no ACTIVE revision of job definition family {!r}; a submission "
+            "under it could not run, and binding it to a revision that does "
+            "not exist would record a job that never was".format(family))
+
+    names = {definition["jobDefinitionName"] for definition in definitions}
+    if len(names) > 1:
+        raise RuntimeError(
+            "job definition family {!r} resolved to more than one "
+            "definition ({}); refusing to choose, because submitting real "
+            "work under a definition nobody selected is worse than not "
+            "submitting it".format(family, ", ".join(sorted(names))))
+
+    # Batch returns revisions in ascending order; the last ACTIVE one is what
+    # a bare-name submission would have resolved to.
+    latest = definitions[-1]
+    image = latest.get("containerProperties", {}).get("image", "")
+
+    return {
+        "arn": latest["jobDefinitionArn"],
+        "revision": int(latest["revision"]),
+        "image_digest": image.split("@", 1)[-1] if "@" in image else "",
+    }
+
+
+def submission_env(job_type, parameters=None, batch_client=None,
+                   s3_client=None):
 
     '''
     The queue, job definition, binding and clients one submission needs.
@@ -340,9 +426,17 @@ def submission_env(job_type, parameters=None):
     the entrypoint checks, and a disagreement there is a rejected submission.
 
     The rest stay in the ENVIRONMENT, because they are deployment facts that
-    change with every image build: the job-definition revision, the image
-    digest, and the release identity are what the CI pipeline produces and
-    what the attempt row must record to be reproducible.
+    change with every image build: the image digest and the release identity
+    are what the CI pipeline produces and what the attempt row must record to
+    be reproducible.
+
+    THE REVISION IS NOT AMONG THEM (round-5 finding). It used to be, as a
+    process-wide `RAPID_JOB_DEFINITION_REV`, and that is exactly the defect:
+    one integer declared for two independently revisioned families, recorded
+    beside a bare family name that Batch resolved to whatever was ACTIVE.
+    `active_definition` resolves it per route class instead, and the SAME
+    versioned ARN is both submitted and recorded — which is the property that
+    makes the reconciler's comparison meaningful rather than a coin flip.
 
     Every one is REQUIRED. A submission that cannot name its own binding is
     exactly what migration 013's amended submitted-state constraint refuses,
@@ -358,9 +452,18 @@ def submission_env(job_type, parameters=None):
         Parameter-tree values, relative-keyed, as `fetch_parameters`
         returns them. Injected by the tests and by a caller that has
         already read the tree; fetched here when omitted.
+    batch_client : botocore client, optional
+        Batch client, used to resolve the ACTIVE revision and returned for
+        the submission itself. Injected by the tests; built here when
+        omitted, so one client serves both.
+    s3_client : botocore client, optional
+        S3 client for the manifest write. Injected by the tests for the same
+        reason as `batch_client`: resolving a binding is a decision, and a
+        test of that decision should not need AWS credentials or a region to
+        construct a client the resolution never calls.
     '''
 
-    required = ("RAPID_JOB_DEFINITION_REV", "RAPID_IMAGE_DIGEST",
+    required = ("RAPID_IMAGE_DIGEST",
                 "RAPID_RELEASE_IDENTITY", "RAPID_MANIFEST_BUCKET")
     missing = [name for name in required if not os.environ.get(name)]
     if missing:
@@ -389,7 +492,17 @@ def submission_env(job_type, parameters=None):
             exit(64)
         binding_names[kind] = value
 
-    job_definition = binding_names["job_definition"]
+    if batch_client is None:
+        batch_client = boto3.client('batch')
+    if s3_client is None:
+        s3_client = boto3.client('s3')
+
+    # The family from the tree, resolved to the one ACTIVE revision. What is
+    # submitted and what is recorded are now the same string by construction,
+    # rather than two values that agree only while an env var happens to be
+    # right.
+    active = active_definition(batch_client, binding_names["job_definition"])
+    job_definition = active["arn"]
 
     return {
         "queue": binding_names["queue"],
@@ -397,14 +510,14 @@ def submission_env(job_type, parameters=None):
         "workload_class": route.workload_class,
         "binding": SubmissionBinding(
             job_definition_arn=job_definition,
-            job_definition_rev=int(os.environ['RAPID_JOB_DEFINITION_REV']),
+            job_definition_rev=active["revision"],
             image_digest=os.environ['RAPID_IMAGE_DIGEST'],
             release_identity=os.environ['RAPID_RELEASE_IDENTITY']),
         "manifest_bucket": os.environ['RAPID_MANIFEST_BUCKET'],
         "manifest_prefix": os.environ.get('RAPID_MANIFEST_PREFIX',
                                           'submissions'),
-        "s3_client": boto3.client('s3'),
-        "batch_client": boto3.client('batch'),
+        "s3_client": s3_client,
+        "batch_client": batch_client,
     }
 
 
