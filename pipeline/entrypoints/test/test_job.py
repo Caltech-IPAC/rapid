@@ -347,23 +347,53 @@ class DispatchRegistrationTests(unittest.TestCase):
                  "rapid_outcome": "success", "product_disposition": "published",
                  "scheduler_state": "SUCCEEDED", "exposure_id": 1, "sca": 1,
                  "sky_tile": None, "error_category": None,
-                 "application_intended_exit": 0, "scheduler_observed_exit": 0}]
+                 "application_intended_exit": 0, "scheduler_observed_exit": 0,
+                 "terminal_record_key": "attempts/records/r/j/a-1/seq-0000.json",
+                 "terminal_record_checksum": None,
+                 "terminal_record_sequence": 1}]
+
+        # AMENDED in round 2: a registrar now EXISTS, so this is a real
+        # registration pass rather than the labelled decision pass FixA left.
+        # The registrar itself is stubbed here — what these tests pin is the
+        # contract `dispatch_registration` consumes attempts under, not the
+        # ported bodies, which have their own suite.
+        registered = []
 
         with mock.patch("database.modules.utils.rapid_db_connect.connection"), \
                 mock.patch("pipeline.registration.candidates",
-                           return_value=rows):
+                           return_value=rows), \
+                mock.patch.object(job, "registrar_for",
+                                  return_value=lambda row, verdict:
+                                  registered.append(row["attempt_id"])):
             job.dispatch_registration(context)
 
         context.record.assert_called_once()
         recorded = context.record.call_args.kwargs["registration"]
-        # AMENDED by FixA (review finding #5). No registrar is installed, so
-        # this is a DECISION pass: the attempt is approved and counted into
-        # `would_register`, never into `registered`. Reporting approvals as
-        # registrations is what let the job return registered=N while writing
-        # no operation-table rows.
+        self.assertEqual([1], registered)
+        self.assertEqual(1, recorded["registered"])
+        self.assertEqual(0, recorded["would_register"])
+        self.assertEqual(0, recorded["exit_code"])
+
+    def test_a_pass_with_no_registrar_is_still_a_labelled_rehearsal(self):
+        # The dry-run machinery stays reachable ON PURPOSE (review finding
+        # #5): a rehearsal's candidates count into `would_register`, never
+        # into `registered`, so no log or metric can read one as the other.
+        context = self._context()
+        rows = [{"attempt_id": 1, "lifecycle_state": "terminal_after_start",
+                 "rapid_outcome": "success", "product_disposition": "published",
+                 "scheduler_state": "SUCCEEDED", "exposure_id": 1, "sca": 1,
+                 "sky_tile": None, "error_category": None,
+                 "application_intended_exit": 0, "scheduler_observed_exit": 0}]
+
+        with mock.patch("database.modules.utils.rapid_db_connect.connection"), \
+                mock.patch("pipeline.registration.candidates",
+                           return_value=rows), \
+                mock.patch.object(job, "registrar_for", return_value=None):
+            job.dispatch_registration(context)
+
+        recorded = context.record.call_args.kwargs["registration"]
         self.assertEqual(1, recorded["would_register"])
         self.assertEqual(0, recorded["registered"])
-        self.assertEqual(0, recorded["exit_code"])
 
     def test_a_failing_registration_raises_rather_than_exiting_zero(self):
         # The defect in what this replaced: four scripts hardcoded exit 0, so

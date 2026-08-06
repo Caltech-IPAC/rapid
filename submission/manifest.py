@@ -155,6 +155,24 @@ class UnitFacts:
         Tessellation identifiers the science image overlaps.
     reference_overlapping_fields : list, optional
         Tessellation identifiers the reference image overlaps.
+    reference_image_version : int, optional
+        Version of the reference image (RefImages.version), stamped into the
+        reference image's RFIMVER header by post-process.
+    pid : int, optional
+        Identifier of the difference image this unit closes out
+        (DiffImages.pid). Post-process only.
+    difference_image_uri : str, optional
+        S3 URI of the difference image (DiffImages.filename). Post-process
+        only.
+    difference_image_version : int, optional
+        Version of the difference image (DiffImages.version), stamped into its
+        DIFIMVER header.
+
+    The last four are the post-process job type's own facts. They were absent
+    from this vocabulary while `pipeline/stages/post_process.py` required
+    `pid` and `difference_image_uri` through `context.fact` — so the facts the
+    stage demanded had no home to be carried in, and post-process gathering
+    could not have supplied them even had it tried.
     """
 
     rid: int | None = None
@@ -174,6 +192,10 @@ class UnitFacts:
     reference_image_uri: str | None = None
     reference_image_infobits: int | None = None
     reference_image_ppid: int | None = None
+    reference_image_version: int | None = None
+    pid: int | None = None
+    difference_image_uri: str | None = None
+    difference_image_version: int | None = None
     images_to_coadd: int | None = None
     coadd_inputs_uri: str | None = None
     sky_position: dict[str, float] | None = None

@@ -29,7 +29,7 @@ import time
 
 from observability.attempts import (
     AttemptWriter, ExecutionBinding, LifecycleState)
-from submission.batching import Batch
+from submission.batching import Batch, batch_units
 from submission.manifest import Manifest
 from submission.submit import S3ManifestStore, publish_manifest, submit_batch
 
@@ -185,6 +185,51 @@ def submit_units(units, job_type, queue, job_definition, binding,
                 job_type, submission.batch_id, submission.job_id,
                 submission.array_size, len(attempt_ids))
     return submission, attempt_ids
+
+
+def submit_gathered(units, job_type, queue, job_definition, binding,
+                    manifest_bucket, manifest_prefix, s3_client, batch_client,
+                    execute, run_id, max_batch_size=None, reason="vpo",
+                    now=None):
+    """Batch a gathered unit list and submit every batch. The VPO's entry.
+
+    `submit_units` submits ONE array job, which is the right unit of work for
+    it: one manifest, one binding, one set of rows. But a gathering pass
+    returns however many units are ready, and the array ceiling is a hard
+    limit — so something has to cut the list and submit each piece. That
+    something was missing, which is part of why nothing in production called
+    `gather_*`, `batch_units` or `submit_units` at all.
+
+    Each batch gets its own run-scoped identity (`<run_id>-<n>` where there is
+    more than one), because two batches are two manifests and a manifest's
+    identity is what its children resolve their unit by. Reusing one identity
+    across batches would put two different unit lists under one manifest key —
+    which the manifest store now refuses outright.
+
+    Returns the list of (submission, attempt_ids) pairs, one per batch. A
+    batch that fails to submit raises: its rows remain as reconciliation
+    cases, and continuing to the next batch would hide that from the operator.
+    """
+    units = list(units)
+    if not units:
+        logger.info("nothing ready to submit for job_type=%s", job_type)
+        return []
+
+    kwargs = {} if max_batch_size is None else {"max_batch_size": max_batch_size}
+    batches = batch_units(units, **kwargs)
+    logger.info("submitting %d %s unit(s) in %d batch(es)",
+                len(units), job_type, len(batches))
+
+    results = []
+    for index, batch in enumerate(batches):
+        batch_run_id = run_id if len(batches) == 1 else f"{run_id}-{index}"
+        results.append(submit_units(
+            batch.manifest.units, job_type=job_type, queue=queue,
+            job_definition=job_definition, binding=binding,
+            manifest_bucket=manifest_bucket, manifest_prefix=manifest_prefix,
+            s3_client=s3_client, batch_client=batch_client, execute=execute,
+            run_id=batch_run_id, reason=reason, now=now))
+    return results
 
 
 def _precreate(writer, manifest, run_id, binding, moment):

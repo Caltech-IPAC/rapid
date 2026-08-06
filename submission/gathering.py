@@ -91,6 +91,21 @@ class UnitSource(Protocol):
     def get_best_reference_image(self, ppid: int, field: int,
                                  fid: int) -> Any: ...
 
+    def get_overlapping_l2files(self, rid: int, fid: int, mjdobs: float,
+                                *corners: float,
+                                radius_of_initial_cone_search: float | None
+                                = ...) -> Sequence[Any]: ...
+
+    def get_job_record(self, jid: int) -> Sequence[Any] | None: ...
+
+    def get_best_difference_image(self, rid: int,
+                                  ppid: int) -> dict[str, Any]: ...
+
+    def get_reference_image(self, rfid: int) -> dict[str, Any]: ...
+
+    def get_jids_of_normal_science_pipeline_jobs_for_processing_date(
+            self, proc_date: str) -> Sequence[Any]: ...
+
 
 def _positions(values: Sequence[Any], ra_keys: Sequence[str],
                dec_keys: Sequence[str]) -> dict[str, float] | None:
@@ -290,6 +305,167 @@ def gather_science_units(handle: UnitSource, start, end,
                                  facts=facts)
 
 
+# The CSV column order `generateReferenceImage` parses, taken from the deleted
+# launcher (awsBatchSubmitJobs_launchSingleReferenceImagePipeline.py, at the
+# commit before the W6 cutover fence). It is a positional format with no
+# header, so the order IS the contract and is written down here rather than
+# left implicit in a join expression.
+COADD_INPUT_COLUMNS = (
+    "rid", "ra0", "dec0", "ra1", "dec1", "ra2", "dec2", "ra3", "dec3",
+    "ra4", "dec4", "filename", "expid", "sca", "field", "mjdobs", "exptime",
+    "infobits", "status", "vbest", "version",
+)
+
+
+def coadd_input_rows(handle: UnitSource, rid: int, fid: int, mjdobs: float,
+                     sky_position: dict, min_images_to_coadd: int,
+                     radius: float | None = None) -> list[list[Any]]:
+    """The reference image's coadd inputs, as CSV rows.
+
+    The launcher's aggregation, preserved because it is science logic: every
+    L2 file overlapping this one's sky tile in the same filter, acquired
+    earlier, ordered by distance from tile centre — then filtered to the rows
+    that may actually be coadded.
+
+    The two exclusions are the launcher's and are not optional. `status == 0`
+    is a file marked bad; `vbest == 0` is a superseded version. Coadding
+    either would build a reference from images the database says not to use.
+
+    Raises `GatheringError` rather than returning a short list when there are
+    too few inputs: "this field cannot support a reference image yet" and
+    "the query failed" must not look the same to the submitter.
+    """
+    corners = [sky_position.get(key) for key in
+               ("ra0", "dec0", "ra1", "dec1", "ra2", "dec2", "ra3", "dec3",
+                "ra4", "dec4")]
+    if any(value is None for value in corners):
+        raise GatheringError(
+            f"rid {rid} has no complete sky position; the overlap query is a "
+            f"cone search about the tile corners and cannot run without them")
+
+    try:
+        overlapping = handle.get_overlapping_l2files(
+            rid, fid, mjdobs, *corners, radius_of_initial_cone_search=radius)
+    except Exception as exc:  # noqa: BLE001
+        raise GatheringError(
+            f"overlap query failed for rid {rid} fid {fid}: {exc}") from exc
+
+    rows: list[list[Any]] = []
+    for image in overlapping or ():
+        input_rid = int(image[0])
+        field_from_overlap = image[11]
+        info = handle.get_info_for_l2file(input_rid)
+        code = getattr(handle, "exit_code", 0)
+        if code >= 64:
+            raise GatheringError(
+                f"get_info_for_l2file failed for rid {input_rid}: "
+                f"rapid_db exit_code {code}")
+        if info is None:
+            continue
+
+        (filename, expid, sca, field, image_mjdobs, exptime,
+         infobits, status, vbest, version) = info[:10]
+
+        if not status or not vbest:
+            continue
+
+        # The launcher's sanity check, kept: the overlap query and the file's
+        # own row must agree about which field this is. They disagreeing means
+        # one of the two is describing a different image, and coadding on that
+        # basis would build a reference from the wrong sky.
+        if field is not None and field_from_overlap is not None \
+                and int(field) != int(field_from_overlap):
+            raise GatheringError(
+                f"rid {input_rid} is field {field} in L2Files but field "
+                f"{field_from_overlap} in the overlap query; refusing to "
+                f"coadd on disagreeing identities")
+
+        rows.append([input_rid, *image[1:11], filename, expid, sca, field,
+                     image_mjdobs, exptime, infobits, status, vbest, version])
+
+    if len(rows) < min_images_to_coadd:
+        raise GatheringError(
+            f"rid {rid} has {len(rows)} coaddable inputs, fewer than the "
+            f"{min_images_to_coadd} the release requires for a reference "
+            f"image")
+    return rows
+
+
+def publish_coadd_inputs(s3_client, bucket: str, key: str,
+                         rows: Iterable[Sequence[Any]]) -> str:
+    """Write the coadd-inputs CSV to S3 and return its URI.
+
+    The reference stage reads `coadd_inputs_uri`, splits the bucket off, and
+    downloads the object — so the URI must name an object that exists before
+    the job starts. Gathering publishes it because gathering is what knows the
+    rows; the stage only consumes.
+    """
+    body = "\n".join(",".join("" if value is None else str(value)
+                              for value in row)
+                     for row in rows)
+    if body:
+        body += "\n"
+    try:
+        s3_client.put_object(Bucket=bucket, Key=key,
+                             Body=body.encode("utf-8"),
+                             ContentType="text/csv")
+    except Exception as exc:  # noqa: BLE001
+        raise GatheringError(
+            f"could not publish the coadd inputs to s3://{bucket}/{key}: "
+            f"{exc}") from exc
+    return f"s3://{bucket}/{key}"
+
+
+def gather_reference_units(handle: UnitSource, start, end,
+                           start_mjdobs: float, end_mjdobs: float,
+                           min_images_to_coadd: int,
+                           s3_client: Any, job_bucket: str,
+                           run_id: str,
+                           fids: Iterable[int] | None = None,
+                           radius: float | None = None
+                           ) -> Iterator[ProcessingUnit]:
+    """Yield reference-image units, each with its coadd inputs published.
+
+    `gather_science_units(make_references=True)` yields the representative
+    image per (field, filter) but NOT `coadd_inputs_uri` — which
+    `reference_image.download_inputs` requires as its first act, so every
+    reference job it produced would fail `input_missing` before doing any
+    work. The inputs are aggregated and published here, and the unit carries
+    the URI of the object that now exists.
+
+    A field that cannot yet support a reference image is SKIPPED, not fatal:
+    it is the ordinary state of a field early in the survey, and one such
+    field must not stop the others being submitted.
+    """
+    for unit in gather_science_units(handle, start, end, start_mjdobs,
+                                     end_mjdobs, min_images_to_coadd,
+                                     fids=fids, make_references=True):
+        facts = unit.facts
+        rid = facts.rid
+        if rid is None:
+            raise GatheringError(
+                f"unit {unit.key} has no rid; the coadd inputs are aggregated "
+                f"from the representative image's own overlap query")
+
+        try:
+            rows = coadd_input_rows(
+                handle, int(rid), int(facts.fid), float(facts.mjdobs),
+                facts.sky_position or {}, min_images_to_coadd, radius=radius)
+        except GatheringError as exc:
+            logger.info("no reference image for unit %s yet: %s",
+                        unit.key, exc)
+            continue
+
+        key = (f"coadd-inputs/{run_id}/{unit.key}/"
+               f"input_images_for_refimage_rid{int(rid)}.csv")
+        uri = publish_coadd_inputs(s3_client, job_bucket, key, rows)
+        logger.info("unit %s: %d coadd inputs at %s",
+                    unit.key, len(rows), uri)
+
+        yield dataclasses.replace(
+            unit, facts=_replace(facts, coadd_inputs_uri=uri))
+
+
 def gather_post_process_units(handle: Any, proc_date: str
                               ) -> Iterator[ProcessingUnit]:
     """Yield post-process units for one processing date.
@@ -307,13 +483,96 @@ def gather_post_process_units(handle: Any, proc_date: str
         proc_date)
     for row in rows or ():
         jid = int(row[0] if isinstance(row, (list, tuple)) else row)
-        job = handle.get_job_record(jid) if hasattr(
-            handle, "get_job_record") else None
+
+        # The job's own row, then the products it produced. `UnitFacts()` with
+        # no arguments used to be yielded here — no product URIs, no database
+        # identities — while `post_process.stamp_reference_image` requires
+        # `reference_image_uri` and `stamp_difference_image` requires
+        # `difference_image_uri`, `pid`, `rid`, `expid`, `fid` and `field` as
+        # its first act. Every post-process job would have failed
+        # `input_missing` before stamping either product.
+        #
+        # `get_job_record` was called behind a `hasattr` guard that was always
+        # false against the real handle, because the method did not exist. It
+        # does now; the guard is gone, so a handle that cannot answer is an
+        # error rather than a silent fall back to the degenerate key.
+        job = handle.get_job_record(jid)
         exposure, sca = _job_identity(job, jid)
+        facts = post_process_facts(handle, job)
+
         yield ProcessingUnit(exposure=exposure, sca=sca,
-                             facts=UnitFacts(),
+                             facts=facts,
                              fields={"jid": jid,
                                      "job_type": JOB_TYPE_POST_PROCESS})
+
+
+def post_process_facts(handle: Any, job: Any) -> UnitFacts:
+    """The facts a post-process unit's stages require, from real queries.
+
+    Post-process stamps identities into the reference and difference images
+    this job produced, so it needs both products' URIs and the identities that
+    go into their headers. Every one traces to a column: the Jobs row for the
+    unit's own identity, DiffImages for the difference image and its pid, and
+    RefImages (through the difference image's rfid) for the reference.
+
+    A fact that cannot be resolved is left absent rather than defaulted, per
+    the module's stated rule — `UnitFacts.require` turns that into one named
+    failure at startup instead of a header stamped with a zero.
+    """
+    if job is None:
+        return UnitFacts()
+
+    # `get_job_record` returns the row tuple in its declared column order; a
+    # mapping is accepted too, because that is what a stub naturally supplies
+    # and the names are the same either way.
+    # NOTE no `sca`: it identifies the processing UNIT (`ProcessingUnit.sca`),
+    # not the facts, and `_job_identity` reads it from the same row for that
+    # purpose. One home per fact.
+    if isinstance(job, dict):
+        expid, field, fid, rid = (
+            _maybe_int(job.get(name))
+            for name in ("expid", "field", "fid", "rid"))
+    else:
+        expid, field, fid, rid = (
+            _maybe_int(job[index]) for index in (0, 2, 3, 4))
+    facts = UnitFacts(expid=expid, field=field, fid=fid, rid=rid)
+
+    if rid is None:
+        return facts
+
+    difference = handle.get_best_difference_image(rid, ppid_for(JOB_TYPE_SCIENCE))
+    code = getattr(handle, "exit_code", 0)
+    if code not in (0, 7):
+        raise GatheringError(
+            f"difference-image lookup failed for rid {rid}: "
+            f"rapid_db exit_code {code}")
+    if not difference:
+        return facts
+
+    facts = _replace(
+        facts,
+        pid=_maybe_int(difference.get("pid")),
+        difference_image_uri=_maybe_str(difference.get("filename")),
+        infobits=_maybe_int(difference.get("infobitssci")),
+        difference_image_version=_maybe_int(difference.get("version")))
+
+    # The reference this difference image was made against — named by the
+    # difference image's own rfid, which is the only thing that knows WHICH
+    # reference was used. Looking one up by field/filter instead could return a
+    # newer reference than the one actually differenced against.
+    rfid = _maybe_int(difference.get("rfid"))
+    if rfid is None:
+        return facts
+
+    reference = handle.get_reference_image(rfid)
+    if not reference:
+        return _replace(facts, reference_image_id=rfid)
+    return _replace(
+        facts,
+        reference_image_id=rfid,
+        reference_image_uri=_maybe_str(reference.get("filename")),
+        reference_image_infobits=_maybe_int(reference.get("infobits")),
+        reference_image_version=_maybe_int(reference.get("version")))
 
 
 def _job_identity(job: Any, jid: int) -> tuple[int, int]:

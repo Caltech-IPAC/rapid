@@ -117,12 +117,29 @@ def download_inputs(context) -> None:
     # directory plus a filename template carrying an "FID" placeholder that the
     # launcher substituted. The manifest now names the object outright — the
     # placeholder was a per-invocation fact wearing configuration's clothes.
-    ref_psf_uri = context.fact("reference_image_uri").replace(
-        "image.fits", "psf.fits")
-    ref_psf, _subdirs, _ = util.download_file_from_s3_bucket(
-        context.s3, ref_psf_uri,
-        outputfile=context.scratch(os.path.basename(ref_psf_uri)))
-    context.produce("reference_psf", ref_psf)
+    #
+    # ONLY WHERE A REFERENCE EXISTS. `context.fact` requires its value, so
+    # taking `reference_image_uri` here failed `input_missing` for every unit
+    # with no reference yet — before `resolve_reference_image` could reach the
+    # branch that exists to BUILD one. The no-reference path was unreachable in
+    # production: absence of a reference is what selects that branch, and this
+    # stage rejected the unit for the same absence two stages earlier.
+    #
+    # The reference PSF belongs to a reference image, so where there is no
+    # reference image there is no reference PSF to fetch. `_build_reference_image`
+    # produces the reference; the PSF for it is derived there, alongside it.
+    reference_uri = context.optional_fact("reference_image_uri")
+    ref_psf = None
+    if reference_uri is not None:
+        ref_psf_uri = reference_uri.replace("image.fits", "psf.fits")
+        ref_psf, _subdirs, _ = util.download_file_from_s3_bucket(
+            context.s3, ref_psf_uri,
+            outputfile=context.scratch(os.path.basename(ref_psf_uri)))
+        context.produce("reference_psf", ref_psf)
+    else:
+        context.logger.info(
+            "no reference image for this unit; the reference and its PSF are "
+            "built later rather than downloaded")
 
     context.logger.info("inputs: science=%s sci_psf=%s ref_psf=%s",
                         gz_name, sci_psf, ref_psf)
@@ -261,13 +278,31 @@ def _build_reference_image(context, awaicgen) -> None:
     # first extraction dropped this call, so a science job that had to build
     # its own reference produced no reference PSF/finder catalogues at all —
     # while the dedicated reference-image pipeline, which runs the same coadd,
-    # did produce them. The reference PSF is an input to this job type, so it
-    # is available here by the same name the download branch produces.
+    # did produce them.
+    #
+    # The PSF this needs is the one for the coadd just built, and on THIS
+    # branch there is no prebuilt reference to have downloaded one from — that
+    # absence is what selected this branch. `download_inputs` therefore leaves
+    # `reference_psf` unproduced here, and requiring it was the ordering defect
+    # that made the no-reference path unreachable. The dedicated
+    # reference-image job type resolves the same need from `psf_uri`
+    # (`reference_image.download_reference_psf`), and this uses the same
+    # source, so a reference built here and one built there are built from the
+    # same PSF.
     psfcat_refimage = context.science_section("psfcat_refimage")
+    if context.has_product("reference_psf"):
+        reference_psf = context.product("reference_psf")
+    else:
+        reference_psf_uri = context.fact("psf_uri")
+        reference_psf, _subdirs, _ = util.download_file_from_s3_bucket(
+            context.s3, reference_psf_uri,
+            outputfile=context.scratch(
+                "refpsf_" + os.path.basename(reference_psf_uri)))
+        context.produce("reference_psf", reference_psf)
     refimage_psfcat = rfis.generatePhotUtilsReferenceImageCatalog(
         context.s3, context.parameter("s3/products-bucket"), context.unit.key,
         context.job_type, mosaic_image_file, mosaic_uncert_image_file,
-        context.product("reference_psf"), psfcat_refimage, True)
+        reference_psf, psfcat_refimage, True)
 
     (flag_psf_refimage_catalog, checksum_psf_refimage_catalog,
      checksum_psf_finder_refimage_catalog, filename_psf_refimage_catalog,

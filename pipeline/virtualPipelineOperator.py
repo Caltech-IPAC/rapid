@@ -17,8 +17,11 @@ import time
 to_zone = tz.gettz('America/Los_Angeles')
 
 import database.modules.utils.rapid_db as db
+from database.modules.utils.rapid_db_connect import ConnectionExecutor, connection
+from observability.attempts import ExecutionBinding
 from pipeline.runtime.process import run_tool
-from submission import routes
+from pipeline.seams import submit_gathered
+from submission import gathering, routes
 from pipeline.runtime.errors import ToolError
 
 
@@ -230,6 +233,94 @@ def look_up_ppid_of_job_type(job_type):
 
 
 #-------------------------------------------------------------------------------------------------------------
+# Methods to turn the operator's one window into what the gathering queries take.
+#-------------------------------------------------------------------------------------------------------------
+
+def mjd_window(start, end):
+
+    '''
+    (start_mjdobs, end_mjdobs) for the operator's STARTDATETIME/ENDDATETIME.
+
+    The readiness query selects (field, filter) pairs by mjdobs while the L2
+    file selection is by timestamp. Both describe the SAME window, so it is
+    converted here rather than accepted as two more environment variables that
+    nothing keeps equal.
+    '''
+
+    from astropy.time import Time
+
+    return (Time(start.replace(" ", "T"), format='isot', scale='utc').mjd,
+            Time(end.replace(" ", "T"), format='isot', scale='utc').mjd)
+
+
+def min_images_to_coadd():
+
+    '''
+    The release's minimum coadd depth.
+
+    Read from release CONTENT (cdf/science/pipeline.toml), which is the home
+    the W4 re-homing gave it — not from the master .ini, whose copy is the
+    duplicate that re-homing was undoing.
+    '''
+
+    from pipeline.runtime import science_config
+
+    science = science_config.load()
+    return int(science_config.value(science, "ref_image",
+                                    "min_n_images_to_coadd"))
+
+
+#-------------------------------------------------------------------------------------------------------------
+# Method to resolve the submission-time execution binding and its clients.
+#-------------------------------------------------------------------------------------------------------------
+
+def submission_env(job_type):
+
+    '''
+    The queue, job definition, binding and clients one submission needs.
+
+    Read from the ENVIRONMENT rather than the master .ini, because these are
+    deployment facts that change with every image build and stack update: the
+    job-definition ARN and revision, the image digest, and the release
+    identity are what the CI pipeline produces and what the attempt row must
+    record to be reproducible. Putting them in a checked-in .ini would make
+    the file wrong the moment the next revision lands.
+
+    Every one is REQUIRED. A submission that cannot name its own binding is
+    exactly what migration 013's amended submitted-state constraint refuses,
+    and defaulting any of them would create rows whose binding does not
+    describe the job that ran.
+    '''
+
+    required = ("RAPID_JOB_QUEUE", "RAPID_JOB_DEFINITION",
+                "RAPID_JOB_DEFINITION_REV", "RAPID_IMAGE_DIGEST",
+                "RAPID_RELEASE_IDENTITY", "RAPID_MANIFEST_BUCKET")
+    missing = [name for name in required if not os.environ.get(name)]
+    if missing:
+        print("*** Error: the submission environment is incomplete; "
+              "missing {}; quitting...".format(", ".join(missing)))
+        exit(64)
+
+    job_definition = os.environ['RAPID_JOB_DEFINITION']
+
+    return {
+        "queue": os.environ['RAPID_JOB_QUEUE'],
+        "job_definition": job_definition,
+        "binding": ExecutionBinding(
+            job_definition_arn=job_definition,
+            job_definition_rev=int(os.environ['RAPID_JOB_DEFINITION_REV']),
+            image_digest=os.environ['RAPID_IMAGE_DIGEST'],
+            release_identity=os.environ['RAPID_RELEASE_IDENTITY'],
+            manifest_checksum=None),
+        "manifest_bucket": os.environ['RAPID_MANIFEST_BUCKET'],
+        "manifest_prefix": os.environ.get('RAPID_MANIFEST_PREFIX',
+                                          'submissions'),
+        "s3_client": boto3.client('s3'),
+        "batch_client": boto3.client('batch'),
+    }
+
+
+#-------------------------------------------------------------------------------------------------------------
 # Method to wait until common set of AWS Batch jobs have finished.
 #-------------------------------------------------------------------------------------------------------------
 
@@ -345,20 +436,50 @@ if __name__ == '__main__':
 
         # Launch reference-image pipelines.
 
-        # W6 seam: submission goes through pipeline.seams.submit_units,
-        # which publishes a manifest, submits ONE array job, and pre-creates
-        # the attempt rows before any child can start.
+        # W6 seam: submission goes through pipeline.seams.submit_gathered,
+        # which batches the gathered units, publishes a manifest per batch,
+        # submits ONE array job each, and pre-creates the attempt rows before
+        # any child can start.
         #
-        # What is not wired here is the unit-gathering query — deciding WHICH
-        # reference images to build is the launcher's science logic, and the
-        # operations design owns the VPO rebuild that re-homes it. Refusing
-        # loudly is the conservative option: fabricating a query here would
-        # submit the wrong work silently.
-        print("*** reference-image submission is not wired to the new "
-              "submission seam yet: pipeline.seams.submit_units needs the "
-              "unit list the deleted launcher computed. See W6 ledger.")
-        dbh.close()
-        exit(64)
+        # The unit-gathering query this used to refuse for is now
+        # `submission.gathering`, rebuilt against the surviving rapid_db
+        # methods — so the refusal has become the thing it was standing in
+        # for. The operations design still owns the ground-up VPO (workload
+        # classes, versioned retry policy, the problems path); this is the
+        # minimal loop that drives the seams, not that rebuild.
+        submission_context = submission_env(routes.JOB_TYPE_REFERENCE_IMAGE)
+        run_id = f"vpo-{proc_date}-refimage-{datetime_utc_now:%H%M%S}"
+
+        # The window in both forms the queries need. The (field, filter)
+        # readiness query is by mjdobs and the L2 file selection is by
+        # timestamp, so both come from the ONE window the operator gave —
+        # derived here rather than taken as two more environment variables
+        # that could disagree with each other.
+        start_mjdobs, end_mjdobs = mjd_window(startdatetime, enddatetime)
+
+        reference_units = gathering.gather_reference_units(
+            dbh, startdatetime, enddatetime,
+            start_mjdobs=start_mjdobs, end_mjdobs=end_mjdobs,
+            min_images_to_coadd=min_images_to_coadd(),
+            s3_client=submission_context["s3_client"],
+            job_bucket=job_info_s3_bucket_base,
+            run_id=run_id)
+
+        with connection("rapid-vpo-submit", lane="transaction") as subconn:
+            submitted = submit_gathered(
+                reference_units,
+                job_type=routes.JOB_TYPE_REFERENCE_IMAGE,
+                queue=submission_context["queue"],
+                job_definition=submission_context["job_definition"],
+                binding=submission_context["binding"],
+                manifest_bucket=submission_context["manifest_bucket"],
+                manifest_prefix=submission_context["manifest_prefix"],
+                s3_client=submission_context["s3_client"],
+                batch_client=submission_context["batch_client"],
+                execute=ConnectionExecutor(subconn).execute,
+                run_id=run_id)
+        print(f"submitted {len(submitted)} reference-image batch(es) "
+              f"under run {run_id}")
 
 
         # Code-timing benchmark.

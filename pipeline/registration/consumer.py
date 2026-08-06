@@ -48,6 +48,11 @@ _COLUMNS = (
     "application_intended_exit", "scheduler_observed_exit", "error_category",
     "exposure_id", "sca", "sky_tile", "terminal_record_key",
     "terminal_record_sequence",
+    # The record's checksum, so a registrar can VERIFY the bytes it reads
+    # rather than trusting whatever is at the key. Registration acts on what
+    # the record says; reading it unverified would reintroduce the
+    # trust-mutable-external-state problem the record exists to remove.
+    "terminal_record_checksum",
     # The watermark, so a caller can see what a candidate was last registered
     # at without a second query (review finding #5).
     "registered_at", "registered_record_sequence",

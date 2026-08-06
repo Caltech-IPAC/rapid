@@ -2626,6 +2626,61 @@ class RAPIDDB:
 
 ########################################################################################################
 
+    def get_job_record(self,jid):
+
+        '''
+        Query select columns in Jobs database table for given JID.
+
+        Post-process gathering needs the job's own identity — which exposure,
+        SCA and science image it processed — because a post-process unit is
+        "close out what this science job produced" and is keyed by exposure/SCA
+        like every other unit.
+
+        This method did not exist. `gather_post_process_units` called it behind
+        a `hasattr` guard, so against the REAL handle the guard was always
+        false: every post-process unit fell back to the jid-as-exposure
+        degenerate case and carried no rid, expid, fid or field at all — and
+        `post_process.stamp_difference_image` requires all four.
+
+        Column order is (expid, sca, field, fid, rid, ppid, status, exitcode),
+        verified against the deployed table 2026-08-06.
+        '''
+
+        self.exit_code = 0
+
+
+        # Define query template.
+
+        query =\
+            "select expid,sca,field,fid,rid,ppid,status,exitcode " +\
+            "from Jobs " +\
+            "where jid = %s;"
+
+        params = (jid,)
+
+        print('query = {}, params = {}'.format(query, params))
+
+
+        # Execute query.
+
+        try:
+            self.cur.execute(query, params)
+            record = self.cur.fetchone()
+
+        except (Exception, psycopg2.DatabaseError) as error:
+            print('*** Error getting Jobs record for jid {}: {}; skipping...'.format(jid,error))
+            self.exit_code = 67
+            return None
+
+        if record is None:
+            print("No Jobs record for jid =",jid)
+            return None
+
+        return record
+
+
+########################################################################################################
+
     def get_unclosedout_jobs_for_processing_date(self,ppid,proc_date):
 
         '''

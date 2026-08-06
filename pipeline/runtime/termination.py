@@ -365,6 +365,23 @@ def upload_bundle(store: Any, key: str, body: bytes) -> dict:
 # The terminal record
 # ---------------------------------------------------------------------------
 
+def _ppid_of(job_type: Any) -> Any:
+    """The pipeline id for a job type, or None where it has none.
+
+    Read from the route matrix, the single home W4 gave the ppid map. None
+    rather than a raise for an unknown type: a record that cannot name its
+    pipeline is still a valid account of what the attempt did, and the
+    registrar treats the absence as the finding it is.
+    """
+    if not job_type:
+        return None
+    try:
+        from submission.routes import ppid_for
+        return ppid_for(job_type)
+    except Exception:  # noqa: BLE001 - an unroutable type is not a record fault
+        return None
+
+
 def build_terminal_record(ownership: Any, job_env: Any, outcome: str,
                           product_disposition: str,
                           intended_exit: int,
@@ -376,7 +393,8 @@ def build_terminal_record(ownership: Any, job_env: Any, outcome: str,
                           error: Any = None,
                           sequence: int = APPLICATION_RECORD_SEQUENCE,
                           science_provenance: dict | None = None,
-                          products: dict | None = None) -> dict:
+                          products: dict | None = None,
+                          job_type: str | None = None) -> dict:
     """Assemble the application's terminal record (sequence 0).
 
     A complete, self-contained account: identity, the submission-time
@@ -409,6 +427,24 @@ def build_terminal_record(ownership: Any, job_env: Any, outcome: str,
         "attempt_id": ownership.attempt_id,
         "scheduler_job_id": ownership.scheduler_job_id,
         "application_attempt_index": ownership.attempt_index,
+        # WHAT KIND OF WORK THIS WAS, and which pipeline it belongs to.
+        #
+        # Found porting the registrar (round 2): registration dispatches on the
+        # job type — a reference-image attempt registers a reference and its
+        # catalogues, a science attempt registers a difference image and its
+        # measurements — and every operations-table insert takes a ppid. The
+        # legacy bodies read both from the per-job `.ini` they were handed.
+        # Neither was in the record, so a registrar reading records alone could
+        # not have told the two job types apart, nor named the pipeline any row
+        # belonged to.
+        #
+        # The job type comes from the MANIFEST — it is what the submitter said
+        # this unit is — and the ppid from the route matrix keyed by it, which
+        # is the single home migration W4 gave that number. Derived once, here,
+        # at the moment the record is authored, so the value in the record is
+        # the one the attempt actually ran as.
+        "job_type": job_type,
+        "ppid": _ppid_of(job_type),
         "queue_name": job_env.queue_name,
         "batch_id": job_env.batch_id,
         "manifest_uri": job_env.manifest_uri,
@@ -592,7 +628,8 @@ def terminate(writer: Any, store: Any, ownership: Any, job_env: Any,
               error: Any = None, now: datetime.datetime | None = None,
               on_step: Any = None, record_store: Any = None,
               science_provenance: dict | None = None,
-              products: dict | None = None) -> TerminationResult:
+              products: dict | None = None,
+              job_type: str | None = None) -> TerminationResult:
     """Run the ordered closing sequence. Raises `RecordsError` if any step fails.
 
     `store` receives the diagnostics bundle; `record_store` receives the
@@ -651,7 +688,8 @@ def terminate(writer: Any, store: Any, ownership: Any, job_env: Any,
         config_digest=config_digest, snapshot_key_value=snapshot_key_value,
         bundle=bundle, stages=stages, provenance=provenance,
         error=serialized,
-        science_provenance=science_provenance, products=products)
+        science_provenance=science_provenance, products=products,
+        job_type=job_type)
     record_key = terminal_record_key(
         records_prefix, ownership.run_id, ownership.logical_job_id,
         ownership.attempt_id, APPLICATION_RECORD_SEQUENCE)

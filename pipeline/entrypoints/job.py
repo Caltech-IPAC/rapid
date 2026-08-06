@@ -328,34 +328,42 @@ def tessellation_provenance(parameters, science, logger):
 
 
 def registrar_for(context):
-    """The product-registration callback, or None when there is not one yet.
+    """The product-registration callback.
 
-    What registering *means* — which operation-table rows a registered
-    product becomes — is the science layer's business, and no registrar
-    exists in the tree yet. `register_batch` decides WHETHER each reconciled
-    attempt's products may be registered; this resolves the thing that would
-    then write them.
+    What registering *means* — which operation-table rows a registered product
+    becomes — is the operations schema's contract, and `pipeline.registration.
+    products` now carries it: the bodies ported from the four `__main__`-only
+    scripts the W6D fence deleted, re-keyed off the attempt's own terminal
+    record instead of the per-job `.ini`, the product-bucket listing and the
+    stdout log those scripts read.
 
-    **Returning None here is not the defect the review found** (#5). The
-    defect was that a missing callback silently became a dry run whose
-    decisions were COUNTED AS REGISTRATIONS — so the job reported
-    `registered=N`, outcome success and exit 0 while writing nothing, and
-    every later pass re-selected the same attempts. Three things now make
-    that unreachable, and none of them requires inventing the science layer's
-    schema:
+    This used to return None unconditionally, which made every production pass
+    a labelled dry run: honest about writing nothing, but the ratified
+    registration consumer was still missing and a successful science attempt
+    remained a candidate forever.
 
-    * `register_batch` refuses a missing callback unless `dry_run=True` says
-      the caller meant it, so a dry run can only happen on purpose;
-    * a dry run's candidates count into `would_register`, never `registered`,
-      so no log or metric can read a rehearsal as a registration;
-    * the registered watermark advances only on a real registration, so a
-      decision pass leaves every attempt a candidate rather than marking work
-      that never happened.
+    The store is the records store, because the registrar fetches and validates
+    each attempt's record itself. Registration reads the immutable record and
+    nothing else — that is the whole point — so being handed a body by a caller
+    would put the trust back in the caller.
 
-    `dispatch_registration` therefore runs the decision pass deliberately and
-    labels it, which is an honest account of what this image can do.
+    `context` is the registration job's own `StageContext`, which is why the
+    store is built here from the same parameter the runtime reads it from
+    rather than taken off the context: a registration job does not run stages
+    and has no record store of its own to reuse.
     """
-    return None
+    import boto3
+
+    from database.modules.utils import rapid_db
+    from pipeline.registration.products import registrar
+    from pipeline.runtime.boundaries import S3ObjectStore
+
+    store = S3ObjectStore(context.parameter(PARAM_RECORDS_BUCKET),
+                          client=boto3.client("s3"))
+    # The handle is passed as a FACTORY, so the connection opens on the first
+    # attempt that actually registers. A pass with no candidates, or one whose
+    # every candidate the taxonomy refuses, then costs no connection.
+    return registrar(rapid_db.RAPIDDB, store)
 
 
 def dispatch_registration(context) -> None:
@@ -389,14 +397,18 @@ def dispatch_registration(context) -> None:
 
     logger = context.logger
 
-    # THE DRY RUN IS ASKED FOR, AND LABELLED (review finding #5). This path
-    # called `register_batch(conn, rows)` with no callback at all, which
-    # silently became a dry run whose decisions were counted as
-    # registrations — so the job returned registered=N, outcome success and
-    # exit 0 while writing no operation-table rows, and every later pass
-    # re-selected the same attempts. The dry run is now explicit, its
-    # candidates count into `would_register` rather than `registered`, and
-    # the watermark advances only on a real registration.
+    # THE REGISTRAR IS REAL NOW (round 2). `registrar_for` used to return None
+    # unconditionally, so this ran as a labelled decision pass in production —
+    # honest about writing nothing, but the ratified registration consumer was
+    # still missing and a successful science attempt stayed a candidate
+    # forever. It now resolves the ported product-registration bodies.
+    #
+    # The dry-run machinery stays, because it is what makes a rehearsal
+    # possible ON PURPOSE and keeps its counts apart from real registrations
+    # (review finding #5): `register_batch` refuses a missing callback unless
+    # `dry_run=True` says the caller meant it, a rehearsal's candidates count
+    # into `would_register` rather than `registered`, and the watermark
+    # advances only on a registration that actually happened.
     register = registrar_for(context)
 
     with connection("rapid-registration", lane="transaction") as conn:
@@ -586,7 +598,13 @@ def _run(workload_class: str) -> int:
             snapshot_key_value=snapshot_key_value,
             stages=recorder.as_list(), provenance=provenance, error=error,
             science_provenance=dict(context.provenance),
-            products=dict(context.published_products))
+            products=dict(context.published_products),
+            # What kind of work this was. Registration dispatches on it, and
+            # the record is the only thing it reads (found porting the
+            # registrar, round 2 — neither job_type nor ppid was recorded, so
+            # a registrar could not tell a reference-image attempt from a
+            # science one).
+            job_type=manifest.job_type)
 
     logger.info("terminated: outcome=%s disposition=%s record=%s exit=%d",
                 result.outcome, result.product_disposition,

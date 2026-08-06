@@ -13,12 +13,14 @@ silently dropped, defaulted, or put in a second home.
 
 import unittest
 
+from submission import gathering
 from submission.gathering import (
     GatheringError,
     gather_post_process_units,
     gather_science_units,
     science_facts,
 )
+from submission.manifest import UnitFacts
 from submission.routes import JOB_TYPE_POST_PROCESS
 
 
@@ -322,6 +324,214 @@ class GatherPostProcessUnitsTests(unittest.TestCase):
             self.JobSource([4242, 4243]), "2026-08-06"))
         keys = {unit.key for unit in units}
         self.assertEqual(len(keys), 2)
+
+
+class PostProcessFactsTests(unittest.TestCase):
+    """The facts post-process stages require, from real queries.
+
+    `UnitFacts()` with no arguments used to be yielded — no product URIs, no
+    database identities — while `stamp_reference_image` requires
+    `reference_image_uri` and `stamp_difference_image` requires
+    `difference_image_uri`, `pid`, `rid`, `expid`, `fid` and `field` as its
+    first act. Every post-process job would have failed `input_missing` before
+    stamping either product.
+    """
+
+    class Source:
+        exit_code = 0
+
+        def __init__(self, difference=None, reference=None, failure=None):
+            self.difference = difference if difference is not None else {}
+            self.reference = reference if reference is not None else {}
+            #: The exit_code the query leaves behind. 7 is the documented "no
+            #: best record" signal; anything else nonzero is a real failure.
+            self.failure = failure
+
+        def get_best_difference_image(self, rid, ppid):
+            if self.failure is not None:
+                self.exit_code = self.failure
+                return {}
+            if not self.difference:
+                self.exit_code = 7
+            return self.difference
+
+        def get_reference_image(self, rfid):
+            return self.reference
+
+    JOB = (5001, 7, 4678636, 1, 42, 15, 1, 0)   # expid, sca, field, fid, rid…
+
+    def _facts(self, **kwargs):
+        return gathering.post_process_facts(self.Source(**kwargs), self.JOB)
+
+    def test_the_job_row_supplies_the_units_own_identity(self):
+        # No `sca` here: it identifies the processing UNIT, not the facts,
+        # and `_job_identity` reads it from the same row for that purpose.
+        facts = self._facts()
+        self.assertEqual((facts.expid, facts.field, facts.fid, facts.rid),
+                         (5001, 4678636, 1, 42))
+
+    def test_the_difference_image_and_its_pid_come_from_diffimages(self):
+        facts = self._facts(difference={
+            "pid": 900, "rfid": 12, "filename": "s3://p/diff.fits",
+            "infobitssci": 4, "version": 3})
+
+        self.assertEqual(facts.pid, 900)
+        self.assertEqual(facts.difference_image_uri, "s3://p/diff.fits")
+        self.assertEqual(facts.infobits, 4)
+        self.assertEqual(facts.difference_image_version, 3)
+
+    def test_the_reference_is_the_one_this_difference_was_made_against(self):
+        # By rfid, not by a fresh field/filter lookup: looking one up could
+        # return a NEWER reference than the one actually differenced against.
+        facts = self._facts(
+            difference={"pid": 900, "rfid": 12,
+                        "filename": "s3://p/diff.fits"},
+            reference={"rfid": 12, "filename": "s3://p/ref.fits",
+                       "infobits": 2, "version": 5})
+
+        self.assertEqual(facts.reference_image_id, 12)
+        self.assertEqual(facts.reference_image_uri, "s3://p/ref.fits")
+        self.assertEqual(facts.reference_image_infobits, 2)
+        self.assertEqual(facts.reference_image_version, 5)
+
+    def test_no_difference_image_leaves_those_facts_absent(self):
+        # Absent, not defaulted: `UnitFacts.require` turns absence into one
+        # named failure at startup rather than a header stamped with a zero.
+        facts = self._facts()
+
+        self.assertIsNone(facts.pid)
+        self.assertIsNone(facts.difference_image_uri)
+        self.assertEqual(facts.rid, 42)
+
+    def test_no_job_row_yields_empty_facts_rather_than_raising(self):
+        self.assertEqual(UnitFacts(),
+                         gathering.post_process_facts(self.Source(), None))
+
+    def test_a_real_query_failure_is_not_read_as_no_difference_image(self):
+        # exit_code 7 means "no best record"; 67 means the query failed. A
+        # gatherer that cannot tell them apart yields a unit with no products
+        # and reports success.
+        with self.assertRaises(gathering.GatheringError):
+            gathering.post_process_facts(self.Source(failure=67), self.JOB)
+
+
+class CoaddInputsTests(unittest.TestCase):
+    """Reference units carry the coadd inputs their first stage requires.
+
+    `gather_science_units(make_references=True)` yields the representative
+    image per (field, filter) but NOT `coadd_inputs_uri` — which
+    `reference_image.download_inputs` requires as its first act, so every
+    reference job it produced failed `input_missing` before doing any work.
+    """
+
+    SKY = {"ra0": 10.0, "dec0": -5.0, "ra1": 10.1, "dec1": -5.1,
+           "ra2": 10.2, "dec2": -5.2, "ra3": 10.3, "dec3": -5.3,
+           "ra4": 10.4, "dec4": -5.4}
+
+    class Source:
+        exit_code = 0
+
+        def __init__(self, overlapping=(), info=None):
+            self.overlapping = list(overlapping)
+            self.info = info or {}
+
+        def get_overlapping_l2files(self, rid, fid, mjdobs, *corners,
+                                    radius_of_initial_cone_search=None):
+            return self.overlapping
+
+        def get_info_for_l2file(self, rid):
+            return self.info.get(rid)
+
+    def _overlap_row(self, rid, field=4678636):
+        return [rid, 10.0, -5.0, 10.1, -5.1, 10.2, -5.2, 10.3, -5.3,
+                10.4, -5.4, field, 0.01]
+
+    def _info(self, filename, field=4678636, status=1, vbest=1):
+        # filename, expid, sca, field, mjdobs, exptime, infobits, status,
+        # vbest, version
+        return (filename, 2, 1, field, 61679.08, 66.4, 0, status, vbest, 1)
+
+    def test_the_rows_carry_the_columns_the_coadd_reader_parses(self):
+        source = self.Source(
+            overlapping=[self._overlap_row(1), self._overlap_row(2)],
+            info={1: self._info("a.fits"), 2: self._info("b.fits")})
+
+        rows = gathering.coadd_input_rows(
+            source, rid=9, fid=1, mjdobs=61679.1, sky_position=self.SKY,
+            min_images_to_coadd=2)
+
+        self.assertEqual(len(rows), 2)
+        self.assertEqual(len(rows[0]), len(gathering.COADD_INPUT_COLUMNS))
+        self.assertEqual(rows[0][0], 1)
+        self.assertEqual(rows[0][11], "a.fits")
+
+    def test_bad_and_superseded_files_are_excluded(self):
+        # status == 0 is a file marked bad; vbest == 0 is a superseded
+        # version. Coadding either would build a reference from images the
+        # database says not to use.
+        source = self.Source(
+            overlapping=[self._overlap_row(1), self._overlap_row(2),
+                         self._overlap_row(3)],
+            info={1: self._info("a.fits"),
+                  2: self._info("b.fits", status=0),
+                  3: self._info("c.fits", vbest=0)})
+
+        rows = gathering.coadd_input_rows(
+            source, rid=9, fid=1, mjdobs=61679.1, sky_position=self.SKY,
+            min_images_to_coadd=1)
+
+        self.assertEqual([row[11] for row in rows], ["a.fits"])
+
+    def test_too_few_inputs_is_an_error_not_a_short_list(self):
+        source = self.Source(overlapping=[self._overlap_row(1)],
+                             info={1: self._info("a.fits")})
+
+        with self.assertRaises(gathering.GatheringError):
+            gathering.coadd_input_rows(
+                source, rid=9, fid=1, mjdobs=61679.1, sky_position=self.SKY,
+                min_images_to_coadd=5)
+
+    def test_disagreeing_field_identities_refuse_to_coadd(self):
+        source = self.Source(
+            overlapping=[self._overlap_row(1, field=111)],
+            info={1: self._info("a.fits", field=222)})
+
+        with self.assertRaises(gathering.GatheringError):
+            gathering.coadd_input_rows(
+                source, rid=9, fid=1, mjdobs=61679.1, sky_position=self.SKY,
+                min_images_to_coadd=1)
+
+    def test_an_incomplete_sky_position_raises_rather_than_cone_searching(self):
+        with self.assertRaises(gathering.GatheringError):
+            gathering.coadd_input_rows(
+                self.Source(), rid=9, fid=1, mjdobs=61679.1,
+                sky_position={"ra0": 10.0}, min_images_to_coadd=1)
+
+    def test_publishing_returns_the_uri_the_stage_downloads(self):
+        class FakeS3:
+            def __init__(self):
+                self.objects = {}
+
+            def put_object(self, Bucket, Key, Body, ContentType=None):
+                self.objects[(Bucket, Key)] = Body
+
+        s3 = FakeS3()
+        uri = gathering.publish_coadd_inputs(
+            s3, "job-info", "coadd-inputs/run-1/u/in.csv",
+            [[1, "a.fits"], [2, "b.fits"]])
+
+        self.assertEqual(uri, "s3://job-info/coadd-inputs/run-1/u/in.csv")
+        self.assertEqual(
+            s3.objects[("job-info", "coadd-inputs/run-1/u/in.csv")],
+            b"1,a.fits\n2,b.fits\n")
+
+    def test_a_failed_publish_raises_rather_than_yielding_a_dead_uri(self):
+        class Broken:
+            def put_object(self, **_kwargs):
+                raise RuntimeError("AccessDenied")
+
+        with self.assertRaises(gathering.GatheringError):
+            gathering.publish_coadd_inputs(Broken(), "b", "k", [[1]])
 
 
 if __name__ == "__main__":
