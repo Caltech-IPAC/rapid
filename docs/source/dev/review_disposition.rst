@@ -865,3 +865,248 @@ on the identity stack or a host with both the pooler route and records access
 would close it. Both are beyond what this round was authorized to change, so
 the gap is recorded rather than worked around, and the one case the round-2
 review named — the crash boundary — was proven by the narrower probe above.
+
+FixD — round-3 external review
+------------------------------
+
+A third external review read the round-2 implementation and raised **nine
+findings** against the completion chain: three P0, five P1, one P2. FixD owns
+them.
+
+Every citation was re-verified against the code before anything was changed,
+and this round that mattered more than either previous one. Two of the nine
+summaries were materially wrong about the mechanism while being right that a
+defect existed, and one was wrong about half its claim:
+
+* **#8's headline claim is false.** ``dispatch_registration`` *does* use the
+  approved connection helper. The real defect is worse than bypassing it —
+  there are TWO concurrent connections on contradictory contracts, and the
+  transaction boundary falls between them.
+* **#5's "FixA staged it" is false.** No bundle-reconstruction code existed
+  anywhere. ``retention.py``'s ``canonical_tag_set`` reconstructs *tags*, not
+  bundles, which is the likeliest source of the confusion. The reconstruction
+  had to be written from scratch.
+* **#5's read-failure half does not hold.** Store faults and genuine absence
+  *are* distinguished, and the record-store path already defers. Only the
+  bundle half is a defect.
+
+Line citations had also drifted in four findings; each is corrected in the row
+that uses it.
+
+.. list-table::
+   :header-rows: 1
+   :widths: 6 34 60
+
+   * - #
+     - The finding, as verified
+     - What FixD did
+   * - 1
+     - **P0.** The reconciler advanced ``terminal_record_key`` and
+       ``terminal_record_sequence`` to its own sequence-1 closure record and
+       left the sequence-0 checksum beside them.
+       ``mark_terminal_after_start`` had no checksum parameter, so the triple
+       could not be written coherently even in principle. The registrar
+       fetches the cited key and hashes exactly those bytes, and the consumer
+       selects precisely the reconciler-advanced rows
+       (``terminal_record_sequence >= 1``) — so this was the ORDINARY path and
+       every normal registration failed on it. (Write site is
+       ``service.py:1024-1036``, not 1004-1036: 1004-1023 is the
+       materialization branch, a different writer that does carry a checksum.)
+     - The citation moves as a TRIPLE. ``mark_terminal_after_start`` carries
+       the advancing checksum, on the ``COALESCE(new, existing)`` side of the
+       rule — the reconciler's record supersedes the application's, exactly as
+       the key already did. The mechanism the review did not name is that the
+       ``CLASS_MATERIALIZED`` branch has no ``return``, so **both** writers run
+       on the crash boundary and the second stranded the first's checksum.
+       The earlier reasoning — that sequence 1 folds the predecessor's facts in
+       verbatim, so the checksum survives — is true about FACTS and false about
+       BYTES, and a checksum hashes bytes. A NULL checksum also stopped being a
+       silent pass in the registrar: the docstring already called it a
+       not-ready row and now the code agrees.
+   * - 2
+     - **P0.** ``context.provenance`` started empty and the entrypoint seeded
+       exactly three keys. ``UnitFacts`` were never copied in, and ``sca``
+       lives on the UNIT, so it was not even reachable from there. Everything
+       the registrar asks about WHICH piece of sky an attempt was — ``field``,
+       ``fid``, ``rid``, ``sca``, ``sky_position`` — was absent from every
+       record production could author. **No production record could ever have
+       satisfied the registrar.** (Seed is ``job.py:569-570``, not 557.)
+     - Unit facts reach the record through the provenance path, following the
+       ``job_type``/``ppid`` precedent: derived once, at record-authoring time,
+       in a named place (``pipeline/registration/facts.py``). Two amendments
+       beyond the report: **hp6/hp9 existed NOWHERE** in the pipeline — not in
+       ``UnitFacts``, not in a stage, not in gathering — so they are DERIVED,
+       transcribed from ``loadPSFCatIntoDBSourcesTable.py``, the file that
+       actually populated the columns they register into. And **``scalefacref``
+       is the RECIPROCAL** of the recorded ``gainmatch_scalefac``; traced
+       through the legacy registrar (which does no arithmetic) to the science
+       monolith that wrote ``1./scalefac``. Both are plausible positive floats,
+       so getting it backwards would have silently disagreed with every row
+       already in the column. Metric names are fixed at the RECORDING sites,
+       not translated at read time — the live schema settled it, since
+       ``diffimmeta``'s real columns *are* the registrar's vocabulary.
+       Registrar tests are rebuilt through ``build_terminal_record``.
+   * - 3
+     - **P0.** The production VPO was unrunnable past reference submission.
+       All three waits omitted ``run_id`` and so returned ``{}`` immediately;
+       all three registration calls omitted the callback and were therefore
+       explicit dry runs; science and post-process submission were
+       ``exit(64)`` stubs; and an unconditional ``exit(65)`` sat on the
+       science-registration success path.
+     - ``wait_for_submitted`` waits on each submission's OWN run id. Passing
+       the parent id would only have half-fixed it: ``submit_gathered``
+       re-scopes to ``<run_id>-<n>`` from two batches on, so one batch would
+       have worked and two would not. ``production_registrar`` builds the real
+       callback from a records bucket and an S3 client — all ``registrar``
+       needs, since it takes its handle as a callable. The stubs are gone:
+       ``gather_science_units``' own representative/rest split maps exactly
+       onto the stage-one/stage-two loop that was already there. A dry run must
+       now be asked for by name (``RAPID_VPO_DRY_RUN``); **production defaults
+       to production**. The vestigial ``DRYRUN`` env var, read by nothing since
+       the W6 fence, is removed rather than left looking operative.
+   * - 4
+     - **P1.** Reference gathering passed the representative's own ``rid`` and
+       ``mjdobs`` to the overlap query, turning on two controls the deleted
+       launcher deliberately turned OFF. Worse than the report said: the
+       representative is ``rows[0]``, the EARLIEST frame, and the window is
+       ``[0, its_mjd)`` — so at exactly ``min_images_to_coadd`` the query
+       returns **0** rows, not N-1. Separately, ``exit_code=67`` is a silent
+       ``return None``, so a database outage was reported as "this field is not
+       ready". (Return is ``rapid_db.py:1323-1326``, not 1308-1328.)
+     - Wrapped at the gathering boundary rather than editing the legacy query,
+       so its other callers keep a byte-identical query. The launcher's two
+       sentinels are restored and named. Worth recording why ``rid='null'``
+       works at all: it selects the ``a.rid is not 'null'`` branch, which is a
+       PostgreSQL **type predicate**, not a comparison — it asks whether an
+       integer column's value is distinguishable from a string literal, which
+       is always true, so it excludes nothing. An accident the launcher relied
+       on, left in ``rapid_db`` and explained at the one call site that depends
+       on it. ``NotReadyYet`` splits ``GatheringError``'s two meanings so the
+       catch narrows to the genuinely ordinary case.
+   * - 5
+     - **P1.** ``_stamp_bundle`` noticed a ran-but-bundle-less attempt,
+       incremented a counter, logged, and returned — and the caller went
+       straight to the terminal transition. Terminal rows are outside the open
+       set, so nothing ever revisited them. The design rule has no exception in
+       it: the bundle exists before the attempt is closed, whichever way it
+       died.
+     - ``pipeline/reconciler/reconstruction.py``, written from scratch — the
+       claim that FixA had staged it was false. Reads from the HEAD of the
+       CloudWatch stream, not the tail closure records use: a record wants how
+       an attempt ended, a bundle wants how it ran. Uploaded through
+       ``termination.upload_bundle``, so a real bundle landing between the
+       check and now is KEPT and the salvage discarded — not hypothetical, a
+       container slow to flush can do exactly that. **Deferring could not
+       terminate**: deferral here is unbounded and the stream expires at 14
+       days, so an attempt deferred past that horizon could never be closed by
+       anyone. The two failures are therefore split — an unreadable stream is
+       permanent and the bundle is written anyway with the gap recorded inside
+       it; a store that refuses the write is a condition a later poll may
+       resolve, and only that defers.
+   * - 6
+     - **P1.** Rounds 1 and 2 built the entire health mechanism — two
+       counters, two thresholds, ``healthy``, ``health()`` — and then
+       ``run_forever`` asked only whether ``poll_once`` threw. The second
+       threshold governed nothing.
+     - The check is on the SUCCESS path, because that is the path the
+       condition occurs on, and it asks ``healthy`` rather than re-deriving one
+       of its terms. ``_resolve_discovered`` was the one per-row loop
+       swallowing its failures instead of reporting them into
+       ``summary["errors"]`` — so a resolver failing every attempt contributed
+       nothing to the health it should have degraded. Beyond the report:
+       ``ReconcilerUnhealthy`` subclasses ``RuntimeError`` and was caught by
+       ``main.py``'s start-failure handler, telling the journal "the reconciler
+       could not start" about a process that had been polling for hours. Own
+       handler, own exit code (71), and the two docstrings that still promised
+       the loop never exits on error now describe what it does.
+   * - 7
+     - **P1.** Post-process called the legacy boolean-returning uploader and
+       discarded the result — which also silently skips a missing file — and
+       never called ``publish_products`` or ``context.publish``, so a failed
+       upload closed ``success``/``published`` with an empty product set. Its
+       FITS ``S3OBJPRF`` named ``job_type/unit`` while the bytes went to the
+       run/attempt prefix. And ``success``+``published`` being the SOLE
+       registering pair meant every successful registration pass became an
+       unsupported candidate on the next one.
+     - Post-process publishes through ``publish_products``/``context.publish``
+       with raising uploads and a consistent ``S3OBJPRF``. The job-type gate
+       had to be a record-body filter rather than a SQL predicate, because the
+       ``attempts`` table has no ``job_type`` column at all — which also makes
+       ``products.py``'s ``row.get("job_type")`` fallback dead code, now
+       removed. Dispositions are derived from what was actually published, so
+       registration jobs close with one that never becomes a candidate.
+   * - 8
+     - **P1.** The report says the callback bypasses the approved connection
+       helper. **It does not.** The real defect: ``registrar_for`` passes
+       ``rapid_db.RAPIDDB`` as a lazy factory, and ``RAPIDDB.__init__`` always
+       opens its OWN connection with autocommit-per-call, while the watermark
+       commits on the approved helper's. Two concurrent connections on
+       contradictory contracts; they cannot be one transaction by construction,
+       which makes ``consumer.py``'s own comment about leaving the attempt a
+       candidate false.
+     - See the schema half below and the code half in the commit. The version-
+       incrementing procs gained attempt-idempotence keyed on
+       ``(attempt_id, registered_record_sequence)`` — the pair, not the attempt
+       alone, because idempotence keyed on the attempt would also block
+       supersession, which 017 made the watermark a sequence precisely to
+       allow.
+   * - 9
+     - **P2.** Product publication used unconditional ``upload_file`` and
+       coadd-input publication unconditional ``put_object``, against a storage
+       design whose mutability table calls both write-once and says
+       immutability is enforced, not promised.
+     - Conditional creates on both, matching the two templates already in the
+       tree. ``upload_file`` **cannot** carry a condition: boto3 validates
+       ``ExtraArgs`` against s3transfer's ``ALLOWED_UPLOAD_ARGS``, which has
+       ``ChecksumSHA256`` but neither ``IfNoneMatch`` nor ``IfMatch`` —
+       confirmed in-image against boto3 1.43.46 / s3transfer 0.19.2, not from
+       recall — so the file path calls ``put_object`` itself, streaming the
+       handle and hashing in chunks so a large mosaic is never resident. That
+       trades multipart parallelism and the 5 GiB ceiling for correctness,
+       which is the right trade at RAPID's product sizes and is noted in the
+       code for whoever first exceeds them. ``coadd_inputs_checksum`` joins
+       ``UnitFacts``, because a URI names a key and this fix is about a key
+       whose bytes could change.
+
+Migration 018, and what the rehearsal caught
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+``018-registration-attempt-idempotence.sql``, applied to rapid-db **2026-08-06
+20:05:57 UTC, first attempt**, after three rehearsal cycles on a throwaway.
+
+The rehearsal earned its place on cycle 2, on a defect invisible to inspection:
+**``CREATE OR REPLACE`` does not replace a function whose argument list
+changed — it creates an OVERLOAD.** The two defaulted parameters left 008's
+9-argument ``addrefimage`` in place beside the new 11-argument one, so every
+legacy 9-argument call failed with "function addrefimage(...) is not unique".
+The mechanism chosen specifically to leave existing callers untouched was the
+thing that broke them, and nothing about it shows on reading: the stream
+applies clean and every new-signature call works. Fixed by dropping the old
+signatures in the same transaction that recreates them.
+
+The two function bodies are 008's **verbatim** plus the guard and the two
+INSERT columns — diffed mechanically against 008 rather than eyeballed, because
+a tidied reimplementation is how behaviour changes that nobody meant to change.
+Even 008's misleading ``*** Error in addProcImage: RawImages record`` message
+is left exactly as it is.
+
+Findings recorded rather than fixed
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+**healpy was never a declared dependency.** It has always been installed in the
+Dockerfiles and never listed in ``requirements.txt``, so "registration works"
+depended on a fact no dependency list stated. With ``hp6``/``hp9`` NOT NULL on
+both product tables, an environment without healpy cannot register at all —
+and it would fail per-attempt, deep inside a pass, rather than at build time.
+Added to ``requirements.txt``; the deployed image carries 1.20.0, verified
+rather than assumed.
+
+**``rapid_db.py`` calls ``exit()`` from library code.** ``get_overlapping_l2files``
+exits 64 when ``ENDREFIMMJDOBS`` is set without ``STARTREFIMMJDOBS``
+(``rapid_db.py:1278``), and ``virtualPipelineOperator`` reads ``RAPID_SW`` /
+``RAPID_WORK`` / ``STARTDATETIME`` / ``ENDDATETIME`` at MODULE scope with the
+same treatment — so importing the operator terminates the interpreter when any
+is unset. Both are the "swallows errors into exit codes from library code"
+pattern the payload proposal's as-is finding 7 names. Neither is fixed here:
+moving those checks is a change to the operator's startup contract, which the
+operations design owns. Recorded so the next round does not rediscover it.
