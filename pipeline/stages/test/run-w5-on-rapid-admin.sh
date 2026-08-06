@@ -144,13 +144,42 @@ del=\${PIPESTATUS[0]}
 echo ">> deletion proof exit code: \$del"
 
 echo
-echo "=== W5 grep proof: no execute_command, no terminating_exitcode ==="
-run sh -c 'if grep -rn "execute_command" --include="*.py" pipeline modules database submission observability \\
-     | grep -v "pipeline/runtime/process.py" | grep -v "^Binary"; then
-     echo "EXECUTE_COMMAND CALL SITES REMAIN"; exit 1; fi
-   if grep -rln "terminating_exitcode" --include="*.py" pipeline modules database submission observability; then
-     echo "TERMINATING_EXITCODE REMAINS"; exit 1; fi
-   echo "zero execute_command call sites, zero terminating_exitcode"'
+echo "=== W5 grep proof: no execute_command CALL SITES, no >= 64 in the payload ==="
+# Both greps target CALL SITES and CODE, not prose: the extracted stage
+# modules name execute_command in their docstrings, explaining what they
+# replaced, and that is a record worth keeping rather than a leftover.
+# A call site is the name followed by an open parenthesis.
+#
+# terminating_exitcode is deliberately NOT swept repo-wide. It survives in
+# the LAUNCHER and REGISTRATION scripts, which the cutover fence keeps
+# until W6 — "the legacy launcher path stays; W6's fence owns it". What
+# W5 owns is the PAYLOAD, so the proof is scoped to what W5 replaced:
+# pipeline/entrypoints/ and pipeline/stages/ carry no exit-code
+# convention, and nothing anywhere tests >= 64.
+#
+# The execute_command grep targets CALL SITES — the name followed by an
+# open parenthesis — not prose: the extracted stage modules name it in
+# their docstrings, explaining what they replaced, and that record is
+# worth keeping.
+#
+# The exit-code proof is a checked-in module rather than an inline
+# heredoc, for two reasons. A heredoc nested inside `sh -c` inside the
+# SSM base64 wrapper failed silently here (found live: exit 1, no
+# output). And the proof deserves to be readable and runnable on its own
+# — it explains why it inspects COMPILED CODE rather than source text,
+# which is the whole subtlety: every mention of terminating_exitcode in
+# these two packages is a docstring saying what was deleted, so a source
+# grep would fail on the documentation of the removal it is verifying.
+run sh -c 'grep -rnE "execute_command(_in_shell)?[[:space:]]*\\(" --include="*.py" \\
+       pipeline modules database submission observability \\
+     | grep -v "pipeline/runtime/process.py" \\
+     && { echo "EXECUTE_COMMAND CALL SITES REMAIN"; exit 1; }
+   echo "zero execute_command call sites"'
+sites=\${PIPESTATUS[0]}
+run python3.11 -m pipeline.stages.test.prove_no_exit_code_convention
+proof=\${PIPESTATUS[0]}
+grp=0
+[ "\$sites" -eq 0 ] && [ "\$proof" -eq 0 ] || grp=1
 grp=\${PIPESTATUS[0]}
 echo ">> grep proof exit code: \$grp"
 
