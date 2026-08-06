@@ -162,7 +162,8 @@ DIA_SOURCE_PARAMS = (
     # --- Identifiers & associations -------------------------------------
     Param("diaSourceId",   "long",             "Unique identifier for this source detection",
                     IMPLEMENTED, "sources.sid",    attr="sid"),
-    Param("visit",         "long",             "Visit (exposure) identifier", #TODO: is this called visit or exposure ID for Roman?
+    Param("expId",         "long",             "RAPID-assigned exposure identifier (pipeline database serial, "
+                                                "not a Roman SOC identifier; see observation_id)",
                     IMPLEMENTED, "sources.expid",  attr="expid"),
     Param("detector",      "int",              "Detector (SCA) number",
                     IMPLEMENTED, "sources.sca",    attr="sca"),
@@ -344,8 +345,6 @@ DIA_SOURCE_PARAMS = (
     #                 STUB, "cross-match to reference-image catalog (not run)"),
 
     # --- Roman-specific identifiers & tiling ------------------------------------
-    # Param("sca",           "int",              "Roman SCA detector number",
-    #                 NOT_USED, "sources.sca"), # duplicate from detector
     Param("field",         "int",              "Roman field identifier",
                     IMPLEMENTED, "sources.field"),
     Param("hp6",           "int",              "HEALPix index at nside=64 (order 6)",
@@ -354,14 +353,30 @@ DIA_SOURCE_PARAMS = (
                     IMPLEMENTED, "sources.hp9"),
     Param("pid",           "long",             "Processing ID for science image",
                     IMPLEMENTED, "sources.pid"),
-    # Param("expid",         "int",              "Exposure identifier",
-    #                 NOT_USED, "sources.expid"), # duplicate from visit/expId above
-    Param("pass",          ["null", "int"],    "Roman survey pass number (stub)",
-                    STUB, "Roman observation ID components (exposure metadata; not in sources table)"),
-    Param("segment",       ["null", "int"],    "Roman survey segment number (stub)",
-                    STUB, "Roman observation ID components (exposure metadata; not in sources table)"),
-    Param("program",       ["null", "int"],    "Roman program identifier (stub)",
-                    STUB, "Roman observation ID components (exposure metadata; not in sources table)"),
+
+    # Roman observation ID hierarchy (meta.observation in the L2 ASDF files):
+    # program > plan > pass > segment > observation > visit > exposure.
+    # All stubs: dropped in the ASDF-to-FITS conversion, not in exposures table.
+    Param("observation_id", ["null", "string"], "Roman observation ID: concatenated observation hierarchy "
+                                                "including the exposure counter; uniquely identifies the "
+                                                "Roman exposure (stub)",
+                    STUB, "meta.observation.observation_id"),
+    Param("program",       ["null", "int"],    "Roman program number (stub)",
+                    STUB, "meta.observation.program"),
+    Param("plan",          ["null", "int"],    "Roman execution plan number (stub)",
+                    STUB, "meta.observation.execution_plan"),
+    Param("pass",          ["null", "int"],    "Roman pass number (stub)",
+                    STUB, "meta.observation.pass"),
+    Param("segment",       ["null", "int"],    "Roman segment number (stub)",
+                    STUB, "meta.observation.segment"),
+    Param("observation",   ["null", "int"],    "Roman observation number within the segment (stub)",
+                    STUB, "meta.observation.observation"),
+    Param("visit",         ["null", "int"],    "Roman visit number; a visit groups multiple exposures, so "
+                                                "this is NOT a per-image identifier -- use expId or "
+                                                "observation_id for that (stub)",
+                    STUB, "meta.observation.visit"),
+    Param("exposure",      ["null", "int"],    "Roman exposure counter within the visit (stub)",
+                    STUB, "meta.observation.exposure"), #TODO: name something else?
     Param("survey",        ["null", "string"], "Survey name (stub)",
                     STUB, "observation metadata (not available)"),
 )
@@ -377,7 +392,7 @@ DIA_FORCED_SOURCE_PARAMS = (
                         STUB, _FP, attr="forced_id"), #TODO: separate ID for forced source?
     Param("diaObjectId",       "long",            "Associated diaObject identifier",
                         STUB, _FP, attr="aid"), #TODO: already in diaSource?
-    Param("visit",             "long",            "Visit (exposure) identifier",
+    Param("expId",             "long",            "RAPID-assigned exposure identifier",
                         STUB, _FP, attr="expid"),
     Param("detector",          "int",             "Detector (SCA) number",
                         STUB, _FP, attr="sca"),

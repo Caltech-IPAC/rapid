@@ -11,9 +11,9 @@
             "doc": "Unique identifier for this source detection"
         },
         {
-            "name": "visit",
+            "name": "expId",
             "type": "long",
-            "doc": "Visit (exposure) identifier"
+            "doc": "RAPID-assigned exposure identifier (pipeline database serial, not a Roman SOC identifier; see observation_id)"
         },
         {
             "name": "detector",
@@ -481,22 +481,13 @@
             "doc": "Processing ID for science image"
         },
         {
-            "name": "pass",
+            "name": "observation_id",
             "type": [
                 "null",
-                "int"
+                "string"
             ],
             "default": null,
-            "doc": "Roman survey pass number (stub)"
-        },
-        {
-            "name": "segment",
-            "type": [
-                "null",
-                "int"
-            ],
-            "default": null,
-            "doc": "Roman survey segment number (stub)"
+            "doc": "Roman observation ID: concatenated observation hierarchy including the exposure counter; uniquely identifies the Roman exposure (stub)"
         },
         {
             "name": "program",
@@ -505,7 +496,61 @@
                 "int"
             ],
             "default": null,
-            "doc": "Roman program identifier (stub)"
+            "doc": "Roman program number (stub)"
+        },
+        {
+            "name": "plan",
+            "type": [
+                "null",
+                "int"
+            ],
+            "default": null,
+            "doc": "Roman execution plan number (stub)"
+        },
+        {
+            "name": "pass",
+            "type": [
+                "null",
+                "int"
+            ],
+            "default": null,
+            "doc": "Roman pass number (stub)"
+        },
+        {
+            "name": "segment",
+            "type": [
+                "null",
+                "int"
+            ],
+            "default": null,
+            "doc": "Roman segment number (stub)"
+        },
+        {
+            "name": "observation",
+            "type": [
+                "null",
+                "int"
+            ],
+            "default": null,
+            "doc": "Roman observation number within the segment (stub)"
+        },
+        {
+            "name": "visit",
+            "type": [
+                "null",
+                "int"
+            ],
+            "default": null,
+            "doc": "Roman visit number; a visit groups multiple exposures, so this is NOT a per-image identifier -- use expId or observation_id for that (stub)"
+        },
+        {
+            "name": "exposure",
+            "type": [
+                "null",
+                "int"
+            ],
+            "default": null,
+            "doc": "Roman exposure counter within the visit (stub)"
         },
         {
             "name": "survey",
