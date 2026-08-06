@@ -1294,16 +1294,7 @@ def _definition_identity(reference):
     """
     if not reference:
         return None
-    tail = str(reference).rsplit("/", 1)[-1]
-    return tail
-    if value is None:
-        return None
-    try:
-        return enum_class(value)
-    except ValueError:
-        logger.warning("ignoring unknown %s value %r",
-                       enum_class.__name__, value)
-        return None
+    return str(reference).rsplit("/", 1)[-1]
 
 
 class ReconcilerUnhealthy(RuntimeError):
