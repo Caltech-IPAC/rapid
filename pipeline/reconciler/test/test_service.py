@@ -758,6 +758,72 @@ class ReconstructionCompletenessTests(unittest.TestCase):
 
         self.assertEqual(1, svc.health()["missing_bundles"])
 
+    def test_the_missing_bundle_is_reconstructed_before_the_row_closes(self):
+        """Round 3 of #16/#5: noticing the gap was never the whole rule.
+
+        The design says the bundle exists before the attempt is closed,
+        whichever way it died. Counting the absence and continuing to the
+        terminal transition left abruptly killed attempts permanently terminal
+        with no diagnostics — and terminal rows are outside the open set, so
+        nothing ever came back for them.
+        """
+        row = attempt_row(1, lifecycle_state="started",
+                          started_at=utc(2026, 8, 6, 11, 0, 0))
+        jobs = [batch_job(status="FAILED", exit_code=137,
+                          started=utc(2026, 8, 6, 11, 0, 0),
+                          stopped=utc(2026, 8, 6, 11, 5, 0))]
+        conn = FakeConnection(rows=[row])
+        key = self._absent_bundle(row)
+        tagging = FakeS3Tagging(missing=[key])
+        diagnostics = InMemoryObjectStore()
+        svc = service.ReconcilerService(
+            conn=conn, batch_client=FakeBatch(jobs=jobs),
+            records_store=InMemoryObjectStore(),
+            diagnostics_store=diagnostics, s3_client=tagging,
+            records_prefix=PREFIX, diagnostics_bucket=DIAGNOSTICS,
+            now=lambda: utc(2026, 8, 6, 12, 0, 0))
+
+        svc.poll_once()
+
+        self.assertIsNotNone(diagnostics.head(key),
+                             "the attempt closed with no bundle at its key")
+        self.assertEqual(1, svc.health()["reconstructed_bundles"])
+        # It closed. The point of reconstructing rather than deferring is that
+        # the attempt still reaches a terminal state.
+        self.assertNotEqual("started", conn.rows[1]["lifecycle_state"])
+
+    def test_a_bundle_that_cannot_be_written_defers_instead(self):
+        # The one case that IS worth deferring: a store that refuses the write
+        # is a condition a later poll may find resolved, unlike a CloudWatch
+        # stream that has expired and never will be.
+        row = attempt_row(1, lifecycle_state="started",
+                          started_at=utc(2026, 8, 6, 11, 0, 0))
+        jobs = [batch_job(status="FAILED", exit_code=137,
+                          started=utc(2026, 8, 6, 11, 0, 0),
+                          stopped=utc(2026, 8, 6, 11, 5, 0))]
+        conn = FakeConnection(rows=[row])
+        key = self._absent_bundle(row)
+        diagnostics = InMemoryObjectStore()
+
+        def refuse(*_args, **_kwargs):
+            raise RuntimeError("the diagnostics bucket denies writes")
+
+        diagnostics.put_if_absent = refuse
+        svc = service.ReconcilerService(
+            conn=conn, batch_client=FakeBatch(jobs=jobs),
+            records_store=InMemoryObjectStore(),
+            diagnostics_store=diagnostics,
+            s3_client=FakeS3Tagging(missing=[key]),
+            records_prefix=PREFIX, diagnostics_bucket=DIAGNOSTICS,
+            now=lambda: utc(2026, 8, 6, 12, 0, 0))
+
+        summary = svc.poll_once()
+
+        self.assertEqual(1, summary["deferred"])
+        self.assertEqual("started", conn.rows[1]["lifecycle_state"],
+                         "an attempt whose evidence is missing and "
+                         "unrecoverable must not be terminalized")
+
     def test_a_never_started_attempt_has_genuinely_nothing_to_retain(self):
         row = attempt_row(1, lifecycle_state="submitted")
         jobs = [batch_job(status="FAILED", exit_code=None, started=None,

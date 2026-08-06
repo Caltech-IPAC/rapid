@@ -34,6 +34,7 @@ from observability.attempts import (
 from pipeline.runtime import termination
 
 from . import closure as closure_mod
+from . import reconstruction
 from . import retention as retention_mod
 from .horizons import beyond_grace_horizon, beyond_submission_horizon
 from .lease import attempt_lease, reread_attempt
@@ -160,6 +161,19 @@ _SUPERSEDABLE_SQL = (
 )
 
 
+class BundleReconstructionFailed(RuntimeError):
+    """An attempt ran, has no bundle, and one could not be written either.
+
+    Raised so the caller's existing handler DEFERS the attempt (round-3
+    finding #5). The distinction this draws is between two failures that look
+    alike and are not: a CloudWatch stream that cannot be read is permanent —
+    the stream expires — and the bundle is written anyway with the gap
+    recorded inside it, because an attempt deferred past that horizon could
+    never be closed by anyone. A store that will not accept the write is a
+    condition a later poll may find resolved, and that is this.
+    """
+
+
 class ReconcilerService:
     """One reconciler. Owns no state between polls beyond its connections.
 
@@ -205,6 +219,12 @@ class ReconcilerService:
         #: Distinct from the never-started case, where there is genuinely
         #: nothing to retain.
         self._missing_bundles = 0
+        #: Of those, how many the reconciler built from the CloudWatch stream
+        #: (round-3 #5). Reported separately from `missing_bundles` because
+        #: they answer different questions: the first is how often attempts
+        #: die without leaving their diagnostics, which is a fleet problem
+        #: worth watching, and this is how many of those were salvaged.
+        self._reconstructed_bundles = 0
 
     # -- health ----------------------------------------------------------
 
@@ -245,6 +265,7 @@ class ReconcilerService:
                 self.consecutive_unproductive_polls,
             "binding_drift": self._binding_drift,
             "missing_bundles": self._missing_bundles,
+            "reconstructed_bundles": self._reconstructed_bundles,
             "poll_failure_threshold": POLL_FAILURE_THRESHOLD,
             "unproductive_poll_threshold": CLOSURE_FAILURE_POLL_THRESHOLD,
         }
@@ -912,11 +933,15 @@ class ReconcilerService:
         genuinely NEVER STARTED (round 2 of #16). Such an attempt had no
         container in which to build one, so "nothing to retain" is the literal
         truth. For an attempt that DID run, an absent bundle means the
-        diagnostics for a real execution are gone, and accepting that silently
-        is how the evidence for a failed attempt disappears with nothing
-        recorded. It is noted on the row's own closure account instead, so the
-        gap is visible rather than indistinguishable from the never-started
-        case.
+        diagnostics for a real execution are gone.
+
+        Round 2 noted that gap and continued. Round 3 CLOSES it: the design
+        rule is unconditional — the bundle exists before the attempt is closed,
+        whichever way it died — so where the attempt did not write one, the
+        reconciler builds it from the CloudWatch stream and marks it
+        reconstructed. See `reconstruction`, which also explains why an
+        unrecoverable log writes a bundle recording the gap rather than
+        deferring an attempt nothing could ever close.
         """
         key = termination.bundle_key(
             self.records_prefix, row["run_id"], row["logical_job_id"],
@@ -935,6 +960,42 @@ class ReconcilerService:
                 "evidence for a real execution is absent, which is NOT the "
                 "never-started 'nothing to retain' case",
                 row["attempt_id"], key)
+
+            # AND THEN BUILD ONE (round-3 finding #5). Noticing the gap and
+            # continuing to the terminal transition is what left abruptly
+            # killed attempts permanently terminal with no diagnostics at all
+            # — and terminal rows are outside the open set, so nothing ever
+            # came back for them. The design's rule has no exception in it:
+            # the bundle exists before the attempt is closed, whichever way it
+            # died, and where the attempt did not write one the reconciler
+            # builds it from the CloudWatch stream and marks it reconstructed.
+            #
+            # A reconstruction that cannot be UPLOADED is a different kind of
+            # failure from one whose log has expired: the first is a condition
+            # a later poll may find resolved, so it defers; the second is
+            # permanent, and the bundle is written anyway with the gap
+            # recorded inside it. Deferring on the second could never
+            # terminate — deferral here is unbounded, and the CloudWatch
+            # stream expires at 14 days, so the raw material is on a clock.
+            rebuilt = reconstruction.reconstruct_bundle(
+                self.diagnostics_store, key, row, observation,
+                self.logs, self.log_group, now=self._now())
+            if rebuilt is None:
+                raise BundleReconstructionFailed(
+                    f"attempt {row['attempt_id']} ran, has no diagnostics "
+                    f"bundle at {key}, and one could not be written there. "
+                    f"Deferring rather than closing an attempt whose evidence "
+                    f"is missing and unrecoverable.")
+            self._reconstructed_bundles += 1
+
+            # Stamp the retention class onto what was just created, so a
+            # reconstructed bundle is governed by the same lifecycle rules as
+            # any other. Skipping this would leave it untagged and therefore
+            # outside every retention rule, which is how a bundle quietly
+            # outlives or predeceases the account that cites it.
+            stamped = retention_mod.stamp_retention(
+                self.s3, self.diagnostics_bucket, key, row, retention_class,
+                extra={"reconstructed": "true"})
         return stamped
 
     def _transition(self, row, observation, writer, record, written,
