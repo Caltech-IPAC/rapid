@@ -1,0 +1,47 @@
+>> target: rapid-admin (i-0ce2eebb8133ab63d)
+>> image: 855590908525.dkr.ecr.us-east-1.amazonaws.com/rapid-pipeline@sha256:0a1dd132e52880eaca00e9c7d6cca2091b68e2010bf07aef7e8f84b477bc62e1
+>> staged repo.tar (d408918d01c488851f612af35a34ae81813395f3eefb15ad7309a633399fb771)
+>> running on rapid-admin via SSM...
+>> command id: 397d781c-84ed-41d7-883b-e53f553dc509
+----- STDOUT -----
+repo.tar: OK
+Login Succeeded!
+
+=== W7 tessellation suite (pipeline repo) ===
+test_centre_and_corner_attributes (database.modules.utils.test.test_roman_tessellation.ClosedFormAccess.test_centre_and_corner_attributes) ... ok
+test_check_version_accepts_the_pinned_release_values (database.modules.utils.test.test_roman_tessellation.ClosedFormAccess.test_check_version_accepts_the_pinned_release_values) ... ok
+test_check_version_refuses_a_different_tessellation (database.modules.utils.test.test_roman_tessellation.ClosedFormAccess.test_check_version_refuses_a_different_tessellation) ... ok
+test_close_is_a_no_op (database.modules.utils.test.test_roman_tessellation.ClosedFormAccess.test_close_is_a_no_op) ... ok
+test_dec_bin_returns_a_whole_ring_ordered_by_ramin (database.modules.utils.test.test_roman_tessellation.ClosedFormAccess.test_dec_bin_returns_a_whole_ring_ordered_by_ramin) ... *** Error: release pins tessellation nside=256, this code is 512
+ok
+test_get_rtid_array_matches_the_scalar_form (database.modules.utils.test.test_roman_tessellation.ClosedFormAccess.test_get_rtid_array_matches_the_scalar_form) ... ok
+test_get_rtid_sets_the_attribute_like_the_sqlite_class (database.modules.utils.test.test_roman_tessellation.ClosedFormAccess.test_get_rtid_sets_the_attribute_like_the_sqlite_class) ... ok
+test_neighbour_counts_at_the_poles (database.modules.utils.test.test_roman_tessellation.ClosedFormAccess.test_neighbour_counts_at_the_poles) ... ok
+test_neighbours_are_symmetric_on_a_sample (database.modules.utils.test.test_roman_tessellation.ClosedFormAccess.test_neighbours_are_symmetric_on_a_sample) ... ok
+test_overlapping_rtids_covers_a_small_box (database.modules.utils.test.test_roman_tessellation.ClosedFormAccess.test_overlapping_rtids_covers_a_small_box) ... ok
+test_pole_tiles_are_not_degenerate (database.modules.utils.test.test_roman_tessellation.ClosedFormAccess.test_pole_tiles_are_not_degenerate) ... ok
+test_pole_patch_values_match_the_2024_note (database.modules.utils.test.test_roman_tessellation.Constants.test_pole_patch_values_match_the_2024_note) ... ok
+test_ring_counts_sum_to_the_table_size (database.modules.utils.test.test_roman_tessellation.Constants.test_ring_counts_sum_to_the_table_size) ... ok
+test_shape (database.modules.utils.test.test_roman_tessellation.Constants.test_shape) ... ok
+test_the_2024_worked_example (database.modules.utils.test.test_roman_tessellation.Constants.test_the_2024_worked_example) ... ok
+test_matches_the_rapid_systems_original (database.modules.utils.test.test_roman_tessellation.Parity.test_matches_the_rapid_systems_original) ... skipped 'rapid_systems is not checked out beside this repo, so the parity check cannot run (looked for /rapid_systems/tools/tessellation/roman_tessellation.py). This is not a pass: it means nothing verified the two copies here.'
+setUpClass (database.modules.utils.test.test_roman_tessellation.SqliteEquivalence) ... skipped 'the legacy SQLite tessellation is not available (set ROMANTESSELLATIONDBNAME to run this comparison). Nothing was compared: the equivalence evidence is the recorded run in rapid_systems tools/tessellation/certification-2026-08-06.txt.'
+
+----------------------------------------------------------------------
+Ran 16 tests in 0.067s
+
+OK (skipped=2)
+>> W7 tessellation suite exit code: 0
+
+=== W7 release pin is readable through W4's reader ===
+version nside512-v2
+digest  ee5b7a614de1ca9a57483660ab47338219932bed9447a9345c48c360c8767cd9
+nside   512 nrows 6291458
+check_version: True
+>> release-pin check exit code: 0
+
+W7-UNITS-OK
+
+----- STDERR -----
+
+----- STATUS: Success -----
