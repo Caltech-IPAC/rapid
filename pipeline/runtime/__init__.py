@@ -24,6 +24,10 @@ stages
     written once at completion including on failure.
 environment
     The per-invocation environment contract, read once, fail-loud on absence.
+science_config
+    The reader for release-versioned science content (`cdf/science/
+    pipeline.toml`) — the third configuration home, carried by the image
+    and identified by its digest. No overrides, no defaults, no merge.
 ownership
     Attempt resolution at startup through W1's atomic claim-or-create
     resolver.
@@ -69,6 +73,11 @@ from pipeline.runtime.process import (  # noqa: F401
     run_shell,
     run_tool,
 )
+from pipeline.runtime.science_config import (  # noqa: F401
+    auxiliary_identity,
+    load_science_config,
+    science_config_digest,
+)
 from pipeline.runtime.stages import (  # noqa: F401
     SKIPPED,
     StageRecord,
@@ -97,13 +106,16 @@ __all__ = [
     "ToolError",
     "ToolResult",
     "WorkingDirectory",
+    "auxiliary_identity",
     "categorize",
     "configure",
     "get_logger",
+    "load_science_config",
     "redact",
     "run_shell",
     "run_stage",
     "run_tool",
+    "science_config_digest",
     "serialize_error",
     "stage_context",
 ]

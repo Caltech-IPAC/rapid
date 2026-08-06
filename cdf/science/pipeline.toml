@@ -1,0 +1,444 @@
+# RAPID science configuration — release content.
+#
+# THE THIRD CONFIGURATION HOME. Every configuration fact in RAPID lives in
+# exactly one of three places (batch-payload co-design, Principles 4):
+#
+#   the pipeline parameter tree  /rapid/pipeline/* in SSM — operational
+#                                configuration, mutable between releases
+#   THIS FILE                    anything that can alter a science product
+#   the submission manifest      per-invocation facts (which SCA, which
+#                                exposure, which reference image)
+#
+# The placement criterion that sorts the first two: CAN THIS VALUE ALTER A
+# SCIENCE PRODUCT? If yes, it is here. The reason is reproducibility, not
+# tidiness: this file is carried by the image, so the image digest
+# recorded in every attempt's provenance identifies these values exactly.
+# A science-affecting value in the mutable tree would let a product's
+# scientific identity change without any release changing, which makes the
+# release identity insufficient to reproduce the product.
+#
+# WHY TOML. The values here were strings in a .ini and are typed here:
+# `float` stays a float, `true` stays a boolean. tomllib is in the 3.11
+# standard library, so this costs no dependency, and typing the values
+# removes the scattered float()/int() coercions at each consumer, which
+# is where a wrong parse hides. Chosen over YAML (needs a dependency,
+# and its implicit typing is the opposite of what is wanted here) and
+# over keeping .ini (untyped, and no nesting).
+#
+# HOW IT IS READ. pipeline/runtime/science_config.py — `load()` for the
+# values, `digest()` for the content hash that goes into provenance
+# alongside the image digest. Nothing else parses this file.
+#
+# WHAT IS NOT HERE. Output filenames, thread counts, verbosity, memory
+# limits: operational, and none of them can change a science result. The
+# `fill_in_by_launch_script` / `to_be_filled_by_script` placeholders that
+# the master .ini carried are also absent — those slots hold
+# per-invocation values, so they belong in the manifest, and carrying the
+# sentinel would only move the landmine. `ppid` is absent because it is
+# routing, single-homed in submission/routes.py.
+#
+# The SExtractor .conv / .nnw / .inp files beside this one in cdf/ are
+# release content too, by location — they ship in the image and are
+# identified by the same image digest. They are not restated here.
+#
+# PROVENANCE OF THESE VALUES. Extracted 2026-08-06 (W4) from
+# cdf/awsBatchSubmitJobs_launchSingleSciencePipeline.ini, which remains in
+# place and functional until W6 deletes it behind the cutover fence. The
+# extraction was mechanical and value-preserving; the round-trip test in
+# pipeline/runtime/test/test_science_config.py checks every key here
+# against that .ini so the two cannot drift while both exist.
+
+[release]
+# Bumped when the science content of this file changes in a way that
+# should be visible as a distinct configuration, independently of the
+# image digest that identifies the file byte-for-byte.
+schema_version = 1
+
+[science]
+# Relocated from the /rapid/pipeline/science/* parameter tree by W4
+# (2026-08-06) — both failed the placement criterion.
+#
+# min_images_to_coadd: minimum input images for reference-image
+# coaddition; below it the pipeline declines to launch. Coadd depth
+# changes the reference image, and the reference image is an input to
+# every difference made against it.
+#
+# NOTE A LIVE DIVERGENCE, recorded rather than silently resolved: the SSM
+# tree carried 3 and the master .ini's [REF_IMAGE] carries
+# min_n_images_to_coadd = 2. That is the duplication this re-homing
+# exists to end. The tree's 3 is taken as authoritative here — it was the
+# deliberate Q4 setting, and the .ini's 2 is the older value — and
+# ref_image.min_n_images_to_coadd below is left at the .ini's 2 so the
+# round-trip test still proves the extraction was faithful. The two
+# converge when W5 switches the payload onto this file and the .ini key
+# goes with the rest of the .ini at W6. Flagged for the owner: if 2 was
+# in fact the intended operating value, this is the line to change.
+min_images_to_coadd = 3
+
+# diff_flavor: which differencing algorithm's image feeds the alert
+# cutout — "sfft" or "zogy". Selects which science product a downstream
+# consumer sees, so it is scientific identity by definition.
+diff_flavor = "sfft"
+
+[source_matching]
+match_radius = 0.00001528
+
+[fake_sources]
+inject_fake_sources_flag = false
+sci_ext = 1
+refimg_input_ext = 1
+num_injections = 100
+mag_min = 21.0
+mag_max = 28.0
+
+[instrument]
+naxis1_sciimage = 4088
+naxis2_sciimage = 4088
+sca_gain = 1.0
+sca_readout_noise = 8.5
+
+[sci_image]
+saturation_level = 2500000
+
+[ref_image]
+naxis1_refimage = 7000
+naxis2_refimage = 7000
+cdelt1_refimage = -0.000030555555556
+cdelt2_refimage = 0.000030555555556
+crota2_refimage = 0.0
+min_n_images_to_coadd = 2
+max_n_images_to_coadd = 25
+
+[naive_diffimage]
+naive_diffimage_flag = true
+
+[zogy]
+astrometric_uncert_x = 0.05
+astrometric_uncert_y = 0.05
+post_zogy_keep_diffimg_lower_cov_map_thresh = 0.5
+
+[sfft]
+run_sfft = true
+crossconv_flag = false
+
+[awaicgen]
+awaicgen_mosaic_rotation = 0.0
+awaicgen_pixelscale_factor = 1.0
+awaicgen_pixelscale_absolute = 0.11
+awaicgen_mos_cellsize_factor = 0.5
+awaicgen_drizzle_factor = 1.0
+awaicgen_inv_var_weight_flag = 0
+awaicgen_pixelflux_scale_flag = 1
+awaicgen_simple_coadd_flag = 1
+awaicgen_unc_sigfigs_retained = 1
+zprefimg = 17.0
+
+[bkgest]
+clippedmean_calc_type = 3
+output_image_type = 2
+local_clippedmean_grid_spacing = 500
+local_clippedmean_input_window = 501
+
+[gainmatch]
+zero_point_sci_keyword = "ZPTMAG"
+zero_point_ref_keyword = "MAGZP"
+magrefthresmin = 19
+magrefthresmax = 24
+refexclbox = 10.5
+refmagkeep = 23.5
+edgebuffer = 100
+numsrcgmatchmin = 20
+radscirefmatch = 1.0
+min_class_star_thresh = 0.5
+max_isoareaf_image_thresh = 100
+max_awin_to_bwin_world_ratio_thresh = 1.3
+
+[psfcat_diffimage]
+n_clip_sigma = 3.0
+n_thresh_sigma = 5
+fwhm = 2.0
+fit_shape = "(17, 17)"
+aperture_radius = 8
+sharplo = 0.2
+sharphi = 1.0
+roundlo = -1.0
+roundhi = 1.0
+min_separation = 1.0
+
+[sextractor_diffimage]
+sextractor_detect_type = "CCD"
+sextractor_detect_minarea = 5
+sextractor_detect_maxarea = 0
+sextractor_thresh_type = "RELATIVE"
+sextractor_detect_thresh = 2.5
+sextractor_analysis_thresh = 2.5
+sextractor_filter = "Y"
+sextractor_filter_thresh = 3.0
+sextractor_deblend_nthresh = 32
+sextractor_deblend_mincont = 0.005
+sextractor_clean = "Y"
+sextractor_clean_param = 1.0
+sextractor_mask_type = "CORRECT"
+sextractor_weight_type = "MAP_RMS,MAP_RMS"
+sextractor_rescale_weights = "Y"
+sextractor_weight_image = "weight.fits"
+sextractor_weight_gain = "N,N"
+sextractor_weight_thresh = 1000000
+sextractor_flag_type = "OR"
+sextractor_phot_apertures = "2.0,3.0,4.0,6.0,10.0,14.0"
+sextractor_phot_autoparams = "2.5,3.5"
+sextractor_phot_petroparams = "2.0,3.5"
+sextractor_phot_autoapers = "0.0,0.0"
+sextractor_phot_fluxfrac = "0.25,0.5,0.75,0.85,0.95,0.99,0.999"
+sextractor_satur_level = 100000.0
+sextractor_satur_key = "SATURATE"
+sextractor_mag_zeropoint = 0.0
+sextractor_mag_gamma = 4.0
+sextractor_gain = 999999999999999.9
+sextractor_gain_key = "GAIN"
+sextractor_pixel_scale = 0
+sextractor_seeing_fwhm = 1.2
+sextractor_back_type = "AUTO"
+sextractor_back_value = 0.0
+sextractor_back_size = 512
+sextractor_back_filtersize = 3
+sextractor_backphoto_type = "LOCAL"
+sextractor_backphoto_thick = 15
+sextractor_back_filtthresh = 0.0
+sextractor_assoc_name = "sky.list"
+sextractor_assoc_data = "2,3,4"
+sextractor_assoc_params = "2,3,4"
+sextractor_assoccoord_type = "PIXEL"
+sextractor_assoc_radius = 2.0
+sextractor_assoc_type = "NEAREST"
+sextractor_assocselec_type = "MATCHED"
+sextractor_fits_unsigned = "N"
+sextractor_interp_maxxlag = 16
+sextractor_interp_maxylag = 16
+sextractor_interp_type = "ALL"
+
+[swarp]
+swarp_weight_type = "NONE"
+swarp_rescale_weights = "Y"
+swarp_weight_image = "None"
+swarp_weight_thresh = 1000.0
+swarp_combine = "Y"
+swarp_combine_type = "MEDIAN"
+swarp_clip_ampfrac = 0.3
+swarp_clip_sigma = 4.0
+swarp_blank_badpixels = "N"
+swarp_celestial_type = "NATIVE"
+swarp_projection_type = "TAN"
+swarp_projection_err = 0.001
+swarp_center_type = "ALL"
+swarp_center = "00:00:00.0,+00:00:00.0"
+swarp_pixelscale_type = "MEDIAN"
+swarp_pixel_scale = 0.0
+swarp_image_size = 0
+swarp_resample = "Y"
+swarp_resampling_type = "BILINEAR"
+swarp_oversampling = 0
+swarp_interpolate = "N"
+swarp_fscalastro_type = "FIXED"
+swarp_fscale_keyword = "FLXSCALE"
+swarp_fscale_default = 1.0
+swarp_gain_keyword = "GAIN"
+swarp_gain_default = 0.0
+swarp_satlev_keyword = "SATURATE"
+swarp_satlev_default = 100000.0
+swarp_subtract_back = "Y"
+swarp_back_type = "AUTO"
+swarp_back_default = 0.0
+swarp_back_size = 128
+swarp_back_filtersize = 3
+swarp_back_filtthresh = 0.0
+
+[sextractor_sciimage]
+sextractor_detect_type = "CCD"
+sextractor_detect_minarea = 5
+sextractor_detect_maxarea = 0
+sextractor_thresh_type = "RELATIVE"
+sextractor_detect_thresh = 2.5
+sextractor_analysis_thresh = 2.5
+sextractor_filter = "Y"
+sextractor_filter_thresh = 100
+sextractor_deblend_nthresh = 4
+sextractor_deblend_mincont = 0.005
+sextractor_clean = "Y"
+sextractor_clean_param = 1.0
+sextractor_mask_type = "CORRECT"
+sextractor_weight_type = "MAP_RMS,MAP_RMS"
+sextractor_rescale_weights = "Y"
+sextractor_weight_image = "weight.fits"
+sextractor_weight_gain = "N,N"
+sextractor_weight_thresh = 1000000
+sextractor_flag_type = "OR"
+sextractor_phot_apertures = "2.0,3.0,4.0,6.0,10.0,14.0"
+sextractor_phot_autoparams = "2.5,3.5"
+sextractor_phot_petroparams = "2.0,3.5"
+sextractor_phot_autoapers = "0.0,0.0"
+sextractor_phot_fluxfrac = "0.25,0.5,0.75,0.85,0.95,0.99,0.999"
+sextractor_satur_level = 100000.0
+sextractor_satur_key = "SATURATE"
+sextractor_mag_zeropoint = 0.0
+sextractor_mag_gamma = 4.0
+sextractor_gain = 999999999999999.9
+sextractor_gain_key = "GAIN"
+sextractor_pixel_scale = 0
+sextractor_seeing_fwhm = 1.2
+sextractor_back_type = "AUTO"
+sextractor_back_value = 0.0
+sextractor_back_size = 512
+sextractor_back_filtersize = 3
+sextractor_backphoto_type = "LOCAL"
+sextractor_backphoto_thick = 15
+sextractor_back_filtthresh = 0.0
+sextractor_assoc_name = "sky.list"
+sextractor_assoc_data = "2,3,4"
+sextractor_assoc_params = "2,3,4"
+sextractor_assoccoord_type = "PIXEL"
+sextractor_assoc_radius = 2.0
+sextractor_assoc_type = "NEAREST"
+sextractor_assocselec_type = "MATCHED"
+sextractor_fits_unsigned = "N"
+sextractor_interp_maxxlag = 16
+sextractor_interp_maxylag = 16
+sextractor_interp_type = "ALL"
+
+[sextractor_refimage]
+sextractor_detect_type = "CCD"
+sextractor_detect_minarea = 5
+sextractor_detect_maxarea = 0
+sextractor_thresh_type = "RELATIVE"
+sextractor_detect_thresh = 2.5
+sextractor_analysis_thresh = 2.5
+sextractor_filter = "Y"
+sextractor_filter_thresh = 100
+sextractor_deblend_nthresh = 4
+sextractor_deblend_mincont = 0.005
+sextractor_clean = "Y"
+sextractor_clean_param = 1.0
+sextractor_mask_type = "CORRECT"
+sextractor_weight_type = "MAP_RMS,MAP_RMS"
+sextractor_rescale_weights = "Y"
+sextractor_weight_image = "weight.fits"
+sextractor_weight_gain = "N,N"
+sextractor_weight_thresh = 1000000
+sextractor_flag_type = "OR"
+sextractor_phot_apertures = "2.0,3.0,4.0,6.0,10.0,14.0"
+sextractor_phot_autoparams = "2.5,3.5"
+sextractor_phot_petroparams = "2.0,3.5"
+sextractor_phot_autoapers = "0.0,0.0"
+sextractor_phot_fluxfrac = "0.25,0.5,0.75,0.85,0.95,0.99,0.999"
+sextractor_satur_level = 100000.0
+sextractor_satur_key = "SATURATE"
+sextractor_mag_zeropoint = 0.0
+sextractor_mag_gamma = 4.0
+sextractor_gain = 999999999999999.9
+sextractor_gain_key = "GAIN"
+sextractor_pixel_scale = 0
+sextractor_seeing_fwhm = 1.2
+sextractor_back_type = "AUTO"
+sextractor_back_value = 0.0
+sextractor_back_size = 512
+sextractor_back_filtersize = 3
+sextractor_backphoto_type = "LOCAL"
+sextractor_backphoto_thick = 15
+sextractor_back_filtthresh = 0.0
+sextractor_assoc_name = "sky.list"
+sextractor_assoc_data = "2,3,4"
+sextractor_assoc_params = "2,3,4"
+sextractor_assoccoord_type = "PIXEL"
+sextractor_assoc_radius = 2.0
+sextractor_assoc_type = "NEAREST"
+sextractor_assocselec_type = "MATCHED"
+sextractor_fits_unsigned = "N"
+sextractor_interp_maxxlag = 16
+sextractor_interp_maxylag = 16
+sextractor_interp_type = "ALL"
+
+[sextractor_gainmatch]
+sextractor_detect_type = "CCD"
+sextractor_detect_minarea = 5
+sextractor_detect_maxarea = 0
+sextractor_thresh_type = "RELATIVE"
+sextractor_detect_thresh = 2.5
+sextractor_analysis_thresh = 2.5
+sextractor_filter = "Y"
+sextractor_filter_thresh = 100
+sextractor_deblend_nthresh = 4
+sextractor_deblend_mincont = 0.005
+sextractor_clean = "Y"
+sextractor_clean_param = 1.0
+sextractor_mask_type = "CORRECT"
+sextractor_weight_type = "MAP_RMS,MAP_RMS"
+sextractor_rescale_weights = "Y"
+sextractor_weight_image = "weight.fits"
+sextractor_weight_gain = "N,N"
+sextractor_weight_thresh = 1000000
+sextractor_flag_type = "OR"
+sextractor_phot_apertures = "2.0,3.0,4.0,6.0,10.0,14.0"
+sextractor_phot_autoparams = "2.5,3.5"
+sextractor_phot_petroparams = "2.0,3.5"
+sextractor_phot_autoapers = "0.0,0.0"
+sextractor_phot_fluxfrac = "0.25,0.5,0.75,0.85,0.95,0.99,0.999"
+sextractor_satur_level = 100000.0
+sextractor_satur_key = "SATURATE"
+sextractor_mag_zeropoint = 0.0
+sextractor_mag_gamma = 4.0
+sextractor_gain = 999999999999999.9
+sextractor_gain_key = "GAIN"
+sextractor_pixel_scale = 0
+sextractor_seeing_fwhm = 1.2
+sextractor_back_type = "AUTO"
+sextractor_back_value = 0.0
+sextractor_back_size = 512
+sextractor_back_filtersize = 3
+sextractor_backphoto_type = "LOCAL"
+sextractor_backphoto_thick = 15
+sextractor_back_filtthresh = 0.0
+sextractor_assoc_name = "sky.list"
+sextractor_assoc_data = "2,3,4"
+sextractor_assoc_params = "2,3,4"
+sextractor_assoccoord_type = "PIXEL"
+sextractor_assoc_radius = 2.0
+sextractor_assoc_type = "NEAREST"
+sextractor_assocselec_type = "MATCHED"
+sextractor_fits_unsigned = "N"
+sextractor_interp_maxxlag = 16
+sextractor_interp_maxylag = 16
+sextractor_interp_type = "ALL"
+
+[forced_photometry]
+match_radius_overlap_field = 0.25
+simflag = 0
+simmag = 14
+stampsz = 25
+stampupsamplefac = 5
+apdiam = 9
+corrunc = 1.0
+snrforcor = 3.0
+minnumrats = 10
+applyflxcorr = 0
+applysimcalcorr = 1
+simcalpsffluxcor = 1.01475385788266
+simcalapfluxcor = 1.06138756681361
+d_earliest = "\"2018-03-17T00:00:00.0 UT\""
+jd_earliest = 2458194.5
+refmatchrad = 0.6
+maxbadpixfrac = 0.5
+minimum_percent_overlap_area = 0.05
+diffimg_fits_keyword_zptmag = "ZPTMAG"
+refimg_fits_keyword_zptmag = "MAGZP"
+
+[psfcat_refimage]
+n_clip_sigma = 3.0
+n_thresh_sigma = 5
+fwhm = 2.0
+fit_shape = "(17, 17)"
+aperture_radius = 8
+sharplo = 0.2
+sharphi = 1.0
+roundlo = -1.0
+roundhi = 1.0
+min_separation = 1.0
