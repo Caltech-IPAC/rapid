@@ -246,7 +246,7 @@ class SubmissionEnvRoutingTests(unittest.TestCase):
         "rapid-pipeline-science": 14,
     }
 
-    ACCOUNT_ARN = "arn:aws:batch:us-east-1:855590908525:job-definition/{}:{}"
+    ACCOUNT_ARN = "arn:aws:batch:us-east-1:ACCOUNT:job-definition/{}:{}"
 
     class FakeBatch:
         """`describe_job_definitions`, exact-match on family, ascending.
