@@ -331,6 +331,19 @@ def wait_until_aws_batch_jobs_finished(job_type, proc_date, config_input, dbh,
     """
     Wait until the attempts of a submitted batch are reconciler-terminal.
 
+    NO LONGER THE OPERATOR'S PATH (round-3 finding #3). The three call sites in
+    the loop below now use `wait_for_submitted`, which waits on each
+    submission's OWN run id — the id `submit_gathered` actually stamped on the
+    rows. This signature takes `run_id` as an OPTIONAL keyword and answers "no
+    run_id given; nothing to wait for" when it is omitted, which is exactly
+    what all three call sites did: the operator waited for nothing at all and
+    proceeded to register jobs that were still running. A wait whose no-op case
+    is reachable by forgetting an argument is a wait that will be forgotten
+    again, so the callers no longer choose.
+
+    Kept because it is the documented seam entry point and takes a caller's
+    connection, which `wait_for_submitted` deliberately does not.
+
     W6 seam. What this replaced polled AWS Batch directly: one
     `describe_jobs` call PER JOB per poll, from a one-shot database snapshot
     taken before the loop (so a job that appeared later was never waited
@@ -390,6 +403,72 @@ def _wait_on(conn, run_id, timeout):
     return counts
 
 
+def wait_for_submitted(submitted, timeout=None):
+    """Wait for every batch a submission pass produced.
+
+    Waits on each SUBMISSION'S OWN run id, not on the parent string the
+    operator built (round-3 finding #3). `submit_gathered` re-scopes per batch
+    — `<run_id>-<n>` wherever there is more than one — so with two or more
+    batches the parent id matches NO attempt row, `wait_for_completion` finds
+    zero attempts and returns immediately, and the operator would proceed to
+    registration while the jobs were still running. One batch would have
+    worked and two would not, which is the worst shape a bug can have.
+
+    Returns a list of per-batch results, and never raises for a timeout: a
+    bounded wait expiring is the designed outcome for a stuck job, and the
+    reconciler classifies stragglers on its own horizons whether or not
+    anyone is waiting.
+    """
+    results = []
+    for submission, _attempt_ids in submitted:
+        batch_run_id = getattr(submission, "run_id", None)
+        if not batch_run_id:
+            print("*** Warning: a submission carries no run id; cannot wait "
+                  "for it. It remains a reconciliation case.")
+            continue
+        with connection("rapid-vpo-wait", lane="transaction") as waitconn:
+            results.append(_wait_on(waitconn, batch_run_id, timeout))
+    return results
+
+
+def production_registrar():
+    """The real registration callback, wired without a StageContext.
+
+    `registrar` takes its database handle as a CALLABLE, so the VPO can build
+    one from what it already has — a records bucket name and an S3 client —
+    without standing up the stage machinery a job entrypoint has. Without this
+    the VPO's only options were a dry run or nothing, which is exactly how
+    registration came to report success while writing no rows.
+
+    The bucket is read from the environment like every other deployment fact
+    this module needs (see `submission_env`), and is REQUIRED: a registrar
+    that cannot find the records it registers from would fail per-attempt,
+    deep inside a pass, rather than here where it is one clear message.
+
+    Returns None where DRY-RUN is explicitly asked for. Production defaults to
+    production — the flag has to be set to get a rehearsal, never the other
+    way round.
+    """
+    if os.environ.get('RAPID_VPO_DRY_RUN', '').lower() in ('1', 'true', 'yes'):
+        print("*** RAPID_VPO_DRY_RUN is set: registration will DECIDE only "
+              "and write no operation-table rows.")
+        return None
+
+    records_bucket = os.environ.get('RAPID_RECORDS_BUCKET')
+    if not records_bucket:
+        print("*** Error: Env. var. RAPID_RECORDS_BUCKET not set; the "
+              "registrar reads each attempt's terminal record from it and "
+              "cannot be built without it; quitting...")
+        exit(64)
+
+    from database.modules.utils import rapid_db
+    from pipeline.registration.products import registrar
+    from pipeline.runtime.boundaries import S3ObjectStore
+
+    store = S3ObjectStore(records_bucket, client=boto3.client("s3"))
+    return registrar(rapid_db.RAPIDDB, store)
+
+
 #-------------------------------------------------------------------------------------------------------------
 # Main program.
 #-------------------------------------------------------------------------------------------------------------
@@ -447,6 +526,13 @@ if __name__ == '__main__':
         # for. The operations design still owns the ground-up VPO (workload
         # classes, versioned retry policy, the problems path); this is the
         # minimal loop that drives the seams, not that rebuild.
+        # The registrar is built ONCE for the whole operator loop and handed
+        # to every phase. Building it per phase would open a database handle
+        # per phase for no reason; building it here also means a
+        # misconfiguration is one message at the top rather than three
+        # identical ones spread through the run.
+        registrar_callback = production_registrar()
+
         submission_context = submission_env(routes.JOB_TYPE_REFERENCE_IMAGE)
         run_id = f"vpo-{proc_date}-refimage-{datetime_utc_now:%H%M%S}"
 
@@ -496,7 +582,14 @@ if __name__ == '__main__':
 
         print(f"Waiting until AWS Batch jobs have finished for job_type={job_type}, proc_date={proc_date}...")
 
-        wait_until_aws_batch_jobs_finished(job_type,proc_date,config_input,dbh)
+        # Waits on each SUBMISSION'S own run id, not the parent string built
+        # above (round-3 finding #3). This call omitted `run_id` entirely, so
+        # the wait hit its "nothing to wait for" guard and returned {}
+        # immediately — the operator went straight on to register jobs that
+        # had not run. Passing the parent id would only have worked for a
+        # single batch: `submit_gathered` re-scopes to `<run_id>-<n>` from two
+        # batches on, so the parent then matches no attempt row at all.
+        wait_for_submitted(submitted)
 
         print(f"Okay, all AWS Batch jobs have finished for job_type={job_type}, proc_date={proc_date}...")
 
@@ -520,11 +613,19 @@ if __name__ == '__main__':
         # scripts it replaced had no importable entry point at all — each was
         # a `__main__` block — which is exactly why this had to be an exec and
         # why their exit codes were the only channel back.
+        #
+        # WITH the registrar (round-3 finding #3). All three of these calls
+        # omitted it, and `run_registration` passes `dry_run=register is None`
+        # — so the production path decided, counted, reported success and wrote
+        # no operation-table rows, leaving every attempt a candidate forever. A
+        # rehearsal now has to be asked for by name (RAPID_VPO_DRY_RUN); the
+        # default is production, which is the only safe direction for that
+        # default to point.
         from pipeline.seams import run_registration
         from database.modules.utils.rapid_db_connect import connection
 
         with connection("rapid-vpo-registration", lane="transaction") as regconn:
-            reg_run = run_registration(regconn)
+            reg_run = run_registration(regconn, register=registrar_callback)
         print("registration pass:", reg_run.as_dict())
         if reg_run.failed:
             print(f"*** Error: {reg_run.failed} registration(s) failed; quitting...")
@@ -566,11 +667,14 @@ if __name__ == '__main__':
             print("stage_label =",stage_label)
 
 
-            # The pipeline launch script requires MAKEREFIMAGESFLAG set in the environment.
-            # Also, set required DRYRUN to False.
+            # MAKEREFIMAGESFLAG is still read downstream. DRYRUN is not: it was
+            # set here for the pipeline launch script that the W6 cutover fence
+            # deleted, and nothing in the tree has read it since. Removed
+            # rather than left as a variable that looks like it controls
+            # something — the real rehearsal switch is RAPID_VPO_DRY_RUN, which
+            # gates the registrar and defaults to production (round-3 #3).
 
             os.environ['MAKEREFIMAGESFLAG'] = make_refimages_flag
-            os.environ['DRYRUN'] = "False"
 
 
             # Launch science pipelines.
@@ -580,16 +684,46 @@ if __name__ == '__main__':
             os.environ['STARTDATETIME'] = startdatetime
             os.environ['ENDDATETIME'] = enddatetime
 
-            # W6 seam: submission goes through pipeline.seams.submit_units.
-            # The unit-gathering query that decided WHICH work to submit was the
-            # deleted launcher's science logic; re-homing it belongs to the
-            # operations design's VPO rebuild. Refusing loudly beats fabricating
-            # a query that would submit the wrong work silently. See W6 ledger.
-            print("*** science submission is not wired to the new submission "
-            "seam yet: pipeline.seams.submit_units needs the unit list the "
-            "deleted launcher computed. See W6 ledger.")
-            dbh.close()
-            exit(64)
+            # SUBMITTED FOR REAL (round-3 finding #3). This was an exit(64)
+            # standing in for the unit-gathering query the deleted launcher
+            # owned — a refusal that was right when it was written, because
+            # fabricating a query would have submitted the wrong work silently.
+            # `submission.gathering.gather_science_units` is now that query,
+            # rebuilt against the surviving rapid_db methods, so the thing the
+            # refusal was waiting for exists and the refusal is what is now
+            # wrong: nothing past this line had ever executed.
+            #
+            # `make_references` is the stage-one/stage-two distinction this
+            # loop already expresses. Stage one takes the representative image
+            # per (field, filter) so a reference can be built where none
+            # exists; stage two takes the rest. `gather_science_units` splits
+            # exactly that way (`rows[:1]` versus `rows[1:]`), so the flag maps
+            # straight onto it rather than needing a second notion of the same
+            # idea.
+            science_units = gathering.gather_science_units(
+                dbh, startdatetime, enddatetime,
+                start_mjdobs=start_mjdobs, end_mjdobs=end_mjdobs,
+                min_images_to_coadd=min_images_to_coadd(),
+                make_references=(make_refimages_flag == "True"))
+
+            science_context = submission_env(routes.JOB_TYPE_SCIENCE)
+            science_run_id = (f"vpo-{proc_date}-science-{stage_label}-"
+                              f"{datetime_utc_now:%H%M%S}")
+            with connection("rapid-vpo-submit", lane="transaction") as subconn:
+                submitted = submit_gathered(
+                    science_units,
+                    job_type=routes.JOB_TYPE_SCIENCE,
+                    queue=science_context["queue"],
+                    job_definition=science_context["job_definition"],
+                    binding=science_context["binding"],
+                    manifest_bucket=science_context["manifest_bucket"],
+                    manifest_prefix=science_context["manifest_prefix"],
+                    s3_client=science_context["s3_client"],
+                    batch_client=science_context["batch_client"],
+                    execute=ConnectionExecutor(subconn).execute,
+                    run_id=science_run_id)
+            print(f"submitted {len(submitted)} science batch(es) under run "
+                  f"{science_run_id} ({stage_label})")
 
 
             # Code-timing benchmark.
@@ -606,7 +740,7 @@ if __name__ == '__main__':
 
             print(f"Waiting until AWS Batch jobs have finished for job_type={job_type}, proc_date={proc_date}, stage_label={stage_label}...")
 
-            wait_until_aws_batch_jobs_finished(job_type,proc_date,config_input,dbh)
+            wait_for_submitted(submitted)
 
             print(f"Okay, all AWS Batch jobs have finished for job_type={job_type}, proc_date={proc_date}, stage_label={stage_label}...")
 
@@ -632,13 +766,20 @@ if __name__ == '__main__':
 
             with connection("rapid-vpo-registration",
                             lane="transaction") as regconn:
-                reg_run = run_registration(regconn)
+                reg_run = run_registration(regconn, register=registrar_callback)
             print("registration pass:", reg_run.as_dict())
             if reg_run.failed:
                 print(f"*** Error: {reg_run.failed} registration(s) failed; quitting...")
                 dbh.close()
                 exit(65)
-            exit(65)
+
+            # The unconditional `exit(65)` that stood here is gone (round-3
+            # finding #3). It sat at the `if`'s own indentation, so even a
+            # wholly successful science registration exited 65 — a failure code
+            # on the success path. It was unreachable only because the
+            # submission stub above it exited 64 first, which is precisely the
+            # kind of dead code that comes back to life the moment the thing in
+            # front of it is fixed.
 
 
             # Code-timing benchmark.
@@ -661,16 +802,33 @@ if __name__ == '__main__':
         #
         # Load environment variable JOBPROCDATE to specify processing date.
 
-        # W6 seam: submission goes through pipeline.seams.submit_units.
-        # The unit-gathering query that decided WHICH work to submit was the
-        # deleted launcher's science logic; re-homing it belongs to the
-        # operations design's VPO rebuild. Refusing loudly beats fabricating
-        # a query that would submit the wrong work silently. See W6 ledger.
-        print("*** post-process submission is not wired to the new submission "
-              "seam yet: pipeline.seams.submit_units needs the unit list the "
-              "deleted launcher computed. See W6 ledger.")
-        dbh.close()
-        exit(64)
+        # SUBMITTED FOR REAL (round-3 finding #3), for the same reason the
+        # science stub above went: `gather_post_process_units` exists, so the
+        # refusal is standing in for something that is no longer missing.
+        #
+        # Post-process work is keyed by JOB rather than by rid — the unit is
+        # "close out what this science job produced" — which is why this
+        # gatherer takes the processing date and nothing else.
+        postproc_units = gathering.gather_post_process_units(dbh, proc_date)
+
+        postproc_context = submission_env(routes.JOB_TYPE_POST_PROCESS)
+        postproc_run_id = (f"vpo-{proc_date}-postproc-"
+                           f"{datetime_utc_now:%H%M%S}")
+        with connection("rapid-vpo-submit", lane="transaction") as subconn:
+            submitted = submit_gathered(
+                postproc_units,
+                job_type=routes.JOB_TYPE_POST_PROCESS,
+                queue=postproc_context["queue"],
+                job_definition=postproc_context["job_definition"],
+                binding=postproc_context["binding"],
+                manifest_bucket=postproc_context["manifest_bucket"],
+                manifest_prefix=postproc_context["manifest_prefix"],
+                s3_client=postproc_context["s3_client"],
+                batch_client=postproc_context["batch_client"],
+                execute=ConnectionExecutor(subconn).execute,
+                run_id=postproc_run_id)
+        print(f"submitted {len(submitted)} post-process batch(es) under run "
+              f"{postproc_run_id}")
 
 
         # Code-timing benchmark.
@@ -687,7 +845,7 @@ if __name__ == '__main__':
 
         print(f"Waiting until AWS Batch jobs have finished for job_type={job_type}, proc_date={proc_date}...")
 
-        wait_until_aws_batch_jobs_finished(job_type,proc_date,config_input,dbh)
+        wait_for_submitted(submitted)
 
         print(f"Okay, all AWS Batch jobs have finished for job_type={job_type}, proc_date={proc_date}...")
 
@@ -711,7 +869,7 @@ if __name__ == '__main__':
         from database.modules.utils.rapid_db_connect import connection
 
         with connection("rapid-vpo-registration", lane="transaction") as regconn:
-            reg_run = run_registration(regconn)
+            reg_run = run_registration(regconn, register=registrar_callback)
         print("registration pass:", reg_run.as_dict())
         if reg_run.failed:
             print(f"*** Error: {reg_run.failed} registration(s) failed; quitting...")
