@@ -108,33 +108,41 @@ Remaining open items, with owners
      - next worker
      - Still owed. Behind the science phase.
    * - Serialization / transaction-boundary audit
-     - **proposed, now urgent**
-     - FOUR defects of one shape. The fourth was found only by deploying the
-       fix for the third, which is the argument that a fifth is waiting.
-       Worth one sweep of every boundary a stage value crosses and every
-       ``except`` around a statement inside a transaction, rather than a
-       fifth fix. Both record encoders now share one coercion policy, which
-       is the smallest version of the same idea.
+     - **ratified 2026-08-06; DONE**
+     - FOUR defects of one shape, and the argument that a fifth was waiting
+       was right: the sweep found seven more, all live or one call site from
+       it. Ratified in the disposition batch and executed by the pre-Q8
+       hardening run — ``preq8_hardening.rst`` carries the boundary
+       inventory, the findings and the fixes.
    * - Reconciler health vs the grace horizon
-     - proposed
-     - ``NRestarts=15`` this run. A normal ramp step trips the
-       5-consecutive-unproductive-poll health check while its attempts sit
-       inside the 10-minute grace horizon — reached, not yet classifiable.
-       Nothing is lost (the supervisor restarts it) but a healthy run trips
-       a check meant for an unhealthy one. Either exclude inside-horizon
-       deferrals from the count or raise the threshold above the horizon.
+     - **ratified 2026-08-06; DONE**
+     - ``NRestarts=15`` this run: a normal ramp step tripped the
+       5-consecutive-unproductive-poll check while its attempts sat inside
+       the 10-minute grace horizon — reached, not yet classifiable. Closed
+       by the first of the two options, which is what the ratified
+       disposition asks for: health counts only actionable-unclosed work.
+       An attempt still running, or inside either horizon, is now a distinct
+       ``waiting`` outcome that health does not count; a closure step that
+       tried and failed still counts, on the same threshold.
+       Evidence: ``preq8_hardening.rst``.
    * - Ramp step 3 cannot reach 270
      - data staging
      - The g0001 window (``2027-10-01``–``2027-10-08``) holds 109 ready
        reference units. Either stage more data or restate the target.
    * - Reconciler log-tail group
-     - proposed
-     - Unchanged and re-observed live. ``logs/job-log-group`` is ABSENT, so
-       the reconciler falls back to ``/aws/batch/job`` — which holds no RAPID
-       job logs and which ``rapid-orchestrator-role`` cannot read. Jobs log
-       to ``/rapid/batch/rapid-queue-{bulk,prompt}`` — TWO groups, so one
-       parameter cannot name both and the fix is a design call. Cost nothing
-       this run: all 217 attempts wrote their own records.
+     - **ratified 2026-08-06; DONE**
+     - ``logs/job-log-group`` was ABSENT, so the reconciler fell back to
+       ``/aws/batch/job`` — which holds no RAPID job logs and which
+       ``rapid-orchestrator-role`` cannot read (``implicitDeny``, simulated
+       live 2026-08-07). Jobs log to
+       ``/rapid/batch/rapid-queue-{bulk,prompt}`` — TWO groups, so no single
+       parameter could ever have named both. Closed by deriving the group
+       PER ATTEMPT from ``binding_job_definition_arn``, which the row already
+       carries: the job definition owns the ``awslogs-group`` option, so the
+       derivation reads the fact at its source and needs no schema change.
+       Both groups were already readable (``/rapid/batch/*``, both simulate
+       ``allowed``). Cost nothing this run: all 217 attempts wrote their own
+       records. Evidence: ``preq8_hardening.rst``.
    * - ``scheduler_job_id`` absent from the ramp summary
      - minor
      - The ``W9-RAMP-SUMMARY`` JSON reports ``scheduler_job_id: null`` while

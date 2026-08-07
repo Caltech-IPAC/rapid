@@ -1139,18 +1139,21 @@ catalogue. The unit suite could not see it: its fake database accepts whatever
 it is handed, so a type the real column cannot hold looks exactly like one it
 can.
 
-.. warning::
+.. note::
 
-   **PROPOSED, needs ratification: the ``cattype`` numbering.** The legacy body
-   read these from ``product_config['REF_IMAGE'][...cattype]`` — a per-job
-   product config the W6 cutover deleted, which never lived in this repo — and
-   neither repo carries a lookup table, a CHECK constraint, or seeded values
-   for the column. ``1 = SExtractor, 2 = PhotUtils`` is therefore an ORDERING
-   chosen in ``pipeline/registration/products.py``, not a value recovered from
-   the operations schema. It is internally consistent and it registers. If the
-   archive already numbers these differently, those two constants are the only
-   place to change, and ``refimcatalogspk (rfid, ppid, cattype)`` means a wrong
-   number collides rather than silently duplicating.
+   **RATIFIED 2026-08-06 (Ben, disposition batch): the ``cattype``
+   vocabulary is ``1 = SExtractor, 2 = PhotUtils``**, verified against the
+   deleted monolith in git history rather than left as an ordering this repo
+   chose.
+
+   Recorded as proposed when written, because the legacy body read these from
+   ``product_config['REF_IMAGE'][...cattype]`` — a per-job product config the
+   W6 cutover deleted, which never lived in this repo — and neither repo
+   carries a lookup table, a CHECK constraint, or seeded values for the
+   column. The two constants live in ``pipeline/registration/products.py``.
+   They remain the only place to change if the archive is ever found to
+   number these differently, and ``refimcatalogspk (rfid, ppid, cattype)``
+   means a wrong number collides rather than silently duplicating.
 
 What the live evidence could not cover
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
