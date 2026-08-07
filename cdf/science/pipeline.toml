@@ -92,16 +92,10 @@ nrows = 6291458
 # changes the reference image, and the reference image is an input to
 # every difference made against it.
 #
-# NOTE A LIVE DIVERGENCE, recorded rather than silently resolved: the SSM
-# tree carried 3 and the master .ini's [REF_IMAGE] carries
-# min_n_images_to_coadd = 2. That is the duplication this re-homing
-# exists to end. The tree's 3 is taken as authoritative here — it was the
-# deliberate Q4 setting, and the .ini's 2 is the older value — and
-# ref_image.min_n_images_to_coadd below is left at the .ini's 2 so the
-# round-trip test still proves the extraction was faithful. The two
-# converge when W5 switches the payload onto this file and the .ini key
-# goes with the rest of the .ini at W6. Flagged for the owner: if 2 was
-# in fact the intended operating value, this is the line to change.
+# The operating value is 2 (Ben, 2026-08-06), resolving the divergence
+# the re-homing surfaced: the SSM tree had carried 3, the master .ini's
+# [REF_IMAGE] carried 2, and the ruling took 2. ref_image.
+# min_n_images_to_coadd below agrees.
 min_images_to_coadd = 2
 
 # diff_flavor: which differencing algorithm's image feeds the alert
