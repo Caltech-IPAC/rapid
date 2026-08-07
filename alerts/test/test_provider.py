@@ -2,9 +2,10 @@
 and a synthetic on-disk job directory (see conftest.py).
 
 Priority tests implemented here:
-  B9  degradation ladder -- cutout failures must degrade to null cutouts,
-      never crash a production run (regression for the live S3
-      EndpointConnectionError crash of 2026-07-13)
+  B9  cutout staging policy -- transient S3 failures retry and recover;
+      a persistent failure or a missing/unreadable image aborts the chip
+      loudly (CutoutStagingError) rather than silently shipping null
+      cutouts for every source on it
   B11 batch/single equivalence -- the same source produced through
       produce_alert() and through batch_produce() must yield
       byte-identical alerts, pinning the prefetch path to the per-query
@@ -20,12 +21,15 @@ TODO (test plan, not yet implemented):
   E20 CLI surface: --diff-flavor choices enforced, bad args exit nonzero
 """
 
+import os
+import shutil
+
 import fastavro
 import pytest
 
 from alerts.produce import (batch_produce, load_schema,
                                   open_alert_archive, produce_alert)
-from alerts.providers import AlertDataProvider
+from alerts.providers import AlertDataProvider, CutoutStagingError
 
 from conftest import CHIP_PID, PRODUCT_OFFSETS, FakeDB
 from test_clips import clip_to_numpy
@@ -98,49 +102,100 @@ def test_invalid_diff_flavor_rejected_at_construction(chip_data):
 # ends in null cutouts and a completed alert, never an exception.
 # ---------------------------------------------------------------------------
 
-def test_missing_product_file_nulls_only_that_cutout(make_provider,
-                                                     chip_data, job_dir):
+def test_missing_product_file_aborts(make_provider, chip_data, job_dir):
+    # one image absent (local staging: file simply gone) must abort the
+    # whole chip, not null just that cutout -- the file would be missing
+    # for every source on the chip
     (job_dir / "awaicgen_output_mosaic_image_resampled_gainmatched.fits"
      ).unlink()
     provider = make_provider()
-    cutouts = provider.get_cutouts(
-        provider.get_detection(chip_data.sources[0]["sid"]))
-    assert cutouts.template is None
-    assert cutouts.difference is not None
-    assert cutouts.science is not None
+    with pytest.raises(CutoutStagingError, match="ref"):
+        provider.get_cutouts(
+            provider.get_detection(chip_data.sources[0]["sid"]))
 
 
-def test_no_diffimages_row_nulls_all_cutouts(make_provider, chip_data):
+def test_no_diffimages_row_aborts(make_provider, chip_data):
     chip_data.diff_filename = None
     provider = make_provider()
-    cutouts = provider.get_cutouts(
-        provider.get_detection(chip_data.sources[0]["sid"]))
-    assert (cutouts.difference, cutouts.science, cutouts.template) \
-        == (None, None, None)
+    with pytest.raises(CutoutStagingError, match="no diffimages row"):
+        provider.get_cutouts(
+            provider.get_detection(chip_data.sources[0]["sid"]))
 
 
-def test_s3_staging_failure_degrades_to_null_cutouts(make_provider,
-                                                     chip_data, monkeypatch):
-    """Regression: a transient S3 failure used to abort the whole run."""
+class _FlakyS3:
+    """Stand-in S3 client: fails the first `fail_times` download_file calls
+    with a transient error, then serves the real fixture file from the
+    on-disk job_dir. head_object returns that file's true size."""
+
+    def __init__(self, job_dir, fail_times):
+        self.job_dir = job_dir
+        self.remaining = fail_times
+        self.calls = 0
+
+    def download_file(self, bucket, key, local):
+        self.calls += 1
+        if self.remaining > 0:
+            self.remaining -= 1
+            raise ConnectionError("simulated transient S3 error")
+        shutil.copy(os.path.join(self.job_dir, os.path.basename(key)), local)
+
+    def head_object(self, Bucket, Key):
+        path = os.path.join(self.job_dir, os.path.basename(Key))
+        return {"ContentLength": os.path.getsize(path)}
+
+
+def _use_s3(monkeypatch, chip_data, job_dir, client):
+    """Point staging at s3:// (so _stage runs), hand it `client`, and make
+    backoff instant."""
     import boto3
+    monkeypatch.setattr(boto3, "client", lambda *a, **k: client)
+    monkeypatch.setattr("alerts.providers.STAGE_BACKOFF_BASE_S", 0.0)
+    # an s3:// diff filename forces the download path; the job dir basename
+    # is irrelevant since _FlakyS3 keys off the product basename
+    chip_data.diff_filename = (
+        "s3://bucket/20260706/jid1/zogy_diffimage_masked.fits")
 
-    def refuse(*args, **kwargs):
-        raise ConnectionError("simulated S3 outage")
 
-    monkeypatch.setattr(boto3, "client", refuse)
-    # an s3:// filename forces the staging path (local paths bypass it)
-    chip_data.diff_filename = ("s3://no-such-bucket/20260706/jid1/"
-                               "zogy_diffimage_masked.fits")
+def test_s3_staging_retries_then_recovers(make_provider, chip_data,
+                                          job_dir, monkeypatch):
+    # one transient failure on the first download must be absorbed by the
+    # retry, not lost -- all three cutouts still produced
+    flaky = _FlakyS3(job_dir, fail_times=1)
+    _use_s3(monkeypatch, chip_data, job_dir, flaky)
     provider = make_provider()
 
-    # the alert must still be produced, just without cutouts
-    blob = produce_alert(provider, chip_data.sources[0]["sid"],
-                         schema=load_schema())
-    assert len(blob) > 0
     cutouts = provider.get_cutouts(
         provider.get_detection(chip_data.sources[0]["sid"]))
-    assert (cutouts.difference, cutouts.science, cutouts.template) \
-        == (None, None, None)
+    assert None not in (cutouts.difference, cutouts.science,
+                        cutouts.template)
+    assert flaky.calls == 4          # 1 failed + 3 successful downloads
+
+
+def test_s3_staging_failure_aborts_after_retries(make_provider, chip_data,
+                                                 job_dir, monkeypatch):
+    # a persistent failure exhausts the retries and aborts loudly; call
+    # _stage directly with an explicit retries to exercise the argument
+    always = _FlakyS3(job_dir, fail_times=10**9)
+    _use_s3(monkeypatch, chip_data, job_dir, always)
+    provider = make_provider()
+
+    with pytest.raises(CutoutStagingError, match="after 3 attempts"):
+        provider._stage("s3://bucket/jid1/sfftdiffimage_masked.fits",
+                        retries=3)
+    assert always.calls == 3         # tried exactly `retries` times
+
+
+def test_s3_staging_default_retries_is_five(make_provider, chip_data,
+                                            job_dir, monkeypatch):
+    # the default attempt count is 5 (the documented default), verified
+    # without hardcoding it in the production code
+    always = _FlakyS3(job_dir, fail_times=10**9)
+    _use_s3(monkeypatch, chip_data, job_dir, always)
+    provider = make_provider()
+
+    with pytest.raises(CutoutStagingError):
+        provider._stage("s3://bucket/jid1/sfftdiffimage_masked.fits")
+    assert always.calls == 5
 
 
 # ---------------------------------------------------------------------------
