@@ -44,6 +44,8 @@ import hashlib
 import logging
 from typing import Any, Iterable, Iterator, Protocol, Sequence
 
+from database.modules.utils.roman_tessellation_db import (
+    RomanTessellationClosedForm)
 from .manifest import ProcessingUnit, UnitFacts
 from .routes import (JOB_TYPE_POST_PROCESS, JOB_TYPE_REFERENCE_IMAGE,
                      JOB_TYPE_SCIENCE, ppid_for)
@@ -165,6 +167,34 @@ def _sky_position(meta: Sequence[Any]) -> dict[str, float] | None:
                       ["dec0", "dec1", "dec2", "dec3", "dec4"])
 
 
+def _tile_position(rtid: int) -> dict[str, float] | None:
+    """The tessellation tile's centre and corners, closed-form.
+
+    The deleted reference-image launcher took these from
+    `roman_tessellation_db` per field, immediately before computing the
+    coadd's mosaic centre from `ra0`/`dec0`
+    (`e03f22c^:pipeline/awsBatchSubmitJobs_launchSingleReferenceImagePipeline.py`
+    lines 352-364). `UnitFacts.tile_position` has always declared the fact;
+    nothing populated it, so the mosaic centre had no source and every
+    reference-image attempt died `internal_error` on the missing
+    `awaicgen_RA_center`.
+
+    The closed form opens no connection and does no I/O, so this adds no
+    per-unit query — the concern that retired the per-unit R-tree lookup in
+    W7 does not apply.
+    """
+    tessellation = RomanTessellationClosedForm()
+    tessellation.get_center_sky_position(int(rtid))
+    tessellation.get_corner_sky_positions(int(rtid))
+    return _positions(
+        [tessellation.ra0, tessellation.ra1, tessellation.ra2,
+         tessellation.ra3, tessellation.ra4,
+         tessellation.dec0, tessellation.dec1, tessellation.dec2,
+         tessellation.dec3, tessellation.dec4],
+        ["ra0", "ra1", "ra2", "ra3", "ra4"],
+        ["dec0", "dec1", "dec2", "dec3", "dec4"])
+
+
 def science_facts(handle: UnitSource, rid: int, field: int, fid: int,
                   reference_ppid: int | None = None,
                   science_ppid: int | None = None) -> UnitFacts:
@@ -220,6 +250,7 @@ def science_facts(handle: UnitSource, rid: int, field: int, fid: int,
         status=_maybe_int(info[7]),
         science_image_uri=_maybe_str(info[0]),
         sky_position=_sky_position(meta),
+        tile_position=_tile_position(int(field)),
     )
 
     filter_name = handle.get_exposure_filter(fid)

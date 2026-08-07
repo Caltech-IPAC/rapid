@@ -26,6 +26,7 @@ import numpy as np
 
 import modules.utils.rapid_pipeline_subs as util
 import pipeline.referenceImageSubs as rfis
+from pipeline.mosaic_geometry import resolve_awaicgen_geometry
 from pipeline.runtime.errors import InputError
 from pipeline.stages.publishing import (publish_products, split_s3_uri,
                                         verify_downloaded_input)
@@ -54,6 +55,17 @@ def build_reference_image(context) -> None:
     awaicgen = context.science_section("awaicgen")
     instrument = context.science_section("instrument")
     fake_sources = context.science_section("fake_sources")
+
+    # The coadd's mosaic extent and centre. The launcher computed these and
+    # substituted them into `[AWAICGEN]` before dispatch, so the four keys
+    # exist in the master `.ini` only as `to_be_filled_by_script` and the W4B
+    # migration had no values to carry. `resolve_awaicgen_geometry` is that
+    # computation ported verbatim; the centre comes from the `tile_position`
+    # fact because it varies per field, the extent from release content
+    # because it does not. See `pipeline/mosaic_geometry.py`.
+    resolve_awaicgen_geometry(awaicgen,
+                              context.science_section("ref_image"),
+                              context.fact("tile_position"))
 
     coadd_inputs_uri = context.fact("coadd_inputs_uri")
     # The bucket comes from the URI, not from `s3/inputs-bucket`. The URI

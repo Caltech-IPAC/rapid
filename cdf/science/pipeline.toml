@@ -192,6 +192,22 @@ awaicgen_output_mosaic_uncert_image_file = "awaicgen_output_mosaic_uncert_image.
 # reference jobs on one host from writing each other's list.
 awaicgen_input_images_list_file = "refimage_sci_inputs.txt"
 awaicgen_input_uncert_list_file = "refimage_unc_inputs.txt"
+# awaicgen's thread count, from [AWAICGEN] in the master .ini
+# (`5664024^:cdf/awsBatchSubmitJobs_launchSingleSciencePipeline.ini:167`) —
+# the same W4B drop again, and the next KeyError
+# `build_awaicgen_command_line_args` would have raised after the four
+# geometry keys were supplied. Found by reading that function's full key
+# list against this section rather than by a fifth ramp attempt.
+awaicgen_num_threads = 2
+
+# The four geometry keys `build_awaicgen_command_line_args` also reads —
+# awaicgen_mosaic_size_x/y and awaicgen_RA_center/Dec_center — are
+# deliberately NOT here. They are per-field, computed by
+# `pipeline/mosaic_geometry.py` from the `tile_position` fact and the
+# [ref_image] section below, exactly as the deleted launcher computed them.
+# The master .ini carries them as `to_be_filled_by_script` for the same
+# reason. `awaicgen_mosaic_rotation` above is overwritten by the same call
+# from `crota2_refimage`, so the mosaic's geometry has one decider.
 
 [bkgest]
 clippedmean_calc_type = 3

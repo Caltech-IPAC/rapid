@@ -51,6 +51,7 @@ import numpy as np
 import modules.utils.rapid_pipeline_subs as util
 import pipeline.differenceImageSubs as dfis
 import pipeline.referenceImageSubs as rfis
+from pipeline.mosaic_geometry import resolve_awaicgen_geometry
 from pipeline.runtime.errors import InputError
 from pipeline.runtime.process import run_shell, run_tool
 from pipeline.stages.publishing import (publish_products, split_s3_uri,
@@ -224,6 +225,17 @@ def _build_reference_image(context, awaicgen) -> None:
     """
     instrument = context.science_section("instrument")
     fake_sources = context.science_section("fake_sources")
+
+    # The mosaic extent and centre, ported from the deleted launcher — see
+    # `pipeline/mosaic_geometry.py`. Resolved in THIS branch and not in
+    # `resolve_reference_image` above, because only the build path coadds:
+    # `_download_reference_image` reads the section for its three output
+    # filenames alone, and requiring `tile_position` there would fail a unit
+    # that legitimately reuses an existing reference image over a fact its
+    # own work never touches.
+    resolve_awaicgen_geometry(awaicgen,
+                              context.science_section("ref_image"),
+                              context.fact("tile_position"))
 
     # The coadd-input list is a per-invocation fact: the manifest names the
     # object holding it, where the monolith took two environment variables
