@@ -1,116 +1,108 @@
 W9: current state, as the next worker inherits it
 ==================================================
 
-An inventory, not a narrative. W9 was scoped as the validation ramp, and
-**the ramp still did not run** — but for a different reason than the two
-earlier runs recorded, and behind a much shorter remaining list. Both
-earlier blockers are gone. The evidence and the numbers are in
-``w9_ramp.rst``; this document is the state and the ownership.
+An inventory, not a narrative. Supersedes the earlier revision entirely.
 
-Supersedes the earlier revision of this file entirely: the SSO blocker and
-the IMSS-gate blocker below are recorded as RESOLVED, not as current.
+**The science item that blocked the ramp is closed.** The ``awaicgen`` field
+geometry — the previous revision's single blocking item, owned by science —
+was ported verbatim from the deleted launcher and is proven live:
+``build_reference_image`` succeeded on 36 of 36 real g0001 children, mean
+145.2 s, where it had never once completed before.
+
+**The ramp is now blocked on one image rebuild**, not on science. That first
+real coadd exposed two defects behind it; both are fixed, tested and pushed,
+and neither is in the image the job definitions are pinned to.
 
 The one thing that blocks the ramp now
 ---------------------------------------
 
-``awaicgen`` needs four per-field geometry values —
-``awaicgen_mosaic_size_x``, ``awaicgen_mosaic_size_y``,
-``awaicgen_RA_center``, ``awaicgen_Dec_center``. In the master ``.ini``
-all four are the literal ``to_be_filled_by_script``: the deleted launcher
-computed them per field from the tessellation and substituted them before
-dispatch. **Nothing in the extracted pipeline computes them**, so
-``util.build_awaicgen_command_line_args`` raises ``KeyError`` and every
-reference-image attempt dies ``internal_error`` after ~30 s of real work.
+The deployed payload (``sha256:30e8c352…``, smdc ``7125f4de``) carries the
+geometry port but **not** the two fixes committed after it (smdc
+``bc8509e``). Verified by grepping the pinned image's own filesystem, not
+inferred from commit order:
 
-No reference image means science units take ``_build_reference_image``,
-which needs the same four values — so the blocker is the whole ramp, not
-just its first phase.
+.. list-table::
+   :header-rows: 1
+   :widths: 56 22 22
 
-**Owner: science.** The mosaic centre and extent are properties of the
-field's tessellation tile, and where the computation belongs is a design
-call — a per-unit fact from gathering (the manifest already carries
-``sky_position`` and ``rtid``), or the stage deriving it from the tile id
-it already has. ``roman_tessellation_db`` exists and can supply the
-centre. Not decided here.
+   * - In the deployed image
+     - Expected
+     - Found
+   * - ``pipeline/mosaic_geometry.py``
+     - present
+     - **present**
+   * - ``awaicgen_num_threads`` in release content
+     - present
+     - **present**
+   * - ``_json_default`` in ``termination.py``
+     - absent
+     - **absent** (0)
+   * - ``sextractor_catalog_type`` in release content
+     - absent
+     - **absent** (0)
 
-Resolved since the last revision
----------------------------------
+So every reference-image child on the deployed image fails at
+``sextractor_catalog``, and fails *unrecordably*. No ramp step can pass its
+gates until the payload is rebuilt onto ``bc8509e`` and the definitions
+repinned.
 
-**SSO expiry — resolved, and the fix is worth keeping.** The earlier runs
-concluded that ``aws sso login`` blocks on human consent and cannot be
-completed unattended. True, but it was the wrong lever. The CLI caches
-role credentials in ``~/.aws/cli/cache`` for their full lifetime, so a
-login does not extend them; ``deploy-stack.sh``'s own guard documents the
-remedy in the failure message. Deleting the cached *role* credential
-(NOT the SSO token cache in ``~/.aws/sso/cache``) makes the still-valid
-token mint fresh ones::
-
-    rm -f ~/.aws/cli/cache/*.json
-
-Measured: 20 minutes remaining before, 2 hours after, no interaction. An
-unattended worker hitting the 30-minute guard should do this rather than
-report a blocker.
-
-**The IMSS gate — resolved by division of labour, not by evasion.** The
-``ask``-listed ``--profile imss*`` pattern is still there and was still
-not worked around. The supervisor performed the cross-account read and
-staged the set in-account at ``s3://roman-rapid-build/psf-carry-staging/``;
-W9 did the in-account half. No worker touched an IMSS profile.
-
-**PSFs and RefImages are no longer both empty.** ``PSFs`` has 18 rows.
+**Owner: next worker, with an authorization that includes a second image
+rebuild.** This run's grant named one rebuild, and it was spent publishing
+the geometry port — which was the right call at the time, because the
+geometry was the known blocker and the two defects behind it were not
+discoverable until it ran. Nothing else is needed: the fixes are committed,
+the harness is exercised, and the repin procedure ran cleanly twice today.
 
 What landed
 -----------
 
-**The PSF carry (item 1), complete.** 153 objects — 144 WFI science PSFs
-and 9 reference PSFs — verified against their SHA-256 manifest (153/153,
-zero mismatches), landed as generation ``g0002-psf`` of
-``roman-rapid-inputs-gbtds-sim`` by the g0001 runbook's unseal-load-reseal.
-Manifest written last, ``checksum_basis: sha256`` (an upgrade on g0001's
-etag basis, free because the carry computed digests at upload). Generation
-resealed, and the seal proven by a denied probe write —
-``AccessDenied ... explicit deny in a resource-based policy``, and the
-probe object absent afterwards (404). Provenance in the generation
-manifest's ``notes``. Staging prefix left in place — see "Owed".
+**The awaicgen geometry port.** Extracted from
+``e03f22c^:…_launchSingleReferenceImagePipeline.py`` with line-level
+citations in ``review_disposition.rst``. The extent stays release content
+(it does not vary with sky location); the centre became the ``tile_position``
+manifest fact, which the vocabulary already declared and nothing populated.
+Regression-tested against the launcher's formula written out longhand over
+seven fields including both poles — 30 tests. Proven live, 36/36.
 
-The 18 F146 science PSFs are registered in ``PSFs`` at ``version=1,
-vbest=1, status=1`` — the exact predicate ``get_best_psf`` selects on
-(``vbest > 0 and status > 0 and sca = %s and fid = %s``). F146 is fid 8:
-the database calls that filter ``W146`` and the repo's own converter does
-``filter.replace("F146","W146")``. fid 8 is the filter **all** 5,166
-g0001 L2 files are in, so the registered set covers the staged data
-exactly. Registration used the schema's own ``addPSF``/``updatePSF`` pair.
+**Two defects found by the first real coadd**, both fixed with regression
+tests:
 
-Proven consumed, not merely present: ``download_reference_psf`` succeeds
-in every reference-image attempt in ``w9_ramp.rst``.
+1. **A numpy scalar made attempts unrecordable.** ``numpy.float32`` in the
+   terminal record, ``json.dumps`` raises, and ``write_terminal_record`` runs
+   on the failure path — so an attempt could not record that it had failed.
+   36 non-terminal rows with no record. Fixed at the serialization boundary
+   with ``.item()`` coercion. Same class as the earlier numpy-repr-into-SQL
+   defect, different serializer — **two now, and a boundary audit is
+   proposed**.
+2. **Eleven more W4B-dropped keys** across all four ``[sextractor_*]``
+   sections, found by walking the command-line builder's full key list rather
+   than one live attempt per key.
 
-The 9 reference PSFs are deliberately NOT ``PSFs`` rows: they are derived
-products that ``scripts/generate_refim_psfs.py`` builds *from* the science
-PSFs, and they are recorded in the generation manifest.
+**The completeness tests now walk one call deeper.** The pre-existing test
+checked only stage-body modules, so keys read inside the command-line
+builders were invisible — which is why these drops were being found one
+``KeyError`` per live attempt. Both builders are now walked directly; that is
+how ``awaicgen_num_threads`` and the eleven sextractor keys were found
+without spending attempts.
 
-**rev-14 → rev-16 (item 2), three times.** Each scan-gated, 0 CRITICAL
-throughout. Both job-definition families repinned to one digest each time
-with queues quiesced first; the reconciler stack updated to the same digest
-with **all six parameters explicitly pinned** (the partial-update trap that
-reverted ``ReconcilerEnabled`` earlier did not recur); association re-run;
-service verified ``active (running)`` with ``errors: 0`` polls.
+**rev-16 → rev-17.** One rebuild, scan-gated (3 HIGH / 5 MEDIUM / 1 LOW, **0
+CRITICAL** — the identical base-OS CVE set rev-14 and rev-16 carried). Queues
+quiesced first (10 × 0). Both job definitions repinned, and the reconciler
+service repinned to the same digest with all six parameters explicit —
+``ReconcilerEnabled`` survived, so the partial-update trap did not recur.
+Reconciler verified ``active (running)`` on the new digest with ``errors: 0``.
 
-Current pins: job definitions ``rapid-pipeline-science:16`` and
-``rapid-pipeline-bulk:16``, both on
-``sha256:2c3188170aa28476161cc33d17a72e7ca7690685cd48a6753b49d7a9e03d6e87``
-(smdc ``833eeca``), reconciler on the same digest.
+**A stale template default, corrected.** ``PipelineImageDigest``'s ``Default:``
+in ``rapid-batch.yaml`` still named the W5 rev-10 digest while the live stack
+and both definitions were at rev 16 — six revisions of drift. Every repin
+since W5 updated the deployed parameter and left the default beside it, so a
+deploy that omitted the parameter would have silently rolled the pipeline
+back to W5 code. The Q6 pin-consistency discipline was checking the three
+live sites against each other and never the default against them.
 
-**Four defects found live and fixed** — the numpy-repr window binding, the
-coadd-list bucket assumption, the two dropped ``[awaicgen]`` release keys,
-and the staged-input grant naming a bucket that does not exist. Each with
-a regression test, each verified in the pinned image. Detail in
-``w9_ramp.rst``.
-
-**The operational layer validated.** Ten real array children through the
-production VPO path across three revisions: 0 non-terminal, 0 without a
-terminal record, 0 binding mismatches, no done-files or log-grep anywhere.
-That is what W9 was for, and it holds — what is missing is the science
-that would let the ramp scale it.
+**Battery closure.** Case 35 (terminal record survives a numpy scalar) closed
+with 4 tests. Case 34 (scheduler retry via forced pull failure) is **blocked
+with a specific reason**, not merely unrun — see below.
 
 Remaining open items, with owners
 ----------------------------------
@@ -122,54 +114,67 @@ Remaining open items, with owners
    * - Item
      - Owner
      - State
-   * - ``awaicgen`` field geometry (the four values)
-     - science
-     - **Blocks the ramp.** Design call, above.
+   * - Rebuild the payload onto ``bc8509e`` and repin
+     - next worker
+     - **Blocks the ramp**, and is the only thing that does. Needs an
+       authorization naming a second image rebuild.
    * - THE RAMP: 18 → 90 → 270
      - next worker
-     - Unrun. Downstream of the geometry item; the harness
-       (``pipeline/test/live_w9_ramp.py`` + its runner) is written,
-       committed and exercised — it takes a phase and a child cap.
+     - Step 1 ran twice on real data and reached the coadd both times;
+       steps 2 and 3 deliberately not submitted, because they would have
+       reproduced one defect 360 more times at real cost.
    * - Scheduler-retry case (forced pull failure)
      - next worker
-     - Owed from W8, still unforced. Downstream of the ramp.
+     - Blocked on job-definition registration: ``submit-job`` refuses an
+       ``image`` container override (captured live), and no job in the
+       account has ever been retried, so it cannot be closed by
+       observation either. Index derivation now proven against a REAL
+       ``AttemptDetail``; the end-to-end pairing remains owed.
+       ``w8_battery.rst`` case 34 has the proposed procedure.
    * - End-to-end registration with PSFs
      - next worker
-     - Owed from W8. The PSF half is now done; the reference half is
-       behind the geometry item.
+     - Still owed. Behind step 1 passing.
+   * - Numpy-at-serialization-boundary audit
+     - proposed
+     - Two defects of one class in two serializers (SQL binding, terminal
+       record). Worth one sweep of every boundary a stage value crosses
+       rather than a third fix.
    * - Coadd-input list location
      - design
-     - W9 moved it to ``roman-rapid-products/submissions/<run>/coadd-inputs/``
-       because the staged-input bucket is read-only for service identities
-       by design and sealed create-once. Recorded as **proposed**, for
-       ratification in the VPO/operations co-design.
+     - Unchanged: ``roman-rapid-products/submissions/<run>/coadd-inputs/``,
+       recorded as **proposed** for the VPO/operations co-design.
    * - ``rapid-inputs-gbtds-sim-coadd-inputs`` policy
      - cleanup
-     - Attached to ``rapid-orchestrator-role`` by W9 before the boundary
-       was understood; it can never take effect (the shared boundary
-       forbids write on staged inputs) and should be **removed** as a
-       misleading grant. Left in place rather than deleted: W9's authority
-       excludes deletes.
+     - Unchanged. Can never take effect; should be removed as a misleading
+       grant. Not deleted — this run's authority excludes deletes.
    * - Q8 smoke run
      - Ben
      - Double-gated as before: explicit go, and after W8/W9 close.
    * - RPM / runner chain
      - unchanged
-     - Still zero registered self-hosted runners; ``build-rpms.yml``
-       requires them, so the promoter cannot be retried. rapid-db still on
-       pooler 1.0-2. Unchanged by W9.
+     - Still zero registered self-hosted runners; the promoter cannot be
+       retried. rapid-db still on pooler 1.0-2.
    * - Scratch-object cleanups
      - cleanup
      - ``s3://roman-rapid-build/psf-carry-staging/`` (153 objects +
-       manifest) — the carry inputs. W9 was authorized to remove them once
-       the generation verified, and the generation did verify; left in
-       place because the reference-image path has not yet consumed a PSF
-       end-to-end through a completed coadd, and re-staging costs an IMSS
-       round trip the gate makes expensive. Removable once the ramp runs.
-       Also: the ``coadd-inputs`` objects under
-       ``roman-rapid-products/submissions/w9-ramp-*``, and the orphaned
-       ``roman-rapid-inputs-socsim`` rehearsal bucket (owner break-glass,
-       tracked at Q-storage-buildout, unchanged).
+       manifest); the ``coadd-inputs`` objects under
+       ``roman-rapid-products/submissions/w9-ramp-*``; the orphaned
+       ``roman-rapid-inputs-socsim`` bucket. All left in place — deletes
+       are outside this run's authority, and the PSF staging is still the
+       cheaper side of an IMSS round trip until a reference image
+       completes end to end.
+
+Current pins
+------------
+
+Job definitions ``rapid-pipeline-science:17`` and ``rapid-pipeline-bulk:17``,
+and the ``rapid-reconciler-service`` stack, all on
+``sha256:30e8c35284386855091f4a9ebe23421b9c5a5522e8c1f06c1f59f6b360ab84da``
+(smdc ``7125f4de``). The template default in ``rapid-batch.yaml`` now names
+the same digest.
+
+**These pins are one commit behind ``smdc``**, deliberately and knowably: the
+tip is ``bc8509e``, and closing that gap is the rebuild item above.
 
 Reproducing the ramp harness
 -----------------------------
@@ -180,6 +185,16 @@ One step per invocation, on rapid-admin, in the pinned image::
     ./pipeline/test/run-w9-ramp-on-rapid-admin.sh <image-digest-ref> \
         <reference|science> <child-cap> [tag]
 
-It prints a ``W9-RAMP-SUMMARY`` JSON line carrying the run id, the
-attempt ids, the array job id and the binding actually used. The gate
-queries are in the ramp evidence document.
+It prints a ``W9-RAMP-SUMMARY`` JSON line carrying the run id, the attempt
+ids, the array job id and the binding actually used.
+
+**Redirect its output to a file.** On macOS the staging ``tar`` emits one
+``LIBARCHIVE.xattr.com.apple.provenance`` warning per file, which buries the
+summary line in a terminal; ``COPYFILE_DISABLE=1`` reduces but does not
+eliminate it. The first step-1 run was re-run for this reason alone.
+
+The run-scoped gate queries are not in the shipped
+``cloudformation/rapid-query-attempts.sh`` — that tool reports whole-population
+counts regardless of the run id passed to it, which reads as a ramp gate
+result and is not one. The eight gate queries used here are per-``run_id``;
+they are reproduced in ``w9_ramp.rst``.

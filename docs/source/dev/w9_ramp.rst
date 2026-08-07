@@ -1,207 +1,199 @@
 W9 — the validation ramp
 ========================
 
-What this records: the ramp did not reach its 18/90/270 steps. It stopped
-at a science-logic gap that no amount of infrastructure work closes, and
-the evidence below is what the attempt established on the way there —
-which is the operational layer working, and four defects found by running
-it rather than by reading it.
+What this records: the ramp still did not reach its 18/90/270 steps, but the
+blocker that stopped the previous attempt is **closed** — the reference-image
+coadd now runs, on real g0001 data, thirty-six times over. Two further
+defects behind it were found by that first real coadd, both are fixed and
+pushed, and neither is in the image the job definitions are pinned to. The
+ramp is one image rebuild away from its first passing step.
 
-The one-line state: **the operational layer is validated; the
-reference-image science is not runnable.**
+The one-line state: **the science that blocked the ramp is done; the ramp is
+blocked on rebuilding the payload onto the fixes it found.**
 
-The blocker, stated first
-------------------------
+What changed since the last revision
+------------------------------------
 
-``awaicgen`` needs four per-field geometry values —
-``awaicgen_mosaic_size_x``, ``awaicgen_mosaic_size_y``,
-``awaicgen_RA_center``, ``awaicgen_Dec_center``. In the master ``.ini``
-all four are the literal string ``to_be_filled_by_script``: the deleted
-launcher computed them per field from the tessellation and substituted
-them before dispatch. **Nothing in the extracted pipeline computes them.**
-``rfis.generateReferenceImage`` passes ``awaicgen_dict`` through unchanged
-to ``util.build_awaicgen_command_line_args``, which does
-``float(awaicgen_dict["awaicgen_mosaic_size_x"])`` and raises.
+The previous revision's blocking item was the four ``awaicgen`` geometry
+values — ``awaicgen_mosaic_size_x/y`` and ``awaicgen_RA_center/Dec_center`` —
+computed by the deleted launcher and by nothing since, so
+``build_reference_image`` raised ``KeyError`` after ~30 s of real work and
+every reference-image attempt died ``internal_error``.
 
-So every reference-image attempt fails ``internal_error`` after doing
-~30 s of real work — downloading its reference PSF, fetching its 48 coadd
-inputs, reformatting them — and stops one call short of the coadd.
+**That item is closed.** The computation was ported verbatim from the deleted
+launcher rather than re-derived, and the port's own split follows the
+launcher's: the extent is release content (it does not vary with sky
+location, launcher lines 226-228), the centre is a per-invocation manifest
+fact (it is the tessellation tile's, launcher lines 352-382). Citations and
+the regression evidence are in ``review_disposition.rst``.
 
-This is science logic, not configuration: the mosaic centre and extent are
-properties of the field's tessellation tile, and deciding where that
-computation belongs (gathering, as a per-unit fact in the manifest; or the
-stage, from the tile id it already carries) is a design call. It is
-recorded here as the ramp's blocking item and left to the owner.
+Measured, live: ``build_reference_image`` **succeeded on 36 of 36 real
+children**, mean 145.2 s, across two independent submissions of the same 18
+units. It had never once completed before.
 
-The chain it blocks is the whole ramp: no reference image means science
-units take ``_build_reference_image``, which needs the same four values.
-Only ``registration`` — which consumes reconciled outcomes and needs no
-image inputs — runs to completion today, which is exactly what W8 found
-and said.
+The ramp's first step, and what it found
+-----------------------------------------
 
-What the ramp DID establish
----------------------------
+Step 1 was submitted twice — the first run's output was lost to macOS
+``tar`` xattr noise on the operator's terminal, so it was re-run to capture
+a clean log. Both submissions are real work against real data and both are
+reported here; their agreement is itself the reproducibility evidence.
 
-Ten real array children were submitted through the production VPO path
-across three job-definition revisions, on real g0001 data. Every gate that
-does not depend on the coadd passed.
-
-.. list-table:: Ramp attempts 130–139
+.. list-table:: Step 1 — 18 reference-image children, twice
    :header-rows: 1
-   :widths: 8 10 8 20 12 12
+   :widths: 26 12 12 12 12 26
 
-   * - Attempt
-     - Phase
-     - Rev
+   * - Run
+     - Children
+     - Attempts
+     - Coadds OK
+     - Mean coadd
      - Terminal state
-     - Category
-     - Submit→terminal
-   * - 130, 131
-     - science
-     - 14
-     - terminal_after_start
-     - tool_failure
-     - 156.1 s
-   * - 132, 133
-     - science
-     - 14
-     - terminal_after_start
-     - input_invalid
-     - 223.7 s
-   * - 134, 135
-     - reference
-     - 14
-     - terminal_after_start
-     - internal_error
-     - 238.5, 239.0 s
-   * - 136, 137
-     - reference
-     - 15
-     - terminal_after_start
-     - internal_error
-     - 65.3 s
-   * - 138, 139
-     - reference
-     - 16
-     - application_closed
-     - internal_error
-     - 177.7, 178.3 s
+   * - ``…20260807T011721Z-step1``
+     - 18
+     - 140–157
+     - **18/18**
+     - 145.0 s
+     - FAILED, unrecordable
+   * - ``…20260807T011745Z-step1b``
+     - 18
+     - 158–175
+     - **18/18**
+     - 145.3 s
+     - FAILED, unrecordable
 
-The error category moves down the stage sequence at each revision, which
-is the useful signal in that table: ``tool_failure`` (the download had
-silently failed and ``gunzip`` met a partial file) → ``input_invalid``
-(download fixed, manifest lacked a fact) → ``internal_error`` on a missing
-config key → ``internal_error`` one key further in. Each step is a defect
-found and fixed; the last one is the blocker above.
-
-Gate results, all captured against the live database:
+Per-stage, identical in both runs:
 
 .. list-table::
    :header-rows: 1
-   :widths: 55 15
+   :widths: 44 14 14 14
+
+   * - Stage
+     - Outcome
+     - n
+     - Mean
+   * - ``download_reference_psf``
+     - success
+     - 18
+     - 0.12 s
+   * - ``build_reference_image``
+     - **success**
+     - 18
+     - 145.3 s
+   * - ``coverage_and_uncertainty_statistics``
+     - success
+     - 18
+     - 4.51 s
+   * - ``sextractor_catalog``
+     - failure
+     - 18
+     - 0.00 s
+
+The coadd is doing real work: each child downloads its reference PSF, fetches
+and reformats its 48 coadd inputs, and produces a 7000×7000 mosaic. The 0.00 s
+on ``sextractor_catalog`` is the signature of an immediate ``KeyError``, not
+of work attempted.
+
+Step-1 gate table
+-----------------
+
+.. list-table::
+   :header-rows: 1
+   :widths: 52 18 30
 
    * - Gate
      - Result
+     - Note
+   * - Binding versioned and matching its recorded revision
+     - **0 of 36 bad**
+     - PASS
+   * - Image/definition binding actually used
+     - 36/36 on rev 17
+     - PASS — one digest
    * - Attempts left non-terminal
-     - **0 of 10**
+     - **36 of 36**
+     - **FAIL** — see below
    * - Attempts without a terminal record
-     - **0 of 10**
-   * - Bindings not versioned / not matching their recorded revision
-     - **0 of 10**
-   * - Done-files or log-grep anywhere in the path
-     - **none**
-   * - Reconciler poll errors, three consecutive cycles per revision
-     - **0**
+     - **36 of 36**
+     - **FAIL** — same cause
+   * - Latency, submit → terminal
+     - not measurable
+     - no ``ended_at`` was ever written
+   * - Reconciler poll errors
+     - 0
+     - PASS
+   * - Done-files or log-grep anywhere
+     - none
+     - PASS
 
-The binding row is the round-5 fix proven live rather than by test: every
-attempt's ``binding_job_definition_arn`` ends in ``:<rev>`` and equals its
-``binding_job_definition_rev``, across revisions 14, 15 and 16 and across
-both route classes — ``rapid-pipeline-bulk`` for reference-image,
-``rapid-pipeline-science`` for science. The submitted ARN, the recorded
-ARN and the running revision are one value.
+**The gate failure is one defect, not thirty-six.** Every attempt failed at
+``sextractor_catalog`` for a missing configuration key, and then could not
+write the terminal record *saying* it had failed, because the record carried
+a numpy scalar that ``json`` refuses. The second defect is what turned a
+clean recorded failure into a non-terminal row with no record — which is the
+state the attempt-record contract exists to make impossible, and which would
+read as a reconciler fault to anyone who had not seen the container log.
+
+Steps 2 and 3 (90 and 270 children) were **not submitted**. Submitting them
+would have reproduced the same failure ninety and two hundred and seventy
+times at real compute cost, and proved nothing that eighteen had not.
+
+The two defects the first real coadd found
+-------------------------------------------
+
+Both are fixed, tested and pushed to ``smdc`` (``bc8509e``). Neither is in the
+deployed image — proven, not inferred, by grepping the pinned digest's own
+filesystem (both counts zero).
+
+**5. A numpy scalar made the attempt unrecordable.** The extracted stage
+bodies compute in numpy, so ``coverage_and_uncertainty_statistics`` records
+``reference_cov5percent`` as a ``numpy.float32``, and ``json.dumps`` raises
+``TypeError: Object of type float32 is not JSON serializable`` inside
+``write_terminal_record``. That function runs on the failure path as well as
+the success path, so an attempt failing for an unrelated reason could not
+record that it had failed. Fixed by coercing at the serialization boundary —
+``.item()``, so an integer scalar stays an integer, and *not* ``default=str``,
+which would keep the write working while silently retyping a numeric field.
+A value with no scalar equivalent still raises.
+
+This is the same *class* as defect 1 (the numpy repr bound into SQL), a
+different consumer. Two numpy-scalar defects in two different serializers
+suggests the boundary is worth an audit rather than a third fix.
+
+**6. Eleven more W4B-dropped keys, in every** ``[sextractor_*]`` **section.**
+``sextractor_catalog_type`` failed the step *after* the 145-second coadd
+succeeded. Rather than pay one live attempt per key, the whole of
+``build_sextractor_command_line_args``' key list was walked against release
+content: 67 required, 7 supplied at runtime by the stage body, 50 present,
+**11 missing**. All eleven restored to all four sections from the master
+``.ini``.
 
 Latency, for the Q8 parameters
 ------------------------------
 
-Submission to terminal, per attempt, from the attempt rows:
+The numbers that can honestly be given from this run are **stage** times, not
+submit-to-terminal times: no attempt wrote ``ended_at``, so the end-to-end
+figure the previous revision reported cannot be recomputed here.
 
-* science, 2 children: 156 s and 224 s
-* reference-image, 2 children: 65 s, 178 s, 239 s
+* Cold-start placement, submit → container start: **~215 s** (01:17:48 →
+  01:21:22 on attempt 158), a compute environment scaling from zero.
+* In-container work, reference-image: **150 s** to the failure point, of
+  which the coadd is 145 s.
+* The coadd's spread is remarkably tight — 145.0 s and 145.3 s in two
+  independent runs, max 150.6 s — which is the useful Q8 input: **a
+  reference-image child costs ~2.5 minutes of real compute**, and the
+  cold-start placement roughly doubles a small step's wall clock.
 
-The spread is scheduling, not work: the in-container stage time is 0.5–36 s
-(the terminal records carry per-stage durations), and the rest is Batch
-placing the job — a cold compute environment scaling from zero. The 65 s
-case is the one that landed on warm capacity. **For Q8's drip parameters
-the number that matters is that a cold start costs ~2–4 minutes before any
-work begins**, so a step's wall-clock floor is that plus its stage time,
-not its stage time.
+No throughput figure is offered. Eighteen children that all failed at the
+same stage measure a stage, not a pipeline.
 
-No throughput figure is offered: two children is not a measurement of
-throughput, and reporting one from this sample would be inventing it. The
-ramp's 18/90/270 steps are what would have produced it.
+What the ramp still owes
+------------------------
 
-Defects found by running it
----------------------------
-
-Four, all now fixed and pushed, each found live and none catchable by the
-suite as it stood:
-
-1. **The readiness window was bound as a numpy repr.** ``mjd_window``
-   returned ``numpy.float64``; psycopg2 has no adapter for it, so it fell
-   back to ``repr()``, which under NumPy 2 is ``np.float64(61679.0)``.
-   Postgres read that as a schema-qualified name — ``schema "np" does not
-   exist`` — which aborted the transaction, so every later query in the
-   pass was skipped and gathering reported "0 (field, filter) pairs".
-   Indistinguishable from a night with no data. The window held 5,166
-   registered L2 files across 109 fields.
-
-2. **The coadd-input list was read from an assumed bucket.** Both
-   consuming stages took the bucket from ``s3/inputs-bucket`` and split
-   that name off the URI — so a list anywhere else was fetched with the
-   whole ``s3://`` string as the key. It also forced a submission-authored
-   file into the sealed, read-only staged-input bucket, which the shared
-   permissions boundary refuses by design (``no permissions boundary
-   allows the s3:PutObject action``). Fixed by reading the bucket from the
-   URI that names it.
-
-3. **Release content was missing the coadd's two input list filenames** —
-   the same W4B migration drop as the three output names beside them, and
-   invisible to the completeness test because the ``[awaicgen]`` section is
-   handed to a helper whole and subscripted directly rather than read
-   through ``science_value``. The test now walks that access pattern too.
-
-4. **The staged-input grant named a bucket that does not exist.**
-   ``StagedInputBucketArnPattern`` was still ``arn:aws:s3:::rapid-socsim-input-*``
-   after the dataset was re-ruled to ``gbtds-sim``, so the job role could
-   not read its own input data — which is what made defect 1's symptom look
-   like a tool failure. Corrected to the real bucket, both ARNs.
-
-Infrastructure landed
----------------------
-
-* **PSFs carried and registered.** 153 objects (144 WFI science PSFs, 9
-  reference PSFs) verified against their SHA-256 manifest, landed as
-  generation ``g0002-psf`` of ``roman-rapid-inputs-gbtds-sim`` by the
-  runbook's unseal-load-reseal, manifest written last, generation resealed
-  and the seal proven by a denied probe write. The 18 F146 science PSFs
-  (fid 8 — the filter g0001's data is entirely in) are registered in
-  ``PSFs`` with ``vbest=1, status=1``, which is the exact predicate
-  ``get_best_psf`` selects on. Proven consumed, not just present:
-  ``download_reference_psf`` succeeds in every reference attempt above.
-
-* **rev-14 → rev-16.** Three builds, each scan-gated (0 CRITICAL
-  throughout; rev-15 was 2 HIGH/1 MEDIUM, rev-14 and rev-16 3 HIGH/5
-  MEDIUM/1 LOW, all base-OS CVEs identical to the previously deployed
-  image). Both job-definition families repinned to one digest each time,
-  queues quiesced first, reconciler stack updated to the same digest with
-  all six parameters explicitly pinned, association re-run, service
-  verified active with clean polls.
-
-Owed
-----
-
-* The four ``awaicgen`` geometry values — the blocker above. Until it is
-  closed no reference image can be built, so the ramp cannot start.
-* The ramp itself: 18 → 90 → 270, unrun.
-* The scheduler-retry case (forced pull failure) and the end-to-end
-  registration proof, both owed from W8 and both downstream of the ramp.
+* **Steps 1, 2 and 3, passing.** Unrun against a payload carrying the two
+  fixes. Everything the harness needs is committed and exercised; what is
+  missing is one image rebuild and the repin behind it.
+* The science phase, which needs a registered reference image — and so is
+  downstream of step 1 passing.
+* The scheduler-retry case (forced pull failure), which needs a job
+  definition pinned to an absent image; see ``w8_battery.rst`` case 34.

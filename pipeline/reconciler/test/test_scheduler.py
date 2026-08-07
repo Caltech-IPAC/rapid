@@ -94,6 +94,88 @@ class AttemptIndexDerivationTests(unittest.TestCase):
     def test_empty_history(self):
         self.assertEqual([], scheduler.derive_attempt_indices([]))
 
+    # -- against a REAL AttemptDetail, not a hand-written dict -----------
+    #
+    # The cases above are the derivation's logic, and they are written from
+    # the API docs. What they cannot catch is the docs being wrong about the
+    # shape — a key that is absent rather than None, a timestamp in the wrong
+    # unit. The literal below is an unedited `describe-jobs` AttemptDetail
+    # from ramp attempt 158 (job cea6cd4c-8341-45b1-a4e4-fc405eb9d8b5:0,
+    # 2026-08-07), captured live and pasted whole EXCEPT the account id,
+    # which is redacted to zeros — this repository is public, and the
+    # pre-push hook refuses the real one. The shape under test is unaffected:
+    # what matters is which keys are present, and that `startedAt` is a
+    # milliseconds integer.
+
+    # The two ECS ARNs the real record carries are dropped rather than
+    # redacted: they embed the account id, this repository is public, and the
+    # pre-push hook refuses any 12-digit run — including a zeroed stand-in.
+    # Nothing under test reads them. What matters is preserved exactly: which
+    # keys Batch populates, that `exitCode` is an int, and that `startedAt`
+    # is a milliseconds-since-epoch integer rather than a string or a float.
+    REAL_ATTEMPT_DETAIL = {
+        "container": {
+            "exitCode": 70,
+            "logStreamName": "bulk/default/54e3b0ac5cc74fe880a883d0c7f2c542",
+            "networkInterfaces": [],
+        },
+        "startedAt": 1786065682290,
+        "stoppedAt": 1786065844551,
+        "statusReason": "Essential container in task exited",
+    }
+
+    def test_a_real_attempt_detail_derives_index_one(self):
+        derived = scheduler.derive_attempt_indices([self.REAL_ATTEMPT_DETAIL])
+
+        self.assertEqual(1, len(derived))
+        self.assertEqual(1, derived[0][0])
+        self.assertIs(self.REAL_ATTEMPT_DETAIL, derived[0][1])
+
+    def test_the_real_shape_is_what_the_derivation_assumes(self):
+        """Pins the API facts the hand-written fixtures merely assume.
+
+        `startedAt` is a milliseconds INTEGER — not an ISO string, and not
+        seconds — and the exit code lives under `container`, not at the top
+        level. A fixture written from the docs cannot fail if the docs are
+        wrong about either; this one was captured from the API.
+        """
+        detail = self.REAL_ATTEMPT_DETAIL
+
+        self.assertIsInstance(detail["startedAt"], int)
+        self.assertIsInstance(detail["stoppedAt"], int)
+        self.assertGreater(detail["stoppedAt"], detail["startedAt"])
+        # Milliseconds, so a 2026 timestamp is ~1.79e12; seconds would be
+        # ~1.79e9 and the reconciler's arithmetic would be out by 1000x.
+        self.assertGreater(detail["startedAt"], 1_000_000_000_000)
+        self.assertIsInstance(detail["container"]["exitCode"], int)
+        self.assertNotIn("exitCode", detail)
+
+    def test_a_never_started_attempt_ahead_of_a_real_one(self):
+        """The owed scheduler-retry shape, half-real.
+
+        A forced pull failure could not be run: it needs a job definition
+        pinned to an absent image, and `submit-job` refuses an `image`
+        container override, so the only route is registering a definition —
+        outside this run's authorization (see w8_battery.rst, case 34).
+
+        What CAN be proven without it is that the derivation handles a
+        never-started attempt sitting in front of a REAL one, which is the
+        pairing the retry case would exercise. Batch omits `startedAt`
+        entirely on an attempt that never ran — it is not present-and-null —
+        so the never-started element here has no such key at all, which is
+        the shape a hand-written `{"startedAt": None}` does not test.
+        """
+        never_started = {"statusReason": "CannotPullContainerError: "
+                                         "manifest unknown"}
+        attempts = [never_started, self.REAL_ATTEMPT_DETAIL]
+
+        derived = scheduler.derive_attempt_indices(attempts)
+
+        self.assertEqual([1, 2], [index for index, _ in derived])
+        self.assertIs(never_started, derived[0][1])
+        self.assertNotIn("startedAt", derived[0][1])
+        self.assertIs(self.REAL_ATTEMPT_DETAIL, derived[1][1])
+
 
 class ObservationTests(unittest.TestCase):
     def test_terminal_and_exit_code_from_the_job(self):

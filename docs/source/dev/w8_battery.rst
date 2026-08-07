@@ -432,3 +432,81 @@ type this database can support today, which is why it is the type that ran.
 The blocking item for the remaining three is therefore: **a PSF set and a
 first reference image for g0001**. Once those exist, the per-type proof is
 the same submission this ran, with the job type changed.
+
+
+W9-final additions
+------------------
+
+Two cases, one closed and one blocked, both recorded here so the battery's
+owed list stays honest.
+
+Case 34 — scheduler retry via forced pull failure: BLOCKED
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+**Owed from W8, still unforced, and now with a specific reason rather than
+"not yet done".**
+
+The case wants a real Batch retry: an attempt that never starts (a pull
+failure), followed by one that does, so ``derive_attempt_indices`` is proven
+against a genuine ``AttemptDetail`` history rather than a hand-written one.
+The deployed job definitions retry ``CannotPullContainerError`` by rule
+(``rapid-batch.yaml`` ``EvaluateOnExit``), so the mechanism is live and only
+needs triggering.
+
+**Why it was not forced.** Triggering it means running a job whose image
+cannot be pulled, and there is no way to do that within this run's authorized
+mutations:
+
+* ``aws batch submit-job --container-overrides image=…`` is **refused by the
+  API**: ``Unknown parameter in containerOverrides: "image", must be one of:
+  vcpus, memory, command, instanceType, environment, resourceRequirements``
+  (captured live). The image is fixed by the job definition, by design.
+* The remaining route is registering a job definition pinned to an absent
+  digest. This run's authorization covers job-definition revisions only
+  alongside an image rebuild, and registering a new definition — even a
+  uniquely-named throwaway — is a mutation outside it. Recorded as proposed
+  rather than taken.
+
+**A scan for a naturally-occurring one found none.** Every FAILED and
+SUCCEEDED job in both queues (80 sampled) has exactly one ``AttemptDetail``:
+no job in the account has ever been retried by the scheduler. So the case
+cannot be closed by observation either — it has to be forced.
+
+**What was closed instead.** The derivation's own coverage was extended from
+hand-written dicts to a **real** ``AttemptDetail``, captured unedited from
+ramp attempt 158, plus the never-started element in front of it
+(``pipeline/reconciler/test/test_scheduler.py``,
+``test_a_real_attempt_detail_derives_index_one`` and
+``test_a_never_started_attempt_ahead_of_a_real_one``). This catches the thing
+the doc-written fixtures cannot: Batch **omits** ``startedAt`` entirely on an
+attempt that never ran rather than setting it null, so a fixture written as
+``{"startedAt": None}`` tests a shape the API does not produce. The
+index-derivation half of the case is therefore proven against reality; the
+end-to-end half — a row pairing with its observation across a real retry —
+remains owed.
+
+**Proposed:** register a throwaway job definition (``rapid-pullfail-probe``)
+pinned to an absent digest, submit one child, assert two ``AttemptDetail``
+entries with the first never-started, then deregister. Needs an
+authorization that names job-definition registration.
+
+Case 35 — the terminal record survives a numpy scalar: CLOSED
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Not owed from W8 — found by the W9 ramp and added here because it belongs
+with the failure-semantics cases rather than with the ramp's own evidence.
+
+MECHANISM: ``write_terminal_record`` runs on the failure path as well as the
+success path. If serializing the record can raise, then an attempt that
+failed for any reason can be left unable to record *that* it failed — a
+non-terminal row with no record, which is the one state the whole
+attempt-record design is built to exclude. The ramp produced exactly that, 36
+times, because a stage recorded a ``numpy.float32``.
+
+Covered by ``pipeline/runtime/test/test_termination.py``,
+``NumpyScalarsInTheRecordTests`` (4 tests): a numpy-like float is written as a
+JSON **number**, is not stringified, an integer scalar stays an integer, and a
+value with no scalar equivalent still raises rather than being silently
+swallowed. The stand-in scalars are deliberate — the runtime does not import
+numpy, and the contract under test is "carries ``.item()``", not "is a numpy
+type".

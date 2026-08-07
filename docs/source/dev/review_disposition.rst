@@ -1376,3 +1376,135 @@ No Batch children were submitted. Finding #1 is a routing question, and
 routing is decidable at the submit-call boundary from what
 ``submission_env`` resolves — submitting jobs would have proven the same fact
 more slowly and less precisely.
+
+
+The awaicgen mosaic geometry — extraction, with citations
+---------------------------------------------------------
+
+The four values ``awaicgen_mosaic_size_x``, ``awaicgen_mosaic_size_y``,
+``awaicgen_RA_center`` and ``awaicgen_Dec_center`` blocked the whole W9 ramp:
+the master ``.ini`` leaves all four as the literal ``to_be_filled_by_script``
+because the deleted launchers computed them and substituted them before
+dispatch, so the W4B migration to release content had nothing to migrate —
+the keys' VALUES never existed in a file. Nothing computed them afterwards,
+and ``build_awaicgen_command_line_args`` raised ``KeyError`` on the first of
+them after the PSF and all 48 coadd inputs had been downloaded and
+reformatted.
+
+This was ported as **extraction, not invention**. The authority is the
+deleted reference-image launcher; the science launcher beside it carries the
+identical lines and the two agree exactly, which is why one function serves
+both callers.
+
+Citations
+~~~~~~~~~
+
+All line numbers are in
+``e03f22c^:pipeline/awsBatchSubmitJobs_launchSingleReferenceImagePipeline.py``
+(the science launcher's equivalents, in
+``…_launchSingleSciencePipeline.py``, are given second).
+
+.. list-table::
+   :header-rows: 1
+   :widths: 30 20 50
+
+   * - What
+     - Lines
+     - The code
+   * - Inputs to the extent
+     - 164-168 / 150-154
+     - ``naxis1_refimage``, ``naxis2_refimage``, ``cdelt1_refimage``,
+       ``crota2_refimage`` read from ``[REF_IMAGE]``
+   * - The extent
+     - 226-231 / 213-217
+     - ``pixel_scale = math.fabs(cdelt1_refimage)`` then
+       ``mosaic_size_x = pixel_scale * naxis1_refimage`` and
+       ``mosaic_size_y = pixel_scale * naxis2_refimage``
+   * - The rotation
+     - 232
+     - ``awaicgen_mosaic_rotation = str(crota2_refimage)``
+   * - The tile centre
+     - 352-355 / (same block)
+     - ``rtid = field``;
+       ``roman_tessellation_db.get_center_sky_position(rtid)``;
+       ``ra0_field``, ``dec0_field``
+   * - The mosaic centre
+     - 370-371, 381-382 / 508-509
+     - ``ra0_refimage = ra0_field`` and
+       ``awaicgen_RA_center = str(ra0_refimage)``, likewise Dec
+
+Two details are ported rather than re-derived, and both would be got wrong by
+anyone reasoning from first principles:
+
+1. ``pixel_scale`` is ``fabs(cdelt1)`` and multiplies **both** axes (226-228).
+   ``cdelt2_refimage`` is read at line 167 and is **not** used for the
+   extent. The reference image is square with equal magnitudes so the two
+   agree numerically today, but the ported code follows the launcher.
+2. The centre carries **no offset**: ``ra0_refimage = ra0_field`` (370-371),
+   under the comment "the reference image is centered on the sky tile with
+   zero rotation" (368). The ``crpix``/corner arithmetic immediately below
+   feeds the reference image's own WCS, not awaicgen's ``-R``/``-D`` — and it
+   is the obvious thing to mistake for a half-mosaic offset.
+
+Where the values landed, and why
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+The launcher's own split decides the placement, and it matches the placement
+criterion exactly:
+
+* **Extent → release content.** Computed once at module scope, under the
+  comment "quantities that do not vary with sky location" (224). It is a
+  function of ``[ref_image]`` alone, identical for every field in a
+  submission, so it stays a config read.
+* **Centre → per-invocation manifest fact.** Computed inside the per-field
+  submit loop, from the tessellation. It varies per field, so it is a fact.
+  ``UnitFacts.tile_position`` already declared it, with exactly the
+  ``ra0``/``dec0`` shape needed, and was never populated by anything;
+  ``submission/gathering.py`` now fills it from the closed form, which opens
+  no connection and issues no query, so W7's retirement of the per-unit
+  R-tree lookup is not reintroduced.
+
+Resolution happens in the build branch only. ``_download_reference_image``
+reads the ``[awaicgen]`` section for its three output filenames alone, and
+requiring ``tile_position`` there would fail a unit that legitimately reuses
+an existing reference image over a fact its own work never touches.
+
+Regression evidence
+~~~~~~~~~~~~~~~~~~~
+
+``pipeline/test/test_mosaic_geometry.py``, 30 tests, all passing. The
+expected values are recomputed from the launcher's arithmetic **written out
+longhand** — not by calling the module under test, and not as hardcoded
+constants, so a change that alters the derivation fails even where it happens
+to preserve today's 7000×7000 square numbers.
+
+Field coverage is seven: three g0001 tiles (511, 3145729, 4096), both pole
+tiles (1 and 6291458) and both pole-adjacent tiles (2 and 6291457). The poles
+are the case ``center_of`` treats specially — it returns early rather than
+going through the ring arithmetic — so a port that assumed the general branch
+would pass on mid-latitude fields alone. Specific tests pin the two
+easy-to-invert details above: ``test_both_axes_take_cdelt1_as_the_launcher_did``
+uses an anisotropic pixel to prove ``cdelt2`` is not consulted, and
+``test_the_centre_is_unoffset_from_the_tile`` pins the absence of the offset.
+
+**Live**: ``build_reference_image`` succeeded on 36 of 36 real g0001 children
+across two independent submissions, mean 145.2 s. It had never once completed
+before this port.
+
+A fifth key, found by reading rather than by running
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+``awaicgen_num_threads`` is read by ``build_awaicgen_command_line_args``
+(line 629) and was absent from ``[awaicgen]`` — the same W4B drop, and the
+next ``KeyError`` the ramp would have hit once the four geometry keys were
+supplied. It was found by walking that function's full key list against
+release content instead of waiting for a fifth live attempt, and restored at
+the master ``.ini``'s value of 2.
+
+That walk is now a test. The pre-existing completeness test checked only the
+keys subscripted in the STAGE-BODY modules, so everything read one call
+deeper — inside the command-line builders, which is where the real
+requirement lives — was invisible to it. That blind spot is why the ramp met
+these drops one ``KeyError`` per live attempt. Both builders are now walked
+directly, and the same walk applied to SExtractor immediately found eleven
+more missing keys (``w9_ramp.rst``, defect 6).
