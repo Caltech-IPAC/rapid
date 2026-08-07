@@ -246,12 +246,23 @@ def mjd_window(start, end):
     file selection is by timestamp. Both describe the SAME window, so it is
     converted here rather than accepted as two more environment variables that
     nothing keeps equal.
+
+    Returned as built-in floats, NOT the `numpy.float64` astropy hands back.
+    These two values are bound straight into the readiness query, and
+    psycopg2 has no adapter for a numpy scalar, so it falls back to repr() —
+    which under NumPy 2 is `np.float64(61679.0)` rather than `61679.0`. That
+    is pasted into the SQL as a schema-qualified name and Postgres rejects it
+    with `schema "np" does not exist`, aborting the transaction so every
+    later query in the pass is skipped too. The failure is silent in the
+    worst way: `get_field_fid_nframes_records_for_mjdobs_range` catches it,
+    prints, and returns None, so gathering reports "0 (field, filter) pairs"
+    — indistinguishable from a night with no data.
     '''
 
     from astropy.time import Time
 
-    return (Time(start.replace(" ", "T"), format='isot', scale='utc').mjd,
-            Time(end.replace(" ", "T"), format='isot', scale='utc').mjd)
+    return (float(Time(start.replace(" ", "T"), format='isot', scale='utc').mjd),
+            float(Time(end.replace(" ", "T"), format='isot', scale='utc').mjd))
 
 
 def min_images_to_coadd():
