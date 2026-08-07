@@ -427,5 +427,122 @@ class PublishTests(unittest.TestCase):
                          kept["reconciliation_classification"])
 
 
+class ReadAttemptStagesTests(unittest.TestCase):
+    """The stage read must name columns `attempt_stages` actually has.
+
+    W9 ramp, live: the query selected `error_category`, which that table has
+    never had — it lives on `attempts` and on `attempt_error_categories`. Two
+    consequences, and the second is the worse one:
+
+    1. Every reconciliation of a started attempt failed, so 36 attempts stayed
+       open and the service reached 4 consecutive unproductive polls against a
+       health threshold of 5.
+    2. The `except` around the query looked like it made the failure safe. It
+       does not: PostgreSQL aborts the WHOLE transaction on any statement
+       error, so every later statement in the same cycle raised
+       `InFailedSqlTransaction`. One real error became thirty-six misleading
+       ones — the same shape as the numpy-repr defect in gathering, where a
+       single bad bind made a whole pass report "no work found".
+
+    There was no coverage of this function at all, which is how a column name
+    that never existed survived to be found by a live run.
+    """
+
+    # Migration 011's column list, which is what the live table has.
+    ACTUAL_COLUMNS = {"stage_record_id", "attempt_id", "stage_name",
+                      "started_at", "duration_ms", "outcome"}
+
+    class _Cursor:
+        def __init__(self, owner):
+            self.owner = owner
+            self.description = [("stage_name",), ("outcome",),
+                                ("started_at",), ("duration_ms",)]
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def execute(self, sql, params=None):
+            self.owner.statements.append(sql)
+            if sql.strip().upper().startswith(("SAVEPOINT", "ROLLBACK",
+                                               "RELEASE")):
+                return
+            self.owner.query = sql
+
+        def fetchall(self):
+            return [("build_reference_image", "success", None, 145310.0)]
+
+    class _Conn:
+        def __init__(self):
+            self.statements = []
+            self.query = None
+
+        def cursor(self):
+            return ReadAttemptStagesTests._Cursor(self)
+
+    def test_it_selects_only_columns_the_table_has(self):
+        conn = self._Conn()
+        closure.read_attempt_stages(conn, 158)
+
+        self.assertIsNotNone(conn.query)
+        select = conn.query.split("FROM")[0]
+        named = {token.strip().strip(",")
+                 for token in select.replace("SELECT", "").split()
+                 if token.strip().strip(",")}
+        unknown = named - self.ACTUAL_COLUMNS
+        self.assertEqual(set(), unknown,
+                         "the stage read names columns attempt_stages "
+                         "does not have")
+
+    def test_it_does_not_select_error_category(self):
+        """The specific column, named, because this is the live regression."""
+        conn = self._Conn()
+        closure.read_attempt_stages(conn, 158)
+        self.assertNotIn("error_category", conn.query)
+
+    def test_a_failing_read_rolls_back_to_a_savepoint(self):
+        """The caught exception must not leave the transaction aborted."""
+        class Failing(self._Conn):
+            def cursor(self):
+                cursor = ReadAttemptStagesTests._Cursor(self)
+                original = cursor.execute
+
+                def execute(sql, params=None):
+                    original(sql, params)
+                    if sql.strip().upper().startswith("SELECT"):
+                        raise RuntimeError("column does not exist")
+                cursor.execute = execute
+                return cursor
+
+        conn = Failing()
+        self.assertIsNone(closure.read_attempt_stages(conn, 158))
+        joined = " ".join(conn.statements).upper()
+        self.assertIn("SAVEPOINT", joined)
+        self.assertIn("ROLLBACK TO SAVEPOINT", joined)
+
+    def test_a_successful_read_releases_its_savepoint(self):
+        conn = self._Conn()
+        rows = closure.read_attempt_stages(conn, 158)
+
+        self.assertEqual(1, len(rows))
+        self.assertEqual("build_reference_image", rows[0]["stage_name"])
+        joined = " ".join(conn.statements).upper()
+        self.assertIn("RELEASE SAVEPOINT", joined)
+        self.assertNotIn("ROLLBACK", joined)
+
+    def test_absence_and_failure_are_still_distinct(self):
+        """None means the read failed; [] means the attempt recorded none."""
+        class Empty(self._Conn):
+            def cursor(self):
+                cursor = ReadAttemptStagesTests._Cursor(self)
+                cursor.fetchall = lambda: []
+                return cursor
+
+        self.assertEqual([], closure.read_attempt_stages(Empty(), 158))
+        self.assertIsNone(closure.read_attempt_stages(None, 158))
+
+
 if __name__ == "__main__":
     unittest.main()

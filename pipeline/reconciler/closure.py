@@ -202,15 +202,37 @@ def read_attempt_stages(conn, attempt_id):
     """
     if conn is None or attempt_id is None:
         return None
-    sql = ("SELECT stage_name, outcome, started_at, duration_ms,"
-           "       error_category"
+    # `attempt_stages` has SIX columns — stage_record_id, attempt_id,
+    # stage_name, started_at, duration_ms, outcome (migration 011). It has
+    # never had `error_category`: that column lives on `attempts` and on
+    # `attempt_error_categories`, and selecting it here made every
+    # reconciliation of a started attempt fail. Found live by the W9 ramp,
+    # whose 36 attempts were the first started-but-unclosed rows the
+    # reconciler had ever been asked to reconstruct — before them the query
+    # was never reached with real work, so the wrong column sat undetected.
+    sql = ("SELECT stage_name, outcome, started_at, duration_ms"
            "  FROM attempt_stages WHERE attempt_id = %s"
            " ORDER BY started_at, stage_name")
     try:
+        # SAVEPOINT, because the `except` below cannot undo an aborted
+        # transaction. PostgreSQL puts the whole transaction into a failed
+        # state on ANY statement error, so a caught-and-warned failure here
+        # still left every later statement in the cycle raising
+        # `InFailedSqlTransaction` — the reconciler logged one honest warning
+        # and then 36 misleading ones, and closed nothing. Exactly the
+        # cascade shape the numpy-repr defect had in gathering: the error is
+        # handled locally and the transaction is not.
         with conn.cursor() as cur:
-            cur.execute(sql, (attempt_id,))
-            names = [description[0] for description in cur.description]
-            rows = [dict(zip(names, row)) for row in cur.fetchall()]
+            cur.execute("SAVEPOINT read_attempt_stages")
+            try:
+                cur.execute(sql, (attempt_id,))
+                names = [description[0] for description in cur.description]
+                rows = [dict(zip(names, row)) for row in cur.fetchall()]
+            except Exception:
+                cur.execute("ROLLBACK TO SAVEPOINT read_attempt_stages")
+                raise
+            else:
+                cur.execute("RELEASE SAVEPOINT read_attempt_stages")
     except Exception as exc:  # noqa: BLE001 - absence and failure differ
         logger.warning("could not read attempt_stages for %s: %s",
                        attempt_id, exc)
