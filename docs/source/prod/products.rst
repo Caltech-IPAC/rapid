@@ -379,10 +379,14 @@ it can be read without any RAPID code, e.g.::
 
 The ``cutoutDifference``, ``cutoutScience``, and ``cutoutReference`` values
 are FITS files as raw bytes (e.g. ``astropy.io.fits.open(io.BytesIO(...))``).
-Production-level avro files will be schema-less and will require versioning
-with Confluent schema in order to use. This file is only to be used for
-exploratory purposes, and its schema may become out of date from the current
-alert code.
+
+.. warning::
+
+   **This sample file is for exploratory purposes only.**
+
+   Production-level avro files will be schema-less and will require
+   versioning with Confluent schema in order to use. This file's schema
+   may become out of date from the current alert code.
 
 .. _alert-packet-contents:
 
