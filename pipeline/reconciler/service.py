@@ -184,7 +184,7 @@ class ReconcilerService:
 
     def __init__(self, conn, batch_client, records_store, diagnostics_store,
                  s3_client, records_prefix, diagnostics_bucket,
-                 logs_client=None, log_group=None,
+                 logs_client=None, log_group=None, log_groups=None,
                  now=None):
         self.conn = conn
         self.batch = batch_client
@@ -199,6 +199,22 @@ class ReconcilerService:
         #: one and says so in `reconstructed_from`.
         self.logs = logs_client
         self.log_group = log_group
+        #: Job-definition NAME -> log group, for per-attempt derivation.
+        #:
+        #: A single service-wide group cannot be right: the two class-fixed job
+        #: definitions log to two different groups
+        #: (`/rapid/batch/rapid-queue-{prompt,bulk}`), so whichever one a
+        #: parameter named, attempts of the other class would be read from a
+        #: group that does not hold their streams. The absent
+        #: `logs/job-log-group` fell back to `/aws/batch/job`, which holds no
+        #: RAPID logs at all and which `rapid-orchestrator-role` cannot read —
+        #: so every reconstruction that needed a log got nothing, silently.
+        #:
+        #: Derived from `binding_job_definition_arn`, which the row already
+        #: carries: the definition is what owns the `awslogs-group` option, so
+        #: this reads the fact at its source rather than inferring a class.
+        #: Names live in the parameter tree, as queue and definition names do.
+        self.log_groups = dict(log_groups or {})
         self._now = now or (
             lambda: datetime.datetime.now(datetime.timezone.utc))
         #: Consecutive polls that raised. Reset by any poll that completes.
@@ -436,6 +452,33 @@ class ReconcilerService:
 
         logger.info("poll: %s", summary)
         return summary
+
+    def _log_group_for(self, row):
+        """Which CloudWatch group holds this attempt's stream.
+
+        The job definition owns the `awslogs-group` option, and the row records
+        the definition it was submitted under, so the derivation reads a fact
+        rather than guessing a class. `binding_job_definition_arn` is a full
+        ARN ending `job-definition/<name>:<revision>`; the revision is dropped
+        because every revision of a definition logs to the same group.
+
+        Falls back to the configured service-wide group when the row carries no
+        binding (rows created before the binding columns landed) or names a
+        definition the tree does not map. That is a thinner reconstruction, not
+        a failed closure — the same posture as a missing logs client.
+        """
+        arn = row.get("binding_job_definition_arn")
+        if arn:
+            name = str(arn).rsplit("/", 1)[-1].split(":", 1)[0]
+            group = self.log_groups.get(name)
+            if group:
+                return group
+            if self.log_groups:
+                logger.warning(
+                    "no log group is mapped for job definition %s; falling "
+                    "back to %s, which may not hold this attempt's stream",
+                    name, self.log_group)
+        return self.log_group
 
     def _safe_rollback(self):
         """Clear an aborted transaction. A rollback that itself fails (the
@@ -798,7 +841,7 @@ class ReconcilerService:
         if predecessor is None:
             stages = closure_mod.read_attempt_stages(self.conn, attempt_id)
             log_tail = closure_mod.read_log_stream(
-                self.logs, self.log_group,
+                self.logs, self._log_group_for(row),
                 observation.log_stream if observation is not None else None)
 
         record = closure_mod.build_closure_record(
@@ -1019,7 +1062,7 @@ class ReconcilerService:
             # stream expires at 14 days, so the raw material is on a clock.
             rebuilt = reconstruction.reconstruct_bundle(
                 self.diagnostics_store, key, row, observation,
-                self.logs, self.log_group, now=self._now())
+                self.logs, self._log_group_for(row), now=self._now())
             if rebuilt is None:
                 raise BundleReconstructionFailed(
                     f"attempt {row['attempt_id']} "

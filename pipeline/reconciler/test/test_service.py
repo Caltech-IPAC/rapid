@@ -160,6 +160,97 @@ class DeferralTests(unittest.TestCase):
         self.assertEqual(0, summary["deferred"])
 
 
+class PerAttemptLogGroupTests(unittest.TestCase):
+    """One service-wide log group cannot be right.
+
+    The two class-fixed job definitions log to two different groups
+    (`/rapid/batch/rapid-queue-{prompt,bulk}`), so whichever a single
+    parameter named, attempts of the other class would be read from a group
+    that does not hold their streams. `logs/job-log-group` was never created
+    at all, so the fallback was `/aws/batch/job` — which holds no RAPID logs
+    and which rapid-orchestrator-role cannot read.
+
+    Derived from `binding_job_definition_arn`, which the row already carries:
+    the job definition owns the `awslogs-group` option, so this reads the fact
+    at its source rather than inferring a workload class.
+    """
+
+    GROUPS = {"rapid-pipeline-science": "/rapid/batch/rapid-queue-prompt",
+              "rapid-pipeline-bulk": "/rapid/batch/rapid-queue-bulk"}
+
+    def _service(self, groups=None):
+        svc, _, _, _, _ = build([], jobs=[])
+        svc.log_group = "/aws/batch/job"
+        svc.log_groups = dict(self.GROUPS if groups is None else groups)
+        return svc
+
+    #: Placeholder account, assembled rather than written out: the derivation
+    #: reads only the trailing `job-definition/<name>:<revision>` segment, and
+    #: a literal 12-digit account id in a tracked file is what the pre-push
+    #: guard exists to stop — real or not.
+    ACCOUNT = "0" * 12
+
+    def _arn(self, name, revision=19):
+        return (f"arn:aws:batch:us-east-1:{self.ACCOUNT}:job-definition/"
+                f"{name}:{revision}")
+
+    def test_each_class_resolves_to_its_own_group(self):
+        svc = self._service()
+
+        self.assertEqual(
+            "/rapid/batch/rapid-queue-prompt",
+            svc._log_group_for(attempt_row(
+                1, binding_job_definition_arn=self._arn(
+                    "rapid-pipeline-science"))))
+        self.assertEqual(
+            "/rapid/batch/rapid-queue-bulk",
+            svc._log_group_for(attempt_row(
+                2, binding_job_definition_arn=self._arn(
+                    "rapid-pipeline-bulk"))))
+
+    def test_the_two_classes_do_not_resolve_to_the_same_group(self):
+        # The property that makes this a derivation rather than two constants:
+        # a regression to one service-wide group shows up here.
+        svc = self._service()
+        prompt = svc._log_group_for(attempt_row(
+            1, binding_job_definition_arn=self._arn("rapid-pipeline-science")))
+        bulk = svc._log_group_for(attempt_row(
+            2, binding_job_definition_arn=self._arn("rapid-pipeline-bulk")))
+
+        self.assertNotEqual(prompt, bulk)
+
+    def test_the_revision_does_not_change_the_group(self):
+        # Every revision of one definition logs to the same group, so pinning
+        # a new revision must not silently unmap it.
+        svc = self._service()
+
+        self.assertEqual(
+            svc._log_group_for(attempt_row(
+                1, binding_job_definition_arn=self._arn(
+                    "rapid-pipeline-science", 19))),
+            svc._log_group_for(attempt_row(
+                2, binding_job_definition_arn=self._arn(
+                    "rapid-pipeline-science", 27))))
+
+    def test_a_row_with_no_binding_falls_back_rather_than_failing(self):
+        # Rows created before the binding columns landed carry no ARN. A
+        # thinner reconstruction is the designed outcome; a raise is not.
+        svc = self._service()
+
+        self.assertEqual(
+            "/aws/batch/job",
+            svc._log_group_for(attempt_row(1,
+                                           binding_job_definition_arn=None)))
+
+    def test_an_unmapped_definition_falls_back_rather_than_failing(self):
+        svc = self._service()
+
+        self.assertEqual(
+            "/aws/batch/job",
+            svc._log_group_for(attempt_row(
+                1, binding_job_definition_arn=self._arn("rapid-pipeline-x"))))
+
+
 class ActionableWorkHealthTests(unittest.TestCase):
     """The ratified health-vs-horizon disposition, pinned.
 

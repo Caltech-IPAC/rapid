@@ -79,9 +79,47 @@ def build_service(session, parameters, conn):
         # CloudWatch, for reconstructing a record with no predecessor (#16).
         # The log group is a parameter rather than a constant because it is
         # the Batch job definition's, and the definition owns that name.
+        #
+        # PER ATTEMPT, because there is no single right answer: the two
+        # class-fixed job definitions log to two different groups, so one
+        # service-wide name would read attempts of the other class from a
+        # group that does not hold their streams. `_log_group_for` derives it
+        # from the definition the row was submitted under; this supplies the
+        # name for each, keyed by job-definition name exactly as the queue and
+        # definition names are keyed.
         logs_client=session.client("logs"),
+        log_groups=_log_groups_from(parameters),
         log_group=parameters.get("logs/job-log-group", "/aws/batch/job"),
     )
+
+
+# Job-definition parameter key -> the log-group parameter key beside it. Both
+# halves live in the tree for the same reason the queue names do: the
+# definition owns the group, and a second home for the name could disagree.
+_LOG_GROUP_PARAMETERS = (
+    ("batch/job-definition-science", "logs/job-log-group-prompt"),
+    ("batch/job-definition-bulk", "logs/job-log-group-bulk"),
+)
+
+
+def _log_groups_from(parameters):
+    """Map each configured job-definition NAME to its log group.
+
+    Keyed by name rather than by workload class because that is what the row's
+    `binding_job_definition_arn` yields, and matching on the recorded fact
+    avoids re-deriving a class the reconciler would otherwise have to infer.
+    A pair whose parameters are not both present is omitted rather than
+    guessed: the caller falls back and says so.
+    """
+    groups = {}
+    for definition_key, group_key in _LOG_GROUP_PARAMETERS:
+        definition = parameters.get(definition_key)
+        group = parameters.get(group_key)
+        if definition and group:
+            # The tree holds `name:revision` for a pinned definition; the group
+            # is the same for every revision of one definition.
+            groups[str(definition).split(":", 1)[0]] = group
+    return groups
 
 
 # The parameter-tree names holding the database endpoint, and the
