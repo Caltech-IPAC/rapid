@@ -135,6 +135,13 @@ def terminal_record_key(prefix: str, run_id: str, logical_job_id: str,
     if sequence < 0:
         raise ValueError(
             f"terminal record sequence is monotonic from 0; got {sequence}")
+    # `attempts.terminal_record_sequence` is a numeric column, and psycopg2
+    # hands numerics back as `Decimal` — which compares fine above and then
+    # fails the `:04d` format below with "invalid format string". Coerce here,
+    # once, so a caller that passes the column value straight through gets a
+    # key rather than a ValueError. Same family as the Decimal defect fixed in
+    # `ClosureRecord.to_bytes`.
+    sequence = int(sequence)
     return (f"{prefix.rstrip('/')}/records/{_safe(run_id)}/"
             f"{_safe(logical_job_id)}/attempt-{_safe(attempt_id)}"
             f"/seq-{sequence:04d}.json")
@@ -339,12 +346,21 @@ def upload_bundle(store: Any, key: str, body: bytes) -> dict:
     """
     existing = store.head(key)
     if existing is not None:
+        stored = existing.get("checksum")
+        if stored is None:
+            # The record must not cite a bundle by a null checksum: every
+            # consumer of `bundle_checksum` reads it as the statement of what
+            # was retained, and None is not a statement. S3 omits the stored
+            # digest for objects written without one, with another algorithm,
+            # or by multipart upload, so compute it from the bytes rather than
+            # passing the absence downstream into a field typed `str`.
+            stored = checksum(store.get(key))
         _logger.info(
             "diagnostics bundle %s already uploaded by an earlier run of this "
             "attempt (sha256 %s, %s bytes); kept — exactly one bundle exists "
-            "per attempt", key, str(existing.get("checksum"))[:12],
+            "per attempt", key, str(stored)[:12],
             existing.get("size"))
-        return {"key": key, "checksum": existing.get("checksum"),
+        return {"key": key, "checksum": stored,
                 "created": False, "size": existing.get("size", 0)}
 
     try:

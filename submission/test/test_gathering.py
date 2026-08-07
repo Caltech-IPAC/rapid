@@ -795,6 +795,26 @@ class GatherReferenceUnitsTests(unittest.TestCase):
         source = self.Source(overlapping=[self._overlap_row(101)])
         self.assertEqual(self._gather(source), [])
 
+    def test_a_null_mjdobs_is_a_named_failure_not_a_bare_type_error(self):
+        """`UnitFacts` documents every field as optional, and `science_facts`
+        builds `mjdobs` with `_maybe_float` precisely so a NULL
+        `L2Files.mjdobs` passes through. Only `rid` was guarded, so
+        `float(facts.mjdobs)` raised `TypeError: float() argument must be a
+        string or a real number, not 'NoneType'` from inside a three-argument
+        call that named neither the field nor the unit.
+        """
+        info = dict(StubSource().info)
+        info[101] = ("s3://in/exp1_sca7.fits", 5001, 7, 4678622, None,
+                     139.8, 0, 1, 1, 1)
+        source = self.Source(
+            info=info,
+            overlapping=[self._overlap_row(101), self._overlap_row(102)])
+
+        with self.assertRaises(gathering.GatheringError) as caught:
+            self._gather(source)
+
+        self.assertIn("mjdobs", str(caught.exception))
+
     def test_a_failed_overlap_query_is_not_reported_as_an_unready_field(self):
         # The distinction the narrowed catch exists for. A night in which
         # every field was skipped because the database stopped answering

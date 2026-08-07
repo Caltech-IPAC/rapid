@@ -103,6 +103,14 @@ class InMemoryObjectStore:
         self.fail_on_put: set = set()
         self.fail_on_get: set = set()
         self.put_calls: list = []
+        # Keys whose HEAD reports NO stored checksum, as real S3 does for an
+        # object written without one, written with a different checksum
+        # algorithm, or uploaded multipart (whose stored value is a composite
+        # of part digests, not the object's SHA-256). Without this the double
+        # could not express a state the real store reaches routinely, so no
+        # test could reach the code that handles it — and three defects lived
+        # there. A double must be able to refuse.
+        self.head_without_checksum: set = set()
 
     def put_if_absent(self, key: str, body: bytes,
                       content_type: str = "application/octet-stream",
@@ -116,7 +124,15 @@ class InMemoryObjectStore:
         digest = checksum(body)
         existing = self.objects.get(key)
         if existing is not None:
-            if existing["checksum"] == digest:
+            # Decided through `head`, exactly as `S3ObjectStore` decides it, so
+            # a key marked `head_without_checksum` drives the same
+            # absent-digest branch here as against real S3. Comparing
+            # `existing["checksum"]` directly would keep this store honest by
+            # construction and blind to the case the real one has to handle.
+            reported = (self.head(key) or {}).get("checksum")
+            if reported is None:
+                reported = checksum(self.get(key))
+            if reported == digest:
                 return PutResult(key=key, checksum=digest, created=False,
                                  size=len(body))
             raise StorageError(
@@ -145,6 +161,8 @@ class InMemoryObjectStore:
         record = self.objects.get(key)
         if record is None:
             return None
+        if key in self.head_without_checksum:
+            return {"checksum": None, "size": record["size"]}
         return {"checksum": record["checksum"], "size": record["size"]}
 
 
@@ -194,9 +212,24 @@ class S3ObjectStore:
         except Exception as exc:  # noqa: BLE001 - translated below
             if _is_precondition_failed(exc):
                 existing = self.head(key)
-                if existing is not None and existing["checksum"] == digest:
-                    return PutResult(key=key, checksum=digest, created=False,
-                                     size=len(body))
+                if existing is not None:
+                    stored = existing.get("checksum")
+                    if stored is None:
+                        # S3 has no stored digest to compare. That is not a
+                        # collision — it is an object written without a
+                        # checksum, with a different algorithm, or by a
+                        # multipart upload (whose stored value is a composite,
+                        # not the object's SHA-256). Deciding "different
+                        # content" from the ABSENCE of a checksum is the same
+                        # mistake as deciding "same content" from a matching
+                        # length: it reads a missing fact as an answer. Fetch
+                        # the bytes and compare them, which is the only thing
+                        # that settles it. One GET, on a path reached only when
+                        # a key is already occupied.
+                        stored = checksum(self.get(key))
+                    if stored == digest:
+                        return PutResult(key=key, checksum=digest,
+                                         created=False, size=len(body))
                 raise StorageError(
                     f"object s3://{self.bucket}/{key} already exists with "
                     f"different content: two writers under one attempt "

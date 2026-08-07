@@ -982,6 +982,37 @@ class ReconstructionCompletenessTests(unittest.TestCase):
         self.assertEqual(row["run_id"], manifest["run_id"])
         self.assertEqual(row["attempt_id"], manifest["attempt_id"])
 
+    def test_the_reconstructed_manifest_keeps_stage_durations_numeric(self):
+        """`default=str` would keep the manifest writable while retyping a
+        numeric field under every consumer that reads it.
+
+        `attempt_stages.duration_ms` is `numeric NOT NULL`, and
+        `closure.read_attempt_stages` hands back raw psycopg2 rows — so the
+        value arrives as a `Decimal`. This is the failure
+        `termination._json_default`'s own docstring warns about, fixed in
+        `ClosureRecord.to_bytes` and missed here.
+        """
+        import decimal
+        import io
+        import tarfile
+
+        # The SERIALIZED bytes are the assertion, not the in-memory manifest:
+        # the manifest holds the Decimal either way, and the defect is what
+        # json.dumps makes of it on the way into the tar.
+        body, _manifest = reconstruction.build_reconstructed_bundle(
+            attempt_row(1), None, events=[],
+            stages=[{"stage": "difference", "duration_ms":
+                     decimal.Decimal("1234.5")}])
+
+        with tarfile.open(fileobj=io.BytesIO(body), mode="r:gz") as tar:
+            manifest = json.loads(
+                tar.extractfile(reconstruction.MANIFEST_MEMBER)
+                .read().decode("utf-8"))
+
+        duration = manifest["attempt_stages"][0]["duration_ms"]
+        self.assertNotIsInstance(duration, str)
+        self.assertEqual(1234.5, duration)
+
     def test_a_never_resolved_attempt_gets_its_bundle_before_it_closes(self):
         """The path finding #5 named: no scheduler observation at all.
 

@@ -161,6 +161,18 @@ class TestKeyDerivation(unittest.TestCase):
         with self.assertRaises(ValueError):
             termination.terminal_record_key(PREFIX, "r", "j", 1, -1)
 
+    def test_a_decimal_sequence_from_the_database_keys_the_same_object(self):
+        """`attempts.terminal_record_sequence` is a numeric column and psycopg2
+        hands numerics back as `Decimal`, which passes the negativity check and
+        then fails `:04d` with "invalid format string". Same family as the
+        Decimal defect already fixed in `ClosureRecord.to_bytes`."""
+        import decimal
+
+        self.assertEqual(
+            termination.terminal_record_key(PREFIX, "r", "j", 1, 2),
+            termination.terminal_record_key(PREFIX, "r", "j", 1,
+                                            decimal.Decimal("2")))
+
     def test_snapshot_key_is_content_addressed(self):
         """Keyed by digest, not by attempt — identical config dedupes."""
         digest = "a" * 64

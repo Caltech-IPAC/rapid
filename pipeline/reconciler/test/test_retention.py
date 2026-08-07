@@ -26,6 +26,22 @@ class RetentionClassTests(unittest.TestCase):
         # only evidence there is.
         self.assertEqual("failure", retention.retention_class_for(None, "FAILED"))
 
+    def test_a_missing_scheduler_state_is_not_agreement(self):
+        # `None` means the scheduler said NOTHING, which is the opposite of the
+        # unambiguous success the short class is for. It used to be admitted
+        # alongside "SUCCEEDED", so an attempt claiming success whose scheduler
+        # identity never resolved — the contradictory case the reconciler
+        # flags for a human — had its diagnostics filed under the SHORTER
+        # expiry, on the one path (`_reconcile_unresolved` -> `_stamp_bundle`
+        # with no observation) where the bundle is the only account there is.
+        self.assertEqual("failure",
+                         retention.retention_class_for("success", None))
+
+    def test_a_stated_agreement_still_retains_short(self):
+        # The narrowing must not swallow the case the class exists for.
+        self.assertEqual("success",
+                         retention.retention_class_for("success", "SUCCEEDED"))
+
 
 class MonotonicTests(unittest.TestCase):
     def test_absent_accepts_anything(self):

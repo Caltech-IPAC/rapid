@@ -802,6 +802,26 @@ class TerminalTests(unittest.TestCase):
             self.writer.mark_terminal_without_start(
                 1, ended_at=at(9), scheduler_state="EXPLODED")
 
+    def test_rejects_an_absent_scheduler_state(self):
+        """017's terminal_without_start CHECK requires
+        `scheduler_state IS NOT NULL`, and the signature types the parameter
+        `str` with no default — but `_validate_scheduler_state` tolerates None
+        by design (that is how `record_scheduler_observation` withholds a state
+        on a submitted row), so it cannot enforce this.
+
+        Without the guard the UPDATE was issued, PostgreSQL refused it, the
+        reconciler counted a per-row error and retried the identical statement
+        every poll — a permanently stuck attempt diagnosed by a constraint
+        name rather than the missing fact. Reachable: `observation.state` is
+        `job.get("status")`, which is None whenever Batch omits it.
+        """
+        with self.assertRaises(ValueError) as caught:
+            self.writer.mark_terminal_without_start(
+                1, ended_at=at(9), scheduler_state=None)
+        self.assertIn("scheduler_state is required", str(caught.exception))
+        # And nothing was sent to the database.
+        self.assertEqual([], self.execute.calls)
+
     def test_a_never_started_attempt_cites_its_closure_record(self):
         # Review finding #14: "the reconciler closes EVERY attempt with a
         # closure record" — including one that never started. 013 forbade

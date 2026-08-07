@@ -102,6 +102,11 @@ class _FakeS3Client:
     def __init__(self):
         self.objects = {}
         self.put_kwargs = []
+        # Keys whose HEAD omits ChecksumSHA256 — what real S3 returns for an
+        # object stored without a checksum, with a different algorithm, or via
+        # multipart upload. The fake used to always supply one, so the
+        # adapter's absent-digest branch was unreachable from any test.
+        self.head_without_checksum = set()
 
     def put_object(self, **kwargs):
         self.put_kwargs.append(kwargs)
@@ -124,6 +129,8 @@ class _FakeS3Client:
         if key not in self.objects:
             raise _ClientError("404")
         body = self.objects[key]
+        if key in self.head_without_checksum:
+            return {"ContentLength": len(body)}
         return {
             "ChecksumSHA256": base64.b64encode(
                 hashlib.sha256(body).digest()).decode("ascii"),
@@ -185,6 +192,48 @@ class TestS3ObjectStoreAdapter(unittest.TestCase):
     def test_get_translates_a_client_error(self):
         with self.assertRaises(StorageError):
             self.store.get("nope")
+
+
+class TestChecksumlessHead(unittest.TestCase):
+    """A HEAD with no stored digest must not decide the question either way.
+
+    Real S3 omits `ChecksumSHA256` for any object written without one, written
+    with a different algorithm, or uploaded multipart. Deciding "different
+    content" from that absence is the same mistake as deciding "same content"
+    from a matching length — reading a missing fact as an answer.
+    """
+
+    def setUp(self):
+        self.client = _FakeS3Client()
+        self.store = S3ObjectStore("bucket", client=self.client)
+
+    def test_head_reports_the_absence_rather_than_inventing_a_digest(self):
+        self.store.put_if_absent("k", b"body")
+        self.client.head_without_checksum.add("k")
+
+        self.assertIsNone(self.store.head("k")["checksum"])
+
+    def test_an_identical_replay_is_a_replay_even_with_no_stored_digest(self):
+        # The crash-recovery path the whole create-once protocol rests on.
+        # This used to raise StorageError("already exists with different
+        # content") for byte-identical content, permanently: the attempt could
+        # never re-run to completion.
+        self.store.put_if_absent("k", b"body")
+        self.client.head_without_checksum.add("k")
+
+        result = self.store.put_if_absent("k", b"body")
+
+        self.assertFalse(result.created)
+        self.assertEqual(checksum(b"body"), result.checksum)
+
+    def test_genuinely_different_content_still_collides(self):
+        # The fix must not turn a real two-writer collision into a silent
+        # replay: absence sends us to the bytes, and the bytes still disagree.
+        self.store.put_if_absent("k", b"one")
+        self.client.head_without_checksum.add("k")
+
+        with self.assertRaises(StorageError):
+            self.store.put_if_absent("k", b"two")
 
 
 if __name__ == "__main__":

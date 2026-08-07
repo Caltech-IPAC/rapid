@@ -162,9 +162,17 @@ def build_reconstructed_bundle(row, observation, events, read_error=None,
     if stages:
         manifest["attempt_stages"] = stages
 
+    # `default=termination._json_default`, NOT `default=str`: the stages come
+    # from `closure.read_attempt_stages` as raw psycopg2 rows, where
+    # `attempt_stages.duration_ms` is `numeric NOT NULL` and arrives as a
+    # `Decimal`. `str` would keep the manifest writable while silently
+    # retyping a numeric field to a string under every consumer that reads it
+    # — the exact failure `_json_default`'s own docstring warns against, and
+    # which was fixed in `ClosureRecord.to_bytes` but not here.
     members = [(MANIFEST_MEMBER,
                 json.dumps(manifest, indent=2, sort_keys=True,
-                           default=str).encode("utf-8"))]
+                           default=termination._json_default,
+                           ).encode("utf-8"))]
     if log_body:
         members.append((LOG_MEMBER, log_body))
 

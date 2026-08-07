@@ -665,10 +665,21 @@ def gather_reference_units(handle: UnitSource, start, end,
                                      fids=fids, make_references=True):
         facts = unit.facts
         rid = facts.rid
-        if rid is None:
+        # All three are dereferenced below, and `UnitFacts` documents every
+        # field as optional — `science_facts` builds `mjdobs` with
+        # `_maybe_float`, which exists to let a NULL `L2Files.mjdobs` through.
+        # Guarding only `rid` left `float(facts.mjdobs)` to raise a bare
+        # `TypeError: float() argument must be ... not 'NoneType'` from inside
+        # a call three arguments wide, naming neither the field nor the unit.
+        # Same failure the `rid` guard above already prevents, extended to the
+        # facts that are actually read, and naming every missing one at once.
+        missing = [name for name in ("rid", "fid", "mjdobs")
+                   if getattr(facts, name, None) is None]
+        if missing:
             raise GatheringError(
-                f"unit {unit.key} has no rid; the coadd inputs are aggregated "
-                f"from the representative image's own overlap query")
+                f"unit {unit.key} is missing {', '.join(missing)}; the coadd "
+                f"inputs are aggregated from the representative image's own "
+                f"overlap query, which needs all three")
 
         try:
             rows = coadd_input_rows(

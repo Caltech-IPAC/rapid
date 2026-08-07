@@ -816,6 +816,22 @@ class AttemptWriter:
         Migration 017 adds the reconciler-authored pair; this writes it.
         """
         _validate_scheduler_state(scheduler_state)
+        if scheduler_state is None:
+            # `_validate_scheduler_state` deliberately tolerates None — that is
+            # how `record_scheduler_observation` withholds a state on a
+            # submitted row — so it cannot enforce this, and the signature
+            # types the parameter `str` without a default. The DDL agrees:
+            # 017's terminal_without_start CHECK requires
+            # `scheduler_state IS NOT NULL`. Without this guard the UPDATE is
+            # issued, PostgreSQL refuses it, the reconciler counts a per-row
+            # error and retries the identical statement on every subsequent
+            # poll — a permanently stuck attempt whose cause is a constraint
+            # name rather than the missing fact. Reachable: `observation.state`
+            # is `job.get("status")`, which is None when Batch omits it.
+            raise ValueError(
+                "scheduler_state is required to reach terminal_without_start: "
+                "the state exists precisely because the scheduler accounted "
+                "for an attempt the application never did")
         if (closure_record_key is None) != (closure_record_sequence is None):
             raise ValueError(
                 "a closure record is cited by key AND sequence or by neither; "

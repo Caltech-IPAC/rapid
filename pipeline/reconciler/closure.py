@@ -162,7 +162,18 @@ def read_predecessor(store, key, attempt_id):
 
     computed = body_checksum(raw)
     stored = head.get("checksum")
-    if stored and stored != computed:
+    if stored is None:
+        # No stored digest to compare against. Validation here is by identity
+        # and checksum, never by mere presence — so say so rather than letting
+        # the comparison below be skipped silently, which is exactly
+        # validation-by-presence wearing a checksum's name. The body is still
+        # parsed and identity-checked below; what is lost is only the
+        # store-side integrity check, and losing it quietly is the defect.
+        logger.warning(
+            "predecessor %s carries no stored checksum (written without one, "
+            "with another algorithm, or multipart); its body is validated by "
+            "identity alone", key)
+    elif stored != computed:
         logger.warning("predecessor %s failed checksum: stored %s computed %s",
                        key, stored, computed)
         return Predecessor(reason=REJECTED_CHECKSUM, key=key)

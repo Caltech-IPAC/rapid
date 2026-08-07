@@ -50,8 +50,16 @@ def retention_class_for(rapid_outcome, scheduler_state=None):
     Anything that is not an unambiguous success retains longer. An attempt with
     no application outcome at all — never started, or dead before classifying
     itself — is failure-class: its diagnostics are the only evidence there is.
+
+    A missing scheduler state is NOT agreement. `None` means the scheduler said
+    nothing — the never-resolved path passes it when there is no observation at
+    all — which is the opposite of unambiguous, and it used to read as consent
+    alongside "SUCCEEDED". An attempt claiming success whose scheduler identity
+    never resolved is the contradictory case the reconciler flags for a human,
+    and it was filing that attempt's diagnostics under the SHORTER expiry.
+    Agreement must be stated: only "SUCCEEDED" agrees.
     """
-    if rapid_outcome == "success" and scheduler_state in (None, "SUCCEEDED"):
+    if rapid_outcome == "success" and scheduler_state == "SUCCEEDED":
         return CLASS_SUCCESS
     return CLASS_FAILURE
 
