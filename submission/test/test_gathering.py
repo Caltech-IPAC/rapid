@@ -12,7 +12,9 @@ silently dropped, defaulted, or put in a second home.
 """
 
 import hashlib
+import os
 import unittest
+from unittest import mock
 
 from submission import gathering
 from submission.gathering import (
@@ -496,10 +498,16 @@ class CoaddInputsTests(unittest.TestCase):
             #: (rid, mjdobs) as the query actually received them — the two
             #: arguments whose values ARE the query's semantics.
             self.overlap_calls = []
+            #: (start_mjdobs, end_mjdobs) per call: since O1 the observation
+            #: window is passed rather than read from the environment, so
+            #: what arrives here is the whole of what selects the frames.
+            self.overlap_windows = []
 
         def get_overlapping_l2files(self, rid, fid, mjdobs, *corners,
-                                    radius_of_initial_cone_search=None):
+                                    radius_of_initial_cone_search=None,
+                                    start_mjdobs=None, end_mjdobs=None):
             self.overlap_calls.append((rid, mjdobs))
+            self.overlap_windows.append((start_mjdobs, end_mjdobs))
             if self.overlap_failure is not None:
                 self.exit_code = self.overlap_failure
                 return None
@@ -576,6 +584,50 @@ class CoaddInputsTests(unittest.TestCase):
         _, mjdobs = source.overlap_calls[0]
         self.assertEqual(mjdobs, gathering.REFERENCE_OVERLAP_OPEN_MJDOBS)
         self.assertNotEqual(mjdobs, 61679.1)
+
+    def test_the_window_comes_from_release_content_by_default(self):
+        # O1: the window used to be read inside `rapid_db` from
+        # STARTREFIMMJDOBS/ENDREFIMMJDOBS. It is release content now, and
+        # arrives at the query as a passed pair — so a process with those
+        # variables set in its environment cannot change which frames a
+        # reference image is built from.
+        source = self.Source(
+            overlapping=[self._overlap_row(1), self._overlap_row(2)],
+            info={1: self._info("a.fits"), 2: self._info("b.fits")})
+
+        # RAPID_SW points at this checkout so the release content read is
+        # the repo's own `cdf/science/pipeline.toml`, not whatever tree the
+        # runner happens to be in.
+        repo_root = os.path.dirname(os.path.dirname(os.path.dirname(
+            os.path.abspath(__file__))))
+        with mock.patch.dict(os.environ,
+                             {"RAPID_SW": repo_root,
+                              "STARTREFIMMJDOBS": "1.0",
+                              "ENDREFIMMJDOBS": "2.0"}):
+            gathering.coadd_input_rows(
+                source, rid=9, fid=1, mjdobs=61679.1, sky_position=self.SKY,
+                min_images_to_coadd=2)
+            release_window = gathering.reference_observation_window()
+
+        window = source.overlap_windows[0]
+        self.assertEqual(window, release_window)
+        # The retired variables have no effect: they are set here precisely
+        # so that a regression restoring the environment read fails.
+        self.assertNotEqual(window, (1.0, 2.0))
+
+    def test_an_explicit_window_is_what_reaches_the_query(self):
+        # The manifest override's path: `gather_reference_units` resolves it
+        # once and hands it down, so every unit of one submission is built
+        # against one window.
+        source = self.Source(
+            overlapping=[self._overlap_row(1), self._overlap_row(2)],
+            info={1: self._info("a.fits"), 2: self._info("b.fits")})
+
+        gathering.coadd_input_rows(
+            source, rid=9, fid=1, mjdobs=61679.1, sky_position=self.SKY,
+            min_images_to_coadd=2, window=(60000.0, 60100.0))
+
+        self.assertEqual(source.overlap_windows[0], (60000.0, 60100.0))
 
     def test_the_representative_image_is_not_excluded_from_its_own_coadd(self):
         # A real rid in the tail parameter renders as `a.rid != %s` and drops
@@ -755,9 +807,12 @@ class GatherReferenceUnitsTests(unittest.TestCase):
             super().__init__(**overrides)
             self.overlapping = list(overlapping)
             self.overlap_failure = overlap_failure
+            self.overlap_windows = []
 
         def get_overlapping_l2files(self, rid, fid, mjdobs, *corners,
-                                    radius_of_initial_cone_search=None):
+                                    radius_of_initial_cone_search=None,
+                                    start_mjdobs=None, end_mjdobs=None):
+            self.overlap_windows.append((start_mjdobs, end_mjdobs))
             if self.overlap_failure is not None:
                 self.exit_code = self.overlap_failure
                 return None

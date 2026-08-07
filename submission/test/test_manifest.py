@@ -161,7 +161,7 @@ def test_no_override_is_the_default_and_writes_no_key():
 def test_the_window_override_round_trips():
     window = ReferenceObservationWindow(start_mjdobs=60000.0,
                                         end_mjdobs=60100.5)
-    manifest = Manifest(units(4), batch_id="b", job_type="reference_image",
+    manifest = Manifest(units(4), batch_id="b", job_type="reference-image",
                         reference_observation_window=window)
 
     restored = Manifest.from_json(manifest.to_json())

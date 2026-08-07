@@ -335,6 +335,19 @@ class RoundTripAgainstTheMasterIniTests(unittest.TestCase):
         # The two rules cannot both hold for this key; the sentinel ban is the
         # one that protects the next reader, so the round-trip yields here.
         diverged = {"sextractor_flag_image"}
+        # RELEASE-ONLY keys: release content the .ini never carried and never
+        # will, so there is nothing for them to round-trip against. Each is
+        # asserted ABSENT from the .ini rather than skipped, so a copy
+        # appearing there — a second home, the drift this class exists to
+        # catch — fails here.
+        #
+        # The window pair arrived with O1, when the environment policy
+        # retired STARTREFIMMJDOBS/ENDREFIMMJDOBS and the window's home
+        # became release content. `min_n_images_to_coadd` went the other
+        # way: it HAD an .ini copy, which O1 deleted as the W4 re-homing's
+        # leftover duplicate.
+        release_only = {"start_refimage_mjdobs", "end_refimage_mjdobs",
+                        "min_n_images_to_coadd"}
         compared = 0
         for name, values in self.toml.items():
             if name in authored:
@@ -353,6 +366,12 @@ class RoundTripAgainstTheMasterIniTests(unittest.TestCase):
                         f"{ini_section}.{key} is no longer a placeholder in "
                         "the .ini; the toml should now round-trip it")
                     self.assertEqual("NONE", value, f"{ini_section}.{key}")
+                    continue
+                if key in release_only:
+                    self.assertNotIn(
+                        key, self.ini[ini_section],
+                        f"{ini_section}.{key} has reappeared in the .ini; "
+                        "release content is its single home (O1)")
                     continue
                 self.assertIn(key, self.ini[ini_section],
                               f"{ini_section}.{key} is not in the .ini")

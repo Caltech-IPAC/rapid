@@ -297,7 +297,11 @@ class BuildProvenanceTests(unittest.TestCase):
         message = str(ctx.exception)
         self.assertIn("RAPID_SOURCE_SHA", message)
         self.assertIn("RAPID_IMAGE_DIGEST", message)
-        self.assertIn("RAPID_JOB_DEFINITION_REV", message)
+        # The revision is NOT among the required reads since O1: the baked
+        # value is advisory, and the authority is the submission-time
+        # execution binding on the attempt row. Naming it here would tell an
+        # operator to go and set something nothing needs.
+        self.assertNotIn("RAPID_JOB_DEFINITION_REV", message)
 
     def test_all_present_returns_provenance_with_config_digest(self):
         env = {
@@ -319,7 +323,32 @@ class BuildProvenanceTests(unittest.TestCase):
         message = str(ctx.exception)
         self.assertNotIn("RAPID_SOURCE_SHA,", message.split(":")[0])
         self.assertIn("RAPID_IMAGE_DIGEST", message)
-        self.assertIn("RAPID_JOB_DEFINITION_REV", message)
+
+    def test_the_baked_revision_is_advisory_and_may_be_absent(self):
+        # An image built without the ENV entry starts. It used to be unable
+        # to: the entrypoint required a value the submitter had already
+        # stopped supplying, and which `active_definition` resolves from
+        # Batch at submission.
+        env = {
+            "RAPID_SOURCE_SHA": "a" * 40,
+            "RAPID_IMAGE_DIGEST": "sha256:" + "b" * 64,
+        }
+        with mock.patch.dict("os.environ", env, clear=True):
+            provenance = job.build_provenance("digest123", {})
+        # None, not "" — absent is absent, and `mark_started` COALESCEs it
+        # onto the row's own binding revision.
+        self.assertIsNone(provenance.job_definition_rev)
+        self.assertEqual(provenance.source_sha, "a" * 40)
+
+    def test_a_blank_baked_revision_reads_as_absent(self):
+        env = {
+            "RAPID_SOURCE_SHA": "a" * 40,
+            "RAPID_IMAGE_DIGEST": "sha256:" + "b" * 64,
+            "RAPID_JOB_DEFINITION_REV": "   ",
+        }
+        with mock.patch.dict("os.environ", env, clear=True):
+            provenance = job.build_provenance("digest123", {})
+        self.assertIsNone(provenance.job_definition_rev)
 
 
 # ---------------------------------------------------------------------------
