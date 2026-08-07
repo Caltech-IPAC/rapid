@@ -122,7 +122,10 @@ RUN if [ -z "$RAPID_BRANCH" ]; then \
     fi && \
     git clone --branch "$RAPID_BRANCH" --single-branch https://github.com/Caltech-IPAC/rapid code
 
-# RUN git clone https://github.com/Caltech-IPAC/rapid code
+# Remove docs directory in /code to make container image smaller.
+
+RUN rm -rf /code/docs
+
 WORKDIR /code
 
 # Build C code in RAPID software stack.
