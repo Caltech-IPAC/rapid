@@ -1338,7 +1338,9 @@ class RAPIDDB:
                                 field_ra2,field_dec2,
                                 field_ra3,field_dec3,
                                 field_ra4,field_dec4,
-                                radius_of_initial_cone_search=None):
+                                radius_of_initial_cone_search=None,
+                                start_mjdobs=None,
+                                end_mjdobs=None):
 
         '''
         Query database for RIDs and distances from tile center for all science images that
@@ -1368,6 +1370,14 @@ class RAPIDDB:
         was ever asked about. Expressing it as the absence of a predicate
         rather than as a predicate that happens to be universally true also
         makes the two branches say what they mean.
+
+        `start_mjdobs`/`end_mjdobs` are the half-open observation window the
+        candidate frames must fall in, `[start, end)`. Passed in, not read
+        from the environment: the window selects which frames enter a
+        science product, so its home is release content with a submission-
+        manifest override, and STARTREFIMMJDOBS/ENDREFIMMJDOBS are gone.
+        Omitting them keeps this query's own historical meaning — everything
+        observed before the representative — for the standalone callers.
         '''
 
         self.exit_code = 0
@@ -1429,25 +1439,26 @@ class RAPIDDB:
             query += "order by dist; "
 
 
-        # Special logic for generating reference image from inputs observed within a certain observation date range.
-        # If STARTREFIMMJDOBS is set, then so must ENDREFIMMJDOBS.
+        # The observation window the reference image's inputs are drawn from.
+        #
+        # It used to be read here from STARTREFIMMJDOBS/ENDREFIMMJDOBS, with
+        # `[0.0, mjdobs)` when neither was set.  That environment path is
+        # deleted: the window selects which frames enter a science product,
+        # and "nothing that can alter a science product is reachable from the
+        # environment" (design/code-standards.md).  Its authoritative value is
+        # release content, per-run overridable only through the submission
+        # manifest's enumerated override field, and the caller — which is the
+        # side that has both — passes the resolved pair in.
+        #
+        # `[0.0, mjdobs)` remains the default for a caller that passes
+        # neither, which is what the standalone scripts still do: the window
+        # ending at the representative's own observation is this query's
+        # historical meaning, not a policy default substituted for an absent
+        # variable.
 
-        start_refimage_mjdobs = os.getenv('STARTREFIMMJDOBS')
-
-        if start_refimage_mjdobs is not None:
-
-            end_refimage_mjdobs = os.getenv('ENDREFIMMJDOBS')
-
-            if end_refimage_mjdobs is None:
-
-                print("*** Error: Env. var. ENDREFIMMJDOBS not set; quitting...")
-                exit(64)
-
-            start_mjdobs = start_refimage_mjdobs
-            end_mjdobs = end_refimage_mjdobs
-
-        else:
+        if start_mjdobs is None:
             start_mjdobs = 0.0
+        if end_mjdobs is None:
             end_mjdobs = mjdobs
 
 

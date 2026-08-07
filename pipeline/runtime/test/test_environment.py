@@ -23,6 +23,7 @@ from pipeline.runtime.environment import (
     describe,
     read_environment,
     redacting_environ,
+    resolve_region,
 )
 from pipeline.runtime.errors import ConfigError
 
@@ -245,6 +246,49 @@ class RedactingEnvironTests(unittest.TestCase):
         result = redacting_environ(env)
         self.assertEqual(result["RAPID_BATCH_ID"], "batch-9")
         self.assertNotEqual(result["API_KEY"], "supersecretvalue")
+
+
+class ResolveRegionTests(unittest.TestCase):
+    """The policy's order, and the raise at the end of it.
+
+    The pattern this replaces was `os.environ.get("AWS_DEFAULT_REGION",
+    "us-east-1")`: in an account deployed anywhere else it reconciled
+    against a region holding none of its work and reported nothing wrong.
+    """
+
+    def test_aws_region_wins(self):
+        env = {"AWS_REGION": "us-west-2", "AWS_DEFAULT_REGION": "us-east-1"}
+        self.assertEqual(resolve_region(env, session_region="eu-west-1"),
+                         "us-west-2")
+
+    def test_default_region_is_the_second_choice(self):
+        env = {"AWS_DEFAULT_REGION": "us-east-2"}
+        self.assertEqual(resolve_region(env, session_region="eu-west-1"),
+                         "us-east-2")
+
+    def test_the_sdk_session_is_the_third(self):
+        self.assertEqual(resolve_region({}, session_region="ap-south-1"),
+                         "ap-south-1")
+
+    def test_an_empty_value_does_not_count_as_set(self):
+        env = {"AWS_REGION": "   ", "AWS_DEFAULT_REGION": "us-east-1"}
+        self.assertEqual(resolve_region(env, session_region="eu-west-1"),
+                         "us-east-1")
+
+    def test_nothing_anywhere_raises_rather_than_defaulting(self):
+        # `session_region=""` is "the SDK was consulted and had none"; None
+        # would mean "consult it", which would reach boto3 from a unit test.
+        with self.assertRaises(ConfigError) as caught:
+            resolve_region({}, session_region="")
+        # The variable is named, so the operator knows what to set.
+        self.assertIn("AWS_REGION", str(caught.exception))
+
+    def test_no_us_east_1_is_ever_substituted(self):
+        # The specific defect: a hardcoded region that made a
+        # misconfiguration look like a healthy service.
+        with self.assertRaises(ConfigError) as caught:
+            resolve_region({}, session_region="")
+        self.assertNotIn("us-east-1", str(caught.exception))
 
 
 class JobEnvironmentFrozenTests(unittest.TestCase):

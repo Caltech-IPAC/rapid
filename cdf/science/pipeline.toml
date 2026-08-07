@@ -131,6 +131,24 @@ cdelt2_refimage = 0.000030555555556
 crota2_refimage = 0.0
 min_n_images_to_coadd = 2
 max_n_images_to_coadd = 25
+# The reference image's observation window, as MJD of observation: which
+# frames are eligible to be coadded into it. Release content, because it
+# selects the science inputs — the environment carried it as
+# STARTREFIMMJDOBS/ENDREFIMMJDOBS until the environment policy retired that
+# path, "nothing that can alter a science product is reachable from the
+# environment" (design/code-standards.md § Environment variables).
+#
+# `999999.9` is MJD 4692-05-11 and is the launcher's own way of writing "no
+# upper bound"; the window is [start, end), so the pair below is every frame
+# ever observed. A per-run narrowing goes in the submission manifest's
+# `reference_observation_window` override — the sole enumerated override
+# field (design/compute.md § Job definitions) — never here and never in the
+# environment.
+#
+# Numbers, not TOML dates: `science_config` refuses native temporal types,
+# and MJD is what the query binds.
+start_refimage_mjdobs = 0.0
+end_refimage_mjdobs = 999999.9
 
 [naive_diffimage]
 naive_diffimage_flag = true

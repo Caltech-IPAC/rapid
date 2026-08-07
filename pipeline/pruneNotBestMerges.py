@@ -72,7 +72,10 @@ config_input_filename = cfg_path + "/" + cfg_filename_only
 config_input = configparser.ConfigParser()
 config_input.read(config_input_filename)
 
-job_info_s3_bucket_base = config_input['JOB_PARAMS']['job_info_s3_bucket_base']
+# `job_info_s3_bucket_base` is NOT read here: it named the legacy IMSS-era
+# bucket (`rapid-pipeline-files`) that this account does not carry, and
+# binding it at import cost a KeyError for a value the file never used.
+# Products and job records go to the buckets the parameter tree names.
 product_s3_bucket_base = config_input['JOB_PARAMS']['product_s3_bucket_base']
 job_config_filename_base = config_input['JOB_PARAMS']['job_config_filename_base']
 product_config_filename_base = config_input['JOB_PARAMS']['product_config_filename_base']

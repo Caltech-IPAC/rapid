@@ -1,6 +1,8 @@
 import argparse
 import importlib
 import json
+import logging
+import os
 import numpy as np
 
 import asdf
@@ -70,13 +72,55 @@ def _fix_wcs(dm):
     return dm
 
 
+logger = logging.getLogger(__name__)
+
+# CRDS's own contract variables. The environment policy carves them out by
+# name — "third-party contract variables (CRDS) are honored as that contract
+# requires, with any fallback made explicit" — because CRDS reads its own
+# environment and RAPID does not get to choose otherwise.
+#
+# What was implicit until now is the FALLBACK. Nothing in the operational
+# path set either variable, so a CRDS fetch from a payload job ran against
+# whatever the image happened to carry: crds' own defaults are the STScI
+# production server and `$HOME/crds_cache`, both of which a Batch container
+# reaches (or fails to reach) silently. These name the fallback so it is a
+# stated choice that appears in the log rather than an ambient one.
+CRDS_SERVER_DEFAULT = "https://roman-crds.stsci.edu"
+CRDS_PATH_DEFAULT = "/tmp/crds_cache"
+
+
+def _crds_configuration():
+    """The CRDS contract variables in force, with the fallback stated.
+
+    Returns the pair actually used, for the log. The environment is CRDS's
+    own interface and is read here at this module's boundary; nothing is
+    written for a downstream RAPID reader.
+    """
+    server = os.environ.get("CRDS_SERVER_URL")
+    path = os.environ.get("CRDS_PATH")
+    if not server:
+        server = CRDS_SERVER_DEFAULT
+        os.environ["CRDS_SERVER_URL"] = server
+        logger.info("CRDS_SERVER_URL is unset; using the documented default "
+                    "%s", server)
+    if not path:
+        path = CRDS_PATH_DEFAULT
+        os.environ["CRDS_PATH"] = path
+        logger.info("CRDS_PATH is unset; caching references under %s", path)
+    return server, path
+
+
 def _fetch_crds_ref(dm, reftype):
     """Fetch a CRDS reference file for the given reftype and return its local path.
 
     Uses crds.getreferences to download the file to the local cache if needed,
     ensuring the file exists before opening. The crds:// URIs stored in
     dm.meta.ref_file are labels only and cannot be opened directly.
+
+    The CRDS contract variables are resolved first, so an unset one is a
+    logged fallback rather than an ambient default nobody recorded.
     """
+    _crds_configuration()
     ref_paths = crds.getreferences(dm.get_crds_parameters(),
                                    reftypes=[reftype], observatory='roman')
     return ref_paths[reftype]

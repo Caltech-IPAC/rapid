@@ -13,7 +13,9 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from submission.manifest import (MAX_ARRAY_SIZE, Manifest, ProcessingUnit)
+from submission.manifest import (MAX_ARRAY_SIZE, OVERRIDE_REFERENCE_WINDOW,
+                                 Manifest, ProcessingUnit,
+                                 ReferenceObservationWindow)
 
 
 def units(count, exposure=90210):
@@ -133,3 +135,108 @@ def test_serialized_form_is_byte_stable():
     # its serialization cannot depend on dict ordering.
     manifest = Manifest(units(6), batch_id="b-9")
     assert manifest.to_json() == Manifest.from_json(manifest.to_json()).to_json()
+
+
+# ---------------------------------------------------------------------------
+# The enumerated science overrides (O1)
+#
+# The manifest is the SOLE carrier of a per-run override of a
+# science-affecting value, and the reference-image observation window is the
+# sole enumerated field. What these pin is the properties the design leans
+# on: the override survives a round trip, it is visible to a promotion gate,
+# it changes the checksum (which is what "recorded by construction" rests
+# on), and an unenumerated or half-specified one is refused rather than
+# quietly dropped.
+# ---------------------------------------------------------------------------
+
+def test_no_override_is_the_default_and_writes_no_key():
+    manifest = Manifest(units(3), batch_id="b")
+    assert manifest.reference_observation_window is None
+    assert manifest.has_science_override is False
+    # Absent, not an empty mapping: two spellings of one absence would give
+    # two different checksums for the same submission.
+    assert "overrides" not in manifest.to_dict()
+
+
+def test_the_window_override_round_trips():
+    window = ReferenceObservationWindow(start_mjdobs=60000.0,
+                                        end_mjdobs=60100.5)
+    manifest = Manifest(units(4), batch_id="b", job_type="reference_image",
+                        reference_observation_window=window)
+
+    restored = Manifest.from_json(manifest.to_json())
+
+    assert restored.reference_observation_window == window
+    assert restored.has_science_override is True
+    assert restored == manifest
+
+
+def test_the_override_is_serialized_under_its_enumerated_name():
+    window = ReferenceObservationWindow(start_mjdobs=1.0, end_mjdobs=2.0)
+    raw = Manifest(units(2), batch_id="b",
+                   reference_observation_window=window).to_dict()
+    assert raw["overrides"] == {
+        OVERRIDE_REFERENCE_WINDOW: {"start_mjdobs": 1.0, "end_mjdobs": 2.0}}
+
+
+def test_an_override_changes_the_checksum():
+    # The bar on promoting an override-bearing product binds "by
+    # construction" because the manifest and its checksum are bound into the
+    # attempt record. That only holds if the override is inside the checksum.
+    plain = Manifest(units(5), batch_id="b").checksum()
+    overridden = Manifest(
+        units(5), batch_id="b",
+        reference_observation_window=ReferenceObservationWindow(
+            start_mjdobs=60000.0, end_mjdobs=60100.0)).checksum()
+    assert overridden != plain
+
+
+def test_a_different_window_is_a_different_checksum():
+    def checksum(end):
+        return Manifest(
+            units(5), batch_id="b",
+            reference_observation_window=ReferenceObservationWindow(
+                start_mjdobs=60000.0, end_mjdobs=end)).checksum()
+
+    assert checksum(60100.0) != checksum(60200.0)
+
+
+def test_an_unenumerated_override_is_refused_not_dropped():
+    # Dropping it would run the job WITHOUT an override its author asked
+    # for, and produce a promotable-looking product from a barred run.
+    raw = Manifest(units(3), batch_id="b").to_dict()
+    raw["overrides"] = {"sca_gain": 1.5}
+    with pytest.raises(ValueError, match="unknown override fields"):
+        Manifest.from_dict(raw)
+
+
+def test_a_half_specified_window_is_refused():
+    raw = Manifest(units(3), batch_id="b").to_dict()
+    raw["overrides"] = {OVERRIDE_REFERENCE_WINDOW: {"start_mjdobs": 60000.0}}
+    with pytest.raises(ValueError, match="end_mjdobs"):
+        Manifest.from_dict(raw)
+
+
+def test_an_empty_window_is_refused():
+    # The window is half-open, so end must exceed start; an inverted or
+    # equal pair selects no frames at all and would build a reference image
+    # from nothing rather than saying so.
+    with pytest.raises(ValueError, match="empty"):
+        ReferenceObservationWindow(start_mjdobs=60100.0, end_mjdobs=60000.0)
+    with pytest.raises(ValueError, match="empty"):
+        ReferenceObservationWindow(start_mjdobs=60000.0, end_mjdobs=60000.0)
+
+
+def test_a_non_numeric_window_bound_is_refused():
+    with pytest.raises(ValueError, match="MJD"):
+        ReferenceObservationWindow(start_mjdobs="60000", end_mjdobs=60100.0)
+
+
+def test_a_version_2_manifest_is_refused():
+    # A version-2 manifest predates the override vocabulary. Reading one as
+    # version 3 would claim it carried no override when the concept did not
+    # exist for it to carry.
+    raw = Manifest(units(3), batch_id="b").to_dict()
+    raw["schema_version"] = 2
+    with pytest.raises(ValueError, match="schema_version"):
+        Manifest.from_dict(raw)

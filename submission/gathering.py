@@ -120,7 +120,10 @@ class UnitSource(Protocol):
     def get_overlapping_l2files(self, rid: Any, fid: int, mjdobs: float,
                                 *corners: float,
                                 radius_of_initial_cone_search: float | None
-                                = ...) -> Sequence[Any]: ...
+                                = ...,
+                                start_mjdobs: float | None = ...,
+                                end_mjdobs: float | None = ...
+                                ) -> Sequence[Any]: ...
 
     def get_job_record(self, jid: int) -> Sequence[Any] | None: ...
 
@@ -388,9 +391,42 @@ REFERENCE_OVERLAP_OPEN_MJDOBS = 999999.9
 REFERENCE_OVERLAP_NO_EXCLUSION = None
 
 
+def reference_observation_window(override=None) -> tuple[float, float]:
+    """The reference image's observation window: override, else release.
+
+    Two homes and no third. The authoritative value is release content
+    (`[ref_image]` in `cdf/science/pipeline.toml`); the submission
+    manifest's `reference_observation_window` is the sole per-run override
+    carrier (design/compute.md § Job definitions). The environment is
+    neither: `STARTREFIMMJDOBS`/`ENDREFIMMJDOBS` selected which frames
+    entered a science product and are deleted, on "nothing that can alter a
+    science product is reachable from the environment".
+
+    Returns the half-open `[start, end)` pair the overlap query binds.
+    """
+    if override is not None:
+        return (float(override.start_mjdobs), float(override.end_mjdobs))
+
+    from pipeline.runtime import science_config
+
+    ref_image = science_config.section(science_config.load(), "ref_image")
+    missing = [key for key in ("start_refimage_mjdobs", "end_refimage_mjdobs")
+               if ref_image.get(key) is None]
+    if missing:
+        raise GatheringError(
+            "release content does not carry the reference observation "
+            "window; missing [ref_image] " + ", ".join(missing)
+            + ". It is release content and has no default here — the "
+            "environment path that used to supply it is deleted.")
+    return (float(ref_image["start_refimage_mjdobs"]),
+            float(ref_image["end_refimage_mjdobs"]))
+
+
 def _overlapping_l2files(handle: UnitSource, rid: int, fid: int,
                          corners: Sequence[Any],
-                         radius: float | None) -> Sequence[Any]:
+                         radius: float | None,
+                         window: tuple[float, float] | None = None
+                         ) -> Sequence[Any]:
     """`get_overlapping_l2files` asked the way the reference stage means it.
 
     Two defects are closed here, and both are the same mistake: the legacy
@@ -407,8 +443,12 @@ def _overlapping_l2files(handle: UnitSource, rid: int, fid: int,
     construction. Every field returned zero coadd inputs, every reference
     unit was logged "not ready yet", and no reference image was ever built.
     The launcher passed 999999.9 for exactly this reason and said so in a
-    comment. So do we; the environment-variable override still wins inside
-    `rapid_db`, which is where operations expects to set it.
+    comment. So do we — but the window is now passed EXPLICITLY, as
+    `window`, and 999999.9 survives only as release content's default upper
+    bound. There is no longer an environment override winning inside
+    `rapid_db`: that path is deleted, and the two homes are release content
+    and the submission manifest's enumerated override
+    (`reference_observation_window`).
 
     **The exclusion.** The tail parameter renders as `a.rid != %s` for a real
     rid — which drops the representative from its own coadd. It is an input
@@ -438,11 +478,14 @@ def _overlapping_l2files(handle: UnitSource, rid: int, fid: int,
     call below already do, and raised as a bare `GatheringError` so it is NOT
     the `NotReadyYet` that `gather_reference_units` swallows.
     """
+    start_mjdobs, end_mjdobs = (window if window is not None
+                                else reference_observation_window())
     try:
         overlapping = handle.get_overlapping_l2files(
             REFERENCE_OVERLAP_NO_EXCLUSION, fid,
             REFERENCE_OVERLAP_OPEN_MJDOBS, *corners,
-            radius_of_initial_cone_search=radius)
+            radius_of_initial_cone_search=radius,
+            start_mjdobs=start_mjdobs, end_mjdobs=end_mjdobs)
     except Exception as exc:  # noqa: BLE001
         raise GatheringError(
             f"overlap query failed for rid {rid} fid {fid}: {exc}") from exc
@@ -458,7 +501,9 @@ def _overlapping_l2files(handle: UnitSource, rid: int, fid: int,
 
 def coadd_input_rows(handle: UnitSource, rid: int, fid: int, mjdobs: float,
                      sky_position: dict, min_images_to_coadd: int,
-                     radius: float | None = None) -> list[list[Any]]:
+                     radius: float | None = None,
+                     window: tuple[float, float] | None = None
+                     ) -> list[list[Any]]:
     """The reference image's coadd inputs, as CSV rows.
 
     The launcher's aggregation, preserved because it is science logic: every
@@ -490,7 +535,8 @@ def coadd_input_rows(handle: UnitSource, rid: int, fid: int, mjdobs: float,
             f"rid {rid} has no complete sky position; the overlap query is a "
             f"cone search about the tile corners and cannot run without them")
 
-    overlapping = _overlapping_l2files(handle, rid, fid, corners, radius)
+    overlapping = _overlapping_l2files(handle, rid, fid, corners, radius,
+                                       window=window)
 
     rows: list[list[Any]] = []
     for image in overlapping:
@@ -636,7 +682,8 @@ def gather_reference_units(handle: UnitSource, start, end,
                            s3_client: Any, job_bucket: str,
                            run_id: str,
                            fids: Iterable[int] | None = None,
-                           radius: float | None = None
+                           radius: float | None = None,
+                           reference_window: tuple[float, float] | None = None
                            ) -> Iterator[ProcessingUnit]:
     """Yield reference-image units, each with its coadd inputs published.
 
@@ -655,11 +702,18 @@ def gather_reference_units(handle: UnitSource, start, end,
     must not read the same as a night early in the survey.
 
     `start_mjdobs`/`end_mjdobs` bound which frames are gathered as UNITS and
-    are passed on for that; they are deliberately not the coadd window. The
-    coadd's inputs are every good frame ever taken of that tile, which is
-    what a reference image is, and `_overlapping_l2files` is where that
-    window is set.
+    are passed on for that; they are deliberately not the coadd window.
+
+    `reference_window` IS the coadd window — a distinct parameter because
+    the two were only ever confusable while one of them had no name here.
+    Its default is release content's, which is every good frame ever taken
+    of that tile, and that is what a reference image is; a submission whose
+    manifest carries the `reference_observation_window` override passes that
+    instead. Resolved once per gathering pass rather than per unit, so every
+    unit of one submission is built against one window.
     """
+    if reference_window is None:
+        reference_window = reference_observation_window()
     for unit in gather_science_units(handle, start, end, start_mjdobs,
                                      end_mjdobs, min_images_to_coadd,
                                      fids=fids, make_references=True):
@@ -684,7 +738,8 @@ def gather_reference_units(handle: UnitSource, start, end,
         try:
             rows = coadd_input_rows(
                 handle, int(rid), int(facts.fid), float(facts.mjdobs),
-                facts.sky_position or {}, min_images_to_coadd, radius=radius)
+                facts.sky_position or {}, min_images_to_coadd, radius=radius,
+                window=reference_window)
         except NotReadyYet as exc:
             # Narrowed from `GatheringError` on purpose. The broad catch
             # swallowed every failure this module raises — a stale sky

@@ -382,17 +382,24 @@ class RoundTripAgainstTheMasterIniTests(unittest.TestCase):
         # silent, so the assertion moves to the new state rather than the
         # change being argued with.
         #
-        # What it guards now is agreement: the two toml keys and the .ini all
-        # state one value, so a future edit that re-opens the gap between them
-        # fails here. The specific NUMBER is deliberately not pinned — that is
-        # an operating value and the release content's to state.
-        ini_value = int(self.ini["REF_IMAGE"]["min_n_images_to_coadd"])
-        self.assertEqual(ini_value,
-                         self.toml["ref_image"]["min_n_images_to_coadd"])
-        self.assertEqual(ini_value,
+        # What it guards now is agreement between the two toml keys, so a
+        # future edit that re-opens the gap between them fails here. The
+        # specific NUMBER is deliberately not pinned — that is an operating
+        # value and the release content's to state.
+        #
+        # The .ini's copy is no longer one of the compared homes: O1 retired
+        # it. Comparing against it guarded a divergence that could only exist
+        # while the value had two homes, and the fix for that is one home,
+        # not a test that watches two. Its ABSENCE is asserted instead, so
+        # re-adding the duplicate fails here rather than silently restoring
+        # something for the toml to drift from.
+        self.assertNotIn("min_n_images_to_coadd", self.ini["REF_IMAGE"],
+                         "the .ini's min-coadd duplicate is back; release "
+                         "content is the single home (O1)")
+        self.assertEqual(self.toml["ref_image"]["min_n_images_to_coadd"],
                          self.toml["science"]["min_images_to_coadd"],
                          "the W4 divergence has re-opened: the science and "
-                         "ref_image minimums no longer agree with the .ini")
+                         "ref_image minimums no longer agree")
 
 
 if __name__ == "__main__":

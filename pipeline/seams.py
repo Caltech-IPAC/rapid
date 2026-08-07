@@ -107,7 +107,7 @@ class SubmissionFailed(RuntimeError):
 def submit_units(units, job_type, queue, job_definition, binding,
                  manifest_bucket, manifest_prefix, s3_client, batch_client,
                  execute, run_id=None, reason="vpo", job_name=None,
-                 now=None):
+                 now=None, reference_observation_window=None):
     """Submit one array job for `units`, with its attempt rows pre-created.
 
     ORDER MATTERS, and it is the reason this is one function rather than two
@@ -134,9 +134,18 @@ def submit_units(units, job_type, queue, job_definition, binding,
     The manifest is published first, before the rows, because the rows carry
     its checksum in their execution binding — an attempt must always know
     exactly which manifest it was submitted under.
+
+    `reference_observation_window` is the sole enumerated science override
+    (design/compute.md § Job definitions), carried into the manifest here so
+    it is checksummed with it and bound into every attempt row — which is
+    what "recorded by construction" means, and what lets a promotion gate
+    refuse a product built under one. None means no override: the window's
+    authoritative value is release content.
     """
     moment = now or datetime.datetime.now(datetime.timezone.utc)
-    manifest = Manifest(units=list(units), batch_id=run_id, job_type=job_type)
+    manifest = Manifest(units=list(units), batch_id=run_id, job_type=job_type,
+                        reference_observation_window=(
+                            reference_observation_window))
     batch = Batch(manifest=manifest, reason=reason)
 
     store = S3ManifestStore(manifest_bucket, prefix=manifest_prefix,
@@ -190,7 +199,7 @@ def submit_units(units, job_type, queue, job_definition, binding,
 def submit_gathered(units, job_type, queue, job_definition, binding,
                     manifest_bucket, manifest_prefix, s3_client, batch_client,
                     execute, run_id, max_batch_size=None, reason="vpo",
-                    now=None):
+                    now=None, reference_observation_window=None):
     """Batch a gathered unit list and submit every batch. The VPO's entry.
 
     `submit_units` submits ONE array job, which is the right unit of work for
@@ -228,7 +237,11 @@ def submit_gathered(units, job_type, queue, job_definition, binding,
             job_definition=job_definition, binding=binding,
             manifest_bucket=manifest_bucket, manifest_prefix=manifest_prefix,
             s3_client=s3_client, batch_client=batch_client, execute=execute,
-            run_id=batch_run_id, reason=reason, now=now))
+            run_id=batch_run_id, reason=reason, now=now,
+            # Every batch of one gathering pass carries the same override:
+            # they are one submission cut by the array ceiling, not runs
+            # under different windows.
+            reference_observation_window=reference_observation_window))
     return results
 
 

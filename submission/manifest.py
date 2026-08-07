@@ -51,6 +51,17 @@ what a job type needs beyond them.
 The .ini path itself is not deleted here — that is W5's switch and W6's
 fence. This establishes where the facts live so the switch has somewhere
 to switch to.
+
+**The enumerated science overrides, since O1.** The manifest is also the
+SOLE carrier of a per-run override of a science-affecting value
+(design/compute.md § Job definitions). The sole enumerated field is the
+reference-image observation window, whose authoritative value is release
+content; it arrived here when the environment policy retired
+`STARTREFIMMJDOBS`/`ENDREFIMMJDOBS`, on the rule that nothing able to
+alter a science product is reachable from the environment. Because the
+manifest and its checksum are bound into the attempt record, an override
+is recorded by construction, which is what lets a promotion gate refuse
+a product built under one.
 """
 
 import dataclasses
@@ -67,6 +78,78 @@ MAX_ARRAY_SIZE = 10000
 # one-unit batch is submitted as a plain (non-array) job instead — see
 # submit.py, which is where that distinction is acted on.
 MIN_ARRAY_SIZE = 2
+
+
+#: The manifest's enumerated science-override fields, and nothing else.
+#:
+#: design/compute.md § Job definitions: "The submission manifest is the sole
+#: carrier for a per-run override of a science-affecting value: override
+#: fields are enumerated in the manifest schema — the sole enumerated field
+#: is the reference-image observation window, whose authoritative value is
+#: release content."
+#:
+#: Enumerated, not an open dict, for the same reason `UnitFacts` names its
+#: facts: an open bag of overrides is a second configuration surface with no
+#: schema, and "science-affecting" would stop being a decidable property of
+#: a manifest. Adding an override is a deliberate schema change reviewed as
+#: one.
+OVERRIDE_REFERENCE_WINDOW = "reference_observation_window"
+OVERRIDE_FIELDS = (OVERRIDE_REFERENCE_WINDOW,)
+
+
+@dataclasses.dataclass(frozen=True)
+class ReferenceObservationWindow:
+    """A per-run override of the reference image's observation window.
+
+    Half-open in MJD of observation, `[start, end)`, matching the overlap
+    query's own bounds. Both ends are required: a window with one end
+    supplied and the other defaulted is the shape the retired environment
+    path had, where setting only `STARTREFIMMJDOBS` was a caught error but
+    setting neither silently produced a different window than either.
+
+    A product built under this override is not promotable to a community
+    surface (design/compute.md § Job definitions). Nothing enforces that
+    bar yet because no community promotion path exists; the manifest and
+    its checksum are bound into the attempt record, so the override is
+    recorded by construction and the bar binds when the gate arrives.
+    """
+
+    start_mjdobs: float
+    end_mjdobs: float
+
+    def __post_init__(self):
+        for name in ("start_mjdobs", "end_mjdobs"):
+            value = getattr(self, name)
+            if not isinstance(value, (int, float)) or isinstance(value, bool):
+                raise ValueError(
+                    f"{name} must be a number of days (MJD); got {value!r}")
+        if self.end_mjdobs <= self.start_mjdobs:
+            raise ValueError(
+                f"the reference observation window is empty: "
+                f"[{self.start_mjdobs}, {self.end_mjdobs}) — the window is "
+                "half-open and its end must exceed its start")
+
+    def to_dict(self) -> dict[str, float]:
+        return {"start_mjdobs": float(self.start_mjdobs),
+                "end_mjdobs": float(self.end_mjdobs)}
+
+    @classmethod
+    def from_dict(cls, raw: dict[str, Any]) -> "ReferenceObservationWindow":
+        known = {"start_mjdobs", "end_mjdobs"}
+        unknown = set(raw) - known
+        if unknown:
+            raise ValueError(
+                "reference_observation_window carries unknown keys "
+                + ", ".join(sorted(unknown)))
+        missing = known - set(raw)
+        if missing:
+            raise ValueError(
+                "reference_observation_window is incomplete; missing: "
+                + ", ".join(sorted(missing))
+                + ". Both ends are required — a half-specified window is the "
+                "defect the environment path had.")
+        return cls(start_mjdobs=raw["start_mjdobs"],
+                   end_mjdobs=raw["end_mjdobs"])
 
 
 @dataclasses.dataclass(frozen=True)
@@ -342,14 +425,19 @@ class Manifest:
     """
 
     # 2 (W4): units gained `facts`, the manifest gained `job_type`.
-    # Version 1 manifests are refused rather than read on a guess — a
-    # version-1 manifest names no job type, and a job type is not
-    # something to default.
-    SCHEMA_VERSION = 2
+    # 3 (O1): the enumerated science-override fields. Version 1 and 2
+    # manifests are refused rather than read on a guess — a version-1
+    # manifest names no job type, and a job type is not something to
+    # default; a version-2 manifest predates the override vocabulary, and
+    # reading one as version 3 would silently claim it carried no override
+    # when the concept did not exist to carry.
+    SCHEMA_VERSION = 3
 
     def __init__(self, units: Iterable[ProcessingUnit],
                  batch_id: str | None = None,
-                 job_type: str = JOB_TYPE_SCIENCE):
+                 job_type: str = JOB_TYPE_SCIENCE,
+                 reference_observation_window: (
+                     "ReferenceObservationWindow | None") = None):
         self.units: tuple[ProcessingUnit, ...] = tuple(units)
         self.batch_id = batch_id
         # Validated at construction, so an invalid job type cannot reach
@@ -357,6 +445,10 @@ class Manifest:
         # the second line, not the first.
         self.route = route_for(job_type)
         self.job_type = job_type
+        # The sole enumerated science override. None means "no override":
+        # the window's authoritative value is release content, and the
+        # gathering layer reads it there.
+        self.reference_observation_window = reference_observation_window
         if not self.units:
             raise ValueError("a manifest needs at least one processing unit")
         if len(self.units) > MAX_ARRAY_SIZE:
@@ -391,7 +483,25 @@ class Manifest:
             return NotImplemented
         return (self.units == other.units
                 and self.batch_id == other.batch_id
-                and self.job_type == other.job_type)
+                and self.job_type == other.job_type
+                and (self.reference_observation_window
+                     == other.reference_observation_window))
+
+    @property
+    def has_science_override(self) -> bool:
+        """Whether this submission carries any enumerated science override.
+
+        What a promotion gate asks: a product built under any override is
+        barred from a community surface. One property rather than a check
+        per field, so adding an override field cannot leave the bar behind.
+        """
+        return any(getattr(self, name) is not None for name in OVERRIDE_FIELDS)
+
+    def overrides_to_dict(self) -> dict[str, Any]:
+        """The enumerated overrides that are actually set, serializable."""
+        window = self.reference_observation_window
+        return ({OVERRIDE_REFERENCE_WINDOW: window.to_dict()} if window
+                else {})
 
     @property
     def workload_class(self) -> str:
@@ -494,11 +604,17 @@ class Manifest:
 
     def to_dict(self) -> dict[str, Any]:
         """Serializable form, written for the jobs to read back."""
+        overrides = self.overrides_to_dict()
         return {
             "schema_version": self.SCHEMA_VERSION,
             "batch_id": self.batch_id,
             "job_type": self.job_type,
             "array_size": self.array_size,
+            # Omitted when empty, per the absent-not-sentinel rule the unit
+            # facts follow: no `overrides` key and an empty one would
+            # otherwise be two spellings of the same absence, and the
+            # checksum would distinguish them.
+            **({"overrides": overrides} if overrides else {}),
             "units": [unit.to_dict() for unit in self.units],
         }
 
@@ -522,9 +638,26 @@ class Manifest:
             raise ValueError(
                 "manifest does not name a job_type; the job type fixes the "
                 "route (class, queue, database lane) and is not defaultable")
+        raw_overrides = raw.get("overrides") or {}
+        unknown = set(raw_overrides) - set(OVERRIDE_FIELDS)
+        if unknown:
+            # An override this schema version does not know is refused, not
+            # dropped: dropping it would run the job WITHOUT an override its
+            # author asked for, and silently produce a promotable-looking
+            # product from a run that was meant to be barred.
+            raise ValueError(
+                "manifest carries unknown override fields "
+                + ", ".join(sorted(unknown))
+                + "; overrides are enumerated in the schema and a newer "
+                "submitter's override cannot be honoured by this reader")
+        window_raw = raw_overrides.get(OVERRIDE_REFERENCE_WINDOW)
+        window = (ReferenceObservationWindow.from_dict(window_raw)
+                  if window_raw is not None else None)
+
         manifest = cls((ProcessingUnit.from_dict(u) for u in raw["units"]),
                        batch_id=raw.get("batch_id"),
-                       job_type=job_type)
+                       job_type=job_type,
+                       reference_observation_window=window)
         # The recorded size is checked against the reconstructed one: a
         # mismatch means the array was sized from something other than
         # the units actually listed.

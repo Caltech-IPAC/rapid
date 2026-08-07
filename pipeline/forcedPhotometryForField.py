@@ -140,7 +140,10 @@ config_input_filename = cfg_path + "/" + cfg_filename_only
 config_input = configparser.ConfigParser()
 config_input.read(config_input_filename)
 
-job_info_s3_bucket_base = config_input['JOB_PARAMS']['job_info_s3_bucket_base']
+# `job_info_s3_bucket_base` is read where it is used, not here. It names the
+# legacy IMSS-era bucket and its one use is the reference-PSF fallback
+# download far below; binding it at import made a value this script mostly
+# does not need a condition of importing it at all.
 product_s3_bucket_base = config_input['JOB_PARAMS']['product_s3_bucket_base']
 job_config_filename_base = config_input['JOB_PARAMS']['job_config_filename_base']
 product_config_filename_base = config_input['JOB_PARAMS']['product_config_filename_base']
@@ -968,6 +971,7 @@ if __name__ == '__main__':
             # fallback if the SFFT difference-image PSF is not available.
 
             refimage_psf_filename_from_bucket = refimage_psf_filename.replace("FID",str(fid))
+            job_info_s3_bucket_base = config_input['JOB_PARAMS']['job_info_s3_bucket_base']
             s3_full_name_refimage_psf = "s3://" + job_info_s3_bucket_base + "/" +\
                 refimage_psf_s3_bucket_dir + "/" + refimage_psf_filename_from_bucket
 

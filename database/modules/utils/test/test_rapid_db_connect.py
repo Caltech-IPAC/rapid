@@ -29,9 +29,11 @@ from database.modules.utils.rapid_db_connect import (
     LANE_SESSION,
     LANE_TRANSACTION,
     ConnectionExecutor,
+    Credentials,
     DBCredentialError,
     DBError,
     DBUnavailable,
+    Endpoint,
     connect,
     connection,
     qualified_identifier,
@@ -674,6 +676,106 @@ class ConnectionExecutorTests(unittest.TestCase):
         with self.assertRaises(psycopg2.OperationalError):
             executor.execute("UPDATE attempts SET x = 1", None)
         self.cur.close.assert_called_once_with()
+
+
+class ExplicitInterfaceTests(unittest.TestCase):
+    """The parameter interface that retired the environment writes (O1).
+
+    The environment policy's rule is that no process writes the environment
+    for a downstream reader. Before this interface, a caller holding the
+    endpoint — the payload entrypoint with the parameter tree in hand, the
+    reconciler with a credential resolved under its own role — could only
+    reach this module by writing `os.environ` and letting `connect` read it
+    back. These pin that the passed values are used, that they beat the
+    environment, and that a credential passed this way never lands in it.
+    """
+
+    def test_an_explicit_endpoint_is_used_and_no_env_is_read(self):
+        connect_fn = mock.MagicMock()
+        # A completely EMPTY environment: the boundary read would raise
+        # DBCredentialError on DBSERVER, so reaching connect_fn at all
+        # proves the passed endpoint was used.
+        with mock.patch.dict(os.environ, {}, clear=True):
+            connect("payload", connect_fn=connect_fn,
+                    endpoint=Endpoint("db.internal", "6432", "rapidopsdb"),
+                    credentials=Credentials("rapid_rw", "s3cret"))
+        kwargs = connect_fn.call_args.kwargs
+        self.assertEqual(kwargs["host"], "db.internal")
+        self.assertEqual(kwargs["port"], "6432")
+        self.assertEqual(kwargs["dbname"], "rapidopsdb")
+        self.assertEqual(kwargs["user"], "rapid_rw")
+        self.assertEqual(kwargs["password"], "s3cret")
+
+    def test_explicit_values_beat_the_environment(self):
+        connect_fn = mock.MagicMock()
+        with patch_env(), patch_credentials("env_user", "env_pass"):
+            connect("payload", connect_fn=connect_fn,
+                    endpoint=Endpoint("passed.internal", "5432", "passeddb"),
+                    credentials=Credentials("passed_user", "passed_pass"))
+        kwargs = connect_fn.call_args.kwargs
+        self.assertEqual(kwargs["host"], "passed.internal")
+        self.assertEqual(kwargs["user"], "passed_user")
+
+    def test_a_passed_credential_never_enters_the_environment(self):
+        # The deciding case: the reconciler used to write DBUSER/DBPASS so
+        # this module could read them, which put a plaintext password in the
+        # environment of everything the service execs.
+        connect_fn = mock.MagicMock()
+        with mock.patch.dict(os.environ, {}, clear=True):
+            connect("reconciler", connect_fn=connect_fn,
+                    endpoint=Endpoint("db.internal", "6432", "rapidopsdb"),
+                    credentials=Credentials("rapid_rw", "s3cret"))
+            self.assertNotIn("DBPASS", os.environ)
+            self.assertNotIn("DBUSER", os.environ)
+            self.assertNotIn("DBSERVER", os.environ)
+
+    def test_the_environment_is_still_the_boundary_fallback(self):
+        # A plain script with no tree passes nothing and still connects.
+        connect_fn = mock.MagicMock()
+        with patch_env(), patch_credentials("rapid_rw", "s3cret"):
+            connect("script", connect_fn=connect_fn)
+        self.assertEqual(connect_fn.call_args.kwargs["host"],
+                         "pooler.internal")
+
+    def test_each_half_falls_back_independently(self):
+        # An explicit endpoint with no credential still reads the credential
+        # at the boundary, which is what the reconciler does when an
+        # operator has supplied DBUSER/DBPASS themselves.
+        connect_fn = mock.MagicMock()
+        with patch_env(), patch_credentials("env_user", "env_pass"):
+            connect("mixed", connect_fn=connect_fn,
+                    endpoint=Endpoint("passed.internal", "5432", "passeddb"))
+        kwargs = connect_fn.call_args.kwargs
+        self.assertEqual(kwargs["host"], "passed.internal")
+        self.assertEqual(kwargs["user"], "env_user")
+
+    def test_an_incomplete_endpoint_is_refused_not_half_read(self):
+        for missing in ("host", "port", "dbname"):
+            with self.subTest(missing=missing):
+                fields = {"host": "h", "port": "1", "dbname": "d"}
+                fields[missing] = None
+                with self.assertRaises(DBCredentialError) as caught:
+                    Endpoint(**fields)
+                self.assertIn(missing, str(caught.exception))
+
+    def test_an_incomplete_credential_is_refused(self):
+        with self.assertRaises(DBCredentialError):
+            Credentials("rapid_rw", "")
+        with self.assertRaises(DBCredentialError):
+            Credentials("", "s3cret")
+
+    def test_the_credential_repr_does_not_print_the_password(self):
+        # Anything that reprs a structure holding one — a log line, a
+        # traceback frame — would otherwise print it.
+        rendered = repr(Credentials("rapid_rw", "hunter2"))
+        self.assertNotIn("hunter2", rendered)
+        self.assertIn("rapid_rw", rendered)
+
+    def test_a_bare_tuple_endpoint_is_validated_not_unpacked_blindly(self):
+        with self.assertRaises(DBCredentialError):
+            connect("payload", connect_fn=mock.MagicMock(),
+                    endpoint=("host-only", "6432", ""),
+                    credentials=Credentials("u", "p"))
 
 
 if __name__ == "__main__":

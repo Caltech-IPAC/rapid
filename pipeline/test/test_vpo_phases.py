@@ -308,11 +308,14 @@ class SubmissionEnvRoutingTests(unittest.TestCase):
                                     "RAPID_MANIFEST_BUCKET",
                                     "RAPID_JOB_QUEUE",
                                     "RAPID_JOB_DEFINITION")}
-        # The revision is RESOLVED from Batch now, never declared. Left set to
-        # a WRONG value on purpose: if anything still reads it, the assertions
-        # below on the resolved revisions fail loudly instead of passing by
-        # coincidence.
-        os.environ["RAPID_JOB_DEFINITION_REV"] = "7"
+        # The revision is RESOLVED from Batch now, never declared — and since
+        # O1 nothing requires the baked value at all, so this is UNSET rather
+        # than set to a deliberately wrong number. A wrong value proved that
+        # nothing read it *and got away with it*; an absent one proves the
+        # stronger thing, that nothing needs it to be there. The runtime's
+        # own read of it (`build_provenance`) is likewise optional now, and
+        # `test_job` covers the absent case there.
+        os.environ.pop("RAPID_JOB_DEFINITION_REV", None)
         os.environ["RAPID_IMAGE_DIGEST"] = "sha256:" + "0" * 64
         os.environ["RAPID_RELEASE_IDENTITY"] = "w8-test"
         os.environ["RAPID_MANIFEST_BUCKET"] = "rapid-manifests"

@@ -70,6 +70,16 @@ if enddatetime is None:
 
 # Additional inputs are observation start and end MJD of window for generating
 # reference images, and minimum number of frames in coadd stack.
+#
+# THIS SCRIPT IS A STANDALONE ANALYSIS TOOL, outside the environment policy's
+# operational path (register § Environment-variable policy: the standalone
+# pipeline-script family's non-orchestrator members enter policy scope
+# individually at promotion). Its two variables below are read fail-loud and
+# are this script's own arguments — they are NOT the pipeline's
+# reference-window override. The operational path's window is release
+# content (`cdf/science/pipeline.toml` `[ref_image]`), per-run overridable
+# only through the submission manifest, and reads nothing from the
+# environment. Promoting this script means converting these to that path.
 # When the flag to make reference images is set to True, then only one
 # representative L2 science image for the field and filter is processed
 # to initially make the needed reference image for the other L2 science images
@@ -157,7 +167,12 @@ config_input_filename = cfg_path + "/" + cfg_filename_only
 config_input = configparser.ConfigParser()
 config_input.read(config_input_filename)
 
-min_n_images_to_coadd = int(config_input['REF_IMAGE']['min_n_images_to_coadd'])
+# From release content, not the master .ini: the .ini's copy was the W4
+# re-homing's duplicate and is retired (O1).
+from pipeline.runtime import science_config as _science_config
+
+min_n_images_to_coadd = int(_science_config.value(
+    _science_config.load(), "ref_image", "min_n_images_to_coadd"))
 max_n_images_to_coadd = int(config_input['REF_IMAGE']['max_n_images_to_coadd'])
 
 print("min_n_images_to_coadd =",min_n_images_to_coadd)

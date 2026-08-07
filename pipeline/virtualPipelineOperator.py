@@ -174,7 +174,12 @@ config_input.read(config_input_filename)
 
 verbose = int(config_input['JOB_PARAMS']['verbose'])
 debug = int(config_input['JOB_PARAMS']['debug'])
-job_info_s3_bucket_base = config_input['JOB_PARAMS']['job_info_s3_bucket_base']
+# `job_info_s3_bucket_base` is NOT read here. It named the legacy IMSS-era
+# bucket (`rapid-pipeline-files`) that this account does not carry; the one
+# submission-path use of it was the reference gather's `job_bucket`, and
+# reading the .ini there made every gather fail at PutObject with
+# AccessDenied (see the manifest-bucket comment below). The buckets come
+# from the parameter tree.
 job_logs_s3_bucket_base = config_input['JOB_PARAMS']['job_logs_s3_bucket_base']
 product_s3_bucket_base = config_input['JOB_PARAMS']['product_s3_bucket_base']
 job_config_filename_base = config_input['JOB_PARAMS']['job_config_filename_base']
@@ -187,7 +192,6 @@ zogy_output_diffimage_file = config_input['ZOGY']['zogy_output_diffimage_file']
 
 print("verbose =",verbose)
 print("debug =",debug)
-print("job_info_s3_bucket_base =",job_info_s3_bucket_base)
 print("job_logs_s3_bucket_base =",job_logs_s3_bucket_base)
 print("product_s3_bucket_base =",product_s3_bucket_base)
 print("job_config_filename_base =",job_config_filename_base)
@@ -280,6 +284,29 @@ def min_images_to_coadd():
     science = science_config.load()
     return int(science_config.value(science, "ref_image",
                                     "min_n_images_to_coadd"))
+
+
+def reference_window_override_for_run():
+
+    '''
+    This run's reference-observation-window override, or None.
+
+    None on every ordinary run, which is the point: the window's
+    authoritative value is release content, and an override exists for
+    rehearsal and validation runs only — a product built under one is barred
+    from a community surface (design/compute.md § Job definitions).
+
+    There is deliberately NO environment variable here. The window used to
+    be STARTREFIMMJDOBS/ENDREFIMMJDOBS, and retiring that path is the whole
+    point of the change: nothing science-affecting is reachable from the
+    environment. The manifest is the sole carrier, and this function is the
+    seam an operator-input surface fills — the VPO's operator interface is
+    the O4 restructure's scope, so until it lands an override is set by a
+    caller constructing `ReferenceObservationWindow` and passing it, not by
+    this process reading anything.
+    '''
+
+    return None
 
 
 #-------------------------------------------------------------------------------------------------------------
@@ -818,9 +845,19 @@ if __name__ == '__main__':
         # that could disagree with each other.
         start_mjdobs, end_mjdobs = mjd_window(startdatetime, enddatetime)
 
+        # The reference image's OWN observation window — a different window
+        # from the one above, which selects units. Release content unless
+        # this submission carries the manifest override; resolved once here
+        # so the gathering pass and the manifest it is submitted under
+        # cannot describe two different windows.
+        reference_window_override = reference_window_override_for_run()
+        reference_window = gathering.reference_observation_window(
+            reference_window_override)
+
         reference_units = gathering.gather_reference_units(
             dbh, startdatetime, enddatetime,
             start_mjdobs=start_mjdobs, end_mjdobs=end_mjdobs,
+            reference_window=reference_window,
             min_images_to_coadd=min_images_to_coadd(),
             s3_client=submission_context["s3_client"],
             # The manifest bucket, NOT the legacy `job_info_s3_bucket_base`
@@ -848,7 +885,8 @@ if __name__ == '__main__':
                 s3_client=submission_context["s3_client"],
                 batch_client=submission_context["batch_client"],
                 execute=ConnectionExecutor(subconn).execute,
-                run_id=run_id)
+                run_id=run_id,
+                reference_observation_window=reference_window_override)
         print(f"submitted {len(submitted)} reference-image batch(es) "
               f"under run {run_id}")
 
