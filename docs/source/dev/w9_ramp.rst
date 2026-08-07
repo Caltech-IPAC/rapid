@@ -1,261 +1,356 @@
 W9 — the validation ramp
 ========================
 
-What this records: the ramp still did not reach its 18/90/270 steps, but the
-blocker that stopped the previous attempt is **closed** — the reference-image
-coadd now runs, on real g0001 data, thirty-six times over. Three further
-defects behind it were found by that step — two in the payload, one in the
-reconciler — all three fixed and pushed, and none of them in the image the
-job definitions are pinned to. The ramp is one image rebuild away from its
-first passing step.
+**The ramp passed.** All three steps ran real g0001 work through the
+production VPO path and passed every gate: 18, then 90, then 109 children,
+**217 of 217 succeeded**, zero failures, zero unexplained records, zero
+done-files. The blocker the previous revision recorded — a payload predating
+its own fixes — is closed, and closing it exposed and closed a fourth defect
+of the same shape.
 
-The one-line state: **the science that blocked the ramp is done; the ramp is
-blocked on rebuilding the payload onto the fixes it found.**
+The one-line state: **the ramp is done; what remains is the science phase and
+a population that cannot reach 270.**
 
-What changed since the last revision
-------------------------------------
+What the previous revision was blocked on
+------------------------------------------
 
-The previous revision's blocking item was the four ``awaicgen`` geometry
-values — ``awaicgen_mosaic_size_x/y`` and ``awaicgen_RA_center/Dec_center`` —
-computed by the deleted launcher and by nothing since, so
-``build_reference_image`` raised ``KeyError`` after ~30 s of real work and
-every reference-image attempt died ``internal_error``.
+The deployed payload carried the ``awaicgen`` geometry port but none of the
+three defects found behind it. Every reference-image child failed at
+``sextractor_catalog``, and failed *unrecordably*. That is closed: the image
+was rebuilt onto the fixes, and the ramp then ran clean.
 
-**That item is closed.** The computation was ported verbatim from the deleted
-launcher rather than re-derived, and the port's own split follows the
-launcher's: the extent is release content (it does not vary with sky
-location, launcher lines 226-228), the centre is a per-invocation manifest
-fact (it is the tessellation tile's, launcher lines 352-382). Citations and
-the regression evidence are in ``review_disposition.rst``.
+The rebuild took **two iterations**, and the second was not foreseen.
 
-Measured, live: ``build_reference_image`` **succeeded on 36 of 36 real
-children**, mean 145.2 s, across two independent submissions of the same 18
-units. It had never once completed before.
+Iteration 1 (smdc ``6728ad3``, ``sha256:d050583…``, revisions 18) published
+the three fixes already on the branch. Running it exposed a fourth defect —
+**defect 8** — which iteration 2 (smdc ``d97989f``, ``sha256:61aaca42…``,
+revisions 19) fixes. Both iterations passed the scan gate by CVE identity:
+3 HIGH / 5 MEDIUM / 1 LOW, **0 CRITICAL**, the identical set
+(``CVE-2026-15308``, ``CVE-2026-54369``, ``CVE-2026-58016``) revisions 17
+carried, as expected for a code-only layer over an unchanged
+``base-30984903893``.
 
-The ramp's first step, and what it found
------------------------------------------
+Defect 8 — the fix that exposed it
+-----------------------------------
 
-Step 1 was submitted twice — the first run's output was lost to macOS
-``tar`` xattr noise on the operator's terminal, so it was re-run to capture
-a clean log. Both submissions are real work against real data and both are
-reported here; their agreement is itself the reproducibility evidence.
+**A Decimal made every closure record unpublishable.**
+``ClosureRecord.to_bytes`` called ``json.dumps`` with no ``default=``, while
+the body it encodes is built straight from database row values.
+``attempt_stages.duration_ms`` is ``numeric NOT NULL`` (migration 011) and
+psycopg2 maps every ``numeric`` to ``Decimal``, so the encoder raised
+``TypeError: Object of type Decimal is not JSON serializable`` for any
+attempt that had recorded a stage.
 
-.. list-table:: Step 1 — 18 reference-image children, twice
+**It was only reachable because defect 7 was fixed.** Until the SAVEPOINT let
+``read_attempt_stages`` succeed, that query always failed and ``stages`` was
+always ``None`` — so no ``Decimal`` ever reached the encoder. Fixing one
+defect is what exposed the next, and the observable transition says so
+exactly:
+
+.. code-block:: text
+
+    errors: 36, deferred:  0    # defect 7 live — the cycle aborts
+    errors:  0, deferred: 36    # defect 7 fixed — 36 rows now defer instead
+    classified: 36, deferred: 0 # defect 8 fixed — all 36 finally close
+
+The middle line is the whole finding: the repin did not break anything, it
+moved 36 attempts from one failure mode to the next one behind it.
+
+**This is the fourth defect of one shape** — a numpy repr bound into SQL, a
+numpy scalar in the terminal record, a caught query error leaving its
+transaction aborted, and now a Decimal in a second record encoder. That is
+the argument for the proposed boundary audit rather than a fifth fix.
+
+The fix reuses ``termination._json_default`` rather than growing a second
+coercion policy; that helper gains a ``Decimal`` branch, which the numpy path
+could not cover because ``Decimal`` has no ``.item()``. Proven on the
+deployed image itself, not argued: the shipped code raises, the fixed code
+encodes ``145300.0`` — a number, not a string.
+
+The three steps
+---------------
+
+.. list-table:: Every step, every child
    :header-rows: 1
-   :widths: 26 12 12 12 12 26
+   :widths: 30 10 10 12 12 12 14
 
    * - Run
-     - Children
-     - Attempts
-     - Coadds OK
-     - Mean coadd
-     - Terminal state
-   * - ``…20260807T011721Z-step1``
+     - Asked
+     - Ran
+     - Succeeded
+     - Failed
+     - Mean latency
+     - Gates
+   * - ``…20260807T024017Z-step1``
      - 18
-     - 140–157
-     - **18/18**
-     - 145.0 s
-     - FAILED, unrecordable
-   * - ``…20260807T011745Z-step1b``
      - 18
-     - 158–175
-     - **18/18**
-     - 145.3 s
-     - FAILED, unrecordable
+     - **18**
+     - 0
+     - 1310.6 s
+     - **PASS**
+   * - ``…20260807T031527Z-step2``
+     - 90
+     - 90
+     - **90**
+     - 0
+     - 1309.5 s
+     - **PASS**
+   * - ``…20260807T034039Z-step3``
+     - 270
+     - 109
+     - **109**
+     - 0
+     - 1323.3 s
+     - **PASS**
 
-Per-stage, identical in both runs:
+**Step 3 ran 109, not 270, and that is a population ceiling rather than a
+failure.** The harness reported ``cap: 270, submitted_units: 109``: it
+gathered every ready reference unit in the g0001 window
+(``2027-10-01``–``2027-10-08``, the staged subset's own window) and there
+were 109. ``_capped`` is a plain truncation of the gathered list, so a cap
+above the population simply submits the population. The ramp's design target
+of 270 is **not reachable with the current staged subset** — recorded below
+as an open item, since it is a data-staging question, not a pipeline one.
 
-.. list-table::
-   :header-rows: 1
-   :widths: 44 14 14 14
+Per-step gate table
+-------------------
 
-   * - Stage
-     - Outcome
-     - n
-     - Mean
-   * - ``download_reference_psf``
-     - success
-     - 18
-     - 0.12 s
-   * - ``build_reference_image``
-     - **success**
-     - 18
-     - 145.3 s
-   * - ``coverage_and_uncertainty_statistics``
-     - success
-     - 18
-     - 4.51 s
-   * - ``sextractor_catalog``
-     - failure
-     - 18
-     - 0.00 s
-
-The coadd is doing real work: each child downloads its reference PSF, fetches
-and reformats its 48 coadd inputs, and produces a 7000×7000 mosaic. The 0.00 s
-on ``sextractor_catalog`` is the signature of an immediate ``KeyError``, not
-of work attempted.
-
-Step-1 gate table
------------------
+Every gate below is scoped to one ``run_id``. The shipped
+``cloudformation/rapid-query-attempts.sh`` reports whole-population counts
+regardless of the run id passed to it, which reads as a ramp gate result and
+is not one.
 
 .. list-table::
    :header-rows: 1
-   :widths: 52 18 30
+   :widths: 44 18 18 20
 
    * - Gate
-     - Result
-     - Note
-   * - Binding versioned and matching its recorded revision
-     - **0 of 36 bad**
-     - PASS
-   * - Image/definition binding actually used
-     - 36/36 on rev 17
-     - PASS — one digest
-   * - Attempts left non-terminal
-     - **36 of 36**
-     - **FAIL** — see below
+     - Step 1 (18)
+     - Step 2 (90)
+     - Step 3 (109)
+   * - Attempts recorded
+     - 18
+     - 90
+     - 109
+   * - Reconciler-terminal within horizon
+     - **18/18**
+     - **90/90**
+     - **109/109**
+   * - Not reconciler-terminal
+     - **0**
+     - **0**
+     - **0**
+   * - ``missing_or_contradictory``
+     - **0**
+     - **0**
+     - **0**
    * - Attempts without a terminal record
-     - **36 of 36**
-     - **FAIL** — same cause
-   * - Latency, submit → terminal
-     - not measurable
-     - no ``ended_at`` was ever written
+     - **0**
+     - **0**
+     - **0**
+   * - Unexplained terminal records
+     - **0**
+     - **0**
+     - **0**
+   * - Distinct image/definition bindings
+     - **1**
+     - **1**
+     - **1**
    * - Reconciler poll errors
-     - **36 per cycle**
-     - **FAIL** — defect 7, a separate cause
+     - **0**
+     - **0**
+     - **0**
    * - Done-files or log-grep anywhere
      - none
-     - PASS
+     - none
+     - none
 
-**The gate failures are three defects, not a hundred and eight.** Every
-attempt failed at
-``sextractor_catalog`` for a missing configuration key, and then could not
-write the terminal record *saying* it had failed, because the record carried
-a numpy scalar that ``json`` refuses. The second defect is what turned a
-clean recorded failure into a non-terminal row with no record — which is the
-state the attempt-record contract exists to make impossible, and which would
-read as a reconciler fault to anyone who had not seen the container log.
+Every attempt in all three steps is ``terminal_after_start`` with
+``rapid_outcome=success``, ``product_disposition=published``,
+``error_category=NULL``, ``scheduler_state=SUCCEEDED`` — one homogeneous
+outcome class, 217 rows, no exceptions to explain.
 
-Steps 2 and 3 (90 and 270 children) were **not submitted**. Submitting them
-would have reproduced the same failure ninety and two hundred and seventy
-times at real compute cost, and proved nothing that eighteen had not.
+All 217 bound to one digest, ``sha256:61aaca42…``, ``source_sha``
+``d97989f842e599e733ca135ab862cf14c316d990`` — the pin the definitions name.
 
-The three defects the first real coadd found
----------------------------------------------
+**A note on what "terminal" means here.** ``application_closed`` is *not*
+terminal for gate purposes: it is the application having written its complete
+account, with the reconciler's scheduler-observed facts still to come. Rows
+sit there legitimately for up to the 10-minute grace horizon
+(``GRACE_HORIZON_SECONDS``) after the scheduler reports them stopped. Every
+step was queried before *and* after that horizon; the gate numbers above are
+the post-horizon ones. A gate query that counted ``application_closed`` as
+terminal would have passed the ramp several minutes early, and one that
+counted it as a failure would have failed a healthy run.
 
-All three are fixed, tested and pushed to ``smdc`` (defects 5 and 6 in
-``bc8509e``, defect 7 in ``fff9296``). None is in the deployed image — proven
-for the first two, not inferred, by grepping the pinned digest's own
-filesystem (both counts zero); defect 7 is in the reconciler, which runs the
-same image.
+Latency and throughput
+----------------------
 
-**5. A numpy scalar made the attempt unrecordable.** The extracted stage
-bodies compute in numpy, so ``coverage_and_uncertainty_statistics`` records
-``reference_cov5percent`` as a ``numpy.float32``, and ``json.dumps`` raises
-``TypeError: Object of type float32 is not JSON serializable`` inside
-``write_terminal_record``. That function runs on the failure path as well as
-the success path, so an attempt failing for an unrelated reason could not
-record that it had failed. Fixed by coercing at the serialization boundary —
-``.item()``, so an integer scalar stays an integer, and *not* ``default=str``,
-which would keep the write working while silently retyping a numeric field.
-A value with no scalar equivalent still raises.
+.. list-table:: Submit → terminal, and in-container span
+   :header-rows: 1
+   :widths: 22 13 13 13 13 13 13
 
-This is the same *class* as defect 1 (the numpy repr bound into SQL), a
-different consumer. Two numpy-scalar defects in two different serializers
-suggests the boundary is worth an audit rather than a third fix.
+   * - Step
+     - min
+     - mean
+     - max
+     - min run
+     - mean run
+     - max run
+   * - 1 (18)
+     - 1098.7 s
+     - **1310.6 s**
+     - 1409.3 s
+     - 895.4 s
+     - 1102.1 s
+     - 1199.5 s
+   * - 2 (90)
+     - 1016.1 s
+     - **1309.5 s**
+     - 1476.7 s
+     - 778.7 s
+     - 1076.7 s
+     - 1245.5 s
+   * - 3 (109)
+     - 1032.3 s
+     - **1323.3 s**
+     - 1497.1 s
+     - 784.3 s
+     - 1080.6 s
+     - 1254.1 s
 
-**6. Eleven more W4B-dropped keys, in every** ``[sextractor_*]`` **section.**
-``sextractor_catalog_type`` failed the step *after* the 145-second coadd
-succeeded. Rather than pay one live attempt per key, the whole of
-``build_sextractor_command_line_args``' key list was walked against release
-content: 67 required, 7 supplied at runtime by the stage body, 50 present,
-**11 missing**. All eleven restored to all four sections from the master
-``.ini``.
+**The distribution is flat across a 6× width increase** — 1310.6, 1309.5,
+1323.3 s mean, a spread of under 1%. Every child of every step was placed
+concurrently (the compute environment scaled to 18, then 90, then 109
+simultaneous ``RUNNING`` children), so the steps measure the same per-child
+cost at three widths rather than a queue draining.
 
-**7. The reconciler's stage read names a column that never existed.** Found
-after the step, by watching the service rather than the attempts.
-``read_attempt_stages`` selects ``error_category`` from ``attempt_stages``;
-that table has six columns and has never had it (verified against the live
-``information_schema``, not read off the migration). Every reconciliation of
-a started attempt therefore failed, the service polled ``errors: 36`` each
-cycle, and it reached 4 consecutive unproductive polls against a health
-threshold of 5.
+That is the useful Q8 input: **a reference-image child costs ~22 minutes
+wall clock, ~18 minutes of it in-container**, and the difference — roughly
+230 s — is placement, which does not grow with step width up to 109.
 
-The ``except`` around that query looked like it made the failure safe. It did
-not: PostgreSQL aborts the whole transaction on any statement error, so
-catching it and returning ``None`` left every later statement in the cycle
-raising ``InFailedSqlTransaction``. **One real error became thirty-six
-misleading ones**, with the honest warning naming the missing column buried
-underneath. That is the same cascade shape as defect 1 — the error handled
-locally, the transaction not — which makes it the third instance of a pattern
-worth a sweep rather than a fourth fix.
+Wall-clock per step, submission to last child terminal: step 1 ~22 min, step
+2 ~14 min, step 3 ~13 min. Steps 2 and 3 are *faster* than step 1 despite
+being 5× and 6× larger, because step 1 paid a cold start from zero.
 
-Fixed with a SAVEPOINT, so a failed read costs the read and not the cycle.
-Six tests added; the function previously had none, which is how a column name
-that never existed survived to be found by a live run. The query is only
-reached for a STARTED attempt with no sequence-0 record, and the ramp's 36
-were the first such rows the reconciler had ever been asked to reconstruct.
+Per-stage timings
+-----------------
 
-The attribution is arithmetic, not assumption — two poll lines, before the
-ramp and after::
+.. list-table:: Mean seconds per stage, all successes
+   :header-rows: 1
+   :widths: 40 15 15 15 15
 
-    01:16:14  {'open':  78, 'skipped': 78, 'errors':  0}   # after the repin
-    01:42:53  {'open': 114, 'skipped': 78, 'errors': 36}   # after the ramp
+   * - Stage
+     - Step 1
+     - Step 2
+     - Step 3
+     - n each
+   * - ``download_reference_psf``
+     - 0.11
+     - 0.11
+     - 0.10
+     - 18 / 90 / 109
+   * - ``build_reference_image``
+     - 152.14
+     - 144.27
+     - 143.13
+     - 18 / 90 / 109
+   * - ``coverage_and_uncertainty_statistics``
+     - 5.81
+     - 4.53
+     - 4.53
+     - 18 / 90 / 109
+   * - ``image_statistics``
+     - 2.83
+     - 2.11
+     - 2.11
+     - 18 / 90 / 109
+   * - ``measure_fwhm``
+     - 0.03
+     - 0.04
+     - 0.04
+     - 18 / 90 / 109
+   * - ``sextractor_catalog``
+     - 3.99
+     - 3.98
+     - 3.85
+     - 18 / 90 / 109
+   * - ``psf_catalog``
+     - **928.96**
+     - **910.60**
+     - **915.77**
+     - 18 / 90 / 109
+   * - ``add_header_keywords``
+     - 0.57
+     - 0.49
+     - 0.49
+     - 18 / 90 / 109
+   * - ``upload_products``
+     - 7.15
+     - 6.97
+     - 6.92
+     - 18 / 90 / 109
 
-``open`` grows by exactly the ramp's 36 while ``skipped`` stays at 78, so the
-78 pre-existing rows are skipped rather than attempted and every one of the 36
-errors is a ramp attempt. The reconciler was not broken by the repin; it was
-handed the first work of this kind it had ever been asked to do.
+Two things worth naming:
 
-The service is degraded but **not** failing: it is ``active``, has never
-reported itself unhealthy, and the unproductive counter oscillates (4 → 3)
-rather than climbing, because it resets on any poll that closes something or
-has nothing to close. It clears when the 36 attempts close.
+**``sextractor_catalog`` now succeeds** — 3.99 s mean across all 217, where
+it failed 36 of 36 at 0.00 s before. The 0.00 s was the signature of an
+immediate ``KeyError``; ~4 s is the signature of work.
 
-An eighth finding, recorded rather than fixed
-----------------------------------------------
+**``psf_catalog`` is the pipeline's cost centre**, ~915 s — about 70% of the
+in-container time and 6× the coadd. It had never been reached before this
+run, so this is its first measurement. It is not a defect: it succeeded
+217/217 with a tight spread. But any future work on reference-image
+throughput starts here, not at the coadd.
 
-**The reconciler's log-tail safety net has never worked.** It reads
-``logs/job-log-group`` from the parameter tree; that parameter is **absent**,
-so it falls back to ``/aws/batch/job`` — a log group that holds no RAPID job
-logs, and on which ``rapid-orchestrator-role`` has no ``logs:GetLogEvents``
-grant. Both facts observed live: the AccessDenied in the reconciler's own
-warning, and a ``get-log-events`` against that group returning
-``ResourceNotFoundException`` for a stream that exists under the real one.
+Reconciler and pooler
+---------------------
 
-The jobs log to ``/rapid/batch/rapid-queue-bulk`` and
-``/rapid/batch/rapid-queue-prompt`` — **two** groups, one per queue
-(``rapid-batch.yaml`` ``LogConfiguration``), so a single ``job-log-group``
-parameter cannot name both. That makes the fix a design call, not a value to
-paste in, which is why it is proposed rather than taken. It is operational
-configuration, so it needs no image rebuild.
+**Reconciler**: ``active (running)`` on ``sha256:61aaca42…``, ``errors: 0``,
+``deferred: 0``, zero ``ERROR`` lines, steady state with ``open`` equal to
+``skipped`` (everything closed). It classified each step's attempts as they
+cleared their grace horizons — 6, then 4, then 4 per cycle — rather than in
+one burst.
 
-Latency, for the Q8 parameters
-------------------------------
+**One thing to record, not a gate failure**: ``NRestarts=15``. The service's
+health check exits on 5 consecutive unproductive polls ("a working process
+doing no work"), and a ramp step reliably produces exactly that while its
+attempts sit inside the 10-minute grace horizon — reached, not classifiable
+yet. The supervisor restarts it and nothing is lost, but **a normal ramp
+trips a health threshold designed to catch an abnormal condition**. Proposed:
+either exclude inside-horizon deferrals from the unproductive count, or raise
+the threshold above the horizon's worth of polls. Recorded rather than
+changed — it is a health-semantics design call.
 
-The numbers that can honestly be given from this run are **stage** times, not
-submit-to-terminal times: no attempt wrote ``ended_at``, so the end-to-end
-figure the previous revision reported cannot be recomputed here.
+**Pooler**: pgbouncer ``active``, **zero ``client_idle_timeout`` kills**
+across the whole ramp window, zero pool exhaustion, zero ``query_timeout``.
+The only closures logged are ``server lifetime over (age=3600s)`` (normal
+recycling) and ``client close request`` (the gate queries disconnecting).
+Bounded waits throughout.
 
-* Cold-start placement, submit → container start: **~215 s** (01:17:48 →
-  01:21:22 on attempt 158), a compute environment scaling from zero.
-* In-container work, reference-image: **150 s** to the failure point, of
-  which the coadd is 145 s.
-* The coadd's spread is remarkably tight — 145.0 s and 145.3 s in two
-  independent runs, max 150.6 s — which is the useful Q8 input: **a
-  reference-image child costs ~2.5 minutes of real compute**, and the
-  cold-start placement roughly doubles a small step's wall clock.
+An eighth finding, still recorded rather than fixed
+----------------------------------------------------
 
-No throughput figure is offered. Eighteen children that all failed at the
-same stage measure a stage, not a pipeline.
+**The reconciler's log-tail safety net still has never worked.** It reads
+``logs/job-log-group``; that parameter is absent, so it falls back to
+``/aws/batch/job`` — which holds no RAPID job logs and which
+``rapid-orchestrator-role`` cannot read. Both facts re-observed live during
+this run, unchanged from the previous revision. Jobs log to
+``/rapid/batch/rapid-queue-{bulk,prompt}`` — **two** groups, so one parameter
+cannot name both and the fix is a design call. Operational configuration, so
+it needs no image rebuild.
+
+It cost nothing this run: the safety net is only read for a reconstructed
+record, and all 217 attempts wrote their own.
 
 What the ramp still owes
 ------------------------
 
-* **Steps 1, 2 and 3, passing.** Unrun against a payload carrying the two
-  fixes. Everything the harness needs is committed and exercised; what is
-  missing is one image rebuild and the repin behind it.
-* The science phase, which needs a registered reference image — and so is
-  downstream of step 1 passing.
-* The scheduler-retry case (forced pull failure), which needs a job
-  definition pinned to an absent image; see ``w8_battery.rst`` case 34.
+* **The science phase.** Unrun. It needs a registered reference image, which
+  step 1 passing now makes possible — this is the next worker's first item,
+  and it is no longer blocked on anything.
+* **End-to-end registration with PSFs.** Still owed, behind the science
+  phase.
+* **A population that reaches 270.** Step 3 exhausted the g0001 window at
+  109. Closing the ramp's stated 270 needs either more staged data or an
+  explicit decision that 109 is the ceiling and the target should say so.

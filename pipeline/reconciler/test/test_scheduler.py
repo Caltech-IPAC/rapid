@@ -153,17 +153,16 @@ class AttemptIndexDerivationTests(unittest.TestCase):
     def test_a_never_started_attempt_ahead_of_a_real_one(self):
         """The owed scheduler-retry shape, half-real.
 
-        A forced pull failure could not be run: it needs a job definition
-        pinned to an absent image, and `submit-job` refuses an `image`
-        container override, so the only route is registering a definition —
-        outside this run's authorization (see w8_battery.rst, case 34).
+        Kept as the composed case — a never-started attempt in front of a
+        REAL started one — which the forced retry below does not produce
+        (both of its attempts failed to pull). Batch omits `startedAt`
+        entirely on an attempt that never ran, so the never-started element
+        here has no such key at all, which is the shape a hand-written
+        `{"startedAt": None}` does not test.
 
-        What CAN be proven without it is that the derivation handles a
-        never-started attempt sitting in front of a REAL one, which is the
-        pairing the retry case would exercise. Batch omits `startedAt`
-        entirely on an attempt that never ran — it is not present-and-null —
-        so the never-started element here has no such key at all, which is
-        the shape a hand-written `{"startedAt": None}` does not test.
+        The forced pull failure this used to say could not be run HAS since
+        been run — see `test_the_forced_retry_history_derives_one_then_two`
+        and w8_battery.rst case 34, now CLOSED.
         """
         never_started = {"statusReason": "CannotPullContainerError: "
                                          "manifest unknown"}
@@ -175,6 +174,61 @@ class AttemptIndexDerivationTests(unittest.TestCase):
         self.assertIs(never_started, derived[0][1])
         self.assertNotIn("startedAt", derived[0][1])
         self.assertIs(self.REAL_ATTEMPT_DETAIL, derived[1][1])
+
+    # Captured unedited from Batch job
+    # 92628807-ea5b-4089-8c1a-7c380309fb87 (w9-run, 2026-08-07) — the first
+    # scheduler retry ever produced in this account, forced by registering
+    # a throwaway definition pinned to an absent digest. Trimmed only of the
+    # ARNs, which are host identities and carry nothing the derivation reads.
+    FORCED_RETRY_HISTORY = [
+        {
+            "container": {
+                "reason": "CannotPullContainerError: Error response from "
+                          "daemon: manifest for <redacted>@sha256:1111… not "
+                          "found: manifest unknown: Requested image not found",
+                "logStreamName": "rapid-pullfail-probe/default/549aee68",
+            },
+            "stoppedAt": 1786076742404,
+            "statusReason": "Task failed to start",
+        },
+        {
+            "container": {
+                "reason": "CannotPullContainerError: Error response from "
+                          "daemon: manifest for <redacted>@sha256:1111… not "
+                          "found: manifest unknown: Requested image not found",
+                "logStreamName": "rapid-pullfail-probe/default/c6c37253",
+            },
+            "stoppedAt": 1786076766555,
+            "statusReason": "Task failed to start",
+        },
+    ]
+
+    def test_the_forced_retry_history_derives_one_then_two(self):
+        """Case 34's end-to-end half, against a REAL retry.
+
+        Every prior test of this derivation used a history assembled by
+        hand. This one is what Batch actually returned for a job that was
+        retried, which is the only thing that can catch the derivation
+        agreeing with a fixture and disagreeing with the API.
+        """
+        derived = scheduler.derive_attempt_indices(self.FORCED_RETRY_HISTORY)
+
+        self.assertEqual([1, 2], [index for index, _ in derived])
+        # List order, not stop-time order — they happen to agree here, and
+        # the point is that the derivation never consulted the times.
+        self.assertIs(self.FORCED_RETRY_HISTORY[0], derived[0][1])
+        self.assertIs(self.FORCED_RETRY_HISTORY[1], derived[1][1])
+
+    def test_neither_forced_retry_attempt_has_a_started_at(self):
+        """The fixture trap, confirmed against the API rather than argued.
+
+        Batch OMITS `startedAt` on an attempt that never ran; it does not
+        set it to null. A fixture written as `{"startedAt": None}` therefore
+        tests a shape that cannot occur, and a derivation that sorted on
+        that key would mis-order exactly this history.
+        """
+        for attempt in self.FORCED_RETRY_HISTORY:
+            self.assertNotIn("startedAt", attempt)
 
 
 class ObservationTests(unittest.TestCase):

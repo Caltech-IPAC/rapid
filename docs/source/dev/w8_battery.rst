@@ -440,10 +440,34 @@ W9-final additions
 Two cases, one closed and one blocked, both recorded here so the battery's
 owed list stays honest.
 
-Case 34 — scheduler retry via forced pull failure: BLOCKED
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Case 34 — scheduler retry via forced pull failure: CLOSED
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-**Owed from W8, still unforced, and now with a specific reason rather than
+**Closed by W9-run (2026-08-07) via the route this section proposed**, under
+an authorization that named job-definition registration.
+
+``rapid-pullfail-probe:1`` was registered pinned to a well-formed but absent
+digest (``sha256:1111…``), one child submitted to ``rapid-queue-bulk``, and
+the definition deregistered afterwards — zero ACTIVE remain.
+
+**It produced the first scheduler retry ever seen in this account.** The job
+reached ``FAILED`` with **two** ``AttemptDetail`` entries, both
+``CannotPullContainerError: … manifest unknown: Requested image not found``,
+both never-started, ~24 s apart. ``derive_attempt_indices`` numbers them
+**1 and 2 in list order**, which is the pairing the case existed to prove.
+
+**And it confirms the fixture concern that motivated the case.** Neither
+entry carries a ``startedAt`` key *at all* — ``has_startedAt: [False,
+False]``. Batch omits the field on an attempt that never ran rather than
+setting it null, so a fixture written as ``{"startedAt": None}`` tests a
+shape the API does not produce. That is exactly why the derivation must key
+on list position and not on start time, and it is now proven against real
+API output rather than a hand-written dict.
+
+The original blocking analysis is preserved below, because the reason it was
+blocked is still the reason the route needs naming in an authorization.
+
+**Owed from W8, and blocked with a specific reason rather than
 "not yet done".**
 
 The case wants a real Batch retry: an attempt that never starts (a pull
@@ -489,6 +513,9 @@ remains owed.
 pinned to an absent digest, submit one child, assert two ``AttemptDetail``
 entries with the first never-started, then deregister. Needs an
 authorization that names job-definition registration.
+
+**Executed exactly as proposed, W9-run 2026-08-07** — see the CLOSED note at
+the head of this case for what it returned.
 
 Case 35 — the terminal record survives a numpy scalar: CLOSED
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
