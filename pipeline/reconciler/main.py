@@ -23,6 +23,7 @@ import sys
 from pipeline.reconciler.service import (POLL_SECONDS, ReconcilerService,
                                          ReconcilerUnhealthy, run_forever)
 from pipeline.runtime.boundaries import S3ObjectStore
+from pipeline.runtime.environment import resolve_region
 
 logger = logging.getLogger("rapid.reconciler.main")
 
@@ -122,8 +123,7 @@ def _log_groups_from(parameters):
     return groups
 
 
-# The parameter-tree names holding the database endpoint, and the
-# environment variables `rapid_db_connect` reads them from. That helper
+# The parameter-tree names holding the database endpoint. The helper
 # deliberately refuses to compile in a default — "it is operational
 # configuration and must come from the parameter tree" — and the tree is
 # exactly where these live. What was missing is the bridge between them:
@@ -132,32 +132,40 @@ def _log_groups_from(parameters):
 # first time the service ran as a service: DBSERVER is not set, exit 70,
 # every 15 seconds.
 #
+# The bridge was `os.environ[...] = ...`, and that is what the environment
+# policy retired: the tree's values are now PASSED to `connect`, so this
+# process's environment carries no endpoint it wrote for itself to read
+# back. An operator's explicitly-set variable still wins, because an
+# absent tree entry leaves that field to the helper's boundary read.
+#
 # The payload does not need this because Batch job definitions carry the
 # same facts as container environment; a systemd unit has no equivalent,
 # and hardcoding them into the unit would put the endpoint in a second
 # home — the drift the tree exists to prevent.
-_DB_ENVIRONMENT = (
+_DB_ENDPOINT_PARAMETERS = (
     ("db/server", "DBSERVER"),
     ("db/port", "DBPORT"),
     ("db/name", "DBNAME"),
 )
 
 
-def _bind_database_environment(parameters):
-    """Publish the tree's database endpoint into the connection helper's env.
+def _database_endpoint(parameters):
+    """The endpoint to pass to `connect`, from the tree over the environment.
 
-    Only fills what is absent: an explicitly-set variable wins, so an
-    operator debugging against another endpoint is not silently overridden.
-    Missing names are left alone rather than defaulted — the helper's own
-    fail-loud check is the one that should report them, by name.
+    Per field: the tree's value if it has one, else this process's own
+    environment. Missing on both sides is left to the helper, whose
+    fail-loud check reports it by name — not defaulted here.
     """
-    for parameter, variable in _DB_ENVIRONMENT:
-        value = parameters.get(parameter)
-        if value and not os.environ.get(variable):
-            os.environ[variable] = str(value)
+    from database.modules.utils.rapid_db_connect import Endpoint
+
+    values = []
+    for parameter, variable in _DB_ENDPOINT_PARAMETERS:
+        value = parameters.get(parameter) or os.environ.get(variable)
+        values.append(str(value) if value else None)
+    return Endpoint(*values)
 
 
-def _bind_database_credentials(session):
+def _database_credentials(session):
     """Resolve the DB credential under the SERVICE role, not the host's.
 
     `rapid_db.get_db_credentials` fetches RAPID_DB_SECRET_ID through boto3's
@@ -170,39 +178,33 @@ def _bind_database_credentials(session):
 
     The session passed here is already chained into
     RAPID_RECONCILER_ROLE_ARN, which is the identity that may read the
-    secret. Resolving through it and handing the result to the helper as
-    DBUSER/DBPASS keeps the credential inside this process: it is never in
-    the unit file, never in the container's declared environment, and never
-    in the journal — the properties the unit's own "no credentials in the
-    environment" note is protecting.
+    secret. The resolved credential is RETURNED and passed to `connect`,
+    where it was previously written to `os.environ` as DBUSER/DBPASS. The
+    unit-file and journal properties that write was protecting still hold,
+    and the one it could not protect now does too: the password no longer
+    exists in this process's environment, so nothing this service execs
+    inherits it and no environment dump can print it.
 
-    Left alone when the secret id is unset or DBUSER/DBPASS are already
-    present, so an operator running against another credential still wins.
-
-    RAPID_DB_SECRET_ID is CLEARED once the credential is in hand, and that
-    is load-bearing rather than tidying: `get_db_credentials` takes the
-    secret branch whenever that variable is set at all, and would re-fetch
-    through the ambient chain — the very failure this works around —
-    ignoring the DBUSER/DBPASS it just received. Clearing it selects the
-    already-resolved branch.
+    Returns None when the secret id is unset or DBUSER/DBPASS are already
+    present, leaving the helper's boundary read to serve an operator
+    running against another credential.
     """
     secret_id = os.environ.get("RAPID_DB_SECRET_ID")
     if not secret_id or os.environ.get("DBUSER"):
-        return
+        return None
+    from database.modules.utils.rapid_db_connect import Credentials
+
     secret = session.client("secretsmanager").get_secret_value(
         SecretId=secret_id)
     credential = json.loads(secret["SecretString"])
-    os.environ["DBUSER"] = credential["username"]
-    os.environ["DBPASS"] = credential["password"]
-    os.environ.pop("RAPID_DB_SECRET_ID", None)
     logger.info("database credential resolved under %s from secret %s",
                 "the service role", secret_id)
+    return Credentials(credential["username"], credential["password"])
 
 
 def main():
     _configure_logging()
 
-    region = os.environ.get("AWS_DEFAULT_REGION", "us-east-1")
     role_arn = os.environ.get("RAPID_RECONCILER_ROLE_ARN")
     poll_seconds = int(os.environ.get("RAPID_RECONCILER_POLL_SECONDS",
                                       POLL_SECONDS))
@@ -220,15 +222,20 @@ def main():
         from database.modules.utils.rapid_db_connect import connection
         from submission.startup import fetch_parameters
 
+        # Inside the try so a missing region exits 70 with the journal line
+        # the operator needs, rather than an unhandled traceback.
+        region = resolve_region()
         session = _assumed_session(role_arn, region)
         parameters = fetch_parameters(client=session.client("ssm"))
-        _bind_database_environment(parameters)
-        _bind_database_credentials(session)
+        endpoint = _database_endpoint(parameters)
+        credentials = _database_credentials(session)
         logger.info("reconciler starting: poll=%ss records=%s diagnostics=%s",
                     poll_seconds, parameters["s3/records-bucket"],
                     parameters["s3/diagnostics-bucket"])
 
-        with connection("rapid-reconciler", lane="transaction") as conn:
+        with connection("rapid-reconciler", lane="transaction",
+                        endpoint=endpoint,
+                        credentials=credentials) as conn:
             service = build_service(session, parameters, conn)
             run_forever(service, poll_seconds=poll_seconds,
                         should_continue=lambda: running["go"])

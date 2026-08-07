@@ -81,6 +81,47 @@ SUPPORTED_SCHEMA_VERSION = 1
 # at a checkout.
 ENV_SOFTWARE_ROOT = "RAPID_SW"
 
+# Optional override for the auxiliary-file directory. Plumbing — a path —
+# whose default is derived from the root, not compiled in.
+ENV_CONFIG_DIRECTORY = "RAPID_CFG"
+
+
+def software_root() -> str:
+    """The installed software root, or raise naming the variable.
+
+    The one fail-loud read of ``RAPID_SW`` for code that needs the root
+    itself rather than the science configuration under it. Payload read
+    sites call this instead of ``os.environ.get("RAPID_SW", "/code")``:
+    that default was the payload surface's divergence from the rest of
+    the operational path, and it is the shape the environment policy
+    names — "substituting a value for an unset variable without any
+    record is prohibited in operational code". A container built without
+    the root set would have silently run every tool out of a ``/code``
+    that may not be the tree it was given.
+    """
+    root = os.getenv(ENV_SOFTWARE_ROOT)
+    if not root:
+        raise ConfigError(
+            f"{ENV_SOFTWARE_ROOT} is not set, so the installed software "
+            "root cannot be located; it is set by the image and there is "
+            "no default — a guessed root runs whatever binaries happen to "
+            "be at that path")
+    return root
+
+
+def config_directory() -> str:
+    """The auxiliary-file directory beside the software root, or raise.
+
+    ``RAPID_CFG`` overrides it — process-level plumbing, a path, with the
+    safe direction as its default — but the default derives from
+    :func:`software_root`, so an unset root fails loud here too rather
+    than resolving to ``/code/cdf``.
+    """
+    override = os.getenv(ENV_CONFIG_DIRECTORY)
+    if override:
+        return override
+    return os.path.join(software_root(), "cdf")
+
 
 def config_path(software_root: str | None = None) -> str:
     """Absolute path to the science configuration file.

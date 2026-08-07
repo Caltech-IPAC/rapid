@@ -156,8 +156,13 @@ class Provenance:
 
     source_sha: str
     container_digest: str
-    job_definition_rev: str
     config_digest: str
+    # ADVISORY, and therefore optional. The image may bake its own view of
+    # the revision it was published against, but nothing requires it: the
+    # authority is the submission-time execution binding on this same row,
+    # and `mark_started` falls back to it when this is None. Ordered last
+    # among the four because it is the only one with a default.
+    job_definition_rev: str | None = None
 
 
 @dataclasses.dataclass(frozen=True)
@@ -611,10 +616,21 @@ class AttemptWriter:
         as never-started — the specification's own legal window. This
         transition is where the claim becomes a start.
         """
+        # `job_definition_rev` falls back to the row's own binding when the
+        # runtime observed none. The image-baked value is ADVISORY now
+        # (design/compute.md § Payload contract): provenance authority for
+        # the executing revision is the submission-time execution binding,
+        # which the submitter resolved from Batch and which is already on
+        # this row. An image built without the ENV entry therefore starts,
+        # and the column the DDL requires at `started` carries the
+        # authoritative revision rather than a second, independently
+        # maintained copy of it that could disagree.
         sql = (
             "UPDATE attempts SET lifecycle_state = %s, started_at = %s,"
             "  source_sha = %s, container_digest = %s,"
-            "  job_definition_rev = %s, config_digest = %s,"
+            "  job_definition_rev = COALESCE("
+            "    %s, binding_job_definition_rev::text),"
+            "  config_digest = %s,"
             "  config_snapshot_key = %s,"
             "  scheduler_job_id = COALESCE(%s, scheduler_job_id),"
             "  application_attempt_index = COALESCE("

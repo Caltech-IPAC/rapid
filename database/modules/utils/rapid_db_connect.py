@@ -28,11 +28,26 @@ What this module does add is a raising wrapper around it: the existing
 function returns ``(None, None)`` on failure after printing, which is the
 swallow this contract forbids at the boundary.
 
+The endpoint and the credential arrive through an EXPLICIT parameter
+interface (``endpoint=``, ``credentials=``), and the environment reads
+are the fallback for a caller that has neither. That is the environment
+policy's shape, not a convenience: "no process writes the environment
+for a downstream reader — the environment is not an in-process
+transport; a process may read its own environment at its boundary and
+pass values on explicitly" (code-standards § Environment variables).
+Before this interface existed the only way for a caller holding the
+endpoint — the payload entrypoint with the parameter tree in hand, the
+reconciler with a credential resolved under its own role — to reach this
+module was to write ``os.environ`` and let ``connect`` read it back,
+which put a plaintext password in the process environment of everything
+downstream. Both now pass what they hold.
+
 Every dynamic identifier goes through ``psycopg2.sql.Identifier``; there
 is no code path in this module that interpolates a value or a name into
 SQL text.
 """
 
+import collections
 import contextlib
 import logging
 import os
@@ -97,6 +112,48 @@ class DBCredentialError(DBError):
     error_category = "config_invalid"
 
 
+class Endpoint(collections.namedtuple("Endpoint", "host port dbname")):
+    """Where the database is: the three facts, passed rather than exported.
+
+    A tuple and not a dict so a caller cannot half-populate one and have
+    the missing half silently become an environment read.
+    """
+
+    __slots__ = ()
+
+    def __new__(cls, host, port, dbname):
+        missing = [name for name, value
+                   in (("host", host), ("port", port), ("dbname", dbname))
+                   if value is None or str(value) == ""]
+        if missing:
+            raise DBCredentialError(
+                "an explicit database endpoint is incomplete; missing: "
+                + ", ".join(missing))
+        return super().__new__(cls, str(host), str(port), str(dbname))
+
+
+class Credentials(collections.namedtuple("Credentials", "user password")):
+    """A resolved database credential, passed explicitly.
+
+    ``__repr__`` is overridden because the default would print the
+    password into any log line, traceback frame, or ``repr()`` of a
+    containing structure — the exact exposure that moving the credential
+    off the environment is meant to close.
+    """
+
+    __slots__ = ()
+
+    def __new__(cls, user, password):
+        if not user or not password:
+            raise DBCredentialError(
+                "an explicit database credential needs both a user and a "
+                "password")
+        return super().__new__(cls, user, password)
+
+    def __repr__(self):
+        return f"Credentials(user={self.user!r}, password=<redacted>)"
+
+
 def resolve_credentials():
     """Fetch (user, password) under the ambient role, or raise.
 
@@ -104,6 +161,10 @@ def resolve_credentials():
     on failure after printing to stdout. That swallow is the thing this
     contract forbids, so it is converted to a raise here — the one place
     the conversion has to happen for every caller of this module.
+
+    This is the BOUNDARY read: a process with no credential of its own
+    reads its own environment here. A caller that already holds one
+    passes ``credentials=`` to :func:`connect` and never reaches this.
     """
     try:
         user, password = get_db_credentials()
@@ -133,8 +194,22 @@ def _require_env(name):
     return value
 
 
+def endpoint_from_environment():
+    """The boundary read of the endpoint, for a caller that holds none.
+
+    Named and separate so the two paths into :func:`connect` are visible:
+    an explicit ``endpoint=`` from a caller that fetched the tree, or this
+    — a process reading its own environment once, at its boundary.
+    """
+    return Endpoint(host=_require_env("DBSERVER"),
+                    port=_require_env("DBPORT"),
+                    dbname=_require_env("DBNAME"))
+
+
 def connect(application_name,
             lane=LANE_TRANSACTION,
+            endpoint=None,
+            credentials=None,
             connect_timeout=DEFAULT_CONNECT_TIMEOUT_S,
             attempts=DEFAULT_CONNECT_ATTEMPTS,
             backoff_initial=DEFAULT_BACKOFF_INITIAL_S,
@@ -158,6 +233,16 @@ def connect(application_name,
     and the pooler's admin interface, which is how a job that transacts
     long on the transaction lane gets caught.
 
+    ``endpoint`` and ``credentials`` are the explicit interface. A caller
+    holding either — the payload entrypoint, which has just read the
+    parameter tree; the reconciler, which has just resolved a secret under
+    its own role — passes it here instead of exporting it into
+    ``os.environ`` for this function to read back. Each is independently
+    optional: what is not passed is read from this process's own
+    environment at its boundary, which is what a plain script still does.
+    Passing a credential explicitly is the only way to reach the database
+    without the password existing in the process environment.
+
     ``sleep`` and ``connect_fn`` are injection points for tests; nothing
     in production passes them.
 
@@ -180,10 +265,19 @@ def connect(application_name,
 
     connect_fn = connect_fn or psycopg2.connect
 
-    host = _require_env("DBSERVER")
-    port = _require_env("DBPORT")
-    dbname = _require_env("DBNAME")
-    user, password = resolve_credentials()
+    if endpoint is None:
+        endpoint = endpoint_from_environment()
+    elif not isinstance(endpoint, Endpoint):
+        # Accept the three fields in a plain tuple or mapping, but build the
+        # real type so the completeness check runs — a caller that passed a
+        # two-element tuple would otherwise unpack into a wrong dbname.
+        endpoint = (Endpoint(**endpoint) if hasattr(endpoint, "keys")
+                    else Endpoint(*endpoint))
+    host, port, dbname = endpoint
+
+    if credentials is None:
+        credentials = resolve_credentials()
+    user, password = Credentials(*credentials)
 
     # PostgreSQL truncates application_name at NAMEDATALEN-1 (63 bytes) and
     # would silently lose the lane suffix on a long component name, so the

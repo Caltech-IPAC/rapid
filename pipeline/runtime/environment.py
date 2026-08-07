@@ -198,6 +198,42 @@ def describe(env: JobEnvironment) -> str:
     return " ".join(parts)
 
 
+def resolve_region(env: dict | None = None, session_region=None) -> str:
+    """The AWS region, by the policy's order, or raise. Never a default.
+
+    code-standards § Environment variables: "Operational code never
+    silently defaults an AWS region: resolve `AWS_REGION`, then
+    `AWS_DEFAULT_REGION`, then the SDK session, then raise." The order is
+    the policy's, and the raise is the point — the pattern this replaces
+    was `os.environ.get("AWS_DEFAULT_REGION", "us-east-1")`, which in an
+    account deployed anywhere else reconciles against a region that holds
+    none of its work and reports nothing wrong.
+
+    `session_region` is the injection point for the SDK step; production
+    passes nothing and the boto3 session is consulted lazily, so a caller
+    whose region is already in the environment never constructs one.
+    """
+    source = os.environ if env is None else env
+
+    for name in ("AWS_REGION", "AWS_DEFAULT_REGION"):
+        value = (source.get(name) or "").strip()
+        if value:
+            return value
+
+    if session_region is None:
+        import boto3
+        session_region = boto3.session.Session().region_name
+    if session_region:
+        return session_region
+
+    raise ConfigError(
+        "no AWS region: neither AWS_REGION nor AWS_DEFAULT_REGION is set "
+        "and the SDK session resolved none. Operational code does not "
+        "default a region — a wrong one succeeds against the wrong "
+        "account's resources.",
+        missing="AWS_REGION")
+
+
 def redacting_environ(env: dict | None = None) -> dict:
     """The environment with sensitive VALUES removed, for a diagnostic dump.
 

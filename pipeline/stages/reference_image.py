@@ -27,12 +27,15 @@ import numpy as np
 import modules.utils.rapid_pipeline_subs as util
 import pipeline.referenceImageSubs as rfis
 from pipeline.mosaic_geometry import resolve_awaicgen_geometry
+from pipeline.runtime import science_config
 from pipeline.runtime.errors import InputError
 from pipeline.stages.publishing import (publish_products, split_s3_uri,
                                         verify_downloaded_input)
 
-SOFTWARE_ROOT = os.environ.get("RAPID_SW", "/code")
-CFG_PATH = os.environ.get("RAPID_CFG", os.path.join(SOFTWARE_ROOT, "cdf"))
+# Fail-loud and per call, not a module-scope `os.environ.get(..., "/code")`:
+# see the same pair in `pipeline/stages/science.py`.
+SOFTWARE_ROOT = science_config.software_root
+CFG_PATH = science_config.config_directory
 
 
 def download_reference_psf(context) -> None:
@@ -109,7 +112,7 @@ def build_reference_image(context) -> None:
         True,
         context.science_value("fake_sources", "inject_fake_sources_flag"),
         fake_sources,
-        SOFTWARE_ROOT,
+        SOFTWARE_ROOT(),
         context.optional_fact("reference_overlapping_fields", []),
         # Any diagnostic input upload keys under THIS attempt, never the
         # legacy jid path a retry would overwrite (#18).
@@ -244,7 +247,7 @@ def image_statistics(context) -> None:
 
 def measure_fwhm(context) -> None:
     """FWHM from the catalogue. (Monolith stage S6, lines 457-485.)"""
-    paramsfile = CFG_PATH + "/rapidSexParamsRefImage.inp"
+    paramsfile = CFG_PATH() + "/rapidSexParamsRefImage.inp"
     vals = util.parse_ascii_text_sextractor_catalog(
         context.product("reference_sexcat"), paramsfile, ["FWHM_IMAGE"])
 

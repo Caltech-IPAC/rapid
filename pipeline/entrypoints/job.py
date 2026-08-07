@@ -49,6 +49,7 @@ file, or greps a log.
 import argparse
 import contextlib
 import datetime
+import json
 import os
 import sys
 import traceback
@@ -179,28 +180,41 @@ def build_provenance(config_digest: str, parameters: dict):
     `container_digest` here and the binding's `image_digest` is a
     reconciliation signal rather than a duplicate.
 
-    All four are required at `started` by the DDL. They come from the image
-    (set as ENV at build time, so a container that does not know what it is
-    cannot start) rather than from the mutable parameter tree.
+    The image's own identity — source sha and container digest — is required
+    at `started` by the DDL, and comes from the image (set as ENV at build
+    time, so a container that does not know what it is cannot start) rather
+    than from the mutable parameter tree.
+
+    `RAPID_JOB_DEFINITION_REV` is NOT among the required reads. The baked
+    revision is advisory (design/compute.md § Payload contract): provenance
+    authority for the executing revision is the submission-time execution
+    binding on the attempt record, which the submitter resolved from Batch.
+    Requiring the baked value made a second, independently maintained copy
+    of one fact load-bearing — an image published against one revision and
+    then run under a newer one carried a wrong number that nothing checked,
+    and an image built without the entry could not start at all. Read here
+    when present so the two views remain comparable; `mark_started` falls
+    back to the binding when it is absent.
     """
     from observability.attempts import Provenance
 
-    missing = [name for name in ("RAPID_SOURCE_SHA", "RAPID_IMAGE_DIGEST",
-                                 "RAPID_JOB_DEFINITION_REV")
+    missing = [name for name in ("RAPID_SOURCE_SHA", "RAPID_IMAGE_DIGEST")
                if not (os.environ.get(name) or "").strip()]
     if missing:
         raise ConfigError(
             "the image does not carry its own identity; missing: "
             + ", ".join(missing)
-            + ". These are set as ENV in the Containerfile at build time and "
-            "on the job definition; a started attempt without provenance is "
-            "not a representable state.",
+            + ". These are set as ENV in the Containerfile at build time; a "
+            "started attempt without provenance is not a representable "
+            "state.",
             missing=",".join(missing))
+
+    baked_revision = (os.environ.get("RAPID_JOB_DEFINITION_REV") or "").strip()
 
     return Provenance(
         source_sha=os.environ["RAPID_SOURCE_SHA"].strip(),
         container_digest=os.environ["RAPID_IMAGE_DIGEST"].strip(),
-        job_definition_rev=os.environ["RAPID_JOB_DEFINITION_REV"].strip(),
+        job_definition_rev=baked_revision or None,
         config_digest=config_digest)
 
 
@@ -539,8 +553,8 @@ def _run(workload_class: str) -> int:
     records_prefix = _required(parameters, PARAM_RECORDS_PREFIX)
 
     # Before the first connection, and after the tree is read: the endpoint is
-    # a tree fact, and the connection helper reads it from the environment.
-    export_database_environment(parameters)
+    # a tree fact, passed to the helper rather than exported for it.
+    db_endpoint, db_credentials = database_connection_inputs(parameters)
 
     workdir = WorkingDirectory.create(job_env.attempt_key)
     # Rebind the logging identifiers now that they are known: every line from
@@ -550,7 +564,8 @@ def _run(workload_class: str) -> int:
                                       attempt_id=job_env.attempt_index)
     logger = logging_setup.get_logger("job", adapter=adapter)
 
-    with _database(route, job_env) as (writer, execute):
+    with _database(route, job_env, db_endpoint, db_credentials) as (writer,
+                                                                    execute):
         # 4. Attempt ownership, through W1's one resolver.
         #
         # The logical-job key is RUN-SCOPED and comes from the one function
@@ -737,36 +752,38 @@ def _execute(context, job_type, recorder, logger):
     return (RapidOutcome.SUCCESS.value, disposition, None)
 
 
-# The connection helper (W1) reads the database endpoint from these
-# environment variables, deliberately: it is used by hosts and services that
-# are not Batch jobs and have no parameter tree. The payload's endpoint is
-# operational configuration and lives in the tree — the co-design moved it
-# there precisely so it would stop depending "on someone remembering
-# job-definition env entries (the rev-5/rev-6 failure class)". This mapping is
-# the bridge, and it is one place rather than a job-definition Environment
-# block per definition.
-DB_PARAMETER_ENV = {
-    "db/server": "DBSERVER",
-    "db/port": "DBPORT",
-    "db/name": "DBNAME",
-    "db/secret-id": "RAPID_DB_SECRET_ID",
-}
+# The tree keys holding the database endpoint and the secret naming its
+# credential. The payload's endpoint is operational configuration and lives
+# in the tree — the co-design moved it there precisely so it would stop
+# depending "on someone remembering job-definition env entries (the
+# rev-5/rev-6 failure class)".
+#
+# These used to be EXPORTED into `os.environ` for the connection helper to
+# read back. That is the in-process environment transport the policy
+# retired: the helper takes them as parameters now, so nothing this
+# container execs inherits the endpoint or the secret id from us.
+DB_PARAMETER_KEYS = ("db/server", "db/port", "db/name", "db/secret-id")
 
 
-def export_database_environment(parameters: dict) -> dict:
-    """Map the tree's `db/*` entries onto the connection helper's contract.
+def database_connection_inputs(parameters: dict):
+    """The tree's `db/*` entries as the connection helper's parameters.
 
-    Returns what was set, for the log. Raises `ConfigError` naming every
+    Returns `(endpoint, credentials)`. Raises `ConfigError` naming every
     missing key at once rather than one per run — the same reasoning as the
     per-invocation environment contract, and for the same reason: each
     discovery otherwise costs a container start.
 
-    Values are exported into `os.environ` because the helper reads them
-    there. That is a process-global write, which is worth doing once at
-    startup in the entrypoint and nowhere else — a stage that wanted a
-    different database would be a stage with a bug.
+    The credential is fetched here, under the job role, and handed on as a
+    value. Its secret id is an identifier and is logged; the credential
+    itself is never logged and never enters the environment.
     """
-    missing = [key for key in DB_PARAMETER_ENV if not parameters.get(key)]
+    from database.modules.utils.rapid_db_connect import (
+        Credentials,
+        DBCredentialError,
+        Endpoint,
+    )
+
+    missing = [key for key in DB_PARAMETER_KEYS if not parameters.get(key)]
     if missing:
         raise ConfigError(
             "the pipeline parameter tree does not carry the database "
@@ -775,26 +792,40 @@ def export_database_environment(parameters: dict) -> dict:
             "lives in the tree, not in job-definition environment entries.",
             missing=",".join(sorted(missing)))
 
-    exported = {}
-    for key, variable in DB_PARAMETER_ENV.items():
-        os.environ[variable] = parameters[key]
-        exported[variable] = parameters[key]
-    # The secret ID is an identifier, not a credential, so it is safe to log;
-    # the credential itself is fetched from Secrets Manager under the job role
-    # and never passes through here.
+    endpoint = Endpoint(host=parameters["db/server"],
+                        port=parameters["db/port"],
+                        dbname=parameters["db/name"])
+    secret_id = parameters["db/secret-id"]
+
+    import boto3
+
+    try:
+        client = boto3.client("secretsmanager",
+                              region_name=environment.resolve_region())
+        secret = json.loads(
+            client.get_secret_value(SecretId=secret_id)["SecretString"])
+        credentials = Credentials(secret["username"], secret["password"])
+    except Exception as exc:  # noqa: BLE001 - re-raised as the helper's type
+        raise DBCredentialError(
+            f"could not resolve the database credential from Secrets Manager "
+            f"secret {secret_id!r} under the job role: {exc}") from exc
+
     _logger.info("database endpoint from the parameter tree: %s:%s/%s "
-                 "(secret %s)", exported["DBSERVER"], exported["DBPORT"],
-                 exported["DBNAME"], exported["RAPID_DB_SECRET_ID"])
-    return exported
+                 "(secret %s)", endpoint.host, endpoint.port, endpoint.dbname,
+                 secret_id)
+    return endpoint, credentials
 
 
 @contextlib.contextmanager
-def _database(route, job_env):
+def _database(route, job_env, endpoint, credentials):
     """One connection for the attempt's lifetime, on the route's lane.
 
     The lane is the job type's contract (route matrix), not a caller's choice.
     `application_name` carries the scheduler job id so a connection held too
     long is attributable to a job in `pg_stat_activity` without a join.
+
+    The endpoint and credential arrive as arguments rather than through the
+    environment: `main` reads them from the tree once and passes them down.
     """
     from database.modules.utils.rapid_db_connect import (
         ConnectionExecutor,
@@ -803,7 +834,8 @@ def _database(route, job_env):
     from observability.attempts import AttemptWriter
 
     application_name = f"rapid-payload:{job_env.scheduler_job_id}"
-    with connection(application_name, lane=route.db_lane) as conn:
+    with connection(application_name, lane=route.db_lane, endpoint=endpoint,
+                    credentials=credentials) as conn:
         execute = ConnectionExecutor(conn)
         yield AttemptWriter(execute), execute
 

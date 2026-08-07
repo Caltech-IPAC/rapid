@@ -52,6 +52,7 @@ import modules.utils.rapid_pipeline_subs as util
 import pipeline.differenceImageSubs as dfis
 import pipeline.referenceImageSubs as rfis
 from pipeline.mosaic_geometry import resolve_awaicgen_geometry
+from pipeline.runtime import science_config
 from pipeline.runtime.errors import InputError
 from pipeline.runtime.process import run_shell, run_tool
 from pipeline.stages.publishing import (publish_products, split_s3_uri,
@@ -61,8 +62,14 @@ from pipeline.stages.publishing import (publish_products, split_s3_uri,
 # `rapid_sw` and "/code/cdf" as `cfg_path` at module scope; they are the
 # installed software root and the auxiliary-file directory beside it, and the
 # Containerfile now sets them as ENV so this module reads rather than assumes.
-SOFTWARE_ROOT = os.environ.get("RAPID_SW", "/code")
-CFG_PATH = os.environ.get("RAPID_CFG", os.path.join(SOFTWARE_ROOT, "cdf"))
+#
+# Resolved per call, not at import, and fail-loud: these were the payload
+# surface's two `os.environ.get("RAPID_SW", "/code")` reads, the only
+# operational reads of the root that defaulted while every other one exited
+# 64. Per call because a module-scope raise would make importing this module
+# for anything — a test, a doc build — require the variable.
+SOFTWARE_ROOT = science_config.software_root
+CFG_PATH = science_config.config_directory
 
 # The interpreter for the bundled tool scripts (ZOGY, SFFT, the fake-source
 # injector). The monolith hardcoded '/usr/bin/python3.11' at three sites; the
@@ -276,7 +283,7 @@ def _build_reference_image(context, awaicgen) -> None:
         True,
         context.science_value("fake_sources", "inject_fake_sources_flag"),
         fake_sources,
-        SOFTWARE_ROOT,
+        SOFTWARE_ROOT(),
         context.optional_fact("reference_overlapping_fields", []),
         # Any diagnostic input upload keys under THIS attempt, never the
         # legacy jid path a retry would overwrite (#18).
@@ -386,7 +393,7 @@ def _build_reference_image(context, awaicgen) -> None:
 
 def measure_reference_fwhm(context) -> None:
     """FWHM from the reference-image catalogue. (Monolith stage H, 581-617.)"""
-    paramsfile = CFG_PATH + "/rapidSexParamsRefImage.inp"
+    paramsfile = CFG_PATH() + "/rapidSexParamsRefImage.inp"
     vals = util.parse_ascii_text_sextractor_catalog(
         context.product("reference_sexcat"), paramsfile, ["FWHM_IMAGE"])
 
@@ -474,7 +481,7 @@ def inject_fake_sources(context) -> None:
     with open(injection_catalog_list_filename, "w") as handle:
         handle.write(file_content)
 
-    fake_sources_code = SOFTWARE_ROOT + "/modules/fake_src/rapid_source_injections.py"
+    fake_sources_code = SOFTWARE_ROOT() + "/modules/fake_src/rapid_source_injections.py"
     run_tool([PYTHON, fake_sources_code,
               "--sci_ext", str(fake_sources["sci_ext"]),
               "--num_injections", str(fake_sources["num_injections"]),
@@ -541,11 +548,11 @@ def science_image_catalog(context) -> None:
     util.generateScienceImageCatalog(
         reformatted,
         context.product("science_uncert_image"),
-        CFG_PATH,
+        CFG_PATH(),
         context.science_section("sextractor_sciimage"),
         filename_sciimage_catalog)
 
-    paramsfile = CFG_PATH + "/rapidSexParamsSciImage.inp"
+    paramsfile = CFG_PATH() + "/rapidSexParamsSciImage.inp"
     vals = util.parse_ascii_text_sextractor_catalog(
         filename_sciimage_catalog, paramsfile, ["FWHM_IMAGE"])
 
@@ -611,8 +618,8 @@ def subtract_background(context) -> None:
     virtue of having been swarped.
     """
     bkgest = context.science_section("bkgest")
-    bkgest_code = SOFTWARE_ROOT + "/c/bin/bkgest"
-    bkgest_include_dir = SOFTWARE_ROOT + "/c/include"
+    bkgest_code = SOFTWARE_ROOT() + "/c/bin/bkgest"
+    bkgest_include_dir = SOFTWARE_ROOT() + "/c/include"
 
     filename_bkg_subbed_science_image = context.scratch(
         bkgest["filename_bkg_subbed_science_image"])
@@ -791,7 +798,7 @@ def run_zogy(context) -> None:
     reads only the data.
     """
     zogy = context.science_section("zogy")
-    zogy_code = SOFTWARE_ROOT + "/modules/zogy/v21Aug2018/py_zogy.py"
+    zogy_code = SOFTWARE_ROOT() + "/modules/zogy/v21Aug2018/py_zogy.py"
 
     filename_diffimage = context.scratch(zogy["zogy_output_diffimage_file"])
     filename_diffpsf = context.scratch(zogy["zogy_output_diffpsf_file"])
@@ -921,7 +928,7 @@ def run_sfft(context) -> None:
     if not context.science_value("sfft", "run_sfft"):
         return SKIPPED
 
-    sfft_code = SOFTWARE_ROOT + "/modules/sfft/sfft_rapid_rimtimsim.py"
+    sfft_code = SOFTWARE_ROOT() + "/modules/sfft/sfft_rapid_rimtimsim.py"
     science_image = context.product("science_image")
 
     crossconv_flag = context.science_value("sfft", "crossconv_flag")
@@ -1043,7 +1050,7 @@ def sextractor_on_difference_image(context, variant: str, image: str,
     nothing here outlives the call.
     """
     sextractor = context.science_section("sextractor_diffimage")
-    paramsfile = CFG_PATH + "/rapidSexParamsDiffImage.inp"
+    paramsfile = CFG_PATH() + "/rapidSexParamsDiffImage.inp"
     catalog = image.replace(".fits", ".txt")
 
     sextractor["sextractor_detection_image"] = detection_image
@@ -1062,9 +1069,9 @@ def sextractor_on_difference_image(context, variant: str, image: str,
         else context.product("weight_image"))
     sextractor["sextractor_parameters_name"] = paramsfile
     sextractor["sextractor_filter_name"] = \
-        CFG_PATH + "/rapidSexDiffImageFilter.conv"
+        CFG_PATH() + "/rapidSexDiffImageFilter.conv"
     sextractor["sextractor_starnnw_name"] = \
-        CFG_PATH + "/rapidSexDiffImageStarGalaxyClassifier.nnw"
+        CFG_PATH() + "/rapidSexDiffImageStarGalaxyClassifier.nnw"
     sextractor["sextractor_catalog_name"] = catalog
 
     run_tool(util.build_sextractor_command_line_args(sextractor),
