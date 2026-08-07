@@ -250,6 +250,11 @@ class ReconcilerService:
         per-row failure is exactly as fatal as a failing poll — the attempts
         never close, registration never sees them — so it flips the unit too,
         within `CLOSURE_FAILURE_POLL_THRESHOLD` polls.
+
+        What counts is ACTIONABLE-UNCLOSED work (ratified disposition,
+        2026-08-06): attempts the reconciler owes something to right now and
+        failed to deliver. An attempt still running, or inside either horizon,
+        is owed nothing yet and never counts against health — see `poll_once`.
         """
         return (self.consecutive_poll_failures < POLL_FAILURE_THRESHOLD
                 and self.consecutive_unproductive_polls
@@ -309,7 +314,8 @@ class ReconcilerService:
         """One reconciliation cycle. Returns a summary dict for the log."""
         rows = self.open_attempts()
         summary = {"open": len(rows), "observed": 0, "classified": 0,
-                   "skipped": 0, "deferred": 0, "errors": 0, "discovered": 0}
+                   "skipped": 0, "deferred": 0, "waiting": 0, "errors": 0,
+                   "discovered": 0}
         if not rows:
             # Nothing to do is not a failure to work (#24).
             self.consecutive_unproductive_polls = 0
@@ -401,18 +407,29 @@ class ReconcilerService:
 
         # Did this cycle actually DO anything (review finding #24)? A poll that
         # tried to close attempts and completed none of them is work-incapable,
-        # however calmly it returned. Deferrals and errors both count as
-        # failures to close; a single classified attempt proves the service can
-        # still work and clears the counter.
+        # however calmly it returned. A single classified attempt proves the
+        # service can still work and clears the counter.
+        #
+        # Health counts ACTIONABLE-UNCLOSED work only (ratified disposition,
+        # 2026-08-06). An attempt still running, one inside its grace horizon,
+        # and one inside its submission-anchored horizon are all `waiting`:
+        # the reconciler owes them nothing yet, so they are not evidence that
+        # it cannot work. Only `deferred` — a closure step that TRIED and
+        # failed — and `errors` are actionable. Counting waiting attempts here
+        # is what made a normal ramp step trip a check meant for an unhealthy
+        # service: W9 ran at NRestarts=15 because every poll during a step's
+        # first ten minutes attempted nothing but horizon-deferrals and was
+        # scored as having failed to close them.
         attempted = summary["classified"] + summary["deferred"] \
             + summary["errors"]
         if attempted and not summary["classified"]:
             self.consecutive_unproductive_polls += 1
             logger.warning(
-                "poll closed nothing while attempting %s (deferred=%s "
-                "errors=%s); %s consecutive unproductive polls, threshold %s",
+                "poll closed nothing while attempting %s actionable (deferred="
+                "%s errors=%s, waiting=%s not counted); %s consecutive "
+                "unproductive polls, threshold %s",
                 attempted, summary["deferred"], summary["errors"],
-                self.consecutive_unproductive_polls,
+                summary["waiting"], self.consecutive_unproductive_polls,
                 CLOSURE_FAILURE_POLL_THRESHOLD)
         else:
             self.consecutive_unproductive_polls = 0
@@ -578,12 +595,13 @@ class ReconcilerService:
                                  observation)
 
         if not observation.is_terminal:
-            return "deferred"
+            # Running, not stuck. The reconciler owes this attempt nothing yet.
+            return "waiting"
 
         if not beyond_grace_horizon(observation.stopped_at, now=self._now()):
             logger.debug("attempt %s is scheduler-terminal but inside the "
                          "grace horizon; leaving it open", attempt_id)
-            return "deferred"
+            return "waiting"
 
         return self._classify(row, observation)
 
@@ -1158,7 +1176,8 @@ class ReconcilerService:
         """
         if not beyond_submission_horizon(row.get("submitted_at"),
                                          now=self._now()):
-            return "deferred"
+            # Inside the submission-anchored horizon: queue time, not a fault.
+            return "waiting"
 
         attempt_id = row["attempt_id"]
         with attempt_lease(self.conn, attempt_id) as held:

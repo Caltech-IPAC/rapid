@@ -158,9 +158,18 @@ Remaining open items, with owners
      - Double-gated as before: explicit go, and after W8/W9 close. W9 is now
        closed, so only the explicit go remains.
    * - RPM / runner chain
-     - unchanged
-     - Still zero registered self-hosted runners; the promoter cannot be
-       retried. rapid-db still on pooler 1.0-2.
+     - corrected
+     - The runner half of this row was a **misdiagnosis**, corrected here.
+       CI runs entirely on GitHub-hosted runners — every workflow in
+       ``rapid_systems`` declares ``runs-on: ubuntu-latest`` — so the count
+       of registered self-hosted runners is zero because none is wanted,
+       not because one is missing, and the promoter is retriable like any
+       other workflow. Verified live 2026-08-06 and re-verified 2026-08-07:
+       ``gh api repos/Caltech-IPAC/rapid/actions/runners`` returns
+       ``total_count: 0`` while workflow runs complete green, and the
+       pooler RPM built successfully. rapid-db still on pooler 1.0-2 —
+       that half of the row stands, and its closure is road-map step 2b
+       (verify the scheduled promoter consumed the rebuilt RPM).
    * - Scratch-object cleanups
      - cleanup
      - ``s3://roman-rapid-build/psf-carry-staging/``; the ``coadd-inputs``

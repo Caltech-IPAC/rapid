@@ -633,9 +633,20 @@ def wait_for_submitted(submitted, timeout=None):
     """
     results = []
     for submission, _attempt_ids in submitted:
-        batch_run_id = getattr(submission, "run_id", None)
+        # `Submission.batch_id`, not `run_id`: the batch's run-scoped identity
+        # is named `batch_id` on the submission and `run_id` on the attempt row
+        # (`seams._precreate` stamps `run_id=manifest.batch_id`), and
+        # `wait_for_completion` queries the row's column. A `getattr(...,
+        # "run_id", None)` here read an attribute `Submission` has never had,
+        # so it was None for EVERY submission: the wait skipped every batch and
+        # the operator registered over jobs that were still running — the same
+        # failure round-3 finding #3 fixed, reintroduced by reading the right
+        # value under the wrong name. Attribute access, not `getattr` with a
+        # default: a submission that cannot name its batch is a fault to raise,
+        # not a batch to silently skip.
+        batch_run_id = submission.batch_id
         if not batch_run_id:
-            print("*** Warning: a submission carries no run id; cannot wait "
+            print("*** Warning: a submission carries no batch id; cannot wait "
                   "for it. It remains a reconciliation case.")
             continue
         with connection("rapid-vpo-wait", lane="transaction") as waitconn:

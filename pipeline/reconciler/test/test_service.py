@@ -115,6 +115,12 @@ class OpenSetTests(unittest.TestCase):
 
 
 class DeferralTests(unittest.TestCase):
+    """`waiting` and `deferred` are different outcomes, and the split is the
+    ratified health disposition (2026-08-06): health counts only
+    ACTIONABLE-UNCLOSED work. An attempt still running, or inside either
+    horizon, is owed nothing yet — it is `waiting`. Only a closure step that
+    TRIED and failed is `deferred`."""
+
     def test_a_running_attempt_is_observed_but_left_open(self):
         rows = [attempt_row(1, lifecycle_state="started")]
         jobs = [batch_job(status="RUNNING", started=utc(2026, 8, 6, 11, 0, 0))]
@@ -122,7 +128,8 @@ class DeferralTests(unittest.TestCase):
 
         summary = svc.poll_once()
 
-        self.assertEqual(1, summary["deferred"])
+        self.assertEqual(1, summary["waiting"])
+        self.assertEqual(0, summary["deferred"])
         # The observation is still recorded — an operator can see queue and
         # start times long before anything terminal happens.
         self.assertTrue(any("scheduler_state" in text.lower() or
@@ -138,7 +145,8 @@ class DeferralTests(unittest.TestCase):
 
         summary = svc.poll_once()
 
-        self.assertEqual(1, summary["deferred"])
+        self.assertEqual(1, summary["waiting"])
+        self.assertEqual(0, summary["deferred"])
         self.assertEqual(0, summary["classified"])
 
     def test_an_unresolved_child_inside_its_horizon_waits(self):
@@ -146,7 +154,63 @@ class DeferralTests(unittest.TestCase):
                             submitted_at=utc(2026, 8, 6, 11, 50, 0))]
         svc, _, _, _, _ = build(rows, jobs=[], now=utc(2026, 8, 6, 12, 0, 0))
 
-        self.assertEqual(1, svc.poll_once()["deferred"])
+        summary = svc.poll_once()
+
+        self.assertEqual(1, summary["waiting"])
+        self.assertEqual(0, summary["deferred"])
+
+
+class ActionableWorkHealthTests(unittest.TestCase):
+    """The ratified health-vs-horizon disposition, pinned.
+
+    W9 ran the reconciler at `NRestarts=15`: every poll during a ramp step's
+    first ten minutes saw nothing but attempts inside their horizons, scored
+    them as attempted-and-not-closed, and tripped a check meant for a service
+    that cannot work. Nothing was lost — the supervisor restarted it — but a
+    healthy run was tripping an unhealthy-service alarm.
+    """
+
+    def test_a_full_step_of_waiting_attempts_never_degrades_health(self):
+        # Eighteen children, all inside the grace horizon: a ramp step's first
+        # poll, exactly. Poll far past the threshold and health must not move.
+        rows = [attempt_row(i, lifecycle_state="started",
+                            scheduler_job_id=f"job-{i}")
+                for i in range(1, 19)]
+        jobs = [batch_job(job_id=f"job-{i}", status="RUNNING",
+                          started=utc(2026, 8, 6, 11, 0, 0))
+                for i in range(1, 19)]
+        svc, _, _, _, _ = build(rows, jobs)
+
+        for _ in range(service.CLOSURE_FAILURE_POLL_THRESHOLD * 2):
+            summary = svc.poll_once()
+
+        self.assertEqual(18, summary["waiting"])
+        self.assertEqual(0, summary["deferred"])
+        self.assertEqual(0, svc.consecutive_unproductive_polls)
+        self.assertTrue(svc.healthy)
+
+    def test_a_persistent_closure_failure_still_degrades_health(self):
+        # The counter must still do its job: this is the condition it exists
+        # for, and the disposition narrows what counts, not whether it counts.
+        row = attempt_row(1, lifecycle_state="started",
+                          started_at=utc(2026, 8, 6, 11, 0, 0))
+        jobs = [batch_job(status="SUCCEEDED", exit_code=0,
+                          started=utc(2026, 8, 6, 11, 0, 0),
+                          stopped=utc(2026, 8, 6, 11, 5, 0))]
+        store = InMemoryObjectStore()
+
+        def refuse(*_args, **_kwargs):
+            raise RuntimeError("the records bucket denies writes")
+
+        store.put_if_absent = refuse
+        svc, _, _, _, _ = build([row], jobs, records=store)
+
+        for _ in range(service.CLOSURE_FAILURE_POLL_THRESHOLD):
+            summary = svc.poll_once()
+
+        self.assertEqual(1, summary["deferred"])
+        self.assertEqual(0, summary["waiting"])
+        self.assertFalse(svc.healthy)
 
 
 class AgreedClosureTests(unittest.TestCase):

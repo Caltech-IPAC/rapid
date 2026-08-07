@@ -75,11 +75,29 @@ _install_module_scope_environment()
 from pipeline import virtualPipelineOperator as vpo  # noqa: E402
 
 
-class Submission:
-    """Just the attribute `wait_for_submitted` reads off a real submission."""
+def Submission(batch_id):
+    """A REAL `submission.submit.Submission`, not a stand-in for one.
 
-    def __init__(self, run_id):
-        self.run_id = run_id
+    The local stub this replaces defined `self.run_id = run_id` and was
+    docstringed "just the attribute `wait_for_submitted` reads off a real
+    submission" — which asserted the belief instead of checking it. The real
+    class has never had a `run_id`; its run-scoped identity is `batch_id`. So
+    the production code read `getattr(submission, "run_id", None)`, got None on
+    every real submission, skipped every wait, and registered over jobs that
+    were still running — while these tests passed, because the double granted
+    the attribute the real object lacked.
+
+    Constructing the real frozen dataclass is what makes these routing tests
+    rather than three constants: a rename or a wrong attribute name now fails
+    here (`AttributeError`/`TypeError`) instead of being blessed. The other
+    fields are the minimum the constructor requires; the wait reads none of
+    them. (Code standards: test doubles must be able to refuse.)
+    """
+    from submission.submit import Submission as RealSubmission
+    return RealSubmission(batch_id=batch_id, job_id="job-abc",
+                          job_name="rapid-test", array_size=2,
+                          manifest_uri="s3://bucket/manifest.json",
+                          manifest_checksum="0" * 64, manifest=None)
 
 
 class WaitForSubmittedTests(unittest.TestCase):
@@ -137,7 +155,7 @@ class WaitForSubmittedTests(unittest.TestCase):
 
         self.assertEqual(["vpo-2026-08-06-refimage"], self.waited)
 
-    def test_a_submission_with_no_run_id_does_not_silently_pass(self):
+    def test_a_submission_with_no_batch_id_does_not_silently_pass(self):
         # It cannot be waited for, but it must not look like a completed wait
         # either: the batch stays a reconciliation case and the operator is
         # told so rather than proceeding as though it had finished.
