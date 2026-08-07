@@ -35,6 +35,19 @@ way by anyone looking at provenance: sorted keys, fixed separators,
 SHA-256. The two digests are not interchangeable and are recorded
 separately — one covers the mutable tree, the other the release content.
 
+**Temporal values are strings, and a native one is refused at load.** TOML
+parses an unquoted ``2026-01-01`` into a `datetime.date`, and the digest
+canonicalizes with ``json.dumps(default=str)``, which stringifies it. So
+``d = 2026-01-01`` and ``d = "2026-01-01"`` — two materially different
+configurations — canonicalize identically and produce the same digest. That
+collapses two configurations onto one provenance identity, which is the one
+property this module exists to guarantee. `load()` therefore refuses any
+native date/time/datetime, naming the key: temporal facts enter science
+configuration as quoted strings only. Refusal is chosen over canonicalizing
+the values explicitly, because canonicalization would change the digest of
+any existing release whose TOML carried a temporal value, and no recorded
+digest may move.
+
 **The SExtractor auxiliary files are covered but not read here.** The
 ``.conv``, ``.nnw``, and ``.inp`` files in ``cdf/`` are release content by
 location: they ship in the image and change only with a release. They are
@@ -44,6 +57,7 @@ by naming the image digest that fixes them, which is the honest statement
 of what pins them.
 """
 
+import datetime
 import functools
 import hashlib
 import json
@@ -94,6 +108,47 @@ def config_path(software_root: str | None = None) -> str:
     return os.path.join(root, SCIENCE_CONFIG_RELATIVE_PATH)
 
 
+# The types tomllib produces for TOML's native temporal forms: local date,
+# local time, and both local and offset date-times. `datetime` subclasses
+# `date`, so the pair covers all four; `bool`/`int` are unrelated here.
+TEMPORAL_TYPES = (datetime.date, datetime.time)
+
+
+def _refuse_temporal_values(content: Mapping[str, Any], resolved: str) -> None:
+    """Raise if any value in the loaded content is a native date or time.
+
+    Walks nested tables and arrays, because a temporal value anywhere under
+    the document reaches the digest through the same canonicalization. The
+    key is named in dotted form so the fix is a single edit the reader can
+    find without hunting.
+
+    Raises
+    ------
+    ConfigError
+        Naming the first offending key and the quoting that fixes it.
+    """
+
+    def walk(node: Any, trail: tuple[str, ...]) -> None:
+        if isinstance(node, TEMPORAL_TYPES):
+            key = ".".join(trail) if trail else "<document root>"
+            raise ConfigError(
+                f"{key} in the science configuration at {resolved} is a "
+                f"native TOML {type(node).__name__} ({node!s}); temporal "
+                "facts must be quoted strings. An unquoted date and the "
+                "same date quoted canonicalize to the identical "
+                "configuration digest, so the two would share one "
+                f"provenance identity. Quote it: {trail[-1] if trail else key}"
+                f' = "{node!s}"')
+        if isinstance(node, dict):
+            for name, value in node.items():
+                walk(value, trail + (str(name),))
+        elif isinstance(node, (list, tuple)):
+            for index, value in enumerate(node):
+                walk(value, trail + (f"[{index}]",))
+
+    walk(content, ())
+
+
 def load(path: str | None = None,
          software_root: str | None = None) -> dict[str, Any]:
     """Read the science configuration.
@@ -114,8 +169,9 @@ def load(path: str | None = None,
     Raises
     ------
     ConfigError
-        The file is missing, unparseable, or declares a schema version
-        this reader does not implement.
+        The file is missing, unparseable, carries a native date/time
+        value, or declares a schema version this reader does not
+        implement.
     """
     resolved = path if path is not None else config_path(software_root)
 
@@ -135,6 +191,12 @@ def load(path: str | None = None,
         raise ConfigError(
             f"could not read the science configuration at {resolved}: {exc}"
         ) from exc
+
+    # Before anything reads a value: a native temporal type would reach the
+    # digest as a string and collide with its quoted twin. Checked ahead of
+    # the schema-version gate so the fault is reported on its own terms
+    # rather than depending on which version the file declares.
+    _refuse_temporal_values(content, resolved)
 
     version = content.get("release", {}).get("schema_version")
     if version != SUPPORTED_SCHEMA_VERSION:

@@ -8,6 +8,7 @@ while both exist. That test deletes itself with the .ini at W6.
 """
 
 import configparser
+import datetime
 import hashlib
 import json
 import os
@@ -199,6 +200,91 @@ class ShippedConfigurationTests(unittest.TestCase):
                 if isinstance(value, str):
                     self.assertNotIn(value, sentinels,
                                      f"{name}.{key} carries a placeholder")
+
+    def test_the_shipped_release_carries_no_native_temporal_value(self):
+        # The enforcement below must not refuse the release it ships with.
+        # Its one date-like entry (forced_photometry.d_earliest) is quoted.
+        content = science_config.load(path=SCIENCE_TOML)
+        self.assertIsInstance(
+            content["forced_photometry"]["d_earliest"], str)
+
+
+class TemporalTypeRefusalTests(unittest.TestCase):
+    """Native TOML dates and times are refused at load.
+
+    The defect these guard: the digest canonicalizes with
+    `json.dumps(default=str)`, so an unquoted date and the same date
+    quoted produce one digest for two different configurations. Refusing
+    the native form at load keeps one digest meaning one configuration.
+    """
+
+    def test_a_native_date_is_refused_and_the_key_is_named(self):
+        path = write_config(MINIMAL + '\nd_earliest = 2018-03-17\n')
+        with self.assertRaises(ConfigError) as caught:
+            science_config.load(path=path)
+        self.assertIn("d_earliest", str(caught.exception))
+
+    def test_a_native_datetime_is_refused(self):
+        path = write_config(MINIMAL + '\nstamp = 2018-03-17T00:00:00\n')
+        with self.assertRaises(ConfigError) as caught:
+            science_config.load(path=path)
+        self.assertIn("stamp", str(caught.exception))
+
+    def test_an_offset_datetime_is_refused(self):
+        path = write_config(MINIMAL + '\nstamp = 2018-03-17T00:00:00Z\n')
+        with self.assertRaises(ConfigError) as caught:
+            science_config.load(path=path)
+        self.assertIn("stamp", str(caught.exception))
+
+    def test_a_native_time_is_refused(self):
+        path = write_config(MINIMAL + '\nat = 07:32:00\n')
+        with self.assertRaises(ConfigError) as caught:
+            science_config.load(path=path)
+        self.assertIn("at", str(caught.exception))
+
+    def test_a_temporal_value_nested_in_a_section_is_refused(self):
+        path = write_config(MINIMAL + '\n[epoch]\nstart = 2018-03-17\n')
+        with self.assertRaises(ConfigError) as caught:
+            science_config.load(path=path)
+        self.assertIn("epoch.start", str(caught.exception))
+
+    def test_a_temporal_value_inside_an_array_is_refused(self):
+        path = write_config(MINIMAL + '\nepochs = [2018-03-17, 2019-01-01]\n')
+        with self.assertRaises(ConfigError) as caught:
+            science_config.load(path=path)
+        self.assertIn("epochs", str(caught.exception))
+
+    def test_the_quoted_form_is_accepted(self):
+        path = write_config(
+            MINIMAL + '\n[forced_photometry]\nd_earliest = "2018-03-17"\n')
+        content = science_config.load(path=path)
+        self.assertEqual(
+            content["forced_photometry"]["d_earliest"], "2018-03-17")
+
+    def test_the_refusal_forecloses_the_digest_collision(self):
+        # Without the refusal these two configurations — a date and the
+        # same date quoted — canonicalize to one digest. The quoted one
+        # loads; the native one never gets far enough to collide.
+        quoted = write_config(
+            MINIMAL + '\n[forced_photometry]\nd = "2018-03-17"\n')
+        native = write_config(
+            MINIMAL + '\n[forced_photometry]\nd = 2018-03-17\n')
+        quoted_content = science_config.load(path=quoted)
+        with self.assertRaises(ConfigError):
+            science_config.load(path=native)
+        # The collision is real: the digest cannot tell the two apart,
+        # which is exactly why the load path must. Built here rather than
+        # loaded, because loading the native form is now impossible.
+        colliding = json.loads(json.dumps(quoted_content))
+        colliding["forced_photometry"]["d"] = datetime.date(2018, 3, 17)
+        self.assertEqual(science_config.digest(quoted_content),
+                         science_config.digest(colliding))
+
+    def test_load_with_digest_refuses_too(self):
+        # The cached wrapper must not be a way around the check.
+        path = write_config(MINIMAL + '\nd = 2018-03-17\n')
+        with self.assertRaises(ConfigError):
+            science_config.load_with_digest(path=path)
 
     def test_load_with_digest_returns_an_independent_copy(self):
         first, digest_one = science_config.load_with_digest(path=SCIENCE_TOML)
