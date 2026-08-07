@@ -52,6 +52,7 @@ import dataclasses
 import logging
 import os
 import tempfile
+import time
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Iterator, Sequence, TypeAlias
 from urllib.parse import urlparse
@@ -65,6 +66,22 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 PRV_WINDOW_DAYS = 365.25  # default look-back window for previous detections
+
+# Cutout-image staging: backoff between attempts is
+# STAGE_BACKOFF_BASE_S * 2**(attempt-1). The attempt count is the `retries`
+# argument of _stage(), not a constant.
+STAGE_BACKOFF_BASE_S = 1.0
+
+
+class CutoutStagingError(RuntimeError):
+    """A cutout source image could not be staged or loaded for a chip.
+
+    Raised (loudly) rather than silently producing null cutouts: a
+    persistent S3 failure or a missing/unreadable product aborts the whole
+    chip so it can be retried or reprocessed, instead of shipping tens of
+    thousands of cutout-less alerts. Because the three images load once per
+    chip, one such failure would otherwise degrade every source on it.
+    """
 
 #: For pylance checking
 LoadedImage: TypeAlias = "tuple[np.ndarray | None, FITSHDR | None]"
@@ -553,6 +570,7 @@ class AlertDataProvider:
         self._images_pid: int | None = None
         self._images: dict[str, LoadedImage] = {}  # "diff"|"sci"|"ref" -> (pixels, header)
         self._staging_dir = tempfile.mkdtemp(prefix="rapid_cutouts_")
+        self._s3: Any = None          # lazily built, retry-configured S3 client
         self._forced_phot_logged = False  # log the not-implemented note once
         # Auxiliary-catalog cross-reference state. The catalog is staged and
         # parsed once per pid -- same lifetime as _images. While CATALOG_FILE
@@ -996,33 +1014,94 @@ class AlertDataProvider:
         return Cutouts(difference=stamps["diff"], science=stamps["sci"],
                        template=stamps["ref"])
 
-    def _stage(self, url: str) -> str | None:
-        """Cache a product file locally.
+    def _stage(self, url: str, required: bool = True,
+               retries: int = 5) -> str | None:
+        """Cache a product file locally, retrying transient S3 failures.
+
+        An ``s3://`` URL is downloaded into the staging directory; a plain
+        path is returned untouched (tests and future non-AWS backends).
+        Transient download failures are retried with exponential backoff
+        (STAGE_BACKOFF_BASE_S), and the download is size-checked against
+        the object's ContentLength so a truncated transfer is retried too.
+
+        On a definitive error (404/403) or exhausted retries, behavior
+        depends on `required`: a required file (the cutout images) raises
+        CutoutStagingError so the chip aborts rather than silently
+        shipping null cutouts; an optional file (e.g. the auxiliary
+        catalog) logs a warning and returns None so its cross-reference is
+        simply skipped.
 
         Parameters
         ----------
         url : str
-            An ``s3://`` URL (downloaded into the staging directory) or a
-            plain path (passed through untouched).
+            An ``s3://`` URL or a plain filesystem path.
+        required : bool, default True
+            Whether a retrieval failure aborts (True) or is skipped (False).
+        retries : int, default 5
+            Maximum number of download attempts before giving up. Each
+            attempt additionally gets boto3's own standard-mode HTTP-level
+            retries underneath.
 
         Returns
         -------
         str or None
-            The local path, or None if the download failed -- that
-            image's cutouts are then null.
+            The local path, or None only when `required` is False and the
+            file could not be retrieved.
+
+        Raises
+        ------
+        CutoutStagingError
+            If a required ``s3://`` file cannot be retrieved.
         """
         if not url.startswith("s3://"):
             return url
         parts = urlparse(url)
+        bucket, key = parts.netloc, parts.path.lstrip("/")
         local = os.path.join(self._staging_dir, os.path.basename(url))
-        try:
-            import boto3  # deferred so non-AWS providers/tests don't need it
-            boto3.client("s3").download_file(parts.netloc,
-                                             parts.path.lstrip("/"), local)
-            return local
-        except Exception:
-            logger.warning("Could not stage %s", url, exc_info=True)
+
+        def fail(reason: str, cause: Exception | None) -> None:
+            if required:
+                raise CutoutStagingError(reason) from cause
+            logger.warning("%s; skipping (optional)", reason)
             return None
+
+        # deferred imports so non-AWS providers/tests don't need boto3
+        import boto3
+        import botocore.exceptions
+        from botocore.config import Config
+        if self._s3 is None:
+            # "standard" retry mode also retries connection errors, which the
+            # default "legacy" mode does not -- our original outage was one
+            self._s3 = boto3.client(
+                "s3", config=Config(retries={"mode": "standard"}))
+
+        last_exc: Exception | None = None
+        for attempt in range(1, retries + 1):
+            try:
+                self._s3.download_file(bucket, key, local)
+                expected = self._s3.head_object(
+                    Bucket=bucket, Key=key)["ContentLength"]
+                actual = os.path.getsize(local)
+                if actual != expected:
+                    raise OSError(f"truncated download: {actual} of "
+                                    f"{expected} bytes")
+                return local
+            except botocore.exceptions.ClientError as exc:
+                code = exc.response.get("Error", {}).get("Code")
+                if code in ("404", "NoSuchKey", "403", "AccessDenied"):
+                    return fail(
+                        f"cutout image not retrievable [{code}]: {url}", exc)
+                last_exc = exc
+            except Exception as exc:
+                last_exc = exc
+            if attempt < retries:
+                wait = STAGE_BACKOFF_BASE_S * 2 ** (attempt - 1)
+                logger.warning(
+                    "staging %s failed (attempt %d/%d): %s; retrying in %.0fs",
+                    url, attempt, retries, last_exc, wait)
+                time.sleep(wait)
+        return fail(
+            f"failed to stage {url} after {retries} attempts", last_exc)
 
     def registered_difference_image(self, pid: int) -> str | None:
         """The basename of the difference image registered for this chip.
@@ -1053,33 +1132,47 @@ class AlertDataProvider:
         Returns
         -------
         dict
-            ``{"diff" | "sci" | "ref": (pixels, header)}``. A
-            missing/unreadable file loads as (None, None), which
-            extract_stamp() turns into a null cutout; a missing
-            diffimages row yields an empty dict.
+            ``{"diff" | "sci" | "ref": (pixels, header)}``.
+
+        Raises
+        ------
+        CutoutStagingError
+            If the pid has no diffimages row, or any of the three cutout
+            images cannot be staged or read. Every image is required: one
+            missing/unreadable file would null that cutout for every
+            source on the chip, so we abort the chip loudly instead (see
+            CutoutStagingError). A wrong-grid image is a separate case,
+            handled by _check_grids_match.
         """
         if self._images_pid == pid:
             return self._images
 
         rows = self._query(
             "SELECT filename FROM diffimages WHERE pid = %s", (pid,))
-        if rows:
-            registered = rows[0]["filename"]
-            job_dir = os.path.dirname(registered)
-            # The registered difference image itself — the role-bound one —
-            # not a basename substituted for it.
-            names = {"diff": os.path.basename(registered),
-                     "sci": CUTOUT_FILES["sci"], "ref": CUTOUT_FILES["ref"]}
-            self._images = {
-                key: load_fits_image(self._stage(f"{job_dir}/{name}"))
-                for key, name in names.items()
-            }
-            self._check_grids_match(pid)
-        else:
-            logger.warning("No diffimages row for pid=%s; cutouts will be "
-                           "null", pid)
-            self._images = {}
+        if not rows:
+            raise CutoutStagingError(
+                f"no diffimages row for pid={pid}; cannot locate the job "
+                f"directory for cutouts")
+
+        # Get registered difference image
+        registered = rows[0]["filename"]
+        job_dir = os.path.dirname(registered)
+        # The registered difference image itself — the role-bound one —
+        # not a basename substituted for it.
+        names = {"diff": os.path.basename(registered),
+                 "sci": CUTOUT_FILES["sci"], "ref": CUTOUT_FILES["ref"]}
+        images = {key: load_fits_image(self._stage(f"{job_dir}/{name}"))
+                  for key, name in names.items()}
+        unreadable = [key for key, (pixels, _) in images.items()
+                      if pixels is None]
+        if unreadable:
+            raise CutoutStagingError(
+                f"pid={pid}: cutout image(s) {unreadable} missing or "
+                f"unreadable in {job_dir}; aborting chip")
+
+        self._images = images
         self._images_pid = pid
+        self._check_grids_match(pid)
         return self._images
 
     #TODO: I think we can assume this instead of checking in production
@@ -1154,7 +1247,9 @@ class AlertDataProvider:
             "SELECT filename FROM diffimages WHERE pid = %s", (pid,))
         if rows:
             job_dir = os.path.dirname(rows[0]["filename"])
-            path = self._stage(f"{job_dir}/{CATALOG_FILE}")
+            # the catalog is an optional cross-reference: skip (don't abort)
+            # if it can't be staged
+            path = self._stage(f"{job_dir}/{CATALOG_FILE}", required=False)
             if path is not None:
                 self._catalog = parse_catalog(path)
         else:
