@@ -879,6 +879,45 @@ class ReleaseContentCompletenessTests(unittest.TestCase):
         self.assertIn("naive_output_diffimage_file",
                       self.release["naive_diffimage"])
 
+    def _subscripted_keys(self, relative_path, dict_name):
+        """Every literal key a module reads as `<dict_name>["..."]`.
+
+        The `science_value` walk above only sees the STAGES. A section dict
+        is also handed whole to the science helpers, which then subscript it
+        directly — so a key dropped from release content is invisible to that
+        walk and surfaces as a `KeyError` in a job instead.
+        """
+        path = os.path.join(REPO_ROOT, *relative_path.split("/"))
+        with open(path) as handle:
+            tree = ast.parse(handle.read())
+
+        keys = set()
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Subscript):
+                continue
+            value = node.value
+            if not (isinstance(value, ast.Name) and value.id == dict_name):
+                continue
+            try:
+                keys.add(ast.literal_eval(node.slice))
+            except ValueError:
+                continue
+        return keys
+
+    def test_every_awaicgen_key_the_coadd_reads_exists(self):
+        """`generateReferenceImage` takes the `[awaicgen]` section whole.
+
+        W9 found two more of the same W4B drop this class was written for:
+        `awaicgen_input_images_list_file` and `awaicgen_input_uncert_list_file`
+        were still in the master .ini and never carried into release content,
+        so `build_reference_image` raised `KeyError` after downloading its PSF
+        and its 48 coadd inputs — 36 seconds of real work before the failure.
+        """
+        for key in self._subscripted_keys(
+                "pipeline/referenceImageSubs.py", "awaicgen_dict"):
+            with self.subTest(key=key):
+                self.assertIn(key, self.release["awaicgen"])
+
 
 if __name__ == "__main__":
     unittest.main()

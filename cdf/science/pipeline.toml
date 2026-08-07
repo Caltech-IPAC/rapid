@@ -179,6 +179,19 @@ zprefimg = 17.0
 awaicgen_output_mosaic_image_file = "awaicgen_output_mosaic_image.fits"
 awaicgen_output_mosaic_cov_map_file = "awaicgen_output_mosaic_cov_map.fits"
 awaicgen_output_mosaic_uncert_image_file = "awaicgen_output_mosaic_uncert_image.fits"
+# The coadd's two INPUT list filenames, from the same [AWAICGEN] section of
+# the master .ini, and dropped by the same W4B migration that dropped the
+# three output names above. `rfis.generateReferenceImage` writes the frame
+# list and the uncertainty list to these two paths and hands them to
+# awaicgen; without them `build_reference_image` raises KeyError before any
+# coadding — found live by the W9 ramp, as `internal_error`
+# 'awaicgen_input_images_list_file' on a reference-image attempt.
+#
+# Scratch-relative filenames, not paths: the stage runs in its own
+# per-attempt scratch directory, which is what keeps two concurrent
+# reference jobs on one host from writing each other's list.
+awaicgen_input_images_list_file = "refimage_sci_inputs.txt"
+awaicgen_input_uncert_list_file = "refimage_unc_inputs.txt"
 
 [bkgest]
 clippedmean_calc_type = 3
