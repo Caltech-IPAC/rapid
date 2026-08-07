@@ -3,10 +3,11 @@ W9 — the validation ramp
 
 What this records: the ramp still did not reach its 18/90/270 steps, but the
 blocker that stopped the previous attempt is **closed** — the reference-image
-coadd now runs, on real g0001 data, thirty-six times over. Two further
-defects behind it were found by that first real coadd, both are fixed and
-pushed, and neither is in the image the job definitions are pinned to. The
-ramp is one image rebuild away from its first passing step.
+coadd now runs, on real g0001 data, thirty-six times over. Three further
+defects behind it were found by that step — two in the payload, one in the
+reconciler — all three fixed and pushed, and none of them in the image the
+job definitions are pinned to. The ramp is one image rebuild away from its
+first passing step.
 
 The one-line state: **the science that blocked the ramp is done; the ramp is
 blocked on rebuilding the payload onto the fixes it found.**
@@ -120,13 +121,14 @@ Step-1 gate table
      - not measurable
      - no ``ended_at`` was ever written
    * - Reconciler poll errors
-     - 0
-     - PASS
+     - **36 per cycle**
+     - **FAIL** — defect 7, a separate cause
    * - Done-files or log-grep anywhere
      - none
      - PASS
 
-**The gate failure is one defect, not thirty-six.** Every attempt failed at
+**The gate failures are three defects, not a hundred and eight.** Every
+attempt failed at
 ``sextractor_catalog`` for a missing configuration key, and then could not
 write the terminal record *saying* it had failed, because the record carried
 a numpy scalar that ``json`` refuses. The second defect is what turned a
@@ -138,12 +140,14 @@ Steps 2 and 3 (90 and 270 children) were **not submitted**. Submitting them
 would have reproduced the same failure ninety and two hundred and seventy
 times at real compute cost, and proved nothing that eighteen had not.
 
-The two defects the first real coadd found
--------------------------------------------
+The three defects the first real coadd found
+---------------------------------------------
 
-Both are fixed, tested and pushed to ``smdc`` (``bc8509e``). Neither is in the
-deployed image — proven, not inferred, by grepping the pinned digest's own
-filesystem (both counts zero).
+All three are fixed, tested and pushed to ``smdc`` (defects 5 and 6 in
+``bc8509e``, defect 7 in ``fff9296``). None is in the deployed image — proven
+for the first two, not inferred, by grepping the pinned digest's own
+filesystem (both counts zero); defect 7 is in the reconciler, which runs the
+same image.
 
 **5. A numpy scalar made the attempt unrecordable.** The extracted stage
 bodies compute in numpy, so ``coverage_and_uncertainty_statistics`` records
@@ -167,6 +171,64 @@ succeeded. Rather than pay one live attempt per key, the whole of
 content: 67 required, 7 supplied at runtime by the stage body, 50 present,
 **11 missing**. All eleven restored to all four sections from the master
 ``.ini``.
+
+**7. The reconciler's stage read names a column that never existed.** Found
+after the step, by watching the service rather than the attempts.
+``read_attempt_stages`` selects ``error_category`` from ``attempt_stages``;
+that table has six columns and has never had it (verified against the live
+``information_schema``, not read off the migration). Every reconciliation of
+a started attempt therefore failed, the service polled ``errors: 36`` each
+cycle, and it reached 4 consecutive unproductive polls against a health
+threshold of 5.
+
+The ``except`` around that query looked like it made the failure safe. It did
+not: PostgreSQL aborts the whole transaction on any statement error, so
+catching it and returning ``None`` left every later statement in the cycle
+raising ``InFailedSqlTransaction``. **One real error became thirty-six
+misleading ones**, with the honest warning naming the missing column buried
+underneath. That is the same cascade shape as defect 1 — the error handled
+locally, the transaction not — which makes it the third instance of a pattern
+worth a sweep rather than a fourth fix.
+
+Fixed with a SAVEPOINT, so a failed read costs the read and not the cycle.
+Six tests added; the function previously had none, which is how a column name
+that never existed survived to be found by a live run. The query is only
+reached for a STARTED attempt with no sequence-0 record, and the ramp's 36
+were the first such rows the reconciler had ever been asked to reconstruct.
+
+The attribution is arithmetic, not assumption — two poll lines, before the
+ramp and after::
+
+    01:16:14  {'open':  78, 'skipped': 78, 'errors':  0}   # after the repin
+    01:42:53  {'open': 114, 'skipped': 78, 'errors': 36}   # after the ramp
+
+``open`` grows by exactly the ramp's 36 while ``skipped`` stays at 78, so the
+78 pre-existing rows are skipped rather than attempted and every one of the 36
+errors is a ramp attempt. The reconciler was not broken by the repin; it was
+handed the first work of this kind it had ever been asked to do.
+
+The service is degraded but **not** failing: it is ``active``, has never
+reported itself unhealthy, and the unproductive counter oscillates (4 → 3)
+rather than climbing, because it resets on any poll that closes something or
+has nothing to close. It clears when the 36 attempts close.
+
+An eighth finding, recorded rather than fixed
+----------------------------------------------
+
+**The reconciler's log-tail safety net has never worked.** It reads
+``logs/job-log-group`` from the parameter tree; that parameter is **absent**,
+so it falls back to ``/aws/batch/job`` — a log group that holds no RAPID job
+logs, and on which ``rapid-orchestrator-role`` has no ``logs:GetLogEvents``
+grant. Both facts observed live: the AccessDenied in the reconciler's own
+warning, and a ``get-log-events`` against that group returning
+``ResourceNotFoundException`` for a stream that exists under the real one.
+
+The jobs log to ``/rapid/batch/rapid-queue-bulk`` and
+``/rapid/batch/rapid-queue-prompt`` — **two** groups, one per queue
+(``rapid-batch.yaml`` ``LogConfiguration``), so a single ``job-log-group``
+parameter cannot name both. That makes the fix a design call, not a value to
+paste in, which is why it is proposed rather than taken. It is operational
+configuration, so it needs no image rebuild.
 
 Latency, for the Q8 parameters
 ------------------------------

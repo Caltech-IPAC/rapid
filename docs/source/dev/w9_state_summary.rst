@@ -10,16 +10,17 @@ was ported verbatim from the deleted launcher and is proven live:
 145.2 s, where it had never once completed before.
 
 **The ramp is now blocked on one image rebuild**, not on science. That first
-real coadd exposed two defects behind it; both are fixed, tested and pushed,
-and neither is in the image the job definitions are pinned to.
+real coadd exposed three defects behind it — two in the payload, one in the
+reconciler — all fixed, tested and pushed, and none of them in the image the
+job definitions are pinned to.
 
 The one thing that blocks the ramp now
 ---------------------------------------
 
 The deployed payload (``sha256:30e8c352…``, smdc ``7125f4de``) carries the
-geometry port but **not** the two fixes committed after it (smdc
-``bc8509e``). Verified by grepping the pinned image's own filesystem, not
-inferred from commit order:
+geometry port but **not** the three fixes committed after it (smdc
+``bc8509e`` and ``fff9296``). Verified by grepping the pinned image's own
+filesystem, not inferred from commit order:
 
 .. list-table::
    :header-rows: 1
@@ -40,6 +41,9 @@ inferred from commit order:
    * - ``sextractor_catalog_type`` in release content
      - absent
      - **absent** (0)
+   * - the SAVEPOINT'd stage read in ``closure.py``
+     - absent
+     - **absent** — the reconciler runs this same image
 
 So every reference-image child on the deployed image fails at
 ``sextractor_catalog``, and fails *unrecordably*. No ramp step can pass its
@@ -49,7 +53,7 @@ repinned.
 **Owner: next worker, with an authorization that includes a second image
 rebuild.** This run's grant named one rebuild, and it was spent publishing
 the geometry port — which was the right call at the time, because the
-geometry was the known blocker and the two defects behind it were not
+geometry was the known blocker and the three defects behind it were not
 discoverable until it ran. Nothing else is needed: the fixes are committed,
 the harness is exercised, and the repin procedure ran cleanly twice today.
 
@@ -64,7 +68,7 @@ manifest fact, which the vocabulary already declared and nothing populated.
 Regression-tested against the launcher's formula written out longhand over
 seven fields including both poles — 30 tests. Proven live, 36/36.
 
-**Two defects found by the first real coadd**, both fixed with regression
+**Three defects found by the first real coadd**, all fixed with regression
 tests:
 
 1. **A numpy scalar made attempts unrecordable.** ``numpy.float32`` in the
@@ -77,6 +81,19 @@ tests:
 2. **Eleven more W4B-dropped keys** across all four ``[sextractor_*]``
    sections, found by walking the command-line builder's full key list rather
    than one live attempt per key.
+3. **The reconciler's stage read names a column that never existed.**
+   ``read_attempt_stages`` selects ``error_category`` from ``attempt_stages``,
+   which has six columns and has never had it — verified against the live
+   ``information_schema``. Every reconciliation of a started attempt failed,
+   and because the caught exception cannot un-abort a PostgreSQL transaction,
+   one real error became 36 ``InFailedSqlTransaction`` ones per cycle. Fixed
+   with a SAVEPOINT; six tests added where there had been none.
+
+**Three cascades of one shape now** — a numpy repr bound into SQL (defect 1),
+a numpy scalar in the terminal record (defect 5), and a caught query error
+leaving its transaction aborted (defect 3 above). Each was one bad value that
+took a whole pass or cycle down with it. The proposed audit below is the
+response.
 
 **The completeness tests now walk one call deeper.** The pre-existing test
 checked only stage-body modules, so keys read inside the command-line
@@ -90,7 +107,10 @@ CRITICAL** — the identical base-OS CVE set rev-14 and rev-16 carried). Queues
 quiesced first (10 × 0). Both job definitions repinned, and the reconciler
 service repinned to the same digest with all six parameters explicit —
 ``ReconcilerEnabled`` survived, so the partial-update trap did not recur.
-Reconciler verified ``active (running)`` on the new digest with ``errors: 0``.
+Reconciler verified ``active (running)`` on the new digest, ``errors: 0`` at
+the time of the repin — it began reporting ``errors: 36`` only once the
+ramp's attempts gave it started-but-unclosed rows to reconstruct, which is
+defect 3 above and not a fault of the repin.
 
 **A stale template default, corrected.** ``PipelineImageDigest``'s ``Default:``
 in ``rapid-batch.yaml`` still named the W5 rev-10 digest while the live stack
@@ -134,11 +154,23 @@ Remaining open items, with owners
    * - End-to-end registration with PSFs
      - next worker
      - Still owed. Behind step 1 passing.
-   * - Numpy-at-serialization-boundary audit
+   * - Serialization / transaction-boundary audit
      - proposed
-     - Two defects of one class in two serializers (SQL binding, terminal
-       record). Worth one sweep of every boundary a stage value crosses
-       rather than a third fix.
+     - THREE defects of one shape now: a numpy repr bound into SQL, a numpy
+       scalar in the terminal record, and a caught query error leaving its
+       transaction aborted. Each turned one bad value into a whole failed
+       pass. Worth one sweep of every boundary a stage value crosses, and of
+       every ``except`` around a statement inside a transaction, rather than
+       a fourth fix.
+   * - Reconciler log-tail group
+     - proposed
+     - The safety net has never worked: ``logs/job-log-group`` is ABSENT
+       from the parameter tree, so the reconciler falls back to
+       ``/aws/batch/job`` — which holds no RAPID job logs and which
+       ``rapid-orchestrator-role`` cannot read (AccessDenied observed live).
+       Jobs log to ``/rapid/batch/rapid-queue-{bulk,prompt}`` — TWO groups,
+       so one parameter cannot name both and the fix is a design call.
+       Operational config, so it needs no image rebuild.
    * - Coadd-input list location
      - design
      - Unchanged: ``roman-rapid-products/submissions/<run>/coadd-inputs/``,
