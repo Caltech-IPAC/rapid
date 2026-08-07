@@ -523,6 +523,7 @@ def run_single_core_job_stage_2_crossmatching(scas,fields,index_thread):
     # that are anything but short tests.
 
     thread_debug = 0
+    newline_character = "\n"
 
     nfields = len(fields)
 
@@ -622,57 +623,90 @@ def run_single_core_job_stage_2_crossmatching(scas,fields,index_thread):
                 ang_sep += match_radius
 
 
-            # Batch cross-matching across all adjacent fields and SCAs in a single query.
+            # Loop over adjacent fields and perform cross-matching.
 
-            rtids_csv = ",".join(str(r) for r in rtids_list)
-            fh.write(f"Cross-matching field = {field} with adjacent fields = {rtids_csv}\n")
-
-            sca_subqueries = []
-            for sca in scas:
-                sources_tablename = f"sources_{proc_date}_{sca}"
-
-                if n_adjacent_fields == 8:
-                    sca_subqueries.append(
-                        f"SELECT a.sid, b.aid "
-                        f"FROM {sources_tablename} AS a, "
-                        f"{astroobjects_tablename} AS b "
-                        f"WHERE q3c_radial_query(a.ra, a.dec, {ra0_field}, {dec0_field}, {ang_sep}) "
-                        f"AND q3c_join(a.ra, a.dec, b.ra0, b.dec0, {match_radius}) "
-                        f"AND a.field IN ({rtids_csv}) AND a.flags = 0"
-                    )
-                else:
-                    sca_subqueries.append(
-                        f"SELECT a.sid, b.aid "
-                        f"FROM {sources_tablename} AS a, "
-                        f"{astroobjects_tablename} AS b "
-                        f"WHERE q3c_join(a.ra, a.dec, b.ra0, b.dec0, {match_radius}) "
-                        f"AND a.field IN ({rtids_csv}) AND a.flags = 0"
-                    )
-
-            query = " UNION ALL ".join(sca_subqueries) + ";"
-            records = dbh.execute_sql_queries([query], thread_debug)
+            for rtid in rtids_list:
+                adjacent_field = rtid
+                fh.write(f"Cross-matching field = {field} with adjacent field = {adjacent_field}\n")
 
 
-            # Code-timing benchmark.
+                # For a given field pertinent to this parallel process, loop over all SCAs
+                # and perform source-matching:
+                # 1. Cross-match each source in an adjacent field with the AstroObjects_<field> table.
+                # 2. Speed it up by restricting cross-matching within the inclusion radius.
+                # 3. Register Merges_<field> records for cross-matches.
 
-            thread_end_time_benchmark = time.time()
-            diff_time_benchmark = thread_end_time_benchmark - thread_start_time_benchmark
-            fh.write(f"Elapsed time in seconds to cross-match all adjacent fields and SCAs with {astroobjects_tablename} = {diff_time_benchmark}\n")
-            thread_start_time_benchmark = thread_end_time_benchmark
+                for sca in scas:
+
+                    sources_tablename = f"sources_{proc_date}_{sca}"
+
+                    if n_adjacent_fields == 8:
+
+                        query = f"SELECT a.sid,b.aid " +\
+                            f"FROM {sources_tablename} AS a, " +\
+                            f"{astroobjects_tablename} AS b " +\
+                            f"WHERE q3c_radial_query(a.ra, a.dec, {ra0_field}, {dec0_field}, {ang_sep}) " +\
+                            f"AND q3c_join(a.ra, a.dec, b.ra0, b.dec0, {match_radius}) " +\
+                            f"AND a.field = {adjacent_field} AND a.flags = 0;"
+
+                    else:
+
+                        query = f"SELECT a.sid,b.aid " +\
+                            f"FROM {sources_tablename} AS a, " +\
+                            f"{astroobjects_tablename} AS b " +\
+                            f"WHERE q3c_join(a.ra, a.dec, b.ra0, b.dec0, {match_radius}) " +\
+                            f"AND a.field = {adjacent_field} AND a.flags = 0;"
+
+                    sql_queries = []
+                    sql_queries.append(query)
+                    records = dbh.execute_sql_queries(sql_queries,thread_debug)
 
 
-            # Write matched records to CSV for bulk copy.
+                    # Code-timing benchmark.
 
-            for record in records:
-                csv_merges_fh.write(f"{record[0]},{record[1]}\n")
+                    thread_end_time_benchmark = time.time()
+                    diff_time_benchmark = thread_end_time_benchmark - thread_start_time_benchmark
+                    fh.write(f"Elapsed time in seconds to cross-match adjacent {sources_tablename} and {astroobjects_tablename} database tables = {diff_time_benchmark}\n")
+                    thread_start_time_benchmark = thread_end_time_benchmark
 
 
-            # Code-timing benchmark.
+                    # For the sources that were matched, create Merges_<field> record.
 
-            thread_end_time_benchmark = time.time()
-            diff_time_benchmark = thread_end_time_benchmark - thread_start_time_benchmark
-            fh.write(f"Elapsed time in seconds to write bulk-copy records to {merges_table_file} for sources outside field = {diff_time_benchmark}\n")
-            thread_start_time_benchmark = thread_end_time_benchmark
+                    for record in records:
+
+                        sid = record[0]
+                        aid = record[1]
+
+                        '''
+                        This method is deprecated.
+
+                        dbh.add_merge_to_field(merges_tablename,aid,sid,thread_debug)
+                        '''
+
+                        nums = ""
+
+                        num = str(aid)
+                        nums = nums + num + ","
+                        num = str(sid)
+                        nums = nums + num + ","
+
+                        # Slice the string to get all but the last character, then add the newline character
+                        line_to_write_to_file = nums[:-1] + newline_character
+
+                        csv_merges_fh.write(line_to_write_to_file)
+
+
+                    # Code-timing benchmark.
+
+                    thread_end_time_benchmark = time.time()
+                    diff_time_benchmark = thread_end_time_benchmark - thread_start_time_benchmark
+                    fh.write(f"Elapsed time in seconds to write bulk-copy records to {merges_table_file} for sources outside field = {diff_time_benchmark}\n")
+                    thread_start_time_benchmark = thread_end_time_benchmark
+
+
+                    # End of loop over scas.
+
+                    fh.write(f"Loop end: index_field,field,sca = {index_field},{field},{sca}\n")
 
 
         # Load records into Merges_<field> database tables.
