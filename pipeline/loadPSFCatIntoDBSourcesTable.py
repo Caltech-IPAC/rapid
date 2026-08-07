@@ -312,18 +312,18 @@ def run_single_core_job(meta_list,index_thread):
                 continue
 
             file_copy_time_benchmark_end = time.time()
-            fh.write(f"Elapsed time in seconds to copy files (isNeg={~isdiffpos})= {file_copy_time_benchmark_end-file_copy_time_benchmark_start}\n")
+            fh.write(f"Elapsed time in seconds to copy files (isdiffpos={isdiffpos})= {file_copy_time_benchmark_end-file_copy_time_benchmark_start}\n")
             # Join catalogs and extract columns for sources database tables.
             file_read_time_benchmark_start = time.time()
             psfcat_qtable = QTable.read(output_psfcat_filename_for_jid,format='ascii')
             psfcat_finder_qtable = QTable.read(output_psfcat_finder_filename_for_jid,format='ascii')
             file_read_time_benchmark_end = time.time()
-            fh.write(f"Elapsed time in seconds to read detection and phot files (isNeg={~isdiffpos})= {file_read_time_benchmark_end-file_read_time_benchmark_start}\n")
+            fh.write(f"Elapsed time in seconds to read detection and phot files (isdiffpos={isdiffpos})= {file_read_time_benchmark_end-file_read_time_benchmark_start}\n")
 
             detect_phot_join_time_benchmark_start = time.time()
             joined_table_inner = join(psfcat_qtable, psfcat_finder_qtable, keys='id', join_type='inner')
             detect_phot_join_time_benchmark_end = time.time()
-            fh.write(f"Elapsed time in seconds to join detection and phot file (isNeg={~isdiffpos}) = {detect_phot_join_time_benchmark_end-detect_phot_join_time_benchmark_start}\n")
+            fh.write(f"Elapsed time in seconds to join detection and phot file (isdiffpos={isdiffpos}) = {detect_phot_join_time_benchmark_end-detect_phot_join_time_benchmark_start}\n")
             # Here are what the columns in the photutils catalogs are called:
             # Main: id group_id group_size local_bkg x_init y_init flux_init x_fit y_fit flux_fit x_err y_err flux_err n_pixels_fit qfit cfit reduced_chi2 flags ra dec
             # Finder: id xcentroid ycentroid sharpness roundness1 roundness2 npix peak flux mag daofind_mag
@@ -375,17 +375,17 @@ def run_single_core_job(meta_list,index_thread):
             joined_table_inner['hp6']   = hp.ang2pix(2**6, joined_table_inner['ra'], joined_table_inner['dec'], nest=True, lonlat=True)
             joined_table_inner['hp9']   = hp.ang2pix(2**9, joined_table_inner['ra'], joined_table_inner['dec'], nest=True, lonlat=True)
             healpix_time_benchmark_end = time.time()
-            fh.write(f"Elapsed time in seconds to calculate healpix (isNeg={~isdiffpos})= {healpix_time_benchmark_end-healpix_time_benchmark_start}\n")
+            fh.write(f"Elapsed time in seconds to calculate healpix (isdiffpos={isdiffpos})= {healpix_time_benchmark_end-healpix_time_benchmark_start}\n")
             field_time_benchmark_start = time.time()
             joined_table_inner['field'] = roman_tessellation_index(joined_table_inner['ra'], joined_table_inner['dec'])   # vectorized
             field_time_benchmark_end = time.time()
-            fh.write(f"Elapsed time in seconds to calculate field (isNeg={~isdiffpos})= {field_time_benchmark_end-field_time_benchmark_start}\n")
+            fh.write(f"Elapsed time in seconds to calculate field (isdiffpos={isdiffpos})= {field_time_benchmark_end-field_time_benchmark_start}\n")
             nums = joined_table_inner.colnames
             joined_table_list.append(joined_table_inner)
         pos_neg_stack_time_benchmark_start = time.time()
         joined_table_inner = table.vstack(joined_table_list)
         pos_neg_stack_time_benchmark_end = time.time()
-        fh.write(f"Elapsed time in seconds to stack tables (isNeg={~isdiffpos})= {pos_neg_stack_time_benchmark_end-pos_neg_stack_time_benchmark_start}\n")
+        fh.write(f"Elapsed time in seconds to stack tables= {pos_neg_stack_time_benchmark_end-pos_neg_stack_time_benchmark_start}\n")
         nrows_pos = len(joined_table_list[0])
         nrows_neg = len(joined_table_list[1])
 
@@ -393,8 +393,8 @@ def run_single_core_job(meta_list,index_thread):
         fh.write(f"nrows in PSF-fit catalog = {nrows} total, {nrows_pos} positive diff, {nrows_neg} negative diff\n")
         buffer_time_benchmark_start = time.time()
         buffer = table_to_buffer(joined_table_inner, nums)
-        pos_nebuffer_time_benchmark_end = time.time()
-        fh.write(f"Elapsed time in seconds to create buffer (isNeg={~isdiffpos})= {buffer_stack_time_benchmark_end-buffer_stack_time_benchmark_start}\n")
+        buffer_time_benchmark_end = time.time()
+        fh.write(f"Elapsed time in seconds to create buffer= {buffer_time_benchmark_end-buffer_time_benchmark_start}\n")
         # Check whether database connection is still alive.
 
         if dbh.is_connection_alive():
@@ -419,7 +419,7 @@ def run_single_core_job(meta_list,index_thread):
         buffer_to_db_time_benchmark_start = time.time()
         dbh.copy_data_from_buffer_into_database(buffer,tablename,nums)
         buffer_to_db_time_benchmark_end = time.time()
-        fh.write(f"Elapsed time in seconds to add rows to temp sources (isNeg={~isdiffpos})= {buffer_to_db_time_benchmark_end-buffer_to_db_time_benchmark_start}\n")
+        fh.write(f"Elapsed time in seconds to add rows to temp sources= {buffer_to_db_time_benchmark_end-buffer_to_db_time_benchmark_start}\n")
 
         if dbh.exit_code >= 64:
             fh.write(f"*** Error bulk-loading data from buffer into specified database table ({tablename}); quitting...\n")
