@@ -181,8 +181,6 @@ def run_single_core_job(asdf_files,index_thread):
         # Convert from ASDF format to FITS format, and add required FITS keywords.
         # Define highest order for computing SIP distortion.
 
-        sip_distortion_degree = 5
-
         if num_cores == 1:
             print(f"sip_distortion_degree = {sip_distortion_degree}\n")
         else:
