@@ -53,6 +53,7 @@ does not exist.
 
 import dataclasses
 import datetime
+import decimal
 import io
 import json
 import os
@@ -540,6 +541,16 @@ def _json_default(value: Any) -> Any:
             return item()
         except (ValueError, TypeError):
             pass
+    # `decimal.Decimal` has no `.item()`, so the duck-typed branch above does
+    # not reach it. psycopg2 maps every PostgreSQL `numeric` column to
+    # `Decimal`, which is how it arrives here: `attempt_stages.duration_ms` is
+    # `numeric NOT NULL` (migration 011), and the reconciler folds those stage
+    # rows into the closure record. `float` rather than `str` for the same
+    # reason `.item()` is preferred over `default=str` above — a duration is a
+    # number to every consumer that reads it, and stringifying it would keep
+    # the write working while silently retyping the field.
+    if isinstance(value, decimal.Decimal):
+        return float(value)
     if isinstance(value, (set, frozenset)):
         return sorted(value)
     if isinstance(value, (datetime.datetime, datetime.date)):

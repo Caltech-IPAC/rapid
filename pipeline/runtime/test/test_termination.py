@@ -33,6 +33,7 @@ inverse — a row citing a record that does not exist — is proven impossible b
 """
 
 import datetime
+import decimal
 import json
 import os
 import shutil
@@ -797,6 +798,43 @@ class NumpyScalarsInTheRecordTests(unittest.TestCase):
         with self.assertRaises(TypeError) as caught:
             termination._json_default(object())
         self.assertIn("not JSON-serializable", str(caught.exception))
+
+
+class DecimalsInTheRecordTests(unittest.TestCase):
+    """`decimal.Decimal` must coerce too (W9 ramp, defect 8, live).
+
+    `Decimal` has no `.item()`, so the duck-typed branch that handles numpy
+    scalars does not reach it and `json.dumps` raised `TypeError: Object of
+    type Decimal is not JSON serializable`. psycopg2 maps every PostgreSQL
+    `numeric` column to `Decimal`, and `attempt_stages.duration_ms` is
+    `numeric NOT NULL` (migration 011) — so the reconciler's closure record
+    carried one for every attempt that recorded any stage, and none of those
+    records could be published.
+
+    Tested here rather than only at the closure site because this helper is
+    now the project's single coercion policy for both record writers.
+    """
+
+    def test_a_decimal_is_written_as_a_number(self):
+        self.assertEqual(1250.0,
+                         termination._json_default(decimal.Decimal("1250")))
+
+    def test_a_fractional_decimal_keeps_its_value(self):
+        self.assertAlmostEqual(
+            145.25, termination._json_default(decimal.Decimal("145.25")))
+
+    def test_it_is_not_stringified(self):
+        """A duration is a number to every consumer that reads it."""
+        self.assertNotIsInstance(
+            termination._json_default(decimal.Decimal("4.51")), str)
+
+    def test_a_decimal_survives_a_full_dumps(self):
+        """The end-to-end contract: the encoder no longer refuses the body."""
+        body = {"stages": [{"stage_name": "build_reference_image",
+                            "duration_ms": decimal.Decimal("145300")}]}
+        loaded = json.loads(json.dumps(body,
+                                       default=termination._json_default))
+        self.assertEqual(145300.0, loaded["stages"][0]["duration_ms"])
 
 
 class _Float32(float):

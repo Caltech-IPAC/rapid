@@ -68,8 +68,30 @@ class ClosureRecord:
     rejected_reason: str | None = None
 
     def to_bytes(self):
+        # `default=` is not optional here, and its absence was defect 8. The
+        # body is built straight from database row values, so it carries
+        # whatever psycopg2 hands back — and `attempt_stages.duration_ms` is
+        # `numeric NOT NULL` (migration 011), which arrives as a `Decimal`
+        # that bare `json.dumps` refuses. Every closure record for an attempt
+        # with stages then failed to publish, the row stayed open, and the
+        # next poll retried it to fail identically.
+        #
+        # This is the FOURTH defect of one shape (a numpy repr bound into
+        # SQL, a numpy scalar in the terminal record, a caught query error
+        # leaving its transaction aborted, and now this) — which is the
+        # argument for the proposed boundary audit rather than a fifth fix.
+        # Found live only after defect 7's SAVEPOINT let `read_attempt_stages`
+        # succeed for the first time: until that read worked, `stages` was
+        # always None and no Decimal ever reached this encoder.
+        #
+        # `termination._json_default` rather than a second local copy: it is
+        # already the project's one answer to "what does `json` do with a
+        # value it cannot encode", it is already imported here, and it now
+        # coerces `Decimal` too. Two coercion policies drifting apart is the
+        # failure mode this avoids.
         return json.dumps(self.body, sort_keys=True, separators=(",", ":"),
-                          ensure_ascii=False).encode("utf-8")
+                          ensure_ascii=False,
+                          default=termination._json_default).encode("utf-8")
 
 
 @dataclasses.dataclass(frozen=True)

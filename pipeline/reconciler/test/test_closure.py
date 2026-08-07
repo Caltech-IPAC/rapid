@@ -1,5 +1,6 @@
 """Closure records: complete canonical snapshots, and the reconciler-first form."""
 
+import decimal
 import json
 import unittest
 
@@ -283,6 +284,44 @@ class PublishTests(unittest.TestCase):
             classification="never_resolved", now=utc(2026, 8, 6, 13, 0, 0))
 
         self.assertEqual(first.to_bytes(), second.to_bytes())
+
+    def test_a_decimal_stage_duration_can_be_encoded(self):
+        # Defect 8, found live on the W9 ramp. `attempt_stages.duration_ms` is
+        # `numeric NOT NULL` (migration 011) and psycopg2 hands every
+        # `numeric` back as a `Decimal`, which bare `json.dumps` refuses:
+        # `TypeError: Object of type Decimal is not JSON serializable`. Every
+        # closure record for an attempt with stages failed to publish, the row
+        # stayed open, and the next poll retried it to fail the same way.
+        #
+        # Only reachable once defect 7's SAVEPOINT let `read_attempt_stages`
+        # succeed — before that `stages` was always None.
+        stages = [{"stage_name": "build_reference_image",
+                   "outcome": "success",
+                   "duration_ms": decimal.Decimal("145300")}]
+        record = closure.build_closure_record(
+            self.row, None, sequence=1, predecessor=None,
+            classification="never_resolved", stages=stages,
+            now=utc(2026, 8, 6, 12, 0, 0))
+
+        body = json.loads(record.to_bytes())
+        duration = body["stages"][0]["duration_ms"]
+        self.assertEqual(145300.0, duration)
+        self.assertNotIsInstance(duration, str)
+
+    def test_a_decimal_stage_duration_publishes(self):
+        """The end-to-end contract: the record reaches the store."""
+        stages = [{"stage_name": "coverage_and_uncertainty_statistics",
+                   "outcome": "success",
+                   "duration_ms": decimal.Decimal("4510")}]
+        record = closure.build_closure_record(
+            self.row, None, sequence=1, predecessor=None,
+            classification="never_resolved", stages=stages,
+            now=utc(2026, 8, 6, 12, 0, 0))
+
+        result = closure.publish_closure_record(
+            self.store, PREFIX, self.row, record)
+
+        self.assertIsNotNone(result)
 
     def test_republishing_after_a_later_build_still_dedupes(self):
         first = closure.build_closure_record(
