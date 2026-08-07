@@ -21,6 +21,7 @@ observability.test.test_submission_integration
 pipeline.entrypoints.test.test_job
 pipeline.reconciler.test.test_closure
 pipeline.reconciler.test.test_horizons
+pipeline.reconciler.test.test_main
 pipeline.reconciler.test.test_retention
 pipeline.reconciler.test.test_scheduler
 pipeline.reconciler.test.test_service

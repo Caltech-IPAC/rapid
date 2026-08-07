@@ -129,6 +129,40 @@ The refusal is loud either way, which is the safe direction for a
 disagreement about a layout — but the safe direction is not the same as no
 consequence, and re-driving an old manifest requires the old image.
 
+What an adversarial pass found
+-------------------------------
+
+The diff was reviewed against itself before merge. Three findings, all
+fixed here, and all of a kind the test suite could not have caught because
+each one only shows up on a failure path or under an operator action:
+
+1. **A missing region was reported as a credential failure.**
+   ``resolve_region()`` was called inside the entrypoint's credential
+   ``try/except``, so an unset region raised ``ConfigError`` and came back
+   out as "could not resolve the database credential ... under the job
+   role" — sending an operator to Secrets Manager and IAM for a problem
+   that is neither. The resolution is hoisted above the ``try``, and the
+   secret's own malformed-payload case gets its own message naming the
+   missing key.
+
+2. **The reconciler's endpoint precedence was inverted.** The rewritten
+   ``_database_endpoint`` read ``parameters.get(...) or os.environ.get(...)``
+   — tree first — while the comment three lines above it, and the code it
+   replaced, both promised the opposite. Failure mode: an operator sets
+   ``DBSERVER`` to a replica, restarts, and is silently connected to
+   production. Fixed, and pinned by ``pipeline/reconciler/test/test_main.py``,
+   a module that did not exist before because this file's startup work used
+   to be environment mutation rather than values a test can assert on.
+
+3. **``CRDS_PATH`` was given a compiled-in default of ``/tmp/crds_cache``.**
+   That is the shape this row fails loud on everywhere else, and the
+   plausible value was worse than none: a Batch container's ``/tmp`` does
+   not survive the attempt, so every retry would have silently re-downloaded
+   the reference set while looking configured. Only ``CRDS_SERVER_URL``
+   keeps a fallback — there is one right answer for Roman — and the policy
+   check's carve-out narrowed to match, so a future write of ``CRDS_PATH``
+   fails it.
+
 Validation
 ----------
 

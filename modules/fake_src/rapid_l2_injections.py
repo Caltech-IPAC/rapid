@@ -86,7 +86,6 @@ logger = logging.getLogger(__name__)
 # reaches (or fails to reach) silently. These name the fallback so it is a
 # stated choice that appears in the log rather than an ambient one.
 CRDS_SERVER_DEFAULT = "https://roman-crds.stsci.edu"
-CRDS_PATH_DEFAULT = "/tmp/crds_cache"
 
 
 def _crds_configuration():
@@ -95,18 +94,32 @@ def _crds_configuration():
     Returns the pair actually used, for the log. The environment is CRDS's
     own interface and is read here at this module's boundary; nothing is
     written for a downstream RAPID reader.
+
+    Only the SERVER has a fallback, and only because there is exactly one
+    right answer for Roman. CRDS_PATH deliberately has none: a compiled-in
+    cache path is the shape this policy fails loud on everywhere else, and
+    the plausible value is worse than no value — a Batch container's
+    `/tmp` does not survive the attempt, so every retry would silently
+    re-download the whole reference set while looking configured. Left
+    unset, CRDS applies its own documented default and the operator who
+    wants a persistent cache sets the variable the CRDS contract names.
+    The choice is logged either way, so it appears in the record rather
+    than being inferred from what did not happen.
     """
     server = os.environ.get("CRDS_SERVER_URL")
-    path = os.environ.get("CRDS_PATH")
     if not server:
         server = CRDS_SERVER_DEFAULT
         os.environ["CRDS_SERVER_URL"] = server
         logger.info("CRDS_SERVER_URL is unset; using the documented default "
                     "%s", server)
-    if not path:
-        path = CRDS_PATH_DEFAULT
-        os.environ["CRDS_PATH"] = path
-        logger.info("CRDS_PATH is unset; caching references under %s", path)
+
+    path = os.environ.get("CRDS_PATH")
+    if path:
+        logger.info("CRDS_PATH=%s", path)
+    else:
+        logger.info("CRDS_PATH is unset; CRDS will use its own default cache "
+                    "location, which in a Batch container does not persist "
+                    "across attempts")
     return server, path
 
 

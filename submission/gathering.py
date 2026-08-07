@@ -436,8 +436,8 @@ def _overlapping_l2files(handle: UnitSource, rid: int, fid: int,
 
     **The window.** `rid`/`fid`/`mjdobs` are not "the image we are building
     around". `mjdobs` is the EXCLUSIVE upper bound of the query's own MJD
-    window, whose lower bound is 0.0 unless STARTREFIMMJDOBS/ENDREFIMMJDOBS
-    say otherwise. Handing it the representative's `mjdobs` asks for "frames
+    window when no window is passed. Handing it the representative's
+    `mjdobs` asks for "frames
     observed strictly before the representative" — and the representative is
     `rows[0]`, the EARLIEST frame in time order, so that window is empty by
     construction. Every field returned zero coadd inputs, every reference

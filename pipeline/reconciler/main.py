@@ -135,8 +135,8 @@ def _log_groups_from(parameters):
 # The bridge was `os.environ[...] = ...`, and that is what the environment
 # policy retired: the tree's values are now PASSED to `connect`, so this
 # process's environment carries no endpoint it wrote for itself to read
-# back. An operator's explicitly-set variable still wins, because an
-# absent tree entry leaves that field to the helper's boundary read.
+# back. An operator's explicitly-set variable still wins — see
+# `_database_endpoint`, which preserves that order deliberately.
 #
 # The payload does not need this because Batch job definitions carry the
 # same facts as container environment; a systemd unit has no equivalent,
@@ -150,17 +150,25 @@ _DB_ENDPOINT_PARAMETERS = (
 
 
 def _database_endpoint(parameters):
-    """The endpoint to pass to `connect`, from the tree over the environment.
+    """The endpoint to pass to `connect`: the ENVIRONMENT over the tree.
 
-    Per field: the tree's value if it has one, else this process's own
-    environment. Missing on both sides is left to the helper, whose
-    fail-loud check reports it by name — not defaulted here.
+    Per field: an explicitly-set variable wins, and the tree fills what is
+    absent. That order is the one the old `_bind_database_environment`
+    had — it wrote a tree value only `if not os.environ.get(variable)` —
+    and it is load-bearing, not incidental: an operator debugging against
+    a replica sets DBSERVER in the unit and restarts, and a tree-first
+    order would silently connect them to production instead while they
+    believed otherwise.
+
+    Missing on both sides raises from `Endpoint`, naming the field. That
+    is a different raiser from the helper's own `_require_env` but the
+    same operator-facing outcome: the absent field is named.
     """
     from database.modules.utils.rapid_db_connect import Endpoint
 
     values = []
     for parameter, variable in _DB_ENDPOINT_PARAMETERS:
-        value = parameters.get(parameter) or os.environ.get(variable)
+        value = os.environ.get(variable) or parameters.get(parameter)
         values.append(str(value) if value else None)
     return Endpoint(*values)
 

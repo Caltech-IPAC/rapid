@@ -426,8 +426,16 @@ class DatabaseConnectionInputsTests(unittest.TestCase):
         # problem that is neither.
         boto3_module = self._boto3(
             '{"username": "rapid_pipeline", "password": "s3cret"}')
-        with self.assertRaises(ConfigError) as caught:
-            self._run(boto3_module, env={})
+        # `resolve_region` is patched to raise rather than left to fall
+        # through to a real boto3 session: on a host that HAS a configured
+        # region — which rapid-admin does — an empty environment resolves
+        # one and this test would pass by not exercising the path at all.
+        with mock.patch.object(
+                job.environment, "resolve_region",
+                side_effect=ConfigError("no AWS region: neither AWS_REGION "
+                                        "nor AWS_DEFAULT_REGION is set")):
+            with self.assertRaises(ConfigError) as caught:
+                self._run(boto3_module)
         self.assertIn("AWS_REGION", str(caught.exception))
         self.assertNotIn("Secrets Manager", str(caught.exception))
 

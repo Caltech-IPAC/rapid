@@ -113,9 +113,11 @@ check "STARTREFIMMJDOBS / ENDREFIMMJDOBS reads on the operational path" \
 # --- 2. environment writes for a downstream reader --------------------------
 # Two exclusions, both named by the policy itself:
 #
-# CRDS_PATH/CRDS_SERVER_URL (§ A) are the third-party contract carve-out —
-# CRDS reads its own environment and RAPID does not get to choose otherwise.
-# The fallback is explicit and logged where it is applied.
+# CRDS_SERVER_URL (§ A) is the third-party contract carve-out — CRDS reads
+# its own environment and RAPID does not get to choose otherwise. The
+# fallback is explicit and logged where it is applied. CRDS_PATH is NOT in
+# this list: it is read and logged but never written, because a compiled-in
+# cache path is the shape this policy fails loud on elsewhere.
 #
 # JOBPROCDATE/MAKEREFIMAGESFLAG/STARTDATETIME/ENDDATETIME in the VPO are the
 # policy's ONE named temporary exception: the orchestrator's environment
@@ -125,7 +127,7 @@ check "STARTREFIMMJDOBS / ENDREFIMMJDOBS reads on the operational path" \
 # this check.
 check "os.environ writes on the operational path" \
       'os\.environ\[[^]]*\] *=|os\.environ\.update|os\.putenv' \
-      'CRDS_PATH|CRDS_SERVER_URL|JOBPROCDATE|MAKEREFIMAGESFLAG|STARTDATETIME|ENDDATETIME'
+      'CRDS_SERVER_URL|JOBPROCDATE|MAKEREFIMAGESFLAG|STARTDATETIME|ENDDATETIME'
 
 # --- 3. silent region defaults ----------------------------------------------
 check "region reads with a compiled-in default" \
