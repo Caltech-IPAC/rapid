@@ -117,6 +117,18 @@ produced ``[0.0, mjdobs)`` — a different window from either, chosen by
 absence. ``ReferenceObservationWindow`` requires both ends and refuses an
 empty interval.
 
+**The schema bump is a deployment fact, checked rather than assumed.**
+``Manifest.SCHEMA_VERSION`` is 3, and ``from_dict`` refuses any other
+version rather than guessing the layout — so an image carrying this change
+cannot read a version-2 manifest. Version-2 manifests do exist in
+``s3://roman-rapid-products/submissions/``, written by the Q8 smoke run.
+They belong to finished runs: at the time of this change there were no
+``RUNNING`` jobs on ``rapid-queue`` (checked, read-only), so no in-flight
+child could meet the refusal, and a new submitter writes only version 3.
+The refusal is loud either way, which is the safe direction for a
+disagreement about a layout — but the safe direction is not the same as no
+consequence, and re-driving an old manifest requires the old image.
+
 Validation
 ----------
 
