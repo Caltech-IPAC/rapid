@@ -799,16 +799,31 @@ def database_connection_inputs(parameters: dict):
 
     import boto3
 
+    # OUTSIDE the try: a missing region is a region fault, and the handler
+    # below would relabel its ConfigError as "could not resolve the
+    # credential" — sending an operator to look at Secrets Manager and the
+    # job role for a problem that is neither.
+    region = environment.resolve_region()
+
     try:
-        client = boto3.client("secretsmanager",
-                              region_name=environment.resolve_region())
+        client = boto3.client("secretsmanager", region_name=region)
         secret = json.loads(
             client.get_secret_value(SecretId=secret_id)["SecretString"])
-        credentials = Credentials(secret["username"], secret["password"])
     except Exception as exc:  # noqa: BLE001 - re-raised as the helper's type
         raise DBCredentialError(
             f"could not resolve the database credential from Secrets Manager "
             f"secret {secret_id!r} under the job role: {exc}") from exc
+
+    # Also outside: a secret that parsed but lacks a username or password is
+    # a malformed secret, and `Credentials` already says so precisely. The
+    # handler above would have wrapped that message inside a vaguer one.
+    try:
+        credentials = Credentials(secret["username"], secret["password"])
+    except KeyError as exc:
+        raise DBCredentialError(
+            f"Secrets Manager secret {secret_id!r} has no {exc.args[0]!r} "
+            f"key; the convention is a JSON SecretString with 'username' "
+            f"and 'password'") from exc
 
     _logger.info("database endpoint from the parameter tree: %s:%s/%s "
                  "(secret %s)", endpoint.host, endpoint.port, endpoint.dbname,

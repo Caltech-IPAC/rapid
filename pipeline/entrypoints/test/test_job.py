@@ -23,6 +23,7 @@ import boundary crossable rather than mocking call-by-call.
 
 import io
 import importlib.util
+import os
 import sys
 import types
 import unittest
@@ -349,6 +350,100 @@ class BuildProvenanceTests(unittest.TestCase):
         with mock.patch.dict("os.environ", env, clear=True):
             provenance = job.build_provenance("digest123", {})
         self.assertIsNone(provenance.job_definition_rev)
+
+
+class DatabaseConnectionInputsTests(unittest.TestCase):
+    """The tree's `db/*` entries as parameters, not as environment writes.
+
+    This function replaced `export_database_environment`, which wrote
+    DBSERVER/DBPORT/DBNAME/RAPID_DB_SECRET_ID into `os.environ` for the
+    connection helper to read back. What is checked here is the property
+    that replaced it — the values are RETURNED — and that a failure on the
+    way is attributed to the thing that actually failed.
+    """
+
+    TREE = {
+        "db/server": "pooler.internal",
+        "db/port": "6432",
+        "db/name": "rapidopsdb",
+        "db/secret-id": "rapid/db/service/pipeline",
+    }
+
+    def _boto3(self, secret_string=None, raises=None):
+        client = mock.MagicMock()
+        if raises is not None:
+            client.get_secret_value.side_effect = raises
+        else:
+            client.get_secret_value.return_value = {
+                "SecretString": secret_string}
+        module = mock.MagicMock()
+        module.client.return_value = client
+        return module
+
+    def _run(self, boto3_module, env=None):
+        environ = {"AWS_REGION": "us-east-1"} if env is None else env
+        with mock.patch.dict(sys.modules, {"boto3": boto3_module}), \
+                mock.patch.dict("os.environ", environ, clear=True):
+            return job.database_connection_inputs(dict(self.TREE))
+
+    def test_the_endpoint_and_credential_are_returned_not_exported(self):
+        boto3_module = self._boto3(
+            '{"username": "rapid_pipeline", "password": "s3cret"}')
+        endpoint, credentials = self._run(boto3_module)
+
+        self.assertEqual(endpoint.host, "pooler.internal")
+        self.assertEqual(endpoint.port, "6432")
+        self.assertEqual(endpoint.dbname, "rapidopsdb")
+        self.assertEqual(credentials.user, "rapid_pipeline")
+        self.assertEqual(credentials.password, "s3cret")
+
+    def test_nothing_is_written_into_the_environment(self):
+        # The whole point of the change: a container that execs anything
+        # must not hand it the endpoint or the secret id.
+        boto3_module = self._boto3(
+            '{"username": "rapid_pipeline", "password": "s3cret"}')
+        with mock.patch.dict(sys.modules, {"boto3": boto3_module}), \
+                mock.patch.dict("os.environ", {"AWS_REGION": "us-east-1"},
+                                clear=True):
+            job.database_connection_inputs(dict(self.TREE))
+            for name in ("DBSERVER", "DBPORT", "DBNAME",
+                         "RAPID_DB_SECRET_ID", "DBUSER", "DBPASS"):
+                self.assertNotIn(name, os.environ)
+
+    def test_every_missing_tree_key_is_named_at_once(self):
+        tree = {"db/server": "pooler.internal"}
+        with self.assertRaises(ConfigError) as caught:
+            job.database_connection_inputs(tree)
+        message = str(caught.exception)
+        for key in ("db/port", "db/name", "db/secret-id"):
+            self.assertIn(key, message)
+
+    def test_a_missing_region_is_a_region_error_not_a_credential_one(self):
+        # The attribution defect this guards: with the region resolution
+        # inside the credential try/except, an unset region surfaced as
+        # "could not resolve the database credential ... under the job
+        # role", sending an operator to Secrets Manager and IAM for a
+        # problem that is neither.
+        boto3_module = self._boto3(
+            '{"username": "rapid_pipeline", "password": "s3cret"}')
+        with self.assertRaises(ConfigError) as caught:
+            self._run(boto3_module, env={})
+        self.assertIn("AWS_REGION", str(caught.exception))
+        self.assertNotIn("Secrets Manager", str(caught.exception))
+
+    def test_a_secrets_manager_failure_names_the_secret(self):
+        boto3_module = self._boto3(raises=RuntimeError("AccessDenied"))
+        with self.assertRaises(Exception) as caught:
+            self._run(boto3_module)
+        message = str(caught.exception)
+        self.assertIn("rapid/db/service/pipeline", message)
+        self.assertIn("AccessDenied", message)
+
+    def test_a_secret_missing_a_key_says_which_key(self):
+        boto3_module = self._boto3('{"username": "rapid_pipeline"}')
+        with self.assertRaises(Exception) as caught:
+            self._run(boto3_module)
+        self.assertIn("password", str(caught.exception))
 
 
 # ---------------------------------------------------------------------------
