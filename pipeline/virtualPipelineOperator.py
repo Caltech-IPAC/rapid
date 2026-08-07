@@ -823,7 +823,17 @@ if __name__ == '__main__':
             start_mjdobs=start_mjdobs, end_mjdobs=end_mjdobs,
             min_images_to_coadd=min_images_to_coadd(),
             s3_client=submission_context["s3_client"],
-            job_bucket=job_info_s3_bucket_base,
+            # The manifest bucket, NOT the legacy `job_info_s3_bucket_base`
+            # from the .ini (`rapid-pipeline-files`, an IMSS-era bucket this
+            # account does not carry). The coadd-input list is written under
+            # `submissions/<run_id>/coadd-inputs/`, beside the manifest that
+            # cites it, so it belongs in the same bucket the manifest goes to
+            # — which is also the only prefix the submitting identity is
+            # granted (`roman-rapid-products/submissions/*`). Reading the
+            # .ini here made every reference gather fail at PutObject with
+            # AccessDenied, correctly: the grant is scoped to the design's
+            # location and the .ini named a different one.
+            job_bucket=submission_context["manifest_bucket"],
             run_id=run_id)
 
         with connection("rapid-vpo-submit", lane="transaction") as subconn:
