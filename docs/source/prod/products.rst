@@ -112,7 +112,7 @@ For a listing of the latest product files from the ``rimtimsims``, download the 
 
 For a listing of the latest product files from the ``SOC sims``, download the following text file:
 
-:download:`rapid-product-files_20260706.txt <rapid-product-files_20260706.txt>`
+:download:`rapid-product-files_20260722.txt <rapid-product-files_20260722.txt>`
 
 A simple Python script can be written to parse the listing and generate ``wget`` or ``curl`` download commands.
 
