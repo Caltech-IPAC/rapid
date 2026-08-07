@@ -16,9 +16,9 @@
             "doc": "Associated diaObject identifier"
         },
         {
-            "name": "visit",
+            "name": "expId",
             "type": "long",
-            "doc": "Visit (exposure) identifier"
+            "doc": "RAPID-assigned exposure identifier"
         },
         {
             "name": "detector",

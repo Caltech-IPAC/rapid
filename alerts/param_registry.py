@@ -133,6 +133,26 @@ NOT_USED = Status.NOT_USED
 _FP = "forced photometry (products not integrated)"
 _SS = "KONA solar-system association (not integrated)"
 
+# PhotUtils PSFPhotometry bitwise fit-condition flags (sources.flags), as
+# defined in photutils/psf/_components.py define_flags() for photutils 3.0.0.
+# The pipeline installs photutils unpinned, so revisit these on upgrades.
+# Bits not named here: 1 partial fit region, 64 no overlap with data,
+# 128 fully masked, 256 too few pixels, 2048 non-finite local background.
+_PSF_FLAG_POS_OUTSIDE_IMAGE = 1 << 1   # fitted position outside image bounds
+_PSF_FLAG_NONPOS_FLUX = 1 << 2         # non-positive flux
+_PSF_FLAG_NO_CONVERGENCE = 1 << 3      # possible non-convergence
+_PSF_FLAG_NO_COVARIANCE = 1 << 4       # missing parameter covariance
+_PSF_FLAG_POS_AT_BOUND = 1 << 5        # position near a positional bound
+_PSF_FLAG_NONFINITE_POS = 1 << 9       # non-finite fitted position
+_PSF_FLAG_NONFINITE_FLUX = 1 << 10     # non-finite fitted flux
+
+# RAPID-defined semantics for the derived boolean flag params; keeps alert
+# consumers insulated from photutils bit-layout changes.
+_CENTROID_FAIL_BITS = (_PSF_FLAG_POS_OUTSIDE_IMAGE | _PSF_FLAG_POS_AT_BOUND
+                       | _PSF_FLAG_NONFINITE_POS)
+_PSFFLUX_FAIL_BITS = (_PSF_FLAG_NONPOS_FLUX | _PSF_FLAG_NO_CONVERGENCE
+                      | _PSF_FLAG_NO_COVARIANCE | _PSF_FLAG_NONFINITE_FLUX)
+
 
 # ---------------------------------------------------------------------------
 # diaSource -- built from providers.Source
@@ -142,7 +162,8 @@ DIA_SOURCE_PARAMS = (
     # --- Identifiers & associations -------------------------------------
     Param("diaSourceId",   "long",             "Unique identifier for this source detection",
                     IMPLEMENTED, "sources.sid",    attr="sid"),
-    Param("visit",         "long",             "Visit (exposure) identifier", #TODO: is this called visit or exposure ID for Roman?
+    Param("expId",         "long",             "RAPID-assigned exposure identifier (pipeline database serial, "
+                                                "not a Roman SOC identifier; see observation_id)",
                     IMPLEMENTED, "sources.expid",  attr="expid"),
     Param("detector",      "int",              "Detector (SCA) number",
                     IMPLEMENTED, "sources.sca",    attr="sca"),
@@ -277,8 +298,9 @@ DIA_SOURCE_PARAMS = (
                     STUB, "shape measurement (SExtractor ELONGATION in file flow)"),
 
     # --- Flags -----------------------------------------------------------------
-    Param("flags",         "long",             "Bitmask of processing flags",
-                    IMPLEMENTED, "sources.flags"), #TODO: expand this into indv. flags
+    Param("psfFitFlags",   "long",             "Bitmask of PhotUtils PSFPhotometry fit-condition flags; "
+                                                "bit definitions follow the photutils version used by the pipeline",
+                    IMPLEMENTED, "sources.flags (PhotUtils PSFPhotometry bitmask)", attr="flags"),
     Param("pixelFlags_saturated", ["null", "boolean"], "Source has saturated pixels (stub)",
                     STUB, "pixel-mask analysis (not run)"),
     Param("pixelFlags_bad",       ["null", "boolean"], "Source has bad pixels (stub)",
@@ -287,11 +309,19 @@ DIA_SOURCE_PARAMS = (
                     STUB, "pixel-mask analysis (not run)"),
     Param("pixelFlags_cr",        ["null", "boolean"], "Source has cosmic ray pixels (stub)",
                     STUB, "pixel-mask analysis (not run)"),
-    Param("centroid_flag", ["null", "boolean"], "Centroid measurement failed (stub)",
-                    STUB, "may fold into flags bitmask (spreadsheet: 'flags dict?')"),
+    Param("centroid_flag", ["null", "boolean"], "Centroid measurement failed (position outside image, "
+                                                "at a fit bound, or non-finite)",
+                    IMPLEMENTED, "derived from sources.flags (PhotUtils bits 2|32|512)",
+                    getter=lambda d: bool(d.flags & _CENTROID_FAIL_BITS)),
     Param("apFlux_flag",   ["null", "boolean"], "Aperture flux measurement failed (stub)",
                     STUB, "may fold into flags bitmask (spreadsheet: 'flags dict?')"),
-    Param("psfFlux_flag",  ["null", "boolean"], "PSF flux measurement failed (stub)",
+    Param("psfFlux_flag",  ["null", "boolean"], "PSF flux measurement failed (non-positive or non-finite "
+                                                "flux, non-convergence, or missing covariance)",
+                    IMPLEMENTED, "derived from sources.flags (PhotUtils bits 4|8|16|1024)",
+                    getter=lambda d: bool(d.flags & _PSFFLUX_FAIL_BITS)),
+    Param("scienceFlux_flag",  ["null", "boolean"], "Science flux measurement failed (stub)",
+                    STUB, "may fold into flags bitmask (spreadsheet: 'flags dict?')"),
+    Param("refFlux_flag",  ["null", "boolean"], "Reference flux measurement failed (stub)",
                     STUB, "may fold into flags bitmask (spreadsheet: 'flags dict?')"),
     Param("isSSCandidate", ["null", "boolean"], "Suspected solar system object: a known SS object is predicted "
                                                 "within the separation cut of this source (see ssMatches); "
@@ -299,24 +329,22 @@ DIA_SOURCE_PARAMS = (
                     STUB, _SS), #TODO: state the separation cut in the doc once chosen
 
     # --- Nearest reference-image source (all stubs) ------------------------------
-    Param("distnr",        ["null", "float"],  "Distance to nearest reference-image source (stub) [arcsec]",
-                    STUB, "cross-match to reference-image catalog (not run)"),
-    Param("ranr",          ["null", "double"], "RA of nearest reference-image source (stub) [deg]",
-                    STUB, "cross-match to reference-image catalog (not run)"),
-    Param("decnr",         ["null", "double"], "Dec of nearest reference-image source (stub) [deg]",
-                    STUB, "cross-match to reference-image catalog (not run)"),
-    Param("magnr",         ["null", "float"],  "Magnitude of nearest reference-image source (stub) [mag]",
-                    STUB, "cross-match to reference-image catalog (not run)"),
-    Param("sigmagnr",      ["null", "float"],  "1-sigma uncertainty in magnr (stub) [mag]",
-                    STUB, "cross-match to reference-image catalog (not run)"),
-    Param("chinr",         ["null", "float"],  "Chi parameter of nearest reference-image source (stub)",
-                    STUB, "cross-match to reference-image catalog (not run)"),
-    Param("sharpnr",       ["null", "float"],  "Sharpness parameter of nearest reference-image source (stub)",
-                    STUB, "cross-match to reference-image catalog (not run)"),
+    # Param("distnr",        ["null", "float"],  "Distance to nearest reference-image source (stub) [arcsec]",
+    #                 STUB, "cross-match to reference-image catalog (not run)"),
+    # Param("ranr",          ["null", "double"], "RA of nearest reference-image source (stub) [deg]",
+    #                 STUB, "cross-match to reference-image catalog (not run)"),
+    # Param("decnr",         ["null", "double"], "Dec of nearest reference-image source (stub) [deg]",
+    #                 STUB, "cross-match to reference-image catalog (not run)"),
+    # Param("magnr",         ["null", "float"],  "Magnitude of nearest reference-image source (stub) [mag]",
+    #                 STUB, "cross-match to reference-image catalog (not run)"),
+    # Param("sigmagnr",      ["null", "float"],  "1-sigma uncertainty in magnr (stub) [mag]",
+    #                 STUB, "cross-match to reference-image catalog (not run)"),
+    # Param("chinr",         ["null", "float"],  "Chi parameter of nearest reference-image source (stub)",
+    #                 STUB, "cross-match to reference-image catalog (not run)"),
+    # Param("sharpnr",       ["null", "float"],  "Sharpness parameter of nearest reference-image source (stub)",
+    #                 STUB, "cross-match to reference-image catalog (not run)"),
 
     # --- Roman-specific identifiers & tiling ------------------------------------
-    # Param("sca",           "int",              "Roman SCA detector number",
-    #                 NOT_USED, "sources.sca"), # duplicate from detector
     Param("field",         "int",              "Roman field identifier",
                     IMPLEMENTED, "sources.field"),
     Param("hp6",           "int",              "HEALPix index at nside=64 (order 6)",
@@ -325,14 +353,30 @@ DIA_SOURCE_PARAMS = (
                     IMPLEMENTED, "sources.hp9"),
     Param("pid",           "long",             "Processing ID for science image",
                     IMPLEMENTED, "sources.pid"),
-    # Param("expid",         "int",              "Exposure identifier",
-    #                 NOT_USED, "sources.expid"), # duplicate from visit/expId above
-    Param("pass",          ["null", "int"],    "Roman survey pass number (stub)",
-                    STUB, "Roman observation ID components (exposure metadata; not in sources table)"),
-    Param("segment",       ["null", "int"],    "Roman survey segment number (stub)",
-                    STUB, "Roman observation ID components (exposure metadata; not in sources table)"),
-    Param("program",       ["null", "int"],    "Roman program identifier (stub)",
-                    STUB, "Roman observation ID components (exposure metadata; not in sources table)"),
+
+    # Roman observation ID hierarchy (meta.observation in the L2 ASDF files):
+    # program > plan > pass > segment > observation > visit > exposure.
+    # All stubs: dropped in the ASDF-to-FITS conversion, not in exposures table.
+    Param("observation_id", ["null", "string"], "Roman observation ID: concatenated observation hierarchy "
+                                                "including the exposure counter; uniquely identifies the "
+                                                "Roman exposure (stub)",
+                    STUB, "meta.observation.observation_id"),
+    Param("program",       ["null", "int"],    "Roman program number (stub)",
+                    STUB, "meta.observation.program"),
+    Param("plan",          ["null", "int"],    "Roman execution plan number (stub)",
+                    STUB, "meta.observation.execution_plan"),
+    Param("pass",          ["null", "int"],    "Roman pass number (stub)",
+                    STUB, "meta.observation.pass"),
+    Param("segment",       ["null", "int"],    "Roman segment number (stub)",
+                    STUB, "meta.observation.segment"),
+    Param("observation",   ["null", "int"],    "Roman observation number within the segment (stub)",
+                    STUB, "meta.observation.observation"),
+    Param("visit",         ["null", "int"],    "Roman visit number; a visit groups multiple exposures, so "
+                                                "this is NOT a per-image identifier -- use expId or "
+                                                "observation_id for that (stub)",
+                    STUB, "meta.observation.visit"),
+    Param("exposure",      ["null", "int"],    "Roman exposure counter within the visit (stub)",
+                    STUB, "meta.observation.exposure"), #TODO: name something else?
     Param("survey",        ["null", "string"], "Survey name (stub)",
                     STUB, "observation metadata (not available)"),
 )
@@ -348,7 +392,7 @@ DIA_FORCED_SOURCE_PARAMS = (
                         STUB, _FP, attr="forced_id"), #TODO: separate ID for forced source?
     Param("diaObjectId",       "long",            "Associated diaObject identifier",
                         STUB, _FP, attr="aid"), #TODO: already in diaSource?
-    Param("visit",             "long",            "Visit (exposure) identifier",
+    Param("expId",             "long",            "RAPID-assigned exposure identifier",
                         STUB, _FP, attr="expid"),
     Param("detector",          "int",             "Detector (SCA) number",
                         STUB, _FP, attr="sca"),
