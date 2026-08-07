@@ -28,6 +28,7 @@ the suite must stay discoverable there. The stub helper is the one
 
 import argparse
 import ast
+import re
 import inspect
 import os
 import importlib.util
@@ -917,6 +918,81 @@ class ReleaseContentCompletenessTests(unittest.TestCase):
                 "pipeline/referenceImageSubs.py", "awaicgen_dict"):
             with self.subTest(key=key):
                 self.assertIn(key, self.release["awaicgen"])
+
+    # -- one call deeper -------------------------------------------------
+    #
+    # The two tests above walk the STAGE-BODY modules. Both sections are
+    # then handed whole to a builder in `modules/utils/rapid_pipeline_subs.py`
+    # that subscripts keys of its own, and those were invisible to this
+    # class: the W9 ramp found `awaicgen_num_threads` and eleven sextractor
+    # keys missing there, each of which would have cost one more live
+    # attempt to discover. The command-line builders are where the real key
+    # requirement lives, so that is what these walk.
+
+    def _builder_keys(self, function: str, mapping: str) -> set:
+        """Keys `function` subscripts out of its `mapping` argument.
+
+        Text-matched rather than AST-walked because these builders spell the
+        same key two ways — `d["sextractor_CATALOG_TYPE".lower()]` beside
+        `d["awaicgen_num_threads"]` — and the `.lower()` form is a call
+        expression that `_subscripted_keys`' `literal_eval` cannot read.
+        """
+        path = os.path.join(REPO_ROOT, "modules", "utils",
+                            "rapid_pipeline_subs.py")
+        with open(path) as handle:
+            source = handle.read()
+        body = source.split(f"def {function}", 1)[1].split("\ndef ", 1)[0]
+        keys = set(re.findall(mapping + r'\["([^"]+)"\]', body))
+        keys |= set(k.lower() for k in
+                    re.findall(mapping + r'\["([^"]+)"\.lower\(\)\]', body))
+        self.assertTrue(keys, f"no keys extracted from {function}")
+        return keys
+
+    def test_every_awaicgen_key_the_command_builder_reads_exists(self):
+        """`build_awaicgen_command_line_args`, one call past the stage body.
+
+        The four geometry keys are excluded because they are NOT release
+        content: they are per-field and are filled in by
+        `pipeline.mosaic_geometry.resolve_awaicgen_geometry` from the
+        `tile_position` fact. `pipeline/test/test_mosaic_geometry.py` proves
+        the resolved section is complete; this proves the rest of the section
+        is declared.
+        """
+        computed = {"awaicgen_mosaic_size_x", "awaicgen_mosaic_size_y",
+                    "awaicgen_RA_center", "awaicgen_Dec_center"}
+        for key in self._builder_keys("build_awaicgen_command_line_args",
+                                      "awaicgen_dict"):
+            if key in computed:
+                continue
+            with self.subTest(key=key):
+                self.assertIn(key, self.release["awaicgen"])
+
+    def test_every_sextractor_key_the_command_builder_reads_exists(self):
+        """`build_sextractor_command_line_args`, for all four sections.
+
+        Eleven keys were missing from every `[sextractor_*]` section — the
+        same W4B drop as the awaicgen ones. The first, `sextractor_catalog_type`,
+        failed the W9 ramp's first step AFTER a 145-second coadd had
+        succeeded; the other ten would have cost ten more steps.
+
+        Seven keys are supplied at runtime by the stage body, not by release
+        content — the input and output filenames, which are per-attempt paths
+        and so are correctly absent here.
+        """
+        path = os.path.join(REPO_ROOT, "pipeline", "referenceImageSubs.py")
+        with open(path) as handle:
+            subs = handle.read()
+        runtime = set(k.lower() for k in re.findall(
+            r'sextractor_refimage_dict\["([^"]+)"\.lower\(\)\]\s*=', subs))
+        self.assertTrue(runtime, "no runtime-supplied sextractor keys found")
+
+        required = self._builder_keys("build_sextractor_command_line_args",
+                                      "sextractor_dict")
+        for section in ("sextractor_refimage", "sextractor_sciimage",
+                        "sextractor_diffimage", "sextractor_gainmatch"):
+            for key in required - runtime:
+                with self.subTest(section=section, key=key):
+                    self.assertIn(key, self.release[section])
 
 
 if __name__ == "__main__":

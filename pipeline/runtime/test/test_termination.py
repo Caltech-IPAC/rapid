@@ -739,3 +739,75 @@ class ScienceProvenanceAndProductsTests(unittest.TestCase):
 
         self.assertNotIn("products", record)
         self.assertNotIn("science_provenance", record)
+
+class NumpyScalarsInTheRecordTests(unittest.TestCase):
+    """A numpy scalar must not make an attempt unrecordable (W9 ramp, live).
+
+    `coverage_and_uncertainty_statistics` records `reference_cov5percent` as a
+    `numpy.float32`, because the extracted stage bodies compute in numpy.
+    `json.dumps` raised `TypeError: Object of type float32 is not JSON
+    serializable` inside `write_terminal_record` — which runs on the FAILURE
+    path as well as the success path, so an attempt that failed for an
+    unrelated reason (a missing sextractor key, in the run that found this)
+    could not write the record saying so. All 18 children of the ramp's first
+    step ended non-terminal with no terminal record: the exact state the
+    attempt-record contract exists to make impossible.
+
+    These tests use a stand-in scalar rather than importing numpy, for the
+    same reason the fix is duck-typed — the runtime does not depend on the
+    science stack, and the contract being proven is "carries .item()", not
+    "is a numpy type".
+    """
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.harness = _Harness(self._tmp.name)
+
+    def test_a_numpy_like_float_is_written_as_a_number(self):
+        self.harness.terminate(
+            science_provenance={"reference_cov5percent": _Float32(0.8671875)})
+        record = json.loads(self.harness.store.get(self.harness.record_key))
+
+        value = record["science_provenance"]["reference_cov5percent"]
+        self.assertIsInstance(value, float)
+        self.assertAlmostEqual(0.8671875, value)
+
+    def test_it_is_not_stringified(self):
+        """`default=str` would keep the write working and corrupt the type."""
+        self.harness.terminate(
+            science_provenance={"reference_medncov": _Float32(12.5)})
+        record = json.loads(self.harness.store.get(self.harness.record_key))
+
+        self.assertNotIsInstance(
+            record["science_provenance"]["reference_medncov"], str)
+
+    def test_an_integer_scalar_stays_an_integer(self):
+        """`.item()` preserves the type where `float()` would flatten it."""
+        self.harness.terminate(science_provenance={"n_sources": _Int64(4242)})
+        record = json.loads(self.harness.store.get(self.harness.record_key))
+
+        value = record["science_provenance"]["n_sources"]
+        self.assertIsInstance(value, int)
+        self.assertNotIsInstance(value, float)
+        self.assertEqual(4242, value)
+
+    def test_a_value_with_no_scalar_equivalent_still_raises(self):
+        """The coercion is a boundary fix, not a silent swallow-everything."""
+        with self.assertRaises(TypeError) as caught:
+            termination._json_default(object())
+        self.assertIn("not JSON-serializable", str(caught.exception))
+
+
+class _Float32(float):
+    """Stands in for `numpy.float32`: a float carrying `.item()`."""
+
+    def item(self):
+        return float(self)
+
+
+class _Int64(int):
+    """Stands in for `numpy.int64`: an int carrying `.item()`."""
+
+    def item(self):
+        return int(self)

@@ -502,6 +502,54 @@ def _product_entries(products: dict) -> list:
     return entries
 
 
+def _json_default(value: Any) -> Any:
+    """Coerce what `json` cannot encode, for the terminal record only.
+
+    The stage bodies are extracted scientific code and they compute in numpy:
+    `coverage_and_uncertainty_statistics` hands `context.record` a
+    `numpy.float32` for `reference_cov5percent`, and `json.dumps` raises
+    `TypeError: Object of type float32 is not JSON serializable` on it. That
+    exception lands in `write_terminal_record`, which is called on the failure
+    path as well as the success path — so an attempt that failed for an
+    unrelated reason could not write the record SAYING it failed. The
+    entrypoint reported "unrecordable failure (internal_error)" and the row
+    stayed non-terminal with no terminal record at all, which is precisely the
+    state the attempt-record contract exists to make impossible. Found live by
+    the W9 ramp, on all 18 children of its first step.
+
+    Coercing here rather than at `context.record` is deliberate. `record()`
+    takes what the science computed and should not be in the business of
+    typing it, and a stage that hands over a numpy scalar is not doing
+    anything wrong. This is the one place the values must become JSON, so
+    this is where the conversion belongs.
+
+    `.item()` rather than `float()`/`int()`: it is numpy's own "give me the
+    equivalent Python scalar", so an integer type stays an integer and a bool
+    stays a bool, where `float()` would flatten all three. NOT `default=str`
+    (the shape `science_config` uses): stringifying `0.87` to `"0.87"` keeps
+    the record writable while silently changing a numeric field's type under
+    every consumer that reads it.
+    """
+    # numpy is not imported at module scope: the runtime is deliberately free
+    # of the science stack, and a duck-typed check keeps it that way. Every
+    # numpy scalar carries `.item()`; so do Python's own numbers, but those
+    # never reach here because json encodes them natively.
+    item = getattr(value, "item", None)
+    if callable(item):
+        try:
+            return item()
+        except (ValueError, TypeError):
+            pass
+    if isinstance(value, (set, frozenset)):
+        return sorted(value)
+    if isinstance(value, (datetime.datetime, datetime.date)):
+        return value.isoformat()
+    raise TypeError(
+        f"the terminal record carries a {type(value).__name__} at "
+        f"{value!r}, which is not JSON-serializable and has no scalar "
+        f"equivalent; a stage recorded a value the record cannot carry")
+
+
 def write_terminal_record(store: Any, key: str, record: dict) -> dict:
     """Write the terminal record, create-once. Returns key/checksum/created.
 
@@ -529,7 +577,8 @@ def write_terminal_record(store: Any, key: str, record: dict) -> dict:
     stored.
     """
     body = json.dumps(record, sort_keys=True, separators=(",", ":"),
-                      ensure_ascii=False).encode("utf-8")
+                      ensure_ascii=False,
+                      default=_json_default).encode("utf-8")
 
     existing = _validated_existing_record(store, key, record)
     if existing is not None:

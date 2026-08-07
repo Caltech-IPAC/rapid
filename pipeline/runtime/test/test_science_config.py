@@ -236,6 +236,19 @@ class RoundTripAgainstTheMasterIniTests(unittest.TestCase):
         # tessellation was identified only by the SQLite file baked into
         # the image. Everything else must round-trip exactly.
         authored = {"release", "science", "tessellation"}
+        # ONE DELIBERATE DIVERGENCE, recorded rather than waived silently.
+        #
+        # The .ini carries `sextractor_FLAG_IMAGE = fill_in_by_launch_script`
+        # in all four of its [SEXTRACTOR_*] blocks. No launcher ever
+        # substituted it, and `build_sextractor_command_line_args` reads the
+        # key but has its two emission lines commented out — so the value is
+        # required to exist and can never reach SExtractor. Release content
+        # states "NONE" instead, because
+        # `test_no_placeholder_sentinels_survived_the_extraction` rightly
+        # refuses to let a per-invocation placeholder pose as a release value.
+        # The two rules cannot both hold for this key; the sentinel ban is the
+        # one that protects the next reader, so the round-trip yields here.
+        diverged = {"sextractor_flag_image"}
         compared = 0
         for name, values in self.toml.items():
             if name in authored:
@@ -244,6 +257,17 @@ class RoundTripAgainstTheMasterIniTests(unittest.TestCase):
             self.assertIn(ini_section, self.ini,
                           f"{name} has no counterpart section in the .ini")
             for key, value in values.items():
+                if key in diverged:
+                    # Still assert the .ini side is what this exemption was
+                    # written for: if the master ever gains a real value, the
+                    # divergence is no longer justified and this must fail.
+                    self.assertEqual(
+                        "fill_in_by_launch_script",
+                        self.ini[ini_section][key].strip(),
+                        f"{ini_section}.{key} is no longer a placeholder in "
+                        "the .ini; the toml should now round-trip it")
+                    self.assertEqual("NONE", value, f"{ini_section}.{key}")
+                    continue
                 self.assertIn(key, self.ini[ini_section],
                               f"{ini_section}.{key} is not in the .ini")
                 raw = self.ini[ini_section][key].strip()

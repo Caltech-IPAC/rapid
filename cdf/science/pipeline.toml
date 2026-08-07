@@ -314,6 +314,37 @@ sextractor_interp_maxxlag = 16
 sextractor_interp_maxylag = 16
 sextractor_interp_type = "ALL"
 
+
+# The eleven keys `build_sextractor_command_line_args` reads that the W4B
+# migration dropped from every [sextractor_*] section — the same drop class
+# as the awaicgen keys, and found the same way: by walking that function's
+# full key list against release content rather than one KeyError per ramp
+# attempt. Values are the master .ini's, verbatim
+# (`cdf/awsBatchSubmitJobs_launchSingleSciencePipeline.ini`), where all four
+# sextractor blocks agree on these eleven.
+#
+# sextractor_flag_image is "NONE", NOT the master's
+# `fill_in_by_launch_script`. The builder READS the key (line 1119) but its
+# two command-line emission lines are commented out (1215-1216), and no
+# launcher ever substituted it — so the value is required to exist and can
+# never reach SExtractor. Carrying the sentinel would have been the honest
+# transcription, but `test_no_placeholder_sentinels_survived_the_extraction`
+# rightly refuses one: a placeholder in release content is a per-invocation
+# slot masquerading as a release value, and the next reader cannot tell it
+# from a real setting. "NONE" is SExtractor's own idiom for "no such image",
+# so it states the same fact without the landmine.
+sextractor_catalog_type = "ASCII_HEAD"
+sextractor_checkimage_type = "NONE"
+sextractor_checkimage_name = "check.fits"
+sextractor_flag_image = "NONE"
+sextractor_header_suffix = ".head"
+sextractor_memory_objstack = 3000
+sextractor_memory_pixstack = 300000
+sextractor_memory_bufsize = 1024
+sextractor_nthreads = 1
+sextractor_verbose_type = "NORMAL"
+sextractor_write_xml = "N"
+
 [swarp]
 swarp_weight_type = "NONE"
 swarp_rescale_weights = "Y"
@@ -402,6 +433,37 @@ sextractor_interp_maxxlag = 16
 sextractor_interp_maxylag = 16
 sextractor_interp_type = "ALL"
 
+
+# The eleven keys `build_sextractor_command_line_args` reads that the W4B
+# migration dropped from every [sextractor_*] section — the same drop class
+# as the awaicgen keys, and found the same way: by walking that function's
+# full key list against release content rather than one KeyError per ramp
+# attempt. Values are the master .ini's, verbatim
+# (`cdf/awsBatchSubmitJobs_launchSingleSciencePipeline.ini`), where all four
+# sextractor blocks agree on these eleven.
+#
+# sextractor_flag_image is "NONE", NOT the master's
+# `fill_in_by_launch_script`. The builder READS the key (line 1119) but its
+# two command-line emission lines are commented out (1215-1216), and no
+# launcher ever substituted it — so the value is required to exist and can
+# never reach SExtractor. Carrying the sentinel would have been the honest
+# transcription, but `test_no_placeholder_sentinels_survived_the_extraction`
+# rightly refuses one: a placeholder in release content is a per-invocation
+# slot masquerading as a release value, and the next reader cannot tell it
+# from a real setting. "NONE" is SExtractor's own idiom for "no such image",
+# so it states the same fact without the landmine.
+sextractor_catalog_type = "ASCII_HEAD"
+sextractor_checkimage_type = "NONE"
+sextractor_checkimage_name = "check.fits"
+sextractor_flag_image = "NONE"
+sextractor_header_suffix = ".head"
+sextractor_memory_objstack = 3000
+sextractor_memory_pixstack = 300000
+sextractor_memory_bufsize = 1024
+sextractor_nthreads = 1
+sextractor_verbose_type = "NORMAL"
+sextractor_write_xml = "N"
+
 [sextractor_refimage]
 sextractor_detect_type = "CCD"
 sextractor_detect_minarea = 5
@@ -454,6 +516,37 @@ sextractor_interp_maxxlag = 16
 sextractor_interp_maxylag = 16
 sextractor_interp_type = "ALL"
 
+
+# The eleven keys `build_sextractor_command_line_args` reads that the W4B
+# migration dropped from every [sextractor_*] section — the same drop class
+# as the awaicgen keys, and found the same way: by walking that function's
+# full key list against release content rather than one KeyError per ramp
+# attempt. Values are the master .ini's, verbatim
+# (`cdf/awsBatchSubmitJobs_launchSingleSciencePipeline.ini`), where all four
+# sextractor blocks agree on these eleven.
+#
+# sextractor_flag_image is "NONE", NOT the master's
+# `fill_in_by_launch_script`. The builder READS the key (line 1119) but its
+# two command-line emission lines are commented out (1215-1216), and no
+# launcher ever substituted it — so the value is required to exist and can
+# never reach SExtractor. Carrying the sentinel would have been the honest
+# transcription, but `test_no_placeholder_sentinels_survived_the_extraction`
+# rightly refuses one: a placeholder in release content is a per-invocation
+# slot masquerading as a release value, and the next reader cannot tell it
+# from a real setting. "NONE" is SExtractor's own idiom for "no such image",
+# so it states the same fact without the landmine.
+sextractor_catalog_type = "ASCII_HEAD"
+sextractor_checkimage_type = "NONE"
+sextractor_checkimage_name = "check.fits"
+sextractor_flag_image = "NONE"
+sextractor_header_suffix = ".head"
+sextractor_memory_objstack = 3000
+sextractor_memory_pixstack = 300000
+sextractor_memory_bufsize = 1024
+sextractor_nthreads = 1
+sextractor_verbose_type = "NORMAL"
+sextractor_write_xml = "N"
+
 [sextractor_gainmatch]
 sextractor_detect_type = "CCD"
 sextractor_detect_minarea = 5
@@ -505,6 +598,37 @@ sextractor_fits_unsigned = "N"
 sextractor_interp_maxxlag = 16
 sextractor_interp_maxylag = 16
 sextractor_interp_type = "ALL"
+
+
+# The eleven keys `build_sextractor_command_line_args` reads that the W4B
+# migration dropped from every [sextractor_*] section — the same drop class
+# as the awaicgen keys, and found the same way: by walking that function's
+# full key list against release content rather than one KeyError per ramp
+# attempt. Values are the master .ini's, verbatim
+# (`cdf/awsBatchSubmitJobs_launchSingleSciencePipeline.ini`), where all four
+# sextractor blocks agree on these eleven.
+#
+# sextractor_flag_image is "NONE", NOT the master's
+# `fill_in_by_launch_script`. The builder READS the key (line 1119) but its
+# two command-line emission lines are commented out (1215-1216), and no
+# launcher ever substituted it — so the value is required to exist and can
+# never reach SExtractor. Carrying the sentinel would have been the honest
+# transcription, but `test_no_placeholder_sentinels_survived_the_extraction`
+# rightly refuses one: a placeholder in release content is a per-invocation
+# slot masquerading as a release value, and the next reader cannot tell it
+# from a real setting. "NONE" is SExtractor's own idiom for "no such image",
+# so it states the same fact without the landmine.
+sextractor_catalog_type = "ASCII_HEAD"
+sextractor_checkimage_type = "NONE"
+sextractor_checkimage_name = "check.fits"
+sextractor_flag_image = "NONE"
+sextractor_header_suffix = ".head"
+sextractor_memory_objstack = 3000
+sextractor_memory_pixstack = 300000
+sextractor_memory_bufsize = 1024
+sextractor_nthreads = 1
+sextractor_verbose_type = "NORMAL"
+sextractor_write_xml = "N"
 
 [forced_photometry]
 match_radius_overlap_field = 0.25
