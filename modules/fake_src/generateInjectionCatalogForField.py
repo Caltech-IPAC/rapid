@@ -78,8 +78,9 @@ if __name__ == "__main__":
         #generate the fake sources catalog
         ras_sinusoidal = np.random.uniform(ra_min, ra_max, num_sinusoidal_variables)
         decs_sinusoidal = np.random.uniform(dec_min, dec_max, num_sinusoidal_variables)
-        periods_sinusoidal = np.random.uniform(sinusoidal_period_min, sinusoidal_period_max, num_sinusoidal_variables)
-        amplitudes_sinusoidal = np.random.uniform(sinusoidal_amplitude_min, sinusoidal_amplitude_max, num_sinusoidal_variables)
+        # log-uniform: period spans many decades (sub-cadence -> >> baseline); amplitude so faint variability is sampled
+        periods_sinusoidal = 10.0 ** np.random.uniform(np.log10(sinusoidal_period_min), np.log10(sinusoidal_period_max), num_sinusoidal_variables)
+        amplitudes_sinusoidal = 10.0 ** np.random.uniform(np.log10(sinusoidal_amplitude_min), np.log10(sinusoidal_amplitude_max), num_sinusoidal_variables)
         magnitudes_sinusoidal = np.random.uniform(sinusoidal_magnitude_min, sinusoidal_magnitude_max, num_sinusoidal_variables)
         phases_sinusoidal = np.random.uniform(sinusoidal_phase_min, sinusoidal_phase_max, num_sinusoidal_variables)
 
@@ -113,8 +114,9 @@ if __name__ == "__main__":
         ras_gaussian = np.random.uniform(ra_min, ra_max, num_gaussian_variables)
         decs_gaussian = np.random.uniform(dec_min, dec_max, num_gaussian_variables)
         peak_times_gaussian = np.random.uniform(gaussian_peak_time_min, gaussian_peak_time_max, num_gaussian_variables)
-        peak_amplitudes_gaussian = np.random.uniform(gaussian_amplitude_min, gaussian_amplitude_max, num_gaussian_variables)
-        sigmas_gaussian = np.random.uniform(gaussian_sigma_min, gaussian_sigma_max, num_gaussian_variables)
+        # log-uniform: peak amplitude (mag); sigma spans sub-cadence spikes -> quasi-static
+        peak_amplitudes_gaussian = 10.0 ** np.random.uniform(np.log10(gaussian_amplitude_min), np.log10(gaussian_amplitude_max), num_gaussian_variables)
+        sigmas_gaussian = 10.0 ** np.random.uniform(np.log10(gaussian_sigma_min), np.log10(gaussian_sigma_max), num_gaussian_variables)
         magnitudes_gaussian = np.random.uniform(gaussian_magnitude_min, gaussian_magnitude_max, num_gaussian_variables)
 
         #ID is generated as the rtid followed by a unique number for each source, 0-padded to 5 digits (e.g. 526133100000, 526133100001, etc.)

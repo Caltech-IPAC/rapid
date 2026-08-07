@@ -63,8 +63,10 @@ print("proc_pt_datetime_started =",proc_pt_datetime_started)
 #bucket_name_output = "socsim-20260427-lite"
 # The WCS correction has already been done by sims/src/socsims/inject_fake_sources_into_l2_asdf_files.py
 # Note the following new S3 buckets:
-bucket_name_input = "socsims-fakesrc-asdf-20260709"
-bucket_name_output = "socsims-fakesrc-fits-20260709-lite"
+bucket_name_input = "socsims-fakesrc-asdf-20260807"
+bucket_name_output = "socsims-fakesrc-fits-20260807-lite"
+
+sip_distortion_degree = 4
 
 
 # Create S3-client and S3-resource objects.
@@ -179,17 +181,15 @@ def run_single_core_job(asdf_files,index_thread):
         # Convert from ASDF format to FITS format, and add required FITS keywords.
         # Define highest order for computing SIP distortion.
 
-        degree = 5
-
         if num_cores == 1:
-            print(f"degree = {degree}\n")
+            print(f"sip_distortion_degree = {sip_distortion_degree}\n")
         else:
-            fh.write(f"degree = {degree}\n")
+            fh.write(f"sip_distortion_degree = {sip_distortion_degree}\n")
 
         asdf_to_fits(
             input_asdf_file_gunzipped,
             output_fits_file,
-            sip_degree=degree
+            sip_degree=sip_distortion_degree
             )
 
 
@@ -567,25 +567,27 @@ def asdf_to_fits(asdf_path, fits_path, sip_degree=5):
     F146    0.93 – 2.00       27.5
     '''
 
-    if "213" in filter:
-        zptmag = 25.4
-    elif "184" in filter:
-        zptmag = 25.9
-    elif "158" in filter:
-        zptmag = 26.4
-    elif "129" in filter:
-        zptmag = 26.3
-    elif "062" in filter:
-        zptmag = 26.4
-    elif "106" in filter:
-         zptmag = 26.4
-    elif "087" in filter:
-        zptmag = 26.3
-    elif "146" in filter:
-        zptmag = 27.5
+    # Derive the AB zeropoint (for flux in DN/s) from the data's OWN photometric
+    # calibration in meta.photometry, so it is self-consistent with romancal's CRDS
+    # photom and with source injection.  The nominal per-filter table above (e.g.
+    # F146 -> 27.5) was ~0.5-0.6 mag off this sim's true calibration, and is kept
+    # only as a documented fallback below.
+    #   SB[MJy/sr] = conversion_megajanskys * S[DN/s]
+    #   F_pt[Jy]   = conversion_megajanskys * 1e6 * pixel_area[sr] * S[DN/s]
+    #   ZPTMAG     = -2.5 * log10(conversion_megajanskys * 1e6 * pixel_area / 3631)
+    phot = getattr(dm.meta, "photometry", None)
+    conv = getattr(phot, "conversion_megajanskys", None)
+    pixarea = getattr(phot, "pixel_area", None)
+    if conv and pixarea and conv > 0 and pixarea > 0:
+        zptmag = -2.5 * np.log10(float(conv) * 1.0e6 * float(pixarea) / 3631.0)
     else:
-        print(f"*** Error: Unexpected filter = {filter}")
-        exit(64)
+        print("*** Warning: meta.photometry unavailable; using nominal ZPTMAG table")
+        nominal_zptmag = {"062": 26.4, "087": 26.3, "106": 26.4, "129": 26.3,
+                          "158": 26.4, "184": 25.9, "213": 25.4, "146": 27.5}
+        zptmag = next((v for k, v in nominal_zptmag.items() if k in filter), None)
+        if zptmag is None:
+            print(f"*** Error: Unexpected filter = {filter}")
+            exit(64)
 
     hdr["ZPTMAG"] = zptmag
 
