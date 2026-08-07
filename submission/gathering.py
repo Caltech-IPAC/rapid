@@ -653,7 +653,12 @@ def gather_reference_units(handle: UnitSource, start, end,
                         unit.key, exc)
             continue
 
-        key = (f"coadd-inputs/{run_id}/{unit.key}/"
+        # Under `submissions/<run_id>/`, beside the manifest that cites it:
+        # the coadd-input list is part of what this submission published to
+        # describe its work, and keeping the two together means one prefix
+        # holds everything a run authored — which is also the prefix the
+        # submitting identity is granted (`roman-rapid-products/submissions/*`).
+        key = (f"submissions/{run_id}/coadd-inputs/{unit.key}/"
                f"input_images_for_refimage_rid{int(rid)}.csv")
         # The checksum travels with the URI (review finding #9). A URI names a
         # key, and the whole point of the conditional create above is that a

@@ -27,7 +27,8 @@ import numpy as np
 import modules.utils.rapid_pipeline_subs as util
 import pipeline.referenceImageSubs as rfis
 from pipeline.runtime.errors import InputError
-from pipeline.stages.publishing import publish_products, verify_downloaded_input
+from pipeline.stages.publishing import (publish_products, split_s3_uri,
+                                        verify_downloaded_input)
 
 SOFTWARE_ROOT = os.environ.get("RAPID_SW", "/code")
 CFG_PATH = os.environ.get("RAPID_CFG", os.path.join(SOFTWARE_ROOT, "cdf"))
@@ -55,8 +56,17 @@ def build_reference_image(context) -> None:
     fake_sources = context.science_section("fake_sources")
 
     coadd_inputs_uri = context.fact("coadd_inputs_uri")
-    job_bucket = context.parameter("s3/inputs-bucket")
-    coadd_inputs_object = coadd_inputs_uri.split(f"{job_bucket}/", 1)[-1]
+    # The bucket comes from the URI, not from `s3/inputs-bucket`. The URI
+    # already names where the object is, and taking the bucket from the
+    # parameter instead asserted that the coadd-input list must live in the
+    # STAGED-INPUT bucket — two different kinds of data with two different
+    # lifecycles (upstream bytes that are sealed create-once, versus a list
+    # this submission just authored) forced into one location by a string
+    # split. Worse, the split was silent when it disagreed: with a URI in
+    # any other bucket, `split(f"{job_bucket}/", 1)[-1]` returns the whole
+    # URI unchanged and the download is attempted with an `s3://...` string
+    # as the KEY.
+    coadd_inputs_bucket, coadd_inputs_object = split_s3_uri(coadd_inputs_uri)
     coadd_inputs_local = context.scratch(os.path.basename(coadd_inputs_uri))
 
     # Fetch the coadd-input list here and check it against the checksum the
@@ -66,7 +76,7 @@ def build_reference_image(context) -> None:
     # fetch, moved to where its bytes can still be refused. Verified after the
     # coadd it would only tell us the reference image we just built was made
     # from the wrong frames.
-    context.s3.download_file(job_bucket, coadd_inputs_object,
+    context.s3.download_file(coadd_inputs_bucket, coadd_inputs_object,
                              coadd_inputs_local)
     verify_downloaded_input(
         context, "coadd-input list", coadd_inputs_local,
@@ -74,7 +84,7 @@ def build_reference_image(context) -> None:
 
     generated = rfis.generateReferenceImage(
         context.s3,
-        job_bucket,
+        coadd_inputs_bucket,
         coadd_inputs_object,
         coadd_inputs_local,
         context.unit.key,

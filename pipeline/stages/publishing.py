@@ -257,6 +257,34 @@ def publish_products(context, bucket, entries, product_type=None):
     return published
 
 
+def split_s3_uri(uri: str) -> tuple[str, str]:
+    """`s3://bucket/key/with/slashes` -> `("bucket", "key/with/slashes")`.
+
+    A URI names its own bucket, so the bucket is READ FROM IT rather than
+    assumed. The stages used to take the bucket from the `s3/inputs-bucket`
+    parameter and derive the key by splitting that name off the URI, which
+    silently did the wrong thing whenever the object was somewhere else:
+    `"s3://other/k".split("inputs-bucket/", 1)[-1]` is the whole URI back
+    again, so the download was attempted with `s3://other/k` as the KEY,
+    against the inputs bucket, and failed as a missing key rather than as
+    the disagreement it was.
+
+    Raises `InputError` rather than returning a partial parse: a malformed
+    URI is bad input to this invocation, and the caller has no better
+    answer than the manifest it was handed.
+    """
+    if not uri.startswith("s3://"):
+        raise InputError(
+            f"{uri!r} is not an s3:// URI, so its bucket cannot be read "
+            "from it", uri=uri)
+    remainder = uri[len("s3://"):]
+    bucket, slash, key = remainder.partition("/")
+    if not bucket or not slash or not key:
+        raise InputError(
+            f"{uri!r} names no bucket-and-key pair", uri=uri)
+    return bucket, key
+
+
 def verify_downloaded_input(context, name: str, path: str,
                             expected: str | None) -> None:
     """Check a downloaded input against the checksum its manifest cited.

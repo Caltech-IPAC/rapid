@@ -53,7 +53,8 @@ import pipeline.differenceImageSubs as dfis
 import pipeline.referenceImageSubs as rfis
 from pipeline.runtime.errors import InputError
 from pipeline.runtime.process import run_shell, run_tool
-from pipeline.stages.publishing import publish_products, verify_downloaded_input
+from pipeline.stages.publishing import (publish_products, split_s3_uri,
+                                        verify_downloaded_input)
 
 # The release-content tree inside the image. The monolith hardcoded "/code" as
 # `rapid_sw` and "/code/cdf" as `cfg_path` at module scope; they are the
@@ -227,9 +228,13 @@ def _build_reference_image(context, awaicgen) -> None:
     # The coadd-input list is a per-invocation fact: the manifest names the
     # object holding it, where the monolith took two environment variables
     # (REFIMAGEINPUTSFILENAME / REFIMAGEINPUTSOBJNAME) set by the launcher.
+    # The bucket is read from the URI, not from `s3/inputs-bucket` — same
+    # fix and same reason as `reference_image.build_reference_image`: the
+    # coadd-input list is authored by submission, not staged upstream, so
+    # tying its location to the staged-input bucket conflated two kinds of
+    # data and made any other location fail as a missing key.
     coadd_inputs_uri = context.fact("coadd_inputs_uri")
-    job_bucket = context.parameter("s3/inputs-bucket")
-    coadd_inputs_object = coadd_inputs_uri.split(f"{job_bucket}/", 1)[-1]
+    coadd_inputs_bucket, coadd_inputs_object = split_s3_uri(coadd_inputs_uri)
     coadd_inputs_local = context.scratch(os.path.basename(coadd_inputs_uri))
 
     # Same fetch-then-verify as `reference_image.build_reference_image`, and
@@ -238,7 +243,7 @@ def _build_reference_image(context, awaicgen) -> None:
     # passes, so the list is checked against the manifest's citation before it
     # is coadded rather than after. `generateReferenceImage` downloads this
     # object to this path itself, so nothing extra is being fetched.
-    context.s3.download_file(job_bucket, coadd_inputs_object,
+    context.s3.download_file(coadd_inputs_bucket, coadd_inputs_object,
                              coadd_inputs_local)
     verify_downloaded_input(
         context, "coadd-input list", coadd_inputs_local,
@@ -246,7 +251,7 @@ def _build_reference_image(context, awaicgen) -> None:
 
     generated = rfis.generateReferenceImage(
         context.s3,
-        job_bucket,
+        coadd_inputs_bucket,
         coadd_inputs_object,
         coadd_inputs_local,
         context.unit.key,
