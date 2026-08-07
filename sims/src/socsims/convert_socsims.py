@@ -63,8 +63,10 @@ print("proc_pt_datetime_started =",proc_pt_datetime_started)
 #bucket_name_output = "socsim-20260427-lite"
 # The WCS correction has already been done by sims/src/socsims/inject_fake_sources_into_l2_asdf_files.py
 # Note the following new S3 buckets:
-bucket_name_input = "socsims-fakesrc-asdf-20260709"
-bucket_name_output = "socsims-fakesrc-fits-20260709-lite"
+bucket_name_input = "socsims-fakesrc-asdf-20260807"
+bucket_name_output = "socsims-fakesrc-fits-20260807-lite"
+
+sip_distortion_degree = 4
 
 
 # Create S3-client and S3-resource objects.
@@ -179,17 +181,17 @@ def run_single_core_job(asdf_files,index_thread):
         # Convert from ASDF format to FITS format, and add required FITS keywords.
         # Define highest order for computing SIP distortion.
 
-        degree = 5
+        sip_distortion_degree = 5
 
         if num_cores == 1:
-            print(f"degree = {degree}\n")
+            print(f"sip_distortion_degree = {sip_distortion_degree}\n")
         else:
-            fh.write(f"degree = {degree}\n")
+            fh.write(f"sip_distortion_degree = {sip_distortion_degree}\n")
 
         asdf_to_fits(
             input_asdf_file_gunzipped,
             output_fits_file,
-            sip_degree=degree
+            sip_degree=sip_distortion_degree
             )
 
 
