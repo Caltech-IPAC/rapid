@@ -332,8 +332,29 @@ measurements are the first run's, carried forward, and remain
    * - Spot-reclaim retry semantics
      - **not measured**
      - Spot stays DISABLED; no trial authorized.
+   * - Per-SCA latency against the one-hour/95% target
+     - **MEASURED at 180-wide — the number the smoke run existed to get**
+     - 180 children, every one ``success`` / ``published``:
+
+       * min **3,039 s** (50.7 min)
+       * mean **3,419 s** (57.0 min)
+       * **p95 3,604 s — 60.1 min**
+       * max **3,721 s** (62.0 min)
+       * wall clock, submission to last completion: **3,956 s** (65.9 min)
+
+       **p95 lands 4 seconds over the 3,600 s target.** Not "close to" —
+       over, by a margin far inside the noise of a single run, which is
+       the honest way to state it: at this width the pipeline sits
+       exactly on the target and does not clear it.
+
+       The spread is narrow (min to max is 22 minutes, p95 only 5 minutes
+       above the mean), so this is not a tail problem to be tuned away —
+       it is where the whole distribution sits. And the ramp's contention
+       cost is small: the uncontended width-2 probe ran 3,371 s and
+       3,300 s, so 3 children per host over 60 hosts added roughly a
+       minute to the mean. **The time is science, not scheduling.**
    * - Queue/startup/execution/publication intervals per SCA
-     - **partial**
+     - **partial, superseded by the row above for the headline figure**
      - Cold-start measured end to end on the prompt queue: submission
        00:38:54 → CE scale-up from zero → instance running 00:40:15 →
        first stage 00:42:07. **~3 min 13 s cold start**, matching the
