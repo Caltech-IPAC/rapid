@@ -561,3 +561,161 @@ What it does establish: prep is live and correct at revision 21; reference
 construction works at full population with complete coverage for the science
 ramp; the records machinery holds under chaos; and one science-path
 configuration defect stands between here and a science ramp.
+
+The resumption — 2026-08-07
+============================
+
+Resumed under the drive-to-workable-system ruling. **The ramp did not
+restart: the run ended on an expired SSO session before any submission.**
+Batch children submitted: **0 of the ≤1,500 ceiling.** What the session did
+land is the two code fixes that stood in front of the ramp, both proven by
+test rather than by live run.
+
+Handoff verification — every claim held
+----------------------------------------
+
+Verified against live state before any action, because a stale handoff
+voids the launch.
+
+.. list-table::
+   :header-rows: 1
+
+   * - Claim
+     - Probe
+     - Result
+   * - Queues empty
+     - ``list-jobs``, 2 queues × 5 non-terminal states
+     - 0 in all ten, exit 0
+   * - No VPO process
+     - ``ps`` on rapid-admin via SSM
+     - none; only the reconciler and the archive sink
+   * - Spot CEs DISABLED
+     - ``describe-compute-environments``
+     - both DISABLED/VALID, both on-demand ENABLED/VALID, desired 0
+   * - Job definitions at rev 21
+     - ``describe-job-definitions``
+     - science and bulk both rev 21 on ``sha256:89223d4b``
+   * - Pin consistent at all sites
+     - template, stack parameter, both definitions
+     - all three agree
+   * - Reconciler healthy
+     - ``systemctl status`` via SSM
+     - active on the same digest, ``errors: 0``
+   * - The 7 ``fixd-chain`` records
+     - SQL on rapid-db through the pooler
+     - attempt_ids 123–129 present
+   * - Their S3 evidence gone
+     - ``head-object`` × 7
+     - all 404
+
+One refinement to the record. The seven rows carry the dangling reference
+in **``terminal_record_key``**; ``closure_record_key`` is NULL and
+``reconciler_materialized`` is false on all seven. The effect is as
+described — registration cannot read the evidence — but the supersession
+must *create* the closure account rather than replace one. Absence is
+object-level: ``attempts/records/`` still holds every other run's prefix.
+
+And the blast radius is narrower than seven. Registration selects on
+``lifecycle_state`` in ``terminal_after_start``/``terminal_without_start``
+**and** ``terminal_record_sequence >= 1``, so of the seven only **126, 127
+and 128** are candidates: 123–125 sit at sequence 0, and 129 is already
+registered. Three unreadable objects abort every operator invocation.
+
+The pre-B EBS check
+-------------------
+
+Re-run at resumption: **4,594 GiB in use against the 50 TiB gp3 quota**
+(``L-7A658B76``, read live). Unchanged from the first run's figure, and
+nowhere near binding at the 540 step.
+
+Fix cycle 1 — the swarp keys
+-----------------------------
+
+``swarp_header_only`` was never one key. Diffing
+``build_swarp_command_line_args`` against release content mechanically:
+**57 keys read, 34 configured, 3 supplied at runtime, 20 missing.** The
+failing key is only the builder's *third* read, which is why it stood in
+front of the other nineteen — fixing it alone would have bought one
+attempt and then raised ``KeyError: 'swarp_header_suffix'``, burning a fix
+cycle to learn nothing new.
+
+All twenty land in ``cdf/science/pipeline.toml`` ``[swarp]``, values taken
+from the master ``.ini`` where they had been correct all along: the loss
+was entirely in the W4B extraction. They are release content by the
+ratified criterion — ``HEADER_ONLY=Y`` makes SWarp write only a ``.head``
+and skip resampling, so "can this value alter a science product" is not a
+close call. All twenty round-trip with **no new exemption**; the remaining
+three unconfigured keys are the per-attempt paths carrying
+``fill_in_by_launch_script``, correctly absent.
+
+Two tests, and the second is the one that matters. The first walks the
+swarp builder as the awaicgen and sextractor tests walk theirs. The
+second, ``test_every_command_line_builder_is_covered_by_this_class``,
+fails on any ``build_*_command_line_args`` that has no completeness test.
+Each of the three completeness tests had arrived reactively, after its
+builder burned a live attempt, and each fix stopped at the builder that
+had just fired — so the next uncovered builder was always one live failure
+away. This is the third occurrence of the class; the enumeration now
+closes instead of being extended a fourth time.
+
+**Proven by refusal, not by passing.** Removing one key fails naming it;
+removing all twenty fails with exactly twenty subtest failures; restoring
+passes; an added bogus builder fails the coverage test. Completeness 7/7
+exit 0, round-trip 34/34 exit 0, with no new exemption.
+
+The supersession pass — written and tested, not run
+----------------------------------------------------
+
+``pipeline/reconciler/supersede_lost_evidence.py``. The reconciler already
+supersedes — ``publish_closure_record`` climbs to the next free sequence
+and the highest sequence is the full account — but it will not revisit
+these rows: its requery is bounded to terminal rows whose *scheduler facts
+changed*, inside a 24 h window set by Batch's own retention, and these
+attempts are a day past it with nothing new to learn. That bound is
+correct. Widening it so an operator's cleanup could be swept up would make
+every terminal row eligible forever, so the driver belongs outside the
+service.
+
+Per attempt it appends a reconciler-first closure record at the next free
+sequence citing the absent object as its rejected predecessor with reason
+``absent`` — that is where "evidence lost" is recorded — then calls
+``mark_missing_or_contradictory``. **The flag is what clears the gate**:
+that state is deliberately absent from ``RECONCILED_STATES``, so a flagged
+attempt stops being a registration candidate. Append-only; the stale key
+stays on the row because it is the evidence of what was lost.
+
+No ``error_category`` is set. These attempts succeeded — ``rapid_outcome``
+is ``success`` on every one — the v1 allowlist has no category for lost
+evidence, and the reconciler's own analogous path sets none either. The
+writer's signature settles it: ``mark_missing_or_contradictory`` takes no
+such parameter.
+
+Absence is re-verified per attempt immediately before writing, and only
+``head`` returning None counts; a store fault defers. Ten tests, exit 0,
+with doubles that can refuse — a scripted fault, a readable record, a row
+citing no key, and a dry run each assert that **nothing** was written to
+either store.
+
+Why the run stopped
+-------------------
+
+The SSO session expired between the last successful probe and the
+supersession run, and would not renew: ``aws sso login`` timed out at the
+browser flow, and ``--use-device-code`` returned a code needing a human to
+enter it. Every SSO profile on the host reads
+``Token has expired and refresh failed``; the one live credential belongs
+to a different account and is out of scope. An unattended session cannot
+clear an interactive authentication prompt.
+
+The supersession script aborted at its own account check, before staging
+code or issuing any SSM command — nothing was launched, and nothing needs
+cleaning up.
+
+State at stop
+-------------
+
+Unchanged from the first run's closeout, and re-verified above: queues
+empty, no VPO process, both Spot CEs DISABLED, definitions at rev 21 on
+``sha256:89223d4b``, reconciler active with ``errors: 0``. **Nothing is
+running and nothing is pending.** The seven ``fixd-chain`` records are
+still stale, so the operator gate is still shut.
