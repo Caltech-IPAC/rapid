@@ -85,6 +85,21 @@ CFG_PATH = science_config.config_directory
 # interpreter than the pipeline; `sys.executable` cannot drift that way.
 PYTHON = sys.executable
 
+# Where `rapid-cmodules` installs bkgest's runtime message catalogue
+# (`bkgest_errcodes.h`), which the tool's own error reporter re-opens at
+# runtime to turn a status code into text. A directory, not a file: the C
+# code appends the filename itself (`bkgest_log_writer.c`, decode_message).
+#
+# A literal, and deliberately so. This is not one of the three configuration
+# homes — it is the RPM prefix contract, the same class of fact as
+# `RAPID_SW`: where the installed software IS, which has to be known before
+# anything it carries can be read. The Containerfile owns `/opt/rapid`
+# explicitly (its `ENV PATH` and `LD_LIBRARY_PATH` both name it), and the
+# eight cmodules binaries are already found by bare name against that same
+# prefix. Routing this one path through SSM or `cdf/` would put the location
+# of the software somewhere the software has to be read to find.
+CMODULES_SHARE = "/opt/rapid/share/bkgest"
+
 # Infobits set when a PSF-catalogue variant fails. One bit per variant, exactly
 # as the monolith assigned them (2**0 at line 1471 through 2**5 at line 2770).
 PSFCAT_INFOBIT = {
@@ -630,12 +645,21 @@ def subtract_background(context) -> None:
     # binaries under `/code/c/bin` was replaced by that RPM, but this call
     # kept the old absolute path and so looked where nothing installs.
     #
-    # The `-a` argument went with it. It is bkgest's OPTIONAL ancillary
-    # FILE ("-a <ancillary_file_path> (Optional)", bkgest_parse_namelist.c),
-    # and it was being passed `/code/c/include` — a directory, not a file,
-    # and one that exists in no image and no branch of this repo. Passing a
-    # non-existent path to an optional argument is not a way to omit it.
+    # `-a` is the DIRECTORY holding bkgest's runtime message catalogue. It
+    # too pointed into the retired tree (`/code/c/include`) and was dropped
+    # when that path was found to exist in no image — correct about the
+    # value, wrong about the argument, which is load-bearing. Omitting it
+    # only falls back to the default `.`, the scratch working directory,
+    # which has no catalogue either.
+    #
+    # Load-bearing because bkgest fails ITSELF without it: the reporter's
+    # fopen() failure sets `I_status`, which becomes a non-zero exit. The
+    # Q9 cycle-3 probe watched it compute a correct background — 2.74 s,
+    # "0 NaN's produced" — and then exit 255 for want of the file it reads
+    # to describe its own success. `rapid-cmodules-1.0.0-3` installs the
+    # catalogue at CMODULES_SHARE, and this points the tool at it.
     run_tool(["bkgest",
+              "-a", CMODULES_SHARE,
               "-i", context.product("science_image_pv"),
               "-f", str(bkgest["output_image_type"]),
               "-c", str(bkgest["clippedmean_calc_type"]),

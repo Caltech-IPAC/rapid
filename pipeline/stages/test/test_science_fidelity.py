@@ -449,24 +449,55 @@ class InHouseCToolInvocationTests(unittest.TestCase):
             "\ndef ", 1)[0]
         self.assertIn('run_tool(["bkgest"', body)
 
-    def test_the_optional_ancillary_argument_is_not_given_a_missing_path(self):
-        """`-a` is bkgest's optional ancillary FILE, and it had a directory.
+    def test_bkgest_is_pointed_at_its_installed_message_catalogue(self):
+        """`-a` is the DIRECTORY holding bkgest's runtime message catalogue.
 
-        It was passed `SOFTWARE_ROOT() + "/c/include"` — a path that exists
-        in no image and on no branch of this repo. An optional argument is
-        omitted by not passing it, never by passing something absent.
+        Two wrong values in a row, so this asserts the right one rather than
+        the absence of a wrong one. It was first passed
+        `SOFTWARE_ROOT() + "/c/include"` — a path in no image and on no
+        branch. That was then dropped as "an optional argument omitted by
+        not passing it", which read the C correctly and the consequences
+        wrongly: `bkgest_init_constants.c` defaults the path to `"."`, and
+        `bkgest_log_writer.c` appends `/bkgest_errcodes.h` and fopen()s the
+        result to decode its own status codes. The failure is not a missing
+        annotation — it sets `I_status`, which becomes a non-zero EXIT. The
+        Q9 cycle-3 probe saw bkgest compute a correct background and exit
+        255 anyway.
+
+        So the argument is load-bearing and the only acceptable value is the
+        directory `rapid-cmodules` installs the catalogue into.
         """
         path = os.path.join(REPO_ROOT, "pipeline", "stages", "science.py")
         with open(path) as handle:
             source = handle.read()
         body = source.split("def subtract_background", 1)[1].split(
             "\ndef ", 1)[0]
-        # Comments stripped: this asserts about what the stage RUNS, and
-        # the lines explaining why `-a` went away necessarily name it.
+        # Comments stripped: this asserts about what the stage RUNS, and the
+        # lines explaining the two bad values necessarily name them.
         code = "\n".join(line for line in body.split("\n")
                          if not line.lstrip().startswith("#"))
         self.assertNotIn("c/include", code)
-        self.assertNotIn('"-a"', code)
+        self.assertIn('"-a"', code)
+        self.assertIn("CMODULES_SHARE", code)
+
+    def test_the_catalogue_directory_is_under_the_rpm_prefix(self):
+        """`CMODULES_SHARE` must name where the RPM actually installs.
+
+        The constant and `rapid-cmodules.spec`'s `%files` are one fact in
+        two repos, and nothing at runtime reconciles them — bkgest does not
+        report a missing catalogue as anything but its own exit code. This
+        pins the app-repo half; `rpms/smoke-test.sh` pins the package half
+        by checking the file is on disk after a real install.
+
+        Read from source rather than imported, like the rest of this class:
+        `science.py` pulls in astropy at import, so importing it would make
+        an assertion about a string literal require the whole science env,
+        and skip everywhere that env is absent.
+        """
+        path = os.path.join(REPO_ROOT, "pipeline", "stages", "science.py")
+        with open(path) as handle:
+            source = handle.read()
+        self.assertIn('CMODULES_SHARE = "/opt/rapid/share/bkgest"', source)
 
 
 class StatisticsKeyNameTests(unittest.TestCase):
