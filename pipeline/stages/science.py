@@ -162,10 +162,31 @@ def download_inputs(context) -> None:
     reference_uri = context.optional_fact("reference_image_uri")
     ref_psf = None
     if reference_uri is not None:
-        ref_psf_uri = reference_uri.replace("image.fits", "psf.fits")
+        # THE MANIFEST NAMES IT; THIS USED TO DERIVE IT. The line here was
+        # `reference_uri.replace("image.fits", "psf.fits")`, which turns
+        # `awaicgen_output_mosaic_image.fits` into
+        # `awaicgen_output_mosaic_psf.fits` — an object the reference-image
+        # job has never written. Its attempt directory holds the mosaic, its
+        # coverage map, its uncertainty image, two catalogues and
+        # `WFI_SCA07_F146_PSF_DET_DIST.fits`, and no `*_mosaic_psf.fits`;
+        # the stage therefore failed `run_zogy` with FileNotFoundError on a
+        # path nothing had ever produced.
+        #
+        # `reference_image.download_reference_psf` — the dedicated
+        # reference-image job's own stage — resolves this from
+        # `psf_uri`, and that fact is the per-SCA detector PSF the
+        # coadd was built against. Reading the same fact here makes the two
+        # job types use one source for one thing, which is what the comment
+        # above already claimed ("the manifest now names the object
+        # outright") and what the code did not do. `science_image_catalog`
+        # further down already falls back to `psf_uri` for exactly this
+        # product, so this also stops the two paths disagreeing about which
+        # PSF a difference was made with.
+        ref_psf_uri = context.fact("psf_uri")
         ref_psf, _subdirs, _ = util.download_file_from_s3_bucket(
             context.s3, ref_psf_uri,
-            outputfile=context.scratch(os.path.basename(ref_psf_uri)))
+            outputfile=context.scratch(
+                "refpsf_" + os.path.basename(ref_psf_uri)))
         context.produce("reference_psf", ref_psf)
     else:
         context.logger.info(

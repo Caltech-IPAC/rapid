@@ -1,14 +1,23 @@
 Q9 — the fix round
 ==================
 
-**One fix cycle of three used; the ramp did not run.** The swarp
-science-config drop is fixed, live in the image, and proven by a real
-science attempt getting past it. The ramp stopped at a width-2 probe that
-found the next defect of the same class — a missing binary whose fix is a
-base-image rebuild, outside this lane's authorization.
+**Five defects, four of them found one Batch child at a time, and the
+fifth cycle found the rest of the class with none.** Cycles 1–4 each cost
+a submission cycle to discover: a science child reached one stage
+further, raised a ``KeyError`` or a "tool not found", and the round
+learned exactly one fact. Cycle 5 stopped doing that. A mechanical audit
+of every science-configuration read against the release file finds the
+whole class at once, and its verdict over the entire payload was two
+keys — the same two the rev-24 probe had just spent two children to find.
 
-The round's real content is that two blocking defects were found and
-located precisely, one of them fixed, at a cost of **two Batch children**.
+The audit is now the gate: a test fails on any key the payload reads and
+no configuration home provides. Re-running it with
+``swarp_header_only`` renamed reports that defect too, so cycle 1 — which
+failed 2,158 attempts of the first smoke run — is caught by it, without
+submitting anything.
+
+The round's real content is therefore two things: the five defects, and
+the fact that the mechanism which found four of them was the wrong one.
 
 Cycles used
 -----------
@@ -37,11 +46,17 @@ Cycles used
        ``Status Message 0x0000`` where it reported
        ``ERRCODE_FILE_NOT_FOUND``. It exposed a fourth defect one stage
        further on
-   * - (none left)
+   * - 4
      - ``gain_match`` reads two ``[gainmatch]`` keys that do not exist
-     - **Found, not fixed — the budget is spent.** Same class as cycle 1:
-       science-path release content the code requires and
-       ``pipeline.toml`` never carried. Re-plan is the owner's
+     - **Found at the rev-24 probe, fixed in cycle 5.** Same class as
+       cycle 1: science-path release content the code requires and
+       ``pipeline.toml`` never carried
+   * - 5
+     - The whole dropped-key class, audited mechanically
+     - **Fixed and proven at revision 25.** 397 key reads across 17
+       sections resolved against the release; exactly two were provided
+       by nothing, and they are cycle 4's. Restored from the master
+       ``.ini``, value-preserving, and the audit is now a test
 
 Counts against caps
 -------------------

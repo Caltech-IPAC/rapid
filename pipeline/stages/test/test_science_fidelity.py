@@ -1162,6 +1162,97 @@ class ReleaseContentCompletenessTests(unittest.TestCase):
                          "add one beside the others and list it here")
 
 
+class ObjectUrisComeFromTheManifest(unittest.TestCase):
+    """No stage may derive one object's URI from another's by string surgery.
+
+    `download_inputs` located the reference PSF as
+    `reference_image_uri.replace("image.fits", "psf.fits")`, which turns
+    `awaicgen_output_mosaic_image.fits` into
+    `awaicgen_output_mosaic_psf.fits` — an object the reference-image job
+    has never written. Its attempt directory holds the mosaic, the coverage
+    map, the uncertainty image, two catalogues and the detector PSF, and no
+    `*_mosaic_psf.fits` at all. Every science child therefore died at
+    `run_zogy` with `FileNotFoundError`, five stages and one probe cycle
+    after the configuration defects had been cleared out of the way.
+
+    The manifest names every object a unit needs, and the dedicated
+    reference-image job reads its PSF from `psf_uri` like anything else.
+    Deriving a second name for the same thing is what let the two job
+    types disagree about which file exists.
+
+    This walks the stage sources for the shape rather than asserting about
+    the one site that failed, so the next derived URI fails here instead of
+    on a ramp.
+
+    **Three sites match the shape and only one was a defect**, which is
+    the distinction this test has to get right or it is noise.
+    `resolve_reference_image` derives the coverage map, the uncertainty
+    image and the SExtractor catalogue from the same mosaic URI, and all
+    three objects DO exist beside the mosaic in the reference job's output
+    (verified in the live bucket: `awaicgen_output_mosaic_cov_map.fits`,
+    `..._uncert_image.fits`, `..._refimsexcat.txt`). Those derivations are
+    a latent coupling — they will break the day the reference job renames
+    an output — but they are not what failed, and asserting against them
+    here would fail the suite for a defect nobody has. They are listed as
+    known and allowed, so a NEW derived URI still fails, and the list
+    itself is the record of the coupling.
+
+    The PSF is not on that list because its derived name never named
+    anything.
+    """
+
+    #: `<something>_uri.replace(` or `context.fact("...").replace(` —
+    #: a URI that came from outside this process being rewritten into
+    #: another URI.
+    DERIVED_URI = re.compile(
+        r"(?:\w*_uri|\bfact\([^)]*\))\s*\.replace\s*\(", re.MULTILINE)
+
+    #: Substrings identifying derivations that resolve to objects the
+    #: reference-image job really writes, verified against the live bucket
+    #: rather than assumed. A fourth derived URI has to be justified the
+    #: same way — by listing the object beside the mosaic — before it is
+    #: added here.
+    KNOWN_RESOLVING = (
+        "os.path.basename(reference_uri), awaicgen[key]",
+        '"image.fits", "refimsexcat.txt"',
+    )
+
+    def _sources(self):
+        for sub in ("pipeline", "modules"):
+            for root, _dirs, files in os.walk(os.path.join(REPO_ROOT, sub)):
+                if "/test" in root or root.endswith("/test"):
+                    continue
+                for name in files:
+                    if name.endswith(".py"):
+                        yield os.path.join(root, name)
+
+    def test_no_stage_derives_an_object_uri_from_another(self):
+        offenders = []
+        for path in self._sources():
+            with open(path) as handle:
+                lines = handle.readlines()
+            for number, line in enumerate(lines, start=1):
+                if line.lstrip().startswith("#"):
+                    continue
+                if not self.DERIVED_URI.search(line):
+                    continue
+                # The call can wrap, and the argument that identifies it is
+                # often on the next line, so the allowlist is checked
+                # against the statement rather than the matched line.
+                statement = "".join(lines[number - 1:number + 2])
+                if any(known in statement for known in self.KNOWN_RESOLVING):
+                    continue
+                offenders.append(
+                    f"{os.path.relpath(path, REPO_ROOT)}:{number}: "
+                    f"{line.strip()}")
+        self.assertEqual(
+            offenders, [],
+            "a stage derives one object's URI from another's by string "
+            "replacement; the manifest names every object a unit needs, and "
+            "a derived name can point at something nothing ever wrote:\n"
+            + "\n".join(offenders))
+
+
 class EveryStageConfigReadIsSatisfied(unittest.TestCase):
     """The whole class of dropped-key defects, not one builder at a time.
 
