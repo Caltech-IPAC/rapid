@@ -950,3 +950,39 @@ bound packing measured at 180- and 540-wide, and host CPU held at
 wave while the first was mid-flight neither disturbed the packing nor
 produced a queueing backlog: Batch scaled the environment underneath a
 running population.
+
+The overlap is measured, not assumed
+------------------------------------
+
+A drip is only a drip if wave *N* is still running when wave *N+1*
+arrives; otherwise the cadence has produced six small bulk runs. Counted
+from the attempt records — children submitted but not yet ended at the
+moment each wave arrived:
+
+.. list-table::
+   :header-rows: 1
+
+   * - Wave
+     - Arrived (UTC)
+     - In flight at arrival
+   * - ``q9-drip-probe``
+     - 12:48:16
+     - 2
+   * - ``q9-drip-w1``
+     - 12:49:10
+     - 62
+   * - ``q9-drip-w2``
+     - 12:59:23
+     - 122
+
+The population accumulates rather than turning over, which is the
+condition the drip exists to create.
+
+**Warm arrival costs 11 seconds; cold arrival costs 2.5 minutes.** Wave 1
+arrived at 12:49:10 and first started at 12:51:39 — the ~3 min cold start,
+matching the 2026-08 baseline. Wave 2 arrived at 12:59:23 and first
+started at **12:59:34, eleven seconds later**, because the hosts were
+already there. That difference is the strongest argument in this document
+for continuous operation over batched: under steady arrival, all but the
+first wave pay no scheduling latency at all, and the queue interval that
+pushes the ramp's arrival-clock p95 over the target largely disappears.
