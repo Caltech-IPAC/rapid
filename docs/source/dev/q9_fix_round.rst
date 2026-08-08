@@ -336,9 +336,13 @@ measurements are the first run's, carried forward, and remain
        **The one-hour/95% target still has no full-path evidence** — no
        science child has reached publication.
    * - Pooler connection draw
-     - **partial**
-     - 23 backends, 7 payload, against ``max_connections`` 200 (~12%) at
-       109-wide. Unmeasured at ramp width.
+     - **measured at 180-wide**
+     - **31 backends of ``max_connections`` 200 — 15.5% — with all 180
+       children in flight**, 8 of them RAPID-tagged. Against 23/7 at the
+       first run's 109-wide step, so the draw grows far slower than the
+       fan-out: 65% more children for 8 more backends. That is the
+       pooler doing exactly what it is for, and it means the connection
+       budget is not what binds the ramp.
    * - Backup-window behaviour under load
      - **not measured**
      - No run intersected a window.
