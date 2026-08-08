@@ -25,9 +25,10 @@ Cycles used
        at 7.30 s on both probe children, where it had failed 2,158
        attempts at 0.51 s
    * - 2
-     - ``bkgest`` absent from the image
-     - **Root-caused, not fixed** — the fix is a base-image rebuild,
-       outside the authorized operations
+     - ``bkgest`` and ``cforcepsfaper`` unreachable
+     - **Code half fixed and merged; image half blocked on disk.** The
+       base build installed ``rapid-cmodules`` successfully and then
+       died writing its final layer — rapid-admin has no room
    * - 3
      - unused
      -
@@ -44,8 +45,11 @@ Counts against caps
      - **2**
    * - Fix cycles (≤3)
      - 1 fixed, 1 root-caused
-   * - Image rebuild + repin (≤2)
-     - **1**
+   * - Application image rebuild + repin (≤2)
+     - **1** (revision 22, the swarp fix)
+   * - Base image rebuild (≤1)
+     - **1 attempt, no artifact** — three tries, none reaching a pushed
+       image; the last installed the RPM and died writing its layer
    * - Deploys per stack (≤2)
      - rapid-batch 1, rapid-reconciler-service 1
 
@@ -100,12 +104,66 @@ It was invisible only because ``swarp_header_only`` failed four stages
 earlier. ``cforcepsfaper`` is missing for the same reason and will fail
 the forced-photometry path identically.
 
-**Why this session stopped rather than fixed it.** The authorized
-operations are the supersession, the swarp fix, an application-image
-rebuild and repin, and Batch submissions. Rebuilding
-``rapid-pipeline-base`` is a different image on a surface this lane did
-not declare, and installing new content into the reproducibility artifact
-is a change of the severity the ruling reserves. Recorded as proposed.
+Installing the RPM was necessary but not sufficient
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+The RPM installs to ``/opt/rapid/bin``. The callers named
+``/code/c/bin`` — the retired from-source build's location — so shipping
+``rapid-cmodules`` alone would have left both binaries exactly as
+unreachable, and cost a fix cycle to discover. The spec says as much in
+its own header: it "replaces the app repo's from-source build
+(``rapid/c/builds/build_inside_container.sh``, which builds these 8
+binaries into ``/code/c/bin``)". The packaging moved; the callers did
+not.
+
+**The code half is fixed and merged.** Both call sites now use the bare
+name, resolved against the ``PATH`` the Containerfile owns — the same way
+``swarp`` and ``sextractor`` have always been found.
+
+``bkgest``'s ``-a`` argument went with it, and that is a second defect in
+the same call rather than tidying. It is the OPTIONAL ancillary *file*
+("``-a <ancillary_file_path> (Optional)``",
+``bkgest_parse_namelist.c``), and it was being handed
+``SOFTWARE_ROOT() + "/c/include"`` — a directory, not a file, and one
+that exists in no image and on no branch of this repo.
+
+The test walks ``pipeline/`` and ``modules/`` for the retired path rather
+than asserting about the two known sites, so a ninth caller fails in the
+suite instead of on a ramp. Proven by refusal: restoring the ``bkgest``
+path fails two tests, restoring the ``cforcepsfaper`` path fails one,
+restoring the bogus ``-a`` fails one, and the fixed tree passes.
+
+The image half is blocked on disk
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+The base rebuild ran and **the diagnosis is confirmed**: the group
+install resolved and installed ``rapid-cmodules-1.0.0-2.el10`` alongside
+the other sixteen packages, "Complete!". The build then failed writing
+its final layer — ``no space left on device``.
+
+rapid-admin has a 64 G root with ~14 G free at rest, and carries **47
+cached pipeline image tags spanning 12 days: 24.25 GB of images plus
+13.44 GB of unused volumes, all reclaimable, none active**. A pipeline
+image is ~5 GB, so a build needs more headroom than the host has while
+that cache sits there.
+
+Three attempts, each failing later than the last as the staging set
+shrank: the whole published repo (3.4 G staged) died at the COPY; the
+``rapid-*`` subset died at the COPY; the comps-group-scoped newest-build
+set (38 packages, every mandatory member covered) got all the way through
+the group install and died committing the layer.
+
+What this session reclaimed is its own: the staged RPM trees and the
+untagged layers from its failed builds. The 24.25 GB of tagged images
+belongs to earlier sessions' builds. They are local caches of images that
+exist immutably in ECR, so pruning them is recoverable — but it is a bulk
+deletion this lane did not have a go for, and the authorization covered a
+base rebuild rather than a cache purge. Recorded as proposed rather than
+taken.
+
+Nothing partial was left behind: no ``base-q9cmodules-*`` tag reached
+ECR, no build container survives, and the host is back at its 79%
+baseline.
 
 Measured parameters
 -------------------
@@ -197,15 +255,23 @@ located precisely enough to fix in one bounded step.
 Proposed, not ratified
 ----------------------
 
-* **Install ``rapid-cmodules`` into ``rapid-pipeline-base`` and rebuild
-  it**, then rebuild the application image on the new base. The RPM
-  exists, is published, and is already declared mandatory in the comps
-  group — this is a base build that does not install the group it
-  declares, not a missing artifact.
+* **Reclaim rapid-admin's image cache** — 24.25 GB of tagged images and
+  13.44 GB of unused volumes, 47 pipeline tags over 12 days, none active
+  and all present in ECR. This is what blocks the base rebuild, and at
+  ~5 GB per image and a build most sessions, the host returns to this
+  state within a few builds however tonight's rebuild is finished. A
+  scheduled prune is the durable form.
 * **Measure the base's RPM set against ``comps.xml`` in CI**, at the
   artifact rather than in a comment. The coverage check that asserted
   "nothing left to build" was right about intent and wrong about the
-  image, and nothing compared the two.
+  image, and nothing compared the two. Run once inline this session
+  against the live artifact, which is how the gap was confirmed.
+* **Bound the base build's staging set** to the comps group's newest
+  builds rather than the whole published repo. The repo carries four
+  ``rapid-python`` revisions at ~717 MB each and workstation packages the
+  group never references; scoping it cut the staged tree from 3.4 G to
+  38 packages and was the difference between failing at the COPY and
+  reaching the layer commit.
 * Carried from the earlier pause, all accepted as proposed: no
   ``error_category`` on superseding records;
   ``reconciliation_sources = ["postgres", "s3"]``; the supersession
@@ -215,13 +281,21 @@ Proposed, not ratified
 Left for the owner
 ------------------
 
-1. **The base-image rebuild** above — the one thing between here and a
-   science ramp.
-2. Then the ramp: 180 → 540 → drip, each step gated on clean attempt
+1. **Free space on rapid-admin**, then finish the base rebuild. The
+   build is proven correct up to its final layer write — the group
+   install put ``rapid-cmodules`` in place — so this is a rerun, not a
+   redesign. Roughly 10 GB of headroom is enough.
+2. **Rebuild the application image on the new base** and repin to
+   revision 23. ``build.sh`` live-resolves the newest ``base-*`` tag by
+   push time, so no pin edit is needed; the code half of the fix is
+   already on ``smdc``.
+3. **A width-2 probe on revision 23** — both children must clear
+   ``subtract_background`` and reach terminal with clean records.
+4. Then the ramp: 180 → 540 → drip, each step gated on clean attempt
    records. The mechanics are proven — the runner submits a bounded,
    capped array with no VPO involved.
-3. A width-2 probe before each widening. It cost two children and found a
-   defect that would have cost 180.
+5. A width-2 probe before each widening. It cost two children and found
+   a defect that would have cost 180.
 
 Carried forward unactioned: registration granularity (a handful of bad
 records aborts the whole operator pass — now demonstrated at fourteen),

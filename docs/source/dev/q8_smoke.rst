@@ -828,6 +828,34 @@ bought 180 identical failures.
 ``cforcepsfaper``, the forced-photometry binary, is missing for the same
 reason and will fail the same way when that path runs.
 
+The base rebuild — diagnosis confirmed, artifact blocked
+---------------------------------------------------------
+
+Authorized after the pause, and it settled the question. The group
+install resolved and installed **``rapid-cmodules-1.0.0-2.el10``**
+alongside the other sixteen packages and reported "Complete!" — so the
+comps group and the RPM were always right, and the live base simply never
+had it. The build then failed writing its final layer: **no space left on
+device**.
+
+rapid-admin carries a 64 G root with ~14 G free and **47 cached pipeline
+image tags over 12 days — 24.25 GB of images plus 13.44 GB of unused
+volumes, all reclaimable, none active**. At ~5 GB per image, a build has
+nowhere to put its layer. Three attempts failed progressively later as
+the staging set shrank: the whole repo (3.4 G) at the COPY, the
+``rapid-*`` subset at the COPY, and the comps-scoped newest-build set —
+38 packages, every mandatory member covered — at the layer commit.
+
+The session reclaimed its own staging and untagged layers. The 24.25 GB
+of tagged images belongs to earlier sessions; they are local caches of
+images held immutably in ECR, so pruning is recoverable, but it is a bulk
+deletion this lane had no go for. Proposed, not taken.
+
+**The code half of the fix landed regardless**, and it was needed
+independently: ``rapid-cmodules`` installs to ``/opt/rapid/bin`` while
+both callers named the retired ``/code/c/bin``, so shipping the RPM alone
+would have left the binaries just as unreachable.
+
 Live state at stop
 ------------------
 
