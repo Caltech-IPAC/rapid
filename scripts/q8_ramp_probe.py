@@ -24,13 +24,13 @@ exceeds `--max-width`, which the caller must state explicitly. The
 truncation is logged with the number dropped, because a silent cap reads
 exactly like a complete run.
 
-The credentials must be the orchestrator's, in the process environment
-before boto3 builds its default session: rapid-admin's instance role has
-no `GetObject`/`PutObject` on the products bucket and no
-`GetSecretValue` on the orchestrator DB secret, and assuming the role
+The credentials must be the orchestrator's, already in the process
+environment before boto3 builds its default session: rapid-admin's
+instance role has no `GetObject`/`PutObject` on the products bucket and
+no `GetSecretValue` on the orchestrator DB secret, and assuming the role
 from inside Python leaves the database lookup on the host identity,
-which is denied. `--assume-role` does the chaining here, in the parent,
-for exactly that reason.
+which is denied. This script therefore does no role-chaining of its own —
+the caller chains and exports, and this reads what it is given.
 
 Run it on rapid-admin, never the laptop.
 """
@@ -59,6 +59,13 @@ def parse_args(argv=None):
                         help="gathering window end (YYYY-MM-DD HH:MM:SS)")
     parser.add_argument("--run-id", default=None,
                         help="run identity; defaults to ramp-<width>-<utc>")
+    parser.add_argument("--db-secret-id",
+                        default="rapid/db/service/orchestrator",
+                        help="Secrets Manager id for the SUBMITTER's database "
+                             "identity. Defaults to the orchestrator secret: "
+                             "the tree's db/secret-id names the pipeline "
+                             "secret, which is the children's identity and is "
+                             "denied to the submitting role")
     parser.add_argument("--dry-run", action="store_true",
                         help="gather and report, submit nothing. Unlike the "
                              "VPO's dry run, this one genuinely does not "
@@ -81,9 +88,35 @@ def main(argv=None):
 
     # Imported after the argument check so a bad invocation fails before
     # the payload's heavy imports (numpy, boto3, psycopg2) run at all.
+    # `submission_env` and `min_images_to_coadd` live in
+    # virtualPipelineOperator, which is a SCRIPT: importing it runs a module
+    # body that reads STARTDATETIME/ENDDATETIME and exits 64 when they are
+    # unset. Restructuring that module is a separate, explicitly out-of-scope
+    # job, so its preconditions are satisfied here instead of being worked
+    # around by copying `submission_env` into this file — a copy would be a
+    # second home for the route-and-binding resolution, which is exactly the
+    # class of defect this ramp keeps finding.
+    #
+    # The values below are the gathering window this script was given. They
+    # are what the VPO would have been started with, so the module sees a
+    # consistent world rather than placeholders.
+    os.environ.setdefault("STARTDATETIME", options.start)
+    os.environ.setdefault("ENDDATETIME", options.end)
+
+    # The same module body reads `sys.argv[1]` as its optional processing
+    # date. Left alone it would read this script's `--width`, so argv is
+    # emptied across the import and restored after — the module only looks
+    # at it once, at import time.
+    saved_argv = sys.argv
+    sys.argv = sys.argv[:1]
+    try:
+        from pipeline.virtualPipelineOperator import (submission_env,
+                                                      min_images_to_coadd)
+    finally:
+        sys.argv = saved_argv
+
     from submission import gathering, routes
     from pipeline.seams import submit_gathered
-    from pipeline.virtualPipelineOperator import submission_env, min_images_to_coadd
     from database.modules.utils.rapid_db_connect import (ConnectionExecutor,
                                                          connection)
 
@@ -101,11 +134,47 @@ def main(argv=None):
     start_mjdobs = float(ref_image["start_refimage_mjdobs"])
     end_mjdobs = float(ref_image["end_refimage_mjdobs"])
 
+    # The endpoint comes from the parameter tree, read once here and passed
+    # explicitly. The alternative -- exporting DBSERVER/DBPORT/DBNAME into
+    # the environment -- would put operational configuration in a second
+    # home, which `endpoint_from_environment` exists precisely to avoid
+    # ("it is operational configuration and must come from the parameter
+    # tree, not a default compiled in here").
+    from submission.startup import fetch_parameters
+    from database.modules.utils.rapid_db_connect import Endpoint
+
+    parameters = fetch_parameters()
+    endpoint = Endpoint(host=parameters["db/server"],
+                        port=parameters["db/port"],
+                        dbname=parameters["db/name"])
+    log.info("database endpoint %s:%s/%s from the parameter tree",
+             endpoint.host, endpoint.port, endpoint.dbname)
+
+    # `resolve_credentials` reads the secret id from the environment, so a
+    # caller that has already chosen an identity sets it there.
+    #
+    # NOT the tree's `db/secret-id`. That names the PIPELINE secret, which
+    # is the identity the Batch children run as; this script is the
+    # SUBMITTER, running as rapid-orchestrator-role, and that role can read
+    # the orchestrator secret and is denied the pipeline one — probed
+    # directly rather than inferred: READABLE rapid/db/service/orchestrator,
+    # DENIED rapid/db/service/pipeline. Using the tree value here fails at
+    # the secret read, one layer below where the real mismatch is.
+    os.environ.setdefault("RAPID_DB_SECRET_ID", options.db_secret_id)
+
     log.info("gathering science units in [%s, %s), mjdobs [%s, %s)",
              options.start, options.end, start_mjdobs, end_mjdobs)
-    with connection("q8-ramp-gather") as conn:
+    # `gather_science_units` takes a RAPIDDB handle, not a raw connection --
+    # it calls the named query methods. The handle borrows this connection
+    # (`conn=`), which is the mode that neither commits nor exits the
+    # process out of library code; the gathering pass is read-only, so the
+    # borrowing mode's "the caller owns the transaction" is exactly right.
+    import database.modules.utils.rapid_db as rapid_db
+
+    with connection("q8-ramp-gather", endpoint=endpoint) as conn:
+        handle = rapid_db.RAPIDDB(conn=conn)
         units = list(gathering.gather_science_units(
-            conn, options.start, options.end,
+            handle, options.start, options.end,
             start_mjdobs=start_mjdobs, end_mjdobs=end_mjdobs,
             min_images_to_coadd=min_images_to_coadd(),
             make_references=False))
@@ -137,11 +206,14 @@ def main(argv=None):
         log.info("dry run: nothing submitted")
         return 0
 
-    context = submission_env(routes.JOB_TYPE_SCIENCE)
+    # The tree is already in hand, so it is passed rather than re-fetched:
+    # two reads could disagree, and the binding recorded in every attempt
+    # row must describe the submission that actually went out.
+    context = submission_env(routes.JOB_TYPE_SCIENCE, parameters=parameters)
     log.info("submitting %d child(ren) as run %s to queue %s (%s)",
              len(units), run_id, context["queue"], context["job_definition"])
 
-    with connection("q8-ramp-submit") as conn:
+    with connection("q8-ramp-submit", endpoint=endpoint) as conn:
         submitted = submit_gathered(
             units,
             job_type=routes.JOB_TYPE_SCIENCE,
