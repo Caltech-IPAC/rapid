@@ -67,20 +67,25 @@ Counts against caps
    * - Cap
      - Used
    * - Batch children (≤1,500)
-     - **8** — four width-2 probes. Two of the eight bought nothing: they
-       were submitted by a probe harness that skipped registration, and
-       the gate refused them at startup (see "The registration gate
-       refused a probe" below)
-   * - Fix cycles (≤3)
-     - **3 of 3, all fixed.** A fourth defect is found and unfixed
-   * - Application image rebuild + repin (≤2)
-     - **3 across the round** — revision 22 (swarp), 23 (cmodules base),
-       24 (catalogue). The cap is per session; cycle 3 used 1 of its 2
+     - **12** — six width-2 probes. Two of the twelve bought nothing:
+       they were submitted by a probe harness that skipped registration,
+       and the gate refused them at startup (see "The registration gate
+       refused a probe" below). Cycle 5 found its defect with **none**
+   * - Fix cycles
+     - **6.** The ≤3 cap governed the first three; it was lifted for the
+       resumption, which spent cycles 5 and 6
+   * - Application image rebuild + repin (≤2 per session)
+     - **5 across the round** — revisions 22 (swarp), 23 (cmodules base),
+       24 (catalogue), 25 (gainmatch keys), 26 (reference PSF). The
+       resumption used 2 of its 2, both first-attempt successes
    * - Base image rebuild
      - **2 artifacts** — one by hand (cycle 2, after three attempts lost
-       to disk), one by the promoter (cycle 3, off rapid-admin entirely)
+       to disk), one by the promoter (cycle 3, off rapid-admin entirely).
+       The resumption rebuilt no base: both its fixes were application
+       content over the same ``base-31237339531``
    * - Deploys per stack (≤2)
-     - rapid-batch 1, rapid-reconciler-service 1, in each session
+     - rapid-batch 2, rapid-reconciler-service 2 in the resumption (one
+       per repin), 1 each in the earlier sessions
 
 What cycle 1 settled, and what it proved
 -----------------------------------------
@@ -315,9 +320,27 @@ measurements are the first run's, carried forward, and remain
      - **not measured**
      - No run intersected a window.
    * - EBS aggregate quota
+     - **measured, re-run 2026-08-08**
+     - 4,594 GiB against 51,200 GiB (``L-7A658B76``) — **9.0%**,
+       unchanged from the earlier reading. ~14.4/50 TiB at the planned
+       540 fan-out, so the quota does not bind the ramp.
+   * - Per-stage science timings, revision 25 (13 stages to ``run_zogy``)
      - **measured**
-     - 4,594 GiB against 50 TiB (``L-7A658B76``), re-run at submission
-       time. ~14.4/50 TiB at the planned 540 fan-out.
+     - ``prepare_zogy_inputs`` 77.37 s dominates; ``resample_reference_image``
+       6.68 s, ``gain_match`` 6.53 s, ``science_image_catalog`` 3.88 s,
+       ``subtract_background`` 2.86 s, ``resolve_reference_image`` 2.21 s,
+       ``science_image_statistics`` 1.69 s, ``download_inputs`` 0.55 s,
+       ``gunzip_science_image`` 0.48 s, ``reformat_science_image`` 0.49 s,
+       ``normalize_science_psf`` 4.8 ms, ``measure_reference_fwhm`` 23.8 ms,
+       ``inject_fake_sources`` skipped. **~103 s of science before the
+       failing stage**, on a warm container.
+   * - Cold start, prompt queue
+     - **measured twice**
+     - Submission 06:22:08 → first stage 06:25:15 — **3 min 07 s**,
+       matching the 2026-08 baseline of ~3 min 13 s. The second probe's
+       instance took longer to reach RUNNING (a fresh host pulling a
+       2.38 GB image), so the pull is the variable part, not the
+       scale-up.
 
 Observability
 -------------
@@ -367,6 +390,53 @@ Revision 23 printed ``Ancillary Data-File Path = .`` and
 ``ERRCODE_FILE_NOT_FOUND`` at the same point, and exited 255.
 ``subtract_background`` now passes and the pipeline reaches the next
 stage.
+
+What a submission needs, established by running it
+---------------------------------------------------
+
+The resumption's probes go through one harness
+(``scripts/q8_ramp_probe.py``) rather than an ad-hoc invocation each
+time, and getting it to run documented five facts the next operator
+would otherwise rediscover:
+
+* ``gather_science_units`` takes a **RAPIDDB handle**, not a raw
+  connection. The handle borrows the caller's connection, which is the
+  mode that neither commits nor calls ``exit()`` from inside library
+  code.
+* The database endpoint comes from the **parameter tree**, read once and
+  passed explicitly. Exporting ``DBSERVER``/``DBPORT``/``DBNAME`` would
+  put operational configuration in a second home, which the reader's own
+  error message exists to prevent.
+* The submitter's database identity is the **orchestrator** secret, not
+  the tree's ``db/secret-id``. That names the *pipeline* secret — the
+  identity the Batch children run as — and the submitting role is denied
+  it. Probed rather than inferred: ``READABLE
+  rapid/db/service/orchestrator``, ``DENIED rapid/db/service/pipeline``.
+* ``submission_env`` requires ``RAPID_IMAGE_DIGEST``,
+  ``RAPID_RELEASE_IDENTITY`` and ``RAPID_MANIFEST_BUCKET``, and the image
+  sets none of them — they are what every attempt row records to be
+  reproducible, so they are supplied per submission. Manifests go to
+  ``roman-rapid-products/submissions/``, which is where the earlier
+  probes' manifests demonstrably are.
+* ``virtualPipelineOperator`` is a **script**: importing it runs a module
+  body that reads ``STARTDATETIME``/``ENDDATETIME`` and ``sys.argv[1]``
+  and exits 64 when they are unset. Its preconditions are satisfied
+  across the import rather than by copying ``submission_env`` out of it —
+  a copy would be a second home for the route-and-binding resolution,
+  which is the class of defect this round keeps finding.
+
+The width cap is enforced before anything is submitted, and the dry run
+proves it on the exact population that caused the incident: the gathering
+pass returns **5,057 units** — the number the rogue VPO once put on a
+queue in 35 seconds — and the harness caps to the stated width, logs the
+5,055 it dropped, and submits nothing. A silent cap reads exactly like a
+complete run, so the count that was dropped is always stated.
+
+One operational trap is worth recording because it cost a probe: SSM's
+command output is capped at 24 KB and **truncates from the end**, which
+is exactly where the submission result is. A run that failed after the
+cap looked identical to one that succeeded. The harness now writes its
+full log to a file on the host and echoes only the summary lines.
 
 The registration gate refused a probe, correctly
 ------------------------------------------------

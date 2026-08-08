@@ -907,6 +907,94 @@ thirteen keys and the code reads two that exist in no configuration home
 records are what count. The ≤3 fix-cycle budget is spent, so it is
 recorded and left.
 
+Resumption, 2026-08-08: the audit sweep
+----------------------------------------
+
+The fourth defect was found the same way as the three before it — by a
+science child reaching one more stage — and that is the finding this
+segment acts on. Four probes, eight children, four defects, each a
+mechanical check away from being found without submitting anything.
+
+So this segment audited first and submitted second.
+``scripts/audit_science_config_reads.py`` walks every
+science-configuration read in the payload and reports the keys no
+configuration home provides. It cannot be a grep: the section dict is
+obtained at the call site as ``context.science_section("gainmatch")`` and
+read in another module under a parameter name, so nothing textual ties
+the string to the variable. The audit resolves each binding structurally
+— accessor argument to callee parameter — and propagates to a **fixed
+point**, because the heaviest readers sit two hops out. A first version
+that followed one hop reported 46 reads across 12 sections and looked
+clean; the fixed point finds **397 reads across 17 sections**, and
+``swarp``'s 57-key builder appears only on the second iteration.
+
+**A missing key is not automatically a defect**, and getting that
+distinction right is most of the work. Thirty-one absent keys are
+per-invocation slots the payload fills in before use — SExtractor's input
+and catalogue paths, swarp's output names, awaicgen's four geometry
+values — whose home is the manifest, and which ``pipeline.toml``'s own
+header says belong there. Adding them would have been a defect, not a
+fix. Every read is therefore classified by whether the payload assigns it
+anywhere, tracked tree-wide because the write and the read are usually in
+different modules.
+
+**The verdict over the whole payload was two keys**: ``[gainmatch]``
+``verbose`` and ``upload_intermediate_products`` — exactly the pair the
+rev-24 probe had just spent two children to find, and nothing else.
+
+Proven by refusal rather than by passing. Removing a real key
+(``magrefthresmin``) reports it; renaming ``swarp_header_only`` — the
+cycle-1 defect that failed 2,158 attempts of the first run — reports that
+too. Both with **zero Batch children**. The audit is now a test, so the
+next dropped key fails a suite instead of a ramp.
+
+The tools were pre-flighted the same way, inside the pinned image on
+rapid-admin: every binary the stages exec (``bkgest``, ``cforcepsfaper``,
+``swarp``, ``sex``, ``awaicgen``), all three ``RAPID_SW``-relative python
+scripts, the bkgest catalogue and the three SExtractor auxiliary files.
+All present. One apparent finding — "sextractor missing" — was the
+probe's own error: the builders exec ``sex``, and a probe for the wrong
+name reports a defect that is not there.
+
+Revisions 25 and 26
+--------------------
+
+**Revision 25** carried the two ``[gainmatch]`` keys. The same in-image
+probe that returned ``KeyError: 'verbose'`` against rev 24 returned
+``verbose=1 upload_intermediate_products=True`` here, read through
+``science_config.load()`` and ``ast.literal_eval`` — the stage's own path,
+not a grep of the file.
+
+Its width-2 probe then cleared ``gain_match`` **in 6.53 s**, where rev 24
+had raised ``KeyError`` at 0.3 ms, and ran on to ``run_zogy``, thirteen
+stages in — and found the fifth defect there.
+
+``run_zogy`` died with ``FileNotFoundError`` on
+``awaicgen_output_mosaic_psf.fits``. ``download_inputs`` was locating the
+reference PSF as ``reference_image_uri.replace("image.fits",
+"psf.fits")``, which turns the mosaic's name into a name **the
+reference-image job has never written**: its attempt directory holds the
+mosaic, the coverage map, the uncertainty image, two catalogues and
+``WFI_SCA07_F146_PSF_DET_DIST.fits``, listed in the live bucket rather
+than assumed, and no ``*_mosaic_psf.fits`` at all.
+
+This is a different class from the four before it — not a missing value
+but a **second home for a name**. The manifest names the object, and
+``reference_image.download_reference_psf`` already reads it from
+``psf_uri``; ``science_image_catalog`` in the same file already falls
+back to ``psf_uri`` for this very product. **Revision 26** makes
+``download_inputs`` read the same fact.
+
+Its test walks the stage sources for the shape — a ``*_uri`` or a
+``fact()`` call being ``.replace()``d into another URI — rather than
+asserting about the site that failed, and immediately found two more
+derivations in ``resolve_reference_image``. Those are **not** defects:
+the coverage map, uncertainty image and SExtractor catalogue all do exist
+beside the mosaic. They are allowlisted with that justification rather
+than fixed, because failing a suite for a defect nobody has is how a gate
+becomes noise — but they are a real latent coupling and the list is its
+record.
+
 Live state at stop
 ------------------
 
