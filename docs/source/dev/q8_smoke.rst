@@ -1014,3 +1014,121 @@ Live state at stop
   ``PIN_AGREEMENT_FAIL=0``
 
 Nothing is running and nothing is pending.
+
+The 540-wide step, read back
+============================
+
+The credential expiry that ended the previous segment left the 540-wide
+step running and unread. It is now read back from the attempt records,
+and it is **clean**: every child terminal, every outcome ``success``,
+every product ``published``, no error category anywhere.
+
+.. list-table::
+   :header-rows: 1
+
+   * - ``run_id``
+     - ``lifecycle_state``
+     - ``rapid_outcome``
+     - ``error_category``
+     - ``product_disposition``
+     - Count
+   * - ``q9-ramp540-0``
+     - ``terminal_after_start``
+     - ``success``
+     - *(null)*
+     - ``published``
+     - 500
+   * - ``q9-ramp540-1``
+     - ``terminal_after_start``
+     - ``success``
+     - *(null)*
+     - ``published``
+     - 40
+
+**The step is two rows, not one, and the reason is worth recording.**
+``submission/max-batch-size`` is 500, so ``submit_gathered`` cut the 540
+units into two batches and gave each its own run-scoped identity —
+``q9-ramp540-0`` and ``q9-ramp540-1`` — because two batches are two
+manifests, and a manifest's identity is what its children resolve their
+unit by. Anything reading back a ramp step by exact ``run_id`` match will
+therefore miss part of it whenever the step exceeds the batch ceiling;
+the prefix (``run_id like 'q9-ramp540%'``) is the correct handle. 500 + 40
+= 540, which is the arithmetic that closes the third ramp gate.
+
+With gate one (180) and gate two (540) both clean, the ramp's batch-shaped
+phase is complete and the drip phase is the remaining work.
+
+The continuous-arrival drip
+===========================
+
+The ramp answers "can it process several hundred at once". The drip
+answers the question the pipeline actually faces in flight, which is
+different: SCAs arrive continuously, and each one's clock starts when it
+arrives, not when a bulk submission is convenient.
+
+Shape, and why these numbers
+----------------------------
+
+``smoke-run.md`` leaves cadence and width open. Adopted here, and
+recorded rather than merely used:
+
+**Six waves of 60 children, one wave every 600 s — 360 children.**
+
+* **360** is a deliberate fraction of the 768 remaining under the 1,500
+  ceiling, leaving 408 in reserve for a fix-round rerun. The cap is a
+  runaway guard, and the conservative reading keeps room under it.
+* **600 s against a ~3,400 s measured service time** means waves overlap
+  roughly six deep. That overlap is the entire point: a cadence longer
+  than the service time would process each wave in isolation and measure
+  six small bulk runs wearing a drip's clothing.
+* **~360 steady-state concurrent** clears the exit criterion's
+  "several hundred concurrent" bar while the arrival pattern, not the
+  width, is what is under test.
+
+Every wave goes through ``q8_ramp_probe.py`` into
+``pipeline.seams.submit_units`` with ``--width`` and an explicit
+``--max-width``, so the rogue-VPO class — 5,057 children in 35 s from a
+dry run that did not suppress submission — cannot recur: a mistaken width
+is refused, not obeyed. The gathering pass reports 5,057 units available
+and each wave logs the number it dropped, because a silent cap reads
+exactly like a complete run.
+
+Three facts the harness had to be told
+--------------------------------------
+
+The drip's first wave submitted nothing and exited 64. Three things had
+to be established before any child could be submitted, and none of them
+were inferable:
+
+**The gathering window is 2027, not 2026.** The staged socsim inputs
+occupy ``2027-10-01`` to ``2027-10-07`` — 5,166 L2 files over four
+observing days, read from ``l2files`` rather than assumed. A 2026 window
+gathers **zero** units while still reporting 109 ``(field, filter)``
+pairs, because the pair query is unbounded on MJD and the per-pair unit
+query filters on ``dateobs``. The failure mode is a confident "109 pairs"
+followed by "nothing to submit", which reads like an empty pipeline
+rather than a wrong window.
+
+**The execution binding must be stated.** ``submission_env`` exits 64
+unless ``RAPID_IMAGE_DIGEST``, ``RAPID_RELEASE_IDENTITY`` and
+``RAPID_MANIFEST_BUCKET`` are all present. This is deliberate and worth
+defending: those three values are recorded into every attempt row, so a
+guessed one would misattribute products rather than fail. The correct
+values were read from what ``q9-ramp540`` actually recorded —
+``binding_image_digest sha256:38f5ded1…``, ``binding_release_identity
+smdc-8f6d875`` — not reconstructed from the parameter tree.
+
+**The manifest bucket is** ``roman-rapid-products``\ **, and the
+parameter tree does not carry it.** The tree has ``s3/manifest-prefix``
+but no manifest bucket, and the obvious guess — ``roman-rapid-records``,
+where terminal records live — is denied to the orchestrator role. The
+authoritative statement is the role's own policy: the
+``SubmissionManifestWrite`` grant names
+``roman-rapid-products/submissions/*`` and nothing else. Reading the
+policy answered in one call what a bucket-by-bucket write probe had
+answered wrongly, because the probe wrote outside the permitted prefix
+and so reported every bucket as denied.
+
+All three were found without spending a single Batch child: two exited
+before submission, and the third failed at the manifest write with the
+attempt rows correctly left as reconciliation cases.

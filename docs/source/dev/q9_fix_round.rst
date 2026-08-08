@@ -815,3 +815,90 @@ Carried forward unactioned: registration granularity (a handful of bad
 records aborts the whole operator pass — now demonstrated at fourteen),
 the ``RAPID_VPO_DRY_RUN`` semantics, memory over-reservation, and the
 legacy ``.ini`` reads.
+
+Closing the round: which clock the latency target is measured on
+================================================================
+
+The single most consequential number in this document was measured on
+the wrong interval, and correcting it changes the verdict rather than
+refining it.
+
+**The previous segment reported p95 3,604 s at 180-wide, "4 seconds over
+the 3,600 s target".** That figure is arithmetically right and measures
+``started_at → ended_at`` — the time a child spends executing once a host
+is already running it. Re-measured on the same 180 rows:
+
+.. list-table::
+   :header-rows: 1
+
+   * - Clock
+     - Mean
+     - p95
+     - Max
+   * - ``submitted_at → ended_at`` (arrival to done)
+     - 3,651 s
+     - **3,837 s**
+     - 3,957 s
+   * - ``started_at → ended_at`` (execution only)
+     - 3,420 s
+     - 3,605 s
+     - 3,722 s
+   * - ``scheduler_started → stopped`` (container only)
+     - 3,422 s
+     - 3,606 s
+     - 3,724 s
+   * - ``scheduler_created → stopped`` (scheduler view)
+     - 3,646 s
+     - 3,831 s
+     - 3,951 s
+
+The two clocks differ by the ~231 s each SCA waits between being
+submitted and having a host to run on.
+
+**For a latency target under continuous arrival, the arrival clock is the
+only defensible one.** ``smoke-run.md`` asks for "per-SCA latency against
+the one-hour/95% working target", and an SCA that waits four minutes for
+capacity is four minutes late no matter what the container's own clock
+says. Measuring from ``started_at`` silently excludes exactly the delay
+that continuous arrival exists to stress, and it is the interval a
+queue-depth problem would show up in.
+
+On the arrival clock, both ramp steps miss the target by much more than
+four seconds:
+
+.. list-table::
+   :header-rows: 1
+
+   * - Step
+     - n
+     - Mean
+     - p95
+     - Max
+     - Within 3,600 s
+   * - ``q9-ramp180``
+     - 180
+     - 3,651 s
+     - 3,837 s
+     - 3,957 s
+     - **53 of 180 — 29%**
+   * - ``q9-ramp540`` (both batches)
+     - 540
+     - 3,684 s
+     - 4,022 s
+     - 4,142 s
+     - **174 of 540 — 32%**
+
+Against a **95%** target, the pipeline delivers **29–32%**. The earlier
+framing — "sits exactly on the target and does not clear it" — was a
+consequence of the clock, not of the pipeline. The honest statement is
+that the one-hour target is missed by a wide margin at both ramp widths,
+and tripling the width from 180 to 540 cost only ~185 s at p95, which
+says the shortfall is not a contention effect that a gentler arrival
+pattern will remove.
+
+This does not contradict the previous segment's diagnosis — that the time
+is science rather than scheduling, with three stages holding 92% of it.
+It sharpens it: the science alone (3,605 s at p95, execution-only) is
+already over 3,600 s before a single second of queueing is counted. No
+arrival pattern can fix a per-SCA cost that exceeds the target on its
+own.
