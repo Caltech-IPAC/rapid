@@ -428,10 +428,10 @@ measurements are the first run's, carried forward, and remain
        0 → 960; **T+2 min 39 s** 60 hosts existed and 100 children were
        STARTING; **T+4 min 43 s** 151 of 180 were RUNNING. So a
        180-child step is fully in flight inside five minutes of a cold,
-       zero-capacity queue — the scheduler and the image pull are not the
-       bottleneck at this width. Compare the ~3 min cold start for a
-       single child: the marginal cost of 178 more children was under two
-       minutes.
+       zero-capacity queue, and **all 180 were RUNNING at T+7 min 51 s**
+       — the scheduler and the image pull are not the bottleneck at this
+       width. Compare the ~3 min cold start for a single child: the
+       marginal cost of 178 more children was under five minutes.
    * - Cold start, prompt queue
      - **measured twice**
      - Submission 06:22:08 → first stage 06:25:15 — **3 min 07 s**,
