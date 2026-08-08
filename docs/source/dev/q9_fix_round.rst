@@ -902,3 +902,19 @@ It sharpens it: the science alone (3,605 s at p95, execution-only) is
 already over 3,600 s before a single second of queueing is counted. No
 arrival pattern can fix a per-SCA cost that exceeds the target on its
 own.
+
+The backup window
+-----------------
+
+``smoke-run.md`` asks for backup-window behaviour under load. The plan is
+``dailyplan``, rule ``dailyrule``, ``cron(0 5 * * ? *)`` in UTC with a
+60-minute start window — confirmed against three consecutive completed
+EFS jobs, all created at 05:00 UTC.
+
+**No run in this segment intersected it.** The ramp steps ran
+07:41–09:58 UTC and the drip 12:43–14:4x UTC; the window is 05:00–06:00
+UTC. So the row is answered as *did not intersect* rather than measured
+— an important distinction, because a 42-hour full-scale run cannot
+avoid it and will cross it twice. Recording "no effect observed" from a
+run that never overlapped the window would be exactly the kind of false
+clean this round has been trying to eliminate.
