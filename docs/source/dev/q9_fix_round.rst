@@ -974,15 +974,46 @@ moment each wave arrived:
    * - ``q9-drip-w2``
      - 12:59:23
      - 122
+   * - ``q9-drip-w3``
+     - 13:09:36
+     - 182
+   * - ``q9-drip-w4``
+     - 13:19:47
+     - 242
 
 The population accumulates rather than turning over, which is the
-condition the drip exists to create.
+condition the drip exists to create. Five arrivals in, nothing had
+completed and every wave was still resident.
 
-**Warm arrival costs 11 seconds; cold arrival costs 2.5 minutes.** Wave 1
-arrived at 12:49:10 and first started at 12:51:39 — the ~3 min cold start,
-matching the 2026-08 baseline. Wave 2 arrived at 12:59:23 and first
-started at **12:59:34, eleven seconds later**, because the hosts were
-already there. That difference is the strongest argument in this document
+**Warm arrival costs ~10 seconds; cold arrival costs 2.5 minutes**, and
+the warm figure held for every wave after the first:
+
+.. list-table::
+   :header-rows: 1
+
+   * - Wave
+     - Arrived
+     - First start
+     - Delay
+   * - ``w1``
+     - 12:49:10
+     - 12:51:39
+     - **2 m 29 s** (cold)
+   * - ``w2``
+     - 12:59:23
+     - 12:59:34
+     - 11 s
+   * - ``w3``
+     - 13:09:36
+     - 13:09:45
+     - 9 s
+   * - ``w4``
+     - 13:19:47
+     - 13:19:56
+     - 9 s
+
+Only the first wave pays the ~3 min cold start that matches the 2026-08
+baseline; every later arrival lands on hosts that already exist. That difference is the strongest argument in this document
 for continuous operation over batched: under steady arrival, all but the
 first wave pay no scheduling latency at all, and the queue interval that
 pushes the ramp's arrival-clock p95 over the target largely disappears.
