@@ -41,6 +41,7 @@ pipeline.stages.test.test_context
 pipeline.stages.test.test_publishing
 pipeline.stages.test.test_sequences
 pipeline.test.test_mosaic_geometry
+pipeline.test.test_operator
 pipeline.test.test_seams
 pipeline.test.test_vpo_phases
 submission.test.test_batching
