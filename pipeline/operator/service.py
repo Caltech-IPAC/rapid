@@ -249,7 +249,39 @@ def parse_args(argv=None):
         "--force-cut", action="store_true",
         help="cut whatever has accumulated without waiting for the cadence "
              "triggers; for a bounded probe")
+    # The bounded-probe pair, deliberately the same shape as
+    # scripts/q8_ramp_probe.py's --width/--max-width: a width alone can be
+    # mistyped into a runaway, so the caller must ALSO state the ceiling it
+    # believes it is under, and a width above that ceiling is refused
+    # rather than obeyed. That guard is what made the drip's submissions
+    # exactly attributable, and a bounded live probe through this operator
+    # needs the same property.
+    parser.add_argument(
+        "--width", type=int, default=None,
+        help="cap the gathered units to this many before they reach the "
+             "accumulator; for a bounded live probe. Requires --max-width.")
+    parser.add_argument(
+        "--max-width", type=int, default=None,
+        help="refuse to run if --width exceeds this; state it explicitly")
     return parser.parse_args(argv)
+
+
+def _bounded(gather, width, max_width, class_name):
+    """Wrap a gatherer so it yields at most `width` units.
+
+    Drops are LOGGED with their count. A silent cap reads exactly like a
+    complete run, which is the failure the drip harness was built to make
+    impossible ("a silent cap reads exactly like a complete run",
+    smoke_run.rst).
+    """
+    def bounded_gather():
+        units = list(gather())
+        if len(units) > width:
+            logger.info(
+                "%s: capping to --width %d; dropping %d gathered unit(s)",
+                class_name, width, len(units) - width)
+        return units[:width]
+    return bounded_gather
 
 
 def main(argv=None):
@@ -267,6 +299,26 @@ def main(argv=None):
 
     try:
         _refuse_retired_flag()
+
+        # The bounded-probe guard, checked BEFORE anything is gathered or
+        # any client is built: a width above the stated ceiling is refused,
+        # never clamped, and a width with no stated ceiling is refused too.
+        # Clamping would submit *something* under a number the caller did
+        # not choose, which is the class of accident this pair exists to
+        # prevent.
+        if args.width is not None:
+            if args.max_width is None:
+                raise RuntimeError(
+                    "--width requires --max-width: state the ceiling you "
+                    "believe you are under, so a mistyped width is refused "
+                    "rather than obeyed.")
+            if args.width > args.max_width:
+                raise RuntimeError(
+                    f"--width {args.width} exceeds the stated --max-width "
+                    f"{args.max_width}; refusing to run.")
+            if args.width < 1:
+                raise RuntimeError(f"--width {args.width} must be at least 1")
+
         operator_input = opinputs.from_namespace(args)
         rehearsing = _rehearsal_requested(args)
 
@@ -337,6 +389,9 @@ def main(argv=None):
         for operational_class in to_run:
             gather = _gatherer(session, parameters, operational_class,
                                operator_input, endpoint, credentials)
+            if args.width is not None:
+                gather = _bounded(gather, args.width, args.max_width,
+                                  operational_class.name)
             if rehearsing:
                 submitter = RehearsalSubmitter()
             else:

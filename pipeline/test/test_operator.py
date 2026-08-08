@@ -445,6 +445,37 @@ class TestRegistrationGranularity(unittest.TestCase):
         self.assertEqual(verdict.exit_code, opregistration.EXIT_PARTIAL)
 
 
+class TestBoundedProbeWidth(unittest.TestCase):
+    """`--width` capped by an explicit `--max-width`, refused not clamped.
+
+    Same shape as scripts/q8_ramp_probe.py's pair, and for its reason: a
+    width alone can be mistyped into a runaway, so the caller must also
+    state the ceiling it believes it is under. The drip's submissions were
+    exactly attributable because of this guard.
+    """
+
+    def test_width_caps_the_gathered_list(self):
+        from pipeline.operator.service import _bounded
+
+        gather = lambda: [unit(i) for i in range(3779)]
+        self.assertEqual(len(_bounded(gather, 2, 4, "prompt-processing")()), 2)
+
+    def test_a_cap_below_the_gathered_count_is_logged_not_silent(self):
+        """A silent cap reads exactly like a complete run."""
+        from pipeline.operator.service import _bounded
+
+        with self.assertLogs("rapid.operator.service", level="INFO") as caught:
+            _bounded(lambda: [unit(i) for i in range(10)], 2, 4, "prompt")()
+        self.assertTrue(any("dropping 8" in m for m in caught.output),
+                        f"the drop count must be logged; got {caught.output}")
+
+    def test_width_within_the_gathered_count_drops_nothing(self):
+        from pipeline.operator.service import _bounded
+
+        self.assertEqual(
+            len(_bounded(lambda: [unit(1), unit(2)], 5, 5, "prompt")()), 2)
+
+
 class TestIdleServiceDoesNotExit(unittest.TestCase):
     """Found live, 2026-08-08, on the first enabled deploy.
 
