@@ -1137,3 +1137,62 @@ draw the same hosts could carry substantially more children, and the
 latency shortfall is unaffected either way because it is per-SCA science
 time, not contention. Sizing and latency are now cleanly separable
 problems.
+
+The Q8 exit assessment
+======================
+
+``smoke-run.md`` states the criterion:
+
+    a ramp step of several hundred concurrent jobs completes with every
+    attempt terminal, records complete and explained, products written,
+    and the drip phase holding the latency target.
+
+Taken clause by clause, against measurement:
+
+.. list-table::
+   :header-rows: 1
+
+   * - Clause
+     - Verdict
+     - Evidence
+   * - Several hundred concurrent
+     - **Met**
+     - 540 concurrent at the ramp's third gate; 242 concurrent in the
+       drip at its fourth arrival
+   * - Every attempt terminal
+     - **Met**
+     - 180 of 180 and 540 of 540 ``terminal_after_start``; no
+       non-terminal record in either step
+   * - Records complete and explained
+     - **Met**
+     - Zero ``error_category`` across both ramp steps and, at the last
+       reading, across all 242 drip children
+   * - Products written
+     - **Met**
+     - Every attempt ``product_disposition = published``
+   * - **Drip holding the latency target**
+     - **NOT met**
+     - The target is 95% within 3,600 s. The ramp delivers **29–32%**
+       on the arrival clock, and the drip's own figure follows from a
+       per-SCA execution cost that already exceeds 3,600 s before
+       queueing
+
+**Q8 does not exit.** Four of five clauses are met — and met properly,
+which no previous session reached — but the fifth is the one the smoke
+run exists to answer, and it is missed by a wide margin rather than
+narrowly.
+
+The reason is now precise, which is the useful part. Per-SCA execution
+alone is **3,605 s at p95** against a 3,600 s target; ``naive_difference``,
+``catalog_zogy`` and ``catalog_sfft`` hold 92% of it. Continuous arrival
+removes essentially all of the queueing component — waves 2–4 started
+9–11 s after arriving — so the drip does what a drip can do and cannot
+reach the target, because no arrival pattern fixes a per-SCA cost that
+exceeds the target on its own.
+
+**No full-scale proposal follows from this run**, per the standing
+instruction: the ~42 h run is the owner's call. What this segment adds to
+that call is that the decision is no longer between "hit the target" and
+"do not know" — it is a scoped science-performance question against three
+named stages, with every infrastructure constraint measured and none of
+them saturated.
