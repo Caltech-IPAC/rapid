@@ -1114,9 +1114,10 @@ unless ``RAPID_IMAGE_DIGEST``, ``RAPID_RELEASE_IDENTITY`` and
 ``RAPID_MANIFEST_BUCKET`` are all present. This is deliberate and worth
 defending: those three values are recorded into every attempt row, so a
 guessed one would misattribute products rather than fail. The correct
-values were read from what ``q9-ramp540`` actually recorded —
-``binding_image_digest sha256:38f5ded1…``, ``binding_release_identity
-smdc-8f6d875`` — not reconstructed from the parameter tree.
+values were read from what ``q9-ramp540`` actually recorded — its
+``binding_image_digest`` (``sha256:38f5ded1…``) and its
+``binding_release_identity`` (``smdc-8f6d875``) — not reconstructed from
+the parameter tree.
 
 **The manifest bucket is** ``roman-rapid-products``\ **, and the
 parameter tree does not carry it.** The tree has ``s3/manifest-prefix``
