@@ -225,7 +225,7 @@ concurrently (the compute environment scaled to 18, then 90, then 109
 simultaneous ``RUNNING`` children), so the steps measure the same per-child
 cost at three widths rather than a queue draining.
 
-That is the useful Q8 input: **a reference-image child costs ~22 minutes
+That is the useful smoke-run input: **a reference-image child costs ~22 minutes
 wall clock, ~18 minutes of it in-container**, and the difference — roughly
 230 s — is placement, which does not grow with step width up to 109.
 

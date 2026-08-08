@@ -1,5 +1,5 @@
-Pre-Q8 hardening
-================
+Hardening ahead of the smoke run
+================================
 
 **All six ratified items landed, and the boundary audit found seven more
 defects of the family it was called for.** Six of the seven are live or one
@@ -7,7 +7,7 @@ call site from it; one is a design question, recorded and parked. Every fix
 carries a regression test, and every regression test was proved by reverting
 its fix and watching the test fail.
 
-The one-line state: **Q8's technical gates were already met; these close the
+The one-line state: **the smoke run's technical gates were already met; these close the
 known ways the run could have failed quietly.**
 
 Scope, and where it came from
@@ -15,7 +15,7 @@ Scope, and where it came from
 
 The disposition batch of 2026-08-06 (``rapid_plan`` ``decisions.md``
 § Batch payload co-design; ``migration/plan.md`` § The worker queue) ratified
-a pre-Q8 hardening worker with four items, plus two corrections. This is that
+a pre-smoke-run hardening worker with four items, plus two corrections. This is that
 run.
 
 .. list-table::

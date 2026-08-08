@@ -111,8 +111,8 @@ Remaining open items, with owners
      - **ratified 2026-08-06; DONE**
      - FOUR defects of one shape, and the argument that a fifth was waiting
        was right: the sweep found seven more, all live or one call site from
-       it. Ratified in the disposition batch and executed by the pre-Q8
-       hardening run — ``preq8_hardening.rst`` carries the boundary
+       it. Ratified in the disposition batch and executed by the
+       pre-smoke-run hardening run — ``preq8_hardening.rst`` carries the boundary
        inventory, the findings and the fixes.
    * - Reconciler health vs the grace horizon
      - **ratified 2026-08-06; DONE**
@@ -161,7 +161,7 @@ Remaining open items, with owners
      - cleanup
      - Unchanged. Can never take effect; should be removed as a misleading
        grant. Not deleted — this run's authority excludes deletes.
-   * - Q8 smoke run
+   * - The smoke run
      - Ben
      - Double-gated as before: explicit go, and after W8/W9 close. W9 is now
        closed, so only the explicit go remains.

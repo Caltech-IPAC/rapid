@@ -1,5 +1,5 @@
-Q9 — the fix round
-==================
+The fix round
+=============
 
 **Five defects, four of them found one Batch child at a time, and the
 fifth cycle found the rest of the class with none.** Cycles 1–4 each cost
@@ -1166,8 +1166,8 @@ latency shortfall is unaffected either way because it is per-SCA science
 time, not contention. Sizing and latency are now cleanly separable
 problems.
 
-The Q8 exit assessment
-======================
+The smoke run's exit assessment
+===============================
 
 ``smoke-run.md`` states the criterion:
 
@@ -1205,7 +1205,7 @@ Taken clause by clause, against measurement:
        per-SCA execution cost that already exceeds 3,600 s before
        queueing
 
-**Q8 does not exit.** Four of five clauses are met — and met properly,
+**The smoke run does not exit.** Four of five clauses are met — and met properly,
 which no previous session reached — but the fifth is the one the smoke
 run exists to answer, and it is missed by a wide margin rather than
 narrowly.

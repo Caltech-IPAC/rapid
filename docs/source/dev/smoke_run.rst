@@ -1,5 +1,5 @@
-Q8 — the smoke run
-==================
+The smoke run
+=============
 
 **The run stopped short of its exit criteria.** Phase A prep completed and
 was verified; the reference phase passed at full population; a science step
@@ -406,7 +406,7 @@ passed 109/109 and could never have reached it. This is precisely the class
 of defect a science-width run exists to surface, and the overrun bought it
 at no extra cost beyond the cap breach itself.
 
-**Not fixed.** Fixing it is a Q9 fix round, outside this run's
+**Not fixed.** Fixing it is a fix round, outside this run's
 authorization.
 
 Stage intervals for the 2,158 that ran
@@ -527,7 +527,7 @@ What is unrun
 Open, not actioned
 ------------------
 
-* **``swarp_header_only``** — the science-path configuration key above. Q9
+* **``swarp_header_only``** — the science-path configuration key above. The
   fix round.
 * **Seven stale ``fixd-chain`` records.** Attempts from 2026-08-06 carry
   reconciler closure records pointing at S3 keys that no longer exist
@@ -880,7 +880,7 @@ Cycle 3 (2026-08-08): the catalogue ships, revision 24
 ``rapid-cmodules`` 1.0.0-3 installs ``bkgest_errcodes.h`` at
 ``/opt/rapid/share/bkgest/`` and ``science.py`` passes ``-a`` at it. The
 stage that exited 255 now reports ``Status Message 0x0000`` and
-``subtract_background`` passes. Full record: ``q9_fix_round.rst``.
+``subtract_background`` passes. Full record: ``fix_round.rst``.
 
 Published through the **in-account promoter** rather than by hand — the
 first base image built that way — which took rapid-admin's disk off the
@@ -1178,12 +1178,12 @@ no-match path is untested is the failure this project has already paid
 for once.
 
 The drip finals and the recorder's outcome are recorded in
-``q9_fix_round.rst``, which carries the run's quantitative record.
+``fix_round.rst``, which carries the run's quantitative record.
 
 The exit ruling — PASSED, 2026-08-08
 =====================================
 
-**Q8 exit was ruled PASSED by owner ruling, 2026-08-08.** Four of the five
+**The smoke run's exit was ruled PASSED by owner ruling, 2026-08-08.** Four of the five
 exit clauses were met outright; the fifth — the latency clause — was ruled
 met in measurement context rather than on the raw comparison.
 

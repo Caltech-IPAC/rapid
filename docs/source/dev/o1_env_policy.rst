@@ -121,7 +121,7 @@ empty interval.
 ``Manifest.SCHEMA_VERSION`` is 3, and ``from_dict`` refuses any other
 version rather than guessing the layout — so an image carrying this change
 cannot read a version-2 manifest. Version-2 manifests do exist in
-``s3://roman-rapid-products/submissions/``, written by the Q8 smoke run.
+``s3://roman-rapid-products/submissions/``, written by the smoke run.
 They belong to finished runs: at the time of this change there were no
 ``RUNNING`` jobs on ``rapid-queue`` (checked, read-only), so no in-flight
 child could meet the refusal, and a new submitter writes only version 3.
@@ -237,7 +237,7 @@ test that compared the two now asserts the ``.ini`` copy stays gone.
 
 **``RAPID_JOB_DEFINITION_REV`` is still set by the Batch job definitions.**
 Removing an ``Environment`` entry registers a new revision of both
-definitions, and the rev-21 pin record is Q8 evidence that must not move.
+definitions, and the rev-21 pin record is smoke-run evidence that must not move.
 Nothing requires the value now, so leaving it costs nothing; removing it
 belongs to whatever change next has cause to register a revision. Recorded
 in ``rapid-batch.yaml`` as proposed.
