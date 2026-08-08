@@ -304,6 +304,12 @@ measurements are the first run's, carried forward, and remain
        16 GiB reservation is what caps density, and **the packing lever
        is memory, not vCPU**: the MaxvCpus numbers describe a ceiling the
        workload never approaches.
+
+       The 540-wide step measured **the same ~19%** on its sampled
+       worker. Packing density and per-host load are identical at three
+       times the fan-out — the extra children arrive as more hosts, not
+       as more pressure on each — which is what makes the 180-wide
+       latency figures a fair predictor of the wider step's.
    * - Prompt-vs-bulk concurrency and packing → the 3,600/1,200 MaxvCpus ratio
      - **partial, superseded in part by the row above**
      - Bulk, 109-wide: 37 ``m6a.4xlarge``, ~2.95 children/host, 436 vCPU
