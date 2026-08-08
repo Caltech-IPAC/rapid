@@ -296,6 +296,14 @@ measurements are the first run's, carried forward, and remain
        select different families" reading was a width artefact, not a
        queue property, and the MaxvCpus ratio cannot be set from the
        narrow measurement.
+
+       **The hosts are CPU-idle while they work.** A sampled worker held
+       ~19% of 16 vCPU under full load — three cores busy on a 16-core
+       host, one per child, consistent with the single-threaded finding
+       from the width-2 probe. So 13 of every 16 cores are unused, the
+       16 GiB reservation is what caps density, and **the packing lever
+       is memory, not vCPU**: the MaxvCpus numbers describe a ceiling the
+       workload never approaches.
    * - Prompt-vs-bulk concurrency and packing → the 3,600/1,200 MaxvCpus ratio
      - **partial, superseded in part by the row above**
      - Bulk, 109-wide: 37 ``m6a.4xlarge``, ~2.95 children/host, 436 vCPU
