@@ -1133,3 +1133,18 @@ and so reported every bucket as denied.
 All three were found without spending a single Batch child: two exited
 before submission, and the third failed at the manifest write with the
 attempt rows correctly left as reconciliation cases.
+
+The rogue-VPO guard
+-------------------
+
+Checked before the drip and again mid-run, because the guard is only
+worth having if it is exercised rather than asserted:
+
+* no ``virtualPipelineOperator`` process on rapid-admin — none was ever
+  started this segment
+* one container running, ``rapid-reconciler-run``, on the rev-26 digest
+* exactly one submitter process, the drip feeder itself
+
+Every child submitted in this segment is therefore attributable to a
+wave with a stated ``--width`` and ``--max-width``. The accounting is
+exact rather than reconstructed.
