@@ -918,3 +918,35 @@ UTC. So the row is answered as *did not intersect* rather than measured
 avoid it and will cross it twice. Recording "no effect observed" from a
 run that never overlapped the window would be exactly the kind of false
 clean this round has been trying to eliminate.
+
+Pooler draw under continuous arrival
+------------------------------------
+
+Measured mid-drip with 122 children in flight: **32 backends against a
+``max_connections`` of 200**, one of them active. The breakdown is 8
+reconciler, 13 unnamed, the rest one-per-payload
+(``rapid-payload:<batch>:<index>``).
+
+That is the same 31–32 seen at 180-wide and at 540-wide. **Three
+different concurrency levels — 122, 180 and 540 — draw the same number
+of backends**, which is the pooler doing exactly what it is for:
+transaction pooling decouples backend count from child count, so
+database sizing is not a function of fan-out. The question is closed for
+any width the compute environments can reach.
+
+Scale-up under arrival, rather than in one step
+-----------------------------------------------
+
+The ramp measured scale-up from cold in a single jump. The drip
+exercises the case flight actually produces — capacity growing while
+work is already running:
+
+* wave 1 (60 children): CE desired **336 vCPU across 21 hosts**
+* waves 1–2 (122 children): CE desired **656 vCPU across 42 hosts**
+
+Roughly 3 children per host at both points, matching the reservation-
+bound packing measured at 180- and 540-wide, and host CPU held at
+**15.9% → 18.8%** — the same ~19% the ramp reported. Adding a second
+wave while the first was mid-flight neither disturbed the packing nor
+produced a queueing backlog: Batch scaled the environment underneath a
+running population.
