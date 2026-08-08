@@ -986,3 +986,83 @@ already there. That difference is the strongest argument in this document
 for continuous operation over batched: under steady arrival, all but the
 first wave pay no scheduling latency at all, and the queue interval that
 pushes the ramp's arrival-clock p95 over the target largely disappears.
+
+Memory: the row recorded as unmeasurable is measurable
+------------------------------------------------------
+
+The previous segment recorded memory per child as **"not measurable as
+built — Batch workers run no CloudWatch agent"**. That is true of
+CloudWatch and false of the conclusion: **the Batch worker AMI registers
+with SSM**, so ``free`` and ``ps`` run on the workers directly. No agent,
+no payload change, no new instrumentation.
+
+Five live science workers under the drip, sampled together:
+
+.. list-table::
+   :header-rows: 1
+
+   * - Host
+     - Used / total
+     - Children
+     - Per-child RSS
+   * - ``ip-10-100-161-8``
+     - 3,033 / 62,924 MB
+     - 3
+     - 989, 987, 978 MB
+   * - ``ip-10-100-170-175``
+     - 3,002 / 62,924 MB
+     - 3
+     - 994, 981, 979 MB
+   * - ``ip-10-100-166-5``
+     - 3,018 / 62,924 MB
+     - 3
+     - 985, 980, 980 MB
+   * - ``ip-10-100-171-92``
+     - 3,036 / 62,924 MB
+     - 3
+     - 991, 988, 983 MB
+   * - ``ip-10-100-162-28``
+     - 2,988 / 62,924 MB
+     - 3
+     - 980, 978, 976 MB
+
+**Per-child RSS is ~985 MB against a 16 GiB reservation — over-reserved
+by roughly 16×**, and the figure is stable to ±1% across five
+independent hosts, so it is the payload's steady draw rather than a
+sampling artefact. Each host has ~59 GB of its 61 GB available.
+
+This is the packing lever, quantified. Memory binds packing to 3 children
+per host while CPU sits at ~19% and disk at 12% — but it binds on the
+*reservation*, not on demand. The three constraints now read:
+
+* **vCPU**: ~19% used — not binding
+* **Disk**: 17 GiB of 150 (12%) — not binding
+* **Memory**: 3 GB of 61 used, 48 GB reserved — **binding, and on a
+  number ~16× the measurement**
+
+Sizing the reservation to the measured draw is the single change with the
+largest effect on cost per SCA, and it needs no science work. It is
+proposed, not ratified: the right value is a decision about headroom for
+the heaviest stage, and the ~985 MB figure here is a steady-state
+average, not a high-water mark. A payload that recorded its own peak RSS
+into the attempt record would settle the headroom question properly —
+which remains the correct long-term fix, now for tuning rather than for
+visibility.
+
+Scratch I/O at the 150 GiB gp3 sizing
+--------------------------------------
+
+The previous segment could answer this only for a bulk host carrying
+reference children (20 GiB of 150), because the science path died at
+stage R. It now runs. On a science worker with three children resident:
+
+* **17 GiB of 150 used (12%)**, 134 GiB free; ``/var/lib/docker`` is 33 GB
+  of that footprint
+* ``VolumeQueueLength`` peaks at **1.6** and otherwise sits near zero
+* Write pattern: a ~3.1 GB/s average burst during image pull and startup,
+  near-idle through the long PSF-fitting stages, then ~488 MB/s as
+  products are written
+
+The 150 GiB gp3 sizing is comfortable and the volume is not a bottleneck
+at this packing. Instance-store reconsideration is not indicated by
+anything measured here.
