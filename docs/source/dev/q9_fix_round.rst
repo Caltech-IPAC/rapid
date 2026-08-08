@@ -1,16 +1,14 @@
 Q9 — the fix round
 ==================
 
-**One fix cycle of three used, and the ramp did not run.** The cycle spent
-was the swarp science-config drop, fixed and proven by test; the
-supersession pass that unblocks the operator was written and unit-proven
-but never executed. The session ended on an expired SSO session that
-cannot be renewed without a human, so no science ramp, no drip phase, and
-no measured parameters beyond what the first run already established.
+**One fix cycle of three used; the ramp did not run.** The swarp
+science-config drop is fixed, live in the image, and proven by a real
+science attempt getting past it. The ramp stopped at a width-2 probe that
+found the next defect of the same class — a missing binary whose fix is a
+base-image rebuild, outside this lane's authorization.
 
-This ledger records what the round settled, what it left, and — because
-that is what Q9 exists to feed — exactly which measurements the full-scale
-proposal is still missing.
+The round's real content is that two blocking defects were found and
+located precisely, one of them fixed, at a cost of **two Batch children**.
 
 Cycles used
 -----------
@@ -23,50 +21,98 @@ Cycles used
      - Outcome
    * - 1
      - ``swarp_header_only`` and nineteen siblings
-     - Fixed; completeness 7/7 and round-trip 34/34, both exit 0
+     - **Fixed and proven live**: ``resample_reference_image`` succeeded
+       at 7.30 s on both probe children, where it had failed 2,158
+       attempts at 0.51 s
    * - 2
-     - unused
-     -
+     - ``bkgest`` absent from the image
+     - **Root-caused, not fixed** — the fix is a base-image rebuild,
+       outside the authorized operations
    * - 3
      - unused
      -
 
-Batch children submitted this session: **0**, against the ≤1,500 ceiling.
-Image rebuilds: **0** of ≤2 — the swarp fix is release content inside the
-image, so it needs one, but the rebuild is an AWS operation and was
-blocked with everything else. Deploys: **0**.
+Counts against caps
+-------------------
 
-What cycle 1 settled
---------------------
+.. list-table::
+   :header-rows: 1
 
-The defect was misread as one key by its error message. It is twenty:
-``build_swarp_command_line_args`` reads 57 keys, ``[swarp]`` carried 34,
-three are per-attempt paths, and the remaining twenty were dropped in the
-W4B ``.ini``-to-TOML extraction. ``swarp_header_only`` is merely the third
-read, so it masked the other nineteen.
+   * - Cap
+     - Used
+   * - Batch children (≤1,500)
+     - **2**
+   * - Fix cycles (≤3)
+     - 1 fixed, 1 root-caused
+   * - Image rebuild + repin (≤2)
+     - **1**
+   * - Deploys per stack (≤2)
+     - rapid-batch 1, rapid-reconciler-service 1
 
-That distinction is the cycle's real content. A one-key fix would have
-passed review, rebuilt the image, resubmitted, and failed at
-``swarp_header_suffix`` on the next line — one cycle spent to advance the
-error message by one key, with two left and nineteen keys to go. Diffing
-the builder against release content mechanically, rather than reading the
-error message, is what turned a three-cycle problem into a one-cycle one.
+What cycle 1 settled, and what it proved
+-----------------------------------------
 
-The generalisation is now enforced rather than remembered. Three
-completeness tests exist — awaicgen, sextractor, swarp — and each arrived
-*after* its builder had already burned a live attempt, each fix stopping
-at the builder that had just fired.
+The defect was misread as one key by its own error message. It is twenty:
+the builder reads 57 keys, ``[swarp]`` carried 34, three are per-attempt
+paths. ``swarp_header_only`` is only the third read, so it masked the
+other nineteen — a one-key fix would have failed at
+``swarp_header_suffix`` and spent a cycle advancing the error message by
+one key. Diffing the builder against release content mechanically, rather
+than reading the message, turned a three-cycle problem into a one-cycle
+one.
+
+The generalisation is enforced rather than remembered:
 ``test_every_command_line_builder_is_covered_by_this_class`` fails on any
-``build_*_command_line_args`` without a test, so a fourth occurrence is
-caught in the suite rather than on the ramp.
+``build_*_command_line_args`` without a completeness test. All three
+existing tests had arrived reactively, each after its builder burned a
+live attempt, each stopping at the builder that had just fired.
+
+**The proof is a live attempt, not a test.** Both probe children ran
+``resample_reference_image`` to success in 7.30 s.
+
+Cycle 2 — the defect the probe found
+--------------------------------------
+
+``subtract_background``, ``tool_failure``, both children:
+``tool not found: '/code/c/bin/bkgest'``.
+
+Established from records and artifacts, not inference:
+
+* ``bkgest`` is one of RAPID's eight in-house C binaries. The application
+  image excludes ``c/`` from its source archive by design; ``build.sh``
+  states "NO C build step exists in this image — there is nothing left
+  to build."
+* That rests on ``rapid-cmodules`` being installed in the base image.
+  The RPM **is built and published** — ``rapid-cmodules-1.0.0-2.el10``,
+  in the yum repo since 2026-08-04 — and ``comps.xml`` marks it
+  **mandatory** in the ``rapid-pipeline`` group.
+* It is **not installed in the live base image**: seven ``rapid-*`` RPMs
+  are present and ``rapid-cmodules`` is not. The base was pushed
+  2026-08-05, a day after the RPM was published, so this is not a timing
+  gap.
+
+The build's RPM-closure coverage check was reasoned from the comps group
+rather than measured in the artifact. Same shape as the swarp drop: a
+declared-complete mapping nothing verified against what shipped.
+
+Pre-existing — the previous rev-21 image is equally without ``bkgest``.
+It was invisible only because ``swarp_header_only`` failed four stages
+earlier. ``cforcepsfaper`` is missing for the same reason and will fail
+the forced-photometry path identically.
+
+**Why this session stopped rather than fixed it.** The authorized
+operations are the supersession, the swarp fix, an application-image
+rebuild and repin, and Batch submissions. Rebuilding
+``rapid-pipeline-base`` is a different image on a surface this lane did
+not declare, and installing new content into the reproducibility artifact
+is a change of the severity the ruling reserves. Recorded as proposed.
 
 Measured parameters
 -------------------
 
-The evidence table smoke-run.md asks for, with what is actually known. The
-109-wide reference measurement is the first run's and is carried forward
-unchanged; it is **supplementary to, not a substitute for**, the science
-ramp on the prompt queue.
+The evidence table with what is now known. The 109-wide reference
+measurements are the first run's, carried forward, and remain
+**supplementary to — not a substitute for —** the science ramp.
 
 .. list-table::
    :header-rows: 1
@@ -75,101 +121,102 @@ ramp on the prompt queue.
      - State
      - Value
    * - Prompt-vs-bulk concurrency and packing → the 3,600/1,200 MaxvCpus ratio
-     - **partial**
-     - Bulk only: 109 concurrent, 37 ``m6a.4xlarge``, ~2.95 children/host,
-       436 vCPU of the bulk CE's 1,200. The prompt queue is unmeasured, so
-       the *ratio* — the thing the row exists to inform — is unanswered.
-   * - Memory-heavy packing across six instance families
+     - **partial, first prompt-queue data**
+     - Bulk, 109-wide: 37 ``m6a.4xlarge``, ~2.95 children/host, 436 vCPU
+       of 1,200, packing bound by the 16 GiB memory reservation. Prompt,
+       2-wide: one ``r6i.2xlarge`` (8 vCPU / 64 GiB) took both children
+       and reported **0 vCPU and 30 GiB remaining** — CPU-bound, the
+       opposite of the bulk case. The two queues select different
+       families and bind on different resources, so the ratio cannot be
+       set from the bulk measurement alone.
+   * - Memory-heavy packing across six families
      - **not measured**
-     - One family selected at 109-wide, so the spread was never exercised.
-       Packing is bound by reservation, not consumption: 16 GiB reserved
-       against ~3 GiB resident, roughly 5x over-reservation, which fits
-       ~4 children per 64 GiB host while drawing 12 of its 16 vCPU.
-   * - Scratch I/O at the 150 GiB gp3 sizing
+     - Two families seen (``m6a.4xlarge`` bulk, ``r6i.2xlarge`` prompt),
+       neither under contention.
+   * - Scratch I/O at 150 GiB gp3
      - **partial**
-     - 20 GiB of 150 used (14%) on a host carrying 3 reference children.
-       Nowhere near binding, and nothing argues for instance store — but
-       the science path's I/O shape is unmeasured.
+     - 20 GiB of 150 (14%) on a bulk host carrying 3 reference children.
+       The science path's shape is unmeasured — it died at stage R.
    * - Spot-reclaim retry semantics
      - **not measured**
-     - Spot stays DISABLED; a Spot trial was not authorized.
+     - Spot stays DISABLED; no trial authorized.
    * - Queue/startup/execution/publication intervals per SCA
-     - **not measured for science**
-     - Reference-path stage intervals are known (``psf_catalog`` 662.6 s
-       average dominates at ~78% of a child). The 2,158 science attempts
-       of the first run died at ``resample_reference_image`` in 0.51 s
-       average, so they measure the failure, not the path. **The
-       one-hour/95% latency target has no science-path evidence at all.**
-   * - Pooler draw against budgets
      - **partial**
-     - 23 backend connections, 7 payload, against ``max_connections`` 200
-       (~12%) at 109-wide. Children connect briefly and return the
-       connection, so this establishes the shape, not the bound. Draw at
-       540-wide is unmeasured.
+     - Cold-start measured end to end on the prompt queue: submission
+       00:38:54 → CE scale-up from zero → instance running 00:40:15 →
+       first stage 00:42:07. **~3 min 13 s cold start**, matching the
+       2026-08 baseline. Science stage times through
+       ``resample_reference_image``: 7.30 s resample, 4.36 s
+       ``science_image_catalog``, 2.36 s ``resolve_reference_image``,
+       1.81 s ``science_image_statistics``, sub-second for the rest.
+       **The one-hour/95% target still has no full-path evidence** — no
+       science child has reached publication.
+   * - Pooler connection draw
+     - **partial**
+     - 23 backends, 7 payload, against ``max_connections`` 200 (~12%) at
+       109-wide. Unmeasured at ramp width.
    * - Backup-window behaviour under load
      - **not measured**
-     - No run intersected a backup window.
-   * - EBS aggregate quota at ramp width
+     - No run intersected a window.
+   * - EBS aggregate quota
      - **measured**
-     - 4,594 GiB in use against 50 TiB (``L-7A658B76``); ~14.4/50 TiB at
-       the planned 540 fan-out, worst case ~42%.
+     - 4,594 GiB against 50 TiB (``L-7A658B76``), re-run at submission
+       time. ~14.4/50 TiB at the planned 540 fan-out.
+
+Observability
+-------------
+
+Two attempts, two failures, **zero unexplained**: both carry
+``tool_failure`` from the v1 allowlist, both carry complete per-stage
+records with durations, and the failing stage carries the tool's own
+argv and message. Triage ran entirely through the attempt table, the
+stage table and the terminal record in S3 — **no log archaeology at any
+point**. The record shape did its job on a defect nobody had predicted.
 
 The exit criterion is unmet
 ---------------------------
 
-smoke-run.md's exit is a ramp step of several hundred concurrent jobs with
-every attempt terminal and explained, products written, and the drip phase
-holding the latency target. None of that ran. **No full-scale proposal
-follows from this round**, and the ~42 h run remains where it was: an
-owner ruling with no measured basis yet.
+smoke-run.md's exit needs a ramp step of several hundred concurrent jobs
+with every attempt terminal and explained, products written, and the drip
+phase holding the latency target. No ramp step ran. **No full-scale
+proposal follows**, and the ~42 h run remains the owner's call with no
+measured basis yet.
 
-What stands between here and a science ramp is now smaller and better
-understood than it was. Three unreadable record objects shut the operator
-gate; the pass that opens it is written and unit-proven. The
-science-config defect that killed 2,158 attempts is fixed at its
-configuration home with a test that refuses the whole class. Both need an
-authenticated session to land: the supersession is a live DB and S3
-operation, and the swarp fix is release content that reaches a job only
-through an image rebuild and repin.
+What the round did change: the operator gate is open and proven open, the
+image is current at revision 22 with pins consistent at five sites, one
+of the two blocking defects is fixed and proven live, and the second is
+located precisely enough to fix in one bounded step.
 
 Proposed, not ratified
 ----------------------
 
-Decisions taken conservatively under the unattended rule, recorded for the
-owner rather than enacted:
-
-* **No ``error_category`` on the superseding records.** The attempts
-  succeeded; the v1 allowlist has no category for lost evidence, the
-  writer's signature accepts none, and the reconciler's own analogous path
-  sets none. Recording a failure that did not happen would be worse than
-  recording nothing.
-* **``reconciliation_sources`` of ``["postgres", "s3"]``.** Those are the
-  two stores that actually disagree here. The reconciler's own sites
-  compare postgres against batch; the list exists to name what was
-  compared.
-* **The supersession driver lives outside the reconciler service.** The
-  24 h supersession window is correct and should not be widened to sweep
-  up an operator's cleanup — that would make every terminal row eligible
-  for requery forever.
-* **The twenty swarp keys are release content**, per the ratified
-  placement criterion. They alter science products; the master ``.ini``
-  values carry across unchanged.
+* **Install ``rapid-cmodules`` into ``rapid-pipeline-base`` and rebuild
+  it**, then rebuild the application image on the new base. The RPM
+  exists, is published, and is already declared mandatory in the comps
+  group — this is a base build that does not install the group it
+  declares, not a missing artifact.
+* **Measure the base's RPM set against ``comps.xml`` in CI**, at the
+  artifact rather than in a comment. The coverage check that asserted
+  "nothing left to build" was right about intent and wrong about the
+  image, and nothing compared the two.
+* Carried from the earlier pause, all accepted as proposed: no
+  ``error_category`` on superseding records;
+  ``reconciliation_sources = ["postgres", "s3"]``; the supersession
+  driver outside the reconciler service; the twenty swarp keys as
+  release content.
 
 Left for the owner
 ------------------
 
-* **An authenticated session.** Everything below needs one.
-* **Run the supersession pass** (``--apply``), then confirm the
-  registration gate passes without submitting science work.
-* **Rebuild and repin** so the swarp fix reaches the job definitions —
-  iteration 3 against the ≤2-per-run cap, scan gate, revision bump,
-  pins verified at template, stack parameter, both definitions and the
-  reconciler unit.
-* **Then the ramp**: 180 → 540 → drip, each step gated on clean attempt
-  records.
+1. **The base-image rebuild** above — the one thing between here and a
+   science ramp.
+2. Then the ramp: 180 → 540 → drip, each step gated on clean attempt
+   records. The mechanics are proven — the runner submits a bounded,
+   capped array with no VPO involved.
+3. A width-2 probe before each widening. It cost two children and found a
+   defect that would have cost 180.
 
-Carried forward unchanged from the first run, none actioned here:
-registration granularity (three bad records abort the whole operator
-pass), the ``RAPID_VPO_DRY_RUN`` semantics, memory over-reservation, and
-the legacy ``.ini`` reads in ``virtualPipelineOperator`` and five
-science-layer scripts.
+Carried forward unactioned: registration granularity (a handful of bad
+records aborts the whole operator pass — now demonstrated at fourteen),
+the ``RAPID_VPO_DRY_RUN`` semantics, memory over-reservation, and the
+legacy ``.ini`` reads.

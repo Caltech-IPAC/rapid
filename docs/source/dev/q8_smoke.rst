@@ -711,11 +711,132 @@ The supersession script aborted at its own account check, before staging
 code or issuing any SSM command — nothing was launched, and nothing needs
 cleaning up.
 
-State at stop
--------------
+State at that pause
+-------------------
 
-Unchanged from the first run's closeout, and re-verified above: queues
-empty, no VPO process, both Spot CEs DISABLED, definitions at rev 21 on
-``sha256:89223d4b``, reconciler active with ``errors: 0``. **Nothing is
-running and nothing is pending.** The seven ``fixd-chain`` records are
-still stale, so the operator gate is still shut.
+Queues empty, no VPO process, both Spot CEs DISABLED, definitions at rev
+21, reconciler active with ``errors: 0``. The seven ``fixd-chain``
+records were still stale, so the operator gate was still shut.
+
+Authentication restored — the run continued
+============================================
+
+The supersession, the gate proof, the rebuild and the repin all landed.
+The ramp did not: a width-2 probe found the next defect in the same
+class, and it is one this session is not authorized to fix.
+
+The supersession, and what proving the gate found
+--------------------------------------------------
+
+The tool's first live run failed at ``DBCredentialError``, which is the
+W8 lesson repeating: ``resolve_credentials`` is the boundary read and
+resolves under the *ambient* role, which inside the container is the
+instance role — deliberately denied the orchestrator secret. Passing the
+role ARN in is not enough; something must assume it. Fixed by reusing the
+service's own helpers rather than opening a third credential path, and
+the S3 client takes the same session (the instance role has no grant on
+the records bucket either, so every absence check would have deferred).
+
+Applied to the three ``fixd-chain`` candidates: each superseded at
+sequence 2, the published body carrying ``reconciler_first``,
+``reconstructed``, ``rejected_predecessor.reason = absent`` and no
+``error_category``. Attempt total unchanged at 5,663 — append-only held,
+and all seven rows still cite their original keys.
+
+**Then the gate proof earned its place.** A dry-run registration pass over
+all 2,333 candidates — reading each cited record from S3 exactly as a real
+pass does, registering nothing — found **eleven more** attempts whose
+record objects are equally absent: eight ``w1-live`` and three
+``fixc-crash``, all from the same 2026-08-06 cleanup. The handoff's
+"seven records" was an undercount of its own defect class. Superseding the
+named seven and proceeding would have hit exit 65 on the first operator
+invocation, after the ramp was already running.
+
+All fourteen superseded. Re-proof: **2,322 candidates, 2,322 readable,
+zero unreadable, probe exit 0.** The gate is open.
+
+Rebuild and repin — revisions 22
+---------------------------------
+
+One rebuild iteration of the two allowed. Tag ``2ffb936-20260808``,
+digest ``sha256:5148f0fe…``, from smdc ``2ffb936`` over the unchanged
+``base-30984903893``.
+
+Scan gate: **CVE-identical** to the digest replaced — 0 CRITICAL, 3 HIGH,
+5 MEDIUM, 1 LOW, every one base-inherited. Verified by diffing the
+vulnerability IDs, not the severity counts: equal counts can hide a swap.
+
+The swarp fix was proven **inside** the digest rather than inferred from
+commit order: 57 builder reads against 54 configured keys leaves only the
+three per-attempt paths, ``swarp_header_only`` reads ``'N'``, and the
+missing set is empty.
+
+Pins consistent at all five sites: template default, deployed stack
+parameter, both job definitions at **revision 22**, and the reconciler
+service — its unit and its running container on the same digest,
+connected as ``rapid_orchestrator``, polling with ``errors: 0``. **Both
+Spot CEs stayed DISABLED across both deploys**, which is the template's
+declared ``State`` converging as intended.
+
+The width-2 probe, and why the ramp stopped
+--------------------------------------------
+
+Two children, job definition revision 22, prompt queue. **Submissions
+this session: 2 of the ≤1,500 ceiling.**
+
+The swarp fix works. ``resample_reference_image`` **succeeded** on both
+children at 7.30 s — the stage that had killed 2,158 attempts at 0.51 s.
+Every stage before it succeeded too.
+
+The pipeline then died at the very next stage:
+
+.. code-block:: text
+
+    stage:          subtract_background
+    error_category: tool_failure
+    error_message:  tool not found: '/code/c/bin/bkgest' —
+                    is it installed and on PATH?
+
+``bkgest`` is one of RAPID's own eight in-house C binaries. It is absent
+from the image, and the root cause is not in this repo:
+
+* The application image excludes ``c/`` from its source archive **by
+  design** — the C tools are meant to arrive as an RPM, not be compiled
+  here. ``build.sh`` states it outright: "NO C build step exists in this
+  image — there is nothing left to build."
+* That claim rests on ``rapid-cmodules`` being installed in
+  ``rapid-pipeline-base``. The RPM **exists and is published** —
+  ``rapid-cmodules-1.0.0-2.el10``, in the yum repo since 2026-08-04 — and
+  ``comps.xml`` lists it **mandatory** in the ``rapid-pipeline`` group.
+* It is **not installed in the live base image**. The base carries seven
+  ``rapid-*`` RPMs; ``rapid-cmodules`` is not among them. The base was
+  pushed 2026-08-05, a day *after* the RPM was published, so this is not
+  a timing gap — the base build did not install the group it declares.
+
+The build's RPM-closure coverage check was reasoned from the comps group
+rather than measured in the image, and the two disagree. That is the same
+shape as the swarp drop: a declared-complete mapping that nothing
+verified against the artifact.
+
+**Pre-existing, not caused by this rebuild** — the previous rev-21 image
+is equally without ``bkgest`` (verified directly). It was invisible
+because the science path never reached stage R: ``swarp_header_only``
+stood four stages earlier. Fixing one defect exposed the next, which is
+what a width-2 probe is for. Committing 180 children first would have
+bought 180 identical failures.
+
+``cforcepsfaper``, the forced-photometry binary, is missing for the same
+reason and will fail the same way when that path runs.
+
+Live state at stop
+------------------
+
+* Both queues 0 in every non-terminal state; the probe drained
+* No VPO process on rapid-admin — the rogue-VPO guard never had to fire,
+  because no VPO was ever started
+* Both Spot CEs DISABLED; both on-demand ENABLED/VALID
+* Job definitions at **revision 22** on ``sha256:5148f0fe``
+* Reconciler active on the same digest, ``errors: 0``
+* Template, stack parameter, both definitions and the reconciler agree
+
+Nothing is running and nothing is pending.
