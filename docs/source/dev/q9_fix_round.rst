@@ -342,8 +342,25 @@ measurements are the first run's, carried forward, and remain
        ``normalize_science_psf`` 4.8 ms, ``measure_reference_fwhm`` 23.8 ms,
        ``inject_fake_sources`` skipped. **~103 s of science before the
        failing stage**, on a warm container.
-   * - Where the science time actually goes, past ``run_zogy``
-     - **partial, and the surprise of the round**
+   * - Where the science time actually goes — **the full path, measured**
+     - **measured end to end, and the headline of the round**
+     - The revision-26 probe ran **all twenty stages to publication**.
+       Both children: ``rapid_outcome=success``,
+       ``product_disposition=published``, no error category, **3,371 s
+       and 3,300 s** — 56 and 55 minutes each, on an ``r6i.2xlarge``
+       carrying only those two children.
+
+       **Three stages are 92% of it**: ``naive_difference`` 1,077.0 s,
+       ``catalog_zogy`` 1,054.5 s, ``catalog_sfft`` 1,001.5 s. The other
+       seventeen total ~236 s, of which ``run_sfft`` is 78.7 s,
+       ``prepare_zogy_inputs`` 68.8 s, ``upload_products`` 36.4 s and
+       ``run_zogy`` 25.5 s. Everything before ``prepare_zogy_inputs`` —
+       the thirteen stages that four probe cycles were spent debugging —
+       is **25 s in total**.
+
+       118 product objects were written for one unit.
+   * - Where the science time goes, as it looked mid-run
+     - **superseded by the row above; kept for the reasoning**
      - The stages after ``run_zogy`` are far heavier than the thirteen
        before it. Revision 26's probe spent **~103 s reaching**
        ``run_zogy`` and then more than **ten minutes** in the difference
@@ -360,16 +377,20 @@ measurements are the first run's, carried forward, and remain
        the job is perfectly healthy, so log freshness is not a health
        signal here.
 
-       **This is the single most consequential measurement of the round
-       for the one-hour/95% target**, and it is the one the ramp exists to
-       pin down. It has to be said plainly: at 49 minutes and counting
-       for **two** children on a dedicated 8-vCPU host with no
-       contention, a single SCA is already approaching the whole one-hour
-       budget. Whatever the ramp measures at 180 and 540, it will not
-       make this number smaller. The target and the current
-       difference-catalogue implementation look incompatible, and that is
-       a science-and-sizing question for the owner, not something a fix
-       cycle closes. Two children at width 2 on a dedicated host say nothing
+       **This is the round's most consequential measurement.** A single
+       SCA takes **56 minutes with no contention at all** — two children
+       alone on an 8-vCPU host, one vCPU each. The one-hour/95% working
+       target is therefore already 93% consumed by one uncontended unit,
+       before any queueing, any cold start (add ~3 min), and any effect
+       of running several hundred of these at once. The ramp cannot
+       improve this: 180 and 540 add contention, they do not remove work.
+
+       This is a science-and-sizing question for the owner, not something
+       another fix cycle closes, and the three stages that hold 92% of
+       the time are where any answer has to start. Worth noting that the
+       target is a *working* one and the ratified acceptance contract
+       lives in ``rapid_plan``; nothing here changes it, this only
+       measures against it. Two children at width 2 on a dedicated host say nothing
        about what several hundred concurrent children do to the same
        stage — that is exactly what 180 and 540 are for.
 
