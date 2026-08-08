@@ -1,4 +1,3 @@
-import ast
 from astropy.io import fits
 import numpy as np
 
@@ -166,11 +165,7 @@ def compute_diffimage_uncertainty(sca_gain,
 # 3. Both input images have been locally background-subtracted.
 ############################################################################################
 
-def gainMatchScienceAndReferenceImages(s3_client,
-                                       product_s3_bucket,
-                                       jid,
-                                       job_proc_date,
-                                       filename_sci_image,
+def gainMatchScienceAndReferenceImages(filename_sci_image,
                                        filename_sci_uncert,
                                        filename_scigainmatchsexcat_catalog,
                                        filename_ref_image,
@@ -182,8 +177,7 @@ def gainMatchScienceAndReferenceImages(s3_client,
                                        fwhm_sci,
                                        fwhm_ref,
                                        astrometric_uncert_x,
-                                       astrometric_uncert_y,
-                                       upload_to_s3_bucket):
+                                       astrometric_uncert_y):
 
 
     # Print diagnostics:
@@ -198,11 +192,6 @@ def gainMatchScienceAndReferenceImages(s3_client,
 
     iam = "Sub gainMatchScienceAndReferenceImages"
     verbose = int(gainmatch_dict['verbose'])
-
-    if upload_to_s3_bucket:
-        upload_intermediate_products = ast.literal_eval(gainmatch_dict['upload_intermediate_products'])
-    else:
-        upload_intermediate_products = False
 
     params_file = "/code/cdf/rapidSexParamsGainMatch.inp"
     filter_conv_file = "/code/cdf/rapidSexGainMatchFilter.conv"
@@ -315,24 +304,11 @@ def gainMatchScienceAndReferenceImages(s3_client,
     run_tool(sextractor_cmd)
 
 
-    # Optionally upload SExtractor catalogs for science and reference images to S3 bucket.
-
-    if upload_intermediate_products:
-
-        scigainmatchsexcat_catalog_s3_bucket_object_name = job_proc_date + "/jid" + str(jid) + "/" +\
-                                                           filename_scigainmatchsexcat_catalog
-
-        refgainmatchsexcat_catalog_s3_bucket_object_name = job_proc_date + "/jid" + str(jid) + "/" +\
-                                                           filename_refgainmatchsexcat_catalog
-
-
-        filenames = [filename_scigainmatchsexcat_catalog,
-                     filename_refgainmatchsexcat_catalog]
-
-        objectnames = [scigainmatchsexcat_catalog_s3_bucket_object_name,
-                       refgainmatchsexcat_catalog_s3_bucket_object_name]
-
-        util.upload_files_to_s3_bucket(s3_client,product_s3_bucket,filenames,objectnames)
+    # Upload is no longer done here (excision, catalog co-design Q8/X8): these
+    # SExtractor catalogs are diagnostic intermediates, never a stage's
+    # `produce`d output, so no canonical publication replaces this — the
+    # legacy `<date>/jid<jid>/…` key it wrote under carried no run or attempt
+    # identity and uploaded unconditionally.
 
 
     # Parse XWIN_IMAGE,YWIN_IMAGE,FLUX_APER_6 (14-pixel diameter) from SExtractor catalog for science image.

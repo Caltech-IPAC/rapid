@@ -309,26 +309,18 @@ def _build_reference_image(context, awaicgen) -> None:
         coadd_inputs_bucket,
         coadd_inputs_object,
         coadd_inputs_local,
-        context.unit.key,
-        context.job_type,
         awaicgen,
         context.science_value("ref_image", "max_n_images_to_coadd"),
         float(instrument["sca_gain"]),
         float(instrument["sca_readout_noise"]),
-        context.parameter("s3/products-bucket"),
-        True,
         context.science_value("fake_sources", "inject_fake_sources_flag"),
         fake_sources,
         SOFTWARE_ROOT(),
         context.optional_fact("reference_overlapping_fields", []),
-        # Any diagnostic input upload keys under THIS attempt, never the
-        # legacy jid path a retry would overwrite (#18).
-        upload_key_prefix=context.product_prefix(),
     )
 
     (infobits_refimage, checksum_refimage,
      mosaic_image_file, mosaic_cov_map_file, mosaic_uncert_image_file,
-     _obj_image, _obj_cov, _obj_uncert,
      nframes, refimage_input_filenames,
      jdstart, jdend, zprefimg, total_refimage_exptime) = generated
 
@@ -346,11 +338,9 @@ def _build_reference_image(context, awaicgen) -> None:
         mosaic_uncert_image_file, n_sigma, hdu_index)
 
     sextractor_refimage = context.science_section("sextractor_refimage")
-    (checksum_sex_refimage_catalog, filename_sex_refimage_catalog,
-     _obj_sexcat) = rfis.generateSExtractorReferenceImageCatalog(
-        context.s3, context.parameter("s3/products-bucket"), context.unit.key,
-        context.job_type, mosaic_image_file, mosaic_uncert_image_file,
-        sextractor_refimage, True)
+    (checksum_sex_refimage_catalog,
+     filename_sex_refimage_catalog) = rfis.generateSExtractorReferenceImageCatalog(
+        mosaic_image_file, mosaic_uncert_image_file, sextractor_refimage)
     context.produce("reference_sexcat", filename_sex_refimage_catalog)
 
     # The PhotUtils reference-image catalogue (monolith lines 508-529). The
@@ -379,14 +369,12 @@ def _build_reference_image(context, awaicgen) -> None:
                 "refpsf_" + os.path.basename(reference_psf_uri)))
         context.produce("reference_psf", reference_psf)
     refimage_psfcat = rfis.generatePhotUtilsReferenceImageCatalog(
-        context.s3, context.parameter("s3/products-bucket"), context.unit.key,
-        context.job_type, mosaic_image_file, mosaic_uncert_image_file,
-        reference_psf, psfcat_refimage, True)
+        mosaic_image_file, mosaic_uncert_image_file, reference_psf,
+        psfcat_refimage)
 
     (flag_psf_refimage_catalog, checksum_psf_refimage_catalog,
      checksum_psf_finder_refimage_catalog, filename_psf_refimage_catalog,
-     filename_psf_finder_refimage_catalog, _obj_psfcat, _obj_finder,
-     _uploaded_psfcat, _uploaded_finder) = refimage_psfcat
+     filename_psf_finder_refimage_catalog) = refimage_psfcat
 
     context.produce("reference_psfcat", filename_psf_refimage_catalog)
     context.produce("reference_psfcat_finder",
@@ -712,10 +700,6 @@ def gain_match(context) -> None:
 
     scalefac, dxrmsfin, dyrmsfin, dxmedianfin, dymedianfin = \
         dfis.gainMatchScienceAndReferenceImages(
-            context.s3,
-            context.parameter("s3/products-bucket"),
-            context.unit.key,
-            context.job_type,
             bkg_subbed,
             context.product("science_uncert_image"),
             filename_scigainmatchsexcat_catalog,
@@ -728,8 +712,7 @@ def gain_match(context) -> None:
             context.product("fwhm_sci"),
             context.product("fwhm_ref"),
             context.science_value("zogy", "astrometric_uncert_x"),
-            context.science_value("zogy", "astrometric_uncert_y"),
-            True)
+            context.science_value("zogy", "astrometric_uncert_y"))
 
     scalefacref = 1. / scalefac
 

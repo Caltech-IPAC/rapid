@@ -172,8 +172,8 @@ class SubmitUnitsTests(unittest.TestCase):
                    if "INTO attempts" in sql]
         self.assertTrue(inserts)
         strings = [p for p in inserts[0] if isinstance(p, str)]
-        self.assertIn("run-1:90000/1", strings)
-        self.assertNotIn("90000/1", strings)
+        self.assertIn("run-1:090000/01", strings)
+        self.assertNotIn("090000/01", strings)
 
     def test_the_run_scoped_key_is_the_one_the_runtime_computes(self):
         # Both sides must agree on the key: the submitter writing the row and
@@ -182,7 +182,7 @@ class SubmitUnitsTests(unittest.TestCase):
         from submission.manifest import ProcessingUnit
 
         unit = ProcessingUnit(exposure=90000, sca=1)
-        self.assertEqual("run-1:90000/1", unit.logical_job_key("run-1"))
+        self.assertEqual("run-1:090000/01", unit.logical_job_key("run-1"))
         self.assertNotEqual(unit.logical_job_key("run-1"),
                             unit.logical_job_key("run-2"))
 

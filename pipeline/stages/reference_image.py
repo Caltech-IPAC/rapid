@@ -102,26 +102,18 @@ def build_reference_image(context) -> None:
         coadd_inputs_bucket,
         coadd_inputs_object,
         coadd_inputs_local,
-        context.unit.key,
-        context.job_type,
         awaicgen,
         context.science_value("ref_image", "max_n_images_to_coadd"),
         float(instrument["sca_gain"]),
         float(instrument["sca_readout_noise"]),
-        context.parameter("s3/products-bucket"),
-        True,
         context.science_value("fake_sources", "inject_fake_sources_flag"),
         fake_sources,
         SOFTWARE_ROOT(),
         context.optional_fact("reference_overlapping_fields", []),
-        # Any diagnostic input upload keys under THIS attempt, never the
-        # legacy jid path a retry would overwrite (#18).
-        upload_key_prefix=context.product_prefix(),
     )
 
     (infobits_refimage, checksum_refimage,
      mosaic_image_file, mosaic_cov_map_file, mosaic_uncert_image_file,
-     _obj_image, _obj_cov, _obj_uncert,
      nframes, refimage_input_filenames,
      jdstart, jdend, zprefimg, total_refimage_exptime) = generated
 
@@ -171,15 +163,10 @@ def sextractor_catalog(context) -> None:
     """SExtractor over the coadd. (Monolith stage S5b-4, lines 378-391.)"""
     sextractor_refimage = context.science_section("sextractor_refimage")
 
-    (checksum, catalog, _obj) = rfis.generateSExtractorReferenceImageCatalog(
-        context.s3,
-        context.parameter("s3/products-bucket"),
-        context.unit.key,
-        context.job_type,
+    (checksum, catalog) = rfis.generateSExtractorReferenceImageCatalog(
         context.product("reference_image"),
         context.product("reference_uncert_image"),
-        sextractor_refimage,
-        True)
+        sextractor_refimage)
 
     context.produce("reference_sexcat", catalog)
     context.record(reference_sexcat_checksum=checksum)
@@ -190,25 +177,17 @@ def psf_catalog(context) -> None:
     psfcat_refimage = context.science_section("psfcat_refimage")
 
     result = rfis.generatePhotUtilsReferenceImageCatalog(
-        context.s3,
-        context.parameter("s3/products-bucket"),
-        context.unit.key,
-        context.job_type,
         context.product("reference_image"),
         context.product("reference_uncert_image"),
         context.product("reference_psf"),
-        psfcat_refimage,
-        True)
+        psfcat_refimage)
 
     (flag_psf_refimage_catalog, checksum_psf_refimage_catalog,
-     _checksum_finder, filename_psf_catalog, _filename_finder,
-     obj_psf_catalog, _obj_finder, uploaded, _uploaded_finder) = result
+     _checksum_finder, filename_psf_catalog, _filename_finder) = result
 
     context.produce("reference_psfcat", filename_psf_catalog)
     context.record(reference_psfcat_ok=bool(flag_psf_refimage_catalog),
-                   reference_psfcat_checksum=checksum_psf_refimage_catalog,
-                   reference_psfcat_object=obj_psf_catalog,
-                   reference_psfcat_uploaded=bool(uploaded))
+                   reference_psfcat_checksum=checksum_psf_refimage_catalog)
 
 
 def image_statistics(context) -> None:

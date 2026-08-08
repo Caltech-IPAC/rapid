@@ -1293,5 +1293,112 @@ class EveryStageConfigReadIsSatisfied(unittest.TestCase):
             "configuration home provides:\n" + completed.stdout)
 
 
+# ---------------------------------------------------------------------------
+# Legacy-upload excision (catalog co-design Q8/X8)
+# ---------------------------------------------------------------------------
+
+class LegacyUploadExcisionTests(unittest.TestCase):
+    """The legacy `<date>/jid<jid>/…` upload branches are gone.
+
+    `referenceImageSubs.py` and `differenceImageSubs.py` built a second,
+    non-attempt-scoped key shape and uploaded unconditionally under it — the
+    one write path in the codebase outside create-once, so a retry could
+    overwrite an earlier attempt's bytes (catalog co-design evidence pack
+    §1.1, X8). The functions are still called for their science-computation
+    side effects; only the upload side effects are excised, since every
+    product they compute is published exactly once by the calling stage's
+    `upload_products`, through `context.product_prefix()` and
+    `publish_products`.
+
+    Asserted against the parsed source, like `PostProcessPublicationTests`
+    above: a docstring or comment is allowed to keep naming the old shape to
+    explain what was removed, but no `Call` node may construct it.
+    """
+
+    LEGACY_KEY_MARKERS = ("jid", "upload_files_to_s3_bucket",
+                          "upload_file", "put_object")
+
+    def _module_source(self, relative_path):
+        path = os.path.join(REPO_ROOT, *relative_path.split("/"))
+        with open(path) as handle:
+            return handle.read()
+
+    def _call_names(self, source):
+        tree = ast.parse(source)
+        return {ast.unparse(node.func) for node in ast.walk(tree)
+                if isinstance(node, ast.Call)}
+
+    def test_referenceimagesubs_builds_no_jid_key(self):
+        """No `jid`/`job_proc_date` string assembly survives in the file.
+
+        The legacy key was built as
+        ``job_proc_date + "/jid" + str(jid) + "/" + ...`` — a plain string
+        join, not a call, so this is a substring search over non-comment
+        lines rather than an AST call check.
+        """
+        source = self._module_source("pipeline/referenceImageSubs.py")
+        offenders = [
+            line for line in source.splitlines()
+            if '"/jid"' in line and not line.lstrip().startswith("#")]
+        self.assertEqual(
+            offenders, [],
+            "a jid-keyed string assembly survives the excision:\n"
+            + "\n".join(offenders))
+
+    def test_differenceimagesubs_builds_no_jid_key(self):
+        source = self._module_source("pipeline/differenceImageSubs.py")
+        offenders = [
+            line for line in source.splitlines()
+            if '"/jid"' in line and not line.lstrip().startswith("#")]
+        self.assertEqual(
+            offenders, [],
+            "a jid-keyed string assembly survives the excision:\n"
+            + "\n".join(offenders))
+
+    def test_referenceimagesubs_calls_no_upload(self):
+        """None of the three reference-image builders call an uploader.
+
+        Checked against parsed call names, not source text, for the same
+        reason `PostProcessPublicationTests` does it that way: the comments
+        left behind to explain the excision name the old helpers, and a
+        substring check would read the explanation as a live call.
+        """
+        source = self._module_source("pipeline/referenceImageSubs.py")
+        called = self._call_names(source)
+        offenders = {name for name in called
+                    if any(marker in name for marker in
+                           ("upload_file", "upload_files_to_s3_bucket",
+                            "put_object"))}
+        self.assertEqual(
+            offenders, set(),
+            f"referenceImageSubs.py still calls an uploader: {offenders}")
+
+    def test_differenceimagesubs_calls_no_upload(self):
+        source = self._module_source("pipeline/differenceImageSubs.py")
+        called = self._call_names(source)
+        offenders = {name for name in called
+                    if any(marker in name for marker in
+                           ("upload_file", "upload_files_to_s3_bucket",
+                            "put_object"))}
+        self.assertEqual(
+            offenders, set(),
+            f"differenceImageSubs.py still calls an uploader: {offenders}")
+
+    def test_the_stage_callers_no_longer_pass_upload_flags(self):
+        """The call sites dropped the dead `upload_to_s3_bucket` argument.
+
+        A stray `True`/`upload_key_prefix=` positional at one of the four
+        call sites would mean a signature drifted back toward the excised
+        parameter rather than the calling stage's own
+        `context.product_prefix()` / `publish_products` path.
+        """
+        for relative_path in ("pipeline/stages/reference_image.py",
+                              "pipeline/stages/science.py"):
+            source = self._module_source(relative_path)
+            with self.subTest(module=relative_path):
+                self.assertNotIn("upload_key_prefix", source)
+                self.assertNotIn("upload_to_s3_bucket", source)
+
+
 if __name__ == "__main__":
     unittest.main()

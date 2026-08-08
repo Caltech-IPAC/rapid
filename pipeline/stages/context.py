@@ -125,11 +125,16 @@ class StageContext:
         one — gets a prefix that says so rather than silently producing the
         old colliding shape, so a production path that lost its identity fails
         visibly instead of overwriting.
+
+        The attempt component is zero-padded per the storage design's key
+        schema (§ Key schema, component law: attempt 10 digits) — `unit.key`
+        already carries its own padding, so this is the prefix's other
+        numeric component.
         """
         if self.run_id is None or self.attempt_id is None:
             return f"{self.job_type}/{self.unit.key}/unidentified-attempt"
         return (f"{self.job_type}/{self.run_id}/{self.unit.key}"
-                f"/attempt-{self.attempt_id}")
+                f"/attempt-{int(self.attempt_id):010d}")
 
     # -- per-invocation facts ------------------------------------------------
 

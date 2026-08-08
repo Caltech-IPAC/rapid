@@ -245,7 +245,7 @@ class GatherScienceUnitsTests(unittest.TestCase):
         units = self._gather(make_references=True)
         self.assertEqual(units[0].exposure, 5001)
         self.assertEqual(units[0].sca, 7)
-        self.assertEqual(units[0].key, "5001/7")
+        self.assertEqual(units[0].key, "005001/07")
 
     def test_the_run_scoped_logical_key_is_unique_per_run(self):
         unit = self._gather(make_references=True)[0]

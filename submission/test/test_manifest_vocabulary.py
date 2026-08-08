@@ -133,6 +133,23 @@ def test_validate_for_rejects_the_wrong_queue():
                               queue_names=QUEUE_NAMES)
 
 
+# --- key zero-padding (catalog co-design, storage.md § Key schema) ----
+
+def test_key_zero_pads_exposure_to_six_digits_and_sca_to_two():
+    unit = ProcessingUnit(exposure=1, sca=2)
+    assert unit.key == "000001/02"
+
+
+def test_key_does_not_truncate_a_component_that_already_fills_its_width():
+    unit = ProcessingUnit(exposure=123456, sca=42)
+    assert unit.key == "123456/42"
+
+
+def test_key_padding_keeps_two_different_units_distinct():
+    assert (ProcessingUnit(exposure=1, sca=2).key
+           != ProcessingUnit(exposure=12, sca=2).key)
+
+
 # --- per-invocation facts ---------------------------------------------
 
 def test_facts_default_to_empty_and_serialize_away():
@@ -209,8 +226,8 @@ def test_require_facts_names_the_offending_indices():
         manifest.require_facts("science_image_uri")
     message = str(caught.value)
     assert "2 of 3 units" in message
-    assert "index 1 (90210/2)" in message
-    assert "index 2 (90210/3)" in message
+    assert "index 1 (090210/02)" in message
+    assert "index 2 (090210/03)" in message
     assert "index 0" not in message
 
 

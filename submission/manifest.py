@@ -380,8 +380,14 @@ class ProcessingUnit:
         NOT a database identity: it names a processing unit, and the same
         exposure/SCA is processed by every run that reprocesses it. Use
         `logical_job_key` for anything that has to be unique across runs.
+
+        Zero-padded per the storage design's key schema (§ Key schema,
+        component law: exposure 6 digits, SCA 2 digits) — this is the
+        component every product key under `product_prefix()` embeds, so an
+        unpadded value here was an unpadded value in every product key ever
+        written.
         """
-        return f"{self.exposure}/{self.sca}"
+        return f"{self.exposure:06d}/{self.sca:02d}"
 
     def logical_job_key(self, run_id: Any) -> str:
         """This unit's RUN-SCOPED logical-job identity (review finding #3).

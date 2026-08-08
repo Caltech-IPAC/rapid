@@ -397,7 +397,7 @@ class ProductPrefixTests(unittest.TestCase):
         prefix = context.product_prefix()
 
         self.assertIn("run-1", prefix)
-        self.assertIn("attempt-4242", prefix)
+        self.assertIn("attempt-0000004242", prefix)
         self.assertIn(context.unit.key, prefix)
         self.assertTrue(prefix.startswith(context.job_type))
 
@@ -423,3 +423,12 @@ class ProductPrefixTests(unittest.TestCase):
     def test_the_prefix_is_stable_for_one_attempt(self):
         context = make_context(run_id="run-1", attempt_id=7)
         self.assertEqual(context.product_prefix(), context.product_prefix())
+
+    def test_the_attempt_component_is_zero_padded_to_ten_digits(self):
+        # storage.md § Key schema, component law: attempt is 10 digits.
+        context = make_context(run_id="run-1", attempt_id=7)
+        self.assertIn("attempt-0000000007", context.product_prefix())
+
+    def test_the_attempt_component_does_not_truncate_a_wide_value(self):
+        context = make_context(run_id="run-1", attempt_id=12345678901)
+        self.assertIn("attempt-12345678901", context.product_prefix())
