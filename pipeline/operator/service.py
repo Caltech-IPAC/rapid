@@ -296,8 +296,41 @@ def main(argv=None):
                 "It cuts batches and reports them; no Batch client is built.")
 
         to_run = operator_input.to_run
-        if not to_run:
+        if not to_run and args.once:
+            # A one-shot invocation with nothing to run has done its job.
             logger.info("no class has disposition 'run'; nothing to do")
+            return 0
+        if not to_run:
+            # A SERVICE with nothing to run IDLES; it does not exit.
+            #
+            # Found live on rapid-admin, 2026-08-08, on the first enabled
+            # deploy: both classes were deployed on `hold`, this path
+            # returned 0, and systemd's Restart=always turned "nothing to
+            # do" into a restart loop — start, exit 0, restart 15 s later,
+            # forever, at a restart counter climbing on every pass.
+            #
+            # Exiting 0 is right for `--once` and wrong for a supervised
+            # service: `hold` on every class is a legitimate and expected
+            # operating state (it is this stack's own default), and a
+            # service must sit in it quietly rather than flapping. The
+            # supervisor's restart is for a service that CANNOT work, not
+            # one with nothing to do — and a unit that restarts every 15
+            # seconds while nominal destroys the signal that restart
+            # frequency is supposed to carry (operations.md: a health
+            # check "must be quiet under nominal operation — its trigger
+            # rate is part of its correctness").
+            #
+            # Idling rather than refusing to start, because the dispositions
+            # are deploy parameters: an operator flipping one to `run` and
+            # re-converging should find a service already up.
+            logger.info(
+                "no class has disposition 'run'; the operator is idle. "
+                "Dispositions are %s — flip one to 'run' and re-converge "
+                "to give it work.",
+                json.dumps(operator_input.dispositions))
+            while running["go"]:
+                time.sleep(min(args.poll_seconds, 60))
+            logger.info("operator stopped cleanly while idle")
             return 0
 
         operators = []

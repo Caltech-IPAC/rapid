@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(aws sts get-caller-identity:*)",
+      "Bash(timeout * aws sts get-caller-identity:*)",
+      "Bash(aws s3 ls:*)",
+      "Bash(aws s3api list-objects-v2:*)",
+      "Bash(aws s3api head-object:*)"
+    ]
+  }
+}

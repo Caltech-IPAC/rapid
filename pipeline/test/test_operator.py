@@ -445,6 +445,46 @@ class TestRegistrationGranularity(unittest.TestCase):
         self.assertEqual(verdict.exit_code, opregistration.EXIT_PARTIAL)
 
 
+class TestIdleServiceDoesNotExit(unittest.TestCase):
+    """Found live, 2026-08-08, on the first enabled deploy.
+
+    Both classes were deployed on `hold` — this stack's own default — and
+    the service returned 0 for "nothing to do". systemd's Restart=always
+    turned that into a restart loop: start, exit 0, restart 15 s later,
+    restart counter climbing. A supervised service with nothing to do must
+    idle; only `--once` should exit.
+    """
+
+    def test_all_hold_is_a_legitimate_state_not_an_exit(self):
+        got = opinputs.build("2027-10-01", "2027-10-07", {
+            opclasses.PROMPT_PROCESSING: opinputs.HOLD,
+            opclasses.REFERENCE_CONSTRUCTION: opinputs.HOLD})
+        self.assertEqual(got.to_run, ())
+        # Nothing to run is a complete, valid census — not an error and
+        # not a reason to refuse to start.
+        self.assertEqual(set(got.dispositions), set(opclasses.CLASS_NAMES))
+
+    def test_the_service_idles_rather_than_exiting_when_nothing_runs(self):
+        """The service loop must not fall through when `to_run` is empty."""
+        import inspect
+
+        from pipeline.operator import service as opservice
+
+        source = inspect.getsource(opservice.main)
+        marker = "if not to_run and args.once:"
+        self.assertIn(
+            marker, source,
+            "the empty-disposition path must distinguish --once (exit) "
+            "from service mode (idle); without that split, a service "
+            "deployed with every class on hold restart-loops")
+        # And the service branch must actually block rather than return.
+        after = source.split("if not to_run:", 1)[1]
+        self.assertIn(
+            "while running[", after,
+            "the service branch must idle in a loop, not return — "
+            "returning is what systemd turns into a restart loop")
+
+
 class TestLegacyModuleIsImportable(unittest.TestCase):
     """The regression found live on rapid-admin, 2026-08-08.
 
