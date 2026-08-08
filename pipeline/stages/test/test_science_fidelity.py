@@ -1162,5 +1162,45 @@ class ReleaseContentCompletenessTests(unittest.TestCase):
                          "add one beside the others and list it here")
 
 
+class EveryStageConfigReadIsSatisfied(unittest.TestCase):
+    """The whole class of dropped-key defects, not one builder at a time.
+
+    The three builder tests above close the three command-line builders.
+    `gain_match` is not one of them: it reads `[gainmatch]` directly in a
+    stage body, so `verbose` and `upload_intermediate_products` were
+    outside every existing test's reach and cost a fourth submission cycle
+    to find (`q9_fix_round.rst`). Widening the enumeration by one test per
+    defect is how the previous four were found, each one stage further
+    down the same path.
+
+    This asserts the property instead: **every science-configuration key
+    the payload reads anywhere is either declared in the release file or
+    assigned by the payload before use.** `scripts/audit_science_config_reads.py`
+    resolves the section-to-variable binding structurally and propagates
+    it to a fixed point, so a key read two calls past the accessor is
+    covered without anyone naming that call. Exit status 0 is the gate.
+
+    Run as a subprocess rather than imported because the audit parses the
+    payload with `ast` and never imports it -- which is what lets it run
+    on a laptop where numpy and friends are absent, the same constraint
+    the stub helper at the top of this file exists for.
+    """
+
+    def test_no_science_config_key_is_read_without_being_provided(self):
+        import subprocess
+
+        script = os.path.join(REPO_ROOT, "scripts",
+                              "audit_science_config_reads.py")
+        self.assertTrue(os.path.exists(script),
+                        f"the config audit is missing at {script}")
+
+        completed = subprocess.run([sys.executable, script],
+                                   capture_output=True, text=True)
+        self.assertEqual(
+            completed.returncode, 0,
+            "the payload reads science-configuration keys that no "
+            "configuration home provides:\n" + completed.stdout)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -233,6 +233,19 @@ filename_bkg_subbed_science_image = "bkg_subbed_science_image.fits"
 filename_global_clippedmean_sciimage_tbl = "global_clippedmean_science_image.tbl"
 
 [gainmatch]
+# The first two keys of [GAINMATCH] in the master .ini
+# (`5664024^:cdf/awsBatchSubmitJobs_launchSingleSciencePipeline.ini:210-211`).
+# Dropped by the W4B migration; `gain_match` reads both by name, and
+# neither is per-invocation, so the manifest is not their home either.
+# Both can alter a science product — `verbose` selects the diagnostic
+# arithmetic the stage reports, and `upload_intermediate_products`
+# decides whether the gain-matched intermediates become artifacts — so
+# they are release content by the placement criterion, not operational.
+# `upload_intermediate_products` is a quoted string, not a TOML boolean:
+# the reader passes it to `ast.literal_eval`, which requires Python's
+# `True` spelling rather than TOML's `true`.
+verbose = 1
+upload_intermediate_products = "True"
 zero_point_sci_keyword = "ZPTMAG"
 zero_point_ref_keyword = "MAGZP"
 magrefthresmin = 19
