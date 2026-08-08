@@ -994,6 +994,59 @@ class ReleaseContentCompletenessTests(unittest.TestCase):
                 with self.subTest(section=section, key=key):
                     self.assertIn(key, self.release[section])
 
+    def test_every_swarp_key_the_command_builder_reads_exists(self):
+        """`build_swarp_command_line_args`, the third builder of this class.
+
+        Twenty keys were missing from `[swarp]` — the same W4B drop as the
+        awaicgen and sextractor ones. `swarp_header_only` is only the
+        builder's third read, which is why it stood in front of the other
+        nineteen: it failed all 2,158 science attempts of the Q8 smoke run
+        at `resample_reference_image` before any of them could show
+        themselves.
+
+        Three keys are per-attempt paths supplied by the stage body and so
+        are correctly absent from release content. They are spelled out
+        rather than derived, because deriving them — regexing every
+        `swarp_dict[...] =` in the resample function, as the sextractor
+        test derives its seven — would also capture `swarp_subtract_back`,
+        `swarp_back_type` and `swarp_back_default`. Those three are
+        OVERRIDES, assigned only after the first swarp call has already
+        read them: release content must still carry them, and a derived
+        exclusion set would quietly license their removal.
+        """
+        runtime_paths = {"swarp_input_image", "swarp_imageout_name",
+                         "swarp_weightout_name"}
+        for key in self._builder_keys("build_swarp_command_line_args",
+                                      "swarp_dict"):
+            if key in runtime_paths:
+                continue
+            with self.subTest(key=key):
+                self.assertIn(key, self.release["swarp"])
+
+    def test_every_command_line_builder_is_covered_by_this_class(self):
+        """No builder may exist in the utils module without a completeness test.
+
+        The three tests above each arrived reactively, after the builder in
+        question had already failed a live attempt: awaicgen and sextractor
+        from the W9 ramp, swarp from the Q8 smoke run. Each time the fix
+        walked the builder that had just fired and stopped there, so the
+        next uncovered builder was always one live failure away. This
+        closes the enumeration instead: a new `build_*_command_line_args`
+        fails here until it is given a test and listed below.
+        """
+        path = os.path.join(REPO_ROOT, "modules", "utils",
+                            "rapid_pipeline_subs.py")
+        with open(path) as handle:
+            source = handle.read()
+        builders = set(re.findall(r"def (build_\w+_command_line_args)\(",
+                                  source))
+        covered = {"build_awaicgen_command_line_args",
+                   "build_sextractor_command_line_args",
+                   "build_swarp_command_line_args"}
+        self.assertEqual(builders, covered,
+                         "a command-line builder has no completeness test; "
+                         "add one beside the others and list it here")
+
 
 if __name__ == "__main__":
     unittest.main()
