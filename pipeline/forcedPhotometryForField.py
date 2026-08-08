@@ -1117,7 +1117,11 @@ if __name__ == '__main__':
     bash_shebang_cmd = "#!/bin/bash -x"
     stack_size_cmd = "ulimit -s 262144"
     show_stack_size_cmd = "ulimit -a"
-    cforcepsfaper_cmd = f"/code/c/bin/cforcepsfaper -i {diffimglistfile} -a {xydatafile} " +\
+    # Bare name, resolved against the image's PATH: cforcepsfaper ships in
+    # rapid-cmodules under /opt/rapid/bin, not under /code/c/bin, which is
+    # where the retired from-source build used to put it. Same correction as
+    # bkgest's in pipeline/stages/science.py.
+    cforcepsfaper_cmd = f"cforcepsfaper -i {diffimglistfile} -a {xydatafile} " +\
                         f"-o {lightcurvefile} -t 1 -r -v >& cforcepsfaper.out"
 
 

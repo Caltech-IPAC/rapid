@@ -618,21 +618,29 @@ def subtract_background(context) -> None:
     virtue of having been swarped.
     """
     bkgest = context.science_section("bkgest")
-    bkgest_code = SOFTWARE_ROOT() + "/c/bin/bkgest"
-    bkgest_include_dir = SOFTWARE_ROOT() + "/c/include"
 
     filename_bkg_subbed_science_image = context.scratch(
         bkgest["filename_bkg_subbed_science_image"])
     filename_global_clippedmean_sciimage_tbl = context.scratch(
         bkgest["filename_global_clippedmean_sciimage_tbl"])
 
-    run_tool([bkgest_code,
+    # `bkgest` by bare name, like `swarp` and `sextractor`. It ships in
+    # rapid-cmodules, which installs to the /opt/rapid/bin prefix the
+    # Containerfile's PATH owns — the from-source build that put these
+    # binaries under `/code/c/bin` was replaced by that RPM, but this call
+    # kept the old absolute path and so looked where nothing installs.
+    #
+    # The `-a` argument went with it. It is bkgest's OPTIONAL ancillary
+    # FILE ("-a <ancillary_file_path> (Optional)", bkgest_parse_namelist.c),
+    # and it was being passed `/code/c/include` — a directory, not a file,
+    # and one that exists in no image and no branch of this repo. Passing a
+    # non-existent path to an optional argument is not a way to omit it.
+    run_tool(["bkgest",
               "-i", context.product("science_image_pv"),
               "-f", str(bkgest["output_image_type"]),
               "-c", str(bkgest["clippedmean_calc_type"]),
               "-g", str(bkgest["local_clippedmean_grid_spacing"]),
               "-w", str(bkgest["local_clippedmean_input_window"]),
-              "-a", bkgest_include_dir,
               "-ot", filename_global_clippedmean_sciimage_tbl,
               "-o2", filename_bkg_subbed_science_image],
              capture_path=context.workdir.tool_capture_path("bkgest"),

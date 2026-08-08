@@ -386,6 +386,89 @@ def _statistics_lookups_in(module_path: str) -> set:
     return lookups
 
 
+class InHouseCToolInvocationTests(unittest.TestCase):
+    """No caller may reach for the retired `/code/c/bin` build tree.
+
+    RAPID's eight in-house C binaries used to be compiled into
+    `c/bin` inside the image by `c/builds/build_inside_container.sh`.
+    They now ship in the `rapid-cmodules` RPM, which installs them to
+    `/opt/rapid/bin` — the prefix the Containerfile's PATH owns, and the
+    same way `swarp` and `sextractor` are found. The application image
+    deliberately excludes `c/` from its source archive, so a caller using
+    the old absolute path resolves to nothing at all.
+
+    `bkgest` was such a caller, and the Q8 probe found it the expensive
+    way: every science child died at `subtract_background` with "tool not
+    found: '/code/c/bin/bkgest'" — one stage after the swarp fix let the
+    pipeline reach it. `cforcepsfaper` had the identical bug waiting on
+    the forced-photometry path.
+
+    This walks the source rather than the two known sites, so the ninth
+    caller fails here instead of on a ramp.
+    """
+
+    #: Everything rapid-cmodules installs (its %files list).
+    CMODULES_BINARIES = ("bkgest", "cforcepsfaper", "computeOverlapArea",
+                         "generateSmoothLampPattern", "hdrupdate",
+                         "imheaders", "makeTestFitsFile", "verifyHduSums")
+
+    def _sources(self):
+        for sub in ("pipeline", "modules"):
+            for root, _dirs, files in os.walk(os.path.join(REPO_ROOT, sub)):
+                if "/test" in root or root.endswith("/test"):
+                    continue
+                for name in files:
+                    if name.endswith(".py"):
+                        yield os.path.join(root, name)
+
+    def test_no_caller_uses_the_retired_c_bin_path(self):
+        offenders = []
+        for path in self._sources():
+            with open(path) as handle:
+                for number, line in enumerate(handle, 1):
+                    stripped = line.lstrip()
+                    # Comments are skipped deliberately: the two fixed call
+                    # sites explain the retired path by naming it, and a
+                    # test that forbids describing the bug would force the
+                    # explanation out of the code it belongs beside.
+                    if stripped.startswith("#"):
+                        continue
+                    if "c/bin" in line:
+                        offenders.append(
+                            f"{os.path.relpath(path, REPO_ROOT)}:{number}")
+        self.assertEqual(offenders, [],
+                         "these call an in-house C binary through the "
+                         "retired /code/c/bin tree; rapid-cmodules installs "
+                         "them on PATH, so invoke them by bare name")
+
+    def test_bkgest_is_invoked_by_bare_name(self):
+        path = os.path.join(REPO_ROOT, "pipeline", "stages", "science.py")
+        with open(path) as handle:
+            source = handle.read()
+        body = source.split("def subtract_background", 1)[1].split(
+            "\ndef ", 1)[0]
+        self.assertIn('run_tool(["bkgest"', body)
+
+    def test_the_optional_ancillary_argument_is_not_given_a_missing_path(self):
+        """`-a` is bkgest's optional ancillary FILE, and it had a directory.
+
+        It was passed `SOFTWARE_ROOT() + "/c/include"` — a path that exists
+        in no image and on no branch of this repo. An optional argument is
+        omitted by not passing it, never by passing something absent.
+        """
+        path = os.path.join(REPO_ROOT, "pipeline", "stages", "science.py")
+        with open(path) as handle:
+            source = handle.read()
+        body = source.split("def subtract_background", 1)[1].split(
+            "\ndef ", 1)[0]
+        # Comments stripped: this asserts about what the stage RUNS, and
+        # the lines explaining why `-a` went away necessarily name it.
+        code = "\n".join(line for line in body.split("\n")
+                         if not line.lstrip().startswith("#"))
+        self.assertNotIn("c/include", code)
+        self.assertNotIn('"-a"', code)
+
+
 class StatisticsKeyNameTests(unittest.TestCase):
     """Finding 8. `clippedmed` and five others never existed.
 
