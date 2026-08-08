@@ -524,6 +524,27 @@ precisely the mistake the attempt-record design exists to prevent.
 The fix-round budget is exhausted at three cycles, so this one is
 recorded and not attempted. Re-plan is the owner's.
 
+What the ramp needs, now that a child gets this far
+-----------------------------------------------------
+
+The ramp's mechanics are settled and its gates are unchanged — width-2
+probe, then 180, then 540, each gated on that step's attempt records, and
+a width-2 probe before each widening. What the revision-26 probe changes
+is the **time budget** for running them.
+
+Every earlier probe resolved in about four minutes because it failed
+early. A child that reaches the difference catalogues takes at least an
+order of magnitude longer, and the drip phase then has to run long enough
+to say something about steady-state arrival. Planning the ramp on the
+old four-minute figure would under-book it badly.
+
+The submission side is ready: ``scripts/q8_ramp_probe.py`` takes the
+width as an argument, so 180 and 540 are the same command with a
+different number, and the default ``max_batch_size`` of 500 means 180 is
+one array while 540 cuts into two — worth knowing before reading the
+run-id suffixes, since ``submit_gathered`` re-scopes each batch to
+``<run_id>-<n>``.
+
 The exit criterion is unmet
 ---------------------------
 
