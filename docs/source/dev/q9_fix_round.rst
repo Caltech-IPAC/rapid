@@ -354,6 +354,13 @@ measurements are the first run's, carried forward, and remain
        pin down. Two children at width 2 on a dedicated host say nothing
        about what several hundred concurrent children do to the same
        stage — that is exactly what 180 and 540 are for.
+
+       That the job was working rather than wedged is established from
+       the host, not from the absence of an error: the ``r6i.2xlarge``
+       carrying both children held a flat **~25.2% CPU for twenty
+       minutes** — 2 of 8 vCPUs pinned, one per child. **The science path
+       is single-threaded per child**, which is the fact that makes the
+       packing question a memory question rather than a CPU one.
    * - Cold start, prompt queue
      - **measured twice**
      - Submission 06:22:08 → first stage 06:25:15 — **3 min 07 s**,
