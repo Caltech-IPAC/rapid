@@ -553,6 +553,16 @@ one array while 540 cuts into two — worth knowing before reading the
 run-id suffixes, since ``submit_gathered`` re-scopes each batch to
 ``<run_id>-<n>``.
 
+**The job definitions carry no timeout** (``describe-jobs`` reports
+``timeout: null``), which was harmless while every child failed inside
+four minutes and is not harmless now that the normal case is tens of
+minutes. A child that genuinely hangs will hold its slot indefinitely,
+and at 540-wide that is 540 slots. Setting an ``attemptDurationSeconds``
+above the measured worst case — once the ramp establishes what that is —
+is proposed, not ratified; the measurement has to come first, because a
+timeout set below the real distribution manufactures exactly the mass
+identical-failure class the ramp's stop condition watches for.
+
 The exit criterion is unmet
 ---------------------------
 
