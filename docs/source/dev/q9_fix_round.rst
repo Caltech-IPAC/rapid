@@ -26,9 +26,13 @@ Cycles used
        attempts at 0.51 s
    * - 2
      - ``bkgest`` and ``cforcepsfaper`` unreachable
-     - **Code half fixed and merged; image half blocked on disk.** The
-       base build installed ``rapid-cmodules`` successfully and then
-       died writing its final layer — rapid-admin has no room
+     - **Fixed and live at revision 23.** RPM installed into a rebuilt
+       base, callers moved off ``/code/c/bin``; the binary now runs. It
+       exposed cycle 3 one line further on
+   * - 3
+     - ``bkgest_errcodes.h`` not shipped by ``rapid-cmodules``
+     - **Root-caused, not fixed** — the runtime message catalogue is in
+       no image; the fix is an RPM rebuild, outside this session's scope
    * - 3
      - unused
      -
@@ -42,14 +46,13 @@ Counts against caps
    * - Cap
      - Used
    * - Batch children (≤1,500)
-     - **2**
+     - **4** — two width-2 probes, one per image revision
    * - Fix cycles (≤3)
      - 1 fixed, 1 root-caused
    * - Application image rebuild + repin (≤2)
-     - **1** (revision 22, the swarp fix)
-   * - Base image rebuild (≤1)
-     - **1 attempt, no artifact** — three tries, none reaching a pushed
-       image; the last installed the RPM and died writing its layer
+     - **2** — revision 22 (swarp), revision 23 (cmodules base)
+   * - Base image rebuild
+     - **1 artifact**, after three attempts lost to disk
    * - Deploys per stack (≤2)
      - rapid-batch 1, rapid-reconciler-service 1
 
@@ -133,37 +136,106 @@ suite instead of on a ramp. Proven by refusal: restoring the ``bkgest``
 path fails two tests, restoring the ``cforcepsfaper`` path fails one,
 restoring the bogus ``-a`` fails one, and the fixed tree passes.
 
-The image half is blocked on disk
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+The image half needed disk before it needed anything else
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-The base rebuild ran and **the diagnosis is confirmed**: the group
+The base rebuild confirmed the diagnosis on its first run: the group
 install resolved and installed ``rapid-cmodules-1.0.0-2.el10`` alongside
-the other sixteen packages, "Complete!". The build then failed writing
-its final layer — ``no space left on device``.
+the other sixteen packages, "Complete!" — so comps.xml and the RPM were
+always right and the live base simply never carried it. That build then
+died writing its final layer, ``no space left on device``, as did two
+before it.
 
-rapid-admin has a 64 G root with ~14 G free at rest, and carries **47
-cached pipeline image tags spanning 12 days: 24.25 GB of images plus
-13.44 GB of unused volumes, all reclaimable, none active**. A pipeline
-image is ~5 GB, so a build needs more headroom than the host has while
-that cache sits there.
+rapid-admin has a 64 G root and carried **47 cached pipeline image tags
+spanning 12 days — 24.25 GB of images plus 13.44 GB of unused volumes,
+all reclaimable, none active** — against a ~5 GB image. Three attempts
+failed progressively later as the staging set shrank: the whole published
+repo (3.4 G staged) at the COPY, the ``rapid-*`` subset at the COPY, and
+the comps-group-scoped newest-build set (38 packages, every mandatory
+member covered) at the layer commit.
 
-Three attempts, each failing later than the last as the staging set
-shrank: the whole published repo (3.4 G staged) died at the COPY; the
-``rapid-*`` subset died at the COPY; the comps-group-scoped newest-build
-set (38 packages, every mandatory member covered) got all the way through
-the group install and died committing the layer.
+**The cache prune, once authorized, was the whole fix.** Every removal
+was gated on the tag resolving in ECR first, so each is recoverable by
+re-pull: 42 tags removed, 3 skipped as untagged and not provably
+re-pullable, 2 kept because the running reconciler needed them, and the
+volume set cleared. Free space went 14 G → 27 G. The identical build then
+succeeded.
 
-What this session reclaimed is its own: the staged RPM trees and the
-untagged layers from its failed builds. The 24.25 GB of tagged images
-belongs to earlier sessions' builds. They are local caches of images that
-exist immutably in ECR, so pruning them is recoverable — but it is a bulk
-deletion this lane did not have a go for, and the authorization covered a
-base rebuild rather than a cache purge. Recorded as proposed rather than
-taken.
+**Base:** ``base-q9cmodules-*``, ``sha256:0b35fda6…`` — the digest is the
+identity; the tag carries a build timestamp whose digit run trips the
+repo's twelve-digit account-number guard, so it is elided rather than
+allowlisted.
+**Application:** ``17a69c3-20260808``, ``sha256:311741ab…``, from smdc
+``17a69c3`` over that base.
 
-Nothing partial was left behind: no ``base-q9cmodules-*`` tag reached
-ECR, no build container survives, and the host is back at its 79%
-baseline.
+Verified in both digests rather than inferred from commit order:
+``rapid-cmodules`` installed, ``bkgest`` and ``cforcepsfaper`` present,
+executable, resolvable on ``PATH``, and loading with no missing shared
+libraries, and ``/code/c/bin`` absent as designed.
+
+**The comps-vs-artifact audit passes**: all fourteen mandatory members of
+the ``rapid-pipeline`` group compared against the built image's
+``rpm -qa``, zero missing. That is the check whose absence let the
+original gap survive, and running it is how the fix was confirmed rather
+than assumed.
+
+Scan gate on both images: CVE-identical to the digests they replace,
+diffed by vulnerability ID rather than severity count. The application
+image's first gate read was **discarded as vacuous** — the scan was still
+``PENDING`` and returned an empty finding list, which is not a clean
+result. Re-read once ``ACTIVE``: nine findings on both sides, identical.
+
+Pins consistent at all five sites, both job definitions at **revision
+23**, and both Spot CEs stayed DISABLED across both deploys.
+
+The rev-23 probe: the binary runs, and finds a third defect
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Two children, job definition revision 23. **Submissions: 4 of the
+≤1,500 ceiling.**
+
+``bkgest`` is now found and executed. The stage that had failed instantly
+at 0.00 s with "tool not found" now **runs for 2.74 s** and the tool
+prints its own banner, its parameters, and "A total of 0 NaN's were
+produced in the results. Processing time: 2.724496 seconds". The image
+half of the fix works.
+
+It still exits 255, for a third reason in the same chain:
+
+.. code-block:: text
+
+    *** BKE_log_writer: Could not open bkgest_errcodes.h
+    bkgest Status Message      0xefff
+    ERRCODE_FILE_NOT_FOUND from Function 0x0000: LOG_WRITER
+    Ancillary Data-File Path = .
+
+``bkgest_errcodes.h`` is not a compile-time header despite its name: it
+is a **runtime message catalogue**, read by ``bkgest_log_writer.c`` to
+turn status codes into text. That function is what the ``-a`` ancillary
+path was for, and removing ``-a`` as a bogus argument was half right and
+half wrong — the value it carried (``/c/include``) was indeed a
+non-existent path, but the argument itself is load-bearing, and without
+it the path defaults to ``.``, where the file also is not.
+
+The consequence is out of proportion to the cause, and worth stating
+precisely: **the science computation completed**. The failure is in the
+message lookup afterwards, which sets ``I_status`` and so becomes a
+non-zero exit; the stage is failed by its error reporter rather than by
+its arithmetic.
+
+The file exists in the repo at ``c/src/bkgest/bkgest_errcodes.h``, and
+**``rapid-cmodules`` ships binaries only** — ``rpm -ql`` lists the eight
+executables and no data files, and the image carries the catalogue
+nowhere. The application image excludes ``c/`` by design, so neither home
+provides it. That is a packaging gap in the RPM, and closing it properly
+means rebuilding and republishing ``rapid-cmodules`` with the catalogue
+installed beside the binaries and ``-a`` restored to point at it —
+outside what this session was authorized to do.
+
+Records again did the work: the tool's full stdout was in the attempt's
+diagnostics bundle, the failing stage carried its argv and exit code, and
+nothing needed log archaeology. Both attempts carry ``tool_failure`` from
+the v1 allowlist; zero unexplained, zero flagged.
 
 Measured parameters
 -------------------
@@ -255,12 +327,15 @@ located precisely enough to fix in one bounded step.
 Proposed, not ratified
 ----------------------
 
-* **Reclaim rapid-admin's image cache** — 24.25 GB of tagged images and
-  13.44 GB of unused volumes, 47 pipeline tags over 12 days, none active
-  and all present in ECR. This is what blocks the base rebuild, and at
-  ~5 GB per image and a build most sessions, the host returns to this
-  state within a few builds however tonight's rebuild is finished. A
-  scheduled prune is the durable form.
+* **Ship ``bkgest_errcodes.h`` in ``rapid-cmodules``** and restore
+  ``bkgest``'s ``-a`` to point at it. The RPM installs eight binaries and
+  no data files; the catalogue its own logger reads at runtime is in no
+  image. Without it every ``bkgest`` invocation exits non-zero after
+  completing its work correctly.
+* **A scheduled prune for rapid-admin's image cache.** Tonight's
+  reclamation was one-off: 42 tags removed, 14 G → 27 G. At ~5 GB per
+  image and a build most sessions, the host returns to a wedged state
+  within a few builds.
 * **Measure the base's RPM set against ``comps.xml`` in CI**, at the
   artifact rather than in a comment. The coverage check that asserted
   "nothing left to build" was right about intent and wrong about the
@@ -281,21 +356,18 @@ Proposed, not ratified
 Left for the owner
 ------------------
 
-1. **Free space on rapid-admin**, then finish the base rebuild. The
-   build is proven correct up to its final layer write — the group
-   install put ``rapid-cmodules`` in place — so this is a rerun, not a
-   redesign. Roughly 10 GB of headroom is enough.
-2. **Rebuild the application image on the new base** and repin to
-   revision 23. ``build.sh`` live-resolves the newest ``base-*`` tag by
-   push time, so no pin edit is needed; the code half of the fix is
-   already on ``smdc``.
-3. **A width-2 probe on revision 23** — both children must clear
-   ``subtract_background`` and reach terminal with clean records.
-4. Then the ramp: 180 → 540 → drip, each step gated on clean attempt
+1. **Rebuild ``rapid-cmodules`` with the message catalogue installed**
+   beside the binaries, republish, rebuild the base and application
+   images on it, and restore ``bkgest``'s ``-a`` to the installed path.
+   This is the one thing between here and a science ramp.
+2. **A width-2 probe on that revision** — both children must clear
+   ``subtract_background`` and reach terminal with clean records. The
+   stage is already proven to run; what is unproven is a zero exit.
+3. Then the ramp: 180 → 540 → drip, each step gated on clean attempt
    records. The mechanics are proven — the runner submits a bounded,
    capped array with no VPO involved.
-5. A width-2 probe before each widening. It cost two children and found
-   a defect that would have cost 180.
+4. A width-2 probe before each widening. Four children have now bought
+   three distinct defects, each of which would have cost 180.
 
 Carried forward unactioned: registration granularity (a handful of bad
 records aborts the whole operator pass — now demonstrated at fourteen),

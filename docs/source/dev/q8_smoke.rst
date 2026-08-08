@@ -846,15 +846,33 @@ the staging set shrank: the whole repo (3.4 G) at the COPY, the
 ``rapid-*`` subset at the COPY, and the comps-scoped newest-build set —
 38 packages, every mandatory member covered — at the layer commit.
 
-The session reclaimed its own staging and untagged layers. The 24.25 GB
-of tagged images belongs to earlier sessions; they are local caches of
-images held immutably in ECR, so pruning is recoverable, but it is a bulk
-deletion this lane had no go for. Proposed, not taken.
+Once the cache prune was authorized it was the whole fix: 42 tags
+removed, each gated on resolving in ECR first so every removal is
+recoverable by re-pull, 3 skipped as untagged and unidentifiable, 2 kept
+for the running reconciler, volumes cleared. Free space 14 G → 27 G, and
+the identical build then succeeded.
 
-**The code half of the fix landed regardless**, and it was needed
-independently: ``rapid-cmodules`` installs to ``/opt/rapid/bin`` while
-both callers named the retired ``/code/c/bin``, so shipping the RPM alone
-would have left the binaries just as unreachable.
+**Base** ``base-q9cmodules-*`` (``sha256:0b35fda6…``) and
+**application** ``17a69c3-20260808`` (``sha256:311741ab…``) both carry
+``rapid-cmodules``, verified in-image: binaries present, executable, on
+``PATH``, loading with no missing shared libraries. The comps-vs-artifact
+audit reports **zero mandatory members missing** — the check whose
+absence let the gap survive. Both scan gates CVE-identical to the digests
+they replace. Job definitions at **revision 23**, pins consistent at all
+five sites, Spot DISABLED throughout.
+
+**The code half was needed independently**: ``rapid-cmodules`` installs
+to ``/opt/rapid/bin`` while both callers named the retired
+``/code/c/bin``, so shipping the RPM alone would have left the binaries
+just as unreachable.
+
+The rev-23 probe then found the next defect one line further on.
+``bkgest`` runs — 2.74 s, its own banner, "0 NaN's produced" — and still
+exits 255, because ``bkgest_errcodes.h``, the **runtime message
+catalogue** its logger reads, is shipped by neither the RPM (binaries
+only) nor the image (``c/`` excluded by design). The science completed;
+the error reporter failed and took the exit code with it. An RPM rebuild
+closes it.
 
 Live state at stop
 ------------------
@@ -865,7 +883,7 @@ Live state at stop
 * No VPO process on rapid-admin — the rogue-VPO guard never had to fire,
   because no VPO was ever started
 * Both Spot CEs DISABLED; both on-demand ENABLED/VALID
-* Job definitions at **revision 22** on ``sha256:5148f0fe``
+* Job definitions at **revision 23** on ``sha256:311741ab``
 * Reconciler active on the same digest, ``errors: 0``
 * Template, stack parameter, both definitions and the reconciler agree
 
