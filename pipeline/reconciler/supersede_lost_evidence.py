@@ -207,13 +207,28 @@ def main(argv=None):
 
     from database.modules.utils.rapid_db_connect import (ConnectionExecutor,
                                                          connection)
+    from pipeline.reconciler.main import (_assumed_session,
+                                          _database_credentials)
+    from pipeline.runtime.environment import resolve_region
+
+    # The identity matters, and getting it wrong is a documented failure.
+    # The ambient credential inside this container is the host's instance
+    # role, which is deliberately NOT granted the orchestrator secret or the
+    # records bucket — the reconciler crashlooped on exactly that in W8.
+    # Chain into the orchestrator role first and read both the secret and S3
+    # through it, reusing the service's own helpers rather than opening a
+    # third credential path that could drift from them.
+    session = _assumed_session(os.environ.get("RAPID_RECONCILER_ROLE_ARN"),
+                               resolve_region())
+    credentials = _database_credentials(session)
 
     bucket = os.environ["RAPID_RECORDS_BUCKET"]
     prefix = os.environ["RAPID_RECORDS_PREFIX"]
-    store = S3ObjectStore(bucket)
+    store = S3ObjectStore(bucket, client=session.client("s3"))
 
     reports = []
-    with connection("rapid-supersede-lost-evidence", lane="transaction") as conn:
+    with connection("rapid-supersede-lost-evidence", lane="transaction",
+                    credentials=credentials) as conn:
         rows = select_rows(conn, args.run_prefix)
         for row in rows:
             reports.append(supersede(conn, store, prefix, row, args.apply,
