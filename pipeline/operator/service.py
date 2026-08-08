@@ -379,42 +379,27 @@ def _gatherer(session, parameters, operational_class, operator_input,
               endpoint, credentials):
     """The ready-work query for one class, bound to this invocation's window.
 
-    Returns a callable so the operator can ask for ready work each poll
-    without knowing how it is found — which is also what lets a test
-    supply a list.
+    Delegates to `pipeline.operator.gathering`, which carries the operator's
+    own copies of `mjd_window` and `min_images_to_coadd`. Those used to be
+    imported from `pipeline.virtualPipelineOperator` — and importing that
+    module ran the old operator's startup, which read this process's argv
+    and exited 64 demanding STARTDATETIME. See that module's header.
     """
-    from pipeline.virtualPipelineOperator import (mjd_window,
-                                                  min_images_to_coadd,
-                                                  reference_window_override_for_run)
-    from submission import gathering
+    from pipeline.operator.gathering import gatherer_for
 
-    start = operator_input.start
-    end = operator_input.end
+    return gatherer_for(
+        operational_class, operator_input, parameters,
+        connection_factory=_gather_connection_factory(endpoint, credentials),
+        s3_client=session.client("s3"))
 
-    def gather():
-        from database.modules.utils.rapid_db_connect import connection
-        start_mjdobs, end_mjdobs = mjd_window(start, end)
-        with connection("rapid-vpo-gather", lane="transaction",
-                        endpoint=endpoint, credentials=credentials) as conn:
-            import database.modules.utils.rapid_db as db
-            dbh = db.RAPIDDB.borrowing(conn)
-            if operational_class.name == opclasses.REFERENCE_CONSTRUCTION:
-                override = reference_window_override_for_run()
-                return gathering.gather_reference_units(
-                    dbh, start, end,
-                    start_mjdobs=start_mjdobs, end_mjdobs=end_mjdobs,
-                    reference_window=gathering.reference_observation_window(
-                        override),
-                    min_images_to_coadd=min_images_to_coadd(),
-                    s3_client=session.client("s3"),
-                    job_bucket=parameters["s3/products-bucket"],
-                    run_id=None)
-            return gathering.gather_science_units(
-                dbh, start, end,
-                start_mjdobs=start_mjdobs, end_mjdobs=end_mjdobs,
-                min_images_to_coadd=min_images_to_coadd())
 
-    return gather
+def _gather_connection_factory(endpoint, credentials):
+    from database.modules.utils.rapid_db_connect import connection
+
+    def factory():
+        return connection("rapid-vpo-gather", lane="transaction",
+                          endpoint=endpoint, credentials=credentials)
+    return factory
 
 
 if __name__ == "__main__":

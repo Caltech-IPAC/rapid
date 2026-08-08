@@ -45,170 +45,216 @@ python_cmd = 'python3.11'
 # silently win.
 
 
-# Print diagnostics.
-
-print("swname =", swname)
-print("swvers =", swvers)
-print("cfg_filename_only =", cfg_filename_only)
-print("python_cmd =", python_cmd)
-
-
-# Compute start time for benchmark.
-
-start_time_benchmark = time.time()
-start_time_benchmark_at_start = start_time_benchmark
-
-
-# Compute processing datetime (UT) and processing datetime (Pacific time).
-
-datetime_utc_now = datetime.now(timezone.utc)
-proc_utc_datetime = datetime_utc_now.strftime('%Y-%m-%dT%H:%M:%SZ')
-datetime_pt_now = datetime_utc_now.replace(tzinfo=timezone.utc).astimezone(tz=to_zone)
-proc_pt_datetime_started = datetime_pt_now.strftime('%Y-%m-%dT%H:%M:%S PT')
-
-print("proc_utc_datetime =",proc_utc_datetime)
-print("proc_pt_datetime_started =",proc_pt_datetime_started)
-
-
-# Initialize handler.
-
-istop = 0
-
-def signal_handler(signum, frame):
-    print('Caught signal', signum)
-    global istop
-    istop = 1
-
-
-# Get processing date of interest from command-line argument.
-# This only needs to be given for running the VPO for just one specific processing date.
-
-try:
-    datearg = (sys.argv)[1]
-except IndexError:
-    datearg = None
-
-print("datearg =",datearg)
-
-
-# Read environment variables.
-
-rapid_sw = os.getenv('RAPID_SW')
-
-if rapid_sw is None:
-
-    print("*** Error: Env. var. RAPID_SW not set; quitting...")
-    exit(64)
-
-rapid_work = os.getenv('RAPID_WORK')
-
-if rapid_work is None:
-
-    print("*** Error: Env. var. RAPID_WORK not set; quitting...")
-    exit(64)
-
-cfg_path = rapid_sw + "/cdf"
-
-print("rapid_sw =",rapid_sw)
-print("cfg_path =",cfg_path)
-
-
-# Script paths, derived from the one software root rather than repeating
-# it (W4 single-homing sweep).
-
-pipeline_code = os.path.join(rapid_sw, "pipeline")
-load_psfcat_into_db_sources_code = os.path.join(pipeline_code, 'loadPSFCatIntoDBSourcesTable.py')
-crossmatch_sources_code = os.path.join(pipeline_code, 'crossMatchSources.py')
-compute_statistics_for_astroobjects_code = os.path.join(pipeline_code, 'computeStatisticsForAstroObjects.py')
-prune_notbest_merges_code = os.path.join(pipeline_code, 'pruneNotBestMerges.py')
-
-# The launcher and registration script paths that used to live here are gone
-# with the scripts themselves (W6 cutover fence). Submission, the completion
-# wait and registration are now three function calls into `pipeline.seams`
-# rather than three subprocess execs:
+# THIS MODULE IS IMPORTABLE AGAIN (2026-08-08, VPO service-shape
+# restructure). Everything from here to the end of the startup block below
+# used to run AT IMPORT: reading `sys.argv[1]`, requiring RAPID_SW,
+# STARTDATETIME and ENDDATETIME in the environment, and calling `exit(64)`
+# when they were absent. So `from pipeline.virtualPipelineOperator import
+# mjd_window` — borrowing one pure function — ran the whole of the old
+# operator's startup as a side effect.
 #
-#   launchSciencePipelinesForDateTimeRangeWithRefImageWindow.py  -> seams.submit_units
-#   awsBatchSubmitJobs_launchPostProcPipelinesForProcDate.py     -> seams.submit_units
-#   launchBunchOfReferenceImagePipelines.py                      -> seams.submit_units
-#   parallelRegisterCompletedJobsInDB.py                         -> seams.run_registration
-#   parallelRegisterCompletedJobsInDBAfterPostProc.py            -> seams.run_registration
-#   wait_until_aws_batch_jobs_finished (describe_jobs, one call
-#     per job per poll, no timeout)                              -> seams.wait_for_completion
+# Found live on rapid-admin: the restructured service's first live
+# rehearsal resolved its credential, logged "REHEARSAL MODE", and then died
 #
-# The four scripts still exec'd below (loadPSFCat, crossMatch,
-# computeStatistics, pruneNotBestMerges) are science-layer post-processing,
-# not part of the completion chain, and are untouched by this fence.
-
-
-# AWS credentials come from boto3's default chain (job role, instance
-# role, or SSO) — no explicit key pair needed or read here.
-
-
-# To process OpenUniverse simulation images, environment variables STARTDATETIME and ENDDATETIME
-# specify observation datetimes.  Later, this will be augmented with code to query the
-# SOCProcs database table for controlling the processing the Roman Space Telescope WFI data.
+#     datearg = --start
+#     *** Error: Env. var. STARTDATETIME not set; quitting...
 #
-# Inputs are observaton start and end datetimes of exposures to be processed.
-# E.g., startdatetime = "2028-09-08 00:18:00", enddatetime = "2028-09-11 00:00:00"
+# because the gather step's import re-read the NEW operator's argv, took
+# `--start` as this script's legacy positional processing date, and then
+# demanded the environment interface the restructure exists to retire. An
+# unimportable module in a package that other code must import from is a
+# hazard to every future caller, not just that one.
+#
+# The fix is the standard one and changes nothing about running this file
+# as a script: the startup work moves into `_startup()`, called from the
+# `__main__` block at the bottom, so `python3 virtualPipelineOperator.py`
+# behaves exactly as before while `import` no longer executes it. The
+# module-level names it sets are still module-level — `_startup` declares
+# them global — because the phase logic below reads them by name.
 
-startdatetime = os.getenv('STARTDATETIME')
+def _startup():
+    """The script startup this file used to do at import time."""
+    # Every name this used to bind at module level stays a module-level
+    # name: the phase logic in the `__main__` block below reads them all by
+    # name, so a missing `global` here would turn one of them into a local
+    # and leave the reader with a NameError at run time. Enumerated in full
+    # rather than trimmed to the ones that looked used.
+    global awaicgen_output_mosaic_image_file, cfg_path
+    global compute_statistics_for_astroobjects_code, config_input
+    global config_input_filename, crossmatch_sources_code, datearg
+    global datetime_pt_now, datetime_utc_now, debug, enddatetime, istop
+    global job_config_filename_base, job_logs_s3_bucket_base
+    global load_psfcat_into_db_sources_code, pipeline_code
+    global proc_pt_datetime_started, proc_utc_datetime
+    global product_config_filename_base, product_s3_bucket_base
+    global prune_notbest_merges_code, rapid_sw, rapid_work
+    global start_time_benchmark, start_time_benchmark_at_start
+    global startdatetime, verbose, zogy_output_diffimage_file
 
-if startdatetime is None:
+    # Print diagnostics.
 
-    print("*** Error: Env. var. STARTDATETIME not set; quitting...")
-    exit(64)
-
-enddatetime = os.getenv('ENDDATETIME')
-
-if enddatetime is None:
-
-    print("*** Error: Env. var. ENDDATETIME not set; quitting...")
-    exit(64)
-
-
-# Read input parameters from .ini file.
-
-config_input_filename = cfg_path + "/" + cfg_filename_only
-config_input = configparser.ConfigParser()
-config_input.read(config_input_filename)
-
-verbose = int(config_input['JOB_PARAMS']['verbose'])
-debug = int(config_input['JOB_PARAMS']['debug'])
-# `job_info_s3_bucket_base` is NOT read here. It named the legacy IMSS-era
-# bucket (`rapid-pipeline-files`) that this account does not carry; the one
-# submission-path use of it was the reference gather's `job_bucket`, and
-# reading the .ini there made every gather fail at PutObject with
-# AccessDenied (see the manifest-bucket comment below). The buckets come
-# from the parameter tree.
-job_logs_s3_bucket_base = config_input['JOB_PARAMS']['job_logs_s3_bucket_base']
-product_s3_bucket_base = config_input['JOB_PARAMS']['product_s3_bucket_base']
-job_config_filename_base = config_input['JOB_PARAMS']['job_config_filename_base']
-product_config_filename_base = config_input['JOB_PARAMS']['product_config_filename_base']
-awaicgen_output_mosaic_image_file = config_input['AWAICGEN']['awaicgen_output_mosaic_image_file']
-zogy_output_diffimage_file = config_input['ZOGY']['zogy_output_diffimage_file']
-
-
-# Print variables.
-
-print("verbose =",verbose)
-print("debug =",debug)
-print("job_logs_s3_bucket_base =",job_logs_s3_bucket_base)
-print("product_s3_bucket_base =",product_s3_bucket_base)
-print("job_config_filename_base =",job_config_filename_base)
-print("product_config_filename_base =",product_config_filename_base)
-print("awaicgen_output_mosaic_image_file =",awaicgen_output_mosaic_image_file)
-print("zogy_output_diffimage_file =",zogy_output_diffimage_file)
-print("startdatetime =",startdatetime)
-print("enddatetime =",enddatetime)
-print("load_psfcat_into_db_sources_code =", load_psfcat_into_db_sources_code)
-print("crossmatch_sources_code =", crossmatch_sources_code)
+    print("swname =", swname)
+    print("swvers =", swvers)
+    print("cfg_filename_only =", cfg_filename_only)
+    print("python_cmd =", python_cmd)
 
 
-# Set signal hander.
+    # Compute start time for benchmark.
 
-signal.signal(signal.SIGINT, signal_handler)
-signal.signal(signal.SIGQUIT, signal_handler)
-signal.signal(signal.SIGTERM, signal_handler)
+    start_time_benchmark = time.time()
+    start_time_benchmark_at_start = start_time_benchmark
+
+
+    # Compute processing datetime (UT) and processing datetime (Pacific time).
+
+    datetime_utc_now = datetime.now(timezone.utc)
+    proc_utc_datetime = datetime_utc_now.strftime('%Y-%m-%dT%H:%M:%SZ')
+    datetime_pt_now = datetime_utc_now.replace(tzinfo=timezone.utc).astimezone(tz=to_zone)
+    proc_pt_datetime_started = datetime_pt_now.strftime('%Y-%m-%dT%H:%M:%S PT')
+
+    print("proc_utc_datetime =",proc_utc_datetime)
+    print("proc_pt_datetime_started =",proc_pt_datetime_started)
+
+
+    # Initialize handler.
+
+    istop = 0
+
+    def signal_handler(signum, frame):
+        print('Caught signal', signum)
+        global istop
+        istop = 1
+
+
+    # Get processing date of interest from command-line argument.
+    # This only needs to be given for running the VPO for just one specific processing date.
+
+    try:
+        datearg = (sys.argv)[1]
+    except IndexError:
+        datearg = None
+
+    print("datearg =",datearg)
+
+
+    # Read environment variables.
+
+    rapid_sw = os.getenv('RAPID_SW')
+
+    if rapid_sw is None:
+
+        print("*** Error: Env. var. RAPID_SW not set; quitting...")
+        exit(64)
+
+    rapid_work = os.getenv('RAPID_WORK')
+
+    if rapid_work is None:
+
+        print("*** Error: Env. var. RAPID_WORK not set; quitting...")
+        exit(64)
+
+    cfg_path = rapid_sw + "/cdf"
+
+    print("rapid_sw =",rapid_sw)
+    print("cfg_path =",cfg_path)
+
+
+    # Script paths, derived from the one software root rather than repeating
+    # it (W4 single-homing sweep).
+
+    pipeline_code = os.path.join(rapid_sw, "pipeline")
+    load_psfcat_into_db_sources_code = os.path.join(pipeline_code, 'loadPSFCatIntoDBSourcesTable.py')
+    crossmatch_sources_code = os.path.join(pipeline_code, 'crossMatchSources.py')
+    compute_statistics_for_astroobjects_code = os.path.join(pipeline_code, 'computeStatisticsForAstroObjects.py')
+    prune_notbest_merges_code = os.path.join(pipeline_code, 'pruneNotBestMerges.py')
+
+    # The launcher and registration script paths that used to live here are gone
+    # with the scripts themselves (W6 cutover fence). Submission, the completion
+    # wait and registration are now three function calls into `pipeline.seams`
+    # rather than three subprocess execs:
+    #
+    #   launchSciencePipelinesForDateTimeRangeWithRefImageWindow.py  -> seams.submit_units
+    #   awsBatchSubmitJobs_launchPostProcPipelinesForProcDate.py     -> seams.submit_units
+    #   launchBunchOfReferenceImagePipelines.py                      -> seams.submit_units
+    #   parallelRegisterCompletedJobsInDB.py                         -> seams.run_registration
+    #   parallelRegisterCompletedJobsInDBAfterPostProc.py            -> seams.run_registration
+    #   wait_until_aws_batch_jobs_finished (describe_jobs, one call
+    #     per job per poll, no timeout)                              -> seams.wait_for_completion
+    #
+    # The four scripts still exec'd below (loadPSFCat, crossMatch,
+    # computeStatistics, pruneNotBestMerges) are science-layer post-processing,
+    # not part of the completion chain, and are untouched by this fence.
+
+
+    # AWS credentials come from boto3's default chain (job role, instance
+    # role, or SSO) — no explicit key pair needed or read here.
+
+
+    # To process OpenUniverse simulation images, environment variables STARTDATETIME and ENDDATETIME
+    # specify observation datetimes.  Later, this will be augmented with code to query the
+    # SOCProcs database table for controlling the processing the Roman Space Telescope WFI data.
+    #
+    # Inputs are observaton start and end datetimes of exposures to be processed.
+    # E.g., startdatetime = "2028-09-08 00:18:00", enddatetime = "2028-09-11 00:00:00"
+
+    startdatetime = os.getenv('STARTDATETIME')
+
+    if startdatetime is None:
+
+        print("*** Error: Env. var. STARTDATETIME not set; quitting...")
+        exit(64)
+
+    enddatetime = os.getenv('ENDDATETIME')
+
+    if enddatetime is None:
+
+        print("*** Error: Env. var. ENDDATETIME not set; quitting...")
+        exit(64)
+
+
+    # Read input parameters from .ini file.
+
+    config_input_filename = cfg_path + "/" + cfg_filename_only
+    config_input = configparser.ConfigParser()
+    config_input.read(config_input_filename)
+
+    verbose = int(config_input['JOB_PARAMS']['verbose'])
+    debug = int(config_input['JOB_PARAMS']['debug'])
+    # `job_info_s3_bucket_base` is NOT read here. It named the legacy IMSS-era
+    # bucket (`rapid-pipeline-files`) that this account does not carry; the one
+    # submission-path use of it was the reference gather's `job_bucket`, and
+    # reading the .ini there made every gather fail at PutObject with
+    # AccessDenied (see the manifest-bucket comment below). The buckets come
+    # from the parameter tree.
+    job_logs_s3_bucket_base = config_input['JOB_PARAMS']['job_logs_s3_bucket_base']
+    product_s3_bucket_base = config_input['JOB_PARAMS']['product_s3_bucket_base']
+    job_config_filename_base = config_input['JOB_PARAMS']['job_config_filename_base']
+    product_config_filename_base = config_input['JOB_PARAMS']['product_config_filename_base']
+    awaicgen_output_mosaic_image_file = config_input['AWAICGEN']['awaicgen_output_mosaic_image_file']
+    zogy_output_diffimage_file = config_input['ZOGY']['zogy_output_diffimage_file']
+
+
+    # Print variables.
+
+    print("verbose =",verbose)
+    print("debug =",debug)
+    print("job_logs_s3_bucket_base =",job_logs_s3_bucket_base)
+    print("product_s3_bucket_base =",product_s3_bucket_base)
+    print("job_config_filename_base =",job_config_filename_base)
+    print("product_config_filename_base =",product_config_filename_base)
+    print("awaicgen_output_mosaic_image_file =",awaicgen_output_mosaic_image_file)
+    print("zogy_output_diffimage_file =",zogy_output_diffimage_file)
+    print("startdatetime =",startdatetime)
+    print("enddatetime =",enddatetime)
+    print("load_psfcat_into_db_sources_code =", load_psfcat_into_db_sources_code)
+    print("crossmatch_sources_code =", crossmatch_sources_code)
+
+
+    # Set signal hander.
+
+    signal.signal(signal.SIGINT, signal_handler)
+    signal.signal(signal.SIGQUIT, signal_handler)
+    signal.signal(signal.SIGTERM, signal_handler)
 
 
 #-------------------------------------------------------------------------------------------------------------
@@ -768,6 +814,11 @@ def registration_callback(factory, conn):
 #-------------------------------------------------------------------------------------------------------------
 
 if __name__ == '__main__':
+
+    # The startup that used to run at import (see `_startup`). Running it
+    # here and only here is what makes this module importable, and it runs
+    # before anything else exactly as the module-level version did.
+    _startup()
 
 
     # Open loop.
