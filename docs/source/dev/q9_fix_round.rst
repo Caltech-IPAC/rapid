@@ -349,8 +349,11 @@ measurements are the first run's, carried forward, and remain
        ``run_zogy`` and then more than **ten minutes** in the difference
        catalogues, logging nothing while photutils fits PSFs on a
        7,000×7,000 difference image ("Input data contains unmasked
-       non-finite values", then silence). Every earlier probe died before
-       this point, so no previous measurement saw it. A per-SCA latency
+       non-finite values", then silence). **The measured floor is at
+       least 49 minutes** — that is how long the two children had been in
+       this stage when this was written, still running, CPU still pinned;
+       it is a lower bound, not the figure. Every earlier probe died
+       before this point, so no previous measurement saw it. A per-SCA latency
        budget built on the pre-``run_zogy`` timings would be wrong by an
        order of magnitude, and the long silent stretch is also a
        liveness-monitoring problem: the log stream stops advancing while
@@ -359,7 +362,14 @@ measurements are the first run's, carried forward, and remain
 
        **This is the single most consequential measurement of the round
        for the one-hour/95% target**, and it is the one the ramp exists to
-       pin down. Two children at width 2 on a dedicated host say nothing
+       pin down. It has to be said plainly: at 49 minutes and counting
+       for **two** children on a dedicated 8-vCPU host with no
+       contention, a single SCA is already approaching the whole one-hour
+       budget. Whatever the ramp measures at 180 and 540, it will not
+       make this number smaller. The target and the current
+       difference-catalogue implementation look incompatible, and that is
+       a science-and-sizing question for the owner, not something a fix
+       cycle closes. Two children at width 2 on a dedicated host say nothing
        about what several hundred concurrent children do to the same
        stage — that is exactly what 180 and 540 are for.
 
