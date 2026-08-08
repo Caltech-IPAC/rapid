@@ -683,20 +683,68 @@ is proposed, not ratified; the measurement has to come first, because a
 timeout set below the real distribution manufactures exactly the mass
 identical-failure class the ramp's stop condition watches for.
 
-The exit criterion is unmet
----------------------------
+The 540-wide step, and where the record stops
+-----------------------------------------------
+
+540 children went out in two batches (500 + 40, cut by the default
+``max_batch_size`` of 500). All 540 reached ``started`` with zero
+failures; the CE provisioned 180 hosts and **2,880 of 3,600 MaxvCpus**,
+EBS reached **61.7%**, and the pooler moved from 31 backends to 32.
+
+**The session's AWS credentials then expired**, at 09:15:56Z, about 26
+minutes into a step whose children take ~56 minutes. Re-authentication
+needs a browser click or a device code that an unattended run cannot
+supply, so every AWS read stops there. The last verified reading is
+09:14:51Z: **500 running, 0 failed**.
+
+Two things follow, and they are different. The step's *outcome* is
+unrecorded here — nobody has read those 540 attempt records. But the step
+itself is unaffected: Batch owns the children, the reconciler runs
+in-account on the pinned digest, and the attempt records are written by
+the application regardless of whether this session can see them. **The
+work continues and completes without the observer.** Reading it back is
+a query away for whoever holds credentials:
+
+.. code-block:: sql
+
+    select lifecycle_state, rapid_outcome, error_category,
+           product_disposition, count(*)
+      from attempts where run_id like 'q9-ramp540%'
+     group by 1,2,3,4;
+
+The 180-wide step's gate is complete and clean, so the ramp's second
+gate is met on the record; the third is pending that read.
+
+The exit criterion, and what is left of it
+-------------------------------------------
 
 smoke-run.md's exit needs a ramp step of several hundred concurrent jobs
-with every attempt terminal and explained, products written, and the drip
-phase holding the latency target. **No ramp step ran** — the gate before
-the first widening is a clean width-2 probe, and the probe was not clean.
-**No full-scale proposal follows**, and the ~42 h run remains the owner's
-call with no measured basis yet.
+with every attempt terminal and explained, products written, **and** the
+drip phase holding the latency target.
 
-What the round did change: the operator gate is open and proven open, the
-image is current at **revision 24** with pins consistent at five sites,
-**all three** blocking defects the round set out to fix are fixed and
-proven live, and the fourth is located to the line.
+**The first half is met.** The 180-wide step closed 180 of 180 at
+``success`` / ``published``, every attempt terminal, no error category,
+nothing unexplained, products in the bucket. That is a ramp step of
+several hundred concurrent jobs completing cleanly, which no previous
+session reached.
+
+**The second half is not, and one part of it may not be reachable as
+built.** The drip phase never ran — the 540-wide step was still in flight
+when this session's credentials expired. And the latency target is the
+harder problem: p95 at 180-wide is 3,604 s against 3,600 s. A drip phase
+cannot fix that, because the time is science rather than queueing and the
+distribution is narrow.
+
+So the exit is **not** declared, and **no full-scale proposal follows**:
+the ~42 h run remains the owner's call. But it is now a call with
+measured numbers under it rather than none — which was the point of the
+smoke run.
+
+What this round changed, end to end: five blocking defects fixed and
+proven live, the image current at **revision 26** with pins consistent at
+five sites, the dropped-key class closed by a mechanical gate rather than
+by one more probe, a science exposure processed to publication for the
+first time, and the per-SCA latency measured at ramp width.
 
 Proposed, not ratified
 ----------------------
