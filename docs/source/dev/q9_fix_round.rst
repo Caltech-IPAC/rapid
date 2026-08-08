@@ -460,8 +460,21 @@ measurements are the first run's, carried forward, and remain
        minutes** — 2 of 8 vCPUs pinned, one per child. **The science path
        is single-threaded per child**, which is the fact that makes the
        packing question a memory question rather than a CPU one.
-   * - Scale-up from zero at ramp width
-     - **measured, 180-wide**
+   * - Scale-up from zero at 540-wide
+     - **measured**
+     - Submission 08:49:22Z into a cold queue. **T+72 s** 79 hosts and
+       1,280 vCPU; **T+3 min 17 s** 180 hosts and **2,880 vCPU** with 240
+       running; **T+6 min 24 s** 492 of the first 500 running. The CE
+       provisions in two visible waves (1,280 then 2,880) rather than one
+       jump.
+
+       **2,880 vCPU against MaxvCpus 3,600** — the 540-wide step reaches
+       80% of the prompt queue's ceiling. It is the first measurement that
+       puts a real number against that limit, and it says the current
+       ceiling supports roughly 675 concurrent children at this packing,
+       not appreciably more.
+   * - Scale-up from zero at 180-wide
+     - **measured**
      - Submission 07:41:13Z. **T+95 s** the CE had raised desired vCPU
        0 → 960; **T+2 min 39 s** 60 hosts existed and 100 children were
        STARTING; **T+4 min 43 s** 151 of 180 were RUNNING. So a
