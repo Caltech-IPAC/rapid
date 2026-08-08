@@ -1066,3 +1066,43 @@ stage R. It now runs. On a science worker with three children resident:
 The 150 GiB gp3 sizing is comfortable and the volume is not a bottleneck
 at this packing. Instance-store reconsideration is not indicated by
 anything measured here.
+
+The three constraints, together
+-------------------------------
+
+Every sizing row in ``smoke-run.md``'s evidence table is now answered
+from measurement rather than from projection, and they point the same
+way:
+
+.. list-table::
+   :header-rows: 1
+
+   * - Resource
+     - Measured
+     - Binding?
+   * - vCPU
+     - ~19% host CPU, identical at 122/180/540
+     - No
+   * - Disk
+     - 17 GiB of 150 (12%), queue length ≤1.6
+     - No
+   * - Database
+     - 32 backends of 200, identical at 122/180/540
+     - No
+   * - EBS aggregate
+     - 10,744 GiB of 51,200 (21%) at 42 hosts
+     - No
+   * - Memory
+     - ~985 MB per child against 16 GiB reserved
+     - **Yes — on the reservation, not the draw**
+
+**Nothing the smoke run measured is actually saturated.** The one
+binding constraint binds on a declared number that overstates real
+consumption by ~16×, which makes packing density a configuration
+decision rather than a hardware one.
+
+That reframes the cost question for the full-scale run: at the measured
+draw the same hosts could carry substantially more children, and the
+latency shortfall is unaffected either way because it is per-SCA science
+time, not contention. Sizing and latency are now cleanly separable
+problems.
