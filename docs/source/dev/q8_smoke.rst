@@ -831,7 +831,9 @@ reason and will fail the same way when that path runs.
 Live state at stop
 ------------------
 
-* Both queues 0 in every non-terminal state; the probe drained
+* Both queues 0 in every non-terminal state; the probe drained, and both
+  its attempts closed ``terminal_after_start`` / ``failure`` /
+  ``tool_failure`` — zero non-terminal, zero unexplained, zero flagged
 * No VPO process on rapid-admin — the rogue-VPO guard never had to fire,
   because no VPO was ever started
 * Both Spot CEs DISABLED; both on-demand ENABLED/VALID

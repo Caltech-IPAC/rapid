@@ -173,6 +173,13 @@ argv and message. Triage ran entirely through the attempt table, the
 stage table and the terminal record in S3 — **no log archaeology at any
 point**. The record shape did its job on a defect nobody had predicted.
 
+Both attempts reached **``terminal_after_start`` / ``failure`` /
+``tool_failure``** under the reconciler running on the new digest: zero
+non-terminal, zero unexplained, zero flagged. The full path from an
+application-authored failure through reconciler classification closed
+cleanly, which is the first end-to-end exercise of that path since the
+repin.
+
 The exit criterion is unmet
 ---------------------------
 
