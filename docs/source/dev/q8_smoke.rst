@@ -1176,3 +1176,50 @@ returns a number (``242``), not an empty string, so the drain condition
 can actually fire rather than silently never matching. A waiter whose
 no-match path is untested is the failure this project has already paid
 for once.
+
+The drip finals and the recorder's outcome are recorded in
+``q9_fix_round.rst``, which carries the run's quantitative record.
+
+The exit ruling — PASSED, 2026-08-08
+=====================================
+
+**Q8 exit was ruled PASSED by owner ruling, 2026-08-08.** Four of the five
+exit clauses were met outright; the fifth — the latency clause — was ruled
+met in measurement context rather than on the raw comparison.
+
+.. list-table::
+   :header-rows: 1
+
+   * - Clause
+     - Verdict
+     - Basis
+   * - Several hundred concurrent
+     - Met
+     - 540 concurrent at the ramp's third gate; 362 concurrent through the
+       drip phase across six overlapping waves
+   * - Every attempt terminal
+     - Met
+     - Zero non-terminal records across the ramp and drip phases combined
+   * - Records complete and explained
+     - Met
+     - Zero unexplained records; every failure and lifecycle transition
+       carries a category or an explicit cause
+   * - Products written
+     - Met
+     - Every terminal attempt carries ``product_disposition = published``
+   * - Latency target
+     - Met in measurement context
+     - See below
+
+The latency clause was measured against a one-hour/95% target set for
+extragalactic fields, using Galactic-plane simulations — the hardest
+source-density case the pipeline will face. Measured latency: arrival-clock
+p95 **3,837 s** at 180-wide, **4,022 s** at 540-wide; execution-only p95
+**3,605 s**. Against the extragalactic-field target these figures miss by a
+wide margin, but the run under test is the dense-field case, not the case
+the target was set for. The ruling treats the measured latency as the
+**dense-field baseline** rather than as a target failure: **latency targets
+are henceforth stated per field class**, and this run establishes the
+Galactic-plane number for that split.
+
+**Milestone M1 (prototype proof) closure criterion is met.**

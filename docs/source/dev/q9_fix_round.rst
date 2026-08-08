@@ -320,26 +320,33 @@ measurements are the first run's, carried forward, and remain
        families and bind on different resources, so the ratio cannot be
        set from the bulk measurement alone.
    * - Memory-heavy packing across six families
-     - **not measured, and not measurable as things stand**
-     - Two families seen (``m6a.4xlarge`` bulk, ``r6i.2xlarge`` prompt),
-       neither under contention. The blocker is now identified rather
-       than merely unaddressed: **Batch workers do not run the
-       CloudWatch agent**, so ``CWAgent/mem_used_percent`` has no
-       datapoints for them — deliberate for ephemeral hosts, but it means
-       memory headroom cannot be read from CloudWatch during a ramp. What
-       is available is the reservation Batch itself enforces and the
-       instance's own vCPU accounting; actual RSS per child needs either
-       the agent on the worker AMI or the payload recording its own high
-       water mark into the attempt record. Proposed, not ratified.
+     - **superseded — see "Memory: the row recorded as unmeasurable is
+       measurable" below**
+     - Only two families were ever exercised (``m6a.4xlarge`` bulk,
+       ``r6i.2xlarge`` prompt); the six-family spread stays unmeasured, so
+       this row does not close on that count. But the memory question
+       itself — the reason the row existed — is answered: the CloudWatch
+       gap holds (Batch workers run no agent, by design, for ephemeral
+       hosts), and it is worked around by running ``free``/``ps`` on the
+       worker over SSM instead of waiting on an agent or a payload change.
+       Per-child RSS measured at ~985 MB against a 16 GiB reservation.
    * - Scratch I/O at 150 GiB gp3
-     - **partial**
-     - 20 GiB of 150 (14%) on a bulk host carrying 3 reference children.
-       The science path's shape is unmeasured — it died at stage R.
+     - **measured** — see "Scratch I/O at the 150 GiB gp3 sizing" below
+     - The science path's shape, unmeasured at the time this row was
+       written because the science path died at stage R, is now measured
+       under the drip: 17 GiB of 150 (12%) on a science worker carrying
+       three children, queue length peaking at 1.6. Not binding.
    * - Spot-reclaim retry semantics
-     - **not measured**
-     - Spot stays DISABLED; no trial authorized.
+     - **still not measured — Spot not authorized**
+     - Both Spot compute environments stayed DISABLED across every cycle
+       and phase of this round, including the drip; no trial of
+       Spot-reclaim behaviour was in scope or authorized. This row stays
+       open until a session is explicitly authorized to enable Spot.
    * - Per-SCA latency against the one-hour/95% target
-     - **MEASURED at 180-wide — the number the smoke run existed to get**
+     - **MEASURED at 180-wide, then corrected to the arrival clock and
+       extended to 540-wide and the drip — see "Closing the round: which
+       clock the latency target is measured on" and the drip sections
+       below**
      - 180 children, every one ``success`` / ``published``:
 
        * min **3,039 s** (50.7 min)
@@ -383,8 +390,13 @@ measurements are the first run's, carried forward, and remain
        connection budget does not bind the ramp and will not bind the
        full-scale run either. This row can be closed.
    * - Backup-window behaviour under load
-     - **not measured**
-     - No run intersected a window.
+     - **still not measured — no run intersected the window**
+     - The backup window is 05:00–06:00 UTC; the ramp ran 07:41–09:58 UTC
+       and the drip 12:43–14:5x UTC, so neither the ramp nor the drip
+       phase ever overlapped it. This row stays open until a run's
+       schedule happens to cross 05:00–06:00 UTC — recording "no effect
+       observed" without an overlap would be a false clean, not a result.
+       Detail: "The backup window" below.
    * - EBS aggregate quota
      - **measured at rest AND under a 180-wide ramp**
      - 4,594 GiB against 51,200 GiB (``L-7A658B76``) at rest — **9.0%**.
@@ -496,6 +508,22 @@ measurements are the first run's, carried forward, and remain
        instance took longer to reach RUNNING (a fresh host pulling a
        2.38 GB image), so the pull is the variable part, not the
        scale-up.
+   * - Continuous-arrival drip: attempt outcomes
+     - **measured — drained and verified**
+     - Six waves of 60 plus the 2-child probe, **362 attempts total,
+       independently verified against the attempt table**: ``run_id like
+       'q9-drip%'`` returns exactly 362 rows split ``q9-drip-probe`` (2),
+       ``q9-drip-w1`` through ``w6`` (60 each). **All 362 terminal, zero
+       non-terminal, zero unexplained**: 350 ``terminal_after_start`` /
+       ``success`` / ``published`` and 12 ``application_closed`` /
+       ``success`` / ``published``, no row carrying an ``error_category``.
+       The self-recorder's own ``progress.txt`` (``still_open`` count)
+       reached 0 at 14:45:49Z and held at 0 through 14:53:56Z, matching
+       the SQL read. Wave overlap, warm/cold arrival delay and the
+       per-child memory measurement taken mid-drip are detailed in "The
+       continuous-arrival drip" below; the arrival-clock latency figure
+       is in "Closing the round: which clock the latency target is
+       measured on".
 
 Observability
 -------------
