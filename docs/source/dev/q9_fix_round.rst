@@ -291,9 +291,17 @@ measurements are the first run's, carried forward, and remain
        families and bind on different resources, so the ratio cannot be
        set from the bulk measurement alone.
    * - Memory-heavy packing across six families
-     - **not measured**
+     - **not measured, and not measurable as things stand**
      - Two families seen (``m6a.4xlarge`` bulk, ``r6i.2xlarge`` prompt),
-       neither under contention.
+       neither under contention. The blocker is now identified rather
+       than merely unaddressed: **Batch workers do not run the
+       CloudWatch agent**, so ``CWAgent/mem_used_percent`` has no
+       datapoints for them — deliberate for ephemeral hosts, but it means
+       memory headroom cannot be read from CloudWatch during a ramp. What
+       is available is the reservation Batch itself enforces and the
+       instance's own vCPU accounting; actual RSS per child needs either
+       the agent on the worker AMI or the payload recording its own high
+       water mark into the attempt record. Proposed, not ratified.
    * - Scratch I/O at 150 GiB gp3
      - **partial**
      - 20 GiB of 150 (14%) on a bulk host carrying 3 reference children.
