@@ -365,13 +365,17 @@ measurements are the first run's, carried forward, and remain
        **The one-hour/95% target still has no full-path evidence** — no
        science child has reached publication.
    * - Pooler connection draw
-     - **measured at 180-wide**
-     - **31 backends of ``max_connections`` 200 — 15.5% — with all 180
-       children in flight**, 8 of them RAPID-tagged. Against 23/7 at the
-       first run's 109-wide step, so the draw grows far slower than the
-       fan-out: 65% more children for 8 more backends. That is the
-       pooler doing exactly what it is for, and it means the connection
-       budget is not what binds the ramp.
+     - **measured at 180-wide and 540-wide; settled**
+     - ``max_connections`` is 200 throughout.
+
+       * 109-wide (first run): 23 backends, 7 RAPID
+       * **180-wide: 31 backends (15.5%), 8 RAPID**
+       * **540-wide: 32 backends (16.0%), 14 RAPID**
+
+       **Tripling the fan-out cost one backend.** The pooler decouples
+       connection count from concurrency essentially completely, so the
+       connection budget does not bind the ramp and will not bind the
+       full-scale run either. This row can be closed.
    * - Backup-window behaviour under load
      - **not measured**
      - No run intersected a window.
@@ -381,8 +385,13 @@ measurements are the first run's, carried forward, and remain
        With the 180-wide step's 60 hosts up: **13,594 GiB, 26.6%** —
        ~9,000 GiB for 60 workers, i.e. ~150 GiB each, exactly the
        configured scratch. Extrapolating the same per-host figure to
-       540-wide (180 hosts) gives ~31,600 GiB, **~62%** — inside the
-       quota, and now measured rather than projected from the sizing.
+       540-wide (180 hosts) gave ~31,600 GiB, ~62%.
+
+       **The 540-wide step then measured 31,594 GiB — 61.7% — on 180
+       hosts**, which is the projection to within 6 GiB. The scratch
+       sizing is linear in host count and the quota is not the binding
+       constraint at this width; it would become one somewhere above
+       ~290 hosts.
    * - Per-stage science timings, revision 25 (13 stages to ``run_zogy``)
      - **measured**
      - ``prepare_zogy_inputs`` 77.37 s dominates; ``resample_reference_image``
