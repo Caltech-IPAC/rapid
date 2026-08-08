@@ -334,6 +334,26 @@ measurements are the first run's, carried forward, and remain
        ``normalize_science_psf`` 4.8 ms, ``measure_reference_fwhm`` 23.8 ms,
        ``inject_fake_sources`` skipped. **~103 s of science before the
        failing stage**, on a warm container.
+   * - Where the science time actually goes, past ``run_zogy``
+     - **partial, and the surprise of the round**
+     - The stages after ``run_zogy`` are far heavier than the thirteen
+       before it. Revision 26's probe spent **~103 s reaching**
+       ``run_zogy`` and then more than **ten minutes** in the difference
+       catalogues, logging nothing while photutils fits PSFs on a
+       7,000×7,000 difference image ("Input data contains unmasked
+       non-finite values", then silence). Every earlier probe died before
+       this point, so no previous measurement saw it. A per-SCA latency
+       budget built on the pre-``run_zogy`` timings would be wrong by an
+       order of magnitude, and the long silent stretch is also a
+       liveness-monitoring problem: the log stream stops advancing while
+       the job is perfectly healthy, so log freshness is not a health
+       signal here.
+
+       **This is the single most consequential measurement of the round
+       for the one-hour/95% target**, and it is the one the ramp exists to
+       pin down. Two children at width 2 on a dedicated host say nothing
+       about what several hundred concurrent children do to the same
+       stage — that is exactly what 180 and 540 are for.
    * - Cold start, prompt queue
      - **measured twice**
      - Submission 06:22:08 → first stage 06:25:15 — **3 min 07 s**,
