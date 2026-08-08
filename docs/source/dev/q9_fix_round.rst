@@ -281,8 +281,23 @@ measurements are the first run's, carried forward, and remain
    * - Evidence
      - State
      - Value
+   * - Prompt-queue packing at ramp width
+     - **measured, 180-wide**
+     - The CE scaled from 0 to **960 desired vCPU on 60
+       ``m6a.4xlarge``** within ~2 minutes of submission — **3 children
+       per host**, the same packing density the first run's 109-wide bulk
+       step showed (~2.95/host), and bound by the 16 GiB memory
+       reservation against 64 GiB hosts rather than by vCPU: 180 children
+       at 4 vCPU each is 720 of the 960 provisioned.
+
+       **The prompt queue changes family with width.** At width 2 it took
+       a single ``r6i.2xlarge``; at 180 it took ``m6a.4xlarge`` — the
+       same family the bulk queue selects. So the earlier "the two queues
+       select different families" reading was a width artefact, not a
+       queue property, and the MaxvCpus ratio cannot be set from the
+       narrow measurement.
    * - Prompt-vs-bulk concurrency and packing → the 3,600/1,200 MaxvCpus ratio
-     - **partial, first prompt-queue data**
+     - **partial, superseded in part by the row above**
      - Bulk, 109-wide: 37 ``m6a.4xlarge``, ~2.95 children/host, 436 vCPU
        of 1,200, packing bound by the 16 GiB memory reservation. Prompt,
        2-wide: one ``r6i.2xlarge`` (8 vCPU / 64 GiB) took both children
@@ -328,10 +343,13 @@ measurements are the first run's, carried forward, and remain
      - **not measured**
      - No run intersected a window.
    * - EBS aggregate quota
-     - **measured, re-run 2026-08-08**
-     - 4,594 GiB against 51,200 GiB (``L-7A658B76``) — **9.0%**,
-       unchanged from the earlier reading. ~14.4/50 TiB at the planned
-       540 fan-out, so the quota does not bind the ramp.
+     - **measured at rest AND under a 180-wide ramp**
+     - 4,594 GiB against 51,200 GiB (``L-7A658B76``) at rest — **9.0%**.
+       With the 180-wide step's 60 hosts up: **13,594 GiB, 26.6%** —
+       ~9,000 GiB for 60 workers, i.e. ~150 GiB each, exactly the
+       configured scratch. Extrapolating the same per-host figure to
+       540-wide (180 hosts) gives ~31,600 GiB, **~62%** — inside the
+       quota, and now measured rather than projected from the sizing.
    * - Per-stage science timings, revision 25 (13 stages to ``run_zogy``)
      - **measured**
      - ``prepare_zogy_inputs`` 77.37 s dominates; ``resample_reference_image``
