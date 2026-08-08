@@ -874,17 +874,55 @@ only) nor the image (``c/`` excluded by design). The science completed;
 the error reporter failed and took the exit code with it. An RPM rebuild
 closes it.
 
+Cycle 3 (2026-08-08): the catalogue ships, revision 24
+------------------------------------------------------
+
+``rapid-cmodules`` 1.0.0-3 installs ``bkgest_errcodes.h`` at
+``/opt/rapid/share/bkgest/`` and ``science.py`` passes ``-a`` at it. The
+stage that exited 255 now reports ``Status Message 0x0000`` and
+``subtract_background`` passes. Full record: ``q9_fix_round.rst``.
+
+Published through the **in-account promoter** rather than by hand — the
+first base image built that way — which took rapid-admin's disk off the
+critical path entirely. Scan gates on both images read ``ACTIVE`` and
+diffed by vulnerability ID: base 8 findings, application 9, zero added
+and zero removed. Severity counts alone would have misled (the new base
+reports 4 MEDIUM against the cycle-2 record's 5, with identical ID sets),
+and the application's first scan read was ``PENDING`` with a null finding
+list and was discarded rather than counted as a clean gate.
+
+Getting there needed two repairs to the publish chain that were nobody's
+fix-cycle: a changelog line of mine that ``rpm`` parsed as a second
+``%install`` directive, and — pre-existing on main since 2026-08-06 — an
+unscoped ``dnf install`` in ``smoke-test.sh`` that resolved across the
+fleet S3 repo and invalidated its own cache mid-transaction. The second
+had been failing every promoter run; ``d62457b`` had aimed a correct
+mechanism at the wrong line, and said so in its own commit message.
+
+**The rev-24 probe then found the fourth defect one stage further on.**
+``gain_match`` raises ``KeyError: 'verbose'``: ``[gainmatch]`` carries
+thirteen keys and the code reads two that exist in no configuration home
+— the same class as ``swarp_header_only``. Batch reported both children
+``SUCCEEDED``; the attempt records say ``rapid_outcome=failure``, and the
+records are what count. The ≤3 fix-cycle budget is spent, so it is
+recorded and left.
+
 Live state at stop
 ------------------
 
-* Both queues 0 in every non-terminal state; the probe drained, and both
-  its attempts closed ``terminal_after_start`` / ``failure`` /
-  ``tool_failure`` — zero non-terminal, zero unexplained, zero flagged
+* Both queues 0 in every non-terminal state; all probes drained
+* The rev-24 probe's attempts (5674, 5675) closed
+  ``application_closed`` / ``failure`` / ``internal_error`` with the
+  container digest recorded — zero non-terminal, zero unexplained
+* Two earlier children (job ``ecf3cef5``) were refused at startup by the
+  registration gate because the probe harness skipped pre-creating their
+  rows. Correct behaviour, self-inflicted, counted against the cap
 * No VPO process on rapid-admin — the rogue-VPO guard never had to fire,
   because no VPO was ever started
-* Both Spot CEs DISABLED; both on-demand ENABLED/VALID
-* Job definitions at **revision 23** on ``sha256:311741ab``
-* Reconciler active on the same digest, ``errors: 0``
-* Template, stack parameter, both definitions and the reconciler agree
+* Both Spot CEs DISABLED; both on-demand ENABLED, all desired 0
+* Job definitions at **revision 24** on ``sha256:239e0328``
+* Reconciler active on the same digest
+* Template, stack parameter, both definitions and the reconciler agree —
+  ``PIN_AGREEMENT_FAIL=0``
 
 Nothing is running and nothing is pending.

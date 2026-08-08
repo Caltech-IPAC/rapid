@@ -31,11 +31,17 @@ Cycles used
        exposed cycle 3 one line further on
    * - 3
      - ``bkgest_errcodes.h`` not shipped by ``rapid-cmodules``
-     - **Root-caused, not fixed** — the runtime message catalogue is in
-       no image; the fix is an RPM rebuild, outside this session's scope
-   * - 3
-     - unused
-     -
+     - **Fixed and proven live at revision 24.** ``rapid-cmodules``
+       1.0.0-3 installs the runtime message catalogue and ``bkgest``'s
+       ``-a`` points at it; the stage now reports
+       ``Status Message 0x0000`` where it reported
+       ``ERRCODE_FILE_NOT_FOUND``. It exposed a fourth defect one stage
+       further on
+   * - (none left)
+     - ``gain_match`` reads two ``[gainmatch]`` keys that do not exist
+     - **Found, not fixed — the budget is spent.** Same class as cycle 1:
+       science-path release content the code requires and
+       ``pipeline.toml`` never carried. Re-plan is the owner's
 
 Counts against caps
 -------------------
@@ -46,15 +52,20 @@ Counts against caps
    * - Cap
      - Used
    * - Batch children (≤1,500)
-     - **4** — two width-2 probes, one per image revision
+     - **8** — four width-2 probes. Two of the eight bought nothing: they
+       were submitted by a probe harness that skipped registration, and
+       the gate refused them at startup (see "The registration gate
+       refused a probe" below)
    * - Fix cycles (≤3)
-     - 1 fixed, 1 root-caused
+     - **3 of 3, all fixed.** A fourth defect is found and unfixed
    * - Application image rebuild + repin (≤2)
-     - **2** — revision 22 (swarp), revision 23 (cmodules base)
+     - **3 across the round** — revision 22 (swarp), 23 (cmodules base),
+       24 (catalogue). The cap is per session; cycle 3 used 1 of its 2
    * - Base image rebuild
-     - **1 artifact**, after three attempts lost to disk
+     - **2 artifacts** — one by hand (cycle 2, after three attempts lost
+       to disk), one by the promoter (cycle 3, off rapid-admin entirely)
    * - Deploys per stack (≤2)
-     - rapid-batch 1, rapid-reconciler-service 1
+     - rapid-batch 1, rapid-reconciler-service 1, in each session
 
 What cycle 1 settled, and what it proved
 -----------------------------------------
@@ -310,28 +321,134 @@ application-authored failure through reconciler classification closed
 cleanly, which is the first end-to-end exercise of that path since the
 repin.
 
+Cycle 3: the catalogue ships, and the stage clears
+--------------------------------------------------
+
+``rapid-cmodules`` 1.0.0-3 installs ``bkgest_errcodes.h`` to
+``/opt/rapid/share/bkgest/``, and ``science.py`` passes ``-a`` at that
+directory. Both halves were needed: cycle 2 had dropped the argument on
+finding its value named a path in no image — right about the value, wrong
+about the argument, since omitting it only falls back to the default
+``"."``, which has no catalogue either.
+
+Published through the promoter, not by hand: the RPM is signed and
+published (96,144 bytes against release 2's 94,191 — the catalogue's
+weight), the base image is built in-account, and rapid-admin's disk is not
+in the path at all. Releases 1, 2 and 3 coexist; the immutable-NEVRA rule
+held.
+
+**The rev-24 probe proves it in the log**, which is worth quoting because
+it is the exact line that failed:
+
+.. code-block:: text
+
+    run: bkgest -a /opt/rapid/share/bkgest -i ...
+    Ancillary Data-File Path = /opt/rapid/share/bkgest
+    bkgest Status Message      0x0000
+    A total of        0   NaN's were produced in the results.
+    Program bkgest, version 1.3, terminated.
+
+Revision 23 printed ``Ancillary Data-File Path = .`` and
+``ERRCODE_FILE_NOT_FOUND`` at the same point, and exited 255.
+``subtract_background`` now passes and the pipeline reaches the next
+stage.
+
+The registration gate refused a probe, correctly
+------------------------------------------------
+
+The first rev-24 probe attempt died at startup on both children, exit 70,
+before any science:
+
+.. code-block:: text
+
+    attempt 5673 resolved to a missing_or_contradictory row: Batch knows
+    about job ecf3cef5-…:0 but no logical job …:12/7 was ever recorded
+
+Not a defect. The probe harness submitted with a raw ``SubmitJob``,
+skipping the ``logical_jobs`` and attempt rows that
+``pipeline.seams.submit_units`` pre-creates **before** submitting — and
+the runtime's resolver claims a pre-created row by its run-scoped id.
+``submit_units``'s own docstring names the failure exactly: "correct
+behaviour on the resolver's part, and a self-inflicted wound on the
+submitter's." The gate declined to run science it could not attribute,
+which is what it is for. Two children spent, no cycle consumed.
+
+Re-submitting through the seam also documented three access facts, each
+probed rather than assumed: rapid-admin's instance role has no
+``s3:GetObject`` or ``s3:PutObject`` on ``roman-rapid-products`` and no
+``GetSecretValue`` on the orchestrator DB secret.
+``rapid-orchestrator-role`` holds all three and its trust policy names
+role-chaining from the admin host explicitly. The credentials must be in
+the process environment before boto3 builds its default session —
+assuming the role from inside Python leaves the DB lookup on the host
+identity, and it is denied.
+
+Cycle 4 is found, and the budget is spent
+-----------------------------------------
+
+Both rev-24 children cleared ``subtract_background`` and then failed one
+stage later, identically:
+
+.. code-block:: text
+
+    stage failed: gain_match after 0.3ms (KeyError: 'verbose')
+      File "pipeline/differenceImageSubs.py", line 200
+        verbose = int(gainmatch_dict['verbose'])
+
+``[gainmatch]`` in ``cdf/science/pipeline.toml`` carries thirteen keys.
+``gainMatchScienceAndReferenceImages`` reads seven, of which **two —
+``verbose`` and ``upload_intermediate_products`` — are in no
+configuration home at all.** That is the same class as cycle 1's
+``swarp_header_only``: science-path release content the code requires and
+the release never carried, invisible until execution reaches the stage.
+
+**Batch reported these children SUCCEEDED.** They are not: the attempts
+closed ``application_closed`` / ``rapid_outcome=failure`` /
+``error_category=internal_error``, and the application exits 0 by design
+after recording its own outcome, so the record is authoritative and the
+scheduler's status is not. Reading the Batch status as the answer is
+precisely the mistake the attempt-record design exists to prevent.
+
+The fix-round budget is exhausted at three cycles, so this one is
+recorded and not attempted. Re-plan is the owner's.
+
 The exit criterion is unmet
 ---------------------------
 
 smoke-run.md's exit needs a ramp step of several hundred concurrent jobs
 with every attempt terminal and explained, products written, and the drip
-phase holding the latency target. No ramp step ran. **No full-scale
-proposal follows**, and the ~42 h run remains the owner's call with no
-measured basis yet.
+phase holding the latency target. **No ramp step ran** — the gate before
+the first widening is a clean width-2 probe, and the probe was not clean.
+**No full-scale proposal follows**, and the ~42 h run remains the owner's
+call with no measured basis yet.
 
 What the round did change: the operator gate is open and proven open, the
-image is current at revision 22 with pins consistent at five sites, one
-of the two blocking defects is fixed and proven live, and the second is
-located precisely enough to fix in one bounded step.
+image is current at **revision 24** with pins consistent at five sites,
+**all three** blocking defects the round set out to fix are fixed and
+proven live, and the fourth is located to the line.
 
 Proposed, not ratified
 ----------------------
 
-* **Ship ``bkgest_errcodes.h`` in ``rapid-cmodules``** and restore
-  ``bkgest``'s ``-a`` to point at it. The RPM installs eight binaries and
-  no data files; the catalogue its own logger reads at runtime is in no
-  image. Without it every ``bkgest`` invocation exits non-zero after
-  completing its work correctly.
+* **Audit every science stage's config reads against the three homes,
+  once, mechanically.** Cycle 1 was twenty dropped ``[swarp]`` keys;
+  cycle 4 is two dropped ``[gainmatch]`` keys; both were found by a
+  science child reaching the stage. A test that walks the stage sources
+  for ``*_dict['key']`` reads and compares them against
+  ``pipeline.toml`` would have found both at once, before any Batch
+  child was submitted. This is the single highest-value item on this
+  list — the ramp cannot be trusted while the same class keeps surfacing
+  one stage at a time.
+* **Pre-flight the science path without Batch.** Four probes have now
+  spent eight children to find four defects, each one stage further
+  along. A local or single-container dry pass over one unit would find
+  the next such defect in seconds rather than in a submission cycle.
+* **``rapid-ccfits`` fetches from heasarc.gsfc.nasa.gov at build time**
+  and timed out on all four retries, twice tonight, costing two full CI
+  cycles. The same URL returned HTTP 200 in under two seconds from the
+  laptop each time, so this is a runner-to-GSFC path flake, not an
+  outage. Every other package in the stack fetches from a pinned local
+  or vendored source.
 * **A scheduled prune for rapid-admin's image cache.** Tonight's
   reclamation was one-off: 42 tags removed, 14 G → 27 G. At ~5 GB per
   image and a build most sessions, the host returns to a wedged state
@@ -356,18 +473,24 @@ Proposed, not ratified
 Left for the owner
 ------------------
 
-1. **Rebuild ``rapid-cmodules`` with the message catalogue installed**
-   beside the binaries, republish, rebuild the base and application
-   images on it, and restore ``bkgest``'s ``-a`` to the installed path.
-   This is the one thing between here and a science ramp.
-2. **A width-2 probe on that revision** — both children must clear
-   ``subtract_background`` and reach terminal with clean records. The
-   stage is already proven to run; what is unproven is a zero exit.
-3. Then the ramp: 180 → 540 → drip, each step gated on clean attempt
-   records. The mechanics are proven — the runner submits a bounded,
-   capped array with no VPO involved.
-4. A width-2 probe before each widening. Four children have now bought
-   three distinct defects, each of which would have cost 180.
+1. **The ruling on cycle 4.** ``[gainmatch]`` needs ``verbose`` and
+   ``upload_intermediate_products``, or the code needs to stop reading
+   them. It is release content by the ratified criterion — both can
+   alter a science product — so the conservative reading is that they
+   belong in ``pipeline.toml``. The fix-round budget is spent, so this
+   is a re-plan rather than a fourth cycle.
+2. **Decide whether to keep fixing one stage at a time.** Four probes,
+   four defects, each one stage further down the same path, every one a
+   thing a mechanical check could have found without submitting
+   anything. The "Proposed" list's first two items are that check; the
+   alternative is discovering stage five the same way.
+3. **A width-2 probe after the cycle-4 fix**, both children reaching
+   terminal with ``rapid_outcome=success``. Note the bar: not Batch
+   ``SUCCEEDED``, which these children reported while failing.
+4. Only then the ramp: 180 → 540 → drip, each step gated on clean
+   attempt records, width-2 probe before each widening. The submission
+   mechanics are now proven through ``submit_units`` with registration
+   intact — a bounded, capped array with no VPO involved.
 
 Carried forward unactioned: registration granularity (a handful of bad
 records aborts the whole operator pass — now demonstrated at fourteen),
