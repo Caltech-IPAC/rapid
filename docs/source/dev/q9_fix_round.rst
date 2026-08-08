@@ -422,6 +422,16 @@ measurements are the first run's, carried forward, and remain
        minutes** — 2 of 8 vCPUs pinned, one per child. **The science path
        is single-threaded per child**, which is the fact that makes the
        packing question a memory question rather than a CPU one.
+   * - Scale-up from zero at ramp width
+     - **measured, 180-wide**
+     - Submission 07:41:13Z. **T+95 s** the CE had raised desired vCPU
+       0 → 960; **T+2 min 39 s** 60 hosts existed and 100 children were
+       STARTING; **T+4 min 43 s** 151 of 180 were RUNNING. So a
+       180-child step is fully in flight inside five minutes of a cold,
+       zero-capacity queue — the scheduler and the image pull are not the
+       bottleneck at this width. Compare the ~3 min cold start for a
+       single child: the marginal cost of 178 more children was under two
+       minutes.
    * - Cold start, prompt queue
      - **measured twice**
      - Submission 06:22:08 → first stage 06:25:15 — **3 min 07 s**,
