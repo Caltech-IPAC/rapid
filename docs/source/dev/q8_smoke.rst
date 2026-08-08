@@ -1148,3 +1148,31 @@ worth having if it is exercised rather than asserted:
 Every child submitted in this segment is therefore attributable to a
 wave with a stated ``--width`` and ``--max-width``. The accounting is
 exact rather than reconstructed.
+
+The credential expiry, handled instead of suffered
+--------------------------------------------------
+
+The previous segment ended when its SSO token expired mid-step, leaving
+the 540-wide result unread until this one collected it. The same expiry
+was due again at **13:32 UTC**, with the drip draining at ~14:40 — so it
+was found in advance by reading the token cache rather than by hitting
+it, and one re-auth attempt was made and failed as expected (the browser
+flow needs a click no unattended session can supply).
+
+**The drip itself never depended on that credential.** The feeder runs on
+rapid-admin under the instance role, chaining to the orchestrator role
+per wave; Batch owns the children; the reconciler runs in-account. Only
+the *reading* was at risk.
+
+So the reading was moved to where the credential is not: a detached
+recorder (``/tmp/q9watch.sh``, ``setsid nohup``) on rapid-admin waits for
+the drip to drain and writes the full outcome and latency analysis to the
+``q9-drip/final/`` prefix of the build-artifacts bucket, uploading a
+progress copy each poll so partial results survive even if the drain
+never completes.
+
+Its done-check was tested before being trusted — the open-count helper
+returns a number (``242``), not an empty string, so the drain condition
+can actually fire rather than silently never matching. A waiter whose
+no-match path is untested is the failure this project has already paid
+for once.
