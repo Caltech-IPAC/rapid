@@ -3523,9 +3523,31 @@ class RAPIDDB:
                 "                      )"
                 "                  )"
                 "                )) "
+                # THE RESUBMISSION GATE (mission mock, live 2026-08-09 —
+                # the same pending-attempt gate the rest of the post-DB
+                # chain gained): a subject with an alert-production attempt
+                # already in flight is not re-gathered. Only PENDING blocks
+                # — an emitted subject is already excluded by the watermark
+                # anti-join above, and a failed attempt frees the subject
+                # (retry by re-gathering). Without this, every accumulator
+                # cut re-submitted all not-yet-claimed subjects for the
+                # whole flight of their first attempts (57 children for 36
+                # subjects, observed live after the DB outage orphaned a
+                # wave).
+                "and not exists ("
+                "  select 1 from Attempts ap "
+                "  join logical_jobs ljp on ljp.logical_job_id = ap.logical_job_id "
+                "  where ljp.job_type = %s "
+                "  and ap.exposure_id = a.exposure_id "
+                "  and ap.sca = a.sca "
+                "  and ap.lifecycle_state in ('submitted', 'started')"
+                ") "
                 "order by a.registered_at, a.attempt_id"
         )
-        params = [JOB_TYPE_CATALOG_LOAD, release_identity]
+        from submission.routes import JOB_TYPE_ALERT_PRODUCTION
+
+        params = [JOB_TYPE_CATALOG_LOAD, release_identity,
+                  JOB_TYPE_ALERT_PRODUCTION]
 
         if limit is not None:
             query += " limit %s"

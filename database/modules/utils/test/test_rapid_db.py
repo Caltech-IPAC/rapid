@@ -334,6 +334,23 @@ class AlertEmissionCatalogLoadClauseTests(unittest.TestCase):
         self.assertTrue(text.rstrip(";").endswith("limit %s"))
         self.assertEqual(params[-1], 5)
 
+    def test_the_pending_attempt_gate_is_present(self):
+        # THE RESUBMISSION GATE (mission mock, live 2026-08-09): a subject
+        # with an alert-production attempt in flight is not re-gathered —
+        # without it every accumulator cut re-submitted every not-yet-
+        # claimed subject (57, then 94, children for 36 subjects, observed
+        # live). Only pending blocks: emitted is the watermark anti-join's
+        # job, and a failed attempt frees the subject (retry path).
+        from submission.routes import JOB_TYPE_ALERT_PRODUCTION
+
+        text, params = self._execute()
+
+        self.assertIn("ap.lifecycle_state in ('submitted', 'started')", text)
+        self.assertIn("ap.exposure_id = a.exposure_id", text)
+        self.assertIn("ap.sca = a.sca", text)
+        self.assertIn(JOB_TYPE_ALERT_PRODUCTION, params)
+        self.assertNotIn(JOB_TYPE_ALERT_PRODUCTION, text)
+
 
 if __name__ == "__main__":
     unittest.main()
