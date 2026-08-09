@@ -99,6 +99,42 @@ def validate_child_name(tablename: str, prototype: str) -> str:
     return tablename
 
 
+def require_table(cursor, tablename: str, prototype: str) -> None:
+    """Refuse, as `input_missing`, when a declared target does not exist.
+
+    **A DECLARED UNIT WHOSE TARGET IS ABSENT IS A SUBMISSION FACT, NOT A
+    CRASH** — and this exists because the first live probe proved the
+    difference. A merge-dedup unit was submitted for a field with no
+    `merges_<field>` clone; the query raised a bare
+    `psycopg2.errors.UndefinedTable`, which is not in the runtime taxonomy,
+    so the attempt closed `internal_error`. That reads as "the pipeline is
+    broken" when what actually happened is "the submitter named a unit whose
+    table has not been created yet" — an ordinary, expected state for a field
+    that has never been crossmatched.
+
+    `input_missing` is the honest classification: the manifest is this
+    invocation's input, and the declared target it names is not there. The
+    reconciler and the problems path treat the two categories differently,
+    so the distinction is not cosmetic.
+
+    Checked BEFORE the statement rather than by catching the driver error
+    after, so the message names the unit and the prototype rather than
+    quoting a SQL fragment.
+    """
+    cursor.execute(
+        "SELECT 1 FROM pg_catalog.pg_tables"
+        " WHERE schemaname = 'public' AND tablename = %s", (tablename,))
+    if cursor.fetchone() is None:
+        raise InputError(
+            f"the declared target table {tablename!r} does not exist. The "
+            f"unit was enumerated at submission against the {prototype!r} "
+            f"prototype's clones; either the clone has not been created yet "
+            f"(a field that has never been crossmatched is the ordinary "
+            f"case) or the manifest named a field that never had one. This "
+            f"is a submission-input fact, not a pipeline fault.",
+            table=tablename, prototype=prototype)
+
+
 def create_child_table(cursor, tablename: str, prototype: str,
                        inherit: bool = False) -> bool:
     """Create one per-field or per-date child table, carrying the prototype's
@@ -270,6 +306,8 @@ def delete_superseded_rows(cursor, tablename: str, prototype: str,
             f"column names must be identifiers; got {join_column!r} and "
             f"{identity_column!r}")
 
+    require_table(cursor, tablename, prototype)
+
     cursor.execute(
         sql.SQL(
             "DELETE FROM {child} WHERE NOT EXISTS ("
@@ -308,6 +346,8 @@ def count_duplicate_groups(cursor, tablename: str, prototype: str) -> int:
             f"prototype {prototype!r} declares no identity columns, so "
             f"'duplicate' is undefined for it; known: "
             + ", ".join(sorted(CONFLICT_TARGETS)))
+
+    require_table(cursor, tablename, prototype)
 
     keys = sql.SQL(", ").join(sql.Identifier(c) for c in conflict)
     cursor.execute(

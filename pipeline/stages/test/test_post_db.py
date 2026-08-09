@@ -116,6 +116,14 @@ class RecordingCursor:
             return self._insert(text, lowered)
         if lowered.startswith("delete from"):
             return self._delete(lowered)
+        if "from pg_catalog.pg_tables" in lowered:
+            # The existence probe `require_table` runs. Answered from the
+            # double's own catalog, so a test that never created the table
+            # gets the same answer PostgreSQL would give.
+            name = params[0] if params else None
+            self._result = [(1,)] if name in self.catalog else []
+            self.rowcount = len(self._result)
+            return None
         if lowered.startswith("select count(*)"):
             self._result = [(self._duplicate_groups(lowered),)]
             self.rowcount = 1
@@ -587,6 +595,37 @@ class DedupCheckTests(unittest.TestCase):
         self.assertEqual(found, 3)
         self.assertNotIn("DELETE", cursor.sql_text.upper())
 
+    def test_a_missing_target_is_input_missing_not_a_crash(self):
+        # FOUND LIVE. The first probe submitted a merge-dedup unit for a
+        # field with no `merges_<field>` clone; the count query raised a bare
+        # psycopg2 UndefinedTable, which is not in the runtime taxonomy, so
+        # the attempt closed `internal_error` — reading as "the pipeline is
+        # broken" when the truth was "that field has never been
+        # crossmatched", an ordinary state.
+        cursor = RecordingCursor(_merges_catalog())   # no merges_7 created
+
+        with self.assertRaises(InputError) as caught:
+            catalog_db.count_duplicate_groups(cursor, "merges_7", "merges")
+
+        self.assertIn("merges_7", str(caught.exception))
+        self.assertIn("does not exist", str(caught.exception))
+
+    def test_a_missing_sweep_target_is_input_missing_too(self):
+        cursor = RecordingCursor(_merges_catalog())
+
+        with self.assertRaises(InputError):
+            catalog_db.delete_superseded_rows(
+                cursor, "merges_7", "merges", join_column="sid",
+                identity_table="diffimages", identity_column="pid")
+
+    def test_an_existing_target_passes_the_check(self):
+        # The control: the guard must not refuse a table that IS there.
+        cursor = RecordingCursor(_merges_catalog())
+        catalog_db.create_child_table(cursor, "merges_7", "merges")
+
+        self.assertEqual(
+            catalog_db.count_duplicate_groups(cursor, "merges_7", "merges"), 0)
+
     def test_a_prototype_with_no_identity_columns_is_refused(self):
         cursor = RecordingCursor(_merges_catalog())
         catalog_db.create_child_table(cursor, "sources_20260808_1", "sources",
@@ -637,7 +676,14 @@ class CurrencySweepTests(unittest.TestCase):
             cursor, "merges_7", "merges", join_column="sid",
             identity_table="diffimages", identity_column="pid")
 
-        self.assertEqual(len(cursor.statements) - before, 1)
+        # ONE DELETE, whatever the row count — that is the property. The
+        # existence probe `require_table` runs first is a second statement
+        # but a constant one, so the assertion counts DELETEs rather than
+        # statements: a per-row implementation would issue millions.
+        issued = cursor.statements[before:]
+        deletes = [s for s in issued if s.upper().lstrip().startswith("DELETE")]
+        self.assertEqual(len(deletes), 1)
+        self.assertLessEqual(len(issued), 2)
 
     def test_a_non_identifier_column_is_refused(self):
         cursor = RecordingCursor(_merges_catalog())
