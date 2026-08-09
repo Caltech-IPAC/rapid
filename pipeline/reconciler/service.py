@@ -32,6 +32,9 @@ import time
 
 from observability.attempts import (
     AttemptWriter, LifecycleState, ProductDisposition, RapidOutcome)
+from pipeline.intent.writer import (
+    COMPLETE, FAILED, SUBMITTED, WRITER_RECONCILER, WorkUnitNotFound,
+    WorkUnitWriter)
 from pipeline.runtime import termination
 
 from . import closure as closure_mod
@@ -136,6 +139,14 @@ _OPEN_COLUMNS = (
     "binding_job_definition_arn",
     "binding_job_definition_rev", "binding_image_digest",
     "binding_release_identity", "binding_manifest_checksum",
+    # The intent-layer FK (migration 036, integration review ruling 13).
+    # NULL on every pre-intent-layer row and on any attempt whose
+    # definition-FK guard held it back at submission time (see
+    # `pipeline.seams._attach_work_unit`) — `_close`'s work-unit-closure
+    # step (below) reads this and skips silently when it is absent, exactly
+    # the "only FK-carrying attempts drive transitions" rule the task brief
+    # states.
+    "work_unit_id",
 )
 
 # Built once, from a module-level tuple of literal identifiers — there is no
@@ -1163,6 +1174,11 @@ class ReconcilerService:
                 error_category=error_category,
                 closure_record_key=written.key,
                 closure_record_sequence=landed_sequence)
+            # A child that never started never produced an outcome, but it
+            # DID fail to do the work its work unit represents — the design
+            # gives no third disposition beyond complete/failed, so this
+            # closes the work unit failed (integration review ruling 13).
+            self._close_work_unit(row, outcome="failed")
             return
 
         if classification == CLASS_ABRUPT_LOSS:
@@ -1180,6 +1196,7 @@ class ReconcilerService:
                 # checksum is a pointer a reader is told to distrust and given
                 # no way to verify.
                 terminal_record_checksum=written.checksum)
+            self._close_work_unit(row, outcome="failed")
             return
 
         body = written.record.body
@@ -1255,6 +1272,84 @@ class ReconcilerService:
             terminal_record_key=written.key,
             terminal_record_sequence=landed_sequence,
             terminal_record_checksum=written.checksum)
+
+        # SUCCESS CLOSES complete; ANY OTHER TERMINAL DISPOSITION CLOSES
+        # failed (integration review ruling 13, task brief: "When an attempt
+        # closes terminally (successfully -> transition its work unit
+        # submitted->complete; any other terminal disposition -> submitted
+        # ->failed)"). `rapid_outcome` is the application's OWN verdict
+        # (`RapidOutcome.SUCCESS`/`FAILURE`/`PARTIAL`) — PARTIAL maps to
+        # failed here, a v1 judgment call: the work unit's six states have
+        # no partial-success cell, and "the smallest affected unit" the
+        # failure-path design scopes retries to is the ATTEMPT/candidate
+        # level, not the work unit, so a partially-successful attempt still
+        # means its work unit's declared scope did not complete cleanly.
+        outcome = body.get("rapid_outcome")
+        self._close_work_unit(
+            row, outcome="complete" if outcome == RapidOutcome.SUCCESS.value
+            else "failed")
+
+    def _close_work_unit(self, row, outcome):
+        """Transition this attempt's work unit submitted->{complete,failed}.
+
+        **NULL work_unit_id IS SKIPPED SILENTLY** (task brief, verbatim
+        rule): every attempt row predating migration 036, and every attempt
+        whose job type has no loaded workflow_definitions row yet (see
+        `pipeline.seams._attach_work_unit`'s FK-guard catch — as of this
+        writer, EVERY job type is in that state), carries `work_unit_id
+        IS NULL`. Those rows have no work unit to transition, and reaching
+        into the intent layer for them would either no-op against nothing
+        or, worse, raise on a row this reconciler has no business touching.
+        This is the one guard that keeps the intent-layer integration inert
+        for the whole fleet of pre-intent-layer and not-yet-defined-job-type
+        attempts, exactly mirroring `AttemptWriter`'s own "absent means
+        absence, not a sentinel" posture one layer up.
+
+        **ATOMICITY — stated exactly, not assumed** (task brief: "report
+        EXACTLY what atomicity you achieved"). This method is called from
+        `_transition`, which runs inside `_close`'s caller's
+        `attempt_lease(self.conn, attempt_id)` block (see `_classify` and
+        `_reconcile_unresolved`, both of which hold the lease across the
+        WHOLE closure sequence — closure record publish, retention stamp,
+        row transition — and commit or roll back the lease's transaction as
+        one unit). `WorkUnitWriter(_Executor(self.conn))` below opens no
+        new transaction and shares the exact connection `AttemptWriter`'s
+        own `writer` was built from earlier in the same `_classify`/
+        `_reconcile_unresolved` call — so the work-unit transition and its
+        unit_event land in the SAME database transaction as the attempt's
+        own closing UPDATE, and a crash between them is impossible by
+        construction (either both commit, at the lease's `conn.commit()`,
+        or neither does, at its `conn.rollback()`). This is genuine
+        same-transaction atomicity, not best-effort-after-commit — verified
+        by reading `lease.attempt_lease`'s own docstring and body rather
+        than assumed from the call shape.
+
+        A work unit that is not currently 'submitted' (an operator already
+        force-transitioned it, or a second reconciliation pass reaches a
+        row whose work unit a first pass already closed — the supersession
+        requery's own re-closure path, SUPERSEDABLE_STATES) raises
+        `WorkUnitNotFound` from the CAS guard; this is caught and logged
+        rather than propagated, because the ATTEMPT'S own closure is the
+        transition this method's caller must not fail on — a work unit
+        already resolved by another writer is not this reconciler's
+        problem to force.
+        """
+        work_unit_id = row.get("work_unit_id")
+        if work_unit_id is None:
+            return
+        work_writer = WorkUnitWriter(_Executor(self.conn))
+        to_state = COMPLETE if outcome == "complete" else FAILED
+        try:
+            work_writer.transition_unit(
+                work_unit_id, SUBMITTED, to_state,
+                writer=WRITER_RECONCILER, now=self._now())
+        except WorkUnitNotFound:
+            logger.info(
+                "work unit %s (attempt %s) was not in 'submitted' when the "
+                "reconciler tried to close it %s; another writer already "
+                "resolved it, so the attempt's own closure proceeds without "
+                "forcing the work unit", work_unit_id, row["attempt_id"],
+                to_state)
 
     # -- the never-resolved case -----------------------------------------
 
@@ -1352,6 +1447,12 @@ class ReconcilerService:
                 error_category="scheduler_provisioning",
                 closure_record_key=written.key,
                 closure_record_sequence=written.sequence)
+            # A child that never resolved never did its work unit's work
+            # either — same "any other terminal disposition -> failed" rule
+            # `_transition` applies, reached here through the SAME open
+            # `current` row (and therefore the same `work_unit_id`, if any)
+            # `reread_attempt` fetched under this method's own lease.
+            self._close_work_unit(current, outcome="failed")
             logger.info("attempt %s classified never-resolved at the "
                         "submission-anchored horizon (closure %s)",
                         attempt_id, written.key)

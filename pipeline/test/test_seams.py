@@ -89,15 +89,32 @@ class FakeS3:
 
 
 class RecordingExecute:
-    """Captures every statement the AttemptWriter issues, in order."""
+    """Captures every statement the AttemptWriter issues, in order.
+
+    Extended (integration review ruling 13) to also stand in for
+    work_units/unit_events: `work_units_by_scope` seeds the SELECT a
+    find-or-create issues (keyed by `(job_type, input_scope)`), and
+    `fk_missing_job_types` simulates the definition-FK guard `_precreate`
+    is written to tolerate — a job type in that set makes an INSERT INTO
+    work_units raise, exactly as the real FK does today for every job type
+    (no `workflow_definitions` row is loaded anywhere in this repo; see
+    `pipeline.seams._attach_work_unit`'s docstring).
+    """
 
     def __init__(self, clock=None):
         self.statements = []
         self.next_id = 100
+        self.next_work_unit_id = 1
         self.clock = clock or CallClock()
         #: The clock reading at the first `INSERT INTO attempts`, so a test can
         #: assert the rows were written before SubmitJob was called.
         self.first_attempt_insert_call = None
+        #: (job_type, input_scope) -> {"work_unit_id": int, "state": str}.
+        #: Empty by default: every unit is a fresh work unit.
+        self.work_units_by_scope: dict[tuple[str, str], dict] = {}
+        #: Job types whose INSERT INTO work_units raises, simulating the
+        #: live definition-FK violation (no workflow_definitions loaded).
+        self.fk_missing_job_types: set[str] = set()
 
     def __call__(self, statement, params=None):
         call = self.clock.tick()
@@ -110,6 +127,31 @@ class RecordingExecute:
             # when the insert landed (FixA, #3: a conflict is verified, not
             # ignored, so the two cases must be distinguishable).
             return [(params[0],)] if params else [("lj",)]
+        if "SELECT work_unit_id" in statement and "FROM work_units" in statement:
+            job_type, input_scope = params[0], params[1]
+            found = self.work_units_by_scope.get((job_type, input_scope))
+            if found is None:
+                return []
+            return [(found["work_unit_id"], job_type, input_scope,
+                     "prompt-processing", 1, found["state"], None, None)]
+        if "INSERT INTO work_units" in statement:
+            job_type, input_scope = params[0], params[1]
+            if job_type in self.fk_missing_job_types:
+                raise RuntimeError(
+                    'insert or update on table "work_units" violates '
+                    'foreign key constraint "work_units_definition_fk"')
+            work_unit_id = self.next_work_unit_id
+            self.next_work_unit_id += 1
+            self.work_units_by_scope[(job_type, input_scope)] = {
+                "work_unit_id": work_unit_id, "state": "ready"}
+            return [(work_unit_id,)]
+        if "UPDATE work_units SET state" in statement:
+            job_type = None
+            for (jt, scope), row in self.work_units_by_scope.items():
+                if row["work_unit_id"] == params[-2]:
+                    row["state"] = params[0]
+                    job_type = jt
+            return 1 if job_type is not None else 0
         if "RETURNING attempt_id" in statement or "resolve_attempt" in statement:
             self.next_id += 1
             return [(self.next_id,)]
@@ -258,6 +300,133 @@ class SubmitUnitsTests(unittest.TestCase):
         self.assertIn(submission.manifest_checksum, logicals[0])
         # ...and NOT the placeholder the caller passed in.
         self.assertNotIn("placeholder", logicals[0])
+
+
+class AttachWorkUnitTests(unittest.TestCase):
+    """`_precreate` attaches a work_unit_id to every new attempt (ruling 13).
+
+    Extends this file's own `RecordingExecute`/`SubmitUnitsTests` fixtures
+    per the task brief's instruction, rather than a parallel test file —
+    this class needs exactly the same `submit_units` call shape those tests
+    already build.
+    """
+
+    def setUp(self):
+        self.clock = CallClock()
+        self.batch = FakeBatchClient(clock=self.clock)
+        self.s3 = FakeS3()
+        self.execute = RecordingExecute(clock=self.clock)
+
+    def _submit(self, count=2, job_type="science"):
+        return seams.submit_units(
+            units(count), job_type=job_type, queue="rapid-queue-prompt",
+            job_definition="rapid-pipeline-science", binding=BINDING,
+            manifest_bucket="bucket", manifest_prefix="submissions",
+            s3_client=self.s3, batch_client=self.batch,
+            execute=self.execute, run_id="run-1",
+            now=utc(2026, 8, 6, 12, 0, 0))
+
+    def test_every_new_attempt_gets_a_work_unit_id(self):
+        self._submit(count=3)
+
+        updates = [params for sql, params in self.execute.statements
+                   if "UPDATE attempts SET work_unit_id" in sql]
+        self.assertEqual(3, len(updates))
+
+    def test_a_fresh_scope_creates_a_work_unit_in_ready_then_submitted(self):
+        self._submit(count=1)
+
+        creates = [(sql, params) for sql, params in self.execute.statements
+                   if "INSERT INTO work_units" in sql]
+        self.assertEqual(1, len(creates))
+        _, create_params = creates[0]
+        self.assertIn("ready", create_params)
+
+        transitions = [(sql, params) for sql, params in self.execute.statements
+                       if "UPDATE work_units SET state" in sql]
+        self.assertEqual(1, len(transitions))
+        _, transition_params = transitions[0]
+        self.assertIn("submitted", transition_params)
+        self.assertIn("ready", transition_params)
+
+    def test_two_units_with_different_subjects_get_different_work_units(self):
+        self._submit(count=2)
+
+        creates = [params for sql, params in self.execute.statements
+                   if "INSERT INTO work_units" in sql]
+        self.assertEqual(2, len(creates))
+        scopes = {(p[0], p[1]) for p in creates}
+        self.assertEqual(2, len(scopes),
+                         "two different (exposure, sca) units must not "
+                         "collide on one work-unit scope")
+
+    def test_an_existing_ready_unit_is_reused_not_recreated(self):
+        # Simulates the campaign-staging case: a work unit was pre-created
+        # (by the mock transformer, part 5) in state 'ready' before
+        # submission ever runs. _precreate's find-or-create must find it
+        # rather than creating a duplicate under the same scope, which the
+        # partial unique index would refuse anyway.
+        unit = units(count=1)[0]
+        from submission.subjects import subject_for
+        subject = subject_for("science").subject_for(unit)
+        scope = "/".join(str(c) for c in subject[1:])
+        self.execute.work_units_by_scope[("science", scope)] = {
+            "work_unit_id": 777, "state": "ready"}
+
+        self._submit(count=1)
+
+        creates = [s for s, _ in self.execute.statements
+                   if "INSERT INTO work_units" in s]
+        self.assertEqual([], creates,
+                         "a pre-existing ready unit must be reused, not recreated")
+        updates = [params for sql, params in self.execute.statements
+                   if "UPDATE attempts SET work_unit_id" in sql]
+        self.assertIn(777, updates[0])
+
+    def test_missing_workflow_definition_skips_attachment_without_failing(self):
+        # No workflow_definitions row is loaded for any job type in this
+        # repo today (verified: no caller of derived.load_workflow_
+        # definition anywhere). The FK violation this would cause live is
+        # simulated here, and submission must still complete — the whole
+        # point of catching it is that the seam keeps working exactly as
+        # before ruling 13 until a definition is loaded.
+        self.execute.fk_missing_job_types.add("science")
+
+        submission, attempt_ids = self._submit(count=2)
+
+        self.assertEqual(2, len(attempt_ids))
+        updates = [params for sql, params in self.execute.statements
+                   if "UPDATE attempts SET work_unit_id" in sql]
+        self.assertEqual([], updates,
+                         "no attachment update when the definition FK blocks "
+                         "creation")
+
+    def test_find_or_create_race_both_callers_resolve_to_one_work_unit(self):
+        # The race-shape test the task brief asks for: two "concurrent"
+        # calls over the same (job_type, input_scope) both resolve to the
+        # same work_unit_id, and only one actually creates. Simulated here
+        # by calling _attach_work_unit twice directly against one shared
+        # fake executor — the second call's SELECT now finds what the
+        # first call's INSERT created, exactly the re-SELECT-on-conflict
+        # shape `_attach_work_unit`'s docstring describes, without needing
+        # real thread concurrency to prove the resolution is idempotent.
+        from pipeline.seams import _attach_work_unit
+        unit = units(count=1)[0]
+
+        _attach_work_unit(self.execute, "science", unit, attempt_id=501,
+                          moment=utc(2026, 8, 6, 12, 0, 0))
+        _attach_work_unit(self.execute, "science", unit, attempt_id=502,
+                          moment=utc(2026, 8, 6, 12, 0, 1))
+
+        creates = [s for s, _ in self.execute.statements
+                   if "INSERT INTO work_units" in s]
+        self.assertEqual(1, len(creates),
+                         "only the first caller creates the work unit")
+        updates = [params for sql, params in self.execute.statements
+                   if "UPDATE attempts SET work_unit_id" in sql]
+        self.assertEqual(2, len(updates))
+        self.assertEqual(updates[0][0], updates[1][0],
+                         "both attempts attach to the SAME work unit")
 
 
 class WaitForCompletionTests(unittest.TestCase):

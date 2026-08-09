@@ -288,19 +288,35 @@ class TestCadenceFromTree(unittest.TestCase):
 
 class TestDeclaredClasses(unittest.TestCase):
 
-    def test_all_four_are_declared(self):
-        self.assertEqual(len(opclasses.CLASSES), 4)
+    def test_all_five_are_declared(self):
+        # Amended (integration review ruling 13): the design's own text
+        # moved from "four operational classes" to "five", adding 'test'
+        # for the mission-mock harness (design/operations.md § The Virtual
+        # Pipeline Operator).
+        self.assertEqual(len(opclasses.CLASSES), 5)
         self.assertEqual(
             set(opclasses.CLASS_NAMES),
             {opclasses.PROMPT_PROCESSING, opclasses.REFERENCE_CONSTRUCTION,
-             opclasses.HISTORICAL_BACKFILL, opclasses.RELEASE_REPROCESSING})
+             opclasses.HISTORICAL_BACKFILL, opclasses.RELEASE_REPROCESSING,
+             opclasses.TEST})
 
-    def test_two_are_declared_not_implemented(self):
+    def test_three_are_declared_not_implemented(self):
+        # 'test' joins backfill and reprocessing as declared-not-implemented
+        # — see opclasses.TEST's blocked_on for exactly why (a live but
+        # never-loaded workflow_definitions FK, and no per-campaign route
+        # resolution yet).
         unimplemented = [c.name for c in opclasses.CLASSES
                          if not c.implemented]
         self.assertEqual(sorted(unimplemented),
                          sorted([opclasses.HISTORICAL_BACKFILL,
-                                 opclasses.RELEASE_REPROCESSING]))
+                                 opclasses.RELEASE_REPROCESSING,
+                                 opclasses.TEST]))
+
+    def test_running_test_class_raises_with_the_reason(self):
+        test_class = opclasses.class_for(opclasses.TEST)
+        with self.assertRaises(opclasses.ClassNotImplemented) as caught:
+            test_class.require_implemented()
+        self.assertIn("workflow_definitions", str(caught.exception))
 
     def test_running_an_unimplemented_class_raises_with_the_reason(self):
         backfill = opclasses.class_for(opclasses.HISTORICAL_BACKFILL)
