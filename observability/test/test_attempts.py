@@ -587,6 +587,44 @@ class StartedTests(unittest.TestCase):
         self.assertIn("application_claim_index", sql)
         self.assertIn("COALESCE(", sql)
 
+    def test_started_records_the_retry_policy_version_that_governs_it(self):
+        # Migration 025's column, and the write site its own CHECK dictates:
+        # `retry_policy_version IS NULL OR lifecycle_state <> 'submitted'`, so
+        # a submitted row must not carry one and the start transition is the
+        # first legal moment. Before this write site the column existed and
+        # nothing ever populated it, so no attempt could say which retry
+        # regime governed it.
+        from observability.attempts import RETRY_POLICY_VERSION
+
+        self.writer.mark_started(1, started_at=at(5),
+                                 provenance=self.provenance)
+        sql, params = self.execute.only()
+
+        self.assertIn("retry_policy_version", sql)
+        self.assertIn(RETRY_POLICY_VERSION, params)
+
+    def test_the_recorded_policy_version_is_one(self):
+        # Version 1 is park-until-change for every application-failure
+        # category. Bumping this is a policy change that the operations
+        # design requires be "justified by an observed failure distribution,
+        # never speculatively" — so the number moves with a policy document,
+        # and this test is what makes moving it deliberate.
+        from observability.attempts import RETRY_POLICY_VERSION
+
+        self.assertEqual(RETRY_POLICY_VERSION, 1)
+
+    def test_a_caller_with_no_policy_in_force_writes_null_not_a_claim(self):
+        # Passing None explicitly is how a caller says "no versioned policy
+        # governed this", which is different from claiming v1 retroactively —
+        # exactly the distinction migration 025's comment draws about rows
+        # predating the column.
+        self.writer.mark_started(1, started_at=at(5),
+                                 provenance=self.provenance,
+                                 retry_policy_version=None)
+        _, params = self.execute.only()
+
+        self.assertIn(None, params)
+
     def test_started_is_a_compare_and_set_on_the_submitted_state(self):
         # Review finding #10: the statement matched on attempt_id alone, so
         # two startup writers could both "start" one row and the later one
@@ -1053,6 +1091,42 @@ class AbruptLossTests(unittest.TestCase):
                                      scheduler_observed_exit=139)
         _, params = self.execute.only()
         self.assertIn(139, params)
+
+    def test_abrupt_loss_writes_the_closure_records_checksum(self):
+        # Migration 022's `closure_record_checksum`, whose own comment says
+        # the write site lands separately — this is that site. The catalog
+        # design's principle is that a pointer is a claim, not a fact: a
+        # reader validates the cited record's checksum before trusting it,
+        # and a citation with no checksum gave that validation nothing to
+        # check against.
+        self.writer.mark_abrupt_loss(
+            1, ended_at=at(9), scheduler_state="FAILED",
+            error_category="resource_exhausted",
+            terminal_record_key="records/1/seq1.json",
+            terminal_record_sequence=1,
+            terminal_record_checksum="sha256:feedface")
+        sql, params = self.execute.only()
+
+        self.assertIn("terminal_record_checksum", sql)
+        self.assertIn("sha256:feedface", params)
+
+    def test_the_citation_moves_as_one_key_sequence_and_checksum(self):
+        # The three are one citation. A key and sequence written without the
+        # checksum is what left a row citing a record no reader could
+        # validate (round-3 finding #1).
+        self.writer.mark_abrupt_loss(
+            1, ended_at=at(9), scheduler_state="FAILED",
+            error_category="resource_exhausted",
+            terminal_record_key="records/1/seq1.json",
+            terminal_record_sequence=1,
+            terminal_record_checksum="sha256:feedface")
+        sql, params = self.execute.only()
+
+        for column in ("terminal_record_key", "terminal_record_sequence",
+                       "terminal_record_checksum"):
+            self.assertIn(column, sql)
+        for value in ("records/1/seq1.json", 1, "sha256:feedface"):
+            self.assertIn(value, params)
 
     def test_the_exit_written_is_the_schedulers_not_the_applications(self):
         # The reconciler is the writer and the scheduler is where the

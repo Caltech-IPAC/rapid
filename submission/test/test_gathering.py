@@ -19,12 +19,26 @@ from unittest import mock
 from submission import gathering
 from submission.gathering import (
     GatheringError,
+    gather_catalog_load_units,
+    gather_crossmatch_units,
+    gather_merge_currency_units,
+    gather_merge_dedup_units,
     gather_post_process_units,
     gather_science_units,
+    gather_source_currency_units,
+    gather_statistics_units,
     science_facts,
 )
 from submission.manifest import UnitFacts
-from submission.routes import JOB_TYPE_POST_PROCESS
+from submission.routes import (
+    JOB_TYPE_CATALOG_LOAD,
+    JOB_TYPE_CROSSMATCH,
+    JOB_TYPE_MERGE_CURRENCY,
+    JOB_TYPE_MERGE_DEDUP,
+    JOB_TYPE_POST_PROCESS,
+    JOB_TYPE_SOURCE_CURRENCY,
+    JOB_TYPE_STATISTICS,
+)
 
 
 class StubSource:
@@ -881,6 +895,183 @@ class GatherReferenceUnitsTests(unittest.TestCase):
 
         self.assertNotIsInstance(ctx.exception, gathering.NotReadyYet)
         self.assertIn("67", str(ctx.exception))
+
+
+class PostDbGatheringTests(unittest.TestCase):
+    """The post-DB chain's unit enumeration, one job type at a time.
+
+    The property under test is the one the co-design's first ruling is about:
+    the work list is built HERE, from operational rows, and each unit is
+    individually addressable. Every one of these six scripts used to answer
+    the same question at runtime by asking the catalog what tables happened
+    to exist — so a unit whose table was missing silently vanished from the
+    work list instead of being reported as work not done.
+    """
+
+    class Source:
+        """The three enumeration methods, and a failure switch for each.
+
+        `exit_code` is how the real `rapid_db` reports failure: it returns
+        None and sets a code, WITHOUT raising. A stub that could only succeed
+        would never exercise the check that turns that silence into an error,
+        which is the defect class this repo has hit before (a failed query
+        reading as "no work").
+        """
+
+        def __init__(self, scas=(), fields=(), per_field=(), failure=0):
+            self.scas = list(scas)
+            self.fields = list(fields)
+            self.per_field = list(per_field)
+            self.failure = failure
+            self.exit_code = 0
+            self.asked_for = []
+
+        def get_scas_with_science_jobs_for_processing_date(self, proc_date):
+            self.asked_for.append(("scas", proc_date))
+            self.exit_code = self.failure
+            return None if self.failure else self.scas
+
+        def get_fields_with_science_jobs_for_processing_date(self, proc_date):
+            self.asked_for.append(("fields", proc_date))
+            self.exit_code = self.failure
+            return None if self.failure else self.fields
+
+        def get_fields_with_per_field_table(self, prototype):
+            self.asked_for.append(("per_field", prototype))
+            self.exit_code = self.failure
+            return None if self.failure else self.per_field
+
+    # -- catalog load: (processing date, SCA) ------------------------------
+
+    def test_catalog_load_enumerates_one_unit_per_sca(self):
+        units = list(gather_catalog_load_units(
+            self.Source(scas=[1, 2, 18]), "20260808"))
+
+        self.assertEqual(len(units), 3)
+        self.assertEqual([u.fields["sca"] for u in units], [1, 2, 18])
+        for unit in units:
+            self.assertEqual(unit.fields["job_type"], JOB_TYPE_CATALOG_LOAD)
+            self.assertEqual(unit.fields["proc_date"], "20260808")
+
+    def test_catalog_load_names_its_target_table_in_the_manifest(self):
+        # The declared input. The job type does not build this name from its
+        # own environment and hope it matches what was gathered.
+        units = list(gather_catalog_load_units(
+            self.Source(scas=[7]), "20260808"))
+
+        self.assertEqual(units[0].fields["target_table"], "sources_20260808_7")
+
+    def test_catalog_load_units_key_uniquely(self):
+        # `logical_job_key` is run-scoped and built from `unit.key`; two units
+        # sharing a key would collide on the logical_jobs primary key.
+        units = list(gather_catalog_load_units(
+            self.Source(scas=[1, 2, 3]), "20260808"))
+
+        self.assertEqual(len({u.key for u in units}), 3)
+
+    def test_a_malformed_processing_date_is_refused(self):
+        # The unit key is derived from it, so a malformed date collides
+        # silently rather than failing.
+        with self.assertRaises(GatheringError):
+            list(gather_catalog_load_units(self.Source(scas=[1]), "2026-08-08"))
+
+    def test_a_failed_sca_query_raises_rather_than_enumerating_nothing(self):
+        # THE SILENT-FAILURE CHECK. `rapid_db` returns None and sets
+        # exit_code 67 without raising, so an unguarded caller reads a
+        # database outage as "this date has no work" and submits an empty
+        # chain that looks like a clean run.
+        with self.assertRaises(GatheringError) as caught:
+            list(gather_catalog_load_units(
+                self.Source(scas=[1], failure=67), "20260808"))
+
+        self.assertIn("67", str(caught.exception))
+
+    def test_a_date_with_no_science_jobs_yields_no_units(self):
+        # Distinct from the failure above: a real empty answer is empty, and
+        # is not an error.
+        self.assertEqual(
+            list(gather_catalog_load_units(self.Source(scas=[]), "20260808")),
+            [])
+
+    # -- crossmatch: (processing date, field) ------------------------------
+
+    def test_crossmatch_enumerates_one_unit_per_field(self):
+        units = list(gather_crossmatch_units(
+            self.Source(fields=[101, 202]), "20260808"))
+
+        self.assertEqual(len(units), 2)
+        self.assertEqual([u.fields["field"] for u in units], [101, 202])
+        for unit in units:
+            self.assertEqual(unit.fields["job_type"], JOB_TYPE_CROSSMATCH)
+
+    def test_crossmatch_carries_the_field_as_a_unit_fact_too(self):
+        # `field` is a named `UnitFacts` entry, so it rides there as well as
+        # in the open mapping — the stages read it through `context.fact`.
+        units = list(gather_crossmatch_units(
+            self.Source(fields=[101]), "20260808"))
+
+        self.assertEqual(units[0].facts.field, 101)
+
+    def test_crossmatch_names_both_target_tables(self):
+        units = list(gather_crossmatch_units(
+            self.Source(fields=[101]), "20260808"))
+
+        self.assertEqual(units[0].fields["target_tables"],
+                         ["astroobjects_101", "merges_101"])
+
+    def test_a_failed_field_query_raises(self):
+        with self.assertRaises(GatheringError):
+            list(gather_crossmatch_units(
+                self.Source(fields=[1], failure=67), "20260808"))
+
+    # -- the corpus-wide per-field job types -------------------------------
+
+    def test_statistics_enumerates_from_the_astroobjects_clones(self):
+        source = self.Source(per_field=[11, 22])
+        units = list(gather_statistics_units(source))
+
+        self.assertEqual([u.fields["field"] for u in units], [11, 22])
+        self.assertEqual(units[0].fields["job_type"], JOB_TYPE_STATISTICS)
+        self.assertIn(("per_field", "astroobjects"), source.asked_for)
+
+    def test_the_sweeps_enumerate_from_the_merges_clones(self):
+        for gather, job_type in (
+                (gather_merge_currency_units, JOB_TYPE_MERGE_CURRENCY),
+                (gather_source_currency_units, JOB_TYPE_SOURCE_CURRENCY),
+                (gather_merge_dedup_units, JOB_TYPE_MERGE_DEDUP)):
+            source = self.Source(per_field=[33])
+            units = list(gather(source))
+
+            self.assertEqual(len(units), 1, job_type)
+            self.assertEqual(units[0].fields["job_type"], job_type)
+            self.assertIn(("per_field", "merges"), source.asked_for)
+
+    def test_per_field_units_key_uniquely(self):
+        units = list(gather_statistics_units(self.Source(per_field=[1, 2, 3])))
+
+        self.assertEqual(len({u.key for u in units}), 3)
+
+    def test_a_failed_per_field_query_raises(self):
+        with self.assertRaises(GatheringError):
+            list(gather_statistics_units(self.Source(per_field=[1],
+                                                     failure=67)))
+
+    def test_every_post_db_gatherer_stamps_its_job_type(self):
+        # The manifest's job type fixes the route, so a unit gathered without
+        # one is a unit no submitter can route.
+        source = self.Source(scas=[1], fields=[1], per_field=[1])
+        gathered = [
+            list(gather_catalog_load_units(source, "20260808")),
+            list(gather_crossmatch_units(source, "20260808")),
+            list(gather_statistics_units(source)),
+            list(gather_merge_currency_units(source)),
+            list(gather_source_currency_units(source)),
+            list(gather_merge_dedup_units(source)),
+        ]
+        for units in gathered:
+            self.assertTrue(units)
+            for unit in units:
+                self.assertIn("job_type", unit.fields)
 
 
 if __name__ == "__main__":

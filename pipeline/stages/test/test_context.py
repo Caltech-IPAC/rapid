@@ -432,3 +432,77 @@ class ProductPrefixTests(unittest.TestCase):
     def test_the_attempt_component_does_not_truncate_a_wide_value(self):
         context = make_context(run_id="run-1", attempt_id=12345678901)
         self.assertIn("attempt-12345678901", context.product_prefix())
+
+
+# ---------------------------------------------------------------------------
+# The database-effect job types' disposition record (post-DB chain conversion)
+# ---------------------------------------------------------------------------
+
+class DispositionRecordTests(unittest.TestCase):
+    """What a job type that writes rows instead of products records.
+
+    Co-design ruling 2, and the operations design's § Post-DB science chain:
+    "each declares an empty product set, its terminal record is a pure
+    disposition record that promotes nothing, and its effect — rows written,
+    rows removed — is recorded in the attempt record's own fields".
+    """
+
+    def test_effect_counts_land_in_provenance(self):
+        context = make_context(job_type="catalog-load")
+        context.record_effect(rows_written=4096, rows_removed=0)
+
+        self.assertEqual(context.provenance["rows_written"], 4096)
+        self.assertEqual(context.provenance["rows_removed"], 0)
+
+    def test_a_zero_effect_is_recorded_rather_than_omitted(self):
+        # The should-find-nothing dedup check's whole output is a zero. An
+        # omitted count and a count of zero are different statements: the
+        # first says nobody looked.
+        context = make_context(job_type="merge-dedup")
+        context.record_effect(rows_written=0, rows_removed=0)
+
+        self.assertIn("rows_written", context.provenance)
+        self.assertIn("rows_removed", context.provenance)
+
+    def test_counts_accumulate_across_stages_of_one_unit(self):
+        # A sequence may write through more than one stage, and the unit's
+        # effect is their sum — not the last stage's figure.
+        context = make_context(job_type="crossmatch")
+        context.record_effect(rows_written=10)
+        context.record_effect(rows_written=5, rows_removed=2)
+
+        self.assertEqual(context.provenance["rows_written"], 15)
+        self.assertEqual(context.provenance["rows_removed"], 2)
+
+    def test_extra_facts_ride_alongside_the_counts(self):
+        context = make_context(job_type="catalog-load")
+        context.record_effect(rows_written=1, load_rate_rows_per_second=250.0)
+
+        self.assertEqual(context.provenance["load_rate_rows_per_second"], 250.0)
+
+    def test_a_database_effect_job_publishes_no_products(self):
+        # THE EMPTY PRODUCT SET. `_execute` derives ProductDisposition.NONE
+        # from an empty `published_products`, and `decide` SKIPs `none` — so
+        # these attempts close successfully and never become registration
+        # candidates. Recording an effect must not create a product.
+        context = make_context(job_type="statistics")
+        context.record_effect(rows_written=99)
+
+        self.assertEqual(context.published_products, {})
+
+    def test_a_borrowed_connection_is_required_not_invented(self):
+        # A database-effect job type with no connection is a wiring fault in
+        # the image, and says so, rather than failing with an
+        # AttributeError inside a query.
+        context = make_context(job_type="catalog-load")
+
+        with self.assertRaises(ConfigError) as caught:
+            context.require_connection()
+
+        self.assertIn("catalog-load", str(caught.exception))
+
+    def test_the_lent_connection_is_handed_back_unchanged(self):
+        sentinel = object()
+        context = make_context(job_type="catalog-load", connection=sentinel)
+
+        self.assertIs(context.require_connection(), sentinel)
