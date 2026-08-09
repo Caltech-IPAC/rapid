@@ -343,8 +343,13 @@ def _merges_catalog():
                               ("rapid_pipeline_write", "DELETE")]},
         "astroobjects": {"columns": ("aid", "ra0", "dec0", "flux0"),
                          "unique": ("aid",), "rows": []},
-        "sources": {"columns": ("sid", "ra", "dec"), "unique": None,
-                    "rows": []},
+        # The live prototype's uniqueness, as migration 041 shapes it: the
+        # fixture used to say `unique: None`, so no test could see that the
+        # sources upsert ran without ON CONFLICT against children that DO
+        # enforce uniqueness — the stub was blind to exactly the constraint
+        # the first production load died on.
+        "sources": {"columns": ("pid", "id", "isdiffpos"),
+                    "unique": ("pid", "id", "isdiffpos"), "rows": []},
         "astroobjectsmeta": {"columns": ("aid", "nobs"), "unique": ("aid",),
                              "rows": []},
     }
@@ -504,6 +509,38 @@ class StagingUpsertTests(unittest.TestCase):
         self.assertEqual(second["rows_written"], 0)   # nothing new to write
         self.assertEqual(second["rows_staged"], 2)    # but it did re-read them
         self.assertEqual(len(self.cursor.catalog["merges_7"]["rows"]), 2)
+
+    def test_sources_positive_and_negative_rows_both_land(self):
+        # Migration 041's shape (mission mock, live 2026-08-09): the two
+        # catalogue files of one product each number `id` from 1, so the
+        # sign is part of the identity. Both rows of a colliding
+        # (pid, id) pair must land — a (pid, id) conflict target would
+        # have silently dropped every negative detection.
+        catalog_db.create_child_table(
+            self.cursor, "sources_20260809_7", "sources", inherit=True)
+        path = self._csv([(1110, 1, "true"), (1110, 1, "false")])
+
+        result = catalog_db.load_through_staging(
+            self.cursor, path, "sources_20260809_7", "sources",
+            ("pid", "id", "isdiffpos"))
+
+        self.assertEqual(result["rows_written"], 2)
+
+    def test_a_sources_rerun_converges(self):
+        catalog_db.create_child_table(
+            self.cursor, "sources_20260809_7", "sources", inherit=True)
+        path = self._csv([(1110, 1, "true"), (1110, 1, "false")])
+        catalog_db.load_through_staging(
+            self.cursor, path, "sources_20260809_7", "sources",
+            ("pid", "id", "isdiffpos"))
+        self.cursor.commit()
+
+        second = catalog_db.load_through_staging(
+            self.cursor, path, "sources_20260809_7", "sources",
+            ("pid", "id", "isdiffpos"))
+
+        self.assertEqual(second["rows_written"], 0)
+        self.assertEqual(second["rows_staged"], 2)
 
     def test_a_raw_insert_of_the_same_rows_is_genuinely_refused(self):
         # The double's teeth, demonstrated. Without `ON CONFLICT DO NOTHING`
@@ -728,12 +765,15 @@ class DedupCheckTests(unittest.TestCase):
             catalog_db.count_duplicate_groups(cursor, "merges_7", "merges"), 0)
 
     def test_a_prototype_with_no_identity_columns_is_refused(self):
+        # `sources` was the example here until migration 041 gave it its
+        # identity columns; `astroobjectsmeta` is a real prototype with no
+        # conflict target, which is the property this refusal is about.
         cursor = RecordingCursor(_merges_catalog())
-        catalog_db.create_child_table(cursor, "sources_20260808_1", "sources",
-                                      inherit=True)
+        catalog_db.create_child_table(
+            cursor, "astroobjectsmeta_1", "astroobjectsmeta")
         with self.assertRaises(ConfigError):
             catalog_db.count_duplicate_groups(
-                cursor, "sources_20260808_1", "sources")
+                cursor, "astroobjectsmeta_1", "astroobjectsmeta")
 
 
 # ---------------------------------------------------------------------------

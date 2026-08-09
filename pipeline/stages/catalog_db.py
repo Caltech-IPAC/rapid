@@ -68,6 +68,14 @@ logger = logging.getLogger(__name__)
 CONFLICT_TARGETS = {
     "merges": ("aid", "sid"),
     "astroobjects": ("aid",),
+    # (pid, id, isdiffpos) — migration 041 (mission mock, live 2026-08-09):
+    # `id` is a PER-FILE ordinal and a product has two files (positive and
+    # negative), so the sign is part of the identity. The entry was missing
+    # entirely before 041, so the sources upsert ran without ON CONFLICT
+    # and the first genuine rerun-or-collision aborted the load; naming
+    # (pid, id) alone would instead have silently dropped every negative
+    # detection.
+    "sources": ("pid", "id", "isdiffpos"),
 }
 
 # Child-table names are `<prototype>_<field>` or `<prototype>_<date>_<sca>`.
