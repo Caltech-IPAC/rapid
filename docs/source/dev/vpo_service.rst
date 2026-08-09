@@ -524,14 +524,39 @@ literal name ``difference_image``. Nothing produces that name.
 This is a **vocabulary mismatch between the payload's record and the
 registrar's expectation**, pre-existing and untouched by the restructure
 (``git log`` over ``pipeline/registration/`` across this work is empty).
-It needs an owner decision — which of the three difference images is the
+It needed an owner decision — which of the three difference images is the
 canonical one to register, or whether the registrar should take all
-three — so it is recorded here rather than guessed at.
+three — so it was recorded here rather than guessed at.
 
 What the refusal does demonstrate is the contract working as designed:
 registration read the record and nothing else, refused rather than
 reconstructing the missing fact from the product bucket, classified the
 attempts for triage, promoted nothing, and left them as candidates.
+
+**RULED AND CLOSED, 2026-08-08/09.** The SFFT difference image is the
+registrable one, and the binding is release content rather than a literal
+in any consumer: ``[product_roles] difference_image = "sfft_diffimage"``.
+Registration, the registered measurement variant and the alert cutouts
+all resolve that one binding; the ZOGY and naive variants stay published,
+checksummed record products without identity-table rows. Replaying the
+backlog took ``diffimages`` from **0 to 1086 rows** and registered
+attempts from 327 to 1415. Full record: :ref:`difference-image-role-binding`.
+
+The submission environment this service runs on
+-----------------------------------------------
+
+The same probe's other finding — ``submission_env`` requires
+``RAPID_IMAGE_DIGEST``, ``RAPID_RELEASE_IDENTITY`` and
+``RAPID_MANIFEST_BUCKET`` with no defaults, and the deployed Quadlet unit
+set none of them — is **closed as of 2026-08-09**. The unit now supplies
+all three plus ``RAPID_MANIFEST_PREFIX``, each derived at deploy time
+from what already knows it: the digest from the unit's own ``ImageRef``,
+the bucket and prefix from the parameter tree, and the release identity
+from the pinned image's ECR tag as ``smdc-<sha>``. Nothing is hand-set,
+so a repin moves all of them together — verified across one, where
+``RAPID_RELEASE_IDENTITY`` followed the image to ``smdc-079de00`` with no
+edit. A rehearsal pass now reaches the submission seam instead of exiting
+64. Full record: :ref:`vpo-submission-environment`.
 
 What the operator does not yet own
 ==================================

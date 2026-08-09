@@ -165,13 +165,30 @@ Verification
 Unit suite, ``rapid``::
 
     $ ./scripts/run-operational-tests.sh <python>
-    1161 tests across 38 modules
+    1157 tests across 38 modules
     RESULT: PASS
     EXIT=0
 
 Baseline before the conversion was 1082 tests across 37 modules. The 12
 gathering tests that fail without ``RAPID_SW`` set fail identically on the
 unmodified tip — the runner does not set it.
+
+.. note::
+
+   **The count was corrected on 2026-08-09**, from a claimed 1161. Two
+   different numbers had been reported for this image — 1161 here and
+   1096/37 by an independent verification — and neither was the image's.
+   Measured *inside* the pinned image with no bind mount, the conversion
+   image ``46c73c0-20260809`` runs **1157 tests across 38 modules**.
+
+   The 1096/37 reading came from
+   ``scripts/run-operational-tests-on-rapid-admin.sh``, which tars the
+   **local checkout** and bind-mounts it over the image: it measures the
+   caller's working tree, not the image, so a checkout at a different
+   commit yields a different count against the same digest. The module
+   list is 38 in the image, so the conversion's new test module *is*
+   registered — the suspected missing registration was an artifact of
+   how the suite was invoked.
 
 ``rapid_systems``: ``validate.sh`` PASS.
 
@@ -249,23 +266,176 @@ from the live ``rapid_read`` / ``rapid_pipeline_write``.
 Open and carried
 ****************
 
-* **The difference-image product vocabulary** (register: OPEN) — the
-  payload publishes ``zogy_diffimage`` / ``sfft_diffimage`` /
-  ``naive_diffimage`` while the registration reader requires a product
-  named literally ``difference_image``. Registration therefore refuses
-  promotion on the live path. Pre-existing, expected, and **not fixed
-  here**; ``diffimages`` holds zero rows in consequence, which is why the
-  currency sweeps have nothing to sweep.
-* **The deployed VPO service cannot submit.** ``submission_env`` requires
-  ``RAPID_MANIFEST_BUCKET``, ``RAPID_IMAGE_DIGEST`` and
-  ``RAPID_RELEASE_IDENTITY`` with ``os.environ[...]`` — no defaults — and
-  the running service's unit sets none of the three (verified inside the
-  live container). It has not failed yet only because gathering finds no
-  work. Pre-existing from the restructure, outside this job's scope,
-  recorded for the owner.
-* **The grant fix is not in the pinned image.** It landed after the
-  second and final permitted rebuild; its effect was proven live by
-  applying ``grant_like_prototype`` to the existing clone. The next
-  rebuild carries the code.
+* **The difference-image product vocabulary** (register: **CLOSED**
+  2026-08-09) — the payload publishes ``zogy_diffimage`` /
+  ``sfft_diffimage`` / ``naive_diffimage`` while the registration reader
+  required a product named literally ``difference_image``, so promotion
+  refused on every science attempt and ``diffimages`` held zero rows.
+  Release content now binds the role — ``[product_roles]
+  difference_image = "sfft_diffimage"`` — and the three consumers resolve
+  it rather than naming an algorithm: registration through the binding
+  the attempt records, the registered measurement variant
+  (``nsexcatsources`` follows the bound image's own positive catalogue),
+  and the alert provider (cutouts come from ``diffimages.filename``
+  itself). ``[science] diff_flavor`` answered the same question for the
+  alert path and is folded into the binding: one knob, never two. See
+  :ref:`difference-image-role-binding` below.
+* **The deployed VPO service cannot submit** (**CLOSED** 2026-08-09).
+  ``submission_env`` requires ``RAPID_MANIFEST_BUCKET``,
+  ``RAPID_IMAGE_DIGEST`` and ``RAPID_RELEASE_IDENTITY`` with
+  ``os.environ[...]`` and no defaults; the unit set none of the three.
+  The Quadlet unit now provides all three (plus
+  ``RAPID_MANIFEST_PREFIX``), each resolved at deploy time from whatever
+  already knows it, and a rehearsal pass reaches the submission seam
+  instead of exiting 64. See :ref:`vpo-submission-environment` below.
+* **The grant fix is not in the pinned image** (**CLOSED** 2026-08-09) —
+  it landed after the conversion's final permitted rebuild and had only
+  ever been proven by bind-mounting the module over a container. The
+  2026-08-09 rebuild, ``079de00-20260809``, is the first image to contain
+  it.
 * ``job.py:409``'s legacy registration fallback stays
   recorded-as-proposed, not removed, per the task's scope.
+
+.. _difference-image-role-binding:
+
+The difference-image role binding (2026-08-09)
+==============================================
+
+The refusal was the promotion contract working. The payload has always
+published three difference images per science attempt, named for the
+algorithms that made them; the registration reader asked for a product
+named ``difference_image``, which nothing has ever produced. Two
+vocabularies, one on each side of the record, and the reader's side was
+the one nobody had exercised against a real record — the suite's fixture
+published the name the reader wanted, so the literal looked correct for
+as long as it existed.
+
+**What the release declares.** ``cdf/science/pipeline.toml`` gains a
+``[product_roles]`` section binding the difference-image role to the
+product that fills it:
+
+.. code-block:: toml
+
+   [product_roles]
+   difference_image = "sfft_diffimage"
+
+``sfft_diffimage`` is the SFFT masked difference image — the product
+whose file is ``sfftdiffimage_masked.fits``, which is also the basename
+the alert layer already cut its stamps from. The ZOGY and naive variants
+stay published, checksummed record products with no identity-table rows.
+
+**How each consumer resolves it.**
+
+* *Registration* reads ``product_roles`` off the attempt's own record,
+  which ``entrypoints/job.py`` writes beside the release digest it came
+  from. That keeps registration a reader of records and nothing else, and
+  it means a replay resolves the role the way the original attempt did
+  even after a later release rebinds it.
+* *The registered measurement variant* derives from the same binding.
+  ``diffimmeta`` describes the difference image that registered, so
+  ``nsexcatsources`` comes from that image's own positive catalogue. It
+  had been pinned to ``zogy_positive`` by an argument about what the
+  monolith wrote — correct then, and it would now have put one
+  algorithm's source count in a row describing another's.
+* *The alert provider* cuts its stamps from ``diffimages.filename``
+  itself. It used to take the registered row's directory and substitute a
+  flavour basename for the file, so an alert's cutout and its
+  measurements could come from two different difference images. The
+  ``diff_flavor`` argument is gone from the provider, the CLI and the
+  benchmark; the benchmark reports the image it actually read.
+
+**One knob, never two.** ``[science] diff_flavor`` already existed and
+answered the same question for the alert path — read by no production
+code, only by a test. It is folded into the role binding rather than left
+beside it: a release carrying both could send registration and cutouts to
+different images without either looking wrong on its own.
+
+**Two guards** parse the registrar and the alert provider and fail if
+either names an algorithm again. Both were written against the real
+modules, not against a copy.
+
+**The replay.** Registration is idempotent by design — ``add_diffimage``
+finds-or-inserts on the ``(attempt_id, sequence)`` pair — so the backlog
+was replayed rather than rebuilt. Measured live on 2026-08-09:
+
+.. list-table::
+   :header-rows: 1
+
+   * - Fact
+     - Before
+     - After
+   * - ``diffimages`` rows
+     - 0
+     - 1086
+   * - ``diffimmeta`` rows
+     - 0
+     - 1086
+   * - published attempts registered
+     - 327
+     - 1415
+   * - identity-invariant violations
+     - —
+     - 0
+
+The 327 before were exactly the ``refimages`` count: every registered
+attempt was a reference image, and every science attempt had refused. A
+second pass added **zero** rows, and re-registering one attempt left its
+outcome document at one promotion event — the attempt-identity guard and
+the append-once keying shown working rather than cited.
+
+Records authored before the binding existed carry no ``product_roles``
+at all, and those are precisely the attempts the replay exists for. The
+reader takes the running release's bindings for such records **only**
+when a caller asks for it explicitly
+(``production_registrar(replay_pre_binding_roles=True)``), a record's own
+binding always wins, and the resolution records which happened —
+``"role_resolved_from": "release"`` in the outcome document above.
+
+Eighteen published attempts remain unregistered and none is a role
+failure: sixteen are ``missing_or_contradictory`` and were never
+candidates, and two are 2026-08-06 probe attempts whose S3 records no
+longer match the checksum their row cites, refused by the integrity
+guard.
+
+.. _vpo-submission-environment:
+
+The VPO's submission environment (2026-08-09)
+=============================================
+
+``submission_env`` reads ``RAPID_IMAGE_DIGEST``,
+``RAPID_RELEASE_IDENTITY`` and ``RAPID_MANIFEST_BUCKET`` through
+``os.environ[...]`` with no defaults, and the deployed unit set none of
+them. The service had not failed only because gathering found no work;
+the first unit it gathered would have exited 64.
+
+All three are per-deployment identity facts, which is what the
+environment policy admits — not configuration, which keeps its ratified
+homes. Each is resolved at deploy time from the thing that already knows
+it, so none becomes a second home:
+
+* the **digest** is split off the unit's own ``ImageRef``. The operator
+  runs the same image as the payload it submits, so a separate parameter
+  could drift from the image actually running.
+* the **manifest bucket and prefix** come from the parameter tree
+  (``s3/products-bucket``, ``s3/manifest-prefix``).
+* the **release identity** is derived from the pinned image's own ECR tag
+  as ``smdc-<sha>``, the form the deployed path already uses. Derived
+  rather than hand-set: an identity that can disagree with the image it
+  names is worse than none.
+
+A missing value fails the convergence loud, naming what is absent, rather
+than writing a unit that starts and cannot submit.
+
+Verified in the live container after the deploy — and again after the
+repin, where the derivation moved both values without an edit:
+
+.. code-block:: text
+
+   RAPID_IMAGE_DIGEST=sha256:aaac2cd9...c36d2df
+   RAPID_MANIFEST_BUCKET=roman-rapid-products
+   RAPID_MANIFEST_PREFIX=submissions
+   RAPID_RELEASE_IDENTITY=smdc-079de00
+
+A rehearsal pass then gathered 3779 units and cut 62 batches while
+submitting nothing — reaching the submission seam at all is what proves
+the wiring, since that is where the missing variables used to exit 64.
