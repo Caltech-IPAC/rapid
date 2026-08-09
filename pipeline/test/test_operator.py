@@ -445,6 +445,31 @@ class TestRegistrationGranularity(unittest.TestCase):
         self.assertEqual(verdict.exit_code, opregistration.EXIT_PARTIAL)
 
 
+class TestSubmissionContextReusesTheOwner(unittest.TestCase):
+    """The binding contract has one implementation; borrow it.
+
+    `build_submission_context` briefly rebuilt what
+    `virtualPipelineOperator.submission_env` already owned, and got it
+    wrong: it put `active_definition`'s raw dict where a
+    `SubmissionBinding` belonged, and the live probe died at
+    `binding.job_definition_arn` with "'dict' object has no attribute".
+    """
+
+    def test_it_delegates_rather_than_rebuilding(self):
+        import inspect
+
+        from pipeline.operator import service as opservice
+
+        source = inspect.getsource(opservice.build_submission_context)
+        self.assertIn("submission_env", source,
+                      "the submission context must come from the function "
+                      "that owns it, not be rebuilt here")
+        self.assertNotIn(
+            "SubmissionBinding(", source,
+            "constructing a binding here duplicates submission_env's "
+            "contract, which is how the two drift")
+
+
 class TestEverySubmissionCarriesARunId(unittest.TestCase):
     """Found live, 2026-08-08, on the first width-2 live probe.
 

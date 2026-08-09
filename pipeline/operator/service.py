@@ -167,25 +167,32 @@ def _database_credentials(session):
 def build_submission_context(session, parameters, operational_class):
     """Clients, buckets and the binding for one class's submissions.
 
-    Route-homogeneous by construction: the queue and definition come from
-    THIS class's route, so a context cannot describe two routes and a
-    batch cut against it is one job type, one queue, one definition.
-    """
-    from pipeline.virtualPipelineOperator import active_definition
+    DELEGATES to `virtualPipelineOperator.submission_env`, which already
+    owns this: it resolves the route's queue and definition from the tree,
+    resolves the definition FAMILY to its one ACTIVE revision, and builds
+    a real `SubmissionBinding` carrying the revision, image digest and
+    release identity that the attempt rows record.
 
-    route = operational_class.route
-    batch_client = session.client("batch")
-    definition = parameters[route.definition_parameter]
-    return {
-        "queue": parameters[route.queue_parameter],
-        "job_definition": definition,
-        "binding": active_definition(batch_client,
-                                     str(definition).split(":", 1)[0]),
-        "manifest_bucket": parameters["s3/products-bucket"],
-        "manifest_prefix": parameters["s3/manifest-prefix"],
-        "s3_client": session.client("s3"),
-        "batch_client": batch_client,
-    }
+    This function briefly reimplemented that, and reimplemented it wrong:
+    it put `active_definition`'s raw dict where a `SubmissionBinding` was
+    expected, and the first live probe died at
+    `binding.job_definition_arn` with "'dict' object has no attribute".
+    Rebuilding a contract that already exists is how the two drift; the
+    binding is the execution record's backbone (a wrong revision makes the
+    reconciler report drift on every attempt), so borrowing the one
+    implementation is the point rather than a convenience.
+
+    Route-homogeneous by construction, which is what `submission_env`
+    gives us: the queue and definition come from THIS class's route, so a
+    context cannot describe two routes.
+    """
+    from pipeline.virtualPipelineOperator import submission_env
+
+    return submission_env(
+        operational_class.route.job_type,
+        parameters=parameters,
+        batch_client=session.client("batch"),
+        s3_client=session.client("s3"))
 
 
 def run_forever(operators, poll_seconds, should_continue,
