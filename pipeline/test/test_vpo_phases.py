@@ -581,9 +581,15 @@ class RegistrarConnectionTests(unittest.TestCase):
 
         captured = {}
 
-        def fake_registrar(dbh, store):
+        # `fallback_roles` is captured, not just absorbed by **kwargs: the
+        # role-binding commit added it to `products.registrar`, and a double
+        # that swallowed it silently would let the pre-binding replay path
+        # regress without a test noticing. Tracking the real signature is
+        # what makes this fake able to refuse a wrong call.
+        def fake_registrar(dbh, store, fallback_roles=None):
             captured["dbh"] = dbh
             captured["store"] = store
+            captured["fallback_roles"] = fallback_roles
             return lambda *a, **k: None
 
         import pipeline.registration.products as products_mod
@@ -610,6 +616,13 @@ class RegistrarConnectionTests(unittest.TestCase):
                          "the registrar must borrow the pass's connection, "
                          "not open one of its own")
 
+        # An ordinary production pass is NOT the pre-binding replay, so the
+        # fallback roles must be absent: passing the running release's
+        # bindings here would let a record authored before bindings existed
+        # register against them silently, which is the one case
+        # `role_product` is supposed to refuse.
+        self.assertIsNone(captured["fallback_roles"])
+
     def test_each_phase_binds_to_its_own_connection(self):
         """Three phases, three registration connections, three bindings.
 
@@ -631,7 +644,8 @@ class RegistrarConnectionTests(unittest.TestCase):
         import pipeline.registration.products as products_mod
         real_registrar = products_mod.registrar
         products_mod.registrar = (
-            lambda dbh, store: captured.append(dbh) or (lambda *a, **k: None))
+            lambda dbh, store, fallback_roles=None:
+                captured.append(dbh) or (lambda *a, **k: None))
         self.addCleanup(setattr, products_mod, "registrar", real_registrar)
 
         factory = vpo.production_registrar()
