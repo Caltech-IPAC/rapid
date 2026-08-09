@@ -123,6 +123,7 @@ RAPID Pipeline Development
    dev/notes.rst
    dev/tests.rst
    dev/vpo_service.rst
+   dev/post_db_chain.rst
    dev/tessellation_bake_retirement.rst
    analyses/analyses.rst
 
