@@ -27,6 +27,7 @@ Everything after "classify" happens inside the per-attempt lease.
 
 import datetime
 import logging
+import socket
 import time
 
 from observability.attempts import (
@@ -326,6 +327,41 @@ class ReconcilerService:
 
     # -- one cycle -------------------------------------------------------
 
+    def write_heartbeat(self, summary):
+        """Record that this poll RAN, whether or not it found work.
+
+        THE LIVENESS FACT, replacing an inference. `derived.region4_watcher_
+        liveness` used to read `max(attempts.reconciliation_detected_at)` —
+        a timestamp written only when a pass finds something to classify. A
+        reconciler polling perfectly against a quiet pipeline wrote nothing,
+        so its liveness decayed to 'stale', and because that view GATES
+        region 4, every target-zero panel in the region rendered untrusted.
+        Health and quiet were indistinguishable, and the healthy case was the
+        one that looked broken.
+
+        One row per poll, including the nothing-to-do poll — which is the
+        whole point, and is why this is called before the early return above
+        as well as at the end of a full cycle.
+
+        Never fatal. A heartbeat that cannot be written is a monitoring
+        problem; failing the reconciliation cycle over it would turn a
+        cosmetic outage into a real one.
+        """
+        try:
+            with self.conn.cursor() as cursor:
+                cursor.execute(
+                    "insert into reconciler_runs "
+                    "(rows_classified, poll_seconds, reconciler_host) "
+                    "values (%s, %s, %s);",
+                    (int(summary.get("classified", 0)),
+                     getattr(self, "poll_seconds", None),
+                     socket.gethostname()))
+            self.conn.commit()
+        except Exception:  # noqa: BLE001 - liveness must not break the loop
+            self._safe_rollback()
+            logger.exception("could not write the reconciler heartbeat; the "
+                             "cycle itself is unaffected")
+
     def poll_once(self):
         """One reconciliation cycle. Returns a summary dict for the log."""
         rows = self.open_attempts()
@@ -333,8 +369,11 @@ class ReconcilerService:
                    "skipped": 0, "deferred": 0, "waiting": 0, "errors": 0,
                    "discovered": 0}
         if not rows:
-            # Nothing to do is not a failure to work (#24).
+            # Nothing to do is not a failure to work (#24) — and it is still a
+            # poll, so it still heartbeats. This is exactly the case the old
+            # liveness inference could not see.
             self.consecutive_unproductive_polls = 0
+            self.write_heartbeat(summary)
             return summary
 
         by_job = {}
@@ -451,6 +490,7 @@ class ReconcilerService:
             self.consecutive_unproductive_polls = 0
 
         logger.info("poll: %s", summary)
+        self.write_heartbeat(summary)
         return summary
 
     def _log_group_for(self, row):

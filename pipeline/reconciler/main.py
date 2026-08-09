@@ -48,21 +48,48 @@ def _assumed_session(role_arn, region):
     role directly, so every reconciliation call is attributable to
     `rapid-orchestrator-role` in CloudTrail rather than to whatever else runs
     on this host.
+
+    **THE CREDENTIAL REFRESHES IN-LOOP** (recorded follow-up). This used to
+    call `assume_role` once and build a session from the three literal strings
+    it returned. Those expire — one hour by default — and a session built from
+    literals cannot renew them, so every reconciliation call began failing
+    `ExpiredToken` about an hour in. The service then exited unhealthy and
+    systemd restarted it, which worked, but meant an hourly restart of a
+    long-running service AS ITS CREDENTIAL MECHANISM: NRestarts climbed
+    forever, and a genuine crashloop was indistinguishable from the ordinary
+    hourly churn in the one number an operator watches.
+
+    `RefreshableCredentials` is botocore's own answer: it re-invokes the
+    refresh callable when the credential nears expiry, inside the running
+    process. The assume_role call below therefore happens on the first use and
+    again shortly before each expiry, rather than once ever — and the process
+    stays up, so NRestarts means what it is supposed to mean.
+
+    Deliberately botocore's mechanism rather than a hand-rolled timer: the
+    expiry arithmetic, the advisory-vs-mandatory refresh window and the
+    thread-safety are exactly the parts that are easy to get subtly wrong, and
+    they are already written and exercised here.
     """
     import boto3
 
     if not role_arn:
         return boto3.Session(region_name=region)
 
+    from botocore.credentials import (DeferredRefreshableCredentials,
+                                      create_assume_role_refresher)
+    from botocore.session import get_session
+
     sts = boto3.client("sts", region_name=region)
-    assumed = sts.assume_role(RoleArn=role_arn,
-                              RoleSessionName="rapid-reconciler")
-    credentials = assumed["Credentials"]
-    return boto3.Session(
-        aws_access_key_id=credentials["AccessKeyId"],
-        aws_secret_access_key=credentials["SecretAccessKey"],
-        aws_session_token=credentials["SessionToken"],
-        region_name=region)
+
+    botocore_session = get_session()
+    botocore_session._credentials = DeferredRefreshableCredentials(
+        refresh_using=create_assume_role_refresher(
+            sts, {"RoleArn": role_arn,
+                  "RoleSessionName": "rapid-reconciler"}),
+        method="sts-assume-role")
+    botocore_session.set_config_variable("region", region)
+    return boto3.Session(botocore_session=botocore_session,
+                         region_name=region)
 
 
 def build_service(session, parameters, conn):

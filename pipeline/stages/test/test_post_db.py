@@ -88,9 +88,15 @@ class RecordingCursor:
       property the staging-plus-upsert shape exists to provide.
     """
 
-    def __init__(self, catalog=None):
+    def __init__(self, catalog=None, tablespaces=()):
         # name -> {"columns": (...), "unique": (...) or None, "rows": [ ... ]}
         self.catalog = dict(catalog or {})
+        # Which tablespaces this server has. EMPTY BY DEFAULT, because that is
+        # what rapid-db has (pg_default and pg_global only) and the default
+        # should be the shape the live server presents — the unconditional
+        # `SET default_tablespace` passed every test and died on the first
+        # real run precisely because the doubles assumed the other case.
+        self.tablespaces = set(tablespaces)
         self.statements = []
         self.rowcount = None
         self._result = []
@@ -133,12 +139,32 @@ class RecordingCursor:
             self._result = [(1,)] if name in self.catalog else []
             self.rowcount = len(self._result)
             return None
+        if "from pg_tablespace" in lowered:
+            # The existence probe `_place_in_data_tablespace` runs. Answered
+            # from the double's own tablespace list so a server that has none
+            # answers as rapid-db actually did.
+            name = params[0] if params else None
+            self._result = [(1,)] if name in self.tablespaces else []
+            self.rowcount = len(self._result)
+            return None
         if lowered.startswith("select count(*)"):
             self._result = [(self._duplicate_groups(lowered),)]
             self.rowcount = 1
             return None
         if lowered.startswith("select"):
             self.rowcount = len(self._result)
+            return None
+        if lowered.startswith("set local default_tablespace"):
+            # POSTGRESQL REFUSES THIS, it does not warn (attempt 6771, live).
+            # The double refuses it too, which is what makes the fallback
+            # testable: a stub that accepted every SET would pass against the
+            # unconditional code that died on the real server.
+            wanted = text.split("=")[-1].strip().strip(";").strip()
+            if wanted not in self.tablespaces:
+                raise CursorRefusal(
+                    f'invalid value for parameter "default_tablespace": '
+                    f'"{wanted}"')
+            self.rowcount = 0
             return None
         # SET, ALTER, and anything else: accepted, recorded, no effect.
         self.rowcount = 0
@@ -767,6 +793,49 @@ class CurrencySweepTests(unittest.TestCase):
             catalog_db.delete_superseded_rows(
                 cursor, "merges_7", "merges", join_column="sid; DROP TABLE x",
                 identity_table="diffimages", identity_column="pid")
+
+
+class TablespacePlacementTests(unittest.TestCase):
+    """A deploy-only defect, found live and guarded here (attempt 6771).
+
+    Every DDL site ran `SET LOCAL default_tablespace = pipeline_data_01`
+    unconditionally. rapid-db has only `pg_default` and `pg_global`, and
+    PostgreSQL REFUSES the SET rather than warning — so the first statement of
+    the first stage raised `InvalidParameterValue` and the whole catalog-load
+    chain was unreachable. Nothing in this suite could see it while the cursor
+    double accepted every SET, which is the stub-blind shape: the statement is
+    valid SQL and only the server knows whether the tablespace exists.
+    """
+
+    def test_the_placement_is_skipped_when_the_server_has_no_tablespace(self):
+        from pipeline.stages import post_db
+
+        cursor = RecordingCursor()          # no tablespaces — rapid-db's shape
+
+        placed = post_db._place_in_data_tablespace(cursor)
+
+        self.assertFalse(placed)
+        self.assertNotIn("set local default_tablespace",
+                         cursor.sql_text.lower())
+
+    def test_the_placement_is_applied_when_the_tablespace_exists(self):
+        from pipeline.stages import post_db
+
+        cursor = RecordingCursor(tablespaces={post_db.DATA_TABLESPACE})
+
+        placed = post_db._place_in_data_tablespace(cursor)
+
+        self.assertTrue(placed)
+        self.assertIn("set local default_tablespace",
+                      cursor.sql_text.lower())
+
+    def test_the_double_refuses_the_set_the_server_refused(self):
+        # The guard on the guard: if this stops raising, the test above stops
+        # proving anything.
+        cursor = RecordingCursor()
+
+        with self.assertRaises(CursorRefusal):
+            cursor.execute("SET LOCAL default_tablespace = pipeline_data_01")
 
 
 if __name__ == "__main__":

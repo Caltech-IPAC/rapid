@@ -114,7 +114,7 @@ def create_sources_table(context) -> None:
         # The child tables live in the data tablespace, the indexes they carry
         # in the index tablespace — the placement the old script set with two
         # `SET default_tablespace` statements around its DDL.
-        cursor.execute("SET LOCAL default_tablespace = pipeline_data_01")
+        _place_in_data_tablespace(cursor, context.logger)
         created = catalog_db.create_child_table(
             cursor, table, "sources", inherit=True)
 
@@ -191,6 +191,46 @@ def download_psf_catalogs(context) -> None:
     context.record(psf_catalog_files=len(downloaded), sca=sca)
     context.logger.info("unit %s/%s: %d catalogue file(s)",
                         proc_date, sca, len(downloaded))
+
+
+#: The tablespace the post-DB child tables are placed in where one exists.
+#: Named once; the three DDL sites ask for it through `_place_in_data_tablespace`.
+DATA_TABLESPACE = "pipeline_data_01"
+
+
+def _place_in_data_tablespace(cursor, logger=None):
+    """Set the data tablespace for this transaction, IF the server has one.
+
+    **A DEPLOY-ONLY DEFECT, found live** (attempt 6771, 2026-08-09). All three
+    DDL sites ran `SET LOCAL default_tablespace = pipeline_data_01`
+    unconditionally, and rapid-db has only `pg_default` and `pg_global`: the
+    named tablespaces are a production-storage arrangement this database does
+    not carry. PostgreSQL refuses the SET itself — `InvalidParameterValue`, not
+    a warning — so `create_sources_table` died on its first statement and the
+    whole catalog-load chain was unreachable. No unit test could see it: the
+    statement is valid SQL and only the SERVER knows whether the tablespace
+    exists.
+
+    Placement is an optimization, not a correctness property — the child tables
+    are identical wherever they live — so its absence must not fail the load.
+    Where the tablespace exists the placement is applied exactly as before;
+    where it does not, the tables land in `pg_default` and the fact is logged
+    rather than assumed. That is the same "absent, not sentinel" rule the
+    gathering layer states: a fact that cannot be resolved is left absent, and
+    nothing invents a substitute.
+    """
+    cursor.execute("select 1 from pg_tablespace where spcname = %s;",
+                   (DATA_TABLESPACE,))
+    if cursor.fetchone() is None:
+        if logger is not None:
+            logger.info(
+                "tablespace %s does not exist on this server; the child "
+                "tables are created in the default tablespace. Placement is "
+                "an optimization and its absence is not a load failure.",
+                DATA_TABLESPACE)
+        return False
+    cursor.execute("SET LOCAL default_tablespace = " + DATA_TABLESPACE)
+    return True
 
 
 def _product_inputs_for_unit(context):
@@ -339,7 +379,7 @@ def create_field_tables(context) -> None:
     field = int(_unit_field(context, "field"))
 
     with transaction(conn) as cursor:
-        cursor.execute("SET LOCAL default_tablespace = pipeline_data_01")
+        _place_in_data_tablespace(cursor, context.logger)
         for prototype in ("astroobjects", "merges"):
             catalog_db.create_child_table(
                 cursor, f"{prototype}_{field}", prototype)
@@ -499,7 +539,7 @@ def compute_statistics(context) -> None:
     target = f"astroobjectsmeta_{field}"
 
     with transaction(conn) as cursor:
-        cursor.execute("SET LOCAL default_tablespace = pipeline_data_01")
+        _place_in_data_tablespace(cursor, context.logger)
         catalog_db.create_child_table(cursor, target, "astroobjectsmeta")
 
         # Recomputed wholesale inside the transaction: the delete and the
