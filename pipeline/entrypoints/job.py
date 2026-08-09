@@ -565,7 +565,8 @@ def _run(workload_class: str) -> int:
     logger = logging_setup.get_logger("job", adapter=adapter)
 
     with _database(route, job_env, db_endpoint, db_credentials) as (writer,
-                                                                    execute):
+                                                                    execute,
+                                                                    conn):
         # 4. Attempt ownership, through W1's one resolver.
         #
         # The logical-job key is RUN-SCOPED and comes from the one function
@@ -618,7 +619,11 @@ def _run(workload_class: str) -> int:
             # Product keys carry run and attempt identity (#18), so a
             # reprocess or a retry cannot overwrite an earlier attempt's
             # objects and leave old checksums pointing at changed bytes.
-            run_id=manifest.batch_id, attempt_id=ownership.attempt_id)
+            run_id=manifest.batch_id, attempt_id=ownership.attempt_id,
+            # THE ATTEMPT'S OWN CONNECTION, LENT TO THE STAGES. The post-DB
+            # job types produce database state rather than S3 products and
+            # write through this one; every other job type ignores it.
+            connection=conn)
 
         # Provenance the stages will extend, seeded with what startup resolved.
         # The tessellation version and digest ride here too, and are CHECKED
@@ -852,7 +857,12 @@ def _database(route, job_env, endpoint, credentials):
     with connection(application_name, lane=route.db_lane, endpoint=endpoint,
                     credentials=credentials) as conn:
         execute = ConnectionExecutor(conn)
-        yield AttemptWriter(execute), execute
+        # The connection itself is yielded alongside the writer (post-DB chain
+        # conversion). The database-effect job types write through it as a
+        # BORROWED connection — co-design ruling 4 — so their writes and this
+        # attempt's own lifecycle rows are on one connection where a
+        # transaction boundary is real. Nothing opens a second one.
+        yield AttemptWriter(execute), execute, conn
 
 
 def _required(parameters: dict, name: str) -> str:

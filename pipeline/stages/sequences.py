@@ -22,13 +22,19 @@ and gets no entry. The entrypoint routes it directly.
 """
 
 from submission.routes import (
+    JOB_TYPE_CATALOG_LOAD,
+    JOB_TYPE_CROSSMATCH,
+    JOB_TYPE_MERGE_CURRENCY,
+    JOB_TYPE_MERGE_DEDUP,
     JOB_TYPE_POST_PROCESS,
     JOB_TYPE_REFERENCE_IMAGE,
     JOB_TYPE_SCIENCE,
+    JOB_TYPE_SOURCE_CURRENCY,
+    JOB_TYPE_STATISTICS,
     RouteError,
 )
 
-from pipeline.stages import post_process, reference_image, science
+from pipeline.stages import post_db, post_process, reference_image, science
 
 # The science (prompt differencing) sequence. Two catalogue variants always
 # (ZOGY positive and negative); SFFT and the naive difference add theirs when
@@ -84,6 +90,19 @@ SEQUENCES = {
     JOB_TYPE_SCIENCE: SCIENCE_SEQUENCE,
     JOB_TYPE_REFERENCE_IMAGE: REFERENCE_IMAGE_SEQUENCE,
     JOB_TYPE_POST_PROCESS: POST_PROCESS_SEQUENCE,
+    # The post-DB science chain (step-3 conversion). These six produce
+    # database state rather than S3 products: each declares an empty product
+    # set, its terminal record is a pure disposition record, and its effect
+    # rides in the attempt record's own fields. They are sequences like any
+    # other because the entrypoint's dispatch, stage spans and termination
+    # protocol are what give them the account of themselves the four
+    # orchestrator subprocesses never had.
+    JOB_TYPE_CATALOG_LOAD: post_db.CATALOG_LOAD_SEQUENCE,
+    JOB_TYPE_CROSSMATCH: post_db.CROSSMATCH_SEQUENCE,
+    JOB_TYPE_STATISTICS: post_db.STATISTICS_SEQUENCE,
+    JOB_TYPE_MERGE_CURRENCY: post_db.MERGE_CURRENCY_SEQUENCE,
+    JOB_TYPE_SOURCE_CURRENCY: post_db.SOURCE_CURRENCY_SEQUENCE,
+    JOB_TYPE_MERGE_DEDUP: post_db.MERGE_DEDUP_SEQUENCE,
 }
 
 

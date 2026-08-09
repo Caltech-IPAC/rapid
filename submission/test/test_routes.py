@@ -174,16 +174,22 @@ def test_unknown_class_is_rejected_before_the_compatibility_check():
 # ---------------------------------------------------------------------------
 
 def test_a_routable_but_unimplemented_job_type_is_rejected_at_the_boundary():
-    # REVIEW FINDING #12. The matrix accepts reprocessing, catalog-load and
-    # crossmatch because the design names them — but no payload implements
-    # them. A manifest naming one used to pass validation, CLAIM AND START an
-    # attempt, and only then raise a route error from inside `_execute`, where
-    # it became an application failure: a row, a bundle, a terminal record and
-    # a failed attempt, all describing a submission that should never have
-    # been accepted.
-    for job_type in ("reprocessing", "catalog-load", "crossmatch"):
-        with pytest.raises(RouteError, match="no implementation"):
-            routes.validate_route(job_type, routes.CLASS_BULK)
+    # REVIEW FINDING #12. The matrix names job types the design has adopted
+    # but no payload implements. A manifest naming one used to pass
+    # validation, CLAIM AND START an attempt, and only then raise a route
+    # error from inside `_execute`, where it became an application failure: a
+    # row, a bundle, a terminal record and a failed attempt, all describing a
+    # submission that should never have been accepted.
+    #
+    # `catalog-load` and `crossmatch` USED TO BE IN THIS LIST and are not any
+    # more: the post-DB chain conversion gave all six of those job types stage
+    # sequences, so they are implemented and must now validate rather than be
+    # rejected (see the two tests below, which check exactly that from the
+    # other direction). `reprocessing` is still described-but-unbuilt, so the
+    # boundary this test guards is still guarded — by the one example that
+    # genuinely has no payload.
+    with pytest.raises(RouteError, match="no implementation"):
+        routes.validate_route("reprocessing", routes.CLASS_BULK)
 
 
 def test_the_implemented_types_still_validate():
@@ -193,6 +199,33 @@ def test_the_implemented_types_still_validate():
                                      ("registration", routes.CLASS_PROMPT)):
         assert routes.validate_route(job_type, workload_class).job_type \
             == job_type
+
+
+def test_the_post_db_chain_validates_as_implemented():
+    # The other direction of the test above, and the one that would have
+    # caught the conversion landing sequences without opening the route: all
+    # six post-DB job types are bulk class, and each must now pass the route
+    # boundary rather than be refused as unimplemented.
+    for job_type in routes.POST_DB_CHAIN:
+        assert routes.validate_route(job_type, routes.CLASS_BULK).job_type \
+            == job_type
+
+
+def test_the_post_db_chain_carries_the_lane_the_design_assigns():
+    # The database design assigns the budgeted session lane by transaction
+    # shape, and gives it to exactly two of the six: "only long-transaction
+    # work (catalog bulk load, crossmatch) holds the budgeted session lane".
+    # A sweep quietly promoted onto the session lane would spend a scarce
+    # connection for a brief transaction.
+    assert routes.route_for(routes.JOB_TYPE_CATALOG_LOAD).db_lane \
+        == routes.LANE_SESSION
+    assert routes.route_for(routes.JOB_TYPE_CROSSMATCH).db_lane \
+        == routes.LANE_SESSION
+    for job_type in (routes.JOB_TYPE_STATISTICS,
+                     routes.JOB_TYPE_MERGE_CURRENCY,
+                     routes.JOB_TYPE_SOURCE_CURRENCY,
+                     routes.JOB_TYPE_MERGE_DEDUP):
+        assert routes.route_for(job_type).db_lane == routes.LANE_TRANSACTION
 
 
 def test_the_implemented_set_matches_what_the_payload_actually_has():

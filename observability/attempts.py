@@ -51,6 +51,24 @@ logger = logging.getLogger(__name__)
 # that must supply them.
 SCHEMA_VERSION = 2
 
+# The retry policy this image implements, recorded on every attempt it starts
+# (migration 025's `attempts.retry_policy_version`; operations design
+# § Failure-path design).
+#
+# VERSION 1 IS DELIBERATELY CONSERVATIVE: "every application-failure category
+# is park-until-change — no automatic retry; the unit waits until a relevant
+# input, configuration, software, or operational condition changes, and is
+# never tombstoned — while scheduler-visible failures carry the
+# condition-gated scheduler retry rows, the sole automatic-retry surface under
+# version 1."
+#
+# The POLICY is release content; this constant is only the version number the
+# writer stamps, so a reader of an old attempt can tell which regime governed
+# it. Bumping it is a policy change — the design requires a new version to be
+# "justified by an observed failure distribution, never speculatively" — so
+# this number moves with a policy document, not on its own.
+RETRY_POLICY_VERSION = 1
+
 
 class LifecycleState(str, enum.Enum):
     """The six lifecycle states. Values match the DDL's CHECK vocabulary."""
@@ -582,7 +600,9 @@ class AttemptWriter:
                      provenance: Provenance,
                      scheduler_job_id: str | None = None,
                      application_attempt_index: int | None = None,
-                     config_snapshot_key: str | None = None) -> None:
+                     config_snapshot_key: str | None = None,
+                     retry_policy_version: int | None = RETRY_POLICY_VERSION
+                     ) -> None:
         """Advance a row to `started`. A real compare-and-set.
 
         Provenance is required here, not optional: the DDL will reject a
@@ -615,6 +635,24 @@ class AttemptWriter:
         killed between claim and start leaves a row that can still be closed
         as never-started — the specification's own legal window. This
         transition is where the claim becomes a start.
+
+        **`retry_policy_version` is written HERE** (post-DB chain and schema
+        hardening co-design; operations design § Failure-path design: retries
+        "are failure-aware and governed by the versioned retry policy").
+        Migration 025 added the column, and its own CHECK decides the write
+        site: `retry_policy_version IS NULL OR lifecycle_state <> 'submitted'`
+        — a submitted row must NOT carry one, because no policy has governed
+        it yet. The start transition is the first moment one applies, so it is
+        the first moment the column may be written.
+
+        The value is the version this IMAGE implements, not a per-attempt
+        choice: version 1 is park-until-change for every application-failure
+        category, and the policy document itself is release content. Recording
+        which version governed an attempt is what makes a later policy change
+        legible in the record — attempts before it park, attempts after it
+        retry, and the column says which regime each ran under. Passing None
+        explicitly writes NULL, which is what a caller with no policy in force
+        should say rather than claiming v1.
         """
         # `job_definition_rev` falls back to the row's own binding when the
         # runtime observed none. The image-baked value is ADVISORY now
@@ -632,6 +670,7 @@ class AttemptWriter:
             "    %s, binding_job_definition_rev::text),"
             "  config_digest = %s,"
             "  config_snapshot_key = %s,"
+            "  retry_policy_version = %s,"
             "  scheduler_job_id = COALESCE(%s, scheduler_job_id),"
             "  application_attempt_index = COALESCE("
             "    %s, application_claim_index, application_attempt_index)"
@@ -641,7 +680,7 @@ class AttemptWriter:
             LifecycleState.STARTED.value, started_at,
             provenance.source_sha, provenance.container_digest,
             provenance.job_definition_rev, provenance.config_digest,
-            config_snapshot_key,
+            config_snapshot_key, retry_policy_version,
             scheduler_job_id, application_attempt_index, attempt_id,
             LifecycleState.SUBMITTED.value,
         ])
@@ -880,7 +919,8 @@ class AttemptWriter:
                          = ProductDisposition.NONE,
                          scheduler_observed_exit: int | None = None,
                          terminal_record_key: str | None = None,
-                         terminal_record_sequence: int | None = None) -> None:
+                         terminal_record_sequence: int | None = None,
+                         terminal_record_checksum: str | None = None) -> None:
         """Close a started attempt that died without reporting — OOM kill, Spot
         reclaim, host death.
 
@@ -905,6 +945,21 @@ class AttemptWriter:
         would not. At schema_version >= 2 the reconciler supplies its
         reconciler-first record's key and sequence, since a
         terminal_after_start row must cite the record that accounts for it.
+
+        **AND ITS CHECKSUM** (catalog design § Promotion; migration 022's
+        `closure_record_checksum`, whose own comment says the write site lands
+        "separately" — this is it). The catalog design's principle is that a
+        pointer is a claim, not a fact: a reader validates the record
+        "parseable, same attempt identity and sequence, checksum where the
+        row's classification records one — before any flip". An abrupt-loss
+        row cited a key with no checksum, so that validation had nothing to
+        check against and the reader was left trusting the very pointer the
+        design tells it not to trust.
+
+        This path in particular, because it is the one where the record is
+        entirely reconciler-authored: the application died without writing
+        anything, so the cited record's bytes were produced by the reconciler
+        calling this — which therefore knows their checksum and can state it.
         """
         _validate_scheduler_state(scheduler_state)
         exit_code = (scheduler_observed_exit if scheduler_observed_exit is not None
@@ -917,9 +972,12 @@ class AttemptWriter:
             product_disposition=product_disposition,
             error_category=error_category,
             terminal_record_key=terminal_record_key,
-            terminal_record_sequence=terminal_record_sequence)
-        logger.warning("attempt %s closed as abrupt loss (%s, exit %s)",
-                       attempt_id, error_category, exit_code)
+            terminal_record_sequence=terminal_record_sequence,
+            terminal_record_checksum=terminal_record_checksum)
+        logger.warning("attempt %s closed as abrupt loss (%s, exit %s, "
+                       "closure checksum %s)",
+                       attempt_id, error_category, exit_code,
+                       (terminal_record_checksum or "absent")[:12])
 
     def mark_missing_or_contradictory(self, attempt_id: int,
                                       reconciliation_class: ReconciliationClass,

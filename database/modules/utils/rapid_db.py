@@ -2901,6 +2901,185 @@ class RAPIDDB:
 
 ########################################################################################################
 
+    def get_scas_with_science_jobs_for_processing_date(self,proc_date):
+
+        '''
+        Distinct SCAs that ran normally on the given processing date.
+
+        THE POST-DB CHAIN'S WORK IS ENUMERATED AT SUBMISSION, NOT DISCOVERED
+        AT RUNTIME (post-DB co-design ruling 1). The catalog-load job type's
+        unit is (processing date, SCA), and this is where that list comes
+        from: the Jobs rows the science pipeline actually wrote, which is the
+        same source `get_jids_of_normal_science_pipeline_jobs_for_processing_date`
+        reads and therefore cannot disagree with it.
+
+        What this deliberately does NOT do is probe `to_regclass` for
+        `sources_<date>_<sca>` tables, the way `crossMatchSources.py:882-890`
+        did. That asked the catalog what tables happen to exist — so the work
+        list depended on what a previous run had already created, and a unit
+        whose table was missing simply vanished from the list rather than
+        being reported as work not done. Reading Jobs asks what work the
+        pipeline DID, which is the question the manifest needs answered.
+        '''
+
+        self.exit_code = 0
+
+        from submission.routes import JOB_TYPE_SCIENCE, ppid_for
+
+        query = "select distinct sca from Jobs " +\
+                "where ppid = %s " +\
+                "and ended >= cast(%s as timestamp) " +\
+                "and ended < cast(%s as timestamp) + cast('1 day' as interval) " +\
+                "and status > 0 " +\
+                "and exitcode <= 32 " +\
+                "and sca is not null " +\
+                "order by sca;"
+        params = (ppid_for(JOB_TYPE_SCIENCE), proc_date, proc_date)
+
+        print('query = {}, params = {}'.format(query, params))
+
+        try:
+            self.cur.execute(query, params)
+            records = [record[0] for record in self.cur]
+            print("nrecs =",len(records))
+
+        except (Exception, psycopg2.DatabaseError) as error:
+            print('*** Error getting SCAs for processing date {}: {}; skipping...'.format(proc_date,error))
+            self.exit_code = 67
+            return
+
+        return records
+
+
+########################################################################################################
+
+    def get_fields_with_science_jobs_for_processing_date(self,proc_date):
+
+        '''
+        Distinct sky fields that ran normally on the given processing date.
+
+        The crossmatch job type's unit is (processing date, field), and the
+        co-design has it "gathered after catalog load completes" — which is
+        about ORDERING, not about where the field list comes from. The list
+        comes from here, the Jobs rows, for the same reason the SCA list
+        does; what waiting for catalog load buys is that the source rows
+        those fields name are loaded by the time the crossmatch unit runs.
+
+        `crossMatchSources.py:899` derived this by selecting distinct field
+        from each `sources_<date>_<sca>` child table it had just found by
+        catalog probe — a query that cannot run until the previous step has
+        written its tables, and that is exactly why it could not live in a
+        manifest. Jobs answers the same question at submission time.
+        '''
+
+        self.exit_code = 0
+
+        from submission.routes import JOB_TYPE_SCIENCE, ppid_for
+
+        query = "select distinct field from Jobs " +\
+                "where ppid = %s " +\
+                "and ended >= cast(%s as timestamp) " +\
+                "and ended < cast(%s as timestamp) + cast('1 day' as interval) " +\
+                "and status > 0 " +\
+                "and exitcode <= 32 " +\
+                "and field is not null " +\
+                "order by field;"
+        params = (ppid_for(JOB_TYPE_SCIENCE), proc_date, proc_date)
+
+        print('query = {}, params = {}'.format(query, params))
+
+        try:
+            self.cur.execute(query, params)
+            records = [record[0] for record in self.cur]
+            print("nrecs =",len(records))
+
+        except (Exception, psycopg2.DatabaseError) as error:
+            print('*** Error getting fields for processing date {}: {}; skipping...'.format(proc_date,error))
+            self.exit_code = 67
+            return
+
+        return records
+
+
+########################################################################################################
+
+    def get_fields_with_per_field_table(self,prototype):
+
+        '''
+        Fields that currently have a per-field clone of the named prototype.
+
+        The corpus-wide sweeps (statistics, the two currency sweeps, the dedup
+        check) act on every field that HAS a table, which is a different
+        question from "which fields ran on a date" — a field loaded last month
+        still needs its currency maintained when a difference image is demoted
+        today, and no processing-date query would name it.
+
+        SO THIS IS A CATALOG QUERY, AND IT IS DELIBERATELY IN THE SUBMISSION
+        LAYER. Ruling 1 bans runtime catalog introspection INSIDE a job type —
+        "a job type never discovers its work by catalog introspection at
+        runtime; every unit is individually retryable and individually
+        reconcilable". Enumerating at submission is what that ruling asks
+        for: the submitter runs this once, the manifest names each field as a
+        declared unit, and each unit is then retryable on its own. The same
+        `pg_tables` question asked from inside the sweep (as
+        `pruneNotBestMerges.py:358` asked it) produced one unbounded job whose
+        work list nothing could reconstruct or retry piecewise.
+
+        `prototype` is a table NAME, not caller SQL: it is matched against the
+        known prototypes and rejected otherwise, so this cannot become a
+        string-substituted query surface. The LIKE pattern is a bound
+        parameter for the same reason.
+        '''
+
+        self.exit_code = 0
+
+        # The prototypes whose clones the post-DB chain sweeps. An allow-list,
+        # not an escaping routine: the set is small, closed, and known here,
+        # and a caller asking for anything else is a bug rather than a table
+        # this method should try to serve.
+        known = ("merges", "astroobjects", "astroobjectsmeta", "sources")
+        if prototype not in known:
+            print('*** Error: {} is not a per-field prototype; known: {}'.format(
+                prototype, ", ".join(known)))
+            self.exit_code = 65
+            return
+
+        query = "select tablename from pg_tables " +\
+                "where schemaname = 'public' " +\
+                "and tablename like %s " +\
+                "order by tablename;"
+        params = (prototype + "\\_%",)
+
+        print('query = {}, params = {}'.format(query, params))
+
+        try:
+            self.cur.execute(query, params)
+            rows = [record[0] for record in self.cur]
+
+        except (Exception, psycopg2.DatabaseError) as error:
+            print('*** Error listing per-field tables for {}: {}; skipping...'.format(prototype,error))
+            self.exit_code = 67
+            return
+
+        # Only the suffixes that are actually field identifiers. A table named
+        # `merges_backup_20260101` matches the LIKE and is NOT a field clone;
+        # returning it would put a bogus unit in a manifest and the job would
+        # fail on a table whose name it built from a non-numeric field.
+        fields = []
+        prefix = prototype + "_"
+        for tablename in rows:
+            suffix = tablename[len(prefix):]
+            if suffix.isdigit():
+                fields.append(int(suffix))
+            else:
+                print("Skipping non-field table:", tablename)
+
+        print("nrecs =",len(fields))
+        return fields
+
+
+########################################################################################################
+
     def get_unclosedout_jobs_for_processing_date(self,ppid,proc_date):
 
         '''

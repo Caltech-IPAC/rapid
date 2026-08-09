@@ -1132,7 +1132,14 @@ class ReconcilerService:
                 error_category=error_category,
                 scheduler_observed_exit=observation.exit_code,
                 terminal_record_key=written.key,
-                terminal_record_sequence=landed_sequence)
+                terminal_record_sequence=landed_sequence,
+                # The checksum of the bytes just written (migration 022's
+                # column, catalog design § Promotion). The reconciler authored
+                # this record, so it is the one writer that knows the digest
+                # without re-reading the object — and a cited key with no
+                # checksum is a pointer a reader is told to distrust and given
+                # no way to verify.
+                terminal_record_checksum=written.checksum)
             return
 
         body = written.record.body

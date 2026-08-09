@@ -102,6 +102,28 @@ class StageContext:
     #: construct a bare context, where `product_prefix` falls back and says so.
     run_id: Any = None
     attempt_id: Any = None
+    #: THE ATTEMPT'S OWN DATABASE CONNECTION, LENT TO STAGES THAT NEED ONE
+    #: (post-DB chain conversion). The entrypoint already opens exactly one
+    #: connection per attempt, on the route matrix's lane for this job type,
+    #: and holds it for the attempt's lifetime. The post-DB job types produce
+    #: database state rather than S3 products, so they need that connection —
+    #: and the co-design's ruling 4 says which one they get: "the non-identity
+    #: per-call database sites inside the converted scripts move to borrowed
+    #: connections with the job-type work".
+    #:
+    #: Borrowed, never opened. The converted scripts each constructed their own
+    #: `db.RAPIDDB()` — 12 direct constructions across the six — every one of
+    #: which opens a second connection whose 33 mutating methods commit
+    #: individually. A stage writing through its own handle could not be in one
+    #: transaction with anything, so a failure midway left a partial effect
+    #: with an attempt record claiming failure. Borrowing puts the stage's
+    #: writes and the attempt's own lifecycle rows on one connection, where the
+    #: transaction boundary is real.
+    #:
+    #: None in unit tests that construct a bare context and in job types that
+    #: touch no database; `require_connection` is what turns that into one
+    #: named failure rather than an AttributeError inside a query.
+    connection: Any = None
 
     # -- product keys --------------------------------------------------------
 
@@ -299,6 +321,55 @@ class StageContext:
         values the record consumes.
         """
         self.provenance.update(facts)
+
+    def require_connection(self):
+        """The attempt's borrowed database connection, required.
+
+        Raises
+        ------
+        ConfigError
+            If the entrypoint did not lend one. A database-effect job type
+            without a connection is a wiring fault in this image, not a bad
+            submission — the route matrix already assigned the job type a
+            lane, so a missing connection means the entrypoint failed to pass
+            what it opened.
+        """
+        if self.connection is None:
+            raise ConfigError(
+                f"job type {self.job_type!r} needs the attempt's database "
+                f"connection and none was lent to this context. The "
+                f"entrypoint opens one per attempt on the route's lane and "
+                f"passes it here; a stage never opens its own.")
+        return self.connection
+
+    def record_effect(self, rows_written: int = 0, rows_removed: int = 0,
+                      **extra: Any) -> None:
+        """Record this unit's DATABASE EFFECT in the attempt's provenance.
+
+        **The terminal record of a database-effect job type is a pure
+        disposition record** (co-design ruling 2, operations design § Post-DB
+        science chain): it declares an empty product set, promotes nothing,
+        "and its effect — rows written, rows removed — is recorded in the
+        attempt record's own fields".
+
+        So this is where the work becomes visible. A catalog-load unit that
+        loaded 4.1M rows and one that loaded none both close successfully and
+        both are honest; the difference is here, and it is what makes an empty
+        result reviewable rather than indistinguishable from a no-op.
+
+        Counts ACCUMULATE across the stages of one unit rather than
+        overwriting, because a sequence may write through more than one stage
+        and the unit's effect is their sum. Passing a count of zero is
+        meaningful and is kept: it records that the stage ran and found
+        nothing, which is exactly what the should-find-nothing dedup check
+        exists to say.
+        """
+        self.provenance["rows_written"] = (
+            self.provenance.get("rows_written", 0) + int(rows_written))
+        self.provenance["rows_removed"] = (
+            self.provenance.get("rows_removed", 0) + int(rows_removed))
+        if extra:
+            self.provenance.update(extra)
 
     # -- derived paths -------------------------------------------------------
 

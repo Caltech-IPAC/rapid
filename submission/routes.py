@@ -73,6 +73,17 @@ JOB_TYPE_REPROCESSING = "reprocessing"
 JOB_TYPE_CATALOG_LOAD = "catalog-load"
 JOB_TYPE_CROSSMATCH = "crossmatch"
 
+# The post-DB science chain's remaining four (step-3 conversion). The chain is
+# six job types, not four: the two sweeps beyond the currently invoked set
+# (source currency, merge dedup) are part of the operational chain because they
+# maintain integrity properties the schema does not enforce, and an
+# unmaintained invariant is a defect under the cross-cutting rules (co-design
+# ruling 3).
+JOB_TYPE_STATISTICS = "statistics"
+JOB_TYPE_MERGE_CURRENCY = "merge-currency-sweep"
+JOB_TYPE_SOURCE_CURRENCY = "source-currency-sweep"
+JOB_TYPE_MERGE_DEDUP = "merge-dedup"
+
 
 class RouteError(ValueError):
     """A submission's route is not one the matrix allows.
@@ -147,6 +158,38 @@ ROUTES: tuple[Route, ...] = (
     Route(JOB_TYPE_CROSSMATCH, CLASS_BULK,
           "batch/queue-bulk", "batch/job-definition-bulk",
           LANE_SESSION, ppid=None),
+    # The four remaining post-DB job types. All bulk class, all TRANSACTION
+    # lane: the database design assigns the budgeted session lane by
+    # transaction shape, and only "catalog bulk load, crossmatch" hold it.
+    # Statistics rebuilds one field's table and the three sweeps delete
+    # bounded row sets — brief transactions, whatever their scan cost, so
+    # putting them on the session lane would spend a budgeted connection on
+    # work that does not need one.
+    Route(JOB_TYPE_STATISTICS, CLASS_BULK,
+          "batch/queue-bulk", "batch/job-definition-bulk",
+          LANE_TRANSACTION, ppid=None),
+    Route(JOB_TYPE_MERGE_CURRENCY, CLASS_BULK,
+          "batch/queue-bulk", "batch/job-definition-bulk",
+          LANE_TRANSACTION, ppid=None),
+    Route(JOB_TYPE_SOURCE_CURRENCY, CLASS_BULK,
+          "batch/queue-bulk", "batch/job-definition-bulk",
+          LANE_TRANSACTION, ppid=None),
+    Route(JOB_TYPE_MERGE_DEDUP, CLASS_BULK,
+          "batch/queue-bulk", "batch/job-definition-bulk",
+          LANE_TRANSACTION, ppid=None),
+)
+
+# The six post-DB science chain job types, in chain order. Named as a group
+# because the operator submits them as a chain and the gathering layer
+# enumerates them together; the order is the dependency order (crossmatch
+# gathers after catalog load has written the source tables it reads).
+POST_DB_CHAIN: tuple[str, ...] = (
+    JOB_TYPE_CATALOG_LOAD,
+    JOB_TYPE_CROSSMATCH,
+    JOB_TYPE_STATISTICS,
+    JOB_TYPE_MERGE_CURRENCY,
+    JOB_TYPE_SOURCE_CURRENCY,
+    JOB_TYPE_MERGE_DEDUP,
 )
 
 JOB_TYPES: tuple[str, ...] = tuple(route.job_type for route in ROUTES)
@@ -176,6 +219,12 @@ IMPLEMENTED_JOB_TYPES: frozenset = frozenset({
     JOB_TYPE_REFERENCE_IMAGE,
     JOB_TYPE_POST_PROCESS,
     JOB_TYPE_REGISTRATION,
+    # The post-DB science chain, implemented by the step-3 conversion:
+    # `pipeline.stages.post_db` carries the six sequences, so these are
+    # runnable rather than merely described. Before the conversion they were
+    # matrix rows with no payload, and `validate_route` rejected them at the
+    # route boundary — which is exactly what this line changes.
+    *POST_DB_CHAIN,
 })
 
 _BY_TYPE = {route.job_type: route for route in ROUTES}

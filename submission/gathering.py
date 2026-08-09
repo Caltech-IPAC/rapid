@@ -47,8 +47,11 @@ from typing import Any, Iterable, Iterator, Protocol, Sequence
 from database.modules.utils.roman_tessellation_db import (
     RomanTessellationClosedForm)
 from .manifest import ProcessingUnit, UnitFacts
-from .routes import (JOB_TYPE_POST_PROCESS, JOB_TYPE_REFERENCE_IMAGE,
-                     JOB_TYPE_SCIENCE, ppid_for)
+from .routes import (JOB_TYPE_CATALOG_LOAD, JOB_TYPE_CROSSMATCH,
+                     JOB_TYPE_MERGE_CURRENCY, JOB_TYPE_MERGE_DEDUP,
+                     JOB_TYPE_POST_PROCESS, JOB_TYPE_REFERENCE_IMAGE,
+                     JOB_TYPE_SCIENCE, JOB_TYPE_SOURCE_CURRENCY,
+                     JOB_TYPE_STATISTICS, ppid_for)
 from .submit import is_precondition_failed
 
 logger = logging.getLogger(__name__)
@@ -134,6 +137,16 @@ class UnitSource(Protocol):
 
     def get_jids_of_normal_science_pipeline_jobs_for_processing_date(
             self, proc_date: str) -> Sequence[Any]: ...
+
+    # The post-DB science chain's three enumerations (step-3 conversion).
+    def get_scas_with_science_jobs_for_processing_date(
+            self, proc_date: str) -> Sequence[Any]: ...
+
+    def get_fields_with_science_jobs_for_processing_date(
+            self, proc_date: str) -> Sequence[Any]: ...
+
+    def get_fields_with_per_field_table(
+            self, prototype: str) -> Sequence[Any]: ...
 
 
 def _positions(values: Sequence[Any], ra_keys: Sequence[str],
@@ -877,6 +890,209 @@ def post_process_facts(handle: Any, job: Any) -> UnitFacts:
         reference_image_uri=_maybe_str(reference.get("filename")),
         reference_image_infobits=_maybe_int(reference.get("infobits")),
         reference_image_version=_maybe_int(reference.get("version")))
+
+
+# ---------------------------------------------------------------------------
+# The post-DB science chain (step-3 conversion)
+# ---------------------------------------------------------------------------
+#
+# Six job types, three unit shapes, one rule: THE WORK LIST IS BUILT HERE.
+#
+# Every one of the six replaced a script that discovered its own work at
+# runtime — `to_regclass` probes across SCAs 1-18, `select distinct field`
+# against tables the previous step had just written, `pg_tables like
+# 'merges_%'`. The co-design's first ruling ends that: "a job type never
+# discovers its work by catalog introspection at runtime; every unit is
+# individually retryable and individually reconcilable in attempt records".
+#
+# What that buys, concretely: a catalog-load pass over 18 SCAs used to be one
+# process whose failure lost the whole date. It is now 18 units with 18 attempt
+# rows, and a rerun re-submits the ones that failed. The manifest names each
+# unit's declared inputs, so what a unit was FOR is recoverable from the
+# submission rather than from re-running the discovery query against a catalog
+# that has since changed.
+#
+# THE UNITS ARE NOT EXPOSURE/SCA, AND `ProcessingUnit` STILL CARRIES THEM.
+# The array layer knows one carrier, and `ProcessingUnit(exposure, sca)` is
+# it. Post-process already established the pattern for work that is not keyed
+# by exposure — the jid rides in `fields` — and these follow it: the real key
+# (processing date, SCA, or field) rides in `fields`, and `exposure`/`sca`
+# carry a stable synthetic identity that keeps `unit.key` unique, which is
+# what `logical_job_key` needs to keep run-scoped rows from colliding.
+
+
+def _proc_date_ordinal(proc_date: str) -> int:
+    """`yyyymmdd` as an integer, for the synthetic unit key.
+
+    The unit key must be unique per unit and stable across a retry of the
+    same unit — that is all `ProcessingUnit.key` promises. A processing date
+    is already an integer written as a string, so it needs no hashing.
+
+    Raises
+    ------
+    GatheringError
+        If the date is not `yyyymmdd`. A malformed date would silently
+        produce colliding unit keys, so it is refused where it is read
+        rather than propagated into a manifest.
+    """
+    text = str(proc_date)
+    if not (len(text) == 8 and text.isdigit()):
+        raise GatheringError(
+            f"processing date {proc_date!r} is not yyyymmdd; the unit key is "
+            f"derived from it and a malformed date collides silently")
+    return int(text)
+
+
+def gather_catalog_load_units(handle: UnitSource, proc_date: str
+                              ) -> Iterator[ProcessingUnit]:
+    """Yield catalog-load units — one per (processing date, SCA).
+
+    The unit grain is the OUTPUT TABLE's grain: `sources_<yyyymmdd>_<sca>`.
+    That is deliberate and it is what makes the staging-plus-upsert load
+    convergent — a unit owns exactly one target table, so a rerun of that
+    unit re-loads that table and cannot interleave with another unit's
+    writes.
+
+    `loadPSFCatIntoDBSourcesTable.py` ran one process per processing DATE
+    over all 18 SCAs with a thread-pool fan-out inside it. The fan-out is
+    what the array layer replaces: 18 array children, 18 attempt rows, each
+    retryable alone.
+    """
+    ordinal = _proc_date_ordinal(proc_date)
+
+    scas = handle.get_scas_with_science_jobs_for_processing_date(proc_date)
+    code = getattr(handle, "exit_code", 0)
+    if code not in (0, 7):
+        raise GatheringError(
+            f"SCA enumeration failed for processing date {proc_date}: "
+            f"rapid_db exit_code {code}")
+
+    for sca in scas or ():
+        sca = int(sca[0] if isinstance(sca, (list, tuple)) else sca)
+        yield ProcessingUnit(
+            exposure=ordinal, sca=sca,
+            facts=UnitFacts(),
+            fields={"proc_date": str(proc_date), "sca": sca,
+                    "job_type": JOB_TYPE_CATALOG_LOAD,
+                    # The declared input: the table this unit loads. Named in
+                    # the manifest so the unit's target is a submission fact
+                    # rather than something the job builds from its own
+                    # environment and hopes matches.
+                    "target_table": f"sources_{proc_date}_{sca}"})
+
+
+def gather_crossmatch_units(handle: UnitSource, proc_date: str
+                            ) -> Iterator[ProcessingUnit]:
+    """Yield crossmatch units — one per (processing date, field).
+
+    **Gathered after catalog load completes**, which the co-design states as
+    an ordering requirement on the CHAIN, not as a data dependency of this
+    query: the field list comes from Jobs (see the handle method's own note),
+    so it is answerable at any time. What waiting buys is that the
+    `sources_<date>_<sca>` rows a crossmatch unit reads are present when it
+    runs. The operator enforces the ordering by submitting the phases in
+    sequence; this function is what it calls for phase two.
+    """
+    ordinal = _proc_date_ordinal(proc_date)
+
+    fields = handle.get_fields_with_science_jobs_for_processing_date(proc_date)
+    code = getattr(handle, "exit_code", 0)
+    if code not in (0, 7):
+        raise GatheringError(
+            f"field enumeration failed for processing date {proc_date}: "
+            f"rapid_db exit_code {code}")
+
+    for field in fields or ():
+        field = int(field[0] if isinstance(field, (list, tuple)) else field)
+        yield ProcessingUnit(
+            exposure=ordinal, sca=0,
+            facts=UnitFacts(field=field),
+            fields={"proc_date": str(proc_date), "field": field,
+                    "job_type": JOB_TYPE_CROSSMATCH,
+                    "target_tables": [f"astroobjects_{field}",
+                                      f"merges_{field}"]})
+
+
+def _per_field_units(handle: UnitSource, job_type: str, prototype: str
+                     ) -> Iterator[ProcessingUnit]:
+    """Yield one unit per field that has a clone of `prototype`.
+
+    The shared body of the three corpus-wide sweeps and statistics. They
+    differ only in which prototype's clones define their work list and what
+    they then do to each field, so the enumeration is written once.
+
+    The synthetic exposure is 0: these units are not scoped to a processing
+    date at all — `computeStatisticsForAstroObjects.py` notably read no
+    `JOBPROCDATE` and operated over whatever tables existed. The field alone
+    identifies the unit, and it rides in both `sca` (for key uniqueness) and
+    `fields` (as the real key).
+    """
+    fields = handle.get_fields_with_per_field_table(prototype)
+    code = getattr(handle, "exit_code", 0)
+    if code not in (0, 7):
+        raise GatheringError(
+            f"per-field enumeration failed for prototype {prototype}: "
+            f"rapid_db exit_code {code}")
+
+    for field in fields or ():
+        field = int(field[0] if isinstance(field, (list, tuple)) else field)
+        yield ProcessingUnit(
+            exposure=0, sca=field,
+            facts=UnitFacts(field=field),
+            fields={"field": field, "job_type": job_type,
+                    "target_table": f"{prototype}_{field}"})
+
+
+def gather_statistics_units(handle: UnitSource) -> Iterator[ProcessingUnit]:
+    """Yield statistics units — one per field with an astroobjects clone.
+
+    Statistics rebuilds `astroobjectsmeta_<field>` from `astroobjects_<field>`,
+    so the astroobjects clones are what define the work.
+    """
+    return _per_field_units(handle, JOB_TYPE_STATISTICS, "astroobjects")
+
+
+def gather_merge_currency_units(handle: UnitSource
+                                ) -> Iterator[ProcessingUnit]:
+    """Yield merge currency-sweep units — one per field with a merges clone.
+
+    The sweep removes merge rows whose difference image has been demoted out
+    of best status. Row currency in this family is a DERIVED property (the
+    operations design's derived-currency invariant): a row is current while
+    the image it derives from holds best status, and between a demotion and
+    the next sweep superseded rows are present by design.
+    """
+    return _per_field_units(handle, JOB_TYPE_MERGE_CURRENCY, "merges")
+
+
+def gather_source_currency_units(handle: UnitSource
+                                 ) -> Iterator[ProcessingUnit]:
+    """Yield source currency-sweep units — one per field with a merges clone.
+
+    The source-side counterpart, and one of the two sweeps the co-design's
+    ruling 3 brings into the operational chain despite never having been
+    invoked by the VPO: they "are the only maintainers of integrity
+    properties the schema does not enforce", and an unmaintained invariant
+    is a defect under the cross-cutting rules.
+
+    Enumerated from the merges clones rather than the sources children
+    because the sweep is per FIELD — `pruneNotBestSources.py` is a per-field
+    sweep like its sibling, and the sources children are per (date, SCA).
+    """
+    return _per_field_units(handle, JOB_TYPE_SOURCE_CURRENCY, "merges")
+
+
+def gather_merge_dedup_units(handle: UnitSource) -> Iterator[ProcessingUnit]:
+    """Yield merge-dedup units — one per field with a merges clone.
+
+    **A should-find-nothing integrity check, not a maintenance dependency.**
+    Migration 027 put a unique index on the merges prototype's (aid, sid) and
+    the clone path carries it, so duplicates are now PREVENTED rather than
+    swept (co-design ruling 6). This job type stays in the chain to prove
+    that: a nonzero find is a defect report about the constraint, and the
+    job records it as one rather than quietly deleting rows.
+    """
+    return _per_field_units(handle, JOB_TYPE_MERGE_DEDUP, "merges")
 
 
 def _job_identity(job: Any, jid: int) -> tuple[int, int]:
