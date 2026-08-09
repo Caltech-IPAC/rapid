@@ -19,6 +19,7 @@ from unittest import mock
 from submission import gathering
 from submission.gathering import (
     GatheringError,
+    gather_alert_production_units,
     gather_catalog_load_units,
     gather_crossmatch_units,
     gather_merge_currency_units,
@@ -27,10 +28,12 @@ from submission.gathering import (
     gather_science_units,
     gather_source_currency_units,
     gather_statistics_units,
+    initialize_alert_watermark,
     science_facts,
 )
 from submission.manifest import UnitFacts
 from submission.routes import (
+    JOB_TYPE_ALERT_PRODUCTION,
     JOB_TYPE_CATALOG_LOAD,
     JOB_TYPE_CROSSMATCH,
     JOB_TYPE_MERGE_CURRENCY,
@@ -918,13 +921,19 @@ class PostDbGatheringTests(unittest.TestCase):
         reading as "no work").
         """
 
-        def __init__(self, scas=(), fields=(), per_field=(), failure=0):
+        def __init__(self, scas=(), fields=(), per_field=(), failure=0,
+                     products=None):
             self.scas = list(scas)
             self.fields = list(fields)
             self.per_field = list(per_field)
             self.failure = failure
             self.exit_code = 0
             self.asked_for = []
+            # (pid, expid, sca, attempt_id, filename) per SCA — the loader's
+            # re-source. Keyed by SCA because the real query is per-SCA, so a
+            # gatherer that asked for the wrong one would get the wrong rows
+            # here too rather than silently getting the same list.
+            self.products = dict(products or {})
 
         def get_scas_with_science_jobs_for_processing_date(self, proc_date):
             self.asked_for.append(("scas", proc_date))
@@ -940,6 +949,12 @@ class PostDbGatheringTests(unittest.TestCase):
             self.asked_for.append(("per_field", prototype))
             self.exit_code = self.failure
             return None if self.failure else self.per_field
+
+        def get_registered_diffimages_for_processing_date_sca(self, proc_date,
+                                                              sca):
+            self.asked_for.append(("products", proc_date, sca))
+            self.exit_code = self.failure
+            return None if self.failure else self.products.get(int(sca), [])
 
     # -- catalog load: (processing date, SCA) ------------------------------
 
@@ -968,6 +983,50 @@ class PostDbGatheringTests(unittest.TestCase):
             self.Source(scas=[1, 2, 3]), "20260808"))
 
         self.assertEqual(len({u.key for u in units}), 3)
+
+    def test_catalog_load_declares_the_registered_products_it_loads(self):
+        # THE RE-SOURCE. The unit used to declare a `jids` list that
+        # `download_psf_catalogs` turned into `<proc_date>/jid<N>/<name>`
+        # keys — a table with no rows feeding a prefix that does not exist.
+        # It now declares each contributing product's own registered URI, and
+        # the loader resolves the catalogue as that object's sibling.
+        source = self.Source(
+            scas=[7],
+            products={7: [(1086, 20, 7, 6765,
+                           "s3://roman-rapid-products/science/run/000020/07/"
+                           "attempt-0000006765/sfftdiffimage_masked.fits")]})
+
+        units = list(gather_catalog_load_units(source, "20260808"))
+
+        inputs = units[0].fields["product_inputs"]
+        self.assertEqual(len(inputs), 1)
+        self.assertEqual(inputs[0]["pid"], 1086)
+        self.assertEqual(inputs[0]["attempt_id"], 6765)
+        self.assertTrue(
+            inputs[0]["difference_image_uri"].endswith(
+                "attempt-0000006765/sfftdiffimage_masked.fits"))
+        # No `jids` anywhere: the legacy fact is gone, not merely unused.
+        self.assertNotIn("jids", units[0].fields)
+
+    def test_catalog_load_asks_for_products_per_sca(self):
+        # The product query is per-SCA, and a gatherer that asked once for
+        # the date would give every unit every SCA's catalogues.
+        source = self.Source(scas=[1, 2], products={1: [], 2: []})
+
+        list(gather_catalog_load_units(source, "20260808"))
+
+        self.assertIn(("products", "20260808", 1), source.asked_for)
+        self.assertIn(("products", "20260808", 2), source.asked_for)
+
+    def test_a_failed_product_query_raises_rather_than_declaring_nothing(self):
+        # Same silent-failure class as the SCA query below: a unit that
+        # declared no inputs because the query failed would load nothing and
+        # close successfully, reporting an outage as an empty catalogue.
+        with self.assertRaises(GatheringError) as caught:
+            list(gather_catalog_load_units(
+                self.Source(scas=[7], failure=67), "20260808"))
+
+        self.assertIn("67", str(caught.exception))
 
     def test_a_malformed_processing_date_is_refused(self):
         # The unit key is derived from it, so a malformed date collides
@@ -1117,6 +1176,131 @@ class PostDbGatheringTests(unittest.TestCase):
             self.assertTrue(units)
             for unit in units:
                 self.assertIn("job_type", unit.fields)
+
+
+class AlertProductionGatheringTests(unittest.TestCase):
+    """The step-4 trigger's gathering and its emission watermark.
+
+    The design's own sentences are the test names where possible: emission is
+    once per logical unit per release, no promotion means no alert, and the
+    watermark is what makes a replay silent.
+    """
+
+    class Source:
+        """Attempts awaiting emission, plus the watermark they claim against.
+
+        The claim is modelled as the real one is — `ON CONFLICT DO NOTHING`
+        returning whether THIS caller won — because the whole
+        at-least-once/suppression posture turns on losing that race being an
+        ordinary outcome rather than an error. A stub that always claimed
+        successfully could not exercise the suppression path at all.
+        """
+
+        def __init__(self, rows=(), failure=0, already=()):
+            self.rows = list(rows)
+            self.failure = failure
+            self.exit_code = 0
+            self.emitted = set(already)
+            self.claims = []
+
+        def get_attempts_awaiting_alert_emission(self, release_identity,
+                                                 limit=None):
+            self.exit_code = self.failure
+            if self.failure:
+                return None
+            rows = [row for row in self.rows
+                    if (row[1], row[2], release_identity) not in self.emitted]
+            return rows[:limit] if limit is not None else rows
+
+        def record_alert_emission(self, exposure_id, sca, release_identity,
+                                  attempt_id, pid=None, alerts_published=0):
+            self.exit_code = self.failure
+            if self.failure:
+                return None
+            key = (exposure_id, sca, release_identity)
+            self.claims.append((key, attempt_id, alerts_published))
+            if key in self.emitted:
+                return False
+            self.emitted.add(key)
+            return True
+
+    #: (attempt_id, expid, sca, pid, product, role_resolved_from,
+    #:  registered_at, sequence) — the query's column order.
+    ROW = (6765, 20, 7, 1086, "sfft_diffimage", "release", "2026-08-09", 1)
+
+    def test_one_unit_per_attempt_awaiting_emission(self):
+        units = list(gather_alert_production_units(
+            self.Source(rows=[self.ROW]), "rel-1"))
+
+        self.assertEqual(len(units), 1)
+        self.assertEqual(units[0].exposure, 20)
+        self.assertEqual(units[0].sca, 7)
+        self.assertEqual(units[0].fields["job_type"], JOB_TYPE_ALERT_PRODUCTION)
+
+    def test_the_manifest_names_the_attempt_and_the_difference_image(self):
+        # The design: "The manifest names the attempt identity and the
+        # promoted difference-image identity as declared inputs."
+        units = list(gather_alert_production_units(
+            self.Source(rows=[self.ROW]), "rel-1"))
+
+        self.assertEqual(units[0].fields["attempt_id"], 6765)
+        self.assertEqual(units[0].fields["difference_image_pid"], 1086)
+        self.assertEqual(units[0].facts.pid, 1086)
+        self.assertEqual(units[0].fields["release_identity"], "rel-1")
+
+    def test_an_already_emitted_unit_is_not_gathered_again(self):
+        # "Emission is once per logical unit per release."
+        source = self.Source(rows=[self.ROW], already={(20, 7, "rel-1")})
+
+        self.assertEqual(
+            list(gather_alert_production_units(source, "rel-1")), [])
+
+    def test_the_same_unit_is_eligible_under_a_different_release(self):
+        # Cross-release re-emission is the release machinery's ruling and is
+        # deliberately NOT decided here — so the scope must actually be
+        # per-release rather than per-unit.
+        source = self.Source(rows=[self.ROW], already={(20, 7, "rel-1")})
+
+        self.assertEqual(
+            len(list(gather_alert_production_units(source, "rel-2"))), 1)
+
+    def test_gathering_without_a_release_identity_is_refused(self):
+        # A pass that did not know its release could not tell an emitted unit
+        # from a new one, which is the one thing the watermark exists to do.
+        for empty in (None, "", "   "):
+            with self.assertRaises(GatheringError):
+                list(gather_alert_production_units(self.Source(), empty))
+
+    def test_a_failed_query_raises_rather_than_emitting_nothing(self):
+        # The silent-failure class again: "no units awaiting emission" and
+        # "the query failed" must not look the same to the submitter.
+        with self.assertRaises(GatheringError) as caught:
+            list(gather_alert_production_units(
+                self.Source(rows=[self.ROW], failure=67), "rel-1"))
+
+        self.assertIn("67", str(caught.exception))
+
+    def test_the_watermark_initialization_claims_without_publishing(self):
+        # THE PROPOSED DISPOSITION. Seeding at deployment is what stops the
+        # replay-backfilled promotions emitting retroactively; each claim
+        # records zero alerts published, because none were.
+        source = self.Source(rows=[self.ROW])
+
+        claimed = initialize_alert_watermark(source, "rel-1")
+
+        self.assertEqual(claimed, 1)
+        self.assertEqual([published for _, _, published in source.claims], [0])
+        # And the unit is silent afterwards.
+        self.assertEqual(
+            list(gather_alert_production_units(source, "rel-1")), [])
+
+    def test_initialization_is_idempotent(self):
+        # Running the deployment step twice must not double-count or raise:
+        # the second pass finds nothing outstanding.
+        source = self.Source(rows=[self.ROW])
+
+        self.assertEqual(initialize_alert_watermark(source, "rel-1"), 1)
+        self.assertEqual(initialize_alert_watermark(source, "rel-1"), 0)
 
 
 if __name__ == "__main__":

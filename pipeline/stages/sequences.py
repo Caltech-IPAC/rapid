@@ -22,6 +22,7 @@ and gets no entry. The entrypoint routes it directly.
 """
 
 from submission.routes import (
+    JOB_TYPE_ALERT_PRODUCTION,
     JOB_TYPE_CATALOG_LOAD,
     JOB_TYPE_CROSSMATCH,
     JOB_TYPE_MERGE_CURRENCY,
@@ -34,7 +35,8 @@ from submission.routes import (
     RouteError,
 )
 
-from pipeline.stages import post_db, post_process, reference_image, science
+from pipeline.stages import (alert_production, post_db, post_process,
+                             reference_image, science)
 
 # The science (prompt differencing) sequence. Two catalogue variants always
 # (ZOGY positive and negative); SFFT and the naive difference add theirs when
@@ -103,6 +105,10 @@ SEQUENCES = {
     JOB_TYPE_MERGE_CURRENCY: post_db.MERGE_CURRENCY_SEQUENCE,
     JOB_TYPE_SOURCE_CURRENCY: post_db.SOURCE_CURRENCY_SEQUENCE,
     JOB_TYPE_MERGE_DEDUP: post_db.MERGE_DEDUP_SEQUENCE,
+    # The alert-production trigger (step-4 conversion): the prompt-queue job
+    # type that wires the complete-but-unwired alerts path to the real
+    # producer.
+    JOB_TYPE_ALERT_PRODUCTION: alert_production.ALERT_PRODUCTION_SEQUENCE,
 }
 
 

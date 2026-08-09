@@ -84,6 +84,13 @@ JOB_TYPE_MERGE_CURRENCY = "merge-currency-sweep"
 JOB_TYPE_SOURCE_CURRENCY = "source-currency-sweep"
 JOB_TYPE_MERGE_DEDUP = "merge-dedup"
 
+# The alert-production trigger (step-4 co-design, gate 2): "Alert production
+# is a job type on the prompt queue, fed by gathering over registration
+# outcomes through the accumulator". The in-process after-commit seam was
+# ruled out — it is not durable, it couples registration to the stream, and
+# it gives alert work no attempt of its own to be recorded against.
+JOB_TYPE_ALERT_PRODUCTION = "alert-production"
+
 
 class RouteError(ValueError):
     """A submission's route is not one the matrix allows.
@@ -177,6 +184,17 @@ ROUTES: tuple[Route, ...] = (
     Route(JOB_TYPE_MERGE_DEDUP, CLASS_BULK,
           "batch/queue-bulk", "batch/job-definition-bulk",
           LANE_TRANSACTION, ppid=None),
+    # Alert production: PROMPT class, because it is prompt work — the whole
+    # point of the trigger is that an alert follows its difference image
+    # promptly, and the bulk queue's scaling is sized for reprocessing.
+    # TRANSACTION lane: it reads candidate rows and writes one watermark row
+    # per unit — brief transactions, not the long-held session the budgeted
+    # lane exists for. ppid None: alert production registers no pipeline
+    # products, so it belongs to no pipeline's row lineage; a placeholder
+    # would put rows in a pipeline they are not from.
+    Route(JOB_TYPE_ALERT_PRODUCTION, CLASS_PROMPT,
+          "batch/queue-prompt", "batch/job-definition-science",
+          LANE_TRANSACTION, ppid=None),
 )
 
 # The six post-DB science chain job types, in chain order. Named as a group
@@ -225,6 +243,9 @@ IMPLEMENTED_JOB_TYPES: frozenset = frozenset({
     # matrix rows with no payload, and `validate_route` rejected them at the
     # route boundary — which is exactly what this line changes.
     *POST_DB_CHAIN,
+    # The alert-production trigger: `pipeline.stages.alert_production` wires
+    # the complete-but-unwired alerts path to the real producer.
+    JOB_TYPE_ALERT_PRODUCTION,
 })
 
 _BY_TYPE = {route.job_type: route for route in ROUTES}

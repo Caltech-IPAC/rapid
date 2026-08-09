@@ -2909,31 +2909,47 @@ class RAPIDDB:
         THE POST-DB CHAIN'S WORK IS ENUMERATED AT SUBMISSION, NOT DISCOVERED
         AT RUNTIME (post-DB co-design ruling 1). The catalog-load job type's
         unit is (processing date, SCA), and this is where that list comes
-        from: the Jobs rows the science pipeline actually wrote, which is the
-        same source `get_jids_of_normal_science_pipeline_jobs_for_processing_date`
-        reads and therefore cannot disagree with it.
+        from.
 
-        What this deliberately does NOT do is probe `to_regclass` for
+        **RE-SOURCED OFF `Jobs` ONTO THE CURRENT SHAPE.** This read `Jobs`
+        until the alert-trigger step, and `Jobs` HOLDS ZERO ROWS: the
+        submission restructure records work in `attempts`, and nothing has
+        written a Jobs row since. The gatherer therefore yielded no units,
+        which is why the catalog-load probe and the load-rate measurement it
+        carries were both blocked (vocab-role-closure ledger, § Named fork).
+        The question is unchanged — what work did the science pipeline
+        actually do on this date — and only the table that answers it moved.
+
+        `diffimages` is that table, joined to the attempt that produced it:
+        a current (`vbest = 1`) science difference image IS the evidence
+        that this SCA produced a loadable catalogue, and its `attempt_id`
+        carries the attempt whose outcome says the work succeeded. The date
+        is `diffimages.created`, the row's own timestamp, rather than a Jobs
+        `ended` that no longer exists.
+
+        What this still deliberately does NOT do is probe `to_regclass` for
         `sources_<date>_<sca>` tables, the way `crossMatchSources.py:882-890`
         did. That asked the catalog what tables happen to exist — so the work
         list depended on what a previous run had already created, and a unit
         whose table was missing simply vanished from the list rather than
-        being reported as work not done. Reading Jobs asks what work the
-        pipeline DID, which is the question the manifest needs answered.
+        being reported as work not done. Reading the registered products asks
+        what the pipeline DID, which is the question the manifest needs
+        answered.
         '''
 
         self.exit_code = 0
 
         from submission.routes import JOB_TYPE_SCIENCE, ppid_for
 
-        query = "select distinct sca from Jobs " +\
-                "where ppid = %s " +\
-                "and ended >= cast(%s as timestamp) " +\
-                "and ended < cast(%s as timestamp) + cast('1 day' as interval) " +\
-                "and status > 0 " +\
-                "and exitcode <= 32 " +\
-                "and sca is not null " +\
-                "order by sca;"
+        query = "select distinct d.sca from DiffImages d " +\
+                "join Attempts a on a.attempt_id = d.attempt_id " +\
+                "where d.ppid = %s " +\
+                "and d.vbest = 1 " +\
+                "and a.rapid_outcome = 'success' " +\
+                "and d.created >= cast(%s as timestamp) " +\
+                "and d.created < cast(%s as timestamp) + cast('1 day' as interval) " +\
+                "and d.sca is not null " +\
+                "order by d.sca;"
         params = (ppid_for(JOB_TYPE_SCIENCE), proc_date, proc_date)
 
         print('query = {}, params = {}'.format(query, params))
@@ -2969,21 +2985,28 @@ class RAPIDDB:
         from each `sources_<date>_<sca>` child table it had just found by
         catalog probe — a query that cannot run until the previous step has
         written its tables, and that is exactly why it could not live in a
-        manifest. Jobs answers the same question at submission time.
+        manifest. The registered products answer the same question at
+        submission time.
+
+        **RE-SOURCED OFF `Jobs`**, for the reason its SCA sibling above
+        states at length and on exactly the same join: `Jobs` holds zero
+        rows, so this returned an empty field list and the crossmatch unit
+        was blocked by the same single root cause as the catalog load.
         '''
 
         self.exit_code = 0
 
         from submission.routes import JOB_TYPE_SCIENCE, ppid_for
 
-        query = "select distinct field from Jobs " +\
-                "where ppid = %s " +\
-                "and ended >= cast(%s as timestamp) " +\
-                "and ended < cast(%s as timestamp) + cast('1 day' as interval) " +\
-                "and status > 0 " +\
-                "and exitcode <= 32 " +\
-                "and field is not null " +\
-                "order by field;"
+        query = "select distinct d.field from DiffImages d " +\
+                "join Attempts a on a.attempt_id = d.attempt_id " +\
+                "where d.ppid = %s " +\
+                "and d.vbest = 1 " +\
+                "and a.rapid_outcome = 'success' " +\
+                "and d.created >= cast(%s as timestamp) " +\
+                "and d.created < cast(%s as timestamp) + cast('1 day' as interval) " +\
+                "and d.field is not null " +\
+                "order by d.field;"
         params = (ppid_for(JOB_TYPE_SCIENCE), proc_date, proc_date)
 
         print('query = {}, params = {}'.format(query, params))
@@ -2999,6 +3022,199 @@ class RAPIDDB:
             return
 
         return records
+
+
+########################################################################################################
+
+    def get_registered_diffimages_for_processing_date_sca(self,proc_date,sca):
+
+        '''
+        The current difference images this (date, SCA) unit's load reads.
+
+        THE LOADER'S RE-SOURCE. `download_psf_catalogs` built its keys as
+        `<proc_date>/jid<N>/<name>` from a `jids` list the gatherer took from
+        `Jobs`. Neither half survives: `Jobs` is empty, and the product bucket
+        holds no such prefix — everything since the submission restructure is
+        attempt-scoped (vocab-role-closure ledger, § Named fork, item 2).
+
+        The replacement does not RECONSTRUCT a key at all, which is the point.
+        `diffimages.filename` is the registered product's own S3 URI, written
+        by the registration this row came from, and the PSF catalogue is its
+        SIBLING under the same attempt prefix. So the loader resolves the
+        catalogue against a URI the catalog already holds rather than
+        assembling one from parts — and a key-grammar change (the zero-padded
+        C-core form is already live alongside the older unpadded one) cannot
+        silently produce a key that points nowhere.
+
+        Returns (pid, expid, sca, attempt_id, filename) per current row.
+        '''
+
+        self.exit_code = 0
+
+        from submission.routes import JOB_TYPE_SCIENCE, ppid_for
+
+        query = "select d.pid, d.expid, d.sca, d.attempt_id, d.filename " +\
+                "from DiffImages d " +\
+                "join Attempts a on a.attempt_id = d.attempt_id " +\
+                "where d.ppid = %s " +\
+                "and d.vbest = 1 " +\
+                "and a.rapid_outcome = 'success' " +\
+                "and d.sca = %s " +\
+                "and d.created >= cast(%s as timestamp) " +\
+                "and d.created < cast(%s as timestamp) + cast('1 day' as interval) " +\
+                "and d.filename is not null " +\
+                "order by d.pid;"
+        params = (ppid_for(JOB_TYPE_SCIENCE), sca, proc_date, proc_date)
+
+        print('query = {}, params = {}'.format(query, params))
+
+        try:
+            self.cur.execute(query, params)
+            records = [record for record in self.cur]
+            print("nrecs =",len(records))
+
+        except (Exception, psycopg2.DatabaseError) as error:
+            print('*** Error getting registered diffimages for {} sca {}: {}; skipping...'.format(proc_date,sca,error))
+            self.exit_code = 67
+            return
+
+        return records
+
+
+########################################################################################################
+
+    def get_attempts_awaiting_alert_emission(self,release_identity,limit=None):
+
+        '''
+        Units whose difference image became current and that have not emitted.
+
+        THE RULED EMISSION PREDICATE (step-4 co-design gates 1, 4, 5;
+        design/operations.md § Alert production). Each clause below is one
+        sentence of the design, and nothing else is in here:
+
+          * "the trigger's unit is the registered attempt, read through its
+            registration_outcome record" -> the driving table is `attempts`,
+            and the promotion is read from that document, not re-derived by
+            querying `diffimages` for what looks current now. The document
+            records what the registration COMMITTED; a later supersession
+            changes `vbest` but must not change whether this attempt emitted.
+
+          * "the gathering predicate is the first outcome in which the unit's
+            difference image became current" -> a promotion event naming the
+            difference-image role's product. `role_resolved_from` is carried
+            through so a record registered before role bindings existed is
+            visible as such rather than silently equivalent.
+
+          * "No promotion, no alert" -> a promotions array with no entry
+            yields no row. A pin-suppressed registration promoted nothing and
+            so is absent here; a later pin-release promotion appears then,
+            which is exactly the ruled behaviour.
+
+          * "Emission is once per logical unit per release" -> the anti-join
+            against `alert_emissions` on (exposure, sca, release). The table's
+            primary key makes a double emission impossible even if two
+            gatherers raced; this clause is what stops the second one being
+            SUBMITTED, which is cheaper than having it refused at write time.
+
+          * "a reference-image-only attempt is a natural no-op" -> such an
+            attempt records no difference-image promotion, so it never
+            appears. No job-type filter is needed to exclude it.
+
+        THE WATERMARK IS INITIALIZED AT DEPLOYMENT, NOT HERE. `alert_emissions`
+        starting empty would make every historical promotion eligible; the
+        deployment seeds it instead (see submission/gathering.py
+        `initialize_alert_watermark`). This query has no date floor of its own
+        precisely so that the watermark is the ONE thing deciding what is
+        eligible — a second, implicit cutoff here would be a place for the two
+        to disagree.
+
+        Returns (attempt_id, expid, sca, pid, product, role_resolved_from,
+        registered_at, sequence) per eligible unit, oldest registration first
+        so a bounded run emits the earliest outstanding work.
+        '''
+
+        self.exit_code = 0
+
+        query = "select a.attempt_id, a.exposure_id, a.sca, " +\
+                "       (promo->>'pid')::int as pid, " +\
+                "       promo->>'product' as product, " +\
+                "       promo->>'role_resolved_from' as role_resolved_from, " +\
+                "       a.registered_at, (promo->>'sequence')::int as sequence " +\
+                "from Attempts a " +\
+                "cross join lateral jsonb_array_elements(" +\
+                "     coalesce(a.registration_outcome->'promotions', '[]'::jsonb)) as promo " +\
+                "where a.registration_outcome is not null " +\
+                "and promo->>'type' = 'promotion' " +\
+                "and promo->>'pid' is not null " +\
+                "and a.exposure_id is not null and a.sca is not null " +\
+                "and not exists (select 1 from Alert_Emissions e " +\
+                "                where e.exposure_id = a.exposure_id " +\
+                "                and e.sca = a.sca " +\
+                "                and e.release_identity = %s) " +\
+                "order by a.registered_at, a.attempt_id"
+        params = [release_identity]
+
+        if limit is not None:
+            query += " limit %s"
+            params.append(int(limit))
+        query += ";"
+
+        print('query = {}, params = {}'.format(query, tuple(params)))
+
+        try:
+            self.cur.execute(query, tuple(params))
+            records = [record for record in self.cur]
+            print("nrecs =",len(records))
+
+        except (Exception, psycopg2.DatabaseError) as error:
+            print('*** Error getting attempts awaiting alert emission for release {}: {}; skipping...'.format(release_identity,error))
+            self.exit_code = 67
+            return
+
+        return records
+
+
+########################################################################################################
+
+    def record_alert_emission(self,exposure_id,sca,release_identity,attempt_id,
+                              pid=None,alerts_published=0):
+
+        '''
+        Claim the emission watermark for one (unit, release).
+
+        `ON CONFLICT DO NOTHING` and a reported row count, which together are
+        the at-least-once posture the design adopts (gate 6): the stream
+        contract is at-least-once and consumers deduplicate on alert identity,
+        so a second emitter losing this race must NOT raise — it must publish
+        nothing further and say so.
+
+        Returns True if this call claimed the emission, False if the unit had
+        already emitted under this release. The caller records the False case
+        as a SUPPRESSED effect count rather than as a failure.
+        '''
+
+        self.exit_code = 0
+
+        query = "insert into Alert_Emissions " +\
+                "(exposure_id, sca, release_identity, attempt_id, pid, alerts_published) " +\
+                "values (%s, %s, %s, %s, %s, %s) " +\
+                "on conflict (exposure_id, sca, release_identity) do nothing;"
+        params = (exposure_id, sca, release_identity, attempt_id, pid,
+                  alerts_published)
+
+        print('query = {}, params = {}'.format(query, params))
+
+        try:
+            self.cur.execute(query, params)
+            claimed = (self.cur.rowcount == 1)
+            self.conn.commit()
+
+        except (Exception, psycopg2.DatabaseError) as error:
+            print('*** Error recording alert emission for unit {}/{} release {}: {}'.format(exposure_id,sca,release_identity,error))
+            self.exit_code = 67
+            return
+
+        return claimed
 
 
 ########################################################################################################

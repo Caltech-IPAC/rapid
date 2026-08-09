@@ -47,11 +47,11 @@ from typing import Any, Iterable, Iterator, Protocol, Sequence
 from database.modules.utils.roman_tessellation_db import (
     RomanTessellationClosedForm)
 from .manifest import ProcessingUnit, UnitFacts
-from .routes import (JOB_TYPE_CATALOG_LOAD, JOB_TYPE_CROSSMATCH,
-                     JOB_TYPE_MERGE_CURRENCY, JOB_TYPE_MERGE_DEDUP,
-                     JOB_TYPE_POST_PROCESS, JOB_TYPE_REFERENCE_IMAGE,
-                     JOB_TYPE_SCIENCE, JOB_TYPE_SOURCE_CURRENCY,
-                     JOB_TYPE_STATISTICS, ppid_for)
+from .routes import (JOB_TYPE_ALERT_PRODUCTION, JOB_TYPE_CATALOG_LOAD,
+                     JOB_TYPE_CROSSMATCH, JOB_TYPE_MERGE_CURRENCY,
+                     JOB_TYPE_MERGE_DEDUP, JOB_TYPE_POST_PROCESS,
+                     JOB_TYPE_REFERENCE_IMAGE, JOB_TYPE_SCIENCE,
+                     JOB_TYPE_SOURCE_CURRENCY, JOB_TYPE_STATISTICS, ppid_for)
 from .submit import is_precondition_failed
 
 logger = logging.getLogger(__name__)
@@ -147,6 +147,21 @@ class UnitSource(Protocol):
 
     def get_fields_with_per_field_table(
             self, prototype: str) -> Sequence[Any]: ...
+
+    # The loader's re-source: the registered products a (date, SCA) unit
+    # loads, each carrying the attempt-scoped URI its catalogue sits beside.
+    def get_registered_diffimages_for_processing_date_sca(
+            self, proc_date: str, sca: int) -> Sequence[Any]: ...
+
+    # The alert-production trigger (step-4 co-design).
+    def get_attempts_awaiting_alert_emission(
+            self, release_identity: str,
+            limit: int | None = ...) -> Sequence[Any]: ...
+
+    def record_alert_emission(self, exposure_id: int, sca: int,
+                              release_identity: str, attempt_id: int,
+                              pid: int | None = ...,
+                              alerts_published: int = ...) -> bool: ...
 
 
 def _positions(values: Sequence[Any], ra_keys: Sequence[str],
@@ -957,6 +972,20 @@ def gather_catalog_load_units(handle: UnitSource, proc_date: str
     over all 18 SCAs with a thread-pool fan-out inside it. The fan-out is
     what the array layer replaces: 18 array children, 18 attempt rows, each
     retryable alone.
+
+    **THE DECLARED INPUTS ARE PRODUCT URIS, NOT JIDS** (the re-source). This
+    used to name a `jids` list that `download_psf_catalogs` turned into
+    `<proc_date>/jid<N>/<name>` keys. Both halves were stale: `Jobs` is empty
+    so the list was always empty, and no such prefix exists in the product
+    bucket — everything since the submission restructure is attempt-scoped.
+
+    What the unit now carries is the registered difference image's own URI
+    per contributing attempt, taken from `diffimages.filename`. The catalogue
+    is that object's SIBLING, so the loader resolves a real key against a
+    real one rather than assembling a key from parts that must all be right.
+    That also survives the live key-grammar split — the newer rows are
+    zero-padded C-core keys, the older ones are not — because no component is
+    reconstructed.
     """
     ordinal = _proc_date_ordinal(proc_date)
 
@@ -969,6 +998,24 @@ def gather_catalog_load_units(handle: UnitSource, proc_date: str
 
     for sca in scas or ():
         sca = int(sca[0] if isinstance(sca, (list, tuple)) else sca)
+
+        products = handle.get_registered_diffimages_for_processing_date_sca(
+            proc_date, sca)
+        code = getattr(handle, "exit_code", 0)
+        if code not in (0, 7):
+            raise GatheringError(
+                f"product enumeration failed for {proc_date} SCA {sca}: "
+                f"rapid_db exit_code {code}")
+
+        # (pid, expid, sca, attempt_id, filename) — the query's column order.
+        # Carried as mappings rather than raw tuples because the manifest is
+        # what a human reads when a unit has to be explained, and a bare
+        # 5-tuple explains nothing.
+        inputs = [{"pid": _maybe_int(row[0]), "expid": _maybe_int(row[1]),
+                   "attempt_id": _maybe_int(row[3]),
+                   "difference_image_uri": _maybe_str(row[4])}
+                  for row in products or ()]
+
         yield ProcessingUnit(
             exposure=ordinal, sca=sca,
             facts=UnitFacts(),
@@ -978,7 +1025,12 @@ def gather_catalog_load_units(handle: UnitSource, proc_date: str
                     # the manifest so the unit's target is a submission fact
                     # rather than something the job builds from its own
                     # environment and hopes matches.
-                    "target_table": f"sources_{proc_date}_{sca}"})
+                    "target_table": f"sources_{proc_date}_{sca}",
+                    # The declared inputs: which registered products this
+                    # unit's catalogues come from. A unit with none loads
+                    # nothing and records that through its effect counts —
+                    # the empty-product-set disposition, not an error.
+                    "product_inputs": inputs})
 
 
 def gather_crossmatch_units(handle: UnitSource, proc_date: str
@@ -1101,6 +1153,134 @@ def gather_merge_dedup_units(handle: UnitSource) -> Iterator[ProcessingUnit]:
     job records it as one rather than quietly deleting rows.
     """
     return _per_field_units(handle, JOB_TYPE_MERGE_DEDUP, "merges")
+
+
+# ---------------------------------------------------------------------------
+# The alert-production trigger (step-4 conversion)
+# ---------------------------------------------------------------------------
+
+
+def gather_alert_production_units(handle: UnitSource, release_identity: str,
+                                  limit: int | None = None
+                                  ) -> Iterator[ProcessingUnit]:
+    """Yield alert-production units — one per unit awaiting emission.
+
+    The trigger the step-4 co-design ruled, in its adopted shape: gathering
+    over registration OUTCOMES, on the prompt queue, through the accumulator
+    like all prompt work (gate 2). The rejected alternative was an
+    in-process after-commit seam inside registration — not durable, coupling
+    registration to the stream, and leaving the alert work with no attempt of
+    its own to be recorded against.
+
+    The unit is the registered attempt (gate 1), keyed by (exposure, SCA) —
+    the SCA attempt, which is the promotion scope and the grain a difference
+    image has. Deduplication is by attempt identity, which is permanent and
+    replay-guarded; emission scoping is by unit and release (gate 4), which
+    is the watermark's primary key.
+
+    The manifest names the ATTEMPT IDENTITY AND THE PROMOTED DIFFERENCE-IMAGE
+    IDENTITY as declared inputs, per the design: those two facts are what the
+    job needs to produce this unit's alerts, and naming them in the
+    submission is what makes the unit recoverable without re-running the
+    gathering query against a catalog that has since moved on.
+
+    `release_identity` is not defaulted. Emission scope includes the release,
+    so a gathering pass that did not know its release would either emit
+    against the wrong scope or invent one — and "once per unit per release"
+    would then be enforced against a scope nobody chose.
+    """
+    if not str(release_identity or "").strip():
+        raise GatheringError(
+            "alert gathering needs the release identity: emission is scoped "
+            "once per logical unit per RELEASE, so a pass without one cannot "
+            "tell an already-emitted unit from a new one")
+
+    rows = handle.get_attempts_awaiting_alert_emission(release_identity,
+                                                       limit=limit)
+    code = getattr(handle, "exit_code", 0)
+    if code not in (0, 7):
+        raise GatheringError(
+            f"alert gathering failed for release {release_identity}: "
+            f"rapid_db exit_code {code}")
+
+    for row in rows or ():
+        # (attempt_id, expid, sca, pid, product, role_resolved_from,
+        #  registered_at, sequence) — the query's column order.
+        attempt_id, expid, sca, pid = (_maybe_int(row[index])
+                                       for index in (0, 1, 2, 3))
+        if expid is None or sca is None:
+            raise GatheringError(
+                f"attempt {attempt_id} promoted a difference image but has no "
+                f"exposure/SCA identity; the alert unit is keyed by it")
+
+        yield ProcessingUnit(
+            exposure=int(expid), sca=int(sca),
+            # `pid` IS the declared difference-image identity, and it is what
+            # `batch_produce` is called with. It rides in the facts because
+            # `UnitFacts.pid` is its one home, not in `fields` beside it.
+            facts=UnitFacts(pid=pid, expid=expid),
+            fields={"job_type": JOB_TYPE_ALERT_PRODUCTION,
+                    "attempt_id": attempt_id,
+                    "release_identity": str(release_identity),
+                    "difference_image_pid": pid,
+                    "difference_image_product": _maybe_str(row[4]),
+                    "role_resolved_from": _maybe_str(row[5]),
+                    "promotion_sequence": _maybe_int(row[7])})
+
+
+def initialize_alert_watermark(handle: UnitSource, release_identity: str,
+                               reason: str = "deployment") -> int:
+    """Seed the emission watermark so existing promotions do not emit.
+
+    **PROPOSED DISPOSITION, IMPLEMENTED CONSERVATIVELY.** The design rules
+    that emission is once per unit per release and says nothing about what a
+    watermark should contain the moment it is created — because until now
+    there was no watermark and no emitter. Left empty, every promotion
+    already in the catalog is "not yet emitted" and the first production run
+    would emit the entire backlog at once.
+
+    That backlog is the 1,086 replay-backfilled promotions from the
+    difference-image role binding: simulation data, registered by a
+    deliberate replay of attempts whose registration had refused, for a
+    release nobody is consuming a stream from. A retroactive flood of them
+    serves no consumer, and the design's emission is explicitly live-flow —
+    "the first outcome in which the unit's difference image became current",
+    an event, not a backlog scan.
+
+    So this claims the watermark for every unit that has ALREADY promoted,
+    recording `alerts_published = 0`: those units are marked as having had
+    their emission accounted for, without anything being published. New
+    promotions after this point are unaffected and emit normally.
+
+    It is recorded in the run ledger as a PROPOSED disposition for the
+    register, not as a settled ruling: it is a real decision about what the
+    system does, and the co-design did not make it.
+
+    Returns the number of units claimed.
+    """
+    rows = handle.get_attempts_awaiting_alert_emission(release_identity)
+    code = getattr(handle, "exit_code", 0)
+    if code not in (0, 7):
+        raise GatheringError(
+            f"watermark initialization could not read the outstanding units "
+            f"for release {release_identity}: rapid_db exit_code {code}")
+
+    claimed = 0
+    for row in rows or ():
+        attempt_id, expid, sca, pid = (_maybe_int(row[index])
+                                       for index in (0, 1, 2, 3))
+        if expid is None or sca is None:
+            continue
+        if handle.record_alert_emission(int(expid), int(sca),
+                                        str(release_identity),
+                                        int(attempt_id), pid=pid,
+                                        alerts_published=0):
+            claimed += 1
+
+    logger.info("alert watermark initialized for release %s (%s): %d unit(s) "
+                "claimed with zero alerts published; they will not emit "
+                "retroactively", release_identity, reason, claimed)
+    return claimed
 
 
 def _job_identity(job: Any, jid: int) -> tuple[int, int]:

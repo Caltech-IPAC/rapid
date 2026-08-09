@@ -136,6 +136,20 @@ def download_psf_catalogs(context) -> None:
     and says so through the effect counts. That is the empty-product-set
     disposition working as designed, and it is why this stage records the
     file count rather than raising on zero.
+
+    **THE KEYS ARE DERIVED FROM THE REGISTERED PRODUCT, NOT ASSEMBLED.** This
+    built `<proc_date>/jid<N>/<name>` from a `jids` list, and every part of
+    that was stale: `Jobs` holds no rows so the list was empty, and the
+    product bucket has no such prefix — everything since the submission
+    restructure is attempt-scoped. The unit now declares `product_inputs`,
+    each carrying the difference image's own S3 URI as registration recorded
+    it, and the catalogue is resolved as that object's SIBLING.
+
+    Deriving rather than assembling is what makes this robust to the live
+    key-grammar split: newer keys are the zero-padded C-core form
+    (`.../000020/07/attempt-0000006765/`) and older ones are not
+    (`.../84/8/attempt-6761/`). Nothing here parses either shape — it replaces
+    the last path segment and keeps the rest.
     """
     psfcat = (context.science or {}).get("psfcat_diffimage") or {}
     positive = psfcat.get("output_sfft_psfcat_filename")
@@ -148,19 +162,27 @@ def download_psf_catalogs(context) -> None:
 
     proc_date = _unit_field(context, "proc_date")
     sca = int(_unit_field(context, "sca"))
-    bucket = context.parameter("s3/product-bucket")
 
     downloaded = []
-    for jid in _jids_for_unit(context):
+    for product in _product_inputs_for_unit(context):
+        uri = product.get("difference_image_uri")
+        if not uri:
+            # A declared input with no URI is a gathering fault, not a
+            # missing catalogue: the row it came from had `filename is not
+            # null` in its own predicate.
+            raise InputError(
+                f"unit {proc_date}/{sca} declares a product input with no "
+                f"difference-image URI: {product!r}")
+        attempt_id = product.get("attempt_id")
         for name in (positive, negative):
-            key = f"{proc_date}/jid{jid}/{name}"
-            target = context.scratch(f"jid{jid}_{name}")
+            bucket, key = _sibling_key(uri, name)
+            target = context.scratch(f"attempt{attempt_id}_{name}")
             try:
                 context.s3.download_file(bucket, key, target)
             except Exception:  # noqa: BLE001 - absence is a normal outcome
-                # A job that produced no catalogue for this SCA contributes
-                # nothing. Logged, not raised: the unit's effect count is what
-                # reports how much it actually loaded.
+                # An attempt that produced no catalogue for this SCA
+                # contributes nothing. Logged, not raised: the unit's effect
+                # count is what reports how much it actually loaded.
                 context.logger.info("no catalogue at s3://%s/%s", bucket, key)
                 continue
             downloaded.append(target)
@@ -171,15 +193,37 @@ def download_psf_catalogs(context) -> None:
                         proc_date, sca, len(downloaded))
 
 
-def _jids_for_unit(context):
-    """The science jobs whose catalogues this unit loads.
+def _product_inputs_for_unit(context):
+    """The registered products whose catalogues this unit loads.
 
     Declared in the manifest by the gatherer; absent means the submission did
     not enumerate them, which is a submission fault rather than something to
     rediscover here.
     """
     fields = getattr(context.unit, "fields", None) or {}
-    return fields.get("jids") or []
+    return fields.get("product_inputs") or []
+
+
+def _sibling_key(uri, name):
+    """`(bucket, key)` for `name` beside the object `uri` names.
+
+    The URI is `s3://<bucket>/<prefix>/<object>`; the catalogue is
+    `<prefix>/<name>`. Written as a last-segment replacement rather than as a
+    parse of the prefix's structure, because the structure differs between
+    the padded and unpadded key grammars and neither is this function's
+    business.
+    """
+    if not str(uri).startswith("s3://"):
+        raise InputError(
+            f"declared product input is not an s3 URI and no catalogue can "
+            f"be resolved beside it: {uri!r}")
+    bucket, _, key = str(uri)[len("s3://"):].partition("/")
+    if not bucket or "/" not in key:
+        raise InputError(
+            f"declared product input {uri!r} names no object under a prefix; "
+            f"the catalogue is resolved as that object's sibling")
+    prefix = key.rsplit("/", 1)[0]
+    return bucket, f"{prefix}/{name}"
 
 
 def load_sources(context) -> None:
