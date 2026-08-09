@@ -179,7 +179,13 @@ def produce_alerts(context) -> None:
 
     conn = context.require_connection()
 
-    provider = make_provider()
+    # The provider reads through THIS attempt's own resolved connection —
+    # `make_provider()`'s no-argument path builds an env-configured
+    # `RAPIDDB()`, and a Batch payload carries no DBSERVER/DBPORT/DBNAME:
+    # every alert job exited 64 at this line on the mock's first wave (the
+    # env-only-contract class again; the connection facts live in the
+    # parameter tree the entrypoint already resolved).
+    provider = make_provider(db=RAPIDDB.borrowing(conn))
     # Adapter-mediated (integration review composite ruling 10): every call
     # below either returns cleanly or raises `RapidDBCallFailed`, so a failed
     # query can never be read as "no row" and fall through to an unguarded

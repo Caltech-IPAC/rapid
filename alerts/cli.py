@@ -34,34 +34,44 @@ else:
 from database.modules.utils.rapid_db import RAPIDDB
 
 
-def make_provider() -> AlertDataProvider:
-    """Connect to the RAPID operations database and wrap it in a provider.
-    (see providers.py)
+def make_provider(db=None) -> AlertDataProvider:
+    """Wrap a RAPID database handle in a provider (see providers.py).
+
+    `db` is the caller's handle — `pipeline.stages.alert_production` passes
+    `RAPIDDB.borrowing(<the attempt's own connection>)`, because a Batch
+    payload's connection facts live in the parameter tree and its resolved
+    context, NOT in DBSERVER/DBPORT/DBNAME environment variables: the
+    env-only default below is the interactive CLI's path, and it exits 64
+    inside every Batch job (found live at the mock's first alert wave —
+    the same env-only-contract class as the registrar's records bucket).
 
     Returns
     -------
     providers.AlertDataProvider
-        Provider reading from the live RAPID database.
+        Provider reading from the given handle, or from a fresh
+        environment-configured connection when none is given (CLI usage).
 
     Raises
     ------
     SystemExit
-        If the database connection cannot be established (missing DB
-        environment variables, or the database is unreachable).
+        Only on the no-argument path, if the database connection cannot be
+        established (missing DB environment variables, or the database is
+        unreachable).
     """
-    # RAPIDDB, from rapid/database/modules/utils/rapid_db.py
-    repo_root = Path(__file__).resolve().parents[1]
-    sys.path.insert(0, str(repo_root))
-    db = RAPIDDB()
-    # RAPIDDB reports connection failure by exit_code/conn=None rather than
-    # raising; fail here with the actual problem.
-    if getattr(db, "conn", None) is None or db.exit_code >= 64:
-        raise SystemExit(
-            "Cannot connect to the RAPID database: check that DBSERVER, "
-            "DBPORT, DBNAME are set in this shell, that credentials are "
-            "available via RAPID_DB_SECRET_ID (or DBUSER/DBPASS as a "
-            "fallback), and that this machine can reach the DB (VPN up / "
-            "EC2 security group allows it)")
+    if db is None:
+        # RAPIDDB, from rapid/database/modules/utils/rapid_db.py
+        repo_root = Path(__file__).resolve().parents[1]
+        sys.path.insert(0, str(repo_root))
+        db = RAPIDDB()
+        # RAPIDDB reports connection failure by exit_code/conn=None rather
+        # than raising; fail here with the actual problem.
+        if getattr(db, "conn", None) is None or db.exit_code >= 64:
+            raise SystemExit(
+                "Cannot connect to the RAPID database: check that DBSERVER, "
+                "DBPORT, DBNAME are set in this shell, that credentials are "
+                "available via RAPID_DB_SECRET_ID (or DBUSER/DBPASS as a "
+                "fallback), and that this machine can reach the DB (VPN up / "
+                "EC2 security group allows it)")
     return AlertDataProvider(db)
 
 
