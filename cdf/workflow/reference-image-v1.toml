@@ -1,0 +1,22 @@
+# Workflow definition: reference-image, version 1.
+#
+# The reviewed file the workflow_definitions reference table is loaded
+# from (design/operations.md § Workflow schema: "a reference table loaded
+# from a reviewed file in the pipeline repository through the audited
+# mutation function, tied by checksum"). The loader is
+# derived.load_workflow_definition (rapid_systems migration 039); the
+# checksum recorded at load is the sha256 of this file's bytes, so an
+# edit here is visible as a checksum mismatch against every version
+# already loaded — versions are immutable, a change is a new version.
+#
+# v1 declares the reference-image job type under the intent layer's six-state
+# work-unit machine with no reference-image-specific overrides: the state
+# machine, transition writers, and retry posture are the cross-cutting
+# ones the operations design adopts; this file exists to give the
+# definition a reviewed, checksummed home rather than to specialize it.
+
+[definition]
+job_type = "reference-image"
+version = 1
+state_machine = "work-unit-v1"   # blocked/ready/submitted/complete/failed/quarantined
+description = "reference-image attempts under the v1 work-unit state machine; no overrides beyond the adopted cross-cutting rules."
