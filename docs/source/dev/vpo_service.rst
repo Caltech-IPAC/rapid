@@ -365,9 +365,86 @@ Verification, 2026-08-08
      - 62 of 63 batches cut on **size** at exactly 60 units — the size
        trigger reachable, which is what 500 had lost
    * - ``rapid-vpo-service`` stack deployed
-     - exit 0; association converged, **VPO-ABSENT-OK** (disabled branch)
+     - exit 0, both the disabled branch (**VPO-ABSENT-OK**) and enabled
+       (**VPO-INSTALL-OK**)
    * - ``rapid_systems`` ``validate.sh``
      - PASS, all layers, exit 0
+
+The image, and what runs from it
+================================
+
+The service runs from ``rapid-pipeline:76da3e0-20260808``
+(``sha256:a1dc4eb0…``), built by ``containers/rapid-pipeline/build.sh``
+from smdc ``76da3e0`` over ``base-31237339531``. It is the first image
+carrying ``pipeline.operator``: every earlier revision — including
+``0e23431-20260808``, built from the commit this work branches *from* —
+returns ``NO_OPERATOR`` for
+``importlib.util.find_spec('pipeline.operator')``.
+
+Verified **from the image itself, no bind mounts**: 38 operator tests
+exit 0, and the full operational suite 1,085 tests / 37 modules PASS exit
+0. Scan gate: Inspector reports 3 HIGH / 5 MEDIUM / 1 LOW — the same nine
+CVEs by identity as the image already in production use, all base-layer.
+
+.. list-table::
+   :header-rows: 1
+
+   * - Deployed check
+     - Result
+   * - Service active after convergence
+     - ``active (running)``, **NRestarts=0**
+   * - Supervised restart
+     - PID 27092 → 27387, back to ``active (running)``, credential
+       re-resolved and tree re-read, **NRestarts=0** after a further 20 s
+   * - Live rehearsal from the deployed image
+     - 3,779 gathered, 63 batches, **0 submissions**, exit 0; queues
+       ``TOTAL_OPEN=0`` before and after
+   * - Bounded-probe guard
+     - width above the ceiling **refused exit 70**; width with no ceiling
+       **refused exit 70**; rehearsal at ``--width 2`` capped to exactly 2
+   * - Width-2 live probe
+     - submitted one array job, ``submissions: 1``, exit 0
+
+Four defects the live path found
+================================
+
+Everything below was found by running the real thing, and each is fixed
+with a test that would have caught it.
+
+**The service restart-looped when idle.** The stack's own defaults put
+every class on ``hold``, the service logged "nothing to do", returned 0,
+and ``Restart=always`` turned that into a restart every 15 s —
+``NRestarts`` climbing while nominal. Exiting 0 is right for ``--once``
+and wrong for a supervised service: every class held is a legitimate
+operating state, and a health signal that fires under nominal operation
+is not a health signal. The service now idles.
+
+**Submissions carried no run id.** ``submit_units`` builds its manifest
+with ``batch_id=run_id`` and ``publish_manifest`` refuses a manifest
+without one, so the first probe died at "manifest has no batch_id".
+The old operator always minted one per phase, so nothing reached that
+guard until this operator replaced it. The id is now the accumulator's
+own batch id — one manifest, one batch, one identity.
+
+**The submission context was a rebuilt copy.** It put
+``active_definition``'s raw dict where a ``SubmissionBinding`` belonged
+and the probe died at ``binding.job_definition_arn``. It now delegates to
+``submission_env``, which owns the contract: route → queue and
+definition, family → its one ACTIVE revision, and the binding carrying
+revision, digest and release identity. A wrong revision there makes the
+reconciler report drift on every attempt, which is why that resolution
+exists in one place.
+
+**A live pass registered as a dry run.** With no registrar,
+``run_registration`` passes ``dry_run=True``, so the first successful
+probe reported ``would_register: 1087, registered: 0`` — decided
+everything, wrote nothing. That is the defect the consumer already fixed
+once (review finding #5), reintroduced one layer up by the operator that
+replaced its caller. A live pass now builds the real registrar through
+``production_registrar``, which binds it to the pass's own connection so
+product rows and the watermark commit together; a rehearsal keeps None,
+because a rehearsal that wrote registration rows would be a rehearsal
+with effects.
 
 Found live during this work
 ===========================
@@ -396,27 +473,23 @@ imports the legacy module in a subprocess with a cleared environment and
 fails if startup runs, the other asserts the operator does not import
 helpers from it.
 
-Not yet verified
-================
+What the operator does not yet own
+==================================
 
-**The service has not been deployed in the enabled state, and the live
-width-2 acceptance probe has not run.** Both require the operator code to
-be *inside* the pinned image, and it is not: the newest image in ECR
-(``0e23431-20260808``) was built from the commit this branch starts from,
-so no built image contains ``pipeline.operator``. Verified directly —
-``importlib.util.find_spec('pipeline.operator')`` returns ``NO_OPERATOR``
-in both the reconciler's pinned image and the newest one.
+``pipeline/virtualPipelineOperator.py`` still holds the three phase
+bodies. This work delivered the service shape, the declared classes, the
+input, the rehearsal seam, the cadence and the registration granularity;
+converting the phase logic itself is separate work, and until it lands
+the operator borrows four things from that module — ``submission_env``,
+``production_registrar``, ``active_definition`` and
+``reference_window_override_for_run`` — deliberately, because each owns a
+contract that must have exactly one implementation. Two of this
+restructure's four live defects came from rebuilding such a contract
+instead of borrowing it.
 
-An image rebuild was outside this job's authorization, so these two
-clauses are escalated rather than worked around. Everything above was
-verified by running the real code, in the real image's interpreter, on
-rapid-admin, against the real database — with the operator modules
-bind-mounted over the image's tree. That is a test scaffold and is
-deliberately not a deployment: the committed unit pulls only the image.
-
-What remains, in order: rebuild the pipeline image from this branch;
-deploy ``rapid-vpo-service`` with ``VpoEnabled=true`` and the new digest;
-confirm the unit starts, reports healthy and survives a supervised
-restart; then one width-2 live probe through the restructured live path,
-checking both children terminal with clean attempt records and
-registration consuming them.
+The payload the probe's children ran is the job definition's pinned
+image, not the operator's. That is correct and unchanged: this
+restructure changes the *submitter*, and moving the payload pin would
+bump the Batch job-definition revision — deliberately left for the owner
+by the environment-policy job, whose ``RAPID_JOB_DEFINITION_REV`` finding
+this inherits.
