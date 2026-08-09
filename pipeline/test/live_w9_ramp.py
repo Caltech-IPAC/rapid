@@ -5,7 +5,7 @@ children it submits; the ramp is 18 -> 90 -> 270 across three runs, each
 gated on the previous step's evidence before the next is launched.
 
 What makes this the production path rather than a test harness that
-resembles one: the binding comes from `vpo.submission_env`, which resolves
+resembles one: the binding comes from `submission_env`, which resolves
 the ACTIVE revisioned job-definition ARN per route class and records the
 same value it submits (the round-5 fix); units come from
 `submission.gathering`, the same functions the VPO calls; submission goes
@@ -44,15 +44,13 @@ from submission.startup import fetch_parameters
 START = os.environ.get("W9_START", "2027-10-01 00:00:00")
 END = os.environ.get("W9_END", "2027-10-08 00:00:00")
 
-# `virtualPipelineOperator` reads its configuration at MODULE level and
-# calls exit(64) when STARTDATETIME/ENDDATETIME are absent, so the window
-# has to be in the environment before it is imported, not after. Setting
-# it from the same two constants keeps one source of truth rather than
-# letting the operator's window and this driver's window drift apart.
-os.environ.setdefault("STARTDATETIME", START)
-os.environ.setdefault("ENDDATETIME", END)
-
-from pipeline import virtualPipelineOperator as vpo  # noqa: E402
+# `submission_env`, `mjd_window` and `min_images_to_coadd` all live in the
+# operator package now (IR-1a extraction) and are importable with no
+# side effects, so this script no longer needs to fake
+# STARTDATETIME/ENDDATETIME to satisfy `virtualPipelineOperator`'s old
+# module-scope startup before importing it.
+from pipeline.operator.gathering import mjd_window, min_images_to_coadd
+from pipeline.operator.submission import submission_env
 
 logging.basicConfig(level=logging.INFO,
                     format="%(asctime)s %(levelname)s %(name)s %(message)s")
@@ -98,7 +96,7 @@ def main():
     # The production resolver: ACTIVE revisioned ARN per route class, and
     # the binding records what it submits.
     parameters = fetch_parameters()
-    context = vpo.submission_env(job_type, parameters=parameters)
+    context = submission_env(job_type, parameters=parameters)
 
     print(f"=== W9 ramp step: phase={phase} cap={cap} run={run_id} ===")
     print(f"    definition {context['job_definition']}")
@@ -112,8 +110,8 @@ def main():
               file=sys.stderr)
         return dbh.exit_code
 
-    start_mjd, end_mjd = vpo.mjd_window(START, END)
-    min_coadd = vpo.min_images_to_coadd()
+    start_mjd, end_mjd = mjd_window(START, END)
+    min_coadd = min_images_to_coadd()
     print(f"    window     {START} .. {END} (mjd {start_mjd:.5f}..{end_mjd:.5f})")
     print(f"    min_coadd  {min_coadd}")
 

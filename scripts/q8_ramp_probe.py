@@ -88,32 +88,17 @@ def main(argv=None):
 
     # Imported after the argument check so a bad invocation fails before
     # the payload's heavy imports (numpy, boto3, psycopg2) run at all.
-    # `submission_env` and `min_images_to_coadd` live in
-    # virtualPipelineOperator, which is a SCRIPT: importing it runs a module
-    # body that reads STARTDATETIME/ENDDATETIME and exits 64 when they are
-    # unset. Restructuring that module is a separate, explicitly out-of-scope
-    # job, so its preconditions are satisfied here instead of being worked
-    # around by copying `submission_env` into this file — a copy would be a
-    # second home for the route-and-binding resolution, which is exactly the
-    # class of defect this ramp keeps finding.
-    #
-    # The values below are the gathering window this script was given. They
-    # are what the VPO would have been started with, so the module sees a
-    # consistent world rather than placeholders.
-    os.environ.setdefault("STARTDATETIME", options.start)
-    os.environ.setdefault("ENDDATETIME", options.end)
-
-    # The same module body reads `sys.argv[1]` as its optional processing
-    # date. Left alone it would read this script's `--width`, so argv is
-    # emptied across the import and restored after — the module only looks
-    # at it once, at import time.
-    saved_argv = sys.argv
-    sys.argv = sys.argv[:1]
-    try:
-        from pipeline.virtualPipelineOperator import (submission_env,
-                                                      min_images_to_coadd)
-    finally:
-        sys.argv = saved_argv
+    # `submission_env` and `min_images_to_coadd` used to live in
+    # `virtualPipelineOperator`, which is a SCRIPT: importing it ran a
+    # module body that read STARTDATETIME/ENDDATETIME and exited 64 when
+    # they were unset, so this script set them and cleared `sys.argv`
+    # first (the module also read `sys.argv[1]` as an optional processing
+    # date at import). Both functions now live in the operator package
+    # (`pipeline.operator.submission`, `pipeline.operator.gathering`),
+    # importable with no side effects (IR-1a extraction), so neither
+    # workaround is needed.
+    from pipeline.operator.gathering import min_images_to_coadd
+    from pipeline.operator.submission import submission_env
 
     from submission import gathering, routes
     from pipeline.seams import submit_gathered

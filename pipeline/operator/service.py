@@ -159,11 +159,11 @@ def _database_credentials(session):
 def build_submission_context(session, parameters, operational_class):
     """Clients, buckets and the binding for one class's submissions.
 
-    DELEGATES to `virtualPipelineOperator.submission_env`, which already
-    owns this: it resolves the route's queue and definition from the tree,
-    resolves the definition FAMILY to its one ACTIVE revision, and builds
-    a real `SubmissionBinding` carrying the revision, image digest and
-    release identity that the attempt rows record.
+    DELEGATES to `pipeline.operator.submission.submission_env`, which
+    already owns this: it resolves the route's queue and definition from
+    the tree, resolves the definition FAMILY to its one ACTIVE revision,
+    and builds a real `SubmissionBinding` carrying the revision, image
+    digest and release identity that the attempt rows record.
 
     This function briefly reimplemented that, and reimplemented it wrong:
     it put `active_definition`'s raw dict where a `SubmissionBinding` was
@@ -178,7 +178,7 @@ def build_submission_context(session, parameters, operational_class):
     gives us: the queue and definition come from THIS class's route, so a
     context cannot describe two routes.
     """
-    from pipeline.virtualPipelineOperator import submission_env
+    from pipeline.operator.submission import submission_env
 
     return submission_env(
         operational_class.route.job_type,
@@ -447,19 +447,19 @@ def main(argv=None):
 def _production_registrar():
     """The real registration callback factory: connection -> callback.
 
-    Delegates to `virtualPipelineOperator.production_registrar`, which
-    owns this: it builds the S3 record store once and binds the registrar
-    to each pass's OWN connection, so product rows and the registration
-    watermark commit in one transaction. Two connections cannot be one
-    transaction — that was round-3 finding #8, and rebuilding this here
-    would be the third place to get it wrong.
+    Delegates to `pipeline.operator.registrar.production_registrar`,
+    which owns this: it builds the S3 record store once and binds the
+    registrar to each pass's OWN connection, so product rows and the
+    registration watermark commit in one transaction. Two connections
+    cannot be one transaction — that was round-3 finding #8, and
+    rebuilding this here would be the third place to get it wrong.
 
     That function returns None when RAPID_VPO_DRY_RUN is set; this
     service refuses to start with that variable set at all
     (`_refuse_retired_flag`), so it cannot be the source of a silent None
     here.
     """
-    from pipeline.virtualPipelineOperator import production_registrar
+    from pipeline.operator.registrar import production_registrar
 
     return production_registrar()
 

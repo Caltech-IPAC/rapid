@@ -85,7 +85,8 @@ def main(argv=None):
         print(">> --dry-run: gathered only, nothing submitted")
         return 0
 
-    from pipeline import seams, virtualPipelineOperator as vpo
+    from pipeline import seams
+    from pipeline.operator.submission import submission_env
 
     # `submission_env` returns a dict and does NOT carry an `execute`: the
     # attempt-row writer binds to a CONNECTION, and which connection is the
@@ -99,7 +100,7 @@ def main(argv=None):
             base64.b64decode(os.environ["RAPID_PARAMETERS_B64"]))
     if parameters:
         print(">> parameter tree injected: {} keys".format(len(parameters)))
-    env = vpo.submission_env(JOB_TYPE_CATALOG_LOAD, parameters=parameters)
+    env = submission_env(JOB_TYPE_CATALOG_LOAD, parameters=parameters)
     run_id = "catalog-load-probe-{}".format(uuid.uuid4().hex[:12])
     print(">> run_id: {}".format(run_id))
     print(">> queue={} job_definition={}".format(

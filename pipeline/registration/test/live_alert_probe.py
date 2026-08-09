@@ -70,7 +70,8 @@ def main(argv=None):
     if args.measure_only:
         return _measure(handle, pid)
 
-    from pipeline import seams, virtualPipelineOperator as vpo
+    from pipeline import seams
+    from pipeline.operator.submission import submission_env
     from database.modules.utils.rapid_db_connect import ConnectionExecutor
 
     parameters = None
@@ -78,7 +79,7 @@ def main(argv=None):
         parameters = json.loads(
             base64.b64decode(os.environ["RAPID_PARAMETERS_B64"]))
 
-    env = vpo.submission_env(JOB_TYPE_ALERT_PRODUCTION, parameters=parameters)
+    env = submission_env(JOB_TYPE_ALERT_PRODUCTION, parameters=parameters)
     run_id = "alert-probe-{}".format(uuid.uuid4().hex[:12])
     print(">> run_id: {}".format(run_id))
     print(">> queue={} job_definition={}".format(
