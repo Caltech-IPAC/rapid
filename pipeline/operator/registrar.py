@@ -14,10 +14,9 @@ before anything runs).
 
 import os
 
-import boto3
 
-
-def production_registrar(replay_pre_binding_roles=False, parameters=None):
+def production_registrar(replay_pre_binding_roles=False, parameters=None,
+                         s3_client=None):
     """A factory for the real registration callback: connection -> callback.
 
     `replay_pre_binding_roles` is the deliberate replay switch. Attempts
@@ -93,7 +92,17 @@ def production_registrar(replay_pre_binding_roles=False, parameters=None):
     from pipeline.registration.products import registrar
     from pipeline.runtime.boundaries import S3ObjectStore
 
-    store = S3ObjectStore(records_bucket, client=boto3.client("s3"))
+    # `s3_client` is the caller's client, built from its assumed session —
+    # the operator service reads records under the orchestrator role, whose
+    # grants name `attempts/*` (the reconciler's client is built the same
+    # way). The ambient default exists for the replay tool, which runs
+    # under a human's own credentials. Building the client here from
+    # ambient credentials was the instance-role AccessDenied class: the
+    # host role never had — and should never need — records-bucket read.
+    if s3_client is None:
+        import boto3
+        s3_client = boto3.client("s3")
+    store = S3ObjectStore(records_bucket, client=s3_client)
 
     fallback_roles = None
     if replay_pre_binding_roles:

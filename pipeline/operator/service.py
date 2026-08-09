@@ -514,7 +514,8 @@ def main(argv=None):
                     # registration rows would be a rehearsal with effects.
                     registrar_factory=(
                         None if rehearsing or not registers_this_class
-                        else _production_registrar(parameters))))
+                        else _production_registrar(
+                            parameters, session.client("s3")))))
 
         if args.once:
             worst = 0
@@ -545,7 +546,7 @@ def main(argv=None):
     return 0
 
 
-def _production_registrar(parameters=None):
+def _production_registrar(parameters=None, s3_client=None):
     """The real registration callback factory: connection -> callback.
 
     Delegates to `pipeline.operator.registrar.production_registrar`,
@@ -555,6 +556,12 @@ def _production_registrar(parameters=None):
     cannot be one transaction — that was round-3 finding #8, and
     rebuilding this here would be the third place to get it wrong.
 
+    `s3_client` is the service's assumed-session client. Every other S3
+    surface this service touches already goes through the session; the
+    registrar's record reads must too — records-bucket read is an
+    orchestrator-role grant, not an instance-role one, so an ambient
+    client fails per-attempt with AccessDenied deep inside a pass.
+
     That function returns None when RAPID_VPO_DRY_RUN is set; this
     service refuses to start with that variable set at all
     (`_refuse_retired_flag`), so it cannot be the source of a silent None
@@ -562,7 +569,7 @@ def _production_registrar(parameters=None):
     """
     from pipeline.operator.registrar import production_registrar
 
-    return production_registrar(parameters=parameters)
+    return production_registrar(parameters=parameters, s3_client=s3_client)
 
 
 def _connection_factory(session, endpoint):

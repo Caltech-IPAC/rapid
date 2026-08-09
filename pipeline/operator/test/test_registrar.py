@@ -71,6 +71,22 @@ class ProductionRegistrarTests(unittest.TestCase):
 
         self.assertIsNotNone(callback)
 
+    def test_a_caller_supplied_s3_client_is_used_not_ambient(self):
+        # The operator service passes its assumed-session client: records-
+        # bucket read is an orchestrator-role grant, and an ambient client
+        # reads as the instance role — AccessDenied per-attempt, deep
+        # inside a pass (seen live: attempt 118, every pass). With a
+        # client supplied, the factory must not touch boto3 at all, which
+        # is also what lets this test run off-image.
+        os.environ["RAPID_RECORDS_BUCKET"] = "roman-rapid-records"
+
+        class _StubClient:
+            pass
+
+        factory = opregistrar.production_registrar(s3_client=_StubClient())
+
+        self.assertIsNotNone(factory)
+
     def test_a_missing_records_bucket_is_refused_not_defaulted(self):
         # The registrar reads each attempt's terminal record from this
         # bucket. Guessing a name would fail per-attempt deep inside a pass;

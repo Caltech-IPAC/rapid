@@ -480,9 +480,12 @@ class TestLivePassRegistersForReal(unittest.TestCase):
 
         source = inspect.getsource(opservice.main)
         self.assertIn(
-            "_production_registrar(parameters)", source,
-            "a live pass must build a real registrar; None makes "
-            "run_registration a dry run that writes nothing")
+            "_production_registrar(\n                            parameters, session.client(\"s3\"))",
+            source,
+            "a live pass must build a real registrar bound to the assumed "
+            "session's S3 client; None makes run_registration a dry run "
+            "that writes nothing, and an ambient client reads records "
+            "under the instance role, which has no records-bucket grant")
         self.assertIn(
             "None if rehearsing", source,
             "a rehearsal must keep None — it has no connection, and a "
