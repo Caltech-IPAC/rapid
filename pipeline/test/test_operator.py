@@ -445,6 +445,44 @@ class TestRegistrationGranularity(unittest.TestCase):
         self.assertEqual(verdict.exit_code, opregistration.EXIT_PARTIAL)
 
 
+class TestLivePassRegistersForReal(unittest.TestCase):
+    """A live pass must not run registration as a dry run.
+
+    Seen live on the first successful width-2 probe: the pass reported
+    `would_register: 1087, registered: 0` because the operator passed
+    `registrar_factory=None`, which makes `run_registration` pass
+    `dry_run=True`. That is the "registration reported success and wrote
+    nothing" defect the consumer already fixed once, reintroduced one
+    layer up.
+    """
+
+    def test_live_mode_builds_a_registrar_and_rehearsal_does_not(self):
+        import inspect
+
+        from pipeline.operator import service as opservice
+
+        source = inspect.getsource(opservice.main)
+        self.assertIn(
+            "_production_registrar()", source,
+            "a live pass must build a real registrar; None makes "
+            "run_registration a dry run that writes nothing")
+        self.assertIn(
+            "None if rehearsing", source,
+            "a rehearsal must keep None — it has no connection, and a "
+            "rehearsal that wrote registration rows would have effects")
+
+    def test_the_registrar_helper_delegates(self):
+        import inspect
+
+        from pipeline.operator import service as opservice
+
+        source = inspect.getsource(opservice._production_registrar)
+        self.assertIn("production_registrar", source)
+        # Must not rebuild the store/binding itself — two connections
+        # cannot be one transaction (round-3 finding #8).
+        self.assertNotIn("S3ObjectStore(", source)
+
+
 class TestSubmissionContextReusesTheOwner(unittest.TestCase):
     """The binding contract has one implementation; borrow it.
 

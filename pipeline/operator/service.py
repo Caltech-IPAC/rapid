@@ -414,7 +414,19 @@ def main(argv=None):
                 max_wait_seconds=max_wait_seconds,
                 connection_factory=_connection_factory(
                     endpoint, credentials) if not rehearsing else None,
-                registrar_factory=None))
+                # A LIVE pass registers for real. Passing None here makes
+                # `run_registration` pass `dry_run=True`, and a dry run
+                # reports `would_register=N` while writing no rows — the
+                # exact "registration reported success and wrote nothing"
+                # defect this codebase already fixed once in the
+                # consumer. Seen live on the first successful width-2
+                # probe: `would_register: 1087, registered: 0`.
+                #
+                # A rehearsal keeps None, deliberately: it has no
+                # connection either, and a rehearsal that wrote
+                # registration rows would be a rehearsal with effects.
+                registrar_factory=(None if rehearsing
+                                   else _production_registrar())))
 
         if args.once:
             worst = 0
@@ -443,6 +455,26 @@ def main(argv=None):
 
     logger.info("operator stopped cleanly")
     return 0
+
+
+def _production_registrar():
+    """The real registration callback factory: connection -> callback.
+
+    Delegates to `virtualPipelineOperator.production_registrar`, which
+    owns this: it builds the S3 record store once and binds the registrar
+    to each pass's OWN connection, so product rows and the registration
+    watermark commit in one transaction. Two connections cannot be one
+    transaction — that was round-3 finding #8, and rebuilding this here
+    would be the third place to get it wrong.
+
+    That function returns None when RAPID_VPO_DRY_RUN is set; this
+    service refuses to start with that variable set at all
+    (`_refuse_retired_flag`), so it cannot be the source of a silent None
+    here.
+    """
+    from pipeline.virtualPipelineOperator import production_registrar
+
+    return production_registrar()
 
 
 def _connection_factory(endpoint, credentials):
