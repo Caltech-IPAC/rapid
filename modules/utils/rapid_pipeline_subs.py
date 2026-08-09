@@ -2530,3 +2530,103 @@ def index_to_radec(idx):
     dec_mas = idx % 648_000_001
     ra_mas  = idx // 648_000_001
     return ra_mas / 3_600_000, dec_mas / 3_600_000 - 90.0
+
+
+# ---------------------------------------------------------------------------
+# PSF-fit catalogue reading, for the catalog-load job type
+# ---------------------------------------------------------------------------
+
+# The HEALPix levels the sources table's hp6/hp9 columns are indexed at,
+# carried from `loadPSFCatIntoDBSourcesTable.py:27-30`. Named rather than
+# inlined because they are the meaning of two database columns.
+PSFCAT_HEALPIX_LEVEL6 = 6
+PSFCAT_HEALPIX_LEVEL9 = 9
+
+
+def read_psfcat_rows(path):
+    """Yield one mapping per source in a PSF-fit catalogue.
+
+    **THE READER THE STEP-3 CONVERSION LEFT OWED.** `post_db.load_sources`
+    has called `util.read_psfcat_rows(path)` since the conversion landed and
+    nothing defined it, so the catalog-load job type failed
+    `AttributeError: module ... has no attribute 'read_psfcat_rows'` at its
+    third stage — after creating its table and downloading 282 catalogue
+    files. Found live by attempt 6773; no unit test could see it, because the
+    tests exercise the SQL the loader composes rather than the file it reads.
+
+    The semantics are the legacy loader's, kept because they are the science
+    contract rather than an implementation choice
+    (`loadPSFCatIntoDBSourcesTable.py:498-513`):
+
+    * the catalogue proper and its `_finder` sibling are INNER-JOINED on
+      `id`. The two files carry different measurements of the same sources
+      and a source present in only one is not loadable — an inner join is
+      what drops it, and the count difference is visible in the effect count.
+    * `hp6`/`hp9` are computed here, from each row's own ra/dec, because they
+      are catalogue-derived values rather than unit facts: they vary per
+      source, so the manifest cannot carry them.
+    * `sca` likewise comes from the catalogue row where it carries one.
+
+    The finder file is resolved from `path` by name, the same way the
+    negative variant is: `<stem>_finder.txt` beside it — which is what the
+    downloader has already placed there.
+
+    A catalogue whose finder sibling is absent yields NOTHING and says so
+    through the log rather than raising: the legacy loader `continue`d on
+    exactly that condition, and one unreadable pair must not fail a unit
+    that has 140 other pairs to load.
+    """
+    import healpy as hp
+    from astropy.table import QTable, join
+
+    finder_path = _finder_path_for(path)
+    if not os.path.exists(finder_path):
+        print("*** Warning: no finder catalogue beside {}; skipping this "
+              "catalogue".format(path))
+        return
+
+    catalogue = QTable.read(path, format='ascii', fast_reader=True)
+    finder = QTable.read(finder_path, format='ascii', fast_reader=True)
+    joined = join(catalogue, finder, keys='id', join_type='inner')
+
+    if len(joined) == 0:
+        return
+
+    ra = np.array(joined['ra'], dtype=np.float64)
+    dec = np.array(joined['dec'], dtype=np.float64)
+    hp6 = hp.ang2pix(2 ** PSFCAT_HEALPIX_LEVEL6, ra, dec,
+                     nest=True, lonlat=True)
+    hp9 = hp.ang2pix(2 ** PSFCAT_HEALPIX_LEVEL9, ra, dec,
+                     nest=True, lonlat=True)
+
+    names = joined.colnames
+    for index, row in enumerate(joined):
+        record = {name: row[name] for name in names}
+        record["hp6"] = int(hp6[index])
+        record["hp9"] = int(hp9[index])
+        yield record
+
+
+def _finder_path_for(path):
+    """The finder catalogue beside `path`, by the names the products use.
+
+    NOT a naive `<stem>_finder<ext>`: the live product names put `_finder`
+    BEFORE `_negative`, not after it —
+
+        sfftdiffimage_masked_psfcat.txt
+        sfftdiffimage_masked_psfcat_finder.txt
+        sfftdiffimage_masked_psfcat_negative.txt
+        sfftdiffimage_masked_psfcat_finder_negative.txt   <- not ..._negative_finder
+
+    and release content names all four independently
+    (`[psfcat_diffimage] output_sfft_psfcat_finder_filename`). Composing the
+    name the obvious way produces a file that does not exist, and since a
+    missing finder is a SKIP rather than an error, every negative catalogue
+    would have been silently dropped — half the sources, with nothing in the
+    log saying so beyond one warning per file.
+    """
+    stem, extension = os.path.splitext(path)
+    if stem.endswith("_negative"):
+        return "{}_finder_negative{}".format(stem[:-len("_negative")],
+                                             extension)
+    return "{}_finder{}".format(stem, extension)

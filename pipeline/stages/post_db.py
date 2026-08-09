@@ -158,7 +158,25 @@ def download_psf_catalogs(context) -> None:
             "release content does not name output_sfft_psfcat_filename in "
             "[psfcat_diffimage]; the catalog load reads its inputs by that "
             "name and has no default for a science filename")
+    # ALL FOUR FILES, because the loader joins each catalogue to its FINDER
+    # sibling on `id` — the legacy loader's inner join, which is the science
+    # contract, not an implementation choice. Downloading only the two
+    # catalogues left `read_psfcat_rows` with no finder to join against, and a
+    # missing finder is a documented SKIP, so every source would have been
+    # dropped with nothing but a per-file warning to say so.
+    #
+    # The names come from release content, and `_finder` sits BEFORE
+    # `_negative` in them (`..._psfcat_finder_negative.txt`), which is why the
+    # finder name is read from the section rather than composed from the
+    # positive one.
+    finder = psfcat.get("output_sfft_psfcat_finder_filename")
+    if not finder:
+        raise InputError(
+            "release content does not name output_sfft_psfcat_finder_filename "
+            "in [psfcat_diffimage]; the catalog load joins each catalogue to "
+            "its finder sibling and cannot compose that name itself")
     negative = positive.replace(".txt", "_negative.txt")
+    finder_negative = finder.replace(".txt", "_negative.txt")
 
     proc_date = _unit_field(context, "proc_date")
     sca = int(_unit_field(context, "sca"))
@@ -174,7 +192,12 @@ def download_psf_catalogs(context) -> None:
                 f"unit {proc_date}/{sca} declares a product input with no "
                 f"difference-image URI: {product!r}")
         attempt_id = product.get("attempt_id")
-        for name in (positive, negative):
+        # The two CATALOGUES are what the loader iterates; the two FINDERS are
+        # fetched beside them because the reader joins to them, and are not
+        # themselves lists of sources to load. Only the catalogues go into
+        # `downloaded`, so a finder can never be walked as if it were one.
+        for name, is_catalogue in ((positive, True), (negative, True),
+                                   (finder, False), (finder_negative, False)):
             bucket, key = _sibling_key(uri, name)
             target = context.scratch(f"attempt{attempt_id}_{name}")
             try:
@@ -185,7 +208,8 @@ def download_psf_catalogs(context) -> None:
                 # count is what reports how much it actually loaded.
                 context.logger.info("no catalogue at s3://%s/%s", bucket, key)
                 continue
-            downloaded.append(target)
+            if is_catalogue:
+                downloaded.append(target)
 
     context.produce("psf_catalogs", downloaded)
     context.record(psf_catalog_files=len(downloaded), sca=sca)
@@ -321,6 +345,11 @@ def _write_sources_csv(context, catalogs, csv_path: str) -> int:
     the manifest and are constant down the file.
     """
     facts = context.unit.facts
+    # The SCA is the UNIT's, as this docstring has always said: neither the
+    # psfcat nor its finder carries an `sca` column, so reading one off the
+    # row wrote NULL into a NOT-NULL-in-spirit identity column. Taken from the
+    # declared unit field, which is where it actually lives.
+    sca = int(_unit_field(context, "sca"))
     written = 0
 
     with open(csv_path, "w", newline="") as handle:
@@ -328,25 +357,35 @@ def _write_sources_csv(context, catalogs, csv_path: str) -> int:
         for path in catalogs:
             positive = "_negative" not in os.path.basename(path)
             for row in util.read_psfcat_rows(path):
-                writer.writerow(_sources_row(row, facts, positive))
+                writer.writerow(_sources_row(row, facts, positive, sca))
                 written += 1
 
     context.logger.info("wrote %d source row(s) to %s", written, csv_path)
     return written
 
 
-def _sources_row(row, facts, positive: bool):
-    """One catalogue row as the sources column tuple, in COPY order."""
+def _sources_row(row, facts, positive: bool, sca):
+    """One catalogue row as the sources column tuple, in COPY order.
+
+    **THE KEYS ARE THE CATALOGUE'S, NOT THE TABLE'S.** Two of them were the
+    destination column names — `npixfit` and `npix` — and the catalogue files
+    carry neither: the psfcat has `n_pixels_fit` and the finder has
+    `n_pixels`. `dict.get` returns None for a name that is not there, so both
+    columns would have loaded as NULL for every source ever loaded, silently,
+    with no error anywhere. Verified against the real product headers
+    (`sfftdiffimage_masked_psfcat.txt` and its `_finder` sibling) rather than
+    inferred from the table.
+    """
     return [
         row.get("id"), row.get("ra"), row.get("dec"),
         row.get("x_fit"), row.get("y_fit"), row.get("flux_fit"),
         row.get("x_err"), row.get("y_err"), row.get("flux_err"),
-        row.get("npixfit"), row.get("qfit"), row.get("cfit"),
+        row.get("n_pixels_fit"), row.get("qfit"), row.get("cfit"),
         row.get("reduced_chi2"), row.get("flags"), row.get("sharpness"),
-        row.get("roundness1"), row.get("roundness2"), row.get("npix"),
+        row.get("roundness1"), row.get("roundness2"), row.get("n_pixels"),
         row.get("peak"), facts.pid, "true" if positive else "false",
         facts.field, row.get("hp6"), row.get("hp9"),
-        facts.expid, facts.fid, row.get("sca"), facts.mjdobs,
+        facts.expid, facts.fid, sca, facts.mjdobs,
     ]
 
 
