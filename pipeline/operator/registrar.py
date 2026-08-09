@@ -17,7 +17,7 @@ import os
 import boto3
 
 
-def production_registrar(replay_pre_binding_roles=False):
+def production_registrar(replay_pre_binding_roles=False, parameters=None):
     """A factory for the real registration callback: connection -> callback.
 
     `replay_pre_binding_roles` is the deliberate replay switch. Attempts
@@ -72,9 +72,19 @@ def production_registrar(replay_pre_binding_roles=False):
               "and write no operation-table rows.")
         return None
 
-    records_bucket = os.environ.get('RAPID_RECORDS_BUCKET')
+    # Environment-over-tree precedence, same as the service kernel's DB
+    # endpoint resolution: the parameter tree's `s3/records-bucket` is the
+    # bucket's one authoritative home (rapid-pipeline-params.yaml; the
+    # reconciler reads the same key), and the env var is a per-invocation
+    # override for probes. The env-only read was a monolith-era contract:
+    # it held while no operational class ran, and the first `run`
+    # disposition under the extracted service found the quadlet carries no
+    # such variable — the tree the service already reads does.
+    records_bucket = (os.environ.get('RAPID_RECORDS_BUCKET')
+                      or (parameters or {}).get('s3/records-bucket'))
     if not records_bucket:
-        print("*** Error: Env. var. RAPID_RECORDS_BUCKET not set; the "
+        print("*** Error: no records bucket: RAPID_RECORDS_BUCKET is unset "
+              "and no `s3/records-bucket` parameter was supplied; the "
               "registrar reads each attempt's terminal record from it and "
               "cannot be built without it; quitting...")
         exit(64)

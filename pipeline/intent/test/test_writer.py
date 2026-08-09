@@ -304,7 +304,10 @@ class SupersedeUnitTests(unittest.TestCase):
         event_sql, event_params = execute.calls[-1]
         self.assertIn("INSERT INTO unit_events", event_sql)
         detail = event_params[-1]
-        self.assertEqual({"superseded_by_unit_id": 6}, detail)
+        # `_as_jsonb` serializes (the real driver refuses a bare dict —
+        # found live); the recorded param is the deterministic JSON text.
+        import json
+        self.assertEqual({"superseded_by_unit_id": 6}, json.loads(detail))
 
 
 class CampaignLifecycleTests(unittest.TestCase):

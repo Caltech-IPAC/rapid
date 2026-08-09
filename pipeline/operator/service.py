@@ -514,7 +514,7 @@ def main(argv=None):
                     # registration rows would be a rehearsal with effects.
                     registrar_factory=(
                         None if rehearsing or not registers_this_class
-                        else _production_registrar())))
+                        else _production_registrar(parameters))))
 
         if args.once:
             worst = 0
@@ -545,7 +545,7 @@ def main(argv=None):
     return 0
 
 
-def _production_registrar():
+def _production_registrar(parameters=None):
     """The real registration callback factory: connection -> callback.
 
     Delegates to `pipeline.operator.registrar.production_registrar`,
@@ -562,7 +562,7 @@ def _production_registrar():
     """
     from pipeline.operator.registrar import production_registrar
 
-    return production_registrar()
+    return production_registrar(parameters=parameters)
 
 
 def _connection_factory(session, endpoint):

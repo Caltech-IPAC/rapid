@@ -480,7 +480,7 @@ class TestLivePassRegistersForReal(unittest.TestCase):
 
         source = inspect.getsource(opservice.main)
         self.assertIn(
-            "_production_registrar()", source,
+            "_production_registrar(parameters)", source,
             "a live pass must build a real registrar; None makes "
             "run_registration a dry run that writes nothing")
         self.assertIn(

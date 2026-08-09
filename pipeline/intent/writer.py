@@ -75,6 +75,7 @@ ruling can revise it without spelunking through call sites.
 
 import dataclasses
 import datetime
+import json
 import logging
 from typing import Any, Protocol, Sequence
 
@@ -608,14 +609,17 @@ def _require_known_campaign_state(state: str, *, param_name: str) -> None:
 def _as_jsonb(value: dict | None) -> Any:
     """Serialize a dict for a jsonb column, or pass None through as NULL.
 
-    Mirrors the repo's existing practice for jsonb columns (e.g.
-    `derived.write_mutation_audit`'s callers) of handing psycopg2 a Python
-    object it adapts, rather than pre-serializing to a JSON string —
-    psycopg2's jsonb adapter accepts a dict directly. A caller using a
-    plain fake executor in tests receives the dict back unchanged, which
-    is what the test doubles below assert against.
+    A JSON STRING, not the dict itself: psycopg2 does not adapt a bare
+    dict on write (`can't adapt type 'dict'` — found live on the first
+    real-driver campaign creation, 2026-08-09; the fake executor happily
+    accepted the dict the real driver refuses). PostgreSQL casts the text
+    parameter to jsonb from the column context. `sort_keys` keeps the
+    serialization deterministic, matching the registration outcome
+    writer's own convention.
     """
-    return value
+    if value is None:
+        return None
+    return json.dumps(value, sort_keys=True)
 
 
 def _rowcount(result: Any, operation: str) -> int:

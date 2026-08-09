@@ -370,7 +370,9 @@ class CreateMockCampaignFromStagedTests(unittest.TestCase):
         event_inserts = [params for sql, params in self.execute.calls
                          if "INSERT INTO unit_events" in sql]
         self.assertEqual(2, len(event_inserts))
-        details = [params[-1] for params in event_inserts]
+        import json
+        details = [json.loads(params[-1]) if isinstance(params[-1], str)
+                   else params[-1] for params in event_inserts]
         self.assertIn({"source_rid": 101, "source_field": 4678622,
                        "source_fid": 8}, details)
         self.assertIn({"source_rid": 102, "source_field": 4678622,
