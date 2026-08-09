@@ -399,7 +399,11 @@ def _run_produce_alerts(context, provider, producer, assemble=None,
         return {"sid": source.sid}
 
     patches = [
-        (alerts.cli, "make_provider", lambda: provider),
+        # `db=` is the stage's path (its own connection's borrowing handle);
+        # the double accepts and ignores it — the provider under test is
+        # the fixture's, and a double that refused the real call shape was
+        # exactly how this suite went red in-image while green off-image.
+        (alerts.cli, "make_provider", lambda db=None: provider),
         (alerts.produce, "assemble_alert_for_source",
          assemble or fake_assemble),
         (alerts.produce, "load_schema", lambda *a, **k: {"fake": True}),
