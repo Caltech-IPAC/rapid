@@ -445,6 +445,70 @@ class TestRegistrationGranularity(unittest.TestCase):
         self.assertEqual(verdict.exit_code, opregistration.EXIT_PARTIAL)
 
 
+class TestEverySubmissionCarriesARunId(unittest.TestCase):
+    """Found live, 2026-08-08, on the first width-2 live probe.
+
+    `submit_units` builds its manifest with `batch_id=run_id`, and
+    `publish_manifest` refuses a manifest with no batch_id. The operator
+    passed run_id=None, so the probe died with "manifest has no batch_id;
+    cannot key its object" — exit 70, before any child was submitted. The
+    old operator always minted one per phase, so nothing ever reached that
+    guard until this operator replaced it.
+    """
+
+    def test_run_id_is_never_none(self):
+        clock = FakeClock()
+        submitter = RecordingRunIdSubmitter()
+        prompt = opclasses.class_for(opclasses.PROMPT_PROCESSING)
+        operator = Operator(prompt, submitter,
+                            gather=lambda: [unit(1), unit(2)],
+                            max_batch_size=60, max_wait_seconds=60,
+                            clock=clock)
+        operator.run_pass(force_cut=True)
+
+        self.assertTrue(submitter.run_ids, "nothing was submitted")
+        for run_id in submitter.run_ids:
+            self.assertIsNotNone(
+                run_id,
+                "a submission with run_id=None becomes a manifest with no "
+                "batch_id, which publish_manifest refuses")
+            self.assertTrue(str(run_id).strip())
+
+    def test_the_run_id_is_the_batch_identity(self):
+        """One manifest, one batch, one identity — not a second id."""
+        clock = FakeClock()
+        submitter = RecordingRunIdSubmitter()
+        prompt = opclasses.class_for(opclasses.PROMPT_PROCESSING)
+        operator = Operator(prompt, submitter, gather=lambda: [unit(1)],
+                            max_batch_size=60, max_wait_seconds=60,
+                            clock=clock)
+        operator.run_pass(force_cut=True)
+        self.assertIn(opclasses.PROMPT_PROCESSING, submitter.run_ids[0])
+
+    def test_an_explicit_run_id_wins(self):
+        clock = FakeClock()
+        submitter = RecordingRunIdSubmitter()
+        prompt = opclasses.class_for(opclasses.PROMPT_PROCESSING)
+        operator = Operator(prompt, submitter, gather=lambda: [unit(1)],
+                            max_batch_size=60, max_wait_seconds=60,
+                            clock=clock)
+        operator.run_pass(run_id="probe-1", force_cut=True)
+        self.assertEqual(submitter.run_ids[0], "probe-1")
+
+
+class RecordingRunIdSubmitter:
+    """Records the run_id each submission was given."""
+
+    can_submit = True
+
+    def __init__(self):
+        self.run_ids = []
+
+    def submit(self, units, operational_class, run_id=None, **kwargs):
+        self.run_ids.append(run_id)
+        return [("submission", [])]
+
+
 class TestBoundedProbeWidth(unittest.TestCase):
     """`--width` capped by an explicit `--max-width`, refused not clamped.
 

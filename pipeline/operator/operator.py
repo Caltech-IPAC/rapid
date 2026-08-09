@@ -115,6 +115,26 @@ class Operator:
 
     # -- one pass ----------------------------------------------------
 
+    def _run_id_for(self, batch, explicit):
+        """This batch's run id — its manifest's identity, never None.
+
+        `submit_units` builds the manifest with `batch_id=run_id`, and
+        `publish_manifest` refuses a manifest with no batch_id: "manifest
+        has no batch_id; cannot key its object". The old operator always
+        minted one per phase (`vpo-<date>-science-...`), so nothing ever
+        reached that guard; this operator passed run_id=None and hit it on
+        the first live probe, before any child was submitted (2026-08-08).
+
+        The accumulator already stamps every batch with a unique id, so
+        that is what identifies this submission — one manifest, one batch,
+        one identity, rather than a second id minted here that would have
+        to be kept in step with it. An explicit caller-supplied id still
+        wins, for a probe that wants a recognisable name.
+        """
+        if explicit:
+            return explicit
+        return f"vpo-{self.operational_class.name}-{batch.manifest.batch_id}"
+
     def run_pass(self, run_id=None, force_cut=False,
                  reference_observation_window=None):
         """Gather, accumulate, cut what the cadence says, submit, register.
@@ -142,7 +162,7 @@ class Operator:
             submissions = self.submitter.submit(
                 batch.manifest.units,
                 self.operational_class,
-                run_id=run_id,
+                run_id=self._run_id_for(batch, run_id),
                 reference_observation_window=reference_observation_window)
             result.submitted.extend(submissions or [])
 
