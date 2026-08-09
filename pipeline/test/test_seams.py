@@ -429,6 +429,87 @@ class AttachWorkUnitTests(unittest.TestCase):
                          "both attempts attach to the SAME work unit")
 
 
+class CampaignUnitTransitionIntegrityTests(unittest.TestCase):
+    """IR-13-a build spec item 6: the campaign-created unit and the unit
+    `_attach_work_unit` later finds at submission time must be the SAME
+    row — one shared `input_scope` grammar, tested end to end through the
+    ONE `RecordingExecute` instance both `create_mock_campaign_from_staged`
+    and `_precreate`/`_attach_work_unit` write through, exactly as a live
+    campaign run and its later submission share one database.
+    """
+
+    def setUp(self):
+        self.execute = RecordingExecute()
+
+    def test_a_gathered_campaign_unit_finds_its_pre_created_row(self):
+        from pipeline.intent.writer import CampaignWriter, WorkUnitWriter
+        from pipeline.mock.transformer import create_mock_campaign_from_staged
+        from pipeline.seams import _attach_work_unit
+        from submission.subjects import parse_exposure_sca_scope
+
+        campaign_writer = CampaignWriter(self.execute)
+        work_writer = WorkUnitWriter(self.execute)
+
+        class Source:
+            exit_code = 0
+
+            def get_l2files_records_for_datetime_range(self, start, end):
+                return [(101, 7, 8)]  # (rid, sca, fid)
+
+            def get_info_for_l2file(self, rid):
+                # (filename, expid, sca, field) — truncated to what the
+                # creator reads.
+                return ("s3://in/exp5001_sca7.fits", 5001, 7, 4678622)
+
+        create_mock_campaign_from_staged(
+            self.execute, campaign_writer, work_writer, Source(),
+            "mock-day-1", start=utc(2027, 10, 1), end=utc(2027, 10, 2),
+            max_units=10)
+
+        creates_before = [s for s, _ in self.execute.statements
+                          if "INSERT INTO work_units" in s]
+        self.assertEqual(1, len(creates_before),
+                         "the campaign creates exactly one work unit")
+
+        # The campaign gatherer's own downstream consequence: a science
+        # ProcessingUnit at the SAME (exposure, sca) the campaign unit's
+        # input_scope names — the exact identity gather_campaign_units
+        # would have parsed back via parse_exposure_sca_scope. Built
+        # directly (not via this file's `units()` helper, whose sca is a
+        # positional `(i % 18) + 1` unrelated to the campaign's own 5001/7).
+        gathered_unit = ProcessingUnit(
+            exposure=5001, sca=7,
+            facts=UnitFacts(rid=101, fid=8, field=4678622, expid=5001))
+
+        _attach_work_unit(self.execute, "science", gathered_unit,
+                          attempt_id=9001, moment=utc(2027, 10, 1, 1))
+
+        # THE ASSERTION THAT MATTERS: no SECOND work unit was minted — the
+        # find-or-create SELECT found the campaign's own row.
+        creates_after = [s for s, _ in self.execute.statements
+                         if "INSERT INTO work_units" in s]
+        self.assertEqual(1, len(creates_after),
+                         "the gathered unit must FIND the campaign's work "
+                         "unit, not create a second one")
+
+        # And the campaign's own work unit is the one now transitioned
+        # ready->submitted and attached to the new attempt.
+        [(job_type, campaign_scope)] = self.execute.work_units_by_scope.keys()
+        self.assertEqual(parse_exposure_sca_scope(campaign_scope), (5001, 7))
+        campaign_work_unit_id = self.execute.work_units_by_scope[
+            (job_type, campaign_scope)]["work_unit_id"]
+
+        updates = [params for sql, params in self.execute.statements
+                   if "UPDATE attempts SET work_unit_id" in sql]
+        self.assertEqual(1, len(updates))
+        self.assertIn(campaign_work_unit_id, updates[0])
+
+        transitions = [params for sql, params in self.execute.statements
+                       if "UPDATE work_units SET state" in sql]
+        self.assertEqual(1, len(transitions))
+        self.assertIn("submitted", transitions[0])
+
+
 class WaitForCompletionTests(unittest.TestCase):
     def _conn(self, *snapshots):
         """A connection whose progress query returns each snapshot in turn."""

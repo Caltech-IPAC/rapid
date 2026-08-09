@@ -40,6 +40,31 @@ called only by probes and tests, because nothing wired them into
 deployed operator gathers only science and reference construction, so the
 system cannot emit alerts or run the catalog chain in continuous
 operation." This registry is what closes it.
+
+**THE REGISTRY KEY IS NOT ALWAYS THE ROUTE JOB TYPE (IR-13-a, the
+campaign-unit gatherer).** Every row before this build had one job type
+serving BOTH roles at once: the key `gatherer_for` looks `_BY_JOB_TYPE` up
+by, AND the job type `OperationalClass.route` resolves through
+`submission.routes.route_for`. The campaign gatherer breaks that
+coincidence on purpose — a test-class campaign gathers under the SCIENCE
+route (`OperationalClass.job_type` must literally be
+`submission.routes.JOB_TYPE_SCIENCE`, or `LiveSubmitter.submit`'s
+`route.job_type` would submit under the wrong queue/definition/manifest
+job_type entirely) while needing a REGISTRY KEY distinct from
+`JOB_TYPE_SCIENCE`, because `_BY_JOB_TYPE` is a plain
+`{job_type: (class_name, gather)}` dict — a second row keyed literally
+`JOB_TYPE_SCIENCE` would silently overwrite (or be shadowed by, depending
+on declaration order) `PROMPT_PROCESSING`'s own science row, and whichever
+lost would gather nothing every pass with no error at all. Each `REGISTRY`
+row is therefore `(registry_key, operational_class_name, gather,
+route_job_type)`: `registry_key` is what `_BY_JOB_TYPE`/`gatherer_for` key
+on and what `_classes_for_pass` (service.py) sets `OperationalClass.name`
+to for the fanned-out instance; `route_job_type` is what that instance's
+`.job_type` becomes, and therefore what `.route` resolves and what gets
+submitted. For every row before this one, `route_job_type` IS the
+registry key (the coincidence every other job type still has) — see
+`_route_job_type` below, which defaults it so no existing row's four-tuple
+needs spelling out explicitly.
 """
 
 import datetime
@@ -54,6 +79,18 @@ from submission.routes import (JOB_TYPE_ALERT_PRODUCTION,
                                JOB_TYPE_SOURCE_CURRENCY, JOB_TYPE_STATISTICS)
 
 logger = logging.getLogger("rapid.operator.gathering")
+
+#: The campaign gatherer's REGISTRY KEY (IR-13-a) — deliberately NOT
+#: `submission.routes.JOB_TYPE_SCIENCE` and deliberately not a member of
+#: that module's route vocabulary at all: it is never submitted, never
+#: appears in a `Manifest.job_type`, and is never checked against
+#: `submission.routes.ROUTES` — it exists ONLY as the dict key
+#: `_BY_JOB_TYPE`/`gatherer_for` look up by and the `OperationalClass.name`
+#: a fanned-out `TEST`-class operator carries (accumulator naming, logging,
+#: run-id prefixing — see `_classes_for_pass`'s own docstring for what
+#: `.name` distinguishes). See this module's header for why a distinct key
+#: is required at all.
+CAMPAIGN_GATHERING_KEY = "test-campaign-science"
 
 
 def mjd_window(start, end):
@@ -212,58 +249,125 @@ def _alert_production_gatherer(operator_input, start_mjdobs, end_mjdobs,
         handle, _release_identity()))
 
 
-#: THE REGISTRY. One entry per job type this operator gathers, each a
-#: `(job_type, operational_class_name, gather)` triple: `gather` takes
-#: `(operator_input, start_mjdobs, end_mjdobs, handle, parameters,
-#: s3_client)` — the union of what any one gatherer in the set needs, so
-#: every entry has the identical call shape and `gatherer_for` below does
-#: not branch on which arguments a given job type's function wants.
+def _campaign_gatherer(operator_input, start_mjdobs, end_mjdobs, handle,
+                       parameters, s3_client):
+    """The TEST class's one gathering entry (IR-13-a).
+
+    Ignores the window/mjd arguments every other gatherer in this set
+    takes: `submission.gathering.gather_campaign_units` reads campaign and
+    work_unit STATE (active, ready), never a time window — a campaign's
+    units become ready when campaign staging creates them, not when they
+    fall inside a poll's observation window. Accepting and discarding the
+    unused arguments (rather than a different call shape) is what keeps
+    `gatherer_for`'s call site identical for every registry row, per this
+    module's own "every entry has the identical call shape" rule.
+    """
+    return list(gathering.gather_campaign_units(handle))
+
+
+#: THE REGISTRY. One entry per gathered unit of work, each a
+#: `(registry_key, operational_class_name, gather, route_job_type)`
+#: four-tuple: `gather` takes `(operator_input, start_mjdobs, end_mjdobs,
+#: handle, parameters, s3_client)` — the union of what any one gatherer in
+#: the set needs, so every entry has the identical call shape and
+#: `gatherer_for` below does not branch on which arguments a given entry's
+#: function wants.
 #:
-#: `operational_class_name` is which of the four declared classes
-#: (`pipeline.operator.classes`) this job type gathers under — the class
-#: axis stays the operator's `to_run` gate exactly as before this ruling;
-#: this registry is what the CLASS axis fans out to, not a replacement for
-#: it. Reference construction keeps its one job type; prompt processing
-#: now fans out to eight (science, the six post-DB types, alert
-#: production) — the complete chain the ADOPTED operations text describes
-#: as operator-scheduled.
+#: `operational_class_name` is which of the five declared classes
+#: (`pipeline.operator.classes`) this entry gathers under — the class axis
+#: stays the operator's `to_run` gate exactly as before this ruling; this
+#: registry is what the CLASS axis fans out to, not a replacement for it.
+#: Reference construction keeps its one job type; prompt processing fans
+#: out to eight (science, the six post-DB types, alert production) — the
+#: complete chain the ADOPTED operations text describes as
+#: operator-scheduled; test fans out to its one campaign-gathering entry.
+#:
+#: `registry_key` and `route_job_type` are the SAME string for every row
+#: except the campaign entry — see this module's header ("THE REGISTRY KEY
+#: IS NOT ALWAYS THE ROUTE JOB TYPE") for exactly why that row differs:
+#: `CAMPAIGN_GATHERING_KEY` is what `_BY_JOB_TYPE` keys on (so it cannot
+#: collide with `PROMPT_PROCESSING`'s own `JOB_TYPE_SCIENCE` row), while
+#: `route_job_type=JOB_TYPE_SCIENCE` is what the fanned-out
+#: `OperationalClass.job_type` becomes, so it still submits under the
+#: science route (v1 restriction). `_registry_row` fills `route_job_type`
+#: from the registry key by default, so every OTHER row's tuple needs no
+#: fourth element spelled out.
+def _registry_row(registry_key, class_name, gather, route_job_type=None):
+    return (registry_key, class_name, gather,
+           registry_key if route_job_type is None else route_job_type)
+
+
 REGISTRY = (
-    (JOB_TYPE_SCIENCE, opclasses.PROMPT_PROCESSING, _science_gatherer),
-    (JOB_TYPE_REFERENCE_IMAGE, opclasses.REFERENCE_CONSTRUCTION,
-     _reference_gatherer),
-    (JOB_TYPE_CATALOG_LOAD, opclasses.PROMPT_PROCESSING,
-     _catalog_load_gatherer),
-    (JOB_TYPE_CROSSMATCH, opclasses.PROMPT_PROCESSING, _crossmatch_gatherer),
-    (JOB_TYPE_STATISTICS, opclasses.PROMPT_PROCESSING, _statistics_gatherer),
-    (JOB_TYPE_MERGE_CURRENCY, opclasses.PROMPT_PROCESSING,
-     _merge_currency_gatherer),
-    (JOB_TYPE_SOURCE_CURRENCY, opclasses.PROMPT_PROCESSING,
-     _source_currency_gatherer),
-    (JOB_TYPE_MERGE_DEDUP, opclasses.PROMPT_PROCESSING,
-     _merge_dedup_gatherer),
-    (JOB_TYPE_ALERT_PRODUCTION, opclasses.PROMPT_PROCESSING,
-     _alert_production_gatherer),
+    _registry_row(JOB_TYPE_SCIENCE, opclasses.PROMPT_PROCESSING,
+                 _science_gatherer),
+    _registry_row(JOB_TYPE_REFERENCE_IMAGE, opclasses.REFERENCE_CONSTRUCTION,
+                 _reference_gatherer),
+    _registry_row(JOB_TYPE_CATALOG_LOAD, opclasses.PROMPT_PROCESSING,
+                 _catalog_load_gatherer),
+    _registry_row(JOB_TYPE_CROSSMATCH, opclasses.PROMPT_PROCESSING,
+                 _crossmatch_gatherer),
+    _registry_row(JOB_TYPE_STATISTICS, opclasses.PROMPT_PROCESSING,
+                 _statistics_gatherer),
+    _registry_row(JOB_TYPE_MERGE_CURRENCY, opclasses.PROMPT_PROCESSING,
+                 _merge_currency_gatherer),
+    _registry_row(JOB_TYPE_SOURCE_CURRENCY, opclasses.PROMPT_PROCESSING,
+                 _source_currency_gatherer),
+    _registry_row(JOB_TYPE_MERGE_DEDUP, opclasses.PROMPT_PROCESSING,
+                 _merge_dedup_gatherer),
+    _registry_row(JOB_TYPE_ALERT_PRODUCTION, opclasses.PROMPT_PROCESSING,
+                 _alert_production_gatherer),
+    # The campaign gatherer (IR-13-a): registered under a KEY distinct from
+    # the route it submits under — see this module's header and
+    # `_registry_row`'s own docstring comment above.
+    _registry_row(CAMPAIGN_GATHERING_KEY, opclasses.TEST,
+                 _campaign_gatherer, route_job_type=JOB_TYPE_SCIENCE),
 )
 
-_BY_JOB_TYPE = {job_type: (class_name, gather)
-                for job_type, class_name, gather in REGISTRY}
+_BY_JOB_TYPE = {registry_key: (class_name, gather, route_job_type)
+                for registry_key, class_name, gather, route_job_type
+                in REGISTRY}
 
 
 def job_types_for_class(class_name):
-    """Every registered job type that gathers under one operational class.
+    """Every registered gathering key that gathers under one operational class.
 
     In declaration order — the chain order the post-DB co-design states
     (catalog load before crossmatch, both before the sweeps) — which is
     what lets `service.py` build one `Operator` per job type in a
     deterministic, dependency-respecting sequence each pass.
+
+    **RETURNS THE REGISTRY KEY, NOT NECESSARILY THE ROUTE JOB TYPE.** For
+    every class but `TEST` the two coincide (this module's header). For
+    `TEST` this returns `CAMPAIGN_GATHERING_KEY` — `service.py`'s
+    `_classes_for_pass` reads `route_job_type_for` (below) to learn what
+    the fanned-out `OperationalClass.job_type` should actually be, so a
+    caller that wants the SUBMITTED job type, not the gathering key, uses
+    that function instead of assuming this one's return value is it.
     """
-    return tuple(job_type for job_type, class_name_, _ in REGISTRY
+    return tuple(registry_key for registry_key, class_name_, _, _ in REGISTRY
                 if class_name_ == class_name)
 
 
-def gatherer_for(job_type, operator_input, parameters, connection_factory,
-                 s3_client=None):
-    """The ready-work query for one JOB TYPE, bound to this window.
+def route_job_type_for(registry_key):
+    """The route job type a registry key's `OperationalClass` submits under.
+
+    For every row but the campaign gatherer's this equals `registry_key`
+    itself; see this module's header for why the campaign entry's differs.
+    `service.py`'s `_classes_for_pass` calls this to build each fanned-out
+    `OperationalClass.job_type` correctly, decoupled from the gathering key
+    `.name` carries.
+    """
+    if registry_key not in _BY_JOB_TYPE:
+        raise ValueError(
+            f"{registry_key!r} is not in the gatherer registry; registered "
+            f"keys are {', '.join(sorted(_BY_JOB_TYPE))}")
+    _, _, route_job_type = _BY_JOB_TYPE[registry_key]
+    return route_job_type
+
+
+def gatherer_for(registry_key, operator_input, parameters,
+                 connection_factory, s3_client=None):
+    """The ready-work query for one REGISTRY KEY, bound to this window.
 
     Returns a callable so the operator can ask for ready work each poll
     without knowing how it is found — which is also what lets a test
@@ -272,15 +376,23 @@ def gatherer_for(job_type, operator_input, parameters, connection_factory,
     **REGISTRY LOOKUP, NOT A CLASS CONDITIONAL** (co-design ruling 1). This
     used to take `operational_class` and branch
     `if operational_class.name == REFERENCE_CONSTRUCTION: ... else: ...` —
-    exactly the shape the ADOPTED text forbids. It now takes the job type
-    directly and looks it up in `REGISTRY`; adding a job type is adding a
+    exactly the shape the ADOPTED text forbids. It now takes the registry
+    key directly and looks it up in `REGISTRY`; adding an entry is adding a
     row above, never a new branch here.
+
+    Takes the REGISTRY KEY, not necessarily the route job type it submits
+    under (this module's header) — `service.py` passes
+    `job_class.name` (the fanned-out `OperationalClass`'s own name, which
+    `_classes_for_pass` sets FROM the registry key), never `job_class.
+    job_type`, precisely so this lookup and the submission route can
+    differ for the campaign entry without either side guessing at the
+    other.
     """
-    if job_type not in _BY_JOB_TYPE:
+    if registry_key not in _BY_JOB_TYPE:
         raise ValueError(
-            f"job type {job_type!r} is not in the gatherer registry; "
+            f"job type {registry_key!r} is not in the gatherer registry; "
             f"registered types are {', '.join(sorted(_BY_JOB_TYPE))}")
-    _, gather_fn = _BY_JOB_TYPE[job_type]
+    _, gather_fn, _ = _BY_JOB_TYPE[registry_key]
 
     def gather():
         import database.modules.utils.rapid_db as rapid_db

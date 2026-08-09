@@ -76,7 +76,7 @@ import dataclasses
 import datetime
 import json
 import logging
-from typing import Any, Sequence
+from typing import Any, Protocol, Sequence
 
 from pipeline.intent.writer import (
     READY,
@@ -86,6 +86,7 @@ from pipeline.intent.writer import (
     WorkUnitWriter,
 )
 from pipeline.runtime.boundaries import ObjectStore
+from submission.manifest import ProcessingUnit
 from submission.routes import JOB_TYPE_SCIENCE
 
 logger = logging.getLogger("rapid.mock.transformer")
@@ -381,3 +382,227 @@ def create_mock_campaign(execute: Any, campaign_writer: CampaignWriter,
     logger.info("created mock campaign %s (id=%s) with %d generation(s)",
                campaign_name, campaign_id, len(schedule))
     return campaign_id
+
+
+# ---------------------------------------------------------------------------
+# create_mock_campaign_from_staged — the W2-FALLBACK entry point
+# (integration review, IR-13-a).
+# ---------------------------------------------------------------------------
+#
+# `create_mock_campaign` above is the schedule-to-generation path this
+# module's docstring describes: mission-schedule rows staged as reference
+# pointers under simulated∧pristine substrate identity, then one work unit
+# per generation. That path still needs `workflow_definitions` loaded (the
+# `RAISES, DOES NOT CATCH` note on `create_mock_campaign` documents exactly
+# this), and separately needs a `ScheduleRow` sequence somebody has to
+# construct.
+#
+# The W2 fallback is a SECOND, simpler substrate for exactly the same
+# work-unit shape: rather than staging NEW reference-pointer objects,
+# campaign work units are created directly FROM ALREADY-REGISTERED
+# simulation input rows — the L2Files/L2FileMeta rows a prior science-
+# pipeline run (or a bulk simulation load) has already written. Nothing is
+# staged and no `GenerationManifest` is written: the campaign's work units
+# point at real, already-registered rows from the first creation, so the
+# units this function yields are exactly the same shape
+# `submission.gathering.gather_science_units` would build from those rows
+# directly — "the yielded units are exactly science-shaped and the whole
+# downstream chain ... runs unmodified" (the supervisor ruling, quoted in
+# `submission.gathering.gather_campaign_units`'s own header).
+#
+# **THE V1 ROUTE RESTRICTION, ASSERTED HERE (creation time — the other half
+# of "assert at campaign creation and at gathering").** There is no
+# `job_type` PARAMETER on this function at all — every work unit it creates
+# is hardcoded to `submission.routes.JOB_TYPE_SCIENCE`, which is a stronger
+# guarantee than accept-and-validate: a caller cannot even ASK this
+# function for a non-science test campaign. `gather_campaign_units`'s own
+# gather-time re-assertion is what guards the OTHER path into a campaign
+# work unit (a hand-built `WorkUnitWriter.create_work_unit` call bypassing
+# this function entirely) — the two guards are independent by design, not
+# redundant, per the ruling's own parenthetical.
+class StagedInputSource(Protocol):
+    """The two `rapid_db.RAPIDDB` methods this function needs to enumerate
+    already-registered simulation rows and read each one's identity.
+
+    Deliberately a NARROWER protocol than `submission.gathering.
+    UnitSource` — this function does not gather a manifest's worth of
+    science facts (no reference lookup, no PSF, no filter name — those are
+    `science_facts`' job at GATHER time, not this function's job at
+    CREATE time), it only needs enough of each row's identity to build a
+    work unit and remember which L2 row backs it.
+    """
+
+    exit_code: int
+
+    def get_l2files_records_for_datetime_range(
+            self, start: Any, end: Any) -> Sequence[Any]: ...
+
+    def get_info_for_l2file(self, rid: int) -> Sequence[Any]: ...
+
+
+def create_mock_campaign_from_staged(
+        execute: Any, campaign_writer: CampaignWriter,
+        work_writer: WorkUnitWriter, handle: StagedInputSource,
+        campaign_name: str, *, start: datetime.datetime,
+        end: datetime.datetime, max_units: int,
+        scas: tuple[int, ...] | None = None,
+        exposure_ids: tuple[int, ...] | None = None,
+        definition_version: int = 1, definition: dict | None = None,
+        now: datetime.datetime | None = None) -> int:
+    """Create a test-class campaign directly from already-registered L2 rows.
+
+    The W2-fallback substrate (module section header above): enumerates
+    `handle.get_l2files_records_for_datetime_range(start, end)` — the same
+    query this repo already has for "every registered L2 row in a window",
+    used unmodified rather than adding a parallel query — optionally
+    narrowed to `scas`/`exposure_ids`, and creates one READY work unit per
+    surviving row, each carrying that row's `(rid, field, fid)` in its
+    creation-event detail under the SAME keys
+    (`source_rid`/`source_field`/`source_fid`)
+    `database.modules.utils.rapid_db.RAPIDDB.
+    get_campaign_unit_source_l2_identity` reads back — the campaign
+    gatherer's other half of this round trip.
+
+    `input_scope` is built via `submission.subjects.build_input_scope` —
+    THE SHARED GRAMMAR, not a second convention. Using the exact function
+    `pipeline.seams._input_scope_for` delegates to is what guarantees a
+    unit created here and the SAME unit later found by `pipeline.seams.
+    _attach_work_unit` (when the accumulator submits it) agree on identity
+    without either side re-deriving the other's string shape.
+
+    **Unit-count safety (the V-phase budget guard).** `max_units` is
+    REQUIRED, not optional with a large default: refuses outright (raises,
+    creates nothing) if the enumerated row count exceeds it, before any
+    campaign or work-unit row is written — a caller that wants a bigger
+    campaign must say so explicitly, exactly as the operator service's own
+    `--width`/`--max-width` pair refuses rather than clamps
+    (`pipeline.operator.service._bounded`'s own doctrine, reused here for
+    the same reason: a silent cap reads exactly like a complete run).
+
+    Parameters
+    ----------
+    handle : StagedInputSource
+        The narrow query surface (see that Protocol) — pass a
+        `database.modules.utils.checked.CheckedHandle`-wrapped
+        `RAPIDDB.borrowing(conn)` in production, a stub in tests.
+    start, end : datetime.datetime
+        The registration window to slice: "exposure ids or mjd window +
+        sca subset" (task brief) — this is the mjd-window half, expressed
+        as the same `dateobs` window `get_l2files_records_for_datetime_
+        range` already takes.
+    max_units : int
+        The budget guard. No default: a caller must state it.
+    scas : tuple of int, optional
+        Narrows the enumerated rows to these SCAs. None means every SCA
+        the window returns.
+    exposure_ids : tuple of int, optional
+        Narrows the enumerated rows to these exposures. None means every
+        exposure the window returns — the "exposure ids" half of the
+        slice spec, applied as a post-filter on the same window query
+        rather than a second query, since `get_l2files_records_for_
+        datetime_range` has no exposure-id parameter to push it into.
+
+    Returns
+    -------
+    int
+        The created campaign's `campaign_id`.
+
+    Raises
+    ------
+    ValueError
+        The enumerated unit count exceeds `max_units` (the budget guard).
+        There is no `job_type` argument to validate — see this section's
+        header for why the v1 route restriction is a hardcoded fact here,
+        not a checked one.
+    RuntimeError
+        An enumerated `rid` (from `get_l2files_records_for_datetime_range`)
+        has no matching row in `get_info_for_l2file`, or that row is
+        missing `expid`/`field` — either means the two queries disagree
+        about what "already-registered" means, which is a real defect in
+        the database, not an unready state.
+    """
+    from submission.routes import JOB_TYPE_SCIENCE
+    from submission.subjects import build_input_scope
+
+    moment = now or datetime.datetime.now(datetime.timezone.utc)
+
+    rows = handle.get_l2files_records_for_datetime_range(start, end)
+    candidates: list[tuple[int, int, int]] = []  # (rid, sca, fid)
+    for row in rows or ():
+        rid, sca = int(row[0]), int(row[1])
+        if scas is not None and sca not in scas:
+            continue
+        candidates.append((rid, sca, int(row[2])))
+
+    # exposure_ids narrows AFTER the window query (module docstring): no
+    # existing query takes both a window and an exposure-id list, and
+    # every candidate's info lookup below is needed regardless to recover
+    # `expid`/`field` — so the exposure filter is applied against that
+    # same lookup rather than issuing a second, narrower query first.
+    enumerated: list[tuple[int, int, int, int, int]] = []  # (rid, sca, fid, expid, field)
+    for rid, sca, fid in candidates:
+        info = handle.get_info_for_l2file(rid)
+        if info is None or len(info) < 4:
+            raise RuntimeError(
+                f"rid {rid} was enumerated by get_l2files_records_for_"
+                f"datetime_range but get_info_for_l2file returned no row; "
+                f"an already-registered row must be resolvable by both "
+                f"queries")
+        expid, field = _maybe_int(info[1]), _maybe_int(info[3])
+        if expid is None or field is None:
+            raise RuntimeError(
+                f"rid {rid} has no expid/field in L2Files; a campaign work "
+                f"unit cannot be built without both")
+        if exposure_ids is not None and expid not in exposure_ids:
+            continue
+        enumerated.append((rid, sca, fid, expid, field))
+
+    # THE BUDGET GUARD — refused, not clamped, and before any write.
+    if len(enumerated) > max_units:
+        raise ValueError(
+            f"campaign {campaign_name!r} would enumerate {len(enumerated)} "
+            f"work unit(s) from already-registered rows, exceeding the "
+            f"stated max_units={max_units}; refusing to create anything. "
+            f"Narrow the window, scas, or exposure_ids, or raise "
+            f"max_units explicitly.")
+
+    campaign_id = campaign_writer.create_campaign(
+        campaign_name, "test", definition=definition, now=moment)
+
+    for rid, sca, fid, expid, field in enumerated:
+        unit = ProcessingUnit(exposure=expid, sca=sca)
+        input_scope = build_input_scope(JOB_TYPE_SCIENCE, unit)
+        identity = WorkUnitIdentity(
+            job_type=JOB_TYPE_SCIENCE, input_scope=input_scope,
+            operational_class="test",
+            definition_version=definition_version)
+        work_writer.create_work_unit(
+            identity, writer=WRITER_VALIDATION_INGEST, state=READY,
+            campaign_id=campaign_id,
+            # THE ROUND TRIP: source_rid/source_field/source_fid, read back
+            # by database.modules.utils.rapid_db.RAPIDDB.
+            # get_campaign_unit_source_l2_identity via
+            # submission.gathering._campaign_unit_l2_identity — see both
+            # docstrings for why this is a detail-keyed carry rather than a
+            # reverse exposure/SCA -> rid query.
+            detail={"source_rid": rid, "source_field": field,
+                   "source_fid": fid},
+            now=moment)
+
+    logger.info(
+        "created mock campaign %s (id=%s) from %d already-registered L2 "
+        "row(s) [%s..%s]", campaign_name, campaign_id, len(enumerated),
+        start.isoformat(), end.isoformat())
+    return campaign_id
+
+
+def _maybe_int(value: Any) -> int | None:
+    """Same absent-not-sentinel helper `submission.gathering` defines.
+
+    Duplicated rather than imported: the two modules are siblings under
+    one convention (this repo's house rule for absent-vs-sentinel), not
+    one depending on the other's internals, matching `pipeline.intent.
+    writer`'s own stated reason for duplicating `_rowcount` rather than
+    importing it across module boundaries.
+    """
+    return None if value is None else int(value)

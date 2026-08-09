@@ -53,6 +53,7 @@ from .routes import (JOB_TYPE_ALERT_PRODUCTION, JOB_TYPE_CATALOG_LOAD,
                      JOB_TYPE_MERGE_DEDUP, JOB_TYPE_REFERENCE_IMAGE,
                      JOB_TYPE_SCIENCE, JOB_TYPE_SOURCE_CURRENCY,
                      JOB_TYPE_STATISTICS, ppid_for)
+from .subjects import SubjectError, parse_exposure_sca_scope
 from .submit import is_precondition_failed
 
 logger = logging.getLogger(__name__)
@@ -166,6 +167,23 @@ class UnitSource(Protocol):
                                       release_identity: str,
                                       attempt_id: int,
                                       pid: int | None = ...) -> bool: ...
+
+    # The campaign gatherer's one enumeration (IR-13-a): every READY
+    # work_unit of every ACTIVE test-class campaign, one joined query
+    # rather than "list active campaigns" then "list ready units per
+    # campaign" — a campaign has no scale problem this v1 needs to guard
+    # (mission-mock campaigns are staged by `create_mock_campaign_from_
+    # staged`'s own `max_units` guard), so the two-query round trip buys
+    # nothing a join does not already give in one.
+    def get_ready_test_campaign_units(self) -> Sequence[Any]: ...
+
+    # The campaign gatherer's second lookup: one work unit's source L2
+    # identity (rid, field, fid), recorded in that unit's creation detail
+    # by `create_mock_campaign_from_staged` — see
+    # `_campaign_unit_l2_identity`'s own docstring for why this is a
+    # detail-keyed read rather than a reverse exposure/SCA -> rid query.
+    def get_campaign_unit_source_l2_identity(
+            self, work_unit_id: int) -> Sequence[Any]: ...
 
 
 def _positions(values: Sequence[Any], ra_keys: Sequence[str],
@@ -417,6 +435,173 @@ def gather_science_units(handle: UnitSource, start, end,
             sca = _sca_of(handle, rid)
             yield ProcessingUnit(exposure=int(exposure), sca=int(sca),
                                  facts=facts)
+
+
+# ---------------------------------------------------------------------------
+# The campaign-unit gatherer (integration review, IR-13-a): lets a
+# test-class mission-mock campaign flow through the DEPLOYED operator /
+# accumulator / submission path, unmodified downstream of gathering.
+# ---------------------------------------------------------------------------
+#
+# **THE SUPERVISOR RULING THIS IMPLEMENTS**, quoted from the run ledger: "a
+# campaign-unit gatherer: a registry row under the test operational class
+# whose gathering enumerates ready test-class work_units of ACTIVE campaigns
+# and yields production-shaped ProcessingUnits under the campaign's declared
+# route." And the v1 restriction: "test campaigns declare the SCIENCE route
+# (assert at campaign creation and at gathering; a non-science test campaign
+# is refused loudly)."
+#
+# **THE W2-FALLBACK SUBSTRATE.** Campaign work units are created FROM
+# already-registered simulation input rows (the l2files/l2filemeta g0001
+# slice `pipeline.mock.transformer.create_mock_campaign_from_staged`
+# enumerates), so every unit this gatherer yields is exactly science-shaped
+# — same `UnitFacts`, same `science_facts` call, same reference-image
+# resolution — and the whole downstream chain (Batch science attempt,
+# reconciler, registration, catalog load, alert production) runs
+# unmodified. This gatherer's ONLY job is: find the ready campaign units,
+# recover their (exposure, sca) identity, and hand them to `science_facts`
+# exactly as `gather_science_units` does for an arrival-driven unit.
+#
+# **ROUTE RESTRICTION, ENFORCED HERE TOO.** `create_mock_campaign_from_
+# staged` asserts SCIENCE at campaign CREATION time (the other half of "at
+# campaign creation and at gathering"); this function re-asserts it at
+# GATHER time against the `job_type` the campaign's work units actually
+# carry, because a unit could in principle reach this gatherer's query
+# having been created by a path that did not go through that assertion —
+# refusing here is the second, independent guard the ruling's parenthetical
+# calls for, not a redundant one.
+def gather_campaign_units(handle: UnitSource) -> Iterator[ProcessingUnit]:
+    """Yield science-shaped units for every READY unit of every ACTIVE test
+    campaign.
+
+    One query (`get_ready_test_campaign_units`) enumerates every ready
+    work_unit belonging to an active, test-operational-class campaign —
+    "enumerates ready test-class work_units of ACTIVE campaigns" exactly.
+    Each row's `input_scope` is parsed back to `(exposure, sca)` via
+    `submission.subjects.parse_exposure_sca_scope` — the SAME grammar
+    `pipeline.seams._input_scope_for` (now `submission.subjects.
+    build_input_scope`) used to build it at creation time, so the unit this
+    function yields and the unit `pipeline.seams._attach_work_unit` later
+    FINDS (rather than re-creates) agree on identity by construction. See
+    that module's grammar section for why one shared helper, not two.
+
+    A unit whose backing L2 rows are missing (the campaign work unit cites
+    an (exposure, sca) that `science_facts` cannot resolve) RAISES rather
+    than being silently skipped — refusal, not skip, per the stub-blind-
+    testing rule this build follows: a campaign unit is a promise that its
+    backing rows exist (the mock transformer only ever creates units over
+    ALREADY-REGISTERED rows), and a promise the database cannot make good
+    on is a real defect, not an ordinary "not ready yet".
+
+    Yields `ProcessingUnit` built through the exact same `science_facts`
+    call `gather_science_units` makes for the same `(exposure, sca)` — so a
+    campaign unit and an arrival-driven unit over the same L2 row are
+    indistinguishable downstream of gathering. `unit.fields["job_type"]` is
+    NOT set here (unlike the post-DB gatherers): the campaign gatherer's
+    units are exposure/SCA-grain exactly like plain science units
+    (`submission.subjects.SUBJECTS`'s `JOB_TYPE_SCIENCE` row already
+    declares that grain), so `dedup_key`/`logical_job_key` need no extra
+    field to disambiguate them, and setting a redundant `fields["job_type"]`
+    here would be a second home for a fact the manifest's own `job_type`
+    already carries.
+    """
+    try:
+        rows = handle.get_ready_test_campaign_units()
+    except RapidDBCallFailed as exc:
+        raise GatheringError(
+            f"campaign-unit enumeration failed: {exc}") from exc
+
+    for row in rows or ():
+        # (work_unit_id, campaign_id, campaign_name, job_type, input_scope)
+        # — this query's column order (database.modules.utils.rapid_db.
+        # RAPIDDB.get_ready_test_campaign_units).
+        work_unit_id, campaign_id, campaign_name, job_type, input_scope = (
+            row[0], row[1], row[2], row[3], row[4])
+
+        # THE V1 ROUTE RESTRICTION, re-asserted at gather time (see this
+        # section's header): a test campaign whose work units do not carry
+        # job_type == science is refused loudly, never silently skipped —
+        # a non-science test campaign reaching this far is a defect in the
+        # creation-time assertion, and gathering must not paper over it.
+        if job_type != JOB_TYPE_SCIENCE:
+            raise GatheringError(
+                f"campaign {campaign_name!r} (id={campaign_id}) work unit "
+                f"{work_unit_id} declares job_type={job_type!r}, not "
+                f"{JOB_TYPE_SCIENCE!r}; v1 test campaigns are restricted to "
+                f"the science route and this must be refused, not "
+                f"gathered")
+
+        try:
+            exposure, sca = parse_exposure_sca_scope(input_scope)
+        except SubjectError as exc:
+            raise GatheringError(
+                f"campaign {campaign_name!r} (id={campaign_id}) work unit "
+                f"{work_unit_id} has an unparseable input_scope "
+                f"{input_scope!r}: {exc}") from exc
+
+        # THE REFUSAL: a campaign unit's backing L2 row must exist, because
+        # the mock transformer only ever creates campaign units over
+        # ALREADY-REGISTERED rows (create_mock_campaign_from_staged's own
+        # docstring). `science_facts` raises `GatheringError` on a missing
+        # L2FileMeta/L2Files row already (see that function) — not caught
+        # here, so it propagates as the loud refusal the ruling calls for
+        # rather than a skip. `field`/`fid` are read off the row itself
+        # (get_info_for_l2file's own return, inside science_facts) rather
+        # than re-derived here, matching gather_science_units's own call
+        # shape exactly.
+        rid, field, fid = _campaign_unit_l2_identity(
+            handle, exposure, sca, work_unit_id, campaign_name)
+        facts = science_facts(handle, rid, field, fid)
+
+        logger.info(
+            "campaign %s (id=%s): gathered work unit %s as %s/%s",
+            campaign_name, campaign_id, work_unit_id, exposure, sca)
+        yield ProcessingUnit(exposure=int(exposure), sca=int(sca),
+                             facts=facts)
+
+
+def _campaign_unit_l2_identity(handle: UnitSource, exposure: int, sca: int,
+                               work_unit_id: int, campaign_name: str
+                               ) -> tuple[int, int, int]:
+    """The (rid, field, fid) `science_facts` needs, for one campaign unit's
+    (exposure, sca).
+
+    Campaign work units carry no `rid` directly — `input_scope` names
+    `(exposure, sca)`, the SAME identity `gather_science_units` resolves
+    through the (field, filter) -> L2Files loop. Rather than a second,
+    parallel L2-row lookup keyed by exposure/SCA (a query this repo's
+    `rapid_db` does not currently offer, since nothing before this gatherer
+    needed to go from exposure/SCA back to `rid` — every existing caller
+    already had `rid` in hand from the (field, filter) loop), this reuses
+    `_sca_of`'s sibling read: `get_l2filemeta_record` is keyed by `rid`, not
+    exposure/SCA, so campaign units instead thread `rid` through
+    `unit_events.detail`/`work_units` at CREATE time — see
+    `pipeline.mock.transformer.create_mock_campaign_from_staged`, which
+    stores the source L2 row's `rid` in exactly the same `detail` shape
+    `create_mock_campaign` already uses for `generation_id`/`manifest_key`.
+
+    Raises
+    ------
+    GatheringError
+        No `rid`/`field`/`fid` was recorded for this campaign unit, or the
+        recorded `rid`'s L2FileMeta row is missing — either is a defect in
+        the campaign's own creation-time bookkeeping, not an unready state.
+    """
+    try:
+        detail = handle.get_campaign_unit_source_l2_identity(work_unit_id)
+    except RapidDBCallFailed as exc:
+        raise GatheringError(
+            f"campaign {campaign_name!r} work unit {work_unit_id}: could "
+            f"not read its source L2 identity: {exc}") from exc
+    if not detail or detail[0] is None:
+        raise GatheringError(
+            f"campaign {campaign_name!r} work unit {work_unit_id} "
+            f"({exposure}/{sca}) carries no source L2 rid in its creation "
+            f"detail; a campaign unit must be created from an already-"
+            f"registered L2 row (create_mock_campaign_from_staged) and "
+            f"this one was not, or its detail was not recorded")
+    rid, field, fid = (int(detail[0]), int(detail[1]), int(detail[2]))
+    return rid, field, fid
 
 
 # The CSV column order `generateReferenceImage` parses, taken from the deleted

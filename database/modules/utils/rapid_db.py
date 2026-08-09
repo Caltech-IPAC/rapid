@@ -4650,3 +4650,138 @@ class RAPIDDB:
 
         if self.exit_code == 0:
             self.conn.commit()           # Commit database transaction
+
+
+########################################################################################################
+
+    def get_ready_test_campaign_units(self):
+
+        '''
+        Every READY work_unit of every ACTIVE test-operational-class
+        campaign — the campaign gatherer's one enumeration (integration
+        review, IR-13-a).
+
+        "a campaign-unit gatherer: a registry row under the test
+        operational class whose gathering enumerates ready test-class
+        work_units of ACTIVE campaigns" (run ledger, quoted verbatim in
+        submission.gathering.gather_campaign_units, this query's one
+        caller). One joined query rather than "list active campaigns" then
+        "list ready units per campaign": migration 036 makes campaign->
+        unit a plain FK (work_units.campaign_id), so the join is a single
+        SELECT, and a mission-mock campaign has no scale problem this v1
+        needs two round trips to guard against (create_mock_campaign_from_
+        staged's own max_units guard bounds it at creation time already).
+
+        Returns (work_unit_id, campaign_id, campaign_name, job_type,
+        input_scope) — the exact column order
+        submission.gathering.gather_campaign_units unpacks positionally.
+        `job_type` is work_units.job_type, read here (not assumed science)
+        because gather_campaign_units re-asserts the v1 route restriction
+        itself rather than trusting this query to have filtered it —
+        "assert at campaign creation and at gathering", the ruling's own
+        double-guard.
+        '''
+
+        self.exit_code = 0
+
+        query = "select u.work_unit_id, u.campaign_id, c.campaign_name, " +\
+                "u.job_type, u.input_scope " +\
+                "from work_units u " +\
+                "join campaigns c on c.campaign_id = u.campaign_id " +\
+                "where c.state = 'active' " +\
+                "and c.operational_class = 'test' " +\
+                "and u.state = 'ready' " +\
+                "and u.superseded_by_unit_id is null " +\
+                "order by u.work_unit_id;"
+
+        print('query = {}'.format(query))
+
+        try:
+            self.cur.execute(query)
+
+            try:
+                records = []
+                nrecs = 0
+                for record in self.cur:
+                    records.append(record)
+                    nrecs += 1
+
+                print("nrecs =",nrecs)
+
+            except:
+                print("Nothing returned from database query; continuing...")
+
+        except (Exception, psycopg2.DatabaseError) as error:
+            print('*** Error getting ready test-campaign work units ({}); skipping...'.format(error))
+            self.exit_code = 67
+            return
+
+        return records
+
+
+########################################################################################################
+
+    def get_campaign_unit_source_l2_identity(self,work_unit_id):
+
+        '''
+        One campaign work unit's source L2 identity: (rid, field, fid),
+        recorded in that unit's CREATION unit_events row detail by
+        pipeline.mock.transformer.create_mock_campaign_from_staged.
+
+        WHY A DETAIL-KEYED READ, NOT A REVERSE EXPOSURE/SCA -> RID QUERY.
+        A campaign work unit's identity (work_units.input_scope) names
+        (exposure, sca) — the same identity gather_science_units resolves
+        through the (field, filter) -> L2Files loop, which always has
+        `rid` in hand before it ever needs exposure/SCA. Nothing before
+        the campaign gatherer needed to go the OTHER way (exposure/SCA
+        back to rid), so no such query previously existed; rather than add
+        one against L2Files (which is not itself unique on exposure/SCA
+        without also disambiguating on vbest/version — a second place to
+        get that logic right), the source rid is carried explicitly in the
+        creation event's jsonb detail, exactly as create_mock_campaign
+        already carries generation_id/manifest_key there for the schedule-
+        staging path (pipeline/mock/transformer.py).
+
+        Reads the unit's CREATION event specifically (from_state is null —
+        migration 036: "from_state NULL on the unit's first event
+        (creation)") rather than the most recent event, because detail is
+        per-event and only the creation event is where
+        create_mock_campaign_from_staged writes this fact; a later
+        transition's detail (if any) carries a different, unrelated
+        payload and reading "the latest row" would silently pick it up
+        instead once a unit has been transitioned.
+
+        Returns (rid, field, fid) as a single row, or a row of (None, None,
+        None) if no creation event or no such keys in its detail — the
+        caller (submission.gathering._campaign_unit_l2_identity) treats
+        either as "not recorded" and raises, since a campaign unit must
+        always have been created with this detail.
+        '''
+
+        self.exit_code = 0
+
+        query = "select (detail->>'source_rid')::int, " +\
+                "(detail->>'source_field')::int, " +\
+                "(detail->>'source_fid')::int " +\
+                "from unit_events " +\
+                "where work_unit_id = %s " +\
+                "and from_state is null " +\
+                "order by occurred_at " +\
+                "limit 1;"
+        params = (work_unit_id,)
+
+        print('query = {}, params = {}'.format(query, params))
+
+        try:
+            self.cur.execute(query, params)
+            record = self.cur.fetchone()
+
+        except (Exception, psycopg2.DatabaseError) as error:
+            print('*** Error getting source L2 identity for work unit {} ({}); skipping...'.format(work_unit_id,error))
+            self.exit_code = 67
+            return
+
+        if record is None:
+            return (None, None, None)
+
+        return record

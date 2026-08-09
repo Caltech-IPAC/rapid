@@ -192,28 +192,39 @@ def _classes_for_pass(operational_class):
 
     Co-design ruling 1: "the registry enumerates that class's job types for
     gathering" — the class axis (`to_run`, `pipeline.operator.inputs`) still
-    gates which of the four declared classes runs this pass; THIS is what a
+    gates which of the five declared classes runs this pass; THIS is what a
     running class fans out to. Reference construction fans out to its one
     job type exactly as before; prompt processing fans out to eight (science
     plus the six post-DB job types plus alert production) — the complete
-    operator-scheduled chain the ADOPTED operations text describes.
+    operator-scheduled chain the ADOPTED operations text describes; test
+    fans out to its one campaign-gathering entry (IR-13-a).
 
-    Returns `OperationalClass` instances, one per job type, built with
-    `dataclasses.replace` over the running class: every consumer downstream
-    (`Operator`, `LiveSubmitter`, `RehearsalSubmitter`, `build_submission_context`)
-    already reads only `.name`, `.job_type`, `.route` and
-    `.require_implemented()` — the exact `OperationalClass` contract — so a
-    per-job-type instance of that same frozen dataclass needs no new type.
-    `.name` becomes the job type string, which is what distinguishes one
-    job type's accumulator, logging and run-id prefix from another's within
-    one running class.
+    Returns `OperationalClass` instances, one per registered entry, built
+    with `dataclasses.replace` over the running class: every consumer
+    downstream (`Operator`, `LiveSubmitter`, `RehearsalSubmitter`,
+    `build_submission_context`) already reads only `.name`, `.job_type`,
+    `.route` and `.require_implemented()` — the exact `OperationalClass`
+    contract — so a per-entry instance of that same frozen dataclass needs
+    no new type. `.name` becomes the REGISTRY KEY (what distinguishes one
+    entry's accumulator, logging and run-id prefix from another's within
+    one running class — `gathering.job_types_for_class`'s own docstring),
+    while `.job_type` becomes `gathering.route_job_type_for(registry_key)`
+    — the two coincide for every class but `TEST` (see `pipeline.operator.
+    gathering`'s module header: the campaign entry's registry key is
+    deliberately distinct from the science route it submits under, so a
+    literal `JOB_TYPE_SCIENCE` key cannot collide with `PROMPT_PROCESSING`'s
+    own science row in the registry's `{job_type: ...}` dict). Decoupling
+    `.name` from `.job_type` here — rather than the pre-IR-13-a shape,
+    which set both to the same string — is exactly what lets `TEST` submit
+    under the science route while gathering under its own distinct key.
     """
     import dataclasses
 
-    from pipeline.operator.gathering import job_types_for_class
+    from pipeline.operator.gathering import (job_types_for_class,
+                                             route_job_type_for)
 
-    job_types = job_types_for_class(operational_class.name)
-    if not job_types:
+    registry_keys = job_types_for_class(operational_class.name)
+    if not registry_keys:
         # A declared, implemented class the registry has no job types for
         # would silently gather nothing every pass — refused here rather
         # than producing an operator that runs and does nothing.
@@ -221,11 +232,26 @@ def _classes_for_pass(operational_class):
             f"operational class {operational_class.name!r} is implemented "
             f"and asked to run, but the gatherer registry names no job "
             f"type for it (pipeline.operator.gathering.REGISTRY)")
-    return tuple(
-        operational_class if job_type == operational_class.job_type
-        else dataclasses.replace(operational_class, name=job_type,
-                                 job_type=job_type)
-        for job_type in job_types)
+    result = []
+    for registry_key in registry_keys:
+        route_job_type = route_job_type_for(registry_key)
+        # Reuse the ORIGINAL instance, unrebuilt, exactly when the fanned-
+        # out entry would be indistinguishable from it — both `.name` and
+        # `.job_type` unchanged. Compared against the running class's own
+        # `.job_type` (not `.name`): PROMPT_PROCESSING's `.name` is
+        # "prompt-processing" but its `.job_type` is already
+        # JOB_TYPE_SCIENCE, which IS the science registry row's key — "science
+        # IS the class's own job type" (test_gathering_registry.py's own
+        # comment) — so a class whose `.job_type` already equals its one
+        # matching registry key needs no `dataclasses.replace` at all.
+        if (registry_key == operational_class.job_type
+                and route_job_type == operational_class.job_type):
+            result.append(operational_class)
+        else:
+            result.append(dataclasses.replace(
+                operational_class, name=registry_key,
+                job_type=route_job_type))
+    return tuple(result)
 
 
 def run_forever(operators, poll_seconds, should_continue,
@@ -446,7 +472,14 @@ def main(argv=None):
         for operational_class in to_run:
             for position, job_class in enumerate(
                     _classes_for_pass(operational_class)):
-                gather = _gatherer(session, parameters, job_class.job_type,
+                # `job_class.name`, NOT `.job_type` (IR-13-a): the two
+                # coincide for every class but TEST, whose registry key
+                # (`.name`) differs on purpose from the route job type it
+                # submits under (`.job_type`) — see `_classes_for_pass`'s
+                # own docstring and `pipeline.operator.gathering`'s module
+                # header. `_gatherer` -> `gathering.gatherer_for` looks up
+                # by the REGISTRY KEY, which is `.name`.
+                gather = _gatherer(session, parameters, job_class.name,
                                    operator_input, endpoint)
                 if args.width is not None:
                     gather = _bounded(gather, args.width, args.max_width,
@@ -567,8 +600,8 @@ def _execute_factory(session, endpoint):
     return factory
 
 
-def _gatherer(session, parameters, job_type, operator_input, endpoint):
-    """The ready-work query for one JOB TYPE, bound to this invocation's window.
+def _gatherer(session, parameters, registry_key, operator_input, endpoint):
+    """The ready-work query for one REGISTRY KEY, bound to this invocation's window.
 
     Delegates to `pipeline.operator.gathering`, which carries the operator's
     own copies of `mjd_window` and `min_images_to_coadd`. Those used to be
@@ -576,15 +609,21 @@ def _gatherer(session, parameters, job_type, operator_input, endpoint):
     module ran the old operator's startup, which read this process's argv
     and exited 64 demanding STARTDATETIME. See that module's header.
 
-    Takes a job type rather than an operational class (co-design ruling 1):
-    `gathering.gatherer_for` is now a registry lookup keyed by job type, and
-    one operational class can register several job types (prompt processing
-    registers eight) — see `_operators_for_class` below, this call's caller.
+    Takes a registry key rather than an operational class (co-design ruling
+    1): `gathering.gatherer_for` is a registry lookup keyed by it, and one
+    operational class can register several entries (prompt processing
+    registers eight) — see `_classes_for_pass` above, this call's caller.
+    **Not necessarily the submitted route job type** (IR-13-a): for every
+    class but `TEST` the registry key and the route job type are the same
+    string; `TEST`'s campaign entry deliberately differs — see `pipeline.
+    operator.gathering`'s module header — so this parameter is always
+    `job_class.name`, never `job_class.job_type`, at this call's one call
+    site.
     """
     from pipeline.operator.gathering import gatherer_for
 
     return gatherer_for(
-        job_type, operator_input, parameters,
+        registry_key, operator_input, parameters,
         connection_factory=_gather_connection_factory(session, endpoint),
         s3_client=session.client("s3"))
 

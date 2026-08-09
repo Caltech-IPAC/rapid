@@ -17,9 +17,10 @@ import dataclasses
 import unittest
 
 from pipeline.operator import classes as opclasses
-from pipeline.operator.gathering import (REGISTRY, gatherer_for,
-                                         job_types_for_class,
-                                         processing_date_for)
+from pipeline.operator.gathering import (CAMPAIGN_GATHERING_KEY, REGISTRY,
+                                         gatherer_for, job_types_for_class,
+                                         processing_date_for,
+                                         route_job_type_for)
 from submission.routes import (JOB_TYPE_ALERT_PRODUCTION,
                                JOB_TYPE_CATALOG_LOAD, JOB_TYPE_CROSSMATCH,
                                JOB_TYPE_MERGE_CURRENCY, JOB_TYPE_MERGE_DEDUP,
@@ -33,14 +34,17 @@ class RegistryShapeTests(unittest.TestCase):
     def test_every_implemented_job_type_is_registered(self):
         # The nine job types `submission.routes.IMPLEMENTED_JOB_TYPES` names
         # minus post-process (co-design ruling 9: undecided disposition,
-        # deliberately out of this registry) are exactly what REGISTRY
-        # carries.
-        registered = {job_type for job_type, _, _ in REGISTRY}
+        # deliberately out of this registry), PLUS the campaign gatherer's
+        # own distinct registry key (IR-13-a — deliberately not a route job
+        # type at all, see pipeline.operator.gathering's module header) are
+        # exactly what REGISTRY carries. Each row is now a four-tuple
+        # (registry_key, class_name, gather, route_job_type).
+        registered = {registry_key for registry_key, _, _, _ in REGISTRY}
         self.assertEqual(registered, {
             JOB_TYPE_SCIENCE, JOB_TYPE_REFERENCE_IMAGE, JOB_TYPE_CATALOG_LOAD,
             JOB_TYPE_CROSSMATCH, JOB_TYPE_STATISTICS, JOB_TYPE_MERGE_CURRENCY,
             JOB_TYPE_SOURCE_CURRENCY, JOB_TYPE_MERGE_DEDUP,
-            JOB_TYPE_ALERT_PRODUCTION,
+            JOB_TYPE_ALERT_PRODUCTION, CAMPAIGN_GATHERING_KEY,
         })
 
     def test_reference_construction_keeps_its_one_job_type(self):
@@ -59,6 +63,23 @@ class RegistryShapeTests(unittest.TestCase):
                 JOB_TYPE_STATISTICS, JOB_TYPE_MERGE_CURRENCY,
                 JOB_TYPE_SOURCE_CURRENCY, JOB_TYPE_MERGE_DEDUP,
                 JOB_TYPE_ALERT_PRODUCTION))
+
+    def test_test_class_registers_the_campaign_gatherer(self):
+        # IR-13-a: TEST fans out to its one campaign-gathering entry, keyed
+        # distinctly from the science route it submits under.
+        self.assertEqual(job_types_for_class(opclasses.TEST),
+                         (CAMPAIGN_GATHERING_KEY,))
+
+    def test_campaign_key_routes_to_science_but_gathers_under_its_own_key(self):
+        # The registry-key/route-job-type split this build introduces: the
+        # campaign entry's registry key is NOT submission.routes.
+        # JOB_TYPE_SCIENCE (it would collide with PROMPT_PROCESSING's own
+        # science row in _BY_JOB_TYPE's dict), but it still submits under
+        # the science route.
+        self.assertNotEqual(CAMPAIGN_GATHERING_KEY, JOB_TYPE_SCIENCE)
+        self.assertEqual(route_job_type_for(CAMPAIGN_GATHERING_KEY),
+                         JOB_TYPE_SCIENCE)
+        self.assertEqual(route_job_type_for(JOB_TYPE_SCIENCE), JOB_TYPE_SCIENCE)
 
     def test_an_unregistered_job_type_is_refused_not_silently_skipped(self):
         with self.assertRaises(ValueError):
@@ -129,3 +150,30 @@ class ClassFanOutTests(unittest.TestCase):
         running = opclasses.class_for(opclasses.REFERENCE_CONSTRUCTION)
         expanded = _classes_for_pass(running)
         self.assertEqual(expanded, (running,))
+
+    def test_test_class_expands_to_the_campaign_entry_with_science_route(self):
+        # THE COLLISION-AVOIDANCE PROPERTY THIS BUILD ADDS (IR-13-a): TEST's
+        # fanned-out OperationalClass carries the CAMPAIGN registry key as
+        # its `.name` (so gathering looks up the campaign gatherer, not
+        # plain science) while `.job_type` is JOB_TYPE_SCIENCE (so it
+        # submits under the science route) — and it is NOT the same object
+        # as PROMPT_PROCESSING's own science fan-out entry, confirming two
+        # independent OperationalClass instances exist rather than one
+        # being silently reused for both.
+        from pipeline.operator.service import _classes_for_pass
+
+        test_running = opclasses.class_for(opclasses.TEST)
+        expanded = _classes_for_pass(test_running)
+
+        self.assertEqual(len(expanded), 1)
+        campaign_entry = expanded[0]
+        self.assertEqual(campaign_entry.name, CAMPAIGN_GATHERING_KEY)
+        self.assertEqual(campaign_entry.job_type, JOB_TYPE_SCIENCE)
+        self.assertEqual(campaign_entry.route.job_type, JOB_TYPE_SCIENCE)
+
+        science_running = opclasses.class_for(opclasses.PROMPT_PROCESSING)
+        science_expanded = _classes_for_pass(science_running)
+        science_entry = next(c for c in science_expanded
+                             if c.job_type == JOB_TYPE_SCIENCE)
+        self.assertIsNot(campaign_entry, science_entry)
+        self.assertNotEqual(campaign_entry.name, science_entry.name)

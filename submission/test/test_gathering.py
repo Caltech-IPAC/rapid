@@ -21,6 +21,7 @@ from submission import gathering
 from submission.gathering import (
     GatheringError,
     gather_alert_production_units,
+    gather_campaign_units,
     gather_catalog_load_units,
     gather_crossmatch_units,
     gather_merge_currency_units,
@@ -38,6 +39,7 @@ from submission.routes import (
     JOB_TYPE_CROSSMATCH,
     JOB_TYPE_MERGE_CURRENCY,
     JOB_TYPE_MERGE_DEDUP,
+    JOB_TYPE_REFERENCE_IMAGE,
     JOB_TYPE_SCIENCE,
     JOB_TYPE_SOURCE_CURRENCY,
     JOB_TYPE_STATISTICS,
@@ -1235,6 +1237,122 @@ class AlertProductionGatheringTests(unittest.TestCase):
 
         self.assertEqual(initialize_alert_watermark(source, "rel-1"), 1)
         self.assertEqual(initialize_alert_watermark(source, "rel-1"), 0)
+
+
+# ---------------------------------------------------------------------------
+# gather_campaign_units (IR-13-a): the campaign-unit gatherer.
+# ---------------------------------------------------------------------------
+
+class CampaignSource(StubSource):
+    """`StubSource` plus the campaign gatherer's two extra methods.
+
+    Reuses `StubSource`'s `meta`/`info` fixtures unchanged — a campaign
+    unit's `science_facts` call must resolve exactly like an arrival-driven
+    unit's, against the SAME kind of L2FileMeta/L2Files rows, which is the
+    whole point of the W2-fallback substrate (module docstring in
+    `submission.gathering`).
+    """
+
+    def __init__(self, campaign_rows=(), source_l2=None, failure=0,
+                **overrides):
+        super().__init__(**overrides)
+        self.campaign_rows = list(campaign_rows)
+        # work_unit_id -> (rid, field, fid)
+        self.source_l2 = dict(source_l2 or {})
+        self.failure = failure
+
+    def get_ready_test_campaign_units(self):
+        self.exit_code = self.failure
+        _refuse_if_failed(self, "get_ready_test_campaign_units")
+        return self.campaign_rows
+
+    def get_campaign_unit_source_l2_identity(self, work_unit_id):
+        self.exit_code = self.failure
+        _refuse_if_failed(self, "get_campaign_unit_source_l2_identity")
+        return self.source_l2.get(work_unit_id, (None, None, None))
+
+
+class GatherCampaignUnitsTests(unittest.TestCase):
+    """`gather_campaign_units`: campaign rows in, science-shaped units out."""
+
+    #: (work_unit_id, campaign_id, campaign_name, job_type, input_scope) —
+    #: the query's own column order. input_scope "5001/7" is exposure/SCA,
+    #: matching submission.subjects.build_input_scope's EXPOSURE_SCA
+    #: grammar for job_type=science.
+    ROW = (901, 42, "mock-day-1", JOB_TYPE_SCIENCE, "5001/7")
+
+    def _source(self, **kw):
+        kw.setdefault("campaign_rows", [self.ROW])
+        kw.setdefault("source_l2", {901: (101, 4678622, 8)})
+        return CampaignSource(**kw)
+
+    def test_one_unit_per_ready_campaign_row(self):
+        units = list(gather_campaign_units(self._source()))
+        self.assertEqual(len(units), 1)
+        self.assertEqual(units[0].exposure, 5001)
+        self.assertEqual(units[0].sca, 7)
+
+    def test_the_unit_is_science_shaped_like_an_arrival_driven_unit(self):
+        # Same science_facts call, same source rid — the campaign unit and
+        # gather_science_units's own unit for rid 101 must carry identical
+        # facts, proving the downstream chain runs unmodified.
+        campaign_units = list(gather_campaign_units(self._source()))
+        direct_facts = science_facts(StubSource(), 101, field=4678622, fid=8)
+
+        self.assertEqual(campaign_units[0].facts, direct_facts)
+
+    def test_no_ready_rows_yields_nothing(self):
+        self.assertEqual(
+            list(gather_campaign_units(self._source(campaign_rows=[]))), [])
+
+    def test_a_non_science_job_type_is_refused_not_skipped(self):
+        # THE V1 ROUTE RESTRICTION, re-asserted at gather time: a test
+        # campaign whose work unit does not declare job_type=science is a
+        # defect (the creation-time assertion should have refused it) and
+        # must raise loudly here, never be silently dropped.
+        bad_row = (901, 42, "mock-day-1", JOB_TYPE_REFERENCE_IMAGE, "5001/7")
+        with self.assertRaises(GatheringError) as caught:
+            list(gather_campaign_units(self._source(campaign_rows=[bad_row])))
+        self.assertIn("science", str(caught.exception))
+
+    def test_an_unparseable_input_scope_is_refused(self):
+        bad_row = (901, 42, "mock-day-1", JOB_TYPE_SCIENCE, "not-a-scope")
+        with self.assertRaises(GatheringError) as caught:
+            list(gather_campaign_units(self._source(campaign_rows=[bad_row])))
+        self.assertIn("901", str(caught.exception))
+
+    def test_a_missing_source_l2_identity_is_refused_not_skipped(self):
+        # "a campaign unit whose backing rows are missing raises loudly —
+        # refusal, not skip" (the supervisor ruling). No source_l2 entry for
+        # work_unit_id 901 means create_mock_campaign_from_staged's own
+        # bookkeeping is incomplete, which is a real defect.
+        source = self._source(source_l2={})
+        with self.assertRaises(GatheringError) as caught:
+            list(gather_campaign_units(source))
+        self.assertIn("901", str(caught.exception))
+
+    def test_a_missing_l2filemeta_row_for_the_recorded_rid_is_refused(self):
+        # The recorded rid (999) has no meta/info row in the stub — mirrors
+        # science_facts's own GatheringError for a dangling reference.
+        source = self._source(source_l2={901: (999, 4678622, 8)})
+        with self.assertRaises(GatheringError):
+            list(gather_campaign_units(source))
+
+    def test_a_failed_enumeration_query_raises(self):
+        source = self._source(failure=FAILURE_THRESHOLD)
+        with self.assertRaises(GatheringError):
+            list(gather_campaign_units(source))
+
+    def test_two_campaigns_each_gather_their_own_units(self):
+        row_a = (901, 42, "mock-day-1", JOB_TYPE_SCIENCE, "5001/7")
+        row_b = (902, 43, "mock-day-2", JOB_TYPE_SCIENCE, "5002/9")
+        source = self._source(
+            campaign_rows=[row_a, row_b],
+            source_l2={901: (101, 4678622, 8), 902: (102, 4678622, 8)})
+
+        units = list(gather_campaign_units(source))
+        self.assertEqual({(u.exposure, u.sca) for u in units},
+                         {(5001, 7), (5002, 9)})
 
 
 if __name__ == "__main__":

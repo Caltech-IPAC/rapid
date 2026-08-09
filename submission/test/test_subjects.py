@@ -29,7 +29,8 @@ from submission.routes import (JOB_TYPE_ALERT_PRODUCTION,
 from submission.subjects import (GRAIN_DATE_FIELD, GRAIN_DATE_SCA,
                                  GRAIN_EXPOSURE_SCA, GRAIN_FIELD,
                                  SubjectError, attempt_identity_fields,
-                                 is_product_producing, subject_for)
+                                 build_input_scope, is_product_producing,
+                                 parse_exposure_sca_scope, subject_for)
 
 
 class GrainDeclarationTests(unittest.TestCase):
@@ -136,3 +137,52 @@ class AttemptIdentityFieldTests(unittest.TestCase):
         self.assertEqual(identity["sca"], 1)
         self.assertNotIn("field", identity)
         self.assertNotIn("processing_date", identity)
+
+
+class InputScopeGrammarTests(unittest.TestCase):
+    """`build_input_scope`/`parse_exposure_sca_scope`: the ONE grammar
+    (IR-13-a) `pipeline.seams._input_scope_for` now delegates to, and the
+    campaign gatherer parses back.
+    """
+
+    def test_build_matches_the_delimited_shape_seams_used_to_hardcode(self):
+        unit = ProcessingUnit(exposure=90000, sca=7)
+        self.assertEqual(build_input_scope(JOB_TYPE_SCIENCE, unit),
+                         "90000/7")
+
+    def test_round_trip_recovers_the_original_exposure_and_sca(self):
+        unit = ProcessingUnit(exposure=90000, sca=7)
+        scope = build_input_scope(JOB_TYPE_SCIENCE, unit)
+        self.assertEqual(parse_exposure_sca_scope(scope), (90000, 7))
+
+    def test_round_trip_holds_for_reference_image_too(self):
+        # The other EXPOSURE_SCA-grain, product-producing job type — proof
+        # the grammar is grain-shaped, not science-specific.
+        unit = ProcessingUnit(exposure=12345, sca=3)
+        scope = build_input_scope(JOB_TYPE_REFERENCE_IMAGE, unit)
+        self.assertEqual(parse_exposure_sca_scope(scope), (12345, 3))
+
+    def test_a_malformed_scope_is_refused_not_coerced(self):
+        with self.assertRaises(SubjectError):
+            parse_exposure_sca_scope("90000/7/extra")
+
+    def test_a_non_integer_component_is_refused(self):
+        with self.assertRaises(SubjectError):
+            parse_exposure_sca_scope("90000/not-a-sca")
+
+    def test_a_single_component_scope_is_refused(self):
+        # Guards against accidentally parsing a FIELD-grain scope (a bare
+        # field id, no slash) as if it were exposure/SCA.
+        with self.assertRaises(SubjectError):
+            parse_exposure_sca_scope("101")
+
+    def test_seams_input_scope_for_agrees_with_build_input_scope(self):
+        # pipeline.seams._input_scope_for now DELEGATES to build_input_scope
+        # (IR-13-a) rather than duplicating the stringification — this
+        # proves the delegation actually happened, not just that both
+        # functions independently agree.
+        from pipeline.seams import _input_scope_for
+
+        unit = ProcessingUnit(exposure=90000, sca=7)
+        self.assertEqual(_input_scope_for(JOB_TYPE_SCIENCE, unit),
+                         build_input_scope(JOB_TYPE_SCIENCE, unit))

@@ -30,29 +30,37 @@ builds them — is what lets a later reader add a `backfill` (or `test`)
 string somewhere and have it mean whatever their code does, which is
 exactly what "nothing may claim their names meanwhile" forbids.
 
-**TEST IS DECLARED-NOT-IMPLEMENTED (v1 judgment call, integration review
-ruling 13) — precisely because of what it is NOT blocked on.** The
-schema exists and is live (migration 036 — `derived.operational_classes`
-already seeds a 'test' row per 028/036's own comment, rapid_systems'
-concern, not this module's); `pipeline.intent.writer` implements the
-full work-unit and campaign state machines against it; `pipeline.seams
-._precreate` attaches a `work_unit_id` to every new attempt including a
-campaign-scoped one. What blocks `test` from `implemented=True` is
-narrower and more precise than "not built": (1) `work_units.
-(job_type, definition_version)` FK-references `workflow_definitions`
-(migration 036), and NO job type — test-class or otherwise — has a
-loaded definition row anywhere in this repo (no caller of migration
-039's `derived.load_workflow_definition` exists), so creating ANY work
-unit fails its FK today, test-class units included; (2) unlike the other
-four classes, `test`'s `job_type` is not a fixed one-to-one mapping —
-"a test campaign declares its queue at campaign definition" — so
-`OperationalClass.route`'s current shape (`route_for(self.job_type)`,
-one job type per class) does not fit it at all; a test-class campaign's
-route is a property of the CAMPAIGN, not of the class, and this module
-has no per-campaign route resolution yet. `job_type=None` here therefore
-means the same thing it means for backfill/reprocessing: this class has
-no fixed route because choosing one per-campaign is exactly the
-undelivered part.
+**TEST IS NOW IMPLEMENTED (integration review ruling 13, build IR-13-a) —
+under a v1 restriction stated precisely, not "fully general".** The two
+blockers this module used to name are resolved differently, not both
+built out:
+
+Blocker 1 (no loaded `workflow_definitions` row) is an OPERATIONAL
+action, not code — the campaign-unit gatherer this build adds does not
+change that a work unit's `(job_type, definition_version)` FK-references
+`workflow_definitions` (migration 036), and no caller of migration 039's
+`derived.load_workflow_definition` exists yet anywhere in this repo. So
+`implemented=True` here is a claim about the CODE PATH, not a claim that
+a workflow_definitions row is loaded — a campaign whose definition row is
+missing still fails loudly at work-unit creation
+(`pipeline.intent.writer.WorkUnitWriter.create_work_unit`'s FK violation),
+which is the correct surface for an unmet operational precondition, not
+a reason to keep the class declared-not-implemented in code. See this
+build's report for the exact pre-campaign load step the V phase must run
+first.
+
+Blocker 2 (no per-campaign route resolution) is resolved by RESTRICTING
+rather than generalizing: "test campaigns declare the SCIENCE route" (the
+v1 restriction the supervisor ruling states, asserted at campaign
+creation in `pipeline.mock.transformer.create_mock_campaign_from_staged`
+and re-asserted at gathering in `submission.gathering.
+gather_campaign_units`). Because v1 test campaigns have exactly ONE
+legal route, `TEST.job_type` can simply BE `routes.JOB_TYPE_SCIENCE` —
+`OperationalClass.route`'s existing `route_for(self.job_type)` shape
+needs no change at all. A later ruling that lets a test campaign declare
+a different route per campaign is the one that would need a real
+per-campaign route resolution mechanism; this v1 does not, because it
+does not offer the choice.
 """
 
 import dataclasses
@@ -73,10 +81,10 @@ HISTORICAL_BACKFILL = "historical-backfill"
 #: Release reprocessing. Declared, not implemented.
 RELEASE_REPROCESSING = "release-reprocessing"
 
-#: Test: the mission-mock harness's campaigns. Declared, not implemented —
-#: see this module's docstring for exactly what blocks it (a live but
-#: never-loaded workflow_definitions FK, and a per-campaign rather than
-#: per-class route).
+#: Test: the mission-mock harness's campaigns. Implemented (IR-13-a) under
+#: the v1 restriction that a test campaign's route IS the science route —
+#: see this module's docstring for what changed and what a
+#: workflow_definitions load still requires operationally.
 TEST = "test"
 
 
@@ -91,7 +99,7 @@ class ClassNotImplemented(NotImplementedError):
 
 @dataclasses.dataclass(frozen=True)
 class OperationalClass:
-    """One of the four. Frozen for the same reason a `Route` is.
+    """One of the five. Frozen for the same reason a `Route` is.
 
     Attributes
     ----------
@@ -153,16 +161,12 @@ CLASSES: tuple[OperationalClass, ...] = (
                    "built yet"),
     OperationalClass(
         TEST,
-        job_type=None,
-        implemented=False,
-        blocked_on="no workflow_definitions row is loaded for any job "
-                   "type (migration 039's loader function has no caller "
-                   "anywhere in this repo), so creating any work unit — "
-                   "test-class included — fails its definition FK; and "
-                   "unlike the other four classes, test has no single "
-                   "fixed route to declare here (a test campaign declares "
-                   "its queue at campaign definition), so this class has "
-                   "no per-campaign route resolution yet either"),
+        # v1 restriction (IR-13-a): a test campaign's route IS the science
+        # route — not a per-campaign choice yet, so a single fixed
+        # job_type is exactly right, matching PROMPT_PROCESSING's own
+        # shape rather than needing a new mechanism.
+        job_type=routes.JOB_TYPE_SCIENCE,
+        implemented=True),
 )
 
 #: Every declared name, in declaration order.
@@ -172,7 +176,7 @@ _BY_NAME = {c.name: c for c in CLASSES}
 
 
 def class_for(name: str) -> OperationalClass:
-    """The declared class of this name, or raise naming the four.
+    """The declared class of this name, or raise naming the five.
 
     An unknown name is an error rather than a default: the set is closed
     by design, and quietly treating an unrecognised class as prompt

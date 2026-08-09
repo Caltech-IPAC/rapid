@@ -209,6 +209,97 @@ def is_product_producing(job_type: str) -> bool:
     return subject_for(job_type).product_producing
 
 
+# ---------------------------------------------------------------------------
+# THE input_scope GRAMMAR (integration review, IR-13-a). ONE shared
+# build/parse pair, not two grammars that could drift.
+# ---------------------------------------------------------------------------
+#
+# `pipeline.seams._input_scope_for` already computes `work_units.input_scope`
+# from a manifest unit at ATTACH time (drop the leading job_type element of
+# `subject_for(job_type).subject_for(unit)`, join the rest with "/" — see
+# that function's own v1-stringification docstring). The campaign gatherer
+# (IR-13-a) needs the INVERSE at GATHER time: given a test-class work unit's
+# stored `input_scope` string, recover the (exposure, sca) pair so it can
+# build the same science-shaped `ProcessingUnit` `gather_science_units`
+# would. And the mock transformer's W2-fallback campaign creator
+# (`pipeline.mock.transformer.create_mock_campaign_from_staged`) needs the
+# FORWARD direction at CREATE time, so a unit it creates and the unit
+# `_attach_work_unit` later finds are the SAME row — one grammar, read both
+# ways, or creation and attachment silently mint two different scope
+# strings for what is supposed to be one unit.
+#
+# `build_input_scope`/`parse_input_scope` below are that one grammar,
+# extracted from `pipeline.seams._input_scope_for` rather than duplicated:
+# that function is amended to call `build_input_scope` (see its own
+# docstring for the delegation), so there is exactly one place either
+# direction is written down.
+
+
+def build_input_scope(job_type: str, unit: Any) -> str:
+    """`work_units.input_scope` for one manifest unit — the FORWARD grammar.
+
+    `subject_for(job_type).subject_for(unit)` computes the declared-subject
+    tuple `(job_type, *values)`; this drops the leading `job_type` (the
+    `work_units.job_type` column already carries it — the partial unique
+    index is scoped by that column, so repeating it inside `input_scope`
+    would be redundant) and joins the rest with `/`, matching the delimited
+    shape `ProcessingUnit.key`/`logical_job_key` already use elsewhere
+    (`"run-1:science/90000/1"`) rather than a second serialization
+    convention for what is, in every declared grain, a short tuple of
+    ints/strings with no nesting.
+
+    Falls back to `(exposure, sca)` — the storage-path shape — for a job
+    type outside the typed-identity registry, consistent with
+    `attempt_identity_fields`'s and `ProcessingUnit.dedup_key`'s own
+    `UnknownJobType` fallback.
+    """
+    try:
+        subject = subject_for(job_type).subject_for(unit)
+    except UnknownJobType:
+        subject = (job_type, unit.exposure, unit.sca)
+    return "/".join(str(component) for component in subject[1:])
+
+
+def parse_exposure_sca_scope(input_scope: str) -> tuple[int, int]:
+    """The (exposure, sca) pair an EXPOSURE_SCA-grain `input_scope` names —
+    the REVERSE of `build_input_scope` for exactly the grain science and
+    reference-image (and the campaign gatherer's science-shaped units) use.
+
+    Only the exposure/SCA grain is invertible generically: `build_input_scope`
+    drops `job_type` and joins the remaining subject components positionally,
+    and for EXPOSURE_SCA those components are always exactly `(exposure,
+    sca)` in that order (`JobTypeSubject.subject_for`'s own branch: `(self.
+    job_type, int(unit.exposure), int(unit.sca))`) — so parsing back is
+    unambiguous. The other grains (date/SCA, date/field, field) are not
+    parsed here: nothing in this v1 needs to invert them, and a generic
+    inverse would have to know each grain's component NAMES, which only
+    `SUBJECTS`' declarations carry, not the string itself.
+
+    Raises
+    ------
+    SubjectError
+        `input_scope` is not exactly two `/`-delimited integer components —
+        a campaign work unit whose stored scope does not match the grammar
+        this same module writes is a real defect (a hand-inserted row, a
+        future grain reusing this v1's gatherer by mistake), not a value to
+        coerce or skip.
+    """
+    parts = input_scope.split("/")
+    if len(parts) != 2:
+        raise SubjectError(
+            f"input_scope {input_scope!r} is not an exposure/SCA scope "
+            f"(expected exactly two '/'-delimited components, got "
+            f"{len(parts)}); the campaign gatherer only reads exposure/SCA-"
+            f"grain test-campaign units")
+    try:
+        exposure, sca = (int(part) for part in parts)
+    except ValueError:
+        raise SubjectError(
+            f"input_scope {input_scope!r} does not parse as two integers "
+            f"(exposure, sca)") from None
+    return exposure, sca
+
+
 def attempt_identity_fields(job_type: str, unit: Any) -> dict[str, Any]:
     """The applicable `AttemptIdentity` fields for one unit of this job type.
 

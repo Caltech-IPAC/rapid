@@ -20,6 +20,7 @@ from pipeline.mock.transformer import (
     ScheduleRow,
     StagedSCA,
     create_mock_campaign,
+    create_mock_campaign_from_staged,
     generation_id_for,
     stage_generation,
     wall_time_to_mjd,
@@ -271,6 +272,146 @@ class CreateMockCampaignTests(unittest.TestCase):
         unit_inserts = [params for sql, params in self.execute.calls
                         if "INSERT INTO work_units" in sql]
         self.assertIn("ready", unit_inserts[0])
+
+
+class StagedRowSource:
+    """The two `StagedInputSource` methods, over a fixed row set.
+
+    `l2files` rows are `(rid, sca, fid)` — `get_l2files_records_for_
+    datetime_range`'s own column order (rid, sca, fid, mjdobs), truncated
+    to the three columns `create_mock_campaign_from_staged` actually reads.
+    `info` rows are keyed by rid: `(filename, expid, sca, field, ...)` —
+    `get_info_for_l2file`'s own order, truncated to what the function reads
+    (index 1 = expid, index 3 = field).
+    """
+
+    def __init__(self, l2files=(), info=None):
+        self.exit_code = 0
+        self.l2files = list(l2files)
+        self.info = dict(info or {})
+
+    def get_l2files_records_for_datetime_range(self, start, end):
+        return self.l2files
+
+    def get_info_for_l2file(self, rid):
+        return self.info.get(rid)
+
+
+class CreateMockCampaignFromStagedTests(unittest.TestCase):
+    """`create_mock_campaign_from_staged`: the W2-fallback entry point."""
+
+    def setUp(self):
+        self.execute = RecordingExecutor()
+        self.campaign_writer = CampaignWriter(self.execute)
+        self.work_writer = WorkUnitWriter(self.execute)
+        # Two already-registered rows: rid 101 (exposure 5001, sca 7, field
+        # 4678622, fid 8) and rid 102 (exposure 5002, sca 9, same field/fid).
+        self.source = StagedRowSource(
+            l2files=[(101, 7, 8), (102, 9, 8)],
+            info={
+                101: ("s3://in/exp1_sca7.fits", 5001, 7, 4678622),
+                102: ("s3://in/exp2_sca9.fits", 5002, 9, 4678622),
+            })
+
+    def _create(self, **kw):
+        kw.setdefault("start", utc(2027, 10, 1))
+        kw.setdefault("end", utc(2027, 10, 2))
+        kw.setdefault("max_units", 10)
+        return create_mock_campaign_from_staged(
+            self.execute, self.campaign_writer, self.work_writer,
+            self.source, "mock-day-1", **kw)
+
+    def test_creates_the_campaign_row_under_the_test_class(self):
+        self._create()
+        campaign_inserts = [(sql, params) for sql, params in self.execute.calls
+                            if "INSERT INTO campaigns" in sql]
+        self.assertEqual(1, len(campaign_inserts))
+        _, params = campaign_inserts[0]
+        self.assertIn("test", params)
+        self.assertIn("mock-day-1", params)
+
+    def test_one_work_unit_per_already_registered_row(self):
+        self._create()
+        unit_inserts = [(sql, params) for sql, params in self.execute.calls
+                        if "INSERT INTO work_units" in sql]
+        self.assertEqual(2, len(unit_inserts))
+
+    def test_no_staging_object_is_written(self):
+        # The W2 fallback moves no bytes and stages nothing — unlike
+        # create_mock_campaign, there is no store argument at all.
+        self.assertNotIn("store", create_mock_campaign_from_staged.__code__.co_varnames)
+
+    def test_input_scope_matches_the_shared_grammar(self):
+        # Grammar identity with build_input_scope/parse_exposure_sca_scope
+        # (submission.subjects) — the round trip the campaign gatherer
+        # depends on.
+        from submission.subjects import parse_exposure_sca_scope
+
+        self._create()
+        unit_inserts = [params for sql, params in self.execute.calls
+                        if "INSERT INTO work_units" in sql]
+        input_scopes = {params[1] for params in unit_inserts}
+        self.assertEqual(
+            {parse_exposure_sca_scope(scope) for scope in input_scopes},
+            {(5001, 7), (5002, 9)})
+
+    def test_work_units_are_created_ready(self):
+        self._create()
+        unit_inserts = [params for sql, params in self.execute.calls
+                        if "INSERT INTO work_units" in sql]
+        self.assertIn("ready", unit_inserts[0])
+
+    def test_the_source_l2_identity_is_recorded_in_the_creation_detail(self):
+        # THE ROUND TRIP: rid/field/fid must land in the creation event's
+        # detail under source_rid/source_field/source_fid — exactly the
+        # keys database.modules.utils.rapid_db.RAPIDDB.
+        # get_campaign_unit_source_l2_identity reads back.
+        self._create()
+        event_inserts = [params for sql, params in self.execute.calls
+                         if "INSERT INTO unit_events" in sql]
+        self.assertEqual(2, len(event_inserts))
+        details = [params[-1] for params in event_inserts]
+        self.assertIn({"source_rid": 101, "source_field": 4678622,
+                       "source_fid": 8}, details)
+        self.assertIn({"source_rid": 102, "source_field": 4678622,
+                       "source_fid": 8}, details)
+
+    def test_scas_narrows_the_enumerated_rows(self):
+        campaign_id = self._create(scas=(7,))
+        unit_inserts = [(sql, params) for sql, params in self.execute.calls
+                        if "INSERT INTO work_units" in sql]
+        self.assertEqual(1, len(unit_inserts))
+
+    def test_exposure_ids_narrows_the_enumerated_rows(self):
+        self._create(exposure_ids=(5002,))
+        unit_inserts = [(sql, params) for sql, params in self.execute.calls
+                        if "INSERT INTO work_units" in sql]
+        self.assertEqual(1, len(unit_inserts))
+
+    def test_max_units_refuses_rather_than_clamps(self):
+        # THE BUDGET GUARD: exceeding max_units raises and writes NOTHING —
+        # not a truncated campaign.
+        with self.assertRaises(ValueError) as caught:
+            self._create(max_units=1)
+        self.assertIn("max_units", str(caught.exception))
+        self.assertEqual([], self.execute.calls,
+                         "a refused campaign must write nothing at all")
+
+    def test_max_units_exactly_matching_the_count_is_allowed(self):
+        # The boundary: exactly max_units enumerated units is NOT a refusal
+        # (the guard is `>`, not `>=`).
+        self._create(max_units=2)
+        unit_inserts = [(sql, params) for sql, params in self.execute.calls
+                        if "INSERT INTO work_units" in sql]
+        self.assertEqual(2, len(unit_inserts))
+
+    def test_a_row_missing_from_get_info_for_l2file_is_a_runtime_error(self):
+        source = StagedRowSource(l2files=[(999, 7, 8)], info={})
+        with self.assertRaises(RuntimeError):
+            create_mock_campaign_from_staged(
+                self.execute, self.campaign_writer, self.work_writer,
+                source, "mock-day-1", start=utc(2027, 10, 1),
+                end=utc(2027, 10, 2), max_units=10)
 
 
 if __name__ == "__main__":

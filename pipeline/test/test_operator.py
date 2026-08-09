@@ -19,6 +19,7 @@ from pipeline.operator import registration as opregistration
 from pipeline.operator.operator import Operator, build_accumulator_cadence
 from pipeline.operator.submitters import LiveSubmitter, RehearsalSubmitter
 from submission.manifest import ProcessingUnit
+from submission.routes import JOB_TYPE_SCIENCE
 
 
 def unit(n):
@@ -300,23 +301,23 @@ class TestDeclaredClasses(unittest.TestCase):
              opclasses.HISTORICAL_BACKFILL, opclasses.RELEASE_REPROCESSING,
              opclasses.TEST})
 
-    def test_three_are_declared_not_implemented(self):
-        # 'test' joins backfill and reprocessing as declared-not-implemented
-        # — see opclasses.TEST's blocked_on for exactly why (a live but
-        # never-loaded workflow_definitions FK, and no per-campaign route
-        # resolution yet).
+    def test_two_are_declared_not_implemented(self):
+        # Amended (IR-13-a): 'test' is now IMPLEMENTED — the mission-mock
+        # campaign gatherer lands in this build, under the v1 restriction
+        # that a test campaign's route IS the science route (see
+        # opclasses.TEST's declaration and this module's own docstring).
+        # Only backfill and reprocessing remain declared-not-implemented.
         unimplemented = [c.name for c in opclasses.CLASSES
                          if not c.implemented]
         self.assertEqual(sorted(unimplemented),
                          sorted([opclasses.HISTORICAL_BACKFILL,
-                                 opclasses.RELEASE_REPROCESSING,
-                                 opclasses.TEST]))
+                                 opclasses.RELEASE_REPROCESSING]))
 
-    def test_running_test_class_raises_with_the_reason(self):
+    def test_test_class_is_implemented_and_routes_to_science(self):
         test_class = opclasses.class_for(opclasses.TEST)
-        with self.assertRaises(opclasses.ClassNotImplemented) as caught:
-            test_class.require_implemented()
-        self.assertIn("workflow_definitions", str(caught.exception))
+        self.assertTrue(test_class.implemented)
+        test_class.require_implemented()  # must not raise
+        self.assertEqual(test_class.route.job_type, JOB_TYPE_SCIENCE)
 
     def test_running_an_unimplemented_class_raises_with_the_reason(self):
         backfill = opclasses.class_for(opclasses.HISTORICAL_BACKFILL)

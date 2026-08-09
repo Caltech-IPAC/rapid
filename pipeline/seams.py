@@ -353,32 +353,25 @@ def _precreate(writer, manifest, run_id, binding, moment, execute=None):
 def _input_scope_for(job_type, unit):
     """The `work_units.input_scope` string for one manifest unit.
 
-    **v1 STRINGIFICATION DECISION**, stated here because the task brief
-    asked for it explicitly: `submission.subjects.subject_for(job_type)
-    .subject_for(unit)` already computes the declared-subject TUPLE this
-    unit's identity and dedup key derive from — `(job_type, *values)`. This
-    function drops the leading `job_type` element (work_units carries
-    job_type in its own column; repeating it inside `input_scope` would be
-    redundant with the very column the partial unique index already scopes
-    by) and joins the remaining values with `/`, matching the delimited
-    shape `ProcessingUnit.key`/`logical_job_key` already use elsewhere in
-    this file (`"run-1:science/90000/1"`) rather than introducing a second
-    serialization convention (e.g. `json.dumps`) for what is, in every
-    declared grain, a short tuple of ints/strings with no nesting.
-
-    Falls back to the same `(job_type, exposure, sca)` shape
-    `attempt_identity_fields` falls back to on `UnknownJobType` — a job
-    type outside the typed-identity registry gets the storage-path-shaped
-    scope every job type used before ruling 2, consistent with the
-    fallback already in `_precreate` above.
+    **DELEGATES to `submission.subjects.build_input_scope`** (IR-13-a),
+    which now owns the v1 stringification decision this function
+    originally made: drop the declared-subject tuple's leading `job_type`
+    element (work_units carries job_type in its own column) and join the
+    rest with `/`, matching the delimited shape `ProcessingUnit.key`/
+    `logical_job_key` already use elsewhere in this file
+    (`"run-1:science/90000/1"`). Moved to `submission.subjects` rather than
+    left here because the campaign gatherer (`submission.gathering.
+    gather_campaign_units`) and the mock transformer's W2-fallback creator
+    (`pipeline.mock.transformer.create_mock_campaign_from_staged`) both
+    need to PARSE this same grammar back to `(exposure, sca)` at gather
+    time, and a parser sharing a module with its own builder is what keeps
+    the two directions from drifting into two grammars — see
+    `submission.subjects.parse_exposure_sca_scope`. This wrapper survives
+    only so every existing caller in this file keeps its short local name.
     """
-    from submission.subjects import UnknownJobType, subject_for
+    from submission.subjects import build_input_scope
 
-    try:
-        subject = subject_for(job_type).subject_for(unit)
-    except UnknownJobType:
-        subject = (job_type, unit.exposure, unit.sca)
-    return "/".join(str(component) for component in subject[1:])
+    return build_input_scope(job_type, unit)
 
 
 def _attach_work_unit(execute, job_type, unit, attempt_id, moment):
