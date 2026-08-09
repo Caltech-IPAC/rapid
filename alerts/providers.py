@@ -157,8 +157,13 @@ class ObjectRecord:
     aid: int
     ra0: float
     dec0: float
-    stdevra: float
-    stdevdec: float
+    # stdevra/stdevdec are statistics' product (astroobjectsmeta_<field>)
+    # and map to the schema's NULLABLE raErr/decErr: None until statistics
+    # has run for the field. nsources maps to non-nullable nDiaSources and
+    # is never None — the provider falls back to the merges association
+    # count when the meta row is absent.
+    stdevra: float | None
+    stdevdec: float | None
     nsources: int
     first_mjd: float | None = None
     last_mjd: float | None = None
@@ -717,11 +722,41 @@ class AlertDataProvider:
             if not self._partition_exists(field):
                 continue  # those sids stay unassociated
             sids = [s.sid for s in sources if s.field == field]
+            # stdevra/stdevdec/nsources are STATISTICS' product and live on
+            # astroobjectsmeta_<field>, not astroobjects_<field> (found
+            # live, mission mock 2026-08-09: the first field whose
+            # partitions existed failed every alert attempt with "column
+            # a.stdevra does not exist"). Statistics runs after crossmatch,
+            # so the meta table can legitimately not exist yet — LEFT JOIN
+            # when it does, NULL stats when it does not: an object with no
+            # computed statistics is still an association.
+            meta_rows = self._query(
+                "SELECT to_regclass(%s) AS reg",
+                (f"astroobjectsmeta_{int(field)}",))
+            meta_exists = bool(meta_rows) and meta_rows[0]["reg"] is not None
+            # nsources maps to the schema's non-nullable nDiaSources; when
+            # the meta row is absent it falls back to the aid's association
+            # count in merges — the very thing statistics counts — while
+            # stdevra/stdevdec map to nullable raErr/decErr and stay NULL.
+            merge_count = (f"(SELECT count(*) FROM merges_{int(field)} m2 "
+                           f"WHERE m2.aid = a.aid)::int")
+            if meta_exists:
+                stats_select = (f"am.stdevra, am.stdevdec, "
+                                f"COALESCE(am.nsources, {merge_count}) "
+                                f"AS nsources")
+                stats_join = (f"LEFT JOIN astroobjectsmeta_{int(field)} am "
+                              f"ON am.aid = a.aid")
+            else:
+                stats_select = (f"NULL::float8 AS stdevra, "
+                                f"NULL::float8 AS stdevdec, "
+                                f"{merge_count} AS nsources")
+                stats_join = ""
             object_rows = self._query(f"""
                 SELECT m.sid, a.aid, a.ra0, a.dec0,
-                       a.stdevra, a.stdevdec, a.nsources
+                       {stats_select}
                 FROM merges_{int(field)} m
                 JOIN astroobjects_{int(field)} a ON m.aid = a.aid
+                {stats_join}
                 WHERE m.sid = ANY(%s)
             """, (sids,))
             for row in object_rows:
