@@ -26,9 +26,8 @@ Provenance and the derivation
 The operative artifact until 2026-08-06 was
 `roman_tessellation_nside512.db` (SQLite, sha256 `fc554b06…`), itself
 converted by Thoth in August 2024 from `romantessellation_nside512.fits`
-— see `database/schema/roman_tessellation_nside512.txt` in the pipeline
-repo for that conversion story, the decmin/decmax column swap, and the
-two pole-tile patches.
+— the conversion story, the decmin/decmax column swap, and the two
+pole-tile patches are recorded in git history for that conversion.
 
 The generation rule was recovered by inspection and proved by exhaustive
 row-identical comparison against that carried copy (`certify.py

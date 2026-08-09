@@ -21,9 +21,8 @@ DBNAME from the environment, as the operator's own registration path does.
 import sys
 
 from database.modules.utils import rapid_db
-from pipeline.operator.registrar import production_registrar
+from pipeline.operator.registrar import production_registrar, registration_callback
 from pipeline.seams import run_registration
-from pipeline.virtualPipelineOperator import registration_callback
 
 
 COUNTS = """

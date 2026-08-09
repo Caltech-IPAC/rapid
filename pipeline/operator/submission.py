@@ -10,8 +10,7 @@ NEW operator's argv and demanded the old operator's environment
 interface. `submission_env` and `production_registrar` (in
 `pipeline.operator.registrar`) are the monolith's only two functions the
 deployed service still calls, so they move to where importing them is
-safe. The monolith imports them back, so its own `__main__` phase logic
-is unchanged.
+safe. The monolith itself has since been retired (IR-2).
 
 Split from `production_registrar`: this module resolves what a
 submission binds to (queue, job definition, clients); `registrar` builds

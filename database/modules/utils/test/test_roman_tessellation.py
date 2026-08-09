@@ -79,8 +79,8 @@ class Constants(unittest.TestCase):
         self.assertEqual(total + 2, tess.NROWS)
 
     def test_pole_patch_values_match_the_2024_note(self):
-        # database/schema/roman_tessellation_nside512.txt records these as
-        # hand-applied repairs; the generator derives them from the rule.
+        # The 2024 conversion note recorded these as hand-applied repairs;
+        # the generator derives them from the rule.
         self.assertEqual(tess.CAP_BOUNDARY, 89.954315)
         self.assertEqual(tess.POLE_CDEC, 89.9771575)
 

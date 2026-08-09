@@ -20,9 +20,8 @@ environment interface this restructure exists to retire.
 That is exactly the coupling the service shape is supposed to break, so
 the helpers move here rather than being imported across it. They are
 small, self-contained, and their reasoning is preserved verbatim below.
-The legacy module keeps its own copies for the phase logic still running
-through it; these are the operator's, and the duplication ends when that
-module is retired.
+The legacy module has since been retired (IR-2); these are now the only
+copies.
 
 THE GATHERER REGISTRY (integration review 2026-08, composite ruling 1).
 `gatherer_for` used to be a two-branch class conditional — reference

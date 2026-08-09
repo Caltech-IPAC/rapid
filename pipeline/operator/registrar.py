@@ -98,3 +98,23 @@ def production_registrar(replay_pre_binding_roles=False):
                          fallback_roles=fallback_roles)
 
     return for_connection
+
+
+def registration_callback(factory, conn):
+    """The callback `run_registration` should be given on `conn`.
+
+    MOVED FROM `pipeline/virtualPipelineOperator.py` alongside
+    `production_registrar` (IR-2). A named seam rather than an inline
+    conditional at each call site: the dry-run factory is None and must
+    stay None (that is what makes `run_registration` pass `dry_run=True`),
+    while a production factory has to be bound to the pass's own
+    connection. Getting that wrong at any one call site reintroduces
+    round-4 finding #2 for that phase alone, which is precisely the kind
+    of defect that hides. `pipeline.operator.operator.Operator._register`
+    inlines the same conditional for the service's own pass; this named
+    form remains for callers outside that class, such as the role-binding
+    replay script.
+    """
+    if factory is None:
+        return None
+    return factory(conn)
