@@ -101,6 +101,12 @@ class StubSource:
             self, start, end, min_nframes, fid=None):
         return self.pairs.get(fid, [])
 
+    def get_blocking_exposure_scas_for_job_type(self, job_type, expids):
+        # The EXPOSURE_SCA resubmission gate (final convergence round):
+        # default empty — nothing blocks — so existing tests keep their
+        # semantics; gate tests override `blocking_exposure_scas`.
+        return getattr(self, "blocking_exposure_scas", [])
+
     def get_l2files_records_for_datetime_range_field_fid(
             self, start, end, field, fid):
         return self.l2files.get((field, fid), [])
@@ -298,6 +304,27 @@ class GatherScienceUnitsTests(unittest.TestCase):
             source, start="2026-01-01", end="2026-12-31",
             start_mjdobs=61600.0, end_mjdobs=61700.0,
             min_images_to_coadd=10, fids=[8]))
+        self.assertEqual(units, [])
+
+    def test_a_blocked_exposure_sca_is_not_regathered(self):
+        # THE RESUBMISSION GATE (final convergence round, 2026-08-09):
+        # science was the last state-blind enumeration — a fixed window
+        # re-yielded every unit each poll for the whole flight of its
+        # first attempt and forever after its success.
+        source = StubSource()
+        baseline = list(gather_science_units(
+            source, start="2026-01-01", end="2026-12-31",
+            start_mjdobs=61600.0, end_mjdobs=61700.0,
+            min_images_to_coadd=10, fids=[8]))
+        self.assertTrue(baseline)
+        source.blocking_exposure_scas = [
+            (u.exposure, u.sca) for u in baseline]
+
+        units = list(gather_science_units(
+            source, start="2026-01-01", end="2026-12-31",
+            start_mjdobs=61600.0, end_mjdobs=61700.0,
+            min_images_to_coadd=10, fids=[8]))
+
         self.assertEqual(units, [])
 
     def test_a_failing_pair_query_raises_rather_than_returning_empty(self):

@@ -164,6 +164,9 @@ class UnitSource(Protocol):
     def get_fields_with_blocking_attempt_for_job_type_since(
             self, job_type: str, since: Any) -> Sequence[Any]: ...
 
+    def get_blocking_exposure_scas_for_job_type(
+            self, job_type: str, expids: Sequence[int]) -> Sequence[Any]: ...
+
     # The alert-production trigger (step-4 co-design).
     def get_attempts_awaiting_alert_emission(
             self, release_identity: str,
@@ -428,6 +431,7 @@ def gather_science_units(handle: UnitSource, start, end,
     logger.info("gathering: %d (field, filter) pairs with >= %d frames",
                 len(pairs), min_images_to_coadd)
 
+    candidates: list[ProcessingUnit] = []
     for field, fid in pairs:
         rows = handle.get_l2files_records_for_datetime_range_field_fid(
             start, end, field, fid)
@@ -447,8 +451,30 @@ def gather_science_units(handle: UnitSource, start, end,
                     f"rid {rid} has no exposure id; a processing unit is "
                     "keyed by exposure/SCA and cannot be built without one")
             sca = _sca_of(handle, rid)
-            yield ProcessingUnit(exposure=int(exposure), sca=int(sca),
-                                 facts=facts)
+            candidates.append(ProcessingUnit(exposure=int(exposure),
+                                             sca=int(sca), facts=facts))
+
+    # THE RESUBMISSION GATE (final convergence round, 2026-08-09): the two
+    # EXPOSURE_SCA arrival-driven types were the last state-blind
+    # enumerations — a fixed window re-yielded every unit each poll for the
+    # whole flight of its first attempt and forever after success. Same
+    # predicate as every other gate: pending-or-success blocks, failure
+    # frees (retry is re-gathering). Scoped to the enumerated exposures.
+    if candidates:
+        job_type = (JOB_TYPE_REFERENCE_IMAGE if make_references
+                    else JOB_TYPE_SCIENCE)
+        try:
+            blocked_rows = handle.get_blocking_exposure_scas_for_job_type(
+                job_type, sorted({u.exposure for u in candidates}))
+        except RapidDBCallFailed as exc:
+            raise GatheringError(
+                f"blocking-attempt check failed for job type {job_type}: "
+                f"{exc}") from exc
+        blocked = {(int(r[0]), int(r[1])) for r in blocked_rows or ()}
+        for unit in candidates:
+            if (unit.exposure, unit.sca) in blocked:
+                continue
+            yield unit
 
 
 # ---------------------------------------------------------------------------

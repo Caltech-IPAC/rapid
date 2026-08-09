@@ -812,21 +812,39 @@ class AlertDataProvider:
                 return None
             return ObjectRecord.from_row(row, strict=True)
 
-        # Single-alert flow: query for just this sid.
+        # Single-alert flow: query for just this sid. Statistics live on
+        # astroobjectsmeta_<field>, never astroobjects_<field> — the same
+        # split the batch prefetch above handles (final convergence round,
+        # 2026-08-09: this path still selected `a.*` and strict
+        # ObjectRecord construction failed for every associated source).
         field = int(detection.field)
         if not self._partition_exists(field):
             return None  # no partition -> no association possible
+        meta_rows = self._query(
+            "SELECT to_regclass(%s) AS reg", (f"astroobjectsmeta_{field}",))
+        meta_exists = bool(meta_rows) and meta_rows[0]["reg"] is not None
+        merge_count = (f"(SELECT count(*) FROM merges_{field} m2 "
+                       f"WHERE m2.aid = a.aid)::int")
+        if meta_exists:
+            stats_select = (f"am.stdevra, am.stdevdec, "
+                            f"COALESCE(am.nsources, {merge_count}) "
+                            f"AS nsources")
+            stats_join = (f"LEFT JOIN astroobjectsmeta_{field} am "
+                          f"ON am.aid = a.aid")
+        else:
+            stats_select = (f"NULL::float8 AS stdevra, "
+                            f"NULL::float8 AS stdevdec, "
+                            f"{merge_count} AS nsources")
+            stats_join = ""
         rows = self._query(f"""
-            SELECT m.aid, a.*
+            SELECT m.aid, a.aid, a.ra0, a.dec0, {stats_select}
             FROM merges_{field} m
             JOIN astroobjects_{field} a ON m.aid = a.aid
+            {stats_join}
             WHERE m.sid = %s
         """, (detection.sid,))
         if not rows:
             return None  # unassociated detection -> alert has no diaObject
-        # from_row() keeps only the ObjectRecord columns. Available in the
-        # a.* row but currently unused: meanra/meandec (mean position),
-        # flux0/meanflux/stdevflux, hp6/hp9.
         return ObjectRecord.from_row(rows[0], strict=True)
 
     def get_prv_detections(self, detection: Source, obj: ObjectRecord,

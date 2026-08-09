@@ -202,12 +202,27 @@ def download_psf_catalogs(context) -> None:
             target = context.scratch(f"attempt{attempt_id}_{name}")
             try:
                 context.s3.download_file(bucket, key, target)
-            except Exception:  # noqa: BLE001 - absence is a normal outcome
-                # An attempt that produced no catalogue for this SCA
-                # contributes nothing. Logged, not raised: the unit's effect
-                # count is what reports how much it actually loaded.
-                context.logger.info("no catalogue at s3://%s/%s", bucket, key)
-                continue
+            except Exception as exc:  # noqa: BLE001 - triaged below
+                # ONLY GENUINE ABSENCE IS A NORMAL OUTCOME (final
+                # convergence round, 2026-08-09): this used to swallow
+                # EVERY exception as "no catalogue", so an authorization,
+                # credential, connectivity, or throttling failure produced
+                # a successful zero-row load — and under the resubmission
+                # gate that success permanently blocked re-gathering,
+                # making an incomplete sources table silently
+                # authoritative. A 404/NoSuchKey means the attempt
+                # produced no catalogue and contributes nothing; anything
+                # else is a real read failure and fails the attempt, which
+                # frees the subject for retry.
+                code = str(getattr(exc, "response", {}).get(
+                    "Error", {}).get("Code", ""))
+                if code in ("404", "NoSuchKey", "NotFound"):
+                    context.logger.info("no catalogue at s3://%s/%s",
+                                        bucket, key)
+                    continue
+                raise InputError(
+                    f"could not read catalogue s3://{bucket}/{key}: "
+                    f"{exc}") from exc
             if is_catalogue:
                 # THE FILE→PRODUCT PAIRING IS THE PAYLOAD (mission mock,
                 # live 2026-08-09): each catalogue's source rows carry ITS

@@ -3325,6 +3325,49 @@ class RAPIDDB:
 
 ########################################################################################################
 
+    def get_blocking_exposure_scas_for_job_type(self,job_type,expids):
+
+        '''
+        (exposure_id, sca) pairs among the given exposures with an attempt
+        of the given job type that is pending or succeeded — the
+        EXPOSURE_SCA-grain resubmission-gate exclusion set (final Codex
+        convergence round, 2026-08-09: science and reference-image
+        gathering were the last state-blind enumerations; same blocking
+        predicate as the other gates, failed attempts free the subject).
+        Scoped to the caller's enumerated exposures so the query never
+        scans the whole attempts corpus.
+        '''
+
+        self.exit_code = 0
+
+        query = "select distinct la.exposure_id, la.sca from Attempts la " +\
+                "join logical_jobs lj on lj.logical_job_id = la.logical_job_id " +\
+                "where lj.job_type = %s " +\
+                "and la.exposure_id = any(%s) " +\
+                "and la.sca is not null " +\
+                "and (la.lifecycle_state in ('submitted','started') " +\
+                "     or la.rapid_outcome = 'success') " +\
+                "order by la.exposure_id, la.sca;"
+
+        params = (job_type, list(expids))
+
+        print('query = {}, params = {}'.format(query, params))
+
+        try:
+            self.cur.execute(query, params)
+            records = [record for record in self.cur]
+            print("nrecs =",len(records))
+
+        except (Exception, psycopg2.DatabaseError) as error:
+            print('*** Error getting blocking {} exposure/SCAs: {}; skipping...'.format(job_type,error))
+            self.exit_code = 67
+            return
+
+        return records
+
+
+########################################################################################################
+
     def get_fields_with_blocking_attempt_for_job_type_since(self,job_type,since):
 
         '''
