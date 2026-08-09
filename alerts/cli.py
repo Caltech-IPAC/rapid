@@ -34,14 +34,9 @@ else:
 from database.modules.utils.rapid_db import RAPIDDB
 
 
-def make_provider(diff_flavor: str = "sfft") -> AlertDataProvider:
+def make_provider() -> AlertDataProvider:
     """Connect to the RAPID operations database and wrap it in a provider.
     (see providers.py)
-
-    Parameters
-    ----------
-    diff_flavor : {"sfft", "zogy"}, optional
-        Which differencing algorithm's image feeds ``cutoutDifference``.
 
     Returns
     -------
@@ -67,7 +62,7 @@ def make_provider(diff_flavor: str = "sfft") -> AlertDataProvider:
             "available via RAPID_DB_SECRET_ID (or DBUSER/DBPASS as a "
             "fallback), and that this machine can reach the DB (VPN up / "
             "EC2 security group allows it)")
-    return AlertDataProvider(db, diff_flavor=diff_flavor)
+    return AlertDataProvider(db)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -109,10 +104,6 @@ def main(argv: list[str] | None = None) -> int:
                         help="store --save archives uncompressed; by "
                              "default they are deflate-compressed, the "
                              "MAST delivery format")
-    parser.add_argument("--diff-flavor", choices=["sfft", "zogy"],
-                        default="sfft",
-                        help="which differencing algorithm's image feeds "
-                             "cutoutDifference (default: %(default)s)")
     parser.add_argument("--log-level", default="WARNING",
                         choices=["DEBUG", "INFO", "WARNING", "ERROR"],
                         help="diagnostic verbosity on stderr; quiet by "
@@ -133,7 +124,7 @@ def main(argv: list[str] | None = None) -> int:
                      "--exposure with --sca")
 
     # Make provider
-    provider = make_provider(diff_flavor=args.diff_flavor)
+    provider = make_provider()
 
     # Make producer, if kafka arg is True. kafka-python with Glue framing
     # under MSK IAM auth (decisions.md § Pipeline Kafka client); the

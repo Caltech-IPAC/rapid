@@ -28,7 +28,7 @@ Data flow (DB table / job-dir file -> record -> schema record)::
 Examples
 --------
 >>> from alerts.providers import AlertDataProvider
->>> provider = AlertDataProvider(db, diff_flavor="sfft")
+>>> provider = AlertDataProvider(db)
 >>> source = provider.get_detection(sid)
 >>> cutouts = provider.get_cutouts(source)
 
@@ -40,8 +40,6 @@ STAMP_HALF_WIDTH : int
     Half the cutout stamp side; stamps are ``2 * STAMP_HALF_WIDTH + 1`` px.
 STAMP_FILL_VALUE : float
     Value for stamp pixels that fall outside the chip (edge clips).
-DIFF_FLAVORS : dict
-    Differencing algorithm ("sfft" / "zogy") -> difference-image basename.
 CUTOUT_FILES : dict
     Cutout kind ("sci" / "ref") -> co-gridded product basename in the job dir.
 WCS_CARD_PREFIXES : tuple of str
@@ -259,13 +257,21 @@ STAMP_FILL_VALUE = 0.0
 # The three cutout images all come from the difference image's pipeline job
 # directory and share one pixel grid (the template is the mosaic already
 # resampled and gain-matched onto the science grid), so a source's fitted
-# pixel position is valid in all of them. The job runs both differencing
-# algorithms; which one feeds cutoutDifference is the provider's
-# diff_flavor argument.
-DIFF_FLAVORS = {
-    "sfft": "sfftdiffimage_masked.fits",
-    "zogy": "zogy_diffimage_masked.fits",
-}
+# pixel position is valid in all of them.
+#
+# WHICH difference image feeds cutoutDifference is no longer a caller's
+# choice. The job runs several differencing algorithms and the release binds
+# exactly one of them to the difference-image role; that is the one that
+# registered, so `diffimages.filename` already names it. Cutting stamps from
+# a different algorithm's image than the row describes would make an alert's
+# cutout and its measurements come from two different difference images.
+#
+# This is the ruling's third gate: no consumer carries an algorithm literal
+# (decisions.md § Difference-image product vocabulary). The role is resolved
+# through the registered filename rather than through release content
+# directly, because the alert layer reads the database and an archived alert
+# must keep pointing at the image its row was built from even after a later
+# release rebinds the role.
 CUTOUT_FILES = {
     "sci": "bkg_subbed_science_image.fits",
     "ref": "awaicgen_output_mosaic_image_resampled_gainmatched.fits",
@@ -486,25 +492,21 @@ class AlertDataProvider:
         get_* calls below answer from that prefetch instead of querying
     """
 
-    def __init__(self, db: Any, diff_flavor: str = "sfft") -> None:
+    def __init__(self, db: Any) -> None:
         """
         Parameters
         ----------
         db : database.modules.utils.rapid_db.RAPIDDB
             The database connection (anything exposing ``.conn.cursor()``).
-        diff_flavor : {"sfft", "zogy"}, optional
-            Which differencing algorithm is used.
 
-        Raises
-        ------
-        ValueError
-            If `diff_flavor` is not a known flavor.
+        Notes
+        -----
+        There is no differencing-algorithm argument. The release binds the
+        difference-image role to one product, that product is what
+        registered, and `diffimages.filename` names it — so the cutouts
+        follow the row rather than a caller's opinion.
         """
-        if diff_flavor not in DIFF_FLAVORS:
-            raise ValueError(f"diff_flavor must be one of "
-                             f"{sorted(DIFF_FLAVORS)}, not {diff_flavor!r}")
         self.db = db
-        self.diff_flavor = diff_flavor
         # Per-chip prefetch state, filled by iter_sources(pid). While the
         # current chip matches source.pid, get_object_for_source() and
         # get_prv_detections() answer from these dicts.
@@ -931,13 +933,26 @@ class AlertDataProvider:
             logger.warning("Could not stage %s", url, exc_info=True)
             return None
 
+    def registered_difference_image(self, pid: int) -> str | None:
+        """The basename of the difference image registered for this chip.
+
+        The provider's answer to "which difference image am I cutting
+        from" — for run identity in reports and benchmarks, which must
+        name what was actually read rather than what a caller asked for.
+        ``None`` when the chip has no registered difference image.
+        """
+        rows = self._query(
+            "SELECT filename FROM diffimages WHERE pid = %s", (pid,))
+        return os.path.basename(rows[0]["filename"]) if rows else None
+
     def _chip_images(self, pid: int) -> dict[str, LoadedImage]:
         """Load (and cache) the chip's three full cutout-source images.
 
-        diffimages.filename locates the job directory; the three cutout
-        images are the co-gridded products in it (the DB's own diff
-        filename is replaced by the diff_flavor one). Staged and loaded
-        on first use, held until a different chip is asked for.
+        diffimages.filename IS the difference image — the one the release
+        bound to the difference-image role and registration recorded — and
+        it also locates the job directory holding the two co-gridded
+        companions. Staged and loaded on first use, held until a different
+        chip is asked for.
 
         Parameters
         ----------
@@ -958,8 +973,11 @@ class AlertDataProvider:
         rows = self._query(
             "SELECT filename FROM diffimages WHERE pid = %s", (pid,))
         if rows:
-            job_dir = os.path.dirname(rows[0]["filename"])
-            names = {"diff": DIFF_FLAVORS[self.diff_flavor],
+            registered = rows[0]["filename"]
+            job_dir = os.path.dirname(registered)
+            # The registered difference image itself — the role-bound one —
+            # not a basename substituted for it.
+            names = {"diff": os.path.basename(registered),
                      "sci": CUTOUT_FILES["sci"], "ref": CUTOUT_FILES["ref"]}
             self._images = {
                 key: load_fits_image(self._stage(f"{job_dir}/{name}"))

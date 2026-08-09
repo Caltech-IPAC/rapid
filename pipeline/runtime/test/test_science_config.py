@@ -30,9 +30,11 @@ MINIMAL = """
 [release]
 schema_version = 1
 
+[product_roles]
+difference_image = "sfft_diffimage"
+
 [science]
 min_images_to_coadd = 3
-diff_flavor = "sfft"
 
 [sfft]
 run_sfft = true
@@ -77,7 +79,8 @@ class LoadTests(unittest.TestCase):
         self.assertIsInstance(content["science"]["min_images_to_coadd"], int)
         self.assertIsInstance(content["sfft"]["run_sfft"], bool)
         self.assertIs(content["sfft"]["crossconv_flag"], False)
-        self.assertIsInstance(content["science"]["diff_flavor"], str)
+        self.assertIsInstance(
+            content["product_roles"]["difference_image"], str)
 
     def test_missing_file_is_a_config_error(self):
         with self.assertRaises(ConfigError) as caught:
@@ -144,8 +147,9 @@ class AccessorTests(unittest.TestCase):
 
     def test_value_reads_through(self):
         self.assertEqual(
-            science_config.value(self.content, "science", "diff_flavor"),
-            "sfft")
+            science_config.value(self.content, "product_roles",
+                                 "difference_image"),
+            "sfft_diffimage")
 
     def test_missing_key_is_a_config_error_with_no_default_parameter(self):
         with self.assertRaises(ConfigError) as caught:
@@ -153,6 +157,70 @@ class AccessorTests(unittest.TestCase):
         self.assertIn("release fault", str(caught.exception))
         # There is no default= parameter to reach for, by design.
         self.assertNotIn("default", science_config.value.__code__.co_varnames)
+
+
+class ProductRoleTests(unittest.TestCase):
+    """The role binding — the one knob every difference-image consumer turns."""
+
+    def setUp(self):
+        self.content = science_config.load(path=write_config(MINIMAL))
+
+    def test_the_role_resolves_to_the_bound_product(self):
+        self.assertEqual(
+            science_config.product_role(self.content,
+                                        science_config.DIFFERENCE_IMAGE_ROLE),
+            "sfft_diffimage")
+
+    def test_the_shipped_release_binds_the_difference_image_role(self):
+        # The live release content, not a fixture: a release that ships
+        # without the binding refuses every science registration.
+        content = science_config.load(path=SCIENCE_TOML)
+        bound = science_config.product_role(
+            content, science_config.DIFFERENCE_IMAGE_ROLE)
+        self.assertTrue(bound.endswith("_diffimage"), bound)
+
+    def test_an_unbound_role_refuses_rather_than_defaulting(self):
+        with self.assertRaises(ConfigError):
+            science_config.product_role(self.content, "psf_catalog")
+
+    def test_a_release_with_no_roles_section_refuses(self):
+        content = science_config.load(path=write_config("""
+[release]
+schema_version = 1
+
+[science]
+min_images_to_coadd = 3
+"""))
+        with self.assertRaises(ConfigError):
+            science_config.product_role(content,
+                                        science_config.DIFFERENCE_IMAGE_ROLE)
+
+    def test_a_role_bound_to_a_non_product_refuses(self):
+        content = science_config.load(path=write_config("""
+[release]
+schema_version = 1
+
+[product_roles]
+difference_image = ""
+"""))
+        with self.assertRaises(ConfigError) as caught:
+            science_config.product_role(content,
+                                        science_config.DIFFERENCE_IMAGE_ROLE)
+        self.assertIn("exactly one published product",
+                      str(caught.exception))
+
+    def test_roles_are_recorded_whole_for_the_attempt_record(self):
+        self.assertEqual(science_config.product_roles(self.content),
+                         {"difference_image": "sfft_diffimage"})
+
+    def test_the_release_carries_no_second_differencing_knob(self):
+        # THE ANTI-LITERAL GUARD, half one: the ruling's second gate is
+        # "one knob, never two". `[science] diff_flavor` used to answer the
+        # same question the role now answers, and a release carrying both
+        # could send the alert cutouts and the registration to different
+        # difference images without either looking wrong on its own.
+        content = science_config.load(path=SCIENCE_TOML)
+        self.assertNotIn("diff_flavor", content["science"])
 
 
 class AuxiliaryIdentityTests(unittest.TestCase):
@@ -187,7 +255,8 @@ class ShippedConfigurationTests(unittest.TestCase):
         content = science_config.load(path=SCIENCE_TOML)
         self.assertIsInstance(content["science"]["min_images_to_coadd"], int)
         self.assertGreater(content["science"]["min_images_to_coadd"], 0)
-        self.assertEqual(content["science"]["diff_flavor"], "sfft")
+        self.assertEqual(content["product_roles"]["difference_image"],
+                         "sfft_diffimage")
 
     def test_no_placeholder_sentinels_survived_the_extraction(self):
         # A carried "fill_in_by_launch_script" would be a landmine: a
@@ -288,9 +357,10 @@ class TemporalTypeRefusalTests(unittest.TestCase):
 
     def test_load_with_digest_returns_an_independent_copy(self):
         first, digest_one = science_config.load_with_digest(path=SCIENCE_TOML)
-        first["science"]["diff_flavor"] = "mutated"
+        first["product_roles"]["difference_image"] = "mutated"
         second, digest_two = science_config.load_with_digest(path=SCIENCE_TOML)
-        self.assertEqual(second["science"]["diff_flavor"], "sfft")
+        self.assertEqual(second["product_roles"]["difference_image"],
+                         "sfft_diffimage")
         self.assertEqual(digest_one, digest_two)
 
 
@@ -315,13 +385,16 @@ class RoundTripAgainstTheMasterIniTests(unittest.TestCase):
         self.assertTrue(self.ini.sections())
 
     def test_every_extracted_value_equals_the_ini(self):
-        # `release`, `science` and `tessellation` are authored, not
-        # extracted: the first is new, the second was relocated from SSM
-        # rather than from the .ini, and the third (W7) pins the sky
+        # `release`, `science`, `tessellation` and `product_roles` are
+        # authored, not extracted: the first is new, the second was relocated
+        # from SSM rather than from the .ini, the third (W7) pins the sky
         # tessellation version, which the .ini never carried at all — the
         # tessellation was identified only by the SQLite file baked into
-        # the image. Everything else must round-trip exactly.
-        authored = {"release", "science", "tessellation"}
+        # the image — and the fourth binds product roles, a contract the
+        # monolith had no notion of (it named algorithms directly, which is
+        # the defect the binding removes). Everything else must round-trip
+        # exactly.
+        authored = {"release", "science", "tessellation", "product_roles"}
         # ONE DELIBERATE DIVERGENCE, recorded rather than waived silently.
         #
         # The .ini carries `sextractor_FLAG_IMAGE = fill_in_by_launch_script`

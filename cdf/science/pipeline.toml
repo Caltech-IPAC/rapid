@@ -54,6 +54,32 @@
 # image digest that identifies the file byte-for-byte.
 schema_version = 1
 
+[product_roles]
+# ROLE → PRODUCT. A role is a stable contract name; the value is the
+# published product that fills it for this release (design/catalog.md
+# § Promotion, "Product roles bind in the declared set").
+#
+# The payload publishes three difference images per science attempt —
+# `zogy_diffimage`, `sfft_diffimage`, `naive_diffimage` — and only one of
+# them is the registrable one. Naming the winner HERE rather than in each
+# consumer is the whole point: registration, the registered measurement
+# variant, and the alert cutouts all resolve this one binding, so there is
+# one knob and never two. A consumer carrying an algorithm literal is the
+# defect this section exists to prevent.
+#
+# `sfft_diffimage` is the SFFT masked difference image — the product whose
+# file is `sfftdiffimage_masked.fits` (pipeline/stages/science.py, run_sfft),
+# which is also the basename the alert layer already cut its stamps from.
+# The ZOGY and naive variants stay published, checksummed record products
+# with no identity-table rows; multi-algorithm identity rows would be a
+# deliberate design change, not a side effect of this binding.
+#
+# Changing a binding is a RELEASE change: the attempt's execution binding
+# pins the image digest, so a replayed registration resolves the role the
+# same way forever. Adopted 2026-08-08 (decisions.md § Difference-image
+# product vocabulary, gates 1-3).
+difference_image = "sfft_diffimage"
+
 [tessellation]
 # THE ACTIVE SKY-TESSELLATION VERSION (W7, 2026-08-06).
 #
@@ -98,10 +124,12 @@ nrows = 6291458
 # min_n_images_to_coadd below agrees.
 min_images_to_coadd = 2
 
-# diff_flavor: which differencing algorithm's image feeds the alert
-# cutout — "sfft" or "zogy". Selects which science product a downstream
-# consumer sees, so it is scientific identity by definition.
-diff_flavor = "sfft"
+# diff_flavor MOVED to [product_roles] difference_image (2026-08-08). It
+# named which differencing algorithm's image feeds the alert cutout, which
+# is the same question the difference-image role answers for registration
+# and for the registered measurement. The ruling's second gate is "one
+# knob, never two", so the two cannot both exist: this one is now the role
+# binding, and the alert layer follows the registered image.
 
 [source_matching]
 match_radius = 0.00001528

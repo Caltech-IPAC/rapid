@@ -628,7 +628,17 @@ def _run(workload_class: str) -> int:
         # Provenance the stages will extend, seeded with what startup resolved.
         # The tessellation version and digest ride here too, and are CHECKED
         # rather than merely recorded (#13).
+        # THE ROLE BINDING TRAVELS IN THE RECORD, not in the registrar. The
+        # release binds the difference-image role to one published product
+        # (`[product_roles]`); registration must know which product filled the
+        # role, and `registration/facts.py` argues the case against teaching
+        # the reader a second vocabulary: the registrar reads the record and
+        # nothing else, so the record has to be self-describing. Recording the
+        # resolved binding here — beside the digest that identifies the
+        # content it came from — is what makes a replayed registration resolve
+        # the role exactly as the original attempt did, forever.
         context.record(release_content_digest=science_digest,
+                       product_roles=science_config.product_roles(science),
                        **tessellation_provenance(parameters, science, logger))
 
         # THE UNIT'S OWN IDENTITY (round-3 finding #2). Provenance carried

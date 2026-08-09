@@ -29,6 +29,7 @@ substituting a default is how the old chain registered products of failed runs.
 
 import logging
 
+from pipeline.runtime.science_config import DIFFERENCE_IMAGE_ROLE
 from submission.routes import JOB_TYPE_REFERENCE_IMAGE, JOB_TYPE_SCIENCE
 
 logger = logging.getLogger("rapid.registration.products")
@@ -111,6 +112,31 @@ def _product(products, name, attempt_id=None):
     if entry is None:
         raise MissingRecordFact(f"products[{name!r}]", attempt_id=attempt_id)
     return entry
+
+
+def role_product(record, science, role, attempt_id=None):
+    """The published product the attempt's release bound to `role`.
+
+    A role is a stable contract name; the release binds it to the concrete
+    product that fills it, and the attempt records the binding it resolved
+    (`entrypoints/job.py`, beside the release digest). Reading it back from
+    the record is what keeps registration a reader of records and nothing
+    else — and what makes a replay resolve the role the way the original
+    attempt did, even if a later release rebinds it.
+
+    An absent binding raises rather than falling back to an algorithm name:
+    the fallback would register whichever product this code was written
+    against, which is exactly the second vocabulary the role exists to
+    remove.
+    """
+    roles = record.get("product_roles") or science.get("product_roles")
+    if not roles:
+        raise MissingRecordFact("product_roles", attempt_id=attempt_id)
+    bound = roles.get(role)
+    if not bound:
+        raise MissingRecordFact(f"product_roles[{role!r}]",
+                                attempt_id=attempt_id)
+    return _product(published(record, attempt_id), bound, attempt_id), bound
 
 
 def register_reference_image(dbh, record, science, attempt_id=None,
@@ -204,8 +230,14 @@ def register_difference_image(dbh, record, science, attempt_id=None,
     was already registered — and it is only half the fix, because the rows and
     the watermark still have to commit together; see `registrar`.
     """
-    products = published(record, attempt_id)
-    difference = _product(products, "difference_image", attempt_id)
+    # THE ROLE, NOT AN ALGORITHM. The payload publishes three difference
+    # images per attempt; the release binds the difference-image role to the
+    # one that registers, and the attempt recorded that binding. Asking for a
+    # literal here is what refused promotion on every real science attempt
+    # (decisions.md § Difference-image product vocabulary): the reader's
+    # vocabulary and the record author's were two different things.
+    difference, difference_product = role_product(
+        record, science, DIFFERENCE_IMAGE_ROLE, attempt_id)
 
     ppid = _need(record, "ppid", attempt_id)
     rid = _need(science, "rid", attempt_id, where="science_provenance")
@@ -253,9 +285,14 @@ def register_difference_image(dbh, record, science, attempt_id=None,
     dbh.register_diffimmeta(pid, fid, sca, field, hp6, hp9, *meta)
     _check(dbh, "register_diffimmeta", attempt_id)
 
-    logger.info("attempt %s registered difference image pid=%s version=%s",
-                attempt_id, pid, version)
-    return {"pid": pid, "version": version}
+    # The product that filled the role is logged and returned, not just the
+    # pid: an operator reading either has to be able to tell WHICH difference
+    # image the row points at without going back to the release content.
+    logger.info("attempt %s registered difference image pid=%s version=%s "
+                "(role %s ← %s)", attempt_id, pid, version,
+                DIFFERENCE_IMAGE_ROLE, difference_product)
+    return {"pid": pid, "version": version,
+            "product": difference_product}
 
 
 def _check(dbh, call, attempt_id):

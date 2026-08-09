@@ -399,7 +399,7 @@ def summary_lines(meta, summary):
                      f"python {meta['python']}  git {meta.get('git_sha')}")
         lines.append(f"cpu: {meta['cpu']}")
         identity = {k: meta[k] for k in
-                    ("pid", "expid", "sca", "diff_flavor", "archive")
+                    ("pid", "expid", "sca", "difference_image", "archive")
                     if meta.get(k) is not None}
         lines.append(f"run: {identity}")
     if summary is None:
@@ -475,8 +475,6 @@ def main(argv=None):
     parser.add_argument("--no-compress", action="store_true",
                         help="store the --save archive uncompressed; by "
                              "default it is deflate-compressed (MAST format)")
-    parser.add_argument("--diff-flavor", choices=["sfft", "zogy"],
-                        default="sfft")
     parser.add_argument("--log-level", default="INFO",
                         choices=["DEBUG", "INFO", "WARNING", "ERROR"])
     args = parser.parse_args(argv)
@@ -488,16 +486,22 @@ def main(argv=None):
         parser.error("give exactly one of --pid or --exposure/--sca")
 
     from alerts.cli import make_provider
-    provider = make_provider(diff_flavor=args.diff_flavor)
+    provider = make_provider()
     pid = (args.pid if args.pid is not None
            else provider.resolve_pid(args.exposure, args.sca))
+
+    # WHICH difference image was measured is still part of the run's
+    # identity — it is just read from the registered row now instead of
+    # being asserted by a flag, so the report cannot claim an image the
+    # cutouts did not come from.
+    difference_image = provider.registered_difference_image(pid)
 
     # benchmark_batch narrates the full summary to the console (logging)
     # and saves it to --out; no separate report() call needed here
     count = benchmark_batch(
         provider, pid, args.out,
         meta_extra={"expid": args.exposure, "sca": args.sca,
-                    "diff_flavor": args.diff_flavor},
+                    "difference_image": difference_image},
         archive_path=args.save, compress=not args.no_compress)
     print(f"pid={pid}: {count} alerts benchmarked -> {args.out}"
           + (f" (+ archive {args.save})" if args.save else ""))

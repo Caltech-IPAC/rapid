@@ -31,7 +31,8 @@ def test_benchmark_writes_wellformed_timing_log(make_provider, chip_data,
     out = tmp_path / "timing.jsonl"
     archive = tmp_path / "alerts.avro"
     count = benchmark_batch(make_provider(), CHIP_PID, str(out),
-                            meta_extra={"diff_flavor": "sfft"},
+                            meta_extra={"difference_image":
+                                        "sfftdiffimage_masked.fits"},
                             archive_path=str(archive))
     assert count == len(chip_data.sources)
 
@@ -45,7 +46,7 @@ def test_benchmark_writes_wellformed_timing_log(make_provider, chip_data,
     assert records[0]["kind"] == "meta"
     (meta,) = by_kind["meta"]
     for field in ("arch", "cpu", "cores", "python", "versions",
-                  "started_utc", "pid", "diff_flavor"):
+                  "started_utc", "pid", "difference_image"):
         assert field in meta, f"meta record missing {field}"
     assert meta["pid"] == CHIP_PID
     assert meta["archive"] == "deflate"

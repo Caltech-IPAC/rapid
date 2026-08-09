@@ -29,6 +29,7 @@ replaces: the cost of the fixture is exactly the coupling that was missing.
 
 import datetime
 import importlib.util
+import inspect
 import json
 import unittest
 
@@ -234,10 +235,22 @@ def difference_record(**overrides):
                    dxmedianfin=0.001, dymedianfin=0.002,
                    nsexcatsources=1234, diffimage_infobits=0)
 
+    # THE PRODUCT NAMES PRODUCTION ACTUALLY PUBLISHES. The payload names its
+    # difference images after the algorithms that made them and publishes all
+    # three; nothing has ever published one called `difference_image`. A
+    # fixture that invented that name is what let the registrar's literal look
+    # correct in the suite while refusing every real attempt.
     published = {
-        "difference_image": {"uri": "s3://p/diff.fits", "checksum": "diff-sha"},
+        "sfft_diffimage": {"uri": "s3://p/sfftdiffimage_masked.fits",
+                           "checksum": "sfft-sha"},
+        "zogy_diffimage": {"uri": "s3://p/zogy_diffimage_masked.fits",
+                           "checksum": "zogy-sha"},
+        "naive_diffimage": {"uri": "s3://p/naive_diffimage_masked.fits",
+                            "checksum": "naive-sha"},
     }
     record = _build(context, published, 2, "science")
+    # The release's role binding, as `entrypoints/job.py` records it.
+    record.setdefault("product_roles", {"difference_image": "sfft_diffimage"})
     record.update(overrides)
     return record
 
@@ -501,6 +514,78 @@ class ReferenceImageBodyTests(unittest.TestCase):
         with self.assertRaises(products.RegistrationFailed):
             products.register_reference_image(
                 dbh, record, record["science_provenance"], 1)
+
+
+class DifferenceImageRoleTests(unittest.TestCase):
+    """The role binding: which published product becomes the diffimages row.
+
+    The payload publishes three difference images and the registrar used to
+    demand a literal `difference_image` that nothing produced, so promotion
+    refused on every real science attempt. These tests fix the contract that
+    replaced it (decisions.md § Difference-image product vocabulary).
+    """
+
+    def test_the_bound_product_is_what_registers(self):
+        dbh = FakeDB()
+        record = difference_record()
+
+        result = products.register_difference_image(
+            dbh, record, record["science_provenance"], 2)
+
+        _name, args = dbh.calls[0]
+        self.assertIn("s3://p/sfftdiffimage_masked.fits", args)
+        self.assertEqual(result["product"], "sfft_diffimage")
+
+    def test_rebinding_the_role_moves_the_registration(self):
+        # ONE KNOB. Nothing here names an algorithm except the binding: a
+        # release that binds ZOGY registers the ZOGY image, with no code
+        # change anywhere in the registrar.
+        dbh = FakeDB()
+        record = difference_record(
+            product_roles={"difference_image": "zogy_diffimage"})
+
+        result = products.register_difference_image(
+            dbh, record, record["science_provenance"], 2)
+
+        _name, args = dbh.calls[0]
+        self.assertIn("s3://p/zogy_diffimage_masked.fits", args)
+        self.assertEqual(result["product"], "zogy_diffimage")
+
+    def test_an_unbound_role_refuses_and_names_the_binding(self):
+        record = difference_record(product_roles={})
+        with self.assertRaises(products.MissingRecordFact) as caught:
+            products.register_difference_image(
+                FakeDB(), record, record["science_provenance"], 2)
+        self.assertEqual(caught.exception.field, "product_roles")
+
+    def test_a_role_bound_to_an_unpublished_product_refuses(self):
+        # The binding names a product the attempt did not publish: a release
+        # fault, and it must read as one rather than registering nothing or
+        # falling back to whatever else is in the list.
+        record = difference_record(
+            product_roles={"difference_image": "hotpants_diffimage"})
+        with self.assertRaises(products.MissingRecordFact) as caught:
+            products.register_difference_image(
+                FakeDB(), record, record["science_provenance"], 2)
+        self.assertIn("hotpants_diffimage", caught.exception.field)
+
+    def test_the_registrar_carries_no_algorithm_literal(self):
+        """THE ANTI-LITERAL GUARD: a consumer must not reintroduce one.
+
+        The ruling's third gate is that registration, alert cutouts and
+        catalog readers all resolve the same binding and no consumer
+        carries an algorithm literal. This fails if someone puts one back.
+        """
+        source = inspect.getsource(products)
+        code = "\n".join(line for line in source.splitlines()
+                         if not line.lstrip().startswith("#"))
+        for literal in ("zogy_diffimage", "sfft_diffimage",
+                        "naive_diffimage"):
+            self.assertNotIn(
+                literal, code,
+                f"pipeline/registration/products.py names {literal!r}; the "
+                "difference image is chosen by the release's role binding, "
+                "which the attempt records")
 
 
 class DifferenceImageBodyTests(unittest.TestCase):
@@ -788,7 +873,13 @@ class AttemptIdentityThreadingTests(unittest.TestCase):
         dbh = self._register(1)
         _name, args = dbh.calls[0]
 
-        difference = products.published(difference_record(), 2)["difference_image"]
+        # Through the role, as the body resolves it — the assertion is about
+        # argument ORDER, so it must compare against the same product the
+        # body registered rather than a name picked here.
+        record = difference_record()
+        difference, _bound = products.role_product(
+            record, record["science_provenance"],
+            products.DIFFERENCE_IMAGE_ROLE, 2)
         self.assertEqual(difference["uri"], args[-4])
         self.assertEqual(difference["checksum"], args[-3])
 

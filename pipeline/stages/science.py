@@ -112,11 +112,34 @@ PSFCAT_INFOBIT = {
 }
 
 # Which difference-image catalogue supplies the single `nsexcatsources` the
-# DiffImMeta row carries. The positive ZOGY one, because that is what the
-# monolith wrote into `product_config['ZOGY']['nsexcatsources']` (line 1801,
-# from the count at 1377) and what the legacy registration body read back out
-# of it. See the recording site in `sextractor_on_difference_image`.
-NSEXCATSOURCES_VARIANT = "zogy_positive"
+# DiffImMeta row carries: the POSITIVE catalogue of whichever difference image
+# the release bound to the difference-image role.
+#
+# It was the literal `"zogy_positive"` — chosen because the monolith wrote
+# `product_config['ZOGY']['nsexcatsources']` (line 1801, from the count at
+# 1377) and the legacy registration body read that key straight back out. That
+# reasoning fixed the ZOGY catalogue as the registered count while the role
+# now binds SFFT, which would put a count from one algorithm in the row
+# describing another. The measurement is "the count belonging to the
+# registered difference image", so it derives from the same binding —
+# design/catalog.md: "Measurements registered alongside a role-bound product
+# are drawn from the bound product's own processing chain." One knob, never
+# two. See the recording site in `sextractor_on_difference_image`.
+#
+# Variants are spelled `{algorithm}_{sign}` and products `{algorithm}_diffimage`,
+# so the algorithm is the common stem; deriving it beats a second table that
+# could disagree with the first.
+def nsexcatsources_variant(context) -> str:
+    """The variant whose source count is the registered `nsexcatsources`."""
+    bound = context.product_role(science_config.DIFFERENCE_IMAGE_ROLE)
+    algorithm = bound.removesuffix("_diffimage")
+    if algorithm == bound:
+        raise ValueError(
+            f"the difference-image role is bound to {bound!r}, whose name "
+            "does not end in '_diffimage'; the registered measurement variant "
+            "is derived from that stem, so a differently-shaped product name "
+            "needs the derivation extended rather than guessed at")
+    return f"{algorithm}_positive"
 
 
 # ---------------------------------------------------------------------------
@@ -1127,15 +1150,14 @@ def sextractor_on_difference_image(context, variant: str, image: str,
     # carried up to six counts and not the one the registrar names, which
     # raised `MissingRecordFact` on every real difference image.
     #
-    # WHICH count it wants is not a judgement call: the monolith wrote
-    # `product_config['ZOGY']['nsexcatsources'] = str(nsexcatsources_zogy_diffimage)`
-    # (`awsBatchSubmitJobs_runSingleSciencePipeline.py:1801`) from the POSITIVE
-    # ZOGY catalogue at line 1377, and the legacy registration body read that
-    # key straight into `register_diffimmeta`
-    # (`registerCompletedJobsInDB.py:687`). The negative, SFFT and naive counts
-    # were never the registered number. Recording any of them under this name
-    # would put a real count in the column that means a different catalogue.
-    if variant == NSEXCATSOURCES_VARIANT:
+    # WHICH count it wants follows the role binding, not an algorithm chosen
+    # here: `diffimmeta` describes the difference image that registered, so
+    # the count has to come from that image's own positive catalogue. The
+    # negative counts, and the counts of the variants that stay unregistered
+    # record products, were never the registered number — recording any of
+    # them under this name would put a real count in a column that means a
+    # different catalogue.
+    if variant == nsexcatsources_variant(context):
         context.record(nsexcatsources=len(vals))
     context.logger.info("sexcat sources (%s) = %d", variant, len(vals))
     return {"catalog": catalog, "values": vals}

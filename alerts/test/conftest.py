@@ -116,9 +116,13 @@ class ChipData:
     """In-memory stand-in for the database tables behind one chip."""
 
     def __init__(self, tpv_header, job_dir):
-        # diffimages.filename: the DB stores the zogy path; the provider
-        # derives the job directory from it and picks the flavored file
-        self.diff_filename = str(job_dir / "zogy_diffimage_masked.fits")
+        # diffimages.filename: the registered difference image — the one the
+        # release bound to the difference-image role. The provider cuts its
+        # stamps from THIS file, so the row and the cutout can never describe
+        # two different difference images. SFFT is the current binding; a test
+        # that rebinds reassigns this and the cutout follows.
+        self.job_dir = job_dir
+        self.diff_filename = str(job_dir / "sfftdiffimage_masked.fits")
 
         # diffimages rows for resolve_pid(expid, sca): reprocessing
         # campaigns leave several rows per (expid, sca), more than one
@@ -296,7 +300,7 @@ def make_provider(chip_data):
     """Factory for independent AlertDataProviders over the same fake chip."""
     from alerts.providers import AlertDataProvider
 
-    def _make(diff_flavor="sfft"):
-        return AlertDataProvider(FakeDB(chip_data), diff_flavor=diff_flavor)
+    def _make():
+        return AlertDataProvider(FakeDB(chip_data))
 
     return _make

@@ -210,6 +210,16 @@ class StageContext:
         """One release-content value, typed as the TOML declares it."""
         return science_config.value(self.science, section_name, key)
 
+    def product_role(self, role: str) -> str:
+        """The published product this release bound to `role`.
+
+        A stage that wants "the difference image" asks for the ROLE and gets
+        back the product name the release nominated. Spelling an algorithm
+        instead is the defect this exists to prevent: the binding is one knob
+        in release content, and every consumer turns that one.
+        """
+        return science_config.product_role(self.science, role)
+
     # -- operational configuration -------------------------------------------
 
     def parameter(self, name: str) -> str:

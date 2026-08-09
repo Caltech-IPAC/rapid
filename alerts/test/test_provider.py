@@ -17,12 +17,16 @@ TODO (test plan, not yet implemented):
       calls); pid change reloads and replaces staged files
   B12 prefetch semantics: prv window filtering per-trigger, multi-field
       chips, independent ObjectRecords for sources sharing an object
-  E20 CLI surface: --diff-flavor choices enforced, bad args exit nonzero
+  E20 CLI surface: bad args exit nonzero
 """
+
+import ast
+import inspect
 
 import fastavro
 import pytest
 
+from alerts import providers
 from alerts.produce import (batch_produce, load_schema,
                                   open_alert_archive, produce_alert)
 from alerts.providers import AlertDataProvider
@@ -71,26 +75,58 @@ def test_missing_field_partition_degrades_to_unassociated(make_provider,
 
 
 # ---------------------------------------------------------------------------
-# diff_flavor selection (plan B7): the flavor argument picks which
-# difference image feeds cutoutDifference; each product carries a distinct
-# DC offset, so the stamp values identify the file that was read
+# The cutout comes from the REGISTERED difference image (the vocabulary
+# ruling's third gate). The release binds the difference-image role to one
+# product, that product is what registered, and diffimages.filename names
+# it — so the provider follows the row rather than an algorithm of its own.
+# Each product carries a distinct DC offset, so the stamp values identify
+# the file that was read.
 # ---------------------------------------------------------------------------
 
-def test_diff_flavor_selects_difference_image(make_provider, chip_data):
+def test_cutout_comes_from_the_registered_difference_image(make_provider,
+                                                           chip_data):
     detection_row = chip_data.sources[0]
-    for flavor, product in (("sfft", "sfftdiffimage_masked.fits"),
-                            ("zogy", "zogy_diffimage_masked.fits")):
-        provider = make_provider(diff_flavor=flavor)
+    base = (round(detection_row["yfit"]) * 1000
+            + round(detection_row["xfit"]))
+    for product in ("sfftdiffimage_masked.fits", "zogy_diffimage_masked.fits"):
+        # Rebinding the role changes what registers, so the row's filename
+        # changes; the cutout must follow it with no argument anywhere.
+        chip_data.diff_filename = str(chip_data.job_dir / product)
+        provider = make_provider()
         detection = provider.get_detection(detection_row["sid"])
         diff, _ = clip_to_numpy(provider.get_cutouts(detection).difference)
-        base = (round(detection_row["yfit"]) * 1000
-                + round(detection_row["xfit"]))
         assert diff[64, 64] == base + PRODUCT_OFFSETS[product]
 
 
-def test_invalid_diff_flavor_rejected_at_construction(chip_data):
-    with pytest.raises(ValueError):
-        AlertDataProvider(FakeDB(chip_data), diff_flavor="hotpants")
+def test_the_provider_carries_no_algorithm_literal():
+    """THE ANTI-LITERAL GUARD: a consumer must not reintroduce one.
+
+    The ruling's third gate is that no consumer of a role-named product
+    carries an algorithm literal — the alert layer's `zogy` cutout literal
+    is the one it names. This fails if a future change puts an algorithm
+    name back into the provider, whether as a constructor argument, a
+    flavour map, or a bare basename.
+    """
+    # Prose may DISCUSS the algorithms; code may not select one. Comments
+    # never reach the AST, and every docstring is dropped explicitly, so
+    # what remains is the executable text — string literals included,
+    # because a basename in a dict is exactly the defect being guarded.
+    tree = ast.parse(inspect.getsource(providers))
+    for node in ast.walk(tree):
+        if not isinstance(node, (ast.Module, ast.ClassDef,
+                                 ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        body = node.body
+        if (body and isinstance(body[0], ast.Expr)
+                and isinstance(body[0].value, ast.Constant)
+                and isinstance(body[0].value.value, str)):
+            node.body = body[1:] or [ast.Pass()]
+    code = ast.unparse(ast.fix_missing_locations(tree)).lower()
+    for literal in ("zogy", "sfft", "hotpants", "naive"):
+        assert literal not in code, (
+            f"alerts/providers.py names the {literal!r} algorithm; the "
+            "difference image is chosen by the release's role binding and "
+            "reaches this module as diffimages.filename")
 
 
 # ---------------------------------------------------------------------------

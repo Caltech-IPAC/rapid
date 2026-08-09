@@ -308,6 +308,47 @@ def value(content: Mapping[str, Any], section_name: str, key: str) -> Any:
     return values[key]
 
 
+#: The role the difference-image consumers resolve. Named once here so a
+#: consumer spells the ROLE, never an algorithm.
+DIFFERENCE_IMAGE_ROLE = "difference_image"
+
+
+def product_roles(content: Mapping[str, Any]) -> dict[str, str]:
+    """Every role this release binds, as role → product name.
+
+    Recorded whole into the attempt's provenance so the record is
+    self-describing: registration resolves the role from what the attempt
+    carried, not from the release content of whatever image happens to be
+    running when the replay passes.
+    """
+    return dict(section(content, "product_roles"))
+
+
+def product_role(content: Mapping[str, Any], role: str) -> str:
+    """The published product bound to `role` by this release.
+
+    A role is a stable contract name; the release binds it to the concrete
+    product that fills it (design/catalog.md § Promotion, "Product roles
+    bind in the declared set"). Every consumer of a role-named product —
+    registration, the registered measurement variant, the alert cutouts —
+    comes through here, which is what keeps the binding a single knob.
+
+    Raises
+    ------
+    ConfigError
+        If the release binds no such role. Refusing beats defaulting to an
+        algorithm: a consumer that silently picked one would register a
+        product this release never nominated, and the recorded release
+        digest would describe a binding the job did not use.
+    """
+    bound = value(content, "product_roles", role)
+    if not isinstance(bound, str) or not bound:
+        raise ConfigError(
+            f"product_roles.{role} binds to {bound!r}, which is not a "
+            "product name; a role binds to exactly one published product")
+    return bound
+
+
 def auxiliary_identity(image_digest: str | None = None) -> dict[str, str]:
     """What pins the SExtractor auxiliary files, for the provenance record.
 

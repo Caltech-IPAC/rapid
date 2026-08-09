@@ -94,11 +94,14 @@ The fact table
      - release content
      - ``[science] min_images_to_coadd``
      - **Left the tree in W4.** Coadd depth changes the reference image.
-   * - Differencing flavour
+   * - Difference-image role binding
      - release content
-     - ``[science] diff_flavor``
-     - **Left the tree in W4.** Selects which product feeds the alert
-       cutout.
+     - ``[product_roles] difference_image``
+     - **Left the tree in W4** as ``[science] diff_flavor``; became the
+       role binding in 2026-08-08's vocabulary ruling. It selects which
+       published difference image registers, which measurement variant is
+       recorded beside it, and which image the alert cutouts come from —
+       one knob for all three, so no consumer carries an algorithm literal.
    * - Reference-image pixel scale
      - release content
      - ``[ref_image] cdelt1_refimage``, ``cdelt2_refimage``
