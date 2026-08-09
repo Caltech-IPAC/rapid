@@ -491,12 +491,25 @@ class DispatchRegistrationTests(unittest.TestCase):
         # ported bodies, which have their own suite.
         registered = []
 
-        with mock.patch("database.modules.utils.rapid_db_connect.connection"), \
+        # AMENDED for integration ruling 4: `register_batch` re-reads the
+        # watermark under the per-attempt lease before registering, via
+        # `cursor.fetchone()`. A bare `mock.patch(...)` connection's cursor
+        # would otherwise answer that `SELECT` with an empty MagicMock
+        # (unpacks to nothing), so it is configured here to answer "not yet
+        # registered, matches the candidate read" — (None,
+        # terminal_record_sequence) — which is the ordinary, non-racing case
+        # this test is actually about.
+        mock_conn = mock.MagicMock()
+        mock_conn.cursor.return_value.fetchone.return_value = (None, 1)
+
+        with mock.patch("database.modules.utils.rapid_db_connect.connection") \
+                as mock_connection, \
                 mock.patch("pipeline.registration.candidates",
                            return_value=rows), \
                 mock.patch.object(job, "registrar_for",
                                   return_value=lambda row, verdict:
                                   registered.append(row["attempt_id"])):
+            mock_connection.return_value.__enter__.return_value = mock_conn
             job.dispatch_registration(context)
 
         context.record.assert_called_once()

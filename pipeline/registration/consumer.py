@@ -30,6 +30,58 @@ produced a duplicate registration on the next pass. `register_batch` now wraps
 each attempt's registration and its watermark in one `transaction(conn)`, and
 the registrar borrows this connection rather than opening its own — the two
 halves of the same fix, neither of which works alone.
+
+THE SINGLE-REGISTRAR PREMISE (integration ruling 4, catalog.md § Promotion).
+Exactly one registrar runs against a given attempt at a time — stated, not
+assumed. `register_batch` acquires a transaction-scoped advisory lease
+(`_acquire_attempt_lease`) on the attempt key as the FIRST statement inside
+each attempt's `_transaction(conn)` block, before any read or write the
+registration itself performs, and re-reads the watermark under the lease
+before deciding whether to proceed. The candidate list `candidates()` builds
+is read unlocked and may be stale by the time this attempt's turn comes; the
+post-lock re-read is what turns "this was a candidate when the pass started"
+into "this is still a candidate now". The operator pass and the dormant
+`JOB_TYPE_REGISTRATION` job route both call `register_batch` — see
+`pipeline.operator.registration.run_pass` and
+`pipeline.entrypoints.job.dispatch_registration` — so both share this one
+lease acquisition, one lock namespace, and one key derivation; neither can
+double-register an attempt the other is mid-transaction on. This is the
+registrar's own instance of the lease primitive, distinct from
+`pipeline.reconciler.lease` — the reconciler's closure protocol runs the same
+primitive shape over its own prefix-listing, lexical-max selection, and that
+machinery belongs there, not here (a separate lock namespace keeps the two
+from colliding semantically on the same attempt id).
+
+VALIDATION REJECTIONS ARE DURABLE (integration ruling 4). A rejection from the
+registrar's own decide/read/verify path — `MissingRecordFact` (a fact the
+record should carry is absent) or `RecordValidationRejected` (a fact the
+record carries fails verification: checksum mismatch, attempt-identity
+mismatch — both raised only by `read_record`) — is not an infrastructure
+failure: the record is what it is, and re-running the same registration body
+against the same immutable record produces the same verdict. `register_batch`
+catches these two classes apart from everything else, commits a
+`registration_outcome` rejection event for the attempt in its own
+transaction, and does NOT advance the registration watermark — the attempt
+stays a genuine candidate (a fixed provenance path or a corrected record
+legitimately changes the verdict on a later pass) while the rejection itself
+is permanently on record. The append-once event-identity guard already in
+`_RECORD_OUTCOME_SQL`'s sibling for rejections is what keeps a record that
+rejects the same way every pass from growing the outcome document without
+bound — the SAME rejection at the SAME record key/sequence/checksum appends
+once, not once per pass.
+
+`RecordValidationRejected` is a NARROWER subclass of the plainer
+`RegistrationFailed` that `products._check` raises for a stored-procedure
+call reporting `dbh.exit_code >= 64` — deliberately not caught here, because
+that code covers catalog.md § Promotion's "Conflicts" (the natural-unique and
+partial `vbest`-index violations, both explicitly RETRYABLE, not a permanent
+verdict on the record) as well as a genuine database fault, and `exit_code`
+alone cannot tell those apart from a validation problem. Catching the broad
+`RegistrationFailed` here would misfile a retryable constraint conflict as a
+durable rejection. Every exception that is not `MissingRecordFact` or
+`RecordValidationRejected` — a bare `RegistrationFailed` from `_check`
+included — keeps the prior behavior exactly: counted as a failure, no
+outcome event, watermark untouched, retried next pass.
 """
 
 import contextlib
@@ -39,8 +91,18 @@ import logging
 
 from observability.attempts import LifecycleState
 from observability.registration import RegistrationDecision, decide
+from pipeline.registration.products import (
+    MissingRecordFact, RecordValidationRejected, RegistrationFailed)
 
 logger = logging.getLogger("rapid.registration")
+
+#: The registrar's own lock namespace for `pg_advisory_xact_lock`'s
+#: two-argument form — distinct from the reconciler's `LEASE_NAMESPACE`
+#: (`pipeline.reconciler.lease`, 0x5732 'W6') so a registrar lease and a
+#: reconciler lease on the same attempt id never collide semantically; they
+#: guard different concerns; the primitive shape is shared, the namespace is
+#: not. 0x5234 is 'R4' — this is integration ruling 4's lease.
+ATTEMPT_LEASE_NAMESPACE = 0x5234
 
 EXIT_OK = 0
 EXIT_FAILURES = 65
@@ -96,6 +158,57 @@ _MARK_REGISTERED_SQL = (
     "   AND (registered_record_sequence IS NULL"
     "        OR registered_record_sequence < %s)"
 )
+
+#: The post-lock re-read (integration ruling 4). Only the watermark columns —
+#: the candidate query's own predicate is `registered_record_sequence IS NULL
+#: OR registered_record_sequence < terminal_record_sequence`, so re-checking
+#: exactly that pair under the lease is what tells this attempt's turn "another
+#: writer already registered this sequence while I waited" from "I am still
+#: the one to do this".
+_REREAD_WATERMARK_SQL = (
+    "SELECT registered_record_sequence, terminal_record_sequence"
+    " FROM attempts WHERE attempt_id = %s"
+)
+
+
+def _acquire_attempt_lease(cursor, attempt_id):
+    """Acquire the registrar's per-attempt lease. Must be the FIRST statement
+    inside the attempt's transaction (integration ruling 4).
+
+    `pg_advisory_xact_lock` (no `try_`) blocks until held and releases at
+    commit or rollback of the CURRENT transaction — exactly the envelope
+    `_transaction(conn)` already opened for the product/outcome/watermark
+    write, so no separate lease context manager is needed here the way the
+    reconciler's `attempt_lease` needs one: that helper opens and owns its own
+    transaction because it is not already inside one; this call is already
+    inside `register_batch`'s per-attempt transaction and simply adds a lock
+    to it.
+
+    Blocking rather than skipping is the right choice here, unlike the
+    reconciler's poll-and-skip: a registration pass is a short, bounded batch
+    over a candidate list already in hand, not an unbounded poll loop, and the
+    other writer holding this lease is either the operator pass or the
+    registration job route doing the SAME kind of bounded work — it will
+    release within one attempt's registration, not indefinitely.
+    """
+    cursor.execute("SELECT pg_advisory_xact_lock(%s, %s)",
+                   (ATTEMPT_LEASE_NAMESPACE, int(attempt_id)))
+
+
+def _reread_watermark(cursor, attempt_id):
+    """The post-lock watermark re-read (integration ruling 4).
+
+    Returns (registered_record_sequence, terminal_record_sequence), or None if
+    the attempt row is gone. Called immediately after the lease is acquired
+    and before any registration work: the candidate list was built by an
+    unlocked read at the start of the pass, so by the time this attempt's
+    lease is held, another writer — the other call path, or an earlier
+    iteration of this same pass on a re-entrant connection — may already have
+    advanced the watermark to or past this record's sequence.
+    """
+    cursor.execute(_REREAD_WATERMARK_SQL, (attempt_id,))
+    row = cursor.fetchone()
+    return tuple(row) if row is not None else None
 
 
 @contextlib.contextmanager
@@ -161,6 +274,13 @@ class RegistrationRun:
         #: folded into `registered` (review finding #5): the two were the
         #: same counter, so a run that wrote nothing reported registrations.
         self.would_register = 0
+        #: VALIDATION REJECTIONS (integration ruling 4). Counted apart from
+        #: `failed`: a rejection commits a durable outcome event and is a
+        #: verdict on the record's own content, not an infrastructure failure
+        #: — folding it into `failed` would make `exit_code` treat a
+        #: permanently-wrong record the same as a transient database error
+        #: worth alerting on.
+        self.rejected = 0
 
     @property
     def exit_code(self):
@@ -169,6 +289,10 @@ class RegistrationRun:
         The four scripts this replaces all hardcoded exit 0, so a registration
         run that registered nothing because every call raised looked exactly
         like a clean run with nothing to do.
+
+        Rejections do not contribute: a rejection is a recorded, durable
+        verdict on the attempt's own data, reached without error — the
+        opposite of a run that "could not do its job".
         """
         return EXIT_FAILURES if self.failed else EXIT_OK
 
@@ -178,6 +302,7 @@ class RegistrationRun:
             "skipped": self.skipped,
             "deferred": self.deferred,
             "failed": self.failed,
+            "rejected": self.rejected,
             "refused_application_failed": self.refused_application_failed,
             "would_register": self.would_register,
             "exit_code": self.exit_code,
@@ -252,6 +377,68 @@ def record_registration_outcome(attempt_id, outcome, record_sequence,
              "role_resolved_from": outcome.get("role_resolved_from"),
              "sequence": sequence}
     cursor.execute(_RECORD_OUTCOME_SQL,
+                   {"event": json.dumps(event, sort_keys=True),
+                    "sequence": sequence, "attempt_id": attempt_id})
+    return event
+
+
+#: The rejection sibling of `_RECORD_OUTCOME_SQL` (integration ruling 4):
+#: same append-once-by-identity, GREATEST-high-water-mark idiom, a distinct
+#: top-level key so a rejection event can never be mistaken for a promotion
+#: (design/catalog.md § Promotion, "The registration outcome" names
+#: "validation rejections" as one of the outcome document's own event kinds,
+#: distinct from promotions). The identity a rejection appends once under is
+#: (type, record key, sequence, checksum, error class): the SAME rejection of
+#: the SAME immutable record on a later pass produces byte-identical JSON and
+#: is contained, not appended again — which is what keeps a record that
+#: rejects the same way every pass from growing this document without bound.
+_RECORD_REJECTION_SQL = (
+    "UPDATE attempts"
+    "   SET registration_outcome = jsonb_build_object("
+    "         'validation_rejections',"
+    "         CASE WHEN COALESCE(registration_outcome->'validation_rejections',"
+    "                            '[]'::jsonb)"
+    "                   @> jsonb_build_array(%(event)s::jsonb)"
+    "              THEN registration_outcome->'validation_rejections'"
+    "              ELSE COALESCE(registration_outcome->'validation_rejections',"
+    "                            '[]'::jsonb)"
+    "                   || jsonb_build_array(%(event)s::jsonb) END,"
+    "         'observed_sequence',"
+    "         GREATEST("
+    "           COALESCE((registration_outcome->>'observed_sequence')::int, 0),"
+    "           %(sequence)s)"
+    "       )"
+    " WHERE attempt_id = %(attempt_id)s"
+)
+
+
+def record_validation_rejection(attempt_id, error, record_key, record_sequence,
+                                record_checksum, cursor=None):
+    """Append a validation rejection to the attempt's outcome document.
+
+    Companion to `record_registration_outcome`, for the OTHER event kind the
+    document carries (integration ruling 4; catalog.md § Promotion, "A
+    validation rejection commits its own registration-outcome entry ...
+    without advancing the registration watermark"). Called in the rejection's
+    OWN transaction — the one `register_batch` opens for this attempt after
+    the lease is held — never in the same commit as a product write, because
+    a rejection means no product rows exist for this pass.
+
+    `error` is the caught `MissingRecordFact` or `RecordValidationRejected`;
+    its class name is part of the event identity so a checksum-mismatch
+    rejection and a missing-field rejection on the same record/sequence are
+    two distinct, both-durable events rather than one clobbering the other.
+    """
+    if cursor is None:
+        return None
+    sequence = int(record_sequence if record_sequence is not None else 1)
+    event = {"type": "rejection",
+             "error_class": type(error).__name__,
+             "reason": str(error),
+             "record_key": record_key,
+             "record_checksum": record_checksum,
+             "sequence": sequence}
+    cursor.execute(_RECORD_REJECTION_SQL,
                    {"event": json.dumps(event, sort_keys=True),
                     "sequence": sequence, "attempt_id": attempt_id})
     return event
@@ -389,7 +576,95 @@ def register_batch(conn, rows, register=None, run=None, dry_run=False):
         # work, already committed by their own blocks.
         try:
             with _transaction(conn) as cur:
-                outcome = register(row, verdict)
+                # THE SINGLE-REGISTRAR LEASE, FIRST (integration ruling 4).
+                # Acquired before any read or write this attempt's
+                # registration performs, inside the very transaction that
+                # will commit the product rows and the watermark — so the
+                # lease and the work it guards share one commit/rollback and
+                # the lock releases automatically either way. See the module
+                # docstring ("THE SINGLE-REGISTRAR PREMISE").
+                _acquire_attempt_lease(cur, verdict.attempt_id)
+
+                # THE POST-LOCK RE-READ. `candidates()` read this row
+                # unlocked, before this attempt's turn in the loop and before
+                # the lease was held; the operator pass and the registration
+                # job route both reach this same point, so by now another
+                # writer may already have registered this exact sequence.
+                # Re-checking the watermark under the lease is what makes
+                # that "stale by the time I got here" visible instead of
+                # silently re-registering.
+                watermark = _reread_watermark(cur, verdict.attempt_id)
+                if watermark is None:
+                    # The row is gone; nothing to register or skip.
+                    run.skipped += 1
+                    logger.info(
+                        "attempt %s vanished between the candidate read and "
+                        "its lease; skipping", verdict.attempt_id)
+                    continue
+                registered_sequence, current_terminal_sequence = watermark
+                target_sequence = row.get("terminal_record_sequence")
+                if (registered_sequence is not None
+                        and target_sequence is not None
+                        and registered_sequence >= target_sequence):
+                    # Another writer — the other call path, or an earlier
+                    # iteration racing on a re-entrant connection — already
+                    # registered this attempt at this sequence or later while
+                    # this one waited on the lease. A clean no-op, not a
+                    # failure: the work this attempt exists to do is already
+                    # done.
+                    run.skipped += 1
+                    logger.info(
+                        "attempt %s already registered at sequence %s "
+                        "(target was %s) by another writer under the same "
+                        "lease; skipping", verdict.attempt_id,
+                        registered_sequence, target_sequence)
+                    continue
+                # `current_terminal_sequence` re-confirms the candidacy
+                # predicate's OTHER half under the lease: a supersession
+                # published between the candidate read and this lease raises
+                # it further still, and the row remains a candidate at the
+                # (now newer) sequence rather than being registered against a
+                # target this pass's candidate read is stale about.
+                if (current_terminal_sequence is not None
+                        and target_sequence is not None
+                        and current_terminal_sequence > target_sequence):
+                    run.skipped += 1
+                    logger.info(
+                        "attempt %s superseded to sequence %s (candidate "
+                        "read saw %s) while waiting on the lease; leaving it "
+                        "a candidate for a fresh pass", verdict.attempt_id,
+                        current_terminal_sequence, target_sequence)
+                    continue
+
+                try:
+                    outcome = register(row, verdict)
+                except (MissingRecordFact, RecordValidationRejected) as rejection:
+                    # A VALIDATION REJECTION (integration ruling 4): the
+                    # registrar's own decide/read/verify path refused this
+                    # attempt's record — a fact it needed is absent, or a
+                    # fact it has fails verification (checksum mismatch,
+                    # attempt-identity mismatch). Durable and NOT an
+                    # infrastructure failure: re-running the same body
+                    # against the same immutable record reaches the same
+                    # verdict. Caught HERE, inside the `with _transaction`
+                    # block rather than at the outer `try`, precisely so it
+                    # does NOT propagate to the outer `except` (which rolls
+                    # back and counts a failure) — a rejection commits its
+                    # outcome event in this same transaction and leaves the
+                    # watermark untouched, which needs the block to exit
+                    # cleanly (`continue`, not re-raise) so `_transaction`
+                    # commits rather than rolls back.
+                    record_validation_rejection(
+                        verdict.attempt_id, rejection,
+                        row.get("terminal_record_key"), target_sequence,
+                        row.get("terminal_record_checksum"), cursor=cur)
+                    run.rejected += 1
+                    logger.info(
+                        "attempt %s REJECTED registration (durable, "
+                        "watermark unchanged): %s", verdict.attempt_id,
+                        rejection)
+                    continue
+
                 # THE REGISTRATION OUTCOME, inside the same envelope as the
                 # product rows and the watermark (migration 024 left the
                 # column with its write site owed: "column first, writer

@@ -73,11 +73,16 @@ class WatermarkTests(unittest.TestCase):
         consumer.register_batch(conn, [reconciled(1)],
                                 register=lambda row, verdict: None)
 
-        self.assertEqual(1, len(conn.statements))
-        statement, params = conn.statements[0]
+        # Lease acquisition and the post-lock re-read (integration ruling 4)
+        # are two more statements ahead of the watermark write now, not a
+        # change to the watermark write itself.
+        self.assertEqual(3, len(conn.statements))
+        statement, params = conn.statements[-1]
         self.assertIn("registered_record_sequence", statement)
         self.assertIn(1, params)
         self.assertEqual(1, conn.commits)
+        self.assertEqual([(consumer.ATTEMPT_LEASE_NAMESPACE, 1)],
+                         conn.lease_acquisitions)
 
     def test_a_failed_registration_writes_no_watermark(self):
         # The attempt must stay a candidate: marking work that did not happen
@@ -89,7 +94,12 @@ class WatermarkTests(unittest.TestCase):
 
         consumer.register_batch(conn, [reconciled(1)], register=explode)
 
-        self.assertEqual([], conn.statements)
+        # The lease and the post-lock re-read still happened — they must, to
+        # even reach the point of calling `explode` — but nothing committed,
+        # which is the property this test is actually about.
+        self.assertEqual([], conn.committed)
+        self.assertEqual(0, conn.commits)
+        self.assertGreaterEqual(conn.rollbacks, 1)
 
     def test_the_watermark_never_moves_backwards(self):
         # Guarded in SQL, so a replay or a concurrent pass cannot lower it.
@@ -281,8 +291,12 @@ class WatermarkSequenceTests(unittest.TestCase):
                                 [reconciled(1, terminal_record_sequence=2)],
                                 register=product_writer(conn))
 
+        # Filtered on the ASSIGNMENT form, not just the column name: the
+        # post-lock re-read (integration ruling 4) also selects
+        # `registered_record_sequence`, and would otherwise be counted here
+        # as a watermark write.
         watermarks = [params for statement, params in conn.committed
-                      if "registered_record_sequence" in statement]
+                      if "registered_record_sequence =" in statement]
         self.assertEqual([1, 2], [params[1] for params in watermarks],
                          "a supersession must advance the watermark to its "
                          "own sequence, or it stays a candidate forever")
@@ -365,15 +379,34 @@ class FakeConn:
     difference between those two lists is the whole property under test — under
     the old code the product rows were durable the moment the registrar wrote
     them, and a failure before the watermark could not take them back.
+
+    AMENDED for integration ruling 4. `register_batch` now issues two more
+    statement shapes as the FIRST things inside each attempt's transaction:
+    `pg_advisory_xact_lock` (the lease — a no-op here, since exercising the
+    lock itself needs postgres; what is under test is the CALL SHAPE, not
+    postgres's locking) and the post-lock watermark re-read (a `SELECT
+    registered_record_sequence, terminal_record_sequence FROM attempts ...`,
+    answered from `watermarks`, a dict of attempt_id -> (registered, terminal)
+    the test configures). The default — no entry — answers `(None, None)`,
+    which every existing test relies on meaning "not registered yet, and no
+    stale-supersession signal", i.e. registration proceeds exactly as it did
+    before this lease existed.
     """
 
-    def __init__(self):
+    def __init__(self, watermarks=None):
         self.statements = []
         self.committed = []
         self.commits = 0
         self.rollbacks = 0
         self.closed_cursors = 0
+        self.lease_acquisitions = []
+        #: attempt_id -> (registered_record_sequence, terminal_record_sequence)
+        #: answered by the post-lock re-read. Configure a stale/raced value
+        #: here to exercise the skip paths; unset attempt ids re-read as
+        #: (None, None) — "proceed", the pre-lease default.
+        self.watermarks = dict(watermarks or {})
         self._pending = []
+        self._last_result = None
 
     def cursor(self):
         return self
@@ -390,6 +423,18 @@ class FakeConn:
     def execute(self, statement, params=None):
         self.statements.append((statement, params))
         self._pending.append((statement, params))
+        self._last_result = None
+        lowered = statement.lower()
+        if "pg_advisory_xact_lock" in lowered:
+            self.lease_acquisitions.append(params)
+        elif ("registered_record_sequence" in lowered
+              and "terminal_record_sequence" in lowered
+              and lowered.strip().startswith("select")):
+            attempt_id = params[0] if params else None
+            self._last_result = self.watermarks.get(attempt_id, (None, None))
+
+    def fetchone(self):
+        return self._last_result
 
     def commit(self):
         self.commits += 1
@@ -489,6 +534,304 @@ class ExitCodeTests(unittest.TestCase):
         self.assertEqual(1, run.failed)
         self.assertEqual(1, run.registered)
         self.assertEqual(consumer.EXIT_FAILURES, run.exit_code)
+
+
+class SingleRegistrarLeaseTests(unittest.TestCase):
+    """INTEGRATION RULING 4: the per-attempt lease's call shape.
+
+    The lock itself can't be exercised without postgres (`pg_advisory_xact_lock`
+    is a no-op in `FakeConn`, same as `FakeConnection` treats it for the
+    reconciler's own lease tests) — what is under test is the SHAPE: the lease
+    is acquired first, inside the attempt's own transaction, and the post-lock
+    re-read happens before any registration work.
+    """
+
+    def test_the_lease_is_the_first_statement_in_the_attempts_transaction(self):
+        conn = FakeConn()
+        consumer.register_batch(conn, [reconciled(1)],
+                                register=lambda row, verdict: None)
+
+        self.assertIn("pg_advisory_xact_lock", conn.statements[0][0])
+        self.assertEqual((consumer.ATTEMPT_LEASE_NAMESPACE, 1),
+                         conn.statements[0][1])
+
+    def test_the_post_lock_reread_happens_before_register_is_called(self):
+        conn = FakeConn()
+        order = []
+
+        def register(row, verdict):
+            order.append("register")
+
+        consumer.register_batch(conn, [reconciled(1)], register=register)
+
+        statement_kinds = [
+            "lease" if "pg_advisory_xact_lock" in s else
+            "reread" if "FROM attempts" in s else "other"
+            for s, _ in conn.statements[:2]]
+        self.assertEqual(["lease", "reread"], statement_kinds)
+        self.assertEqual(["register"], order,
+                         "register() must run only after the lease and the "
+                         "re-read, not before")
+
+    def test_the_lease_and_the_registration_share_one_transaction(self):
+        # Acquired via the SAME cursor `_transaction(conn)` yields, so the
+        # lease is inside the product/outcome/watermark envelope and releases
+        # at that one commit — not a separate transaction of its own the way
+        # the reconciler's standalone `attempt_lease` context manager is.
+        conn = FakeConn()
+        consumer.register_batch(conn, [reconciled(1)],
+                                register=product_writer(conn))
+
+        self.assertEqual(1, conn.commits)
+        committed_statements = [s for s, _ in conn.committed]
+        self.assertTrue(any("pg_advisory_xact_lock" in s
+                            for s in committed_statements),
+                        "the lease acquisition must be part of the same "
+                        "committed unit of work as the registration")
+
+    def test_a_stale_watermark_at_the_lease_is_a_clean_skip_not_a_failure(self):
+        # Models the race the lease exists to close: another writer — the
+        # operator pass or the registration job route — registered this exact
+        # attempt at this exact sequence between this pass's unlocked
+        # candidate read and this attempt's turn under the lease.
+        conn = FakeConn(watermarks={1: (1, 1)})  # already registered at seq 1
+        called = []
+
+        def register(row, verdict):
+            called.append(row["attempt_id"])
+            return {"pid": 1, "version": 1, "product": "x",
+                    "role_resolved_from": "record"}
+
+        run = consumer.register_batch(conn, [reconciled(1)], register=register)
+
+        self.assertEqual([], called,
+                         "a candidate already registered under the lease "
+                         "must not reach the registration body at all")
+        self.assertEqual(0, run.registered)
+        self.assertEqual(1, run.skipped)
+        self.assertEqual(0, run.failed)
+        # The lease and its re-read commit (the lease is transaction-scoped
+        # and must release one way or the other), but nothing else does: no
+        # product write, no watermark advance, no outcome event.
+        committed_sql = [statement for statement, _ in conn.committed]
+        self.assertTrue(all("pg_advisory_xact_lock" in s or "FROM attempts" in s
+                            for s in committed_sql),
+                        f"unexpected writes on a clean skip: {committed_sql}")
+
+    def test_a_supersession_discovered_under_the_lease_is_a_clean_skip(self):
+        # The candidate read saw terminal_record_sequence=1; by the time the
+        # lease is held, the reconciler has published sequence 2. Registering
+        # against the stale target would record the wrong sequence.
+        conn = FakeConn(watermarks={1: (None, 2)})
+        called = []
+
+        def register(row, verdict):
+            called.append(row["attempt_id"])
+
+        run = consumer.register_batch(
+            conn, [reconciled(1, terminal_record_sequence=1)],
+            register=register)
+
+        self.assertEqual([], called)
+        self.assertEqual(0, run.registered)
+        self.assertEqual(1, run.skipped)
+        committed_sql = [statement for statement, _ in conn.committed]
+        self.assertTrue(all("pg_advisory_xact_lock" in s or "FROM attempts" in s
+                            for s in committed_sql),
+                        f"unexpected writes on a clean skip: {committed_sql}")
+
+    def test_a_fresh_candidate_under_the_lease_proceeds_normally(self):
+        # The ordinary, non-racing case: watermark re-read agrees with the
+        # candidate read, and registration proceeds exactly as before the
+        # lease existed.
+        conn = FakeConn(watermarks={1: (None, 1)})
+        run = consumer.register_batch(conn, [reconciled(1)],
+                                      register=product_writer(conn))
+
+        self.assertEqual(1, run.registered)
+        self.assertEqual(0, run.skipped)
+
+
+class ValidationRejectionTests(unittest.TestCase):
+    """INTEGRATION RULING 4: validation rejections are durable, not failures.
+
+    `MissingRecordFact` and `RecordValidationRejected` (`pipeline.
+    registration.products`) are the registrar's two validation classes — the
+    record is missing a fact it needs, or a fact it has fails verification.
+    Both commit a rejection outcome event and leave the watermark untouched.
+    The plainer `RegistrationFailed` `RecordValidationRejected` subclasses is
+    deliberately NOT one of them (see
+    `test_a_bare_registration_failed_is_a_failure_not_a_rejection`): it also
+    covers a retryable database conflict, so treating it as a rejection would
+    misfile a retry as a permanent verdict. Every other exception keeps the
+    prior failure/retry behaviour exactly.
+    """
+
+    def _rejection_writes(self, conn):
+        return [(statement, params) for statement, params in conn.committed
+                if "validation_rejections" in statement]
+
+    def _watermark_writes(self, conn):
+        return [(statement, params) for statement, params in conn.committed
+                if "registered_record_sequence =" in statement]
+
+    def test_a_missing_record_fact_is_rejected_not_failed(self):
+        conn = FakeConn()
+
+        def register(row, verdict):
+            raise consumer.MissingRecordFact("products", attempt_id=1)
+
+        run = consumer.register_batch(conn, [reconciled(1)], register=register)
+
+        self.assertEqual(0, run.failed)
+        self.assertEqual(1, run.rejected)
+        self.assertEqual(0, run.registered)
+
+    def test_a_checksum_mismatch_is_rejected(self):
+        conn = FakeConn()
+
+        def register(row, verdict):
+            raise consumer.RecordValidationRejected("checksum mismatch")
+
+        run = consumer.register_batch(conn, [reconciled(1)], register=register)
+
+        self.assertEqual(0, run.failed)
+        self.assertEqual(1, run.rejected)
+
+    def test_a_rejection_commits_its_outcome_event(self):
+        # Durable — the rejection is not lost when the transaction rolls
+        # back, because it is not a rollback: the rejection's own transaction
+        # commits the outcome event.
+        conn = FakeConn()
+
+        def register(row, verdict):
+            raise consumer.MissingRecordFact("products", attempt_id=1)
+
+        consumer.register_batch(conn, [reconciled(1)], register=register)
+
+        writes = self._rejection_writes(conn)
+        self.assertEqual(1, len(writes))
+        statement, params = writes[0]
+        event = json.loads(params["event"])
+        self.assertEqual("rejection", event["type"])
+        self.assertEqual("MissingRecordFact", event["error_class"])
+        self.assertEqual(1, conn.commits)
+        self.assertEqual(0, conn.rollbacks)
+
+    def test_a_rejection_does_not_advance_the_watermark(self):
+        conn = FakeConn()
+
+        def register(row, verdict):
+            raise consumer.RecordValidationRejected("checksum mismatch")
+
+        consumer.register_batch(conn, [reconciled(1)], register=register)
+
+        self.assertEqual([], self._watermark_writes(conn),
+                         "a validation rejection must leave the attempt "
+                         "retryable, which the watermark write would undo")
+
+    def test_a_rejection_writes_no_product_or_promotion_outcome(self):
+        conn = FakeConn()
+
+        def register(row, verdict):
+            raise consumer.MissingRecordFact("products", attempt_id=1)
+
+        consumer.register_batch(conn, [reconciled(1)], register=register)
+
+        promotions = [s for s, _ in conn.committed
+                     if "'promotions'" in s]
+        self.assertEqual([], promotions)
+
+    def test_repeated_identical_rejections_do_not_grow_the_document(self):
+        # THE CONVERGENCE PROPERTY. A record that fails validation the same
+        # way keeps failing it the same way — the record is immutable — so a
+        # rejection at the same record key/sequence/checksum on a later pass
+        # must not accumulate a second, identical entry. The append-once
+        # event-identity guard (mirroring `_RECORD_OUTCOME_SQL`'s) is what a
+        # real database enforces via the `@>` containment check; this test
+        # pins the SQL shape that guard depends on, since `FakeConn` does not
+        # evaluate JSONB itself.
+        self.assertIn("@>", consumer._RECORD_REJECTION_SQL)
+        self.assertIn("GREATEST", consumer._RECORD_REJECTION_SQL)
+        # And the event is fully determined by (attempt, record key,
+        # sequence, checksum, error class) — nothing time-varying — so the
+        # same rejection on the same record serializes identically every
+        # pass, which is what makes the `@>` containment check actually
+        # contain it.
+        conn = FakeConn()
+
+        def register(row, verdict):
+            raise consumer.MissingRecordFact("products", attempt_id=1)
+
+        consumer.register_batch(conn, [reconciled(1)], register=register)
+        first_event = json.loads(self._rejection_writes(conn)[0][1]["event"])
+
+        conn2 = FakeConn()
+        consumer.register_batch(conn2, [reconciled(1)], register=register)
+        second_event = json.loads(self._rejection_writes(conn2)[0][1]["event"])
+
+        self.assertEqual(first_event, second_event)
+
+    def test_a_non_validation_exception_is_still_a_failure_not_a_rejection(self):
+        # Infrastructure failures keep the prior behaviour exactly: counted
+        # as failed, no outcome event, retried next pass — not folded into
+        # the new rejection path.
+        conn = FakeConn()
+
+        def register(row, verdict):
+            raise RuntimeError("the database connection dropped")
+
+        run = consumer.register_batch(conn, [reconciled(1)], register=register)
+
+        self.assertEqual(1, run.failed)
+        self.assertEqual(0, run.rejected)
+        self.assertEqual([], self._rejection_writes(conn))
+
+    def test_a_bare_registration_failed_is_a_failure_not_a_rejection(self):
+        # THE TAXONOMY BOUNDARY. `products._check` raises plain
+        # `RegistrationFailed` when a stored-procedure call reports
+        # `dbh.exit_code >= 64` — a code `rapid_db.py` also sets for a
+        # genuine natural-unique or partial `vbest`-index conflict
+        # (catalog.md § Promotion, "Conflicts": explicitly RETRYABLE, not a
+        # permanent verdict on the record) as well as for an actual database
+        # fault. Catching the broad `RegistrationFailed` here would misfile
+        # a retryable conflict as a durable rejection — only the narrower
+        # `RecordValidationRejected` (raised solely by `read_record`'s own
+        # checksum/identity checks) is caught as a rejection.
+        conn = FakeConn()
+
+        def register(row, verdict):
+            raise consumer.RegistrationFailed(
+                "update_refimage failed for attempt 1: rapid_db exit_code 67")
+
+        run = consumer.register_batch(conn, [reconciled(1)], register=register)
+
+        self.assertEqual(1, run.failed)
+        self.assertEqual(0, run.rejected)
+        self.assertEqual([], self._rejection_writes(conn))
+
+    def test_record_validation_rejected_is_a_registration_failed_subclass(self):
+        # So any caller that already catches the broader class still catches
+        # this one — the narrowing is additive, not a breaking split.
+        self.assertTrue(issubclass(consumer.RecordValidationRejected,
+                                   consumer.RegistrationFailed))
+
+    def test_a_rejection_does_not_stop_the_pass(self):
+        # Per-attempt, like a failure: one rejected record must not block
+        # attempts after it in the same pass.
+        conn = FakeConn()
+
+        def register(row, verdict):
+            if row["attempt_id"] == 1:
+                raise consumer.MissingRecordFact("products", attempt_id=1)
+            return {"pid": 2, "version": 1, "product": "x",
+                    "role_resolved_from": "record"}
+
+        run = consumer.register_batch(
+            conn, [reconciled(1), reconciled(2)], register=register)
+
+        self.assertEqual(1, run.rejected)
+        self.assertEqual(1, run.registered)
 
 
 class NoLegacyMechanismTests(unittest.TestCase):

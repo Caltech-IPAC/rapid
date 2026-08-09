@@ -330,7 +330,33 @@ def _check(dbh, call, attempt_id):
 
 
 class RegistrationFailed(RuntimeError):
-    """A database call in a registration body reported failure."""
+    """A database call in a registration body reported failure.
+
+    Raised by `_check` when `dbh.exit_code >= 64`, which `rapid_db.py` also
+    sets for a genuine constraint conflict on the `update*` calls (catalog.md
+    § Promotion, "Conflicts": the natural-unique constraints and the partial
+    `vbest` indexes are both RETRYABLE — the attempt stays a candidate and a
+    later pass's registration legitimately supersedes the earlier winner).
+    `exit_code` does not distinguish a conflict from a transient database
+    fault, so neither can this class: both are infrastructure-shaped and
+    retried next pass, never a durable rejection. `RecordValidationRejected`
+    below is the narrower, unambiguous subset — never raised by `_check`.
+    """
+
+
+class RecordValidationRejected(RegistrationFailed):
+    """The terminal record itself fails verification (integration ruling 4).
+
+    Raised only by `read_record`'s own checks — checksum mismatch, attempt-
+    identity mismatch — where the record's bytes are what is wrong, not a
+    database call. Re-running the same registration body against the same
+    immutable record reaches the same verdict, which is what makes this a
+    DURABLE rejection (catalog.md § Promotion, "a validation rejection
+    commits its own registration-outcome entry ... without advancing the
+    registration watermark") rather than a retryable failure. A subclass of
+    `RegistrationFailed`, not a sibling: any caller that already catches the
+    parent broadly still catches this.
+    """
 
 
 def read_record(store, row):
@@ -367,7 +393,7 @@ def read_record(store, row):
         raise MissingRecordFact("terminal_record_checksum",
                                 attempt_id=attempt_id)
     if recorded != computed:
-        raise RegistrationFailed(
+        raise RecordValidationRejected(
             f"the terminal record at {key} for attempt {attempt_id} does not "
             f"match the checksum the row cites (recorded {recorded}, computed "
             f"{computed}); refusing to register from bytes the attempt did "
@@ -375,7 +401,7 @@ def read_record(store, row):
 
     body = json.loads(raw.decode("utf-8"))
     if str(body.get("attempt_id")) != str(attempt_id):
-        raise RegistrationFailed(
+        raise RecordValidationRejected(
             f"the record at {key} belongs to attempt "
             f"{body.get('attempt_id')}, not {attempt_id}")
     return body
