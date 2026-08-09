@@ -1056,6 +1056,51 @@ class PostDbGatheringTests(unittest.TestCase):
             list(gather_statistics_units(self.Source(per_field=[1],
                                                      failure=67)))
 
+    # `attempts.sca` is smallint and `attempts.exposure_id` is integer, probed
+    # live on rapid-db. A unit whose identity does not fit those domains
+    # cannot have a row created for it, so the constraint belongs here rather
+    # than being discovered at submission time — which is exactly how it WAS
+    # discovered: the first live merge-dedup submission raised
+    # `NumericValueOutOfRange: smallint out of range` from `create_submitted`,
+    # because the per-field units put a seven-digit field identifier
+    # (4641773) in `sca`. These tests use REAL field magnitudes for that
+    # reason; the original tests used single-digit fields, which fit smallint
+    # and so proved nothing.
+    SMALLINT_MAX = 32767
+    INTEGER_MAX = 2147483647
+
+    def test_a_real_field_identifier_does_not_overflow_the_sca_column(self):
+        units = list(gather_statistics_units(
+            self.Source(per_field=[4641773, 4645869])))
+
+        self.assertTrue(units)
+        for unit in units:
+            self.assertLessEqual(abs(unit.sca), self.SMALLINT_MAX)
+            self.assertLessEqual(abs(unit.exposure), self.INTEGER_MAX)
+
+    def test_per_field_units_carry_no_sca(self):
+        # A field identifier in `sca` would be a field pretending to be an
+        # SCA. These units have none, and 0 says so.
+        units = list(gather_merge_dedup_units(self.Source(per_field=[4641773])))
+
+        self.assertEqual(units[0].sca, 0)
+        self.assertEqual(units[0].exposure, 4641773)
+        self.assertEqual(units[0].fields["field"], 4641773)
+
+    def test_real_field_units_still_key_uniquely(self):
+        units = list(gather_statistics_units(
+            self.Source(per_field=[4641773, 4645869, 4637678])))
+
+        self.assertEqual(len({u.key for u in units}), 3)
+
+    def test_a_real_processing_date_fits_the_exposure_column(self):
+        units = list(gather_catalog_load_units(
+            self.Source(scas=[1, 18]), "20260808"))
+
+        for unit in units:
+            self.assertLessEqual(unit.exposure, self.INTEGER_MAX)
+            self.assertLessEqual(unit.sca, self.SMALLINT_MAX)
+
     def test_every_post_db_gatherer_stamps_its_job_type(self):
         # The manifest's job type fixes the route, so a unit gathered without
         # one is a unit no submitter can route.

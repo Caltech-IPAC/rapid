@@ -1021,11 +1021,19 @@ def _per_field_units(handle: UnitSource, job_type: str, prototype: str
     differ only in which prototype's clones define their work list and what
     they then do to each field, so the enumeration is written once.
 
-    The synthetic exposure is 0: these units are not scoped to a processing
-    date at all — `computeStatisticsForAstroObjects.py` notably read no
-    `JOBPROCDATE` and operated over whatever tables existed. The field alone
-    identifies the unit, and it rides in both `sca` (for key uniqueness) and
-    `fields` (as the real key).
+    **THE FIELD RIDES IN `exposure`, NOT IN `sca`** — and that is a live
+    finding, not a style choice. `attempts.sca` is `smallint` (max 32767)
+    because an SCA is 1-18; a Roman field identifier is seven digits
+    (4641773 in the live l2files), so putting one in `sca` raised
+    `NumericValueOutOfRange: smallint out of range` from `create_submitted`
+    on the first real submission. `exposure_id` is `integer`, which holds it.
+    The unit tests missed this because their synthetic fields were small
+    enough to fit — only a live row insert could surface it.
+
+    `sca` is therefore 0: these units have no SCA, and 0 says so rather than
+    a field identifier pretending to be one. Uniqueness comes from the field
+    in `exposure`, which is what `unit.key` and the run-scoped
+    `logical_job_key` are built from.
     """
     fields = handle.get_fields_with_per_field_table(prototype)
     code = getattr(handle, "exit_code", 0)
@@ -1037,7 +1045,7 @@ def _per_field_units(handle: UnitSource, job_type: str, prototype: str
     for field in fields or ():
         field = int(field[0] if isinstance(field, (list, tuple)) else field)
         yield ProcessingUnit(
-            exposure=0, sca=field,
+            exposure=field, sca=0,
             facts=UnitFacts(field=field),
             fields={"field": field, "job_type": job_type,
                     "target_table": f"{prototype}_{field}"})
