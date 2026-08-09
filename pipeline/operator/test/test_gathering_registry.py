@@ -189,3 +189,30 @@ class ClassFanOutTests(unittest.TestCase):
                              if c.job_type == JOB_TYPE_SCIENCE)
         self.assertIsNot(campaign_entry, science_entry)
         self.assertNotEqual(campaign_entry.name, science_entry.name)
+
+
+class RegistryCallShapeTests(unittest.TestCase):
+    """Every REGISTRY row honours the six-argument union call shape."""
+
+    def test_every_gather_function_accepts_the_documented_six_arguments(self):
+        # The registry docstring states the contract — `gather` takes
+        # `(operator_input, start_mjdobs, end_mjdobs, handle, parameters,
+        # s3_client)` — and `gatherer_for`'s dispatcher calls every row
+        # identically, never branching per entry. One row (science) used
+        # to take four: a TypeError on the first real prompt-class
+        # gather, found live at the mock's T0 enablement. Signature
+        # inspection catches that class of drift for every current and
+        # future row without invoking anything.
+        import inspect
+
+        from pipeline.operator.gathering import REGISTRY
+
+        for registry_key, _, gather_fn, _ in REGISTRY:
+            params = [
+                p for p in inspect.signature(gather_fn).parameters.values()
+                if p.kind in (p.POSITIONAL_ONLY, p.POSITIONAL_OR_KEYWORD,
+                              p.VAR_POSITIONAL)]
+            self.assertGreaterEqual(
+                len(params), 6,
+                f"registry row {registry_key!r}: gather function must "
+                f"accept the six-argument union call shape")

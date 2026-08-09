@@ -193,7 +193,13 @@ def _release_identity():
     return value
 
 
-def _science_gatherer(operator_input, start_mjdobs, end_mjdobs, handle):
+def _science_gatherer(operator_input, start_mjdobs, end_mjdobs, handle,
+                      parameters, s3_client):
+    # `parameters`/`s3_client` unused, taken anyway: every REGISTRY row's
+    # gather function carries the identical six-argument union shape the
+    # registry docstring states, so the dispatcher never branches. This
+    # row was the ONE that didn't — a TypeError at first prompt-class
+    # gather, found live at the mock's enablement.
     return list(gathering.gather_science_units(
         handle, operator_input.start, operator_input.end,
         start_mjdobs=start_mjdobs, end_mjdobs=end_mjdobs,
