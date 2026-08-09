@@ -982,7 +982,8 @@ class PostDbGatheringTests(unittest.TestCase):
             scas=[7],
             products={7: [(1086, 20, 7, 6765,
                            "s3://roman-rapid-products/science/run/000020/07/"
-                           "attempt-0000006765/sfftdiffimage_masked.fits")]})
+                           "attempt-0000006765/sfftdiffimage_masked.fits",
+                           4641773, 3, 61679.09)]})
 
         units = list(gather_catalog_load_units(source, "20260808"))
 
@@ -993,6 +994,12 @@ class PostDbGatheringTests(unittest.TestCase):
         self.assertTrue(
             inputs[0]["difference_image_uri"].endswith(
                 "attempt-0000006765/sfftdiffimage_masked.fits"))
+        # Per-product identity for the sources rows (mission mock, live
+        # 2026-08-09): field/fid/mjdobs ride each product, never a
+        # unit-constant fact.
+        self.assertEqual(inputs[0]["field"], 4641773)
+        self.assertEqual(inputs[0]["fid"], 3)
+        self.assertEqual(inputs[0]["mjdobs"], 61679.09)
         # No `jids` anywhere: the legacy fact is gone, not merely unused.
         self.assertNotIn("jids", units[0].fields)
 
