@@ -25,8 +25,10 @@ pipeline.reconciler.test.test_main
 pipeline.reconciler.test.test_retention
 pipeline.reconciler.test.test_scheduler
 pipeline.reconciler.test.test_service
+pipeline.reconciler.test.test_intent_closure
 pipeline.registration.test.test_consumer
 pipeline.registration.test.test_products
+database.modules.utils.test.test_checked
 pipeline.runtime.test.test_boundaries
 pipeline.runtime.test.test_environment
 pipeline.runtime.test.test_errors
@@ -45,8 +47,14 @@ pipeline.stages.test.test_sequences
 pipeline.test.test_mosaic_geometry
 pipeline.test.test_operator
 pipeline.test.test_seams
-pipeline.test.test_vpo_phases
+pipeline.operator.test.test_submission
+pipeline.operator.test.test_registrar
+pipeline.operator.test.test_mjd_window
+pipeline.operator.test.test_gathering_registry
+pipeline.intent.test.test_writer
+pipeline.mock.test.test_transformer
 submission.test.test_batching
+submission.test.test_subjects
 submission.test.test_gathering
 submission.test.test_manifest
 submission.test.test_manifest_vocabulary
