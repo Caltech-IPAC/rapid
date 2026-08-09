@@ -38,6 +38,7 @@ pipeline.runtime.test.test_stages
 pipeline.runtime.test.test_termination
 pipeline.runtime.test.test_workdir
 pipeline.stages.test.test_context
+pipeline.stages.test.test_alert_production
 pipeline.stages.test.test_post_db
 pipeline.stages.test.test_publishing
 pipeline.stages.test.test_sequences

@@ -46,11 +46,16 @@ from pipeline.runtime.errors import InputError
 
 logger = logging.getLogger(__name__)
 
-#: The internal-phase topic. The mission/public stream is not reachable from
-#: this job type: the internal namespace is what the publication policy grants
-#: (`rapid.internal.alerts.*` in the msk-internal-client policy) and what the
-#: step-4 co-design's internal phase measures against.
-INTERNAL_ALERT_TOPIC = "rapid.internal.alerts.v1"
+#: The internal-topic PREFIX this job type is allowed to publish under.
+#:
+#: The topic itself is a parameter (`kafka/topic`), not a constant here — one
+#: home per fact, and the parameter tree is that home. What is hardcoded is
+#: the namespace GUARD: the mission/public stream must not be reachable from
+#: this job type even by reconfiguration, and the publication policy grants
+#: `rapid.internal.alerts.*` (plus `rapid.test.*`) and nothing else. A
+#: parameter edit that pointed this at a public topic would otherwise be a
+#: one-line change with no code review of the blast radius.
+INTERNAL_TOPIC_PREFIXES = ("rapid.internal.", "rapid.test.")
 
 #: The PLACEHOLDER selection, labelled as one.
 #:
@@ -150,6 +155,7 @@ def produce_alerts(context) -> None:
             exposure, sca, release_identity)
         return
 
+    topic = _internal_topic(context)
     producer = _make_internal_producer(context)
     schema = load_schema()
 
@@ -176,8 +182,7 @@ def produce_alerts(context) -> None:
         try:
             alert = assemble_alert_for_source(provider, source)
             payload = serialize_alert(alert, schema=schema)
-            publish_alert(payload, producer, topic=INTERNAL_ALERT_TOPIC,
-                          flush=False)
+            publish_alert(payload, producer, topic=topic, flush=False)
             published += 1
         except Exception as exc:  # noqa: BLE001 - a candidate, not the chip
             # PER-CANDIDATE DROP (gate 3). The reason is the exception's type
@@ -206,7 +211,7 @@ def produce_alerts(context) -> None:
         dropped_by_reason=dropped_by_reason,
         drop_dispositions=drop_dispositions,
         emissions_suppressed=0,
-        alert_topic=INTERNAL_ALERT_TOPIC,
+        alert_topic=topic,
         alert_release_identity=release_identity,
         alert_difference_image_pid=pid,
         selection_rule=f"PLACEHOLDER top-{PLACEHOLDER_TOP_N_BY_SNR}-by-snr",
@@ -216,7 +221,7 @@ def produce_alerts(context) -> None:
         "(release %s, topic %s)",
         exposure, sca, considered, published,
         sum(dropped_by_reason.values()), release_identity,
-        INTERNAL_ALERT_TOPIC)
+        topic)
 
 
 def _update_emission_count(handle, exposure, sca, release_identity, published):
@@ -241,24 +246,56 @@ def _update_emission_count(handle, exposure, sca, release_identity, published):
                        "watermark for %s/%s: %s", exposure, sca, exc)
 
 
+def _internal_topic(context):
+    """This deployment's alert topic, refused unless it is an internal one.
+
+    The name comes from the parameter tree (`kafka/topic`), which is its one
+    home. The PREFIX check is the guard: the step-4 internal phase publishes
+    to internal topics only, and the mission/public stream is out of scope
+    entirely. Refusing here means a parameter pointing at a public topic
+    fails the attempt loudly rather than publishing simulation alerts onto a
+    stream consumers trust.
+    """
+    topic = context.parameter("kafka/topic")
+    if not topic:
+        raise InputError(
+            "the parameter tree does not carry kafka/topic; the "
+            "alert-production job type publishes to the internal topic and "
+            "has no default")
+    if not any(topic.startswith(prefix) for prefix in INTERNAL_TOPIC_PREFIXES):
+        raise InputError(
+            f"kafka/topic is {topic!r}, which is not an internal topic. The "
+            f"alert-production job type publishes under "
+            f"{' or '.join(INTERNAL_TOPIC_PREFIXES)} only; the mission "
+            f"stream is not reachable from this job type")
+    return topic
+
+
 def _make_internal_producer(context):
     """The real Kafka producer, on the internal topic.
 
     THE INJECTION SEAM MADE REAL. `batch_produce`'s `producer=` argument has
-    always accepted one; nothing constructed it outside the CLI. The broker is
-    a PARAMETER, not an environment variable read at import: the environment
-    policy puts nothing that selects a destination in the environment, and a
-    misread broker would publish to the wrong cluster silently.
+    always accepted one; nothing constructed it outside the CLI. The brokers
+    are a PARAMETER, not an environment variable read at import: the
+    environment policy puts nothing that selects a destination in the
+    environment, and a misread broker would publish to the wrong cluster
+    silently.
+
+    The request-size cap is NOT set here. `make_transport`'s own default
+    (15728640) already equals the tree's `kafka/max-request-bytes`, and
+    `make_producer` does not forward the keyword — passing it would be a
+    TypeError at the first real publication. If the two ever need to differ,
+    the forwarding is the change to make, not a second value invented here.
     """
     from alerts.kafka_producer import make_producer
 
-    broker = context.parameter("kafka/bootstrap-brokers")
-    if not broker:
+    brokers = context.parameter("kafka/bootstrap-servers")
+    if not brokers:
         raise InputError(
-            "the parameter tree does not carry kafka/bootstrap-brokers; the "
+            "the parameter tree does not carry kafka/bootstrap-servers; the "
             "alert-production job type publishes to the internal topic and "
             "has no default broker")
-    return make_producer(broker)
+    return make_producer(brokers)
 
 
 #: The job type's sequence — one stage, for the reason `produce_alerts` states.
