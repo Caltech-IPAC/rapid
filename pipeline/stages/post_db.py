@@ -357,11 +357,33 @@ def _write_sources_csv(context, catalogs, csv_path: str) -> int:
         for path in catalogs:
             positive = "_negative" not in os.path.basename(path)
             for row in util.read_psfcat_rows(path):
-                writer.writerow(_sources_row(row, facts, positive, sca))
+                writer.writerow(_copy_nulls(
+                    _sources_row(row, facts, positive, sca)))
                 written += 1
 
     context.logger.info("wrote %d source row(s) to %s", written, csv_path)
     return written
+
+
+def _copy_nulls(values):
+    """Render None as COPY's NULL marker rather than as an empty field.
+
+    **Found live by attempt 6774**, at the very end of a 591-second load: the
+    CSV built cleanly, all 282 files parsed, and `COPY` refused the first row
+    carrying an absent value with `InvalidTextRepresentation: invalid input
+    syntax for type integer: ""`.
+
+    `csv.writer` renders None as an EMPTY FIELD, and `copy_from` is told
+    `null="\\N"` — so an empty field is the literal empty string, which is a
+    valid text value and an invalid integer. The two conventions disagreed
+    about exactly one thing, and only a row with a genuinely absent value
+    could show it.
+
+    This is the "absent, not sentinel" rule meeting a format that has its own
+    spelling for absent. Nothing is defaulted here; the None is preserved and
+    written the way the reader on the other side reads it.
+    """
+    return ["\\N" if value is None else value for value in values]
 
 
 def _sources_row(row, facts, positive: bool, sca):

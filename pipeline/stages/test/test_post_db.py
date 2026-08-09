@@ -795,6 +795,31 @@ class CurrencySweepTests(unittest.TestCase):
                 identity_table="diffimages", identity_column="pid")
 
 
+class CopyNullTests(unittest.TestCase):
+    """An absent value must reach COPY as its NULL marker (attempt 6774).
+
+    `csv.writer` renders None as an empty field; `copy_from` is told
+    `null="\\N"`. The two disagree about exactly one thing, and the
+    disagreement only appears on a row whose value is genuinely absent — so
+    the load ran 591 seconds, parsed 282 files, and died on the first such
+    row with `invalid input syntax for type integer: ""`.
+    """
+
+    def test_none_becomes_the_copy_null_marker(self):
+        from pipeline.stages import post_db
+
+        self.assertEqual(post_db._copy_nulls([1, None, "x"]),
+                         [1, "\\N", "x"])
+
+    def test_zero_and_empty_string_are_not_nulls(self):
+        # The bug in reverse: a real 0 or "" must stay itself. Mapping
+        # falsiness rather than None would erase measured zeros.
+        from pipeline.stages import post_db
+
+        self.assertEqual(post_db._copy_nulls([0, "", False]),
+                         [0, "", False])
+
+
 class TablespacePlacementTests(unittest.TestCase):
     """A deploy-only defect, found live and guarded here (attempt 6771).
 
