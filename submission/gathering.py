@@ -44,14 +44,15 @@ import hashlib
 import logging
 from typing import Any, Iterable, Iterator, Protocol, Sequence
 
+from database.modules.utils.checked import RapidDBCallFailed
 from database.modules.utils.roman_tessellation_db import (
     RomanTessellationClosedForm)
 from .manifest import ProcessingUnit, UnitFacts
 from .routes import (JOB_TYPE_ALERT_PRODUCTION, JOB_TYPE_CATALOG_LOAD,
                      JOB_TYPE_CROSSMATCH, JOB_TYPE_MERGE_CURRENCY,
-                     JOB_TYPE_MERGE_DEDUP, JOB_TYPE_POST_PROCESS,
-                     JOB_TYPE_REFERENCE_IMAGE, JOB_TYPE_SCIENCE,
-                     JOB_TYPE_SOURCE_CURRENCY, JOB_TYPE_STATISTICS, ppid_for)
+                     JOB_TYPE_MERGE_DEDUP, JOB_TYPE_REFERENCE_IMAGE,
+                     JOB_TYPE_SCIENCE, JOB_TYPE_SOURCE_CURRENCY,
+                     JOB_TYPE_STATISTICS, ppid_for)
 from .submit import is_precondition_failed
 
 logger = logging.getLogger(__name__)
@@ -127,16 +128,6 @@ class UnitSource(Protocol):
                                 start_mjdobs: float | None = ...,
                                 end_mjdobs: float | None = ...
                                 ) -> Sequence[Any]: ...
-
-    def get_job_record(self, jid: int) -> Sequence[Any] | None: ...
-
-    def get_best_difference_image(self, rid: int,
-                                  ppid: int) -> dict[str, Any]: ...
-
-    def get_reference_image(self, rfid: int) -> dict[str, Any]: ...
-
-    def get_jids_of_normal_science_pipeline_jobs_for_processing_date(
-            self, proc_date: str) -> Sequence[Any]: ...
 
     # The post-DB science chain's three enumerations (step-3 conversion).
     def get_scas_with_science_jobs_for_processing_date(
@@ -256,14 +247,28 @@ def science_facts(handle: UnitSource, rid: int, field: int, fid: int,
     science_ppid = (ppid_for(JOB_TYPE_SCIENCE)
                     if science_ppid is None else science_ppid)
 
-    meta = handle.get_l2filemeta_record(rid)
+    # `get_l2filemeta_record`/`get_info_for_l2file` used to be read only for
+    # `None` — a failed query (nonzero exit_code, `None` returned) and a
+    # genuinely absent row looked identical. The adapter now raises
+    # `RapidDBCallFailed` for the former, so `None` here means only "no
+    # such row" (or the harmless code-7 not-found convention passed
+    # through clean — see `database.modules.utils.checked`).
+    try:
+        meta = handle.get_l2filemeta_record(rid)
+    except RapidDBCallFailed as exc:
+        raise GatheringError(
+            f"L2FileMeta lookup failed for rid {rid}: {exc}") from exc
     if meta is None or len(meta) < 12:
         raise GatheringError(
             f"rid {rid} has no L2FileMeta row; it cannot be positioned on "
             "the sky and no science unit can be built from it")
     sca = int(meta[0])
 
-    info = handle.get_info_for_l2file(rid)
+    try:
+        info = handle.get_info_for_l2file(rid)
+    except RapidDBCallFailed as exc:
+        raise GatheringError(
+            f"L2Files lookup failed for rid {rid}: {exc}") from exc
     # (filename, expid, sca, field, mjdobs, exptime, infobits, status,
     #  vbest, version) — the order get_info_for_l2file selects in.
     if info is None or len(info) < 8:
@@ -289,11 +294,19 @@ def science_facts(handle: UnitSource, rid: int, field: int, fid: int,
         tile_position=_tile_position(int(field)),
     )
 
-    filter_name = handle.get_exposure_filter(fid)
+    try:
+        filter_name = handle.get_exposure_filter(fid)
+    except RapidDBCallFailed as exc:
+        raise GatheringError(
+            f"filter lookup failed for fid {fid}: {exc}") from exc
     if filter_name is not None:
         facts = _replace(facts, filter_name=str(filter_name))
 
-    psf = handle.get_best_psf(sca, fid)
+    try:
+        psf = handle.get_best_psf(sca, fid)
+    except RapidDBCallFailed as exc:
+        raise GatheringError(
+            f"PSF lookup failed for sca {sca} fid {fid}: {exc}") from exc
     if psf is not None and len(psf) >= 2 and psf[0] is not None:
         facts = _replace(facts, psfid=_maybe_int(psf[0]),
                          psf_uri=_maybe_str(psf[1]))
@@ -322,19 +335,21 @@ def _best_reference(handle: UnitSource, reference_ppid: int,
     the only place that knows which call answered.
     """
     for ppid in (reference_ppid, science_ppid):
-        record = handle.get_best_reference_image(ppid, field, fid)
+        # exit_code 7 is the documented "no reference yet" signal, and the
+        # adapter passes it through as a clean (empty) result rather than
+        # raising — see `database.modules.utils.checked`. Any other query
+        # failure raises `RapidDBCallFailed` here, and is not caught: it
+        # must not read as "no reference".
+        try:
+            record = handle.get_best_reference_image(ppid, field, fid)
+        except RapidDBCallFailed as exc:
+            raise GatheringError(
+                f"reference lookup failed for field {field} fid {fid} "
+                f"under ppid {ppid}: {exc}") from exc
         if record:
             found = dict(record)
             found.setdefault("ppid", ppid)
             return found
-        # exit_code 7 is the documented "no reference yet" signal; any
-        # other nonzero is a real query failure and must not read as
-        # "no reference".
-        code = getattr(handle, "exit_code", 0)
-        if code not in (0, 7):
-            raise GatheringError(
-                f"reference lookup failed for field {field} fid {fid} "
-                f"under ppid {ppid}: rapid_db exit_code {code}")
     return None
 
 
@@ -519,16 +534,15 @@ def _overlapping_l2files(handle: UnitSource, rid: int, fid: int,
             REFERENCE_OVERLAP_OPEN_MJDOBS, *corners,
             radius_of_initial_cone_search=radius,
             start_mjdobs=start_mjdobs, end_mjdobs=end_mjdobs)
+    except RapidDBCallFailed as exc:
+        # This is a query failure, not an unready field, and must not be
+        # reported as one — hence `GatheringError`, not `NotReadyYet`.
+        raise GatheringError(
+            f"overlap query failed for rid {rid} fid {fid}: {exc}") from exc
     except Exception as exc:  # noqa: BLE001
         raise GatheringError(
             f"overlap query failed for rid {rid} fid {fid}: {exc}") from exc
 
-    code = getattr(handle, "exit_code", 0)
-    if code >= 64:
-        raise GatheringError(
-            f"overlap query failed for rid {rid} fid {fid}: rapid_db "
-            f"exit_code {code}. This is a query failure, not an unready "
-            f"field, and must not be reported as one")
     return overlapping or ()
 
 
@@ -575,12 +589,12 @@ def coadd_input_rows(handle: UnitSource, rid: int, fid: int, mjdobs: float,
     for image in overlapping:
         input_rid = int(image[0])
         field_from_overlap = image[11]
-        info = handle.get_info_for_l2file(input_rid)
-        code = getattr(handle, "exit_code", 0)
-        if code >= 64:
+        try:
+            info = handle.get_info_for_l2file(input_rid)
+        except RapidDBCallFailed as exc:
             raise GatheringError(
                 f"get_info_for_l2file failed for rid {input_rid}: "
-                f"rapid_db exit_code {code}")
+                f"{exc}") from exc
         if info is None:
             continue
 
@@ -803,115 +817,6 @@ def gather_reference_units(handle: UnitSource, start, end,
                                  coadd_inputs_checksum=checksum))
 
 
-def gather_post_process_units(handle: Any, proc_date: str
-                              ) -> Iterator[ProcessingUnit]:
-    """Yield post-process units for one processing date.
-
-    Post-process work is keyed by JOB id, not by rid: the unit is "close
-    out what this science job produced". `ProcessingUnit` is still the
-    carrier — the array layer knows nothing else — so the jid rides in
-    `fields`, which exists precisely for what `UnitFacts` does not name.
-
-    The exposure/SCA pair is taken from the job row, so the unit keys the
-    same way every other unit does and the run-scoped logical-job key
-    stays unique.
-    """
-    rows = handle.get_jids_of_normal_science_pipeline_jobs_for_processing_date(
-        proc_date)
-    for row in rows or ():
-        jid = int(row[0] if isinstance(row, (list, tuple)) else row)
-
-        # The job's own row, then the products it produced. `UnitFacts()` with
-        # no arguments used to be yielded here — no product URIs, no database
-        # identities — while `post_process.stamp_reference_image` requires
-        # `reference_image_uri` and `stamp_difference_image` requires
-        # `difference_image_uri`, `pid`, `rid`, `expid`, `fid` and `field` as
-        # its first act. Every post-process job would have failed
-        # `input_missing` before stamping either product.
-        #
-        # `get_job_record` was called behind a `hasattr` guard that was always
-        # false against the real handle, because the method did not exist. It
-        # does now; the guard is gone, so a handle that cannot answer is an
-        # error rather than a silent fall back to the degenerate key.
-        job = handle.get_job_record(jid)
-        exposure, sca = _job_identity(job, jid)
-        facts = post_process_facts(handle, job)
-
-        yield ProcessingUnit(exposure=exposure, sca=sca,
-                             facts=facts,
-                             fields={"jid": jid,
-                                     "job_type": JOB_TYPE_POST_PROCESS})
-
-
-def post_process_facts(handle: Any, job: Any) -> UnitFacts:
-    """The facts a post-process unit's stages require, from real queries.
-
-    Post-process stamps identities into the reference and difference images
-    this job produced, so it needs both products' URIs and the identities that
-    go into their headers. Every one traces to a column: the Jobs row for the
-    unit's own identity, DiffImages for the difference image and its pid, and
-    RefImages (through the difference image's rfid) for the reference.
-
-    A fact that cannot be resolved is left absent rather than defaulted, per
-    the module's stated rule — `UnitFacts.require` turns that into one named
-    failure at startup instead of a header stamped with a zero.
-    """
-    if job is None:
-        return UnitFacts()
-
-    # `get_job_record` returns the row tuple in its declared column order; a
-    # mapping is accepted too, because that is what a stub naturally supplies
-    # and the names are the same either way.
-    # NOTE no `sca`: it identifies the processing UNIT (`ProcessingUnit.sca`),
-    # not the facts, and `_job_identity` reads it from the same row for that
-    # purpose. One home per fact.
-    if isinstance(job, dict):
-        expid, field, fid, rid = (
-            _maybe_int(job.get(name))
-            for name in ("expid", "field", "fid", "rid"))
-    else:
-        expid, field, fid, rid = (
-            _maybe_int(job[index]) for index in (0, 2, 3, 4))
-    facts = UnitFacts(expid=expid, field=field, fid=fid, rid=rid)
-
-    if rid is None:
-        return facts
-
-    difference = handle.get_best_difference_image(rid, ppid_for(JOB_TYPE_SCIENCE))
-    code = getattr(handle, "exit_code", 0)
-    if code not in (0, 7):
-        raise GatheringError(
-            f"difference-image lookup failed for rid {rid}: "
-            f"rapid_db exit_code {code}")
-    if not difference:
-        return facts
-
-    facts = _replace(
-        facts,
-        pid=_maybe_int(difference.get("pid")),
-        difference_image_uri=_maybe_str(difference.get("filename")),
-        infobits=_maybe_int(difference.get("infobitssci")),
-        difference_image_version=_maybe_int(difference.get("version")))
-
-    # The reference this difference image was made against — named by the
-    # difference image's own rfid, which is the only thing that knows WHICH
-    # reference was used. Looking one up by field/filter instead could return a
-    # newer reference than the one actually differenced against.
-    rfid = _maybe_int(difference.get("rfid"))
-    if rfid is None:
-        return facts
-
-    reference = handle.get_reference_image(rfid)
-    if not reference:
-        return _replace(facts, reference_image_id=rfid)
-    return _replace(
-        facts,
-        reference_image_id=rfid,
-        reference_image_uri=_maybe_str(reference.get("filename")),
-        reference_image_infobits=_maybe_int(reference.get("infobits")),
-        reference_image_version=_maybe_int(reference.get("version")))
-
-
 # ---------------------------------------------------------------------------
 # The post-DB science chain (step-3 conversion)
 # ---------------------------------------------------------------------------
@@ -934,10 +839,10 @@ def post_process_facts(handle: Any, job: Any) -> UnitFacts:
 #
 # THE UNITS ARE NOT EXPOSURE/SCA, AND `ProcessingUnit` STILL CARRIES THEM.
 # The array layer knows one carrier, and `ProcessingUnit(exposure, sca)` is
-# it. Post-process already established the pattern for work that is not keyed
-# by exposure — the jid rides in `fields` — and these follow it: the real key
-# (processing date, SCA, or field) rides in `fields`, and `exposure`/`sca`
-# carry a stable synthetic identity that keeps `unit.key` unique, which is
+# it. These follow the pattern gathering already used for units not keyed by
+# exposure: the real key (processing date, SCA, or field) rides in `fields`,
+# and `exposure`/`sca` carry a stable synthetic identity that keeps `unit.key`
+# unique, which is
 # what `logical_job_key` needs to keep run-scoped rows from colliding.
 
 
@@ -994,23 +899,23 @@ def gather_catalog_load_units(handle: UnitSource, proc_date: str
     """
     ordinal = _proc_date_ordinal(proc_date)
 
-    scas = handle.get_scas_with_science_jobs_for_processing_date(proc_date)
-    code = getattr(handle, "exit_code", 0)
-    if code not in (0, 7):
+    try:
+        scas = handle.get_scas_with_science_jobs_for_processing_date(proc_date)
+    except RapidDBCallFailed as exc:
         raise GatheringError(
             f"SCA enumeration failed for processing date {proc_date}: "
-            f"rapid_db exit_code {code}")
+            f"{exc}") from exc
 
     for sca in scas or ():
         sca = int(sca[0] if isinstance(sca, (list, tuple)) else sca)
 
-        products = handle.get_registered_diffimages_for_processing_date_sca(
-            proc_date, sca)
-        code = getattr(handle, "exit_code", 0)
-        if code not in (0, 7):
+        try:
+            products = handle.get_registered_diffimages_for_processing_date_sca(
+                proc_date, sca)
+        except RapidDBCallFailed as exc:
             raise GatheringError(
                 f"product enumeration failed for {proc_date} SCA {sca}: "
-                f"rapid_db exit_code {code}")
+                f"{exc}") from exc
 
         # (pid, expid, sca, attempt_id, filename) — the query's column order.
         # Carried as mappings rather than raw tuples because the manifest is
@@ -1072,13 +977,13 @@ def gather_crossmatch_units(handle: UnitSource, proc_date: str
     """
     ordinal = _proc_date_ordinal(proc_date)
 
-    incomplete = handle.get_scas_with_incomplete_catalog_load_for_processing_date(
-        proc_date)
-    code = getattr(handle, "exit_code", 0)
-    if code not in (0, 7):
+    try:
+        incomplete = handle.get_scas_with_incomplete_catalog_load_for_processing_date(
+            proc_date)
+    except RapidDBCallFailed as exc:
         raise GatheringError(
             f"catalog-load coverage check failed for processing date "
-            f"{proc_date}: rapid_db exit_code {code}")
+            f"{proc_date}: {exc}") from exc
     if incomplete:
         logger.info(
             "crossmatch: processing date %s has %d SCA(s) with no completed "
@@ -1086,12 +991,13 @@ def gather_crossmatch_units(handle: UnitSource, proc_date: str
             proc_date, len(incomplete), sorted(int(s) for s in incomplete))
         return
 
-    fields = handle.get_fields_with_science_jobs_for_processing_date(proc_date)
-    code = getattr(handle, "exit_code", 0)
-    if code not in (0, 7):
+    try:
+        fields = handle.get_fields_with_science_jobs_for_processing_date(
+            proc_date)
+    except RapidDBCallFailed as exc:
         raise GatheringError(
             f"field enumeration failed for processing date {proc_date}: "
-            f"rapid_db exit_code {code}")
+            f"{exc}") from exc
 
     for field in fields or ():
         field = int(field[0] if isinstance(field, (list, tuple)) else field)
@@ -1126,12 +1032,12 @@ def _per_field_units(handle: UnitSource, job_type: str, prototype: str
     in `exposure`, which is what `unit.key` and the run-scoped
     `logical_job_key` are built from.
     """
-    fields = handle.get_fields_with_per_field_table(prototype)
-    code = getattr(handle, "exit_code", 0)
-    if code not in (0, 7):
+    try:
+        fields = handle.get_fields_with_per_field_table(prototype)
+    except RapidDBCallFailed as exc:
         raise GatheringError(
             f"per-field enumeration failed for prototype {prototype}: "
-            f"rapid_db exit_code {code}")
+            f"{exc}") from exc
 
     for field in fields or ():
         field = int(field[0] if isinstance(field, (list, tuple)) else field)
@@ -1234,13 +1140,13 @@ def gather_alert_production_units(handle: UnitSource, release_identity: str,
             "once per logical unit per RELEASE, so a pass without one cannot "
             "tell an already-emitted unit from a new one")
 
-    rows = handle.get_attempts_awaiting_alert_emission(release_identity,
-                                                       limit=limit)
-    code = getattr(handle, "exit_code", 0)
-    if code not in (0, 7):
+    try:
+        rows = handle.get_attempts_awaiting_alert_emission(release_identity,
+                                                           limit=limit)
+    except RapidDBCallFailed as exc:
         raise GatheringError(
             f"alert gathering failed for release {release_identity}: "
-            f"rapid_db exit_code {code}")
+            f"{exc}") from exc
 
     for row in rows or ():
         # (attempt_id, expid, sca, pid, product, role_resolved_from,
@@ -1297,12 +1203,12 @@ def initialize_alert_watermark(handle: UnitSource, release_identity: str,
 
     Returns the number of units claimed.
     """
-    rows = handle.get_attempts_awaiting_alert_emission(release_identity)
-    code = getattr(handle, "exit_code", 0)
-    if code not in (0, 7):
+    try:
+        rows = handle.get_attempts_awaiting_alert_emission(release_identity)
+    except RapidDBCallFailed as exc:
         raise GatheringError(
             f"watermark initialization could not read the outstanding units "
-            f"for release {release_identity}: rapid_db exit_code {code}")
+            f"for release {release_identity}: {exc}") from exc
 
     claimed = 0
     for row in rows or ():
@@ -1310,35 +1216,29 @@ def initialize_alert_watermark(handle: UnitSource, release_identity: str,
                                        for index in (0, 1, 2, 3))
         if expid is None or sca is None:
             continue
-        if handle.record_alert_emission(int(expid), int(sca),
-                                        str(release_identity),
-                                        int(attempt_id), pid=pid,
-                                        alerts_published=0):
+        # `record_alert_emission` used to be read only for its return value
+        # — a failed claim (nonzero exit_code) and a claim that lost the
+        # `ON CONFLICT DO NOTHING` race both fell through as "not claimed"
+        # and this unit was silently skipped rather than the pass being
+        # told a query had failed mid-backfill. The adapter now raises
+        # instead, so only a genuine race loss reaches the `if` below.
+        try:
+            won = handle.record_alert_emission(int(expid), int(sca),
+                                               str(release_identity),
+                                               int(attempt_id), pid=pid,
+                                               alerts_published=0)
+        except RapidDBCallFailed as exc:
+            raise GatheringError(
+                f"watermark initialization could not claim unit "
+                f"{expid}/{sca} for release {release_identity}: "
+                f"{exc}") from exc
+        if won:
             claimed += 1
 
     logger.info("alert watermark initialized for release %s (%s): %d unit(s) "
                 "claimed with zero alerts published; they will not emit "
                 "retroactively", release_identity, reason, claimed)
     return claimed
-
-
-def _job_identity(job: Any, jid: int) -> tuple[int, int]:
-    """(exposure, sca) for a post-process unit, or a jid-derived fallback.
-
-    A Jobs row carries expid and sca; where the handle cannot supply the
-    row, the jid alone still has to produce a unique unit key, so it
-    becomes the exposure with SCA 0. That is a labelled degenerate case,
-    not a silent default: it keeps the run-scoped key unique (the jid is
-    unique) without pretending to know an SCA it was never told.
-    """
-    if job is not None:
-        expid = _maybe_int(job[0] if not isinstance(job, dict)
-                           else job.get("expid"))
-        sca = _maybe_int(job[1] if not isinstance(job, dict)
-                         else job.get("sca"))
-        if expid is not None and sca is not None:
-            return int(expid), int(sca)
-    return int(jid), 0
 
 
 def _sca_of(handle: UnitSource, rid: int) -> int:

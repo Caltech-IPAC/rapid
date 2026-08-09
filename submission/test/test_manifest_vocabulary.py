@@ -79,9 +79,9 @@ def test_an_unknown_job_type_is_refused_at_construction():
 
 
 def test_the_job_type_survives_a_round_trip():
-    original = Manifest(units(), batch_id="b1", job_type="post-process")
+    original = Manifest(units(), batch_id="b1", job_type="registration")
     restored = Manifest.from_json(original.to_json())
-    assert restored.job_type == "post-process"
+    assert restored.job_type == "registration"
     assert restored == original
 
 

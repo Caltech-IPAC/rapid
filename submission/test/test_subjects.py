@@ -23,7 +23,7 @@ from submission.manifest import ProcessingUnit
 from submission.routes import (JOB_TYPE_ALERT_PRODUCTION,
                                JOB_TYPE_CATALOG_LOAD, JOB_TYPE_CROSSMATCH,
                                JOB_TYPE_MERGE_CURRENCY, JOB_TYPE_MERGE_DEDUP,
-                               JOB_TYPE_POST_PROCESS, JOB_TYPE_REFERENCE_IMAGE,
+                               JOB_TYPE_REFERENCE_IMAGE, JOB_TYPE_REGISTRATION,
                                JOB_TYPE_SCIENCE, JOB_TYPE_SOURCE_CURRENCY,
                                JOB_TYPE_STATISTICS)
 from submission.subjects import (GRAIN_DATE_FIELD, GRAIN_DATE_SCA,
@@ -43,11 +43,12 @@ class GrainDeclarationTests(unittest.TestCase):
             self.assertFalse(is_product_producing(job_type),
                              f"{job_type} must not be product-producing")
 
-    def test_post_process_is_deliberately_unregistered(self):
-        # Co-design ruling 9: post-process's disposition is undecided, so it
-        # stays out of this registry rather than being guessed into a grain.
+    def test_registration_is_deliberately_unregistered(self):
+        # Registration is not gathered through this path at all — it has no
+        # declared subject grain and stays out of this registry rather than
+        # being guessed into one.
         with self.assertRaises(SubjectError):
-            subject_for(JOB_TYPE_POST_PROCESS)
+            subject_for(JOB_TYPE_REGISTRATION)
 
     def test_grains_match_the_ruling_text(self):
         self.assertEqual(subject_for(JOB_TYPE_CATALOG_LOAD).grain,
@@ -85,11 +86,11 @@ class DedupSubjectTests(unittest.TestCase):
                          (JOB_TYPE_SCIENCE, 90000, 1))
 
     def test_an_unregistered_job_type_falls_back_to_exposure_sca(self):
-        # post-process and any job type the registry does not cover keep
+        # Registration and any job type the registry does not cover keep
         # the pre-ruling exposure/SCA identity rather than raising.
         unit = ProcessingUnit(exposure=42, sca=3)
-        self.assertEqual(unit.dedup_key(JOB_TYPE_POST_PROCESS),
-                         (JOB_TYPE_POST_PROCESS, 42, 3))
+        self.assertEqual(unit.dedup_key(JOB_TYPE_REGISTRATION),
+                         (JOB_TYPE_REGISTRATION, 42, 3))
 
 
 class AttemptIdentityFieldTests(unittest.TestCase):

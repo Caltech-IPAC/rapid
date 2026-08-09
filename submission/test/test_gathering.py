@@ -16,6 +16,7 @@ import os
 import unittest
 from unittest import mock
 
+from database.modules.utils.checked import FAILURE_THRESHOLD, RapidDBCallFailed
 from submission import gathering
 from submission.gathering import (
     GatheringError,
@@ -24,7 +25,6 @@ from submission.gathering import (
     gather_crossmatch_units,
     gather_merge_currency_units,
     gather_merge_dedup_units,
-    gather_post_process_units,
     gather_science_units,
     gather_source_currency_units,
     gather_statistics_units,
@@ -38,11 +38,28 @@ from submission.routes import (
     JOB_TYPE_CROSSMATCH,
     JOB_TYPE_MERGE_CURRENCY,
     JOB_TYPE_MERGE_DEDUP,
-    JOB_TYPE_POST_PROCESS,
     JOB_TYPE_SCIENCE,
     JOB_TYPE_SOURCE_CURRENCY,
     JOB_TYPE_STATISTICS,
 )
+
+
+def _refuse_if_failed(source, method):
+    """Raise `RapidDBCallFailed` for a stub call that set `exit_code >= 64`.
+
+    Production gathering no longer reads `source.exit_code` itself — that
+    check now lives in `database.modules.utils.checked.CheckedHandle`,
+    which wraps the real handle before a gatherer ever sees it. These
+    stubs are called directly, with no adapter in front of them, so a
+    stub that wants to exercise "the query failed" must refuse the same
+    way the adapter would: raise, rather than return `None` and rely on
+    a caller-side `exit_code` check that no longer exists. Code 7 (the
+    documented "no record" convention) is not a failure and is not
+    raised here, matching `CheckedHandle.FAILURE_THRESHOLD`.
+    """
+    code = getattr(source, "exit_code", 0)
+    if code >= FAILURE_THRESHOLD:
+        raise RapidDBCallFailed(method, code)
 
 
 class StubSource:
@@ -101,8 +118,11 @@ class StubSource:
     def get_best_reference_image(self, ppid, field, fid):
         self.reference_calls.append(ppid)
         if callable(self.reference):
-            return self.reference(self, ppid, field, fid)
-        return self.reference
+            result = self.reference(self, ppid, field, fid)
+        else:
+            result = self.reference
+        _refuse_if_failed(self, "get_best_reference_image")
+        return result
 
 
 # ---------------------------------------------------------------------------
@@ -304,138 +324,6 @@ class GatherScienceUnitsTests(unittest.TestCase):
         self.assertIn("exposure", str(ctx.exception))
 
 
-# ---------------------------------------------------------------------------
-# Post-process units
-# ---------------------------------------------------------------------------
-
-class GatherPostProcessUnitsTests(unittest.TestCase):
-
-    class JobSource:
-        def __init__(self, jids, job=None):
-            self.jids = jids
-            self.job = job
-
-        def get_jids_of_normal_science_pipeline_jobs_for_processing_date(
-                self, proc_date):
-            return [(jid,) for jid in self.jids]
-
-        def get_job_record(self, jid):
-            return self.job
-
-    def test_the_jid_rides_in_fields_not_in_unit_facts(self):
-        # Post-process work is keyed by JOB, not by rid. `fields` exists
-        # precisely for what `UnitFacts` does not name.
-        units = list(gather_post_process_units(
-            self.JobSource([4242]), "2026-08-06"))
-        self.assertEqual(len(units), 1)
-        self.assertEqual(units[0].fields["jid"], 4242)
-        self.assertEqual(units[0].fields["job_type"], JOB_TYPE_POST_PROCESS)
-
-    def test_exposure_and_sca_come_from_the_job_row_when_available(self):
-        units = list(gather_post_process_units(
-            self.JobSource([4242], job={"expid": 5001, "sca": 7}),
-            "2026-08-06"))
-        self.assertEqual((units[0].exposure, units[0].sca), (5001, 7))
-
-    def test_without_a_job_row_the_jid_still_keys_the_unit_uniquely(self):
-        # A labelled degenerate case, not a silent default: the jid is
-        # unique, so the run-scoped key stays unique, without pretending to
-        # know an SCA nobody supplied.
-        units = list(gather_post_process_units(
-            self.JobSource([4242, 4243]), "2026-08-06"))
-        keys = {unit.key for unit in units}
-        self.assertEqual(len(keys), 2)
-
-
-class PostProcessFactsTests(unittest.TestCase):
-    """The facts post-process stages require, from real queries.
-
-    `UnitFacts()` with no arguments used to be yielded — no product URIs, no
-    database identities — while `stamp_reference_image` requires
-    `reference_image_uri` and `stamp_difference_image` requires
-    `difference_image_uri`, `pid`, `rid`, `expid`, `fid` and `field` as its
-    first act. Every post-process job would have failed `input_missing` before
-    stamping either product.
-    """
-
-    class Source:
-        exit_code = 0
-
-        def __init__(self, difference=None, reference=None, failure=None):
-            self.difference = difference if difference is not None else {}
-            self.reference = reference if reference is not None else {}
-            #: The exit_code the query leaves behind. 7 is the documented "no
-            #: best record" signal; anything else nonzero is a real failure.
-            self.failure = failure
-
-        def get_best_difference_image(self, rid, ppid):
-            if self.failure is not None:
-                self.exit_code = self.failure
-                return {}
-            if not self.difference:
-                self.exit_code = 7
-            return self.difference
-
-        def get_reference_image(self, rfid):
-            return self.reference
-
-    JOB = (5001, 7, 4678636, 1, 42, 15, 1, 0)   # expid, sca, field, fid, rid…
-
-    def _facts(self, **kwargs):
-        return gathering.post_process_facts(self.Source(**kwargs), self.JOB)
-
-    def test_the_job_row_supplies_the_units_own_identity(self):
-        # No `sca` here: it identifies the processing UNIT, not the facts,
-        # and `_job_identity` reads it from the same row for that purpose.
-        facts = self._facts()
-        self.assertEqual((facts.expid, facts.field, facts.fid, facts.rid),
-                         (5001, 4678636, 1, 42))
-
-    def test_the_difference_image_and_its_pid_come_from_diffimages(self):
-        facts = self._facts(difference={
-            "pid": 900, "rfid": 12, "filename": "s3://p/diff.fits",
-            "infobitssci": 4, "version": 3})
-
-        self.assertEqual(facts.pid, 900)
-        self.assertEqual(facts.difference_image_uri, "s3://p/diff.fits")
-        self.assertEqual(facts.infobits, 4)
-        self.assertEqual(facts.difference_image_version, 3)
-
-    def test_the_reference_is_the_one_this_difference_was_made_against(self):
-        # By rfid, not by a fresh field/filter lookup: looking one up could
-        # return a NEWER reference than the one actually differenced against.
-        facts = self._facts(
-            difference={"pid": 900, "rfid": 12,
-                        "filename": "s3://p/diff.fits"},
-            reference={"rfid": 12, "filename": "s3://p/ref.fits",
-                       "infobits": 2, "version": 5})
-
-        self.assertEqual(facts.reference_image_id, 12)
-        self.assertEqual(facts.reference_image_uri, "s3://p/ref.fits")
-        self.assertEqual(facts.reference_image_infobits, 2)
-        self.assertEqual(facts.reference_image_version, 5)
-
-    def test_no_difference_image_leaves_those_facts_absent(self):
-        # Absent, not defaulted: `UnitFacts.require` turns absence into one
-        # named failure at startup rather than a header stamped with a zero.
-        facts = self._facts()
-
-        self.assertIsNone(facts.pid)
-        self.assertIsNone(facts.difference_image_uri)
-        self.assertEqual(facts.rid, 42)
-
-    def test_no_job_row_yields_empty_facts_rather_than_raising(self):
-        self.assertEqual(UnitFacts(),
-                         gathering.post_process_facts(self.Source(), None))
-
-    def test_a_real_query_failure_is_not_read_as_no_difference_image(self):
-        # exit_code 7 means "no best record"; 67 means the query failed. A
-        # gatherer that cannot tell them apart yields a unit with no products
-        # and reports success.
-        with self.assertRaises(gathering.GatheringError):
-            gathering.post_process_facts(self.Source(failure=67), self.JOB)
-
-
 class FakeConditionalS3:
     """Just enough S3 to exercise the conditional put, semantics not calls.
 
@@ -528,6 +416,7 @@ class CoaddInputsTests(unittest.TestCase):
             self.overlap_windows.append((start_mjdobs, end_mjdobs))
             if self.overlap_failure is not None:
                 self.exit_code = self.overlap_failure
+                _refuse_if_failed(self, "get_overlapping_l2files")
                 return None
             return self.overlapping
 
@@ -833,6 +722,7 @@ class GatherReferenceUnitsTests(unittest.TestCase):
             self.overlap_windows.append((start_mjdobs, end_mjdobs))
             if self.overlap_failure is not None:
                 self.exit_code = self.overlap_failure
+                _refuse_if_failed(self, "get_overlapping_l2files")
                 return None
             return self.overlapping
 
@@ -946,28 +836,35 @@ class PostDbGatheringTests(unittest.TestCase):
         def get_scas_with_science_jobs_for_processing_date(self, proc_date):
             self.asked_for.append(("scas", proc_date))
             self.exit_code = self.failure
+            _refuse_if_failed(self, "get_scas_with_science_jobs_for_processing_date")
             return None if self.failure else self.scas
 
         def get_scas_with_incomplete_catalog_load_for_processing_date(
                 self, proc_date):
             self.asked_for.append(("incomplete_catalog_load", proc_date))
             self.exit_code = self.failure
+            _refuse_if_failed(
+                self, "get_scas_with_incomplete_catalog_load_for_processing_date")
             return None if self.failure else self.incomplete_catalog_load
 
         def get_fields_with_science_jobs_for_processing_date(self, proc_date):
             self.asked_for.append(("fields", proc_date))
             self.exit_code = self.failure
+            _refuse_if_failed(self, "get_fields_with_science_jobs_for_processing_date")
             return None if self.failure else self.fields
 
         def get_fields_with_per_field_table(self, prototype):
             self.asked_for.append(("per_field", prototype))
             self.exit_code = self.failure
+            _refuse_if_failed(self, "get_fields_with_per_field_table")
             return None if self.failure else self.per_field
 
         def get_registered_diffimages_for_processing_date_sca(self, proc_date,
                                                               sca):
             self.asked_for.append(("products", proc_date, sca))
             self.exit_code = self.failure
+            _refuse_if_failed(
+                self, "get_registered_diffimages_for_processing_date_sca")
             return None if self.failure else self.products.get(int(sca), [])
 
     # -- catalog load: (processing date, SCA) ------------------------------
@@ -1234,6 +1131,7 @@ class AlertProductionGatheringTests(unittest.TestCase):
         def get_attempts_awaiting_alert_emission(self, release_identity,
                                                  limit=None):
             self.exit_code = self.failure
+            _refuse_if_failed(self, "get_attempts_awaiting_alert_emission")
             if self.failure:
                 return None
             rows = [row for row in self.rows
@@ -1243,6 +1141,7 @@ class AlertProductionGatheringTests(unittest.TestCase):
         def record_alert_emission(self, exposure_id, sca, release_identity,
                                   attempt_id, pid=None, alerts_published=0):
             self.exit_code = self.failure
+            _refuse_if_failed(self, "record_alert_emission")
             if self.failure:
                 return None
             key = (exposure_id, sca, release_identity)

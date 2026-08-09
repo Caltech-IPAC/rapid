@@ -9,9 +9,9 @@ files, so a duplicate would silently overwrite an earlier stage's log).
 
 **Why `sys.modules` is stubbed before import.** Importing `pipeline.stages.
 sequences` (directly, or transitively through `pipeline/stages/__init__.py`)
-pulls in `science`, `reference_image`, and `post_process`, which import
-numpy, astropy, scipy, psycopg2, boto3, dateutil, galsim, romanisim, and
-photutils at module scope. None of those are installed in this environment.
+pulls in `science` and `reference_image`, which import numpy, astropy,
+scipy, psycopg2, boto3, dateutil, galsim, romanisim, and photutils at
+module scope. None of those are installed in this environment.
 `sequence_for` and the `SEQUENCES` table itself need none of that machinery
 — they are a lookup over `(name, callable)` tuples — so lightweight
 stand-ins satisfy the import chain without exercising the science.
@@ -140,14 +140,6 @@ class SequenceForTests(unittest.TestCase):
 
     def test_reference_image_returns_a_non_empty_tuple_of_name_callable_pairs(self):
         sequence = sequence_for("reference-image")
-        self.assertIsInstance(sequence, tuple)
-        self.assertGreater(len(sequence), 0)
-        for name, fn in sequence:
-            self.assertIsInstance(name, str)
-            self.assertTrue(callable(fn))
-
-    def test_post_process_returns_a_non_empty_tuple_of_name_callable_pairs(self):
-        sequence = sequence_for("post-process")
         self.assertIsInstance(sequence, tuple)
         self.assertGreater(len(sequence), 0)
         for name, fn in sequence:

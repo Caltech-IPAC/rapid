@@ -249,23 +249,16 @@ class UnitFacts:
     reference_overlapping_fields : list, optional
         Tessellation identifiers the reference image overlaps.
     reference_image_version : int, optional
-        Version of the reference image (RefImages.version), stamped into the
-        reference image's RFIMVER header by post-process.
+        Version of the reference image (RefImages.version).
     pid : int, optional
-        Identifier of the difference image this unit closes out
-        (DiffImages.pid). Post-process only.
+        Identifier of the difference image this unit is about
+        (DiffImages.pid). Set by alert-production gathering, which names it
+        as the promoted difference-image identity a unit's alerts are drawn
+        from.
     difference_image_uri : str, optional
-        S3 URI of the difference image (DiffImages.filename). Post-process
-        only.
+        S3 URI of the difference image (DiffImages.filename).
     difference_image_version : int, optional
-        Version of the difference image (DiffImages.version), stamped into its
-        DIFIMVER header.
-
-    The last four are the post-process job type's own facts. They were absent
-    from this vocabulary while `pipeline/stages/post_process.py` required
-    `pid` and `difference_image_uri` through `context.fact` — so the facts the
-    stage demanded had no home to be carried in, and post-process gathering
-    could not have supplied them even had it tried.
+        Version of the difference image (DiffImages.version).
     """
 
     rid: int | None = None
@@ -424,13 +417,11 @@ class ProcessingUnit:
         hand: the accumulator was constructed with it, and a manifest names
         it.
 
-        **JOB TYPES OUTSIDE THE TYPED-IDENTITY REGISTRY** (post-process,
-        registration, reprocessing — co-design ruling 9 leaves
-        post-process's disposition undecided, and the other two are not
-        gathered through this path at all) fall back to `(job_type,
-        exposure, sca)`: the exposure/SCA identity every job type used
-        before this ruling, which is exactly right for them because none of
-        the three has a grain other than exposure/SCA today.
+        **JOB TYPES OUTSIDE THE TYPED-IDENTITY REGISTRY** (registration,
+        reprocessing — not gathered through this path at all) fall back to
+        `(job_type, exposure, sca)`: the exposure/SCA identity every job
+        type used before this ruling, which is exactly right for them
+        because neither has a grain other than exposure/SCA today.
         """
         try:
             return subject_for(job_type).subject_for(self)

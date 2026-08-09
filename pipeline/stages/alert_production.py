@@ -42,6 +42,7 @@ twice while claiming to have published once is not.
 
 import logging
 
+from database.modules.utils.checked import CheckedHandle
 from pipeline.runtime.errors import InputError
 
 logger = logging.getLogger(__name__)
@@ -124,7 +125,11 @@ def produce_alerts(context) -> None:
     sca = int(context.unit.sca)
 
     provider = make_provider()
-    handle = provider.db
+    # Adapter-mediated (integration review composite ruling 10): the claim
+    # below either returns cleanly or raises `RapidDBCallFailed`, so a
+    # failed claim can never be read as "not claimed" and fall through to
+    # publishing unclaimed.
+    handle = CheckedHandle(provider.db)
 
     # THE CLAIM, FIRST. `record_alert_emission` is an INSERT ... ON CONFLICT
     # DO NOTHING against the watermark's primary key, so exactly one caller
@@ -132,12 +137,6 @@ def produce_alerts(context) -> None:
     claimed = handle.record_alert_emission(
         exposure, sca, release_identity, attempt_id, pid=pid,
         alerts_published=0)
-    if getattr(handle, "exit_code", 0) >= 64:
-        raise RuntimeError(
-            f"could not claim the alert emission watermark for unit "
-            f"{exposure}/{sca} under release {release_identity}: rapid_db "
-            f"exit_code {handle.exit_code}. Refusing to publish unclaimed: "
-            f"an emission that is not recorded can be emitted again")
 
     if not claimed:
         # Already emitted under this release. The ruled behaviour is silence:

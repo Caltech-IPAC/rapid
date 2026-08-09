@@ -285,11 +285,20 @@ def gatherer_for(job_type, operator_input, parameters, connection_factory,
 
     def gather():
         import database.modules.utils.rapid_db as rapid_db
+        from database.modules.utils.checked import CheckedHandle
 
         start_mjdobs, end_mjdobs = mjd_window(operator_input.start,
                                               operator_input.end)
         with connection_factory() as conn:
-            handle = rapid_db.RAPIDDB.borrowing(conn)
+            # Wrapped before it becomes the `UnitSource` gathering sees
+            # (integration review composite ruling 10): every call the
+            # gatherers make either returns clean data or raises
+            # `RapidDBCallFailed`, and the `getattr(handle, "exit_code",
+            # 0)` checks that used to live in each gatherer are gone —
+            # only the "is code 7 a real answer" judgment stays there,
+            # because that is what each gatherer's own field means, not
+            # what a failed call means.
+            handle = CheckedHandle(rapid_db.RAPIDDB.borrowing(conn))
             return gather_fn(operator_input, start_mjdobs, end_mjdobs,
                              handle, parameters, s3_client)
 

@@ -34,7 +34,6 @@ def test_job_types_are_unique():
 @pytest.mark.parametrize("job_type,workload_class,lane", [
     ("science", CLASS_PROMPT, LANE_TRANSACTION),
     ("reference-image", CLASS_BULK, LANE_TRANSACTION),
-    ("post-process", CLASS_PROMPT, LANE_TRANSACTION),
     ("registration", CLASS_PROMPT, LANE_TRANSACTION),
     ("reprocessing", CLASS_BULK, LANE_TRANSACTION),
     ("catalog-load", CLASS_BULK, LANE_SESSION),
@@ -78,7 +77,6 @@ def test_unknown_job_type_is_rejected_naming_the_vocabulary():
 
 def test_ppid_map_is_single_homed_here():
     assert routes.ppid_for("science") == 15
-    assert routes.ppid_for("post-process") == 17
     assert routes.ppid_for("reference-image") == 12
 
 
@@ -94,7 +92,6 @@ def test_cross_pipeline_types_have_no_ppid_rather_than_a_placeholder():
 def test_reverse_ppid_lookup():
     assert routes.job_type_for_ppid(15) == "science"
     assert routes.job_type_for_ppid(12) == "reference-image"
-    assert routes.job_type_for_ppid(17) == "post-process"
 
 
 def test_reverse_lookup_of_an_unknown_ppid_is_rejected():
@@ -195,7 +192,6 @@ def test_a_routable_but_unimplemented_job_type_is_rejected_at_the_boundary():
 def test_the_implemented_types_still_validate():
     for job_type, workload_class in (("science", routes.CLASS_PROMPT),
                                      ("reference-image", routes.CLASS_BULK),
-                                     ("post-process", routes.CLASS_PROMPT),
                                      ("registration", routes.CLASS_PROMPT)):
         assert routes.validate_route(job_type, workload_class).job_type \
             == job_type

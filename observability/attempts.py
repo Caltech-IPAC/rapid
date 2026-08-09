@@ -157,7 +157,7 @@ class AttemptIdentity:
 
     **APPLICABLE IDENTIFIERS ONLY** (integration review 2026-08, composite
     ruling 2). `exposure_id`/`sca` are the storage-path scope and apply only
-    to exposure/SCA-grain attempts (science, reference-image, post-process,
+    to exposure/SCA-grain attempts (science, reference-image,
     alert-production); `field`/`processing_date` are the scope for the
     field-grain and date-field-grain job types (statistics, the three
     sweeps, crossmatch) and the date-SCA grain (catalog load, alongside

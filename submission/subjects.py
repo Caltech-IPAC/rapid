@@ -41,9 +41,9 @@ from typing import Any
 
 from .routes import (JOB_TYPE_ALERT_PRODUCTION, JOB_TYPE_CATALOG_LOAD,
                      JOB_TYPE_CROSSMATCH, JOB_TYPE_MERGE_CURRENCY,
-                     JOB_TYPE_MERGE_DEDUP, JOB_TYPE_POST_PROCESS,
-                     JOB_TYPE_REFERENCE_IMAGE, JOB_TYPE_SCIENCE,
-                     JOB_TYPE_SOURCE_CURRENCY, JOB_TYPE_STATISTICS)
+                     JOB_TYPE_MERGE_DEDUP, JOB_TYPE_REFERENCE_IMAGE,
+                     JOB_TYPE_SCIENCE, JOB_TYPE_SOURCE_CURRENCY,
+                     JOB_TYPE_STATISTICS)
 
 #: The five grains the ruling names, verbatim.
 GRAIN_EXPOSURE_SCA = "exposure_sca"
@@ -65,9 +65,9 @@ class UnknownJobType(SubjectError):
 
     Distinct from the base `SubjectError` a KNOWN job type raises when a
     unit is missing one of ITS declared components: that is a real defect
-    in the unit and must propagate, while an unknown job type (post-process,
-    registration, reprocessing — deliberately out of this registry's scope,
-    see `SUBJECTS`) is the case `ProcessingUnit.dedup_key` falls back from.
+    in the unit and must propagate, while an unknown job type (registration,
+    reprocessing — deliberately out of this registry's scope, see
+    `SUBJECTS`) is the case `ProcessingUnit.dedup_key` falls back from.
     Catching the base class in that fallback would silently absorb the
     first kind of error too.
     """
@@ -139,10 +139,9 @@ class JobTypeSubject:
 
 
 # The declared set. One row per job type that gathering actually produces
-# units for — post-process is intentionally NOT here (co-design ruling 9:
-# its disposition is undecided; it keeps using `unit.key` dedup exactly as
-# it does today until that ruling resolves, so it is out of this
-# registry's scope rather than guessed into a grain).
+# units for (co-design ruling 9 retired post-process: nothing live read what
+# it stamped, so it carries no subject grain here rather than the job type
+# itself being retired from the vocabulary the ruling was scoped to).
 SUBJECTS: tuple[JobTypeSubject, ...] = (
     JobTypeSubject(JOB_TYPE_SCIENCE, GRAIN_EXPOSURE_SCA,
                   product_producing=True),
@@ -189,7 +188,7 @@ def subject_for(job_type: str) -> JobTypeSubject:
     ------
     SubjectError
         The job type has no declared subject — either unknown, or (like
-        post-process) deliberately out of this registry's scope.
+        registration) deliberately out of this registry's scope.
     """
     try:
         return _BY_TYPE[job_type]
@@ -223,9 +222,6 @@ def attempt_identity_fields(job_type: str, unit: Any) -> dict[str, Any]:
 
     * EXPOSURE_SCA (science, reference-image, alert-production) —
       `exposure_id`/`sca` are real; `field`/`processing_date` are absent.
-      (Post-process is exposure/SCA-shaped too, by construction of
-      `_job_identity`, but is outside this registry per co-design
-      ruling 9 and keeps using its own identity fields as today.)
     * DATE_SCA (catalog load) — `sca` and `processing_date` are real;
       `exposure_id` is the synthetic date-ordinal carrier and is NOT an
       identifier — omitted here rather than written as if it were.

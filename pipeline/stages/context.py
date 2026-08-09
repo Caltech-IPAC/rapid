@@ -169,9 +169,9 @@ class StageContext:
             product_producing = is_product_producing(self.job_type)
         except UnknownJobType:
             # A job type the typed-identity registry does not cover
-            # (post-process, registration, reprocessing) is exposure/SCA-
-            # shaped by construction and keeps building product keys as
-            # every job type did before this ruling.
+            # (registration, reprocessing) is exposure/SCA-shaped by
+            # construction and keeps building product keys as every job
+            # type did before this ruling.
             product_producing = True
         if not product_producing:
             raise ConfigError(

@@ -67,7 +67,6 @@ DB_LANES = (LANE_TRANSACTION, LANE_SESSION)
 
 JOB_TYPE_SCIENCE = "science"
 JOB_TYPE_REFERENCE_IMAGE = "reference-image"
-JOB_TYPE_POST_PROCESS = "post-process"
 JOB_TYPE_REGISTRATION = "registration"
 JOB_TYPE_REPROCESSING = "reprocessing"
 JOB_TYPE_CATALOG_LOAD = "catalog-load"
@@ -150,9 +149,6 @@ ROUTES: tuple[Route, ...] = (
     Route(JOB_TYPE_REFERENCE_IMAGE, CLASS_BULK,
           "batch/queue-bulk", "batch/job-definition-bulk",
           LANE_TRANSACTION, ppid=12),
-    Route(JOB_TYPE_POST_PROCESS, CLASS_PROMPT,
-          "batch/queue-prompt", "batch/job-definition-science",
-          LANE_TRANSACTION, ppid=17),
     Route(JOB_TYPE_REGISTRATION, CLASS_PROMPT,
           "batch/queue-prompt", "batch/job-definition-science",
           LANE_TRANSACTION, ppid=None),
@@ -217,8 +213,9 @@ JOB_TYPES: tuple[str, ...] = tuple(route.job_type for route in ROUTES)
 #
 # The matrix is the design's vocabulary and deliberately names job types that
 # are planned — reprocessing, catalog-load, crossmatch. This is the subset
-# with a payload behind it: the three stage sequences plus registration, which
-# dispatches to the records-consumer path rather than to a sequence.
+# with a payload behind it: the science and reference-image stage sequences
+# plus registration, which dispatches to the records-consumer path rather
+# than to a sequence.
 #
 # The two lists are deliberately separate rather than the matrix being
 # trimmed. The matrix carries each type's class, queue and DB lane, which are
@@ -235,7 +232,6 @@ JOB_TYPES: tuple[str, ...] = tuple(route.job_type for route in ROUTES)
 IMPLEMENTED_JOB_TYPES: frozenset = frozenset({
     JOB_TYPE_SCIENCE,
     JOB_TYPE_REFERENCE_IMAGE,
-    JOB_TYPE_POST_PROCESS,
     JOB_TYPE_REGISTRATION,
     # The post-DB science chain, implemented by the step-3 conversion:
     # `pipeline.stages.post_db` carries the six sequences, so these are

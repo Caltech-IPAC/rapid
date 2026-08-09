@@ -76,10 +76,10 @@ def _unit_field(context, name: str):
     """One value from the unit's open `fields` mapping, required.
 
     The post-DB units are keyed by processing date, SCA or field rather than
-    by exposure, so their real identity rides in `ProcessingUnit.fields` (the
-    same carrier post-process uses for its jid). A missing key means the
-    manifest did not describe this unit, which is `input_missing` — the same
-    classification `context.fact` gives for an absent `UnitFacts` entry.
+    by exposure, so their real identity rides in `ProcessingUnit.fields`. A
+    missing key means the manifest did not describe this unit, which is
+    `input_missing` — the same classification `context.fact` gives for an
+    absent `UnitFacts` entry.
     """
     fields = getattr(context.unit, "fields", None) or {}
     if name not in fields:

@@ -27,7 +27,6 @@ from submission.routes import (
     JOB_TYPE_CROSSMATCH,
     JOB_TYPE_MERGE_CURRENCY,
     JOB_TYPE_MERGE_DEDUP,
-    JOB_TYPE_POST_PROCESS,
     JOB_TYPE_REFERENCE_IMAGE,
     JOB_TYPE_SCIENCE,
     JOB_TYPE_SOURCE_CURRENCY,
@@ -35,8 +34,7 @@ from submission.routes import (
     RouteError,
 )
 
-from pipeline.stages import (alert_production, post_db, post_process,
-                             reference_image, science)
+from pipeline.stages import alert_production, post_db, reference_image, science
 
 # The science (prompt differencing) sequence. Two catalogue variants always
 # (ZOGY positive and negative); SFFT and the naive difference add theirs when
@@ -82,16 +80,9 @@ REFERENCE_IMAGE_SEQUENCE = (
     ("upload_products", reference_image.upload_products),
 )
 
-POST_PROCESS_SEQUENCE = (
-    ("stamp_reference_image", post_process.stamp_reference_image),
-    ("stamp_difference_image", post_process.stamp_difference_image),
-    ("upload_products", post_process.upload_products),
-)
-
 SEQUENCES = {
     JOB_TYPE_SCIENCE: SCIENCE_SEQUENCE,
     JOB_TYPE_REFERENCE_IMAGE: REFERENCE_IMAGE_SEQUENCE,
-    JOB_TYPE_POST_PROCESS: POST_PROCESS_SEQUENCE,
     # The post-DB science chain (step-3 conversion). These six produce
     # database state rather than S3 products: each declares an empty product
     # set, its terminal record is a pure disposition record, and its effect

@@ -363,16 +363,7 @@ class SubmissionEnvRoutingTests(unittest.TestCase):
             context["job_definition"])
         self.assertEqual(vpo.routes.CLASS_PROMPT, context["workload_class"])
 
-    def test_post_process_is_submitted_to_the_prompt_class(self):
-        context = self._resolve(vpo.routes.JOB_TYPE_POST_PROCESS)
-
-        self.assertEqual("rapid-queue-prompt", context["queue"])
-        self.assertEqual(
-            self.ACCOUNT_ARN.format("rapid-pipeline-science", 14),
-            context["job_definition"])
-        self.assertEqual(vpo.routes.CLASS_PROMPT, context["workload_class"])
-
-    # -- and the property that makes those three a routing test ------------
+    # -- and the property that makes those a routing test ------------------
 
     def test_the_three_phases_do_not_share_one_binding(self):
         """The defect stated directly: reference and science must differ.
@@ -401,7 +392,6 @@ class SubmissionEnvRoutingTests(unittest.TestCase):
         expected = {
             vpo.routes.JOB_TYPE_REFERENCE_IMAGE: ("rapid-pipeline-bulk", 11),
             vpo.routes.JOB_TYPE_SCIENCE: ("rapid-pipeline-science", 14),
-            vpo.routes.JOB_TYPE_POST_PROCESS: ("rapid-pipeline-science", 14),
         }
         for job_type, (family, revision) in expected.items():
             with self.subTest(job_type=job_type):
@@ -508,8 +498,7 @@ class SubmissionEnvRoutingTests(unittest.TestCase):
         rather than assumed to agree.
         """
         for job_type in (vpo.routes.JOB_TYPE_REFERENCE_IMAGE,
-                         vpo.routes.JOB_TYPE_SCIENCE,
-                         vpo.routes.JOB_TYPE_POST_PROCESS):
+                         vpo.routes.JOB_TYPE_SCIENCE):
             with self.subTest(job_type=job_type):
                 context = self._resolve(job_type)
                 route = vpo.routes.validate_route(

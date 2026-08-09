@@ -275,8 +275,7 @@ def _precreate(writer, manifest, run_id, binding, moment):
     exposure/SCA-shaped carrier for every field of one processing date, so
     keying on `unit.key` would collide them exactly as the accumulator's
     dedup used to (see `manifest.ProcessingUnit.dedup_key`'s docstring).
-    Job types the typed-identity registry does not cover (post-process,
-    outside co-design ruling 9's undecided disposition) fall back to the
+    Job types the typed-identity registry does not cover fall back to the
     exposure/SCA identity every job type used before this ruling — only
     `UnknownJobType` (the registry has no declaration at all for this job
     type) is caught for that fallback; a KNOWN job type's unit missing one
