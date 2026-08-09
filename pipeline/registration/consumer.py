@@ -34,6 +34,7 @@ halves of the same fix, neither of which works alone.
 
 import contextlib
 import datetime
+import json
 import logging
 
 from observability.attempts import LifecycleState
@@ -204,6 +205,58 @@ def candidates(conn, states=RECONCILED_STATES):
     return rows
 
 
+#: Append-once by EVENT IDENTITY, in one statement. The document is built
+#: server-side from the existing value so a replay cannot double an entry:
+#: an event whose key is already present is not appended again, and the
+#: observed-sequence high-water mark only ever advances
+#: (design/catalog.md § Promotion, "The registration outcome").
+_RECORD_OUTCOME_SQL = (
+    "UPDATE attempts"
+    "   SET registration_outcome = jsonb_build_object("
+    "         'promotions',"
+    "         CASE WHEN COALESCE(registration_outcome->'promotions', '[]'::jsonb)"
+    "                   @> jsonb_build_array(%(event)s::jsonb)"
+    "              THEN registration_outcome->'promotions'"
+    "              ELSE COALESCE(registration_outcome->'promotions', '[]'::jsonb)"
+    "                   || jsonb_build_array(%(event)s::jsonb) END,"
+    "         'observed_sequence',"
+    "         GREATEST("
+    "           COALESCE((registration_outcome->>'observed_sequence')::int, 0),"
+    "           %(sequence)s)"
+    "       )"
+    " WHERE attempt_id = %(attempt_id)s"
+)
+
+
+def record_registration_outcome(attempt_id, outcome, record_sequence,
+                                cursor=None):
+    """Append this registration's account to the attempt's outcome document.
+
+    Migration 024 created `registration_outcome` and deliberately left the
+    writer owed ("column first, writer after"); this is that writer. The
+    document is an OBJECT — the CHECK constraint requires one — carrying
+    the promotion events and the observed-sequence high-water mark.
+
+    Append-once keyed by event identity, so the replay that populated
+    `diffimages` cannot also grow this document on every pass. A body that
+    returned nothing structured (the reference path today) writes no event
+    and only advances the high-water mark.
+    """
+    if cursor is None or not isinstance(outcome, dict):
+        return None
+    sequence = int(record_sequence if record_sequence is not None else 1)
+    event = {"type": "promotion",
+             "pid": outcome.get("pid"),
+             "version": outcome.get("version"),
+             "product": outcome.get("product"),
+             "role_resolved_from": outcome.get("role_resolved_from"),
+             "sequence": sequence}
+    cursor.execute(_RECORD_OUTCOME_SQL,
+                   {"event": json.dumps(event, sort_keys=True),
+                    "sequence": sequence, "attempt_id": attempt_id})
+    return event
+
+
 def mark_registered(conn, attempt_id, record_sequence, now=None, cursor=None):
     """Record that this attempt was registered at `record_sequence`.
 
@@ -336,7 +389,16 @@ def register_batch(conn, rows, register=None, run=None, dry_run=False):
         # work, already committed by their own blocks.
         try:
             with _transaction(conn) as cur:
-                register(row, verdict)
+                outcome = register(row, verdict)
+                # THE REGISTRATION OUTCOME, inside the same envelope as the
+                # product rows and the watermark (migration 024 left the
+                # column with its write site owed: "column first, writer
+                # after"). It has to be here and not after the block —
+                # an account of a commit that did not happen is worse than
+                # no account, and this way the three land or none do.
+                record_registration_outcome(
+                    verdict.attempt_id, outcome,
+                    row.get("terminal_record_sequence"), cursor=cur)
                 mark_registered(conn, verdict.attempt_id,
                                 row.get("terminal_record_sequence"),
                                 cursor=cur)

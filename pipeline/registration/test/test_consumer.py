@@ -1,5 +1,6 @@
 """The registration consumer: reconciled-only, refusal by taxonomy, real exit."""
 
+import json
 import unittest
 
 from pipeline.registration import consumer
@@ -126,6 +127,11 @@ def product_writer(conn, rows=None, fail_after_write=False):
             # product rows were already committed by the time control reached
             # here, and nothing downstream could take them back.
             raise RuntimeError("the registrar died after writing its products")
+        # What the real bodies return, and what the outcome writer reads.
+        # A double that returned None could not tell a writer that records
+        # the promotion from one that records nothing.
+        return {"pid": 900 + row["attempt_id"], "version": 1,
+                "product": "sfft_diffimage", "role_resolved_from": "record"}
 
     return register
 
@@ -282,6 +288,66 @@ class WatermarkSequenceTests(unittest.TestCase):
                          "own sequence, or it stays a candidate forever")
         # The CAS bound is the same sequence, so the guard is `< that`.
         self.assertEqual([1, 2], [params[3] for params in watermarks])
+
+
+class RegistrationOutcomeTests(unittest.TestCase):
+    """Migration 024's owed writer: the account of what registration did.
+
+    The column has existed since 024 with no writer, so every registered
+    attempt carried NULL — including all 1088 the role-binding replay
+    registered. These fix the writer's contract.
+    """
+
+    def _outcome_writes(self, conn):
+        return [(statement, params) for statement, params in conn.committed
+                if "registration_outcome" in statement]
+
+    def test_the_outcome_lands_in_the_same_transaction_as_the_watermark(self):
+        # An account of a commit that did not happen is worse than none, so
+        # it must be durable exactly when the products and watermark are.
+        conn = FakeConn()
+        consumer.register_batch(conn, [reconciled(1)],
+                                register=product_writer(conn))
+        self.assertEqual(1, len(self._outcome_writes(conn)))
+
+    def test_the_event_carries_what_registration_resolved(self):
+        conn = FakeConn()
+        consumer.register_batch(conn, [reconciled(1)],
+                                register=product_writer(conn))
+        _statement, params = self._outcome_writes(conn)[0]
+        event = json.loads(params["event"])
+        self.assertEqual("promotion", event["type"])
+        self.assertEqual(1, event["sequence"])
+
+    def test_a_body_returning_nothing_structured_writes_no_event(self):
+        # The reference path returns a dict today, but a body that returns
+        # None must not fabricate a promotion event.
+        conn = FakeConn()
+        consumer.register_batch(conn, [reconciled(1)],
+                                register=lambda row, verdict: None)
+        self.assertEqual([], self._outcome_writes(conn))
+
+    def test_the_append_is_keyed_so_a_replay_cannot_double_it(self):
+        # The statement itself must carry the containment guard; a writer
+        # that appended unconditionally would grow the document on every
+        # replay pass, which is exactly what the role-binding replay does.
+        conn = FakeConn()
+        consumer.register_batch(conn, [reconciled(1)],
+                                register=product_writer(conn))
+        statement, _params = self._outcome_writes(conn)[0]
+        self.assertIn("@>", statement)
+        self.assertIn("GREATEST", statement)
+
+    def test_the_document_is_an_object_as_the_check_constraint_requires(self):
+        statement, _ = self._outcome_writes(
+            self._registered_conn())[0]
+        self.assertIn("jsonb_build_object", statement)
+
+    def _registered_conn(self):
+        conn = FakeConn()
+        consumer.register_batch(conn, [reconciled(1)],
+                                register=product_writer(conn))
+        return conn
 
 
 class FakeConn:

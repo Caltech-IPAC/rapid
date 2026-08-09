@@ -38,12 +38,21 @@ SELECT (SELECT count(*) FROM diffimages)                        AS diffimages,
          WHERE registration_outcome IS NOT NULL)                AS with_outcome
 """
 
-#: One row per attempt is the contract; more than one means the
-#: attempt-identity guard did not hold.
+#: WHAT A DUPLICATE ACTUALLY IS. Several rows per (rid, ppid) is the
+#: DESIGNED shape, not a fault: reprocessing gives one row per version and
+#: the partial unique index promotes exactly one of them
+#: (design/catalog.md § Promotion, "Enforcement"). Counting those as
+#: duplicates reports 180 violations against a healthy table.
+#:
+#: The two real invariants are: at most one promoted row per identity
+#: group, and never two rows at the same version.
 DUPLICATES = """
-SELECT count(*) FROM (
-  SELECT rid, ppid, count(*) AS n
-    FROM diffimages GROUP BY rid, ppid HAVING count(*) > 1) dup
+SELECT (SELECT count(*) FROM (
+          SELECT rid, ppid FROM diffimages WHERE vbest IN (1, 2)
+           GROUP BY rid, ppid HAVING count(*) > 1) promoted)
+     + (SELECT count(*) FROM (
+          SELECT rid, ppid, version FROM diffimages
+           GROUP BY rid, ppid, version HAVING count(*) > 1) versioned)
 """
 
 
@@ -92,7 +101,14 @@ def main(argv):
 
     before, after = one_pass(factory, "pass 1")
     if after is None:
+        # An unreachable database is a FAILED replay, not an empty one: a
+        # zero here would read as "nothing to do" in exactly the ledger
+        # this script exists to supply.
         return 64
+    if before["diffimages"] == after["diffimages"] and before["unregistered"]:
+        print("*** no rows were added and candidates remain; the replay did "
+              "not do what it was run to do")
+        return 1
 
     if twice:
         # THE IDEMPOTENCE PROOF. A second pass over the same attempts must
