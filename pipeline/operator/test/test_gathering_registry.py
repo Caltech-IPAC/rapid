@@ -88,30 +88,37 @@ class RegistryShapeTests(unittest.TestCase):
 
 
 class ProcessingDateTests(unittest.TestCase):
-    """The named, single function the window-to-date judgment call lives in."""
+    """The named, single function the processing-date judgment call lives in."""
 
-    def test_the_processing_date_is_the_windows_end_in_utc(self):
+    def test_the_processing_date_is_the_pass_moment_in_utc(self):
+        # AMENDED by the mission mock's live evidence: the date is the day
+        # the pass RUNS (wall clock, UTC) — the same clock every
+        # `diffimages.created` comparison and `sources_<date>_<sca>` table
+        # name is keyed by — never the observation window's end, which is
+        # observation time and matched no `created` value on a simulated
+        # substrate (catalog load enumerated nothing, live, 2026-08-09).
         import datetime
 
         class FakeInput:
-            end = datetime.datetime(2026, 8, 9, 3, 0, 0,
+            end = datetime.datetime(2027, 10, 1, 2, 7, 0,
                                     tzinfo=datetime.timezone.utc)
 
-        self.assertEqual(processing_date_for(FakeInput()), "20260809")
+        moment = datetime.datetime(2026, 8, 9, 17, 0, 0,
+                                   tzinfo=datetime.timezone.utc)
+        self.assertEqual(processing_date_for(FakeInput(), now=moment),
+                         "20260809")
 
-    def test_a_non_utc_end_is_converted_before_formatting(self):
+    def test_a_non_utc_moment_is_converted_before_formatting(self):
         import datetime
 
         tz = datetime.timezone(datetime.timedelta(hours=-7))
+        # 2026-08-08 23:30 -07:00 is 2026-08-09 06:30 UTC — the DATE must
+        # come from the UTC instant, not the naive wall-clock digits, or a
+        # pass near a day boundary would gather the wrong date's chain.
+        moment = datetime.datetime(2026, 8, 8, 23, 30, 0, tzinfo=tz)
 
-        class FakeInput:
-            # 2026-08-08 23:30 -07:00 is 2026-08-09 06:30 UTC — the DATE
-            # must come from the UTC instant, not the naive wall-clock
-            # digits, or a pass near a day boundary would gather the wrong
-            # date's chain.
-            end = datetime.datetime(2026, 8, 8, 23, 30, 0, tzinfo=tz)
-
-        self.assertEqual(processing_date_for(FakeInput()), "20260809")
+        self.assertEqual(processing_date_for(object(), now=moment),
+                         "20260809")
 
 
 class ClassFanOutTests(unittest.TestCase):

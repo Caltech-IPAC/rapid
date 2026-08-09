@@ -40,6 +40,7 @@ a stub that returns rows, with no database and no monkeypatching.
 
 import base64
 import dataclasses
+import datetime
 import hashlib
 import logging
 from typing import Any, Iterable, Iterator, Protocol, Sequence
@@ -149,6 +150,19 @@ class UnitSource(Protocol):
     # indirectly through the same fact class) gate on — co-design ruling 1.
     def get_scas_with_incomplete_catalog_load_for_processing_date(
             self, proc_date: str) -> Sequence[Any]: ...
+
+    # The resubmission gates (mission mock, live 2026-08-09): gather sets
+    # and exclusion sets over pending-or-successful attempts, so a
+    # state-blind enumeration cannot resubmit a subject every accumulator
+    # cut. Failed attempts free the subject — retry by re-gathering.
+    def get_scas_with_gatherable_catalog_load_for_processing_date(
+            self, proc_date: str) -> Sequence[Any]: ...
+
+    def get_fields_with_blocking_crossmatch_attempt_for_processing_date(
+            self, proc_date: str) -> Sequence[Any]: ...
+
+    def get_fields_with_blocking_attempt_for_job_type_since(
+            self, job_type: str, since: Any) -> Sequence[Any]: ...
 
     # The alert-production trigger (step-4 co-design).
     def get_attempts_awaiting_alert_emission(
@@ -1092,8 +1106,16 @@ def gather_catalog_load_units(handle: UnitSource, proc_date: str
     """
     ordinal = _proc_date_ordinal(proc_date)
 
+    # THE RESUBMISSION GATE (mission mock, live 2026-08-09): enumerate only
+    # SCAs still LACKING a pending-or-successful catalog-load attempt for
+    # this date. The unconditional science-SCA enumeration resubmitted the
+    # same units every accumulator cut for the whole flight of the first
+    # attempt and forever after its success. Failed attempts free the SCA
+    # again — re-gathering is the retry path. See the handle method's
+    # docstring for the exact blocking predicate.
     try:
-        scas = handle.get_scas_with_science_jobs_for_processing_date(proc_date)
+        scas = handle.get_scas_with_gatherable_catalog_load_for_processing_date(
+            proc_date)
     except RapidDBCallFailed as exc:
         raise GatheringError(
             f"SCA enumeration failed for processing date {proc_date}: "
@@ -1192,8 +1214,24 @@ def gather_crossmatch_units(handle: UnitSource, proc_date: str
             f"field enumeration failed for processing date {proc_date}: "
             f"{exc}") from exc
 
+    # THE RESUBMISSION GATE (mission mock, live 2026-08-09): a field with a
+    # pending-or-successful crossmatch attempt for this date is not
+    # re-gathered; a field whose attempts all failed is — retry by
+    # re-gathering, same predicate as the catalog-load gather set.
+    try:
+        blocked = handle.get_fields_with_blocking_crossmatch_attempt_for_processing_date(
+            proc_date)
+    except RapidDBCallFailed as exc:
+        raise GatheringError(
+            f"crossmatch blocking-attempt check failed for processing date "
+            f"{proc_date}: {exc}") from exc
+    blocked_fields = {int(row[0] if isinstance(row, (list, tuple)) else row)
+                      for row in blocked or ()}
+
     for field in fields or ():
         field = int(field[0] if isinstance(field, (list, tuple)) else field)
+        if field in blocked_fields:
+            continue
         yield ProcessingUnit(
             exposure=ordinal, sca=0,
             facts=UnitFacts(field=field),
@@ -1232,8 +1270,32 @@ def _per_field_units(handle: UnitSource, job_type: str, prototype: str
             f"per-field enumeration failed for prototype {prototype}: "
             f"{exc}") from exc
 
+    # THE RESUBMISSION GATE (mission mock, live 2026-08-09): the FIELD-grain
+    # types carry no processing date in their identity (ruling 2 — only
+    # applicable identifiers), so the durable-state dedup is "no pending or
+    # successful attempt of this job type for this field since UTC
+    # midnight" — at most one run per field per UTC day. Without it this
+    # state-blind enumeration resubmitted every accumulator cut (found live
+    # at the mock's first prompt-class enablement: 3 sweep children per
+    # cut). The day cadence is a recorded, revisitable v1 call — the real
+    # sweep cadence policy is an open design item; failed attempts free the
+    # field again, retry by re-gathering.
+    since = datetime.datetime.now(datetime.timezone.utc).replace(
+        hour=0, minute=0, second=0, microsecond=0)
+    try:
+        blocked = handle.get_fields_with_blocking_attempt_for_job_type_since(
+            job_type, since)
+    except RapidDBCallFailed as exc:
+        raise GatheringError(
+            f"blocking-attempt check failed for job type {job_type}: "
+            f"{exc}") from exc
+    blocked_fields = {int(row[0] if isinstance(row, (list, tuple)) else row)
+                      for row in blocked or ()}
+
     for field in fields or ():
         field = int(field[0] if isinstance(field, (list, tuple)) else field)
+        if field in blocked_fields:
+            continue
         yield ProcessingUnit(
             exposure=field, sca=0,
             facts=UnitFacts(field=field),

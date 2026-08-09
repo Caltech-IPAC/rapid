@@ -146,28 +146,32 @@ def min_images_to_coadd():
                                     "min_n_images_to_coadd"))
 
 
-def processing_date_for(operator_input):
+def processing_date_for(operator_input, now=None):
     """The `yyyymmdd` processing date one pass's post-DB-chain gatherers act on.
 
-    **JUDGMENT CALL, RECORDED HERE RATHER THAN GUESSED SILENTLY.** The
-    post-DB chain and alert production are gathered per PROCESSING DATE
-    (`submission.gathering.gather_catalog_load_units` et al. all take
-    `proc_date: str`), but the operator's own input is a WINDOW
-    (`start`/`end` datetimes, `pipeline/operator/inputs.py`) — the co-design
-    that built the window input did not anticipate date-keyed gathering,
-    and no evidence in the design texts or the run's artifacts states which
-    end of the window is "the" processing date for a pass.
+    **AMENDED JUDGMENT CALL — the processing date is a WALL-CLOCK
+    operational fact, not an observation fact.** The first resolution here
+    derived it from `operator_input.end`'s UTC calendar date; the mission
+    mock refuted that live: every fact the post-DB chain enumerates
+    against is stamped with the day the pipeline DID the work
+    (`diffimages.created`, the registration row's own timestamp — see
+    `get_scas_with_science_jobs_for_processing_date`'s docstring), while
+    the window is stamped in OBSERVATION time. The two clocks coincide in
+    same-day production and diverge for exactly the cases the window
+    exists to scope — simulated substrates, backfill, reprocessing —
+    where the window-end date matched no `created` value and catalog load
+    enumerated nothing. The processing date is therefore the day this
+    pass runs, UTC — the same day every `created` comparison and every
+    `sources_<yyyymmdd>_<sca>` target-table name is keyed by.
 
-    This resolves it as `operator_input.end`'s UTC calendar date: the day
-    the window closes on is the day whose science-chain arrivals a pass is
-    acting on completing, which matches the ADOPTED ordering statement
-    ("catalog load per processing date and SCA... gathered after catalog
-    load completes" — the chain follows the day's ingest, not the day
-    diffing started). Stated as one named function so a different rule is
-    a one-line change, not a re-derivation at every call site.
+    `operator_input` is retained deliberately: the call sites pass it, and
+    a future per-class rule (a backfill class processing "as of" a chosen
+    day) would resolve it from the input again. `now` is the test seam.
+    Still one named function so a different rule stays a one-line change.
     """
-    return operator_input.end.astimezone(datetime.timezone.utc).strftime(
-        "%Y%m%d")
+    del operator_input  # reserved for a future per-class rule; see docstring
+    moment = now or datetime.datetime.now(datetime.timezone.utc)
+    return moment.astimezone(datetime.timezone.utc).strftime("%Y%m%d")
 
 
 def _release_identity():

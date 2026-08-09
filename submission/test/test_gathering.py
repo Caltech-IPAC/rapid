@@ -815,7 +815,9 @@ class PostDbGatheringTests(unittest.TestCase):
         """
 
         def __init__(self, scas=(), fields=(), per_field=(), failure=0,
-                     products=None, incomplete_catalog_load=()):
+                     products=None, incomplete_catalog_load=(),
+                     gatherable_catalog_load=None, blocking_crossmatch=(),
+                     blocking_per_field=()):
             self.scas = list(scas)
             self.fields = list(fields)
             self.per_field = list(per_field)
@@ -834,6 +836,15 @@ class PostDbGatheringTests(unittest.TestCase):
             # the refusal path, which is exactly the stub-refusal principle
             # this suite's own tests are held to.
             self.incomplete_catalog_load = list(incomplete_catalog_load)
+            # The resubmission gates (mission mock, live 2026-08-09).
+            # `gatherable_catalog_load` defaults to `scas`: absent pending
+            # or successful attempts, the gather set IS the science set —
+            # tests that narrow it are exercising the gate.
+            self.gatherable_catalog_load = (
+                list(scas) if gatherable_catalog_load is None
+                else list(gatherable_catalog_load))
+            self.blocking_crossmatch = list(blocking_crossmatch)
+            self.blocking_per_field = list(blocking_per_field)
 
         def get_scas_with_science_jobs_for_processing_date(self, proc_date):
             self.asked_for.append(("scas", proc_date))
@@ -868,6 +879,70 @@ class PostDbGatheringTests(unittest.TestCase):
             _refuse_if_failed(
                 self, "get_registered_diffimages_for_processing_date_sca")
             return None if self.failure else self.products.get(int(sca), [])
+
+        def get_scas_with_gatherable_catalog_load_for_processing_date(
+                self, proc_date):
+            self.asked_for.append(("gatherable_catalog_load", proc_date))
+            self.exit_code = self.failure
+            _refuse_if_failed(
+                self,
+                "get_scas_with_gatherable_catalog_load_for_processing_date")
+            return None if self.failure else self.gatherable_catalog_load
+
+        def get_fields_with_blocking_crossmatch_attempt_for_processing_date(
+                self, proc_date):
+            self.asked_for.append(("blocking_crossmatch", proc_date))
+            self.exit_code = self.failure
+            _refuse_if_failed(
+                self,
+                "get_fields_with_blocking_crossmatch_attempt_for_processing_date")
+            return None if self.failure else self.blocking_crossmatch
+
+        def get_fields_with_blocking_attempt_for_job_type_since(
+                self, job_type, since):
+            self.asked_for.append(("blocking_per_field", job_type, since))
+            self.exit_code = self.failure
+            _refuse_if_failed(
+                self, "get_fields_with_blocking_attempt_for_job_type_since")
+            return None if self.failure else self.blocking_per_field
+
+    # -- the resubmission gates (mission mock, live 2026-08-09) ------------
+
+    def test_catalog_load_gathers_only_scas_without_blocking_attempts(self):
+        # The gather set is the GATHERABLE set — science SCAs lacking a
+        # pending-or-successful catalog-load attempt — never the whole
+        # science set: the state-blind enumeration resubmitted every
+        # accumulator cut, live.
+        units = list(gather_catalog_load_units(
+            self.Source(scas=[1, 2, 18], gatherable_catalog_load=[2]),
+            "20260809"))
+
+        self.assertEqual([u.fields["sca"] for u in units], [2])
+
+    def test_crossmatch_skips_fields_with_blocking_attempts(self):
+        units = list(gather_crossmatch_units(
+            self.Source(fields=[4641773, 4641774],
+                        blocking_crossmatch=[4641773]), "20260809"))
+
+        self.assertEqual([u.fields["field"] for u in units], [4641774])
+
+    def test_per_field_types_skip_fields_with_blocking_attempts_today(self):
+        source = self.Source(per_field=[4641773, 4641774],
+                             blocking_per_field=[4641774])
+
+        units = list(gather_merge_currency_units(source))
+
+        self.assertEqual([u.fields["field"] for u in units], [4641773])
+        # The gate's window is the pass's UTC day: `since` must be a
+        # timezone-aware UTC midnight, not a naive datetime and not a
+        # rolling interval.
+        blocking_calls = [c for c in source.asked_for
+                          if c[0] == "blocking_per_field"]
+        self.assertEqual(len(blocking_calls), 1)
+        _, job_type, since = blocking_calls[0]
+        self.assertEqual(job_type, JOB_TYPE_MERGE_CURRENCY)
+        self.assertEqual((since.hour, since.minute, since.second), (0, 0, 0))
+        self.assertIsNotNone(since.tzinfo)
 
     # -- catalog load: (processing date, SCA) ------------------------------
 

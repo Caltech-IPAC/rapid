@@ -3212,6 +3212,165 @@ class RAPIDDB:
 
 ########################################################################################################
 
+    def get_scas_with_gatherable_catalog_load_for_processing_date(self,proc_date):
+
+        '''
+        SCAs that ran science on this date and have no catalog-load attempt
+        that is pending or succeeded — the catalog-load GATHER set.
+
+        THE RESUBMISSION GATE (mission mock, live finding 2026-08-09). The
+        catalog-load enumeration used to return every science SCA of the
+        date unconditionally, so a 15-second poll cadence resubmitted the
+        same (date, SCA) unit every accumulator cut for the whole flight of
+        the first attempt and forever after its success. Gathering is a
+        durable-state predicate here exactly as it is for ordering
+        (composite ruling 1): the state read is "does a BLOCKING attempt
+        exist" — one in flight (lifecycle 'submitted'/'started') or one
+        that succeeded. A subject whose attempts all FAILED is returned
+        again: retry by re-gathering is the intended recovery path, and a
+        blocked-on-failure gate would need scoped_retry for every transient.
+
+        The in-flight test deliberately does NOT count
+        'application_closed'/'terminal_after_start' with a NULL outcome as
+        blocking — those are reconciliation states whose outcome resolves
+        within the reconciler's grace horizon, and counting them would
+        block retries of attempts the reconciler later marks failed.
+        '''
+
+        self.exit_code = 0
+
+        query = "select sc.sca from (" +\
+                "  select distinct d.sca from DiffImages d " +\
+                "  join Attempts a on a.attempt_id = d.attempt_id " +\
+                "  where d.ppid = %s and d.vbest = 1 " +\
+                "  and a.rapid_outcome = 'success' " +\
+                "  and d.created >= cast(%s as timestamp) " +\
+                "  and d.created < cast(%s as timestamp) + cast('1 day' as interval) " +\
+                "  and d.sca is not null" +\
+                ") sc " +\
+                "where not exists (" +\
+                "  select 1 from Attempts la " +\
+                "  join logical_jobs lj on lj.logical_job_id = la.logical_job_id " +\
+                "  where lj.job_type = %s " +\
+                "  and la.sca = sc.sca " +\
+                "  and la.processing_date = cast(%s as date) " +\
+                "  and (la.lifecycle_state in ('submitted','started') " +\
+                "       or la.rapid_outcome = 'success')" +\
+                ") " +\
+                "order by sc.sca;"
+
+        from submission.routes import JOB_TYPE_CATALOG_LOAD, JOB_TYPE_SCIENCE, ppid_for
+
+        params = (ppid_for(JOB_TYPE_SCIENCE), proc_date, proc_date,
+                  JOB_TYPE_CATALOG_LOAD, proc_date)
+
+        print('query = {}, params = {}'.format(query, params))
+
+        try:
+            self.cur.execute(query, params)
+            records = [record[0] for record in self.cur]
+            print("nrecs =",len(records))
+
+        except (Exception, psycopg2.DatabaseError) as error:
+            print('*** Error getting gatherable catalog-load SCAs for {}: {}; skipping...'.format(proc_date,error))
+            self.exit_code = 67
+            return
+
+        return records
+
+
+########################################################################################################
+
+    def get_fields_with_blocking_crossmatch_attempt_for_processing_date(self,proc_date):
+
+        '''
+        Fields with a crossmatch attempt for this processing date that is
+        pending or succeeded — the crossmatch resubmission-gate EXCLUSION
+        set (mission mock, live finding 2026-08-09; same blocking predicate
+        as the catalog-load gather set, see that method's docstring).
+        Failed attempts do not block: re-gathering is the retry path.
+        '''
+
+        self.exit_code = 0
+
+        query = "select distinct la.field from Attempts la " +\
+                "join logical_jobs lj on lj.logical_job_id = la.logical_job_id " +\
+                "where lj.job_type = %s " +\
+                "and la.processing_date = cast(%s as date) " +\
+                "and la.field is not null " +\
+                "and (la.lifecycle_state in ('submitted','started') " +\
+                "     or la.rapid_outcome = 'success') " +\
+                "order by la.field;"
+
+        from submission.routes import JOB_TYPE_CROSSMATCH
+
+        params = (JOB_TYPE_CROSSMATCH, proc_date)
+
+        print('query = {}, params = {}'.format(query, params))
+
+        try:
+            self.cur.execute(query, params)
+            records = [record[0] for record in self.cur]
+            print("nrecs =",len(records))
+
+        except (Exception, psycopg2.DatabaseError) as error:
+            print('*** Error getting blocking crossmatch fields for {}: {}; skipping...'.format(proc_date,error))
+            self.exit_code = 67
+            return
+
+        return records
+
+
+########################################################################################################
+
+    def get_fields_with_blocking_attempt_for_job_type_since(self,job_type,since):
+
+        '''
+        Fields with an attempt of the given job type submitted at or after
+        `since` that is pending or succeeded — the per-field
+        resubmission-gate EXCLUSION set for the FIELD-grain job types
+        (statistics and the three sweeps), whose identity carries no
+        processing date (composite ruling 2: only applicable identifiers).
+
+        `since` is the UTC midnight of the pass's processing date, giving
+        the v1 cadence "at most one successful or in-flight run per field
+        per UTC day" (mission mock, live finding 2026-08-09: the sweeps'
+        state-blind enumeration resubmitted every accumulator cut). The
+        day-cadence is a recorded, revisitable judgment call — a real
+        sweep cadence policy is an open design item; this gate exists so
+        enablement is bounded, not to decide that policy.
+        '''
+
+        self.exit_code = 0
+
+        query = "select distinct la.field from Attempts la " +\
+                "join logical_jobs lj on lj.logical_job_id = la.logical_job_id " +\
+                "where lj.job_type = %s " +\
+                "and la.submitted_at >= %s " +\
+                "and la.field is not null " +\
+                "and (la.lifecycle_state in ('submitted','started') " +\
+                "     or la.rapid_outcome = 'success') " +\
+                "order by la.field;"
+
+        params = (job_type, since)
+
+        print('query = {}, params = {}'.format(query, params))
+
+        try:
+            self.cur.execute(query, params)
+            records = [record[0] for record in self.cur]
+            print("nrecs =",len(records))
+
+        except (Exception, psycopg2.DatabaseError) as error:
+            print('*** Error getting blocking {} fields since {}: {}; skipping...'.format(job_type,since,error))
+            self.exit_code = 67
+            return
+
+        return records
+
+
+########################################################################################################
+
     def get_attempts_awaiting_alert_emission(self,release_identity,limit=None):
 
         '''
