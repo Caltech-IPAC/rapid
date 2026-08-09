@@ -569,6 +569,49 @@ class DifferenceImageRoleTests(unittest.TestCase):
                 FakeDB(), record, record["science_provenance"], 2)
         self.assertIn("hotpants_diffimage", caught.exception.field)
 
+    def test_a_pre_binding_record_registers_from_the_release(self):
+        # THE REPLAY CASE. Every attempt published before the binding
+        # existed carries the three difference images under their algorithm
+        # names and no `product_roles` — and the ruling requires exactly
+        # those to register on replay, because their refusal is why
+        # `diffimages` is empty. The running release supplies the binding,
+        # and the result says so rather than pretending the record did.
+        dbh = FakeDB()
+        record = difference_record()
+        del record["product_roles"]
+
+        result = products.register_difference_image(
+            dbh, record, record["science_provenance"], 2,
+            fallback_roles={"difference_image": "sfft_diffimage"})
+
+        _name, args = dbh.calls[0]
+        self.assertIn("s3://p/sfftdiffimage_masked.fits", args)
+        self.assertEqual(result["role_resolved_from"], "release")
+
+    def test_a_recorded_binding_beats_the_running_release(self):
+        # The fallback is for records that carry NOTHING, never a way for
+        # the running release to overrule what an attempt actually resolved.
+        dbh = FakeDB()
+        record = difference_record(
+            product_roles={"difference_image": "zogy_diffimage"})
+
+        result = products.register_difference_image(
+            dbh, record, record["science_provenance"], 2,
+            fallback_roles={"difference_image": "sfft_diffimage"})
+
+        self.assertEqual(result["product"], "zogy_diffimage")
+        self.assertEqual(result["role_resolved_from"], "record")
+
+    def test_without_a_fallback_a_pre_binding_record_still_refuses(self):
+        # The fallback is opt-in per caller. Ordinary registration passes
+        # none, so an unbound record refuses exactly as before.
+        record = difference_record()
+        del record["product_roles"]
+        with self.assertRaises(products.MissingRecordFact) as caught:
+            products.register_difference_image(
+                FakeDB(), record, record["science_provenance"], 2)
+        self.assertEqual(caught.exception.field, "product_roles")
+
     def test_the_registrar_carries_no_algorithm_literal(self):
         """THE ANTI-LITERAL GUARD: a consumer must not reintroduce one.
 
@@ -877,7 +920,7 @@ class AttemptIdentityThreadingTests(unittest.TestCase):
         # argument ORDER, so it must compare against the same product the
         # body registered rather than a name picked here.
         record = difference_record()
-        difference, _bound = products.role_product(
+        difference, _bound, _from = products.role_product(
             record, record["science_provenance"],
             products.DIFFERENCE_IMAGE_ROLE, 2)
         self.assertEqual(difference["uri"], args[-4])

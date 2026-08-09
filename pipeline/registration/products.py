@@ -114,7 +114,7 @@ def _product(products, name, attempt_id=None):
     return entry
 
 
-def role_product(record, science, role, attempt_id=None):
+def role_product(record, science, role, attempt_id=None, fallback_roles=None):
     """The published product the attempt's release bound to `role`.
 
     A role is a stable contract name; the release binds it to the concrete
@@ -124,19 +124,34 @@ def role_product(record, science, role, attempt_id=None):
     else — and what makes a replay resolve the role the way the original
     attempt did, even if a later release rebinds it.
 
-    An absent binding raises rather than falling back to an algorithm name:
-    the fallback would register whichever product this code was written
-    against, which is exactly the second vocabulary the role exists to
-    remove.
+    RECORDS AUTHORED BEFORE THE BINDING EXISTED. Every attempt published
+    before 2026-08-08 carries the three difference images under their
+    algorithm names and no `product_roles` at all, because nothing wrote
+    one — and the ruling requires exactly those attempts to register on
+    replay, since the refusal is why `diffimages` is empty. `fallback_roles`
+    is that one narrow path: the caller passes the RUNNING release's
+    bindings, used only when the record carries none, and the caller is
+    told which happened so the ledger can say so. It is not a default —
+    an unbound role still raises, and a record that DOES carry a binding
+    always wins, so a replay of a modern attempt can never be answered by
+    whatever release happens to be running.
+
+    Returns (entry, product_name, resolved_from) where `resolved_from` is
+    "record" or "release".
     """
     roles = record.get("product_roles") or science.get("product_roles")
+    resolved_from = "record"
     if not roles:
-        raise MissingRecordFact("product_roles", attempt_id=attempt_id)
+        if not fallback_roles:
+            raise MissingRecordFact("product_roles", attempt_id=attempt_id)
+        roles = fallback_roles
+        resolved_from = "release"
     bound = roles.get(role)
     if not bound:
         raise MissingRecordFact(f"product_roles[{role!r}]",
                                 attempt_id=attempt_id)
-    return _product(published(record, attempt_id), bound, attempt_id), bound
+    entry = _product(published(record, attempt_id), bound, attempt_id)
+    return entry, bound, resolved_from
 
 
 def register_reference_image(dbh, record, science, attempt_id=None,
@@ -211,7 +226,7 @@ def register_reference_image(dbh, record, science, attempt_id=None,
 
 
 def register_difference_image(dbh, record, science, attempt_id=None,
-                              record_sequence=None):
+                              record_sequence=None, fallback_roles=None):
     """The difference-image body. (Legacy `registerCompletedJobsInDB.py`.)
 
     Same shape as the reference body — `add_diffimage`, then `update_diffimage`
@@ -236,8 +251,9 @@ def register_difference_image(dbh, record, science, attempt_id=None,
     # literal here is what refused promotion on every real science attempt
     # (decisions.md § Difference-image product vocabulary): the reader's
     # vocabulary and the record author's were two different things.
-    difference, difference_product = role_product(
-        record, science, DIFFERENCE_IMAGE_ROLE, attempt_id)
+    difference, difference_product, role_source = role_product(
+        record, science, DIFFERENCE_IMAGE_ROLE, attempt_id,
+        fallback_roles=fallback_roles)
 
     ppid = _need(record, "ppid", attempt_id)
     rid = _need(science, "rid", attempt_id, where="science_provenance")
@@ -289,10 +305,12 @@ def register_difference_image(dbh, record, science, attempt_id=None,
     # pid: an operator reading either has to be able to tell WHICH difference
     # image the row points at without going back to the release content.
     logger.info("attempt %s registered difference image pid=%s version=%s "
-                "(role %s ← %s)", attempt_id, pid, version,
-                DIFFERENCE_IMAGE_ROLE, difference_product)
+                "(role %s ← %s, resolved from the %s)", attempt_id, pid,
+                version, DIFFERENCE_IMAGE_ROLE, difference_product,
+                role_source)
     return {"pid": pid, "version": version,
-            "product": difference_product}
+            "product": difference_product,
+            "role_resolved_from": role_source}
 
 
 def _check(dbh, call, attempt_id):
@@ -363,7 +381,7 @@ def read_record(store, row):
     return body
 
 
-def registrar(dbh, store):
+def registrar(dbh, store, fallback_roles=None):
     """Build the `register(row, verdict)` callback the consumer injects.
 
     `store` is the records store: the registrar fetches each attempt's terminal
@@ -381,6 +399,11 @@ def registrar(dbh, store):
     what registering means differs by type: a reference-image attempt
     registers a reference and its catalogues, a science attempt registers a
     difference image and its measurements.
+
+    `fallback_roles` is the running release's product-role bindings, used
+    ONLY for records authored before bindings were recorded at all — see
+    `role_product`. Absent it, such a record refuses, which is the correct
+    behaviour everywhere except a deliberate replay of pre-binding attempts.
     """
     handle = {"value": None if callable(dbh) else dbh}
 
@@ -437,7 +460,8 @@ def registrar(dbh, store):
                                             attempt_id, record_sequence)
         if job_type == JOB_TYPE_SCIENCE:
             return register_difference_image(resolve(), body, science,
-                                             attempt_id, record_sequence)
+                                             attempt_id, record_sequence,
+                                             fallback_roles=fallback_roles)
         # Unreachable while `REGISTRABLE_JOB_TYPES` and the two branches above
         # agree — `is_registrable` has already returned for anything else. It
         # is kept as the guard for exactly that disagreement: a type added to

@@ -727,8 +727,16 @@ def wait_for_submitted(submitted, timeout=None):
     return results
 
 
-def production_registrar():
+def production_registrar(replay_pre_binding_roles=False):
     """A factory for the real registration callback: connection -> callback.
+
+    `replay_pre_binding_roles` is the deliberate replay switch. Attempts
+    published before the difference-image role binding existed carry no
+    `product_roles`, so registration refuses them — which is correct until
+    someone is knowingly replaying exactly those. Set it and the running
+    release's bindings answer for records that carry none, and only those;
+    a record with its own binding always wins. Off by default, because a
+    silent fallback would let the running release re-interpret history.
 
     IT TAKES THE PASS'S CONNECTION (round-4 finding #2), and that is the whole
     point of the extra layer. This used to return a callback built over
@@ -787,9 +795,17 @@ def production_registrar():
 
     store = S3ObjectStore(records_bucket, client=boto3.client("s3"))
 
+    fallback_roles = None
+    if replay_pre_binding_roles:
+        from pipeline.runtime import science_config
+        fallback_roles = science_config.product_roles(science_config.load())
+        print("*** replaying pre-binding records against the running "
+              "release's product roles: {}".format(fallback_roles))
+
     def for_connection(conn):
         """The callback for ONE registration pass, on ITS connection."""
-        return registrar(lambda: rapid_db.RAPIDDB.borrowing(conn), store)
+        return registrar(lambda: rapid_db.RAPIDDB.borrowing(conn), store,
+                         fallback_roles=fallback_roles)
 
     return for_connection
 
