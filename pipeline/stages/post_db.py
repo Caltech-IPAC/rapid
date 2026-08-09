@@ -640,12 +640,22 @@ def compute_statistics(context) -> None:
                 target=sql.Identifier(target)))
         removed = cursor.rowcount or 0
 
+        # THE LIVE PROTOTYPE'S COLUMNS (mission mock, live 2026-08-09,
+        # defect #9): this INSERT named (aid, nobs, mjdobs_first,
+        # mjdobs_last, flux_mean, flux_stddev) — a shape no migration ever
+        # created — so every statistics attempt failed on UndefinedColumn,
+        # and under retry-by-regather that was an unbounded loop (~600
+        # children before the hold). astroobjectsmeta's real columns
+        # (007-sources-family) are the ones the alert provider reads:
+        # position/flux means and stdevs plus nsources.
         cursor.execute(
             sql.SQL(
-                "INSERT INTO {target} (aid, nobs, mjdobs_first, mjdobs_last, "
-                "flux_mean, flux_stddev) "
-                "SELECT m.aid, count(*), min(s.mjdobs), max(s.mjdobs), "
-                "       avg(s.fluxfit), stddev_pop(s.fluxfit) "
+                "INSERT INTO {target} (aid, meanra, stdevra, meandec, "
+                "stdevdec, meanflux, stdevflux, nsources) "
+                "SELECT m.aid, avg(s.ra), coalesce(stddev_pop(s.ra), 0), "
+                "       avg(s.dec), coalesce(stddev_pop(s.dec), 0), "
+                "       avg(s.fluxfit), coalesce(stddev_pop(s.fluxfit), 0), "
+                "       count(*) "
                 "FROM {merges} AS m JOIN sources AS s ON s.sid = m.sid "
                 "GROUP BY m.aid").format(
                     target=sql.Identifier(target),

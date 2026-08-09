@@ -350,8 +350,14 @@ def _merges_catalog():
         # the first production load died on.
         "sources": {"columns": ("pid", "id", "isdiffpos"),
                     "unique": ("pid", "id", "isdiffpos"), "rows": []},
-        "astroobjectsmeta": {"columns": ("aid", "nobs"), "unique": ("aid",),
-                             "rows": []},
+        # The live prototype's shape (007-sources-family) — the fixture's
+        # old ("aid", "nobs") modeled a schema no migration ever created,
+        # which is exactly how the statistics INSERT's UndefinedColumn
+        # failure stayed invisible off-image (defect #9, live 2026-08-09).
+        "astroobjectsmeta": {"columns": ("aid", "meanra", "stdevra",
+                                         "meandec", "stdevdec", "meanflux",
+                                         "stdevflux", "nsources"),
+                             "unique": ("aid",), "rows": []},
     }
 
 
