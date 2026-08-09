@@ -187,9 +187,78 @@ def create_child_table(cursor, tablename: str, prototype: str,
                     child=sql.Identifier(tablename),
                     proto=sql.Identifier(prototype)))
 
+    if created:
+        grant_like_prototype(cursor, tablename, prototype)
+
     logger.info("child table %s ready (prototype %s, indexes carried)",
                 tablename, prototype)
     return created
+
+
+def grant_like_prototype(cursor, tablename: str, prototype: str) -> None:
+    """Give a fresh clone the same table grants its prototype carries.
+
+    **FOUND LIVE.** `LIKE ... INCLUDING INDEXES` copies structure, not
+    privileges, and a clone is owned by whichever role created it — so a
+    merge-dedup unit against a freshly created `merges_<field>` died with
+    `psycopg2.errors.InsufficientPrivilege: permission denied for table
+    merges_4641773`. The table existed, carried the right unique index, and
+    was unreadable by the role the Batch payload connects as.
+
+    The old `crossMatchSources.py:1000-1010` issued a hand-written GRANT
+    block after each CREATE for exactly this reason. The conversion replaced
+    the CREATE and dropped the GRANTs with it — the kind of gap only a live
+    run finds, because a test double has no privilege system to refuse you.
+
+    **Read from the prototype rather than hardcoded.** The old block named
+    `rapidreadrole`, `rapidadminrole` and `rapidporole` as literals; the live
+    database's roles are `rapid_read`, `rapid_pipeline_write` and
+    `rapid_admin`, so that list had already drifted out of date. Copying
+    whatever the prototype actually grants means the clone tracks the
+    migration baseline automatically and there is no second list to go
+    stale — the same reasoning as `INCLUDING INDEXES` over a hand-written
+    index list.
+    """
+    cursor.execute(
+        "SELECT grantee, privilege_type"
+        "  FROM information_schema.role_table_grants"
+        " WHERE table_schema = 'public' AND table_name = %s",
+        (prototype,))
+    grants: dict[str, list[str]] = {}
+    for grantee, privilege in cursor.fetchall():
+        grants.setdefault(grantee, []).append(privilege)
+
+    if not grants:
+        logger.warning(
+            "prototype %s carries no table grants; clone %s gets none either",
+            prototype, tablename)
+        return
+
+    for grantee, privileges in sorted(grants.items()):
+        # Privilege keywords are SQL, not identifiers, and come from the
+        # catalog rather than from a caller — but they are still checked
+        # against the known set rather than interpolated on trust.
+        allowed = [p for p in privileges if p in _PRIVILEGES]
+        if not allowed:
+            continue
+        cursor.execute(
+            sql.SQL("GRANT {privileges} ON TABLE {child} TO {grantee}").format(
+                privileges=sql.SQL(", ").join(
+                    sql.SQL(p) for p in sorted(allowed)),
+                child=sql.Identifier(tablename),
+                grantee=sql.Identifier(grantee)))
+
+    logger.info("clone %s granted the prototype's privileges (%s)",
+                tablename, ", ".join(sorted(grants)))
+
+
+# The privilege keywords a table grant may name. An allow-list because these
+# are composed as SQL keywords rather than as quoted identifiers; anything
+# outside it is skipped rather than interpolated.
+_PRIVILEGES = frozenset({
+    "SELECT", "INSERT", "UPDATE", "DELETE", "TRUNCATE", "REFERENCES",
+    "TRIGGER",
+})
 
 
 def load_through_staging(cursor, csv_path: str, tablename: str,

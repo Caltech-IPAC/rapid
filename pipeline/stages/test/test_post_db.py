@@ -116,6 +116,15 @@ class RecordingCursor:
             return self._insert(text, lowered)
         if lowered.startswith("delete from"):
             return self._delete(lowered)
+        if "role_table_grants" in lowered:
+            # The prototype's grants, which `grant_like_prototype` copies onto
+            # a fresh clone. Modelled because the live probe proved a clone
+            # without them is unreadable by the role the payload connects as.
+            name = params[0] if params else None
+            self._result = list(
+                self.catalog.get(name, {}).get("grants", []))
+            self.rowcount = len(self._result)
+            return None
         if "from pg_catalog.pg_tables" in lowered:
             # The existence probe `require_table` runs. Answered from the
             # double's own catalog, so a test that never created the table
@@ -299,7 +308,13 @@ def _key_of(row, columns, unique):
 def _merges_catalog():
     return {
         "merges": {"columns": ("aid", "sid"), "unique": ("aid", "sid"),
-                   "rows": []},
+                   "rows": [],
+                   # The grants the live prototype carries, which a clone
+                   # must end up with too.
+                   "grants": [("rapid_read", "SELECT"),
+                              ("rapid_pipeline_write", "INSERT"),
+                              ("rapid_pipeline_write", "UPDATE"),
+                              ("rapid_pipeline_write", "DELETE")]},
         "astroobjects": {"columns": ("aid", "ra0", "dec0", "flux0"),
                          "unique": ("aid",), "rows": []},
         "sources": {"columns": ("sid", "ra", "dec"), "unique": None,
@@ -348,6 +363,61 @@ class CloneCarriesIndexesTests(unittest.TestCase):
             'INCLUDING CONSTRAINTS)')
 
         self.assertIsNone(cursor.catalog["merges_9"]["unique"])
+
+    def test_a_fresh_clone_is_granted_the_prototypes_privileges(self):
+        # FOUND LIVE. `LIKE ... INCLUDING INDEXES` copies structure, not
+        # privileges, and a clone is owned by whoever created it — so a
+        # merge-dedup unit against a fresh clone died with
+        # `InsufficientPrivilege: permission denied for table
+        # merges_4641773`. The table was there, correctly indexed, and
+        # unreadable by the role the payload connects as. No test double has
+        # a privilege system, which is why only a live run could find it.
+        cursor = RecordingCursor(_merges_catalog())
+        catalog_db.create_child_table(cursor, "merges_7", "merges")
+
+        grants = [s for s in cursor.statements if s.startswith("GRANT")]
+        self.assertTrue(grants, "a fresh clone was created with no grants")
+        text = "\n".join(grants)
+        self.assertIn('"rapid_read"', text)
+        self.assertIn('"rapid_pipeline_write"', text)
+        self.assertIn("SELECT", text)
+
+    def test_the_grants_are_read_from_the_prototype_not_hardcoded(self):
+        # The old crossMatchSources.py named `rapidreadrole` / `rapidporole`
+        # as literals, and those names had already drifted from the live
+        # database's `rapid_read` / `rapid_pipeline_write`. Reading the
+        # prototype means the clone tracks the migration baseline instead of
+        # a second list going stale — the same argument as INCLUDING INDEXES.
+        catalog = _merges_catalog()
+        catalog["merges"]["grants"] = [("some_future_role", "SELECT")]
+        cursor = RecordingCursor(catalog)
+        catalog_db.create_child_table(cursor, "merges_7", "merges")
+
+        grants = "\n".join(s for s in cursor.statements
+                           if s.startswith("GRANT"))
+        self.assertIn('"some_future_role"', grants)
+
+    def test_an_existing_clone_is_not_re_granted(self):
+        # `created` is False on the second call, and re-issuing grants every
+        # pass is the shape the UNLOGGED bug had — a statement outside the
+        # creation guard, running forever.
+        cursor = RecordingCursor(_merges_catalog())
+        catalog_db.create_child_table(cursor, "merges_7", "merges")
+        before = len([s for s in cursor.statements if s.startswith("GRANT")])
+
+        catalog_db.create_child_table(cursor, "merges_7", "merges")
+        after = len([s for s in cursor.statements if s.startswith("GRANT")])
+
+        self.assertEqual(before, after)
+
+    def test_a_prototype_with_no_grants_is_logged_not_fatal(self):
+        catalog = _merges_catalog()
+        catalog["merges"]["grants"] = []
+        cursor = RecordingCursor(catalog)
+
+        catalog_db.create_child_table(cursor, "merges_7", "merges")
+
+        self.assertIn("merges_7", cursor.catalog)
 
     def test_a_child_name_that_is_not_a_child_name_is_refused(self):
         cursor = RecordingCursor(_merges_catalog())
@@ -593,7 +663,12 @@ class DedupCheckTests(unittest.TestCase):
         found = catalog_db.count_duplicate_groups(cursor, "merges_7", "merges")
 
         self.assertEqual(found, 3)
-        self.assertNotIn("DELETE", cursor.sql_text.upper())
+        # No DELETE *statement*. The word also appears as a privilege keyword
+        # in the clone's GRANT — matching the bare word would fail on that
+        # and say nothing about whether rows were removed.
+        deletes = [s for s in cursor.statements
+                   if s.upper().lstrip().startswith("DELETE")]
+        self.assertEqual(deletes, [])
 
     def test_a_missing_target_is_input_missing_not_a_crash(self):
         # FOUND LIVE. The first probe submitted a merge-dedup unit for a
