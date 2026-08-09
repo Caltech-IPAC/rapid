@@ -209,7 +209,13 @@ def download_psf_catalogs(context) -> None:
                 context.logger.info("no catalogue at s3://%s/%s", bucket, key)
                 continue
             if is_catalogue:
-                downloaded.append(target)
+                # THE FILE→PRODUCT PAIRING IS THE PAYLOAD (mission mock,
+                # live 2026-08-09): each catalogue's source rows carry ITS
+                # difference image's identity (pid, expid, field, fid,
+                # mjdobs), which varies per product within one (date, SCA)
+                # unit. A flat path list lost the association and the CSV
+                # wrote a unit-constant (absent) pid into a NOT NULL column.
+                downloaded.append((target, product))
 
     context.produce("psf_catalogs", downloaded)
     context.record(psf_catalog_files=len(downloaded), sca=sca)
@@ -339,12 +345,15 @@ def load_sources(context) -> None:
 def _write_sources_csv(context, catalogs, csv_path: str) -> int:
     """Flatten the PSF catalogues into one COPY-ready CSV. Returns row count.
 
-    The per-source values the database columns need beyond what the catalogue
-    carries — the difference-image identity, exposure, SCA, filter, MJD, and
-    the healpix indices — are unit facts, not measurements, so they come from
-    the manifest and are constant down the file.
+    The per-source values the database columns need beyond what the
+    catalogue carries — the difference-image identity (pid), exposure,
+    field, filter, and MJD — are PER PRODUCT, not per unit (mission mock,
+    live 2026-08-09): a (date, SCA) unit loads catalogues from many
+    registered products, so `catalogs` is a list of `(path, product)`
+    pairs and each file's rows carry its own product's identity. A
+    unit-constant fact here wrote NULL pid into a NOT NULL column for
+    every source of every production unit.
     """
-    facts = context.unit.facts
     # The SCA is the UNIT's, as this docstring has always said: neither the
     # psfcat nor its finder carries an `sca` column, so reading one off the
     # row wrote NULL into a NOT-NULL-in-spirit identity column. Taken from the
@@ -354,11 +363,11 @@ def _write_sources_csv(context, catalogs, csv_path: str) -> int:
 
     with open(csv_path, "w", newline="") as handle:
         writer = csv.writer(handle)
-        for path in catalogs:
+        for path, product in catalogs:
             positive = "_negative" not in os.path.basename(path)
             for row in util.read_psfcat_rows(path):
                 writer.writerow(_copy_nulls(
-                    _sources_row(row, facts, positive, sca)))
+                    _sources_row(row, product, positive, sca)))
                 written += 1
 
     context.logger.info("wrote %d source row(s) to %s", written, csv_path)
@@ -386,7 +395,7 @@ def _copy_nulls(values):
     return ["\\N" if value is None else value for value in values]
 
 
-def _sources_row(row, facts, positive: bool, sca):
+def _sources_row(row, product, positive: bool, sca):
     """One catalogue row as the sources column tuple, in COPY order.
 
     **THE KEYS ARE THE CATALOGUE'S, NOT THE TABLE'S.** Two of them were the
@@ -397,6 +406,10 @@ def _sources_row(row, facts, positive: bool, sca):
     with no error anywhere. Verified against the real product headers
     (`sfftdiffimage_masked_psfcat.txt` and its `_finder` sibling) rather than
     inferred from the table.
+
+    `product` is the catalogue file's OWN declared product input — the
+    gatherer's per-product mapping (pid, expid, field, fid, mjdobs) — never
+    a unit-constant: one (date, SCA) unit spans many products.
     """
     return [
         row.get("id"), row.get("ra"), row.get("dec"),
@@ -405,9 +418,10 @@ def _sources_row(row, facts, positive: bool, sca):
         row.get("n_pixels_fit"), row.get("qfit"), row.get("cfit"),
         row.get("reduced_chi2"), row.get("flags"), row.get("sharpness"),
         row.get("roundness1"), row.get("roundness2"), row.get("n_pixels"),
-        row.get("peak"), facts.pid, "true" if positive else "false",
-        facts.field, row.get("hp6"), row.get("hp9"),
-        facts.expid, facts.fid, sca, facts.mjdobs,
+        row.get("peak"), product.get("pid"), "true" if positive else "false",
+        product.get("field"), row.get("hp6"), row.get("hp9"),
+        product.get("expid"), product.get("fid"), sca,
+        product.get("mjdobs"),
     ]
 
 

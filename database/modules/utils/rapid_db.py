@@ -3094,9 +3094,11 @@ class RAPIDDB:
 
         from submission.routes import JOB_TYPE_SCIENCE, ppid_for
 
-        query = "select d.pid, d.expid, d.sca, d.attempt_id, d.filename " +\
+        query = "select d.pid, d.expid, d.sca, d.attempt_id, d.filename, " +\
+                "d.field, d.fid, l.mjdobs " +\
                 "from DiffImages d " +\
                 "join Attempts a on a.attempt_id = d.attempt_id " +\
+                "join L2Files l on l.rid = d.rid " +\
                 "where d.ppid = %s " +\
                 "and d.vbest = 1 " +\
                 "and a.rapid_outcome = 'success' " +\

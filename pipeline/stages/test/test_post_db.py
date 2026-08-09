@@ -863,5 +863,46 @@ class TablespacePlacementTests(unittest.TestCase):
             cursor.execute("SET LOCAL default_tablespace = pipeline_data_01")
 
 
+class SourcesRowIdentityTests(unittest.TestCase):
+    """`_sources_row`: identity columns come from the file's OWN product.
+
+    The mission mock's first production catalog load (2026-08-09) failed on
+    every unit: the row builder read pid/field/expid/fid/mjdobs off
+    unit-constant facts, which are empty for a (date, SCA) unit — a unit
+    spans MANY products, so those five are per-catalogue-file values from
+    the gatherer's declared `product_inputs`, and an absent pid was COPYed
+    as NULL into a NOT NULL column.
+    """
+
+    def test_identity_columns_come_from_the_product_mapping(self):
+        from pipeline.stages import post_db
+
+        product = {"pid": 4321, "expid": 99, "field": 4641773, "fid": 3,
+                   "mjdobs": 61679.09, "attempt_id": 6819}
+        row = {"id": 1, "ra": 267.6, "dec": -29.8, "hp6": 28822,
+               "hp9": 1844653}
+
+        values = post_db._sources_row(row, product, True, 7)
+
+        # COPY order per SOURCES_COLUMNS: pid at index 19, isdiffpos 20,
+        # field 21, expid 24, fid 25, sca 26, mjdobs 27.
+        self.assertEqual(values[19], 4321)
+        self.assertEqual(values[20], "true")
+        self.assertEqual(values[21], 4641773)
+        self.assertEqual(values[24], 99)
+        self.assertEqual(values[25], 3)
+        self.assertEqual(values[26], 7)
+        self.assertEqual(values[27], 61679.09)
+
+    def test_two_files_of_one_unit_can_carry_different_pids(self):
+        from pipeline.stages import post_db
+
+        first = post_db._sources_row({}, {"pid": 1}, True, 7)
+        second = post_db._sources_row({}, {"pid": 2}, False, 7)
+
+        self.assertEqual((first[19], second[19]), (1, 2))
+        self.assertEqual((first[20], second[20]), ("true", "false"))
+
+
 if __name__ == "__main__":
     unittest.main()

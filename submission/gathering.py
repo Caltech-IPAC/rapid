@@ -1132,13 +1132,20 @@ def gather_catalog_load_units(handle: UnitSource, proc_date: str
                 f"product enumeration failed for {proc_date} SCA {sca}: "
                 f"{exc}") from exc
 
-        # (pid, expid, sca, attempt_id, filename) — the query's column order.
-        # Carried as mappings rather than raw tuples because the manifest is
-        # what a human reads when a unit has to be explained, and a bare
-        # 5-tuple explains nothing.
+        # (pid, expid, sca, attempt_id, filename, field, fid, mjdobs) — the
+        # query's column order. Carried as mappings rather than raw tuples
+        # because the manifest is what a human reads when a unit has to be
+        # explained, and a bare tuple explains nothing. field/fid/mjdobs
+        # ride per PRODUCT (mission mock, live 2026-08-09): a (date, SCA)
+        # unit loads catalogues from MANY products, and the sources rows'
+        # identity columns (pid, expid, field, fid, mjdobs) vary per
+        # catalogue file — a unit-constant fact wrote NULL pid for every
+        # source and the load's NOT NULL constraint refused the COPY.
         inputs = [{"pid": _maybe_int(row[0]), "expid": _maybe_int(row[1]),
                    "attempt_id": _maybe_int(row[3]),
-                   "difference_image_uri": _maybe_str(row[4])}
+                   "difference_image_uri": _maybe_str(row[4]),
+                   "field": _maybe_int(row[5]), "fid": _maybe_int(row[6]),
+                   "mjdobs": None if row[7] is None else float(row[7])}
                   for row in products or ()]
 
         yield ProcessingUnit(
