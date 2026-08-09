@@ -38,6 +38,12 @@ termination
     The startup and termination protocols, and the key derivations they use.
 workdir
     The per-attempt working directory: derived paths, no cwd dependence.
+service_kernel
+    Shared plumbing for the reconciler and operator SERVICES (not the
+    per-job payload): logging setup, signal-to-stop-flag wiring, the
+    refreshable assumed-role session, database endpoint/credential
+    resolution with the per-connection-open fetch, and the shared
+    start-failed/unhealthy exit codes.
 
 The database boundary is W1's `ConnectionExecutor` under
 `observability.attempts.AttemptWriter`; the S3 boundary is
@@ -78,6 +84,16 @@ from pipeline.runtime.science_config import (  # noqa: F401
     load_science_config,
     science_config_digest,
 )
+from pipeline.runtime.service_kernel import (  # noqa: F401
+    EXIT_START_FAILED,
+    EXIT_UNHEALTHY,
+    assumed_session,
+    configure_logging,
+    connection_factory,
+    database_credentials,
+    database_endpoint,
+    install_stop_signal,
+)
 from pipeline.runtime.stages import (  # noqa: F401
     SKIPPED,
     StageRecord,
@@ -93,6 +109,8 @@ __all__ = [
     "RECONCILER_ERROR_CATEGORIES",
     "ConfigError",
     "DBError",
+    "EXIT_START_FAILED",
+    "EXIT_UNHEALTHY",
     "InputError",
     "RecordsError",
     "ResourceError",
@@ -106,10 +124,16 @@ __all__ = [
     "ToolError",
     "ToolResult",
     "WorkingDirectory",
+    "assumed_session",
     "auxiliary_identity",
     "categorize",
     "configure",
+    "configure_logging",
+    "connection_factory",
+    "database_credentials",
+    "database_endpoint",
     "get_logger",
+    "install_stop_signal",
     "load_science_config",
     "redact",
     "run_shell",

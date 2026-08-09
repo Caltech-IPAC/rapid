@@ -28,13 +28,24 @@ one decision.
 The old `RAPID_VPO_DRY_RUN` is REFUSED rather than honoured or ignored:
 a run that sets it is asking for the semantics that submitted 5,057 real
 children, and the safe answer to that request is to refuse to start.
+
+The service plumbing this module used to carry on its own — logging
+setup, the assumed-role session, endpoint/credential resolution, the
+70/71 exit codes — now lives in `pipeline.runtime.service_kernel`, shared
+with the reconciler's `pipeline.reconciler.main`. Adopting it also fixes
+the one place this service had drifted from the reconciler's proven
+shape: `_assumed_session` used to build a boto3 session from the three
+literal strings a one-shot `sts.assume_role` returns, which is exactly
+the shape the reconciler's own docstring records as a fixed production
+incident (`service_kernel.assumed_session`'s docstring has the full
+account). This service now uses the same `DeferredRefreshableCredentials`
+mechanism.
 """
 
 import argparse
 import json
 import logging
 import os
-import signal
 import sys
 import time
 
@@ -42,12 +53,12 @@ from pipeline.operator import classes as opclasses
 from pipeline.operator import inputs as opinputs
 from pipeline.operator.operator import Operator, build_accumulator_cadence
 from pipeline.operator.submitters import LiveSubmitter, RehearsalSubmitter
+from pipeline.runtime import service_kernel
 from pipeline.runtime.environment import resolve_region
+from pipeline.runtime.service_kernel import EXIT_START_FAILED, EXIT_UNHEALTHY
 
 logger = logging.getLogger("rapid.operator.service")
 
-EXIT_START_FAILED = 70
-EXIT_UNHEALTHY = 71
 EXIT_PARTIAL_REGISTRATION = 66
 
 #: Poll cadence for the service loop. The accumulator's age trigger is
@@ -65,11 +76,7 @@ class OperatorUnhealthy(RuntimeError):
     """The service is running but cannot do its work."""
 
 
-def _configure_logging():
-    logging.basicConfig(
-        level=os.environ.get("RAPID_LOG_LEVEL", "INFO"),
-        format="%(asctime)sZ %(levelname)s %(name)s %(message)s",
-        stream=sys.stdout)
+_configure_logging = service_kernel.configure_logging
 
 
 def _refuse_retired_flag():
@@ -101,67 +108,52 @@ def _rehearsal_requested(args):
 def _assumed_session(role_arn, region):
     """A boto3 session under the orchestrator role, or the ambient one.
 
-    The service chains into its own role so every submission is
-    attributable to `rapid-orchestrator-role` in CloudTrail rather than
-    to whatever else runs on this host. Same as the reconciler.
+    Delegates to `service_kernel.assumed_session`. This used to build a
+    session from the three literal strings a one-shot `sts.assume_role`
+    call returns — the shape that expires in an hour with no way to
+    renew, and that the reconciler's own docstring records as the fixed
+    ExpiredToken crashloop incident. The kernel's `DeferredRefreshableCredentials`
+    mechanism replaces it here too, so the operator's session refreshes
+    in-process the same way the reconciler's does.
     """
-    import boto3
-
-    if not role_arn:
-        return boto3.Session(region_name=region)
-
-    sts = boto3.client("sts", region_name=region)
-    assumed = sts.assume_role(RoleArn=role_arn,
-                              RoleSessionName="rapid-vpo")
-    credentials = assumed["Credentials"]
-    return boto3.Session(
-        aws_access_key_id=credentials["AccessKeyId"],
-        aws_secret_access_key=credentials["SecretAccessKey"],
-        aws_session_token=credentials["SessionToken"],
-        region_name=region)
+    return service_kernel.assumed_session(
+        role_arn, region, role_session_name="rapid-vpo")
 
 
-_DB_ENDPOINT_PARAMETERS = (
-    ("db/server", "DBSERVER"),
-    ("db/port", "DBPORT"),
-    ("db/name", "DBNAME"),
-)
+_DB_ENDPOINT_PARAMETERS = service_kernel.DB_ENDPOINT_PARAMETERS
 
 
 def _database_endpoint(parameters):
     """The endpoint to pass to `connect`: the ENVIRONMENT over the tree.
 
-    Per field, exactly as the reconciler resolves it — an operator
-    debugging against a replica sets DBSERVER in the unit and restarts,
-    and a tree-first order would silently connect them to production.
+    Delegates to `service_kernel.database_endpoint`, shared with the
+    reconciler. Per field: an explicitly-set variable wins, and the tree
+    fills what is absent — an operator debugging against a replica sets
+    DBSERVER in the unit and restarts, and a tree-first order would
+    silently connect them to production.
     """
-    from database.modules.utils.rapid_db_connect import Endpoint
-
-    values = []
-    for parameter, variable in _DB_ENDPOINT_PARAMETERS:
-        value = os.environ.get(variable) or parameters.get(parameter)
-        values.append(str(value) if value else None)
-    return Endpoint(*values)
+    return service_kernel.database_endpoint(parameters)
 
 
 def _database_credentials(session):
     """Resolve the DB credential under the SERVICE role, not the host's.
 
-    Returned and passed to `connect`, never written to `os.environ`: the
-    password does not exist in this process's environment, so nothing it
-    execs inherits it. Same as the reconciler, for the same reason.
-    """
-    secret_id = os.environ.get("RAPID_DB_SECRET_ID")
-    if not secret_id or os.environ.get("DBUSER"):
-        return None
-    from database.modules.utils.rapid_db_connect import Credentials
+    Delegates to `service_kernel.database_credentials`, shared with the
+    reconciler. Returned and passed to `connect`, never written to
+    `os.environ`: the password does not exist in this process's
+    environment, so nothing it execs inherits it.
 
-    secret = session.client("secretsmanager").get_secret_value(
-        SecretId=secret_id)
-    credential = json.loads(secret["SecretString"])
-    logger.info("database credential resolved under the service role from %s",
-                secret_id)
-    return Credentials(credential["username"], credential["password"])
+    **Called fresh at each connection open** (`_connection_factory`,
+    `_execute_factory`, `_gather_connection_factory` below each call this
+    per invocation rather than once) — the per-connection-open secret
+    fetch the security design requires (design/security.md, "Database
+    service credentials"), which this service previously violated: a
+    credential resolved once in `main()` was closed over by every
+    connection factory for the process's whole lifetime, so a rotated
+    secret was picked up only on the next restart rather than the next
+    connection.
+    """
+    return service_kernel.database_credentials(session, logger=logger)
 
 
 def build_submission_context(session, parameters, operational_class):
@@ -295,14 +287,7 @@ def main(argv=None):
     _configure_logging()
     args = parse_args(argv)
 
-    running = {"go": True}
-
-    def stop(signum, _frame):
-        logger.info("caught signal %s; finishing the current pass", signum)
-        running["go"] = False
-
-    signal.signal(signal.SIGTERM, stop)
-    signal.signal(signal.SIGINT, stop)
+    running = service_kernel.install_stop_signal(logger)
 
     try:
         _refuse_retired_flag()
@@ -339,7 +324,9 @@ def main(argv=None):
         parameters = fetch_parameters(client=session.client("ssm"))
         max_batch_size, max_wait_seconds = build_accumulator_cadence(parameters)
         endpoint = _database_endpoint(parameters)
-        credentials = _database_credentials(session)
+        # No credential is resolved here: each connection factory below
+        # fetches its own, fresh, at the moment it opens a connection —
+        # see `_database_credentials`.
 
         logger.info(
             "VPO starting: mode=%s window=%s..%s dispositions=%s "
@@ -395,7 +382,7 @@ def main(argv=None):
         operators = []
         for operational_class in to_run:
             gather = _gatherer(session, parameters, operational_class,
-                               operator_input, endpoint, credentials)
+                               operator_input, endpoint)
             if args.width is not None:
                 gather = _bounded(gather, args.width, args.max_width,
                                   operational_class.name)
@@ -406,14 +393,14 @@ def main(argv=None):
                                                    operational_class)
                 submitter = LiveSubmitter(
                     context,
-                    _execute_factory(endpoint, credentials),
+                    _execute_factory(session, endpoint),
                     max_batch_size=max_batch_size)
             operators.append(Operator(
                 operational_class, submitter, gather,
                 max_batch_size=max_batch_size,
                 max_wait_seconds=max_wait_seconds,
                 connection_factory=_connection_factory(
-                    endpoint, credentials) if not rehearsing else None,
+                    session, endpoint) if not rehearsing else None,
                 # A LIVE pass registers for real. Passing None here makes
                 # `run_registration` pass `dry_run=True`, and a dry run
                 # reports `would_register=N` while writing no rows — the
@@ -477,18 +464,27 @@ def _production_registrar():
     return production_registrar()
 
 
-def _connection_factory(endpoint, credentials):
-    """A callable returning a fresh connection context manager."""
-    from database.modules.utils.rapid_db_connect import connection
+def _connection_factory(session, endpoint):
+    """A callable returning a fresh connection context manager.
 
-    def factory():
-        return connection("rapid-vpo", lane="transaction",
-                          endpoint=endpoint, credentials=credentials)
-    return factory
+    Delegates to `service_kernel.connection_factory`, which fetches the DB
+    credential INSIDE the returned callable, at each call — not once here
+    and closed over. A credential resolved once in `main()` and shared by
+    every connection this factory opens for the rest of the process's life
+    is exactly the "cached across connections" shape the security design
+    forbids; fetching fresh per call is what makes a rotated secret take
+    effect on the next connection rather than only the next restart.
+    """
+    return service_kernel.connection_factory(
+        session, endpoint, "rapid-vpo", lane="transaction")
 
 
-def _execute_factory(endpoint, credentials):
-    """A context manager yielding the submission `execute` callable."""
+def _execute_factory(session, endpoint):
+    """A context manager yielding the submission `execute` callable.
+
+    Same per-call credential fetch as `_connection_factory`: the secret is
+    resolved fresh inside `factory()`, not closed over from `main()`.
+    """
     import contextlib
 
     from database.modules.utils.rapid_db_connect import (ConnectionExecutor,
@@ -496,6 +492,7 @@ def _execute_factory(endpoint, credentials):
 
     @contextlib.contextmanager
     def factory():
+        credentials = service_kernel.database_credentials(session)
         with connection("rapid-vpo-submit", lane="transaction",
                         endpoint=endpoint, credentials=credentials) as conn:
             yield ConnectionExecutor(conn).execute
@@ -503,7 +500,7 @@ def _execute_factory(endpoint, credentials):
 
 
 def _gatherer(session, parameters, operational_class, operator_input,
-              endpoint, credentials):
+              endpoint):
     """The ready-work query for one class, bound to this invocation's window.
 
     Delegates to `pipeline.operator.gathering`, which carries the operator's
@@ -516,17 +513,14 @@ def _gatherer(session, parameters, operational_class, operator_input,
 
     return gatherer_for(
         operational_class, operator_input, parameters,
-        connection_factory=_gather_connection_factory(endpoint, credentials),
+        connection_factory=_gather_connection_factory(session, endpoint),
         s3_client=session.client("s3"))
 
 
-def _gather_connection_factory(endpoint, credentials):
-    from database.modules.utils.rapid_db_connect import connection
-
-    def factory():
-        return connection("rapid-vpo-gather", lane="transaction",
-                          endpoint=endpoint, credentials=credentials)
-    return factory
+def _gather_connection_factory(session, endpoint):
+    """Same per-call credential fetch as `_connection_factory`, for gathering."""
+    return service_kernel.connection_factory(
+        session, endpoint, "rapid-vpo-gather", lane="transaction")
 
 
 if __name__ == "__main__":

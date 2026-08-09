@@ -12,84 +12,46 @@ classifying none. systemd's `Restart=always` retries all of them with backoff,
 which is the right behaviour for the cases that actually happen: the database
 or the parameter tree briefly unreachable, a stale connection, a rotated
 credential.
+
+The service plumbing this module used to carry on its own — logging setup,
+the refreshable assumed-role session, endpoint/credential resolution, the
+exit-code constants — now lives in `pipeline.runtime.service_kernel`, shared
+with the operator's `pipeline.operator.service`. `_database_endpoint` and
+`_database_credentials` stay here as thin wrappers rather than moving the
+call sites to the kernel names directly, so this module's own test suite
+(`pipeline/reconciler/test/test_main.py`) keeps working unchanged.
 """
 
-import json
 import logging
 import os
-import signal
 import sys
 
 from pipeline.reconciler.service import (POLL_SECONDS, ReconcilerService,
                                          ReconcilerUnhealthy, run_forever)
+from pipeline.runtime import service_kernel
 from pipeline.runtime.boundaries import S3ObjectStore
 from pipeline.runtime.environment import resolve_region
+from pipeline.runtime.service_kernel import EXIT_START_FAILED, EXIT_UNHEALTHY
 
 logger = logging.getLogger("rapid.reconciler.main")
 
-EXIT_START_FAILED = 70
-# Distinct from a start failure so the journal, and anything reading exit
-# codes, can tell "never got going" from "was working and stopped being able
-# to" — two different operator responses (round-3 finding #6).
-EXIT_UNHEALTHY = 71
-
-
-def _configure_logging():
-    logging.basicConfig(
-        level=os.environ.get("RAPID_LOG_LEVEL", "INFO"),
-        format="%(asctime)sZ %(levelname)s %(name)s %(message)s",
-        stream=sys.stdout)
+_configure_logging = service_kernel.configure_logging
 
 
 def _assumed_session(role_arn, region):
     """A boto3 session under the orchestrator role, or the ambient one.
 
-    The service chains into its own role rather than using the host's instance
-    role directly, so every reconciliation call is attributable to
-    `rapid-orchestrator-role` in CloudTrail rather than to whatever else runs
-    on this host.
-
-    **THE CREDENTIAL REFRESHES IN-LOOP** (recorded follow-up). This used to
-    call `assume_role` once and build a session from the three literal strings
-    it returned. Those expire — one hour by default — and a session built from
-    literals cannot renew them, so every reconciliation call began failing
-    `ExpiredToken` about an hour in. The service then exited unhealthy and
-    systemd restarted it, which worked, but meant an hourly restart of a
-    long-running service AS ITS CREDENTIAL MECHANISM: NRestarts climbed
-    forever, and a genuine crashloop was indistinguishable from the ordinary
-    hourly churn in the one number an operator watches.
-
-    `RefreshableCredentials` is botocore's own answer: it re-invokes the
-    refresh callable when the credential nears expiry, inside the running
-    process. The assume_role call below therefore happens on the first use and
-    again shortly before each expiry, rather than once ever — and the process
-    stays up, so NRestarts means what it is supposed to mean.
-
-    Deliberately botocore's mechanism rather than a hand-rolled timer: the
-    expiry arithmetic, the advisory-vs-mandatory refresh window and the
-    thread-safety are exactly the parts that are easy to get subtly wrong, and
-    they are already written and exercised here.
+    Delegates to `service_kernel.assumed_session`, which carries the
+    refreshable-credential mechanism this docstring used to document in
+    full: an earlier version called `assume_role` once and built a session
+    from the three literal strings it returned, which expire in an hour and
+    cannot renew, so every reconciliation call began failing `ExpiredToken`
+    about an hour in — a fixed production incident, and the reason the
+    kernel's session builder uses `DeferredRefreshableCredentials` rather
+    than literals for both services now.
     """
-    import boto3
-
-    if not role_arn:
-        return boto3.Session(region_name=region)
-
-    from botocore.credentials import (DeferredRefreshableCredentials,
-                                      create_assume_role_refresher)
-    from botocore.session import get_session
-
-    sts = boto3.client("sts", region_name=region)
-
-    botocore_session = get_session()
-    botocore_session._credentials = DeferredRefreshableCredentials(
-        refresh_using=create_assume_role_refresher(
-            sts, {"RoleArn": role_arn,
-                  "RoleSessionName": "rapid-reconciler"}),
-        method="sts-assume-role")
-    botocore_session.set_config_variable("region", region)
-    return boto3.Session(botocore_session=botocore_session,
-                         region_name=region)
+    return service_kernel.assumed_session(
+        role_arn, region, role_session_name="rapid-reconciler")
 
 
 def build_service(session, parameters, conn):
@@ -150,91 +112,57 @@ def _log_groups_from(parameters):
     return groups
 
 
-# The parameter-tree names holding the database endpoint. The helper
-# deliberately refuses to compile in a default — "it is operational
-# configuration and must come from the parameter tree" — and the tree is
-# exactly where these live. What was missing is the bridge between them:
-# the reconciler fetched the tree, then called `connection()`, which read
-# an environment nobody had populated. Found live 2026-08-06 (W8), the
-# first time the service ran as a service: DBSERVER is not set, exit 70,
-# every 15 seconds.
-#
-# The bridge was `os.environ[...] = ...`, and that is what the environment
-# policy retired: the tree's values are now PASSED to `connect`, so this
-# process's environment carries no endpoint it wrote for itself to read
-# back. An operator's explicitly-set variable still wins — see
-# `_database_endpoint`, which preserves that order deliberately.
+# The parameter-tree names holding the database endpoint. Found live
+# 2026-08-06 (W8), the first time the service ran as a service: DBSERVER
+# is not set, exit 70, every 15 seconds — the bridge from tree to
+# `connect()` was missing entirely.
 #
 # The payload does not need this because Batch job definitions carry the
 # same facts as container environment; a systemd unit has no equivalent,
 # and hardcoding them into the unit would put the endpoint in a second
 # home — the drift the tree exists to prevent.
-_DB_ENDPOINT_PARAMETERS = (
-    ("db/server", "DBSERVER"),
-    ("db/port", "DBPORT"),
-    ("db/name", "DBNAME"),
-)
+_DB_ENDPOINT_PARAMETERS = service_kernel.DB_ENDPOINT_PARAMETERS
 
 
 def _database_endpoint(parameters):
     """The endpoint to pass to `connect`: the ENVIRONMENT over the tree.
 
-    Per field: an explicitly-set variable wins, and the tree fills what is
-    absent. That order is the one the old `_bind_database_environment`
-    had — it wrote a tree value only `if not os.environ.get(variable)` —
-    and it is load-bearing, not incidental: an operator debugging against
-    a replica sets DBSERVER in the unit and restarts, and a tree-first
-    order would silently connect them to production instead while they
-    believed otherwise.
-
-    Missing on both sides raises from `Endpoint`, naming the field. That
-    is a different raiser from the helper's own `_require_env` but the
-    same operator-facing outcome: the absent field is named.
+    Delegates to `service_kernel.database_endpoint`, shared with the
+    operator. Per field: an explicitly-set variable wins, and the tree
+    fills what is absent — an operator debugging against a replica sets
+    DBSERVER in the unit and restarts, and a tree-first order would
+    silently connect them to production instead while they believed
+    otherwise. Missing on both sides raises from `Endpoint`, naming the
+    field.
     """
-    from database.modules.utils.rapid_db_connect import Endpoint
-
-    values = []
-    for parameter, variable in _DB_ENDPOINT_PARAMETERS:
-        value = os.environ.get(variable) or parameters.get(parameter)
-        values.append(str(value) if value else None)
-    return Endpoint(*values)
+    return service_kernel.database_endpoint(parameters)
 
 
 def _database_credentials(session):
     """Resolve the DB credential under the SERVICE role, not the host's.
 
-    `rapid_db.get_db_credentials` fetches RAPID_DB_SECRET_ID through boto3's
-    default credential chain, which inside this container is the host's
-    instance role — and that role is deliberately NOT granted the
-    orchestrator secret (rapid-db-instance-role reads it only on the DB host,
-    for the association pass). So the fetch failed with AccessDenied and the
-    service crashlooped on "could not resolve database credentials", found
-    live 2026-08-06 (W8) the first time it ran as a service.
+    Delegates to `service_kernel.database_credentials`, shared with the
+    operator. `rapid_db.get_db_credentials` fetches RAPID_DB_SECRET_ID
+    through boto3's default credential chain, which inside this container
+    is the host's instance role — and that role is deliberately NOT
+    granted the orchestrator secret (rapid-db-instance-role reads it only
+    on the DB host, for the association pass). So the fetch failed with
+    AccessDenied and the service crashlooped on "could not resolve
+    database credentials", found live 2026-08-06 (W8) the first time it
+    ran as a service.
 
     The session passed here is already chained into
     RAPID_RECONCILER_ROLE_ARN, which is the identity that may read the
     secret. The resolved credential is RETURNED and passed to `connect`,
-    where it was previously written to `os.environ` as DBUSER/DBPASS. The
-    unit-file and journal properties that write was protecting still hold,
-    and the one it could not protect now does too: the password no longer
-    exists in this process's environment, so nothing this service execs
-    inherits it and no environment dump can print it.
+    never written to `os.environ`: the password does not exist in this
+    process's environment, so nothing it execs inherits it and no
+    environment dump can print it.
 
     Returns None when the secret id is unset or DBUSER/DBPASS are already
     present, leaving the helper's boundary read to serve an operator
     running against another credential.
     """
-    secret_id = os.environ.get("RAPID_DB_SECRET_ID")
-    if not secret_id or os.environ.get("DBUSER"):
-        return None
-    from database.modules.utils.rapid_db_connect import Credentials
-
-    secret = session.client("secretsmanager").get_secret_value(
-        SecretId=secret_id)
-    credential = json.loads(secret["SecretString"])
-    logger.info("database credential resolved under %s from secret %s",
-                "the service role", secret_id)
-    return Credentials(credential["username"], credential["password"])
+    return service_kernel.database_credentials(session, logger=logger)
 
 
 def main():
@@ -244,14 +172,7 @@ def main():
     poll_seconds = int(os.environ.get("RAPID_RECONCILER_POLL_SECONDS",
                                       POLL_SECONDS))
 
-    running = {"go": True}
-
-    def stop(signum, _frame):
-        logger.info("caught signal %s; finishing the current cycle", signum)
-        running["go"] = False
-
-    signal.signal(signal.SIGTERM, stop)
-    signal.signal(signal.SIGINT, stop)
+    running = service_kernel.install_stop_signal(logger)
 
     try:
         from database.modules.utils.rapid_db_connect import connection
