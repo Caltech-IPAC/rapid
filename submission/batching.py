@@ -124,7 +124,7 @@ class ReadyWorkAccumulator:
         self._batch_id_factory = batch_id_factory
 
         self._waiting: list[ProcessingUnit] = []
-        self._pending_keys: set[str] = set()
+        self._pending_keys: set[tuple] = set()
         self._oldest_at: float | None = None
 
     # -- accumulation ------------------------------------------------
@@ -138,12 +138,25 @@ class ReadyWorkAccumulator:
         is only within the waiting set — once a batch is cut, its keys are
         released, because a genuine reprocess of the same SCA is legitimate
         work that arrives as a new unit.
+
+        **DEDUPS ON THE DECLARED SUBJECT, NOT `.key`** (co-design ruling 2,
+        the V25 defect). `.key` is the exposure/SCA-shaped storage carrier
+        every `ProcessingUnit` has, whatever its job type — a crossmatch
+        unit puts the processing-date ordinal in `exposure` and a fixed `0`
+        in `sca`, so every field of one date shared `.key` and every field
+        after the first was silently dropped here. `unit.dedup_key(self.job_type)`
+        (`submission.manifest.ProcessingUnit.dedup_key`, backed by
+        `submission.subjects`) reads the real identity instead, so two
+        units collide only when their declared subjects agree. Every
+        accumulator holds one job type (this class's own contract, stated
+        above), so `self.job_type` is always the right type to key with.
         """
-        if unit.key in self._pending_keys:
+        dedup_key = unit.dedup_key(self.job_type)
+        if dedup_key in self._pending_keys:
             logger.debug("unit %s already waiting; dropped", unit.key)
             return
         self._waiting.append(unit)
-        self._pending_keys.add(unit.key)
+        self._pending_keys.add(dedup_key)
         if self._oldest_at is None:
             self._oldest_at = self._clock()
 
@@ -199,7 +212,7 @@ class ReadyWorkAccumulator:
         units = self._waiting[:take]
         self._waiting = self._waiting[take:]
         for unit in units:
-            self._pending_keys.discard(unit.key)
+            self._pending_keys.discard(unit.dedup_key(self.job_type))
 
         # The remainder's wait restarts now: it was not the thing that
         # aged out, and charging it the old batch's age would cut the

@@ -172,19 +172,27 @@ class SubmitUnitsTests(unittest.TestCase):
                    if "INTO attempts" in sql]
         self.assertTrue(inserts)
         strings = [p for p in inserts[0] if isinstance(p, str)]
-        self.assertIn("run-1:090000/01", strings)
+        self.assertIn("run-1:science/90000/1", strings)
         self.assertNotIn("090000/01", strings)
 
     def test_the_run_scoped_key_is_the_one_the_runtime_computes(self):
         # Both sides must agree on the key: the submitter writing the row and
         # the runtime claiming it through the resolver. One function owns the
         # format so a second copy cannot drift.
+        #
+        # KEYED BY THE DECLARED SUBJECT, NOT `.key` (co-design ruling 2): a
+        # science unit's subject is `(job_type, exposure, sca)`, which is
+        # "science/90000/1" rather than the zero-padded storage-path key —
+        # `dedup_key`'s docstring has the full reasoning, and the crossmatch
+        # collision it fixes.
         from submission.manifest import ProcessingUnit
+        from submission.routes import JOB_TYPE_SCIENCE
 
         unit = ProcessingUnit(exposure=90000, sca=1)
-        self.assertEqual("run-1:090000/01", unit.logical_job_key("run-1"))
-        self.assertNotEqual(unit.logical_job_key("run-1"),
-                            unit.logical_job_key("run-2"))
+        self.assertEqual("run-1:science/90000/1",
+                         unit.logical_job_key("run-1", JOB_TYPE_SCIENCE))
+        self.assertNotEqual(unit.logical_job_key("run-1", JOB_TYPE_SCIENCE),
+                            unit.logical_job_key("run-2", JOB_TYPE_SCIENCE))
 
     def test_the_rows_are_created_before_submit_job(self):
         # REVIEW FINDING #2, and the reason this seam is one function rather

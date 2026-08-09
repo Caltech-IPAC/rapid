@@ -573,11 +573,21 @@ def _run(workload_class: str) -> int:
         # both sides share (review finding #3): the submitter writes the row
         # under this key and the resolver claims it by matching on it, so a
         # second copy of the format string here is how the two would stop
-        # agreeing.
+        # agreeing. Keyed by the manifest's job type (co-design ruling 2) so
+        # a crossmatch child resolves against its unit's real (date, field)
+        # subject rather than the exposure/SCA-shaped carrier every job type
+        # shares — see `ProcessingUnit.logical_job_key`'s docstring.
+        #
+        # `identity_extra` stays exposure/SCA-shaped: it is read only on the
+        # reconciler-first branch of `resolve_attempt` (migration 013), which
+        # the normal pre-created-row claim never reaches, and that SQL
+        # function does not yet accept `field`/`processing_date` — migration
+        # 039 adds the parameters this call site will then pass.
         ownership = resolve_ownership(
             writer, job_env,
             run_id=manifest.batch_id,
-            logical_job_id=unit.logical_job_key(manifest.batch_id),
+            logical_job_id=unit.logical_job_key(manifest.batch_id,
+                                                manifest.job_type),
             identity_extra={"exposure_id": unit.exposure, "sca": unit.sca,
                             "sky_tile": getattr(unit.facts, "rtid", None)},
             lifecycle_reader=lifecycle_reader_for(execute))

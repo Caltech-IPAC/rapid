@@ -56,7 +56,17 @@ def test_the_job_type_fixes_the_route():
 
 
 def test_a_session_lane_job_type_carries_the_session_lane():
-    manifest = Manifest(units(), job_type="crossmatch")
+    # Crossmatch units are DATE_FIELD-grain (co-design ruling 2): their
+    # declared subject is `(job_type, proc_date, field)`, not exposure/SCA,
+    # so a manifest of them needs those fields named to have a real dedup
+    # identity — a bare `units()` here would have every unit collide on
+    # the same missing-field subject.
+    crossmatch_units = [
+        ProcessingUnit(exposure=20260808, sca=0,
+                       fields={"proc_date": "20260808", "field": field})
+        for field in (101, 202)
+    ]
+    manifest = Manifest(crossmatch_units, job_type="crossmatch")
     assert manifest.db_lane == LANE_SESSION
     assert manifest.ppid is None
 

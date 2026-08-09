@@ -3083,6 +3083,94 @@ class RAPIDDB:
 
 ########################################################################################################
 
+    def get_scas_with_incomplete_catalog_load_for_processing_date(self,proc_date):
+
+        '''
+        SCAs that ran science on this date but have NO successful catalog-load
+        attempt for it — the durable-state coverage gap crossmatch and alert
+        production both gate on.
+
+        THE DURABLE-STATE ORDERING PREDICATE (integration review 2026-08,
+        composite ruling 1's "every ordering fact is a durable-state gathering
+        predicate"; design/operations.md: "Crossmatch readiness is durable
+        state, not operator sequencing: its gathering predicate checks
+        recorded catalog-load completion facts directly ... never an ordering
+        convention among gatherer invocations"). Nothing about SUBMISSION
+        ORDER is read here — an operator that happened to submit crossmatch
+        before catalog load finished must still see the gap, and an operator
+        restarted mid-chain must see the same gap it would have seen before
+        the restart. The only fact this reads is whether the row exists.
+
+        **COVERAGE SEMANTICS: PER PROCESSING DATE, NOT PER FIELD.**
+        `crossMatchSources.py` cross-matches one field against
+        `sources_<proc_date>_<sca>` for EVERY sca in the date's science SCA
+        list (`run_single_core_job_stage_1_crossmatching`'s `for sca in
+        scas:` loop, guarded only by "allow for missing SCAs" — a
+        table-existence tolerance, not a per-field SCA subset). A crossmatch
+        unit for field F does not read a narrower slice of SCAs than a
+        crossmatch unit for field G on the same date; both want the WHOLE
+        date's catalog load done. So this is scoped to `proc_date` alone —
+        the same population `get_scas_with_science_jobs_for_processing_date`
+        already enumerates — and the caller applies the SAME answer to every
+        field of that date rather than a per-field re-query.
+
+        "A successful catalog-load attempt" is a `logical_jobs.job_type =
+        'catalog-load'` row (migration 039) whose owning attempt reached
+        `lifecycle_state = 'terminal_after_start'` with `rapid_outcome =
+        'success'`, scoped to this SCA and processing date via the
+        applicable-identifier columns migration 039 adds
+        (`attempts.sca`, `attempts.processing_date`) — never the
+        exposure/SCA sentinel a catalog-load unit's synthetic `exposure_id`
+        would otherwise look like.
+
+        Returns the SCAs with NO such attempt: an empty list is the
+        all-clear both callers gate on.
+        '''
+
+        self.exit_code = 0
+
+        query = "select sc.sca from (" +\
+                "  select distinct d.sca from DiffImages d " +\
+                "  join Attempts a on a.attempt_id = d.attempt_id " +\
+                "  where d.ppid = %s and d.vbest = 1 " +\
+                "  and a.rapid_outcome = 'success' " +\
+                "  and d.created >= cast(%s as timestamp) " +\
+                "  and d.created < cast(%s as timestamp) + cast('1 day' as interval) " +\
+                "  and d.sca is not null" +\
+                ") sc " +\
+                "where not exists (" +\
+                "  select 1 from Attempts la " +\
+                "  join logical_jobs lj on lj.logical_job_id = la.logical_job_id " +\
+                "  where lj.job_type = %s " +\
+                "  and la.sca = sc.sca " +\
+                "  and la.processing_date = cast(%s as date) " +\
+                "  and la.lifecycle_state = 'terminal_after_start' " +\
+                "  and la.rapid_outcome = 'success'" +\
+                ") " +\
+                "order by sc.sca;"
+
+        from submission.routes import JOB_TYPE_CATALOG_LOAD, JOB_TYPE_SCIENCE, ppid_for
+
+        params = (ppid_for(JOB_TYPE_SCIENCE), proc_date, proc_date,
+                  JOB_TYPE_CATALOG_LOAD, proc_date)
+
+        print('query = {}, params = {}'.format(query, params))
+
+        try:
+            self.cur.execute(query, params)
+            records = [record[0] for record in self.cur]
+            print("nrecs =",len(records))
+
+        except (Exception, psycopg2.DatabaseError) as error:
+            print('*** Error getting incomplete catalog-load SCAs for {}: {}; skipping...'.format(proc_date,error))
+            self.exit_code = 67
+            return
+
+        return records
+
+
+########################################################################################################
+
     def get_attempts_awaiting_alert_emission(self,release_identity,limit=None):
 
         '''
@@ -3110,11 +3198,36 @@ class RAPIDDB:
             so is absent here; a later pin-release promotion appears then,
             which is exactly the ruled behaviour.
 
-          * "Emission is once per logical unit per release" -> the anti-join
-            against `alert_emissions` on (exposure, sca, release). The table's
-            primary key makes a double emission impossible even if two
-            gatherers raced; this clause is what stops the second one being
-            SUBMITTED, which is cheaper than having it refused at write time.
+          * "enumerates attempts whose registration committed with the
+            unit's difference image promoted to current, past the alert
+            watermark and with the unit's catalog load complete" -> the
+            catalog-load clause, ADDED by integration review 2026-08
+            (composite ruling 1: "the ruled catalog-load clause is missing
+            from the implemented alert predicate" — this was the exact gap
+            named). The unit's processing date is the promoted difference
+            image's own `created` date (the same convention
+            `get_scas_with_science_jobs_for_processing_date` and
+            `get_scas_with_incomplete_catalog_load_for_processing_date`
+            use), and "complete" means a `logical_jobs.job_type =
+            'catalog-load'` attempt reached `terminal_after_start` /
+            `success` for that (date, sca) — read through the SAME fact
+            class `get_scas_with_incomplete_catalog_load_for_processing_date`
+            reads, expressed inline here because this query is driven by
+            promo/diffimages rows a separate per-date call cannot join
+            against without re-deriving the date twice.
+
+          * "Emission is once per logical unit per release" -> gathering
+            excludes units carrying ANY `alert_emissions` row in
+            (watermark_seed, claimed-and-fresh, emitted) — migration 037's
+            state model, replacing 033's single-state anti-join (co-design
+            ruling 3). A STALE claim (age past the 1-hour threshold
+            migration 037's `derived.alert_emission_status` view names,
+            AND the claiming attempt terminal) is gatherable again: a crashed
+            claimant must not permanently suppress its unit's alert. The
+            primary key still makes a double CONFIRMED emission impossible
+            even if two gatherers raced; this clause is what stops a second
+            one being GATHERED, which is cheaper than relying only on the
+            CAS claim to refuse it.
 
           * "a reference-image-only attempt is a natural no-op" -> such an
             attempt records no difference-image promotion, so it never
@@ -3135,6 +3248,14 @@ class RAPIDDB:
 
         self.exit_code = 0
 
+        from submission.routes import JOB_TYPE_CATALOG_LOAD
+
+        # The staleness threshold, matching migration 037's
+        # `derived.alert_emission_status` view exactly (that view's own
+        # comment: "keep the two in sync by inspection until a shared
+        # parameter home exists" — this is the pipeline half of that pair).
+        claim_staleness = "interval '1 hour'"
+
         query = "select a.attempt_id, a.exposure_id, a.sca, " +\
                 "       (promo->>'pid')::int as pid, " +\
                 "       promo->>'product' as product, " +\
@@ -3143,16 +3264,31 @@ class RAPIDDB:
                 "from Attempts a " +\
                 "cross join lateral jsonb_array_elements(" +\
                 "     coalesce(a.registration_outcome->'promotions', '[]'::jsonb)) as promo " +\
+                "join DiffImages d on d.pid = (promo->>'pid')::int " +\
                 "where a.registration_outcome is not null " +\
                 "and promo->>'type' = 'promotion' " +\
                 "and promo->>'pid' is not null " +\
                 "and a.exposure_id is not null and a.sca is not null " +\
+                "and exists (" +\
+                "  select 1 from Attempts la " +\
+                "  join logical_jobs lj on lj.logical_job_id = la.logical_job_id " +\
+                "  where lj.job_type = %s " +\
+                "  and la.sca = a.sca " +\
+                "  and la.processing_date = d.created::date " +\
+                "  and la.lifecycle_state = 'terminal_after_start' " +\
+                "  and la.rapid_outcome = 'success'" +\
+                ") " +\
                 "and not exists (select 1 from Alert_Emissions e " +\
                 "                where e.exposure_id = a.exposure_id " +\
                 "                and e.sca = a.sca " +\
-                "                and e.release_identity = %s) " +\
+                "                and e.release_identity = %s " +\
+                "                and (" +\
+                "                  e.state in ('watermark_seed', 'emitted') " +\
+                "                  or (e.state = 'claimed' " +\
+                "                      and e.claimed_at >= now() - " + claim_staleness + ")" +\
+                "                )) " +\
                 "order by a.registered_at, a.attempt_id"
-        params = [release_identity]
+        params = [JOB_TYPE_CATALOG_LOAD, release_identity]
 
         if limit is not None:
             query += " limit %s"

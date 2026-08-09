@@ -267,22 +267,45 @@ def _precreate(writer, manifest, run_id, binding, moment):
     No `scheduler_job_id` is passed: Batch has not assigned one yet, and that
     is precisely why this runs before `SubmitJob`. `_bind_scheduler_jobs`
     fills them in afterwards.
+
+    **TYPED IDENTITY** (co-design ruling 2). The logical-job key and the
+    attempt row's identifier columns both derive from the manifest's job
+    type's DECLARED SUBJECT (`submission.subjects`) rather than from
+    `unit.key` alone — a crossmatch manifest's units carry the same
+    exposure/SCA-shaped carrier for every field of one processing date, so
+    keying on `unit.key` would collide them exactly as the accumulator's
+    dedup used to (see `manifest.ProcessingUnit.dedup_key`'s docstring).
+    Job types the typed-identity registry does not cover (post-process,
+    outside co-design ruling 9's undecided disposition) fall back to the
+    exposure/SCA identity every job type used before this ruling — only
+    `UnknownJobType` (the registry has no declaration at all for this job
+    type) is caught for that fallback; a KNOWN job type's unit missing one
+    of its declared components is a real defect and propagates rather than
+    being silently absorbed into the fallback shape.
     """
     from observability.attempts import AttemptIdentity
+    from submission.subjects import UnknownJobType, attempt_identity_fields
 
     attempt_ids = []
     for index, unit in enumerate(manifest.units):
-        logical_job_id = unit.logical_job_key(manifest.batch_id)
+        logical_job_id = unit.logical_job_key(manifest.batch_id,
+                                              manifest.job_type)
 
         writer.create_logical_job(
-            logical_job_id, manifest.batch_id, binding)
+            logical_job_id, manifest.batch_id, binding,
+            job_type=manifest.job_type)
+
+        try:
+            identity_fields = attempt_identity_fields(manifest.job_type, unit)
+        except UnknownJobType:
+            identity_fields = {"exposure_id": unit.exposure, "sca": unit.sca,
+                               "sky_tile": getattr(unit.facts, "rtid", None)}
 
         attempt_ids.append(writer.create_submitted(
             AttemptIdentity(
                 run_id=manifest.batch_id,
                 logical_job_id=logical_job_id,
-                exposure_id=unit.exposure, sca=unit.sca,
-                sky_tile=getattr(unit.facts, "rtid", None)),
+                **identity_fields),
             created_at=moment, submitted_at=moment,
             binding=binding))
     return attempt_ids

@@ -136,6 +136,34 @@ def test_a_unit_already_waiting_is_dropped(clock):
     assert len(acc) == 1
 
 
+def test_two_fields_crossmatch_units_do_not_collide_v25(clock):
+    # THE V25 DEFECT (co-design ruling 2). `gather_crossmatch_units` yields
+    # `ProcessingUnit(exposure=<date ordinal>, sca=0, ...)` for EVERY field
+    # of one processing date — so every field shares one `.key`, and
+    # deduping on `.key` (as this accumulator did before the fix) silently
+    # dropped every field after the first. Two different fields of the same
+    # date must both survive.
+    from submission.routes import JOB_TYPE_CROSSMATCH
+
+    acc = make_accumulator(clock, job_type=JOB_TYPE_CROSSMATCH)
+    date_ordinal = 20260808
+    acc.add(ProcessingUnit(exposure=date_ordinal, sca=0,
+                           fields={"proc_date": "20260808", "field": 101,
+                                   "job_type": JOB_TYPE_CROSSMATCH}))
+    acc.add(ProcessingUnit(exposure=date_ordinal, sca=0,
+                           fields={"proc_date": "20260808", "field": 202,
+                                   "job_type": JOB_TYPE_CROSSMATCH}))
+    assert len(acc) == 2
+
+    # And a genuine re-offer of the SAME field still dedups, exactly as
+    # before this ruling — the fix narrows what counts as "the same unit",
+    # it does not turn dedup off.
+    acc.add(ProcessingUnit(exposure=date_ordinal, sca=0,
+                           fields={"proc_date": "20260808", "field": 101,
+                                   "job_type": JOB_TYPE_CROSSMATCH}))
+    assert len(acc) == 2
+
+
 def test_a_unit_can_return_after_its_batch_is_cut(clock):
     # A genuine reprocess is legitimate new work.
     acc = make_accumulator(clock, max_batch_size=1)

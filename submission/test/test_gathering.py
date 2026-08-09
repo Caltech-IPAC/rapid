@@ -39,6 +39,7 @@ from submission.routes import (
     JOB_TYPE_MERGE_CURRENCY,
     JOB_TYPE_MERGE_DEDUP,
     JOB_TYPE_POST_PROCESS,
+    JOB_TYPE_SCIENCE,
     JOB_TYPE_SOURCE_CURRENCY,
     JOB_TYPE_STATISTICS,
 )
@@ -266,8 +267,8 @@ class GatherScienceUnitsTests(unittest.TestCase):
 
     def test_the_run_scoped_logical_key_is_unique_per_run(self):
         unit = self._gather(make_references=True)[0]
-        self.assertNotEqual(unit.logical_job_key("run-a"),
-                            unit.logical_job_key("run-b"))
+        self.assertNotEqual(unit.logical_job_key("run-a", JOB_TYPE_SCIENCE),
+                            unit.logical_job_key("run-b", JOB_TYPE_SCIENCE))
 
     def test_a_field_with_no_files_is_skipped_not_an_error(self):
         source = StubSource(l2files={})
@@ -922,7 +923,7 @@ class PostDbGatheringTests(unittest.TestCase):
         """
 
         def __init__(self, scas=(), fields=(), per_field=(), failure=0,
-                     products=None):
+                     products=None, incomplete_catalog_load=()):
             self.scas = list(scas)
             self.fields = list(fields)
             self.per_field = list(per_field)
@@ -934,11 +935,24 @@ class PostDbGatheringTests(unittest.TestCase):
             # gatherer that asked for the wrong one would get the wrong rows
             # here too rather than silently getting the same list.
             self.products = dict(products or {})
+            # Which SCAs the durable-state predicate should report as NOT
+            # having a completed catalog-load attempt yet. Empty by default
+            # (the coverage check passes and crossmatch gathers normally) —
+            # a stub that could only report "complete" would never exercise
+            # the refusal path, which is exactly the stub-refusal principle
+            # this suite's own tests are held to.
+            self.incomplete_catalog_load = list(incomplete_catalog_load)
 
         def get_scas_with_science_jobs_for_processing_date(self, proc_date):
             self.asked_for.append(("scas", proc_date))
             self.exit_code = self.failure
             return None if self.failure else self.scas
+
+        def get_scas_with_incomplete_catalog_load_for_processing_date(
+                self, proc_date):
+            self.asked_for.append(("incomplete_catalog_load", proc_date))
+            self.exit_code = self.failure
+            return None if self.failure else self.incomplete_catalog_load
 
         def get_fields_with_science_jobs_for_processing_date(self, proc_date):
             self.asked_for.append(("fields", proc_date))
@@ -1062,6 +1076,20 @@ class PostDbGatheringTests(unittest.TestCase):
         self.assertEqual([u.fields["field"] for u in units], [101, 202])
         for unit in units:
             self.assertEqual(unit.fields["job_type"], JOB_TYPE_CROSSMATCH)
+
+    def test_crossmatch_gathers_nothing_when_a_sca_is_incomplete(self):
+        # The durable-state gate: one SCA without a completed catalog-load
+        # attempt holds the WHOLE date's crossmatch gathering (the stage
+        # reads every SCA's sources table), and the fields are never even
+        # enumerated — gather again next poll, no exception.
+        source = self.Source(fields=[101, 202], incomplete_catalog_load=[7])
+
+        units = list(gather_crossmatch_units(source, "20260808"))
+
+        self.assertEqual(units, [])
+        self.assertIn(("incomplete_catalog_load", "20260808"),
+                      source.asked_for)
+        self.assertNotIn(("fields", "20260808"), source.asked_for)
 
     def test_crossmatch_carries_the_field_as_a_unit_fact_too(self):
         # `field` is a named `UnitFacts` entry, so it rides there as well as

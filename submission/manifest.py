@@ -70,6 +70,7 @@ import json
 from typing import Any, Iterable, Iterator
 
 from .routes import JOB_TYPE_SCIENCE, Route, route_for, validate_route
+from .subjects import UnknownJobType, subject_for
 
 # Batch's hard ceiling on array children (design/compute.md § Submission).
 MAX_ARRAY_SIZE = 10000
@@ -386,10 +387,57 @@ class ProcessingUnit:
         component every product key under `product_prefix()` embeds, so an
         unpadded value here was an unpadded value in every product key ever
         written.
+
+        **THE STORAGE-PATH KEY, NOT THE DEDUP KEY** (co-design ruling 2).
+        `exposure`/`sca` are typed carriers the array layer understands for
+        every job type — a crossmatch unit puts its processing-date ordinal
+        in `exposure` and a fixed `0` in `sca` (`submission/gathering.py`,
+        `gather_crossmatch_units`), which is NOT this unit's identity, only
+        its shape. Use `dedup_key(job_type)` for deduplication and
+        `logical_job_key(run_id, job_type)` for the run-scoped identity;
+        both derive from the job type's DECLARED subject
+        (`submission.subjects`), and only for the two product-producing job
+        types (science, reference-image) does that subject coincide with
+        this key — which is why `product_prefix()` may still embed `.key`
+        for exactly those two and no other.
         """
         return f"{self.exposure:06d}/{self.sca:02d}"
 
-    def logical_job_key(self, run_id: Any) -> str:
+    def dedup_key(self, job_type: str) -> tuple[Any, ...]:
+        """This unit's declared-subject identity for one job type.
+
+        THE FIX FOR THE V25 DEFECT: `ReadyWorkAccumulator` (batching.py)
+        used to dedup on `.key` for every job type, so two crossmatch units
+        for different FIELDS of one processing date — both
+        `ProcessingUnit(exposure=<date ordinal>, sca=0, ...)` — carried the
+        same `.key` and the second silently vanished from the waiting set.
+        `subjects.subject_for(job_type).subject_for(unit)` reads the real
+        identity out of `unit.fields` (or, for exposure/SCA-grain types,
+        out of `exposure`/`sca` themselves), so two units collide here only
+        when their DECLARED subjects agree.
+
+        `job_type` is a parameter rather than a unit attribute because a
+        `ProcessingUnit` does not always know its own job type — science and
+        reference-image units never set `fields["job_type"]` (only the
+        `Manifest` they end up in does; see `gather_science_units`) — while
+        every caller that needs a dedup key already has the job type at
+        hand: the accumulator was constructed with it, and a manifest names
+        it.
+
+        **JOB TYPES OUTSIDE THE TYPED-IDENTITY REGISTRY** (post-process,
+        registration, reprocessing — co-design ruling 9 leaves
+        post-process's disposition undecided, and the other two are not
+        gathered through this path at all) fall back to `(job_type,
+        exposure, sca)`: the exposure/SCA identity every job type used
+        before this ruling, which is exactly right for them because none of
+        the three has a grain other than exposure/SCA today.
+        """
+        try:
+            return subject_for(job_type).subject_for(self)
+        except UnknownJobType:
+            return (job_type, self.exposure, self.sca)
+
+    def logical_job_key(self, run_id: Any, job_type: str) -> str:
         """This unit's RUN-SCOPED logical-job identity (review finding #3).
 
         `logical_jobs.logical_job_id` is a global primary key, so keying it on
@@ -405,8 +453,15 @@ class ProcessingUnit:
         submitter writing the pre-created row and the runtime claiming it
         through the resolver. A second copy of this format string elsewhere is
         exactly how the two would drift apart.
+
+        **KEYED BY THE DEDUP SUBJECT, NOT `.key`** (co-design ruling 2,
+        continuing the fix above): two crossmatch units for the same
+        processing date but different fields must resolve to two distinct
+        logical jobs, not one — `.key` alone would collide them exactly as
+        it collided them in the accumulator.
         """
-        return f"{run_id}:{self.key}"
+        subject = "/".join(str(part) for part in self.dedup_key(job_type))
+        return f"{run_id}:{subject}"
 
     def to_dict(self) -> dict[str, Any]:
         facts = self.facts.to_dict()
@@ -461,21 +516,36 @@ class Manifest:
             raise ValueError(
                 f"{len(self.units)} units exceeds Batch's {MAX_ARRAY_SIZE}-child "
                 "array ceiling; the batcher must cut smaller batches")
-        duplicates = self._duplicate_keys()
+        duplicates = self._duplicate_subjects()
         if duplicates:
-            # Two children processing the same SCA would write the same
-            # products from two attempts with different identities.
+            # Two children processing the same declared subject would write
+            # the same products (product-producing types) or the same
+            # database effect twice, from two attempts with different
+            # identities.
             raise ValueError(
                 "duplicate processing units in one manifest: "
-                + ", ".join(sorted(duplicates)))
+                + ", ".join(sorted(str(d) for d in duplicates)))
 
-    def _duplicate_keys(self) -> set[str]:
-        seen: set[str] = set()
-        dupes: set[str] = set()
+    def _duplicate_subjects(self) -> set:
+        """Units colliding on their DECLARED SUBJECT, not on `.key`.
+
+        Co-design ruling 2. `.key` is the exposure/SCA-shaped storage
+        carrier every unit has regardless of job type; a manifest of
+        crossmatch units for one processing date shares one `.key` shape
+        across every field it carries (`exposure` is the date ordinal,
+        `sca` is a fixed `0` — see `gather_crossmatch_units`), so checking
+        `.key` here would reject a perfectly good multi-field crossmatch
+        manifest. `unit.dedup_key(self.job_type)` is the real per-unit
+        identity for this manifest's job type; two units collide here only
+        when it agrees.
+        """
+        seen: set = set()
+        dupes: set = set()
         for unit in self.units:
-            if unit.key in seen:
-                dupes.add(unit.key)
-            seen.add(unit.key)
+            subject = unit.dedup_key(self.job_type)
+            if subject in seen:
+                dupes.add(subject)
+            seen.add(subject)
         return dupes
 
     def __len__(self) -> int:

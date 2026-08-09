@@ -154,6 +154,20 @@ class AttemptIdentity:
 
     Frozen: identity is fixed when the row is created. A retry constructs a new
     identity, it does not edit this one.
+
+    **APPLICABLE IDENTIFIERS ONLY** (integration review 2026-08, composite
+    ruling 2). `exposure_id`/`sca` are the storage-path scope and apply only
+    to exposure/SCA-grain attempts (science, reference-image, post-process,
+    alert-production); `field`/`processing_date` are the scope for the
+    field-grain and date-field-grain job types (statistics, the three
+    sweeps, crossmatch) and the date-SCA grain (catalog load, alongside
+    `sca`). A row never carries a field number smeared into `exposure_id`
+    as a sentinel — the V25-adjacent defect the co-design calls out
+    ("Attempt-record identifier columns carry only applicable
+    identifiers — never a field number in an exposure/SCA sentinel").
+    `field`/`processing_date` are `attempts.field`/`attempts.processing_date`
+    (migration 039 spec, submission/subjects.py's typed-identity registry
+    names which grain populates which pair).
     """
 
     run_id: str
@@ -161,6 +175,8 @@ class AttemptIdentity:
     exposure_id: int | None = None
     sca: int | None = None
     sky_tile: str | None = None
+    field: int | None = None
+    processing_date: Any | None = None
 
 
 @dataclasses.dataclass(frozen=True)
@@ -288,7 +304,8 @@ class AttemptWriter:
 
     def create_logical_job(self, logical_job_id: str, run_id: str,
                            binding: ExecutionBinding,
-                           scheduler_job_id: str | None = None) -> None:
+                           scheduler_job_id: str | None = None,
+                           job_type: str | None = None) -> None:
         """Record the logical job and its execution binding.
 
         Called ONCE per logical job by the submitter, before its attempt rows
@@ -316,13 +333,24 @@ class AttemptWriter:
         `LogicalJobConflict`: two different submissions have claimed one
         identity, and continuing would attach attempts to a binding that does
         not describe them.
+
+        `job_type` (migration 039 spec) is the queryable job-type binding the
+        durable-state gathering predicates join through — crossmatch and
+        alert-production readiness both check "is there a completed
+        catalog-load attempt for this scope", and that check joins attempts
+        to their owning logical job for its job type rather than trusting an
+        exposure/SCA sentinel. Submitter-written, once, alongside the rest of
+        the binding; not verified against a conflicting value the way the
+        binding fields are, because it is descriptive of the WORK rather than
+        of the execution and two submissions of the same logical job are
+        always doing the same job type by construction.
         """
         sql = (
             "INSERT INTO logical_jobs ("
             "  logical_job_id, run_id, job_definition_arn, job_definition_rev,"
             "  image_digest, release_identity, manifest_checksum,"
-            "  scheduler_job_id"
-            ") VALUES (%s, %s, %s, %s, %s, %s, %s, %s)"
+            "  scheduler_job_id, job_type"
+            ") VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)"
             " ON CONFLICT (logical_job_id) DO NOTHING"
             " RETURNING logical_job_id"
         )
@@ -330,7 +358,7 @@ class AttemptWriter:
             logical_job_id, run_id, binding.job_definition_arn,
             binding.job_definition_rev, binding.image_digest,
             binding.release_identity, binding.manifest_checksum,
-            scheduler_job_id,
+            scheduler_job_id, job_type,
         ])
 
         if _rowcount(inserted, "create_logical_job") == 0:
@@ -487,19 +515,21 @@ class AttemptWriter:
         sql = (
             "INSERT INTO attempts ("
             "  schema_version, run_id, logical_job_id, scheduler_job_id,"
-            "  exposure_id, sca, sky_tile, lifecycle_state,"
+            "  exposure_id, sca, sky_tile, field, processing_date,"
+            "  lifecycle_state,"
             "  created_at, submitted_at,"
             "  binding_job_definition_arn, binding_job_definition_rev,"
             "  binding_image_digest, binding_release_identity,"
             "  binding_manifest_checksum"
-            ") VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s,"
+            ") VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,"
             "          %s, %s, %s, %s, %s)"
             " RETURNING attempt_id"
         )
         params = [
             self.schema_version, identity.run_id, identity.logical_job_id,
             scheduler_job_id, identity.exposure_id, identity.sca,
-            identity.sky_tile, LifecycleState.SUBMITTED.value,
+            identity.sky_tile, identity.field, identity.processing_date,
+            LifecycleState.SUBMITTED.value,
             created_at, submitted_at,
             binding.job_definition_arn if binding else None,
             binding.job_definition_rev if binding else None,
@@ -545,7 +575,8 @@ class AttemptWriter:
             if binding is not None:
                 self.create_logical_job(
                     logical_job_id, run_id, binding,
-                    scheduler_job_id=submission.child_job_id(index))
+                    scheduler_job_id=submission.child_job_id(index),
+                    job_type=submission.manifest.job_type)
             attempt_ids.append(self.create_submitted(
                 identity, created_at=created_at, submitted_at=submitted_at,
                 scheduler_job_id=submission.child_job_id(index),

@@ -433,6 +433,36 @@ class ProductPrefixTests(unittest.TestCase):
         context = make_context(run_id="run-1", attempt_id=12345678901)
         self.assertIn("attempt-12345678901", context.product_prefix())
 
+    def test_database_effect_job_type_mints_no_product_key(self):
+        # Co-design ruling 2: "database-effect job types declare empty
+        # product sets and mint no product keys." A statistics unit's `.key`
+        # is `{field:06d}/00` — a synthetic array-layer carrier, not a real
+        # storage path (`_per_field_units`, submission/gathering.py) — so
+        # `product_prefix()` must refuse rather than build a misleading S3
+        # key from it.
+        from pipeline.runtime.errors import ConfigError
+
+        context = make_context(job_type="statistics", run_id="run-1",
+                               attempt_id=1)
+        with self.assertRaises(ConfigError):
+            context.product_prefix()
+
+    def test_product_producing_job_types_are_unaffected(self):
+        # The refusal is scoped to database-effect types; science and
+        # reference-image keep building product keys exactly as before.
+        for job_type in ("science", "reference-image"):
+            context = make_context(job_type=job_type, run_id="run-1",
+                                   attempt_id=1)
+            self.assertTrue(context.product_prefix())
+
+    def test_a_job_type_outside_the_registry_still_mints_a_key(self):
+        # post-process is deliberately unregistered (ruling 9); it must keep
+        # building product keys exactly as every job type did before this
+        # ruling, not be refused for lacking a declaration.
+        context = make_context(job_type="post-process", run_id="run-1",
+                               attempt_id=1)
+        self.assertTrue(context.product_prefix())
+
 
 # ---------------------------------------------------------------------------
 # The database-effect job types' disposition record (post-DB chain conversion)

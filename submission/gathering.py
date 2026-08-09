@@ -153,6 +153,11 @@ class UnitSource(Protocol):
     def get_registered_diffimages_for_processing_date_sca(
             self, proc_date: str, sca: int) -> Sequence[Any]: ...
 
+    # The durable-state ordering predicate crossmatch (and alert production,
+    # indirectly through the same fact class) gate on — co-design ruling 1.
+    def get_scas_with_incomplete_catalog_load_for_processing_date(
+            self, proc_date: str) -> Sequence[Any]: ...
+
     # The alert-production trigger (step-4 co-design).
     def get_attempts_awaiting_alert_emission(
             self, release_identity: str,
@@ -1037,15 +1042,49 @@ def gather_crossmatch_units(handle: UnitSource, proc_date: str
                             ) -> Iterator[ProcessingUnit]:
     """Yield crossmatch units — one per (processing date, field).
 
-    **Gathered after catalog load completes**, which the co-design states as
-    an ordering requirement on the CHAIN, not as a data dependency of this
-    query: the field list comes from Jobs (see the handle method's own note),
-    so it is answerable at any time. What waiting buys is that the
-    `sources_<date>_<sca>` rows a crossmatch unit reads are present when it
-    runs. The operator enforces the ordering by submitting the phases in
-    sequence; this function is what it calls for phase two.
+    **DURABLE-STATE READINESS, NOT OPERATOR SEQUENCING** (co-design ruling 1;
+    design/operations.md: "Crossmatch readiness is durable state, not
+    operator sequencing: its gathering predicate checks recorded
+    catalog-load completion facts directly ... never an ordering convention
+    among gatherer invocations"). This used to gather unconditionally and
+    rely on the OPERATOR submitting catalog load before crossmatch each
+    pass — an ordering convention among gatherer invocations, exactly what
+    the design forbids, because it gives the wrong answer the moment two
+    passes interleave (a crossmatch poll racing a still-running catalog-load
+    batch) or the operator restarts mid-chain. The predicate now reads the
+    same fact the alert-production predicate reads
+    (`get_scas_with_incomplete_catalog_load_for_processing_date`): whether a
+    successful catalog-load attempt is RECORDED, never whether one was
+    submitted first.
+
+    **COVERAGE IS PER PROCESSING DATE, NOT PER FIELD** — see the handle
+    method's own docstring for why: `crossMatchSources.py` reads every SCA
+    of the date for every field it cross-matches, so one incomplete SCA
+    blocks every field of that date, not just the ones that happen to share
+    it. The check therefore runs ONCE per gathering pass, not once per
+    field.
+
+    A date with any incomplete SCA yields NOTHING — `NotReadyYet` is not
+    raised here (unlike the reference-image gatherer) because "gather again
+    next poll" is the intended behaviour for a data dependency that will
+    resolve on its own, and an empty yield is exactly what every other
+    gatherer does for "nothing ready yet".
     """
     ordinal = _proc_date_ordinal(proc_date)
+
+    incomplete = handle.get_scas_with_incomplete_catalog_load_for_processing_date(
+        proc_date)
+    code = getattr(handle, "exit_code", 0)
+    if code not in (0, 7):
+        raise GatheringError(
+            f"catalog-load coverage check failed for processing date "
+            f"{proc_date}: rapid_db exit_code {code}")
+    if incomplete:
+        logger.info(
+            "crossmatch: processing date %s has %d SCA(s) with no completed "
+            "catalog-load attempt yet (%s); gathering nothing this pass",
+            proc_date, len(incomplete), sorted(int(s) for s in incomplete))
+        return
 
     fields = handle.get_fields_with_science_jobs_for_processing_date(proc_date)
     code = getattr(handle, "exit_code", 0)

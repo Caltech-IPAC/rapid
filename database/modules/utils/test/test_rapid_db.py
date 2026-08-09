@@ -244,5 +244,96 @@ class OverlapExclusionClauseTests(unittest.TestCase):
         self.assertNotIn("is not", text.lower())
 
 
+class IncompleteCatalogLoadQueryTests(unittest.TestCase):
+    """`get_scas_with_incomplete_catalog_load_for_processing_date` — the
+    durable-state predicate crossmatch gathering gates on directly (co-design
+    ruling 1). Query-shape only, for the same reason
+    `AlertEmissionCatalogLoadClauseTests` is: no live database in this build.
+    """
+
+    def _execute(self):
+        db = make_db(iter_rows=())
+        db.get_scas_with_incomplete_catalog_load_for_processing_date(
+            "20260808")
+        query, params = db.cur.execute.call_args.args
+        return query, params
+
+    def test_scoped_to_one_processing_date_not_per_field(self):
+        from submission.routes import JOB_TYPE_CATALOG_LOAD
+
+        text, params = self._execute()
+
+        self.assertIn(JOB_TYPE_CATALOG_LOAD, params)
+        self.assertIn("la.processing_date = cast(%s as date)", text)
+        # No field/`d.field` reference anywhere: coverage is per-date, per
+        # the handle method's own docstring on why a per-field subset would
+        # be wrong (crossMatchSources.py reads every SCA of the date).
+        self.assertNotIn("field", text)
+
+    def test_every_placeholder_has_a_bound_parameter(self):
+        text, params = self._execute()
+        self.assertEqual(text.count("%s"), len(params))
+
+
+class AlertEmissionCatalogLoadClauseTests(unittest.TestCase):
+    """`get_attempts_awaiting_alert_emission` carries the ruled catalog-load
+    clause (integration review 2026-08, composite ruling 1: "the ruled
+    catalog-load clause is missing from the implemented alert predicate").
+
+    THIS IS A QUERY-SHAPE TEST, NOT A BEHAVIORAL ONE. The predicate is
+    entirely server-side SQL with no Python-level branching `rapid_db.py`'s
+    thin wrapper could exercise without a live database — the stub-refusal
+    principle applies to the SQL text itself here: a stub that only ever
+    returned "eligible" could not distinguish "the clause is present and
+    evaluates true" from "the clause was never written". These tests assert
+    the EXISTS clause and its parameter are actually emitted with the right
+    shape; full behavioral verification (a promoted attempt whose catalog
+    load has not completed is excluded; completed, it is included) needs a
+    live probe against real `attempts`/`logical_jobs` rows, which this build
+    does not have access to and reports as owed.
+    """
+
+    def _execute(self, **kwargs):
+        db = make_db(iter_rows=())
+        db.get_attempts_awaiting_alert_emission("rel-1", **kwargs)
+        query, params = db.cur.execute.call_args.args
+        return query, params
+
+    def test_the_catalog_load_exists_clause_is_present(self):
+        text, params = self._execute()
+
+        self.assertIn("logical_jobs", text)
+        self.assertIn("job_type = %s", text)
+        self.assertIn("la.processing_date = d.created::date", text)
+        self.assertIn("la.lifecycle_state = 'terminal_after_start'", text)
+        self.assertIn("la.rapid_outcome = 'success'", text)
+
+    def test_the_job_type_parameter_is_catalog_load_not_query_text(self):
+        from submission.routes import JOB_TYPE_CATALOG_LOAD
+
+        text, params = self._execute()
+
+        self.assertIn(JOB_TYPE_CATALOG_LOAD, params)
+        self.assertNotIn(JOB_TYPE_CATALOG_LOAD, text)
+
+    def test_the_emission_exclusion_covers_the_three_stored_states(self):
+        # Migration 037's state model (co-design ruling 3): watermark_seed
+        # and emitted always exclude; a claim excludes only while fresh.
+        text, params = self._execute()
+
+        self.assertIn("e.state in ('watermark_seed', 'emitted')", text)
+        self.assertIn("e.state = 'claimed'", text)
+        self.assertIn("e.claimed_at >= now() - interval '1 hour'", text)
+
+    def test_every_placeholder_has_a_bound_parameter(self):
+        text, params = self._execute()
+        self.assertEqual(text.count("%s"), len(params))
+
+    def test_a_limit_appends_its_own_placeholder_last(self):
+        text, params = self._execute(limit=5)
+        self.assertTrue(text.rstrip(";").endswith("limit %s"))
+        self.assertEqual(params[-1], 5)
+
+
 if __name__ == "__main__":
     unittest.main()

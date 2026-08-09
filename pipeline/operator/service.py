@@ -187,6 +187,47 @@ def build_submission_context(session, parameters, operational_class):
         s3_client=session.client("s3"))
 
 
+def _classes_for_pass(operational_class):
+    """Every registered job type this class gathers, as its own `OperationalClass`.
+
+    Co-design ruling 1: "the registry enumerates that class's job types for
+    gathering" — the class axis (`to_run`, `pipeline.operator.inputs`) still
+    gates which of the four declared classes runs this pass; THIS is what a
+    running class fans out to. Reference construction fans out to its one
+    job type exactly as before; prompt processing fans out to eight (science
+    plus the six post-DB job types plus alert production) — the complete
+    operator-scheduled chain the ADOPTED operations text describes.
+
+    Returns `OperationalClass` instances, one per job type, built with
+    `dataclasses.replace` over the running class: every consumer downstream
+    (`Operator`, `LiveSubmitter`, `RehearsalSubmitter`, `build_submission_context`)
+    already reads only `.name`, `.job_type`, `.route` and
+    `.require_implemented()` — the exact `OperationalClass` contract — so a
+    per-job-type instance of that same frozen dataclass needs no new type.
+    `.name` becomes the job type string, which is what distinguishes one
+    job type's accumulator, logging and run-id prefix from another's within
+    one running class.
+    """
+    import dataclasses
+
+    from pipeline.operator.gathering import job_types_for_class
+
+    job_types = job_types_for_class(operational_class.name)
+    if not job_types:
+        # A declared, implemented class the registry has no job types for
+        # would silently gather nothing every pass — refused here rather
+        # than producing an operator that runs and does nothing.
+        raise RuntimeError(
+            f"operational class {operational_class.name!r} is implemented "
+            f"and asked to run, but the gatherer registry names no job "
+            f"type for it (pipeline.operator.gathering.REGISTRY)")
+    return tuple(
+        operational_class if job_type == operational_class.job_type
+        else dataclasses.replace(operational_class, name=job_type,
+                                 job_type=job_type)
+        for job_type in job_types)
+
+
 def run_forever(operators, poll_seconds, should_continue,
                 sleep=time.sleep,
                 failure_threshold=POLL_FAILURE_THRESHOLD):
@@ -379,41 +420,68 @@ def main(argv=None):
             logger.info("operator stopped cleanly while idle")
             return 0
 
+        # One `Operator` per JOB TYPE, not per class (co-design ruling 1):
+        # `_classes_for_pass` fans each running class out to every job type
+        # the registry declares for it, so prompt processing's one `to_run`
+        # entry becomes eight operators sharing the class's window and
+        # dispositions while each keeps its own accumulator and submission
+        # context — exactly "one job type, one queue, one definition per
+        # array submission" (operations.md, ADOPTED), now honoured per job
+        # type rather than per class.
+        #
+        # REGISTRATION STAYS ONE PASS PER POLL, NOT ONE PER JOB TYPE.
+        # `Operator._register()` runs `pipeline.operator.registration.run_pass`,
+        # which is a GLOBAL sweep of every outstanding registration
+        # candidate — it is not scoped to a job type or an accumulator, so
+        # giving every one of eight job-type operators its own connection
+        # factory would run the identical global pass eight times a poll.
+        # Harmless (a candidate registered by the first pass is not a
+        # candidate for the second), but it is not the design and it is
+        # eight times the log volume and eight times the table scan for
+        # nothing. So only the FIRST operator of each running class carries
+        # a connection factory / registrar; `Operator._register()` returns
+        # None (skipped) for the rest, which is its documented behaviour
+        # for "a probe or a test that is only exercising submission".
         operators = []
         for operational_class in to_run:
-            gather = _gatherer(session, parameters, operational_class,
-                               operator_input, endpoint)
-            if args.width is not None:
-                gather = _bounded(gather, args.width, args.max_width,
-                                  operational_class.name)
-            if rehearsing:
-                submitter = RehearsalSubmitter()
-            else:
-                context = build_submission_context(session, parameters,
-                                                   operational_class)
-                submitter = LiveSubmitter(
-                    context,
-                    _execute_factory(session, endpoint),
-                    max_batch_size=max_batch_size)
-            operators.append(Operator(
-                operational_class, submitter, gather,
-                max_batch_size=max_batch_size,
-                max_wait_seconds=max_wait_seconds,
-                connection_factory=_connection_factory(
-                    session, endpoint) if not rehearsing else None,
-                # A LIVE pass registers for real. Passing None here makes
-                # `run_registration` pass `dry_run=True`, and a dry run
-                # reports `would_register=N` while writing no rows — the
-                # exact "registration reported success and wrote nothing"
-                # defect this codebase already fixed once in the
-                # consumer. Seen live on the first successful width-2
-                # probe: `would_register: 1087, registered: 0`.
-                #
-                # A rehearsal keeps None, deliberately: it has no
-                # connection either, and a rehearsal that wrote
-                # registration rows would be a rehearsal with effects.
-                registrar_factory=(None if rehearsing
-                                   else _production_registrar())))
+            for position, job_class in enumerate(
+                    _classes_for_pass(operational_class)):
+                gather = _gatherer(session, parameters, job_class.job_type,
+                                   operator_input, endpoint)
+                if args.width is not None:
+                    gather = _bounded(gather, args.width, args.max_width,
+                                      job_class.name)
+                if rehearsing:
+                    submitter = RehearsalSubmitter()
+                else:
+                    context = build_submission_context(session, parameters,
+                                                       job_class)
+                    submitter = LiveSubmitter(
+                        context,
+                        _execute_factory(session, endpoint),
+                        max_batch_size=max_batch_size)
+                registers_this_class = position == 0
+                operators.append(Operator(
+                    job_class, submitter, gather,
+                    max_batch_size=max_batch_size,
+                    max_wait_seconds=max_wait_seconds,
+                    connection_factory=(
+                        _connection_factory(session, endpoint)
+                        if not rehearsing and registers_this_class else None),
+                    # A LIVE pass registers for real. Passing None here makes
+                    # `run_registration` pass `dry_run=True`, and a dry run
+                    # reports `would_register=N` while writing no rows — the
+                    # exact "registration reported success and wrote nothing"
+                    # defect this codebase already fixed once in the
+                    # consumer. Seen live on the first successful width-2
+                    # probe: `would_register: 1087, registered: 0`.
+                    #
+                    # A rehearsal keeps None, deliberately: it has no
+                    # connection either, and a rehearsal that wrote
+                    # registration rows would be a rehearsal with effects.
+                    registrar_factory=(
+                        None if rehearsing or not registers_this_class
+                        else _production_registrar())))
 
         if args.once:
             worst = 0
@@ -499,20 +567,24 @@ def _execute_factory(session, endpoint):
     return factory
 
 
-def _gatherer(session, parameters, operational_class, operator_input,
-              endpoint):
-    """The ready-work query for one class, bound to this invocation's window.
+def _gatherer(session, parameters, job_type, operator_input, endpoint):
+    """The ready-work query for one JOB TYPE, bound to this invocation's window.
 
     Delegates to `pipeline.operator.gathering`, which carries the operator's
     own copies of `mjd_window` and `min_images_to_coadd`. Those used to be
     imported from `pipeline.virtualPipelineOperator` — and importing that
     module ran the old operator's startup, which read this process's argv
     and exited 64 demanding STARTDATETIME. See that module's header.
+
+    Takes a job type rather than an operational class (co-design ruling 1):
+    `gathering.gatherer_for` is now a registry lookup keyed by job type, and
+    one operational class can register several job types (prompt processing
+    registers eight) — see `_operators_for_class` below, this call's caller.
     """
     from pipeline.operator.gathering import gatherer_for
 
     return gatherer_for(
-        operational_class, operator_input, parameters,
+        job_type, operator_input, parameters,
         connection_factory=_gather_connection_factory(session, endpoint),
         s3_client=session.client("s3"))
 

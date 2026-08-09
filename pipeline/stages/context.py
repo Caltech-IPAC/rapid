@@ -152,7 +152,34 @@ class StageContext:
         schema (§ Key schema, component law: attempt 10 digits) — `unit.key`
         already carries its own padding, so this is the prefix's other
         numeric component.
+
+        **REFUSED FOR DATABASE-EFFECT JOB TYPES** (co-design ruling 2).
+        `submission.subjects` declares which job types are product-
+        producing; every other job type's units are not exposure/SCA
+        identity at all (a crossmatch unit's `.key` is a processing-date
+        ordinal and a fixed SCA sentinel), so a product key built from it
+        would be a real S3 path built from a synthetic value. Those job
+        types write database effects through `context.record_effect`, never
+        through `publish`, so this is a defect, not a legitimate call —
+        raised here rather than left to build a misleading key.
         """
+        from submission.subjects import UnknownJobType, is_product_producing
+
+        try:
+            product_producing = is_product_producing(self.job_type)
+        except UnknownJobType:
+            # A job type the typed-identity registry does not cover
+            # (post-process, registration, reprocessing) is exposure/SCA-
+            # shaped by construction and keeps building product keys as
+            # every job type did before this ruling.
+            product_producing = True
+        if not product_producing:
+            raise ConfigError(
+                f"job type {self.job_type!r} is a database-effect job type "
+                f"(co-design ruling 2): it declares an empty product set "
+                f"and must never call product_prefix(). Its unit's "
+                f".key is a synthetic carrier, not a storage identity — use "
+                f"context.record_effect() instead.")
         if self.run_id is None or self.attempt_id is None:
             return f"{self.job_type}/{self.unit.key}/unidentified-attempt"
         return (f"{self.job_type}/{self.run_id}/{self.unit.key}"

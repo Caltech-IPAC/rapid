@@ -125,8 +125,9 @@ class FakeUnit:
 
 
 class FakeManifest:
-    def __init__(self, units):
+    def __init__(self, units, job_type="science"):
         self.units = tuple(units)
+        self.job_type = job_type
 
 
 class FakeSubmission:
