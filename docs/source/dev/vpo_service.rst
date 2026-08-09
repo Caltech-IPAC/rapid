@@ -473,6 +473,66 @@ imports the legacy module in a subprocess with a cleared environment and
 fails if startup runs, the other asserts the operator does not import
 helpers from it.
 
+The width-2 live probe, end to end
+===================================
+
+One array job, two children, through the restructured live path.
+
+.. list-table::
+   :header-rows: 1
+
+   * - Stage
+     - Evidence
+   * - Submission
+     - ``gathered: 2, cut_batches: 1, submissions: 1``, exit 0; run id
+       ``vpo-prompt-processing-0d1ecb8b…`` — the accumulator's own batch
+       identity
+   * - Children
+     - both **SUCCEEDED**, container **exit code 0**, ~57.6 min
+   * - Attempt records
+     - **exactly two**, one per array child:
+       ``rapid_outcome = success``, ``product_disposition = published``,
+       **``error_category`` empty on both**,
+       ``binding_job_definition_rev = 27`` (a resolved revision, not a
+       family name), image digest present
+   * - Reconciliation
+     - held ``waiting: 2, errors: 0`` through the 10-minute grace
+       horizon, then ``classified: 2, waiting: 0`` — the designed
+       transition, on time
+   * - Registration
+     - **consumed both** and refused them for a stated reason (below);
+       the pass recorded each refusal and returned a structured verdict
+   * - Queues
+     - ``TOTAL_OPEN=0`` after
+
+A finding the probe surfaced, in code this work does not touch
+--------------------------------------------------------------
+
+Registration refused both attempts with
+
+.. code-block:: text
+
+   MissingRecordFact: the terminal record for attempt 6765 carries no
+   "products['difference_image']"
+
+The records are complete: each carries **60 named products** with
+checksums, sizes and URIs. But the payload's product vocabulary names
+difference images ``zogy_diffimage``, ``sfft_diffimage`` and
+``naive_diffimage``, while ``registration/products.py`` asks for the
+literal name ``difference_image``. Nothing produces that name.
+
+This is a **vocabulary mismatch between the payload's record and the
+registrar's expectation**, pre-existing and untouched by the restructure
+(``git log`` over ``pipeline/registration/`` across this work is empty).
+It needs an owner decision — which of the three difference images is the
+canonical one to register, or whether the registrar should take all
+three — so it is recorded here rather than guessed at.
+
+What the refusal does demonstrate is the contract working as designed:
+registration read the record and nothing else, refused rather than
+reconstructing the missing fact from the product bucket, classified the
+attempts for triage, promoted nothing, and left them as candidates.
+
 What the operator does not yet own
 ==================================
 
