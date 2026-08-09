@@ -132,24 +132,36 @@ class ClassFanOutTests(unittest.TestCase):
             self.assertTrue(c.implemented)
             self.assertEqual(c.route.job_type, c.job_type)
 
-    def test_the_original_science_class_is_reused_not_rebuilt(self):
-        # Science IS the class's own job type, so `_classes_for_pass` must
-        # not construct a second, merely-equal OperationalClass for it —
-        # returning the original object is what makes this cheap to assert
-        # and avoids two frozen instances that compare equal but are not
-        # the same object drifting apart under a future edit.
+    def test_every_expanded_name_is_its_registry_key_never_the_class(self):
+        # `.name` is the GATHERING LOOKUP KEY (`service._gatherer` passes
+        # it to `gathering.gatherer_for`). A reuse branch used to hand back
+        # the running class itself when the registry key equalled its
+        # `.job_type`, so `.name` stayed "prompt-processing" — a key in no
+        # registry — and the service crashed at start the FIRST time the
+        # class was actually enabled (found live at the mock's T0 deploy;
+        # reference construction carried the same latent crash). The
+        # property that matters is exactly this one, for every entry of
+        # every implemented class with a fan-out.
         from pipeline.operator.service import _classes_for_pass
 
-        running = opclasses.class_for(opclasses.PROMPT_PROCESSING)
-        expanded = _classes_for_pass(running)
-        self.assertIs(expanded[0], running)
+        for class_name in (opclasses.PROMPT_PROCESSING,
+                           opclasses.REFERENCE_CONSTRUCTION,
+                           opclasses.TEST):
+            running = opclasses.class_for(class_name)
+            expanded = _classes_for_pass(running)
+            self.assertEqual(tuple(c.name for c in expanded),
+                             job_types_for_class(class_name))
+            for c in expanded:
+                self.assertNotEqual(c.name, running.name)
 
-    def test_reference_construction_expands_to_itself_alone(self):
+    def test_reference_construction_expands_to_its_registry_key(self):
         from pipeline.operator.service import _classes_for_pass
 
         running = opclasses.class_for(opclasses.REFERENCE_CONSTRUCTION)
         expanded = _classes_for_pass(running)
-        self.assertEqual(expanded, (running,))
+        self.assertEqual(len(expanded), 1)
+        self.assertEqual(expanded[0].name, running.job_type)
+        self.assertEqual(expanded[0].job_type, running.job_type)
 
     def test_test_class_expands_to_the_campaign_entry_with_science_route(self):
         # THE COLLISION-AVOIDANCE PROPERTY THIS BUILD ADDS (IR-13-a): TEST's

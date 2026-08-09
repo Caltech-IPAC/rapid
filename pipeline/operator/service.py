@@ -234,23 +234,18 @@ def _classes_for_pass(operational_class):
             f"type for it (pipeline.operator.gathering.REGISTRY)")
     result = []
     for registry_key in registry_keys:
-        route_job_type = route_job_type_for(registry_key)
-        # Reuse the ORIGINAL instance, unrebuilt, exactly when the fanned-
-        # out entry would be indistinguishable from it — both `.name` and
-        # `.job_type` unchanged. Compared against the running class's own
-        # `.job_type` (not `.name`): PROMPT_PROCESSING's `.name` is
-        # "prompt-processing" but its `.job_type` is already
-        # JOB_TYPE_SCIENCE, which IS the science registry row's key — "science
-        # IS the class's own job type" (test_gathering_registry.py's own
-        # comment) — so a class whose `.job_type` already equals its one
-        # matching registry key needs no `dataclasses.replace` at all.
-        if (registry_key == operational_class.job_type
-                and route_job_type == operational_class.job_type):
-            result.append(operational_class)
-        else:
-            result.append(dataclasses.replace(
-                operational_class, name=registry_key,
-                job_type=route_job_type))
+        # EVERY fanned-out entry is rebuilt, unconditionally. A reuse
+        # branch used to return the ORIGINAL class instance when the
+        # registry key equalled the class's `.job_type` — but `.name` is
+        # the gathering lookup key, and the original's `.name` is the
+        # CLASS name ("prompt-processing", "reference-construction"),
+        # which is in no registry: both production classes crashed at
+        # start the first time either was enabled. The fanned-out entry
+        # is never the running class; its `.name` is always the registry
+        # key.
+        result.append(dataclasses.replace(
+            operational_class, name=registry_key,
+            job_type=route_job_type_for(registry_key)))
     return tuple(result)
 
 
