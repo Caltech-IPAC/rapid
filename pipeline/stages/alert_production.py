@@ -26,26 +26,65 @@ loudly because a run that reports published alerts while publishing nothing is
 worse than one that crashes (the 2026-08-04 Q7 finding, which is why
 `GlueFramingProducer.flush` raises).
 
-**EMISSION IS ONCE PER LOGICAL UNIT PER RELEASE** (gate 4). The watermark is
-claimed BEFORE publishing, not after: a claim that loses the race means
-another emitter has this unit, and this attempt then publishes nothing and
-records the suppression. Claiming after publishing would leave a window in
-which two attempts both published and only one recorded.
+**EMISSION COMMIT SEMANTICS: CLAIM -> PUBLISH/FLUSH -> CONFIRM** (integration
+review 2026-08 composite ruling 3, migration 037; supersedes the earlier
+claim-before-publish watermark this module described up to that ruling). The
+previous protocol claimed the watermark, published, and stopped: any failure
+between the committed claim and delivery permanently suppressed the unit's
+alert, because a claim WAS a confirmed emission — there was no representable
+state in between. Migration 037 adds the missing middle state (`claimed`,
+transient), and this module now writes it as three separate steps:
 
-That ordering costs the at-least-once posture nothing, because at-least-once
-is the contract (gate 6): a claim that succeeds and a publish that then dies
-mid-flight leaves the unit marked emitted with fewer alerts than intended,
-which is a duplicate-suppression question the CONSUMER answers by deduplicating
-on alert identity. Publishing twice is permitted by the contract; publishing
-twice while claiming to have published once is not.
+1. **CLAIM** — a CAS insert/update against `alert_emissions`' primary key
+   (exposure_id, sca, release_identity), committed in its OWN transaction
+   BEFORE any publishing starts. Proceeds only when the claim returns THIS
+   attempt's own `claim_token`; a claim that returns nothing, or a different
+   attempt's token, is a recorded no-op — not a failure — because the unit is
+   either terminally suppressed already or genuinely owned by a live
+   claimant.
+2. **PUBLISH** — assembly and serialization stay PER CANDIDATE, inside the
+   drop-and-continue catch (gate 3: a bad cutout drops that candidate, not
+   the chip); the producer send and the flush are CHIP-LEVEL, outside every
+   per-candidate catch. A candidate failure was always meant to be
+   independent of delivery; a delivery failure was always meant to fail the
+   attempt (the 2026-08-04 Q7 finding stands). If publishing raises, the
+   claim is left `claimed` — untouched — for a later attempt to confirm or
+   take over; it is never rolled back to unclaimed, because the at-least-once
+   contract's cost is a possible duplicate, never a silently abandoned claim
+   nobody retries.
+3. **CONFIRM** — a second CAS update, gated on this attempt still owning the
+   claim (`claim_token` unchanged since step 1), in the SAME transaction as
+   the `alert_published` milestone write (integration ruling 6): a crash
+   cannot confirm an emission without the milestone recording it, or vice
+   versa. A confirm that finds the claim taken over (zero rows) is a
+   recorded no-op: the takeover attempt republishes, and consumers
+   deduplicate on alert identity — the at-least-once contract's accepted
+   cost, never treated as this attempt's failure.
+
+**THE CLAIM, THE CONFIRM, AND THE MILESTONE ALL WRITE THROUGH THE BORROWED
+CONNECTION** (`context.require_connection()`), never through `provider.db` —
+`provider.db` is `alerts.cli.make_provider()`'s OWN, separate `RAPIDDB()`
+connection, opened purely to read candidates and cutouts. Writing the
+emission state through it would put the CAS on a connection with no relation
+to this attempt's own lifecycle transaction, and — because it autocommits
+per call — no way to make CONFIRM and the milestone atomic at all.
 """
 
 import logging
 
-from database.modules.utils.checked import CheckedHandle
+from database.modules.utils.checked import CheckedHandle, RapidDBCallFailed
+from database.modules.utils.rapid_db import RAPIDDB
+from database.modules.utils.rapid_db_connect import ConnectionExecutor, transaction
 from pipeline.runtime.errors import InputError
 
 logger = logging.getLogger(__name__)
+
+#: The claim CAS's own staleness threshold, restated here ONLY as
+#: documentation (the actual SQL literal lives in
+#: `RAPIDDB.claim_alert_emission` and `get_attempts_awaiting_alert_emission`,
+#: matching migration 037's `derived.alert_emission_status` view — "keep the
+#: two in sync by inspection until a shared parameter home exists").
+CLAIM_STALENESS = "interval '1 hour'"
 
 #: The internal-topic PREFIX this job type is allowed to publish under.
 #:
@@ -108,50 +147,84 @@ def select_candidates(sources, top_n=PLACEHOLDER_TOP_N_BY_SNR):
 def produce_alerts(context) -> None:
     """Publish this unit's alerts, once, and record what happened.
 
-    The whole job type in one stage, because it is one indivisible decision:
-    claim the emission, publish under the claim, record the effect. Splitting
-    it would create a window between claiming and publishing in which a
-    retry could see a claimed-but-unpublished unit and have no way to tell
-    that from a published one.
+    Three steps, three distinct commit points — CLAIM (own transaction,
+    first), PUBLISH (no commit of its own; a candidate that assembles cleanly
+    is sent but not yet confirmed), CONFIRM+MILESTONE (one transaction,
+    last). See the module docstring for why the three cannot collapse back
+    into one without reopening the at-most-once loss this protocol replaces.
     """
     from alerts.cli import make_provider
     from alerts.produce import (assemble_alert_for_source, load_schema,
                                 publish_alert, serialize_alert)
+    # Lazy, matching `pipeline/stages/science.py`'s own milestone-writer
+    # import and `pipeline/entrypoints/job.py`'s `_database` — no stage
+    # imports `observability.attempts` at module scope.
+    from observability.attempts import AttemptWriter
 
     pid = int(_unit_field(context, "difference_image_pid"))
-    attempt_id = int(_unit_field(context, "attempt_id"))
+    # The REGISTERED SOURCE attempt — the promotion that made this unit
+    # eligible (migration 037's `alert_emissions.attempt_id`). Distinct from
+    # this attempt's OWN identity below, which is the CLAIM identity.
+    source_attempt_id = int(_unit_field(context, "attempt_id"))
     release_identity = str(_unit_field(context, "release_identity"))
     exposure = int(context.unit.exposure)
     sca = int(context.unit.sca)
 
+    # THIS ATTEMPT'S OWN IDENTITY — the claiming attempt (migration 037's
+    # `alert_emissions.claim_token`), from the entrypoint's own resolved
+    # ownership, never from the unit's declared fields (those name the
+    # SOURCE attempt, a different fact — see the module docstring).
+    claiming_attempt_id = int(context.attempt_id)
+    claim_token = str(claiming_attempt_id)
+
+    conn = context.require_connection()
+
     provider = make_provider()
-    # Adapter-mediated (integration review composite ruling 10): the claim
-    # below either returns cleanly or raises `RapidDBCallFailed`, so a
-    # failed claim can never be read as "not claimed" and fall through to
-    # publishing unclaimed.
-    handle = CheckedHandle(provider.db)
+    # Adapter-mediated (integration review composite ruling 10): every call
+    # below either returns cleanly or raises `RapidDBCallFailed`, so a failed
+    # query can never be read as "no row" and fall through to an unguarded
+    # publish.
+    emissions = CheckedHandle(RAPIDDB.borrowing(conn))
 
-    # THE CLAIM, FIRST. `record_alert_emission` is an INSERT ... ON CONFLICT
-    # DO NOTHING against the watermark's primary key, so exactly one caller
-    # can win per (unit, release) no matter how many race.
-    claimed = handle.record_alert_emission(
-        exposure, sca, release_identity, attempt_id, pid=pid,
-        alerts_published=0)
+    # STEP 1: THE CLAIM, in its own transaction, committed BEFORE any
+    # publishing starts (integration ruling 3: "a crash after a committed
+    # claim leaves a stale-recoverable claim, never a suppression").
+    #
+    # `transaction(conn)` wraps the commit/rollback boundary around whatever
+    # runs inside the `with` block; it does not need its own cursor to do
+    # that — Postgres transactions are connection-scoped, not cursor-scoped,
+    # so `emissions.cur.execute(...)` (via `claim_alert_emission`, on the
+    # SAME `conn`) participates in this transaction regardless of which
+    # cursor object issued it. The `with` block's own cursor (`_`) is
+    # unused; it exists to open and close the block.
+    try:
+        with transaction(conn) as _:
+            won_token = emissions.claim_alert_emission(
+                exposure, sca, release_identity, source_attempt_id,
+                claiming_attempt_id, claim_token, pid=pid)
+    except RapidDBCallFailed as exc:
+        raise RuntimeError(
+            f"could not claim the emission for unit {exposure}/{sca} "
+            f"release {release_identity}: {exc}") from exc
 
-    if not claimed:
-        # Already emitted under this release. The ruled behaviour is silence:
-        # replays, re-executions and serial-later registrations of the same
-        # unit do not re-emit. Recorded as a suppression, which is one of the
-        # four effect counts the design names, and closes successfully.
+    if won_token != claim_token:
+        # A NULL return, or someone else's token: either the unit is already
+        # terminally suppressed (watermark_seed/emitted) or a live claimant
+        # holds it. Either way this attempt publishes nothing. Recorded as a
+        # suppression, one of the four effect counts the design names, and
+        # closes successfully — never a failure.
         context.record_effect(
             candidates_considered=0, alerts_published=0,
             emissions_suppressed=1,
-            suppression_reason="already emitted under this release",
+            suppression_reason=(
+                "already emitted, or claimed by a live attempt, under this "
+                "release"),
             alert_release_identity=release_identity,
             alert_difference_image_pid=pid)
         context.logger.info(
-            "unit %s/%s already emitted under release %s; publishing nothing",
-            exposure, sca, release_identity)
+            "unit %s/%s not claimed by this attempt under release %s "
+            "(won_token=%r); publishing nothing",
+            exposure, sca, release_identity, won_token)
         return
 
     topic = _internal_topic(context)
@@ -167,8 +240,10 @@ def produce_alerts(context) -> None:
         sources = list(provider.iter_sources(pid))
     except Exception as exc:  # noqa: BLE001
         # CHIP-LEVEL failure: the provider could not read this difference
-        # image at all. This is the one case that fails the attempt, per the
-        # failure-path design's SCA-level scope.
+        # image at all. This is one of the two cases that fails the attempt
+        # per the failure-path design's SCA-level scope (the other being
+        # delivery, below) — the claim is left `claimed`, untouched, for a
+        # later attempt to confirm or take over.
         raise RuntimeError(
             f"could not read candidates for difference image pid {pid}: "
             f"{exc}") from exc
@@ -176,13 +251,18 @@ def produce_alerts(context) -> None:
     selected = select_candidates(sources)
     considered = len(selected)
 
+    # STEP 2: PUBLISH. Candidate scope is assembly + serialization ONLY
+    # (integration ruling 3) — each candidate's own catch stops there.
+    # Producer construction (above), topic resolution (above), auth, send,
+    # and flush are CHIP-LEVEL: outside every per-candidate catch, so a
+    # producer/broker failure raises loudly rather than recording as a
+    # candidate drop (the 2026-08-04 Q7 finding this module has named since
+    # it was written).
     for source in selected:
         sid = getattr(source, "sid", None)
         try:
             alert = assemble_alert_for_source(provider, source)
             payload = serialize_alert(alert, schema=schema)
-            publish_alert(payload, producer, topic=topic, flush=False)
-            published += 1
         except Exception as exc:  # noqa: BLE001 - a candidate, not the chip
             # PER-CANDIDATE DROP (gate 3). The reason is the exception's type
             # rather than its message: the counts are grouped by reason and a
@@ -194,14 +274,51 @@ def produce_alerts(context) -> None:
                                       "detail": str(exc)[:200]})
             context.logger.warning("candidate sid=%s dropped (%s): %s",
                                    sid, reason, exc)
+            continue
+        # CHIP-LEVEL from here: send is not wrapped in the per-candidate
+        # catch. A send failure (as opposed to a delayed delivery failure
+        # `flush` reports) is a producer/broker fault, not this candidate's.
+        publish_alert(payload, producer, topic=topic, flush=False)
+        published += 1
 
     # DELIVERY failure raises loudly — flush() reports what send() deferred.
+    # The claim stays `claimed`: this attempt's confirm below never runs, and
+    # a later attempt (retry or takeover) republishes and confirms — the
+    # at-least-once contract's accepted cost, never a silent loss.
     producer.flush()
 
-    # The watermark carries the count now that it is known. The claim above
-    # wrote zero deliberately: it is what makes the claim safe to take before
-    # the work, and this is where it becomes the truth.
-    _update_emission_count(handle, exposure, sca, release_identity, published)
+    # STEP 3: CONFIRM + THE alert_published MILESTONE, in ONE transaction
+    # (integration ruling 3 / 6: "Emission confirmation and the
+    # alert-published milestone commit in one transaction, so a crash cannot
+    # confirm an emission without the milestone recording it").
+    try:
+        with transaction(conn) as _:
+            confirmed_token = emissions.confirm_alert_emission(
+                exposure, sca, release_identity, claim_token, published)
+            if confirmed_token == claim_token:
+                writer = AttemptWriter(
+                    ConnectionExecutor(conn, autocommit_each=False))
+                writer.record_milestone(
+                    "alert_published", _utcnow(), exposure_id=exposure,
+                    sca=sca, producing_attempt_id=claiming_attempt_id)
+    except RapidDBCallFailed as exc:
+        # The alerts are published; failing the attempt now would misreport a
+        # successful emission as a failure and invite a retry that would
+        # republish. Logged loudly instead — the attempt's own effect counts
+        # still carry the number, and the claim (still 'claimed') is
+        # recoverable by a later confirm or takeover.
+        logger.warning(
+            "published %d alert(s) for %s/%s but could not confirm the "
+            "emission (claim left 'claimed' for later recovery): %s",
+            published, exposure, sca, exc)
+        confirmed_token = None
+
+    if confirmed_token != claim_token:
+        context.logger.warning(
+            "unit %s/%s: claim was taken over between publish and confirm "
+            "(or the confirm failed); %d alert(s) were published but this "
+            "attempt's confirmation is a recorded no-op — the takeover "
+            "republishes, consumers deduplicate", exposure, sca, published)
 
     context.record_effect(
         candidates_considered=considered,
@@ -210,39 +327,35 @@ def produce_alerts(context) -> None:
         dropped_by_reason=dropped_by_reason,
         drop_dispositions=drop_dispositions,
         emissions_suppressed=0,
+        emission_confirmed=(confirmed_token == claim_token),
         alert_topic=topic,
         alert_release_identity=release_identity,
         alert_difference_image_pid=pid,
         selection_rule=f"PLACEHOLDER top-{PLACEHOLDER_TOP_N_BY_SNR}-by-snr",
         sources_available=len(sources))
     context.logger.info(
-        "unit %s/%s: %d candidate(s) considered, %d published, %d dropped "
-        "(release %s, topic %s)",
+        "unit %s/%s: %d candidate(s) considered, %d published, %d dropped, "
+        "confirmed=%s (release %s, topic %s)",
         exposure, sca, considered, published,
-        sum(dropped_by_reason.values()), release_identity,
-        topic)
+        sum(dropped_by_reason.values()), confirmed_token == claim_token,
+        release_identity, topic)
 
 
-def _update_emission_count(handle, exposure, sca, release_identity, published):
-    """Write the published count onto the claimed watermark row.
+def _utcnow():
+    """The confirm moment, for the `alert_published` milestone's `reached_at`.
 
-    Separate from the claim because `ON CONFLICT DO NOTHING` deliberately does
-    not update — that is what makes it a claim rather than a last-writer-wins
-    upsert. The count is written here, against the row this attempt owns.
+    A fresh timestamp rather than a value threaded through from the CONFIRM
+    statement's own `now()`: the milestone and the confirm write in the same
+    transaction but not the same statement, and `design/observability.md`
+    ties `alert_published` to "emission confirmation" as a moment, not to the
+    UPDATE's own server-side clock read specifically — a wall-clock read
+    here, a few microseconds before the UPDATE's own `now()`, is close enough
+    that no consumer of this milestone could tell the difference, and it
+    keeps the milestone writer independent of the confirm statement's return
+    shape.
     """
-    try:
-        handle.cur.execute(
-            "update Alert_Emissions set alerts_published = %s "
-            "where exposure_id = %s and sca = %s and release_identity = %s;",
-            (int(published), int(exposure), int(sca), str(release_identity)))
-        handle.conn.commit()
-    except Exception as exc:  # noqa: BLE001
-        # The alerts are published; failing the attempt now would misreport a
-        # successful emission as a failure and invite a retry that the
-        # watermark would correctly refuse. Logged loudly instead — the
-        # attempt's own effect counts still carry the number.
-        logger.warning("could not update the published count on the emission "
-                       "watermark for %s/%s: %s", exposure, sca, exc)
+    import datetime
+    return datetime.datetime.now(datetime.timezone.utc)
 
 
 def _internal_topic(context):

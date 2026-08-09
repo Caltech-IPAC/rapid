@@ -1138,14 +1138,21 @@ class AlertProductionGatheringTests(unittest.TestCase):
                     if (row[1], row[2], release_identity) not in self.emitted]
             return rows[:limit] if limit is not None else rows
 
-        def record_alert_emission(self, exposure_id, sca, release_identity,
-                                  attempt_id, pid=None, alerts_published=0):
+        def seed_alert_emission_watermark(self, exposure_id, sca,
+                                          release_identity, attempt_id,
+                                          pid=None):
+            # Renamed from `record_alert_emission` (migration 037 /
+            # integration ruling 3): seeding and the live CAS claim are
+            # different writes now — this double models seeding only, the
+            # one `initialize_alert_watermark` calls. `ON CONFLICT DO
+            # NOTHING` semantics are unchanged: a unit already carrying a
+            # row (seeded or otherwise) is not re-seeded.
             self.exit_code = self.failure
-            _refuse_if_failed(self, "record_alert_emission")
+            _refuse_if_failed(self, "seed_alert_emission_watermark")
             if self.failure:
                 return None
             key = (exposure_id, sca, release_identity)
-            self.claims.append((key, attempt_id, alerts_published))
+            self.claims.append((key, attempt_id, 0))
             if key in self.emitted:
                 return False
             self.emitted.add(key)

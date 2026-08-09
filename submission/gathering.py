@@ -154,10 +154,18 @@ class UnitSource(Protocol):
             self, release_identity: str,
             limit: int | None = ...) -> Sequence[Any]: ...
 
-    def record_alert_emission(self, exposure_id: int, sca: int,
-                              release_identity: str, attempt_id: int,
-                              pid: int | None = ...,
-                              alerts_published: int = ...) -> bool: ...
+    # Watermark SEEDING only (migration 037 / integration ruling 3): the
+    # live CAS claim/confirm path is a different pair of methods
+    # (`claim_alert_emission` / `confirm_alert_emission`) that
+    # `pipeline.stages.alert_production` calls directly through
+    # `RAPIDDB.borrowing(...)`, not through this gathering-time protocol —
+    # gathering only ever SEEDS the watermark, at `initialize_alert_
+    # watermark`, so this is the one method of the pair this protocol
+    # declares.
+    def seed_alert_emission_watermark(self, exposure_id: int, sca: int,
+                                      release_identity: str,
+                                      attempt_id: int,
+                                      pid: int | None = ...) -> bool: ...
 
 
 def _positions(values: Sequence[Any], ra_keys: Sequence[str],
@@ -1216,17 +1224,18 @@ def initialize_alert_watermark(handle: UnitSource, release_identity: str,
                                        for index in (0, 1, 2, 3))
         if expid is None or sca is None:
             continue
-        # `record_alert_emission` used to be read only for its return value
-        # — a failed claim (nonzero exit_code) and a claim that lost the
+        # `seed_alert_emission_watermark` (migration 037 / integration ruling
+        # 3 split: seeding and the live CAS claim are different writes now —
+        # see its docstring). Used to be read only for its return value — a
+        # failed claim (nonzero exit_code) and a claim that lost the
         # `ON CONFLICT DO NOTHING` race both fell through as "not claimed"
         # and this unit was silently skipped rather than the pass being
         # told a query had failed mid-backfill. The adapter now raises
         # instead, so only a genuine race loss reaches the `if` below.
         try:
-            won = handle.record_alert_emission(int(expid), int(sca),
-                                               str(release_identity),
-                                               int(attempt_id), pid=pid,
-                                               alerts_published=0)
+            won = handle.seed_alert_emission_watermark(
+                int(expid), int(sca), str(release_identity),
+                int(attempt_id), pid=pid)
         except RapidDBCallFailed as exc:
             raise GatheringError(
                 f"watermark initialization could not claim unit "

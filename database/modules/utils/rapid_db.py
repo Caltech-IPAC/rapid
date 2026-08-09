@@ -1511,6 +1511,47 @@ class RAPIDDB:
 
 ########################################################################################################
 
+    def get_l2file_created(self,rid):
+
+        '''
+        The L2Files row's own `created` timestamp for the given rid.
+
+        THE `l2_available` MILESTONE'S SOURCE (integration ruling 6;
+        design/observability.md: "l2_available carries the authoritative
+        source-availability timestamp"). No SOC-side ingest/publication
+        timestamp exists anywhere in this schema — L2FileMeta carries none,
+        and `l2files.created timestamptz DEFAULT now()` (006) is the only
+        timestamp column anywhere near "when RAPID first knew about this
+        file". It is the row's OWN insert time, not a timestamp the SOC
+        supplies — a proxy, not a direct measurement — but it is the best
+        one the live schema names, and RAPID cannot know about an L2 file
+        before its row exists, so it is a reasonable upper bound on true SOC
+        availability.
+
+        Returns the `created` value, or None if no row exists for this rid.
+        '''
+
+        self.exit_code = 0
+
+        query = "select created from L2Files where rid = %s;"
+        params = (rid,)
+
+        print('query = {}, params = {}'.format(query, params))
+
+        try:
+            self.cur.execute(query, params)
+            record = self.cur.fetchone()
+
+        except (Exception, psycopg2.DatabaseError) as error:
+            print('*** Error getting L2Files.created for rid {}: {}'.format(rid,error))
+            self.exit_code = 67
+            return
+
+        return record[0] if record is not None else None
+
+
+########################################################################################################
+
     def get_info_for_l2file(self,rid):
 
         '''
@@ -3221,13 +3262,20 @@ class RAPIDDB:
             (watermark_seed, claimed-and-fresh, emitted) — migration 037's
             state model, replacing 033's single-state anti-join (co-design
             ruling 3). A STALE claim (age past the 1-hour threshold
-            migration 037's `derived.alert_emission_status` view names,
-            AND the claiming attempt terminal) is gatherable again: a crashed
-            claimant must not permanently suppress its unit's alert. The
-            primary key still makes a double CONFIRMED emission impossible
-            even if two gatherers raced; this clause is what stops a second
-            one being GATHERED, which is cheaper than relying only on the
-            CAS claim to refuse it.
+            migration 037's `derived.alert_emission_status` view names, AND
+            the claiming attempt terminal — THE OWED OWNER-TERMINAL CONJUNCT,
+            integration ruling 3) is gatherable again: a crashed claimant
+            must not permanently suppress its unit's alert, but a claimant
+            that is merely SLOW (still running, not yet terminal) must not be
+            raced by a second gatherer just because its claim aged past the
+            threshold — age alone says nothing about whether the claimant is
+            dead. The owner lookup joins `attempts` on `claim_token` cast to
+            an attempt id (guarded: a token that is not a bare integer counts
+            as NOT terminal, conservatively — see below). The primary key
+            still makes a double CONFIRMED emission impossible even if two
+            gatherers raced; this clause is what stops a second one being
+            GATHERED, which is cheaper than relying only on the CAS claim to
+            refuse it.
 
           * "a reference-image-only attempt is a natural no-op" -> such an
             attempt records no difference-image promotion, so it never
@@ -3256,38 +3304,66 @@ class RAPIDDB:
         # parameter home exists" — this is the pipeline half of that pair).
         claim_staleness = "interval '1 hour'"
 
-        query = "select a.attempt_id, a.exposure_id, a.sca, " +\
-                "       (promo->>'pid')::int as pid, " +\
-                "       promo->>'product' as product, " +\
-                "       promo->>'role_resolved_from' as role_resolved_from, " +\
-                "       a.registered_at, (promo->>'sequence')::int as sequence " +\
-                "from Attempts a " +\
-                "cross join lateral jsonb_array_elements(" +\
-                "     coalesce(a.registration_outcome->'promotions', '[]'::jsonb)) as promo " +\
-                "join DiffImages d on d.pid = (promo->>'pid')::int " +\
-                "where a.registration_outcome is not null " +\
-                "and promo->>'type' = 'promotion' " +\
-                "and promo->>'pid' is not null " +\
-                "and a.exposure_id is not null and a.sca is not null " +\
-                "and exists (" +\
-                "  select 1 from Attempts la " +\
-                "  join logical_jobs lj on lj.logical_job_id = la.logical_job_id " +\
-                "  where lj.job_type = %s " +\
-                "  and la.sca = a.sca " +\
-                "  and la.processing_date = d.created::date " +\
-                "  and la.lifecycle_state = 'terminal_after_start' " +\
-                "  and la.rapid_outcome = 'success'" +\
-                ") " +\
-                "and not exists (select 1 from Alert_Emissions e " +\
-                "                where e.exposure_id = a.exposure_id " +\
-                "                and e.sca = a.sca " +\
-                "                and e.release_identity = %s " +\
-                "                and (" +\
-                "                  e.state in ('watermark_seed', 'emitted') " +\
-                "                  or (e.state = 'claimed' " +\
-                "                      and e.claimed_at >= now() - " + claim_staleness + ")" +\
-                "                )) " +\
+        query = (
+                "select a.attempt_id, a.exposure_id, a.sca, "
+                "       (promo->>'pid')::int as pid, "
+                "       promo->>'product' as product, "
+                "       promo->>'role_resolved_from' as role_resolved_from, "
+                "       a.registered_at, (promo->>'sequence')::int as sequence "
+                "from Attempts a "
+                "cross join lateral jsonb_array_elements("
+                "     coalesce(a.registration_outcome->'promotions', '[]'::jsonb)) as promo "
+                "join DiffImages d on d.pid = (promo->>'pid')::int "
+                "where a.registration_outcome is not null "
+                "and promo->>'type' = 'promotion' "
+                "and promo->>'pid' is not null "
+                "and a.exposure_id is not null and a.sca is not null "
+                "and exists ("
+                "  select 1 from Attempts la "
+                "  join logical_jobs lj on lj.logical_job_id = la.logical_job_id "
+                "  where lj.job_type = %s "
+                "  and la.sca = a.sca "
+                "  and la.processing_date = d.created::date "
+                "  and la.lifecycle_state = 'terminal_after_start' "
+                "  and la.rapid_outcome = 'success'"
+                ") "
+                "and not exists (select 1 from Alert_Emissions e "
+                "                where e.exposure_id = a.exposure_id "
+                "                and e.sca = a.sca "
+                "                and e.release_identity = %s "
+                "                and ("
+                "                  e.state in ('watermark_seed', 'emitted') "
+                "                  or (e.state = 'claimed' "
+                "                      and ("
+                "                        e.claimed_at >= now() - " + claim_staleness + " "
+                # THE OWED OWNER-TERMINAL CONJUNCT (integration ruling 3), in
+                # the "or not exists(...)" clause below: a stale claim (age
+                # past threshold) is excluded from gathering (kept NOT
+                # gatherable) unless the claiming attempt is ALSO terminal.
+                # Expressed as the negation inside this OR, matching the
+                # surrounding "exclude when fresh OR <not-yet-safe-to-
+                # retake>" shape: the claim stays excluded while fresh, OR
+                # while stale-but-the-claimant-might-still-be-running. A
+                # claim_token that does not parse to a bare integer (guarded
+                # by the regexp_replace/NULLIF idiom the CAS claim itself
+                # uses) cannot be resolved to an owning attempt at all, so it
+                # is treated conservatively as NOT terminal — excluded from
+                # gathering until the CAS claim's own age-based takeover can
+                # retake it directly, rather than gathering guessing an
+                # owner it cannot verify.
+                "                        or not exists ("
+                "                          select 1 from attempts owner "
+                "                          where owner.attempt_id = "
+                "                                nullif(regexp_replace(e.claim_token, "
+                "                                                      '[^0-9]', '', 'g'), '')::bigint "
+                "                          and owner.lifecycle_state in "
+                "                              ('terminal_after_start', 'terminal_without_start')"
+                "                        )"
+                "                      )"
+                "                  )"
+                "                )) "
                 "order by a.registered_at, a.attempt_id"
+        )
         params = [JOB_TYPE_CATALOG_LOAD, release_identity]
 
         if limit is not None:
@@ -3312,31 +3388,39 @@ class RAPIDDB:
 
 ########################################################################################################
 
-    def record_alert_emission(self,exposure_id,sca,release_identity,attempt_id,
-                              pid=None,alerts_published=0):
+    def seed_alert_emission_watermark(self,exposure_id,sca,release_identity,
+                                      attempt_id,pid=None):
 
         '''
-        Claim the emission watermark for one (unit, release).
+        Seed the emission watermark for one (unit, release) as `watermark_seed`.
 
-        `ON CONFLICT DO NOTHING` and a reported row count, which together are
-        the at-least-once posture the design adopts (gate 6): the stream
-        contract is at-least-once and consumers deduplicate on alert identity,
-        so a second emitter losing this race must NOT raise — it must publish
-        nothing further and say so.
+        WATERMARK SEEDING ONLY (migration 037 / integration ruling 3). This
+        used to be `record_alert_emission`, an `ON CONFLICT DO NOTHING` insert
+        shared by both the deployment-time watermark seed and the live claim
+        path. The two are now different writes with different target states —
+        a seed row is TERMINAL-suppress on write (`state = 'watermark_seed'`,
+        never published), a claim row is TRANSIENT (`state = 'claimed'`,
+        carries a claim_token and claimed_at, and is confirmed or superseded
+        later) — so one method can no longer serve both. The live claim/CAS
+        path is `claim_alert_emission`; this method is `initialize_alert_
+        watermark`'s writer only.
 
-        Returns True if this call claimed the emission, False if the unit had
-        already emitted under this release. The caller records the False case
-        as a SUPPRESSED effect count rather than as a failure.
+        `ON CONFLICT DO NOTHING` and a reported row count, same as before: a
+        second seeding pass over a unit already seeded (or already claimed —
+        seeding never overwrites) must not raise, it must say it did not win.
+
+        Returns True if this call seeded the row, False if a row already
+        existed for this (unit, release) under any state.
         '''
 
         self.exit_code = 0
 
         query = "insert into Alert_Emissions " +\
-                "(exposure_id, sca, release_identity, attempt_id, pid, alerts_published) " +\
-                "values (%s, %s, %s, %s, %s, %s) " +\
+                "(exposure_id, sca, release_identity, attempt_id, pid, " +\
+                " alerts_published, state) " +\
+                "values (%s, %s, %s, %s, %s, %s, 'watermark_seed') " +\
                 "on conflict (exposure_id, sca, release_identity) do nothing;"
-        params = (exposure_id, sca, release_identity, attempt_id, pid,
-                  alerts_published)
+        params = (exposure_id, sca, release_identity, attempt_id, pid, 0)
 
         print('query = {}, params = {}'.format(query, params))
 
@@ -3346,11 +3430,162 @@ class RAPIDDB:
             self.conn.commit()
 
         except (Exception, psycopg2.DatabaseError) as error:
-            print('*** Error recording alert emission for unit {}/{} release {}: {}'.format(exposure_id,sca,release_identity,error))
+            print('*** Error seeding alert emission watermark for unit {}/{} release {}: {}'.format(exposure_id,sca,release_identity,error))
             self.exit_code = 67
             return
 
         return claimed
+
+
+########################################################################################################
+
+    def claim_alert_emission(self,exposure_id,sca,release_identity,
+                             attempt_id,claiming_attempt_id,claim_token,
+                             pid=None):
+
+        '''
+        CAS-claim the right to emit one (unit, release) (migration 037 /
+        integration ruling 3).
+
+        Replaces the old claim-before-publish `record_alert_emission`
+        (renamed `seed_alert_emission_watermark`, watermark-seeding only).
+        This is the LIVE claim: `INSERT ... ON CONFLICT DO UPDATE ... WHERE`
+        CAS against the primary key (exposure_id, sca, release_identity) —
+        the ON CONFLICT arm fires when a row already exists in ANY state, and
+        the WHERE clause is what makes it a claim rather than a last-writer-
+        wins upsert: it only overwrites a row that is itself 'claimed' AND
+        (stale by age, OR the same claimant re-claiming idempotently, OR a
+        retry of the same logical unit whose prior claimant attempt is now
+        terminal). A 'watermark_seed' or 'emitted' row never matches the
+        WHERE clause and so is never touched — those are the terminal-
+        suppress states and this statement cannot un-suppress one.
+
+        `attempt_id` is the REGISTERED SOURCE attempt (the promotion that made
+        this unit eligible — `unit.fields["attempt_id"]`, unchanged across
+        retries of the emission step). `claiming_attempt_id` is the alert-
+        production attempt actually doing this claim (`context.attempt_id`);
+        `claim_token` is that same identity as text, carried as a separate
+        parameter because the CAS's third disjunct needs it as a plain
+        integer for the `prior.attempt_id = ...::bigint` join as well as a
+        string for the column itself.
+
+        Returns the claim_token of the row that came back from RETURNING
+        (there is at most one), or None if no row matched — either the row is
+        terminal (already seeded/emitted) or 'claimed'-fresh by a different,
+        non-terminal claimant. The CALLER decides what a None means for it;
+        this method only reports the CAS outcome.
+
+        Must run inside the caller's own transaction (the borrowed connection
+        held for the attempt's lifetime) — this call itself does not commit,
+        unlike every autocommitting method elsewhere in this class. The CLAIM
+        is its own transaction, committed once by the caller immediately
+        after this call returns, deliberately BEFORE publishing begins (a
+        crash after a committed claim leaves a stale-recoverable row, never a
+        suppression).
+        '''
+
+        self.exit_code = 0
+
+        # The staleness threshold, matching migration 037's
+        # `derived.alert_emission_status` view (that view's own comment:
+        # "keep the two in sync by inspection until a shared parameter home
+        # exists" — this is the pipeline half of that pair, and the same
+        # literal `get_attempts_awaiting_alert_emission` uses).
+        query = \
+            "insert into Alert_Emissions " +\
+            "(exposure_id, sca, release_identity, attempt_id, pid, " +\
+            " alerts_published, state, claim_token, claimed_at) " +\
+            "values (%s, %s, %s, %s, %s, 0, 'claimed', %s, now()) " +\
+            "on conflict (exposure_id, sca, release_identity) do update " +\
+            "  set claim_token = excluded.claim_token, " +\
+            "      claimed_at = now() " +\
+            "  where alert_emissions.state = 'claimed' " +\
+            "    and (alert_emissions.claimed_at < now() - interval '1 hour' " +\
+            "         or alert_emissions.claim_token = excluded.claim_token " +\
+            "         or exists ( " +\
+            "              select 1 from attempts prior, attempts me " +\
+            "              where me.attempt_id = %s " +\
+            "                and prior.attempt_id = " +\
+            "                    nullif(regexp_replace(alert_emissions.claim_token, " +\
+            "                                          '[^0-9]', '', 'g'), '')::bigint " +\
+            "                and prior.logical_job_id = me.logical_job_id " +\
+            "                and prior.lifecycle_state in " +\
+            "                    ('terminal_after_start', 'terminal_without_start'))) " +\
+            "returning claim_token;"
+        params = (exposure_id, sca, release_identity, attempt_id, pid,
+                  str(claim_token), int(claiming_attempt_id))
+
+        print('query = {}, params = {}'.format(query, params))
+
+        try:
+            self.cur.execute(query, params)
+            row = self.cur.fetchone()
+
+        except (Exception, psycopg2.DatabaseError) as error:
+            print('*** Error claiming alert emission for unit {}/{} release {}: {}'.format(exposure_id,sca,release_identity,error))
+            self.exit_code = 67
+            return
+
+        return row[0] if row is not None else None
+
+
+########################################################################################################
+
+    def confirm_alert_emission(self,exposure_id,sca,release_identity,
+                               claim_token,alerts_published):
+
+        '''
+        CONFIRM a claimed emission, once publishing has flushed successfully
+        (migration 037 / integration ruling 3).
+
+        `UPDATE ... WHERE claim_token = <mine> AND state = 'claimed' RETURNING
+        claim_token` — succeeds only when this claim is still owned by the
+        caller. NULLs claim_token/claimed_at in the same statement: migration
+        037's `alert_emissions_claim_shape_ck` CHECK constraint requires a
+        non-'claimed' row to carry NEITHER field, so a confirm that left them
+        set would violate the constraint outright.
+
+        Returns the claim_token of the row that was confirmed (there is at
+        most one), or None if no row matched — the claim was taken over by
+        another attempt (or already confirmed) between this attempt's publish
+        and this confirm call. The CALLER records that as a recorded no-op
+        (the takeover republishes; consumers dedup), never as a failure.
+
+        Must run inside the SAME transaction as the alert_published milestone
+        write (integration ruling 3 / 6: "Emission confirmation and the
+        alert-published milestone commit in one transaction"). This call does
+        not commit — the caller's transaction envelope does, after both
+        statements.
+        '''
+
+        self.exit_code = 0
+
+        # claim_token is NULLed by this very statement, so RETURNING the
+        # post-update column would always read NULL. RETURNING a bound
+        # parameter instead (`%s as confirmed_token`) reports which token was
+        # confirmed without a second round trip or a subquery.
+        query = \
+            "update Alert_Emissions " +\
+            "   set state = 'emitted', alerts_published = %s, " +\
+            "       emitted_at = now(), claim_token = null, claimed_at = null " +\
+            " where exposure_id = %s and sca = %s and release_identity = %s " +\
+            "   and claim_token = %s and state = 'claimed' " +\
+            "returning %s as confirmed_token;"
+        params = (int(alerts_published), exposure_id, sca, release_identity,
+                  str(claim_token), str(claim_token))
+
+        print('query = {}, params = {}'.format(query, params))
+
+        try:
+            self.cur.execute(query, params)
+            row = self.cur.fetchone()
+
+        except (Exception, psycopg2.DatabaseError) as error:
+            print('*** Error confirming alert emission for unit {}/{} release {}: {}'.format(exposure_id,sca,release_identity,error))
+            self.exit_code = 67
+            return
+
+        return row[0] if row is not None else None
 
 
 ########################################################################################################

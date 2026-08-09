@@ -54,8 +54,9 @@ def _install_third_party_stubs() -> None:
 
 _install_third_party_stubs()
 
-from pipeline.runtime.errors import InputError            # noqa: E402
-from pipeline.stages import alert_production              # noqa: E402
+from database.modules.utils.rapid_db import RAPIDDB        # noqa: E402
+from pipeline.runtime.errors import InputError             # noqa: E402
+from pipeline.stages import alert_production                # noqa: E402
 
 
 class Source:
@@ -66,41 +67,128 @@ class Source:
         self.snr = snr
 
 
-class Watermark:
-    """The emission watermark, enforcing its real primary key.
+class FakeConn:
+    """The borrowed connection `produce_alerts` claims/confirms through.
 
-    `record_alert_emission` is `INSERT ... ON CONFLICT DO NOTHING` and returns
-    whether THIS caller claimed the row. Modelling that faithfully is what
-    makes the suppression path testable: a double that always returned True
-    could never show the second emitter staying silent.
+    `produce_alerts` now writes the CAS claim and confirm through
+    `RAPIDDB.borrowing(context.require_connection())` rather than through an
+    injected watermark object (migration 037 / integration ruling 3) — so the
+    double has to stand in for the psycopg2 connection itself, the same idiom
+    `pipeline/registration/test/test_consumer.py`'s own `FakeConn` uses:
+    `cursor()` returns something with `execute`/`fetchone`/`close`, `commit`/
+    `rollback` are tracked so a test can assert the transaction boundary
+    (`transaction(conn)`, not `RAPIDDB.borrowing`'s own suppressed one).
+
+    THE DOUBLE CAN REFUSE. `alert_emissions` is modelled as a real CAS would
+    behave: at most one row per (exposure_id, sca, release_identity), a claim
+    succeeds only under the real WHERE clause (state='claimed' AND (stale OR
+    same claimant OR prior claimant terminal)), and confirm succeeds only
+    when the caller's own token still matches. A double that always claimed,
+    or always confirmed, could not show the suppression or takeover paths at
+    all — the same discipline the old `Watermark` stated for `ON CONFLICT DO
+    NOTHING`.
     """
 
-    def __init__(self, failure=0, already=()):
+    def __init__(self, failure=0, rows=None, terminal_attempts=()):
         self.exit_code = 0
         self.failure = failure
-        self.emitted = set(already)
-        self.published = {}
-        self.cur = self
-        self.conn = self
-        self.updates = []
+        #: (exposure_id, sca, release_identity) -> row dict: state,
+        #: claim_token, claimed_at (a monotonic counter standing in for
+        #: real time — "stale" is modelled by `stale_keys` below instead of
+        #: wall-clock math, which a unit test has no business depending on).
+        self.rows = dict(rows or {})
+        #: Keys whose claim should be treated as PAST the staleness
+        #: threshold, for the takeover tests.
+        self.stale_keys = set()
+        #: attempt ids whose owning claim should be treated as terminal
+        #: (parseable claim_token + terminal lifecycle_state), for the
+        #: owner-terminal takeover tests.
+        self.terminal_attempts = set(terminal_attempts)
+        self.commits = 0
+        self.rollbacks = 0
+        self.statements = []
+        self.milestones = []
+        #: `ConnectionExecutor.execute` (the milestone writer's path) reads
+        #: `cur.description`/`cur.rowcount` — None/1 models "an INSERT with
+        #: no RETURNING clause", exactly `record_milestone`'s statement
+        #: shape, so the executor takes the `rowcount` branch rather than
+        #: trying to `fetchall()` a result set that was never produced.
+        self.description = None
+        self.rowcount = 1
 
-    def record_alert_emission(self, exposure_id, sca, release_identity,
-                              attempt_id, pid=None, alerts_published=0):
-        self.exit_code = self.failure
-        if self.failure:
-            return None
-        key = (exposure_id, sca, release_identity)
-        if key in self.emitted:
-            return False
-        self.emitted.add(key)
-        return True
+    # -- psycopg2 connection surface -----------------------------------
+    def cursor(self):
+        return self
 
-    # The `_update_emission_count` path writes through cur/conn directly.
-    def execute(self, statement, params=None):
-        self.updates.append((statement, params))
+    def close(self):
+        pass
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
 
     def commit(self):
-        pass
+        self.commits += 1
+
+    def rollback(self):
+        self.rollbacks += 1
+
+    # -- cursor surface: dispatches on statement shape, like the
+    #    registration consumer's own FakeConn --------------------------
+    def execute(self, statement, params=None):
+        self.statements.append((statement, params))
+        lowered = " ".join(statement.lower().split())
+        if self.failure:
+            self._last_result = None
+            raise RuntimeError(f"stubbed query failure ({self.failure})")
+        if "insert into alert_emissions" in lowered and "on conflict" in lowered:
+            self._last_result = self._claim(params)
+        elif "update alert_emissions" in lowered and "state = 'emitted'" in lowered:
+            self._last_result = self._confirm(params)
+        elif "insert into milestones" in lowered:
+            self.milestones.append(params)
+            self._last_result = None
+        else:
+            self._last_result = None
+
+    def fetchone(self):
+        return self._last_result
+
+    def fetchall(self):
+        return [] if self._last_result is None else [self._last_result]
+
+    # -- the CAS itself, in Python, matching claim_alert_emission's SQL -
+    def _claim(self, params):
+        (exposure_id, sca, release_identity, attempt_id, pid,
+         claim_token, claiming_attempt_id) = params
+        key = (exposure_id, sca, release_identity)
+        row = self.rows.get(key)
+        if row is None:
+            self.rows[key] = {"state": "claimed", "claim_token": claim_token}
+            return (claim_token,)
+        if row["state"] != "claimed":
+            return None  # terminal (watermark_seed / emitted): never touched
+        stale = key in self.stale_keys
+        same_claimant = row["claim_token"] == claim_token
+        prior_terminal = (row["claim_token"].isdigit()
+                          and int(row["claim_token"]) in self.terminal_attempts)
+        if stale or same_claimant or prior_terminal:
+            row["claim_token"] = claim_token
+            return (claim_token,)
+        return None  # lost the race: fresh, not a retry, not terminal
+
+    def _confirm(self, params):
+        (alerts_published, exposure_id, sca, release_identity, claim_token,
+         confirmed_token) = params
+        key = (exposure_id, sca, release_identity)
+        row = self.rows.get(key)
+        if row is None or row["state"] != "claimed" or row["claim_token"] != claim_token:
+            return None  # taken over, or already confirmed
+        row["state"] = "emitted"
+        row["alerts_published"] = alerts_published
+        return (confirmed_token,)
 
 
 class Producer:
@@ -130,16 +218,31 @@ class Unit:
 
 
 class Context:
-    """The stage context surface `produce_alerts` actually uses."""
+    """The stage context surface `produce_alerts` actually uses.
 
-    def __init__(self, unit, parameters):
+    `attempt_id` and `require_connection()` are new (migration 037 /
+    integration ruling 3): the claim/confirm/milestone writes go through the
+    ATTEMPT'S OWN borrowed connection now, not through an injected watermark
+    object — `attempt_id` is this attempt's OWN identity (the claiming
+    attempt, distinct from `unit.fields["attempt_id"]`, the registered SOURCE
+    attempt the unit declares).
+    """
+
+    def __init__(self, unit, parameters, conn=None, attempt_id=99):
         self.unit = unit
         self.parameters = dict(parameters)
         self.provenance = {}
         self.logger = _SilentLogger()
+        self.connection = conn
+        self.attempt_id = attempt_id
 
     def parameter(self, name):
         return self.parameters.get(name)
+
+    def require_connection(self):
+        if self.connection is None:
+            raise RuntimeError("no connection lent to this test context")
+        return self.connection
 
     def record_effect(self, rows_written=0, rows_removed=0, **extra):
         self.provenance["rows_written"] = (
@@ -161,9 +264,18 @@ PARAMETERS = {
     "kafka/max-request-bytes": "15728640",
 }
 
+#: The claiming attempt's identity in every test below — `context.attempt_id`
+#: — distinct from the unit's declared `attempt_id` field (the registered
+#: SOURCE attempt, `SOURCE_ATTEMPT_ID`). Migration 037 keeps these as two
+#: different columns (`alert_emissions.attempt_id` vs `.claim_token`)
+#: precisely because they can differ; the tests use different values
+#: throughout so a test that accidentally conflated them would fail.
+CLAIMING_ATTEMPT_ID = 99
+SOURCE_ATTEMPT_ID = 6765
+
 
 def _unit(**overrides):
-    fields = {"attempt_id": 6765, "release_identity": "rel-1",
+    fields = {"attempt_id": SOURCE_ATTEMPT_ID, "release_identity": "rel-1",
               "difference_image_pid": 1086,
               "job_type": "alert-production"}
     fields.update(overrides)
@@ -247,10 +359,17 @@ class UnitFieldTests(unittest.TestCase):
 
 
 class Provider:
-    """The alert data provider, over a watermark handle."""
+    """The alert data provider, over the CANDIDATE-reading connection only.
 
-    def __init__(self, db, sources=(), chip_error=None):
-        self.db = db
+    `db` is no longer where the emission CAS writes go (migration 037 /
+    integration ruling 3 moved those onto the attempt's own borrowed
+    connection — see `Context.require_connection`); this double no longer
+    needs one at all, and takes none, so a test that mistakenly wired the
+    old `watermark` object here would fail on the missing argument rather
+    than silently doing nothing.
+    """
+
+    def __init__(self, sources=(), chip_error=None):
         self.sources = list(sources)
         self.chip_error = chip_error
 
@@ -260,54 +379,71 @@ class Provider:
         return iter(self.sources)
 
 
+def _run_produce_alerts(context, provider, producer, assemble=None,
+                        fail_sids=()):
+    """Run `produce_alerts` against doubles, patching the `alerts` package.
+
+    Module-level (not a method) so both `EmissionTests` and
+    `WatermarkSeedTests` can drive a real run without duplicating the patch
+    list — `produce_alerts` resolves `alerts.cli`/`alerts.produce`/
+    `alerts.kafka_producer` through module-level imports, so they are
+    patched here rather than injected.
+    """
+    import alerts.cli
+    import alerts.produce
+    import alerts.kafka_producer
+
+    def fake_assemble(prov, source):
+        if source.sid in fail_sids:
+            raise ValueError(f"candidate {source.sid} is unusable")
+        return {"sid": source.sid}
+
+    patches = [
+        (alerts.cli, "make_provider", lambda: provider),
+        (alerts.produce, "assemble_alert_for_source",
+         assemble or fake_assemble),
+        (alerts.produce, "load_schema", lambda *a, **k: {"fake": True}),
+        (alerts.produce, "serialize_alert",
+         lambda alert, schema=None: b"x" * 10),
+        (alerts.produce, "publish_alert",
+         lambda payload, prod, topic="alerts", flush=False:
+             prod.produce(topic, payload)),
+        (alerts.kafka_producer, "make_producer",
+         lambda *a, **k: producer),
+    ]
+    saved = [(mod, name, getattr(mod, name, None)) for mod, name, _ in patches]
+    for mod, name, value in patches:
+        setattr(mod, name, value)
+    try:
+        alert_production.produce_alerts(context)
+    finally:
+        for mod, name, value in saved:
+            if value is not None:
+                setattr(mod, name, value)
+
+
 class EmissionTests(unittest.TestCase):
-    """Gates 3 and 4: emission control and the effect counts.
+    """Ruling 3: claim -> publish/flush -> confirm, and the effect counts.
 
     `produce_alerts` resolves its collaborators through module-level imports,
     so they are patched here rather than injected — the alternative would be
     widening the stage signature purely for the tests, which the repo's own
-    seam discipline argues against.
+    seam discipline argues against. The emission CAS itself is exercised for
+    real (against `FakeConn`'s modelled `alert_emissions` table) through the
+    real `RAPIDDB.claim_alert_emission` / `confirm_alert_emission` SQL —
+    only the connection is a double, never the CAS logic.
     """
 
     def _run(self, context, provider, producer, assemble=None, fail_sids=()):
         """Run the stage against doubles, patching the alerts package."""
-        import alerts.cli
-        import alerts.produce
-        import alerts.kafka_producer
-
-        def fake_assemble(prov, source):
-            if source.sid in fail_sids:
-                raise ValueError(f"candidate {source.sid} is unusable")
-            return {"sid": source.sid}
-
-        patches = [
-            (alerts.cli, "make_provider", lambda: provider),
-            (alerts.produce, "assemble_alert_for_source",
-             assemble or fake_assemble),
-            (alerts.produce, "load_schema", lambda *a, **k: {"fake": True}),
-            (alerts.produce, "serialize_alert",
-             lambda alert, schema=None: b"x" * 10),
-            (alerts.produce, "publish_alert",
-             lambda payload, prod, topic="alerts", flush=False:
-                 prod.produce(topic, payload)),
-            (alerts.kafka_producer, "make_producer",
-             lambda *a, **k: producer),
-        ]
-        saved = [(mod, name, getattr(mod, name, None)) for mod, name, _ in patches]
-        for mod, name, value in patches:
-            setattr(mod, name, value)
-        try:
-            alert_production.produce_alerts(context)
-        finally:
-            for mod, name, value in saved:
-                if value is not None:
-                    setattr(mod, name, value)
+        _run_produce_alerts(context, provider, producer, assemble=assemble,
+                            fail_sids=fail_sids)
 
     def test_a_clean_run_publishes_and_records_the_counts(self):
-        watermark = Watermark()
-        provider = Provider(watermark, sources=[Source(1, 9.0), Source(2, 8.0)])
+        conn = FakeConn()
+        provider = Provider(sources=[Source(1, 9.0), Source(2, 8.0)])
         producer = Producer()
-        context = Context(_unit(), PARAMETERS)
+        context = Context(_unit(), PARAMETERS, conn=conn)
 
         self._run(context, provider, producer)
 
@@ -316,18 +452,25 @@ class EmissionTests(unittest.TestCase):
         self.assertEqual(context.provenance["candidates_considered"], 2)
         self.assertEqual(context.provenance["alerts_published"], 2)
         self.assertEqual(context.provenance["emissions_suppressed"], 0)
+        self.assertTrue(context.provenance["emission_confirmed"])
         self.assertEqual(context.provenance["alert_topic"],
                          "rapid.internal.alerts.v1")
         # The selection rule names itself as the placeholder it is.
         self.assertIn("PLACEHOLDER", context.provenance["selection_rule"])
+        # (a) CONFIRM lands, and (f) the milestone is in the SAME transaction.
+        key = (20, 7, "rel-1")
+        self.assertEqual(conn.rows[key]["state"], "emitted")
+        self.assertEqual(len(conn.milestones), 1)
+        self.assertEqual(conn.milestones[0][0], "alert_published")
 
     def test_an_already_emitted_unit_publishes_nothing(self):
         # "Emission is once per logical unit per release" — a replay is
         # silent, and the suppression is one of the four effect counts.
-        watermark = Watermark(already={(20, 7, "rel-1")})
-        provider = Provider(watermark, sources=[Source(1, 9.0)])
+        conn = FakeConn(rows={(20, 7, "rel-1"): {"state": "emitted",
+                                                  "claim_token": None}})
+        provider = Provider(sources=[Source(1, 9.0)])
         producer = Producer()
-        context = Context(_unit(), PARAMETERS)
+        context = Context(_unit(), PARAMETERS, conn=conn)
 
         self._run(context, provider, producer)
 
@@ -337,12 +480,11 @@ class EmissionTests(unittest.TestCase):
 
     def test_a_candidate_failure_drops_only_that_candidate(self):
         # Gate 3: candidate failures never fail the attempt.
-        watermark = Watermark()
-        provider = Provider(watermark,
-                            sources=[Source(1, 9.0), Source(2, 8.0),
+        conn = FakeConn()
+        provider = Provider(sources=[Source(1, 9.0), Source(2, 8.0),
                                      Source(3, 7.0)])
         producer = Producer()
-        context = Context(_unit(), PARAMETERS)
+        context = Context(_unit(), PARAMETERS, conn=conn)
 
         self._run(context, provider, producer, fail_sids={2})
 
@@ -357,37 +499,163 @@ class EmissionTests(unittest.TestCase):
 
     def test_a_chip_level_failure_fails_the_attempt(self):
         # The one case that does: the provider cannot read the image at all.
-        watermark = Watermark()
-        provider = Provider(watermark, chip_error=OSError("no such image"))
+        conn = FakeConn()
+        provider = Provider(chip_error=OSError("no such image"))
         producer = Producer()
-        context = Context(_unit(), PARAMETERS)
+        context = Context(_unit(), PARAMETERS, conn=conn)
 
         with self.assertRaises(RuntimeError):
             self._run(context, provider, producer)
 
-    def test_a_delivery_failure_raises_loudly(self):
+        # (b) claim-then-crash-before-publish: the claim is intact, untouched.
+        self.assertEqual(conn.rows[(20, 7, "rel-1")]["state"], "claimed")
+
+    def test_a_delivery_failure_raises_loudly_and_the_claim_survives_intact(self):
         # The 2026-08-04 Q7 finding: a run that reports published alerts
         # while publishing nothing is worse than one that crashes.
-        watermark = Watermark()
-        provider = Provider(watermark, sources=[Source(1, 9.0)])
+        conn = FakeConn()
+        provider = Provider(sources=[Source(1, 9.0)])
         producer = Producer(flush_error=RuntimeError("1 of 1 alert failed"))
-        context = Context(_unit(), PARAMETERS)
+        context = Context(_unit(), PARAMETERS, conn=conn)
 
         with self.assertRaises(RuntimeError):
             self._run(context, provider, producer)
 
-    def test_an_unclaimable_watermark_refuses_to_publish(self):
+        # (b) publish failure is chip-level: no confirm ran, claim intact.
+        key = (20, 7, "rel-1")
+        self.assertEqual(conn.rows[key]["state"], "claimed")
+        self.assertEqual(conn.rows[key]["claim_token"],
+                         str(CLAIMING_ATTEMPT_ID))
+        self.assertEqual(conn.milestones, [])
+
+    def test_an_unclaimable_emission_refuses_to_publish(self):
         # A claim that could not be RECORDED must not publish: an emission
         # that is not recorded can be emitted again.
-        watermark = Watermark(failure=67)
-        provider = Provider(watermark, sources=[Source(1, 9.0)])
+        conn = FakeConn(failure=67)
+        provider = Provider(sources=[Source(1, 9.0)])
         producer = Producer()
-        context = Context(_unit(), PARAMETERS)
+        context = Context(_unit(), PARAMETERS, conn=conn)
 
         with self.assertRaises(RuntimeError):
             self._run(context, provider, producer)
 
         self.assertEqual(producer.published, [])
+
+    def test_a_stale_claim_from_a_terminal_attempt_is_taken_over(self):
+        # (b) continued: a crashed claimant's stale claim is retaken by a
+        # later attempt, per the CAS's own staleness-OR-terminal-prior arm.
+        conn = FakeConn(
+            rows={(20, 7, "rel-1"): {"state": "claimed", "claim_token": "1"}},
+            terminal_attempts={1})
+        conn.stale_keys.add((20, 7, "rel-1"))
+        provider = Provider(sources=[Source(1, 9.0)])
+        producer = Producer()
+        context = Context(_unit(), PARAMETERS, conn=conn)
+
+        self._run(context, provider, producer)
+
+        self.assertEqual(len(producer.published), 1)
+        self.assertEqual(context.provenance["emissions_suppressed"], 0)
+        self.assertTrue(context.provenance["emission_confirmed"])
+
+    def test_confirm_nulls_the_claim_fields(self):
+        # (d) CHECK-shape compliance: migration 037's alert_emissions_claim_
+        # shape_ck forbids a non-'claimed' row carrying claim fields, so the
+        # CONFIRM statement text itself must NULL both — asserted against the
+        # statement FakeConn actually received, not just the modelled result.
+        conn = FakeConn()
+        provider = Provider(sources=[Source(1, 9.0)])
+        producer = Producer()
+        context = Context(_unit(), PARAMETERS, conn=conn)
+
+        self._run(context, provider, producer)
+
+        confirm_statements = [
+            statement for statement, _ in conn.statements
+            if "state = 'emitted'" in statement.lower()]
+        self.assertEqual(len(confirm_statements), 1)
+        lowered = " ".join(confirm_statements[0].lower().split())
+        self.assertIn("claim_token = null", lowered)
+        self.assertIn("claimed_at = null", lowered)
+
+    def test_a_takeover_between_publish_and_confirm_is_a_recorded_no_op(self):
+        # (c) takeover: publish is gated on RETURNING this attempt's own
+        # token (already covered above); this is the CONFIRM-side half — a
+        # foreign token at confirm time is a no-op, never a failure, and
+        # never re-publishes on this attempt's behalf.
+        conn = FakeConn()
+        provider = Provider(sources=[Source(1, 9.0)])
+        producer = Producer()
+        context = Context(_unit(), PARAMETERS, conn=conn)
+
+        # Claim as usual, then simulate another attempt taking the claim over
+        # before this attempt's confirm runs.
+        original_confirm = conn._confirm
+
+        def confirm_after_takeover(params):
+            key = (20, 7, "rel-1")
+            conn.rows[key]["claim_token"] = "12345"  # a different claimant
+            return original_confirm(params)
+
+        conn._confirm = confirm_after_takeover
+
+        self._run(context, provider, producer)
+
+        # The alert still went out (publish already happened) but this
+        # attempt's own confirmation did not land.
+        self.assertEqual(len(producer.published), 1)
+        self.assertFalse(context.provenance["emission_confirmed"])
+        self.assertEqual(conn.rows[(20, 7, "rel-1")]["claim_token"], "12345")
+
+    def test_duplicate_tolerant_retry_republishes_an_unconfirmed_claim(self):
+        # (e) duplicate-tolerance: a retry finding its OWN unconfirmed claim
+        # (same claim_token — this attempt crashed after claiming but before
+        # confirming, and is now retried under the SAME attempt identity)
+        # republishes rather than suppressing.
+        conn = FakeConn(rows={(20, 7, "rel-1"):
+                              {"state": "claimed",
+                               "claim_token": str(CLAIMING_ATTEMPT_ID)}})
+        provider = Provider(sources=[Source(1, 9.0)])
+        producer = Producer()
+        context = Context(_unit(), PARAMETERS, conn=conn)
+
+        self._run(context, provider, producer)
+
+        self.assertEqual(len(producer.published), 1)
+        self.assertEqual(context.provenance["emissions_suppressed"], 0)
+
+
+class WatermarkSeedTests(unittest.TestCase):
+    """(g) seed rows carry `watermark_seed`, never the live claim state."""
+
+    def test_seed_alert_emission_watermark_writes_the_seed_state(self):
+        self.assertIn(
+            "'watermark_seed'",
+            _method_source(RAPIDDB.seed_alert_emission_watermark))
+
+    def test_the_claim_and_confirm_never_write_watermark_seed(self):
+        # The live CAS path must never be able to (re)mint a seed row — only
+        # `seed_alert_emission_watermark` does, and only at initialization.
+        # Checked against a real CAS run's tracked statements (the SQL that
+        # actually executes), not the method source — the docstrings above
+        # legitimately discuss `watermark_seed` in prose (explaining why the
+        # CAS's WHERE clause never matches one), which a source-text search
+        # cannot tell apart from the executable statement.
+        conn = FakeConn()
+        provider = Provider(sources=[Source(1, 9.0)])
+        producer = Producer()
+        context = Context(_unit(), PARAMETERS, conn=conn)
+
+        _run_produce_alerts(context, provider, producer)
+
+        executed = " ".join(
+            statement.lower() for statement, _ in conn.statements)
+        self.assertNotIn("watermark_seed", executed)
+
+
+def _method_source(method):
+    import inspect
+    return inspect.getsource(method)
 
 
 if __name__ == "__main__":

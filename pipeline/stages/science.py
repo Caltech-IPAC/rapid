@@ -146,6 +146,87 @@ def nsexcatsources_variant(context) -> str:
 # Inputs
 # ---------------------------------------------------------------------------
 
+def _record_l2_available_milestone(context) -> None:
+    """The `l2_available` milestone: this unit's L2 input, durably known.
+
+    THE CHAIN'S FIRST WIRED END (integration ruling 6; design/observability.md
+    § Attempt record: "the wired milestone writers are the chain's ends:
+    `l2_available` carries the authoritative source-availability timestamp").
+    Wired HERE, at the start of the science attempt's first stage, because
+    this is the earliest point in the LIVE path (as opposed to gathering,
+    which runs before any attempt exists to carry as `producing_attempt_id`)
+    where the unit's L2 input is confirmed durably known.
+
+    THE TIMESTAMP: `L2Files.created`, fetched fresh rather than carried as a
+    `UnitFacts` field, because no fact currently carries it. It is a PROXY
+    for true SOC availability, not a direct measurement — see
+    `RAPIDDB.get_l2file_created`'s docstring for why it is the best the live
+    schema names. If this ever needs replacing with a real SOC-supplied
+    timestamp, this is the one place that changes.
+
+    IDEMPOTENT BY FIND-BEFORE-WRITE. `milestones` carries no unique
+    constraint on (milestone_name, exposure_id, sca) — a retried science
+    attempt for the same unit would otherwise insert a second `l2_available`
+    row every pass. Checked directly against the borrowed connection rather
+    than through `AttemptWriter` (which has no read methods) — the same
+    connection the write itself uses, so the existence check and the insert
+    that follows it see a consistent view.
+    """
+    from database.modules.utils.checked import CheckedHandle, RapidDBCallFailed
+    from database.modules.utils.rapid_db import RAPIDDB
+    from database.modules.utils.rapid_db_connect import ConnectionExecutor
+    from observability.attempts import AttemptWriter
+
+    rid = context.optional_fact("rid")
+    if rid is None:
+        context.logger.warning(
+            "no rid on this unit's facts; the l2_available milestone needs "
+            "one to look up L2Files.created and cannot be recorded")
+        return
+
+    conn = context.require_connection()
+    exposure = int(context.unit.exposure)
+    sca = int(context.unit.sca)
+
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT 1 FROM milestones WHERE milestone_name = %s "
+            "AND exposure_id = %s AND sca = %s LIMIT 1",
+            ("l2_available", exposure, sca))
+        already_recorded = cur.fetchone() is not None
+    conn.rollback()  # read-only; do not hold a transaction open
+
+    if already_recorded:
+        context.logger.info(
+            "l2_available already recorded for %s/%s; not duplicating",
+            exposure, sca)
+        return
+
+    # `RAPIDDB.borrowing` swallows commits (by design — the borrower owns
+    # the transaction boundary), which is exactly right for a read, but this
+    # handle is read-only here: `get_l2file_created` never writes.
+    handle = CheckedHandle(RAPIDDB.borrowing(conn))
+    try:
+        created = handle.get_l2file_created(rid)
+    except RapidDBCallFailed as exc:
+        context.logger.warning(
+            "could not read L2Files.created for rid %s; the l2_available "
+            "milestone is not recorded for %s/%s: %s",
+            rid, exposure, sca, exc)
+        return
+    if created is None:
+        context.logger.warning(
+            "rid %s has no L2Files row; the l2_available milestone is not "
+            "recorded for %s/%s", rid, exposure, sca)
+        return
+
+    writer = AttemptWriter(ConnectionExecutor(conn, autocommit_each=False))
+    writer.record_milestone(
+        "l2_available", created, exposure_id=exposure, sca=sca,
+        producing_attempt_id=context.attempt_id)
+    conn.commit()
+
+
 def download_inputs(context) -> None:
     """Fetch the science image and both PSFs. (Monolith stages E, F.)
 
@@ -154,6 +235,8 @@ def download_inputs(context) -> None:
     host unable to collide — the old cwd-relative naming was safe only because
     one container ran one unit.
     """
+    _record_l2_available_milestone(context)
+
     science_image_uri = context.fact("science_image_uri")
 
     gz_name, _subdirs, _ = util.download_file_from_s3_bucket(
