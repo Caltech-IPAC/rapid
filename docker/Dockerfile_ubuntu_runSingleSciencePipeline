@@ -27,7 +27,7 @@ RUN yum -y install patch
 
 # Install fftw3-devel
 RUN yum install -y fftw3-devel && \
-    rm -rf /var/lib/apt/lists/*
+    dnf clean all
 
 # Remove requests from RPM package to allow
 # romanisim to install under Python 3.9
@@ -37,7 +37,7 @@ RUN yum -y remove python3-requests
 
 # Install packages in Python 3.9 (/usr/bin/python3)
 
-RUN yum install -y pip
+RUN yum install -y python3-pip
 RUN pip install --upgrade pip
 RUN pip install --upgrade numpy
 RUN pip install --upgrade astropy
@@ -122,11 +122,11 @@ RUN if [ -z "$RAPID_BRANCH" ]; then \
     fi && \
     git clone --branch "$RAPID_BRANCH" --single-branch https://github.com/Caltech-IPAC/rapid code
 
+WORKDIR /code
+
 # Remove docs directory in /code to make container image smaller.
 
-RUN rm -rf /code/docs
-
-WORKDIR /code
+RUN cd /code && /bin/rm -rf docs
 
 # Build C code in RAPID software stack.
 
@@ -149,4 +149,4 @@ WORKDIR $RAPID_WORK
 
 ENTRYPOINT ["bash"]
 
-CMD ["$RAPID_SW/pipeline/awsBatchSubmitJobs_runSingleSciencePipeline.sh"]
+CMD ["/code/pipeline/awsBatchSubmitJobs_runSingleSciencePipeline.sh"]
