@@ -112,14 +112,20 @@ def make_attempt(conn, work_unit_id=None, error_category=None,
     the production query does not use.
     """
     with conn.cursor() as cur:
+        # `schema_version` is NOT NULL with no default: the attempts table
+        # requires every row to state which schema wrote it. Read from the
+        # table's own current maximum rather than hard-coded, so this fixture
+        # does not pin a number a later migration moves.
+        cur.execute("SELECT coalesce(max(schema_version), 1) FROM attempts")
+        schema_version = cur.fetchone()[0]
         cur.execute(
             "INSERT INTO attempts"
-            "  (run_id, lifecycle_state, work_unit_id, error_category,"
-            "   registered_at)"
-            " VALUES (%s, %s, %s, %s, %s)"
+            "  (run_id, schema_version, lifecycle_state, work_unit_id,"
+            "   error_category, registered_at)"
+            " VALUES (%s, %s, %s, %s, %s, %s)"
             " RETURNING attempt_id",
-            [f"brief-a-{RUN_TAG}", lifecycle, work_unit_id, error_category,
-             "now()" if registered else None])
+            [f"brief-a-{RUN_TAG}", schema_version, lifecycle, work_unit_id,
+             error_category, "now()" if registered else None])
         return cur.fetchone()[0]
 
 
@@ -377,16 +383,21 @@ def test_4_missing_definition_fails_closed(conn):
     enabled streams, which is exactly the deploy-forgot-the-step state it
     exists to catch.
     """
-    execute = executor(conn)
+    from pipeline.intent.definitions import shipped_definitions
 
-    # A definitions-free view of the world: the check reads
-    # workflow_definitions, so an empty result is the missing-definition
-    # state. Done in a rolled-back transaction so the real rows survive.
+    # THE MISSING-DEFINITION STATE IS PRODUCED BY AN EMPTY TABLE, and the
+    # honest way to show the check reacting to an empty table — without
+    # deleting the fixture rows other tests depend on, and without fighting
+    # unit_events's FK to work_units — is a real, empty table of the real
+    # shape. A temporary table shadowing `workflow_definitions` in this
+    # session's search_path is exactly that: the check's own SELECT runs
+    # unmodified against real PostgreSQL, and it resolves to the empty temp
+    # relation for the duration of this test.
+    execute = executor(conn)
     with conn.cursor() as cur:
-        cur.execute("CREATE TEMP TABLE saved_defs AS "
-                    "SELECT * FROM workflow_definitions")
-        cur.execute("DELETE FROM work_units")
-        cur.execute("DELETE FROM workflow_definitions")
+        cur.execute(
+            "CREATE TEMP TABLE workflow_definitions"
+            " (LIKE public.workflow_definitions INCLUDING ALL)")
 
     named_stream = None
     try:
@@ -395,19 +406,16 @@ def test_4_missing_definition_fails_closed(conn):
         message = str(exc)
         assert "science" in message, f"the stream is not named: {message}"
         assert "not loaded" in message or "no shipped" in message, message
-        named_stream = message.splitlines()[1].strip() if "\n" in message \
-            else message
+        lines = [line.strip() for line in message.splitlines()
+                 if line.strip().startswith("-")]
+        named_stream = lines[0] if lines else message
     else:
-        conn.rollback()
         raise AssertionError(
             "the completeness check PASSED with no definitions loaded; it is "
             "not failing closed")
 
-    # Now load them and re-run the same check.
-    with conn.cursor() as cur:
-        cur.execute("INSERT INTO workflow_definitions SELECT * FROM saved_defs")
-
-    from pipeline.intent.definitions import shipped_definitions
+    # NOW LOAD THEM AND RE-RUN THE SAME CHECK. Loading into the temp table
+    # means "after the deployment step ran" without touching the shared rows.
     shipped = shipped_definitions()
     with conn.cursor() as cur:
         for definition in shipped.values():
@@ -415,9 +423,7 @@ def test_4_missing_definition_fails_closed(conn):
                 "INSERT INTO workflow_definitions"
                 "  (job_type, definition_version, checksum, source_path,"
                 "   description)"
-                " VALUES (%s,%s,%s,%s,%s)"
-                " ON CONFLICT (job_type, definition_version) DO UPDATE"
-                "   SET checksum = EXCLUDED.checksum",
+                " VALUES (%s,%s,%s,%s,%s)",
                 [definition["job_type"], definition["version"],
                  definition["checksum"], definition["source_path"],
                  definition["description"]])
@@ -425,9 +431,13 @@ def test_4_missing_definition_fails_closed(conn):
     verified = verify_work_stream_completeness(execute)
     assert verified > 0, "the check verified zero streams after loading"
 
-    conn.rollback()   # leave the database as we found it
-    return (f"check failed closed naming: {named_stream[:80]}...; after "
-            f"loading, the same check verified {verified} streams")
+    with conn.cursor() as cur:
+        cur.execute("DROP TABLE workflow_definitions")   # the temp one only
+    conn.commit()
+
+    return (f"check failed closed naming [{named_stream[:70]}]; after "
+            f"loading {len(shipped)} shipped definitions the same check "
+            f"verified {verified} streams")
 
 
 # -- test 5: per-stream isolation --------------------------------------------
@@ -445,7 +455,18 @@ def test_5_stream_isolation(_conn):
     acceptance evidence and the five criteria belong in one place with one
     verdict format.
     """
+    import logging
+
     from pipeline.operator import service as operator_service
+
+    # The isolation this test proves is LOGGED with `logger.exception`, so a
+    # passing run emits ~20 expected tracebacks. Under SSM's tail-truncated
+    # 24KB output that buries every other test's verdict — the noise is the
+    # test working, and it still has to not drown the report. Silenced for
+    # the duration and restored after, rather than left to flood.
+    operator_logger = logging.getLogger(operator_service.__name__)
+    previous_level = operator_logger.level
+    operator_logger.setLevel(logging.CRITICAL)
 
     class Result:
         def __init__(self, name):
@@ -526,6 +547,8 @@ def test_5_stream_isolation(_conn):
         raise AssertionError(
             "every stream failed and the service did NOT exit; the "
             "shared-fault verdict is not firing")
+    finally:
+        operator_logger.setLevel(previous_level)
 
     return (f"stream isolation holds (sick={sick.passes}, after={healthy.passes},"
             f" third={later.passes}); one sick stream kept the service up for "
