@@ -54,9 +54,9 @@ start_time_benchmark = time.time()
 
 # Compute processing datetime (UT) and processing datetime (Pacific time).
 
-datetime_utc_now = datetime.utcnow()
+datetime_utc_now = datetime.now(timezone.utc)
 proc_utc_datetime = datetime_utc_now.strftime('%Y-%m-%dT%H:%M:%SZ')
-datetime_pt_now = datetime_utc_now.replace(tzinfo=timezone.utc).astimezone(tz=to_zone)
+datetime_pt_now = datetime_utc_now.astimezone(tz=to_zone)
 proc_pt_datetime_started = datetime_pt_now.strftime('%Y-%m-%dT%H:%M:%S PT')
 
 print("proc_utc_datetime =",proc_utc_datetime)
@@ -192,20 +192,17 @@ def run_single_core_job(asdf_files,index_thread):
 
     try:
         fh = open(thread_work_file, 'w', encoding="utf-8")
-    except:
-        print(f"*** Error: Could not open output file {thread_work_file}; quitting...")
-        exit(64)
+    except Exception as e:
+        print(f"*** Error: Could not open output file {thread_work_file} ({e}); quitting...")
+        raise
 
     fh.write(f"\nStart of run_single_core_job: index_thread={index_thread}\n")
 
 
     # Loop over input ASDF files.
 
-    for index_asdf_file in range(n_asdf_files):
-
-        index_core = index_asdf_file % num_cores
-        if index_thread != index_core:
-            continue
+    my_asdf_files = list(range(index_thread, n_asdf_files, num_cores))
+    for index_asdf_file in my_asdf_files:
 
         input_asdf_file = asdf_files[index_asdf_file]
 
@@ -286,10 +283,7 @@ def run_single_core_job(asdf_files,index_thread):
     return message
 
 
-def execute_parallel_processes(asdf_files_list,num_cores=None):
-
-    if num_cores is None:
-        num_cores = os.cpu_count()  # Use all available cores if not specified
+def execute_parallel_processes(asdf_files_list):
 
     print("num_cores =",num_cores)
 
@@ -375,6 +369,8 @@ def correct_gwcs_inject_fake_variable_sources_output_asdf_file(fh, input_asdf_pa
     # ------------------------------------------------------------------ #
     gwcs_obj   = dm.meta.wcs              # gwcs.WCS instance
 
+    dm.close()
+
 
     # Compute center of ASDF image.  Image pixel coordinates must be zero-based.
 
@@ -413,9 +409,14 @@ def correct_gwcs_inject_fake_variable_sources_output_asdf_file(fh, input_asdf_pa
     file_content = ""
     for overlapping_field in sciimg_overlapping_rtids:
         injection_catalog_filename = f"injection_catalog_rtid{overlapping_field}.json"
-        s3_full_name_injection_catalog = f"s3://{job_info_s3_bucket}/injection_catalogs/{injection_catalog_filename}"
-        injection_catalog_filename,subdirs,downloaded_from_bucket = util.download_file_from_s3_bucket(s3_client,s3_full_name_injection_catalog)
-        fh.write(f"s3_full_name_injection_catalog = {s3_full_name_injection_catalog}\n")
+
+        downloaded_from_bucket = True
+        if not os.path.exists(injection_catalog_filename):
+
+            s3_full_name_injection_catalog = f"s3://{job_info_s3_bucket}/injection_catalogs/{injection_catalog_filename}"
+            injection_catalog_filename,subdirs,downloaded_from_bucket = util.download_file_from_s3_bucket(s3_client,s3_full_name_injection_catalog)
+            fh.write(f"s3_full_name_injection_catalog = {s3_full_name_injection_catalog}\n")
+
         fh.write(f"injection_catalog_filename = {injection_catalog_filename}\n")
         if downloaded_from_bucket:
             file_content += f"{injection_catalog_filename}\n"
@@ -508,6 +509,7 @@ if __name__ == '__main__':
     lines = code_to_execute_stdout.splitlines()
 
     i = 0
+    j = 0
     for line in lines:
 
         #print(line)
@@ -535,6 +537,7 @@ if __name__ == '__main__':
                 continue
 
             input_asdf_files.append(input_asdf_file)
+            j += 1
 
         i += 1
 
@@ -542,6 +545,7 @@ if __name__ == '__main__':
         #    break
 
     print(f"Total number of socsims = {i}")
+    print(f"Total number of socsims skipped = {j}")
 
 
     #########################################################################################
@@ -550,7 +554,7 @@ if __name__ == '__main__':
     #########################################################################################
 
     if num_cores > 1:
-        execute_parallel_processes(input_asdf_files,num_cores)
+        execute_parallel_processes(input_asdf_files)
     else:
         thread_index = 0
         run_single_core_job(input_asdf_files,thread_index)
