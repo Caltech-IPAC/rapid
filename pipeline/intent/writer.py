@@ -125,6 +125,31 @@ _TRANSITION_GRAPH: dict[tuple[str, str], str | None] = {
     (READY, SUBMITTED): None,
     (SUBMITTED, COMPLETE): None,
     (SUBMITTED, FAILED): None,
+    # THE TWO EDGES RETRY POLICY v1 NEEDS AND v1's FIRST GRAPH OMITTED
+    # (rule 4 repair). The graph above was written when every closure site
+    # hard-coded "terminal and not SUCCESS -> failed", so the only edges out
+    # of `submitted` were the two verdicts. `pipeline.intent.retry_policy`
+    # makes the policy executable, and it yields two more outcomes that were
+    # unreachable:
+    #
+    #   submitted -> blocked  park-until-change. The policy says application
+    #                         failures are "never tombstoned"; parking is
+    #                         how a unit survives one. Without this edge the
+    #                         only way to record an application failure was
+    #                         the tombstone the policy forbids.
+    #   submitted -> ready    a scheduler-visible loss (Spot reclaim, OOM
+    #                         kill) under the retry ceiling. Nothing was
+    #                         learned about the work, so the unit returns to
+    #                         the queue for a NEW attempt (rule 5) rather
+    #                         than inheriting a verdict from a container's
+    #                         death.
+    #
+    # Both are ORDINARY forward edges (writer None): the reconciler fires
+    # them as part of closing an attempt, exactly as it already fires
+    # submitted->complete/failed. Neither is an operator override, so
+    # neither is gated to the mutation API.
+    (SUBMITTED, BLOCKED): None,
+    (SUBMITTED, READY): None,
     (BLOCKED, QUARANTINED): None,
     (READY, QUARANTINED): None,
     (SUBMITTED, QUARANTINED): None,

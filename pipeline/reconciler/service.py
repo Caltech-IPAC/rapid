@@ -31,10 +31,14 @@ import socket
 import time
 
 from observability.attempts import (
-    AttemptWriter, LifecycleState, ProductDisposition, RapidOutcome)
+    RECONCILER_ERROR_CATEGORIES, AttemptWriter, LifecycleState,
+    ProductDisposition, RapidOutcome)
+from pipeline.intent.retry_policy import (
+    CLOSE_COMPLETE, PARK_BLOCKED, RETRY_READY, blocked_reason_for,
+    disposition_for_terminal_attempt, policy_version)
 from pipeline.intent.writer import (
-    COMPLETE, FAILED, SUBMITTED, WRITER_RECONCILER, WorkUnitNotFound,
-    WorkUnitWriter)
+    BLOCKED, COMPLETE, FAILED, READY, SUBMITTED, WRITER_RECONCILER,
+    WorkUnitNotFound, WorkUnitWriter)
 from pipeline.runtime import termination
 
 from . import closure as closure_mod
@@ -1174,11 +1178,18 @@ class ReconcilerService:
                 error_category=error_category,
                 closure_record_key=written.key,
                 closure_record_sequence=landed_sequence)
-            # A child that never started never produced an outcome, but it
-            # DID fail to do the work its work unit represents — the design
-            # gives no third disposition beyond complete/failed, so this
-            # closes the work unit failed (integration review ruling 13).
-            self._close_work_unit(row, outcome="failed")
+            # A child that never started never produced an outcome. It used
+            # to close the work unit `failed` unconditionally, on the reading
+            # that "the design gives no third disposition beyond
+            # complete/failed" — but the design DOES: `blocked` is the third
+            # disposition, and retry policy v1 names which failures reach it
+            # (rule 4 repair). A container that never started is the
+            # scheduler-visible case par excellence — nothing was learned
+            # about the work — so the category on the row now decides, and
+            # for a provisioning failure that means a NEW attempt rather than
+            # a tombstone on the logical work.
+            self._close_work_unit(row, outcome="failed",
+                                  error_category=error_category)
             return
 
         if classification == CLASS_ABRUPT_LOSS:
@@ -1196,7 +1207,15 @@ class ReconcilerService:
                 # checksum is a pointer a reader is told to distrust and given
                 # no way to verify.
                 terminal_record_checksum=written.checksum)
-            self._close_work_unit(row, outcome="failed")
+            # ABRUPT LOSS IS THE ARCHETYPE THIS REPAIR EXISTS FOR (rule 4).
+            # An OOM kill or a Spot reclaim is a physical event about a
+            # container, carrying no verdict on the logical work; closing the
+            # unit `failed` here was the single most damaging instance of
+            # "closes from an intermediate physical failure". The category
+            # (scheduler_reclaimed for a reclaim) now routes it back to
+            # `ready` for a new attempt, under the ceiling.
+            self._close_work_unit(row, outcome="failed",
+                                  error_category=error_category)
             return
 
         body = written.record.body
@@ -1273,24 +1292,129 @@ class ReconcilerService:
             terminal_record_sequence=landed_sequence,
             terminal_record_checksum=written.checksum)
 
-        # SUCCESS CLOSES complete; ANY OTHER TERMINAL DISPOSITION CLOSES
-        # failed (integration review ruling 13, task brief: "When an attempt
-        # closes terminally (successfully -> transition its work unit
-        # submitted->complete; any other terminal disposition -> submitted
-        # ->failed)"). `rapid_outcome` is the application's OWN verdict
-        # (`RapidOutcome.SUCCESS`/`FAILURE`/`PARTIAL`) — PARTIAL maps to
-        # failed here, a v1 judgment call: the work unit's six states have
-        # no partial-success cell, and "the smallest affected unit" the
-        # failure-path design scopes retries to is the ATTEMPT/candidate
-        # level, not the work unit, so a partially-successful attempt still
-        # means its work unit's declared scope did not complete cleanly.
+        # SUCCESS PROPOSES complete; EVERY OTHER TERMINAL DISPOSITION GOES TO
+        # RETRY POLICY (rule 4 repair). The earlier rule here was "any other
+        # terminal disposition -> submitted->failed", which tombstoned the
+        # logical work on one attempt's application failure — the case policy
+        # v1 explicitly parks instead ("never tombstoned"). `rapid_outcome` is
+        # still the application's OWN verdict
+        # (`RapidOutcome.SUCCESS`/`FAILURE`/`PARTIAL`); what changed is that a
+        # non-SUCCESS verdict is now an INPUT to the policy decision rather
+        # than a synonym for the unit's death.
+        #
+        # PARTIAL still does not complete the unit — the work unit's six
+        # states have no partial-success cell, and "the smallest affected
+        # unit" the failure-path design scopes retries to is the
+        # ATTEMPT/candidate level. It now parks rather than tombstones, which
+        # is the same judgment call one state to the left: an operator can see
+        # it and act, and nothing is lost.
+        #
+        # Note `_close_work_unit` also checks the series before applying any
+        # of this: if a sibling attempt was already accepted, this row's
+        # failure changes nothing about the unit.
         outcome = body.get("rapid_outcome")
         self._close_work_unit(
             row, outcome="complete" if outcome == RapidOutcome.SUCCESS.value
-            else "failed")
+            else "failed",
+            error_category=error_category)
 
-    def _close_work_unit(self, row, outcome):
-        """Transition this attempt's work unit submitted->{complete,failed}.
+    def _work_unit_series(self, work_unit_id, exclude_attempt_id):
+        """The sibling attempts of one work unit: succeeded-yet? and loss count.
+
+        **WHY THE SERIES AND NOT THE ROW** (rule 4, verbatim: "closure
+        decisions consult the current attempt series, not the single attempt
+        row that triggered reconciliation"). Reconciliation is per-attempt
+        and its ordering is not guaranteed: a unit whose attempt 1 was
+        OOM-killed and whose attempt 2 succeeded can have attempt 1's
+        terminal disposition reconciled AFTER attempt 2's acceptance —
+        supersession requeries deliberately re-examine terminal rows. A
+        closure decision made from attempt 1's row alone would then
+        overwrite a legitimately `complete` unit with a verdict about a
+        container that died, which is precisely the "closes from an
+        intermediate physical failure" the rule forbids.
+
+        So the closure sites ask the series two questions this method
+        answers in ONE round trip:
+
+          * has any OTHER attempt at this work already been accepted? If so
+            the logical work is done and this row's failure is history.
+          * how many scheduler-visible losses has the series absorbed? —
+            the input to `retry_policy`'s ceiling, which is a property of
+            the UNIT's history, not of any one attempt.
+
+        `exclude_attempt_id` keeps the triggering row out of its own census:
+        its disposition is the caller's argument, and at this point in the
+        transaction its own UPDATE has already landed, so counting it would
+        double-count the very loss being classified.
+
+        Runs on the same connection and therefore the same transaction as
+        the closure it informs (see `_close_work_unit`'s atomicity note), so
+        it observes the caller's own uncommitted writes — the correct
+        reading, not a stale snapshot.
+        """
+        rows = self._execute_on_conn(
+            "SELECT registered_at, error_category"
+            "  FROM attempts"
+            " WHERE work_unit_id = %s AND attempt_id <> %s",
+            [work_unit_id, exclude_attempt_id])
+        sibling_accepted = False
+        scheduler_losses = 0
+        for registered_at, error_category in rows or ():
+            # ACCEPTANCE, NOT "the row looks successful": rule 4 admits
+            # `complete` only "from an accepted (registered) result", and
+            # `registered_at` is the column the registrar stamps inside the
+            # same transaction as the product rows and the watermark (see
+            # `pipeline.registration.consumer.mark_registered`). An attempt
+            # that closed with a SUCCESS outcome but was never registered has
+            # produced no accepted result and must not complete the unit —
+            # which is exactly why the successful-attempt check reads this
+            # column and not `rapid_outcome`.
+            if registered_at is not None:
+                sibling_accepted = True
+            if error_category in RECONCILER_ERROR_CATEGORIES:
+                scheduler_losses += 1
+        return sibling_accepted, scheduler_losses
+
+    def _execute_on_conn(self, sql, params):
+        """One read on the caller's open transaction. See `_Executor`."""
+        with self.conn.cursor() as cur:
+            cur.execute(sql, params)
+            if cur.description is not None:
+                return cur.fetchall()
+            return ()
+
+    def _close_work_unit(self, row, outcome, error_category=None):
+        """Resolve this attempt's work unit under retry policy v1.
+
+        **THIS METHOD NO LONGER MEANS "CLOSE"** — it means "hand the
+        attempt's terminal disposition to retry policy and apply the
+        answer". The rename was not made because every caller and every
+        test names it, but the four outcomes it can now produce are stated
+        here rather than implied by the argument:
+
+          accepted result        -> submitted -> complete   (the only
+                                    complete path — rule 4)
+          scheduler-visible loss -> submitted -> ready      (a NEW attempt
+                                    follows; rule 5)
+          application failure    -> submitted -> blocked    (park-until-
+                                    change; "never tombstoned")
+          policy exhausted       -> submitted -> failed     (the ceiling)
+
+        **WHAT CHANGED AND WHY** (rule 4 repair). Every call site used to
+        pass `outcome="failed"` for any terminal disposition that was not
+        SUCCESS, and this method transitioned straight to FAILED. That
+        tombstoned the logical work on the first physical failure of any
+        attempt at it — an OOM kill, a Spot reclaim, a missing input — while
+        `observability.attempts`'s own stated policy said application
+        failures are "never tombstoned" and scheduler failures are the
+        automatic-retry surface. The code and its policy statement
+        contradicted each other; `pipeline.intent.retry_policy` is now the
+        one executable authority and this method consults it.
+
+        The defect was MASKED, not absent: with no workflow definition
+        loaded, `work_unit_id` was NULL on every row and every call here
+        returned at the guard below. The definition-loading step makes the
+        intent layer live, so this repair lands with it.
 
         **NULL work_unit_id IS SKIPPED SILENTLY** (task brief, verbatim
         rule): every attempt row predating migration 036, and every attempt
@@ -1337,19 +1461,70 @@ class ReconcilerService:
         work_unit_id = row.get("work_unit_id")
         if work_unit_id is None:
             return
+
+        attempt_id = row["attempt_id"]
+        succeeded = outcome == "complete"
+        if error_category is None:
+            error_category = row.get("error_category")
+
+        # THE SERIES DECIDES, NOT THIS ROW. A sibling attempt that was
+        # already accepted means the logical work is done: this row's
+        # failure is an intermediate physical event with no verdict left to
+        # cast. Rule 4's "a later successful attempt of the same logical
+        # work must be able to complete the unit" also runs the other way —
+        # an EARLIER-reconciled success must not be undone by a
+        # later-reconciled failure.
+        sibling_accepted, scheduler_losses = self._work_unit_series(
+            work_unit_id, attempt_id)
+        if not succeeded and sibling_accepted:
+            logger.info(
+                "attempt %s failed but work unit %s already has an accepted "
+                "attempt; leaving the unit as it stands rather than casting "
+                "an intermediate physical failure as the unit's verdict",
+                attempt_id, work_unit_id)
+            return
+
+        disposition = disposition_for_terminal_attempt(
+            succeeded=succeeded,
+            error_category=error_category,
+            scheduler_loss_count=scheduler_losses)
+
+        blocked_reason = None
+        if disposition == CLOSE_COMPLETE:
+            to_state = COMPLETE
+        elif disposition == RETRY_READY:
+            to_state = READY
+        elif disposition == PARK_BLOCKED:
+            to_state = BLOCKED
+            blocked_reason = blocked_reason_for(error_category)
+        else:
+            to_state = FAILED
+
         work_writer = WorkUnitWriter(_Executor(self.conn))
-        to_state = COMPLETE if outcome == "complete" else FAILED
         try:
             work_writer.transition_unit(
                 work_unit_id, SUBMITTED, to_state,
-                writer=WRITER_RECONCILER, now=self._now())
+                writer=WRITER_RECONCILER,
+                blocked_reason=blocked_reason,
+                # The decision's own provenance, so an operator reading the
+                # unit_event can tell which policy version and which
+                # observed category produced this edge — the same reasoning
+                # `observability.attempts` gives for stamping
+                # retry_policy_version on every attempt.
+                detail={
+                    "disposition": disposition,
+                    "retry_policy_version": policy_version(),
+                    "error_category": error_category,
+                    "scheduler_loss_count": scheduler_losses,
+                    "deciding_attempt_id": attempt_id,
+                },
+                now=self._now())
         except WorkUnitNotFound:
             logger.info(
                 "work unit %s (attempt %s) was not in 'submitted' when the "
-                "reconciler tried to close it %s; another writer already "
+                "reconciler tried to move it to %s; another writer already "
                 "resolved it, so the attempt's own closure proceeds without "
-                "forcing the work unit", work_unit_id, row["attempt_id"],
-                to_state)
+                "forcing the work unit", work_unit_id, attempt_id, to_state)
 
     # -- the never-resolved case -----------------------------------------
 
@@ -1448,11 +1623,20 @@ class ReconcilerService:
                 closure_record_key=written.key,
                 closure_record_sequence=written.sequence)
             # A child that never resolved never did its work unit's work
-            # either — same "any other terminal disposition -> failed" rule
-            # `_transition` applies, reached here through the SAME open
-            # `current` row (and therefore the same `work_unit_id`, if any)
-            # `reread_attempt` fetched under this method's own lease.
-            self._close_work_unit(current, outcome="failed")
+            # either — but "never did the work" is not "the work can never be
+            # done", and this site had been closing the unit `failed` at the
+            # horizon (rule 4: closure only from acceptance or policy
+            # exhaustion — a horizon is neither). The category written one
+            # statement above is `scheduler_provisioning`: scheduler-visible,
+            # so policy v1 returns the unit to `ready` for a new attempt, and
+            # a unit whose attempts keep vanishing hits the ceiling and fails
+            # explicitly instead of on the first disappearance.
+            #
+            # Reached through the SAME open `current` row (and therefore the
+            # same `work_unit_id`, if any) `reread_attempt` fetched under this
+            # method's own lease.
+            self._close_work_unit(current, outcome="failed",
+                                  error_category="scheduler_provisioning")
             logger.info("attempt %s classified never-resolved at the "
                         "submission-anchored horizon (closure %s)",
                         attempt_id, written.key)
