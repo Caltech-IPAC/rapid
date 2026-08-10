@@ -104,13 +104,27 @@ def ensure_definition(conn):
 
 def make_attempt(conn, work_unit_id=None, error_category=None,
                  registered=False, lifecycle="submitted"):
-    """One attempts row, minimal but real: the table's own NOT NULLs honoured.
+    """One attempts row, minimal but real: the table's own constraints honoured.
 
-    Returns its attempt_id. The columns set here are the ones the closure
-    path reads (`work_unit_id`, `error_category`, `registered_at`); everything
-    else takes its default so this fixture cannot quietly depend on a column
-    the production query does not use.
+    Returns its attempt_id.
+
+    **THE LIFECYCLE STATE DECIDES WHICH COLUMNS MAY BE SET**, and the schema
+    enforces it per state — `attempts_state_submitted_check` requires a
+    `submitted` row to carry NO outcome facts at all (including
+    `error_category`), while `attempts_state_terminal_without_start_check`
+    requires a `terminal_without_start` row to carry `ended_at` and
+    `scheduler_state` and NO `started_at`. That is the schema refusing to let
+    a row claim a failure category while claiming to be still in flight, and
+    it is exactly the kind of invariant a hand-built fake cannot enforce —
+    the first version of this fixture wrote `error_category` onto a
+    `submitted` row and only real PostgreSQL objected.
+
+    So an attempt carrying an error category is written in a TERMINAL state,
+    which is also what the reconciler itself writes
+    (`mark_terminal_without_start` for a container that never started).
     """
+    if error_category is not None and lifecycle == "submitted":
+        lifecycle = "terminal_without_start"
     run_id = f"brief-a-{RUN_TAG}"
     with conn.cursor() as cur:
         # THE TABLE'S OWN NOT-NULL-WITHOUT-DEFAULT SET, read from
@@ -127,16 +141,21 @@ def make_attempt(conn, work_unit_id=None, error_category=None,
             "INSERT INTO logical_jobs (logical_job_id, run_id)"
             " VALUES (%s, %s) ON CONFLICT DO NOTHING",
             [logical_job_id, run_id])
+        terminal = lifecycle in ("terminal_without_start",
+                                 "terminal_after_start",
+                                 "application_closed")
         cur.execute(
             "INSERT INTO attempts"
             "  (run_id, schema_version, logical_job_id, lifecycle_state,"
             "   created_at, submitted_at, work_unit_id, error_category,"
-            "   registered_at)"
+            "   ended_at, scheduler_state, registered_at)"
             " VALUES (%s, %s, %s, %s, now(), now(), %s, %s,"
+            "         CASE WHEN %s THEN now() ELSE NULL END,"
+            "         CASE WHEN %s THEN 'FAILED' ELSE NULL END,"
             "         CASE WHEN %s THEN now() ELSE NULL END)"
             " RETURNING attempt_id",
             [run_id, schema_version, logical_job_id, lifecycle, work_unit_id,
-             error_category, registered])
+             error_category, terminal, terminal, registered])
         return cur.fetchone()[0]
 
 
@@ -212,7 +231,8 @@ def test_1_fail_then_succeed(conn):
     writer.transition_unit(unit, READY, SUBMITTED,
                            writer=WRITER_ORCHESTRATOR)
     conn.commit()
-    accepted = make_attempt(conn, work_unit_id=unit, registered=True)
+    accepted = make_attempt(conn, work_unit_id=unit, registered=True,
+                            lifecycle="terminal_without_start")
 
     # Attempt 2 succeeds and registers -> complete.
     disposition = retry_policy.disposition_for_terminal_attempt(
