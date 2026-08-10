@@ -124,8 +124,16 @@ echo "BRIEF-B-SCHEMA-MIGRATIONS: $recorded rows recorded"
 # `-m contract` selects the tier explicitly, overriding the default
 # `-m 'not contract and not live'` in pyproject.toml — the contract tier is
 # opt-in precisely so a bare `pytest` never tries to open a database.
+#
+# CONTRACT_PYTHON names the interpreter the suite runs under. It exists
+# because rapid-admin's system python3 has neither pytest nor psycopg2 and
+# must not be `pip install`ed into — a shared host's system interpreter is
+# everyone's. The rapid-admin runner points this at a scratch venv; CI leaves
+# it unset and gets the job's own python, which is already the installed one.
+PY=${CONTRACT_PYTHON:-python3}
+echo "BRIEF-B-PYTHON: $($PY -c 'import sys; print(sys.executable, sys.version.split()[0])')"
 echo "BRIEF-B-SUITE: starting"
-python3 -m pytest pipeline/contract -m contract -p no:cacheprovider \
+"$PY" -m pytest pipeline/contract -m contract -p no:cacheprovider \
     --no-header -q "$@" 2>&1 | tee -a "$LOG" | tail -40
 suite_rc=${PIPESTATUS[0]}
 
