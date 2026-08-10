@@ -62,10 +62,10 @@ class WorkUnitClosureTests(unittest.TestCase):
         # WAS `test_failure_closes_the_work_unit_failed` (rule 4 repair). An
         # application failure is the case retry policy v1 calls
         # park-until-change and "never tombstoned"; closing the unit `failed`
-        # here was the tombstone the policy forbids. This row carries no
-        # `error_category` — the honest state of an attempt that failed
-        # without saying why — so it parks under the `unclassified_failure`
-        # reason rather than being retried on a timer.
+        # here was the tombstone the policy forbids. The shared fixture's
+        # category is `config_invalid` — one of the eleven application
+        # categories — so the park names its own cause in `blocked_reason`
+        # rather than parking anonymously.
         row = attempt_row(1, lifecycle_state="application_closed",
                           started_at=utc(2026, 8, 6, 11, 0, 0),
                           rapid_outcome="failure", product_disposition="none",
@@ -86,7 +86,7 @@ class WorkUnitClosureTests(unittest.TestCase):
         _, params = transitions[0]
         self.assertIn("blocked", params)
         self.assertIn(42, params)
-        self.assertIn("unclassified_failure", params)
+        self.assertIn("application_failure:config_invalid", params)
         self.assertNotIn("failed", params)
 
     def test_null_work_unit_id_is_skipped_silently(self):
@@ -123,10 +123,11 @@ class WorkUnitClosureTests(unittest.TestCase):
         # WAS `test_never_started_closes_the_work_unit_failed`. A container
         # that never started produced no verdict about the work, so the unit
         # must not be closed `failed` on it (rule 4: never from an
-        # intermediate physical failure). With no error_category on the row
-        # the conservative disposition is a park, not a retry — an
-        # unexplained failure repeated on a timer is the unbounded loop the
-        # policy exists to prevent.
+        # intermediate physical failure). `Observation.reconciler_category`
+        # calls this `scheduler_provisioning` — "the attempt did not get as
+        # far as running, which is precisely what that category means" — which
+        # is scheduler-visible, so policy v1 returns the unit to `ready` for a
+        # NEW attempt (rule 5) instead of tombstoning it.
         row = attempt_row(1, lifecycle_state="submitted", work_unit_id=99)
         jobs = [batch_job(status="FAILED", exit_code=None, started=None,
                           stopped=utc(2026, 8, 6, 11, 0, 0))]
@@ -140,20 +141,30 @@ class WorkUnitClosureTests(unittest.TestCase):
         _, params = transitions[0]
         self.assertIn(99, params)
         self.assertNotIn("failed", params)
-        self.assertIn("blocked", params)
+        self.assertIn("ready", params)
 
-    def test_abrupt_loss_returns_the_work_unit_to_ready_for_a_new_attempt(self):
+    def test_abrupt_loss_does_not_tombstone_the_work_unit(self):
         # WAS `test_abrupt_loss_closes_the_work_unit_failed` — the single most
-        # damaging instance of the rule 4 violation. Exit 137 is an OOM
-        # kill/Spot reclaim: a fact about a container, carrying no verdict on
-        # the logical work. This row's category IS scheduler-visible, so
-        # policy v1 hands it to the automatic-retry surface and the unit goes
-        # back to `ready` for a NEW RAPID attempt (rule 5) rather than being
-        # tombstoned.
+        # damaging instance of the rule 4 violation: exit 137 on a container
+        # that HAD started closed the logical work `failed` on one physical
+        # death.
+        #
+        # WHICH WAY IT NOW GOES DEPENDS ON THE CATEGORY, and for a started
+        # container with no recognizable scheduler reason the category is
+        # `internal_error`, not a scheduler one: `Observation.
+        # reconciler_category` returns None once `never_ran` is false, on the
+        # stated principle that it "never invents a category for an attempt
+        # that had the chance to author one", and `_classify` falls back to
+        # `internal_error`. So this parks rather than retries — which is the
+        # conservative half of policy v1 and still not a tombstone. A REAL
+        # Spot reclaim (a "Host EC2"/"Spot instance termination" status
+        # reason on a container that never ran) is classified
+        # `scheduler_reclaimed` and retries; see
+        # `test_never_started_does_not_tombstone_the_work_unit` for the
+        # scheduler-visible path.
         row = attempt_row(1, lifecycle_state="started",
                           started_at=utc(2026, 8, 6, 11, 0, 0),
-                          work_unit_id=7,
-                          error_category="scheduler_reclaimed")
+                          work_unit_id=7)
         jobs = [batch_job(status="FAILED", exit_code=137,
                           started=utc(2026, 8, 6, 11, 0, 0),
                           stopped=utc(2026, 8, 6, 11, 5, 0))]
@@ -166,7 +177,8 @@ class WorkUnitClosureTests(unittest.TestCase):
         self.assertEqual(1, len(transitions))
         _, params = transitions[0]
         self.assertIn(7, params)
-        self.assertIn("ready", params)
+        self.assertIn("blocked", params)
+        self.assertIn("application_failure:internal_error", params)
         self.assertNotIn("failed", params)
 
     def test_a_failure_beside_an_accepted_sibling_leaves_the_unit_alone(self):
@@ -178,19 +190,28 @@ class WorkUnitClosureTests(unittest.TestCase):
         # a legitimately complete unit with a verdict about a dead container.
         # With an accepted sibling in the series, this row's failure must
         # produce NO work-unit transition at all.
+        # Only the LOST attempt is in the open set this poll reconciles (the
+        # accepted sibling is already terminal AND registered, so it is not a
+        # candidate) — that is exactly the late-reconciled-failure ordering
+        # rule 4 cares about. The sibling exists in the table for the series
+        # census to find.
         lost = attempt_row(1, lifecycle_state="started",
                            started_at=utc(2026, 8, 6, 11, 0, 0),
-                           work_unit_id=55,
-                           error_category="scheduler_reclaimed")
+                           work_unit_id=55)
         accepted = attempt_row(2, lifecycle_state="terminal_after_start",
                                started_at=utc(2026, 8, 6, 12, 0, 0),
                                ended_at=utc(2026, 8, 6, 12, 5, 0),
                                work_unit_id=55,
-                               registered_at=utc(2026, 8, 6, 12, 6, 0))
+                               registered_at=utc(2026, 8, 6, 12, 6, 0),
+                               registered_record_sequence=1)
         jobs = [batch_job(status="FAILED", exit_code=137,
                           started=utc(2026, 8, 6, 11, 0, 0),
                           stopped=utc(2026, 8, 6, 11, 5, 0))]
-        svc, conn, _, _, _ = build([lost, accepted], jobs)
+        svc, conn, _, _, _ = build([lost], jobs)
+        # The sibling lives in the table but not in this poll's open set: it
+        # is added to the connection's rows directly, which is what the
+        # series census reads, without making it a reconciliation candidate.
+        conn.rows[accepted["attempt_id"]] = dict(accepted)
 
         svc.poll_once()
 
