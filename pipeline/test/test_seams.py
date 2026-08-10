@@ -5,6 +5,8 @@ import unittest
 
 from observability.attempts import ExecutionBinding
 from pipeline import seams
+from pipeline.intent.errors import (FOREIGN_KEY_VIOLATION, UNIQUE_VIOLATION,
+                                    FakePgError)
 from pipeline.reconciler.test.stubs import FakeConnection, attempt_row, utc
 from submission import submit
 from submission.manifest import ProcessingUnit, UnitFacts
@@ -97,8 +99,10 @@ class RecordingExecute:
     `fk_missing_job_types` simulates the definition-FK guard `_precreate`
     is written to tolerate — a job type in that set makes an INSERT INTO
     work_units raise, exactly as the real FK does today for every job type
-    (no `workflow_definitions` row is loaded anywhere in this repo; see
-    `pipeline.seams._attach_work_unit`'s docstring).
+    Both simulated database failures are raised as `FakePgError` carrying a
+    real SQLSTATE, because production classifies on SQLSTATE rather than
+    message text (`pipeline.intent.errors`) — a double that can only raise a
+    hand-crafted message cannot exercise the branch that runs.
     """
 
     def __init__(self, clock=None):
@@ -112,9 +116,17 @@ class RecordingExecute:
         #: (job_type, input_scope) -> {"work_unit_id": int, "state": str}.
         #: Empty by default: every unit is a fresh work unit.
         self.work_units_by_scope: dict[tuple[str, str], dict] = {}
-        #: Job types whose INSERT INTO work_units raises, simulating the
-        #: live definition-FK violation (no workflow_definitions loaded).
+        #: Job types whose INSERT INTO work_units raises SQLSTATE 23503,
+        #: simulating a missing workflow_definitions row. No longer swallowed
+        #: by production (rule 12): a missing definition is a hard error now
+        #: that a deployment step loads them.
         self.fk_missing_job_types: set[str] = set()
+        #: (job_type, input_scope) pairs whose next INSERT raises SQLSTATE
+        #: 23505 and materializes `race_winner_id` as the winning row — the
+        #: claim-race loser's view (rule 6).
+        self.unique_violation_scopes: set[tuple[str, str]] = set()
+        #: The work_unit_id a simulated race winner holds.
+        self.race_winner_id = 4242
 
     def __call__(self, statement, params=None):
         call = self.clock.tick()
@@ -137,9 +149,27 @@ class RecordingExecute:
         if "INSERT INTO work_units" in statement:
             job_type, input_scope = params[0], params[1]
             if job_type in self.fk_missing_job_types:
-                raise RuntimeError(
-                    'insert or update on table "work_units" violates '
-                    'foreign key constraint "work_units_definition_fk"')
+                # A DRIVER-SHAPED ERROR, not a message string. Production
+                # classifies by SQLSTATE (`pipeline.intent.errors`), so a
+                # double that raises only hand-crafted text cannot exercise
+                # the branch that actually runs — the stub-blindness this
+                # suite's previous FK test had. `FakePgError` carries a real
+                # `pgcode`.
+                raise FakePgError(FOREIGN_KEY_VIOLATION,
+                                  'insert or update on table "work_units" '
+                                  'violates foreign key constraint '
+                                  '"work_units_definition_fk"')
+            if (job_type, input_scope) in self.unique_violation_scopes:
+                # The claim-race loser's view: another transaction created
+                # this exact identity first and migration 036's partial
+                # unique index refuses ours.
+                self.unique_violation_scopes.discard((job_type, input_scope))
+                self.work_units_by_scope[(job_type, input_scope)] = {
+                    "work_unit_id": self.race_winner_id, "state": "ready"}
+                raise FakePgError(UNIQUE_VIOLATION,
+                                  'duplicate key value violates unique '
+                                  'constraint '
+                                  '"work_units_current_identity_uq"')
             work_unit_id = self.next_work_unit_id
             self.next_work_unit_id += 1
             self.work_units_by_scope[(job_type, input_scope)] = {
@@ -383,23 +413,66 @@ class AttachWorkUnitTests(unittest.TestCase):
                    if "UPDATE attempts SET work_unit_id" in sql]
         self.assertIn(777, updates[0])
 
-    def test_missing_workflow_definition_skips_attachment_without_failing(self):
-        # No workflow_definitions row is loaded for any job type in this
-        # repo today (verified: no caller of derived.load_workflow_
-        # definition anywhere). The FK violation this would cause live is
-        # simulated here, and submission must still complete — the whole
-        # point of catching it is that the seam keeps working exactly as
-        # before ruling 13 until a definition is loaded.
+    def test_missing_workflow_definition_is_now_a_hard_error(self):
+        # THE INVERSE OF WHAT THIS TEST USED TO ASSERT (rule 12 repair). It
+        # previously asserted that a definition-FK violation was SWALLOWED and
+        # submission carried on, which is what made the intent layer silently
+        # optional — the FK was standing in for a deployment step, and a
+        # message-substring match decided what it meant.
+        #
+        # Definitions are now loaded by an explicit deployment step
+        # (`pipeline.intent.definitions.load_definitions`) and verified by the
+        # startup completeness check, so reaching work-unit creation with no
+        # definition means the deploy was incomplete. That is a fault, and it
+        # propagates.
         self.execute.fk_missing_job_types.add("science")
 
-        submission, attempt_ids = self._submit(count=2)
+        with self.assertRaises(FakePgError) as caught:
+            self._submit(count=2)
+        self.assertEqual(FOREIGN_KEY_VIOLATION, caught.exception.pgcode)
 
-        self.assertEqual(2, len(attempt_ids))
+    def test_claim_race_loser_resolves_to_the_winning_unit(self):
+        # RULE 6, at the seam: the INSERT loses to a concurrent creator, and
+        # this caller re-SELECTs the winner and attaches to it rather than
+        # letting the unique violation abort the pass. The fake raises a real
+        # SQLSTATE 23505 (not a message string), which is what production
+        # classifies on.
+        from pipeline.seams import _attach_work_unit
+
+        unit = units(count=1)[0]
+        scope = seams._input_scope_for("science", unit)
+        self.execute.unique_violation_scopes.add(("science", scope))
+
+        _attach_work_unit(self.execute, "science", unit, attempt_id=601,
+                          moment=utc(2027, 10, 1))
+
         updates = [params for sql, params in self.execute.statements
                    if "UPDATE attempts SET work_unit_id" in sql]
-        self.assertEqual([], updates,
-                         "no attachment update when the definition FK blocks "
-                         "creation")
+        self.assertTrue(updates,
+                        "the race loser attached to no work unit at all")
+        self.assertIn(self.execute.race_winner_id, updates[0])
+
+    def test_a_unique_violation_whose_winner_vanishes_still_raises(self):
+        # The one case that must NOT be papered over: a 23505 whose winning
+        # row cannot then be found is a contradiction, not a race, and a
+        # blind retry loop there is how a claim path spins forever.
+        from pipeline.seams import _attach_work_unit
+
+        unit = units(count=1)[0]
+        scope = seams._input_scope_for("science", unit)
+
+        # Raise 23505 but leave the winner unmaterialized.
+        original = self.execute.__call__
+
+        def conflicting(statement, params=None):
+            if "INSERT INTO work_units" in statement:
+                raise FakePgError(UNIQUE_VIOLATION, "duplicate key")
+            return original(statement, params)
+
+        with self.assertRaises(FakePgError):
+            _attach_work_unit(conflicting, "science", unit, attempt_id=602,
+                              moment=utc(2027, 10, 1))
+        self.assertIsNotNone(scope)
 
     def test_find_or_create_race_both_callers_resolve_to_one_work_unit(self):
         # The race-shape test the task brief asks for: two "concurrent"

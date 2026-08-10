@@ -259,18 +259,38 @@ class TransitionCasTests(unittest.TestCase):
         self.assertIn(WRITER_ORCHESTRATOR, event_params)
 
     def test_blocking_transition_requires_reason(self):
-        # submitted->blocked is not in the v1 graph at all (see the module
-        # docstring: only blocked->ready is named for recovery FROM blocked;
-        # nothing transitions a unit INTO blocked after creation in this
-        # v1). This asserts the graph refusal, which fires before the
-        # reason check would ever run — the ValueError branch for a missing
-        # reason is exercised instead through `create_work_unit`, the only
-        # v1 path that reaches state='blocked'.
+        # submitted->blocked IS in the graph now (rule 4 repair): retry
+        # policy v1 parks application failures rather than tombstoning them,
+        # so the reconciler needs this edge and the graph gained it. This
+        # test previously asserted the graph REFUSED the edge, and noted that
+        # the missing-reason ValueError branch was therefore unreachable —
+        # now the edge is legal, so the assertion this test is named for is
+        # the one it can finally make: entering `blocked` without a reason is
+        # refused, because migration 036's
+        # `work_units_blocked_reason_ck` makes a blocked unit with no reason
+        # unrepresentable and a caller must not learn that from a constraint
+        # violation three layers down.
         execute = RecordingExecutor()
+        execute._select_result = [("submitted",)]
         writer = WorkUnitWriter(execute)
-        with self.assertRaises(IllegalTransition):
+        with self.assertRaises(ValueError):
             writer.transition_unit(1, SUBMITTED, BLOCKED,
                                    writer=WRITER_ORCHESTRATOR)
+
+    def test_blocking_transition_with_a_reason_is_legal(self):
+        # The other half: with a reason, the edge fires and the reason lands
+        # in the UPDATE's parameters. Guards against a future graph edit
+        # silently removing the edge retry policy depends on.
+        execute = RecordingExecutor()
+        execute._select_result = [("submitted",)]
+        writer = WorkUnitWriter(execute)
+        writer.transition_unit(1, SUBMITTED, BLOCKED,
+                               writer=WRITER_RECONCILER,
+                               blocked_reason="application_failure:tool_failure")
+        updates = [call for call in execute.calls
+                   if call[0].startswith("UPDATE work_units")]
+        self.assertTrue(updates, "no work_units UPDATE was issued")
+        self.assertIn("application_failure:tool_failure", updates[0][1])
 
 
 class SupersedeUnitTests(unittest.TestCase):
