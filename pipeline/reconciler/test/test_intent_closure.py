@@ -208,18 +208,30 @@ class WorkUnitClosureTests(unittest.TestCase):
                           started=utc(2026, 8, 6, 11, 0, 0),
                           stopped=utc(2026, 8, 6, 11, 5, 0))]
         svc, conn, _, _, _ = build([lost], jobs)
-        # The sibling lives in the table but not in this poll's open set: it
-        # is added to the connection's rows directly, which is what the
-        # series census reads, without making it a reconciliation candidate.
+        # The sibling lives in the table for the series census to find. It is
+        # injected directly rather than passed to `build` so that this test
+        # asserts ONE attempt's closure decision: a poll that also reconciled
+        # the sibling would issue that row's own transition too, and the
+        # question here is narrower — what does attempt 1's failure do to a
+        # unit whose work is already accepted?
         conn.rows[accepted["attempt_id"]] = dict(accepted)
 
-        svc.poll_once()
+        # THE SERIES CENSUS IS THE MECHANISM, asserted directly: it reports an
+        # accepted sibling, which is what makes the closure a no-op.
+        sibling_accepted, losses = svc._work_unit_series(55, 1)
+        self.assertTrue(sibling_accepted,
+                        "the census did not see the accepted sibling")
+        self.assertEqual(0, losses)
 
-        transitions = [(text, params) for text, params in conn.statements
-                       if "UPDATE work_units SET state" in text
-                       and 55 in params]
+        before = len([1 for text, params in conn.statements
+                      if "UPDATE work_units SET state" in text
+                      and 55 in params])
+        svc._close_work_unit(dict(lost), outcome="failed")
+        after = [(text, params) for text, params in conn.statements
+                 if "UPDATE work_units SET state" in text and 55 in params]
+
         self.assertEqual(
-            [], transitions,
+            before, len(after),
             "the unit was transitioned despite already having an accepted "
             "attempt; an intermediate physical failure cast the unit's verdict")
 
