@@ -49,6 +49,21 @@ dependencies = [
     "boto3",
     "healpy",
     "psycopg2-binary",
+    # UNDECLARED UNTIL NOW, and found the way healpy's own comment in
+    # requirements.txt describes finding it: the entry-point launch check
+    # imported `pipeline.entrypoints.job`, which pulls in the stage sequences,
+    # which import `modules.utils.rapid_pipeline_subs`, which imports scipy.
+    # Every one of these is imported by code the payload runs, and none was
+    # declared anywhere — "installed in the Dockerfile and never written down"
+    # is precisely the dependency that a fresh environment discovers at
+    # runtime. Declared here rather than in requirements.txt because this is
+    # the file that now defines what installing RAPID means; requirements.txt
+    # stays as the image builds' input.
+    "scipy",
+    "astropy",
+    "pandas",
+    "photutils",
+    "reproject",
 ]
 
 [project.optional-dependencies]
