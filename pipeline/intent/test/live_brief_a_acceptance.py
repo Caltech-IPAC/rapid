@@ -148,14 +148,20 @@ def make_attempt(conn, work_unit_id=None, error_category=None,
             "INSERT INTO attempts"
             "  (run_id, schema_version, logical_job_id, lifecycle_state,"
             "   created_at, submitted_at, work_unit_id, error_category,"
-            "   ended_at, scheduler_state, registered_at)"
+            "   ended_at, scheduler_state, registered_at,"
+            "   registered_record_sequence)"
             " VALUES (%s, %s, %s, %s, now(), now(), %s, %s,"
             "         CASE WHEN %s THEN now() ELSE NULL END,"
             "         CASE WHEN %s THEN 'FAILED' ELSE NULL END,"
-            "         CASE WHEN %s THEN now() ELSE NULL END)"
+            "         CASE WHEN %s THEN now() ELSE NULL END,"
+            # `attempts_registered_pair_check`: the acceptance timestamp and
+            # the record sequence it was accepted at are set together or not
+            # at all — a registered_at with no sequence would name an
+            # acceptance nobody can locate.
+            "         CASE WHEN %s THEN 1 ELSE NULL END)"
             " RETURNING attempt_id",
             [run_id, schema_version, logical_job_id, lifecycle, work_unit_id,
-             error_category, terminal, terminal, registered])
+             error_category, terminal, terminal, registered, registered])
         return cur.fetchone()[0]
 
 
