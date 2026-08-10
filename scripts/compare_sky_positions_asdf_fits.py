@@ -10,8 +10,14 @@ from astropy.io import fits
 
 import modules.utils.rapid_pipeline_subs as util
 
-asdf_file = 'r0034001001001001001_0001_wfi06_f062_cal.asdf'
+asdf_file = 'r0034001001001001001_0001_wfi06_f062_cal_lite.asdf'
 fits_file = 'r0034001001001001001_0001_wfi06_f062_cal_lite.fits'
+
+# Also check SCAs 7, 9, 16, 18 at corners of CCD mosaic.
+
+asdf_file = 'r0034001001001001001_0001_wfi18_f062_cal_lite.asdf'
+fits_file = 'r0034001001001001001_0001_wfi18_f062_cal_lite.fits'
+
 
 def extract_gwcs(af):
 
@@ -83,8 +89,8 @@ if __name__ == '__main__':
 
     # Pixel coordinates must be zero-based indices.
 
-    xs = [0,4087,   4087,0,    2043.5]
-    ys = [0,0,      4087,4087, 2043.5]
+    xs = list(range(4088))
+    ys = list(range(4088))
 
 
     # Size of a Roman WFI pixel on a side, in arcseconds.
@@ -104,7 +110,7 @@ if __name__ == '__main__':
         if isinstance(sky, SkyCoord):
             ra = sky.ra.deg
             dec = sky.dec.deg
-            print(f"===asdf===>x,y,ra,dec = {x},{y},{ra},{dec}")
+            #print(f"===asdf===>x,y,ra,dec = {x},{y},{ra},{dec}")
         else:
             # Some gwcs objects return (lon, lat) arrays directly
             ra, dec = np.asarray(sky[0]), np.asarray(sky[1])
@@ -122,6 +128,9 @@ if __name__ == '__main__':
 
     # Compute distances between sky positions computed from ASDF versus FITS.
 
+    min_pixsep = 1.0
+    max_pixsep = 0.0
+
     for i in range(len(xs)):
         x = xs[i]
         y = ys[i]
@@ -137,6 +146,16 @@ if __name__ == '__main__':
 
         print(f"===fits===>x,y,ra,dec,angsep,pixsep = {x},{y},{ra},{dec},{angsep},{pixsep}")
 
+        if pixsep > max_pixsep:
+            max_pixsep = pixsep
+
+        if pixsep < min_pixsep:
+            min_pixsep = pixsep
+
+    print(f"asdf_file = {asdf_file}")
+    print(f"fits_file = {fits_file}")
+    print(f"min_pixsep = {min_pixsep}")
+    print(f"max_pixsep = {max_pixsep}")
 
     exit(0)
 
