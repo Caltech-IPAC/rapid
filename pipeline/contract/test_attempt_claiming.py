@@ -43,6 +43,21 @@ def _now():
     return datetime.datetime.now(datetime.timezone.utc)
 
 
+def _scheduler_job_id(logical_job_id):
+    """A scheduler job id unique to this logical job.
+
+    **THE RESOLVER KEYS ON IT AND REFUSES TO CROSS IDENTITIES.** Reusing one
+    scheduler job id across two logical jobs raises from inside PL/pgSQL:
+    "scheduler job X attempt 1 is attempt N, which belongs to run R/logical
+    job A, not to run R/logical job B. Refusing to resolve across
+    identities." That is rule 3 enforced in the database — a scheduler
+    execution answers for exactly one logical job — and it is another
+    invariant no fake in this repository expresses. Deriving the id from the
+    logical job keeps each test's fixture honest about it.
+    """
+    return f"job-{logical_job_id}"
+
+
 def _attempt_rows(conn, logical_job_id):
     with conn.cursor() as cur:
         cur.execute(
@@ -81,7 +96,7 @@ def test_two_concurrent_resolvers_converge_on_one_attempt(conn, second_conn):
             barrier.wait(timeout=30)
             attempt_id = writer.resolve_attempt(
                 _identity(run_id, logical_job_id), moment, moment,
-                scheduler_job_id=f"job-{fixture.RUN_TAG}",
+                scheduler_job_id=_scheduler_job_id(logical_job_id),
                 application_attempt_index=1, scheduler_attempt_index=1)
             connection.commit()
             results[slot] = attempt_id
@@ -126,13 +141,13 @@ def test_a_second_application_attempt_index_is_a_new_attempt(conn):
 
     first = writer.resolve_attempt(
         identity, moment, moment,
-        scheduler_job_id=f"job-{fixture.RUN_TAG}-1",
+        scheduler_job_id=_scheduler_job_id(logical_job_id),
         application_attempt_index=1, scheduler_attempt_index=1)
     conn.commit()
 
     second = writer.resolve_attempt(
         identity, moment, moment,
-        scheduler_job_id=f"job-{fixture.RUN_TAG}-2",
+        scheduler_job_id=_scheduler_job_id(logical_job_id),
         application_attempt_index=2, scheduler_attempt_index=1)
     conn.commit()
 
@@ -161,12 +176,12 @@ def test_resolving_the_same_index_twice_is_idempotent(conn):
 
     first = writer.resolve_attempt(
         identity, moment, moment,
-        scheduler_job_id=f"job-{fixture.RUN_TAG}",
+        scheduler_job_id=_scheduler_job_id(logical_job_id),
         application_attempt_index=1, scheduler_attempt_index=1)
     conn.commit()
     again = writer.resolve_attempt(
         identity, moment, moment,
-        scheduler_job_id=f"job-{fixture.RUN_TAG}",
+        scheduler_job_id=_scheduler_job_id(logical_job_id),
         application_attempt_index=1, scheduler_attempt_index=1)
     conn.commit()
 
@@ -201,7 +216,7 @@ def test_the_resolver_refuses_a_logical_job_with_no_binding(conn):
     with pytest.raises(psycopg2.errors.CheckViolation) as caught:
         writer.resolve_attempt(
             _identity(run_id, logical_job_id), moment, moment,
-            scheduler_job_id=f"job-{fixture.RUN_TAG}",
+            scheduler_job_id=_scheduler_job_id(logical_job_id),
             application_attempt_index=1, scheduler_attempt_index=1)
     conn.rollback()
 
