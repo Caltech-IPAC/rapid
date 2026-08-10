@@ -259,30 +259,94 @@ def run_forever(operators, poll_seconds, should_continue,
     make one throw. Consecutive failures past the threshold are different:
     the process is alive and the service is not working, and saying so by
     exiting is what lets the supervisor act.
+
+    **THE EXCEPTION BOUNDARY IS PER WORK STREAM, NOT PER POLL** (rule 22
+    repair). This loop used to wrap the whole `for operator in operators`
+    sweep in ONE try/except with ONE process-wide counter, which coupled
+    every stream to every other stream in two distinct ways:
+
+      * the first operator to raise skipped every LATER operator in that
+        pass — crossmatch throwing meant science, reference-image and the
+        rest simply did not poll, even though nothing was wrong with them;
+      * five consecutive failures of ONE stream killed the whole service,
+        taking eight healthy streams down with the sick one.
+
+    Rule 22 states the requirement exactly: "A failure gathering or handling
+    one enabled work stream never prevents polling or progress of otherwise-
+    independent ready work streams; health and consecutive failures are
+    tracked per work stream, with process-level failure reserved for shared
+    faults." So the try/except moves INSIDE the loop, and the counter becomes
+    one counter per stream, keyed by `operator.name` — the registry key,
+    which is what identifies a work stream everywhere else in this module
+    (see `_classes_for_pass` on why it is `.name` and not `.job_type`).
+
+    This mirrors the item-level pattern `pipeline.operator.registration`
+    already applies one layer down, where a single unregisterable attempt is
+    counted and logged without aborting its batch.
+
+    **WHAT STILL EXITS THE PROCESS.** The threshold is now evaluated per
+    stream, but a single sick stream must not exit a service that is
+    otherwise working — that would restore the coupling by another route. The
+    process-level verdict is therefore reserved for a genuinely SHARED fault,
+    recognized by its symptom rather than by exception type: EVERY stream
+    failing its threshold together. One stream failing while others make
+    progress is a stream-level fault, reported and counted, and it keeps
+    failing visibly rather than taking the service with it.
+
+    Deliberately symptom-based, not type-based: this module has no
+    fatal-vs-transient exception classification, and inventing one here would
+    mean guessing which driver and SDK exceptions are shared faults. "Every
+    stream is failing" is the observable that actually distinguishes a
+    connection/config/AWS outage from one bad gatherer, and it needs no
+    taxonomy to be right.
     """
-    consecutive_failures = 0
+    # Per-stream consecutive-failure counts, keyed by the registry key. A
+    # stream absent from this dict has never failed.
+    consecutive_failures = {}
+    stream_names = [getattr(operator, "name", repr(operator))
+                    for operator in operators]
+
     while should_continue():
         started = time.monotonic()
-        try:
-            for operator in operators:
+
+        for operator, name in zip(operators, stream_names):
+            try:
                 result = operator.run_pass()
-                logger.info("pass: %s", result.as_dict())
-        except Exception:  # noqa: BLE001 - retried, but counted
-            consecutive_failures += 1
-            logger.exception(
-                "operator poll failed (%d consecutive, threshold %d)",
-                consecutive_failures, failure_threshold)
-            if consecutive_failures >= failure_threshold:
-                raise OperatorUnhealthy(
-                    f"{consecutive_failures} consecutive poll failures "
-                    f"(threshold {failure_threshold}); the operator is "
-                    f"running but operating nothing. Exiting so the "
-                    f"supervisor restarts it.")
-        else:
-            if consecutive_failures:
-                logger.info("operator recovered after %d failed poll(s)",
-                            consecutive_failures)
-            consecutive_failures = 0
+            except Exception:  # noqa: BLE001 - counted per stream, not fatal
+                failures = consecutive_failures.get(name, 0) + 1
+                consecutive_failures[name] = failures
+                logger.exception(
+                    "work stream %s failed its pass (%d consecutive for this "
+                    "stream, threshold %d); later streams in this poll still "
+                    "run", name, failures, failure_threshold)
+                continue
+            if consecutive_failures.pop(name, 0):
+                logger.info("work stream %s recovered", name)
+            logger.info("pass: %s", result.as_dict())
+
+        # THE SHARED-FAULT VERDICT. Every stream over threshold at once is
+        # the symptom of a fault none of them owns — the database is
+        # unreachable, the credential expired, the region is throttling
+        # everything — and that is the case the supervisor's restart is for.
+        unhealthy = [name for name in stream_names
+                     if consecutive_failures.get(name, 0) >= failure_threshold]
+        if stream_names and len(unhealthy) == len(stream_names):
+            raise OperatorUnhealthy(
+                f"every work stream ({', '.join(stream_names)}) has failed "
+                f"at least {failure_threshold} consecutive passes; this is a "
+                f"shared fault rather than one stream's, and the operator is "
+                f"running while operating nothing. Exiting so the supervisor "
+                f"restarts it.")
+        if unhealthy:
+            # Named at WARNING every poll: a stream stuck over threshold
+            # while the service stays up is exactly the condition an operator
+            # must be able to see, and it no longer announces itself by the
+            # process dying.
+            logger.warning(
+                "work stream(s) %s are over the failure threshold (%d) but "
+                "other streams are progressing, so this is not a shared "
+                "fault; the service stays up and they keep being retried",
+                ", ".join(sorted(unhealthy)), failure_threshold)
 
         elapsed = time.monotonic() - started
         remaining = poll_seconds - elapsed
@@ -441,6 +505,27 @@ def main(argv=None):
             logger.info("operator stopped cleanly while idle")
             return 0
 
+        # THE WORK-STREAM COMPLETENESS CHECK (rule 12), fail-closed, once,
+        # here. Placed AFTER the idle path above and BEFORE any operator is
+        # built, which is the only correct spot for both reasons:
+        #
+        #   * after the idle return, because "no class has disposition run"
+        #     is a legitimate operating state that must keep idling quietly
+        #     (see the 2026-08-08 restart-loop note above) — a service with
+        #     nothing enabled has no stream to be incomplete about, and
+        #     failing there would recreate exactly that restart loop;
+        #   * before the operators are constructed, because the check's
+        #     entire value is refusing to START work whose specification is
+        #     incomplete. Discovering a missing definition lazily, one poll
+        #     pass at a time, was the previous behaviour: the stream simply
+        #     produced no work units, silently, forever.
+        #
+        # Read-only (SELECT on workflow_definitions); the LOADING step is an
+        # operator action under `rapid_operator` (see
+        # `pipeline.intent.definitions.load_definitions`), never something a
+        # service does to itself at startup.
+        _verify_work_streams(session, endpoint)
+
         # One `Operator` per JOB TYPE, not per class (co-design ruling 1):
         # `_classes_for_pass` fans each running class out to every job type
         # the registry declares for it, so prompt processing's one `to_run`
@@ -580,6 +665,33 @@ def _connection_factory(session, endpoint):
     """
     return service_kernel.connection_factory(
         session, endpoint, "rapid-vpo", lane="transaction")
+
+
+def _verify_work_streams(session, endpoint):
+    """Run the fail-closed work-stream completeness check (rule 12).
+
+    Opens ONE short read-only connection, runs the check, closes it. Not
+    folded into `_execute_factory`'s per-pass connection: this is a startup
+    gate that must have answered before the first poll, and it reads
+    `workflow_definitions` — SELECT-granted reference content, needing none
+    of the submission lane's write capability.
+
+    `WorkStreamIncomplete` (a `ConfigError`) propagates deliberately: the
+    caller's existing handler maps a start-time `ConfigError` to the
+    start-failed exit, which is precisely fail-closed. Nothing is caught
+    here — a check that swallowed its own verdict would be the optional
+    intent layer all over again.
+    """
+    from database.modules.utils.rapid_db_connect import (ConnectionExecutor,
+                                                         connection)
+    from pipeline.intent.definitions import verify_work_stream_completeness
+
+    credentials = service_kernel.database_credentials(session)
+    with connection("rapid-vpo-startup", lane="transaction",
+                    endpoint=endpoint, credentials=credentials) as conn:
+        verified = verify_work_stream_completeness(
+            ConnectionExecutor(conn).execute)
+    logger.info("work-stream completeness check passed (%d streams)", verified)
 
 
 def _execute_factory(session, endpoint):

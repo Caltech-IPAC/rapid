@@ -29,6 +29,7 @@ import time
 
 from observability.attempts import (
     AttemptWriter, ExecutionBinding, LifecycleState)
+from pipeline.intent.errors import is_unique_violation
 from pipeline.intent.writer import (
     READY, SUBMITTED, WRITER_ORCHESTRATOR, WRITER_VALIDATION_INGEST,
     WorkUnitIdentity, WorkUnitWriter)
@@ -297,24 +298,27 @@ def _precreate(writer, manifest, run_id, binding, moment, execute=None):
     transaction, exactly as `logical_jobs`/`attempts` already do.
 
     `execute=None` is accepted and treated as "skip the intent layer for
-    this call" rather than raising, for two reasons stated honestly here
-    rather than silently: (1) every existing caller of `_precreate` before
-    this ruling passes no `execute`, and a hard requirement would break
-    them at the seam's exact boundary rather than at a considered
-    migration; (2) `work_units.(job_type, definition_version)` carries a
-    live FK to `workflow_definitions` (migration 036), and AS OF THIS
-    WRITER, `derived.load_workflow_definition` (migration 039) has no
-    caller anywhere in this repo — no job type has a loaded definition row.
-    Attaching a work unit to an attempt whose job type has no loaded
-    definition would violate that FK and abort the whole submission
-    transaction, which is worse than the pre-intent-layer behaviour this
-    ruling is landing alongside. `_attach_work_unit` therefore CATCHES a
-    definition-FK violation specifically (see its docstring) and logs
-    rather than raising, so the seam keeps working exactly as before for
-    every job type until its definition is loaded — but every other
-    unexpected failure in intent-layer attachment propagates, because
-    silently swallowing those would hide a real defect in the exact code
-    path meant to prove ruling 13 out.
+    this call" rather than raising, because every caller of `_precreate`
+    predating the intent-layer ruling passes no `execute`, and a hard
+    requirement would break them at the seam's exact boundary rather than at
+    a considered migration.
+
+    **THE SECOND REASON IS GONE, AND WITH IT THE FK GUARD** (rule 12 repair).
+    This docstring used to give a second justification: no job type had a
+    loaded `workflow_definitions` row, because migration 039's
+    `derived.load_workflow_definition` had no caller anywhere, so
+    `_attach_work_unit` swallowed a definition-FK violation to keep the seam
+    working. That made the intent layer silently optional — the FK was doing
+    the work a deployment step should do, and a message-substring match was
+    deciding what the FK meant.
+
+    The loader now HAS a caller (`pipeline.intent.definitions`, invoked as a
+    deployment step) and the startup completeness check refuses to run a work
+    stream whose definition is not loaded. A definition-FK violation at
+    work-unit creation is therefore no longer an expected steady state — it
+    means the deployment step did not run for an enabled stream, which is a
+    hard error and propagates as one. Nothing here classifies a database
+    error by message text any more; see `pipeline.intent.errors`.
     """
     from observability.attempts import AttemptIdentity
     from submission.subjects import UnknownJobType, attempt_identity_fields
@@ -413,36 +417,48 @@ def _attach_work_unit(execute, job_type, unit, attempt_id, moment):
     therefore issued as two round trips deliberately, not as a shortcut
     that was skipped.
 
-    **RACE TOLERANCE.** A genuine two-caller race on the same
-    (job_type, input_scope) is resolved by re-SELECTing after an INSERT
-    conflict — NOT implemented as a retry loop here, because
-    `create_work_unit`'s bare INSERT has no `ON CONFLICT` clause of its own
-    (migration 036 defines the uniqueness as a partial index, not a
-    constraint this module upserts against) and this function propagates
-    whatever the executor raises on that conflict rather than papering over
-    it with a blind retry. The race-shape TEST (`pipeline/intent/test/
-    test_writer.py` and this seam's own extended tests) simulates the
-    conflict at the fake-executor level and asserts both callers resolve to
-    one work_unit_id via the re-SELECT path — see
-    `test_seams.py::AttachWorkUnitTests` for the concrete shape asserted
-    against a fake that returns a conflict on the second INSERT.
+    **RACE TOLERANCE — NOW ACTUALLY IMPLEMENTED (rule 6 repair).** This
+    docstring previously described a re-SELECT-after-conflict resolution and
+    even cited a test asserting it; neither existed. The only `except` was
+    the FK-substring guard below, so a genuine two-caller race on the same
+    (job_type, input_scope) let migration 036's partial-unique violation
+    propagate out of the loser's call and — through the operator loop's
+    single shared try/except — abort that whole poll pass, including the
+    unrelated work streams later in it.
 
-    **THE FK-GUARD CATCH (see `_precreate`'s docstring part 2).** No
-    workflow_definitions row is loaded for any job type as of this writer,
-    so `create_work_unit`'s INSERT would violate `work_units_definition_fk`
-    for every job type today. This function catches exactly that — an
-    exception whose message names `work_units_definition_fk`, matching
-    real psycopg2's `ForeignKeyViolation` (which reports the violated
-    constraint by name) and letting a test fake raise a plain
-    `RuntimeError`/`Exception` carrying that same substring, the way this
-    repo's `_is_precondition_failed` already matches driver errors by
-    recognizable content rather than importing driver-specific exception
-    types into code that must also run where the driver is absent — is
-    logged and swallowed, so the intent layer stays inert rather than
-    fatal until a definition is loaded. Every OTHER exception — a
-    malformed identity, a genuine programming error — propagates, because
-    this seam is exactly the code that must prove the intent layer out,
-    and silently absorbing unrelated failures here would hide that.
+    The claim-or-create is now closed properly: `create_work_unit`'s INSERT
+    is attempted, and a unique violation means *the other racer won*, which
+    is a success for this caller's purpose — the row it needed exists. It
+    re-SELECTs the winning row and proceeds down the same path an ordinary
+    pre-existing unit takes, so BOTH racers return the SAME work_unit_id.
+
+    **EXACTLY ONE ready->submitted TRANSITION (rule 6's exclusivity half).**
+    Resolving both racers to one id must not authorize two submissions of
+    it. The re-SELECT path deliberately does NOT assume the winner left the
+    row in `ready`: it re-reads the state and reuses the state dispatch
+    below, so whichever racer arrives second finds either
+
+      * `ready`  — the winner created but has not yet transitioned; this
+        caller's `transition_unit` is CAS-guarded (`WHERE state = 'ready'`)
+        so if the winner transitions first, this one raises
+        `WorkUnitNotFound` and does not double-submit; or
+      * `submitted` — the winner already transitioned, and this caller takes
+        the attach-without-transition branch.
+
+    In both orderings exactly one ready->submitted event fires. The CAS in
+    `WorkUnitWriter.transition_unit` is what makes that true under real
+    concurrency, not the ordering of the two SELECTs.
+
+    **CLASSIFICATION IS BY SQLSTATE, NOT MESSAGE TEXT (rule 12).** The
+    unique violation is recognized by SQLSTATE 23505 via
+    `pipeline.intent.errors`, never by matching words in an exception
+    message. The FK-substring guard that used to live here — which
+    swallowed a missing workflow_definitions row and made the whole intent
+    layer silently optional — is gone: definitions are loaded by an
+    explicit deployment step (`pipeline.intent.definitions`) and verified by
+    the startup completeness check, so a missing definition at work-unit
+    creation is now a hard error, as it should always have been. A
+    foreign-key violation here propagates.
     """
     identity = WorkUnitIdentity(
         job_type=job_type, input_scope=_input_scope_for(job_type, unit),
@@ -450,63 +466,102 @@ def _attach_work_unit(execute, job_type, unit, attempt_id, moment):
         definition_version=1)
     work_writer = WorkUnitWriter(execute)
 
-    try:
-        existing = work_writer.find_current_unit(
-            identity.job_type, identity.input_scope)
-        if existing is None:
-            # THE ARRIVAL-DRIVEN CASE: no upstream validation/ingest stage
-            # created a unit ahead of submission, so THIS call is treated as
-            # that creator (module docstring, part 1) — a fresh unit is
-            # created ready, then immediately transitioned to submitted in
-            # the same call, as TWO separate unit_events under two writer
-            # identities (task brief: "Use writer='validation_ingest' for
-            # the creation event and writer='orchestrator' for the
-            # ready->submitted transition event"), even though both fire
-            # from one Python call — the design's writer-exclusivity rule
-            # is about WHO the design attributes each transition CLASS to,
-            # not about how many Python calls separate them in this v1.
+    existing = work_writer.find_current_unit(
+        identity.job_type, identity.input_scope)
+
+    if existing is None:
+        # THE ARRIVAL-DRIVEN CASE: no upstream validation/ingest stage
+        # created a unit ahead of submission, so THIS call is treated as
+        # that creator (module docstring, part 1) — a fresh unit is
+        # created ready, then immediately transitioned to submitted in
+        # the same call, as TWO separate unit_events under two writer
+        # identities (task brief: "Use writer='validation_ingest' for
+        # the creation event and writer='orchestrator' for the
+        # ready->submitted transition event"), even though both fire
+        # from one Python call — the design's writer-exclusivity rule
+        # is about WHO the design attributes each transition CLASS to,
+        # not about how many Python calls separate them in this v1.
+        try:
             work_unit_id = work_writer.create_work_unit(
                 identity, writer=WRITER_VALIDATION_INGEST, state=READY,
                 now=moment)
-            work_writer.transition_unit(
-                work_unit_id, READY, SUBMITTED, writer=WRITER_ORCHESTRATOR,
-                now=moment)
-        else:
-            work_unit_id = existing["work_unit_id"]
-            if existing["state"] != READY:
-                # Already submitted (a retry re-running _precreate for a
-                # unit whose work unit is mid-flight) or otherwise not
-                # workable right now — attach without transitioning rather
-                # than issuing an illegal edge. The attempt still gets its
-                # FK; the work unit's own state is left to whichever writer
-                # owns it.
-                logger.debug(
-                    "work unit %s for %s/%s is %s, not ready; attaching "
-                    "attempt %s without a transition",
-                    work_unit_id, job_type, identity.input_scope,
-                    existing["state"], attempt_id)
-                _set_attempt_work_unit(execute, attempt_id, work_unit_id)
-                return
-            # THE CAMPAIGN-STAGED CASE (and any other pre-created-ready
-            # unit): a unit already exists in 'ready', created by another
-            # writer (the mock transformer, part 5, or a genuine upstream
-            # validation/ingest stage this v1 does not yet have) — this
-            # call only transitions it, under writer='orchestrator', never
-            # re-creating.
-            work_writer.transition_unit(
-                work_unit_id, READY, SUBMITTED, writer=WRITER_ORCHESTRATOR,
-                now=moment)
-    except Exception as exc:  # noqa: BLE001 - narrowed by message below
-        if "work_units_definition_fk" in str(exc):
-            logger.debug(
-                "no workflow_definitions row for job_type=%s; skipping "
-                "intent-layer attachment for attempt %s until one is "
-                "loaded (migration 039's derived.load_workflow_definition "
-                "has no caller yet)", job_type, attempt_id)
+        except Exception as exc:  # noqa: BLE001 - re-raised unless 23505
+            if not is_unique_violation(exc):
+                raise
+            # WE LOST THE RACE, AND THAT IS A SUCCESS (rule 6). Between our
+            # SELECT and our INSERT another transaction created the current
+            # unit for this exact (job_type, input_scope) and committed;
+            # migration 036's partial unique index refused ours. The row we
+            # needed exists — so re-SELECT it and fall through to the SAME
+            # state dispatch a pre-existing unit takes. Both racers end up
+            # returning one work_unit_id.
+            existing = work_writer.find_current_unit(
+                identity.job_type, identity.input_scope)
+            if existing is None:
+                # A unique violation whose winning row cannot then be found
+                # is not a race — it is a contradiction (the winner rolled
+                # back after we saw its conflict, or the uniqueness we
+                # violated is not the one we re-SELECT on). Never retried
+                # blindly: raise the original error rather than loop.
+                raise
+            logger.info(
+                "lost the work-unit claim race for %s/%s; resolved to the "
+                "winning unit %s for attempt %s",
+                job_type, identity.input_scope, existing["work_unit_id"],
+                attempt_id)
+            work_unit_id = _transition_or_attach(
+                execute, work_writer, existing, job_type,
+                identity.input_scope, attempt_id, moment)
+            _set_attempt_work_unit(execute, attempt_id, work_unit_id)
             return
-        raise
+        work_writer.transition_unit(
+            work_unit_id, READY, SUBMITTED, writer=WRITER_ORCHESTRATOR,
+            now=moment)
+    else:
+        work_unit_id = _transition_or_attach(
+            execute, work_writer, existing, job_type, identity.input_scope,
+            attempt_id, moment)
 
     _set_attempt_work_unit(execute, attempt_id, work_unit_id)
+
+
+def _transition_or_attach(execute, work_writer, existing, job_type,
+                          input_scope, attempt_id, moment):
+    """Transition a pre-existing unit ready->submitted, or just attach to it.
+
+    Factored out of `_attach_work_unit` because the race-loser path needs
+    exactly this dispatch (rule 6: "attaching to a unit already `submitted`
+    must not authorize a second submission path") and duplicating it was how
+    the two branches would drift. Returns the work_unit_id either way.
+
+    **SUBMISSION OWNERSHIP STAYS EXCLUSIVE.** The `state != READY` branch
+    attaches the attempt's FK and issues no transition, so nothing here can
+    produce a second ready->submitted event for a unit already submitted. The
+    READY branch's `transition_unit` is CAS-guarded on `state = 'ready'`, so
+    two callers that both read `ready` still yield exactly one transition —
+    the loser raises `WorkUnitNotFound` from the CAS rather than firing a
+    duplicate.
+    """
+    work_unit_id = existing["work_unit_id"]
+    if existing["state"] != READY:
+        # Already submitted (a retry re-running _precreate for a unit whose
+        # work unit is mid-flight), parked `blocked` by retry policy, or
+        # otherwise not workable right now — attach without transitioning
+        # rather than issuing an illegal edge. The attempt still gets its FK;
+        # the work unit's own state is left to whichever writer owns it.
+        logger.debug(
+            "work unit %s for %s/%s is %s, not ready; attaching attempt %s "
+            "without a transition",
+            work_unit_id, job_type, input_scope, existing["state"], attempt_id)
+        return work_unit_id
+    # THE CAMPAIGN-STAGED CASE (and any other pre-created-ready unit): a unit
+    # already exists in 'ready', created by another writer (the mock
+    # transformer, part 5, or a genuine upstream validation/ingest stage this
+    # v1 does not yet have) — this call only transitions it, under
+    # writer='orchestrator', never re-creating.
+    work_writer.transition_unit(
+        work_unit_id, READY, SUBMITTED, writer=WRITER_ORCHESTRATOR, now=moment)
+    return work_unit_id
 
 
 def _set_attempt_work_unit(execute, attempt_id, work_unit_id):
