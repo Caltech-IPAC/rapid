@@ -1,0 +1,256 @@
+"""
+File:    fixture.py
+
+The contract tier's connection to a real PostgreSQL, and the row-building
+helpers every contract test shares.
+
+**LOCATION-PARAMETERIZED** (brief B, required outcome 1: "The test fixture is
+location-parameterized (takes a connection target), so the same suite runs in
+CI and on rapid-admin unchanged"). The target comes from the standard libpq
+environment variables — PGHOST/PGPORT/PGUSER/PGPASSWORD/PGDATABASE — and from
+nothing else. There is no config file, no `--host` flag, and no branch on
+"am I in CI". A GitHub Actions service container and a podman container on
+rapid-admin differ in host and port and in nothing this suite can observe,
+which is the property that makes the rapid-admin run acceptance-equivalent to
+the CI run rather than merely similar to it. `pipeline.intent.test.
+live_brief_a_acceptance` already took its target this way; this module is that
+convention, factored out.
+
+**WHY A REAL DATABASE** (rule 23). Every behaviour this tier asserts is a
+property of PostgreSQL, not of Python:
+
+  * the claim race is resolved by migration 036's partial unique index
+    raising SQLSTATE 23505 in one of two genuinely concurrent transactions;
+  * `blocked` requires a non-NULL `blocked_reason` by CHECK constraint;
+  * the registration watermark's monotonicity is a `WHERE` predicate
+    evaluated under concurrent writers;
+  * `resolve_attempt` is a PL/pgSQL function in the migration stream — this
+    repository has no copy of it and CANNOT stub it faithfully, because its
+    advisory-lock key derivation and its two partial unique indexes are the
+    behaviour under test.
+
+The last one is the sharpest argument for this whole tier: the acquisition
+path every attempt takes is code this repository does not contain.
+
+**FIXTURE HONESTY** (the discipline `live_brief_a_acceptance` established and
+this inherits). Each test builds its own rows under a unique run tag and
+deletes only what it created. Nothing truncates a table or assumes an empty
+database, so a re-run is safe, two runs may overlap on one database, and a
+failure leaves its own rows behind for inspection.
+
+**DOUBLES MUST BE ABLE TO REFUSE.** This module deliberately provides no fake
+executor. A contract test that wanted one would be a stub test in the wrong
+directory; the tier exists because the fakes could not refuse what the live
+system refuses (`pipeline/contract/test_double_agreement.py` is the standing
+proof of that, one probe per protocol).
+"""
+
+import os
+import uuid
+
+#: One tag per process run, so concurrent or repeated runs never collide on
+#: the uniqueness constraints these tests deliberately provoke.
+RUN_TAG = uuid.uuid4().hex[:12]
+
+#: The job type contract tests create units under. `science` is used because
+#: it is the one job type present in every registry AND shipped as a
+#: definition file, so a loaded definition exists for it after the deployment
+#: step — the same choice, for the same reason, as brief A's acceptance suite.
+JOB_TYPE = "science"
+
+DEFINITION_VERSION = 1
+
+
+def connection_target():
+    """The libpq connection parameters, resolved from the environment.
+
+    Returned as a dict rather than applied directly so a caller that needs a
+    second, independent connection (the concurrency tests need two) builds it
+    from the same resolved target instead of re-reading the environment and
+    possibly disagreeing with the first.
+    """
+    return {
+        "host": os.environ.get("PGHOST", "127.0.0.1"),
+        "port": int(os.environ.get("PGPORT", "5432")),
+        "user": os.environ.get("PGUSER", "postgres"),
+        "password": os.environ.get("PGPASSWORD", ""),
+        "dbname": os.environ.get("PGDATABASE", "rapid"),
+    }
+
+
+def connect():
+    """One new connection to the target, autocommit off.
+
+    psycopg2 is imported inside the function, not at module scope. The stub
+    tier stubs `psycopg2` into `sys.modules`, and a module-level import here
+    would bind whichever object won that race if the two tiers were ever
+    collected into one interpreter — the contract tier must talk to the real
+    driver or not run at all.
+    """
+    import psycopg2
+
+    return psycopg2.connect(**connection_target())
+
+
+def executor(conn):
+    """The `execute(sql, params)` callable the intent layer takes.
+
+    Rows for statements with a result set, `rowcount` otherwise — the exact
+    contract `observability.attempts.Executor` and
+    `pipeline.intent.writer.Executor` document, implemented over a real
+    cursor. This shim is what makes the production writer classes run
+    unmodified against real PostgreSQL: the tests exercise the SAME writer
+    code the services do, differing only in what its one injected callable
+    talks to.
+    """
+    def execute(statement, params=None):
+        with conn.cursor() as cur:
+            cur.execute(statement, params)
+            if cur.description is not None:
+                return cur.fetchall()
+            return cur.rowcount
+    return execute
+
+
+def scope(name):
+    """A run-unique `input_scope`, so two runs never collide on identity.
+
+    The partial unique index is on `(job_type, input_scope)` where the unit
+    is not superseded — so an un-tagged scope would make a second run of this
+    suite fail against the first run's leftover rows, and the failure would
+    look exactly like the defect the test is hunting.
+    """
+    return f"{name}-{RUN_TAG}"
+
+
+def ensure_definition(conn):
+    """A loaded `workflow_definitions` row, so `work_units`'s FK is satisfiable.
+
+    Inserted directly rather than through `derived.load_workflow_definition`
+    because this suite runs as the scratch superuser, not `rapid_operator`,
+    and the loader's own behaviour is asserted separately through the real
+    function. Idempotent.
+    """
+    with conn.cursor() as cur:
+        cur.execute(
+            "INSERT INTO workflow_definitions"
+            "  (job_type, definition_version, checksum, source_path,"
+            "   description)"
+            " VALUES (%s, %s, %s, %s, %s)"
+            " ON CONFLICT (job_type, definition_version) DO NOTHING",
+            [JOB_TYPE, DEFINITION_VERSION, "contract-fixture",
+             "cdf/workflow/science-v1.toml", "contract tier fixture"])
+    conn.commit()
+
+
+def make_logical_job(conn, run_id=None):
+    """One `logical_jobs` row, returning its id.
+
+    `attempts.logical_job_id` carries an FK to this table, so every attempt
+    fixture needs a parent. A fixture that cannot satisfy the real
+    constraints is a fixture testing a schema nobody deployed.
+    """
+    run_id = run_id or f"contract-{RUN_TAG}"
+    logical_job_id = f"lj-{RUN_TAG}-{uuid.uuid4().hex[:8]}"
+    with conn.cursor() as cur:
+        cur.execute(
+            "INSERT INTO logical_jobs (logical_job_id, run_id)"
+            " VALUES (%s, %s) ON CONFLICT DO NOTHING",
+            [logical_job_id, run_id])
+    return logical_job_id, run_id
+
+
+def make_attempt(conn, work_unit_id=None, error_category=None,
+                 registered=False, lifecycle="submitted",
+                 terminal_record_sequence=None):
+    """One `attempts` row, minimal but real: the table's own constraints honoured.
+
+    Returns its attempt_id.
+
+    **THE LIFECYCLE STATE DECIDES WHICH COLUMNS MAY BE SET**, and the schema
+    enforces it per state — `attempts_state_submitted_check` requires a
+    `submitted` row to carry NO outcome facts at all (including
+    `error_category`), while `attempts_state_terminal_without_start_check`
+    requires a `terminal_without_start` row to carry `ended_at` and
+    `scheduler_state` and NO `started_at`. That is the schema refusing to let
+    a row claim a failure category while claiming to be still in flight, and
+    it is exactly the kind of invariant a hand-built fake cannot enforce —
+    the first version of brief A's equivalent fixture wrote `error_category`
+    onto a `submitted` row and only real PostgreSQL objected.
+    """
+    if error_category is not None and lifecycle == "submitted":
+        lifecycle = "terminal_without_start"
+    logical_job_id, run_id = make_logical_job(conn)
+    terminal = lifecycle in ("terminal_without_start", "terminal_after_start",
+                             "application_closed")
+    with conn.cursor() as cur:
+        cur.execute("SELECT coalesce(max(schema_version), 1) FROM attempts")
+        schema_version = cur.fetchone()[0]
+        cur.execute(
+            "INSERT INTO attempts"
+            "  (run_id, schema_version, logical_job_id, lifecycle_state,"
+            "   created_at, submitted_at, work_unit_id, error_category,"
+            "   ended_at, scheduler_state, registered_at,"
+            "   registered_record_sequence, terminal_record_sequence,"
+            "   terminal_record_key)"
+            " VALUES (%s, %s, %s, %s, now(), now(), %s, %s,"
+            "         CASE WHEN %s THEN now() ELSE NULL END,"
+            "         CASE WHEN %s THEN 'FAILED' ELSE NULL END,"
+            "         CASE WHEN %s THEN now() ELSE NULL END,"
+            # `attempts_registered_pair_check`: the acceptance timestamp and
+            # the record sequence it was accepted at are set together or not
+            # at all — a registered_at with no sequence would name an
+            # acceptance nobody can locate.
+            "         CASE WHEN %s THEN 1 ELSE NULL END,"
+            "         %s,"
+            "         CASE WHEN %s IS NULL THEN NULL"
+            "              ELSE %s END)"
+            " RETURNING attempt_id",
+            [run_id, schema_version, logical_job_id, lifecycle, work_unit_id,
+             error_category, terminal, terminal, registered, registered,
+             terminal_record_sequence,
+             terminal_record_sequence,
+             f"records/{RUN_TAG}/{uuid.uuid4().hex[:8]}.json"])
+        return cur.fetchone()[0]
+
+
+def unit_state(conn, work_unit_id):
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT state, blocked_reason FROM work_units WHERE work_unit_id=%s",
+            [work_unit_id])
+        return cur.fetchone()
+
+
+def unit_events(conn, work_unit_id):
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT from_state, to_state, writer FROM unit_events"
+            " WHERE work_unit_id = %s ORDER BY unit_event_id", [work_unit_id])
+        return cur.fetchall()
+
+
+def create_unit(conn, input_scope, state=None):
+    """A work unit in `state`, created through the production writer.
+
+    Goes through `WorkUnitWriter` rather than a hand-written INSERT on
+    purpose: a fixture that writes rows the production writer would never
+    write tests a schema the application does not use.
+    """
+    from pipeline.intent.writer import (READY, WRITER_ORCHESTRATOR,
+                                        WRITER_VALIDATION_INGEST,
+                                        WorkUnitIdentity, WorkUnitWriter)
+
+    state = READY if state is None else state
+    writer = WorkUnitWriter(executor(conn))
+    identity = WorkUnitIdentity(
+        job_type=JOB_TYPE, input_scope=input_scope,
+        operational_class="prompt-processing",
+        definition_version=DEFINITION_VERSION)
+    work_unit_id = writer.create_work_unit(
+        identity, writer=WRITER_VALIDATION_INGEST, state=READY)
+    if state != READY:
+        writer.transition_unit(work_unit_id, READY, state,
+                               writer=WRITER_ORCHESTRATOR)
+    conn.commit()
+    return work_unit_id

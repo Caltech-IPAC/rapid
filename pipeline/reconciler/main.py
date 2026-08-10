@@ -165,6 +165,26 @@ def _database_credentials(session):
     return service_kernel.database_credentials(session, logger=logger)
 
 
+def _preflight_schema(conn):
+    """Assert the deployed migration state satisfies this build (rule 18).
+
+    A thin wrapper over `pipeline.intent.schema_contract`, kept here rather
+    than calling the checker inline for the same reason `_database_endpoint`
+    is a wrapper: this module's own test suite patches at this seam.
+
+    The executor is built over the service's own connection — the check is
+    one read-only SELECT on `schema_migrations`, so it costs a round trip
+    and needs no privileges beyond what the service already holds.
+    """
+    from database.modules.utils.rapid_db_connect import ConnectionExecutor
+    from pipeline.intent.schema_contract import verify_schema_contract
+
+    verified = verify_schema_contract(ConnectionExecutor(conn).execute)
+    logger.info("schema preflight passed: %s required migrations present",
+                verified)
+    return verified
+
+
 def main():
     _configure_logging()
 
@@ -192,6 +212,21 @@ def main():
         with connection("rapid-reconciler", lane="transaction",
                         endpoint=endpoint,
                         credentials=credentials) as conn:
+            # THE SCHEMA PREFLIGHT (rule 18), fail-closed, before the service
+            # is built. Placed inside the connection and before
+            # `build_service` for the same reason the operator's work-stream
+            # check sits where it does: the check's entire value is refusing
+            # to START against a schema this build's SQL does not fit.
+            # Without it a missing migration surfaced as an UndefinedColumn
+            # from whichever query happened to run first, hours later,
+            # attributed to that query rather than to the deployment.
+            #
+            # A raise here lands in the `except Exception` below and exits
+            # EXIT_START_FAILED, which is what systemd's Restart=always
+            # should retry — the migration step is the fix, and a restarting
+            # service that keeps naming the missing migration in the journal
+            # is how an operator finds that out.
+            _preflight_schema(conn)
             service = build_service(session, parameters, conn)
             run_forever(service, poll_seconds=poll_seconds,
                         should_continue=lambda: running["go"])

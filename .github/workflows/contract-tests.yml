@@ -1,0 +1,202 @@
+# The contract tier in CI: PostgreSQL built from the authoritative migration
+# stream, then the PostgreSQL-backed suite against it (rule 23).
+#
+# THIS IS THE rapid REPO'S FIRST GITHUB ACTIONS WORKFLOW. Its shape follows
+# the conventions already proven in the sibling infrastructure repo
+# (rapid_systems/.github/workflows): every action SHA-pinned, least-privilege
+# permissions, no self-hosted runners, no AWS credentials.
+#
+# TRIGGERS ARE SCOPED TO THE BRIEF'S BRANCH, deliberately and temporarily.
+# Until this has been reviewed, a workflow that fired on every push to `smdc`
+# or `dev` would run — and fail, for want of the repo secret below — on work
+# nobody asked to gate. Widening the trigger to the branches this should
+# actually gate is the reviewer's decision, and it is one line.
+#
+# ---------------------------------------------------------------------------
+# THE OWNER PROVISIONING STEP (brief B: "provisioning the repo secret is an
+# owner step outside this brief").
+#
+#   Secret name:  RAPID_SYSTEMS_READ_TOKEN
+#   Scope needed: read-only `contents` on IPAC-SW/rapid_systems
+#   Set with:     gh secret set RAPID_SYSTEMS_READ_TOKEN --repo Caltech-IPAC/rapid
+#
+# WHY A SECRET IS NEEDED AT ALL: Caltech-IPAC/rapid is PUBLIC and
+# IPAC-SW/rapid_systems is PRIVATE, in a different organization. The
+# workflow's own GITHUB_TOKEN is scoped to this repository and cannot read
+# across that boundary, so the authoritative migration stream is unreachable
+# without a credential the owner provisions. A fine-grained PAT works today; a
+# GitHub App installation token is the better long-term answer and drops in at
+# the same name (brief B: "PAT now and GitHub App token when it lands").
+#
+# THE WORKFLOW NEVER EMBEDS OR CHOOSES THE CREDENTIAL. It reads one named
+# secret and passes it to `actions/checkout`. Nothing here mints, copies or
+# defaults a token, and a run without the secret FAILS CLOSED at a named step
+# rather than silently testing against a schema it built some other way — a
+# green run against a vendored copy of the migrations would be exactly the
+# false substrate this whole tier exists to eliminate.
+name: contract-tests
+
+on:
+  push:
+    branches: [smdc-brief-b]
+  workflow_dispatch:
+
+# Least privilege: the job reads this repo's code and nothing else. The
+# cross-org read is the PAT's, not this token's.
+permissions:
+  contents: read
+
+concurrency:
+  group: contract-tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  contract:
+    runs-on: ubuntu-latest
+
+    # POSTGRESQL 18 + Q3C, MATCHING THE FLEET — not the stock postgres image.
+    #
+    # The deployed database is PostgreSQL 18 with the Q3C spherical-indexing
+    # extension (rapid_systems/containers/rapid-postgres/Containerfile, on
+    # which rapid-db's quadlet is pinned), and `003-q3c-and-partition-grant
+    # .sql` does `CREATE EXTENSION IF NOT EXISTS q3c` — so the stream simply
+    # does not apply to an image without it. Testing against a PostgreSQL the
+    # fleet does not run would make every result here a statement about a
+    # database nobody deploys.
+    #
+    # The image is BUILT IN THIS JOB from the same base and the same PGDG
+    # package rapid_systems builds from, rather than pulled from that repo's
+    # ECR: this workflow holds no AWS credentials by design, and adding them
+    # to reach a registry would be a far larger change than adding a package
+    # to a container. The base is digest-pinned; the q3c package tracks PGDG
+    # for the same reason rapid_systems' own pin does (PGDG drops superseded
+    # versions, so a stale pin fails loudly rather than silently drifting).
+    services:
+      postgres:
+        image: postgres:18@sha256:b913fd5699b8bd23fa4b06d72ecdd939fad43b80fb8651bac06caa0e6d135cac
+        env:
+          POSTGRES_PASSWORD: contract-tier
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+
+    env:
+      PGHOST: 127.0.0.1
+      PGPORT: "5432"
+      PGUSER: postgres
+      PGPASSWORD: contract-tier
+      PGDATABASE: rapid
+      # The revision of the migration stream this run consumed. Recorded in
+      # the run's own log as evidence: "record the revision used" is part of
+      # the required outcome, and a run that cannot say which schema it tested
+      # against has not demonstrated anything reproducible.
+      RAPID_SYSTEMS_REF: 0fd0d571bdcdfb72aed0cf01b47a84cda2904672
+
+    steps:
+      - name: check out rapid
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09  # v5
+
+      - name: fail closed if the cross-org read secret is not provisioned
+        # A NAMED FAILURE, NOT A CONFUSING ONE. Without this step the run
+        # fails inside `actions/checkout` with a generic "repository not
+        # found", which reads as a typo in the repo name rather than as the
+        # one provisioning step this workflow documents.
+        if: ${{ secrets.RAPID_SYSTEMS_READ_TOKEN == '' }}
+        run: |
+          echo "BRIEF-B-SECRET: FAIL exit=1 (RAPID_SYSTEMS_READ_TOKEN is not set)"
+          echo "The migration stream lives in the PRIVATE repo IPAC-SW/rapid_systems."
+          echo "Provision with:"
+          echo "  gh secret set RAPID_SYSTEMS_READ_TOKEN --repo Caltech-IPAC/rapid"
+          echo "The token needs read-only contents access to IPAC-SW/rapid_systems."
+          exit 1
+
+      - name: check out the authoritative migration stream (pinned)
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09  # v5
+        with:
+          repository: IPAC-SW/rapid_systems
+          # PINNED BY REVISION, never a branch name: the schema under test
+          # must be a stated fact, so a rerun of this workflow tests the same
+          # schema and a change of schema is a change to this file.
+          ref: ${{ env.RAPID_SYSTEMS_REF }}
+          token: ${{ secrets.RAPID_SYSTEMS_READ_TOKEN }}
+          path: rapid_systems
+          persist-credentials: false
+
+      - name: record the migration-stream revision
+        run: |
+          cd rapid_systems
+          echo "BRIEF-B-RAPID-SYSTEMS-REV: $(git rev-parse HEAD)"
+          ls cloudformation/db-migrations/*.sql | wc -l
+
+      - name: install Q3C into the service container
+        # The service container is the stock postgres:18 image; Q3C is added
+        # here, from the SAME PGDG repository the base image already has
+        # configured and that rapid_systems' own image builds from. Installing
+        # into the running container rather than building a derived image
+        # keeps this workflow free of a registry and of any credential to one.
+        run: |
+          set -euo pipefail
+          cid=$(docker ps --filter "ancestor=postgres:18" --format '{{.ID}}' | head -1)
+          if [ -z "$cid" ]; then
+            cid=$(docker ps --format '{{.ID}} {{.Image}}' | grep -i postgres | head -1 | cut -d' ' -f1)
+          fi
+          echo "BRIEF-B-PG-CONTAINER: $cid"
+          docker exec "$cid" apt-get update -qq
+          docker exec "$cid" apt-get install -y --no-install-recommends postgresql-18-q3c
+          echo "BRIEF-B-Q3C: PASS exit=0"
+
+      - name: set up python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1  # v6
+        with:
+          python-version: "3.11"
+
+      - name: install postgresql client
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends postgresql-client
+
+      - name: install the package (required outcome 3)
+        # `pip install -e .` IS an acceptance criterion, so it is a step whose
+        # failure fails the run — not a convenience for the steps after it.
+        run: |
+          python3 -m pip install --upgrade pip
+          python3 -m pip install -e '.[test]'
+          echo "BRIEF-B-INSTALL: PASS exit=0"
+
+      - name: entry points launch
+        # The console scripts must EXIST and be importable. They are run with
+        # no configuration, so each is expected to fail on its own missing
+        # environment — what is asserted is that the shim resolved and the
+        # module imported, which is what `pip install -e .` is being trusted
+        # for. A shim that could not import would fail differently, with a
+        # traceback naming the import.
+        run: |
+          set +e
+          for cmd in rapid-reconciler rapid-operator rapid-job; do
+            command -v "$cmd" >/dev/null || { echo "BRIEF-B-ENTRYPOINT-$cmd: FAIL exit=1 (not installed)"; exit 1; }
+            out=$("$cmd" --help 2>&1); rc=$?
+            echo "BRIEF-B-ENTRYPOINT-$cmd: resolved exit=$rc"
+            printf '%s\n' "$out" | grep -qi 'ModuleNotFoundError\|ImportError' && {
+              echo "BRIEF-B-ENTRYPOINT-$cmd: FAIL exit=1 (import error)"
+              printf '%s\n' "$out" | tail -20
+              exit 1
+            }
+          done
+          echo "BRIEF-B-ENTRYPOINTS: PASS exit=0"
+
+      - name: run the contract suite against the applied stream
+        run: |
+          scripts/run-contract-tests.sh rapid_systems/cloudformation/db-migrations
+
+      - name: the stubbed tier stays green, unchanged
+        # Required outcome 3: "Keep the stubbed tier running unchanged during
+        # the transition." Run here as well as on rapid-admin so a packaging
+        # change that breaks the stub tier's per-module interpreter isolation
+        # is caught by the same gate that introduced it.
+        run: |
+          scripts/run-operational-tests.sh

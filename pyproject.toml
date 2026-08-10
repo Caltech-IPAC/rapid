@@ -1,16 +1,18 @@
-# Lint configuration for the RAPID repository.
+# Project, build and lint configuration for the RAPID repository.
 #
-# Created by W2 of the Batch payload co-design, for one purpose: the adopted
-# code standards ban print() from the operational layer and require it
-# lint-enforced (ruff T201) on the converted modules. There was no
-# pyproject.toml in this repo, so this file is new — and deliberately narrow.
+# Created by W2 of the Batch payload co-design as a lint config alone, for one
+# purpose: the adopted code standards ban print() from the operational layer
+# and require it lint-enforced (ruff T201) on the converted modules.
 #
-# WHAT THIS FILE IS NOT: it declares no [build-system] and no [project]. Adding
-# either would change how the package is built and installed, and the payload
-# design has that as W5's work ("PYTHONPATH replaced by installing the package
-# into the image environment"). A lint config that quietly turned the repo into
-# an installable distribution would be a change nobody asked for, landing in
-# the worker least equipped to prove it.
+# `[build-system]` and `[project]` were DELIBERATELY ABSENT until now, and this
+# file's own header said so: "the payload design has that as W5's work
+# (PYTHONPATH replaced by installing the package into the image environment).
+# A lint config that quietly turned the repo into an installable distribution
+# would be a change nobody asked for." That work is now asked for — brief B,
+# required outcome 3 — so the declarations land here, in a change whose whole
+# subject is packaging, rather than as a side effect of a lint edit. The
+# original reasoning was about WHERE the change belonged, not whether it
+# should ever happen, and this is that place.
 #
 # WHY THE BAN IS PER-PATH: the repo has 2,126 print() calls across the
 # pipeline, modules, database and sims trees. A global T201 would fail on all
@@ -19,6 +21,111 @@
 # converted — W3 adds the payload scripts it converts, W5 the entrypoint. A
 # rule that is enforced on a small area and expanding beats one that is
 # declared everywhere and ignored.
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "rapid-pipeline"
+version = "0.1.0"
+description = "RAPID — Roman Alerts Promptly from Image Differencing"
+requires-python = ">=3.11"
+license = {text = "BSD-3-Clause"}
+
+# THE RUNTIME DEPENDENCIES ARE requirements.txt's, RESTATED, NOT REPLACED.
+# requirements.txt stays: the Dockerfiles install from it, and moving the
+# authority here would mean editing image builds this brief does not own.
+# The cost of the duplication is that they can drift; the cost of not
+# declaring them is that `pip install -e .` produces an installation that
+# imports nothing, which is worse and is the thing this outcome exists to
+# fix. `healpy`'s own comment in requirements.txt records what a missing
+# undeclared dependency actually costs.
+dependencies = [
+    "numpy>=1.25",
+    "fastavro",
+    "kafka-python",
+    "aws-msk-iam-sasl-signer-python",
+    "boto3",
+    "healpy",
+    "psycopg2-binary",
+]
+
+[project.optional-dependencies]
+# The contract tier's own needs, kept OUT of the runtime set: an image that
+# runs payloads has no reason to carry pytest, and a test dependency that
+# ships to production is how a test-only import ends up in an operational
+# traceback.
+test = ["pytest>=7"]
+
+[project.scripts]
+# The existing entrypoints, named as commands. Each maps to a `main()` this
+# repo already had and already ran as `python3 -m <module>` — these are new
+# NAMES for proven entrypoints, not new entrypoints, which is why every one
+# of them is a bare `module:main` with no wrapper. The systemd units and job
+# definitions that invoke `python3 -m ...` keep working unchanged; nothing is
+# migrated onto these names by this change.
+rapid-reconciler = "pipeline.reconciler.main:main"
+rapid-operator = "pipeline.operator.service:main"
+rapid-job = "pipeline.entrypoints.job:main"
+
+[tool.setuptools]
+# EXPLICIT PACKAGE LIST, NOT AUTO-DISCOVERY. Auto-discovery over this repo
+# root finds `docs`, `sims`, `soc`, `c`, `RuBR` and several directories that
+# are not importable packages at all, and setuptools' flat-layout detector
+# refuses outright ("Multiple top-level packages discovered in a flat-layout")
+# rather than guessing. Naming the four operational trees is also the honest
+# statement of what "installing RAPID" means today: the modules the services
+# and payloads import, not the whole working directory.
+#
+# `pipeline` and `database` carry NO `__init__.py` (PEP 420 namespace
+# packages) while `observability` and `submission` do — hence
+# `find-namespace`, which handles both. Using plain `find` here silently
+# drops the two namespace trees and yields a wheel whose `import pipeline`
+# fails, which is the exact failure mode this outcome is meant to end.
+packages.find = {namespaces = true, include = [
+    "pipeline*", "observability*", "submission*", "database*",
+]}
+
+[tool.setuptools.package-data]
+# The reviewed, checksummed workflow definitions must travel with the
+# distribution: `pipeline.intent.definitions` reads them from the software
+# root and verifies the sha256 of each file's BYTES against what is loaded in
+# `workflow_definitions`. A wheel without them turns every startup
+# completeness check into "no shipped workflow definition for job type ...",
+# and the checksum comparison makes a mangled copy just as loud as a missing
+# one.
+"*" = ["*.toml"]
+
+[tool.pytest.ini_options]
+# THE THREE TIERS, DECLARED (required outcome 3). Until now the tiers were
+# expressed as a hand-maintained module list inside
+# `scripts/run-operational-tests.sh` and a filename convention (`live_*.py`)
+# understood only by the humans invoking them. Markers make the tier a
+# property of the test rather than of the list that happens to name it:
+#
+#   stub     — the existing tier: psycopg2/boto3 stubbed into sys.modules,
+#              pure logic, no infrastructure. Runs anywhere.
+#   contract — this brief's new tier: real PostgreSQL, real migration
+#              schema, real transactions. Needs a database (PGHOST etc).
+#   live     — the pre-existing manual tier (`live_*.py`), run by a human
+#              against deployed infrastructure. NOT a gate.
+#
+# `run-operational-tests.sh` keeps its explicit module list for now — the
+# brief requires the stubbed tier stay green unchanged during the
+# transition, and retiring that list is a later step that these markers make
+# possible rather than one this change makes.
+markers = [
+    "stub: pure-logic tests with psycopg2/boto3 stubbed (no infrastructure)",
+    "contract: tests against a real PostgreSQL built from the migration stream",
+    "live: manual tests against deployed infrastructure; never a gate",
+]
+# The contract tier is opt-IN. A bare `pytest` on a laptop or in a lint job
+# must not try to open a database connection and fail for want of one — the
+# CI job and the rapid-admin runner both select the tier explicitly with
+# `-m contract`.
+addopts = "-m 'not contract and not live'"
+testpaths = ["pipeline", "observability", "submission", "database"]
 
 [tool.ruff]
 # Match the line length the existing code is written to.

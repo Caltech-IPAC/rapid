@@ -668,30 +668,44 @@ def _connection_factory(session, endpoint):
 
 
 def _verify_work_streams(session, endpoint):
-    """Run the fail-closed work-stream completeness check (rule 12).
+    """Run the two fail-closed startup checks (rules 18 and 12), in order.
 
-    Opens ONE short read-only connection, runs the check, closes it. Not
-    folded into `_execute_factory`'s per-pass connection: this is a startup
-    gate that must have answered before the first poll, and it reads
-    `workflow_definitions` — SELECT-granted reference content, needing none
-    of the submission lane's write capability.
+    Opens ONE short read-only connection, runs both checks, closes it. Not
+    folded into `_execute_factory`'s per-pass connection: these are startup
+    gates that must have answered before the first poll, and they read
+    `schema_migrations` and `workflow_definitions` — SELECT-granted
+    reference content, needing none of the submission lane's write
+    capability.
 
-    `WorkStreamIncomplete` (a `ConfigError`) propagates deliberately: the
-    caller's existing handler maps a start-time `ConfigError` to the
-    start-failed exit, which is precisely fail-closed. Nothing is caught
-    here — a check that swallowed its own verdict would be the optional
-    intent layer all over again.
+    **THE SCHEMA CONTRACT IS CHECKED FIRST** (rule 18), and the order is
+    load-bearing rather than cosmetic. The work-stream check SELECTs
+    `workflow_definitions`, a table migration 039 creates: run against a
+    database that never got 039, it fails as an `UndefinedTable` naming the
+    completeness check, which sends an operator looking for a missing
+    definition ROW when what is missing is the whole migration. Preflighting
+    the schema first turns that into the accurate message.
+
+    Both exceptions propagate deliberately: `WorkStreamIncomplete` is a
+    `ConfigError` and `SchemaContractUnmet` a `RuntimeError`, and the
+    caller's existing handler maps either at start time to the start-failed
+    exit, which is precisely fail-closed. Nothing is caught here — a check
+    that swallowed its own verdict would be the optional intent layer all
+    over again.
     """
     from database.modules.utils.rapid_db_connect import (ConnectionExecutor,
                                                          connection)
     from pipeline.intent.definitions import verify_work_stream_completeness
+    from pipeline.intent.schema_contract import verify_schema_contract
 
     credentials = service_kernel.database_credentials(session)
     with connection("rapid-vpo-startup", lane="transaction",
                     endpoint=endpoint, credentials=credentials) as conn:
-        verified = verify_work_stream_completeness(
-            ConnectionExecutor(conn).execute)
-    logger.info("work-stream completeness check passed (%d streams)", verified)
+        execute = ConnectionExecutor(conn).execute
+        migrations = verify_schema_contract(execute)
+        verified = verify_work_stream_completeness(execute)
+    logger.info("schema preflight passed (%d required migrations); "
+                "work-stream completeness check passed (%d streams)",
+                migrations, verified)
 
 
 def _execute_factory(session, endpoint):

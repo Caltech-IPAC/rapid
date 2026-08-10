@@ -872,11 +872,26 @@ def _database(route, job_env, endpoint, credentials):
         connection,
     )
     from observability.attempts import AttemptWriter
+    from pipeline.intent.schema_contract import verify_schema_contract
 
     application_name = f"rapid-payload:{job_env.scheduler_job_id}"
     with connection(application_name, lane=route.db_lane, endpoint=endpoint,
                     credentials=credentials) as conn:
         execute = ConnectionExecutor(conn)
+        # THE PAYLOAD PREFLIGHTS TOO (rule 18: "Services AND PAYLOADS
+        # preflight the application/schema contract at startup"). A payload
+        # is not a long-lived service, which is exactly why it matters here:
+        # a job pinned to an old release, submitted before a deployment and
+        # started after it, is the routine way old code meets a new schema —
+        # rule 18's expand/contract clause makes that legal, and this check
+        # is what distinguishes it from the illegal direction, an image
+        # NEWER than the database it was scheduled against.
+        #
+        # Raising here happens before any product work, so the attempt fails
+        # at its start with a named migration rather than part-way through a
+        # science stage with an UndefinedColumn — and a failure this early
+        # costs one attempt, not one attempt plus a partial product.
+        verify_schema_contract(execute.execute)
         # The connection itself is yielded alongside the writer (post-DB chain
         # conversion). The database-effect job types write through it as a
         # BORROWED connection — co-design ruling 4 — so their writes and this
