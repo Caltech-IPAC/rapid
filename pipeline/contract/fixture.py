@@ -175,13 +175,16 @@ def make_logical_job(conn, run_id=None, with_binding=False):
         columns += ["job_definition_arn", "job_definition_rev",
                     "image_digest", "release_identity", "manifest_checksum"]
         values += [
-            # A SYNTHETIC ARN with a placeholder account field. The binding's
+            # A SYNTHETIC ARN CARRYING NO ACCOUNT FIELD AT ALL. The binding's
             # CONTENT is never interpreted by anything under test — the
-            # constraint requires it to be present and non-NULL, nothing
-            # more — so a real account number here would be an identifier
-            # published to a public repository for no test's benefit. The
-            # repo's own pre-push guard catches exactly this, and caught this.
-            "arn:aws:batch:us-east-1:000000000000:job-definition/contract:1",
+            # constraint requires it to be present and non-NULL, nothing more.
+            # A real account number here would be an identifier published to a
+            # public repository for no test's benefit, and the repo's pre-push
+            # guard rejects any 12-digit run alike, placeholder included. The
+            # honest resolution is not to allowlist a guard that is protecting
+            # a public repo, but to stop putting an account-shaped field in a
+            # string nothing parses.
+            "arn:aws:batch:us-east-1:account:job-definition/contract:1",
             1,
             "sha256:" + "0" * 64,
             f"contract-release-{RUN_TAG}",
