@@ -231,7 +231,7 @@ if dbserver is None:
 # Custom methods for parallel processing, taking advantage of multiple cores on the job-launcher machine.
 #-------------------------------------------------------------------------------------------------------------
 
-def execute_sql_queries_for_given_sca(sql_queries_dict,sca):
+def execute_sql_queries_for_given_sca(sql_queries_dict,obs_date,sca):
 
 
     # Connect to database.  Each thread MUST have its own independent database connection for parallelism.
@@ -248,7 +248,8 @@ def execute_sql_queries_for_given_sca(sql_queries_dict,sca):
 
     try:
 
-        sql_queries = sql_queries_dict[sca]
+        sql_queries_key = (obs_date,sca)
+        sql_queries = sql_queries_dict[sql_queries_key]
 
         for sql_query in sql_queries:
 
@@ -375,7 +376,10 @@ def run_single_core_job(jids,overlapping_fields_list,meta_list,index_thread):
             hp6 = meta_dict["hp6"]
             hp9 = meta_dict["hp9"]
             mjdobs = meta_dict["mjdobs"]
+            dateobs = meta_dict["dateobs"]
             pid = meta_dict["pid"]
+
+            obs_date = dateobs.split()[0].replace("-","")
 
 
             # Check whether done file exists in S3 bucket for job, and skip if it exists.
@@ -395,8 +399,8 @@ def run_single_core_job(jids,overlapping_fields_list,meta_list,index_thread):
             # Parallel S3-bucket downloads:
             # 1. SFFT-difference-image PSF-fit catalog file for positive difference image
             # 2. SFFT-difference-image PSF-fit finder catalog file for positive difference image
-            # 1. SFFT-difference-image PSF-fit catalog file for negative difference image
-            # 2. SFFT-difference-image PSF-fit finder catalog filefor negative difference image
+            # 3. SFFT-difference-image PSF-fit catalog file for negative difference image
+            # 4. SFFT-difference-image PSF-fit finder catalog filefor negative difference image
             #
             # dl_executor returns tuples.  E.g.,
             # ret_psfcat = ('sfftdiffimage_masked_psfcat_jid130875.txt', '20260722/jid130875', True)
@@ -524,7 +528,7 @@ def run_single_core_job(jids,overlapping_fields_list,meta_list,index_thread):
             #
             # Prepare records into sources database tables.
 
-            sources_table = f"sources_{proc_date}_{sca}"
+            sources_table = f"sources_{obs_date}_{sca}"
             sources_table_file = f"sources_{proc_date}_sca{sca}_jid{jid}" + ".csv"
 
             with open(sources_table_file, "w") as csv_fh:
@@ -580,7 +584,7 @@ def run_single_core_job(jids,overlapping_fields_list,meta_list,index_thread):
 
 
     except Exception as e:
-        print(f"*** Error: Could not open output file {thread_work_file} ({e}); quitting...")
+        print(f"*** Error in method run_single_core_job {thread_work_file} ({e}); quitting...")
         raise
 
     finally:
@@ -672,7 +676,6 @@ if __name__ == '__main__':
     jid_list = []
     overlapping_fields_list = []
     meta_list = []
-    scas_dict = {}
 
     for jid in recs:
 
@@ -697,12 +700,11 @@ if __name__ == '__main__':
         hp6 = l2file_dict["hp6"]
         hp9 = l2file_dict["hp9"]
         mjdobs = l2file_dict["mjdobs"]
+        dateobs = l2file_dict["dateobs"]
 
         diffimage_dict = dbh.get_best_difference_image(rid,ppid)
 
         pid = diffimage_dict['pid']
-
-        scas_dict[sca] = 1
 
 
         # Load Sources record metadata into a dictionary that can be appended to a list,
@@ -718,6 +720,7 @@ if __name__ == '__main__':
         meta_dict["hp6"] = hp6
         meta_dict["hp9"] = hp9
         meta_dict["mjdobs"] = mjdobs
+        meta_dict["dateobs"] = dateobs
         meta_dict["pid"] = pid
 
 
@@ -751,8 +754,6 @@ if __name__ == '__main__':
 
         print("jid =",jid)
 
-    scas_list = list(scas_dict.keys())
-
 
     # Code-timing benchmark.
 
@@ -762,33 +763,64 @@ if __name__ == '__main__':
     start_time_benchmark = end_time_benchmark
 
 
+    # Figure out which Source child tables need to be created.
+
+    table_create_obs_date_sca_dict = {}            # Dictionary key is (obs_date,sca) tuple.
+
+    for jid,meta_dict in zip(jid_list,meta_list):
+
+        sca = meta_dict["sca"]
+        dateobs = meta_dict["dateobs"]
+        obs_date = dateobs.split()[0].replace("-","")
+
+        tablename = f"sources_{obs_date}_{sca}"
+
+        sql_queries = []
+        sql_queries.append(f"SELECT to_regclass('public.{tablename}') IS NOT NULL;")
+        records = dbh.execute_sql_queries(sql_queries)
+
+        table_exists_flag = records[0][0]
+
+        if not table_exists_flag:
+
+            table_create_key = (obs_date,sca)
+            table_create_obs_date_sca_dict[table_create_key] = 1
+
+
+    table_create_list = list(table_create_obs_date_sca_dict.keys())
+
+
     # Optionally skip sources child database table creation and bulk loading of sources records,
     # and just do the indexing, clustering, and applying grants to sources database tables for
-    # all SCAs associated with processing date...")
+    # all SCAs associated with observing date...")
 
     if do_loading and jid_list:
 
+        for table_create_tuple in table_create_list:
 
-        # Create sources database tables for all SCAs associated with processing date.
+            obs_date = table_create_tuple[0]
+            sca = table_create_tuple[1]
 
-        print("Creating sources database tables for all SCAs associated with processing date...")
 
-        sql_queries = []
-        sql_queries.append("SET default_tablespace = pipeline_data_01;")
+            # Create sources database tables for all SCAs associated with observing dates
+            # that are covered under the processing date.
 
-        for sca in scas_list:
+            print("Creating sources database tables for all SCAs associated with processing date...")
 
-            tablename = f"sources_{proc_date}_{sca}"
+            sql_queries = []
+            sql_queries.append("SET default_tablespace = pipeline_data_01;")
 
-            sql_queries.append(f"CREATE TABLE IF NOT EXISTS {tablename} (LIKE sources " +
+            tablename = f"sources_{obs_date}_{sca}"
+
+            sql_queries.append(f"CREATE TABLE {tablename} (LIKE sources " +
                                f"INCLUDING DEFAULTS INCLUDING CONSTRAINTS);")
             sql_queries.append(f"ALTER TABLE {tablename} SET UNLOGGED;")
             sql_queries.append(f"ALTER TABLE {tablename} INHERIT sources;")
 
-        dbh.execute_sql_queries(sql_queries)
+            dbh.execute_sql_queries(sql_queries)
 
-        if dbh.exit_code >= 64:
-            exit(dbh.exit_code)
+            if dbh.exit_code >= 64:
+                exit(dbh.exit_code)
 
 
         # Close main-program database connection before long episode of bulk-loading source records.
@@ -847,16 +879,12 @@ if __name__ == '__main__':
         exit(dbh.exit_code)
 
 
-    if jid_list and scas_list:
+    if jid_list:
 
 
         # Index sources database tables for all SCAs associated with processing date.
 
         print("Indexing sources database tables for all SCAs associated with processing date...")
-
-        sql_queries = []
-        sql_queries.append("SET default_tablespace = pipeline_indx_01;")
-        dbh.execute_sql_queries(sql_queries)
 
 
         # Define the various CREATE INDEX queries for different tables.  These cannot be
@@ -864,21 +892,30 @@ if __name__ == '__main__':
 
         sql_queries_dict = {}
 
-        for sca in scas_list:
-            sql_queries = []
-            sql_queries.append(f"CREATE INDEX sources_{proc_date}_{sca}_pid_idx ON sources_{proc_date}_{sca} (pid);")
-            sql_queries.append(f"CREATE INDEX sources_{proc_date}_{sca}_expid_idx ON sources_{proc_date}_{sca} (expid);")
-            sql_queries.append(f"CREATE INDEX sources_{proc_date}_{sca}_sca_idx ON sources_{proc_date}_{sca} (sca);")
-            sql_queries.append(f"CREATE INDEX sources_{proc_date}_{sca}_field_idx ON sources_{proc_date}_{sca} (field);")
-            sql_queries.append(f"CREATE INDEX sources_{proc_date}_{sca}_flags_idx ON sources_{proc_date}_{sca} (flags);")
-            sql_queries.append(f"CREATE INDEX sources_{proc_date}_{sca}_mjdobs_idx ON sources_{proc_date}_{sca} (mjdobs);")
-            sql_queries.append(f"CREATE INDEX sources_{proc_date}_{sca}_sid_idx ON sources_{proc_date}_{sca} (sid);")
-            sql_queries.append(f"CREATE INDEX sources_{proc_date}_{sca}_radec_idx ON sources_{proc_date}_{sca} (q3c_ang2ipix(ra, dec));")
-            sql_queries_dict[sca] = sql_queries
+        for table_create_tuple in table_create_list:
 
-        with ThreadPoolExecutor(max_workers = len(scas_list)) as executor:
-            for sca in scas_list:
-                executor.submit(execute_sql_queries_for_given_sca, sql_queries_dict, sca)
+            obs_date = table_create_tuple[0]
+            sca = table_create_tuple[1]
+
+            sql_queries = []
+            sql_queries.append("SET default_tablespace = pipeline_indx_01;")
+            sql_queries.append(f"CREATE INDEX sources_{obs_date}_{sca}_pid_idx ON sources_{obs_date}_{sca} (pid);")
+            sql_queries.append(f"CREATE INDEX sources_{obs_date}_{sca}_expid_idx ON sources_{obs_date}_{sca} (expid);")
+            sql_queries.append(f"CREATE INDEX sources_{obs_date}_{sca}_sca_idx ON sources_{obs_date}_{sca} (sca);")
+            sql_queries.append(f"CREATE INDEX sources_{obs_date}_{sca}_field_idx ON sources_{obs_date}_{sca} (field);")
+            sql_queries.append(f"CREATE INDEX sources_{obs_date}_{sca}_flags_idx ON sources_{obs_date}_{sca} (flags);")
+            sql_queries.append(f"CREATE INDEX sources_{obs_date}_{sca}_mjdobs_idx ON sources_{obs_date}_{sca} (mjdobs);")
+            sql_queries.append(f"CREATE INDEX sources_{obs_date}_{sca}_sid_idx ON sources_{obs_date}_{sca} (sid);")
+            sql_queries.append(f"CREATE INDEX sources_{obs_date}_{sca}_radec_idx ON sources_{obs_date}_{sca} (q3c_ang2ipix(ra, dec));")
+            table_create_key = (obs_date,sca)
+            sql_queries_dict[table_create_key] = sql_queries
+
+        if table_create_list:
+            with ThreadPoolExecutor(max_workers = len(table_create_list)) as executor:
+                for table_create_tuple in table_create_list:
+                    obs_date = table_create_tuple[0]
+                    sca = table_create_tuple[1]
+                    executor.submit(execute_sql_queries_for_given_sca, sql_queries_dict, obs_date, sca)
 
 
         # Cluster, analyze, and apply grants to sources database tables for all SCAs associated with processing date.
@@ -886,17 +923,19 @@ if __name__ == '__main__':
         print("Clustering, analyzing, and applying grants to sources database tables for all SCAs associated with processing date...")
 
         sql_queries = []
-        for sca in scas_list:
+        for table_create_tuple in table_create_list:
+            obs_date = table_create_tuple[0]
+            sca = table_create_tuple[1]
 
-            sql_queries.append(f"CLUSTER sources_{proc_date}_{sca} USING sources_{proc_date}_{sca}_radec_idx;")
-            sql_queries.append(f"ANALYZE sources_{proc_date}_{sca};")
-            #sql_queries.append(f"ALTER TABLE sources_{proc_date}_{sca} SET LOGGED;")                  # For speed, do not log.
-            sql_queries.append(f"REVOKE ALL ON TABLE sources_{proc_date}_{sca} FROM rapidreadrole;")
-            sql_queries.append(f"GRANT SELECT ON TABLE sources_{proc_date}_{sca} TO GROUP rapidreadrole;")
-            sql_queries.append(f"REVOKE ALL ON TABLE sources_{proc_date}_{sca} FROM rapidadminrole;")
-            sql_queries.append(f"GRANT ALL ON TABLE sources_{proc_date}_{sca} TO GROUP rapidadminrole;")
-            sql_queries.append(f"REVOKE ALL ON TABLE sources_{proc_date}_{sca} FROM rapidporole;")
-            sql_queries.append(f"GRANT INSERT,UPDATE,SELECT,DELETE,TRUNCATE,TRIGGER,REFERENCES ON TABLE sources_{proc_date}_{sca} TO rapidporole;")
+            sql_queries.append(f"CLUSTER sources_{obs_date}_{sca} USING sources_{obs_date}_{sca}_radec_idx;")
+            sql_queries.append(f"ANALYZE sources_{obs_date}_{sca};")
+            #sql_queries.append(f"ALTER TABLE sources_{obs_date}_{sca} SET LOGGED;")                  # For speed, do not log.
+            sql_queries.append(f"REVOKE ALL ON TABLE sources_{obs_date}_{sca} FROM rapidreadrole;")
+            sql_queries.append(f"GRANT SELECT ON TABLE sources_{obs_date}_{sca} TO GROUP rapidreadrole;")
+            sql_queries.append(f"REVOKE ALL ON TABLE sources_{obs_date}_{sca} FROM rapidadminrole;")
+            sql_queries.append(f"GRANT ALL ON TABLE sources_{obs_date}_{sca} TO GROUP rapidadminrole;")
+            sql_queries.append(f"REVOKE ALL ON TABLE sources_{obs_date}_{sca} FROM rapidporole;")
+            sql_queries.append(f"GRANT INSERT,UPDATE,SELECT,DELETE,TRUNCATE,TRIGGER,REFERENCES ON TABLE sources_{obs_date}_{sca} TO rapidporole;")
 
         dbh.execute_sql_queries(sql_queries)
 
