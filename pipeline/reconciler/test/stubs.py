@@ -187,6 +187,20 @@ class FakeConnection:
                            if row.get("ended_at") is not None
                            and row["ended_at"] >= horizon]
             matched.sort(key=lambda row: row["attempt_id"])
+        elif "work_unit_id = %s and attempt_id <> %s" in lowered:
+            # THE ATTEMPT-SERIES CENSUS (rule 4): the closure path asks its
+            # work unit's OTHER attempts whether any was accepted and how many
+            # scheduler-visible losses the series absorbed. Modelled as the
+            # real predicate rather than falling through to the by-attempt_id
+            # lookup below — where `params[0]` is a work_unit_id, that
+            # fallback would silently return whichever attempt happened to
+            # share that number, and a stub that answers the wrong question
+            # confidently is worse than one that cannot answer.
+            work_unit_id, excluded = params[0], params[1]
+            matched = [row for row in self.rows.values()
+                       if row.get("work_unit_id") == work_unit_id
+                       and row.get("attempt_id") != excluded]
+            matched.sort(key=lambda row: row["attempt_id"])
         else:
             attempt_id = params[0]
             row = self.rows.get(attempt_id)
