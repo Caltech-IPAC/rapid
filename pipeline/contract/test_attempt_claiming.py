@@ -67,7 +67,7 @@ def test_two_concurrent_resolvers_converge_on_one_attempt(conn, second_conn):
     A resolver without the recheck passes a stubbed test and fails here with
     a unique violation or two rows. That is the whole point of the tier.
     """
-    logical_job_id, run_id = fixture.make_logical_job(conn)
+    logical_job_id, run_id = fixture.make_logical_job(conn, with_binding=True)
     conn.commit()
 
     barrier = threading.Barrier(2)
@@ -117,7 +117,7 @@ def test_a_second_application_attempt_index_is_a_new_attempt(conn):
     history rule 3 requires (four distinct records, each answering one
     question).
     """
-    logical_job_id, run_id = fixture.make_logical_job(conn)
+    logical_job_id, run_id = fixture.make_logical_job(conn, with_binding=True)
     conn.commit()
     writer = _writer(conn)
 
@@ -152,7 +152,7 @@ def test_resolving_the_same_index_twice_is_idempotent(conn):
     contention involved), so a resolver broken in only one of the two ways is
     still caught.
     """
-    logical_job_id, run_id = fixture.make_logical_job(conn)
+    logical_job_id, run_id = fixture.make_logical_job(conn, with_binding=True)
     conn.commit()
     writer = _writer(conn)
 
@@ -172,6 +172,41 @@ def test_resolving_the_same_index_twice_is_idempotent(conn):
 
     assert first == again, f"re-resolving produced a second row: {first} vs {again}"
     assert len(_attempt_rows(conn, logical_job_id)) == 1
+
+
+def test_the_resolver_refuses_a_logical_job_with_no_binding(conn):
+    """An attempt cannot be claimed under a job with no sealed binding (rule 7).
+
+    THE SCHEMA ENFORCES THE SEALED SUBMISSION, not convention. The resolver's
+    INSERT copies the execution binding from `logical_jobs`, and
+    `attempts_state_submitted_check` requires a `submitted` row at
+    `schema_version >= 2` to carry a job-definition ARN, an image digest and
+    a manifest checksum. So a binding-less logical job cannot produce an
+    attempt at all: "the sealed submission pins its manifest checksum and
+    exact queue/job-definition/image identities" is a database invariant here,
+    not a code review item.
+
+    Found by this suite rather than reasoned out: the first version of the
+    fixture created binding-less logical jobs, and the resolver refused them
+    from inside PL/pgSQL. Nothing in this repository could have refused it —
+    which is the argument for the tier, made by the tier.
+    """
+    import psycopg2
+
+    logical_job_id, run_id = fixture.make_logical_job(conn)   # no binding
+    conn.commit()
+    writer = _writer(conn)
+    moment = _now()
+
+    with pytest.raises(psycopg2.errors.CheckViolation) as caught:
+        writer.resolve_attempt(
+            _identity(run_id, logical_job_id), moment, moment,
+            scheduler_job_id=f"job-{fixture.RUN_TAG}",
+            application_attempt_index=1, scheduler_attempt_index=1)
+    conn.rollback()
+
+    assert caught.value.pgcode == "23514", caught.value.pgcode
+    assert "attempts_state_submitted_check" in str(caught.value)
 
 
 def test_the_schema_refuses_an_outcome_on_an_in_flight_attempt(conn):

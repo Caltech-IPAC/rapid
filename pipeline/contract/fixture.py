@@ -143,20 +143,50 @@ def ensure_definition(conn):
     conn.commit()
 
 
-def make_logical_job(conn, run_id=None):
+def make_logical_job(conn, run_id=None, with_binding=False):
     """One `logical_jobs` row, returning its id.
 
     `attempts.logical_job_id` carries an FK to this table, so every attempt
     fixture needs a parent. A fixture that cannot satisfy the real
     constraints is a fixture testing a schema nobody deployed.
+
+    **`with_binding` IS REQUIRED FOR ANYTHING GOING THROUGH `resolve_attempt`**,
+    and finding that out is a small worked example of why this tier exists.
+    The resolver's INSERT copies the execution binding from the logical job
+    (`v_binding.job_definition_arn` and friends), and
+    `attempts_state_submitted_check` — as amended by migration 013 — requires
+    a `submitted` row at `schema_version >= 2` to carry a non-NULL
+    job-definition ARN, image digest and manifest checksum. A binding-less
+    logical job therefore produces an attempt the schema refuses, from inside
+    the resolver, with the failure attributed to a CHECK constraint two levels
+    away from the fixture that caused it.
+
+    That is the sealed-submission discipline of rule 7 being enforced by the
+    database rather than by convention: an attempt cannot exist without the
+    exact queue/job-definition/image identity it will run under. No fake
+    executor in this repository enforces it, which is exactly why the first
+    version of this fixture did not set it.
     """
     run_id = run_id or f"contract-{RUN_TAG}"
     logical_job_id = f"lj-{RUN_TAG}-{uuid.uuid4().hex[:8]}"
+    columns = ["logical_job_id", "run_id"]
+    values = [logical_job_id, run_id]
+    if with_binding:
+        columns += ["job_definition_arn", "job_definition_rev",
+                    "image_digest", "release_identity", "manifest_checksum"]
+        values += [
+            "arn:aws:batch:us-east-1:855590908525:job-definition/contract:1",
+            1,
+            "sha256:" + "0" * 64,
+            f"contract-release-{RUN_TAG}",
+            "sha256:" + "1" * 64,
+        ]
+    placeholders = ", ".join(["%s"] * len(values))
     with conn.cursor() as cur:
         cur.execute(
-            "INSERT INTO logical_jobs (logical_job_id, run_id)"
-            " VALUES (%s, %s) ON CONFLICT DO NOTHING",
-            [logical_job_id, run_id])
+            f"INSERT INTO logical_jobs ({', '.join(columns)})"
+            f" VALUES ({placeholders}) ON CONFLICT DO NOTHING",
+            values)
     return logical_job_id, run_id
 
 
