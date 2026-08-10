@@ -122,15 +122,20 @@ def test_two_concurrent_resolvers_converge_on_one_attempt(conn, second_conn):
         f"one identity resolved to {len(rows)} attempt rows: {rows}")
 
 
-def test_a_second_application_attempt_index_is_a_new_attempt(conn):
+def test_a_second_scheduler_attempt_is_a_new_attempt_row(conn):
     """Rule 5: a retry is a NEW attempt row, not an update of the old one.
 
-    Same logical job, a different `application_attempt_index` — which is what
-    a RAPID retry is. The resolver must not converge these onto one row: the
-    partial unique index that makes the concurrent case converge is scoped to
-    the index, and a resolver that ignored it would silently overwrite the
-    history rule 3 requires (four distinct records, each answering one
-    question).
+    **THE TWO INDICES ANSWER DIFFERENT QUESTIONS**, which this test exists to
+    pin and which the resolver enforces: `scheduler_attempt_index` identifies
+    the physical execution the row records, and `application_attempt_index` is
+    the claim staked on it. A retry is therefore a new SCHEDULER attempt, and
+    resolving one scheduler attempt under two application claims is refused
+    outright — "attempt N is already claimed by application attempt 1; caller
+    claims attempt 2. Refusing to hand one row to two attempts."
+
+    That refusal is the identity chain of rule 3 holding at the database
+    boundary, and it is invisible to a fake resolver, which has no notion of
+    which index means what.
     """
     logical_job_id, run_id = fixture.make_logical_job(conn, with_binding=True)
     conn.commit()
@@ -148,14 +153,46 @@ def test_a_second_application_attempt_index_is_a_new_attempt(conn):
     second = writer.resolve_attempt(
         identity, moment, moment,
         scheduler_job_id=_scheduler_job_id(logical_job_id),
-        application_attempt_index=2, scheduler_attempt_index=1)
+        application_attempt_index=2, scheduler_attempt_index=2)
     conn.commit()
 
     assert first != second, (
-        "attempt 2 resolved onto attempt 1's row; every retry is a new RAPID "
-        "attempt (rule 5)")
+        "the second scheduler attempt resolved onto the first's row; every "
+        "retry is a new RAPID attempt (rule 5)")
     rows = _attempt_rows(conn, logical_job_id)
     assert len(rows) == 2, f"expected two attempt rows, got {rows}"
+
+
+def test_one_scheduler_attempt_is_never_claimed_by_two_applications(conn):
+    """The resolver refuses to hand one row to two application claims.
+
+    The complement of the test above: holding `scheduler_attempt_index`
+    fixed while advancing `application_attempt_index` asks for exactly the
+    thing rule 3 forbids — one physical execution answering for two logical
+    claims. Pinned here so the refusal cannot quietly become an overwrite.
+    """
+    import psycopg2
+
+    logical_job_id, run_id = fixture.make_logical_job(conn, with_binding=True)
+    conn.commit()
+    writer = _writer(conn)
+    identity = _identity(run_id, logical_job_id)
+    moment = _now()
+
+    writer.resolve_attempt(
+        identity, moment, moment,
+        scheduler_job_id=_scheduler_job_id(logical_job_id),
+        application_attempt_index=1, scheduler_attempt_index=1)
+    conn.commit()
+
+    with pytest.raises(psycopg2.errors.RaiseException) as caught:
+        writer.resolve_attempt(
+            identity, moment, moment,
+            scheduler_job_id=_scheduler_job_id(logical_job_id),
+            application_attempt_index=2, scheduler_attempt_index=1)
+    conn.rollback()
+
+    assert "Refusing to hand one row to two attempts" in str(caught.value)
 
 
 def test_resolving_the_same_index_twice_is_idempotent(conn):
