@@ -111,21 +111,32 @@ def make_attempt(conn, work_unit_id=None, error_category=None,
     else takes its default so this fixture cannot quietly depend on a column
     the production query does not use.
     """
+    run_id = f"brief-a-{RUN_TAG}"
     with conn.cursor() as cur:
-        # `schema_version` is NOT NULL with no default: the attempts table
-        # requires every row to state which schema wrote it. Read from the
-        # table's own current maximum rather than hard-coded, so this fixture
-        # does not pin a number a later migration moves.
+        # THE TABLE'S OWN NOT-NULL-WITHOUT-DEFAULT SET, read from
+        # information_schema rather than guessed one round trip at a time:
+        # schema_version, run_id, logical_job_id, lifecycle_state, created_at,
+        # submitted_at. `logical_job_id` is text carrying an FK to
+        # logical_jobs, so the parent row is created first — a fixture that
+        # cannot satisfy the real constraints is a fixture testing a schema
+        # nobody deployed.
         cur.execute("SELECT coalesce(max(schema_version), 1) FROM attempts")
         schema_version = cur.fetchone()[0]
+        logical_job_id = f"lj-{RUN_TAG}-{uuid.uuid4().hex[:8]}"
+        cur.execute(
+            "INSERT INTO logical_jobs (logical_job_id, run_id)"
+            " VALUES (%s, %s) ON CONFLICT DO NOTHING",
+            [logical_job_id, run_id])
         cur.execute(
             "INSERT INTO attempts"
-            "  (run_id, schema_version, lifecycle_state, work_unit_id,"
-            "   error_category, registered_at)"
-            " VALUES (%s, %s, %s, %s, %s, %s)"
+            "  (run_id, schema_version, logical_job_id, lifecycle_state,"
+            "   created_at, submitted_at, work_unit_id, error_category,"
+            "   registered_at)"
+            " VALUES (%s, %s, %s, %s, now(), now(), %s, %s,"
+            "         CASE WHEN %s THEN now() ELSE NULL END)"
             " RETURNING attempt_id",
-            [f"brief-a-{RUN_TAG}", schema_version, lifecycle, work_unit_id,
-             error_category, "now()" if registered else None])
+            [run_id, schema_version, logical_job_id, lifecycle, work_unit_id,
+             error_category, registered])
         return cur.fetchone()[0]
 
 
