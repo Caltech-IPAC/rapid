@@ -78,13 +78,22 @@ rapid-job = "pipeline.entrypoints.job:main"
 # statement of what "installing RAPID" means today: the modules the services
 # and payloads import, not the whole working directory.
 #
-# `pipeline` and `database` carry NO `__init__.py` (PEP 420 namespace
-# packages) while `observability` and `submission` do — hence
-# `find-namespace`, which handles both. Using plain `find` here silently
-# drops the two namespace trees and yields a wheel whose `import pipeline`
+# `pipeline`, `database` and `modules` carry NO `__init__.py` (PEP 420
+# namespace packages) while `observability` and `submission` do — hence
+# `namespaces = true`, which handles both. Using plain `find` here silently
+# drops the namespace trees and yields a wheel whose `import pipeline`
 # fails, which is the exact failure mode this outcome is meant to end.
+#
+# `modules` IS LOAD-BEARING and was missing from the first version of this
+# list: `pipeline/stages/post_db.py` does `import
+# modules.utils.rapid_pipeline_subs`, so an installed distribution without it
+# gives `ModuleNotFoundError: No module named 'modules'` the moment the job
+# entrypoint imports its stage sequences — caught by the entry-point launch
+# check on rapid-admin, which is precisely what that check is for. The
+# science-algorithm subtrees (coadd, sfft, zogy, ...) come with it; they are
+# what the payload's stages call into.
 packages.find = {namespaces = true, include = [
-    "pipeline*", "observability*", "submission*", "database*",
+    "pipeline*", "observability*", "submission*", "database*", "modules*",
 ]}
 
 [tool.setuptools.package-data]

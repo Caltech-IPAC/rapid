@@ -15,16 +15,32 @@ assert the property itself: two genuinely concurrent transactions, and one
 row at the end.
 """
 
+import datetime
 import threading
 
 import pytest
 
-from observability.attempts import AttemptWriter
+from observability.attempts import AttemptIdentity, AttemptWriter
 from pipeline.contract import fixture
 
 
 def _writer(conn):
     return AttemptWriter(fixture.executor(conn))
+
+
+def _identity(run_id, logical_job_id):
+    """The identity triple this suite claims under.
+
+    An exposure/SCA-grain identity, which is what `science` attempts carry;
+    `field`/`processing_date` stay unset because a row never carries a field
+    number smeared into `exposure_id` as a sentinel.
+    """
+    return AttemptIdentity(run_id=run_id, logical_job_id=logical_job_id,
+                           exposure_id=1, sca=1)
+
+
+def _now():
+    return datetime.datetime.now(datetime.timezone.utc)
 
 
 def _attempt_rows(conn, logical_job_id):
@@ -61,12 +77,12 @@ def test_two_concurrent_resolvers_converge_on_one_attempt(conn, second_conn):
     def resolve(slot, connection):
         try:
             writer = _writer(connection)
+            moment = _now()
             barrier.wait(timeout=30)
             attempt_id = writer.resolve_attempt(
-                run_id=run_id, logical_job_id=logical_job_id,
+                _identity(run_id, logical_job_id), moment, moment,
                 scheduler_job_id=f"job-{fixture.RUN_TAG}",
-                application_attempt_index=1, scheduler_attempt_index=1,
-                exposure_id=1, sca=1, sky_tile=None)
+                application_attempt_index=1, scheduler_attempt_index=1)
             connection.commit()
             results[slot] = attempt_id
         except Exception as exc:  # noqa: BLE001 - reported, not swallowed
@@ -105,18 +121,19 @@ def test_a_second_application_attempt_index_is_a_new_attempt(conn):
     conn.commit()
     writer = _writer(conn)
 
+    identity = _identity(run_id, logical_job_id)
+    moment = _now()
+
     first = writer.resolve_attempt(
-        run_id=run_id, logical_job_id=logical_job_id,
+        identity, moment, moment,
         scheduler_job_id=f"job-{fixture.RUN_TAG}-1",
-        application_attempt_index=1, scheduler_attempt_index=1,
-        exposure_id=1, sca=1, sky_tile=None)
+        application_attempt_index=1, scheduler_attempt_index=1)
     conn.commit()
 
     second = writer.resolve_attempt(
-        run_id=run_id, logical_job_id=logical_job_id,
+        identity, moment, moment,
         scheduler_job_id=f"job-{fixture.RUN_TAG}-2",
-        application_attempt_index=2, scheduler_attempt_index=1,
-        exposure_id=1, sca=1, sky_tile=None)
+        application_attempt_index=2, scheduler_attempt_index=1)
     conn.commit()
 
     assert first != second, (
@@ -139,17 +156,18 @@ def test_resolving_the_same_index_twice_is_idempotent(conn):
     conn.commit()
     writer = _writer(conn)
 
+    identity = _identity(run_id, logical_job_id)
+    moment = _now()
+
     first = writer.resolve_attempt(
-        run_id=run_id, logical_job_id=logical_job_id,
+        identity, moment, moment,
         scheduler_job_id=f"job-{fixture.RUN_TAG}",
-        application_attempt_index=1, scheduler_attempt_index=1,
-        exposure_id=1, sca=1, sky_tile=None)
+        application_attempt_index=1, scheduler_attempt_index=1)
     conn.commit()
     again = writer.resolve_attempt(
-        run_id=run_id, logical_job_id=logical_job_id,
+        identity, moment, moment,
         scheduler_job_id=f"job-{fixture.RUN_TAG}",
-        application_attempt_index=1, scheduler_attempt_index=1,
-        exposure_id=1, sca=1, sky_tile=None)
+        application_attempt_index=1, scheduler_attempt_index=1)
     conn.commit()
 
     assert first == again, f"re-resolving produced a second row: {first} vs {again}"
