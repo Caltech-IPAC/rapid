@@ -379,7 +379,7 @@ def run_single_core_job(jids,overlapping_fields_list,meta_list,index_thread):
             dateobs = meta_dict["dateobs"]
             pid = meta_dict["pid"]
 
-            obs_date = dateobs.split()[0].replace("-","")
+            obs_date = str(dateobs).split()[0].replace("-","")
 
 
             # Check whether done file exists in S3 bucket for job, and skip if it exists.
@@ -771,7 +771,7 @@ if __name__ == '__main__':
 
         sca = meta_dict["sca"]
         dateobs = meta_dict["dateobs"]
-        obs_date = dateobs.split()[0].replace("-","")
+        obs_date = str(dateobs).split()[0].replace("-","")
 
         tablename = f"sources_{obs_date}_{sca}"
 
