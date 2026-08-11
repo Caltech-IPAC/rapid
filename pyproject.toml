@@ -89,6 +89,12 @@ test = ["pytest>=7"]
 rapid-reconciler = "pipeline.reconciler.main:main"
 rapid-operator = "pipeline.operator.service:main"
 rapid-job = "pipeline.entrypoints.job:main"
+# The fourth entry, and the first that is a one-shot subcommand CLI rather
+# than a long-running service: the operator surface rule 16 requires, so
+# that routine operation reaches the audited mutation functions through a
+# constrained procedure instead of handwritten SQL at a psql prompt. Same
+# bare `module:main` convention as the three above.
+rapidctl = "pipeline.operatorctl.main:main"
 
 [tool.setuptools]
 # EXPLICIT PACKAGE LIST, NOT AUTO-DISCOVERY. Auto-discovery over this repo
