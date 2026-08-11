@@ -55,7 +55,8 @@ from astropy.io import fits
 from astropy.coordinates import SkyCoord
 from astropy.table import QTable, join
 
-import database.modules.utils.rapid_db as db
+from database.modules.utils.rapid_db_connect import LANE_TRANSACTION, connect
+from pipeline.repositories.diffimages import DiffImageRepository
 import modules.utils.rapid_pipeline_subs as util
 import database.modules.utils.roman_tessellation_db as tessellation
 from pipeline.runtime.process import run_tool
@@ -571,19 +572,25 @@ if __name__ == '__main__':
 
     # Open database connection.
 
-    dbh = db.RAPIDDB()
+    # THE REPOSITORY, NOT `RAPIDDB` (conformance rule 17, brief G4). Two
+    # things change here and both are the point of the carve:
+    #
+    #   * The connection comes from `rapid_db_connect.connect()`, which
+    #     RAISES a typed error rather than exiting the interpreter from a
+    #     constructor -- so the `if dbh.exit_code >= 64: exit(...)` guard
+    #     that stood here is gone, and the exit-code contract moves to the
+    #     `__main__` block at the bottom of this file, which is what owns
+    #     exiting.
+    #   * The overlap query returns NAMED records. The 24-position unpack
+    #     below (`record[0]` ... `record[24]`) was one inserted column away
+    #     from silently mis-assigning every coordinate it read.
 
-    if dbh.exit_code >= 64:
-        exit(dbh.exit_code)
+    conn = connect("rapid-forced-photometry", lane=LANE_TRANSACTION)
+    diffimages = DiffImageRepository(conn)
 
     # Get all filter names.
 
-    records = dbh.get_filters()
-    filters = {}
-    for record in records:
-        fid = record[0]
-        filter = record[1]
-        filters[fid] = filter
+    filters = {row.fid: row.name for row in diffimages.filters()}
 
 
     # Get all difference images that possibly overlap the field by
@@ -593,11 +600,11 @@ if __name__ == '__main__':
     # filename,checksum,infobitssci,infobitsref,rfid,refimfilename,refimchecksum,
     # dist_field_sciimg_center (degrees).
 
-    records = dbh.get_possible_overlapping_diffimages(ppid_sci,
-                                                      jd_earliest,
-                                                      ra0_field,
-                                                      dec0_field,
-                                                      match_radius_overlap_field)
+    records = diffimages.possibly_overlapping(ppid_sci,
+                                              jd_earliest,
+                                              ra0_field,
+                                              dec0_field,
+                                              match_radius_overlap_field)
 
     nrecs = len(records)
 
@@ -666,23 +673,28 @@ if __name__ == '__main__':
     # Loop over records returned from database query.
 
     for record in records:
-        pid = record[0]
-        expid = record[1]
-        sca = record[2]
-        fid = record[3]
-        field = record[4]
-        jd = record[5]
-        ra0 = record[6]
-        dec0 = record[7]
-        ra1 = record[8]
-        dec1 = record[9]
-        ra2 = record[10]
-        dec2 = record[11]
-        ra3 = record[12]
-        dec3 = record[13]
-        ra4 = record[14]
-        dec4 = record[15]
-        filename = record[16]
+        # Named, not positional (brief G4). The block this replaced read
+        # twenty-five fields by index, so a column added anywhere in the
+        # repository's SELECT list would have shifted every later one --
+        # `ra1` quietly becoming `dec1` and the photometry silently wrong
+        # about where it looked, with nothing raising.
+        pid = record.pid
+        expid = record.expid
+        sca = record.sca
+        fid = record.fid
+        field = record.field
+        jd = record.jd
+        ra0 = record.ra0
+        dec0 = record.dec0
+        ra1 = record.ra1
+        dec1 = record.dec1
+        ra2 = record.ra2
+        dec2 = record.dec2
+        ra3 = record.ra3
+        dec3 = record.dec3
+        ra4 = record.ra4
+        dec4 = record.dec4
+        filename = record.filename
 
         # TODO The database query returns ZOGY difference images.  E.g.,
         # s3://rapid-product-files/20260519/jid91919/zogy_diffimage_masked.fits
@@ -695,14 +707,14 @@ if __name__ == '__main__':
         else:
             filename = filename.replace("zogy_diffimage","sfftdiffimage")
 
-        checksum = record[17]
-        infobitssci = record[18]
-        infobitsref = record[19]
-        rfid = record[20]
-        refimfilename = record[21]
-        refimchecksum = record[22]
-        ppid_ref = record[23]
-        dist_field_sciimg_center = record[24]
+        checksum = record.checksum
+        infobitssci = record.infobitssci
+        infobitsref = record.infobitsref
+        rfid = record.rfid
+        refimfilename = record.refimfilename
+        refimchecksum = record.refimchecksum
+        ppid_ref = record.refim_ppid
+        dist_field_sciimg_center = record.dist
 
         i += 1
 

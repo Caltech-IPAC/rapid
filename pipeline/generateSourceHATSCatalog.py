@@ -24,7 +24,8 @@ from hats_import.catalog.arguments import ImportArguments
 from hats_import.pipeline import pipeline_with_client
 from hats_import.catalog.file_readers import CsvReader
 
-import database.modules.utils.rapid_db as db
+from database.modules.utils.rapid_db_connect import LANE_TRANSACTION, connect
+from pipeline.repositories.skycatalogs import SkyCatalogRepository
 from pipeline.runtime.process import run_tool
 
 
@@ -156,24 +157,17 @@ if __name__ == '__main__':
 
     # Open database connection.
 
-    dbh = db.RAPIDDB()
+    # THE REPOSITORY, NOT `RAPIDDB` (conformance rule 17, brief G4). The
+    # connection helper raises a typed error instead of exiting from a
+    # constructor, so the `exit(dbh.exit_code)` guard is gone and this
+    # file's `__main__` block owns the exit code.
 
-    if dbh.exit_code >= 64:
-        exit(dbh.exit_code)
+    conn = connect("rapid-source-hats", lane=LANE_TRANSACTION)
+    catalogs = SkyCatalogRepository(conn)
 
     # Query for list of unique source IDs (sid) from parent Sources database table.
 
-    query = f"SELECT sid FROM sources ORDER BY sid;"
-    sql_queries = []
-    sql_queries.append(query)
-    records = dbh.execute_sql_queries(sql_queries,debug)
-
-    sid_list = []
-
-    for record in records:
-
-        sid = record[0]
-        sid_list.append(sid)
+    sid_list = catalogs.source_ids()
 
     nrows_per_file = 100000
     n_sids = len(sid_list)
@@ -202,10 +196,8 @@ if __name__ == '__main__':
         print(f"file_num,start_index,end_index = {file_num},{start_index},{end_index}")
         print(f"start_sid,end_sid = {start_sid},{end_sid}")
 
-        query = f"SELECT {sources_cols} FROM sources WHERE sid >= {start_sid} and sid <= {end_sid} ORDER BY sid;"
-        sql_queries = []
-        sql_queries.append(query)
-        records = dbh.execute_sql_queries(sql_queries,debug)
+        records = catalogs.source_columns_in_range(
+            sources_cols.split(","), start_sid, end_sid)
 
         with open(filename_csv, 'w', newline='') as csvfile:
             writer = csv.writer(csvfile)
@@ -218,7 +210,7 @@ if __name__ == '__main__':
 
     # Close database connection.
 
-    dbh.close()
+    conn.close()
 
 
     # Code-timing benchmark.

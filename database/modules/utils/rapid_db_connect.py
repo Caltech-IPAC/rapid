@@ -90,9 +90,18 @@ class DBError(Exception):
     Carries ``error_category`` so the runtime's taxonomy serializer can
     map it onto the attempt record's allowlist (migration 013's
     ``attempt_error_categories``) without a second lookup table.
+
+    Also carries ``exit_code``: the process-exit code an ENTRYPOINT should
+    use when this error reaches the top of a one-shot program. 64 is
+    ``rapid_db.py``'s long-documented "cannot connect to database", and
+    keeping the number here is what let ``RAPIDDB.__init__``'s five
+    ``exit(64)`` calls become raises without changing the contract any
+    wrapper script or operator already relies on (rule 17: library code
+    raises, entrypoints exit).
     """
 
     error_category = "db_error"
+    exit_code = 64
 
 
 class DBUnavailable(DBError):

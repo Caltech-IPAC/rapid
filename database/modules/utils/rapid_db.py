@@ -199,6 +199,28 @@ class RAPIDDB:
     BorrowedConnection above and the borrowing() classmethod below.  In that
     mode nothing here commits, nothing here rolls back, and nothing here
     calls exit() -- the caller owns the transaction and the process.
+
+    **THIS CLASS IS FROZEN (conformance rule 17; implementation brief G).**
+
+    No new capability lands here.  New database access goes through
+    `rapid_db_connect.connect()` and a narrow repository over it -- see
+    `pipeline/repositories/` for the first two, which is the shape the rest
+    of this class's 5,000 lines migrate into over time.  Adding a
+    thirty-third query method here would deepen exactly the surface that
+    migration has to unwind, and would inherit this class's three
+    incompatible error contracts (the exit_code flag, the `return None` on
+    failure, and the raw driver exceptions from the bookkeeping queries in
+    __init__) rather than the one contract the replacement has.
+
+    Frozen is not deprecated: the existing methods work, their callers are
+    not broken, and nothing here is scheduled for deletion.  What is
+    forbidden is GROWTH.
+
+    Changes that are still welcome: bug fixes, parameterization of
+    interpolated SQL, and conversions of the kind __init__ has just had --
+    the five `exit(64)` calls that terminated the interpreter from library
+    code are now a raised `DBCredentialError` (which carries `exit_code`,
+    so an entrypoint that owns exiting can still honour the codes above).
     """
 
 
@@ -260,25 +282,64 @@ class RAPIDDB:
 
         print("dbserver,dbname,dbport,dbuser =",dbserver,dbname,dbport,dbuser)
 
-        if dbserver is None:
-            print("*** Error: Env. var. DBSERVER not set; quitting...")
-            exit(64)
 
-        if dbport is None:
-            print("*** Error: Env. var. DBPORT not set; quitting...")
-            exit(64)
+        # LIBRARY CODE DOES NOT TERMINATE THE PROCESS (conformance rule 17).
+        #
+        # These five checks called exit(64) -- straight out of a constructor,
+        # in a module 25 call sites import.  The exit-code CONTRACT is not
+        # the defect and is unchanged: 64 still means "cannot connect to
+        # database", and the class docstring above still documents the
+        # family.  What was wrong was WHERE the contract was enforced.  A
+        # library that exits cannot be caught, cannot be cleaned up after,
+        # cannot report which of five variables was missing to a caller that
+        # might know how to supply it, and cannot be tested without a
+        # subprocess.  Worse, it took the process with it in contexts that
+        # had no business dying: `pipeline/stages/alert_production.py:184-187`
+        # records every alert job on the mock's first wave exiting 64 at a
+        # RAPIDDB() line, because a Batch payload carries no DBSERVER.
+        #
+        # The exception carries the code it would have exited with, so the
+        # entrypoints that legitimately own exiting can still honour the
+        # contract -- `exit_code` on the exception, `sys.exit(exc.exit_code)`
+        # at the process boundary.  That is the move rule 17 asks for: the
+        # exit-code contract migrates to the entrypoints that own exiting,
+        # rather than being abolished.
+        #
+        # WHY DBCredentialError AND NOT A NEW TYPE.  `rapid_db_connect.py`
+        # already has the vocabulary -- DBError / DBUnavailable /
+        # DBCredentialError, with `error_category` the runtime's taxonomy
+        # serializer reads -- and a missing DBSERVER is precisely its
+        # "config_invalid" case.  A second family here would be the third
+        # error vocabulary in one package.  See that module's docstring for
+        # which family applies where.
 
-        if dbname is None:
-            print("*** Error: Env. var. DBNAME not set; quitting...")
-            exit(64)
+        # IMPORTED HERE, NOT AT MODULE SCOPE, and the direction is why:
+        # `rapid_db_connect` imports `get_db_credentials` FROM THIS MODULE
+        # (rapid_db_connect.py:64), so a module-level import back would be a
+        # cycle -- and one that fails at interpreter start rather than at a
+        # call site, taking down every importer of either module.  A
+        # function-local import runs after both modules are initialized.
+        from database.modules.utils.rapid_db_connect import DBCredentialError
 
-        if dbuser is None:
-            print("*** Error: Env. var. DBUSER not set (or RAPID_DB_SECRET_ID secret missing 'username'); quitting...")
-            exit(64)
+        missing = [name for name,value in (('DBSERVER',dbserver),
+                                           ('DBPORT',dbport),
+                                           ('DBNAME',dbname),
+                                           ('DBUSER',dbuser),
+                                           ('DBPASS',dbpass))
+                   if value is None]
 
-        if dbpass is None:
-            print("*** Error: Env. var. DBPASS not set (or RAPID_DB_SECRET_ID secret missing 'password'); quitting...")
-            exit(64)
+        if missing:
+
+            # Reported ALL AT ONCE rather than one exit per variable.  The
+            # old form told an operator about DBSERVER, and only after they
+            # fixed it did it mention DBPORT -- five round trips to learn
+            # what one message can say.
+            self.exit_code = 64
+            raise DBCredentialError(
+                "cannot connect to database: environment variable(s) not set: "
+                + ", ".join(missing)
+                + " (DBUSER/DBPASS may instead come from the "
+                  "RAPID_DB_SECRET_ID secret's 'username'/'password')")
 
 
         # Connect to database

@@ -43,6 +43,41 @@ The predicates are deliberately conservative — an exception with no
 `pgcode`, or a `pgcode` that is not the one asked about, is NOT that error.
 An unrecognized failure must propagate, never be absorbed by a branch that
 guessed.
+
+THE TWO TYPED-ERROR VOCABULARIES, AND WHERE EACH APPLIES
+--------------------------------------------------------
+
+Rule 17 asks for one documented vocabulary. There are two families, they
+are not competing, and this is the statement of which is which — because
+undocumented, they read as duplication and the next author picks one by
+coin-flip.
+
+**This module classifies what the DATABASE said about a statement.** Its
+inputs are driver exceptions carrying a SQLSTATE; its outputs are
+predicates. It never constructs an error to raise at a caller (except
+`FakePgError`, which exists only so tests raise the real shape). Reach for
+it when a statement failed and the question is *which* failure —
+"unique violation" means a concurrent claimant won the race, and that is a
+branch, not a crash.
+
+**`database/modules/utils/rapid_db_connect.py` classifies whether a
+CONNECTION could be established, and what to do about it.** Its family —
+`DBError` / `DBUnavailable` / `DBCredentialError` — is raised, not
+predicated, and carries `error_category` for the attempt record's taxonomy
+plus `exit_code` for the entrypoint that owns exiting. Reach for it when
+there is no connection to run a statement on.
+
+They meet at exactly one seam: a SQLSTATE this module recognizes can only
+be produced by a connection that module established. Nothing needs to
+convert between them, and nothing should — a `DBUnavailable` has no
+SQLSTATE, and a 23505 says nothing about credentials.
+
+A third surface, `pipeline/operatorctl/contract.py`, classifies DRAFT
+migration 047's operator-contract refusals (RA001 expected-state mismatch,
+RA002 idempotency conflict). It is this module's kind — SQLSTATE
+classification — and reads the code the same way `sqlstate_of` does; it
+lives beside the CLI rather than here because the codes are the operator
+API's, not the intent layer's.
 """
 
 #: PostgreSQL SQLSTATE 23505 — unique_violation. Raised by a partial unique

@@ -51,7 +51,8 @@ from hats_import.catalog.arguments import ImportArguments
 from hats_import.pipeline import pipeline_with_client
 from hats_import.catalog.file_readers import ParquetReader
 
-import database.modules.utils.rapid_db as db
+from database.modules.utils.rapid_db_connect import LANE_TRANSACTION, connect
+from pipeline.repositories.skycatalogs import SkyCatalogRepository
 from pipeline.runtime.process import run_tool
 
 
@@ -186,22 +187,25 @@ if __name__ == '__main__':
 
     # Open database connection.
 
-    dbh = db.RAPIDDB()
+    # THE REPOSITORY, NOT `RAPIDDB` (conformance rule 17, brief G4). The
+    # `if dbh.exit_code >= 64: exit(...)` guard is gone because the
+    # connection helper raises instead of exiting from library code; this
+    # file's `__main__` block owns the exit code.
+    #
+    # The calls this replaced also passed `debug` POSITIONALLY into
+    # `execute_sql_queries`' `params_list` parameter, which then evaluated
+    # `params_list[i]` against the integer -- and `execute_sql_queries`
+    # returns only the LAST query's rows regardless of how many it was
+    # given. Neither trap survives a method that issues one query and
+    # returns its own rows.
 
-    if dbh.exit_code >= 64:
-        exit(dbh.exit_code)
+    conn = connect("rapid-lightcurve-hats", lane=LANE_TRANSACTION)
+    catalogs = SkyCatalogRepository(conn)
 
 
     # Query for available fields.
 
-    sql_queries = []
-    sql_queries.append(f"select tablename from pg_tables where schemaname='public' and tablename like 'merges_%';")
-    records = dbh.execute_sql_queries(sql_queries,debug)
-
-    fields_list = []
-    for record in records:
-        field = record[0].replace("merges_","")
-        fields_list.append(field)
+    fields_list = catalogs.fields()
 
 
     # Code-timing benchmark.
@@ -226,19 +230,7 @@ if __name__ == '__main__':
 
         # Query for ordered list of unique IDs (aid) in AstroObjects_<field> database table.
 
-        aid_list = []
-        astroobjects_tablename = f"astroobjects_{field}"
-        merges_tablename = f"merges_{field}"
-
-        query = f"SELECT aid FROM {astroobjects_tablename} WHERE nsources > 0 ORDER BY aid;"
-        sql_queries = []
-        sql_queries.append(query)
-        records = dbh.execute_sql_queries(sql_queries,debug)
-
-        for record in records:
-
-            aid = record[0]
-            aid_list.append(aid)
+        aid_list = catalogs.astroobject_ids(field)
 
 
         # Partition AstroObjects_<field> database records and lightcurve data into nrows_per_file chunks.
@@ -274,12 +266,10 @@ if __name__ == '__main__':
 
             # Query for AstroObjects records.
 
-            query = f"SELECT {lc_astroobjects_cols} FROM {astroobjects_tablename} WHERE aid >= {start_aid} AND aid <= {end_aid} ORDER BY aid;"
-            sql_queries = []
-            sql_queries.append(query)
-            astroobjects_records = dbh.execute_sql_queries(sql_queries,debug)
-
             astroobjects_cols = lc_astroobjects_cols.split(",")
+            astroobjects_records = catalogs.astroobject_columns_in_range(
+                field, astroobjects_cols, start_aid, end_aid)
+
             sources_cols = lc_sources_cols.split(",")
             sources_cols.insert(0,lc_df_join_index)             # add the join-index column name (aid)
 
@@ -300,11 +290,9 @@ if __name__ == '__main__':
 
             # Query for Sources records.
 
-            query = f"SELECT {lc_df_join_index},a.{lc_sources_cols} FROM sources a, {merges_tablename} b " +\
-                    f"WHERE a.sid = b.sid AND aid >= {start_aid} AND aid <= {end_aid} ORDER BY aid,mjdobs;"
-            sql_queries = []
-            sql_queries.append(query)
-            sources_records = dbh.execute_sql_queries(sql_queries,debug)
+            sources_records = catalogs.joined_sources_in_range(
+                field, lc_sources_cols.split(","), lc_df_join_index,
+                start_aid, end_aid)
 
             for sources_record in sources_records:
 
@@ -367,7 +355,7 @@ if __name__ == '__main__':
 
     # Close database connection.
 
-    dbh.close()
+    conn.close()
 
 
     # Code-timing benchmark.
