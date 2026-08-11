@@ -111,7 +111,8 @@ class SubmissionFailed(RuntimeError):
 def submit_units(units, job_type, queue, job_definition, binding,
                  manifest_bucket, manifest_prefix, s3_client, batch_client,
                  execute, run_id=None, reason="vpo", job_name=None,
-                 now=None, reference_observation_window=None):
+                 now=None, reference_observation_window=None,
+                 protocol_commit=None):
     """Submit one array job for `units`, with its attempt rows pre-created.
 
     ORDER MATTERS, and it is the reason this is one function rather than two
@@ -145,6 +146,28 @@ def submit_units(units, job_type, queue, job_definition, binding,
     what "recorded by construction" means, and what lets a promotion gate
     refuse a product built under one. None means no override: the window's
     authoritative value is release content.
+
+    `protocol_commit` is a zero-argument callable that COMMITS the caller's
+    transaction, and it exists for one narrow, load-bearing reason (rule 7,
+    brief C1). The submission record's `calling` state must be DURABLE at the
+    instant `submit_job` goes out: a row saying "a request is in flight" is
+    worthless if it is still uncommitted when the process dies, because the
+    pass that later finds the wreckage sees `prepared` and confidently
+    concludes no call was made — a wrong answer stated with certainty, which
+    is worse than the no-answer this protocol replaces. So the caller supplies
+    the commit and this function calls it between marking `calling` and
+    calling Batch.
+
+    That is NOT a transaction spanning `SubmitJob` — it is the mechanism by
+    which none does. Rule 7's first clause ("No transaction spans SubmitJob")
+    still holds and is strengthened: the transaction is deliberately CLOSED
+    before the call, leaving nothing open across it.
+
+    None means "do not commit", leaving the protocol's writes in the caller's
+    transaction. Every caller predating this brief passes nothing and keeps
+    its existing transaction shape; what it forgoes is the durability of the
+    `calling` marker, which is no worse than the pre-protocol behaviour it
+    already had.
     """
     moment = now or datetime.datetime.now(datetime.timezone.utc)
     manifest = Manifest(units=list(units), batch_id=run_id, job_type=job_type,
@@ -173,6 +196,22 @@ def submit_units(units, job_type, queue, job_definition, binding,
     attempt_ids = _precreate(writer, batch.manifest, run_id, bound, moment,
                              execute=execute)
 
+    # 2a. THE SUBMISSION RECORD (rule 7, brief C1). Opened `prepared` — the
+    #     manifest exists and the rows exist, but nothing has been asked of
+    #     Batch, so a crash here loses nothing because no job can exist. The
+    #     protocol WRAPS the ordering above rather than replacing it: steps
+    #     1-4 and their reasoning are untouched.
+    #
+    #     Degrades to the pre-protocol path when DRAFT migration 044 is not
+    #     applied. That is what lets this branch run against the deployed
+    #     schema while the change request is pending — the submission still
+    #     happens, it simply has no durable record, exactly as before.
+    submission_id = _open_submission(
+        execute, batch=batch, job_name=job_name, queue=queue,
+        job_definition=job_definition, manifest_uri=manifest_uri,
+        binding=bound, attempt_ids=attempt_ids, moment=moment,
+        commit=protocol_commit)
+
     # 3. Submit. A failure here leaves the rows as reconciliation cases, not
     #    orphans: they are correct, they simply never got a scheduler job.
     try:
@@ -181,16 +220,26 @@ def submit_units(units, job_type, queue, job_definition, binding,
             store=store, client=batch_client, job_name=job_name,
             manifest_uri=manifest_uri)
     except Exception as exc:
+        # THE CALL'S OUTCOME IS AMBIGUOUS, AND THAT IS NOW RECORDED rather
+        # than inferred later from a NULL scheduler id and a stopwatch. The
+        # row moves to `unknown`, and a resolution pass answers it by
+        # positively re-querying Batch for the job name — never by calling
+        # submit_job again for this submission.
+        _mark_submission_unknown(execute, submission_id, exc,
+                                 commit=protocol_commit)
         logger.error(
             "SubmitJob failed for run %s after %d attempt row(s) were "
-            "pre-created; the rows remain as reconciliation cases and are "
-            "classified at the submission-anchored horizon: %s",
-            batch.manifest.batch_id, len(attempt_ids), exc)
+            "pre-created; the rows remain as reconciliation cases and the "
+            "submission record carries the ambiguity for identity re-query: "
+            "%s", batch.manifest.batch_id, len(attempt_ids), exc)
         raise SubmissionFailed(
             f"SubmitJob failed for run {batch.manifest.batch_id} after "
             f"{len(attempt_ids)} attempt row(s) were pre-created: {exc}",
             run_id=batch.manifest.batch_id,
             attempt_ids=attempt_ids) from exc
+
+    # 3a. The call returned an id: the happy path's end.
+    _mark_submission_bound(execute, submission_id, submission.job_id)
 
     # 4. Backfill the child job ids the scheduler has now assigned.
     _bind_scheduler_jobs(writer, submission, attempt_ids)
@@ -609,6 +658,106 @@ def _operational_class_for(job_type):
     if entry is not None:
         return entry[0]
     return opclasses.PROMPT_PROCESSING
+
+
+def _open_submission(execute, *, batch, job_name, queue, job_definition,
+                     manifest_uri, binding, attempt_ids, moment, commit=None):
+    """Open the submission record and mark it CALLING. Returns its id or None.
+
+    Returns None — and does nothing at all — when DRAFT migration 044 is not
+    applied, which is the deployed state until the change request lands. The
+    probe is `protocol.is_available`, asking the catalog rather than trying a
+    write and interpreting the failure: "the table is not deployed" and "the
+    write went wrong" are different facts and must not arrive as one.
+
+    THE COMMIT SITS BETWEEN `calling` AND THE CALLER'S `submit_batch`, which
+    is the entire reason this helper exists as a separate step rather than
+    being folded into the caller's flow — see `submit_units`'s docstring on
+    `protocol_commit` for why durability at that exact instant is what makes
+    the record worth having.
+
+    A protocol failure NEVER blocks a submission. If the record cannot be
+    opened, the submission still proceeds: the protocol's purpose is to make
+    an ambiguous outcome resolvable, and refusing to submit because the
+    bookkeeping failed would convert a diagnosis aid into an outage. The
+    failure is logged, `None` is returned, and the path degrades to exactly
+    the pre-protocol behaviour.
+    """
+    from submission import protocol
+
+    try:
+        if not protocol.is_available(execute):
+            logger.debug(
+                "the submissions table is absent (DRAFT 044 not applied); "
+                "submitting without a durable submission record")
+            return None
+
+        submission_id = protocol.prepare(
+            execute,
+            run_id=str(batch.manifest.batch_id),
+            job_type=batch.manifest.job_type,
+            job_name=job_name or f"rapid-{batch.manifest.batch_id}",
+            job_queue=queue,
+            job_definition=job_definition,
+            manifest_checksum=binding.manifest_checksum,
+            manifest_uri=manifest_uri,
+            array_size=batch.manifest.array_size,
+            now=moment)
+        protocol.attach_attempts(execute, submission_id, attempt_ids)
+        protocol.mark_calling(execute, submission_id, now=moment)
+    except Exception as exc:  # noqa: BLE001 - bookkeeping must not gate work
+        logger.warning(
+            "could not open the submission record for run %s: %s; the "
+            "submission proceeds without one",
+            batch.manifest.batch_id, exc)
+        return None
+
+    if commit is not None:
+        # DURABLE BEFORE THE CALL. Without this the `calling` marker is
+        # invisible to the only reader that matters — the pass that finds the
+        # wreckage after this process stops existing.
+        commit()
+    return submission_id
+
+
+def _mark_submission_bound(execute, submission_id, scheduler_job_id):
+    """CALLING -> BOUND, best-effort: the call returned an id."""
+    if submission_id is None:
+        return
+    from submission import protocol
+
+    try:
+        protocol.mark_bound(execute, submission_id, scheduler_job_id)
+    except Exception as exc:  # noqa: BLE001 - the work succeeded regardless
+        logger.warning(
+            "submission %s was not marked bound (%s); a resolution pass will "
+            "find the job by identity re-query and record it FOUND, which is "
+            "the same conclusion by the same evidence",
+            submission_id, exc)
+
+
+def _mark_submission_unknown(execute, submission_id, exc, commit=None):
+    """CALLING -> UNKNOWN: the call's outcome could not be judged.
+
+    Committed if the caller supplied a commit, for the same durability reason
+    the `calling` write is: this runs on the failure path, where the process
+    may be about to lose whatever it has not written down.
+    """
+    if submission_id is None:
+        return
+    from submission import protocol
+
+    try:
+        protocol.mark_unknown(
+            execute, submission_id,
+            detail=f"{type(exc).__name__}: {exc}")
+        if commit is not None:
+            commit()
+    except Exception as inner:  # noqa: BLE001 - never mask the real failure
+        logger.warning(
+            "submission %s could not be marked unknown (%s); its row stays "
+            "`calling`, which a resolution pass treats as equally ambiguous "
+            "and resolves the same way", submission_id, inner)
 
 
 def _bind_scheduler_jobs(writer, submission, attempt_ids):

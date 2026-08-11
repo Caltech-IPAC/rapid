@@ -161,6 +161,92 @@ def describe_in_batches(client, job_ids, chunk=DESCRIBE_CHUNK):
         yield DescribeBatch(requested=tuple(window), jobs=jobs, missing=missing)
 
 
+#: The job states `find_job_by_name` searches. Batch's `ListJobs` requires a
+#: status filter when filtering by name, and there is no "any" value — so the
+#: search covers every state a submitted job can be in, including the terminal
+#: ones. SUCCEEDED and FAILED matter as much as the live states here: a
+#: submission whose outcome was ambiguous may have been accepted, run and
+#: FINISHED before anyone came back to ask, and concluding `lost` because the
+#: job is no longer running would authorize a duplicate submission of work
+#: that has already been done.
+JOB_SEARCH_STATES = ("SUBMITTED", "PENDING", "RUNNABLE", "STARTING",
+                     "RUNNING", "SUCCEEDED", "FAILED")
+
+
+def find_job_by_name(client, job_name, job_queue, states=JOB_SEARCH_STATES):
+    """The job id of a job submitted under `job_name`, or None if none exists.
+
+    THE POSITIVE RE-QUERY rule 7's ambiguity protocol resolves by (brief C1:
+    "resolved to FOUND or LOST by positively re-querying Batch by
+    deterministic identity (job name carries the attempt identity — verify and
+    use the existing naming)"). The naming was verified rather than assumed:
+    `submission.submit.build_submit_kwargs` sets `jobName` to
+    `job_name or f"rapid-{manifest.batch_id}"`, a pure function of the batch
+    identity, and `submission.protocol` stores the name actually used on the
+    submission row — so this asks for the exact string the call used.
+
+    **WHY THIS IS POSSIBLE AT ALL, AND WHY IT IS THE WHOLE POINT.** The
+    ambiguous case is precisely the one where no `jobId` was ever received —
+    that is what makes it ambiguous — so `describe_jobs`, which takes ids,
+    cannot answer it. `ListJobs` filtered by name can, because the name was
+    determined BEFORE the call rather than assigned by it. A deterministic
+    identity chosen by the submitter is what turns "did my request arrive"
+    from unanswerable into a lookup.
+
+    Returns the first matching job id. A name matching several jobs means the
+    batch identity was reused across submissions, which
+    `S3ManifestStore.put`'s conditional create already refuses upstream; the
+    oldest match is returned and the collision logged, because reporting SOME
+    job of that name is the answer that prevents a duplicate submission,
+    which is the failure this call exists to avoid.
+    """
+    paginator = None
+    try:
+        paginator = client.get_paginator("list_jobs")
+    except Exception:  # noqa: BLE001 - a stub client may expose no paginator
+        paginator = None
+
+    found = []
+    for state in states:
+        kwargs = {"jobQueue": job_queue, "jobStatus": state,
+                  "filters": [{"name": "JOB_NAME", "values": [job_name]}]}
+        if paginator is not None:
+            pages = paginator.paginate(**kwargs)
+        else:
+            pages = [client.list_jobs(**kwargs)]
+        for page in pages:
+            for job in page.get("jobSummaryList", ()):
+                if job.get("jobName") == job_name and job.get("jobId"):
+                    found.append((job.get("createdAt") or 0, job["jobId"]))
+
+    if not found:
+        logger.info("no Batch job named %s on queue %s", job_name, job_queue)
+        return None
+    if len(found) > 1:
+        logger.warning(
+            "%d Batch jobs share the name %s on queue %s; returning the "
+            "oldest. A reused batch identity is refused upstream by the "
+            "manifest store's conditional create, so this means two "
+            "submissions claimed one identity", len(found), job_name,
+            job_queue)
+    found.sort()
+    return found[0][1]
+
+
+def batch_describer(client):
+    """A `describe(job_name, job_queue)` bound to this Batch client.
+
+    The shape `submission.protocol.resolve` injects. Kept here rather than in
+    `submission.protocol` for the layering reason that module's own docstring
+    gives: the protocol's resolution LOGIC — which is the part that can be
+    wrong — is testable without an AWS account precisely because the lookup
+    arrives as a callable, exactly as `submit_batch` takes its client.
+    """
+    def describe(job_name, job_queue):
+        return find_job_by_name(client, job_name, job_queue)
+    return describe
+
+
 def derive_attempt_indices(attempts):
     """Number a job's attempt history one-based, in the order Batch lists it.
 
