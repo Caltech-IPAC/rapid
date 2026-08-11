@@ -101,54 +101,6 @@ jobs:
       - name: check out rapid
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09  # v5
 
-      - name: fail closed if the cross-org read secret is not provisioned
-        # A NAMED FAILURE, NOT A CONFUSING ONE. Without this step the run
-        # fails inside `actions/checkout` with a generic "repository not
-        # found", which reads as a typo in the repo name rather than as the
-        # one provisioning step this workflow documents.
-        #
-        # The secret is tested through an `env:` binding rather than
-        # `${{ secrets.* }}` inside an `if:`. The `secrets` context is not
-        # available to step-level `if` expressions — a workflow using it
-        # there does not merely skip the step, it fails to PARSE, and an
-        # unparseable workflow produces a run with no jobs and no annotation
-        # (verified live on this branch, run 31443363996).
-        env:
-          RAPID_SYSTEMS_READ_TOKEN: ${{ secrets.RAPID_SYSTEMS_READ_TOKEN }}
-        run: |
-          if [ -n "${RAPID_SYSTEMS_READ_TOKEN:-}" ]; then
-            echo "BRIEF-B-SECRET: PASS exit=0 (RAPID_SYSTEMS_READ_TOKEN is set)"
-            exit 0
-          fi
-          echo "BRIEF-B-SECRET: FAIL exit=1 (RAPID_SYSTEMS_READ_TOKEN is not set)"
-          echo "The migration stream lives in the PRIVATE repo IPAC-SW/rapid_systems."
-          echo "Provision with:"
-          echo "  gh secret set RAPID_SYSTEMS_READ_TOKEN --repo Caltech-IPAC/rapid"
-          echo "The token needs read-only contents access to IPAC-SW/rapid_systems."
-          exit 1
-
-      - name: check out the authoritative migration stream (pinned)
-        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09  # v5
-        with:
-          repository: IPAC-SW/rapid_systems
-          # PINNED BY REVISION, never a branch name: the schema under test
-          # must be a stated fact, so a rerun of this workflow tests the same
-          # schema and a change of schema is a change to this file. Written
-          # as a literal rather than `${{ env.* }}`: the `env` context is not
-          # guaranteed to a `with:` input, and a ref that silently resolved
-          # to empty would check out the default branch — testing against an
-          # unpinned schema while claiming a pinned one.
-          ref: 0fd0d571bdcdfb72aed0cf01b47a84cda2904672
-          token: ${{ secrets.RAPID_SYSTEMS_READ_TOKEN }}
-          path: rapid_systems
-          persist-credentials: false
-
-      - name: record the migration-stream revision
-        run: |
-          cd rapid_systems
-          echo "BRIEF-B-RAPID-SYSTEMS-REV: $(git rev-parse HEAD)"
-          ls cloudformation/db-migrations/*.sql | wc -l
-
       - name: install Q3C into the service container
         # The service container is the stock postgres:18 image; Q3C is added
         # here, from the SAME PGDG repository the base image already has
@@ -205,10 +157,6 @@ jobs:
           done
           echo "BRIEF-B-ENTRYPOINTS: PASS exit=0"
 
-      - name: run the contract suite against the applied stream
-        run: |
-          scripts/run-contract-tests.sh rapid_systems/cloudformation/db-migrations
-
       - name: the stubbed tier stays green, unchanged
         # Required outcome 3: "Keep the stubbed tier running unchanged during
         # the transition." Run here as well as on rapid-admin so a packaging
@@ -216,3 +164,65 @@ jobs:
         # is caught by the same gate that introduced it.
         run: |
           scripts/run-operational-tests.sh
+
+      - name: fail closed if the cross-org read secret is not provisioned
+        # A NAMED FAILURE, NOT A CONFUSING ONE. Without this step the run
+        # fails inside `actions/checkout` with a generic "repository not
+        # found", which reads as a typo in the repo name rather than as the
+        # one provisioning step this workflow documents.
+        #
+        # PLACED AS LATE AS IT CAN BE, immediately before the one step that
+        # genuinely needs the secret. Everything above — the Q3C install, the
+        # editable install, the entry points, the stubbed tier — needs no
+        # cross-org read, so ordering the gate last means a secretless run
+        # still proves all of it and stops at exactly one named, expected
+        # place. A gate at the top would have made every one of those steps
+        # unverifiable until the day the secret lands, and "it will presumably
+        # work once someone provisions the token" is not evidence.
+        #
+        # The secret is tested through an `env:` binding rather than
+        # `${{ secrets.* }}` inside an `if:`. The `secrets` context is not
+        # available to step-level `if` expressions — a workflow using it
+        # there does not merely skip the step, it fails to PARSE, and an
+        # unparseable workflow produces a run with no jobs and no annotation
+        # (verified live on this branch, run 31443363996).
+        env:
+          RAPID_SYSTEMS_READ_TOKEN: ${{ secrets.RAPID_SYSTEMS_READ_TOKEN }}
+        run: |
+          if [ -n "${RAPID_SYSTEMS_READ_TOKEN:-}" ]; then
+            echo "BRIEF-B-SECRET: PASS exit=0 (RAPID_SYSTEMS_READ_TOKEN is set)"
+            exit 0
+          fi
+          echo "BRIEF-B-SECRET: FAIL exit=1 (RAPID_SYSTEMS_READ_TOKEN is not set)"
+          echo "The migration stream lives in the PRIVATE repo IPAC-SW/rapid_systems."
+          echo "Provision with:"
+          echo "  gh secret set RAPID_SYSTEMS_READ_TOKEN --repo Caltech-IPAC/rapid"
+          echo "The token needs read-only contents access to IPAC-SW/rapid_systems."
+          exit 1
+
+      - name: check out the authoritative migration stream (pinned)
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09  # v5
+        with:
+          repository: IPAC-SW/rapid_systems
+          # PINNED BY REVISION, never a branch name: the schema under test
+          # must be a stated fact, so a rerun of this workflow tests the same
+          # schema and a change of schema is a change to this file. Written
+          # as a literal rather than `${{ env.* }}`: the `env` context is not
+          # guaranteed to a `with:` input, and a ref that silently resolved
+          # to empty would check out the default branch — testing against an
+          # unpinned schema while claiming a pinned one.
+          ref: 0fd0d571bdcdfb72aed0cf01b47a84cda2904672
+          token: ${{ secrets.RAPID_SYSTEMS_READ_TOKEN }}
+          path: rapid_systems
+          persist-credentials: false
+
+      - name: record the migration-stream revision
+        run: |
+          cd rapid_systems
+          echo "BRIEF-B-RAPID-SYSTEMS-REV: $(git rev-parse HEAD)"
+          ls cloudformation/db-migrations/*.sql | wc -l
+
+      - name: run the contract suite against the applied stream
+        run: |
+          scripts/run-contract-tests.sh rapid_systems/cloudformation/db-migrations
+
