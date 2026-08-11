@@ -1,4 +1,4 @@
-# DRAFT migrations — brief C
+# DRAFT migrations — briefs C and G
 
 **These files are not the schema. They are proposed change requests against
 `IPAC-SW/rapid_systems`, staged here because this repository cannot edit that
@@ -34,6 +34,32 @@ against are the same schema, and 044-046 remain the next free numbers.
 | `044-submission-protocol.sql` | `submissions` table: the durable PREPARED → CALLING → BOUND / UNKNOWN → FOUND / LOST record rule 7 requires | C1 |
 | `045-work-unit-cancelled-state.sql` | amends `work_units_state_ck` to admit `'cancelled'` — the seventh state | C3 |
 | `046-cancel-work-units-function.sql` | `derived.cancel_work_units`, the audited mutation-API entry point, plus the work-unit lock in `derived.retry_parked_attempts` | C3 |
+| `047-idempotency-and-expected-state.sql` | the mutation contract's two missing fields: an `idempotency_key` / `expected_state` column pair on `derived.mutation_audit`, keyed OVERLOADS of `add_problem_category` and `retry_parked_attempts` taking both, the shared `derived.mutation_replay` lookup, and `derived.record_external_action` for operator actions whose target is outside this database | G2, G3 |
+
+## Brief G's draft (047), for its reviewer
+
+Written against stream head **044** (`rapid_systems` at
+`14e4ccf8971a1f6edeb6e7d24771b99d4a574e9a`), which is the revision the brief G
+acceptance run applied; 047 follows C's 044-046 and is the next free number.
+
+Three review points, each argued at length in the file's own header:
+
+1. **Overloads, not amended signatures.** Changing an argument list in
+   PostgreSQL creates a different function and orphans the old one with its
+   grants; an "amendment" would have to DROP the current signature and so
+   silently revoke `rapid_orchestrator`'s enumerated EXECUTE. The keyed
+   functions take `p_idempotency_key` FIRST, so no existing call can bind to
+   them and no defaulted-argument ambiguity arises.
+2. **The key's uniqueness is partial, over real runs only.** A dry run must
+   not consume a key, or every apply would replay its own preview. The
+   partial unique index and the replay lookup both exclude `dry_run`.
+3. **030's invariants are untouched.** The append-only trigger, the
+   ungranted `write_mutation_audit`, and the no-direct-write grant posture
+   are unchanged — and asserted, not assumed, by
+   `pipeline/contract/test_operator_grants.py`.
+
+Applied twice in the acceptance run to demonstrate idempotence
+(`BRIEF-G-DRAFT-047-REAPPLY: PASS exit=0`).
 
 ## How the application behaves while these are unapplied
 
