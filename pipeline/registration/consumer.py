@@ -382,6 +382,138 @@ def record_registration_outcome(attempt_id, outcome, record_sequence,
     return event
 
 
+#: The `l2_available` milestone's find-before-write guard. `milestones` carries
+#: no unique constraint on (milestone_name, exposure_id, sca) — migration 011
+#: defines only the scope CHECK — so a re-registration under a later
+#: supersession would otherwise append a second row for a unit that reached the
+#: milestone once. Scoped to the unit, not the attempt, exactly as
+#: `AttemptWriter.record_milestone` documents ("a unit may reach a milestone
+#: through more than one attempt across retries").
+_L2_AVAILABLE_EXISTS_SQL = (
+    "SELECT 1 FROM milestones"
+    " WHERE milestone_name = 'l2_available'"
+    "   AND exposure_id = %s AND sca = %s LIMIT 1"
+)
+
+_RECORD_L2_AVAILABLE_SQL = (
+    "INSERT INTO milestones"
+    "  (milestone_name, exposure_id, sca, reached_at, producing_attempt_id)"
+    " VALUES ('l2_available', %s, %s, %s, %s)"
+)
+
+#: The milestone's timestamp source, read on the acceptance connection.
+#:
+#: The science stage reached this through `RAPIDDB.get_l2file_created(rid)`,
+#: keyed by the unit's `rid` fact. An attempt row carries no `rid`, so the
+#: acceptance side keys by `(expid, sca)` — the identity `L2Files` itself is
+#: keyed on (migration 006: `expid integer NOT NULL, sca smallint NOT NULL`)
+#: and the identity the attempt row already carries. `vbest` picks the current
+#: version where a unit has been re-delivered, matching the exclusion
+#: `submission.gathering.coadd_input_rows` applies to the same table
+#: ("`vbest == 0` is a superseded version"); `created` is ascending-stable per
+#: row, so the ORDER BY only decides between co-current versions.
+_L2_CREATED_SQL = (
+    "SELECT created FROM L2Files"
+    " WHERE expid = %s AND sca = %s AND vbest <> 0"
+    " ORDER BY created LIMIT 1"
+)
+
+
+def record_l2_available(attempt_id, row, cursor=None):
+    """The `l2_available` milestone, written in the acceptance transaction.
+
+    **WHY IT MOVED HERE** (conformance rule 8, brief C2). This was
+    `pipeline.stages.science._record_l2_available_milestone`, called from
+    `download_inputs` — the first science stage, in the same function that
+    then downloads the science image and both PSFs. It called
+    `context.require_connection()` for the attempt-long BORROWED connection,
+    read, wrote through an `AttemptWriter`, and committed, all inside a
+    product-producing sequence. `pipeline.stages.context` states the rule that
+    forbids exactly this: "the post-DB job types produce database state rather
+    than S3 products, so they need that connection" — database effects belong
+    to post-DB job types, and a science stage is not one. Rule 8 states it
+    from the other side: "Pixel/transform workers hold no database connection.
+    They upload artifacts and one sealed, checksummed result manifest, then
+    exit."
+
+    So the worker now holds no connection on this path at all, and the
+    milestone lands on the ACCEPTANCE side, inside `register_batch`'s
+    per-attempt transaction — the one that already commits the product rows,
+    the registration outcome and the watermark together. That co-commit is the
+    acceptance criterion: a crash between registration and the milestone is
+    not a window that can be hit, because there is no second commit to crash
+    between. It is one transaction or none.
+
+    **THE TIMING SEMANTICS CHANGE, AND NOTHING OBSERVES IT** (brief C2:
+    "verify no consumer of `milestones.l2_available` depends on the earlier
+    timing; record what you find"). The milestone previously carried
+    `L2Files.created` — a proxy for SOC availability, fetched fresh at
+    download time — and was written at the start of the science attempt. It
+    now carries the same authoritative fact where one is available and is
+    written at acceptance. Searched at 820dd40: the only references to
+    `l2_available` anywhere in the tree are its writer, the writer's own
+    docstring, and `RAPIDDB.get_l2file_created`'s docstring naming itself as
+    the source. There is NO READER — no query, no view, no dashboard, no
+    latency clock, no test asserting its timestamp. The four latency clocks
+    the minimal-viable target names (arrival→admission, admission→transform
+    result, acceptance→outbox, outbox→broker acknowledgement) do not read this
+    table. So the change of timing is unobserved today, and this docstring is
+    the record of that check for whoever wires the first reader.
+
+    **WHY NOT DERIVE IT FROM REGISTRATION STATE INSTEAD** (the brief offers
+    that alternative: "or is derived from state registration already writes if
+    a separate milestone row is redundant"). The row is kept. Registration
+    writes `registered_at` — when RAPID ACCEPTED the result — which answers a
+    different question from "when did this unit's L2 input become durably
+    known", and the milestone's whole purpose per design/observability.md is
+    to carry "the authoritative source-availability timestamp" as the chain's
+    first end. Deriving one from the other would silently redefine the
+    milestone as an acceptance clock and lose the only fact it exists to hold.
+
+    `reached_at` is `L2Files.created` — the SAME authoritative-source proxy
+    the science stage read, reached by `(expid, sca)` rather than by `rid`
+    because that is the identity an attempt row carries (see `_L2_CREATED_SQL`)
+    — and falls back to the acceptance moment when no L2Files row answers. The
+    fallback is explicit rather than skipping the milestone: an accepted unit
+    HAS reached the milestone, that fact is worth recording even where the
+    proxy timestamp is unavailable, and a NULL `reached_at` is refused by the
+    schema anyway. The fallback is logged so a milestone carrying an
+    acceptance time rather than a source time is visible as such.
+    """
+    if cursor is None:
+        return False
+
+    exposure_id = row.get("exposure_id")
+    sca = row.get("sca")
+    if exposure_id is None or sca is None:
+        # The milestone is scoped by (exposure, sca) — migration 011's
+        # `milestones_scope_check` demands at least one scope column, and a
+        # half-scoped row would be unfindable by the find-before-write guard
+        # above. A non-science attempt (reference construction, the post-DB
+        # chain) legitimately has neither; it has no L2 input to be available.
+        return False
+
+    cursor.execute(_L2_AVAILABLE_EXISTS_SQL, (int(exposure_id), int(sca)))
+    if cursor.fetchone() is not None:
+        return False
+
+    cursor.execute(_L2_CREATED_SQL, (int(exposure_id), int(sca)))
+    found = cursor.fetchone()
+    reached_at = found[0] if found is not None else None
+    if reached_at is None:
+        reached_at = datetime.datetime.now(datetime.timezone.utc)
+        logger.info(
+            "no current L2Files row for %s/%s; the l2_available milestone "
+            "carries the acceptance time rather than the source proxy",
+            exposure_id, sca)
+
+    cursor.execute(_RECORD_L2_AVAILABLE_SQL,
+                   (int(exposure_id), int(sca), reached_at, attempt_id))
+    logger.info("l2_available milestone recorded for %s/%s at acceptance "
+                "(attempt %s)", exposure_id, sca, attempt_id)
+    return True
+
+
 #: The rejection sibling of `_RECORD_OUTCOME_SQL` (integration ruling 4):
 #: same append-once-by-identity, GREATEST-high-water-mark idiom, a distinct
 #: top-level key so a rejection event can never be mistaken for a promotion
@@ -677,6 +809,18 @@ def register_batch(conn, rows, register=None, run=None, dry_run=False):
                 mark_registered(conn, verdict.attempt_id,
                                 row.get("terminal_record_sequence"),
                                 cursor=cur)
+                # THE `l2_available` MILESTONE, IN THIS TRANSACTION (rule 8,
+                # brief C2). It used to be written by the science stage's
+                # `download_inputs` on the worker's borrowed connection —
+                # inside the product-producing sequence, against that
+                # module's own product/database-effect split. It is written
+                # here instead, in the envelope that already commits the
+                # product rows, the outcome and the watermark, so "a crash
+                # between registration and the milestone" is not a state the
+                # system can reach: there is one commit, and the milestone is
+                # inside it. See `record_l2_available` for the timing change
+                # this implies and why nothing observes it.
+                record_l2_available(verdict.attempt_id, row, cursor=cur)
         except Exception:  # noqa: BLE001 - counted, not swallowed
             run.failed += 1
             logger.exception(
