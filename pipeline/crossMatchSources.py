@@ -998,10 +998,8 @@ if __name__ == '__main__':
 
 
     # Figure out which Source child tables need to be cross-matched.
-    # Also, find all distinct fields covered by the Sources child tables, only for records with flags=0.
 
-    table_crossmatch_obs_date_sca_dict = {}            # Dictionary key is (obs_date,sca) tuple.
-    fields_dict = {}
+    table_crossmatch_obs_date_sca_dict = {}      # Dictionary key is (obs_date,sca) tuple.
 
     for jid,meta_dict in zip(jid_list,meta_list):
 
@@ -1009,10 +1007,10 @@ if __name__ == '__main__':
         dateobs = meta_dict["dateobs"]
         obs_date = str(dateobs).split()[0].replace("-","")
 
-        tablename = f"sources_{obs_date}_{sca}"
+        sources_tablename = f"sources_{obs_date}_{sca}"
 
         sql_queries = []
-        sql_queries.append(f"SELECT to_regclass('public.{tablename}') IS NOT NULL;")
+        sql_queries.append(f"SELECT to_regclass('public.{sources_tablename}') IS NOT NULL;")
 
         try:
             records = dbh.execute_sql_queries(sql_queries,debug)
@@ -1034,34 +1032,48 @@ if __name__ == '__main__':
             table_crossmatch_key = (obs_date,sca)
             table_crossmatch_obs_date_sca_dict[table_crossmatch_key] = 1
 
-            sql_queries = []
-            sql_queries.append(f"select distinct field from {tablename} WHERE flags = 0;")
-
-            try:
-                records = dbh.execute_sql_queries(sql_queries,debug)
-            except Exception as e:
-                print(f"*** Error: Exception raised in dbh.execute_sql_queries " +
-                         f"(e={e});  quitting...")
-                dbh.close()
-                raise
-
-            if dbh.exit_code >= 64:
-                print("*** Error from {}; quitting ".format(swname))
-                dbh.close()
-                exit(dbh.exit_code)
-
-            for record in records:
-                field = record[0]
-                fields_dict[field] = 1
 
     tables_to_crossmatch_list = list(table_crossmatch_obs_date_sca_dict.keys())
+    n_tables_to_crossmatch_list = len(tables_to_crossmatch_list)
+    print("n_tables_to_crossmatch_list =",n_tables_to_crossmatch_list)
+
+
+    # Find all distinct fields covered by the Sources child tables,
+    # only for records with flags=0.
+
+    fields_dict = {}
+
+    for table_to_crossmatch_tuple in tables_to_crossmatch_list:
+
+        obs_date = table_to_crossmatch_tuple[0]
+        sca = table_to_crossmatch_tuple[1]
+
+        sources_tablename = f"sources_{obs_date}_{sca}"
+
+        sql_queries = []
+        sql_queries.append(f"select distinct field from {sources_tablename} WHERE flags = 0;")
+
+        try:
+            records = dbh.execute_sql_queries(sql_queries,debug)
+        except Exception as e:
+            print(f"*** Error: Exception raised in dbh.execute_sql_queries " +
+                     f"(e={e});  quitting...")
+            dbh.close()
+            raise
+
+        if dbh.exit_code >= 64:
+            print("*** Error from {}; quitting ".format(swname))
+            dbh.close()
+            exit(dbh.exit_code)
+
+        for record in records:
+            field = record[0]
+            fields_dict[field] = 1
+
 
     fields_list = list(fields_dict.keys())
-
-    n_tables_to_crossmatch_list = len(tables_to_crossmatch_list)
     nfields = len(fields_list)
-
-    print("n_tables_to_crossmatch_list,nfields =",n_tables_to_crossmatch_list,nfields)
+    print("nfields =",n_tables_to_crossmatch_list)
 
 
     # Code-timing benchmark.
