@@ -51,7 +51,11 @@ def terminate_jobs_audited(conn, idempotency_key, queue, states, reason,
     out = out or sys.stdout
     scope = "batch:queue=%s:states=%s" % (queue, ",".join(states))
 
-    jobs = _list_all(queue, states, region, profile, session_factory)
+    # ONE client for the whole invocation: the listing pass and every
+    # termination share it, so credentials resolve once without a global
+    # holding a client between unrelated invocations.
+    client = _client(region, profile, session_factory)
+    jobs = _list_all(client, queue, states)
 
     # Expected state checked HERE, before the audit row and before any
     # termination: the operator said how many jobs they were acting on, and
@@ -91,40 +95,42 @@ def terminate_jobs_audited(conn, idempotency_key, queue, states, reason,
                   % (job["jobId"], job.get("jobName", "?"),
                      job.get("status", "?")), file=out)
         else:
-            _client(region, profile, session_factory).terminate_job(
-                jobId=job["jobId"], reason=reason)
+            client.terminate_job(jobId=job["jobId"], reason=reason)
             print("terminated %s (%s)" % (job["jobId"],
                                           job.get("jobName", "?")), file=out)
 
     return result, scope
 
 
-def _list_all(queue, states, region, profile, session_factory):
+def _list_all(client, queue, states):
     """Every job in the named states, using the wrapped module's lister."""
     from aws.terminate_batch_jobs import list_jobs
-    client = _client(region, profile, session_factory)
     jobs = []
     for state in states:
         jobs.extend(list_jobs(client, queue, state))
     return jobs
 
 
-_CLIENT = {}
-
-
 def _client(region, profile, session_factory):
-    """One Batch client per invocation, built once and reused.
+    """Build the Batch client for this invocation.
 
-    Cached because ``_list_all`` and the termination loop both need it and
-    building a boto3 session per call would re-resolve credentials for
-    every job in the queue.
+    NOT CACHED ACROSS CALLS, and the reason is a defect this module
+    shipped with: the first version memoized on ``(region, profile)`` in
+    a module-level dict, so a second call in the same process reused the
+    first call's client. Under a caller with a real boto3 session that is
+    merely a stale credential; under the contract tests — where both keys
+    are ``None`` — it meant the second test terminated jobs through the
+    FIRST test's client, and the injected double correctly refused. The
+    double caught it, which is what a double that can refuse is for.
+
+    The saving the cache bought was one session construction per
+    invocation. `terminate_jobs_audited` builds a client for the listing
+    pass and one per terminated job, which is worth avoiding — so the
+    caller resolves it ONCE and passes it down, rather than a global
+    holding it between unrelated invocations.
     """
-    key = (region, profile)
-    if key not in _CLIENT:
-        if session_factory is not None:
-            _CLIENT[key] = session_factory()
-        else:
-            import boto3                          # noqa: PLC0415
-            _CLIENT[key] = boto3.Session(
-                region_name=region, profile_name=profile).client("batch")
-    return _CLIENT[key]
+    if session_factory is not None:
+        return session_factory()
+    import boto3                                  # noqa: PLC0415
+    return boto3.Session(region_name=region,
+                         profile_name=profile).client("batch")
