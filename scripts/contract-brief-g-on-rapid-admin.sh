@@ -206,7 +206,7 @@ echo "BRIEF-G-PASS2-RESULT: ${pass2_line:-<no summary line>}"
 # single args string.
 for spec in \
     "CRIT1-2:pipeline/contract/test_operator_mutations.py:" \
-    "CRIT3:pipeline/contract/test_operator_mutations.py:break_glass or unreconciled" \
+    "CRIT3:pipeline/contract/test_operator_mutations.py:clear_the_row or unreconciled_view or unopened_event" \
     "CRIT4:pipeline/contract/test_wrapped_operator_tools.py:" \
     "CRIT5:pipeline/contract/test_repositories.py:" \
     "GRANTS:pipeline/contract/test_operator_grants.py:" ; do
