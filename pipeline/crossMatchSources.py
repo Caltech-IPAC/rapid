@@ -1006,7 +1006,7 @@ if __name__ == '__main__':
 
         sca = meta_dict["sca"]
         dateobs = meta_dict["dateobs"]
-        obs_date = dateobs.split()[0].replace("-","")
+        obs_date = str(dateobs).split()[0].replace("-","")
 
         field = meta_dict["field"]
 
