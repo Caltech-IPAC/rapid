@@ -232,7 +232,7 @@ def run_single_core_job_stage_1_crossmatching(tables_to_crossmatch_list,fields,i
             try:
                 records = dbh.execute_sql_queries(sql_queries,thread_debug)
             except Exception as e:
-                fh.write(f"*** Error: Exception raised for in dbh.execute_sql_queries " +
+                fh.write(f"*** Error: Exception raised in dbh.execute_sql_queries " +
                          f"(query={query},e={e});  quitting...\n")
                 fh.flush()
                 fh.close()
@@ -281,7 +281,7 @@ def run_single_core_job_stage_1_crossmatching(tables_to_crossmatch_list,fields,i
                     try:
                         records = dbh.execute_sql_queries(sql_queries,thread_debug)
                     except Exception as e:
-                        fh.write(f"*** Error: Exception raised for in dbh.execute_sql_queries " +
+                        fh.write(f"*** Error: Exception raised in dbh.execute_sql_queries " +
                                  f"(query={query},e={e});  quitting...\n")
                         fh.flush()
                         fh.close()
@@ -351,7 +351,7 @@ def run_single_core_job_stage_1_crossmatching(tables_to_crossmatch_list,fields,i
                     try:
                         records = dbh.execute_sql_queries(sql_queries,thread_debug)
                     except Exception as e:
-                        fh.write(f"*** Error: Exception raised for in dbh.execute_sql_queries " +
+                        fh.write(f"*** Error: Exception raised in dbh.execute_sql_queries " +
                                  f"(query={query},e={e});  quitting...\n")
                         fh.flush()
                         fh.close()
@@ -446,7 +446,7 @@ def run_single_core_job_stage_1_crossmatching(tables_to_crossmatch_list,fields,i
             try:
                 dbh.copy_data_from_file_into_database(astroobjects_table_file,astroobjects_tablename,astroobjects_columns)
             except Exception as e:
-                fh.write(f"*** Error: Exception raised for in dbh.copy_data_from_file_into_database " +
+                fh.write(f"*** Error: Exception raised in dbh.copy_data_from_file_into_database " +
                          f"(astroobjects_table_file={astroobjects_table_file},e={e});  quitting...\n")
                 fh.flush()
                 fh.close()
@@ -478,7 +478,7 @@ def run_single_core_job_stage_1_crossmatching(tables_to_crossmatch_list,fields,i
             try:
                 dbh.copy_data_from_file_into_database(merges_table_file,merges_tablename,merges_columns)
             except Exception as e:
-                fh.write(f"*** Error: Exception raised for in dbh.copy_data_from_file_into_database " +
+                fh.write(f"*** Error: Exception raised in dbh.copy_data_from_file_into_database " +
                          f"(merges_table_file={merges_table_file},e={e});  quitting...\n")
                 fh.flush()
                 fh.close()
@@ -721,7 +721,7 @@ def run_single_core_job_stage_2_crossmatching(tables_to_crossmatch_list,fields,i
                     try:
                         records = dbh.execute_sql_queries(sql_queries,thread_debug)
                     except Exception as e:
-                        fh.write(f"*** Error: Exception raised for in dbh.execute_sql_queries " +
+                        fh.write(f"*** Error: Exception raised in dbh.execute_sql_queries " +
                                  f"(query={query},e={e});  quitting...\n")
                         fh.flush()
                         fh.close()
@@ -781,7 +781,7 @@ def run_single_core_job_stage_2_crossmatching(tables_to_crossmatch_list,fields,i
         try:
             dbh.copy_data_from_file_into_database(merges_table_file,merges_tablename,merges_columns)
         except Exception as e:
-            fh.write(f"*** Error: Exception raised for in dbh.copy_data_from_file_into_database " +
+            fh.write(f"*** Error: Exception raised in dbh.copy_data_from_file_into_database " +
                      f"(merges_table_file={merges_table_file},e={e});  quitting...\n")
             fh.flush()
             fh.close()
@@ -998,6 +998,7 @@ if __name__ == '__main__':
 
 
     # Figure out which Source child tables need to be cross-matched.
+    # Also, find all distinct fields covered by the Sources child tables, only for records with flags=0.
 
     table_crossmatch_obs_date_sca_dict = {}            # Dictionary key is (obs_date,sca) tuple.
     fields_dict = {}
@@ -1008,8 +1009,6 @@ if __name__ == '__main__':
         dateobs = meta_dict["dateobs"]
         obs_date = str(dateobs).split()[0].replace("-","")
 
-        field = meta_dict["field"]
-
         tablename = f"sources_{obs_date}_{sca}"
 
         sql_queries = []
@@ -1018,7 +1017,7 @@ if __name__ == '__main__':
         try:
             records = dbh.execute_sql_queries(sql_queries,debug)
         except Exception as e:
-            print(f"*** Error: Exception raised for in dbh.execute_sql_queries " +
+            print(f"*** Error: Exception raised in dbh.execute_sql_queries " +
                      f"(e={e});  quitting...")
             dbh.close()
             raise
@@ -1035,7 +1034,25 @@ if __name__ == '__main__':
             table_crossmatch_key = (obs_date,sca)
             table_crossmatch_obs_date_sca_dict[table_crossmatch_key] = 1
 
-            fields_dict[field] = 1
+            sql_queries = []
+            sql_queries.append(f"select distinct field from {tablename} WHERE flags = 0;")
+
+            try:
+                records = dbh.execute_sql_queries(sql_queries,debug)
+            except Exception as e:
+                print(f"*** Error: Exception raised in dbh.execute_sql_queries " +
+                         f"(e={e});  quitting...")
+                dbh.close()
+                raise
+
+            if dbh.exit_code >= 64:
+                print("*** Error from {}; quitting ".format(swname))
+                dbh.close()
+                exit(dbh.exit_code)
+
+            for record in records:
+                field = record[0]
+                fields_dict[field] = 1
 
     tables_to_crossmatch_list = list(table_crossmatch_obs_date_sca_dict.keys())
 
@@ -1070,7 +1087,7 @@ if __name__ == '__main__':
         try:
             records = dbh.execute_sql_queries(sql_queries,debug)
         except Exception as e:
-            print(f"*** Error: Exception raised for in dbh.execute_sql_queries " +
+            print(f"*** Error: Exception raised in dbh.execute_sql_queries " +
                      f"(e={e});  quitting...")
             dbh.close()
             raise
@@ -1110,7 +1127,7 @@ if __name__ == '__main__':
     try:
         records = dbh.execute_sql_queries(sql_queries,debug)
     except Exception as e:
-        print(f"*** Error: Exception raised for in dbh.execute_sql_queries " +
+        print(f"*** Error: Exception raised in dbh.execute_sql_queries " +
                  f"(e={e});  quitting...")
         dbh.close()
         raise
@@ -1160,7 +1177,7 @@ if __name__ == '__main__':
     try:
         records = dbh.execute_sql_queries(sql_queries,debug)
     except Exception as e:
-        print(f"*** Error: Exception raised for in dbh.execute_sql_queries " +
+        print(f"*** Error: Exception raised in dbh.execute_sql_queries " +
                  f"(e={e});  quitting...")
         dbh.close()
         raise
@@ -1242,7 +1259,7 @@ if __name__ == '__main__':
     try:
         records = dbh.execute_sql_queries(sql_queries,debug)
     except Exception as e:
-        print(f"*** Error: Exception raised for in dbh.execute_sql_queries " +
+        print(f"*** Error: Exception raised in dbh.execute_sql_queries " +
                  f"(e={e});  quitting...")
         dbh.close()
         raise
