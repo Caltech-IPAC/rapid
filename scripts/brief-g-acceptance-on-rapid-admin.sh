@@ -80,6 +80,7 @@ tar --no-xattrs -czf "$tarball" \
     pipeline \
     submission \
     alerts \
+    aws \
     migrations-draft \
     pyproject.toml
 echo ">> repo tarball: $(du -h "$tarball" | cut -f1)"

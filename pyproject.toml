@@ -119,9 +119,15 @@ rapidctl = "pipeline.operatorctl.main:main"
 # check on rapid-admin, which is precisely what that check is for. The
 # science-algorithm subtrees (coadd, sfft, zogy, ...) come with it; they are
 # what the payload's stages call into.
+#
+# `aws` joins the list for brief G: `rapidctl terminate-batch-jobs` WRAPS
+# `aws/terminate_batch_jobs.py` rather than reimplementing it, so that
+# module now has an importer and must travel with the distribution. It is
+# operator tooling, not job-payload runtime — nothing a Batch payload
+# imports reaches it.
 packages.find = {namespaces = true, include = [
     "pipeline*", "observability*", "submission*", "database*", "modules*",
-    "alerts*",
+    "alerts*", "aws*",
 ]}
 
 [tool.setuptools.package-data]

@@ -120,11 +120,17 @@ grep -E '^BRIEF-B-(APPLY|SUITE|SCHEMA-MIGRATIONS)' "${STAGE_DIR}/pass1.log" | he
 pass1_line=$(grep -E '^[0-9]+ (passed|failed)|passed|skipped' \
     "${STAGE_DIR}/contract-pytest.log" 2>/dev/null | tail -1)
 echo "BRIEF-G-PASS1-RESULT: ${pass1_line:-<no summary line>}"
-# The skip count is the evidence for "CI stays green", so the skipped test
-# names are echoed too — a bare count cannot distinguish the intended skips
-# from a module that failed to import and skipped everything.
+# THE SKIP REASONS ARE THE EVIDENCE for "CI stays green", so they are
+# re-run with `-rs` and echoed. A bare count cannot distinguish the intended
+# draft-schema skips from a module that failed to import and skipped
+# everything, and `-q` alone prints no skip lines at all to grep for — the
+# first version of this block looked for `SKIPPED [n]` in a `-q` log and
+# silently reported nothing.
 echo "BRIEF-G-PASS1-SKIPS:"
-grep -oE 'SKIPPED \[[0-9]+\] [^:]+' "${STAGE_DIR}/pass1.log" 2>/dev/null \
+"$VPY" -m pytest pipeline/contract -m contract -p no:cacheprovider \
+    --no-header -q -rs >"${STAGE_DIR}/pass1-skips.log" 2>&1
+grep -E '^SKIPPED' "${STAGE_DIR}/pass1-skips.log" \
+    | sed -E 's/^SKIPPED \[([0-9]+)\] .*: /[\1] /' \
     | sort | uniq -c | head -10
 if [ "$pass1_rc" -ne 0 ]; then
     echo "--- BRIEF-G-PASS1 failures ---"
@@ -191,17 +197,32 @@ echo "BRIEF-G-PASS2-RESULT: ${pass2_line:-<no summary line>}"
 # say WHICH tests ran, and the criteria are the deliverable — so each brief-G
 # module is re-run with `-v` selection and its own verdict line, front-loaded
 # where the 24KB truncation cannot reach it.
+#
+# The `-k` expression for criterion 3 is passed as ONE argument, not split
+# on spaces: the first version of this loop word-split `-k break_glass or
+# unreconciled` into three arguments, so pytest read `or` as a file path and
+# reported "no tests ran" with exit 4 — a criterion that looked selected and
+# was never run. Hence the explicit third field per spec rather than a
+# single args string.
 for spec in \
-    "CRIT1-2:pipeline/contract/test_operator_mutations.py" \
-    "CRIT3:pipeline/contract/test_operator_mutations.py -k break_glass or unreconciled" \
-    "CRIT4:pipeline/contract/test_wrapped_operator_tools.py" \
-    "CRIT5:pipeline/contract/test_repositories.py" \
-    "GRANTS:pipeline/contract/test_operator_grants.py" ; do
+    "CRIT1-2:pipeline/contract/test_operator_mutations.py:" \
+    "CRIT3:pipeline/contract/test_operator_mutations.py:break_glass or unreconciled" \
+    "CRIT4:pipeline/contract/test_wrapped_operator_tools.py:" \
+    "CRIT5:pipeline/contract/test_repositories.py:" \
+    "GRANTS:pipeline/contract/test_operator_grants.py:" ; do
     name=${spec%%:*}
-    args=${spec#*:}
-    # shellcheck disable=SC2086 — args is a deliberate multi-token selection
-    "$VPY" -m pytest $args -m contract -p no:cacheprovider --no-header -q \
-        >"${STAGE_DIR}/${name}.log" 2>&1
+    rest=${spec#*:}
+    target=${rest%%:*}
+    kexpr=${rest#*:}
+    if [ -n "$kexpr" ]; then
+        "$VPY" -m pytest "$target" -k "$kexpr" -m contract \
+            -p no:cacheprovider --no-header -q \
+            >"${STAGE_DIR}/${name}.log" 2>&1
+    else
+        "$VPY" -m pytest "$target" -m contract \
+            -p no:cacheprovider --no-header -q \
+            >"${STAGE_DIR}/${name}.log" 2>&1
+    fi
     rc=$?
     line=$(grep -E 'passed|failed|error|no tests ran' \
         "${STAGE_DIR}/${name}.log" 2>/dev/null | tail -1)

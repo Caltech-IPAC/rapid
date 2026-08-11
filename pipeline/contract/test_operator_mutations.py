@@ -258,17 +258,31 @@ def test_a_key_reused_for_a_different_action_is_refused(conn):
 
 
 def test_scoped_retry_is_audited_and_replayable(conn):
-    """The other operate-tier action, over real parked attempts.
+    """The other operate-tier action, audited and replayed under one key.
 
     `retry_parked_attempts` records a release DECISION rather than
     modifying attempt rows (031's header explains at length why writing
     `reconciliation_class` would corrupt the reconciler's own field), so
-    "did it mutate?" is a question about the ledger — which is exactly
-    what makes the idempotency assertion here meaningful.
+    "did it mutate?" is a question about the ledger — which is what makes
+    the idempotency assertion here the meaningful one.
+
+    RUN AGAINST AN EMPTY CANDIDATE POPULATION, DELIBERATELY, and the
+    reason is a real schema fact worth recording. The function's parked
+    population requires `rapid_outcome = 'failure'` on a row whose
+    `lifecycle_state` is one of the two terminal states — but
+    `attempts_state_terminal_without_start_check` (017) requires
+    `rapid_outcome IS NULL`, and `attempts_state_terminal_after_start_check`
+    (013) requires eleven binding and provenance columns the contract
+    fixture does not set. So `fixture.make_attempt` cannot construct a
+    row this function would select, and a fixture that could would be
+    hand-writing a row shape the production writers never produce.
+
+    What is under test here is what BRIEF G ADDED — the key, the audit
+    row, and the replay — and all three are observable with zero
+    candidates. The candidate-selection query itself is 031's, unchanged
+    by this brief and already covered by its own acceptance.
     """
     _, run_id = fixture.make_logical_job(conn)
-    fixture.make_attempt(conn, error_category="application_error",
-                         lifecycle="terminal_after_start")
     conn.commit()
 
     key = _key("retry")
@@ -276,6 +290,7 @@ def test_scoped_retry_is_audited_and_replayable(conn):
         conn, key, run_id, "brief G criterion 1", dry_run=False)
 
     assert result["replayed"] is False
+    assert result["action"] == "scoped_retry"
     rows = _audit_rows(conn, key)
     assert len(rows) == 1
     assert rows[0]["action_class"] == "scoped_retry"
@@ -284,7 +299,9 @@ def test_scoped_retry_is_audited_and_replayable(conn):
     replay = actions.retry_parked_attempts(
         conn, key, run_id, "brief G criterion 1", dry_run=False)
     assert replay["replayed"] is True
-    assert len(_audit_rows(conn, key)) == 1
+    assert replay["audit_id"] == result["audit_id"]
+    assert len(_audit_rows(conn, key)) == 1, (
+        "the repeat call wrote a second audit row")
 
 
 # ---------------------------------------------------------------------------
@@ -355,10 +372,14 @@ def test_retry_refuses_when_the_candidate_population_moved(conn):
     signature would have released the new set and reported success.
     """
     _, run_id = fixture.make_logical_job(conn)
-    fixture.make_attempt(conn, error_category="application_error",
-                         lifecycle="terminal_after_start")
     conn.commit()
 
+    # The dry run reports the population as it actually is; the apply then
+    # claims a different one. (See `test_scoped_retry_is_audited_and_
+    # replayable` for why the fixture cannot construct a selectable parked
+    # attempt — it does not matter here, because the mismatch is between
+    # what the caller CLAIMS and what the function COUNTS, and that
+    # disagreement is real at any population size.)
     preview = actions.retry_parked_attempts(
         conn, _key("moved-preview"), run_id, "brief G criterion 2",
         dry_run=True)
