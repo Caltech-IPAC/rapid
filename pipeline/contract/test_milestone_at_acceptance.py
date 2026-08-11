@@ -23,6 +23,18 @@ a SECOND connection's visibility — which is exactly the argument
 
 No draft schema is needed; `milestones` is migration 011's and the acceptance
 transaction is already there. These run in CI.
+
+**THE ATTEMPT FIXTURES USE `terminal_without_start`**, and which state a
+fixture may claim is itself decided by the schema rather than by preference —
+a small worked example of why this tier exists. `terminal_after_start` is
+refused by `attempts_state_terminal_after_start_check` (013 as corrected by
+014) unless the row also carries `started_at`, the three binding columns,
+`scheduler_observed_exit` and both `terminal_record_*` columns; `make_attempt`
+sets none of those, so a fixture asking for that state fails inside the
+INSERT, two levels from the test that wanted it. `terminal_without_start`
+needs only `ended_at` and `scheduler_state`, both of which `make_attempt`
+does set. Nothing here is testing lifecycle states — any reconciled attempt
+serves — so the fixture takes the one the schema admits.
 """
 
 import pathlib
@@ -92,7 +104,7 @@ def test_milestone_commits_in_the_same_transaction_as_registration(conn,
     it was told. Here PostgreSQL's own isolation is the thing answering.
     """
     exposure, sca = _unique_exposure_sca(conn)
-    attempt_id = fixture.make_attempt(conn, lifecycle="terminal_after_start")
+    attempt_id = fixture.make_attempt(conn, lifecycle="terminal_without_start")
     conn.commit()
 
     with conn.cursor() as cur:
@@ -127,7 +139,7 @@ def test_the_milestone_is_not_duplicated_by_a_second_registration(conn):
     schema would refuse it.
     """
     exposure, sca = _unique_exposure_sca(conn)
-    attempt_id = fixture.make_attempt(conn, lifecycle="terminal_after_start")
+    attempt_id = fixture.make_attempt(conn, lifecycle="terminal_without_start")
     conn.commit()
 
     with conn.cursor() as cur:
@@ -148,7 +160,7 @@ def test_an_attempt_without_exposure_scope_records_no_milestone(conn):
     the honest behaviour for an attempt carrying neither is to record nothing
     rather than to invent a scope.
     """
-    attempt_id = fixture.make_attempt(conn, lifecycle="terminal_after_start")
+    attempt_id = fixture.make_attempt(conn, lifecycle="terminal_without_start")
     conn.commit()
 
     with conn.cursor() as cur:

@@ -73,13 +73,24 @@ class WatermarkTests(unittest.TestCase):
         consumer.register_batch(conn, [reconciled(1)],
                                 register=lambda row, verdict: None)
 
-        # Lease acquisition and the post-lock re-read (integration ruling 4)
-        # are two more statements ahead of the watermark write now, not a
-        # change to the watermark write itself.
-        self.assertEqual(3, len(conn.statements))
-        statement, params = conn.statements[-1]
-        self.assertIn("registered_record_sequence", statement)
-        self.assertIn(1, params)
+        # THE WATERMARK WRITE IS FOUND BY CONTENT, NOT BY COUNT. This used to
+        # assert `len(conn.statements) == 3` and then read the LAST one —
+        # encoding how many statements one registration issues, which is not
+        # what the test is named for or about. Brief C's rule-8 repair added
+        # one (the `l2_available` milestone, which now co-commits here rather
+        # than being written by the science stage), so the count assertion
+        # failed while the watermark write it exists to check was untouched.
+        # What matters is that the watermark statement is issued with the
+        # right sequence, inside the one transaction — all three of which are
+        # asserted directly below.
+        watermark = [
+            (sql, params) for sql, params in conn.statements
+            if "registered_record_sequence" in sql and "UPDATE attempts" in sql
+        ]
+        self.assertEqual(1, len(watermark),
+                         f"expected exactly one watermark write, got "
+                         f"{[s for s, _ in conn.statements]}")
+        self.assertIn(1, watermark[0][1])
         self.assertEqual(1, conn.commits)
         self.assertEqual([(consumer.ATTEMPT_LEASE_NAMESPACE, 1)],
                          conn.lease_acquisitions)
