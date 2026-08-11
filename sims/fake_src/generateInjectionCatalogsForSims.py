@@ -131,7 +131,8 @@ if __name__ == '__main__':
     records = dbh.execute_sql_queries(sql_queries,debug)
 
 
-    # For the sources that were matched, create Merges_<field> record.
+    # For the fields associated with L2Files records, find all fields that the
+    # L2 file overlaps.
 
     for record in records:
 
