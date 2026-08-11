@@ -6,12 +6,6 @@
 # (rapid_systems/.github/workflows): every action SHA-pinned, least-privilege
 # permissions, no self-hosted runners, no AWS credentials.
 #
-# TRIGGERS ARE SCOPED TO THE BRIEF'S BRANCH, deliberately and temporarily.
-# Until this has been reviewed, a workflow that fired on every push to `smdc`
-# or `dev` would run — and fail, for want of the repo secret below — on work
-# nobody asked to gate. Widening the trigger to the branches this should
-# actually gate is the reviewer's decision, and it is one line.
-#
 # ---------------------------------------------------------------------------
 # THE OWNER PROVISIONING STEP (brief B: "provisioning the repo secret is an
 # owner step outside this brief").
@@ -38,7 +32,7 @@ name: contract-tests
 
 on:
   push:
-    branches: [smdc-brief-b]
+    branches: [smdc]
   workflow_dispatch:
 
 # Least privilege: the job reads this repo's code and nothing else. The
