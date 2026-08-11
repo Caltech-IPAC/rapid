@@ -26,8 +26,8 @@ import re
 import modules.utils.rapid_pipeline_subs as util
 
 
-bucket_name_input = "rimtimsim-251210"
-bucket_name_output = "rimtimsim-20260401-lite"
+bucket_name_input = "rimtimsim-260622"
+bucket_name_output = "rimtimsim-260622-lite"
 
 
 # Create S3 resource and client objects.
@@ -88,10 +88,10 @@ for input_fits_file in input_fits_files:
     transpose_data = np.transpose(data)
 
 
-    # Modify CRPIX1,2 to image center.
+    # Keep CRPIX1,2 as in original FITS files.
 
-    hdr["CRPIX1"] = 2044.5
-    hdr["CRPIX2"] = 2044.5
+    hdr["CRPIX1"] = 2044.0
+    hdr["CRPIX2"] = 2044.0
 
 
     # Remove CDELT1 and CDELT2 keywords.
