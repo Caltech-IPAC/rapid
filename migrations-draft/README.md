@@ -20,6 +20,15 @@ are numbered 044-046 to follow it. If the stream advances past 043 before
 these are adopted, they are renumbered on adoption — the numbers here record
 what they were written against, not a claim on those slots.
 
+The acceptance run reported `rapid_systems` at
+`3d7c6b420fa3b0cedff7276ec8b10ef2ac574478`, one commit ahead: that repo
+advanced while this work was in progress. The migration stream is IDENTICAL at
+both revisions — `3d7c6b4` touches only
+`cloudformation/rapid-{reconciler,vpo}-service.yaml`, no file under
+`db-migrations/`, and both revisions carry the same 44 stream files — so the
+schema these drafts were written against and the schema they were accepted
+against are the same schema, and 044-046 remain the next free numbers.
+
 | Draft | Purpose | Brief item |
 |---|---|---|
 | `044-submission-protocol.sql` | `submissions` table: the durable PREPARED → CALLING → BOUND / UNKNOWN → FOUND / LOST record rule 7 requires | C1 |
