@@ -22,6 +22,7 @@ from astropy.io import fits
 import numpy as np
 import boto3
 import re
+from astropy.wcs import WCS
 
 import modules.utils.rapid_pipeline_subs as util
 
@@ -88,10 +89,41 @@ for input_fits_file in input_fits_files:
     transpose_data = np.transpose(data)
 
 
-    # Keep CRPIX1,2 as in original FITS files.
+    # Print original values in FITS header.
 
-    hdr["CRPIX1"] = 2044.0
-    hdr["CRPIX2"] = 2044.0
+    crpix1_orig = hdr["CRPIX1"]
+    crpix2_orig = hdr["CRPIX2"]
+    crval1_orig = hdr['CRVAL1']
+    crval2_orig = hdr['CRVAL2']
+
+    print(f"crpix1_orig,crpix2_orig,crval1_orig,crval2_orig = " +
+          f"{crpix1_orig}, {crpix2_orig}, {crval1_orig}, {crval2_orig}")
+
+
+    # Awaicgen requires CRPIX keywords at image center, so we must recompute the CRVAL keywords.
+
+    crpix1 = 2044.5
+    crpix2 = 2044.5
+
+    wcs = WCS(hdr) # Initialize WCS object from FITS header
+
+    print(wcs)
+
+    pixel_x, pixel_y = crpix1 - 1, crpix2 - 1
+    celestial_coords = wcs.pixel_to_world(pixel_x, pixel_y)
+    print(f"CRVAL1,CRVAL2 Pixel ({pixel_x}, {pixel_y}) corresponds to " +
+          f"{celestial_coords.ra.deg:.12f} RA and {celestial_coords.dec.deg:.12f} Dec.")
+
+    crval1 = celestial_coords.ra.deg:.12f
+    crval2 = celestial_coords.dec.deg:.12f
+
+    hdr["CRPIX1"] = crpix1
+    hdr["CRPIX2"] = crpix2
+
+    hdr["CRVAL1"] = crval1
+    hdr["CRVAL2"] = crval2
+
+    print(f"crpix1,crpix2,crval1,crval2 = {crpix1}, {crpix2}, {crval1}, {crval2}")
 
 
     # Remove CDELT1 and CDELT2 keywords.
