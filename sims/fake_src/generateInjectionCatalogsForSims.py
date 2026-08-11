@@ -91,8 +91,10 @@ config_input = configparser.ConfigParser()
 config_input.read(config_input_filename)
 
 job_info_s3_bucket_base = config_input['JOB_PARAMS']['job_info_s3_bucket_base']
-debug = config_input['JOB_PARAMS']['debug']
+debug = int(config_input['JOB_PARAMS']['debug'])
 
+fake_sources_dict = config_input['FAKE_SOURCES']
+injection_catalogs_subdir = fake_sources_dict['injection_catalogs_subdir']
 
 
 #-------------------------------------------------------------------------------------------------------------
@@ -104,7 +106,7 @@ if __name__ == '__main__':
 
     '''
     Generate all fake-source injection catalogs with fixed sky positions for the fields covered
-    by the simulations and upload them to s3://rapid-pipeline-files/injection_catalogs.
+    by the simulations and upload them to s3://rapid-pipeline-files/injection_catalogs_subdir.
     Field number is also known as rtid (Roman tessellation ID).
     '''
 
@@ -171,7 +173,7 @@ if __name__ == '__main__':
 
             rtid = rtid_record[0]
 
-            s3_full_name_injection_catalog = f"s3://{job_info_s3_bucket_base}/injection_catalogs/injection_catalog_rtid{rtid}.json"
+            s3_full_name_injection_catalog = f"s3://{job_info_s3_bucket_base}/injection_catalogs_subdir/injection_catalog_rtid{rtid}.json"
 
             print("Try downloading {s3_full_name_injection_catalog}...")
 
@@ -193,7 +195,7 @@ if __name__ == '__main__':
 
             # Upload fake-source injection catalog to product S3 bucket.
 
-            s3_object_name_injection_catalog = "injection_catalogs/" + injection_catalog_filename
+            s3_object_name_injection_catalog = f"{injection_catalogs_subdir}/" + injection_catalog_filename
 
             util.upload_files_to_s3_bucket(s3_client,job_info_s3_bucket_base,[injection_catalog_filename],[s3_object_name_injection_catalog])
 

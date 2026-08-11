@@ -160,6 +160,7 @@ debug = int(config_input['JOB_PARAMS']['debug'])
 job_info_s3_bucket = config_input['JOB_PARAMS']['job_info_s3_bucket_base']
 
 fake_sources_dict = config_input['FAKE_SOURCES']
+injection_catalogs_subdir = fake_sources_dict['injection_catalogs_subdir']
 
 
 #-------------------------------------------------------------------------------------------------------------
@@ -413,7 +414,7 @@ def correct_gwcs_inject_fake_variable_sources_output_asdf_file(fh, input_asdf_pa
         downloaded_from_bucket = True
         if not os.path.exists(injection_catalog_filename):
 
-            s3_full_name_injection_catalog = f"s3://{job_info_s3_bucket}/injection_catalogs/{injection_catalog_filename}"
+            s3_full_name_injection_catalog = f"s3://{job_info_s3_bucket}/{injection_catalogs_subdir}/{injection_catalog_filename}"
             injection_catalog_filename,subdirs,downloaded_from_bucket = util.download_file_from_s3_bucket(s3_client,s3_full_name_injection_catalog)
             fh.write(f"s3_full_name_injection_catalog = {s3_full_name_injection_catalog}\n")
 
@@ -441,7 +442,7 @@ def correct_gwcs_inject_fake_variable_sources_output_asdf_file(fh, input_asdf_pa
 
             # Upload fake-source injection catalog to product S3 bucket.
 
-            s3_object_name_injection_catalog = "injection_catalogs/" + injection_catalog_filename
+            s3_object_name_injection_catalog = f"{injection_catalogs_subdir}/" + injection_catalog_filename
 
             util.upload_files_to_s3_bucket(s3_client,job_info_s3_bucket,[injection_catalog_filename],[s3_object_name_injection_catalog])
 
