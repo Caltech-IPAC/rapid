@@ -64,6 +64,12 @@ dependencies = [
     "pandas",
     "photutils",
     "reproject",
+    # `alerts.providers` reads pixel products through fitsio; the alert
+    # production stage's own tests import it transitively. Last of the six
+    # found by installing the package into a clean environment and watching
+    # what broke — which is the only reliable way to enumerate the
+    # dependencies of a tree that has never been installed.
+    "fitsio",
 ]
 
 [project.optional-dependencies]
