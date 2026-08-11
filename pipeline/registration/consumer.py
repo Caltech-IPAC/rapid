@@ -102,6 +102,17 @@ logger = logging.getLogger("rapid.registration")
 #: reconciler lease on the same attempt id never collide semantically; they
 #: guard different concerns; the primitive shape is shared, the namespace is
 #: not. 0x5234 is 'R4' — this is integration ruling 4's lease.
+#:
+#: THE LOCK ORDER (conformance rule 9, brief C3). This lease is LEVEL 1, per
+#: attempt. The work-unit lock (`pipeline.intent.lock`, 0x5755 'WU') is LEVEL
+#: 2, per work unit, and is always taken UNDERNEATH this one — never the
+#: reverse, which is what makes the two-level order total and therefore
+#: deadlock-free. Acceptance is one of the dispositions rule 9 names, so a
+#: registration that transitions a work unit does so under both: R4 held from
+#: the first statement of the per-attempt transaction, WU taken inside
+#: `transition_unit` before its CAS. The full reasoning, including why W6 and
+#: R4 still do not serialize against each other, is in `pipeline.intent.lock`
+#: and repeated at `pipeline.reconciler.lease.LEASE_NAMESPACE`.
 ATTEMPT_LEASE_NAMESPACE = 0x5234
 
 EXIT_OK = 0

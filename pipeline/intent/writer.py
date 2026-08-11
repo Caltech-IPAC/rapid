@@ -79,6 +79,8 @@ import json
 import logging
 from typing import Any, Protocol, Sequence
 
+from pipeline.intent.lock import lock_work_unit
+
 logger = logging.getLogger(__name__)
 
 # -- the six work-unit states, verbatim from migration 036 -------------------
@@ -89,8 +91,31 @@ COMPLETE = "complete"
 FAILED = "failed"
 QUARANTINED = "quarantined"
 
+# -- and the seventh, from DRAFT migration 045 -------------------------------
+#
+# CANCELLATION IS A DISPOSITION, NOT A FAILURE (rule 9, brief C3: "an
+# operator- or policy-initiated terminal state distinct from failure"). It is
+# a seventh state rather than a reuse of `failed` because the two answer
+# different questions and an operator surface that cannot tell them apart
+# cannot do its job: `failed` means RAPID tried the work and the retry policy
+# exhausted, which is a fact about the work; `cancelled` means someone decided
+# the work should not happen, which is a fact about the decision. Folding
+# cancellation into `failed` would also corrupt the retry taxonomy — migration
+# 040's `retry_parked_attempts` selects `failed` units and returns them to
+# `ready`, so a cancelled unit spelled `failed` would be revived by the next
+# scoped retry, which is exactly the "accidental revival" acceptance criterion
+# 4 forbids.
+#
+# `work_units_state_ck` (036:130-132) is a closed enumeration of six, so this
+# value does not exist in the deployed schema: it arrives with DRAFT migration
+# 045, which amends that CHECK. Until that draft lands as a rapid_systems
+# change request, any write of this state is refused by the database — which
+# is why the contract tests covering cancellation probe for the state's
+# admissibility and skip cleanly when it is absent, keeping smdc CI green.
+CANCELLED = "cancelled"
+
 WORK_UNIT_STATES = frozenset({
-    BLOCKED, READY, SUBMITTED, COMPLETE, FAILED, QUARANTINED,
+    BLOCKED, READY, SUBMITTED, COMPLETE, FAILED, QUARANTINED, CANCELLED,
 })
 
 # -- the four writer classes migration 036's unit_events_writer_ck admits ----
@@ -159,6 +184,33 @@ _TRANSITION_GRAPH: dict[tuple[str, str], str | None] = {
     # WRITER_MUTATION_API (see `transition_unit`'s writer check below).
     (FAILED, READY): WRITER_MUTATION_API,
     (QUARANTINED, READY): WRITER_MUTATION_API,
+    # CANCELLATION'S ENTRY EDGES (rule 9, brief C3), gated to the mutation
+    # API for the same reason the two recovery edges above are: cancelling
+    # work is an operator or policy DECISION, and the design's whole posture
+    # is that decisions are audited. The reconciler and the orchestrator have
+    # no business cancelling — they observe and apply policy to what they
+    # observe; neither ever concludes "this work should not happen".
+    #
+    # The admitted from-states are the three NON-TERMINAL ones, mirroring
+    # quarantine's entry set exactly and for the identical reason ("an
+    # operator override must be able to interrupt it at whatever state it is
+    # caught in"). Work that is already `complete`, `failed` or `quarantined`
+    # is not cancellable: complete work happened and cancelling it would be a
+    # claim about the past, and the other two are terminal dispositions
+    # already — an operator who wants a failed unit gone supersedes it or
+    # leaves it, and `quarantined -> cancelled` would blur two deliberately
+    # distinct operator verdicts.
+    #
+    # THERE IS NO EDGE *OUT* OF CANCELLED, and that is the terminality
+    # acceptance criterion 4 asserts. `cancelled -> ready` is deliberately
+    # absent even for the mutation API: reviving cancelled work is creating
+    # new work, which the design already has a mechanism for (a new unit,
+    # with supersession recording the relationship) and which keeps the
+    # cancellation itself an immutable fact rather than a state someone
+    # quietly stepped back out of.
+    (BLOCKED, CANCELLED): WRITER_MUTATION_API,
+    (READY, CANCELLED): WRITER_MUTATION_API,
+    (SUBMITTED, CANCELLED): WRITER_MUTATION_API,
 }
 
 
@@ -370,6 +422,7 @@ class WorkUnitWriter:
                         blocked_reason: str | None = None,
                         reason: str | None = None,
                         detail: dict | None = None,
+                        lock: bool = True,
                         now: Any = None) -> None:
         """CAS-guarded state transition, refused if the graph does not admit it.
 
@@ -382,6 +435,36 @@ class WorkUnitWriter:
         where another writer already moved the row off `from_state` — two
         different failure modes, both real, neither substitutable for the
         other.
+
+        **THE WORK-UNIT LOCK IS TAKEN HERE, FOR EVERY TRANSITION** (rule 9,
+        brief C3: "cancellation, quarantine, retry, blocked-parking, closure
+        and acceptance all take the same work-unit-scoped lock in the same
+        order before their transition"). It is acquired at this one choke
+        point rather than at each call site precisely because rule 9 asks for
+        ONE discipline: a lock that each disposition remembers to take is a
+        lock some disposition eventually forgets, and the forgetting is
+        invisible until two writers interleave in production. Every edge in
+        `_TRANSITION_GRAPH` passes through this method, so locking here makes
+        the discipline exhaustive by construction — the same reasoning the
+        contract tier's auto-marking uses ("a tier whose membership depends on
+        remembering to say so is a tier that leaks").
+
+        The lock is transaction-scoped and this module never opens or closes a
+        transaction (see the class's own convention, matching `AttemptWriter`):
+        it is released by the caller's commit or rollback, alongside the
+        `work_units` UPDATE and the `unit_events` row this method also writes.
+        So a disposition's decision and its record are one unit of work under
+        one lock, which is what "the state machine, not the timestamp, is the
+        truth" requires to hold under concurrency.
+
+        `lock=False` exists for one narrow case: a caller that ALREADY holds
+        this unit's lock and is transitioning under it (the cancellation path
+        reads the unit's state under the lock, decides, then transitions).
+        PostgreSQL advisory locks are re-entrant within a transaction, so a
+        second acquisition would in fact succeed — the parameter is not there
+        to prevent a deadlock but to keep the acquisition visible at exactly
+        one place per critical section, so reading a call site tells you where
+        the section begins. It is never a way to opt out of the discipline.
         """
         _require_known_writer(writer)
         _require_known_state(from_state, param_name="from_state")
@@ -408,6 +491,12 @@ class WorkUnitWriter:
                 "blocked_reason must be None unless to_state='blocked'")
 
         moment = now or datetime.datetime.now(datetime.timezone.utc)
+
+        # THE LOCK, BEFORE THE CAS (rule 9). Ordered here rather than at the
+        # call sites so no disposition can transition without it; see the
+        # docstring for why one choke point and not six.
+        if lock:
+            lock_work_unit(self._execute, work_unit_id)
 
         sql = (
             "UPDATE work_units SET state = %s, blocked_reason = %s,"

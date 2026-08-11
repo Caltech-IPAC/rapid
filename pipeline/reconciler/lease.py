@@ -35,6 +35,33 @@ logger = logging.getLogger("rapid.reconciler.lease")
 # which is a different key space.
 LEASE_NAMESPACE = 0x5732  # 'W6'
 
+# THE LOCK ORDER (conformance rule 9, brief C3). Three advisory-lock
+# namespaces now exist, at two levels, and the order between the levels is
+# fixed:
+#
+#   level 1, per ATTEMPT     W6  0x5732  this module (the reconciler's lease)
+#                            R4  0x5234  pipeline.registration.consumer
+#   level 2, per WORK UNIT   WU  0x5755  pipeline.intent.lock
+#
+# W6 and R4 are siblings and deliberately never serialize against each other:
+# an attempt's closure sequence and its registration sequence are different
+# critical sections over one attempt, and making them contend would risk
+# deadlock for no invariant. That reasoning is unchanged.
+#
+# What changed is that the WORK UNIT — the resource rule 9's dispositions
+# actually arbitrate — now has a lock of its own, and it is taken UNDERNEATH
+# whichever attempt lease is held:
+#
+#     attempt lease (W6 or R4)  ->  work-unit lock (WU)   ALWAYS
+#     work-unit lock            ->  attempt lease         NEVER
+#
+# That is the only order the code can take: both leases are acquired as the
+# first statement of their transaction, and the work unit is not known until
+# the attempt row has been read under the lease. Because no holder of WU ever
+# waits for W6 or R4, no cycle can form. See `pipeline.intent.lock` for the
+# full reasoning, including why the CAS in `transition_unit` remains under the
+# lock rather than being replaced by it.
+
 # A PostgreSQL identifier this code is willing to interpolate: lower-case
 # ASCII, digits and underscores, starting with a letter. Every column in the
 # attempts table matches; anything that does not is refused rather than
