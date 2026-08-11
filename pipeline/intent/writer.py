@@ -427,6 +427,53 @@ class WorkUnitWriter:
         logger.info("work unit %s: %s -> %s (writer=%s)",
                     work_unit_id, from_state, to_state, writer)
 
+    def amend_blocked_reason(self, work_unit_id: int, blocked_reason: str, *,
+                             now: Any = None) -> bool:
+        """Refresh the reason of a unit that stays `blocked`. NOT a transition.
+
+        A repeated gathering pass over a dependency that is still unsatisfied
+        has nothing to transition — the unit was blocked and remains blocked —
+        but the reason's DETAIL can legitimately sharpen between passes (a
+        dependency named more precisely once more is known about it). Writing
+        that through `transition_unit` would be wrong twice over: `blocked ->
+        blocked` is not an edge the graph admits, and recording a
+        `unit_events` row for it would claim a transition that did not happen,
+        against migration 036's "one row per transition" and invariant 1's
+        append-only history being a history OF TRANSITIONS.
+
+        So this updates the reason column and records no event, and it is
+        CAS-guarded on `state = 'blocked'` so it cannot resurrect a reason
+        onto a unit another writer has since released — which
+        `work_units_blocked_reason_ck` would refuse anyway, but refusing here
+        names the race instead of surfacing a constraint violation.
+
+        Returns True when a row was updated, False when the unit was no longer
+        blocked. False is an ordinary race, not an error: the caller wanted the
+        unit's reason current, and a unit that is no longer blocked has no
+        reason to keep current.
+        """
+        if not blocked_reason:
+            raise ValueError(
+                "amend_blocked_reason needs a reason; a blocked unit must "
+                "always carry one (work_units_blocked_reason_ck)")
+
+        moment = now or datetime.datetime.now(datetime.timezone.utc)
+        sql = (
+            "UPDATE work_units SET blocked_reason = %s, updated_at = %s"
+            " WHERE work_unit_id = %s AND state = %s"
+        )
+        result = self._execute(sql, [
+            blocked_reason, moment, work_unit_id, BLOCKED,
+        ])
+        if _rowcount(result, "amend_blocked_reason") == 0:
+            logger.debug(
+                "work unit %s is no longer blocked; reason not amended",
+                work_unit_id)
+            return False
+        logger.info("work unit %s blocked_reason amended to %s",
+                    work_unit_id, blocked_reason)
+        return True
+
     def supersede_unit(self, old_work_unit_id: int, new_work_unit_id: int, *,
                        writer: str, reason: str | None = None,
                        now: Any = None) -> None:

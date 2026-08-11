@@ -211,14 +211,30 @@ def _science_gatherer(operator_input, start_mjdobs, end_mjdobs, handle,
 
 
 def _reference_gatherer(operator_input, start_mjdobs, end_mjdobs, handle,
-                        parameters, s3_client):
+                        parameters, s3_client, on_blocked=None,
+                        on_unblocked=None):
+    """Reference-construction units, with unripe fields parked queryably.
+
+    `on_blocked` is rule 13's repair (brief C4) and is the ONLY gatherer
+    argument outside the registry's six-argument union — see `_call_gatherer`
+    below for why it is passed positionally-by-keyword rather than widening
+    that union for every row. Reference construction is the one gatherer that
+    has a missing-dependency state at all: `coadd_input_rows` raises
+    `NotReadyYet` when a field has too few coaddable frames, which is the
+    worked example rule 13 names ("Missing dependencies (e.g. reference
+    coverage) leave work BLOCKED without consuming attempts").
+
+    None means "gather without recording", which is what the probes, the
+    tests and any caller with no database connection want; the operator's
+    own pass always supplies one.
+    """
     return list(gathering.gather_reference_units(
         handle, operator_input.start, operator_input.end,
         start_mjdobs=start_mjdobs, end_mjdobs=end_mjdobs,
         min_images_to_coadd=min_images_to_coadd(),
         s3_client=s3_client,
         job_bucket=parameters["s3/products-bucket"],
-        run_id=None))
+        run_id=None, on_blocked=on_blocked, on_unblocked=on_unblocked))
 
 
 def _catalog_load_gatherer(operator_input, start_mjdobs, end_mjdobs, handle,
@@ -420,7 +436,143 @@ def gatherer_for(registry_key, operator_input, parameters,
             # because that is what each gatherer's own field means, not
             # what a failed call means.
             handle = CheckedHandle(rapid_db.RAPIDDB.borrowing(conn))
-            return gather_fn(operator_input, start_mjdobs, end_mjdobs,
-                             handle, parameters, s3_client)
+            return _call_gatherer(gather_fn, operator_input, start_mjdobs,
+                                  end_mjdobs, handle, parameters, s3_client,
+                                  conn)
 
     return gather
+
+
+def _call_gatherer(gather_fn, operator_input, start_mjdobs, end_mjdobs,
+                   handle, parameters, s3_client, conn):
+    """Invoke one registry gatherer, passing `on_blocked` only if it takes one.
+
+    THE SIX-ARGUMENT UNION STAYS SIX (this module's header: "every REGISTRY
+    row's gather function carries the identical six-argument union shape the
+    registry docstring states, so the dispatcher never branches"). Rule 13's
+    blocked-unit recorder is needed by exactly ONE gatherer — reference
+    construction, the only one with a missing-dependency state — and widening
+    the union to seven would make every other row take an argument it can
+    never use, which is the shape the registry docstring exists to prevent.
+
+    So the dispatch inspects the callable for the optional parameter instead
+    of branching on job type: a gatherer that declares `on_blocked` gets one,
+    and a gatherer that does not is called exactly as before. Adding the
+    missing-dependency case to a second job type later is then a signature
+    change on that gatherer and nothing else — still not a branch here.
+
+    The recorder is bound to THIS PASS'S connection, the same one the handle
+    reads through, so a blocked unit is written in the connection the caller's
+    own transaction boundary owns. `pipeline.contract.fixture.executor` shape:
+    rows for a result set, rowcount otherwise.
+    """
+    import inspect
+
+    try:
+        accepted = set(inspect.signature(gather_fn).parameters)
+    except (TypeError, ValueError):  # pragma: no cover - builtins/C callables
+        accepted = set()
+
+    kwargs = {}
+    if "on_blocked" in accepted:
+        kwargs["on_blocked"] = _blocked_recorder(conn)
+    if "on_unblocked" in accepted:
+        kwargs["on_unblocked"] = _unblocked_releaser(conn)
+
+    return gather_fn(operator_input, start_mjdobs, end_mjdobs, handle,
+                     parameters, s3_client, **kwargs)
+
+
+def _blocked_recorder(conn):
+    """The `on_blocked(job_type, input_scope, dependency)` callback, on `conn`.
+
+    Composes `submission.blocked.record_blocked` with this pass's connection.
+    Failures are caught and logged rather than raised: a gathering pass that
+    could not RECORD that a field is unripe must still submit the fields that
+    are ready. Rule 13 asks for the blocked work to be visible, and a
+    visibility write that took down the whole pass would trade a worse defect
+    for a better one — the pass would submit nothing at all, which is the
+    silent-omission failure this repair exists to end, only louder.
+    """
+    from submission import blocked as blocked_units
+
+    def on_blocked(job_type, input_scope, dependency, operational_class):
+        try:
+            unit_id = blocked_units.record_blocked(
+                _executor(conn), job_type=job_type, input_scope=input_scope,
+                operational_class=operational_class, dependency=dependency)
+            conn.commit()
+            return unit_id
+        except Exception as exc:  # noqa: BLE001 - visibility must not gate work
+            logger.warning(
+                "could not record the blocked work unit for %s/%s (%s): %s; "
+                "the gathering pass continues and the ready units still "
+                "submit", job_type, input_scope, dependency, exc)
+            _rollback_quietly(conn)
+            return None
+
+    return on_blocked
+
+
+def _unblocked_releaser(conn):
+    """The `on_unblocked(job_type, input_scope)` callback, on `conn`.
+
+    The inverse of `_blocked_recorder`, with the same failure posture and for
+    a sharper reason: this fires on the path where a unit's coverage HAS
+    arrived and the unit is about to be yielded for submission. A failed
+    release must not stop that submission — the work is ready and the pass
+    should submit it — so the exception is logged and the unit still yields.
+    The consequence of the failure is a unit left `blocked` while its work
+    proceeds, which the next pass's release corrects, and which is visible in
+    the meantime rather than silent.
+    """
+    from submission import blocked as blocked_units
+    from pipeline.intent.writer import WRITER_ORCHESTRATOR
+
+    def on_unblocked(job_type, input_scope):
+        try:
+            released = blocked_units.release_blocked(
+                _executor(conn), job_type=job_type, input_scope=input_scope,
+                writer_identity=WRITER_ORCHESTRATOR)
+            conn.commit()
+            return released
+        except Exception as exc:  # noqa: BLE001 - release must not gate work
+            logger.warning(
+                "could not release the blocked work unit for %s/%s: %s; the "
+                "unit still submits and a later pass releases it",
+                job_type, input_scope, exc)
+            _rollback_quietly(conn)
+            return False
+
+    return on_unblocked
+
+
+def _executor(conn):
+    """The `execute(sql, params)` callable the intent layer's writers take.
+
+    Rows for a statement with a result set, `rowcount` otherwise — the exact
+    contract `pipeline.intent.writer.Executor` documents, over this pass's own
+    connection. Identical in shape to `pipeline.contract.fixture.executor`,
+    which is what lets the contract tier drive the same writer code these
+    callbacks do.
+    """
+    def execute(statement, params=None):
+        with conn.cursor() as cur:
+            cur.execute(statement, params)
+            if cur.description is not None:
+                return cur.fetchall()
+            return cur.rowcount
+    return execute
+
+
+def _rollback_quietly(conn):
+    """Roll back after a failed intent-layer write, swallowing a second fault.
+
+    A rollback that itself fails leaves nothing better to try, and raising
+    from the handler would replace a logged warning with the pass-killing
+    exception the handler exists to prevent.
+    """
+    try:
+        conn.rollback()
+    except Exception:  # noqa: BLE001 - nothing better to do here
+        pass

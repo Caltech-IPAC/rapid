@@ -48,6 +48,7 @@ from typing import Any, Iterable, Iterator, Protocol, Sequence
 from database.modules.utils.checked import RapidDBCallFailed
 from database.modules.utils.roman_tessellation_db import (
     RomanTessellationClosedForm)
+from . import blocked
 from .manifest import ProcessingUnit, UnitFacts
 from .routes import (JOB_TYPE_ALERT_PRODUCTION, JOB_TYPE_CATALOG_LOAD,
                      JOB_TYPE_CROSSMATCH, JOB_TYPE_MERGE_CURRENCY,
@@ -963,7 +964,9 @@ def gather_reference_units(handle: UnitSource, start, end,
                            run_id: str,
                            fids: Iterable[int] | None = None,
                            radius: float | None = None,
-                           reference_window: tuple[float, float] | None = None
+                           reference_window: tuple[float, float] | None = None,
+                           on_blocked: Any = None,
+                           on_unblocked: Any = None
                            ) -> Iterator[ProcessingUnit]:
     """Yield reference-image units, each with its coadd inputs published.
 
@@ -980,6 +983,28 @@ def gather_reference_units(handle: UnitSource, start, end,
     that state. A query that failed raises past this loop, because a night
     in which every field was skipped because the database was unreachable
     must not read the same as a night early in the survey.
+
+    **SKIPPED IS NO LONGER SILENT** (conformance rule 13, brief C4). Skipping
+    was the whole disposition: the unit was logged at INFO and omitted from
+    the yield, and nothing was persisted — so an operator asking "what is
+    blocked, and why" had nothing to query, and a field that never ripened
+    was indistinguishable from a field never gathered. `on_blocked` is that
+    repair. Called with `(job_type, input_scope, dependency,
+    operational_class)` for each skipped unit, it parks a queryable BLOCKED
+    work unit naming the missing dependency; `on_unblocked` is its inverse,
+    called for a unit that now HAS its coverage so a previously parked unit
+    transitions `blocked -> ready` through the existing graph edge. No
+    attempt is created or consumed on either path — a parked unit has never
+    been submitted.
+
+    **THIS MODULE STILL WRITES NOTHING ITSELF.** Both are injected callables,
+    for the reason `submission.blocked`'s own docstring gives at length: this
+    module's `UnitSource` is a deliberately narrow READ-ONLY protocol, and its
+    testability rests on gathering needing no database to write to. The
+    callbacks are supplied by `pipeline.operator.gathering`, which has the
+    connection; `None` — the default, and what every probe and test passes —
+    means gather without recording, which behaves exactly as this function
+    did before.
 
     `start_mjdobs`/`end_mjdobs` bound which frames are gathered as UNITS and
     are passed on for that; they are deliberately not the coadd window.
@@ -1028,6 +1053,14 @@ def gather_reference_units(handle: UnitSource, start, end,
             # sentence an operator reads and does nothing about.
             logger.info("no reference image for unit %s yet: %s",
                         unit.key, exc)
+            # ...and the INFO line is no longer the whole disposition (rule
+            # 13). The unit is parked BLOCKED with the dependency named, so
+            # the same query that finds package A's application-failure parks
+            # finds this one too. `continue` still follows: a blocked unit is
+            # not yielded, so nothing is submitted for it and no attempt is
+            # consumed.
+            _record_blocked_unit(on_blocked, unit,
+                                 blocked.REFERENCE_COVERAGE)
             continue
 
         # Under `submissions/<run_id>/`, beside the manifest that cites it:
@@ -1045,9 +1078,62 @@ def gather_reference_units(handle: UnitSource, start, end,
         logger.info("unit %s: %d coadd inputs at %s",
                     unit.key, len(rows), uri)
 
+        # THE DEPENDENCY IS SATISFIED (rule 13's second half). If an earlier
+        # pass parked this unit blocked on reference coverage, the coverage
+        # now exists — this very pass just aggregated it — so the unit is
+        # released `blocked -> ready` through the existing graph edge before
+        # it is yielded for submission. A unit that was never blocked has
+        # nothing to release, and the release reports that as a no-op rather
+        # than an error.
+        _release_blocked_unit(on_unblocked, unit)
+
         yield dataclasses.replace(
             unit, facts=_replace(facts, coadd_inputs_uri=uri,
                                  coadd_inputs_checksum=checksum))
+
+
+def _blocked_identity(unit):
+    """The `(job_type, input_scope, operational_class)` a blocked unit takes.
+
+    Built through `submission.subjects.build_input_scope` and
+    `pipeline.seams._operational_class_for` — the SAME two functions the
+    submission path uses to identify a work unit — rather than assembled
+    locally. That is the whole correctness requirement of this identity: a
+    unit parked at gathering and the unit later submitted for the same field
+    must be ONE row under migration 036's partial unique index on
+    `(job_type, input_scope)`, so the blocked row is the row that transitions
+    to ready rather than a second row shadowing it. Two spellings of the
+    identity would produce two units, and the release would fire against a
+    row nobody submits.
+
+    Imported inside the function: `pipeline` imports `submission` in nine
+    places and `submission` imports `pipeline` in none (see
+    `submission.submit.is_precondition_failed`'s note on that direction). A
+    module-level import here would invert that dependency for the whole
+    package; a call-time one keeps the layering and costs a dict lookup.
+    """
+    from pipeline.seams import _operational_class_for
+    from submission.subjects import build_input_scope
+
+    job_type = JOB_TYPE_REFERENCE_IMAGE
+    return (job_type, build_input_scope(job_type, unit),
+            _operational_class_for(job_type))
+
+
+def _record_blocked_unit(on_blocked, unit, dependency):
+    """Park one unit blocked, if the caller supplied a recorder."""
+    if on_blocked is None:
+        return None
+    job_type, input_scope, operational_class = _blocked_identity(unit)
+    return on_blocked(job_type, input_scope, dependency, operational_class)
+
+
+def _release_blocked_unit(on_unblocked, unit):
+    """Release one unit blocked->ready, if the caller supplied a releaser."""
+    if on_unblocked is None:
+        return False
+    job_type, input_scope, _ = _blocked_identity(unit)
+    return on_unblocked(job_type, input_scope)
 
 
 # ---------------------------------------------------------------------------
