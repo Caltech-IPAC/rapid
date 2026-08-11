@@ -109,6 +109,7 @@ rapid-job = "pipeline.entrypoints.job:main"
 # what the payload's stages call into.
 packages.find = {namespaces = true, include = [
     "pipeline*", "observability*", "submission*", "database*", "modules*",
+    "alerts*",
 ]}
 
 [tool.setuptools.package-data]

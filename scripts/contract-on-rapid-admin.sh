@@ -148,7 +148,12 @@ echo "BRIEF-B-CONTRACT-SUITE: exit=$suite_rc"
 # baseline (dc4aa20) on this host, so that failure is the host's missing
 # dependencies and not a regression. "Unchanged and green" is only a
 # meaningful claim where the tier's dependencies are present.
-./scripts/run-operational-tests.sh "$VPY" >"${STAGE_DIR}/stub-tier.log" 2>&1
+# RAPID_SW is the installed software root, read fail-loud (no compiled-in
+# default, by env-policy) for the release's science configuration. The
+# existing `run-operational-tests-on-rapid-admin.sh` sets it for exactly this
+# reason; a checkout-rooted run sets it to the checkout.
+RAPID_SW="${STAGE_DIR}/repo" ./scripts/run-operational-tests.sh "$VPY" \
+    >"${STAGE_DIR}/stub-tier.log" 2>&1
 stub_rc=$?
 tail -4 "${STAGE_DIR}/stub-tier.log"
 echo "BRIEF-B-STUB-TIER: exit=$stub_rc"

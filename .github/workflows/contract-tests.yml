@@ -162,6 +162,15 @@ jobs:
         # the transition." Run here as well as on rapid-admin so a packaging
         # change that breaks the stub tier's per-module interpreter isolation
         # is caught by the same gate that introduced it.
+        #
+        # RAPID_SW is the installed software root. It is read fail-loud (no
+        # compiled-in default — `scripts/check-env-policy.sh` enforces that),
+        # because the science configuration is release content and must come
+        # from the installed tree rather than be guessed from the working
+        # directory. `run-operational-tests-on-rapid-admin.sh` sets it for the
+        # same reason; a checkout-rooted run sets it to the checkout.
+        env:
+          RAPID_SW: ${{ github.workspace }}
         run: |
           scripts/run-operational-tests.sh
 

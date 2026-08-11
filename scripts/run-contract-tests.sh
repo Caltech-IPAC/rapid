@@ -40,6 +40,14 @@ cd "$REPO_ROOT" || exit 2
 export PGHOST PGPORT PGUSER PGDATABASE
 [ -n "${PGPASSWORD:-}" ] && export PGPASSWORD
 
+# The installed software root, read fail-loud by the science-configuration and
+# definition loaders (no compiled-in default — `check-env-policy.sh` enforces
+# it). The definitions this suite's fixture and preflight tests read are
+# release content shipped under it, so a run rooted at this checkout says so
+# rather than letting a caller's ambient value decide.
+: "${RAPID_SW:=$REPO_ROOT}"
+export RAPID_SW
+
 LOG=${CONTRACT_LOG:-/tmp/brief-b-contract.log}
 : > "$LOG"
 
