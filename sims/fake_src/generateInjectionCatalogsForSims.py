@@ -167,10 +167,35 @@ if __name__ == '__main__':
         rtid_records_list = roman_tessellation_db.get_overlapping_rtids(ra0,dec0,ra1,dec1,ra2,dec2,ra3,dec3,ra4,dec4)
 
 
+        # Alternatively, compute all fields that overlap the science image by identifying all surrounding sky tiles.
+
+        neighboring_rtids = roman_tessellation_db.get_all_neighboring_rtids(field)
+
+        sciimg_overlapping_rtids = [field]
+        for neighboring_rtid in neighboring_rtids:
+            sciimg_overlapping_rtids.append(neighboring_rtid)
+
+        # Find union using set operations
+
+        union_list = list(set(rtid_records_list).union(neighboring_rtids))
+
+
+        # Compare lists.
+
+        set_a = set(rtid_records_list)
+        set_b = set(sciimg_overlapping_rtids)
+
+        result = [item for item in rtid_records_list if item not in set_b]
+        print(f"Fields returned by method get_overlapping_rtids that are not returned by method get_all_neighboring_rtids = {result}")
+
+        result = [item for item in sciimg_overlapping_rtids if item not in set_a]
+        print(f"Fields returned by method get_all_neighboring_rtids that are not returned by method get_overlapping_rtids = {result}")
+
+
         # Skip injection-catalog generation for given rtid in list if it
         # already exists in the S3 bucket.
 
-        for rtid_record in rtid_records_list:
+        for rtid_record in union_list:
 
             rtid = rtid_record[0]
 
