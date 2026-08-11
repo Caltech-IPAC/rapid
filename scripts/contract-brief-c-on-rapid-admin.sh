@@ -113,6 +113,17 @@ grep -E '^BRIEF-B-(APPLY|SUITE|SCHEMA-MIGRATIONS)' "${STAGE_DIR}/pass1.log" | he
 pass1_line=$(grep -E '^[0-9]+ (passed|failed)|passed|skipped' \
     "${STAGE_DIR}/contract-pytest.log" 2>/dev/null | tail -1)
 echo "BRIEF-C-PASS1-RESULT: ${pass1_line:-<no summary line>}"
+# THE FAILURE DETAIL TRAVELS WITH THE VERDICT. The scratch directory is
+# removed by the caller's trap when this run ends, so a failure whose only
+# account is in a file there is a failure nobody can diagnose without
+# re-running. The short-form names and the assertion lines are echoed into
+# stdout — which is capped at 24KB and tail-truncated, hence `head` bounds on
+# both — so one run produces both the verdict and the reason.
+if [ "$pass1_rc" -ne 0 ]; then
+    echo "--- BRIEF-C-PASS1 failures ---"
+    grep -E '^(FAILED|ERROR)' "${STAGE_DIR}/contract-pytest.log" | head -20
+    grep -E '^E ' "${STAGE_DIR}/contract-pytest.log" | head -25
+fi
 echo "BRIEF-C-PASS1: exit=$pass1_rc"
 
 # --- Apply the DRAFT migrations, in order ------------------------------------
@@ -138,21 +149,40 @@ done
 echo "BRIEF-C-DRAFTS: PASS exit=0 ($drafts_applied draft migrations applied)"
 
 # --- PASS 2: base + drafts, the full acceptance ------------------------------
-# `run-contract-tests.sh` re-applies the base stream; every file in it is
-# idempotent (IF NOT EXISTS / DO $$ guards), so a second application converges
-# rather than errors — which is the stream's own design property, exercised
-# here rather than assumed.
+# THE SUITE IS RUN DIRECTLY, NOT THROUGH `run-contract-tests.sh` A SECOND
+# TIME. That script re-applies the whole stream before running, and the stream
+# is NOT idempotent across this boundary: DRAFT 045 replaces
+# `work_units_state_ck` with a seven-value version, and re-running
+# 036-intent-schema-v1.sql then fails because its own `ADD CONSTRAINT` finds a
+# constraint of that name already present (verified live: "FAIL exit=3 failed
+# on 036-intent-schema-v1.sql after 36 file(s)").
+#
+# That is not a defect in 045 or in the stream — it is the ordinary shape of
+# an amending migration, and re-applying an already-applied stream on top of
+# its own amendments is not something the applier ever does in production
+# either (`apply-db-migrations.sh` skips what `schema_migrations` records).
+# The first pass above built and recorded the base schema; the drafts amended
+# it; the schema is now exactly base+drafts and needs no third application.
+#
+# So this pass invokes pytest with the same interpreter, selection and
+# environment `run-contract-tests.sh` uses, against the database those two
+# steps already built.
 echo "BRIEF-C-PASS2: base + drafts (the full acceptance)"
 export CONTRACT_LOG="${STAGE_DIR}/contract-pytest-pass2.log"
-./scripts/run-contract-tests.sh "${STAGE_DIR}/db-migrations" \
-    >"${STAGE_DIR}/pass2.log" 2>&1
+: > "$CONTRACT_LOG"
+: "${RAPID_SW:=${STAGE_DIR}/repo}"
+export RAPID_SW
+"$VPY" -m pytest pipeline/contract -m contract -p no:cacheprovider \
+    --no-header -q >"${STAGE_DIR}/pass2.log" 2>&1
 suite_rc=$?
-grep -E '^BRIEF-B-(APPLY|SUITE)' "${STAGE_DIR}/pass2.log" | head -4
-pass2_line=$(grep -E 'passed|failed' \
-    "${STAGE_DIR}/contract-pytest-pass2.log" 2>/dev/null | tail -1)
+cp "${STAGE_DIR}/pass2.log" "$CONTRACT_LOG"
+pass2_line=$(grep -E 'passed|failed|error' \
+    "${STAGE_DIR}/pass2.log" 2>/dev/null | tail -1)
 echo "BRIEF-C-PASS2-RESULT: ${pass2_line:-<no summary line>}"
 if [ "$suite_rc" -ne 0 ]; then
-    grep -E '^(FAILED|ERROR)' "${STAGE_DIR}/contract-pytest-pass2.log" | head -20
+    echo "--- BRIEF-C-PASS2 failures ---"
+    grep -E '^(FAILED|ERROR)' "${STAGE_DIR}/pass2.log" | head -20
+    grep -E '^E ' "${STAGE_DIR}/pass2.log" | head -30
 fi
 echo "BRIEF-C-CONTRACT-SUITE: exit=$suite_rc"
 
@@ -163,6 +193,10 @@ echo "BRIEF-C-CONTRACT-SUITE: exit=$suite_rc"
 RAPID_SW="${STAGE_DIR}/repo" ./scripts/run-operational-tests.sh "$VPY" \
     >"${STAGE_DIR}/stub-tier.log" 2>&1
 stub_rc=$?
+if [ "$stub_rc" -ne 0 ]; then
+    echo "--- BRIEF-C-STUB-TIER failures ---"
+    grep -E '^FAIL |^ *FAIL: ' "${STAGE_DIR}/stub-tier.log" | head -25
+fi
 tail -4 "${STAGE_DIR}/stub-tier.log"
 echo "BRIEF-C-STUB-TIER: exit=$stub_rc"
 

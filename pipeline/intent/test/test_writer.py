@@ -9,6 +9,7 @@ house convention (`observability/test/test_attempts.py`'s
 
 import unittest
 
+from pipeline.intent.lock import WORK_UNIT_NAMESPACE
 from pipeline.intent.writer import (
     ABANDONED,
     ACTIVE,
@@ -239,21 +240,65 @@ class TransitionCasTests(unittest.TestCase):
             writer.transition_unit(1, READY, SUBMITTED,
                                    writer=WRITER_ORCHESTRATOR)
 
+    def _find_call(self, execute, fragment):
+        """The first recorded statement containing `fragment`, with its params.
+
+        FOUND BY CONTENT, NOT BY POSITION. These two tests used to index
+        `execute.calls[0]` and `[1]`, which encoded an assumption about how
+        many statements `transition_unit` issues — and brief C's rule-9 repair
+        added one, the work-unit advisory lock that now precedes the CAS. The
+        tests then failed for naming the wrong index while the behaviour each
+        asserts was entirely intact, which is a test measuring the wrong
+        thing: neither cares WHERE the UPDATE sits in the sequence, only that
+        it is issued with the right predicate and parameters. Searching by
+        content says that directly, and survives the next statement anyone
+        legitimately adds.
+        """
+        for sql, params in execute.calls:
+            if fragment in sql:
+                return sql, params
+        self.fail(f"no recorded statement contained {fragment!r}; "
+                  f"statements were: {[sql for sql, _ in execute.calls]}")
+
     def test_the_update_matches_on_work_unit_id_and_from_state(self):
         execute = RecordingExecutor()
         writer = WorkUnitWriter(execute)
         writer.transition_unit(99, READY, SUBMITTED, writer=WRITER_ORCHESTRATOR)
-        sql, params = execute.calls[0]
-        self.assertIn("WHERE work_unit_id = %s AND state = %s", sql)
+        sql, params = self._find_call(
+            execute, "WHERE work_unit_id = %s AND state = %s")
         self.assertIn(99, params)
         self.assertIn(READY, params)
+
+    def test_the_work_unit_lock_precedes_the_cas(self):
+        """Rule 9's discipline, asserted at the writer that enforces it.
+
+        The lock has to come BEFORE the CAS, not merely be present: its
+        purpose is to serialize the decision, and a lock taken after the
+        update would serialize nothing that matters. Position is the whole
+        claim here, which is why this test — unlike the two around it —
+        legitimately asserts on ordering.
+        """
+        execute = RecordingExecutor()
+        writer = WorkUnitWriter(execute)
+        writer.transition_unit(7, READY, SUBMITTED, writer=WRITER_ORCHESTRATOR)
+
+        statements = [sql for sql, _ in execute.calls]
+        lock_index = next(i for i, sql in enumerate(statements)
+                          if "pg_advisory_xact_lock" in sql)
+        cas_index = next(i for i, sql in enumerate(statements)
+                         if "UPDATE work_units" in sql)
+        self.assertLess(lock_index, cas_index)
+
+        _sql, params = self._find_call(execute, "pg_advisory_xact_lock")
+        self.assertIn(WORK_UNIT_NAMESPACE, params)
+        self.assertIn(7, params)
 
     def test_transition_writes_a_unit_event(self):
         execute = RecordingExecutor()
         writer = WorkUnitWriter(execute)
         writer.transition_unit(1, READY, SUBMITTED, writer=WRITER_ORCHESTRATOR)
-        event_sql, event_params = execute.calls[1]
-        self.assertIn("INSERT INTO unit_events", event_sql)
+        event_sql, event_params = self._find_call(
+            execute, "INSERT INTO unit_events")
         self.assertIn(READY, event_params)
         self.assertIn(SUBMITTED, event_params)
         self.assertIn(WRITER_ORCHESTRATOR, event_params)

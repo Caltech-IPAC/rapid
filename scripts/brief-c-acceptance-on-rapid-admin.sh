@@ -37,9 +37,13 @@ ACCOUNT=$(aws sts get-caller-identity --query Account --output text)
 # image without it. Digest-pinned.
 IMAGE=${1:-${ACCOUNT}.dkr.ecr.us-east-1.amazonaws.com/rapid-postgres@sha256:ae911258c5ec314d9e0b02946fbc97c6c05c8cb12ecca5ff4b5d6b47295d3420}
 
-MIGRATIONS_SRC=${MIGRATIONS_SRC:-../../rapid_systems/cloudformation/db-migrations}
+# The sibling checkout, READ-ONLY. This worktree lives at
+# `<rapid-parent>/wt-brief-c`, so rapid_systems is one level up beside it —
+# the same place the repo-isolation rule expects it and the only thing this
+# script ever reads from that repo.
+MIGRATIONS_SRC=${MIGRATIONS_SRC:-../rapid_systems/cloudformation/db-migrations}
 [ -d "$MIGRATIONS_SRC" ] || { echo "!! no migration stream at $MIGRATIONS_SRC" >&2; exit 1; }
-STREAM_REV=$(git -C "$(dirname "$MIGRATIONS_SRC")/.." rev-parse HEAD)
+STREAM_REV=$(git -C "$MIGRATIONS_SRC" rev-parse HEAD)
 
 BUCKET="rapid-build-artifacts-${ACCOUNT}"
 RUN_ID="brief-c-$(date -u +%Y%m%dT%H%M%SZ)"
