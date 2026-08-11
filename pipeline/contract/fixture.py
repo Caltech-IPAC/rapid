@@ -112,6 +112,61 @@ def executor(conn):
     return execute
 
 
+def has_table(conn, table_name, schema="public"):
+    """Is this table present? The DRAFT-schema probe.
+
+    Brief C ships new schema as DRAFT migration files under
+    `migrations-draft/`, which are change requests against `rapid_systems`
+    rather than part of the authoritative stream — so a contract test needing
+    one must SKIP where it is absent, and must PROBE rather than assume
+    ("probe the schema, don't assume"). CI builds its database from the
+    authoritative stream and therefore skips those tests; the rapid-admin
+    acceptance run applies base + drafts and therefore runs them.
+
+    Asking the catalog rather than trying a query and interpreting the failure
+    keeps "this schema is not deployed" apart from "the query is wrong" — two
+    facts a test must never conflate, because conflating them turns a broken
+    test into a silent skip.
+    """
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT 1 FROM information_schema.tables"
+            " WHERE table_schema = %s AND table_name = %s LIMIT 1",
+            [schema, table_name])
+        return cur.fetchone() is not None
+
+
+def has_function(conn, function_name, schema="derived"):
+    """Is this function present? The DRAFT-schema probe for 046's entry point."""
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT 1 FROM pg_proc p JOIN pg_namespace n"
+            "  ON n.oid = p.pronamespace"
+            " WHERE n.nspname = %s AND p.proname = %s LIMIT 1",
+            [schema, function_name])
+        return cur.fetchone() is not None
+
+
+def admits_state(conn, state, table="work_units"):
+    """Does this table's state CHECK admit `state`?
+
+    Distinct from `has_table`: DRAFT 045 amends an EXISTING constraint rather
+    than adding an object, so presence is not the question — vocabulary is.
+    Asked by probing the constraint's own text, which is what the database
+    will actually enforce, rather than by attempting a write and rolling back
+    (that would leave the test's transaction in a failed state and force the
+    caller to reason about savepoints to recover).
+    """
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT pg_get_constraintdef(c.oid) FROM pg_constraint c"
+            " JOIN pg_class t ON t.oid = c.conrelid"
+            " WHERE t.relname = %s AND c.conname = %s",
+            [table, f"{table}_state_ck"])
+        row = cur.fetchone()
+    return bool(row) and f"'{state}'" in row[0]
+
+
 def scope(name):
     """A run-unique `input_scope`, so two runs never collide on identity.
 
