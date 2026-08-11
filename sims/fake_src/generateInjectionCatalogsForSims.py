@@ -21,6 +21,13 @@ python_cmd = '/usr/bin/python3.11'
 generate_injection_catalog_code = '/code/modules/fake_src/generateInjectionCatalogForField.py'
 
 
+
+
+upload_to_bucket = True
+
+
+
+
 # Print diagnostics.
 
 print("swname =", swname)
@@ -124,7 +131,7 @@ if __name__ == '__main__':
 
     # Query RAPID operations database for the relevant fields.
 
-    query = f"SELECT DISTINCT field FROM l2files WHERE vbest>0 AND status>0;"
+    query = f"SELECT DISTINCT field FROM l2files WHERE vbest > 0 AND status > 0;"
 
     sql_queries = []
     sql_queries.append(query)
@@ -144,7 +151,7 @@ if __name__ == '__main__':
         # Query RAPID operations database for representative science image,
         # in order to find the sky positions of its four corners.
 
-        query = f"SELECT rid FROM l2files WHERE vbest>0 AND field = {field} limit 1;"
+        query = f"SELECT rid FROM l2files WHERE vbest > 0 AND field = {field} limit 1;"
 
         sql_queries = []
         sql_queries.append(query)
@@ -162,25 +169,31 @@ if __name__ == '__main__':
             exit(dbh.exit_code)
 
 
-        # Compute all fields that overlap the science image.
+        # Compute all fields that overlap the science image using get_overlapping_rtids method.
         # This method returns a tuple per record: (rtid,ramin,ramax,decmin,decmax);
         # E.g.,(4649964, 268.0224304199219, 268.1103515625, -28.588502883911133, -28.503568649291992)
+
+        print(f"Fields returned for science-image field = {field}")
 
         rtid_records_list = roman_tessellation_db.get_overlapping_rtids(ra0,dec0,ra1,dec1,ra2,dec2,ra3,dec3,ra4,dec4)
 
         rtids_list = []
         for rtid_record in rtid_records_list:
             rtid = rtid_record[0]
-        rtids_list.append(rtid)
+            rtids_list.append(rtid)
+        print(f"Fields returned by method get_overlapping_rtids = {rtids_list}")
 
 
-        # Alternatively, compute all fields that overlap the science image by identifying all surrounding sky tiles.
+        # Alternatively, compute all fields that overlap the science image using get_all_neighboring_rtids method.
+        # This method identifies all surrounding sky tiles (which should be a superset of the actual overlapping fields).
 
         neighboring_rtids = roman_tessellation_db.get_all_neighboring_rtids(field)
 
         sciimg_overlapping_rtids = [field]
         for neighboring_rtid in neighboring_rtids:
             sciimg_overlapping_rtids.append(neighboring_rtid)
+        print(f"Fields returned by method get_all_neighboring_rtids = {sciimg_overlapping_rtids}")
+
 
         # Find union using set operations
 
@@ -224,11 +237,13 @@ if __name__ == '__main__':
             exitcode_from_generate_injection_catalog_cmd = util.execute_command(generate_injection_catalog_cmd)
 
 
-            # Upload fake-source injection catalog to product S3 bucket.
+            # Optionally upload fake-source injection catalog to product S3 bucket.
 
-            s3_object_name_injection_catalog = f"{injection_catalogs_subdir}/" + injection_catalog_filename
+            if upload_to_bucket:
 
-            util.upload_files_to_s3_bucket(s3_client,job_info_s3_bucket_base,[injection_catalog_filename],[s3_object_name_injection_catalog])
+                s3_object_name_injection_catalog = f"{injection_catalogs_subdir}/" + injection_catalog_filename
+
+                util.upload_files_to_s3_bucket(s3_client,job_info_s3_bucket_base,[injection_catalog_filename],[s3_object_name_injection_catalog])
 
 
         # Code-timing benchmark.
