@@ -239,6 +239,13 @@ def run_single_core_job_stage_1_crossmatching(tables_to_crossmatch_list,fields,i
                 dbh.close()
                 raise
 
+            if dbh.exit_code >= 64:
+                fh.write(f"*** Error from dbh.execute_sql_queries (query={query}); quitting...\n")
+                fh.flush()
+                fh.close()
+                dbh.close()
+                raise RuntimeError(f"*** Error from dbh.execute_sql_queries (query={query}); quitting...")
+
             for record in records:
                 expid = record[0]
                 mjdobs = record[1]
@@ -288,6 +295,13 @@ def run_single_core_job_stage_1_crossmatching(tables_to_crossmatch_list,fields,i
                         dbh.close()
                         raise
 
+                    if dbh.exit_code >= 64:
+                        fh.write(f"*** Error from dbh.execute_sql_queries (query={query}); quitting...\n")
+                        fh.flush()
+                        fh.close()
+                        dbh.close()
+                        raise RuntimeError(f"*** Error from dbh.execute_sql_queries (query={query}); quitting...")
+
 
                     # Code-timing benchmark.
 
@@ -313,6 +327,8 @@ def run_single_core_job_stage_1_crossmatching(tables_to_crossmatch_list,fields,i
                         # even for unlogged table.
 
                         '''
+                        This method is deprecated.
+
                         dbh.add_merge_to_field(merges_tablename,aid,sid)
                         '''
 
@@ -357,6 +373,13 @@ def run_single_core_job_stage_1_crossmatching(tables_to_crossmatch_list,fields,i
                         fh.close()
                         dbh.close()
                         raise
+
+                    if dbh.exit_code >= 64:
+                        fh.write(f"*** Error from dbh.execute_sql_queries (query={query}); quitting...\n")
+                        fh.flush()
+                        fh.close()
+                        dbh.close()
+                        raise RuntimeError(f"*** Error from dbh.execute_sql_queries (query={query}); quitting...")
 
                     for record in records:
 
@@ -726,7 +749,16 @@ def run_single_core_job_stage_2_crossmatching(tables_to_crossmatch_list,fields,i
                         fh.flush()
                         fh.close()
                         dbh.close()
+                        roman_tessellation_db.close()
                         raise
+
+                    if dbh.exit_code >= 64:
+                        fh.write(f"*** Error from dbh.execute_sql_queries (query={query}); quitting...\n")
+                        fh.flush()
+                        fh.close()
+                        dbh.close()
+                        roman_tessellation_db.close()
+                        raise RuntimeError(f"*** Error from dbh.execute_sql_queries (query={query}); quitting...")
 
 
                     # Code-timing benchmark.
@@ -786,6 +818,7 @@ def run_single_core_job_stage_2_crossmatching(tables_to_crossmatch_list,fields,i
             fh.flush()
             fh.close()
             dbh.close()
+            roman_tessellation_db.close()
             raise
 
         if dbh.exit_code >= 64:
@@ -794,6 +827,7 @@ def run_single_core_job_stage_2_crossmatching(tables_to_crossmatch_list,fields,i
             fh.flush()
             fh.close()
             dbh.close()
+            roman_tessellation_db.close()
             raise RuntimeError(f"*** Error bulk-loading data from file ({merges_table_file}) " +
                                f"into specified database table ({merges_tablename}); quitting...")
 
@@ -933,7 +967,13 @@ if __name__ == '__main__':
     # that are associated with the given processing date.
     # Returns a list of job IDs.
 
-    recs = dbh.get_jids_of_normal_science_pipeline_jobs_for_processing_date(proc_date)
+    try:
+        recs = dbh.get_jids_of_normal_science_pipeline_jobs_for_processing_date(proc_date)
+    except Exception as e:
+        print(f"*** Error: Exception raised in dbh.get_jids_of_normal_science_pipeline_jobs_for_processing_date " +
+              f"(proc_date={proc_date},e={e});  quitting...")
+        dbh.close()
+        exit(64)
 
     if dbh.exit_code >= 64:
         print("*** Error from {}; quitting ".format(swname))
@@ -949,11 +989,35 @@ if __name__ == '__main__':
 
     for jid in recs:
 
-        job_dict = dbh.get_info_for_job(jid)
+        try:
+            job_dict = dbh.get_info_for_job(jid)
+        except Exception as e:
+            print(f"*** Error: Exception raised in dbh.get_info_for_job " +
+                  f"(jid={jid},e={e});  quitting...")
+            dbh.close()
+            exit(64)
+
+        if dbh.exit_code >= 64:
+            print(f"*** Error: Exception raised in dbh.get_info_for_job " +
+                  f"(jid={jid});  quitting...")
+            dbh.close()
+            exit(dbh.exit_code)
 
         rid = job_dict["rid"]
 
-        l2file_dict = dbh.get_l2file_info_for_sources(rid)
+        try:
+            l2file_dict = dbh.get_l2file_info_for_sources(rid)
+        except Exception as e:
+            print(f"*** Error: Exception raised in dbh.get_l2file_info_for_sources " +
+                  f"(rid={rid},e={e});  quitting...")
+            dbh.close()
+            exit(64)
+
+        if dbh.exit_code >= 64:
+            print(f"*** Error: Exception raised in dbh.get_l2file_info_for_sources " +
+                  f"(rid={rid});  quitting...")
+            dbh.close()
+            exit(dbh.exit_code)
 
         crval1 = l2file_dict['crval1']
         crval2 = l2file_dict['crval2']
@@ -1016,9 +1080,9 @@ if __name__ == '__main__':
             records = dbh.execute_sql_queries(sql_queries,debug)
         except Exception as e:
             print(f"*** Error: Exception raised in dbh.execute_sql_queries " +
-                     f"(e={e});  quitting...")
+                  f"(e={e});  quitting...")
             dbh.close()
-            raise
+            exit(64)
 
         if dbh.exit_code >= 64:
             print("*** Error from {}; quitting ".format(swname))
@@ -1057,9 +1121,9 @@ if __name__ == '__main__':
             records = dbh.execute_sql_queries(sql_queries,debug)
         except Exception as e:
             print(f"*** Error: Exception raised in dbh.execute_sql_queries " +
-                     f"(e={e});  quitting...")
+                  f"(e={e});  quitting...")
             dbh.close()
-            raise
+            exit(64)
 
         if dbh.exit_code >= 64:
             print("*** Error from {}; quitting ".format(swname))
@@ -1073,7 +1137,7 @@ if __name__ == '__main__':
 
     fields_list = list(fields_dict.keys())
     nfields = len(fields_list)
-    print("nfields =",n_tables_to_crossmatch_list)
+    print("nfields =",nfields)
 
 
     # Code-timing benchmark.
@@ -1100,9 +1164,9 @@ if __name__ == '__main__':
             records = dbh.execute_sql_queries(sql_queries,debug)
         except Exception as e:
             print(f"*** Error: Exception raised in dbh.execute_sql_queries " +
-                     f"(e={e});  quitting...")
+                  f"(e={e});  quitting...")
             dbh.close()
-            raise
+            exit(64)
 
         if dbh.exit_code >= 64:
             print("*** Error from {}; quitting ".format(swname))
@@ -1140,9 +1204,9 @@ if __name__ == '__main__':
         records = dbh.execute_sql_queries(sql_queries,debug)
     except Exception as e:
         print(f"*** Error: Exception raised in dbh.execute_sql_queries " +
-                 f"(e={e});  quitting...")
+              f"(e={e});  quitting...")
         dbh.close()
-        raise
+        exit(64)
 
     if dbh.exit_code >= 64:
         print("*** Error from {}; quitting ".format(swname))
@@ -1190,9 +1254,9 @@ if __name__ == '__main__':
         records = dbh.execute_sql_queries(sql_queries,debug)
     except Exception as e:
         print(f"*** Error: Exception raised in dbh.execute_sql_queries " +
-                 f"(e={e});  quitting...")
+              f"(e={e});  quitting...")
         dbh.close()
-        raise
+        exit(64)
 
     if dbh.exit_code >= 64:
         print("*** Error from {}; quitting ".format(swname))
@@ -1272,9 +1336,9 @@ if __name__ == '__main__':
         records = dbh.execute_sql_queries(sql_queries,debug)
     except Exception as e:
         print(f"*** Error: Exception raised in dbh.execute_sql_queries " +
-                 f"(e={e});  quitting...")
+              f"(e={e});  quitting...")
         dbh.close()
-        raise
+        exit(64)
 
     if dbh.exit_code >= 64:
         print("*** Error from {}; quitting ".format(swname))
