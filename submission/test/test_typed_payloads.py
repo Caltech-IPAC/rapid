@@ -37,6 +37,17 @@ from submission.subjects import SubjectError, subject_for
 MISSING_CASES = [
     (JOB_TYPE_SCIENCE, dict(sca=3), "exposure"),
     (JOB_TYPE_SCIENCE, dict(exposure=1), "sca"),
+    # The imaging FACTS, not just the subject components. Each is dropped
+    # from an otherwise-complete fixture, so the case exercises exactly one
+    # absence — and covers the required set D4 moved off `UnitFacts`, where
+    # every one of these was `X | None = None` and none was checked at all.
+] + [
+    (JOB_TYPE_SCIENCE,
+     dict({k: v for k, v in fixtures.IMAGING_FACTS.items() if k != name},
+          exposure=90001, sca=3),
+     name)
+    for name in ("rid", "fid", "field", "rtid", "expid")
+] + [
     (JOB_TYPE_CATALOG_LOAD,
      dict(sca=3, target_table="t"), "proc_date"),
     (JOB_TYPE_CATALOG_LOAD,
