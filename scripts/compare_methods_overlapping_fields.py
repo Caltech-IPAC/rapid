@@ -183,7 +183,8 @@ if __name__ == '__main__':
         for rtid_record in rtid_records_list:
             rtid = rtid_record[0]
             rtids_list.append(rtid)
-        print(f"Method 1: Fields returned by method get_overlapping_rtids = {rtids_list.sort()}")
+        rtids_list.sort()
+        print(f"Method 1: Fields returned by method get_overlapping_rtids = {rtids_list}")
 
 
         # Method 2
@@ -195,13 +196,14 @@ if __name__ == '__main__':
         sciimg_overlapping_rtids = [field]
         for neighboring_rtid in neighboring_rtids:
             sciimg_overlapping_rtids.append(neighboring_rtid)
-        print(f"Method 2: Fields returned by method get_all_neighboring_rtids = {sciimg_overlapping_rtids.sort()}")
+        sciimg_overlapping_rtids.sort()
+        print(f"Method 2: Fields returned by method get_all_neighboring_rtids = {sciimg_overlapping_rtids}")
 
 
         # Find union using set operations
 
         union_list = list(set(rtids_list).union(neighboring_rtids))
-
+        union_list.sort()
 
         # Compare lists.
 
@@ -209,12 +211,14 @@ if __name__ == '__main__':
         set_b = set(sciimg_overlapping_rtids)
 
         result = [item for item in rtids_list if item not in set_b]
-        print(f"Fields returned by method get_overlapping_rtids that are not returned by method get_all_neighboring_rtids = {result.sort()}")
+        result.sort()
+        print(f"Fields returned by method get_overlapping_rtids that are not returned by method get_all_neighboring_rtids = {result}")
 
         result = [item for item in sciimg_overlapping_rtids if item not in set_a]
-        print(f"Fields returned by method get_all_neighboring_rtids that are not returned by method get_overlapping_rtids = {result.sort()}")
+        result.sort()
+        print(f"Fields returned by method get_all_neighboring_rtids that are not returned by method get_overlapping_rtids = {result}")
 
-        print(f"Methods 1 and 2: Union of fields = {union_list.sort()}")
+        print(f"Methods 1 and 2: Union of fields = {union_list}")
 
 
         # Method #3
@@ -251,7 +255,8 @@ if __name__ == '__main__':
                 rtid_dict[rtid] = 1
 
         keys_list = list(rtid_dict.keys())
-        print(f"Method 3: Fields overlapping image = {keys_list.sort()}")
+        keys_list.sort()
+        print(f"Method 3: Fields overlapping image = {keys_list}")
 
 
     # Code-timing benchmark.
