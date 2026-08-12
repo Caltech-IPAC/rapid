@@ -57,6 +57,9 @@ _install_third_party_stubs()
 from database.modules.utils.rapid_db import RAPIDDB        # noqa: E402
 from pipeline.runtime.errors import InputError             # noqa: E402
 from pipeline.stages import alert_production                # noqa: E402
+from submission import payloads                             # noqa: E402
+from submission.manifest import ProcessingUnit               # noqa: E402
+from submission.routes import JOB_TYPE_ALERT_PRODUCTION      # noqa: E402
 
 
 class Source:
@@ -209,14 +212,6 @@ class Producer:
             raise self.flush_error
 
 
-class Unit:
-    def __init__(self, exposure, sca, fields):
-        self.exposure = exposure
-        self.sca = sca
-        self.fields = fields
-        self.facts = None
-
-
 class Context:
     """The stage context surface `produce_alerts` actually uses.
 
@@ -224,8 +219,8 @@ class Context:
     integration ruling 3): the claim/confirm/milestone writes go through the
     ATTEMPT'S OWN borrowed connection now, not through an injected watermark
     object — `attempt_id` is this attempt's OWN identity (the claiming
-    attempt, distinct from `unit.fields["attempt_id"]`, the registered SOURCE
-    attempt the unit declares).
+    attempt, distinct from `unit.payload.promoted_attempt_id`, the registered
+    SOURCE attempt the unit declares).
     """
 
     def __init__(self, unit, parameters, conn=None, attempt_id=99):
@@ -265,9 +260,9 @@ PARAMETERS = {
 }
 
 #: The claiming attempt's identity in every test below — `context.attempt_id`
-#: — distinct from the unit's declared `attempt_id` field (the registered
-#: SOURCE attempt, `SOURCE_ATTEMPT_ID`). Migration 037 keeps these as two
-#: different columns (`alert_emissions.attempt_id` vs `.claim_token`)
+#: — distinct from the unit's declared `promoted_attempt_id` component (the
+#: registered SOURCE attempt, `SOURCE_ATTEMPT_ID`). Migration 037 keeps these
+#: as two different columns (`alert_emissions.attempt_id` vs `.claim_token`)
 #: precisely because they can differ; the tests use different values
 #: throughout so a test that accidentally conflated them would fail.
 CLAIMING_ATTEMPT_ID = 99
@@ -275,11 +270,23 @@ SOURCE_ATTEMPT_ID = 6765
 
 
 def _unit(**overrides):
-    fields = {"attempt_id": SOURCE_ATTEMPT_ID, "release_identity": "rel-1",
-              "difference_image_pid": 1086,
-              "job_type": "alert-production"}
-    fields.update(overrides)
-    return Unit(exposure=20, sca=7, fields=fields)
+    """A real alert-production `ProcessingUnit`, exposure=20/sca=7 fixed.
+
+    Built from the TYPED payload (`submission.payloads`) rather than a
+    hand-rolled stub with a `.fields` dict: `ProcessingUnit.exposure`/`.sca`
+    are properties derived from the payload's declared components now, and
+    `AlertProductionPayload` validates its required components at
+    construction (rule 11), so a real payload is both simpler and more
+    faithful to what `produce_alerts` actually receives than a re-implemented
+    stub would be.
+    """
+    components = {"exposure": 20, "sca": 7,
+                  "promoted_attempt_id": SOURCE_ATTEMPT_ID,
+                  "release_identity": "rel-1",
+                  "difference_image_pid": 1086}
+    components.update(overrides)
+    return ProcessingUnit(
+        payload=payloads.build(JOB_TYPE_ALERT_PRODUCTION, **components))
 
 
 class SelectionTests(unittest.TestCase):
@@ -348,14 +355,20 @@ class UnitFieldTests(unittest.TestCase):
     """The unit is what the manifest says."""
 
     def test_a_missing_declared_field_fails_naming_it(self):
+        # `difference_image_pid` is REQUIRED on an alert-production payload
+        # (rule 11) and validated at construction, so it can no longer be
+        # deleted off a built unit the way the old open `fields` dict let
+        # tests delete a key. `role_resolved_from` is the payload's own
+        # genuinely-optional component (see `AlertProductionPayload`'s
+        # docstring) and is absent here by simply not passing it — the same
+        # "declared but not carried" case `_unit_field` is meant to catch.
         unit = _unit()
-        del unit.fields["difference_image_pid"]
         context = Context(unit, PARAMETERS)
 
         with self.assertRaises(InputError) as caught:
-            alert_production._unit_field(context, "difference_image_pid")
+            alert_production._unit_field(context, "role_resolved_from")
 
-        self.assertIn("difference_image_pid", str(caught.exception))
+        self.assertIn("role_resolved_from", str(caught.exception))
 
 
 class Provider:

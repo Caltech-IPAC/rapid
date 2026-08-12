@@ -13,13 +13,20 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
+from submission import payloads
 from submission.manifest import (MAX_ARRAY_SIZE, OVERRIDE_REFERENCE_WINDOW,
                                  Manifest, ProcessingUnit,
                                  ReferenceObservationWindow)
+from submission.routes import JOB_TYPE_REFERENCE_IMAGE, JOB_TYPE_SCIENCE
+
+
+def unit(exposure, sca):
+    return ProcessingUnit(
+        payload=payloads.build(JOB_TYPE_SCIENCE, exposure=exposure, sca=sca))
 
 
 def units(count, exposure=90210):
-    return [ProcessingUnit(exposure=exposure, sca=i + 1) for i in range(count)]
+    return [unit(exposure, i + 1) for i in range(count)]
 
 
 # ---------------------------------------------------------------------------
@@ -53,15 +60,13 @@ def test_manifest_at_exactly_the_ceiling_is_allowed():
 def test_duplicate_units_are_rejected():
     # Two children on one SCA would write the same products under two
     # attempt identities.
-    duplicated = [ProcessingUnit(exposure=1, sca=5),
-                  ProcessingUnit(exposure=1, sca=5)]
+    duplicated = [unit(1, 5), unit(1, 5)]
     with pytest.raises(ValueError, match="duplicate"):
         Manifest(duplicated)
 
 
 def test_same_sca_on_different_exposures_is_not_a_duplicate():
-    Manifest([ProcessingUnit(exposure=1, sca=5),
-              ProcessingUnit(exposure=2, sca=5)])
+    Manifest([unit(1, 5), unit(2, 5)])
 
 
 # ---------------------------------------------------------------------------
@@ -91,11 +96,17 @@ def test_index_outside_the_manifest_raises():
         manifest.unit_for_index(-1)
 
 
-def test_extra_fields_survive_the_round_trip():
-    unit = ProcessingUnit(exposure=7, sca=3,
-                          fields={"field": 42, "filter": "F158"})
-    restored = Manifest.from_json(Manifest([unit, ProcessingUnit(7, 4)]).to_json())
-    assert restored.unit_for_index(0).fields == {"field": 42, "filter": "F158"}
+# JUDGEMENT CALL: `test_extra_fields_survive_the_round_trip` tested that the
+# open `fields` dict's arbitrary extra keys survived a round trip. `.fields`
+# is gone entirely (rule 11) — there is no longer a concept of an untyped
+# "extra" key riding along a unit, only a payload's own declared, typed
+# components. Rewritten to the closest surviving property: a unit's declared
+# payload components survive the round trip.
+def test_payload_components_survive_the_round_trip():
+    first = unit(7, 3)
+    second = unit(7, 4)
+    restored = Manifest.from_json(Manifest([first, second]).to_json())
+    assert restored.unit_for_index(0).payload == first.payload
 
 
 # ---------------------------------------------------------------------------
@@ -110,7 +121,7 @@ def test_checksum_is_stable_across_equal_manifests():
 def test_checksum_changes_when_a_unit_changes():
     before = Manifest(units(5), batch_id="b").checksum()
     altered = units(5)
-    altered[2] = ProcessingUnit(exposure=90210, sca=99)
+    altered[2] = unit(90210, 99)
     assert Manifest(altered, batch_id="b").checksum() != before
 
 
@@ -159,9 +170,23 @@ def test_no_override_is_the_default_and_writes_no_key():
 
 
 def test_the_window_override_round_trips():
+    # BUG FOUND DURING MIGRATION: the manifest here is built with
+    # job_type="reference-image", but `units(4)` builds SCIENCE-typed
+    # payloads. `Manifest.__init__` dedups on `unit.dedup_key(self.job_type)`
+    # (co-design ruling 2), which now raises `SubjectError` when a unit's
+    # own payload job type disagrees with the manifest's — exactly the
+    # mismatch this manifest would have had. The old exposure/SCA-sentinel
+    # `ProcessingUnit` carried no job type of its own, so the mismatch was
+    # invisible before this refactor; units are now built with the matching
+    # reference-image payload instead.
     window = ReferenceObservationWindow(start_mjdobs=60000.0,
                                         end_mjdobs=60100.5)
-    manifest = Manifest(units(4), batch_id="b", job_type="reference-image",
+    reference_image_units = [
+        ProcessingUnit(payload=payloads.build(JOB_TYPE_REFERENCE_IMAGE,
+                                              exposure=90210, sca=i + 1))
+        for i in range(4)]
+    manifest = Manifest(reference_image_units, batch_id="b",
+                        job_type=JOB_TYPE_REFERENCE_IMAGE,
                         reference_observation_window=window)
 
     restored = Manifest.from_json(manifest.to_json())
@@ -239,4 +264,31 @@ def test_a_version_2_manifest_is_refused():
     raw = Manifest(units(3), batch_id="b").to_dict()
     raw["schema_version"] = 2
     with pytest.raises(ValueError, match="schema_version"):
+        Manifest.from_dict(raw)
+
+
+# JUDGEMENT CALL: no prior test pinned "a version-3 manifest is refused",
+# but `Manifest.SCHEMA_VERSION` moving from 3 to 4 (D3) is itself a rule-11
+# behaviour change the docstring calls out by name — "there is deliberately
+# NO compatibility parser rebuilding a typed subject from a sentinel
+# exposure/SCA" — so it is added here rather than left unpinned. A
+# version-3 unit is exactly the sentinel shape rule 11 forbids:
+# `{"exposure": ..., "sca": ..., "fields": {...}}`, with no `payload` key
+# at all.
+def test_a_version_3_manifest_is_refused_not_translated():
+    raw = Manifest(units(3), batch_id="b").to_dict()
+    raw["schema_version"] = 3
+    with pytest.raises(ValueError, match="schema_version"):
+        Manifest.from_dict(raw)
+
+
+def test_a_version_3_unit_shape_is_refused_even_at_the_current_version():
+    # Even if a caller mislabels a legacy unit as schema_version 4, the
+    # per-unit reconstruction refuses it: there is no `payload` key to read,
+    # only the old sentinel `exposure`/`sca`/`fields` triple, and
+    # `ProcessingUnit.from_dict` raises rather than guessing a typed subject
+    # out of it.
+    raw = Manifest(units(3), batch_id="b").to_dict()
+    raw["units"][0] = {"exposure": 90210, "sca": 1, "fields": {}}
+    with pytest.raises(ValueError, match="payload"):
         Manifest.from_dict(raw)

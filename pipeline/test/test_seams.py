@@ -8,15 +8,16 @@ from pipeline import seams
 from pipeline.intent.errors import (FOREIGN_KEY_VIOLATION, UNIQUE_VIOLATION,
                                     FakePgError)
 from pipeline.reconciler.test.stubs import FakeConnection, attempt_row, utc
-from submission import submit
+from submission import payloads, submit
 from submission.manifest import ProcessingUnit, UnitFacts
+from submission.routes import JOB_TYPE_SCIENCE
 
 
 def units(count=2, base=90000):
-    return [ProcessingUnit(exposure=base + i, sca=(i % 18) + 1,
-                           facts=UnitFacts(rid=1, fid=1, field=1,
-                                           expid=base + i),
-                           fields={})
+    return [ProcessingUnit(
+                payload=payloads.build(JOB_TYPE_SCIENCE,
+                                       exposure=base + i, sca=(i % 18) + 1),
+                facts=UnitFacts(rid=1, fid=1, field=1, expid=base + i))
             for i in range(count)]
 
 
@@ -260,7 +261,8 @@ class SubmitUnitsTests(unittest.TestCase):
         from submission.manifest import ProcessingUnit
         from submission.routes import JOB_TYPE_SCIENCE
 
-        unit = ProcessingUnit(exposure=90000, sca=1)
+        unit = ProcessingUnit(
+            payload=payloads.build(JOB_TYPE_SCIENCE, exposure=90000, sca=1))
         self.assertEqual("run-1:science/90000/1",
                          unit.logical_job_key("run-1", JOB_TYPE_SCIENCE))
         self.assertNotEqual(unit.logical_job_key("run-1", JOB_TYPE_SCIENCE),
@@ -551,7 +553,7 @@ class CampaignUnitTransitionIntegrityTests(unittest.TestCase):
         # directly (not via this file's `units()` helper, whose sca is a
         # positional `(i % 18) + 1` unrelated to the campaign's own 5001/7).
         gathered_unit = ProcessingUnit(
-            exposure=5001, sca=7,
+            payload=payloads.build(JOB_TYPE_SCIENCE, exposure=5001, sca=7),
             facts=UnitFacts(rid=101, fid=8, field=4678622, expid=5001))
 
         _attach_work_unit(self.execute, "science", gathered_unit,

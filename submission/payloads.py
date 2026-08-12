@@ -105,6 +105,31 @@ def _require(value, name, job_type):
     return value
 
 
+def _freeze(payload, name):
+    """Normalize a sequence member to a tuple, in place on a frozen dataclass.
+
+    **WHY THIS IS NEEDED AT ALL.** These payloads are frozen and compared by
+    value, and they round-trip through JSON — where every sequence comes back
+    a `list`. So a payload built with `target_tables=("a", "b")` and the same
+    payload parsed back from its own wire form compared UNEQUAL: tuple vs
+    list. That is not a cosmetic difference; the units are deduplicated and
+    matched by value, so a manifest written and read back described units the
+    submitter would not recognise as the ones it wrote. Caught by the
+    round-trip test in `submission/test/test_manifest_wire.py`.
+
+    Normalizing on the way IN — rather than comparing leniently on the way
+    out — is the fix that holds everywhere, because it means only one
+    representation ever exists inside the process.
+
+    `object.__setattr__` is how a frozen dataclass's `__post_init__` sets a
+    field; the freeze is against later mutation by callers, not against the
+    constructor completing its own initialization.
+    """
+    value = getattr(payload, name, None)
+    if value is not None and not isinstance(value, tuple):
+        object.__setattr__(payload, name, tuple(value))
+
+
 class UnitPayload:
     """Base for the per-job-type payloads.
 
@@ -269,6 +294,7 @@ class CatalogLoadPayload(UnitPayload):
         _require(self.proc_date, "proc_date", self.JOB_TYPE)
         _require(self.sca, "sca", self.JOB_TYPE)
         _require(self.target_table, "target_table", self.JOB_TYPE)
+        _freeze(self, "product_inputs")
 
 
 @dataclasses.dataclass(frozen=True)
@@ -299,6 +325,7 @@ class CrossmatchPayload(UnitPayload):
             raise PayloadError(
                 f"a {self.JOB_TYPE} unit requires 'target_tables'; a unit "
                 f"with no declared targets would run and write nowhere")
+        _freeze(self, "target_tables")
 
 
 @dataclasses.dataclass(frozen=True)

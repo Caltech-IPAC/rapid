@@ -14,7 +14,9 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
+from submission import payloads
 from submission.manifest import Manifest, ProcessingUnit
+from submission.routes import JOB_TYPE_SCIENCE
 from submission.startup import (PIPELINE_PARAMETER_PATH, ParameterFetchError,
                                 configuration_digest, fetch_parameters,
                                 resolve_job_context)
@@ -58,8 +60,10 @@ CONFIG = {name.removeprefix("/rapid/pipeline/"): value
 
 
 def manifest_of(count=18, batch_id="b-1"):
-    return Manifest([ProcessingUnit(exposure=90210, sca=i + 1)
-                     for i in range(count)], batch_id=batch_id)
+    return Manifest(
+        [ProcessingUnit(payload=payloads.build(JOB_TYPE_SCIENCE,
+                                               exposure=90210, sca=i + 1))
+         for i in range(count)], batch_id=batch_id)
 
 
 # ---------------------------------------------------------------------------

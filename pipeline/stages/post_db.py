@@ -307,9 +307,20 @@ def _product_inputs_for_unit(context):
     Declared in the manifest by the gatherer; absent means the submission did
     not enumerate them, which is a submission fault rather than something to
     rediscover here.
+
+    An EMPTY list is a legitimate answer and not a fault: a catalog-load
+    unit with no product inputs loads nothing and records that through its
+    effect counts — the empty-product-set disposition. That is why
+    `product_inputs` is the one optional member of `CatalogLoadPayload` and
+    why it defaults to empty rather than to None.
     """
-    fields = getattr(context.unit, "fields", None) or {}
-    return fields.get("product_inputs") or []
+    payload = getattr(context.unit, "payload", None)
+    if payload is None:
+        raise InputError(
+            "this unit carries no typed payload; manifest schema version 4 "
+            "refuses the pre-rule-11 `fields` shape rather than translating "
+            "it")
+    return list(getattr(payload, "product_inputs", ()) or ())
 
 
 def _sibling_key(uri, name):
@@ -618,9 +629,29 @@ def _source_tables_for_unit(context, proc_date: str):
     Declared by the submitter in the manifest. Falls back to nothing rather
     than probing the catalog: a unit that names no source tables loaded no
     sources, and the honest outcome is an effect count of zero.
+
+    **A LATENT DEFECT, FLAGGED RATHER THAN FIXED HERE (brief D scope).**
+    This read `fields["source_tables"]`, and NO gatherer has ever written
+    that key — `gather_crossmatch_units` writes the unit's TARGET tables
+    (`astroobjects_<field>`, `merges_<field>`) and nothing else. So this
+    function has always returned `[]` and `crossmatch_sources` has always
+    iterated over nothing. Moving to the typed payload is what surfaced it:
+    an open dict answers `.get()` for a key nobody sets with a silent None,
+    while a closed payload has to be asked for something it declares.
+
+    Kept behaviourally identical — still an empty list — because deciding
+    what a crossmatch unit's source tables ARE is a submission-design
+    question outside package D, and inventing an answer here would change
+    what the stage does under cover of a representation change. Recorded as
+    a change request in D's ledger.
     """
-    fields = getattr(context.unit, "fields", None) or {}
-    return fields.get("source_tables") or []
+    payload = getattr(context.unit, "payload", None)
+    if payload is None:
+        raise InputError(
+            "this unit carries no typed payload; manifest schema version 4 "
+            "refuses the pre-rule-11 `fields` shape rather than translating "
+            "it")
+    return list(getattr(payload, "source_tables", ()) or ())
 
 
 CROSSMATCH_SEQUENCE = (

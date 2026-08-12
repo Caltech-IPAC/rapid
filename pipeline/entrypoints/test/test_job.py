@@ -138,6 +138,7 @@ _install_third_party_stubs()
 from pipeline.entrypoints import job  # noqa: E402
 from pipeline.runtime.errors import ConfigError, RecordsError  # noqa: E402
 from pipeline.runtime.test.stubs import make_job_environment  # noqa: E402
+from submission import payloads  # noqa: E402
 from submission.manifest import (  # noqa: E402
     Manifest,
     ProcessingUnit,
@@ -158,8 +159,9 @@ QUEUE_NAMES = {
 
 
 def _science_manifest(**overrides) -> Manifest:
-    unit = ProcessingUnit(exposure=1, sca=2, facts=UnitFacts(
-        science_image_uri="s3://rapid-bucket/sci.fits"))
+    unit = ProcessingUnit(
+        payload=payloads.build(JOB_TYPE_SCIENCE, exposure=1, sca=2),
+        facts=UnitFacts(science_image_uri="s3://rapid-bucket/sci.fits"))
     fields = {"units": [unit], "job_type": JOB_TYPE_SCIENCE}
     fields.update(overrides)
     return Manifest(fields.pop("units"), **fields)

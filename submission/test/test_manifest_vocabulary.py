@@ -17,8 +17,7 @@ from submission import payloads  # noqa: E402
 from submission.manifest import Manifest, ProcessingUnit, UnitFacts  # noqa: E402
 from submission.routes import (  # noqa: E402
     CLASS_BULK, CLASS_PROMPT, JOB_TYPE_CROSSMATCH, JOB_TYPE_REFERENCE_IMAGE,
-    JOB_TYPE_REGISTRATION, JOB_TYPE_SCIENCE, LANE_SESSION, LANE_TRANSACTION,
-    RouteError,
+    JOB_TYPE_SCIENCE, LANE_SESSION, LANE_TRANSACTION, RouteError,
 )
 
 
@@ -253,7 +252,9 @@ def test_a_reference_image_id_of_none_means_one_must_be_built():
 
 def test_require_facts_passes_when_every_unit_carries_them():
     manifest = Manifest(
-        [ProcessingUnit(exposure=90210, sca=n + 1, facts=science_facts())
+        [ProcessingUnit(payload=payloads.build(JOB_TYPE_SCIENCE,
+                                               exposure=90210, sca=n + 1),
+                        facts=science_facts())
          for n in range(3)],
         job_type="science")
     manifest.require_facts("rid", "science_image_uri")
@@ -261,9 +262,15 @@ def test_require_facts_passes_when_every_unit_carries_them():
 
 def test_require_facts_names_the_offending_indices():
     manifest = Manifest([
-        ProcessingUnit(exposure=90210, sca=1, facts=science_facts()),
-        ProcessingUnit(exposure=90210, sca=2, facts=UnitFacts(rid=2)),
-        ProcessingUnit(exposure=90210, sca=3, facts=UnitFacts(rid=3)),
+        ProcessingUnit(payload=payloads.build(JOB_TYPE_SCIENCE,
+                                              exposure=90210, sca=1),
+                       facts=science_facts()),
+        ProcessingUnit(payload=payloads.build(JOB_TYPE_SCIENCE,
+                                              exposure=90210, sca=2),
+                       facts=UnitFacts(rid=2)),
+        ProcessingUnit(payload=payloads.build(JOB_TYPE_SCIENCE,
+                                              exposure=90210, sca=3),
+                       facts=UnitFacts(rid=3)),
     ], job_type="science")
     with pytest.raises(ValueError) as caught:
         manifest.require_facts("science_image_uri")
@@ -276,7 +283,9 @@ def test_require_facts_names_the_offending_indices():
 
 def test_require_facts_truncates_a_long_list_but_states_the_total():
     manifest = Manifest(
-        [ProcessingUnit(exposure=90210, sca=n + 1) for n in range(15)],
+        [ProcessingUnit(payload=payloads.build(JOB_TYPE_SCIENCE,
+                                               exposure=90210, sca=n + 1))
+         for n in range(15)],
         job_type="science")
     with pytest.raises(ValueError) as caught:
         manifest.require_facts("rid")
@@ -287,7 +296,9 @@ def test_require_facts_truncates_a_long_list_but_states_the_total():
 
 def test_facts_survive_a_full_manifest_round_trip():
     manifest = Manifest(
-        [ProcessingUnit(exposure=90210, sca=n + 1, facts=science_facts(rid=n))
+        [ProcessingUnit(payload=payloads.build(JOB_TYPE_SCIENCE,
+                                               exposure=90210, sca=n + 1),
+                        facts=science_facts(rid=n))
          for n in range(3)],
         batch_id="b1", job_type="science")
     restored = Manifest.from_json(manifest.to_json())

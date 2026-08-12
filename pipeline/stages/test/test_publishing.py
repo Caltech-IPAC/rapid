@@ -32,7 +32,9 @@ from pipeline.runtime.errors import InputError, StorageError  # noqa: E402
 from pipeline.stages.context import StageContext  # noqa: E402
 from pipeline.stages.publishing import (publish_products,  # noqa: E402
                                         verify_downloaded_input)
+from submission import payloads  # noqa: E402
 from submission.manifest import ProcessingUnit, UnitFacts  # noqa: E402
+from submission.routes import JOB_TYPE_SCIENCE  # noqa: E402
 
 BUCKET = "rapid-products"
 
@@ -153,7 +155,7 @@ class FakeS3:
 
 def make_context(workdir=None, **overrides) -> StageContext:
     unit = overrides.pop("unit", ProcessingUnit(
-        exposure=1, sca=2,
+        payload=payloads.build(JOB_TYPE_SCIENCE, exposure=1, sca=2),
         facts=UnitFacts(science_image_uri="s3://b/img.fits")))
     fields = {
         "workdir": workdir,
