@@ -276,6 +276,41 @@ whole family in one change. Doing it in 051 alone would create exactly the
 kind of silent inconsistency between sibling functions that is worse than the
 shared laxity. Recorded as a candidate CR.
 
+## P-H12 — What fix round 1 wired, and what it deliberately did not
+
+**Wired (was designed in round 1, reachable only now):**
+
+- the full admission lifecycle in all three ingest scripts, including the
+  crash ordering (seal last, and only on a clean run);
+- L2 admission at each script's L2 registration, which is what actually
+  repairs `addl2file`'s `max(version)+1`;
+- `rapidctl gc-compute-plan`, `gc-recompute-plan` and `gc-execute-plan`, the
+  executor's first production call sites;
+- the admitted release reaching `ExecutionBinding` at `pipeline/seams.py`;
+- **N1**: active-manifest bodies are read and expanded, with a reader that can
+  refuse and a plan-level refusal when one cannot be read;
+- **N2**: the fence re-verifies the owner's discharge inside the critical
+  section.
+
+**Deliberately NOT done, and why:**
+
+- **The ingest scripts were not rewritten.** They remain
+  pre-pipeline-convention procedural scripts; fix round 1 adds the admission
+  calls at their existing seams and changes nothing else about how they work.
+  A rewrite is a large behavioural change to the live ingest path and is not
+  this round's scope.
+- **`enumerate_source` records the S3 ETag, not a SHA-256.** At enumeration
+  time the bytes are not local — they are downloaded per file later — so
+  computing the same digest the L2 admission uses would mean a second full
+  pass over the input set. The manifest's `byte_custody` column states which
+  guarantee is in force, which is exactly what it exists for. Proposal:
+  reconcile the two digests when the ingest path is next revisited.
+- **`_S3Versions` joins the deletion-route allowlist rather than the
+  assertion being loosened.** It carries no policy — the executor decides
+  whether to delete; this only performs it — and it always passes a
+  `VersionId`, asserted directly. The exclusivity claim is unchanged in
+  substance: two enumerated modules, one decision point.
+
 ## P-H8 — The horizon fails closed with no default
 
 **Decision taken:** there is no default horizon that permits deletion. A GC run

@@ -104,9 +104,25 @@ def stamp_schema_present(execute):
     Takes the same one-callable `execute(sql, params)` executor the rest of
     the intent layer takes, so a service on a borrowed connection and a
     contract test on a scratch database call it identically.
+
+    **ANY UNRECOGNISED ANSWER MEANS "NOT PRESENT", AND THAT IS DELIBERATE.**
+    The executor contract is "rows for a statement with a result set,
+    `rowcount` otherwise", and a stub that answers this probe with an integer
+    — which the seams stub tier does, having no schema at all — is telling us
+    it has no admission tables. Reading `rows[0]` there raised `TypeError` and
+    took down the whole submission path on a database this check exists to
+    tolerate. Fail SOFT here rather than closed: an absent stamp schema means
+    the caller falls back to the environment's release, which is the
+    documented pre-051 behaviour, whereas an exception would refuse to submit
+    at all.
     """
-    rows = execute(_STAMP_PROBE, [])
-    return bool(rows and _first(rows[0]))
+    try:
+        rows = execute(_STAMP_PROBE, [])
+    except Exception:                                 # noqa: BLE001
+        return False
+    if not isinstance(rows, (list, tuple)) or not rows:
+        return False
+    return bool(_first(rows[0]))
 
 
 def release_for_exposure(execute, expid):

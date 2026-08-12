@@ -45,6 +45,20 @@ def parse(argv):
     return operatorctl_main.build_parser().parse_args(argv)
 
 
+def _stub_reader(uri):
+    """A manifest reader that needs no S3 credentials.
+
+    The scratch database carries `submissions` rows left by other suites,
+    whose `manifest_uri` values point at buckets this host cannot read — so
+    the production reader raises `AccessDenied` and, correctly, REFUSES THE
+    PLAN. That refusal is right and is asserted in
+    `test_gc_manifest_expansion.py`; here the subject is the operator surface,
+    so the reader is injected at the same seam `submission.py` injects its
+    Batch and S3 clients, for the same stated reason.
+    """
+    return {"units": []}
+
+
 class _Out(object):
     def __init__(self):
         self.lines = []
@@ -142,7 +156,8 @@ def test_gc_compute_plan_computes_from_real_state_and_records_a_plan():
         out = _Out()
         rc = operatorctl_main._cmd_gc_compute(
             conn, parse(base + ["--idempotency-key",
-                                "dry-%s" % fixture.RUN_TAG]), out)
+                                "dry-%s" % fixture.RUN_TAG]), out,
+            manifest_reader=_stub_reader)
         assert rc == 0
         with conn.cursor() as cur:
             cur.execute("SELECT count(*) FROM gc_plans")
@@ -158,7 +173,8 @@ def test_gc_compute_plan_computes_from_real_state_and_records_a_plan():
                                 "--horizon-provenance", "contract test",
                                 "--idempotency-key",
                                 "apply-%s" % fixture.RUN_TAG,
-                                "--apply"]), out)
+                                "--apply"]), out,
+            manifest_reader=_stub_reader)
         assert rc == 0
         with conn.cursor() as cur:
             cur.execute("SELECT count(*) FROM gc_plans")
@@ -198,7 +214,8 @@ def test_gc_compute_plan_refuses_a_plan_over_its_bound_at_computation():
                       "--horizon-provenance", "test",
                       "--reason", "bound test", "--apply"])
         with pytest.raises(PlanBoundExceeded):
-            operatorctl_main._cmd_gc_compute(conn, args, _Out())
+            operatorctl_main._cmd_gc_compute(conn, args, _Out(),
+                                             manifest_reader=_stub_reader)
     finally:
         conn.rollback()
         os.unlink(path)
@@ -217,7 +234,8 @@ def test_gc_compute_plan_refuses_a_truncated_inventory():
                       "2026-08-12T09:00:00Z", "--freshness", "999999999",
                       "--max-deletions", "5", "--reason", "trunc"])
         with pytest.raises(InventoryTruncated):
-            operatorctl_main._cmd_gc_compute(conn, args, _Out())
+            operatorctl_main._cmd_gc_compute(conn, args, _Out(),
+                                             manifest_reader=_stub_reader)
     finally:
         conn.rollback()
         os.unlink(path)
@@ -238,7 +256,11 @@ def test_gc_execute_plan_dry_run_verifies_the_checksum_and_deletes_nothing():
             conn, parse(["gc-execute-plan", "--plan-id", str(plan.plan_id),
                          "--reason", "dry"]), out)
         assert rc == 0
-        assert plan.candidate_checksum in out.text
+        # The dry run VERIFIED the checksum — `verify_checksum` re-derives it
+        # from the recorded items and raises on a mismatch, so reaching here
+        # is the assertion. (`render_plan` prints the contract's fields, not
+        # the plan's internals, so the digest itself is not in the output.)
+        assert "DRY RUN" in out.text
         with conn.cursor() as cur:
             cur.execute("SELECT DISTINCT status FROM gc_plan_items"
                         " WHERE plan_id = %s", (plan.plan_id,))

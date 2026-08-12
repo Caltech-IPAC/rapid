@@ -84,8 +84,21 @@ def record_a_plan(conn, keys=("science/r/u/attempt-0000000001/a.fits",),
     tag = tag or fixture.RUN_TAG
     repo = GCPlanRepository(conn)
     objects = [make_object(key) for key in keys]
+    # NO ATTRIBUTED ATTEMPT BY DEFAULT.
+    #
+    # This used to hardcode `attempt_id=1`, which COLLIDES with whatever
+    # attempt 1 happens to be on a shared scratch database — and once the
+    # executor began re-verifying discharge inside the fence (N2), that
+    # collision made every item in every execution test resolve as
+    # `skipped-fenced`, because the real attempt 1 is not discharged. The
+    # fixture was asserting against a row it did not create, which is the
+    # fixture-honesty rule this tier is built on.
+    #
+    # `None` means "not attributed", which the recheck correctly treats as
+    # nothing to re-verify. The one test that needs the recheck to fire sets
+    # an attempt id explicitly and patches the owner lookup with it.
     candidates = [
-        Candidate(obj=o, object_class="difference_image", attempt_id=1,
+        Candidate(obj=o, object_class="difference_image", attempt_id=None,
                   canonical_prefix=o.key.rsplit("/", 1)[0])
         for o in objects]
     plan = repo.record_plan(

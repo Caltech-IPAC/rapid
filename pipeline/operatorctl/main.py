@@ -503,7 +503,14 @@ def _read_inventory_file(path):
     return [{"objects": objects}]
 
 
-def _cmd_gc_compute(conn, args, out):
+def _cmd_gc_compute(conn, args, out, manifest_reader=None):
+    """Compute a plan.
+
+    `manifest_reader` is injectable for the same reason `submission.py` injects
+    its Batch and S3 clients: resolving a reference set is a DECISION, and a
+    test of that decision should not need S3 credentials to make it. Production
+    passes the real S3 reader.
+    """
     from pipeline.operatorctl.gc import compute_plan, s3_manifest_reader
     key = args.idempotency_key or new_idempotency_key("gc-compute")
     buckets = tuple(args.bucket) if args.bucket else DEFAULT_GC_BUCKETS
@@ -522,7 +529,7 @@ def _cmd_gc_compute(conn, args, out):
         allowlist=tuple(args.allow_class) if args.allow_class else (),
         dry_run=not args.apply,
         horizon_provenance=args.horizon_provenance,
-        manifest_reader=s3_manifest_reader())
+        manifest_reader=manifest_reader or s3_manifest_reader())
     if args.apply:
         conn.commit()
     print(render_plan("gc_compute_plan",
