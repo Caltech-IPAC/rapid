@@ -341,6 +341,12 @@ exercises it directly, and the mutation script simply did not re-run that
 test — but the coverage was *unit-level only*: nothing checked that the apply
 branch actually hands the wrapper to the executor. The new test closes that.
 
+A second mutation run (`mut-20260812T105135Z`) confirms that distinction
+rather than leaving it asserted: under the same key-only-delete mutation the
+wrapper test goes red (exit=1) alongside the new CLI test, and both return to
+green when it is restored. So the record is precise — the wrapper's behaviour
+was proven; its *reachability from the apply branch* was not.
+
 The last row is the reviewer's point demonstrated rather than argued: an apply
 branch that returns before executing anything is **invisible to the old test
 and fatal to the new one**. That is the defect class the round existed to
