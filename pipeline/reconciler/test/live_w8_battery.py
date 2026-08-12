@@ -67,7 +67,8 @@ from pipeline.runtime.errors import (
 )
 from pipeline.runtime.process import run_tool
 from submission import payloads
-from submission.manifest import Manifest, ProcessingUnit, UnitFacts
+from submission.manifest import Manifest, ProcessingUnit
+from submission.test import payload_fixtures as fixtures
 from submission.routes import (
     CLASS_BULK,
     CLASS_PROMPT,
@@ -249,8 +250,7 @@ def case_manifest_type_mismatch():
     operator can submit reference-image work to the prompt queue.
     """
     unit = ProcessingUnit(
-        payload=payloads.build(JOB_TYPE_REFERENCE_IMAGE, exposure=999001, sca=1),
-        facts=UnitFacts(rid=1))
+        payload=fixtures.reference_payload(exposure=999001, sca=1, rid=1))
     manifest = Manifest(units=[unit], batch_id=RUN,
                         job_type=JOB_TYPE_REFERENCE_IMAGE)
     try:

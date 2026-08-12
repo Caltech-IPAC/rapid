@@ -23,7 +23,8 @@ from database.modules.utils import rapid_db_connect as dbc
 from observability.attempts import ExecutionBinding
 from pipeline import seams
 from submission import payloads
-from submission.manifest import ProcessingUnit, UnitFacts
+from submission.manifest import ProcessingUnit
+from submission.test import payload_fixtures as fixtures
 from submission.routes import JOB_TYPE_REGISTRATION, JOB_TYPE_SCIENCE, route_for
 
 logging.basicConfig(level=logging.INFO,
@@ -76,9 +77,11 @@ def main():
     # independent of this construction fix. Not resolved here: no non-test
     # file may be touched by this task, and the fix belongs to whoever owns
     # the registration-submission contract.
+    # `rid` was passed as None here to say "this probe does not care";
+    # it is a REQUIRED imaging fact now, so the fixture's own synthetic
+    # value stands in. The probe asserts nothing about it.
     unit = ProcessingUnit(
-        payload=payloads.build(JOB_TYPE_SCIENCE, exposure=999200, sca=1),
-        facts=UnitFacts(rid=None))
+        payload=fixtures.science_payload(exposure=999200, sca=1))
 
     print(f"=== W8 live registration, run {RUN} ===")
     print(f"    definition {latest['jobDefinitionArn']}")

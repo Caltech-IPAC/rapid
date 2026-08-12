@@ -14,7 +14,9 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from submission import payloads  # noqa: E402
-from submission.manifest import Manifest, ProcessingUnit, UnitFacts  # noqa: E402
+from submission.manifest import Manifest, ProcessingUnit  # noqa: E402
+from submission import payloads  # noqa: E402
+from submission.test import payload_fixtures as fixtures  # noqa: E402
 from submission.routes import (  # noqa: E402
     CLASS_BULK, CLASS_PROMPT, JOB_TYPE_CROSSMATCH, JOB_TYPE_REFERENCE_IMAGE,
     JOB_TYPE_SCIENCE, LANE_SESSION, LANE_TRANSACTION, RouteError,
@@ -28,21 +30,31 @@ def units(count=2, exposure=90210, job_type=JOB_TYPE_SCIENCE):
 
 
 def science_facts(**overrides):
+    """A fully-resolved science payload — what `science_facts` gathers.
+
+    `status` and `images_to_coadd` are gone from this list because D4 dropped
+    them: neither was read by any consumer, and one was never even written.
+    The rest moved onto `ImagingPayload` unchanged.
+    """
     base = dict(
         rid=4242, fid=3, filter_name="F184", field=511, rtid=511,
-        expid=90210, mjdobs=60553.25, exptime=140.25, infobits=0, status=1,
+        expid=90210, mjdobs=60553.25, exptime=140.25, infobits=0,
         science_image_uri="s3://sims/l2/f184/exp90210_sca1.fits",
         psfid=77, psf_uri="s3://sims/psf/f184_sca1.fits",
         reference_image_id=1201,
         reference_image_uri="s3://products/ref/511_f184.fits",
         reference_image_infobits=0, reference_image_ppid=12,
-        images_to_coadd=-1,
         sky_position={"ra0": 10.5, "dec0": -20.25},
         tile_position={"ra0": 10.4, "dec0": -20.2},
-        overlapping_fields=[511, 512, 513],
+        overlapping_fields=(511, 512, 513),
     )
     base.update(overrides)
-    return UnitFacts(**base)
+    # `exposure`/`sca` are subject COMPONENTS rather than facts, so they are
+    # split out and passed positionally — `science_payload` takes them as
+    # its first two arguments and the rest as fact overrides.
+    exposure = base.pop("exposure", 90210)
+    sca = base.pop("sca", 1)
+    return fixtures.science_payload(exposure=exposure, sca=sca, **base)
 
 
 # --- job type and route ----------------------------------------------
@@ -210,27 +222,35 @@ def test_facts_round_trip_with_their_types():
 
 def test_absent_facts_are_omitted_not_written_as_null():
     # The adopted absent-not-sentinel rule: never-resolved and
-    # resolved-to-nothing are different states.
-    facts = UnitFacts(rid=1)
-    written = facts.to_dict()
-    assert written == {"rid": 1}
-    assert "psfid" not in written
+    # resolved-to-nothing are different states. Unchanged by D4 — the rule
+    # moved onto the payloads with the members it governs. What DID change
+    # is that the required facts can no longer be absent at all, so the
+    # omission is demonstrated on an optional one.
+    written = fixtures.science_payload().to_dict()
+    assert "psfid" not in written, (
+        "the fixture resolves no PSF, so no psfid key may appear")
+    assert written["rid"] == 101
 
 
 def test_unknown_fact_keys_are_refused_rather_than_dropped():
     # A key this schema does not know means a newer submitter wrote the
     # manifest; guessing at the rest would be worse than refusing.
-    with pytest.raises(ValueError, match="unknown keys"):
-        UnitFacts.from_dict({"rid": 1, "quantum_flux": 9})
+    with pytest.raises(payloads.PayloadError, match="unknown keys"):
+        payloads.from_dict(
+            JOB_TYPE_SCIENCE,
+            dict(fixtures.science_payload().to_dict(), quantum_flux=9))
 
 
 def test_require_names_every_missing_fact_at_once():
-    facts = UnitFacts(rid=1)
+    # `require` survives D4 with its contract intact: it names EVERY absent
+    # fact rather than the first, so one startup failure tells the operator
+    # everything the submission was missing.
+    payload = fixtures.science_payload()      # resolves no PSF
     with pytest.raises(ValueError) as caught:
-        facts.require("rid", "psfid", "science_image_uri")
+        payload.require("rid", "psfid", "psf_uri")
     message = str(caught.value)
     assert "psfid" in message
-    assert "science_image_uri" in message
+    assert "psf_uri" in message
     assert "rid" not in message.split(":")[1]
 
 
@@ -261,19 +281,24 @@ def test_require_facts_passes_when_every_unit_carries_them():
 
 
 def test_require_facts_names_the_offending_indices():
+    # THE FACT ASKED FOR IS AN OPTIONAL ONE, and that is a consequence of
+    # D4 rather than a weakening. `science_image_uri` — what this asked for
+    # before — is now REQUIRED at construction, so a unit lacking it cannot
+    # be built and no manifest can contain one. The behaviour under test is
+    # unchanged: `require_facts` names every offending index, not just the
+    # first. `psf_uri` is genuinely optional (an SCA may have no registered
+    # PSF), so it is the fact that can still be absent on some units and
+    # present on others.
     manifest = Manifest([
-        ProcessingUnit(payload=payloads.build(JOB_TYPE_SCIENCE,
-                                              exposure=90210, sca=1),
-                       facts=science_facts()),
-        ProcessingUnit(payload=payloads.build(JOB_TYPE_SCIENCE,
-                                              exposure=90210, sca=2),
-                       facts=UnitFacts(rid=2)),
-        ProcessingUnit(payload=payloads.build(JOB_TYPE_SCIENCE,
-                                              exposure=90210, sca=3),
-                       facts=UnitFacts(rid=3)),
+        ProcessingUnit(payload=science_facts(
+            exposure=90210, sca=1, psf_uri="s3://sims/psf/a.fits")),
+        ProcessingUnit(payload=science_facts(
+            exposure=90210, sca=2, psfid=None, psf_uri=None)),
+        ProcessingUnit(payload=science_facts(
+            exposure=90210, sca=3, psfid=None, psf_uri=None)),
     ], job_type="science")
     with pytest.raises(ValueError) as caught:
-        manifest.require_facts("science_image_uri")
+        manifest.require_facts("psf_uri")
     message = str(caught.value)
     assert "2 of 3 units" in message
     assert "index 1 (090210/02)" in message
