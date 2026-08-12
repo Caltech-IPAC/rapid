@@ -312,7 +312,7 @@ if __name__ == '__main__':
         exit(dbh.exit_code)
 
     sql_queries = []
-    sql_queries.append(f"select tablename from pg_tables where schemaname='public' and tablename like 'sources_{proc_date}%';")
+    sql_queries.append(f"select tablename from pg_tables where schemaname='public' and tablename like 'sources\\_{proc_date}%';")
     records = dbh.execute_sql_queries(sql_queries,debug)
 
     sources_table_names = []

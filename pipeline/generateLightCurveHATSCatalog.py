@@ -195,7 +195,7 @@ if __name__ == '__main__':
     # Query for available fields.
 
     sql_queries = []
-    sql_queries.append(f"select tablename from pg_tables where schemaname='public' and tablename like 'merges_%';")
+    sql_queries.append(f"select tablename from pg_tables where schemaname='public' and tablename like 'merges\\_%';")
     records = dbh.execute_sql_queries(sql_queries,debug)
 
     fields_list = []

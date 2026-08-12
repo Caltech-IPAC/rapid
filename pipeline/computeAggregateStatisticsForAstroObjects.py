@@ -99,7 +99,7 @@ if __name__ == '__main__':
         exit(dbh.exit_code)
 
     sql_queries = []
-    sql_queries.append(f"select tablename from pg_tables where schemaname='public' and tablename like 'astroobjects_%';")
+    sql_queries.append(f"select tablename from pg_tables where schemaname='public' and tablename like 'astroobjects\\_%';")
     records = dbh.execute_sql_queries(sql_queries,query_debug)
 
     fields_list = []
