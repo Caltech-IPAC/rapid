@@ -282,20 +282,34 @@ class ImagingPayload(ExposureScaPayload):
     sets, and the reason each comment exists.
     """
 
-    # -- required: the L2 row's own identity and geometry ------------------
-    # `science_facts` resolves every one of these from `get_l2filemeta_record`
-    # and `get_info_for_l2file` before it returns, and raises `GatheringError`
-    # if either row is missing. A unit that reached submission without them
-    # has no science image to process.
+    # -- required: the L2 row's identity ------------------------------------
+    # `science_facts` resolves these from `get_l2filemeta_record` and
+    # `get_info_for_l2file` and raises `GatheringError` if either row is
+    # missing, so a unit that exists has them. `rid` anchors every later
+    # lookup; `fid`/`field` are passed in by the caller; `rtid` equals
+    # `field` by construction; `expid` is what the unit is keyed by and
+    # `gather_science_units` raises on its absence before building anything.
     rid: int = None
     fid: int = None
     field: int = None
     rtid: int = None
     expid: int = None
+
+    # -- optional because the SCHEMA permits NULL ---------------------------
+    # Each is read from a nullable `L2Files`/`L2FileMeta` column through
+    # `_maybe_float`/`_maybe_int`/`_maybe_str`, whose whole purpose is to let
+    # a NULL through rather than inventing a value. `gather_reference_units`
+    # carries the explicit guard that names `mjdobs` when it is about to
+    # dereference it, which is where the absence actually matters and where
+    # the message can say what the unit was for.
     mjdobs: float = None
     exptime: float = None
     infobits: int = None
     science_image_uri: str = None
+    #: The image's own centre and corners, and the sky tile's. Optional for
+    #: the same reason: `L2FileMeta` may not carry a complete position, and
+    #: `coadd_input_rows` refuses loudly on an incomplete one rather than
+    #: coadding on a partial footprint.
     sky_position: dict = None
     tile_position: dict = None
 
@@ -348,13 +362,25 @@ class ImagingPayload(ExposureScaPayload):
         "overlapping_fields", "reference_overlapping_fields",
     )
 
-    #: The members above that a unit cannot be built without. Named as a
-    #: tuple rather than checked inline so the required set is readable as
-    #: one list and so subclasses can extend it.
-    REQUIRED_FACTS = (
-        "rid", "fid", "field", "rtid", "expid", "mjdobs", "exptime",
-        "infobits", "science_image_uri", "sky_position", "tile_position",
-    )
+    #: The members a unit cannot be built without — and ONLY those.
+    #:
+    #: **NARROWER THAN "everything the L2 lookup returns", deliberately.**
+    #: `science_facts` builds `mjdobs`, `exptime`, `infobits`,
+    #: `science_image_uri` and the positions with `_maybe_float`/
+    #: `_maybe_int`/`_maybe_str`, which exist precisely to let a NULL column
+    #: through — `L2Files.mjdobs` may be NULL, and
+    #: `gather_reference_units` already carries an explicit guard naming
+    #: `rid`/`fid`/`mjdobs` at the point it dereferences them. Requiring
+    #: them here would refuse at gather time a row the database permits and
+    #: the pipeline already handles, turning a named downstream failure into
+    #: an earlier and less informative one.
+    #:
+    #: What IS required is the identity the unit is keyed and routed by:
+    #: `rid` anchors every later lookup, and `fid`/`field`/`rtid`/`expid`
+    #: are resolved by the caller or raised on before this payload is built.
+    #: Rule 11's demand is that optionality be reasoned rather than blanket,
+    #: and the reason here is the schema's own nullability.
+    REQUIRED_FACTS = ("rid", "fid", "field", "rtid", "expid")
 
     def __post_init__(self):
         super().__post_init__()
