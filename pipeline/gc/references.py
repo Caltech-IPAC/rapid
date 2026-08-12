@@ -174,8 +174,12 @@ def is_fully_discharged(owner):
     """Is this attempt's owner FULLY DISCHARGED?
 
     The term is defined exactly, and deliberately does NOT mean the schema's
-    supersession concept — there is no `superseded_by_unit_id` column and this
-    code does not invent one. All three must hold:
+    supersession concept. `work_units.superseded_by_unit_id` DOES exist
+    (`036-intent-schema-v1.sql:118`; the brief's claim that it does not was
+    wrong — see P-H10) and this code deliberately never consults it: a unit
+    can be superseded from ANY state, `ready` included, so supersession does
+    not imply discharge and reading it here would delete live work's objects.
+    All three must hold:
 
       * the owning work unit is `complete` or `cancelled` — the literal
         predicate, because `failed` and `quarantined` are called terminal

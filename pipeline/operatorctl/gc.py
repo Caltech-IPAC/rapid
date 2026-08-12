@@ -29,11 +29,52 @@ from pipeline.gc.plans import GCPlanRepository, candidate_checksum
 from pipeline.operatorctl.contract import call_function
 
 
+def s3_manifest_reader(client=None):
+    """Read a manifest body from S3 and parse it.
+
+    The production reader for `expand_manifest_bodies`. It RAISES on a
+    manifest it cannot fetch or parse, which is the behaviour the plan-level
+    refusal depends on — a reader that returned `{}` on failure would silently
+    turn "unreadable" into "protects nothing".
+    """
+    import json as _json
+
+    def read(uri):
+        if not uri.startswith("s3://"):
+            raise ValueError("not an S3 URI: %r" % (uri,))
+        bucket, _, key = uri[len("s3://"):].partition("/")
+        handle = client or __import__("boto3").client("s3")
+        body = handle.get_object(Bucket=bucket, Key=key)["Body"].read()
+        return _json.loads(body)
+    return read
+
+
+def still_referenced_check(execute, manifest_reader=None):
+    """The final re-verification the executor runs INSIDE the fence.
+
+    Layer 3 of the four layered mitigations. It re-reads the live reference
+    set — not a snapshot taken at planning time — and answers "has this object
+    become referenced since?". Products are uploaded BEFORE they are
+    registered (`pipeline/stages/publishing.py:198`), so a registrar that
+    committed between planning and execution is exactly the case this catches.
+
+    Returns a callable, so the executor holds no database knowledge of its
+    own.
+    """
+    def is_referenced(item):
+        uri = "s3://%s/%s" % (item.bucket, item.object_key)
+        references, _consulted, _absent = reference_sql.collect_references(
+            execute, manifest_reader=manifest_reader)
+        return uri in references or item.object_key in references
+    return is_referenced
+
+
 def compute_plan(conn, execute, *, inventory_source, inventory_id,
                  inventory_taken_at, declared_buckets, declared_prefixes,
                  horizons, max_deletions, freshness_seconds, reason,
                  idempotency_key, actor, allowlist=None, dry_run=True,
-                 class_of=None, first_seen_absent=None, now=None):
+                 class_of=None, first_seen_absent=None, now=None,
+                 horizon_provenance=None, manifest_reader=None):
     """Compute (and, unless dry-run, record) one GC plan.
 
     Returns the rendered result dict either way. The DRY RUN DOES THE REAL
@@ -49,12 +90,20 @@ def compute_plan(conn, execute, *, inventory_source, inventory_id,
         now=now, declared_buckets=declared_buckets,
         declared_prefixes=declared_prefixes)
 
-    refs, consulted, absent = reference_sql.collect_references(execute)
+    refs, consulted, absent = reference_sql.collect_references(
+        execute, manifest_reader=manifest_reader)
     facts = reference_sql.attempt_facts(execute)
     owners = reference_sql.owners(execute)
 
     effective = horizon_module.effective_horizon(*horizons.values())
-    provenance = horizon_module.describe(horizons)
+    # THE PROVENANCE IS THE OPERATOR'S WHEN THEY GIVE ONE. 052's CHECK
+    # requires a horizon and a provenance together or neither, because a
+    # horizon without a stated source is a guess wearing a number; the
+    # computed description is the fallback so the pair is never half-filled.
+    provenance = (horizon_provenance if effective is not None
+                  and horizon_provenance else
+                  (horizon_module.describe(horizons)
+                   if effective is not None else None))
 
     def elapsed(obj):
         first = (first_seen_absent(obj) if first_seen_absent else None)

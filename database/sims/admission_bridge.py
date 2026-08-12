@@ -43,6 +43,23 @@ from pipeline.repositories.admission import (AdmissionConflict,
 #: pointer switch does not split one manifest across two releases.
 _RUN_RELEASE = {"identity": None, "manifest_id": None}
 
+#: The environment variable the run's manifest key travels in.
+#:
+#: **WHY AN ENVIRONMENT VARIABLE AND NOT JUST THE MODULE GLOBAL.** The socsim
+#: driver fans out over `ProcessPoolExecutor`, and a forked worker gets a COPY
+#: of this module's state at fork time on Linux — and on a spawn-based start
+#: method, no copy at all. A module global alone would therefore be `None` in
+#: exactly the processes that do the admitting, which is the same shape of
+#: bug as the one this fix round exists to repair. The manifest KEY is
+#: inherited through the environment, and `_resolve_run()` re-derives the
+#: manifest id and the release FROM THE DATABASE in whichever process asks.
+#:
+#: Re-deriving is not a second read of the pointer: the release is read back
+#: off the MANIFEST ROW, which recorded it once when the run began. So the
+#: linearization holds across processes — every worker gets the release the
+#: manifest was opened under, not whatever the pointer says now.
+RUN_MANIFEST_ENV = "RAPID_ADMISSION_MANIFEST_KEY"
+
 
 def begin_admission_run(dbh, manifest_key=None, source_scope="socsim",
                         byte_custody="external-versioned"):
@@ -63,7 +80,45 @@ def begin_admission_run(dbh, manifest_key=None, source_scope="socsim",
         manifest = repo.open_manifest(manifest_key, source_scope, release,
                                       byte_custody)
         _RUN_RELEASE["manifest_id"] = manifest.manifest_id
+        # Published for the worker processes, which do not inherit this
+        # module's state reliably (see RUN_MANIFEST_ENV).
+        os.environ[RUN_MANIFEST_ENV] = manifest_key
     return release
+
+
+def _resolve_run(dbh):
+    """This process's run state, re-derived from the database if needed.
+
+    Returns `(release_identity, manifest_id)`.
+
+    In the driver process the module global is already populated and this is a
+    dictionary lookup. In a worker process it is not, so the manifest key is
+    read from the environment and the manifest row supplies both the id and
+    the release it was opened under — which is what keeps every worker on the
+    SAME release as the driver rather than re-reading a pointer that may have
+    moved.
+    """
+    if _RUN_RELEASE.get("identity"):
+        return _RUN_RELEASE["identity"], _RUN_RELEASE.get("manifest_id")
+
+    manifest_key = os.environ.get(RUN_MANIFEST_ENV)
+    if not manifest_key:
+        raise ReleasePointerUnset(
+            "begin_admission_run() has not been called in this process and "
+            "no %s is set, so this ingest has no release to stamp its "
+            "admissions with. The pointer is read ONCE per run so a switch "
+            "mid-run cannot split one manifest across two releases "
+            "(rule 18)." % RUN_MANIFEST_ENV)
+
+    repo = AdmissionRepository(dbh.conn)
+    row = repo.manifest_by_key(manifest_key)
+    if row is None:
+        raise ReleasePointerUnset(
+            "no admission manifest %r; this worker cannot determine which "
+            "release to stamp its admissions with" % (manifest_key,))
+    _RUN_RELEASE["identity"] = row["release_identity"]
+    _RUN_RELEASE["manifest_id"] = row["manifest_id"]
+    return row["release_identity"], row["manifest_id"]
 
 
 def seal_admission_run(dbh):
@@ -73,7 +128,7 @@ def seal_admission_run(dbh):
     crash leaves either a complete replayable record or an explicitly unsealed
     one, never a sealed manifest whose entries are partial.
     """
-    manifest_id = _RUN_RELEASE.get("manifest_id")
+    _release_unused, manifest_id = _resolve_run(dbh)
     if manifest_id is None:
         return None
     repo = AdmissionRepository(dbh.conn)
@@ -91,7 +146,7 @@ def enumerate_source(dbh, bucket, key, checksum, version_id=None,
     now sits at that key; where the input bucket is unversioned it is None and
     the manifest's `byte_custody` says what the guarantee actually rests on.
     """
-    manifest_id = _RUN_RELEASE.get("manifest_id")
+    _release_unused, manifest_id = _resolve_run(dbh)
     if manifest_id is None:
         return None
     repo = AdmissionRepository(dbh.conn)
@@ -116,10 +171,10 @@ def record_exposure_admission(dbh, dateobs, expid, facts):
         raise AdmissionSchemaAbsent(
             "DRAFT 051 is not applied; refusing to ingest rather than "
             "admitting without database-enforced idempotency")
+    release, manifest_id = _resolve_run(dbh)
     return repo.admit_exposure(
         dateobs=dateobs, expid=expid, facts=_clean(facts),
-        release_identity=_release(),
-        manifest_id=_RUN_RELEASE.get("manifest_id"))
+        release_identity=release, manifest_id=manifest_id)
 
 
 def record_l2file_admission(dbh, exposure, sca, source_checksum, rid, facts,
@@ -136,22 +191,11 @@ def record_l2file_admission(dbh, exposure, sca, source_checksum, rid, facts,
         raise AdmissionSchemaAbsent(
             "DRAFT 051 is not applied; refusing to ingest rather than "
             "minting a duplicate L2 admission")
+    release, manifest_id = _resolve_run(dbh)
     return repo.admit_l2file(
         exposure=exposure, sca=sca, source_checksum=source_checksum, rid=rid,
-        facts=_clean(facts), release_identity=_release(),
-        manifest_id=_RUN_RELEASE.get("manifest_id"),
-        checksum_algorithm=checksum_algorithm)
-
-
-def _release():
-    identity = _RUN_RELEASE.get("identity")
-    if not identity:
-        raise ReleasePointerUnset(
-            "begin_admission_run() has not been called, so this ingest has "
-            "no release to stamp its admissions with. The pointer is read "
-            "ONCE per run so a switch mid-run cannot split one manifest "
-            "across two releases (rule 18).")
-    return identity
+        facts=_clean(facts), release_identity=release,
+        manifest_id=manifest_id, checksum_algorithm=checksum_algorithm)
 
 
 def _clean(facts):

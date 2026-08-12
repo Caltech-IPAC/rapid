@@ -11,6 +11,8 @@ import modules.utils.rapid_pipeline_subs as util
 import database.modules.utils.rapid_db as db
 import database.modules.utils.roman_tessellation_db as sqlite
 
+from datetime import datetime, timezone
+
 # The carved admission repository (rule 20); RAPIDDB is frozen.
 from database.sims.admission_bridge import (begin_admission_run,
                                             enumerate_source,
@@ -406,7 +408,16 @@ def register_l2file(dbh,header,wcs,subdir_only,file,expid,fid):
 
     # Insert record in L2Files database table.
 
-    dbh.add_l2file(expid,sca,field,hp6,hp9,fid,dateobs,mjdobs,exptime,infobits,
+    # `add_l2file_fourth_order`, NOT `add_l2file`. This call named a method
+    # that does not exist on `RAPIDDB` — only the `_fourth_order` and
+    # `_fifth_order` overloads do — so this script raised `AttributeError` on
+    # its first L2 file and its L2 path was DEAD. The argument list here
+    # already matches the 4th-order signature exactly (57 positional
+    # arguments, same order), so the name was the whole defect. Found while
+    # wiring the admission call below, recorded as proposal P-H2, and fixed
+    # here because leaving it would mean this script could not exercise the
+    # carved repository at all — which is what fix round 1 exists to correct.
+    dbh.add_l2file_fourth_order(expid,sca,field,hp6,hp9,fid,dateobs,mjdobs,exptime,infobits,
         status,filename,checksum,crval1,crval2,crpix1,crpix2,cd11,cd12,cd21,cd22,
         ctype1,ctype2,cunit1,cunit2,a_order,a_0_2,a_0_3,a_0_4,a_1_1,a_1_2,
         a_1_3,a_2_0,a_2_1,a_2_2,a_3_0,a_3_1,a_4_0,b_order,b_0_2,b_0_3,
@@ -418,6 +429,24 @@ def register_l2file(dbh,header,wcs,subdir_only,file,expid,fid):
 
     print("rid =",rid)
     print("version =",version)
+
+
+    # THE L2 ADMISSION RECORD (rule 20's deeper half), as in the other two
+    # ingest scripts.
+    if rid is None:
+        raise RuntimeError(
+            "add_l2file_fourth_order did not return a rid (exit_code=%s); "
+            "the L2 file was not registered."
+            % getattr(dbh, "exit_code", "?"))
+
+    admission = record_l2file_admission(
+        dbh, exposure=expid, sca=sca, source_checksum=checksum, rid=rid,
+        facts={"field": field, "hp6": hp6, "hp9": hp9, "fid": fid,
+               "mjdobs": mjdobs, "exptime": exptime, "infobits": infobits,
+               "ra": ra, "dec": dec, "equinox": equinox,
+               "zptmag": zptmag, "skymean": skymean})
+    print("l2 admission identity =", admission.admission_identity,
+          "created =", admission.created)
 
 
     # Return rid, version, filename, and checksum stored in database record.
@@ -517,6 +546,43 @@ def register_files():
 
     dbh = db.RAPIDDB()
 
+
+    # THE SEALED SOURCE MANIFEST, OPENED AND ENUMERATED BEFORE ANY ADMISSION
+    # (rule 20's durability clause), and the release pointer read ONCE.
+    #
+    # This script's inputs are enumerated per subdirectory rather than per
+    # object, so the manifest entries are the 18-file sets it copies. The
+    # ordering is unchanged: created UNSEALED, everything enumerated,
+    # admissions made, SEALED LAST.
+
+    manifest_key = "troxel-%s" % datetime.now(timezone.utc).strftime(
+        "%Y%m%dT%H%M%SZ")
+    release_identity = begin_admission_run(
+        dbh, manifest_key=manifest_key,
+        source_scope="s3://%s" % bucket_name_input,
+        byte_custody="external-versioned")
+    print(f"admission release = {release_identity}")
+
+    admission_s3_client = boto3.client('s3')
+    n_enumerated = 0
+    for subdir_only in files_input.keys():
+        for file in files_input[subdir_only]:
+            key = subdir_only + "/" + file
+            try:
+                head = admission_s3_client.head_object(
+                    Bucket=bucket_name_input, Key=key)
+            except Exception as e:
+                print(f"*** Error: could not enumerate {key}: {e}; "
+                      f"quitting rather than sealing a partial manifest...")
+                exit(65)
+            enumerate_source(dbh, bucket_name_input, key,
+                             head["ETag"].strip('"'),
+                             version_id=head.get("VersionId"),
+                             size=head.get("ContentLength"), algorithm="md5")
+            n_enumerated += 1
+    dbh.conn.commit()
+    print(f"enumerated {n_enumerated} source object(s) into the manifest")
+
     # Loop over subdirs and copy 18 files from S3 bucket with one copy command.
 
     nfiles = 0
@@ -567,6 +633,15 @@ def register_files():
 
 
     print("nfiles =",nfiles)
+
+
+    # SEAL LAST, and only when every enumerated subdirectory was processed.
+
+    if nfiles == len(files_input) and nfiles > 0:
+        print("manifest sealed:", seal_admission_run(dbh))
+    else:
+        print(f"manifest left UNSEALED ({nfiles} of {len(files_input)} "
+              f"subdirectories processed)")
 
 
     # Close database connection.

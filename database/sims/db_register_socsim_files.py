@@ -817,6 +817,40 @@ def register_l2file(dbh,header,wcs,file,expid,fid,local_file=None):
     print("version =",version)
 
 
+    # THE L2 ADMISSION RECORD (rule 20's deeper half).
+    #
+    # `add_l2file_fifth_order` above still writes the legacy `l2files` row and
+    # no reader is migrated. But the ADMISSION is content-keyed here, and this
+    # is the call that repairs the defect the brief names as rule 20's central
+    # finding: `addl2file` computes `coalesce(max(version), 0) + 1` against
+    # `l2filespk UNIQUE (expid, sca, version)` — uniqueness that INCLUDES the
+    # version — so the max+1 sidesteps the constraint by construction and a
+    # re-ingest MINTS A NEW ADMISSION ROW.
+    #
+    # `admission_l2files` carries the `(expid, sca)` UNIQUE that `l2files` has
+    # never had, so a re-ingest of the same detector file RETURNS its existing
+    # admission, and the same `(expid, sca)` arriving with a DIFFERENT
+    # checksum is refused rather than silently re-versioned.
+    #
+    # `rid` is checked first for the same reason `expid` is in
+    # `register_exposure`: the legacy method reports failure by setting
+    # `exit_code` and returning, leaving `dbh.rid` as None, and nothing here
+    # ever checked it.
+    if rid is None:
+        raise RuntimeError(
+            "add_l2file_fifth_order did not return a rid (exit_code=%s); the "
+            "L2 file was not registered." % getattr(dbh, "exit_code", "?"))
+
+    admission = record_l2file_admission(
+        dbh, exposure=expid, sca=sca, source_checksum=checksum, rid=rid,
+        facts={"field": field, "hp6": hp6, "hp9": hp9, "fid": fid,
+               "mjdobs": mjdobs, "exptime": exptime, "infobits": infobits,
+               "crval1": crval1, "crval2": crval2, "ra": ra0, "dec": dec0,
+               "equinox": equinox, "zptmag": zptmag, "skymean": skymean})
+    print("l2 admission identity =", admission.admission_identity,
+          "created =", admission.created)
+
+
     # Return rid, version, filename, and checksum stored in database record.
 
     return rid,version,filename,checksum
@@ -990,11 +1024,91 @@ if __name__ == '__main__':
 
     n_to_register = len(sorted_input_fits_files)
 
+
+    # THE SEALED SOURCE MANIFEST IS OPENED AND ENUMERATED HERE, BEFORE ANY
+    # ADMISSION (rule 20's durability clause).
+    #
+    # The ordering is the whole guarantee and it is why this lives in the main
+    # program rather than in a worker: the manifest is created UNSEALED, every
+    # source object is enumerated into it, the admissions are then made, and it
+    # is SEALED LAST. A crash anywhere in between therefore leaves either a
+    # complete replayable record or an explicitly unsealed one — never a
+    # sealed manifest whose admissions are partial. 051's trigger enforces the
+    # other half: an admission may not cite an unsealed manifest.
+    #
+    # THE RELEASE POINTER IS READ ONCE, HERE, and every admission in this run
+    # carries that same value. That is the linearization the brief fixes: an
+    # operator switching the pointer mid-run cannot split one manifest across
+    # two releases.
+    #
+    # `enumerate_source` records each object's checksum and, where the input
+    # bucket is versioned, its immutable version id. The checksum recorded at
+    # enumeration is the S3 object's ETag rather than the SHA-256 the L2
+    # admission uses: the bytes are not local yet, and downloading every file
+    # twice to avoid a second digest would cost a full extra pass over the
+    # input set. The manifest's `byte_custody` says which guarantee is in
+    # force, which is exactly what that column is for.
+
+    admission_dbh = db.RAPIDDB()
+    if admission_dbh.exit_code >= 64:
+        exit(admission_dbh.exit_code)
+
+    manifest_key = "socsim-%s-%s" % (
+        prefix_input.strip("/").replace("/", "-") or "all",
+        datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ"))
+
+    release_identity = begin_admission_run(
+        admission_dbh, manifest_key=manifest_key, source_scope=
+        "s3://%s/%s" % (bucket_name_input, prefix_input),
+        byte_custody="external-versioned")
+    print(f"admission release = {release_identity}")
+    print(f"admission manifest = {manifest_key}")
+
+    # A client of this scope's own: the module-level handle is a `resource`,
+    # and `download_s3_file` builds its client per call because boto3 clients
+    # are not safe across the processes `ProcessPoolExecutor` forks. This
+    # enumeration runs BEFORE the fan-out, so one client here is safe.
+    admission_s3_client = boto3.client('s3')
+
+    for input_fits_file in sorted_input_fits_files:
+        try:
+            head = admission_s3_client.head_object(Bucket=bucket_name_input,
+                                                   Key=input_fits_file)
+        except Exception as e:
+            print(f"*** Error: could not enumerate {input_fits_file}: {e}; "
+                  f"quitting rather than sealing a partial manifest...")
+            exit(65)
+        enumerate_source(
+            admission_dbh, bucket_name_input, input_fits_file,
+            head["ETag"].strip('"'),
+            version_id=head.get("VersionId"),
+            size=head.get("ContentLength"), algorithm="md5")
+
+    admission_dbh.conn.commit()
+    print(f"enumerated {n_to_register} source object(s) into the manifest")
+
     if num_cores > 1:
         n_registered,n_failed = execute_parallel_processes(sorted_input_fits_files,num_cores)
     else:
         thread_index = 0
         n_registered,n_failed = run_single_core_job(sorted_input_fits_files,thread_index)
+
+
+    # SEAL LAST, AND ONLY ON A CLEAN RUN. A run with failures leaves the
+    # manifest explicitly UNSEALED, which is the honest state: some of what it
+    # enumerated was never admitted, and 051 refuses to let a later admission
+    # cite it. Sealing a manifest whose admissions are partial is the one
+    # outcome the crash ordering exists to prevent, so a failed run must not
+    # do it as a tidy-up.
+
+    if n_failed == 0 and n_registered > 0:
+        sealed = seal_admission_run(admission_dbh)
+        print(f"manifest sealed: {sealed}")
+    else:
+        print(f"manifest left UNSEALED ({n_failed} failure(s), "
+              f"{n_registered} registered): an unsealed manifest is the "
+              f"honest record of a partial run")
+    admission_dbh.close()
 
 
     # Code-timing benchmark.

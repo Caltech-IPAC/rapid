@@ -380,6 +380,31 @@ class AdmissionRepository:
             (len(entries), digest, manifest_id))
         return ManifestRecord(manifest_id, None, True, len(entries))
 
+    def manifest_by_key(self, manifest_key):
+        """One manifest by its run key, with the release it was opened under.
+
+        **THE RELEASE IS READ BACK OFF THE MANIFEST ROW, NEVER RE-READ FROM
+        THE POINTER.** This is what lets a worker process that did not run
+        `begin_admission_run` join a run already in progress without breaking
+        the linearization: the manifest recorded its release once, when the
+        run began, so every worker resolving through here gets THAT value and
+        not whatever the pointer says now. Re-reading the pointer would be
+        exactly the torn-manifest state the brief forbids.
+        """
+        self._require_schema()
+        rows = self._query(
+            "manifest_by_key",
+            "SELECT manifest_id, manifest_key, release_identity, sealed_at,"
+            "       coalesce(entry_count, 0)"
+            "  FROM admission_manifests WHERE manifest_key = %s",
+            (manifest_key,))
+        if not rows:
+            return None
+        row = rows[0]
+        return {"manifest_id": row[0], "manifest_key": row[1],
+                "release_identity": row[2], "sealed": row[3] is not None,
+                "entry_count": row[4]}
+
     def manifest_entries(self, manifest_id):
         """The enumerated sources, for a replay."""
         self._require_schema()

@@ -10,6 +10,8 @@ import modules.utils.rapid_pipeline_subs as util
 import database.modules.utils.rapid_db as db
 import database.modules.utils.roman_tessellation_db as sqlite
 
+from datetime import datetime, timezone
+
 # The carved admission repository (rule 20); RAPIDDB is frozen.
 from database.sims.admission_bridge import (begin_admission_run,
                                             enumerate_source,
@@ -447,6 +449,28 @@ def register_l2file(dbh,header,wcs,file,expid,fid):
     print("version =",version)
 
 
+    # THE L2 ADMISSION RECORD (rule 20's deeper half), as in the socsim
+    # script. This is the call that repairs `addl2file`'s
+    # `coalesce(max(version), 0) + 1` re-versioning: the admission sidecar
+    # carries the `(expid, sca)` UNIQUE that `l2files` has never had, so a
+    # re-ingest RETURNS its existing admission and a differing checksum for
+    # the same grain is refused rather than silently minting a new version.
+    if rid is None:
+        raise RuntimeError(
+            "add_l2file_fourth_order did not return a rid (exit_code=%s); "
+            "the L2 file was not registered."
+            % getattr(dbh, "exit_code", "?"))
+
+    admission = record_l2file_admission(
+        dbh, exposure=expid, sca=sca, source_checksum=checksum, rid=rid,
+        facts={"field": field, "hp6": hp6, "hp9": hp9, "fid": fid,
+               "mjdobs": mjdobs, "exptime": exptime, "infobits": infobits,
+               "ra": ra, "dec": dec, "equinox": equinox,
+               "zptmag": zptmag, "skymean": skymean})
+    print("l2 admission identity =", admission.admission_identity,
+          "created =", admission.created)
+
+
     # Return rid, version, filename, and checksum stored in database record.
 
     return rid,version,filename,checksum
@@ -537,6 +561,35 @@ def register_files():
     dbh = db.RAPIDDB()
 
 
+    # THE SEALED SOURCE MANIFEST, OPENED AND ENUMERATED BEFORE ANY ADMISSION
+    # (rule 20's durability clause), and the release pointer read ONCE so a
+    # switch mid-run cannot split this manifest across two releases.
+    #
+    # The ordering is the guarantee: created UNSEALED, every source object
+    # enumerated, admissions made, SEALED LAST — so a crash leaves either a
+    # complete replayable record or an explicitly unsealed one. 051's trigger
+    # enforces the other half by refusing an admission that cites an unsealed
+    # manifest.
+
+    manifest_key = "rimtimsim-%s" % datetime.now(timezone.utc).strftime(
+        "%Y%m%dT%H%M%SZ")
+    release_identity = begin_admission_run(
+        dbh, manifest_key=manifest_key,
+        source_scope="s3://%s" % bucket_name_input,
+        byte_custody="external-versioned")
+    print(f"admission release = {release_identity}")
+
+    admission_s3_client = boto3.client('s3')
+    for input_fits_file in input_fits_files:
+        head = admission_s3_client.head_object(Bucket=bucket_name_input,
+                                               Key=input_fits_file)
+        enumerate_source(dbh, bucket_name_input, input_fits_file,
+                         head["ETag"].strip('"'),
+                         version_id=head.get("VersionId"),
+                         size=head.get("ContentLength"), algorithm="md5")
+    dbh.conn.commit()
+
+
     # Loop over files from S3 bucket with one copy command.
 
     nfiles = 0
@@ -580,6 +633,18 @@ def register_files():
             print(f"*** Warning: Could not remove {input_fits_file}: {e}")
 
         nfiles += 1
+
+
+    # SEAL LAST, and only when every enumerated file was admitted. A shorter
+    # run leaves the manifest explicitly UNSEALED, which is the honest record
+    # of a partial ingest: some of what it enumerated was never admitted, and
+    # 051 refuses to let a later admission cite it.
+
+    if nfiles == len(input_fits_files) and nfiles > 0:
+        print("manifest sealed:", seal_admission_run(dbh))
+    else:
+        print(f"manifest left UNSEALED ({nfiles} of "
+              f"{len(input_fits_files)} admitted)")
 
 
     # Close database connection.

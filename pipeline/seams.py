@@ -182,11 +182,44 @@ def submit_units(units, job_type, queue, job_definition, binding,
     #    carry, so it has to exist before they do.
     manifest_uri = publish_manifest(batch.manifest, store)
 
+    # THE RELEASE COMES FROM THE ADMISSION, NOT FROM THIS PROCESS'S
+    # ENVIRONMENT (rule 18, brief H2).
+    #
+    # `binding.release_identity` is `RAPID_RELEASE_IDENTITY` as the submitting
+    # process happens to have it (`pipeline/operator/submission.py:274`). Work
+    # derived from an admission must instead be pinned to the release THAT
+    # ADMISSION was made under — that is what makes "rollback changes only the
+    # release used for future admissions" mean anything, because otherwise the
+    # release a piece of work carries is a property of whichever process
+    # submitted it.
+    #
+    # `binding_release_for_units` reads the admitted release for this
+    # manifest's units and reconciles it with the environment's. A
+    # DISAGREEMENT IS REFUSED LOUDLY rather than resolved in favour of either:
+    # preferring the environment is the defect being repaired, and preferring
+    # the admission silently would hide a submitter running the wrong image.
+    # It also refuses a manifest whose units were admitted under two different
+    # releases — one manifest carries one release, the submission-side half of
+    # the linearization the admission side guarantees by reading the pointer
+    # once.
+    #
+    # `require_stamp=False` because work admitted BEFORE DRAFT 051 landed
+    # carries no stamp and must still be submittable; the fallback is explicit
+    # and is logged by the reconciler rather than being a silent default.
+    release_identity = binding.release_identity
+    if execute is not None:
+        from pipeline.intent.admission_release import (
+            binding_release_for_units, stamp_schema_present)
+        if stamp_schema_present(execute):
+            release_identity = binding_release_for_units(
+                execute, _admission_units_of(batch.manifest),
+                binding.release_identity, require_stamp=False)
+
     bound = ExecutionBinding(
         job_definition_arn=binding.job_definition_arn,
         job_definition_rev=binding.job_definition_rev,
         image_digest=binding.image_digest,
-        release_identity=binding.release_identity,
+        release_identity=release_identity,
         manifest_checksum=batch.manifest.checksum(),
     )
 
@@ -297,6 +330,33 @@ def submit_gathered(units, job_type, queue, job_definition, binding,
             # under different windows.
             reference_observation_window=reference_observation_window))
     return results
+
+
+def _admission_units_of(manifest):
+    """The admission grains this manifest's units derive from (rule 18).
+
+    Only EXPOSURE/SCA-GRAIN units have an admission to look up: `exposure`
+    and `sca` are real identity there and nowhere else
+    (`submission/payloads.py:242-257`). A crossmatch unit carries a proc_date
+    and a field, which name no admitted file — so it contributes nothing here
+    rather than being coerced into a shape it does not have, which is the
+    sentinel-carrier defect rule 11 removed.
+
+    Returns `("l2file", expid, sca)` tuples: the L2 grain, because that is the
+    grain a science unit's inputs were actually admitted at. The exposure
+    grain's release is the same one by construction — both are stamped from
+    the same pointer read in one admission run — so looking up the finer grain
+    costs nothing and is more precise.
+    """
+    units = []
+    for unit in getattr(manifest, "units", ()) or ():
+        payload = getattr(unit, "payload", None)
+        exposure = getattr(payload, "exposure", None)
+        sca = getattr(payload, "sca", None)
+        if exposure is None or sca is None:
+            continue
+        units.append(("l2file", exposure, sca))
+    return units
 
 
 def _precreate(writer, manifest, run_id, binding, moment, execute=None):

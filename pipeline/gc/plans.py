@@ -73,6 +73,11 @@ class PlanItem(typing.NamedTuple):
     version_id: str
     object_class: str
     status: str
+    #: The attempt the key was canonically attributed to, carried so the
+    #: executor can RE-VERIFY that attempt's discharge inside the fence — the
+    #: planning-time watermark check is a snapshot, and the terminal-record
+    #: sequence can advance after it.
+    attributed_attempt_id: object = None
 
 
 def candidate_checksum(candidates):
@@ -301,7 +306,7 @@ class GCPlanRepository:
         rows = self._query(
             "unresolved_items",
             "SELECT item_id, bucket, object_key, version_id, object_class,"
-            "       status FROM gc_plan_items"
+            "       status, attributed_attempt_id FROM gc_plan_items"
             " WHERE plan_id = %s AND status IN ('pending', 'in-flight')"
             " ORDER BY item_id", (plan_id,))
         return [PlanItem(*row) for row in rows]

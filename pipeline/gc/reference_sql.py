@@ -74,13 +74,110 @@ SELECT s.manifest_uri
 """
 
 
+#: Every URI-bearing field in the payload family, ENUMERATED FROM THE
+#: DATACLASSES rather than taken from any partial list. Verified at this
+#: branch's head: `science_image_uri` (`payloads.py:308`), `psf_uri` (`:332`)
+#: and `reference_image_uri` (`:341`) on `ImagingPayload`; `coadd_inputs_uri`
+#: (`:433`) on `ReferenceImagePayload`. No other payload class declares one.
+#:
+#: **`reference_image_uri` IS A CROSS-ATTEMPT REFERENCE** — a reference image
+#: published by one attempt is cited by many later science manifests — which
+#: is why expanding manifest bodies matters and attempt-scoped reasoning alone
+#: would delete live inputs.
+MANIFEST_URI_FIELDS = ("science_image_uri", "psf_uri", "reference_image_uri",
+                       "coadd_inputs_uri")
+
+
+class ManifestUnreadable(PlanRefused):
+    """An in-scope manifest could not be read or expanded.
+
+    **THE PLAN IS REFUSED, NOT THE OBJECT.** "Its referenced objects" cannot
+    be identified without reading it, so the fallback cannot be per-object:
+    guessing which objects an unreadable manifest covers is exactly the guess
+    this design refuses to make. Nothing is deleted in a run where this is
+    raised.
+    """
+
+    error_category = "gc_manifest_unreadable"
+
+
+def expand_manifest_bodies(uris, reader):
+    """Every object an active manifest's BODY references.
+
+    **AN ACTIVE MANIFEST PROTECTS ITS CONTENTS AS WELL AS ITSELF.** The
+    manifest body carries input URIs, and anti-joining against the manifest
+    row alone would leave every input it names looking unreferenced. So each
+    active manifest is READ and expanded, and every URI field present in its
+    units is added to the reference set.
+
+    `reader(uri)` returns the parsed manifest body (a dict) or raises. Kept
+    injectable so the contract tier can supply one that REFUSES — a reader
+    that cannot fail could not exercise the plan-level refusal below, which is
+    the whole safety property here.
+
+    Every URI FIELD IS ENUMERATED, not coded to a partial list: an unknown
+    key ending in `_uri` is treated as a reference too, so a payload gaining a
+    new URI component does not silently drop out of the reference set.
+    """
+    referenced = set()
+    for uri in sorted(uris):
+        try:
+            body = reader(uri)
+        except Exception as exc:                      # noqa: BLE001
+            raise ManifestUnreadable(
+                "in-scope manifest %s could not be read (%s). THE PLAN IS "
+                "REFUSED and nothing is deleted in this run: the objects that "
+                "manifest references cannot be identified without reading it, "
+                "and guessing which they are is precisely the guess this "
+                "design does not make." % (uri, exc)) from exc
+        if body is None:
+            raise ManifestUnreadable(
+                "in-scope manifest %s expanded to nothing; refusing the plan "
+                "rather than treating an unreadable manifest as protecting no "
+                "objects" % (uri,))
+        referenced.update(_uris_in(body))
+    return referenced
+
+
+def _uris_in(node):
+    """Every URI-valued leaf in a manifest body, at any depth.
+
+    Walks rather than reading known keys: the units are nested inside the
+    manifest and a top-level scan would see none of them. Both the enumerated
+    field names and any other key ending `_uri` are collected, so a payload
+    that gains a URI component is covered before anyone updates a list.
+    """
+    found = set()
+    if isinstance(node, dict):
+        for key, value in node.items():
+            lowered = str(key).lower()
+            if (lowered in MANIFEST_URI_FIELDS or lowered.endswith("_uri")) \
+                    and isinstance(value, str) and value.strip():
+                found.add(value.strip())
+            else:
+                found.update(_uris_in(value))
+    elif isinstance(node, (list, tuple)):
+        for value in node:
+            found.update(_uris_in(value))
+    return found
+
+
 def surface_present(execute, relation):
     """Is this reference surface deployed? Probed, never caught."""
     rows = execute("SELECT to_regclass(%s) IS NOT NULL", ["public." + relation])
     return bool(rows and _first(rows[0]))
 
 
-def collect_references(execute, *, require_all=True):
+#: Coadd-input CSV objects — `submission/gathering.py:983`, written under
+#: `submissions/<run_id>/coadd-inputs/...` and CITED BY MANIFESTS while
+#: carrying no row of their own in any product table. They reach the
+#: reference set two ways: by manifest expansion (a reference image payload's
+#: `coadd_inputs_uri`) and, for manifests predating that field, by this
+#: prefix-scoped surface over the submissions table's own run ids.
+COADD_INPUT_PREFIX = "coadd-inputs/"
+
+
+def collect_references(execute, *, require_all=True, manifest_reader=None):
     """Every referenced URI, from every deployed surface.
 
     Returns `(references, consulted, absent)`.
@@ -119,11 +216,36 @@ def collect_references(execute, *, require_all=True):
                     % (relation, exc)) from exc
             absent.append(relation)
             continue
+        surface_values = set()
         for row in rows or ():
             value = _first(row)
             if value:
-                references.add(str(value))
+                surface_values.add(str(value))
+        references.update(surface_values)
         consulted.append(relation)
+
+        # AN ACTIVE MANIFEST PROTECTS ITS CONTENTS AS WELL AS ITSELF. The
+        # manifest row alone would leave every input it names looking
+        # unreferenced — including `reference_image_uri`, which is a
+        # CROSS-ATTEMPT reference cited by many later science manifests. So
+        # the bodies are read and expanded here, and an unreadable one
+        # REFUSES THE PLAN rather than being skipped.
+        if relation == "submissions" and surface_values:
+            if manifest_reader is None:
+                # NOT SILENTLY SKIPPED. Without a reader the contents cannot
+                # be identified, which is the same state as an unreadable
+                # manifest and gets the same answer.
+                raise ManifestUnreadable(
+                    "%d active manifest(s) are in scope but no manifest "
+                    "reader was supplied, so their referenced objects cannot "
+                    "be identified. THE PLAN IS REFUSED: an active manifest "
+                    "protects its contents as well as itself, and computing "
+                    "a plan without expanding them would leave every input "
+                    "they name looking unreferenced."
+                    % (len(surface_values),))
+            references.update(
+                expand_manifest_bodies(surface_values, manifest_reader))
+            consulted.append("submissions:bodies")
 
     return references, consulted, absent
 

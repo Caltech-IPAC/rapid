@@ -201,6 +201,91 @@ def build_parser():
     release.set_defaults(func=_cmd_set_release)
 
     # --- GC (H3/H4) --------------------------------------------------------
+    gc_compute = sub.add_parser(
+        "gc-compute-plan",
+        help="compute a recorded GC plan from a pinned inventory",
+        description="Pass 1 of the two-pass process (§4.11 steps 1-4): read a "
+                    "pinned S3 inventory, anti-join it against every "
+                    "reference surface, apply the five-clause candidate rule, "
+                    "and record a checksummed plan. Dry-run by default, and "
+                    "THE DRY RUN DOES THE REAL WORK — real inventory, real "
+                    "reference queries, real anti-join — it simply does not "
+                    "write the plan.")
+    gc_compute.add_argument("--inventory", required=True,
+                            help="path to the pinned inventory report (JSON "
+                                 "lines of {bucket,key,version_id,size,"
+                                 "last_modified}, or a manifest naming them)")
+    gc_compute.add_argument("--inventory-id", required=True,
+                            help="the inventory's own identity, recorded on "
+                                 "the plan")
+    gc_compute.add_argument("--inventory-taken-at", required=True,
+                            help="when the snapshot was taken (ISO-8601). "
+                                 "An inventory older than --freshness is "
+                                 "refused")
+    gc_compute.add_argument("--freshness", type=int, default=None,
+                            help="maximum inventory age in seconds. NO "
+                                 "DEFAULT: an unbounded staleness check is "
+                                 "not a check")
+    gc_compute.add_argument("--bucket", action="append", default=None,
+                            metavar="BUCKET",
+                            help="declared bucket scope; repeatable. In this "
+                                 "package the declared scope is the products "
+                                 "bucket alone")
+    gc_compute.add_argument("--prefix", action="append", default=None,
+                            metavar="PREFIX", help="declared key prefixes")
+    gc_compute.add_argument("--horizon-seconds", type=int, default=None,
+                            help="the safety horizon. WITH NONE CONFIGURED "
+                                 "THE PLAN DELETES NOTHING and says why — "
+                                 "there is deliberately no default that "
+                                 "permits deletion")
+    gc_compute.add_argument("--horizon-provenance", default=None,
+                            help="where the horizon came from. A horizon "
+                                 "without a stated provenance is a guess "
+                                 "wearing a number")
+    gc_compute.add_argument("--max-deletions", type=int, required=True,
+                            help="the plan's bound. A plan exceeding it is "
+                                 "REFUSED at computation, never truncated at "
+                                 "execution")
+    gc_compute.add_argument("--allow-class", action="append", default=None,
+                            metavar="CLASS",
+                            help="add an object class to the deletable-class "
+                                 "allowlist for this plan. Opt-in and empty "
+                                 "by default: with none given the plan "
+                                 "deletes nothing, which is a conforming "
+                                 "outcome")
+    _mutation_arguments(gc_compute, "a GC candidate set")
+    gc_compute.set_defaults(func=_cmd_gc_compute)
+
+    gc_execute = sub.add_parser(
+        "gc-execute-plan",
+        help="execute an approved GC plan",
+        description="Pass 2 (§4.11 step 6): delete the EXACT object versions "
+                    "an approved plan recorded, in bounded batches, behind "
+                    "the fence. Every item is re-verified immediately before "
+                    "its delete; anything whose version moved, whose fence "
+                    "cannot be taken, or which became referenced is skipped "
+                    "and reported while the run continues.")
+    gc_execute.add_argument("--plan-id", type=int, required=True)
+    _mutation_arguments(gc_execute, "an approved GC plan")
+    gc_execute.set_defaults(func=_cmd_gc_execute)
+
+    gc_recompute = sub.add_parser(
+        "gc-recompute-plan",
+        help="run pass 2's recomputation against a second pinned inventory",
+        description="§4.11 step 5, which is MANDATORY rather than optional: "
+                    "after the horizon elapses the anti-join is recomputed "
+                    "against a SECOND pinned inventory, and only candidates "
+                    "absent in BOTH passes survive. Anything that reappeared "
+                    "is excluded by status; its row and the plan checksum are "
+                    "untouched.")
+    gc_recompute.add_argument("--plan-id", type=int, required=True)
+    gc_recompute.add_argument("--inventory", required=True)
+    gc_recompute.add_argument("--inventory-id", required=True)
+    gc_recompute.add_argument("--inventory-taken-at", required=True)
+    gc_recompute.add_argument("--freshness", type=int, default=None)
+    _mutation_arguments(gc_recompute, "a computed GC plan")
+    gc_recompute.set_defaults(func=_cmd_gc_recompute)
+
     gc_approve = sub.add_parser(
         "gc-approve-plan",
         help="approve a recomputed GC plan for execution",
@@ -383,6 +468,218 @@ def _cmd_set_release(conn, args, out):
                       "admission_release_pointer:%s" % args.release_identity,
                       args.reason, key, result, args.apply), file=out)
     return EXIT_OK
+
+
+#: The declared GC scope for this package: the products bucket alone. The
+#: records, diagnostics, backup, logs, meta, build and simulation input
+#: buckets are OUT OF SCOPE and no plan may name them (brief H, "Out of
+#: scope"). Widening it is a later, separately argued change.
+DEFAULT_GC_BUCKETS = ("roman-rapid-products",)
+
+
+def _read_inventory_file(path):
+    """Read a pinned inventory report into the page shape the reader takes.
+
+    JSON lines, one object per line. Deliberately primitive: an S3 Inventory
+    report reader, a recorded listing and a test double all present the same
+    thing, which is what lets the DOUBLE REFUSE — return a partial page, a
+    missing object or a row with no version — and a double that cannot fail
+    proves nothing.
+
+    A line carrying `{"truncated": true}` is honoured, so a report that KNOWS
+    it is short can say so and be refused rather than read as complete.
+    """
+    import json as _json
+    objects = []
+    with open(path, "r", encoding="utf-8") as handle:
+        for line in handle:
+            line = line.strip()
+            if not line:
+                continue
+            row = _json.loads(line)
+            if row.get("truncated"):
+                return [{"objects": objects, "truncated": True}]
+            objects.append(row)
+    return [{"objects": objects}]
+
+
+def _cmd_gc_compute(conn, args, out):
+    from pipeline.operatorctl.gc import compute_plan, s3_manifest_reader
+    key = args.idempotency_key or new_idempotency_key("gc-compute")
+    buckets = tuple(args.bucket) if args.bucket else DEFAULT_GC_BUCKETS
+    prefixes = tuple(args.prefix) if args.prefix else ()
+    horizons = {"configured": args.horizon_seconds}
+
+    result = compute_plan(
+        conn, _executor(conn),
+        inventory_source=_read_inventory_file(args.inventory),
+        inventory_id=args.inventory_id,
+        inventory_taken_at=args.inventory_taken_at,
+        declared_buckets=buckets, declared_prefixes=prefixes,
+        horizons=horizons, max_deletions=args.max_deletions,
+        freshness_seconds=args.freshness, reason=args.reason,
+        idempotency_key=key, actor=_session_user(conn),
+        allowlist=tuple(args.allow_class) if args.allow_class else (),
+        dry_run=not args.apply,
+        horizon_provenance=args.horizon_provenance,
+        manifest_reader=s3_manifest_reader())
+    if args.apply:
+        conn.commit()
+    print(render_plan("gc_compute_plan",
+                      "gc:%s" % ",".join(buckets), args.reason, key, result,
+                      args.apply), file=out)
+    # THE REFUSAL IS PRINTED PLAINLY, not left to be inferred from a zero. An
+    # operator seeing "0 candidates" deserves to know whether that is because
+    # nothing qualified or because no horizon is configured.
+    if result.get("refusal"):
+        print("", file=out)
+        print("  NOTE: %s" % result["refusal"], file=out)
+    return EXIT_OK
+
+
+def _cmd_gc_recompute(conn, args, out):
+    from pipeline.gc.inventory import read_inventory
+    from pipeline.gc.plans import GCPlanRepository
+    key = args.idempotency_key or new_idempotency_key("gc-recompute")
+    repo = GCPlanRepository(conn)
+    plan = repo.plan(args.plan_id)
+    if plan is None:
+        print("rapidctl: no GC plan %s" % args.plan_id, file=sys.stderr)
+        return EXIT_USAGE
+
+    inventory = read_inventory(
+        _read_inventory_file(args.inventory), inventory_id=args.inventory_id,
+        taken_at=args.inventory_taken_at, freshness_seconds=args.freshness)
+    # ONLY CANDIDATES PRESENT IN THE SECOND INVENTORY AND STILL UNREFERENCED
+    # SURVIVE. Absence in either pass excludes.
+    present = {(o.bucket, o.key, o.version_id) for o in inventory.objects}
+
+    if not args.apply:
+        result = {"action": "gc_recompute_plan", "plan_id": args.plan_id,
+                  "state": plan.state, "second_inventory": args.inventory_id,
+                  "objects_in_second_inventory": len(inventory.objects),
+                  "dry_run": True, "rows_affected": 0}
+    else:
+        excluded = repo.recompute(args.plan_id, surviving_keys=present,
+                                  inventory=inventory,
+                                  recomputed_by=_session_user(conn))
+        conn.commit()
+        result = {"action": "gc_recompute_plan", "plan_id": args.plan_id,
+                  "excluded_on_recompute": excluded, "dry_run": False,
+                  "rows_affected": excluded}
+    print(render_plan("gc_recompute_plan", "gc_plan:%s" % args.plan_id,
+                      args.reason, key, result, args.apply), file=out)
+    return EXIT_OK
+
+
+def _cmd_gc_execute(conn, args, out):
+    """Drive the executor — the production call site it previously lacked."""
+    from pipeline.gc.execute import Executor
+    from pipeline.gc.plans import GCPlanRepository
+    from pipeline.operatorctl.gc import (record_execution,
+                                         s3_manifest_reader,
+                                         still_referenced_check)
+
+    key = args.idempotency_key or new_idempotency_key("gc-execute")
+    repo = GCPlanRepository(conn)
+    plan = repo.plan(args.plan_id)
+    if plan is None:
+        print("rapidctl: no GC plan %s" % args.plan_id, file=sys.stderr)
+        return EXIT_USAGE
+
+    if not args.apply:
+        # THE DRY RUN VERIFIES THE CHECKSUM AND COUNTS THE REAL WORK, and
+        # deletes nothing. It is the plan the apply will act on, minus the
+        # acting.
+        repo.verify_checksum(args.plan_id)
+        unresolved = repo.unresolved_items(args.plan_id)
+        result = {"action": "gc_plan_execute", "plan_id": args.plan_id,
+                  "state": plan.state,
+                  "candidate_checksum": plan.candidate_checksum,
+                  "unresolved_items": len(unresolved),
+                  "dry_run": True, "rows_affected": 0}
+        print(render_plan("gc_plan_execute", "gc_plan:%s" % args.plan_id,
+                          args.reason, key, result, args.apply), file=out)
+        return EXIT_OK
+
+    import boto3
+    executor = Executor(conn, _S3Versions(boto3.client("s3")),
+                        actor=_session_user(conn))
+    outcomes = executor.execute(
+        args.plan_id, commit=conn.commit,
+        still_referenced=still_referenced_check(
+            _executor(conn), manifest_reader=s3_manifest_reader()))
+    result = record_execution(conn, key, args.plan_id, args.reason, outcomes,
+                              dry_run=False,
+                              policy_citation=args.policy_citation)
+    tally = {}
+    for outcome in outcomes:
+        tally[outcome.status] = tally.get(outcome.status, 0) + 1
+    print(render_plan("gc_plan_execute", "gc_plan:%s" % args.plan_id,
+                      args.reason, key, result, args.apply), file=out)
+    print("", file=out)
+    print("  items by outcome:", file=out)
+    for status in sorted(tally):
+        print("    %-22s %s" % (status, tally[status]), file=out)
+    return EXIT_OK
+
+
+class _S3Versions(object):
+    """The narrow S3 surface `pipeline/gc/execute.py` needs, over boto3.
+
+    Two methods, deliberately: `head_version` and `delete_version`. Keeping
+    the surface this small is what lets the contract tier substitute a double
+    that can REFUSE — return a missing object, fail a delete, report a version
+    that moved after planning — which a wider wrapper around a boto3 client
+    could not.
+    """
+
+    def __init__(self, client):
+        self._client = client
+
+    def head_version(self, bucket, key):
+        try:
+            head = self._client.head_object(Bucket=bucket, Key=key)
+        except Exception as exc:                      # noqa: BLE001
+            code = getattr(exc, "response", {}).get(
+                "Error", {}).get("Code", "")
+            if str(code) in ("404", "NoSuchKey", "NotFound"):
+                return None
+            raise
+        return head.get("VersionId")
+
+    def delete_version(self, bucket, key, version_id):
+        """Delete the EXACT version, never the key.
+
+        `VersionId` is mandatory here rather than optional: a key-only delete
+        on a versioning-enabled bucket installs a delete marker over whatever
+        is current, including a version written after the plan was computed.
+        """
+        self._client.delete_object(Bucket=bucket, Key=key,
+                                   VersionId=version_id)
+        return True
+
+
+def _executor(conn):
+    """The one-callable `execute(sql, params)` the intent layer takes."""
+    def execute(statement, params=None):
+        with conn.cursor() as cur:
+            cur.execute(statement, params)
+            if cur.description is not None:
+                return cur.fetchall()
+            return cur.rowcount
+    return execute
+
+
+def _session_user(conn):
+    """The database's own `session_user` — never a CLI argument.
+
+    An operator-supplied actor string would be an operator attesting to their
+    own identity, which is exactly what an audit actor must not be.
+    """
+    with conn.cursor() as cur:
+        cur.execute("SELECT session_user")
+        return cur.fetchone()[0]
 
 
 def _cmd_gc_approve(conn, args, out):

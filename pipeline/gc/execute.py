@@ -78,12 +78,52 @@ class Executor:
     CHANGED VERSION proves nothing.
     """
 
-    def __init__(self, conn, s3, *, actor, fence_lease_seconds=None):
+    def __init__(self, conn, s3, *, actor, fence_lease_seconds=None,
+                 recheck_discharge=True):
         self._conn = conn
         self._s3 = s3
         self._actor = actor
         self._repo = GCPlanRepository(conn)
         self._lease = fence_lease_seconds or FENCE_LEASE_SECONDS
+        self._recheck_discharge = recheck_discharge
+
+    def _still_discharged(self, item):
+        """Re-verify the owner's discharge INSIDE the fence.
+
+        **THE WATERMARK COMPARISON AT PLANNING TIME IS A SNAPSHOT**, and the
+        fence has to cover terminal-record ADVANCEMENT, not only registration.
+        A terminal-record writer can raise `terminal_record_sequence`
+        immediately after the plan read it, making registration lag again and
+        need the very object GC is about to delete — and exact-version
+        deletion does not help there, because the new registration wants that
+        same version.
+
+        So the discharge predicate is re-evaluated here, against the attempt
+        this item was canonically attributed to, and a lapse SKIPS THE ITEM
+        rather than failing the run. Returns `(True, None)` or
+        `(False, reason)`.
+        """
+        if not self._recheck_discharge or item.attributed_attempt_id is None:
+            return True, None
+        from pipeline.gc.reference_sql import owners
+        from pipeline.gc.references import is_fully_discharged
+
+        def execute(sql, params=None):
+            with self._conn.cursor() as cur:
+                cur.execute(sql, params)
+                if cur.description is not None:
+                    return cur.fetchall()
+                return cur.rowcount
+
+        current = owners(execute, [item.attributed_attempt_id])
+        discharged, why = is_fully_discharged(
+            current.get(item.attributed_attempt_id))
+        if discharged:
+            return True, None
+        return False, (
+            "the owning attempt is no longer fully discharged (%s) — the "
+            "watermark check at planning time was a snapshot and the "
+            "terminal-record sequence has moved since" % why)
 
     def execute(self, plan_id, *, still_referenced=None, commit=None):
         """Run the plan. Returns the per-item outcomes.
@@ -148,6 +188,16 @@ class Executor:
                     item.item_id, "skipped-fenced",
                     "the object became referenced between planning and "
                     "execution; re-verified inside the fence and skipped")
+                self._record(item.item_id, outcome)
+                commit()
+                return outcome
+
+            # THE DISCHARGE WATERMARK IS RE-VERIFIED INSIDE THE FENCE, not
+            # only at planning time. The fence covers terminal-record
+            # ADVANCEMENT, and a lapse skips this item while the run continues.
+            discharged, why = self._still_discharged(item)
+            if not discharged:
+                outcome = DeleteOutcome(item.item_id, "skipped-fenced", why)
                 self._record(item.item_id, outcome)
                 commit()
                 return outcome
