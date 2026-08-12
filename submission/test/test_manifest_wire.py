@@ -19,7 +19,7 @@ import json
 import pytest
 
 from submission import payloads
-from submission.manifest import Manifest, ProcessingUnit, UnitFacts
+from submission.manifest import Manifest, ProcessingUnit
 from submission.routes import (JOB_TYPE_ALERT_PRODUCTION,
                                JOB_TYPE_CATALOG_LOAD, JOB_TYPE_CROSSMATCH,
                                JOB_TYPE_REFERENCE_IMAGE, JOB_TYPE_SCIENCE,
@@ -29,9 +29,25 @@ from submission.routes import (JOB_TYPE_ALERT_PRODUCTION,
 #: actually requires. Built once and reused so every assertion below runs
 #: over the same set — a per-test ad-hoc unit would let one job type quietly
 #: drop out of the coverage.
+#: The facts `science_facts` always resolves, which both imaging payloads
+#: require at construction. Named once because science and reference-image
+#: share them — the same reason `ImagingPayload` exists.
+IMAGING = dict(
+    rid=11, fid=2, field=4242, rtid=4242, expid=90001, mjdobs=60000.5,
+    exptime=100.0, infobits=0,
+    science_image_uri="s3://bucket/sci.fits",
+    sky_position={"ra0": 10.0, "dec0": 20.0},
+    tile_position={"ra0": 10.0, "dec0": 20.0},
+)
+
 UNITS = {
-    JOB_TYPE_SCIENCE: dict(exposure=90001, sca=3),
-    JOB_TYPE_REFERENCE_IMAGE: dict(exposure=90002, sca=4),
+    JOB_TYPE_SCIENCE: dict(exposure=90001, sca=3, **IMAGING),
+    JOB_TYPE_REFERENCE_IMAGE: dict(
+        exposure=90002, sca=4,
+        coadd_inputs_uri="s3://bucket/coadd.csv",
+        coadd_inputs_checksum="f" * 64,
+        coadd_input_identities=((90001, 3, 0), (90002, 4, 0)),
+        **IMAGING),
     JOB_TYPE_ALERT_PRODUCTION: dict(
         exposure=90003, sca=5, promoted_attempt_id=77,
         release_identity="release-1", difference_image_pid=1234),
@@ -49,8 +65,16 @@ UNITS = {
 #: test, written out explicitly rather than derived from the code it checks,
 #: so a mistake in the code cannot make this table agree with it.
 EXPECTED_PAYLOAD_KEYS = {
-    JOB_TYPE_SCIENCE: {"grain", "exposure", "sca"},
-    JOB_TYPE_REFERENCE_IMAGE: {"grain", "exposure", "sca"},
+    # The imaging types carry their resolved facts, so the expected set is
+    # "grain + subject + every fact the fixture actually set". Written as
+    # `grain/exposure/sca` plus the fixture's own keys rather than a hand
+    # list of twenty names: the property under test is that NOTHING ELSE
+    # appears, and a hand list would drift from the fixture and start
+    # asserting about facts the fixture stopped setting.
+    JOB_TYPE_SCIENCE: {"grain", "exposure", "sca"} | set(IMAGING),
+    JOB_TYPE_REFERENCE_IMAGE: (
+        {"grain", "exposure", "sca", "coadd_inputs_uri",
+         "coadd_inputs_checksum", "coadd_input_identities"} | set(IMAGING)),
     JOB_TYPE_ALERT_PRODUCTION: {"grain", "exposure", "sca",
                                 "promoted_attempt_id", "release_identity",
                                 "difference_image_pid"},
@@ -70,9 +94,19 @@ def _manifest(job_type):
                     job_type=job_type)
 
 
+#: The two carriers rule 11 prohibits, as they would appear on the wire.
+#: `fields` was the open dict; `facts` was the all-optional `UnitFacts`
+#: object. D3 removed the first and D4 the second, and BOTH absences are
+#: asserted here — removing one while keeping the other is exactly the
+#: half-done state fix round 1 caught.
+PROHIBITED_WIRE_KEYS = ("fields", "facts")
+
+
 @pytest.mark.parametrize("job_type", sorted(UNITS))
-def test_serialized_manifest_has_no_fields_key_anywhere(job_type):
-    """No `fields` key exists at any depth of the serialized manifest.
+@pytest.mark.parametrize("prohibited", PROHIBITED_WIRE_KEYS)
+def test_serialized_manifest_has_no_prohibited_carrier_key(job_type,
+                                                           prohibited):
+    """Neither prohibited carrier appears at any depth of the manifest.
 
     Scanned recursively rather than checked at the unit level: the open
     dict's whole problem was that it could carry anything anywhere, so the
@@ -83,8 +117,8 @@ def test_serialized_manifest_has_no_fields_key_anywhere(job_type):
 
     def walk(node, trail="$"):
         if isinstance(node, dict):
-            assert "fields" not in node, (
-                f"a `fields` key survives at {trail} in the {job_type} "
+            assert prohibited not in node, (
+                f"a `{prohibited}` key survives at {trail} in the {job_type} "
                 f"manifest: {node!r}")
             for key, value in node.items():
                 walk(value, f"{trail}.{key}")
@@ -93,6 +127,22 @@ def test_serialized_manifest_has_no_fields_key_anywhere(job_type):
                 walk(value, f"{trail}[{index}]")
 
     walk(document)
+
+
+@pytest.mark.parametrize("job_type", sorted(UNITS))
+def test_a_unit_serializes_exactly_one_carrier(job_type):
+    """A unit's wire form is `{"payload": {...}}` and nothing else.
+
+    The positive statement behind the two absences above: there is ONE
+    carrier, not a typed one beside an untyped one. A second top-level key
+    on a unit would be a second place a fact could live, which is the
+    condition rule 11 prohibits regardless of what that key is called.
+    """
+    document = json.loads(_manifest(job_type).to_json())
+    for unit in document["units"]:
+        assert set(unit) == {"payload"}, (
+            f"a {job_type} unit serializes {sorted(unit)}; a unit carries "
+            f"exactly one carrier, its typed payload")
 
 
 @pytest.mark.parametrize("job_type", sorted(UNITS))

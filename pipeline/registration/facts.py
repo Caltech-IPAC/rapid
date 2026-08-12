@@ -142,11 +142,13 @@ def unit_provenance(unit, job_type=None):
     facts = getattr(unit, "facts", None)
     provenance = {}
 
-    # `sca` comes from the unit's SUBJECT rather than its facts — it is half
-    # of the
-    # unit's identity (`exposure/sca`) rather than a queried attribute of it.
-    # It was the one required registrar fact with nowhere at all to come from,
-    # because nothing ever looked at the unit itself.
+    # `sca` comes from the unit's SUBJECT rather than from its per-invocation
+    # facts — it is half of the unit's identity (`exposure/sca`) rather than a
+    # queried attribute of it. It was the one required registrar fact with
+    # nowhere at all to come from, because nothing ever looked at the unit
+    # itself. Since D4 both live on the same payload object, but the
+    # distinction still holds and is why `unit.sca` is read here rather than
+    # the payload being treated as a flat bag.
     if getattr(unit, "sca", None) is not None:
         provenance["sca"] = int(unit.sca)
     if getattr(unit, "exposure", None) is not None:
