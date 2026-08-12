@@ -114,8 +114,8 @@ for input_fits_file in input_fits_files:
     print(f"CRVAL1,CRVAL2 Pixel ({pixel_x}, {pixel_y}) corresponds to " +
           f"{celestial_coords.ra.deg:.12f} RA and {celestial_coords.dec.deg:.12f} Dec.")
 
-    crval1 = celestial_coords.ra.deg:.12f
-    crval2 = celestial_coords.dec.deg:.12f
+    crval1 = celestial_coords.ra.deg
+    crval2 = celestial_coords.dec.deg
 
     hdr["CRPIX1"] = crpix1
     hdr["CRPIX2"] = crpix2
