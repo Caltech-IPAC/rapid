@@ -319,6 +319,33 @@ plan. The misleading docstring was corrected rather than the test deleted:
 what it actually checks — the executor's own behaviour against a stub — is
 worth checking, and it now says so.
 
+**THE NEW TEST WAS MUTATION-CHECKED, BECAUSE A GREEN MUST BE EARNED.** The
+test being replaced was green while proving nothing, so asserting that its
+replacement is better would have repeated the error one round later. The
+wiring was broken three ways on the scratch database and both tests re-run
+each time (`mut-20260812T104920Z` on rapid-admin):
+
+| Mutation | New CLI test | Old executor test |
+|---|---|---|
+| baseline (unmutated) | pass | pass |
+| `set_defaults(func=...)` remapped away from `_cmd_gc_execute` | **fail** | pass |
+| `_S3Versions.delete_version` deletes by key, dropping `VersionId` | **fail** | **pass** |
+| apply branch returns before reaching the executor | **fail** | **pass** |
+| restored | pass | — |
+
+One row corrected an expectation I had written down beforehand: I predicted
+the old executor test would also catch the key-only delete, and it does not,
+because it drives its own `StubS3` and never touches `_S3Versions`. **That
+wrapper is not uncovered** — `test_the_s3_surface_deletes_by_exact_version_only`
+exercises it directly, and the mutation script simply did not re-run that
+test — but the coverage was *unit-level only*: nothing checked that the apply
+branch actually hands the wrapper to the executor. The new test closes that.
+
+The last row is the reviewer's point demonstrated rather than argued: an apply
+branch that returns before executing anything is **invisible to the old test
+and fatal to the new one**. That is the defect class the round existed to
+cover, and it is now covered.
+
 **Deliberately NOT done, and why:**
 
 - **The ingest scripts were not rewritten.** They remain
