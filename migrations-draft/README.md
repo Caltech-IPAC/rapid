@@ -1,4 +1,4 @@
-# DRAFT migrations — briefs C and G
+# DRAFT migrations — briefs C, G and D
 
 **These files are not the schema. They are proposed change requests against
 `IPAC-SW/rapid_systems`, staged here because this repository cannot edit that
@@ -15,10 +15,12 @@ head — and become change requests against `rapid_systems` for its owner to
 review and apply.
 
 Stream head when these were written: **043**
-(`rapid_systems` at `e2b5ebcf3eb33e1bb3afd9b392525ac1507ce62d`). The drafts
-are numbered 044-046 to follow it. If the stream advances past 043 before
-these are adopted, they are renumbered on adoption — the numbers here record
-what they were written against, not a claim on those slots.
+(`rapid_systems` at `e2b5ebcf3eb33e1bb3afd9b392525ac1507ce62d`; still 043 at
+`83f1a38283167132654706ea092d047312f35d4b`, the revision brief D ran
+against — 44 stream files at both). The drafts are numbered 044 onward to
+follow it. If the stream advances past 043 before these are adopted, they
+are renumbered on adoption — the numbers here record what they were written
+against, not a claim on those slots.
 
 The acceptance run reported `rapid_systems` at
 `3d7c6b420fa3b0cedff7276ec8b10ef2ac574478`, one commit ahead: that repo
@@ -35,6 +37,7 @@ against are the same schema, and 044-046 remain the next free numbers.
 | `045-work-unit-cancelled-state.sql` | amends `work_units_state_ck` to admit `'cancelled'` — the seventh state | C3 |
 | `046-cancel-work-units-function.sql` | `derived.cancel_work_units`, the audited mutation-API entry point, plus the work-unit lock in `derived.retry_parked_attempts` | C3 |
 | `047-idempotency-and-expected-state.sql` | the mutation contract's two missing fields: an `idempotency_key` / `expected_state` column pair on `derived.mutation_audit`, keyed OVERLOADS of `add_problem_category` and `retry_parked_attempts` taking both, the shared `derived.mutation_replay` lookup, and `derived.record_external_action` for operator actions whose target is outside this database | G2, G3 |
+| `048-products-and-artifacts.sql` | `products` (one row per deterministic product key, UNIQUE-constrained), `artifacts` (one row per published file per attempt, replay-unique on attempt + record sequence + published name, full 64-character checksum with its algorithm), `product_artifacts` (the current binding, one current row per product), plus a nullable `product_id` FK on `refimages` and `diffimages` | D1, D2 |
 
 ## Brief G's draft (047), for its reviewer
 
@@ -60,6 +63,46 @@ Three review points, each argued at length in the file's own header:
 
 Applied twice in the acceptance run to demonstrate idempotence
 (`BRIEF-G-DRAFT-047-REAPPLY: PASS exit=0`).
+
+## Brief D's draft (048), for its reviewer
+
+Written against stream head **043** (`rapid_systems` at
+`83f1a38283167132654706ea092d047312f35d4b`), the revision the brief D
+acceptance run applied; 048 follows G's 047 and is the next free number. The
+stream is unchanged from the 44 files C and G were written against.
+
+Four review points, each argued at length in the file's own header:
+
+1. **Three tables, not one.** `products` is one row per deterministic
+   identity and is NOT attempt-scoped; `artifacts` is one row per published
+   file per attempt and IS; `product_artifacts` carries which artifact
+   currently realizes which product. Rule 10's "products and artifacts are
+   distinct records" is what the split implements, and the retry case is
+   what it buys: the product row is unchanged, the new bytes get their own
+   artifact, and the binding moves.
+2. **The uniqueness is in the database.** `products_product_key_uq` and
+   `artifacts_replay_uq` are constraints, not application conventions,
+   because the registration consumer is explicitly concurrent (per-attempt
+   leases, watermark re-reads) and a find-or-insert in Python has a window
+   a second registrar can interleave into.
+3. **No reader is migrated.** Every legacy column on `refimages` and
+   `diffimages` keeps being populated exactly as before; the two tables gain
+   one appended, nullable `product_id` FK and nothing else. Nullable because
+   rows predating product identity cannot be backfilled — the identity
+   components are not recoverable from the row. The acceptance run asserts
+   the named production readers' RESULTS are unchanged, not merely that rows
+   still exist.
+4. **The checksum is done right, and the legacy defect is only flagged.**
+   `artifacts.checksum` is 64 characters with its algorithm recorded and a
+   CHECK constraint. `refimages.checksum` and `diffimages.checksum` remain
+   `varchar(32)` (`006-core-tables.sql:393,448`) and therefore still
+   truncate every SHA-256 they are given — a latent defect brief D flags as
+   a candidate change request and explicitly puts out of scope, since
+   widening a live column is its own decision. A contract test asserts the
+   defect still exists, so the flag cannot go stale unnoticed.
+
+Applied twice in the acceptance run to demonstrate idempotence
+(`BRIEF-D-DRAFT-048-REAPPLY: PASS exit=0`).
 
 ## How the application behaves while these are unapplied
 
