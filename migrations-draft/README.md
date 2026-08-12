@@ -302,6 +302,90 @@ LOGIN/password association pass for `rapid_publisher` (from
 it with a deliberately sized pool. Until the first runs, the role cannot
 authenticate at all, by construction.
 
+## Brief H's drafts (051, 052), for their reviewer
+
+Written against stream head **043** (`rapid_systems` at
+`83f1a38283167132654706ea092d047312f35d4b`, 44 stream files) — re-verified
+twice on 2026-08-12, from the sibling checkout and via the GitHub contents
+API. 051 and 052 follow E's 050. 051 depends on **006** (the `exposures` and
+`l2files` tables it attaches identity to) and on **DRAFT 047**
+(`derived.mutation_audit`'s idempotency/expected-state pair); 052 depends on
+047 as well.
+
+| Draft | Purpose | Brief item |
+|---|---|---|
+| `051-admission-identity-and-release.sql` | the two admission sidecar tables, the sealed source manifest, and the switchable release pointer with its audited mutation | H1, H2 |
+| `052-gc-plans.sql` | `gc_plans` / `gc_plan_items` (the recorded, checksummed, immutable two-pass deletion plan), `gc_fences`, and `gc_plan_execute` joining 047's enumerated external action classes | H3, H4 |
+
+Seven review points:
+
+1. **The two grains are defined separately and differently, and that is the
+   whole of rule 20's repo-side half.** The exposure grain's identity is
+   `dateobs` ALONE, matching the database's own natural key
+   (`exposurespk UNIQUE (dateobs)`, `006:194`) — no checksum participates,
+   because an exposure is an observational fact and not a file, and ingestion
+   is per-detector-file so there is no exposure-level file to hash. The L2
+   grain's identity is a content key over `(expid, sca)` plus the source
+   checksum, which is the grain where a file exists.
+
+2. **`admission_l2files` carries the `(expid, sca)` UNIQUE that `l2files` has
+   never had, and deliberately does not add it to `l2files`.** `l2filespk` is
+   `(expid, sca, version)` — uniqueness that INCLUDES the version — which is
+   exactly what lets `addl2file`'s `coalesce(max(version), 0) + 1`
+   (`008:438-446`) sidestep it and mint a new admission row per re-ingest.
+   Adding `UNIQUE (expid, sca)` to `l2files` itself **would refuse to apply
+   against any database holding a genuine re-version**, so the sidecar carries
+   the constraint the new path needs and the legacy table's shape is
+   untouched. No reader is migrated.
+
+3. **`admitted_at` is write-once by TRIGGER, not by convention.** This is the
+   direct repair of `addExposure`'s `else` branch (`008:331-345`), which
+   updates every field including `created = now()` and so destroys the
+   original ingest timestamp, unrecoverably, on every repeat. A trigger rather
+   than a grant because the owner and any SECURITY DEFINER function bypass
+   column grants.
+
+4. **Sealing is the LAST write, and citing an unsealed manifest is refused.**
+   That ordering is the crash guarantee: at any instant a manifest is either
+   unsealed (citing no admissions, because the trigger forbids it) or sealed
+   (with every entry durable, because they were written first). There is no
+   third state.
+
+5. **The GC plan is a LIST and it is immutable once computed.** Pass-one
+   candidate rows and the checksum over them are never deleted and never
+   rewritten; recomputation records its verdict as a STATUS on the existing
+   row, so a dropped candidate stays visible as `excluded-on-recompute`. A
+   plan whose items were deleted to reflect a recomputation would be a plan
+   that lies about what it computed, and its checksum would have to move to
+   match — at which point it is evidence of nothing.
+
+6. **`gc_plan_execute` joins 047's ENUMERATED action classes rather than
+   widening the column.** 047 refuses any class outside its literal list on
+   purpose ("an open text column would make this function a general-purpose
+   audit-row writer, which is the thing 031 deliberately refuses to grant
+   anyone"), so 052 replaces the function with 047's body verbatim plus one
+   string. Reproducing that body loosely would have silently changed
+   behaviour — an early revision did, and was caught by diffing against the
+   real definition rather than by a test.
+
+7. **The fence is a database row, never an S3 tag.** `PutObjectTagging`
+   replaces an object's entire tag set with no merge, and
+   `pipeline/reconciler/retention.py:219` rewrites the canonical full set on
+   every classification — so a GC hold expressed as a tag would survive
+   exactly until the next reclassification.
+
+**A warning for the next brief's harness, learned here.** The first acceptance
+smoke applied 051, re-applied it idempotently, created all six tables and all
+three functions, and fired both triggers — **and passed while
+`set_admission_release` carried two fatal signature errors**, because it never
+CALLED the function. PL/pgSQL resolves a callee's signature at EXECUTION, not
+at creation, so an unexecuted function body is unverified however green the
+apply looks. Every DRAFT function should be exercised, not merely applied.
+
+Applied and re-applied cleanly in the recorded acceptance run
+(`BRIEF-H-DRAFT-051`, `BRIEF-H-DRAFT-052` and `BRIEF-H-DRAFT-REAPPLY` all
+`exit=0`).
+
 ## Style
 
 These match the stream's own conventions deliberately — read several of the

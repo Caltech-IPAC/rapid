@@ -7,8 +7,8 @@ query methods, returning raw tuples, reporting failure by setting
 `exit_code` and returning `None`, and (until brief G) exiting the process
 from its constructor.
 
-THE CARVE IS SMALL AND REAL, NOT BROAD AND SHALLOW. Two repositories
-ship here, chosen as the two highest-traffic live operational families
+THE CARVE IS SMALL AND REAL, NOT BROAD AND SHALLOW. It began with two
+repositories, chosen as the two highest-traffic live operational families
 per the call-site survey: the sky-catalog readers used by the HATS
 catalog generators, and the difference-image overlap query used by forced
 photometry. Between them they cover the three non-test `pipeline/`
@@ -16,6 +16,23 @@ top-level `RAPIDDB()` call sites — the ones still using the legacy
 `exit(dbh.exit_code)` idiom. `pipeline/stages/` was already converted to
 `RAPIDDB.borrowing(conn)` + `CheckedHandle` by an earlier brief and needs
 no carve; it is the template this package generalizes.
+
+IT HAS GROWN ONE PACKAGE AT A TIME, AND EACH ADDITION IS A REFUSAL
+RECORDED. Brief D added `products.py`, F added `association.py`, E added
+`alert_outbox.py`, H added `admission.py` — and D, F and E each shipped a
+first revision that put its queries on `RAPIDDB` instead and was
+correctly refused. The freeze now leads every brief's header for that
+reason. `admission.py` is the sharpest case of why it matters: admission
+ran through `RAPIDDB.add_exposure`, which reports failure by setting
+`exit_code = 67` and returning, leaving `expid` as `None` — and not one
+of the three ingest scripts had ever checked it, so that `None` flowed on
+as the L2 insert's `expid`. A typed raise is the whole difference.
+
+THE ADMISSION CARVE ALSO SETS A PRECEDENT WORTH NAMING: it does not fall
+back. Where its DRAFT schema is absent it REFUSES to admit, because the
+legacy path it would fall back to mints a duplicate admission per
+re-ingest by construction. A degraded path that silently reintroduces the
+defect its replacement exists to remove is worse than no path at all.
 
 WHAT A REPOSITORY HERE IS, AND IS NOT:
 
