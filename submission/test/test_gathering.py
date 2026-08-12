@@ -86,13 +86,19 @@ class _StubAssociationRepository:
     def claim_position(self, association_set=None, lane=None):
         self._source.asked_for.append(("watermark", association_set, lane))
         if self._source.watermark_failure:
-            raise RepositoryQueryFailed("claim_position")
+            # Two arguments, matching the real constructor's `(method,
+            # message)` — a double that raised the typed error WRONGLY would
+            # fail with a TypeError instead of the failure it meant to
+            # simulate, which is a green-looking red for the wrong reason.
+            raise RepositoryQueryFailed(
+                "claim_position", "stubbed watermark read failure")
         return self._source.watermark
 
     def earliest_unaccepted_date(self, association_set=None):
         self._source.asked_for.append(("earliest_owed", association_set))
         if self._source.owed_failure:
-            raise RepositoryQueryFailed("earliest_unaccepted_date")
+            raise RepositoryQueryFailed(
+                "earliest_unaccepted_date", "stubbed owed-date read failure")
         return self._source.earliest_owed
 
 

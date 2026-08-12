@@ -347,25 +347,52 @@ def make_diffimage(conn, attempt_id, field, ppid, created=None, vbest=1,
         return cur.fetchone()[0]
 
 
-def set_attempt_outcome(conn, attempt_id, rapid_outcome, field=None,
-                        processing_date=None):
-    """Give an attempt an outcome, and optionally its (date, field) identity.
+def make_completed_attempt(conn, rapid_outcome="success", field=None,
+                           processing_date=None):
+    """One attempt that RAN and finished — the shape a science outcome needs.
 
-    `make_attempt` deliberately builds a row that satisfies the lifecycle
-    CHECK constraints and nothing more; the work-inventory tests need attempts
-    that carry an outcome and a subject, which is a separate concern from
-    being well-formed. Written as an UPDATE rather than more `make_attempt`
-    parameters so the state machine's own constraints are what admit or refuse
-    the combination.
+    Returns its attempt_id.
+
+    **THE SCHEMA DECIDES WHAT A FINISHED ATTEMPT LOOKS LIKE, AND IT IS STRICT.**
+    An attempt carrying `rapid_outcome` must be `terminal_after_start`, whose
+    CHECK (`attempts_state_terminal_after_start_check`, migration 011) demands
+    nine columns together: `started_at`, `scheduler_job_id`, `source_sha`,
+    `container_digest`, `job_definition_rev`, `config_digest`, `ended_at`,
+    `process_exit_code`, `rapid_outcome` and `product_disposition`. The
+    sibling state `terminal_without_start` forbids `rapid_outcome` outright —
+    nothing ran, so nothing succeeded.
+
+    A first version of the work-inventory fixture wrote `rapid_outcome` onto a
+    `terminal_after_start` row without the other eight and real PostgreSQL
+    refused it, which is the same lesson `make_attempt`'s docstring already
+    records for its own case: this class of invariant is exactly what a
+    hand-built fake cannot enforce, and the reason these tests are in the
+    contract tier at all.
     """
+    logical_job_id, run_id = make_logical_job(conn)
+    tag = uuid.uuid4().hex[:8]
     with conn.cursor() as cur:
+        cur.execute("SELECT coalesce(max(schema_version), 1) FROM attempts")
+        schema_version = cur.fetchone()[0]
         cur.execute(
-            "UPDATE attempts"
-            "   SET rapid_outcome = %s,"
-            "       field = COALESCE(%s, field),"
-            "       processing_date = COALESCE(%s::date, processing_date)"
-            " WHERE attempt_id = %s",
-            [rapid_outcome, field, processing_date, attempt_id])
+            "INSERT INTO attempts"
+            "  (run_id, schema_version, logical_job_id, lifecycle_state,"
+            "   created_at, submitted_at, started_at, ended_at,"
+            "   scheduler_job_id, scheduler_state, source_sha,"
+            "   container_digest, job_definition_rev, config_digest,"
+            "   process_exit_code, rapid_outcome, product_disposition,"
+            "   field, processing_date)"
+            " VALUES (%s, %s, %s, 'terminal_after_start',"
+            "         now(), now(), now(), now(),"
+            "         %s, 'SUCCEEDED', %s,"
+            "         'sha256:' || %s, 1, 'sha256:' || %s,"
+            "         0, %s, 'published',"
+            "         %s, %s::date)"
+            " RETURNING attempt_id",
+            [run_id, schema_version, logical_job_id,
+             f"job-{tag}", f"sha-{tag}", tag, tag, rapid_outcome,
+             field, processing_date])
+        return cur.fetchone()[0]
 
 
 def unit_state(conn, work_unit_id):

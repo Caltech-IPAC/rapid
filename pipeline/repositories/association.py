@@ -170,7 +170,7 @@ class AssociationRepository:
                 cur.execute(statement, params)
                 return cur.fetchall()
         except Exception as exc:  # noqa: BLE001 - re-raised as a typed error
-            raise RepositoryQueryFailed(method) from exc
+            raise RepositoryQueryFailed(method, str(exc)) from exc
 
     def ordering_schema_present(self):
         """Is DRAFT 049 applied on this database?

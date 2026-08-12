@@ -83,11 +83,17 @@ def _repository_fields(conn, proc_date, only):
                   if pd == proc_date and field in only)
 
 
-def _seed(conn, attempt_lifecycle="terminal_after_start", **kwargs):
-    """One science attempt with an outcome, plus its difference image."""
-    attempt_id = fixture.make_attempt(conn, lifecycle=attempt_lifecycle)
-    fixture.set_attempt_outcome(
-        conn, attempt_id, kwargs.pop("rapid_outcome", "success"),
+def _seed(conn, **kwargs):
+    """One finished science attempt plus its difference image.
+
+    The attempt is built `terminal_after_start` with every column that state's
+    CHECK requires — see `fixture.make_completed_attempt`. An outcome cannot
+    be bolted onto a half-built row: the schema refuses it, which is the
+    invariant these tests exist inside rather than around.
+    """
+    attempt_id = fixture.make_completed_attempt(
+        conn,
+        rapid_outcome=kwargs.pop("rapid_outcome", "success"),
         field=kwargs.get("field"),
         processing_date=kwargs.pop("processing_date", None))
     fixture.make_diffimage(conn, attempt_id, ppid=kwargs.pop("ppid",
@@ -261,9 +267,18 @@ def test_earliest_unaccepted_date_executes_and_finds_the_earliest(
 
     owed = AssociationRepository(conn).earliest_unaccepted_date()
 
+    # The query executes and returns a date — the point of this test is that
+    # its SQL runs at all, which it never did before this file existed.
     assert owed is not None, "two dates owe work and the query found neither"
+    assert len(owed) == 8 and owed.isdigit(), \
+        f"the owed date should be YYYYMMDD text, got {owed!r}"
+    # Bounded by OUR earlier seed rather than asserted equal to it: the
+    # scratch database carries other briefs' fixture rows, so an older owed
+    # date is a legitimate answer. What must hold is that the earlier of our
+    # two dates is not skipped in favour of the later one.
     assert owed <= "20260809", (
-        f"expected the earliest owed date at or before 20260809, got {owed}")
+        f"the query named {owed}, later than our earliest owed date 20260809; "
+        "the min() is not finding the earliest")
 
 
 def test_an_accepted_pair_leaves_the_owed_inventory(conn, clean_fields):
@@ -280,7 +295,40 @@ def test_an_accepted_pair_leaves_the_owed_inventory(conn, clean_fields):
     conn.commit()
 
     repository = AssociationRepository(conn)
-    before = repository.earliest_unaccepted_date()
+
+    # The assertion is on THIS pair's membership in the owed inventory, not on
+    # the global minimum: rapid-admin's scratch database carries other briefs'
+    # fixture rows, so `earliest_unaccepted_date()` may legitimately name an
+    # older date throughout. A test that asserted on the minimum would pass or
+    # fail according to what its neighbours left behind.
+    def _owed_pairs():
+        with conn.cursor() as cur:
+            cur.execute(
+                "WITH science AS ("
+                "  SELECT to_char(date_trunc('day', d.created), 'YYYYMMDD')"
+                "         AS pd, d.field AS field"
+                "    FROM DiffImages d"
+                "    JOIN Attempts a ON a.attempt_id = d.attempt_id"
+                "   WHERE d.ppid = %s AND d.vbest = 1"
+                "     AND a.rapid_outcome = 'success' AND d.field IS NOT NULL"
+                "), accepted AS ("
+                "  SELECT to_char(la.processing_date, 'YYYYMMDD') AS pd,"
+                "         la.field AS field"
+                "    FROM Attempts la"
+                "    JOIN logical_jobs lj"
+                "      ON lj.logical_job_id = la.logical_job_id"
+                "   WHERE lj.job_type = 'crossmatch' AND la.field IS NOT NULL"
+                "     AND (la.lifecycle_state IN ('submitted','started')"
+                "          OR la.rapid_outcome = 'success')"
+                ") "
+                "SELECT s.pd, s.field FROM science s"
+                "  LEFT JOIN accepted a ON a.pd = s.pd AND a.field = s.field"
+                " WHERE a.field IS NULL AND s.field = ANY(%s)",
+                [SCIENCE_PPID, fields])
+            return cur.fetchall()
+
+    assert (proc_date, fields[0]) in _owed_pairs(), \
+        "the seeded pair should be owed before any crossmatch attempt exists"
 
     # A pending crossmatch attempt for that (date, field).
     crossmatch_attempt = fixture.make_attempt(conn, lifecycle="submitted")
@@ -296,11 +344,17 @@ def test_an_accepted_pair_leaves_the_owed_inventory(conn, clean_fields):
             [crossmatch_attempt])
     conn.commit()
 
-    after = repository.earliest_unaccepted_date()
-
-    assert before is not None
-    assert after != proc_date or after is None or after < proc_date, (
+    assert (proc_date, fields[0]) not in _owed_pairs(), (
         "an accepted (date, field) pair is still being reported as owed")
+    # And the method under test executes its own SQL over the same state.
+    # Asserted as "this date is not what it names", which is true whatever
+    # other briefs' rows are present: an accepted pair cannot be the reason a
+    # date is owed, so if this date still has no other owed field the query
+    # must have moved past it.
+    owed_here = [f for pd, f in _owed_pairs() if pd == proc_date]
+    if not owed_here:
+        assert repository.earliest_unaccepted_date() != proc_date, (
+            "no field of this date is owed, yet the query still names it")
 
 
 def test_claim_position_executes_against_the_real_watermark_row(conn):
@@ -351,7 +405,8 @@ def test_the_schema_probe_distinguishes_absent_from_empty(conn):
     assert AssociationRepository(conn).ordering_schema_present() is True
 
 
-def test_a_repository_query_failure_raises_rather_than_returning_none(conn):
+def test_a_repository_query_failure_raises_rather_than_returning_none(
+        conn, second_conn):
     """The typed refusal, from a real driver error.
 
     `RepositoryQueryFailed` is what replaced `RAPIDDB`'s `exit_code = 67;
@@ -360,17 +415,24 @@ def test_a_repository_query_failure_raises_rather_than_returning_none(conn):
     on failure would convert a database outage into silently unordered
     gathering. Provoked with a real aborted transaction rather than a patched
     method, so the raising path is the production one.
+
+    **ON `second_conn`, NOT `conn`.** `conn` is the session-scoped connection
+    every other test in this tier shares (`conftest.py`), so aborting its
+    transaction here poisons whatever runs next — a first version did exactly
+    that and turned one deliberate failure into six unrelated
+    `InFailedSqlTransaction` errors. A test that breaks a shared fixture is
+    not testing the failure path, it is manufacturing one for its neighbours.
     """
     _require_schema(conn)
     from pipeline.repositories.errors import RepositoryQueryFailed
 
-    with conn.cursor() as cur:
+    with second_conn.cursor() as cur:
         with pytest.raises(Exception):
             cur.execute("SELECT this_function_does_not_exist()")
 
-    # The connection is now in a failed transaction, so the next statement
+    # That connection is now in a failed transaction, so the next statement
     # errors — the repository must surface that as its typed failure.
     with pytest.raises(RepositoryQueryFailed):
-        AssociationRepository(conn).claim_position()
+        AssociationRepository(second_conn).claim_position()
 
-    conn.rollback()
+    second_conn.rollback()
