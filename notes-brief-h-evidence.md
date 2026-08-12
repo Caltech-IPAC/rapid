@@ -84,6 +84,65 @@ directory or `scripts/`, e.g. `pipeline/runtime/test/run-on-rapid-admin.sh:211`,
 `pipeline/registration/test/run-fixd-chain-on-rapid-db.sh:134`. These are the
 enumerated approved exclusions for the criterion-11 exclusivity assertion.
 
+## The re-derived reference set — three classes the brief's list omits
+
+The brief requires the reference set be **re-derived** by enumerating every S3
+write path in the declared scope before the anti-join is written, and that
+anything found beyond its list be added and recorded as a finding. That
+enumeration found three, each of which would have been classified as
+unreferenced garbage:
+
+1. **HATS catalogs written by `aws s3 sync`** —
+   `pipeline/generateSourceHATSCatalog.py:237` and
+   `generateLightCurveHATSCatalog.py:384` recursively sync a whole local
+   directory to `<products-bucket>/<catalog_name>`. The prefix is **stable and
+   shared, carrying no run or attempt id**, configured from the legacy INI key
+   `JOB_PARAMS/product_s3_bucket_base`, and successive runs overwrite by
+   design. This is inside the declared scope, has no database reference of any
+   kind, and is not attempt-scoped — so it is retained twice over: once as
+   unattributable, once as not-on-the-allowlist.
+
+2. **Content-addressed configuration snapshots** —
+   `pipeline/runtime/termination.py:217` writes
+   `{prefix}/config-snapshots/sha256/{digest}.json` through `put_if_absent`.
+   Being content-addressed, **one object is shared by every array child of
+   every attempt that resolved to the same configuration**. Attempt-scoped
+   reasoning is therefore actively wrong for this class: the attempt that
+   happened to write it may be long discharged while a thousand live attempts
+   still depend on it. Retained.
+
+3. **The `unidentified-attempt` degraded prefix** —
+   `pipeline/stages/context.py:184` returns
+   `{job_type}/{unit.key}/unidentified-attempt` when `run_id` or `attempt_id`
+   is absent. It carries **no run or attempt identity at all**, so canonical
+   round-trip attribution cannot reconstruct it and refuses it. This is a real
+   key shape in the products bucket, not a hypothetical, and it is exactly the
+   "parse is not a round trip" case: a naive parser looking for `attempt-N`
+   finds nothing and might treat the object as legacy-layout garbage.
+
+Two further findings that shape the design rather than the reference set:
+
+- **Published-but-unregistered is a NORMAL state, not orphan evidence.**
+  `pipeline/registration/products.py:273` selects the registering difference
+  image **by role binding** — an attempt publishes three difference-image
+  variants and exactly one is registered. The other two are permanently
+  unreferenced by construction. This corroborates the brief's decisive
+  constraint from the registration side.
+
+- **`reference_image_uri` is a CROSS-ATTEMPT reference**
+  (`submission/payloads.py:341`). A reference image published by one attempt is
+  cited by many later science manifests, so attempt-scoped product deletion
+  would break work that has nothing to do with the producing attempt. The four
+  URI fields in the payload family are exactly `science_image_uri` (:308),
+  `psf_uri` (:332), `reference_image_uri` (:341) and `coadd_inputs_uri` (:433)
+  — enumerated from the dataclasses rather than taken from the brief's partial
+  list, as required.
+
+Also confirmed: `pipeline/reconciler/retention.py`'s `put_object_tagging`
+(:219) is a **full-set rewrite** with no merge, so any GC hold expressed as an
+object tag would be silently dropped by the next classification. H therefore
+expresses its fence in the database, never as an S3 tag.
+
 ## pgBackRest retention (the horizon input)
 
 `cloudformation/rapid-postgres-pgbackrest.conf:32` sets
