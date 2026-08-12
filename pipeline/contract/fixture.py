@@ -354,20 +354,30 @@ def make_completed_attempt(conn, rapid_outcome="success", field=None,
     Returns its attempt_id.
 
     **THE SCHEMA DECIDES WHAT A FINISHED ATTEMPT LOOKS LIKE, AND IT IS STRICT.**
-    An attempt carrying `rapid_outcome` must be `terminal_after_start`, whose
-    CHECK (`attempts_state_terminal_after_start_check`, migration 011) demands
-    nine columns together: `started_at`, `scheduler_job_id`, `source_sha`,
-    `container_digest`, `job_definition_rev`, `config_digest`, `ended_at`,
-    `process_exit_code`, `rapid_outcome` and `product_disposition`. The
-    sibling state `terminal_without_start` forbids `rapid_outcome` outright —
-    nothing ran, so nothing succeeded.
+    An attempt carrying `rapid_outcome` must be `terminal_after_start`, and
+    the sibling state `terminal_without_start` forbids `rapid_outcome`
+    outright — nothing ran, so nothing succeeded. There is no third option: a
+    successful science attempt is a fully-populated terminal-after-start row
+    or it is not representable.
 
-    A first version of the work-inventory fixture wrote `rapid_outcome` onto a
-    `terminal_after_start` row without the other eight and real PostgreSQL
-    refused it, which is the same lesson `make_attempt`'s docstring already
-    records for its own case: this class of invariant is exactly what a
-    hand-built fake cannot enforce, and the reason these tests are in the
-    contract tier at all.
+    The live CHECK is migration 014's, not 011's — the constraint was replaced
+    twice (013 then 014) and only the last one is on the table. At
+    `schema_version >= 2` it requires SIXTEEN columns together: the nine
+    run-and-finish fields (`started_at`, `scheduler_job_id`, `source_sha`,
+    `container_digest`, `job_definition_rev`, `config_digest`, `ended_at`,
+    `scheduler_state`, `rapid_outcome`, `product_disposition`) PLUS the
+    version-gated six — the binding triple (`binding_job_definition_arn`,
+    `binding_image_digest`, `binding_manifest_checksum`),
+    `scheduler_observed_exit`, and the terminal record pair
+    (`terminal_record_key`, `terminal_record_sequence`).
+
+    Two successive versions of this fixture were refused by real PostgreSQL —
+    the first bolted an outcome onto a half-built row, the second satisfied
+    011's list and missed 014's version-gated additions. Both are the lesson
+    `make_attempt`'s own docstring records: this class of invariant is exactly
+    what a hand-built fake cannot enforce, and reading the CURRENT constraint
+    rather than the one a grep found first is the difference between a fixture
+    that documents the schema and one that guesses at it.
     """
     logical_job_id, run_id = make_logical_job(conn)
     tag = uuid.uuid4().hex[:8]
@@ -378,19 +388,28 @@ def make_completed_attempt(conn, rapid_outcome="success", field=None,
             "INSERT INTO attempts"
             "  (run_id, schema_version, logical_job_id, lifecycle_state,"
             "   created_at, submitted_at, started_at, ended_at,"
-            "   scheduler_job_id, scheduler_state, source_sha,"
-            "   container_digest, job_definition_rev, config_digest,"
-            "   process_exit_code, rapid_outcome, product_disposition,"
+            "   scheduler_job_id, scheduler_state, scheduler_observed_exit,"
+            "   source_sha, container_digest, job_definition_rev,"
+            "   config_digest, process_exit_code, rapid_outcome,"
+            "   product_disposition, binding_job_definition_arn,"
+            "   binding_image_digest, binding_manifest_checksum,"
+            "   terminal_record_key, terminal_record_sequence,"
             "   field, processing_date)"
             " VALUES (%s, %s, %s, 'terminal_after_start',"
             "         now(), now(), now(), now(),"
-            "         %s, 'SUCCEEDED', %s,"
-            "         'sha256:' || %s, 1, 'sha256:' || %s,"
-            "         0, %s, 'published',"
+            "         %s, 'SUCCEEDED', 0,"
+            "         %s, 'sha256:' || %s, 1,"
+            "         'sha256:' || %s, 0, %s,"
+            "         'published', %s,"
+            "         'sha256:' || %s, 'sha256:' || %s,"
+            "         %s, 1,"
             "         %s, %s::date)"
             " RETURNING attempt_id",
             [run_id, schema_version, logical_job_id,
              f"job-{tag}", f"sha-{tag}", tag, tag, rapid_outcome,
+             f"arn:aws:batch:us-east-1:000000000000:job-definition/f-{tag}:1",
+             tag, tag,
+             f"records/{RUN_TAG}/{tag}.json",
              field, processing_date])
         return cur.fetchone()[0]
 
