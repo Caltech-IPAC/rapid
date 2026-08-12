@@ -282,15 +282,22 @@ def test_no_production_module_reads_a_units_fields_attribute():
 
     Scoped to UNIT readers, per brief D's own parenthetical: unrelated APIs
     named `fields` — `dataclasses.fields`, a repository's `.fields()`
-    method, a local variable — are not in scope, and the pattern below
-    matches only an attribute access on something named like a unit.
+    method, a local variable — are not in scope.
+
+    **PARSED, NOT GREPPED.** The first version of this scanner matched text
+    and reported three docstrings that EXPLAIN the retired dict — including
+    the one on `manifest.dedup_key` describing the V25 defect it closed.
+    Those explanations are exactly the documentation this change should
+    leave behind, and a scanner that flags them pressures the next author to
+    delete the explanation rather than the behaviour. Walking the AST asks
+    the real question — "does any code evaluate `<something>.fields`?" —
+    which comments and docstrings cannot answer falsely.
     """
+    import ast
     import os
-    import re
 
     root = os.path.dirname(os.path.dirname(os.path.dirname(
         os.path.abspath(__file__))))
-    pattern = re.compile(r"\b(unit|self)\.fields\b")
 
     offenders = []
     for directory in ("submission", "pipeline", "alerts", "observability"):
@@ -305,22 +312,39 @@ def test_no_production_module_reads_a_units_fields_attribute():
                     continue
                 path = os.path.join(current, name)
                 # `errors="replace"` because the tree contains at least one
-                # legacy source file that is not valid UTF-8, and a scanner
-                # that dies on it would silently stop checking every file
-                # after it — the worst failure mode a completeness check can
-                # have. A replacement character cannot create a false match
-                # for the ASCII pattern below.
+                # legacy source file that is not valid UTF-8. A scanner that
+                # died on it would silently stop checking every file after
+                # it — the worst failure mode a completeness check can have.
                 with open(path, encoding="utf-8", errors="replace") as handle:
-                    for number, line in enumerate(handle, 1):
-                        stripped = line.strip()
-                        # Comments and docstring prose legitimately DISCUSS
-                        # the retired dict — this file does too. Only code
-                        # is in scope.
-                        if stripped.startswith("#"):
-                            continue
-                        if pattern.search(line):
-                            offenders.append(
-                                f"{os.path.relpath(path, root)}:{number}")
+                    body = handle.read()
+                try:
+                    tree = ast.parse(body)
+                except SyntaxError:
+                    # Python 2 leftovers exist in `database/`; none is in
+                    # scope here, but a parse failure must be visible rather
+                    # than silently reducing coverage.
+                    offenders.append(
+                        f"{os.path.relpath(path, root)}: could not parse")
+                    continue
+
+                for node in ast.walk(tree):
+                    if not (isinstance(node, ast.Attribute)
+                            and node.attr == "fields"):
+                        continue
+                    # `dataclasses.fields(x)` and a repository's `.fields()`
+                    # are unrelated APIs, per brief D's own parenthetical —
+                    # the scope is UNIT readers. What identifies one is the
+                    # object being a name like `unit`/`self` rather than a
+                    # module or a repository handle.
+                    value = node.value
+                    if isinstance(value, ast.Name) and value.id in (
+                            "unit", "self"):
+                        offenders.append(
+                            f"{os.path.relpath(path, root)}:{node.lineno}")
+                    elif (isinstance(value, ast.Attribute)
+                          and value.attr == "unit"):
+                        offenders.append(
+                            f"{os.path.relpath(path, root)}:{node.lineno}")
 
     assert not offenders, (
         f"these production lines still read a unit's `fields` attribute, "

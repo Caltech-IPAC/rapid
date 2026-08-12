@@ -44,6 +44,7 @@ from submission.routes import (
     JOB_TYPE_SOURCE_CURRENCY,
     JOB_TYPE_STATISTICS,
 )
+from submission.subjects import SubjectError
 
 
 def _refuse_if_failed(source, method):
@@ -944,14 +945,14 @@ class PostDbGatheringTests(unittest.TestCase):
             self.Source(scas=[1, 2, 18], gatherable_catalog_load=[2]),
             "20260809"))
 
-        self.assertEqual([u.fields["sca"] for u in units], [2])
+        self.assertEqual([u.payload.sca for u in units], [2])
 
     def test_crossmatch_skips_fields_with_blocking_attempts(self):
         units = list(gather_crossmatch_units(
             self.Source(fields=[4641773, 4641774],
                         blocking_crossmatch=[4641773]), "20260809"))
 
-        self.assertEqual([u.fields["field"] for u in units], [4641774])
+        self.assertEqual([u.payload.field for u in units], [4641774])
 
     def test_per_field_types_skip_fields_with_blocking_attempts_today(self):
         source = self.Source(per_field=[4641773, 4641774],
@@ -959,7 +960,7 @@ class PostDbGatheringTests(unittest.TestCase):
 
         units = list(gather_merge_currency_units(source))
 
-        self.assertEqual([u.fields["field"] for u in units], [4641773])
+        self.assertEqual([u.payload.field for u in units], [4641773])
         # The gate's window is the pass's UTC day: `since` must be a
         # timezone-aware UTC midnight, not a naive datetime and not a
         # rolling interval.
@@ -978,10 +979,10 @@ class PostDbGatheringTests(unittest.TestCase):
             self.Source(scas=[1, 2, 18]), "20260808"))
 
         self.assertEqual(len(units), 3)
-        self.assertEqual([u.fields["sca"] for u in units], [1, 2, 18])
+        self.assertEqual([u.payload.sca for u in units], [1, 2, 18])
         for unit in units:
-            self.assertEqual(unit.fields["job_type"], JOB_TYPE_CATALOG_LOAD)
-            self.assertEqual(unit.fields["proc_date"], "20260808")
+            self.assertEqual(unit.payload.JOB_TYPE, JOB_TYPE_CATALOG_LOAD)
+            self.assertEqual(unit.payload.proc_date, "20260808")
 
     def test_catalog_load_names_its_target_table_in_the_manifest(self):
         # The declared input. The job type does not build this name from its
@@ -989,7 +990,7 @@ class PostDbGatheringTests(unittest.TestCase):
         units = list(gather_catalog_load_units(
             self.Source(scas=[7]), "20260808"))
 
-        self.assertEqual(units[0].fields["target_table"], "sources_20260808_7")
+        self.assertEqual(units[0].payload.target_table, "sources_20260808_7")
 
     def test_catalog_load_units_key_uniquely(self):
         # `logical_job_key` is run-scoped and built from `unit.key`; two units
@@ -1014,7 +1015,7 @@ class PostDbGatheringTests(unittest.TestCase):
 
         units = list(gather_catalog_load_units(source, "20260808"))
 
-        inputs = units[0].fields["product_inputs"]
+        inputs = units[0].payload.product_inputs
         self.assertEqual(len(inputs), 1)
         self.assertEqual(inputs[0]["pid"], 1086)
         self.assertEqual(inputs[0]["attempt_id"], 6765)
@@ -1027,8 +1028,11 @@ class PostDbGatheringTests(unittest.TestCase):
         self.assertEqual(inputs[0]["field"], 4641773)
         self.assertEqual(inputs[0]["fid"], 3)
         self.assertEqual(inputs[0]["mjdobs"], 61679.09)
-        # No `jids` anywhere: the legacy fact is gone, not merely unused.
-        self.assertNotIn("jids", units[0].fields)
+        # No `jids` anywhere: the legacy fact is gone, not merely unused —
+        # the payload is a closed dataclass, so the equivalent assertion is
+        # that its type declares no such component or invocation fact.
+        payload = units[0].payload
+        self.assertNotIn("jids", payload.COMPONENTS + payload.INVOCATION_FACTS)
 
     def test_catalog_load_asks_for_products_per_sca(self):
         # The product query is per-SCA, and a gatherer that asked once for
@@ -1081,9 +1085,9 @@ class PostDbGatheringTests(unittest.TestCase):
             self.Source(fields=[101, 202]), "20260808"))
 
         self.assertEqual(len(units), 2)
-        self.assertEqual([u.fields["field"] for u in units], [101, 202])
+        self.assertEqual([u.payload.field for u in units], [101, 202])
         for unit in units:
-            self.assertEqual(unit.fields["job_type"], JOB_TYPE_CROSSMATCH)
+            self.assertEqual(unit.payload.JOB_TYPE, JOB_TYPE_CROSSMATCH)
 
     def test_crossmatch_gathers_nothing_when_a_sca_is_incomplete(self):
         # The durable-state gate: one SCA without a completed catalog-load
@@ -1111,8 +1115,8 @@ class PostDbGatheringTests(unittest.TestCase):
         units = list(gather_crossmatch_units(
             self.Source(fields=[101]), "20260808"))
 
-        self.assertEqual(units[0].fields["target_tables"],
-                         ["astroobjects_101", "merges_101"])
+        self.assertEqual(units[0].payload.target_tables,
+                         ("astroobjects_101", "merges_101"))
 
     def test_a_failed_field_query_raises(self):
         with self.assertRaises(GatheringError):
@@ -1125,8 +1129,8 @@ class PostDbGatheringTests(unittest.TestCase):
         source = self.Source(per_field=[11, 22])
         units = list(gather_statistics_units(source))
 
-        self.assertEqual([u.fields["field"] for u in units], [11, 22])
-        self.assertEqual(units[0].fields["job_type"], JOB_TYPE_STATISTICS)
+        self.assertEqual([u.payload.field for u in units], [11, 22])
+        self.assertEqual(units[0].payload.JOB_TYPE, JOB_TYPE_STATISTICS)
         self.assertIn(("per_field", "astroobjects"), source.asked_for)
 
     def test_the_sweeps_enumerate_from_the_merges_clones(self):
@@ -1138,7 +1142,7 @@ class PostDbGatheringTests(unittest.TestCase):
             units = list(gather(source))
 
             self.assertEqual(len(units), 1, job_type)
-            self.assertEqual(units[0].fields["job_type"], job_type)
+            self.assertEqual(units[0].payload.JOB_TYPE, job_type)
             self.assertIn(("per_field", "merges"), source.asked_for)
 
     def test_per_field_units_key_uniquely(self):
@@ -1165,22 +1169,33 @@ class PostDbGatheringTests(unittest.TestCase):
     INTEGER_MAX = 2147483647
 
     def test_a_real_field_identifier_does_not_overflow_the_sca_column(self):
+        # The overflow risk this guarded against — a seven-digit field
+        # identifier smeared into the smallint `sca` column — is now
+        # structural rather than merely avoided: a FieldPayload has no `sca`
+        # attribute at all, only `field`, so there is no smallint-shaped slot
+        # left for it to overflow. What survives to check is that the real
+        # field magnitude rides through gathering intact.
         units = list(gather_statistics_units(
             self.Source(per_field=[4641773, 4645869])))
 
         self.assertTrue(units)
+        self.assertEqual([u.payload.field for u in units], [4641773, 4645869])
         for unit in units:
-            self.assertLessEqual(abs(unit.sca), self.SMALLINT_MAX)
-            self.assertLessEqual(abs(unit.exposure), self.INTEGER_MAX)
+            self.assertLessEqual(abs(unit.payload.field), self.INTEGER_MAX)
 
     def test_per_field_units_carry_no_sca(self):
         # A field identifier in `sca` would be a field pretending to be an
-        # SCA. These units have none, and 0 says so.
+        # SCA. These units have none at all now: a FieldPayload declares no
+        # `sca` component, so asking for one is refused rather than
+        # answering with a sentinel `0`.
         units = list(gather_merge_dedup_units(self.Source(per_field=[4641773])))
 
-        self.assertEqual(units[0].sca, 0)
-        self.assertEqual(units[0].exposure, 4641773)
-        self.assertEqual(units[0].fields["field"], 4641773)
+        self.assertNotIn("sca", units[0].payload.COMPONENTS)
+        with self.assertRaises(SubjectError):
+            units[0].sca
+        with self.assertRaises(SubjectError):
+            units[0].exposure
+        self.assertEqual(units[0].payload.field, 4641773)
 
     def test_real_field_units_still_key_uniquely(self):
         units = list(gather_statistics_units(
@@ -1189,11 +1204,20 @@ class PostDbGatheringTests(unittest.TestCase):
         self.assertEqual(len({u.key for u in units}), 3)
 
     def test_a_real_processing_date_fits_the_exposure_column(self):
+        # The old sentinel this guarded against — the processing date's
+        # ordinal smeared into the integer `exposure` column — no longer has
+        # a representation to construct: CatalogLoadPayload declares
+        # `proc_date` (carried as a string) and `sca`, and no `exposure`
+        # component at all. What survives to check is that the real `sca`
+        # still fits its smallint column, and that asking this unit for an
+        # `exposure` is refused rather than answering with the date ordinal.
         units = list(gather_catalog_load_units(
             self.Source(scas=[1, 18]), "20260808"))
 
         for unit in units:
-            self.assertLessEqual(unit.exposure, self.INTEGER_MAX)
+            self.assertNotIn("exposure", unit.payload.COMPONENTS)
+            with self.assertRaises(SubjectError):
+                unit.exposure
             self.assertLessEqual(unit.sca, self.SMALLINT_MAX)
 
     def test_every_post_db_gatherer_stamps_its_job_type(self):
@@ -1211,7 +1235,7 @@ class PostDbGatheringTests(unittest.TestCase):
         for units in gathered:
             self.assertTrue(units)
             for unit in units:
-                self.assertIn("job_type", unit.fields)
+                self.assertTrue(unit.payload.JOB_TYPE)
 
 
 class AlertProductionGatheringTests(unittest.TestCase):
@@ -1280,7 +1304,7 @@ class AlertProductionGatheringTests(unittest.TestCase):
         self.assertEqual(len(units), 1)
         self.assertEqual(units[0].exposure, 20)
         self.assertEqual(units[0].sca, 7)
-        self.assertEqual(units[0].fields["job_type"], JOB_TYPE_ALERT_PRODUCTION)
+        self.assertEqual(units[0].payload.JOB_TYPE, JOB_TYPE_ALERT_PRODUCTION)
 
     def test_the_manifest_names_the_attempt_and_the_difference_image(self):
         # The design: "The manifest names the attempt identity and the
@@ -1288,10 +1312,10 @@ class AlertProductionGatheringTests(unittest.TestCase):
         units = list(gather_alert_production_units(
             self.Source(rows=[self.ROW]), "rel-1"))
 
-        self.assertEqual(units[0].fields["attempt_id"], 6765)
-        self.assertEqual(units[0].fields["difference_image_pid"], 1086)
+        self.assertEqual(units[0].payload.promoted_attempt_id, 6765)
+        self.assertEqual(units[0].payload.difference_image_pid, 1086)
         self.assertEqual(units[0].facts.pid, 1086)
-        self.assertEqual(units[0].fields["release_identity"], "rel-1")
+        self.assertEqual(units[0].payload.release_identity, "rel-1")
 
     def test_an_already_emitted_unit_is_not_gathered_again(self):
         # "Emission is once per logical unit per release."
