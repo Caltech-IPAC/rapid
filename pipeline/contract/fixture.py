@@ -308,6 +308,46 @@ def make_attempt(conn, work_unit_id=None, error_category=None,
         return cur.fetchone()[0]
 
 
+def _foreign_key_targets(conn, table):
+    """`{column: (parent_table, parent_column)}` for one table's simple FKs.
+
+    Single-column keys only: a composite FK cannot be satisfied by picking
+    one id per column independently, and no table this fixture builds has
+    one. Read from `pg_constraint` so the answer is the database's, not a
+    list here that drifts from it.
+    """
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT att.attname, cl.relname, ratt.attname"
+            "  FROM pg_constraint c"
+            "  JOIN pg_class t ON t.oid = c.conrelid"
+            "  JOIN pg_class cl ON cl.oid = c.confrelid"
+            "  JOIN pg_attribute att"
+            "    ON att.attrelid = c.conrelid AND att.attnum = c.conkey[1]"
+            "  JOIN pg_attribute ratt"
+            "    ON ratt.attrelid = c.confrelid AND ratt.attnum = c.confkey[1]"
+            " WHERE c.contype = 'f' AND t.relname = %s"
+            "   AND array_length(c.conkey, 1) = 1", [table])
+        return {column: (parent, parent_column)
+                for column, parent, parent_column in cur.fetchall()}
+
+
+def _any_parent_id(conn, parent_table, parent_column):
+    """An existing id from `parent_table`, minting one if it is empty.
+
+    Reuse first: several of these parents are seeded catalogue rows
+    (`filters`, `pipelines`, `swversions`) and adding to them would put
+    fixture rows in tables the pipeline reads as reference data.
+    """
+    with conn.cursor() as cur:
+        cur.execute(f"SELECT {parent_column} FROM {parent_table}"
+                    f" ORDER BY {parent_column} LIMIT 1")
+        row = cur.fetchone()
+    if row is not None:
+        return row[0]
+    return _insert_filling_required(conn, parent_table, parent_column, {})
+
+
 def _insert_filling_required(conn, table, returning, values):
     """Insert a row, filling every other required column from the CATALOG.
 
@@ -341,12 +381,24 @@ def _insert_filling_required(conn, table, returning, values):
             " ORDER BY ordinal_position", [table])
         required = cur.fetchall()
 
+    # FOREIGN KEYS CANNOT TAKE A PLACEHOLDER. A required column that
+    # references another table needs a value that EXISTS there — `svid` on
+    # `refimages` points at `swversions`, and filling it with 0 produced a
+    # ForeignKeyViolation, not a usable row. So every required FK column is
+    # resolved to a real parent id, reusing whatever the stream seeded and
+    # minting a parent only when the table is empty. Read from the catalog
+    # rather than listed here so a new FK on any of these tables is handled
+    # the day it appears, not the day it breaks a fixture.
+    references = _foreign_key_targets(conn, table)
+
     row = dict(values)
     for name, data_type in required:
         if name in row:
             continue
-        if data_type in ("timestamp with time zone", "timestamp without "
-                         "time zone", "date"):
+        if name in references:
+            row[name] = _any_parent_id(conn, *references[name])
+        elif data_type in ("timestamp with time zone", "timestamp without "
+                           "time zone", "date"):
             row[name] = "now()"
         elif data_type in ("character varying", "text", "character"):
             row[name] = "x"
