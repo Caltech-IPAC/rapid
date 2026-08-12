@@ -17,6 +17,7 @@ A stub-tier test: pure Python, no database.
 import pytest
 
 from submission import payloads
+from submission.test import payload_fixtures as fixtures
 from submission.manifest import ProcessingUnit
 from submission.routes import (JOB_TYPE_ALERT_PRODUCTION,
                                JOB_TYPE_CATALOG_LOAD, JOB_TYPE_CROSSMATCH,
@@ -163,8 +164,7 @@ def test_a_non_exposure_grain_unit_has_no_exposure_at_all(job_type,
 
 def test_an_exposure_grain_unit_still_answers_normally():
     """The complement: where the grain declares them, they are plain data."""
-    unit = ProcessingUnit(payload=payloads.build(
-        JOB_TYPE_SCIENCE, exposure=90001, sca=3))
+    unit = fixtures.science_unit(exposure=90001, sca=3)
     assert unit.exposure == 90001
     assert unit.sca == 3
     assert unit.job_type == JOB_TYPE_SCIENCE
@@ -262,14 +262,22 @@ def test_a_disagreeing_grain_in_the_wire_form_is_refused():
     assert "grain" in str(raised.value)
 
 
-@pytest.mark.parametrize("job_type,components", [
-    (JOB_TYPE_SCIENCE, dict(exposure=90001, sca=3)),
-    (JOB_TYPE_CROSSMATCH, dict(proc_date="20260812", field=1,
-                               target_tables=("t",))),
-    (JOB_TYPE_CATALOG_LOAD, dict(proc_date="20260812", sca=6,
-                                 target_table="t")),
+@pytest.mark.parametrize("build", [
+    fixtures.science_payload,
+    fixtures.reference_payload,
+    fixtures.alert_payload,
+    fixtures.crossmatch_payload,
+    fixtures.catalog_load_payload,
 ])
-def test_a_payload_round_trips_through_its_wire_form(job_type, components):
-    original = payloads.build(job_type, **components)
-    restored = payloads.from_dict(job_type, original.to_dict())
+def test_a_payload_round_trips_through_its_wire_form(build):
+    """Serialize a payload, parse it back, and get an EQUAL object.
+
+    Equality, not just an equal subject: the facts D4 moved onto the payload
+    have to survive the round trip too, and the sequence members are the ones
+    that would not (JSON returns every sequence as a list) without
+    `_freeze`'s normalization.
+    """
+    original = build()
+    restored = payloads.from_dict(original.JOB_TYPE, original.to_dict())
     assert restored.subject() == original.subject()
+    assert restored == original

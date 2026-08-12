@@ -138,18 +138,14 @@ _install_third_party_stubs()
 from pipeline.entrypoints import job  # noqa: E402
 from pipeline.runtime.errors import ConfigError, RecordsError  # noqa: E402
 from pipeline.runtime.test.stubs import make_job_environment  # noqa: E402
-from submission import payloads  # noqa: E402
-from submission.manifest import (  # noqa: E402
-    Manifest,
-    ProcessingUnit,
-    UnitFacts,
-)
+from submission.manifest import Manifest, ProcessingUnit  # noqa: E402
 from submission.routes import (  # noqa: E402
     CLASS_BULK,
     CLASS_PROMPT,
     JOB_TYPE_SCIENCE,
     RouteError,
 )
+from submission.test import payload_fixtures as fixtures  # noqa: E402
 
 
 QUEUE_NAMES = {

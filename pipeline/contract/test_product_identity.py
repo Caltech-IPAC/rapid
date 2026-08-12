@@ -60,9 +60,18 @@ def test_determinism_same_components_same_key_across_runs_and_attempts():
     THE WHOLE POINT OF RULE 10, stated as a test. `run_id` and `attempt_id`
     are not parameters of any key function — that is the structural reason
     this holds — so the test demonstrates it the only way it can be
-    demonstrated: by computing the key twice and asserting equality, and by
-    asserting (below, in the hygiene tests) that no run or attempt value
+    demonstrated here: by computing the key twice and asserting equality, and
+    by asserting (below, in the hygiene tests) that no run or attempt value
     could have reached the payload even if a caller passed one.
+
+    **THE TWO-ATTEMPT FORM IS DEMONSTRATED IN
+    `test_product_cardinality.py`**, by
+    `test_retry_under_a_new_attempt_keeps_the_product_and_moves_the_binding`:
+    two distinct `attempt_id`s register through the real repository against a
+    real database and resolve to ONE product row with one product key. That
+    is criterion 1's literal reading — "identical components under two
+    different run/attempt pairs → same product key" — end to end, and this
+    test is its by-construction counterpart.
     """
     first, first_payload = _difference_key()
     second, second_payload = _difference_key()

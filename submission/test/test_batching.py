@@ -18,6 +18,7 @@ from submission import payloads
 from submission.batching import (ReadyWorkAccumulator, batch_units)
 from submission.manifest import MAX_ARRAY_SIZE, ProcessingUnit
 from submission.routes import JOB_TYPE_CROSSMATCH, JOB_TYPE_SCIENCE
+from submission.test import payload_fixtures as fixtures
 
 
 class FakeClock:
@@ -35,7 +36,7 @@ class FakeClock:
 
 def unit(exposure, sca):
     return ProcessingUnit(
-        payload=payloads.build(JOB_TYPE_SCIENCE, exposure=exposure, sca=sca))
+        payload=fixtures.science_payload(exposure=exposure, sca=sca))
 
 
 def units(count, exposure=90210):

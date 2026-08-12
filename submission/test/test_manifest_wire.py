@@ -322,8 +322,7 @@ def test_exposure_sca_keys_keep_their_exact_previous_spelling():
     existing object. Zero-padded 6 and 2 digits, exactly as the storage
     design's key schema fixes it.
     """
-    unit = ProcessingUnit(payload=payloads.build(
-        JOB_TYPE_SCIENCE, exposure=90001, sca=3))
+    unit = _unit(JOB_TYPE_SCIENCE)
     assert unit.key == "090001/03"
 
 

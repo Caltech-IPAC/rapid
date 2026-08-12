@@ -161,6 +161,20 @@ def test_retry_under_a_new_attempt_keeps_the_product_and_moves_the_binding(
     product_b, artifact_b = _register(conn, repository, key, payload,
                                       second_attempt, 1, checksum="e" * 64)
 
+    # CRITERION 1, IN ITS LITERAL FORM. The determinism tests in
+    # `test_product_identity.py` demonstrate "same components → same key" by
+    # computing the key twice, which is by-construction: `run_id` and
+    # `attempt_id` are not parameters of any key function, so there is no
+    # argument through which an execution context could enter. The brief's
+    # LETTER asks for two different attempts, and this is where that is
+    # demonstrated end to end — two distinct `attempt_id`s, each registering
+    # through the real repository, resolving to ONE product row because their
+    # identity components agree.
+    assert first_attempt != second_attempt, (
+        "the two registrations must be under distinct attempts for this to "
+        "demonstrate anything about identity across attempts")
+    assert product_a.product_key == product_b.product_key == key
+
     # ONE product, TWO artifacts.
     assert product_a.product_id == product_b.product_id
     assert artifact_a.artifact_id != artifact_b.artifact_id
