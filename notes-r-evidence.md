@@ -212,3 +212,58 @@ docstring is corrected to say so.
 database from the AUTHORITATIVE STREAM ONLY, so it exercises R2 fully (no
 database needed) and SKIPS R1's three tests (048 absent) — which is the
 CI-green property, not a gap.
+
+Run **31592979558**, head `718d112`, conclusion **success**, `CI_EXIT=0`.
+Every step green, including "entry points launch" — all five console scripts
+resolve and import with R2's preflight in place:
+
+```
+BRIEF-B-ENTRYPOINT-rapid-reconciler: resolved exit=70   (starts, refuses: no AWS env)
+BRIEF-B-ENTRYPOINT-rapid-operator:   resolved exit=0
+BRIEF-B-ENTRYPOINT-rapid-job:        resolved exit=0
+BRIEF-B-ENTRYPOINT-rapidctl:         resolved exit=0
+BRIEF-B-ENTRYPOINT-rapid-publisher:  resolved exit=70   (as above)
+```
+
+**That R2's tests RAN rather than skipped is established by arithmetic
+against run 1's PASS 1**, which used the identical substrate (base stream,
+no drafts) before the doubles were fixed:
+
+| | passed | failed | skipped |
+|---|---|---|---|
+| run 1 PASS 1 (pre-fix) | 294 | **4** | 237 |
+| CI (post-fix) | **298** | 0 | 237 |
+
+The four failures became four passes (294 + 4 = 298) and **the skip count is
+unchanged at 237** — so the R2 tests were collected and executed in both, not
+silently skipped in the green one. That is the check the zero-skip gate makes
+on the rapid-admin side, done here by difference because CI runs `-q`.
+
+## What remains open
+
+1. **The mutation check has not been executed.**
+   `scripts/mutation-brief-r-on-rapid-admin.sh` is committed and wired into
+   the runner as a seventh verdict term; its six sed expressions were each
+   verified to match exactly one line. It has never run: R1's mutations need
+   DRAFT 048's tables, so rapid-admin is the only venue, and the run carrying
+   it lost its credentials. **To close:** re-run
+   `scripts/brief-r-acceptance-on-rapid-admin.sh` with valid SSO.
+
+2. **CR-R1 is unlanded** (`notes-r-change-requests.md`). The reconciler and
+   publisher units do not supply `RAPID_RELEASE_IDENTITY` /
+   `RAPID_IMAGE_DIGEST`, which R2's fail-closed preflight reads. Deploying
+   R2 to those two units before the CR lands makes them refuse to start.
+   This is `rapid_systems` custody and outside R's scope.
+
+3. **Run 2's verdict is unknown**, not green — see above. R1's three
+   contract tests were proven green in run 1, on a database with 048
+   applied, so what run 2 would have added is the mutation check and a
+   re-confirmation.
+
+## Scope
+
+R touched only what its contract named: the two wiring sites, their tests,
+the doubles those changes invalidated, R's own harness scripts, and these
+notes. No schema was added or proposed. `rapid_systems` was read
+READ-ONLY and never edited. No merge, no PR — branch `smdc-r-residual`
+pushed, worktree retained.
