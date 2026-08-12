@@ -398,8 +398,25 @@ def build(job_type, **components):
 
     The single construction entry point, so gathering never names a payload
     class directly and a job type's payload shape can change in one place.
+
+    **ONE EXCEPTION TYPE FOR ONE FAILURE.** A missing component raises
+    `PayloadError` whichever way it is missing. Without this translation the
+    caller saw two different exceptions for the same mistake: `TypeError`
+    from the dataclass constructor when the keyword was OMITTED, and
+    `PayloadError` from `__post_init__` when it was passed as `None`. That
+    split is invisible until someone writes `except PayloadError` and it
+    silently does not catch half the cases — which is exactly what a caller
+    validating a submission would write. The original is chained, so the
+    constructor's own message about which argument it wanted is not lost.
     """
-    return payload_type(job_type)(**components)
+    cls = payload_type(job_type)
+    try:
+        return cls(**components)
+    except TypeError as exc:
+        raise PayloadError(
+            f"a {job_type} unit payload could not be built: {exc}. It "
+            f"declares {sorted(set(cls.COMPONENTS) | set(cls.INVOCATION_FACTS))}"
+        ) from exc
 
 
 def from_dict(job_type, raw):

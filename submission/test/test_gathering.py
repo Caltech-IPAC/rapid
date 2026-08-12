@@ -295,9 +295,18 @@ class GatherScienceUnitsTests(unittest.TestCase):
         self.assertEqual(units[0].key, "005001/07")
 
     def test_the_run_scoped_logical_key_is_unique_per_run(self):
+        # `make_references=True` yields REFERENCE-IMAGE units, so the key is
+        # asked for under that job type. This test used to pass
+        # JOB_TYPE_SCIENCE against those units and the old API accepted it
+        # silently — `dedup_key(job_type)` read whatever job type it was
+        # handed and built a tuple from the unit's exposure/sca regardless,
+        # so the mismatch was invisible. The typed payload declares its own
+        # job type and refuses the disagreement, which is what surfaced this.
         unit = self._gather(make_references=True)[0]
-        self.assertNotEqual(unit.logical_job_key("run-a", JOB_TYPE_SCIENCE),
-                            unit.logical_job_key("run-b", JOB_TYPE_SCIENCE))
+        self.assertEqual(unit.job_type, JOB_TYPE_REFERENCE_IMAGE)
+        self.assertNotEqual(
+            unit.logical_job_key("run-a", JOB_TYPE_REFERENCE_IMAGE),
+            unit.logical_job_key("run-b", JOB_TYPE_REFERENCE_IMAGE))
 
     def test_a_field_with_no_files_is_skipped_not_an_error(self):
         source = StubSource(l2files={})

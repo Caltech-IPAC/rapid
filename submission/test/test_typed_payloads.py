@@ -64,16 +64,20 @@ def test_a_missing_component_fails_at_construction(job_type, components,
                                                    missing):
     """Building a payload without a required component raises, naming it.
 
-    Two things asserted together: that it raises AT ALL (rather than
-    building a unit with a None component that fails later), and that the
+    Three things asserted together: that it raises AT ALL (rather than
+    building a unit with a None component that fails later), that it raises
+    ONE exception type whichever way the component is missing, and that the
     message names the component — because the operator reading it needs to
     know which fact the submission was missing, not merely that one was.
+
+    The single type matters more than it looks. An omitted keyword reaches
+    the dataclass constructor as `TypeError` while an explicit `None`
+    reaches `__post_init__` as `PayloadError`; `payloads.build` translates
+    the first so a caller writing `except PayloadError` catches both. Before
+    that translation it caught half the cases silently.
     """
-    with pytest.raises((payloads.PayloadError, TypeError)) as raised:
+    with pytest.raises(payloads.PayloadError) as raised:
         payloads.build(job_type, **components)
-    # A TypeError from the dataclass constructor already names the missing
-    # keyword; a PayloadError names it in prose. Either is loud and either
-    # names it, which is the property under test.
     assert missing in str(raised.value)
 
 
@@ -86,7 +90,7 @@ def test_no_unit_can_be_built_around_an_invalid_payload(job_type, components,
     no moment at which an identity-less unit is a live object that could be
     put in a manifest.
     """
-    with pytest.raises((payloads.PayloadError, TypeError)):
+    with pytest.raises(payloads.PayloadError):
         ProcessingUnit(payload=payloads.build(job_type, **components))
 
 
