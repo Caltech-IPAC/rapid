@@ -205,13 +205,42 @@ export CONTRACT_LOG="${STAGE_DIR}/contract-pytest-pass2.log"
 : > "$CONTRACT_LOG"
 : "${RAPID_SW:=${STAGE_DIR}/repo}"
 export RAPID_SW
+# `-rs` so the skip REASONS are in the log, not just a count in the summary
+# line: a nonzero skip count has to name which tests skipped for the failure
+# below to be actionable.
 "$VPY" -m pytest pipeline/contract -m contract -p no:cacheprovider \
-    --no-header -q >"${STAGE_DIR}/pass2.log" 2>&1
+    --no-header -q -rs >"${STAGE_DIR}/pass2.log" 2>&1
 suite_rc=$?
 cp "${STAGE_DIR}/pass2.log" "$CONTRACT_LOG"
 pass2_line=$(grep -E 'passed|failed|error' \
     "${STAGE_DIR}/pass2.log" 2>/dev/null | tail -1)
 echo "BRIEF-D-PASS2-RESULT: ${pass2_line:-<no summary line>}"
+
+# ZERO SKIPS IN PASS 2, ENFORCED RATHER THAN ASSUMED.
+#
+# Brief D: "the recorded acceptance run executes with ZERO D-specific skips,
+# and the ledger states the skip count." This block is what makes that a
+# gate instead of a claim. Until it existed, PASS 2's verdict was grepped
+# for `passed|failed|error` only — so a run where a draft-schema test
+# skipped (because 048 had not applied, or a probe was misspelled, or a
+# fixture bailed early) reported success with the criterion silently
+# unexercised. That is the "no false cleans" failure mode exactly: the
+# acceptance would have looked identical whether the D tests ran or not.
+#
+# PASS 1 is where skips are EXPECTED (drafts absent, that is the CI-green
+# property being demonstrated). PASS 2 is the recorded acceptance run and
+# must have none.
+pass2_skips=$(grep -cE '^SKIPPED' "${STAGE_DIR}/pass2.log" 2>/dev/null)
+pass2_skips=${pass2_skips:-0}
+echo "BRIEF-D-PASS2-SKIPS: $pass2_skips"
+if [ "$pass2_skips" -ne 0 ]; then
+    echo "BRIEF-D-PASS2-SKIPS: FAIL exit=1 ($pass2_skips skip(s) in the"\
+         "recorded acceptance run; the brief requires zero)"
+    grep -E '^SKIPPED' "${STAGE_DIR}/pass2.log" | head -20
+    suite_rc=1
+else
+    echo "BRIEF-D-PASS2-SKIPS: PASS exit=0 (zero skips, as the brief requires)"
+fi
 
 # THE CRITERIA, NAMED INDIVIDUALLY. A suite-level "N passed" does not say
 # WHICH tests ran, and the criteria are the deliverable — so each brief-D

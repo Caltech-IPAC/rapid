@@ -179,84 +179,258 @@ def test_no_reader_selects_star_from_the_altered_tables():
 #: verbatim (including the legacy spelling and case) because a paraphrase
 #: would be testing a query nobody runs — the same reason
 #: `DiffImageRepository` carries its SQL over unchanged.
+#:
+#: Each entry is a CALLABLE taking the seeded fixture's identities, so every
+#: query is parameterized to select exactly the rows this run created. The
+#: earlier version used fixed literals (`ppid = 15`, `pid = 1`) that matched
+#: nothing on a fresh scratch database, which is how five of the six readers
+#: came to be compared on empty result sets.
 READERS = {
     # `RAPIDDB.get_best_reference_image` (rapid_db.py:1680) — reference
     # selection. The column list is explicit, which is why appending a
     # column cannot reach it.
-    "reference_selection": (
+    "reference_selection": lambda s: (
         "select rfid,filename,infobits,version from RefImages"
         " where vbest > 0 and status > 0 and ppid = %s and field = %s"
         " and fid = %s",
-        (15, 4242, 2)),
+        (s["ppid"], s["field"], s["fid"])),
     # `get_registered_diffimages_for_processing_date_sca`
     # (rapid_db.py:3131) — post-DB gathering reading `diffimages.filename`.
-    "post_db_gathering": (
+    "post_db_gathering": lambda s: (
         "select pid,filename,checksum from DiffImages"
-        " where vbest > 0 and status > 0 and ppid = %s",
-        (15,)),
+        " where vbest > 0 and status > 0 and ppid = %s and field = %s"
+        " order by pid",
+        (s["ppid"], s["field"])),
     # `pipeline/repositories/diffimages.py:72` — forced photometry's join
     # reading URI and checksum off both tables.
-    "forced_photometry_join": (
+    "forced_photometry_join": lambda s: (
         "select a.pid,a.filename,a.checksum,b.filename,b.checksum"
         " from DiffImages a, RefImages b where a.rfid = b.rfid"
-        " and a.status > 0 and b.status > 0 and a.vbest > 0 and b.vbest > 0",
-        ()),
+        " and a.status > 0 and b.status > 0 and a.vbest > 0 and b.vbest > 0"
+        " and a.field = %s order by a.pid",
+        (s["field"],)),
     # `alerts/providers.py:584,989-1001` — PID selection and the
     # `diffimages.filename` directory anchor for companion files.
-    "alert_companion_anchor": (
+    "alert_companion_anchor": lambda s: (
         "select pid,filename from DiffImages where vbest > 0 and pid = %s",
-        (1,)),
+        (s["pid"],)),
     # `pipeline/stages/catalog_db.py:358` call sites — the currency sweep
     # over pid/vbest.
-    "currency_sweep": (
+    "currency_sweep": lambda s: (
         "select pid,vbest,version from DiffImages where vbest > 0"
-        " and ppid = %s order by pid",
-        (15,)),
+        " and ppid = %s and field = %s order by pid",
+        (s["ppid"], s["field"])),
     # `submission/gathering.py:1205` — catalog-load derives the sibling
     # catalogue names from the diffimage path.
-    "catalog_load_sibling": (
+    "catalog_load_sibling": lambda s: (
         "select pid,filename from DiffImages where status > 0 and vbest > 0"
-        " order by pid",
-        ()),
+        " and field = %s order by pid",
+        (s["field"],)),
 }
 
 
-@pytest.mark.parametrize("name", sorted(READERS))
-def test_reader_results_are_identical_before_and_after(conn, name):
-    """Each named reader returns the same rows with and without the column.
+# ---------------------------------------------------------------------------
+# The fixture: real `refimages` and `diffimages` rows for the readers to find
+# ---------------------------------------------------------------------------
+#
+# EVERY NAMED READER IS EXERCISED ON NON-EMPTY RESULTS. The first version of
+# this file ran five of the six readers twice against a freshly-built scratch
+# database and compared two EMPTY result sets — which is a tautology, not a
+# compatibility test: it would have passed just as well if the migration had
+# dropped the column the reader selects. Only `reference_selection` had real
+# rows. This fixture gives all six real rows, so "results are unchanged" is a
+# statement about rows that exist.
 
-    "Before the D migrations" is simulated exactly as a reader experiences
-    it: the same query over the same rows, with the new column playing no
-    part. Since the column is appended, nullable, defaulted to NULL and
-    named in no predicate, the two results must be identical tuple-for-
-    tuple — and if a future edit ever gives `product_id` a default or a
-    predicate, this is the test that catches it.
 
-    Runs against whatever rows the scratch database holds, which for a
-    freshly-built one is none. An empty result compared to an empty result
-    is a weak assertion, so the fixture below inserts a row pair first.
+def _reference_row(cur, ppid, fid, svid, field, suffix):
+    """One `refimages` row, returning its rfid."""
+    cur.execute(
+        "INSERT INTO refimages (field, hp6, hp9, fid, ppid, version,"
+        " vbest, filename, status, checksum, svid, infobits)"
+        " VALUES (%s, 1, 1, %s, %s, 1, 1, %s, 1, %s, %s, 0)"
+        " RETURNING rfid",
+        [field, fid, ppid, f"s3://bucket/{fixture.RUN_TAG}/ref{suffix}.fits",
+         "a" * 32, svid])
+    return cur.fetchone()[0]
+
+
+def _l2file_row(cur, expid, sca, field, fid):
+    """One `l2files` row, returning its rid.
+
+    **BUILT FROM `information_schema`, NOT FROM A HAND-WRITTEN COLUMN LIST.**
+    `l2files` has 61 NOT NULL columns — the WCS keywords and the full 4th/5th
+    order SIP coefficient set — and none of them is read by any reader under
+    test here. Enumerating them by hand would be sixty lines of zeroes that
+    say nothing, and would silently break the moment the stream adds a
+    column. Asking the catalog for the required columns and filling each with
+    a type-appropriate placeholder keeps the fixture honest about what it
+    cares about (the identity columns, set explicitly below) and indifferent
+    to the rest.
+    """
+    explicit = {
+        "expid": expid, "sca": sca, "field": field, "fid": fid,
+        "version": 1, "vbest": 1, "status": 1, "infobits": 0,
+        "filename": f"s3://bucket/{fixture.RUN_TAG}/sci{expid}_{sca}.fits",
+        "checksum": "b" * 32,
+    }
+    cur.execute(
+        "SELECT column_name, data_type FROM information_schema.columns"
+        " WHERE table_name = 'l2files' AND is_nullable = 'NO'"
+        "   AND column_default IS NULL"
+        "   AND is_identity = 'NO'"
+        " ORDER BY ordinal_position")
+    columns, values = [], []
+    for column, kind in cur.fetchall():
+        columns.append(f'"{column}"')
+        if column in explicit:
+            values.append(explicit[column])
+        elif kind in ("timestamp with time zone", "timestamp without time zone",
+                      "date"):
+            values.append("2026-08-12T00:00:00Z")
+        elif kind in ("character varying", "text", "character"):
+            values.append("x")
+        else:
+            values.append(0)
+    placeholders = ", ".join(["%s"] * len(values))
+    cur.execute(
+        f"INSERT INTO l2files ({', '.join(columns)})"
+        f" VALUES ({placeholders}) RETURNING rid", values)
+    return cur.fetchone()[0]
+
+
+def _difference_row(cur, rid, rfid, ppid, fid, svid, expid, sca, field):
+    """One `diffimages` row, returning its pid."""
+    cur.execute(
+        "INSERT INTO diffimages (rid, expid, sca, ppid, version, vbest,"
+        " rfid, field, hp6, hp9, fid, ra0, dec0, ra1, dec1, ra2, dec2,"
+        " ra3, dec3, ra4, dec4, infobitssci, infobitsref, filename,"
+        " checksum, status, svid)"
+        " VALUES (%s, %s, %s, %s, 1, 1, %s, %s, 1, 1, %s,"
+        "         10.0, 20.0, 10.1, 20.1, 10.2, 20.2, 10.3, 20.3,"
+        "         10.4, 20.4, 0, 0, %s, %s, 1, %s)"
+        " RETURNING pid",
+        [rid, expid, sca, ppid, rfid, field, fid,
+         f"s3://bucket/{fixture.RUN_TAG}/diff{expid}_{sca}.fits",
+         "c" * 32, svid])
+    return cur.fetchone()[0]
+
+
+@pytest.fixture
+def seeded(conn):
+    """Real rows every named reader can find, rolled back after the test.
+
+    Returns the identity values the reader queries are parameterized by, so
+    each test selects EXACTLY the rows this fixture created rather than
+    whatever else the shared scratch database happens to hold — the
+    fixture-honesty discipline this tier runs on.
     """
     _require_schema(conn)
-    sql, params = READERS[name]
+    field = int(fixture.RUN_TAG[:5], 16) % 100000
+
+    with conn.cursor() as cur:
+        for table, column in (("pipelines", "ppid"), ("filters", "fid"),
+                              ("swversions", "svid"), ("scas", "sca")):
+            cur.execute(f"SELECT {column} FROM {table}"
+                        f" ORDER BY {column} LIMIT 1")
+            if cur.fetchone() is None:
+                pytest.skip(f"no {table} rows on this database to satisfy"
+                            f" the foreign key")
+
+        cur.execute("SELECT ppid FROM pipelines ORDER BY ppid LIMIT 1")
+        ppid = cur.fetchone()[0]
+        cur.execute("SELECT fid FROM filters ORDER BY fid LIMIT 1")
+        fid = cur.fetchone()[0]
+        cur.execute("SELECT svid FROM swversions ORDER BY svid LIMIT 1")
+        svid = cur.fetchone()[0]
+        cur.execute("SELECT sca FROM scas ORDER BY sca LIMIT 1")
+        sca = cur.fetchone()[0]
+
+        rfid = _reference_row(cur, ppid, fid, svid, field, "a")
+
+        # `exposures.dateobs` is UNIQUE, so the run tag makes this run's
+        # exposure its own rather than colliding with a previous run's.
+        # `exposures.dateobs` is UNIQUE (`exposurespk`), so the timestamp is
+        # offset by this run's own tag rather than fixed: two runs of this
+        # suite against one scratch database must not collide, and a
+        # collision here would look like the compatibility defect under test.
+        cur.execute(
+            "INSERT INTO exposures (dateobs, field, fid, exptime, mjdobs,"
+            " status, infobits, hp6, hp9)"
+            " VALUES (timestamptz '2026-08-12 00:00:00+00'"
+            "         + make_interval(secs => %s), %s, %s, 100.0,"
+            "         60000.0, 1, 0, 1, 1)"
+            " RETURNING expid",
+            [int(fixture.RUN_TAG[:6], 16) % 1000000, field, fid])
+        expid = cur.fetchone()[0]
+
+        rid = _l2file_row(cur, expid, sca, field, fid)
+        pid = _difference_row(cur, rid, rfid, ppid, fid, svid, expid, sca,
+                              field)
+
+    yield {"ppid": ppid, "fid": fid, "svid": svid, "field": field,
+           "sca": sca, "rfid": rfid, "expid": expid, "rid": rid, "pid": pid}
+    conn.rollback()
+
+
+@pytest.mark.parametrize("name", sorted(READERS))
+def test_reader_results_are_identical_before_and_after(conn, seeded, name):
+    """Each named reader returns the SAME NON-EMPTY rows before and after.
+
+    "Before the D migrations" is executed, not asserted about: the same
+    query runs against a derived table that carries every column of the real
+    one EXCEPT `product_id`. If the appended column could reach a result —
+    through a `select *`, a default, a predicate, or an ordering — the two
+    result sets would differ. Comparing against a pre-migration VIEW is the
+    only way to demonstrate that from inside a migrated database.
+
+    The first version of this test compared the reader's output to itself
+    and asserted the query text did not mention `product_id`. That is a
+    statement about a string, and it passed on five readers whose result
+    sets were both empty.
+    """
+    sql, params = READERS[name](seeded)
 
     with conn.cursor() as cur:
         cur.execute(sql, params)
         after = cur.fetchall()
 
-        # The "before" view: the same query, run in a session that cannot
-        # see the new column at all. Simulated by asserting the query's own
-        # column list does not mention it — which is the honest statement,
-        # since the query text IS the reader's whole view of the table.
-        assert "product_id" not in sql.lower()
+        # THE PRE-MIGRATION VIEW. Each altered table is shadowed by a
+        # subquery selecting every column except `product_id`, so the query
+        # runs against exactly the table shape that existed before 048.
+        pre = sql
+        for table in ALTERED_TABLES:
+            cur.execute(
+                "SELECT string_agg(quote_ident(column_name), ', '"
+                "                  ORDER BY ordinal_position)"
+                " FROM information_schema.columns"
+                " WHERE table_name = %s AND column_name <> 'product_id'",
+                [table])
+            columns = cur.fetchone()[0]
+            pre = _shadow(pre, table, f"(SELECT {columns} FROM {table})")
+        cur.execute(pre, params)
+        before = cur.fetchall()
 
-        cur.execute(sql, params)
-        again = cur.fetchall()
+    assert after, (
+        f"the {name} reader returned NOTHING; comparing two empty result "
+        f"sets demonstrates nothing about compatibility, so the fixture "
+        f"must seed rows this reader can find")
+    assert after == before, (
+        f"the {name} reader's results differ between the migrated table and "
+        f"a pre-migration view of it:\n  after  = {after}\n  before = "
+        f"{before}")
 
-    assert after == again, (
-        f"the {name} reader is not deterministic across two runs on "
-        f"unchanging data; the D migration is not the cause but the reader "
-        f"cannot be compared before and after until it is")
-    conn.rollback()
+
+def _shadow(sql, table, replacement):
+    """Replace a bare table name in `sql` with a derived-table subquery.
+
+    Word-boundary matched and case-insensitive, because the readers' SQL is
+    carried over verbatim from production and spells its tables in the
+    legacy mixed case (`from DiffImages a, RefImages b`). An alias following
+    the name is preserved by matching only the identifier itself.
+    """
+    import re
+
+    return re.sub(rf"\b{table}\b", replacement, sql, flags=re.IGNORECASE)
 
 
 def test_readers_see_identical_results_across_the_migration_on_real_rows(
@@ -302,7 +476,8 @@ def test_readers_see_identical_results_across_the_migration_on_real_rows(
              "a" * 32, svid])
         rfid = cur.fetchone()[0]
 
-        sql, _ = READERS["reference_selection"]
+        sql, _ = READERS["reference_selection"](
+            {"ppid": ppid, "field": field, "fid": fid})
         cur.execute(sql, (ppid, field, fid))
         selected = cur.fetchall()
 
