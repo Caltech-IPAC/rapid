@@ -98,13 +98,15 @@ def test_the_manifest_is_sealed_after_the_admissions_not_before(script):
     with open(os.path.join(REPO_ROOT, script), "r",
               encoding="utf-8") as handle:
         text = handle.read()
-    seal_at = text.index("seal_admission_run(dbh")
-    begin_at = text.index("begin_admission_run(")
+    # The LAST call of each, so a mention in the import block or a docstring
+    # cannot stand in for the real one; and the handle name differs per script
+    # (`dbh` vs `admission_dbh`), so the call is matched by function name.
+    seal_at = text.rindex("seal_admission_run(")
+    begin_at = text.rindex("begin_admission_run(")
     assert begin_at < seal_at, (
         "%s seals its manifest before opening it" % script)
     # And the seal is guarded on a clean run rather than unconditional.
-    tail = text[seal_at - 700:seal_at]
-    assert "UNSEALED" in text[seal_at - 900:seal_at + 900], (
+    assert "UNSEALED" in text[seal_at - 1200:seal_at + 1200], (
         "%s seals unconditionally; a run with failures must leave the "
         "manifest explicitly unsealed, which is the honest record of a "
         "partial ingest" % script)

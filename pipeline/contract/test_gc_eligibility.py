@@ -528,7 +528,14 @@ def test_reference_surfaces_execute_against_real_sql():
     conn = fixture.connect()
     try:
         execute = fixture.executor(conn)
-        refs, consulted, absent = reference_sql.collect_references(execute)
+        # A READER IS MANDATORY WHERE ACTIVE MANIFESTS EXIST. An active
+        # manifest protects its contents as well as itself, so computing a
+        # reference set without expanding them would leave every input they
+        # name looking unreferenced — `collect_references` refuses rather than
+        # skipping. This one returns an empty body: the point here is the SQL
+        # surfaces, and manifest expansion has its own file.
+        refs, consulted, absent = reference_sql.collect_references(
+            execute, manifest_reader=lambda uri: {"units": []})
         assert isinstance(refs, set)
         # The legacy surfaces are in the BASE stream, so they must always be
         # consulted — if they are reported absent, the probe is broken.

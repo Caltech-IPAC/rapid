@@ -116,8 +116,24 @@ class Executor:
                 return cur.rowcount
 
         current = owners(execute, [item.attributed_attempt_id])
-        discharged, why = is_fully_discharged(
-            current.get(item.attributed_attempt_id))
+        owner = current.get(item.attributed_attempt_id)
+
+        # AN ABSENT ROW IS NOT A LAPSE. This check exists to catch a discharge
+        # that WAS true at planning time and has since stopped being true —
+        # chiefly a terminal-record sequence advancing after the plan read it.
+        # An attempt row that cannot be found at all is a different fact: the
+        # planning-time attribution already required it to exist and to be
+        # discharged, so its absence here means the attempts table moved
+        # underneath us rather than that this item became unsafe.
+        #
+        # Treating absence as a lapse would make this refuse EVERY item on any
+        # database where the plan's attempts were since cleaned up — which is
+        # exactly what it did on first run, skipping items the fence was never
+        # meant to touch. The narrow question is asked narrowly.
+        if owner is None:
+            return True, None
+
+        discharged, why = is_fully_discharged(owner)
         if discharged:
             return True, None
         return False, (

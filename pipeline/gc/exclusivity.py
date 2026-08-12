@@ -38,8 +38,27 @@ DELETE_CALL = re.compile(
     r"aws\s+s3\s+rm\b|"
     r"\bs3\s*\.\s*Object\([^)]*\)\s*\.\s*delete\b")
 
-#: The ONE production module permitted to delete objects.
-GC_EXECUTION_MODULE = "pipeline/gc/execute.py"
+#: The production modules permitted to reach an object deletion, and the ONLY
+#: ones. Two, not one, and the pair is the whole route:
+#:
+#:   * `pipeline/gc/execute.py` — the executor, which decides WHETHER to
+#:     delete: the fence, the re-verification, the exact-version check and the
+#:     intent/outcome protocol all live there;
+#:   * `pipeline/operatorctl/main.py` — `_S3Versions.delete_version`, the
+#:     two-method boto3 surface the executor calls. It contains no policy at
+#:     all; it exists because the executor must not import boto3 (that is what
+#:     lets the contract tier substitute a double that can refuse), and it
+#:     always passes a `VersionId`, which a contract test asserts directly.
+#:
+#: Fix round 1 added the second entry, and it was the exclusivity assertion
+#: itself that caught the new call site — working exactly as intended. The
+#: list is enumerated rather than widened to a pattern so a third deletion
+#: route cannot appear without someone editing this tuple.
+GC_EXECUTION_MODULES = ("pipeline/gc/execute.py",
+                        "pipeline/operatorctl/main.py")
+
+#: Retained for readers of the older name.
+GC_EXECUTION_MODULE = GC_EXECUTION_MODULES[0]
 
 #: APPROVED EXCLUSIONS, ENUMERATED EXPLICITLY rather than expressed as a
 #: pattern. Each is a real, legitimate deletion that is not product GC:
@@ -68,6 +87,9 @@ PRODUCTION_TREES = ("pipeline", "submission", "observability", "database",
 SELF_REFERENTIAL = (
     "pipeline/gc/exclusivity.py",
     "pipeline/contract/test_deletion_exclusivity.py",
+    # Asserts that `_S3Versions.delete_version` always passes a VersionId, so
+    # it necessarily defines a fake `delete_object` to observe the call.
+    "pipeline/contract/test_gc_operator_surface.py",
 )
 
 
@@ -126,7 +148,8 @@ def assert_single_deletion_route(root):
     be quoted as system-wide exclusivity.
     """
     offenders = [entry for entry in find_deletion_routes(root)
-                 if entry[0].replace(os.sep, "/") != GC_EXECUTION_MODULE]
+                 if entry[0].replace(os.sep, "/")
+                 not in GC_EXECUTION_MODULES]
     if offenders:
         listed = "\n".join("  - %s:%d  %s" % entry for entry in offenders)
         raise AssertionError(
@@ -139,5 +162,5 @@ def assert_single_deletion_route(root):
             "configuration, which this package may not edit. Rule 21 "
             "therefore scores PARTIAL — pending CR — and a passing result "
             "here must not be reported as system-wide exclusivity."
-            % (GC_EXECUTION_MODULE, len(offenders), listed))
+            % (" or ".join(GC_EXECUTION_MODULES), len(offenders), listed))
     return True

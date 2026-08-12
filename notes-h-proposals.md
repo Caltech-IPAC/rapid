@@ -1,5 +1,40 @@
 # Brief H — proposals ledger
 
+> **FIX ROUND 1 (2026-08-12).** The first submission of this package shipped
+> the machinery for H1, H2 and H4 with **the real call graph never connected**.
+> Adversarial diff-vs-brief review found four blocking wiring gaps, all four
+> verified before the round began. Read this note as: the components below were
+> designed as described in the first round, and only became *reachable in
+> production* in fix round 1. What was fixed:
+>
+> - **B1 — admission was dead on arrival.** All three ingest scripts imported
+>   the admission lifecycle and called only `record_exposure_admission`, which
+>   reads run state that only `begin_admission_run` establishes — so every
+>   real exposure raised `ReleasePointerUnset`. The full lifecycle is now
+>   wired into all three: open unsealed → read the pointer once → enumerate
+>   every source object → admit → **seal last, and only on a clean run**.
+> - **B2 — the L2 defect rule 20 exists to fix was untouched.**
+>   `record_l2file_admission` was imported by all three scripts and called by
+>   none; `addl2file`'s `max(version)+1` re-versioning was unchanged in
+>   production. It is now called at each script's L2 registration.
+> - **B3 — the GC was unreachable by an operator.** `rapidctl` had no
+>   `gc-compute-plan` and no `gc-execute-plan`, and `pipeline/gc/execute.py`
+>   had **zero production call sites**. All three steps now exist under the
+>   full mutation contract.
+> - **B4 — the release stamp never reached `ExecutionBinding`.**
+>   `pipeline/seams.py` was never touched, so work took its release from the
+>   submitting process's environment and rule 18 was not repaired. The seam
+>   now resolves the admitted release and refuses a disagreement loudly.
+> - **N1** (active-manifest body expansion) and **N2** (fence re-verifies the
+>   discharge watermark) were closed in the same round rather than deferred.
+>
+> **The lesson, which is the reusable part:** every one of these survived a
+> green 474-test acceptance run, because the tests exercised units and the
+> integration was assumed. Import-level presence read as wiring. Fix round 1
+> adds tests that parse for CALLS, drive the operator surface end to end, and
+> assert the executor is genuinely reached — each written to fail if the
+> wiring were removed again.
+
 Every decision this brief left to the worker, plus every finding that is a
 decision for the merge gate rather than for this package. **Nothing here is
 ratified**; the brief's fixed rulings are implemented as written and are not
@@ -36,15 +71,21 @@ beyond what the carve necessarily touches, because each is a live-behaviour
 change in a pre-pipeline-convention script and is outside H's scope. Recorded
 for the merge gate.
 
-1. **`database/sims/db_register_troxel_sim_files.py:382` calls
-   `dbh.add_l2file(...)`, which does not exist.** `RAPIDDB` defines only
-   `add_l2file_fourth_order` (`rapid_db.py:536`) and `add_l2file_fifth_order`
-   (`:651`); a repo-wide grep finds this call site and no definition. The
-   script would raise `AttributeError` on its first L2 registration and has no
-   `try`/`except` around it. This script is therefore **dead on the L2 path
-   today** — which is itself the finding, because criterion 4 requires all
-   three production ingest scripts to use the carved repository, and this one
-   could never have worked.
+1. **`dbh.add_l2file(...)` in the troxel script did not exist — FIXED IN FIX
+   ROUND 1.** `RAPIDDB` defines only `add_l2file_fourth_order`
+   (`rapid_db.py:536`) and `add_l2file_fifth_order` (`:651`); that call site
+   named neither, so the script raised `AttributeError` on its first L2
+   registration, with no `try`/`except` around it — its L2 path was **dead**.
+
+   Originally recorded here as "found but not fixed, outside H's scope". Fix
+   round 1 **fixed it**, because it had become blocking: B2 requires all three
+   production ingest scripts to admit through the carved repository, and a
+   script whose L2 path cannot execute cannot do that. The change is minimal
+   and provably safe — the existing argument list already matched the
+   4th-order signature exactly (same 57 positional arguments, same order), so
+   **the method name was the entire defect**. A contract test now asserts that
+   no ingest script calls a `dbh.*` method `RAPIDDB` does not define, checked
+   against the real class rather than a list.
 
 2. **`db_register_troxel_sim_files.py:445` calls `register_l2filemeta` with 17
    arguments against the 19-parameter signature** at `rapid_db.py:840`

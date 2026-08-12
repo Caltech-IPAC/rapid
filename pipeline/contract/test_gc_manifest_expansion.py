@@ -115,6 +115,11 @@ def test_collect_references_refuses_when_manifests_exist_but_no_reader_does():
     Not silently skipped: computing a plan without expanding active manifests
     would leave every input they name looking unreferenced, which is the
     condition under which this GC deletes live data.
+
+    **THE FIXTURE MAKES ITS OWN ACTIVE MANIFEST** rather than skipping when
+    the database happens to have none. A first revision skipped, and the
+    recorded acceptance run's zero-skip gate caught it — a criterion that
+    skips proves nothing, which is exactly why that gate exists.
     """
     from pipeline.contract import fixture
     conn = fixture.connect()
@@ -122,15 +127,36 @@ def test_collect_references_refuses_when_manifests_exist_but_no_reader_does():
         if not fixture.has_table(conn, "submissions"):
             pytest.skip("DRAFT 044 is not applied (submissions absent)")
         execute = fixture.executor(conn)
+        run_id = "gc-manifest-%s" % fixture.RUN_TAG
 
-        # Only meaningful if there IS an active manifest to expand; with none,
-        # the absence of a reader is not yet a problem.
-        rows = execute(reference_sql.ACTIVE_MANIFESTS_SQL, [])
-        if not rows:
-            pytest.skip("no active submission manifests on this database")
+        # An active manifest: a `submissions` row with a manifest_uri and NO
+        # resolvable children, which the ACTIVE_MANIFESTS_SQL predicate treats
+        # as active precisely because unattributable children are retained.
+        with conn.cursor() as cur:
+            # Every NOT NULL column, read from 044 rather than guessed: the
+            # table requires job_type, job_name, job_queue, job_definition,
+            # manifest_checksum, manifest_uri, array_size and state.
+            cur.execute(
+                "INSERT INTO submissions"
+                " (run_id, job_type, job_name, job_queue, job_definition,"
+                "  manifest_checksum, manifest_uri, array_size, state)"
+                " VALUES (%s, 'science', %s, 'q', 'jd', %s, %s, 1,"
+                "         'prepared')",
+                (run_id, "job-" + run_id, "sha256:" + ("a" * 64),
+                 MANIFEST_URI))
+        conn.commit()
+        try:
+            rows = execute(reference_sql.ACTIVE_MANIFESTS_SQL, [])
+            assert rows, "the fixture manifest is not active"
 
-        with pytest.raises(ManifestUnreadable):
-            reference_sql.collect_references(execute, manifest_reader=None)
+            with pytest.raises(ManifestUnreadable):
+                reference_sql.collect_references(execute,
+                                                 manifest_reader=None)
+        finally:
+            with conn.cursor() as cur:
+                cur.execute("DELETE FROM submissions WHERE run_id = %s",
+                            (run_id,))
+            conn.commit()
     finally:
         conn.close()
 
