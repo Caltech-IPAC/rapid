@@ -345,7 +345,15 @@ for spec in \
     "CRIT9-PLAN-INTEGRITY:pipeline/contract/test_gc_execution.py:checksum or bound or rewritten or transition or approval or reappears:contract" \
     "CRIT10-EXECUTION-SAFETY:pipeline/contract/test_gc_execution.py:exact or version_changed or registered or absent or failure or fence or crash or resume or terminal or commit or unapproved:contract" \
     "CRIT11-DELETION-EXCLUSIVITY:pipeline/contract/test_deletion_exclusivity.py:deletion or exclusion or executor:not live" \
-    "CRIT12-RAPIDDB-FROZEN:pipeline/contract/test_deletion_exclusivity.py:rapiddb or rapid_db or carve:not live" ; do
+    "CRIT12-RAPIDDB-FROZEN:pipeline/contract/test_deletion_exclusivity.py:rapiddb or rapid_db or carve:not live" \
+    "FIX1-B1-ADMISSION-WIRED:pipeline/contract/test_admission_wiring.py:lifecycle or sealed_after:not live" \
+    "FIX1-B2-L2-WIRED:pipeline/contract/test_admission_wiring.py:l2_registration or nonexistent_rapiddb:not live" \
+    "FIX1-B4-BINDING-WIRED:pipeline/contract/test_admission_wiring.py:submission_seam or exposure_grain:not live" \
+    "FIX1-B4-BINDING-DB:pipeline/contract/test_admission_wiring.py:reaches_a_real or worker_process:contract" \
+    "FIX1-B3-OPERATOR-SURFACE:pipeline/contract/test_gc_operator_surface.py::contract" \
+    "FIX1-N1-MANIFEST-EXPANSION:pipeline/contract/test_gc_manifest_expansion.py::not live" \
+    "FIX1-N1-MANIFEST-EXPANSION-DB:pipeline/contract/test_gc_manifest_expansion.py::contract" \
+    "FIX1-N2-FENCE-RECHECK:pipeline/contract/test_gc_execution.py:discharge_watermark or still_discharged:contract" ; do
     # Four colon-separated fields: name, target, -k expression, -m marker.
     # Split by successive prefix/suffix removal rather than by IFS word
     # splitting, because an empty middle field must stay empty rather than

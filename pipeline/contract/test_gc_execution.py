@@ -543,6 +543,72 @@ def test_a_terminal_item_cannot_be_reopened():
         conn.close()
 
 
+def test_the_fence_re_verifies_the_discharge_watermark(monkeypatch):
+    """N2: the watermark check at planning time is a SNAPSHOT.
+
+    A terminal-record writer can raise `terminal_record_sequence` immediately
+    after the plan reads it, making registration lag again and need the very
+    object GC is about to delete — and exact-version deletion does NOT help
+    there, because the new registration wants that same version. So the
+    discharge predicate is re-evaluated inside the fence, and a lapse skips
+    the item.
+
+    The owner lookup is patched to report the lapse, because provoking a real
+    terminal-record advance mid-critical-section would need a second writer
+    racing this test; what matters is that the executor ASKS and honours the
+    answer, which is what the shipped version never did.
+    """
+    conn = fixture.connect()
+    try:
+        require_gc_schema(conn)
+        key = "science/r/u/attempt-0000000001/lapsed.fits"
+        repo, plan = approved_plan(conn, (key,), "lapse-" + fixture.RUN_TAG)
+
+        # The item must carry an attributed attempt for the recheck to fire.
+        with conn.cursor() as cur:
+            cur.execute("UPDATE gc_plan_items SET attributed_attempt_id = 1"
+                        " WHERE plan_id = %s", (plan.plan_id,))
+        conn.commit()
+
+        # The owner is no longer fully discharged: its registration watermark
+        # now lags a terminal-record sequence that advanced after planning.
+        monkeypatch.setattr(
+            "pipeline.gc.reference_sql.owners",
+            lambda execute, attempt_ids=None: {
+                1: {"unit_state": "complete",
+                    "registered_record_sequence": 3,
+                    "terminal_record_sequence": 9,
+                    "live_attempt_count": 0}})
+
+        s3 = StubS3(versions={(BUCKET, key): "v1"})
+        Executor(conn, s3, actor="gc").execute(plan.plan_id,
+                                                commit=conn.commit)
+        assert s3.delete_calls == [], (
+            "the item was deleted although its owner stopped being fully "
+            "discharged between planning and execution")
+        row = item_statuses(conn, plan.plan_id)[0]
+        assert row[1] == "skipped-fenced"
+    finally:
+        conn.close()
+
+
+def test_a_still_discharged_owner_is_not_skipped_by_the_recheck():
+    """The converse, so the recheck cannot pass by refusing everything."""
+    conn = fixture.connect()
+    try:
+        require_gc_schema(conn)
+        key = "science/r/u/attempt-0000000001/ok.fits"
+        repo, plan = approved_plan(conn, (key,), "nolapse-" + fixture.RUN_TAG)
+        # No attributed attempt: the recheck has nothing to look up and must
+        # not invent a refusal.
+        s3 = StubS3(versions={(BUCKET, key): "v1"})
+        Executor(conn, s3, actor="gc").execute(plan.plan_id,
+                                                commit=conn.commit)
+        assert s3.delete_calls == [(BUCKET, key, "v1")]
+    finally:
+        conn.close()
+
+
 def test_execute_refuses_without_a_real_commit_callable():
     """The intent/outcome protocol NEEDS a commit between its two halves.
 
