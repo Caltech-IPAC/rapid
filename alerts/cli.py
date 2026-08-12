@@ -10,12 +10,22 @@ Usage:
     python -m alerts.cli <source_id>                  # one alert
     python -m alerts.cli --pid <pid>                  # one diff image by pid
     python -m alerts.cli --exposure <expid> --sca <n> # one diff image by exposure + SCA
+
+THIS COMMAND ASSEMBLES ALERTS; IT DOES NOT PUBLISH THEM (brief E, rule 14).
+`--kafka` used to construct a producer and send from here, which made this a
+second route onto the wire beside the pipeline — bypassing the outbox, the
+delivery policy, and the pinned schema version that makes a resend
+byte-identical. It now fails with a message naming the real route. Use
+`--save FILE` to write the assembled alerts to an Avro archive.
+
+The only delivery route is the outbox: `pipeline/stages/alert_production.py`
+commits packets to `alert_outbox` inside its confirmation transaction, and the
+`rapid-publisher` service delivers them.
 """
 
 import argparse
 import contextlib
 import logging
-import os
 import sys
 from pathlib import Path
 
@@ -102,9 +112,16 @@ def main(argv: list[str] | None = None) -> int:
                              "--sca); uses the newest vbest>0 processing")
     parser.add_argument("--sca", type=int,
                         help="SCA number (1-18), goes with --exposure")
+    # RETAINED ONLY TO FAIL CLOSED, and deliberately not deleted outright: the
+    # flag is in operators' fingers and in older runbooks, and a removed flag
+    # produces "unrecognized arguments" — which reads as a CLI version skew and
+    # invites someone to find a way around it. Naming the replacement in an
+    # error message is what actually redirects the person typing it.
     parser.add_argument("--kafka", action="store_true",
-                        help="publish to Kafka ($KAFKA_BROKER, default "
-                             "localhost:9092)")
+                        help="REMOVED: publishing is the rapid-publisher "
+                             "service's job (rule 14). This flag now fails "
+                             "with an explanation; use --save to write an "
+                             "Avro archive instead")
     parser.add_argument("--topic", default="alerts", help="Kafka topic")
     parser.add_argument("--save", metavar="FILE",
                         help="also write the run's alerts to one Avro "
@@ -136,20 +153,31 @@ def main(argv: list[str] | None = None) -> int:
     # Make provider
     provider = make_provider()
 
-    # Make producer, if kafka arg is True. kafka-python with Glue framing
-    # under MSK IAM auth (decisions.md § Pipeline Kafka client); the
-    # producer is injected from here into produce.py exactly as before.
+    # NO SEND ROUTE EXISTS HERE ANY MORE (brief E2, rule 14). This CLI used to
+    # construct a real producer and publish, which made it a SECOND way onto
+    # the wire beside the pipeline — with no outbox, no delivery policy check,
+    # no pinned schema version and therefore no "identical bytes on resend".
+    # A packet sent this way would be invisible to every clock and every
+    # health view, and indistinguishable at the broker from a real one.
+    #
+    # The only route is now the outbox: the alert-production job commits
+    # packets and `rapid-publisher` delivers them.
+    # `pipeline/contract/test_alert_send_routes.py` asserts repo-wide that
+    # production transport construction is reachable from the publisher entry
+    # point alone, and this branch is why that assertion can hold.
+    #
+    # FAIL CLOSED, NOT SILENTLY IGNORE. A flag that was accepted and did
+    # nothing would let someone believe they had published.
     producer = None
     if args.kafka:
-        if __package__:
-            from .kafka_producer import make_producer
-        else:
-            from alerts.kafka_producer import make_producer
-        broker = os.environ.get("KAFKA_BROKER")
-        if not broker:
-            parser.error("--kafka needs KAFKA_BROKER set to the MSK IAM "
-                         "bootstrap brokers (port 9098)")
-        producer = make_producer(broker)
+        parser.error(
+            "--kafka is removed: this CLI no longer publishes. Alert delivery "
+            "goes through the transactional outbox — the alert-production job "
+            "commits packets to `alert_outbox` in its confirmation "
+            "transaction and the `rapid-publisher` service delivers them "
+            "at-least-once with identical bytes on resend (rule 14). This "
+            "command still ASSEMBLES alerts: use --save FILE to write them to "
+            "an Avro archive.")
 
     # Alert archive (produce.py)
     archive_ctx = (open_alert_archive(

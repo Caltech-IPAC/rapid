@@ -137,9 +137,17 @@ jobs:
         # module imported, which is what `pip install -e .` is being trusted
         # for. A shim that could not import would fail differently, with a
         # traceback naming the import.
+        #
+        # ALL FIVE DECLARED ENTRY POINTS, which until brief E was three.
+        # `pyproject.toml` has declared `rapidctl` since brief G and this loop
+        # never named it — a latent gap, not a deliberate exclusion: the one
+        # thing this step exists to prove is that every console script a wheel
+        # declares can actually be executed, and a declared-but-unchecked
+        # entry point is exactly the "scaffold is not a deployment" defect it
+        # is guarding against. E closes it and adds its own `rapid-publisher`.
         run: |
           set +e
-          for cmd in rapid-reconciler rapid-operator rapid-job; do
+          for cmd in rapid-reconciler rapid-operator rapid-job rapidctl rapid-publisher; do
             command -v "$cmd" >/dev/null || { echo "BRIEF-B-ENTRYPOINT-$cmd: FAIL exit=1 (not installed)"; exit 1; }
             out=$("$cmd" --help 2>&1); rc=$?
             echo "BRIEF-B-ENTRYPOINT-$cmd: resolved exit=$rc"

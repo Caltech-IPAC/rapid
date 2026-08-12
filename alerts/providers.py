@@ -88,6 +88,26 @@ class Source:
     yfit: float
     band: str
     aid: int | None = None        # associated object; set once known
+    # THE CATALOGUE'S OWN KEY, exposed for alert identity (brief E). Together
+    # with `pid` and `isdiffpos` this is migration 041's conflict identity for
+    # `sources` — `id` is a PER-FILE ordinal, unique only within one difference
+    # image and one sign, which is why it never travels alone.
+    #
+    # Distinct from `sid`, and that distinction is the reason this field
+    # exists. `sid` is DB-GENERATED at catalog load (`pipeline/stages/
+    # post_db.py`'s COPY column list does not carry it), so it is
+    # realization-local: reload the same catalogue and every detection gets a
+    # new one. An alert identity built on `sid` would change for data that did
+    # not change, which is what `alerts/identity.py` refuses.
+    #
+    # Placed among the defaulted fields rather than beside `sid` where it
+    # belongs by meaning: `Source` is built positionally by a good many test
+    # doubles, and a non-defaulted field inserted second would break every one
+    # of them (and a dataclass cannot put a defaulted field before a required
+    # one at all). `from_row` fills it by NAME from the `sources` row, where
+    # `SELECT s.*` has always returned it, so the production path is unaffected
+    # by where it sits.
+    id: int | None = None
     xerr: float | None = None
     yerr: float | None = None
     fluxfit: float | None = None
@@ -130,6 +150,13 @@ class Source:
         strict : bool, optional
             If True, every Source field must be present as a key in `row`
             (except `aid`). Errors on dropped columns instead of null.
+
+            `id` IS in the strict set, deliberately. Every caller reads
+            `SELECT s.*` from `sources`, so the column is always there; making
+            it strict means a future query that narrows its column list fails
+            HERE, naming `id`, rather than silently producing alert packets
+            whose identity component is None — which the identity module would
+            then refuse one layer further away from the cause.
 
         Returns
         -------

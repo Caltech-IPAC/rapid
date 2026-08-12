@@ -95,6 +95,10 @@ rapid-job = "pipeline.entrypoints.job:main"
 # constrained procedure instead of handwritten SQL at a psql prompt. Same
 # bare `module:main` convention as the three above.
 rapidctl = "pipeline.operatorctl.main:main"
+# The fifth, and the third long-running service: rule 14's publisher, the only
+# component that talks to the broker after brief E moved delivery out of the
+# alert-production Batch job. Same bare `module:main` convention.
+rapid-publisher = "pipeline.publisher.service:main"
 
 [tool.setuptools]
 # EXPLICIT PACKAGE LIST, NOT AUTO-DISCOVERY. Auto-discovery over this repo

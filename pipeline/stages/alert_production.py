@@ -26,9 +26,22 @@ loudly because a run that reports published alerts while publishing nothing is
 worse than one that crashes (the 2026-08-04 Q7 finding, which is why
 `GlueFramingProducer.flush` raises).
 
-**EMISSION COMMIT SEMANTICS: CLAIM -> PUBLISH/FLUSH -> CONFIRM** (integration
-review 2026-08 composite ruling 3, migration 037; supersedes the earlier
-claim-before-publish watermark this module described up to that ruling). The
+**THIS JOB TYPE NO LONGER SENDS ANYTHING** (brief E, rule 14). Until package E
+this module constructed a live Kafka producer and sent in-job, which put
+delivery inside the Batch job's lifetime: a broker outage failed science
+attempts that had already done their science, and "identical bytes on resend"
+could not be true because a resend was whatever the next attempt happened to
+re-serialize. The job's obligation now ENDS AT THE OUTBOX — it assembles,
+serializes, computes each packet's identity, and commits `alert_outbox` rows in
+the confirmation transaction. `rapid-publisher` (`pipeline/publisher/`) owns
+the wire from there, and is the only component in the tree that constructs a
+producer at all; `pipeline/contract/test_alert_send_routes.py` asserts that
+repo-wide.
+
+**EMISSION COMMIT SEMANTICS: CLAIM -> ASSEMBLE -> CONFIRM+OUTBOX** (integration
+review 2026-08 composite ruling 3, migration 037, as re-targeted by brief E;
+supersedes the earlier claim-before-publish watermark this module described up
+to that ruling). The
 previous protocol claimed the watermark, published, and stopped: any failure
 between the committed claim and delivery permanently suppressed the unit's
 alert, because a claim WAS a confirmed emission — there was no representable
@@ -42,24 +55,46 @@ transient), and this module now writes it as three separate steps:
    attempt's token, is a recorded no-op — not a failure — because the unit is
    either terminally suppressed already or genuinely owned by a live
    claimant.
-2. **PUBLISH** — assembly and serialization stay PER CANDIDATE, inside the
-   drop-and-continue catch (gate 3: a bad cutout drops that candidate, not
-   the chip); the producer send and the flush are CHIP-LEVEL, outside every
-   per-candidate catch. A candidate failure was always meant to be
-   independent of delivery; a delivery failure was always meant to fail the
-   attempt (the 2026-08-04 Q7 finding stands). If publishing raises, the
-   claim is left `claimed` — untouched — for a later attempt to confirm or
-   take over; it is never rolled back to unclaimed, because the at-least-once
-   contract's cost is a possible duplicate, never a silently abandoned claim
-   nobody retries.
-3. **CONFIRM** — a second CAS update, gated on this attempt still owning the
-   claim (`claim_token` unchanged since step 1), in the SAME transaction as
-   the `alert_published` milestone write (integration ruling 6): a crash
-   cannot confirm an emission without the milestone recording it, or vice
-   versa. A confirm that finds the claim taken over (zero rows) is a
-   recorded no-op: the takeover attempt republishes, and consumers
-   deduplicate on alert identity — the at-least-once contract's accepted
-   cost, never treated as this attempt's failure.
+2. **ASSEMBLE** — assembly, serialization and identity computation stay PER
+   CANDIDATE, inside the drop-and-continue catch (gate 3: a bad cutout drops
+   that candidate, not the chip). Each surviving candidate also has its framed
+   size CHECKED against `MAX_PACKET_BYTES` here: an oversize packet is an
+   AUDITABLE DROP with its own reason, recorded like any other drop and
+   discarded BEFORE the confirmation transaction — never a row committed to
+   the outbox that the publisher could not send, and never a stranded claim.
+   Nothing in this step touches a network.
+3. **CONFIRM + OUTBOX** — the ALERT-EFFECT CONFIRMATION transaction, and the
+   fixed order inside it is load-bearing (brief E):
+
+       confirm CAS  ->  verify this attempt still owns the claim  ->
+       insert outbox rows  ->  write the milestone
+
+   The confirm CAS can affect ZERO rows without raising — a takeover is a
+   recorded no-op — so a losing claimant that inserted outbox rows first
+   would leave packets behind for an emission it did not confirm, and the
+   publisher would deliver them. A losing claimant therefore commits NEITHER
+   outbox rows NOR the milestone. All three effects are one transaction
+   (integration ruling 6, extended by rule 14): a crash cannot confirm an
+   emission without the packets, or write packets without the milestone.
+
+   This is rule 14's "same transaction as the database effect that produced
+   them", and it is deliberately NOT rule 9's result-acceptance transaction —
+   the attempt's terminal record and closure happen later, in the termination
+   protocol (`pipeline/entrypoints/job.py`, `pipeline/runtime/termination.py`),
+   and the registration consumer that owns that transaction cannot construct
+   these packets: it has no provider, no cutouts and no schema. The remaining
+   rule-9 architectural gap is recorded in DRAFT 050's header rather than
+   papered over here.
+
+   TWO LEVELS OF IDEMPOTENCY, NOT CONFLATED. The chip-level
+   `alert_emissions` fence (this claim/confirm CAS) decides whether this
+   ATTEMPT may emit at all; `alert_outbox.alert_id`'s UNIQUE constraint
+   decides whether a PACKET is already there. A re-run after a lost response
+   re-claims through the first and writes no duplicate rows through the
+   second — the digest is deterministic, so the re-run recomputes the same
+   ids and the insert path absorbs them as idempotent. Neither mechanism
+   substitutes for the other: the fence cannot tell packets apart, and
+   uniqueness cannot tell whether an emission was authorized.
 
 **THE CLAIM, THE CONFIRM, AND THE MILESTONE ALL WRITE THROUGH THE BORROWED
 CONNECTION** (`context.require_connection()`), never through `provider.db` —
@@ -72,6 +107,12 @@ per call — no way to make CONFIRM and the milestone atomic at all.
 
 import logging
 
+# The framing overhead the size check must account for. Imported rather than
+# restated: the header is `alerts/kafka_producer.py`'s definition and a second
+# copy of its length here would silently disagree if the format ever changed.
+# Module-scope because it is a constant, not a collaborator — every other
+# `alerts` import in this module is deliberately lazy (see `produce_alerts`).
+from alerts.kafka_producer import GLUE_HEADER_LEN
 from database.modules.utils.checked import CheckedHandle, RapidDBCallFailed
 from database.modules.utils.rapid_db import RAPIDDB
 from database.modules.utils.rapid_db_connect import ConnectionExecutor, transaction
@@ -86,16 +127,46 @@ logger = logging.getLogger(__name__)
 #: two in sync by inspection until a shared parameter home exists").
 CLAIM_STALENESS = "interval '1 hour'"
 
-#: The internal-topic PREFIX this job type is allowed to publish under.
+#: The internal-topic PREFIX an alert may be destined for.
 #:
-#: The topic itself is a parameter (`kafka/topic`), not a constant here — one
-#: home per fact, and the parameter tree is that home. What is hardcoded is
-#: the namespace GUARD: the mission/public stream must not be reachable from
-#: this job type even by reconfiguration, and the publication policy grants
-#: `rapid.internal.alerts.*` (plus `rapid.test.*`) and nothing else. A
-#: parameter edit that pointed this at a public topic would otherwise be a
-#: one-line change with no code review of the blast radius.
+#: THE GUARD MOVED TO THE PUBLISHER (brief E2) and this constant moved with the
+#: reason for it. The namespace rule is unchanged — the mission/public stream
+#: must not be reachable even by reconfiguration, and the publication policy
+#: grants `rapid.internal.alerts.*` (plus `rapid.test.*`) and nothing else —
+#: but after E this job type has no send to guard: it writes a `topic` into
+#: each outbox row and `rapid-publisher` checks that stored value immediately
+#: before every send, which is the last point where the check still means
+#: something.
+#:
+#: It is enforced HERE TOO, at outbox-write time, and deliberately so: the
+#: topic is part of the row's write-once envelope, so a packet written for a
+#: forbidden topic could never be corrected — only refused. Refusing to WRITE
+#: it fails the attempt loudly at the point where the parameter was misread,
+#: which is where an operator can act on it. Two checks, one rule, neither
+#: redundant: this one prevents the row, the publisher's prevents the send.
 INTERNAL_TOPIC_PREFIXES = ("rapid.internal.", "rapid.test.")
+
+#: The largest framed packet this job type will commit to the outbox.
+#:
+#: `make_transport`'s producer cap is 15728640 (15 MiB) and equals the tree's
+#: `kafka/max-request-bytes`; a packet at or over it cannot be sent, so
+#: committing one would strand a row the publisher can only ever REFUSE. The
+#: bound here is deliberately UNDER that cap — a packet's wire form carries the
+#: Glue header on top of what is measured, brokers apply their own per-message
+#: overhead, and a packet that is exactly at the limit locally is the one that
+#: fails remotely.
+#:
+#: 12 MiB against a typical ~200 KB packet (cutouts dominate: 129x129 stamps,
+#: `alerts/providers.py`) is roughly sixty times the ordinary size, so this
+#: bound is not a tuning knob for normal traffic — it is a guard against a
+#: pathological packet, and crossing it is an auditable drop with its own
+#: recorded reason rather than a silent truncation or a stranded row.
+MAX_PACKET_BYTES = 12 * 1024 * 1024
+
+#: The drop reason an oversize packet is recorded under. A NAMED CONSTANT
+#: because it is a vocabulary term the effect counts group by, and a reason
+#: spelled differently in two places would split one category into two.
+DROP_REASON_OVERSIZE = "OversizePacket"
 
 #: The PLACEHOLDER selection, labelled as one.
 #:
@@ -165,8 +236,9 @@ def produce_alerts(context) -> None:
     into one without reopening the at-most-once loss this protocol replaces.
     """
     from alerts.cli import make_provider
+    from alerts.identity import alert_identity, payload_checksum
     from alerts.produce import (assemble_alert_for_source, load_schema,
-                                publish_alert, serialize_alert)
+                                serialize_alert)
     # Lazy, matching `pipeline/stages/science.py`'s own milestone-writer
     # import and `pipeline/entrypoints/job.py`'s `_database` — no stage
     # imports `observability.attempts` at module scope.
@@ -245,13 +317,21 @@ def produce_alerts(context) -> None:
         return
 
     topic = _internal_topic(context)
-    producer = _make_internal_producer(context)
     schema = load_schema()
+    # The pinned schema-version UUID, resolved ONCE per chip and stored on
+    # every packet this attempt writes. Resolved HERE, at outbox-write time,
+    # rather than by the publisher at send time: that is the whole mechanism
+    # behind "identical bytes on resend" — see `_pinned_schema_version`.
+    schema_version_id = _pinned_schema_version(context, topic)
+    # Which identity basis this chip's packets use, decided once: the image is
+    # the same for every candidate on it.
+    image_basis = _image_identity(emissions, pid, context)
 
     considered = 0
-    published = 0
+    outboxed = 0
     dropped_by_reason: dict = {}
     drop_dispositions: list = []
+    packets: list = []
 
     try:
         sources = list(provider.iter_sources(pid))
@@ -268,18 +348,26 @@ def produce_alerts(context) -> None:
     selected = select_candidates(sources)
     considered = len(selected)
 
-    # STEP 2: PUBLISH. Candidate scope is assembly + serialization ONLY
-    # (integration ruling 3) — each candidate's own catch stops there.
-    # Producer construction (above), topic resolution (above), auth, send,
-    # and flush are CHIP-LEVEL: outside every per-candidate catch, so a
-    # producer/broker failure raises loudly rather than recording as a
-    # candidate drop (the 2026-08-04 Q7 finding this module has named since
-    # it was written).
+    # STEP 2: ASSEMBLE. Candidate scope is assembly, serialization, identity
+    # and the size check — no network, nothing durable. Each candidate's own
+    # catch stops here (gate 3: a bad cutout drops that candidate, not the
+    # chip), and NOTHING in this loop writes: the packets accumulate in memory
+    # and are committed together, once, by the confirmation transaction below.
+    # That is what makes "a crash before CONFIRM leaves no outbox rows" true by
+    # construction rather than by care.
     for source in selected:
         sid = getattr(source, "sid", None)
         try:
             alert = assemble_alert_for_source(provider, source)
             payload = serialize_alert(alert, schema=schema)
+            # THE CATALOG KEY, NOT `sid` (brief E's fixed reading). `sid` is
+            # DB-generated at catalog load and realization-local; `(id,
+            # isdiffpos)` is the catalogue's own conflict identity.
+            packet_id, _identity_payload = alert_identity(
+                catalog_id=getattr(source, "id", None),
+                isdiffpos=getattr(source, "isdiffpos", None),
+                release_identity=release_identity,
+                **image_basis)
         except Exception as exc:  # noqa: BLE001 - a candidate, not the chip
             # PER-CANDIDATE DROP (gate 3). The reason is the exception's type
             # rather than its message: the counts are grouped by reason and a
@@ -292,70 +380,140 @@ def produce_alerts(context) -> None:
             context.logger.warning("candidate sid=%s dropped (%s): %s",
                                    sid, reason, exc)
             continue
-        # CHIP-LEVEL from here: send is not wrapped in the per-candidate
-        # catch. A send failure (as opposed to a delayed delivery failure
-        # `flush` reports) is a producer/broker fault, not this candidate's.
-        publish_alert(payload, producer, topic=topic, flush=False)
-        published += 1
 
-    # DELIVERY failure raises loudly — flush() reports what send() deferred.
-    # The claim stays `claimed`: this attempt's confirm below never runs, and
-    # a later attempt (retry or takeover) republishes and confirms — the
-    # at-least-once contract's accepted cost, never a silent loss.
-    producer.flush()
+        # THE SIZE CHECK, BEFORE THE CONFIRM TRANSACTION (brief E2). Measured
+        # on the FRAMED size — header included — because that is what the
+        # producer's request cap applies to. An oversize packet is an
+        # auditable drop with its own reason: the chip's other candidates
+        # emit normally, and no row is committed that the publisher could only
+        # ever refuse.
+        framed_size = len(payload) + GLUE_HEADER_LEN
+        if framed_size > MAX_PACKET_BYTES:
+            dropped_by_reason[DROP_REASON_OVERSIZE] = (
+                dropped_by_reason.get(DROP_REASON_OVERSIZE, 0) + 1)
+            drop_dispositions.append({
+                "sid": sid, "reason": DROP_REASON_OVERSIZE,
+                "detail": (f"framed packet is {framed_size} bytes, over the "
+                           f"{MAX_PACKET_BYTES}-byte bound (producer request "
+                           f"cap is 15728640)"),
+                "alert_id": packet_id, "bytes": framed_size})
+            context.logger.error(
+                "candidate sid=%s dropped: framed packet %d bytes exceeds the "
+                "%d-byte bound; not outboxed (alert_id would have been %s)",
+                sid, framed_size, MAX_PACKET_BYTES, packet_id)
+            continue
+
+        packets.append({"alert_id": packet_id, "payload": payload,
+                        "checksum": payload_checksum(payload), "sid": sid})
 
     # STEP 3: CONFIRM + THE alert_published MILESTONE, in ONE transaction
     # (integration ruling 3 / 6: "Emission confirmation and the
     # alert-published milestone commit in one transaction, so a crash cannot
     # confirm an emission without the milestone recording it").
+    # THE ORDER IS FIXED AND IS THE POINT (brief E): confirm CAS first, then
+    # the token check, and ONLY THEN the outbox rows and the milestone. The
+    # confirm can affect zero rows without raising, so inserting first would
+    # let a LOSING claimant commit packets for an emission it did not confirm
+    # — and the publisher would deliver them. Under this order a loser commits
+    # neither.
     try:
         with transaction(conn) as _:
             confirmed_token = emissions.confirm_alert_emission(
-                exposure, sca, release_identity, claim_token, published)
+                exposure, sca, release_identity, claim_token, len(packets))
             if confirmed_token == claim_token:
+                for packet in packets:
+                    # Through the migration's function, never a bare INSERT:
+                    # the same-id-different-envelope comparison is the
+                    # invariant, and a call site that wrote its own statement
+                    # could forget it. A re-run after a lost response lands
+                    # here with identical digests and is absorbed as
+                    # 'idempotent'.
+                    #
+                    # A GENUINE COLLISION RAISES, AND IS NOT CAUGHT HERE —
+                    # deliberately. The `except RapidDBCallFailed` below
+                    # handles ordinary query failure (the handle's exit_code
+                    # convention); a same-id-different-envelope collision is
+                    # not that. It raises psycopg2's own error straight
+                    # through `CheckedHandle`, unwinds this transaction, and
+                    # FAILS THE ATTEMPT. That is the intended outcome: it
+                    # means either the digest inputs are incomplete or two
+                    # different packets were minted under one identity, and
+                    # both are defects that must stop the pipeline rather than
+                    # be recorded as a drop and continued past.
+                    emissions.insert_alert_outbox_packet(
+                        packet["alert_id"], image_basis["basis_name"],
+                        packet["payload"], packet["checksum"],
+                        schema_version_id, topic, release_identity,
+                        exposure, sca, claiming_attempt_id)
+                    outboxed += 1
                 writer = AttemptWriter(
                     ConnectionExecutor(conn, autocommit_each=False))
                 writer.record_milestone(
                     "alert_published", _utcnow(), exposure_id=exposure,
                     sca=sca, producing_attempt_id=claiming_attempt_id)
     except RapidDBCallFailed as exc:
-        # The alerts are published; failing the attempt now would misreport a
-        # successful emission as a failure and invite a retry that would
-        # republish. Logged loudly instead — the attempt's own effect counts
-        # still carry the number, and the claim (still 'claimed') is
-        # recoverable by a later confirm or takeover.
+        # NOTHING WAS DELIVERED, so this is materially different from what it
+        # meant before brief E. The transaction rolled back: no outbox rows,
+        # no milestone, no confirmed emission — and no packets on the wire
+        # either, because this job type no longer sends. The claim stays
+        # 'claimed' and a later attempt (retry or takeover) redoes the work and
+        # confirms. Logged rather than raised for the same reason as before:
+        # the attempt's science succeeded and failing it here would invite a
+        # retry of the whole job for a database fault at its last step.
+        outboxed = 0
         logger.warning(
-            "published %d alert(s) for %s/%s but could not confirm the "
-            "emission (claim left 'claimed' for later recovery): %s",
-            published, exposure, sca, exc)
+            "assembled %d packet(s) for %s/%s but the confirmation "
+            "transaction failed; NOTHING was committed and nothing was sent "
+            "(claim left 'claimed' for later recovery): %s",
+            len(packets), exposure, sca, exc)
         confirmed_token = None
 
     if confirmed_token != claim_token:
+        # A LOSING CLAIMANT COMMITS NOTHING. The transaction above wrote no
+        # outbox rows and no milestone, because both are inside the
+        # `confirmed_token == claim_token` arm — so unlike the pre-E protocol,
+        # there is nothing on the wire to deduplicate: the takeover attempt
+        # assembles and outboxes the same packets under the same deterministic
+        # ids, and the publisher delivers them once.
+        outboxed = 0
         context.logger.warning(
-            "unit %s/%s: claim was taken over between publish and confirm "
-            "(or the confirm failed); %d alert(s) were published but this "
-            "attempt's confirmation is a recorded no-op — the takeover "
-            "republishes, consumers deduplicate", exposure, sca, published)
+            "unit %s/%s: claim was taken over before confirm (or the confirm "
+            "failed); %d assembled packet(s) were DISCARDED uncommitted — the "
+            "takeover attempt outboxes them under the same deterministic "
+            "alert ids", exposure, sca, len(packets))
 
     context.record_effect(
         candidates_considered=considered,
-        alerts_published=published,
+        # OUTBOX-WRITE ACCOUNTING, NOT DELIVERY ACCOUNTING, and renamed to say
+        # so (brief E2 asks for one or the other; this is the choice). The old
+        # `alerts_published` counted producer sends from inside this job, which
+        # no longer happen — keeping the name would have this attempt claiming
+        # a delivery it does not perform and cannot observe. What this job can
+        # honestly report is how many packets it COMMITTED; whether they
+        # reached the broker is `alert_outbox.state`, and how long that took is
+        # the `alert_outbox_health` view. The DB column
+        # `alert_emissions.alerts_published` (migration 037) keeps its name —
+        # renaming a column is a rapid_systems change this brief does not own —
+        # and now counts packets outboxed by the confirming attempt.
+        alerts_outboxed=outboxed,
         candidates_dropped=sum(dropped_by_reason.values()),
         dropped_by_reason=dropped_by_reason,
         drop_dispositions=drop_dispositions,
         emissions_suppressed=0,
         emission_confirmed=(confirmed_token == claim_token),
         alert_topic=topic,
+        alert_identity_basis=image_basis["basis_name"],
+        alert_schema_version_id=str(schema_version_id),
         alert_release_identity=release_identity,
         alert_difference_image_pid=pid,
         selection_rule=f"PLACEHOLDER top-{PLACEHOLDER_TOP_N_BY_SNR}-by-snr",
         sources_available=len(sources))
     context.logger.info(
-        "unit %s/%s: %d candidate(s) considered, %d published, %d dropped, "
-        "confirmed=%s (release %s, topic %s)",
-        exposure, sca, considered, published,
+        "unit %s/%s: %d candidate(s) considered, %d outboxed, %d dropped, "
+        "confirmed=%s (release %s, topic %s, basis %s)",
+        exposure, sca, considered, outboxed,
         sum(dropped_by_reason.values()), confirmed_token == claim_token,
-        release_identity, topic)
+        release_identity, topic, image_basis["basis_name"])
 
 
 def _utcnow():
@@ -400,31 +558,95 @@ def _internal_topic(context):
     return topic
 
 
-def _make_internal_producer(context):
-    """The real Kafka producer, on the internal topic.
+def _pinned_schema_version(context, topic):
+    """The schema-version UUID every packet this attempt writes is pinned to.
 
-    THE INJECTION SEAM MADE REAL. `batch_produce`'s `producer=` argument has
-    always accepted one; nothing constructed it outside the CLI. The brokers
-    are a PARAMETER, not an environment variable read at import: the
-    environment policy puts nothing that selects a destination in the
-    environment, and a misread broker would publish to the wrong cluster
-    silently.
+    RESOLVED HERE, AT OUTBOX-WRITE TIME, AND STORED — which is the entire
+    mechanism behind rule 14's "identical bytes on resend". The production
+    producer resolves the registry's LATEST version at publish time
+    (`alerts/kafka_producer.py`, `SchemaVersionNumber={"LatestVersion":
+    True}`), so a packet re-framed after a registry bump yields DIFFERENT wire
+    bytes. Pinning the UUID onto the row and framing strictly from it is what
+    makes a resend byte-identical across a registry change.
 
-    The request-size cap is NOT set here. `make_transport`'s own default
-    (15728640) already equals the tree's `kafka/max-request-bytes`, and
-    `make_producer` does not forward the keyword — passing it would be a
-    TypeError at the first real publication. If the two ever need to differ,
-    the forwarding is the change to make, not a second value invented here.
+    Taken from the parameter tree when it carries one, and otherwise from the
+    registry — reading it here, once per chip, rather than per packet: it is
+    the same value for every packet on the chip and the lookup is a network
+    call.
+
+    NOTE THE DIRECTION OF THE DEPENDENCY. This is the LAST place in the
+    pipeline that may consult the registry, and it does so to WRITE a value
+    down, never to send. After brief E the send path has no registry access at
+    all, which is what the pinning buys.
     """
-    from alerts.kafka_producer import make_producer
+    pinned = context.parameter("kafka/schema-version-id")
+    if pinned:
+        return str(pinned)
 
-    brokers = context.parameter("kafka/bootstrap-servers")
-    if not brokers:
+    from alerts.kafka_producer import GlueSchemaRegistry, schema_name_for_topic
+
+    try:
+        return str(GlueSchemaRegistry().schema_version_id(
+            schema_name_for_topic(topic)))
+    except Exception as exc:  # noqa: BLE001
+        # FAIL THE ATTEMPT rather than invent or defer. A packet written
+        # without a pinned version could only be framed by a registry lookup
+        # at send time, which is exactly the property this design removes; and
+        # the column is NOT NULL, so there is no partial answer to record.
         raise InputError(
-            "the parameter tree does not carry kafka/bootstrap-servers; the "
-            "alert-production job type publishes to the internal topic and "
-            "has no default broker")
-    return make_producer(brokers)
+            f"cannot resolve the schema version to pin onto this chip's "
+            f"packets for topic {topic!r} ({type(exc).__name__}: {exc}); the "
+            f"outbox row stores the version so a resend reproduces the first "
+            f"send's wire bytes, and a packet written without one could only "
+            f"be framed by a registry lookup at send time") from exc
+
+
+def _image_identity(emissions, pid, context):
+    """Which identity basis this chip's packets use, and its image component.
+
+    Returns the keyword arguments `alerts.identity.alert_identity` takes, plus
+    a `basis_name` for the outbox column and the effect record.
+
+    THE PRODUCT KEY IS PREFERRED AND THE LEGACY TUPLE IS A DEGRADATION. A
+    difference image registered under the identity model has a
+    `diffimages.product_id` pointing at its `products` row (DRAFT 048), and
+    that product key is the identity that survives reprocessing. 048 added the
+    column as NULLABLE, so pre-D history has none — and for those rows the
+    legacy `pid` is the ONLY identity of record. Mirrors the D worker's
+    ratified P8 degradation: legacy-only, logged with the reason, never
+    invented.
+
+    The basis is decided ONCE PER CHIP because the image is the same for every
+    candidate on it, and — critically — it is decided at outbox-write time and
+    then frozen into each row. A difference image that later gains a product
+    binding does NOT re-mint identities for packets already outboxed.
+    """
+    from alerts.identity import BASIS_LEGACY_PID, BASIS_PRODUCT_KEY
+
+    product_key = None
+    try:
+        product_key = emissions.get_difference_image_product_key(pid)
+    except RapidDBCallFailed as exc:
+        # A FAILED LOOKUP IS NOT AN ABSENT BINDING. Degrading to the legacy
+        # basis here would mint permanent legacy identities for images that
+        # may well have product keys, on the strength of a transient database
+        # fault — and the identities are immutable once written.
+        raise RuntimeError(
+            f"could not determine whether difference image pid {pid} has a "
+            f"product binding: {exc}. Refusing to choose an identity basis on "
+            f"a failed lookup — the basis is frozen into every packet this "
+            f"chip writes and cannot be corrected later") from exc
+
+    if product_key:
+        return {"basis_name": BASIS_PRODUCT_KEY, "product_key": product_key}
+
+    context.logger.info(
+        "difference image pid %s has no product binding (pre-D history: "
+        "DRAFT 048 added diffimages.product_id as nullable), so this chip's "
+        "packets take the %s basis with the legacy pid as the image "
+        "identity — the ratified degradation, recorded per packet in "
+        "alert_outbox.identity_basis", pid, BASIS_LEGACY_PID)
+    return {"basis_name": BASIS_LEGACY_PID, "legacy_pid": pid}
 
 
 #: The job type's sequence — one stage, for the reason `produce_alerts` states.
