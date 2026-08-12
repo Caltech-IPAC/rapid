@@ -96,13 +96,25 @@ transient), and this module now writes it as three separate steps:
    substitutes for the other: the fence cannot tell packets apart, and
    uniqueness cannot tell whether an emission was authorized.
 
-**THE CLAIM, THE CONFIRM, AND THE MILESTONE ALL WRITE THROUGH THE BORROWED
-CONNECTION** (`context.require_connection()`), never through `provider.db` —
-`provider.db` is `alerts.cli.make_provider()`'s OWN, separate `RAPIDDB()`
-connection, opened purely to read candidates and cutouts. Writing the
-emission state through it would put the CAS on a connection with no relation
-to this attempt's own lifecycle transaction, and — because it autocommits
-per call — no way to make CONFIRM and the milestone atomic at all.
+**THE CLAIM, THE CONFIRM, THE OUTBOX ROWS AND THE MILESTONE ALL WRITE THROUGH
+THE BORROWED CONNECTION** (`context.require_connection()`), never through
+`provider.db` — `provider.db` is `alerts.cli.make_provider()`'s OWN, separate
+`RAPIDDB()` connection, opened purely to read candidates and cutouts. Writing
+the emission state through it would put the CAS on a connection with no
+relation to this attempt's own lifecycle transaction, and — because it
+autocommits per call — no way to make CONFIRM, the packets and the milestone
+atomic at all.
+
+**THE OUTBOX WRITES GO THROUGH A CARVED REPOSITORY** — `pipeline/repositories/
+alert_outbox.py`, over that same borrowed connection, so they participate in
+the confirmation transaction exactly as the CAS does. `RAPIDDB` is FROZEN
+(brief G's ratified merge decision; target rule 17 puts new access behind
+narrow typed repositories), and the emission CAS above is reached through it
+only because those methods predate the freeze. Two failure vocabularies
+therefore meet in this module — `RapidDBCallFailed` from the legacy handle's
+`exit_code` convention, `RepositoryQueryFailed` from the repository — and the
+confirmation path catches both, because a failed packet insert and a failed
+confirm are the same event to this stage.
 """
 
 import logging

@@ -257,10 +257,43 @@ Seven review points, each a decision rather than a default:
    this branch's second acceptance run. The assignment to the smallint column
    still range-checks the value, so the check moves rather than disappearing.
 
+8. **The application side reaches this schema through a carved repository,
+   never through `RAPIDDB`.** `pipeline/repositories/alert_outbox.py` owns the
+   two calls the alert-production stage makes — `insert_packet` and
+   `product_key_for_difference_image` — beside D's `products.py` and F's
+   `association.py`. `RAPIDDB` is frozen (brief G's ratified merge decision;
+   rule 17), and the first revision of this work put both queries there and
+   was correctly refused, exactly as F's was.
+
+   The carve is not a move, and the difference is worth a reviewer's eye. The
+   `RAPIDDB` revision recovered from an unapplied DRAFT 048 by catching
+   `UndefinedTable` and calling `conn.rollback()` — safe in that class, where
+   every read autocommits and owns nothing, and CATASTROPHIC on this path,
+   where the same rollback would discard the confirm CAS the caller had
+   already written inside the confirmation transaction. The repository asks
+   the catalog first (`product_binding_present`), so a missing 048 never
+   aborts the caller's transaction to be discovered. It also never commits and
+   never rolls back, for the reason `products.py`'s `_query` records: the
+   caller owns the boundary.
+
+   One thing IS deliberately not wrapped: the migration's own collision RAISE
+   (SQLSTATE **P0001**) passes through the repository unwrapped, so a
+   same-id-different-envelope insert fails the attempt instead of arriving as
+   a typed "query failed" a caller may reasonably treat as retryable.
+
 **Applied and re-applied cleanly** in the recorded acceptance run
 (`BRIEF-E-DRAFT-050: PASS exit=0`, `BRIEF-E-DRAFT-050-REAPPLY: PASS exit=0`
-— idempotent), with the full contract tier at 251 passed / **zero skips** and
+— idempotent), with the full contract tier at 279 passed / **zero skips** and
 `BRIEF-E-OVERALL: PASS exit=0`.
+
+**The grant posture is asserted twice, on purpose.** The catalog-metadata
+tests ask what the grant map says (`has_table_privilege`,
+`has_column_privilege`); the behavioural tests `SET LOCAL ROLE` to
+`rapid_pipeline_write` and `rapid_publisher` and ATTEMPT each forbidden
+operation, asserting `InsufficientPrivilege` specifically. Neither subsumes
+the other — a passing catalog test beside a failing behavioural one would mean
+the map lies, and the reverse would mean the refusal holds today for a reason
+the map does not document.
 
 **Deployment still owes two things this file cannot do**, both drafted as
 `rapid_systems` change-request text in the brief-E worker's ledger: the
