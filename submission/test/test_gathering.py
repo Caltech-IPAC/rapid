@@ -1384,7 +1384,11 @@ class PostDbGatheringTests(unittest.TestCase):
         with self.assertRaises(GatheringError) as caught:
             list(gather_crossmatch_units(source, "20260808"))
 
-        self.assertIn("67", str(caught.exception))
+        # The message names the READ that failed, not an exit code: the
+        # repository raises `RepositoryQueryFailed(method, message)` rather
+        # than setting `exit_code = 67`, which is the whole difference the
+        # carved layer was introduced to make.
+        self.assertIn("claim_position", str(caught.exception))
         # It is THIS read that refused, not an earlier one raising first: the
         # pass reached the watermark, which is the only way this test proves
         # anything about the watermark's own guard.
@@ -1403,7 +1407,7 @@ class PostDbGatheringTests(unittest.TestCase):
         with self.assertRaises(GatheringError) as caught:
             list(gather_crossmatch_units(source, "20260809"))
 
-        self.assertIn("67", str(caught.exception))
+        self.assertIn("earliest_unaccepted_date", str(caught.exception))
         self.assertIn(("earliest_owed", None), source.asked_for)
 
     # -- the corpus-wide per-field job types -------------------------------

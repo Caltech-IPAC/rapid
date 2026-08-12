@@ -108,8 +108,16 @@ def clean_fields(conn):
     _require_schema(conn)
     fields = _fields(6)
     yield fields
+    # Children before parents — `diffimages` references `l2files`,
+    # `exposures` and `refimages`, so deleting in the other order is a
+    # foreign-key violation rather than a cleanup. The attempts rows are
+    # detached rather than deleted: other tables reference them, and this
+    # fixture owns the field, not the attempt.
     with conn.cursor() as cur:
         cur.execute("DELETE FROM diffimages WHERE field = ANY(%s)", [fields])
+        cur.execute("DELETE FROM l2files WHERE field = ANY(%s)", [fields])
+        cur.execute("DELETE FROM refimages WHERE field = ANY(%s)", [fields])
+        cur.execute("DELETE FROM exposures WHERE field = ANY(%s)", [fields])
         cur.execute("UPDATE attempts SET field = NULL WHERE field = ANY(%s)",
                     [fields])
     conn.commit()

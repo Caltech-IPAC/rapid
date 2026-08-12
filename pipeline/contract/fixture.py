@@ -308,6 +308,61 @@ def make_attempt(conn, work_unit_id=None, error_category=None,
         return cur.fetchone()[0]
 
 
+def _diffimage_parents(conn, field, tag):
+    """The four FK parents a `diffimages` row needs. Returns their ids.
+
+    `filters` and `pipelines` ARE seeded by the stream (`009-seed-data.sql`),
+    so `fid` is read rather than written — inventing a filter would put a row
+    in the catalogue the pipeline reads. `exposures`, `l2files` and
+    `refimages` are NOT seeded, so a minimal parent is created per call.
+
+    Created per call rather than shared: `refimagespk` is UNIQUE on
+    `(field, fid, ppid, version)` and these tests deliberately place several
+    images on one field, so a shared reference image would collide on the
+    second one. The `version` is taken from a sequence-free max+1 for the same
+    reason.
+    """
+    with conn.cursor() as cur:
+        cur.execute("SELECT fid FROM filters ORDER BY fid LIMIT 1")
+        row = cur.fetchone()
+        if row is None:
+            raise AssertionError(
+                "no rows in `filters`; 009-seed-data.sql seeds them, so an "
+                "empty table means the stream was not fully applied")
+        fid = row[0]
+
+        cur.execute(
+            "INSERT INTO exposures (dateobs, field, fid, exptime, mjdobs,"
+            "                       hp6, hp9)"
+            " VALUES (now(), %s, %s, 100.0, 60000.0, 1, 1) RETURNING expid",
+            [field, fid])
+        expid = cur.fetchone()[0]
+
+        cur.execute(
+            "INSERT INTO l2files (expid, sca, version, vbest, field, fid,"
+            "                     dateobs, mjdobs, exptime, filename,"
+            "                     checksum, crval1, crval2, crpix1, crpix2,"
+            "                     cd11, cd12, cd21, cd22)"
+            " VALUES (%s, 1, 1, 1, %s, %s, now(), 60000.0, 100.0, %s, %s,"
+            "         10.0, 10.0, 1.0, 1.0, 1.0, 0.0, 0.0, 1.0)"
+            " RETURNING rid",
+            [expid, field, fid, f"l2/{RUN_TAG}/{tag}.fits", tag[:8]])
+        rid = cur.fetchone()[0]
+
+        cur.execute(
+            "SELECT coalesce(max(version), 0) + 1 FROM refimages"
+            " WHERE field = %s AND fid = %s AND ppid = 12", [field, fid])
+        version = cur.fetchone()[0]
+        cur.execute(
+            "INSERT INTO refimages (field, hp6, hp9, fid, ppid, version,"
+            "                       vbest, svid, filename, checksum)"
+            " VALUES (%s, 1, 1, %s, 12, %s, 1, 1, %s, %s) RETURNING rfid",
+            [field, fid, version, f"ref/{RUN_TAG}/{tag}.fits", tag[:8]])
+        rfid = cur.fetchone()[0]
+
+    return expid, rid, fid, rfid
+
+
 def make_diffimage(conn, attempt_id, field, ppid, created=None, vbest=1,
                    sca=1):
     """One `diffimages` row, minimal but real, for the work-inventory tests.
@@ -328,8 +383,20 @@ def make_diffimage(conn, attempt_id, field, ppid, created=None, vbest=1,
     `attempt_id` requires `registered_record_sequence` alongside it
     (`diffimages_attempt_identity_check`, migration 018) — both halves or
     neither, so the pair is written together here.
+
+    **THE PARENT ROWS ARE REAL.** `diffimages` carries five foreign keys —
+    `expid` to `exposures`, `rid` to `l2files`, `fid` to `filters`, `ppid` to
+    `pipelines`, `rfid` to `refimages` — and PostgreSQL enforces every one of
+    them. `_reference_row` below reuses whatever the applied stream already
+    seeded and mints a minimal parent only when the table is empty, so this
+    fixture neither depends on a particular seed nor duplicates rows the
+    stream already provides. A first version passed literal `1`s for all five
+    and real PostgreSQL refused it on `diffimages_expid_fk`, which is the
+    referential half of the same lesson the CHECK constraints taught above.
     """
     tag = uuid.uuid4().hex[:8]
+    expid, rid, fid, rfid = _diffimage_parents(conn, field, tag)
+
     with conn.cursor() as cur:
         cur.execute(
             "INSERT INTO diffimages"
@@ -337,13 +404,13 @@ def make_diffimage(conn, attempt_id, field, ppid, created=None, vbest=1,
             "   fid, jd, ra0, dec0, ra1, dec1, ra2, dec2, ra3, dec3, ra4,"
             "   dec4, infobitssci, infobitsref, filename, status, svid,"
             "   created, attempt_id, registered_record_sequence)"
-            " VALUES (1, 1, %s, %s, 1, %s, 1, %s, 1, 1,"
-            "         1, 2460000.5, 10.0, 10.0, 10.0, 10.0, 10.1, 10.0,"
+            " VALUES (%s, %s, %s, %s, 1, %s, %s, %s, 1, 1,"
+            "         %s, 2460000.5, 10.0, 10.0, 10.0, 10.0, 10.1, 10.0,"
             "         10.1, 10.1, 10.0, 10.1, 0, 0, %s, 0, 1,"
             "         COALESCE(%s::timestamptz, now()), %s, 1)"
             " RETURNING pid",
-            [sca, ppid, vbest, field, f"diffimages/{RUN_TAG}/{tag}.fits",
-             created, attempt_id])
+            [rid, expid, sca, ppid, vbest, rfid, field, fid,
+             f"diffimages/{RUN_TAG}/{tag}.fits", created, attempt_id])
         return cur.fetchone()[0]
 
 
