@@ -278,6 +278,19 @@ stub_rc=$?
 if [ "$stub_rc" -ne 0 ]; then
     echo "--- BRIEF-D-STUB-TIER failures ---"
     grep -E '^FAIL |^ *FAIL: ' "${STAGE_DIR}/stub-tier.log" | head -25
+    # THE FAILING MODULES ARE RE-RUN INDIVIDUALLY FOR THEIR ACTUAL ERRORS.
+    # `run-operational-tests.sh` prints a per-module PASS/FAIL table and
+    # swallows the tracebacks, which is right for a green run and useless
+    # for a red one: "FAIL submission.test.test_gathering" names the module
+    # and nothing about what broke, so every diagnosis needed another whole
+    # staging round trip. Re-running just the failures costs seconds and
+    # puts the error in the same transcript as the verdict.
+    echo "--- BRIEF-D-STUB-TIER detail ---"
+    for module in $(grep -E '^FAIL ' "${STAGE_DIR}/stub-tier.log" \
+                    | awk '{print $2}' | head -6); do
+        echo ">> $module"
+        "$VPY" -m unittest "$module" 2>&1 | tail -25
+    done
 fi
 tail -4 "${STAGE_DIR}/stub-tier.log"
 echo "BRIEF-D-STUB-TIER: exit=$stub_rc"
