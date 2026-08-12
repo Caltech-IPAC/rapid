@@ -31,11 +31,18 @@ class FakeTransport:
 
     def __init__(self):
         self.sent = []          # (topic, wire_bytes)
+        # The message keys, recorded alongside. `Transport.send` gained an
+        # optional `key` in brief E — the publisher sets every message's key to
+        # its `alert_id` so at-least-once delivery stays deduplicable — and a
+        # double that silently dropped it could not tell whether a caller had
+        # set one.
+        self.keys = []
         self.flushes = 0
         self.closed = False
 
-    def send(self, topic, value):
+    def send(self, topic, value, key=None):
         self.sent.append((topic, value))
+        self.keys.append(key)
         return FakeFuture()
 
     def flush(self):
@@ -162,6 +169,23 @@ def test_produce_looks_the_schema_up_by_topic(producer):
     assert producer.registry.lookups == ["rapid.internal.alerts.wide"]
 
 
+def test_produce_passes_the_message_key_through(producer):
+    # Brief E: `Transport.send` gained a key, because at-least-once delivery
+    # is only deduplicable if every copy of a packet arrives under the same
+    # one. Asserted at the TRANSPORT, which is where the key either reaches
+    # the wire or is quietly dropped.
+    producer.produce("rapid.test.alerts", b"avro-bytes", key=b"sha256:abc")
+    assert producer.transport.keys == [b"sha256:abc"]
+
+
+def test_produce_without_a_key_sends_none(producer):
+    # The pre-E call sites pass no key and must keep working unchanged —
+    # kafka-python's own default. A fake that required one would make this
+    # widening look like a breaking change.
+    producer.produce("rapid.test.alerts", b"avro-bytes")
+    assert producer.transport.keys == [None]
+
+
 def test_publish_alert_drives_the_producer_unchanged(producer):
     # publish_alert is produce.py's, untouched by the client swap: this is
     # the assertion that the DI seam held across the migration.
@@ -206,8 +230,9 @@ class ResolvingTransport(FakeTransport):
         super().__init__()
         self.error = error
 
-    def send(self, topic, value):
+    def send(self, topic, value, key=None):
         self.sent.append((topic, value))
+        self.keys.append(key)
         return ResolvingFuture(self.error)
 
 

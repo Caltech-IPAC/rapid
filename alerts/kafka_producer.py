@@ -161,9 +161,18 @@ class Transport(Protocol):
 
     Narrow by design: it is the whole contract a test fake has to satisfy,
     and it keeps `GlueFramingProducer` honest about what it depends on.
+
+    `key` was added by brief E. The publisher sets every message's key to its
+    `alert_id`, because at-least-once delivery is only deduplicable if each
+    copy of a packet arrives under the same key — and this Protocol is where a
+    test fake learns it has to accept one. It is OPTIONAL so that the
+    pre-existing value-only call sites, and the fakes written against them,
+    keep working unchanged: kafka-python's own `send` has always taken
+    `key=None` by default, so this widens the declared contract to match what
+    the real transport already does rather than asking anything to change.
     """
 
-    def send(self, topic: str, value: bytes) -> Any:
+    def send(self, topic: str, value: bytes, key: bytes | None = None) -> Any:
         ...
 
     def flush(self) -> None:
@@ -364,19 +373,28 @@ class GlueFramingProducer:
         self._pending: list[Any] = []
 
     def produce(self, topic: str, value: bytes,
-                callback: Callable[[Any, Any], None] | None = None) -> None:
+                callback: Callable[[Any, Any], None] | None = None,
+                key: bytes | None = None) -> None:
         """Frame and send one alert.
 
         Signature matches the injected-producer surface produce.py calls,
         `callback` included: kafka-python has no per-message callback
         argument, so it is attached to the returned future instead, which
         preserves the caller's error-reporting contract.
+
+        `key` (brief E) is passed straight through to the transport. NOTE that
+        the publisher does NOT come through this method: it must frame from the
+        outbox row's PINNED schema version, and this method resolves the
+        registry's latest instead — which is the whole difference "identical
+        bytes on resend" turns on. The parameter is here so the surface is
+        honest and so an archive or replay tool can key its messages the same
+        way, not because the publisher uses it.
         """
         schema_name = schema_name_for_topic(topic)
         version_id = self.registry.schema_version_id(schema_name)
         wire_bytes = frame_alert(value, version_id)
 
-        future = self.transport.send(topic, wire_bytes)
+        future = self.transport.send(topic, wire_bytes, key=key)
         self._pending.append(future)
 
         if callback is not None and hasattr(future, "add_callback"):
