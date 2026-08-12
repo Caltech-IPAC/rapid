@@ -523,10 +523,18 @@ def test_radec_index_assigns_identical_aids_on_a_second_run(conn):
     second = [util.radec_index(ra, dec) for ra, dec in positions]
 
     assert first == second, "radec_index is not deterministic"
-    assert all(isinstance(a, int) for a in first)
+    # INTEGRAL, not `isinstance(..., int)`. `radec_index` returns `np.int64`
+    # (`modules/utils/rapid_pipeline_subs.py:2523-2526`), which is not a
+    # Python `int` — an earlier version of this assertion said `int` and
+    # failed on the first acceptance run against correct code. The property
+    # that actually matters is that the identity is a whole number the
+    # database can hold in a `bigint` column, so that is what is asserted.
+    assert all(float(a).is_integer() for a in first)
+    assert all(-2**63 <= int(a) < 2**63 for a in first), \
+        "an aid outside bigint would not survive the round trip to merges.aid"
     # Distinct positions must not collapse onto one identity, or "the same
     # object" would mean "anywhere in this part of the sky".
-    assert len(set(first)) == len(positions)
+    assert len(set(int(a) for a in first)) == len(positions)
 
 
 # ---------------------------------------------------------------------------

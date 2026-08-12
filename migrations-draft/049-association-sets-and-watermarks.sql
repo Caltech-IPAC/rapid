@@ -302,8 +302,23 @@ COMMENT ON FUNCTION derived.live_association_set() IS
 -- live set keeps today's unprefixed names — no rename, no data motion, no
 -- backfill; every non-live set gets its own prefix and is therefore isolated
 -- from the live tables BY CONSTRUCTION, not by a rule anything has to enforce.
+-- DROPPED FIRST, then created. `CREATE OR REPLACE FUNCTION` cannot RENAME an
+-- existing function's parameters — it fails with "cannot change name of input
+-- parameter" — so a database that already took an earlier revision of this
+-- draft would refuse the corrected one, and the second application in the
+-- idempotence check would refuse it too. The drop is by full signature so it
+-- can only ever remove this exact function.
+DROP FUNCTION IF EXISTS derived.association_table_name(text, integer, integer);
+
+-- The parameters are `p_`-prefixed and the column they compare against is
+-- table-qualified. Naming a parameter `association_set` — the same as the
+-- column — made PL/pgSQL resolve the qualified form
+-- `derived.association_table_name.association_set` as a TABLE reference and
+-- fail with "missing FROM-clause entry", caught by the contract tier's set
+-- isolation test on the first acceptance run. The prefix removes the
+-- ambiguity at the source rather than working around it.
 CREATE OR REPLACE FUNCTION derived.association_table_name(
-    prototype text, association_set integer, field integer)
+    p_prototype text, p_association_set integer, p_field integer)
 RETURNS text
 LANGUAGE plpgsql
 STABLE
@@ -311,22 +326,22 @@ AS $$
 DECLARE
     set_kind text;
 BEGIN
-    SELECT kind INTO set_kind
+    SELECT s.kind INTO set_kind
       FROM association_sets AS s
-     WHERE s.association_set = derived.association_table_name.association_set;
+     WHERE s.association_set = p_association_set;
 
     IF set_kind IS NULL THEN
-        RAISE EXCEPTION 'unknown association_set %', association_set
+        RAISE EXCEPTION 'unknown association_set %', p_association_set
             USING ERRCODE = 'foreign_key_violation';
     END IF;
 
     IF set_kind = 'live_prompt' THEN
         -- Today's names, unchanged. This branch is why adopting this
         -- migration moves no data.
-        RETURN format('%s_%s', prototype, field);
+        RETURN format('%s_%s', p_prototype, p_field);
     END IF;
 
-    RETURN format('%s_s%s_%s', prototype, association_set, field);
+    RETURN format('%s_s%s_%s', p_prototype, p_association_set, p_field);
 END;
 $$;
 

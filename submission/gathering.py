@@ -1519,8 +1519,22 @@ def _next_claimable_field(candidates: Sequence[int], proc_date: str,
         return
 
     if wm_date is None:
-        # The origin: nothing accepted in this set yet, so the smallest ready
-        # field of this date is the frontier's successor.
+        # THE ORIGIN — and it still has a predecessor question to answer.
+        # Nothing accepted in this set yet does NOT mean nothing is owed: the
+        # very first units may have run and failed, and this pass may be for a
+        # LATER date than the one still owing. An earlier version returned
+        # `ready[0]` here unconditionally and let a later date claim past a
+        # failed earlier one — the exact §2.5 violation the whole item exists
+        # to close, live at the origin, which is where every deployment
+        # starts. The cross-date check therefore comes FIRST and applies at
+        # the origin exactly as it does after the frontier has moved.
+        if earliest_owed is not None and str(earliest_owed) < str(proc_date):
+            logger.info(
+                "crossmatch: nothing accepted in this association set yet, "
+                "but date %s still owes crossmatch work; date %s is not "
+                "claimable past an unaccepted predecessor",
+                earliest_owed, proc_date)
+            return
         yield ready[0]
         return
 
