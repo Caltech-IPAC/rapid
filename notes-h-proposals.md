@@ -180,6 +180,39 @@ explicitly out of scope. Rule 21 scores **PARTIAL** for the reasons in the
 ledger — but the reason is "the mechanism governs one bucket and the tag-expiry
 scheme governs another", not "a competing route deletes the objects H governs".
 
+## P-H10 — Two schema facts the brief states incorrectly
+
+Both verified against the head; neither changes the code, and both are
+recorded so the next reader is not misled. Full detail in
+`notes-brief-h-evidence.md`.
+
+1. **`work_units` has no `unit_key` column and its PK is `work_unit_id`**, not
+   `unit_id` (`036-intent-schema-v1.sql:111-122`). The persisted unit identity
+   is `(job_type, input_scope)`, and the canonical round trip therefore
+   rebuilds the S3 key component as `job_type || '/' || input_scope`. Caught
+   before the SQL ran, by reading the migration rather than trusting the
+   brief's column names.
+
+2. **`superseded_by_unit_id` DOES exist** (`036:118`), contrary to the brief's
+   "there is no `superseded_by_unit_id` column; do not invent one". The
+   brief's *ruling* is nonetheless implemented exactly as written —
+   `is_fully_discharged` never consults supersession — and using it would in
+   fact be wrong, since a unit can be superseded from any state including
+   `ready`, so a superseded unit is not thereby discharged.
+
+## P-H11 — `btrim` strips spaces only, across this whole function family
+
+`length(btrim(x)) = 0` is the mandatory-field guard every keyed mutation in
+this stream uses (`047:182,253,256`), and PostgreSQL's one-argument `btrim`
+strips **spaces only** — so a reason of `E'\t\n '` has length 2 and is
+ACCEPTED. 051 matches its siblings rather than being quietly stricter than
+them.
+
+**Proposal (not taken):** widen the guard to `btrim(x, E' \t\n\r')` across the
+whole family in one change. Doing it in 051 alone would create exactly the
+kind of silent inconsistency between sibling functions that is worse than the
+shared laxity. Recorded as a candidate CR.
+
 ## P-H8 — The horizon fails closed with no default
 
 **Decision taken:** there is no default horizon that permits deletion. A GC run
