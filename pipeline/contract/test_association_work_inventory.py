@@ -338,13 +338,25 @@ def test_an_accepted_pair_leaves_the_owed_inventory(conn, clean_fields):
     assert (proc_date, fields[0]) in _owed_pairs(), \
         "the seeded pair should be owed before any crossmatch attempt exists"
 
-    # A pending crossmatch attempt for that (date, field).
+    # A pending crossmatch attempt for that (date, field). `make_attempt`
+    # builds a `submitted` row, whose CHECK requires the binding triple at
+    # schema_version >= 2 (migration 013) — the subject columns are added by
+    # the same UPDATE so the row is only ever written complete.
     crossmatch_attempt = fixture.make_attempt(conn, lifecycle="submitted")
     with conn.cursor() as cur:
         cur.execute(
-            "UPDATE attempts SET field = %s, processing_date = %s::date"
+            "UPDATE attempts"
+            "   SET field = %s, processing_date = %s::date,"
+            "       binding_job_definition_arn ="
+            "         coalesce(binding_job_definition_arn, %s),"
+            "       binding_image_digest ="
+            "         coalesce(binding_image_digest, 'sha256:crossmatch'),"
+            "       binding_manifest_checksum ="
+            "         coalesce(binding_manifest_checksum, 'sha256:manifest')"
             " WHERE attempt_id = %s",
-            [fields[0], proc_date, crossmatch_attempt])
+            [fields[0], proc_date,
+             "arn:aws:batch:us-east-1:000000000000:job-definition/xm:1",
+             crossmatch_attempt])
         cur.execute(
             "UPDATE logical_jobs SET job_type = 'crossmatch'"
             " WHERE logical_job_id ="

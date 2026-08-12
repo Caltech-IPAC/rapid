@@ -440,9 +440,24 @@ def _diffimage_parents(conn, field, tag):
                 "empty table means the stream was not fully applied")
         fid = row[0]
 
-    expid = _insert_filling_required(
-        conn, "exposures", "expid",
-        {"field": field, "fid": fid, "exptime": 100.0, "mjdobs": 60000.0})
+    # `exposurespk` is UNIQUE on `dateobs` ALONE, so the helper's `now()`
+    # collides whenever two exposures are seeded inside the same clock tick —
+    # which is exactly what a test seeding five rows in a loop does. The
+    # timestamp is therefore made unique per row rather than left to the
+    # default, and `mjdobs` is moved with it so the two stay consistent: an
+    # exposure whose MJD disagrees with its dateobs is a row no pipeline
+    # would ever write.
+    with conn.cursor() as cur:
+        cur.execute(
+            "INSERT INTO exposures (dateobs, field, fid, exptime, mjdobs,"
+            "                       hp6, hp9)"
+            " SELECT timestamptz '2020-01-01 00:00:00+00'"
+            "          + (coalesce(max(expid), 0) + 1) * interval '1 second',"
+            "        %s, %s, 100.0,"
+            "        58849.0 + coalesce(max(expid), 0) + 1, 1, 1"
+            "   FROM exposures"
+            " RETURNING expid", [field, fid])
+        expid = cur.fetchone()[0]
 
     rid = _insert_filling_required(
         conn, "l2files", "rid",
