@@ -157,6 +157,19 @@ Applied twice in the acceptance run to demonstrate idempotence
 (`BRIEF-F-DRAFT-049-REAPPLY: PASS exit=0`), and the recorded acceptance run
 reported `BRIEF-F-PASS2-SKIPS: 0` with all seven criteria green.
 
+**Fix round 1.** The application side of this draft moved out of `RAPIDDB`,
+which is frozen: the two reads the claim path makes now live in
+`pipeline/repositories/association.py` over a connection the caller owns, and
+`database/modules/utils/rapid_db.py` is byte-identical with `smdc`. The
+cross-date gate no longer derives its own answer to "which (date, field) pairs
+are science work" — it shares `RAPIDDB.get_fields_with_science_jobs_for_
+processing_date`'s predicate, because the two independently written versions
+could and did disagree (a succeeded attempt whose difference image is
+superseded is work to one and not the other).
+`pipeline/contract/test_association_work_inventory.py` proves the agreement
+against real rows across the edge states rather than asserting it in a
+comment, and gives both repository methods their first real-SQL coverage.
+
 ## How the application behaves while these are unapplied
 
 Every code path that needs draft schema **probes for it and degrades

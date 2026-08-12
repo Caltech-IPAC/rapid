@@ -1443,11 +1443,11 @@ def _association_claim_position(handle: UnitSource):
             "applied); gathering without the rule 19 ordering gate")
         return None
 
-    # A bare `(proc_date, field)` two-tuple — the shape
-    # `RAPIDDB.get_association_claim_position` returns. Unpacked positionally
-    # rather than defensively unwrapped: a handle answering some other shape
-    # is a bug to surface here, not one to absorb into a guess about which
-    # element was meant.
+    # A `Watermark(proc_date, field)` — the named tuple
+    # `AssociationRepository.claim_position` returns. Unpacked positionally
+    # rather than defensively unwrapped: a repository answering some other
+    # shape is a bug to surface here, not one to absorb into a guess about
+    # which element was meant.
     wm_date, wm_field = position
     return (None if wm_date is None else str(wm_date),
             None if wm_field is None else int(wm_field))
