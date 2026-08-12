@@ -13,16 +13,16 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from submission import payloads
 from submission.manifest import (MAX_ARRAY_SIZE, OVERRIDE_REFERENCE_WINDOW,
                                  Manifest, ProcessingUnit,
                                  ReferenceObservationWindow)
-from submission.routes import JOB_TYPE_REFERENCE_IMAGE, JOB_TYPE_SCIENCE
+from submission.routes import JOB_TYPE_REFERENCE_IMAGE
+from submission.test import payload_fixtures as fixtures
 
 
 def unit(exposure, sca):
     return ProcessingUnit(
-        payload=payloads.build(JOB_TYPE_SCIENCE, exposure=exposure, sca=sca))
+        payload=fixtures.science_payload(exposure=exposure, sca=sca))
 
 
 def units(count, exposure=90210):
@@ -182,8 +182,8 @@ def test_the_window_override_round_trips():
     window = ReferenceObservationWindow(start_mjdobs=60000.0,
                                         end_mjdobs=60100.5)
     reference_image_units = [
-        ProcessingUnit(payload=payloads.build(JOB_TYPE_REFERENCE_IMAGE,
-                                              exposure=90210, sca=i + 1))
+        ProcessingUnit(payload=fixtures.reference_payload(
+            exposure=90210, sca=i + 1))
         for i in range(4)]
     manifest = Manifest(reference_image_units, batch_id="b",
                         job_type=JOB_TYPE_REFERENCE_IMAGE,

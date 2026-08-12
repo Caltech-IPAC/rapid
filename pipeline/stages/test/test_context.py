@@ -149,9 +149,8 @@ _install_third_party_stubs()
 
 from pipeline.runtime.errors import ConfigError, InputError  # noqa: E402
 from pipeline.stages.context import StageContext  # noqa: E402
-from submission import payloads  # noqa: E402
-from submission.manifest import ProcessingUnit, UnitFacts  # noqa: E402
-from submission.routes import JOB_TYPE_SCIENCE  # noqa: E402
+from submission.manifest import ProcessingUnit  # noqa: E402
+from submission.test import payload_fixtures as fixtures  # noqa: E402
 
 
 class FakeLogger:
@@ -187,8 +186,8 @@ SCIENCE_CONFIG = {
 
 def make_context(**overrides) -> StageContext:
     unit = overrides.pop("unit", ProcessingUnit(
-        payload=payloads.build(JOB_TYPE_SCIENCE, exposure=1, sca=2),
-        facts=UnitFacts(science_image_uri="s3://b/img.fits")))
+        payload=fixtures.science_payload(
+            exposure=1, sca=2, science_image_uri="s3://b/img.fits")))
     fields = {
         "workdir": None,
         "unit": unit,
@@ -279,32 +278,34 @@ class ProduceTests(unittest.TestCase):
 class FactTests(unittest.TestCase):
 
     def test_none_manifest_fact_raises_inputerror(self):
+        # `science_image_uri` is now a required imaging fact, so a payload
+        # missing it cannot be constructed at all — the absent-value branch
+        # of `context.fact()` is exercised instead through `psf_uri`, a
+        # declared-but-legitimately-optional fact the fixture leaves unset.
         unit = ProcessingUnit(
-            payload=payloads.build(JOB_TYPE_SCIENCE, exposure=1, sca=2),
-            facts=UnitFacts())
+            payload=fixtures.science_payload(exposure=1, sca=2))
         context = make_context(unit=unit)
         with self.assertRaises(InputError):
-            context.fact("science_image_uri")
+            context.fact("psf_uri")
 
     def test_present_fact_is_returned(self):
         unit = ProcessingUnit(
-            payload=payloads.build(JOB_TYPE_SCIENCE, exposure=1, sca=2),
-            facts=UnitFacts(science_image_uri="s3://b/i.fits"))
+            payload=fixtures.science_payload(
+                exposure=1, sca=2, science_image_uri="s3://b/i.fits"))
         context = make_context(unit=unit)
         self.assertEqual(context.fact("science_image_uri"), "s3://b/i.fits")
 
     def test_optional_fact_returns_the_default_when_absent(self):
         unit = ProcessingUnit(
-            payload=payloads.build(JOB_TYPE_SCIENCE, exposure=1, sca=2),
-            facts=UnitFacts())
+            payload=fixtures.science_payload(exposure=1, sca=2))
         context = make_context(unit=unit)
         self.assertEqual(context.optional_fact("reference_image_id", -1), -1)
         self.assertIsNone(context.optional_fact("reference_image_id"))
 
     def test_optional_fact_returns_the_value_when_present(self):
         unit = ProcessingUnit(
-            payload=payloads.build(JOB_TYPE_SCIENCE, exposure=1, sca=2),
-            facts=UnitFacts(reference_image_id=42))
+            payload=fixtures.science_payload(
+                exposure=1, sca=2, reference_image_id=42))
         context = make_context(unit=unit)
         self.assertEqual(context.optional_fact("reference_image_id", -1), 42)
 

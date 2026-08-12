@@ -131,12 +131,11 @@ def FakeUnit(exposure, sca):
     is both simpler and honest: `ProcessingUnit` is a frozen dataclass over
     a frozen payload, with no I/O to avoid.
     """
-    from submission import payloads
     from submission.manifest import ProcessingUnit
-    from submission.routes import JOB_TYPE_SCIENCE
+    from submission.test import payload_fixtures as fixtures
 
-    return ProcessingUnit(payload=payloads.build(
-        JOB_TYPE_SCIENCE, exposure=exposure, sca=sca))
+    return ProcessingUnit(
+        payload=fixtures.science_payload(exposure=exposure, sca=sca))
 
 
 class FakeManifest:

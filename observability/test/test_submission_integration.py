@@ -41,11 +41,10 @@ BINDING = ExecutionBinding(
     release_identity="rapid-test",
     manifest_checksum="sha256:" + "b" * 64,
 )
-from submission import payloads
 from submission.batching import Batch
 from submission.manifest import Manifest, ProcessingUnit
-from submission.routes import JOB_TYPE_SCIENCE
 from submission.submit import submit_batch
+from submission.test import payload_fixtures as fixtures
 
 UTC = datetime.timezone.utc
 
@@ -95,7 +94,7 @@ class FakeBatchClient:
 
 def a_batch(units, batch_id="batch-1"):
     manifest = Manifest(
-        [ProcessingUnit(payload=payloads.build(JOB_TYPE_SCIENCE, exposure=e, sca=s))
+        [ProcessingUnit(payload=fixtures.science_payload(exposure=e, sca=s))
          for e, s in units],
         batch_id=batch_id)
     return Batch(manifest=manifest, reason="full")

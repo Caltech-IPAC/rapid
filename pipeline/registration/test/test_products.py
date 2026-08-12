@@ -38,9 +38,8 @@ from pipeline.registration import products
 from pipeline.runtime import termination
 from pipeline.runtime.boundaries import InMemoryObjectStore, checksum
 from pipeline.stages.context import StageContext
-from submission import payloads
-from submission.manifest import ProcessingUnit, UnitFacts
-from submission.routes import JOB_TYPE_REFERENCE_IMAGE, JOB_TYPE_SCIENCE
+from submission.manifest import ProcessingUnit
+from submission.test import payload_fixtures as fixtures
 
 # healpy is a container dependency (`docker/Dockerfile_ubuntu*: pip install
 # healpy`) and is not in requirements.txt, so it is present in the image and
@@ -133,20 +132,17 @@ class _QuietLogger:
 
 
 def _reference_unit():
-    return ProcessingUnit(
-        payload=payloads.build(JOB_TYPE_REFERENCE_IMAGE, exposure=90000, sca=7),
-        facts=UnitFacts(rid=42, fid=1, field=4678636, rtid=4678636,
-                        expid=90000, sky_position=dict(SKY_POSITION),
-                        reference_image_infobits=0))
+    return ProcessingUnit(payload=fixtures.reference_payload(
+        exposure=90000, sca=7, rid=42, fid=1, field=4678636, rtid=4678636,
+        expid=90000, sky_position=dict(SKY_POSITION),
+        reference_image_infobits=0))
 
 
 def _science_unit():
-    return ProcessingUnit(
-        payload=payloads.build(JOB_TYPE_SCIENCE, exposure=90000, sca=7),
-        facts=UnitFacts(rid=42, fid=1, field=4678636, rtid=4678636,
-                        expid=90000, sky_position=dict(SKY_POSITION),
-                        reference_image_id=77, reference_image_infobits=0,
-                        infobits=0))
+    return ProcessingUnit(payload=fixtures.science_payload(
+        exposure=90000, sca=7, rid=42, fid=1, field=4678636, rtid=4678636,
+        expid=90000, sky_position=dict(SKY_POSITION),
+        reference_image_id=77, reference_image_infobits=0, infobits=0))
 
 
 def _build(context, published, attempt_id, job_type):

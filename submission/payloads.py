@@ -223,8 +223,17 @@ class UnitPayload:
             payload[name] = getattr(self, name)
         for name in self.INVOCATION_FACTS:
             value = getattr(self, name, None)
-            if value is not None:
-                payload[name] = value
+            # ABSENT FACTS ARE OMITTED, and an empty sequence counts as
+            # absent. This is `UnitFacts.to_dict`'s adopted absent-not-
+            # sentinel rule, carried over: a key that is not there is a fact
+            # the submitter did not resolve, while a key present and empty
+            # would be a claim that the value is known to be nothing. The
+            # sequence members default to `()` rather than None so callers
+            # can iterate them without a guard, which makes the emptiness
+            # check necessary here rather than a None check sufficing.
+            if value is None or (isinstance(value, tuple) and not value):
+                continue
+            payload[name] = value
         return payload
 
 

@@ -156,8 +156,9 @@ QUEUE_NAMES = {
 
 def _science_manifest(**overrides) -> Manifest:
     unit = ProcessingUnit(
-        payload=payloads.build(JOB_TYPE_SCIENCE, exposure=1, sca=2),
-        facts=UnitFacts(science_image_uri="s3://rapid-bucket/sci.fits"))
+        payload=fixtures.science_payload(
+            exposure=1, sca=2,
+            science_image_uri="s3://rapid-bucket/sci.fits"))
     fields = {"units": [unit], "job_type": JOB_TYPE_SCIENCE}
     fields.update(overrides)
     return Manifest(fields.pop("units"), **fields)

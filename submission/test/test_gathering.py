@@ -32,7 +32,6 @@ from submission.gathering import (
     initialize_alert_watermark,
     science_facts,
 )
-from submission.manifest import UnitFacts
 from submission.routes import (
     JOB_TYPE_ALERT_PRODUCTION,
     JOB_TYPE_CATALOG_LOAD,
@@ -149,7 +148,9 @@ class ScienceFactsTests(unittest.TestCase):
         self.assertEqual(facts.mjdobs, 61680.5)
         self.assertEqual(facts.exptime, 139.8)
         self.assertEqual(facts.infobits, 0)
-        self.assertEqual(facts.status, 1)
+        # `status` was deleted as a dead member (D4): resolved by
+        # `science_facts` in the past but never read by any consumer, and
+        # `SciencePayload` declares no such component or invocation fact.
         self.assertEqual(facts.science_image_uri, "s3://in/exp1_sca7.fits")
         self.assertEqual(facts.filter_name, "F146")
 
@@ -1323,7 +1324,10 @@ class AlertProductionGatheringTests(unittest.TestCase):
 
         self.assertEqual(units[0].payload.promoted_attempt_id, 6765)
         self.assertEqual(units[0].payload.difference_image_pid, 1086)
-        self.assertEqual(units[0].facts.pid, 1086)
+        # Same fact, read through the `facts` alias (`facts` IS the
+        # payload, D4) — there is no separate `pid` member, only
+        # `difference_image_pid`.
+        self.assertEqual(units[0].facts.difference_image_pid, 1086)
         self.assertEqual(units[0].payload.release_identity, "rel-1")
 
     def test_an_already_emitted_unit_is_not_gathered_again(self):

@@ -78,8 +78,10 @@ EXPECTED_PAYLOAD_KEYS = {
     JOB_TYPE_ALERT_PRODUCTION: {"grain", "exposure", "sca",
                                 "promoted_attempt_id", "release_identity",
                                 "difference_image_pid"},
-    JOB_TYPE_CATALOG_LOAD: {"grain", "proc_date", "sca", "target_table",
-                            "product_inputs"},
+    # No `product_inputs`: the fixture sets none, and an empty sequence is
+    # an ABSENT fact rather than a fact known to be empty — so it emits no
+    # key, per the absent-not-sentinel rule the payloads inherited.
+    JOB_TYPE_CATALOG_LOAD: {"grain", "proc_date", "sca", "target_table"},
     JOB_TYPE_CROSSMATCH: {"grain", "proc_date", "field", "target_tables"},
     JOB_TYPE_STATISTICS: {"grain", "field", "target_table"},
 }

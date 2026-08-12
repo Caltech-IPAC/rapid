@@ -18,15 +18,14 @@ from pipeline.operator import inputs as opinputs
 from pipeline.operator import registration as opregistration
 from pipeline.operator.operator import Operator, build_accumulator_cadence
 from pipeline.operator.submitters import LiveSubmitter, RehearsalSubmitter
-from submission import payloads
 from submission.manifest import ProcessingUnit
 from submission.routes import JOB_TYPE_SCIENCE
+from submission.test import payload_fixtures as fixtures
 
 
 def unit(n):
     """One processing unit, enough of one for the accumulator."""
-    return ProcessingUnit(payload=payloads.build(JOB_TYPE_SCIENCE,
-                                                 exposure=n, sca=1))
+    return ProcessingUnit(payload=fixtures.science_payload(exposure=n, sca=1))
 
 
 class FakeClock:
