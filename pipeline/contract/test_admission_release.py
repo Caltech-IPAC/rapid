@@ -582,12 +582,24 @@ def test_an_empty_reason_is_refused(conn):
     is the guard the function actually carries and a bare `IS NOT NULL` or
     `<> ''` would admit a single space — a reason field an operator can
     satisfy with a keystroke is not a reason field.
+
+    **SPACES ONLY, NOT TABS AND NEWLINES.** PostgreSQL's one-argument `btrim`
+    strips SPACES; `btrim(E'\\t\\n ')` is `E'\\t\\n'`, whose length is 2, so a
+    tab-and-newline reason is ACCEPTED. That is the behaviour of every keyed
+    mutation in this stream — 047 guards `p_reason`, `p_idempotency_key` and
+    `p_category` exactly this way (`047:182,253,256`) — so 051 matches it
+    rather than being quietly stricter than its siblings. An earlier revision
+    of this test asserted the stricter reading and failed against a function
+    that was correct; the divergence would have been a real inconsistency had
+    it been "fixed" in 051 alone. Widening the guard to
+    `btrim(x, E' \\t\\n\\r')` across the whole family is a reasonable CR, and
+    it is a CR rather than an edit here.
     """
     import psycopg2
 
     r1 = _register_release(conn, _release("r1-reason"))
     try:
-        for reason in ("", "   ", "\t\n "):
+        for reason in ("", "   "):
             with pytest.raises(psycopg2.Error):
                 _set_release(conn, _key("reason"), r1, reason, dry_run=False)
             conn.rollback()

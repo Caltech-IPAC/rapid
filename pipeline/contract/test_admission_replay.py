@@ -29,6 +29,24 @@ def require_admission_schema(conn):
         pytest.skip("DRAFT 051 is not applied (admission_exposures absent)")
 
 
+def _dateobs(day, tag):
+    """A run-unique `dateobs`, ZERO-PADDED and deterministically derived.
+
+    Two bugs are avoided here and both were live in the first draft of this
+    file. `"%s" % (n % 24)` produces `T4:00:00Z` for single-digit hours, which
+    is not ISO-8601 and which `canonical_dateobs` correctly refuses — the
+    admission layer was right and the fixture was wrong. And `hash()` is
+    salted per process (PYTHONHASHSEED), so a value derived from it differs
+    between the suite run and any re-run, which would make a row written by
+    one invisible to the next. A stable digest of the tag gives a unique hour
+    that is the same every time.
+    """
+    import hashlib
+    digest = hashlib.sha256(tag.encode("utf-8")).hexdigest()
+    return "%sT%02d:%02d:00Z" % (day, int(digest[:2], 16) % 24,
+                                 int(digest[2:4], 16) % 60)
+
+
 def a_release(conn, tag):
     identity = "rel-replay-%s" % tag
     with conn.cursor() as cur:
@@ -90,7 +108,7 @@ def test_a_replay_reproduces_the_same_admissions_with_zero_new_rows():
         repo = AdmissionRepository(conn)
         manifest_id = sealed_manifest(conn, repo, release, tag)
 
-        dateobs = "2026-03-01T%s:00:00Z" % (hash(tag) % 24)
+        dateobs = _dateobs("2026-03-01", tag)
         expid = an_exposure(conn, dateobs)
         first = repo.admit_exposure(dateobs=dateobs, expid=expid, facts=FACTS,
                                     release_identity=release,
@@ -143,7 +161,7 @@ def test_replay_needs_no_source_bytes():
         repo = AdmissionRepository(conn)
         manifest_id = sealed_manifest(conn, repo, release, tag)
 
-        dateobs = "2026-03-02T%s:00:00Z" % (hash(tag) % 24)
+        dateobs = _dateobs("2026-03-02", tag)
         expid = an_exposure(conn, dateobs)
         first = repo.admit_exposure(dateobs=dateobs, expid=expid, facts=FACTS,
                                     release_identity=release,
@@ -196,7 +214,7 @@ def test_an_unsealed_manifest_is_refused():
                                 "b" * 64)
         conn.commit()
 
-        dateobs = "2026-03-03T%s:00:00Z" % (hash(tag) % 24)
+        dateobs = _dateobs("2026-03-03", tag)
         expid = an_exposure(conn, dateobs)
         with pytest.raises(Exception) as caught:
             repo.admit_exposure(dateobs=dateobs, expid=expid, facts=FACTS,
@@ -339,7 +357,7 @@ def test_idempotency_survives_the_env_var_being_set():
         tag = fixture.RUN_TAG + "-envvar"
         release = a_release(conn, tag)
         repo = AdmissionRepository(conn)
-        dateobs = "2026-03-04T%s:00:00Z" % (hash(tag) % 24)
+        dateobs = _dateobs("2026-03-04", tag)
         expid = an_exposure(conn, dateobs)
         first = repo.admit_exposure(dateobs=dateobs, expid=expid, facts=FACTS,
                                     release_identity=release)

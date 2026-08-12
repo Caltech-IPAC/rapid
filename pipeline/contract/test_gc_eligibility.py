@@ -242,8 +242,15 @@ def test_unreferenced_by_construction_classes_are_retained(object_class, name):
      "run id does not match the attempt's"),
     ("science/%s/science/99999/2/attempt-%010d/d.fits" % (RUN_ID, ATTEMPT_ID),
      "work-unit key does not match"),
-    ("foreign/%s/%s/attempt-%010d/d.fits" % (RUN_ID, UNIT_KEY, ATTEMPT_ID),
-     "foreign prefix"),
+    # A FOREIGN PREFIX **INSIDE** THE DECLARED SCOPE. The job-type component
+    # is wrong, so the reconstructed canonical prefix cannot match — but the
+    # key still begins `science/`, which is what makes this an ATTRIBUTION
+    # negative rather than a scope one. A first draft used a key starting
+    # `foreign/`, which the scope clause caught first: the test passed while
+    # asserting nothing about attribution, and the reason string lied.
+    ("science/%s/foreign/%s/attempt-%010d/d.fits"
+     % (RUN_ID, UNIT_KEY, ATTEMPT_ID),
+     "foreign prefix inside the declared scope"),
     ("science/%s/%s/unidentified-attempt/d.fits" % (RUN_ID, UNIT_KEY),
      "the degraded prefix carries no attempt identity at all"),
 ])

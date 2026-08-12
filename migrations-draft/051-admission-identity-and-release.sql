@@ -573,7 +573,7 @@ DECLARE
     current_    text;
     replay_     jsonb;
     audit_id_   bigint;
-    result_     jsonb;
+    affected_   integer := 0;
 BEGIN
     IF p_reason IS NULL OR length(btrim(p_reason)) = 0 THEN
         RAISE EXCEPTION 'a reason is mandatory for every operator mutation'
@@ -631,47 +631,69 @@ BEGIN
             USING ERRCODE = 'RA001';
     END IF;
 
-    result_ := jsonb_build_object(
-        'action', 'set_admission_release',
-        'previous_release', current_,
-        'requested_release', p_release_identity,
-        'changed', (coalesce(current_, '') IS DISTINCT FROM p_release_identity),
-        'dry_run', p_dry_run);
-
-    IF p_dry_run THEN
-        RETURN result_ || jsonb_build_object('rows_affected', 0);
+    -- THE POINTER MOVES ONLY ON A REAL RUN, but the ROWS-AFFECTED count is
+    -- computed either way so the rehearsal reports what the apply would do.
+    IF NOT p_dry_run THEN
+        -- SUPERSEDE, NEVER REWRITE. The old row keeps its actor, reason and
+        -- timestamp; only its current flag clears. A rollback is then visible
+        -- in the table as exactly what it was.
+        UPDATE admission_release_pointer SET is_current = false
+         WHERE is_current;
+        INSERT INTO admission_release_pointer
+            (release_identity, is_current, set_by, reason)
+        VALUES (p_release_identity, true, session_user, p_reason);
+        affected_ := 1;
     END IF;
 
-    -- THE AUDIT ROW IS WRITTEN INLINE, NOT THROUGH `write_mutation_audit`.
+    -- THE AUDIT ROW IS WRITTEN FOR BOTH THE REHEARSAL AND THE APPLY, and it
+    -- is written INLINE rather than through `write_mutation_audit`.
     --
-    -- 047's header states the reason and this file follows it: that function
-    -- (031:77-86) takes `(action_class, action_tier, target_scope, reason,
-    -- dry_run, rows_affected, policy_citation, dispatcher, detail)` and
-    -- carries NO idempotency key and NO expected state — the two columns 047
-    -- added and the two this call must record. Routing a keyed mutation
-    -- through it would silently drop both, leaving a key that never replays.
-    -- So the keyed functions insert directly, exactly as 047's own
-    -- `record_external_action` and its keyed overloads do.
+    -- BOTH, because that is what every keyed function in 047 does
+    -- (`add_problem_category`, `047:304-315`, writes its audit row outside
+    -- the `NOT p_dry_run` guard with `dry_run = p_dry_run` and
+    -- `rows_affected = 0`). The ledger records operator ACTIONS, and running
+    -- a rehearsal against production is an action worth having in the
+    -- history — an operator who previewed a release switch at 3am and did not
+    -- apply it has still done something a later reader wants to see. 030's
+    -- CHECK is what keeps it honest: a dry run may not claim rows changed.
+    --
+    -- INLINE, because `write_mutation_audit` (`031:77-86`) takes
+    -- `(action_class, action_tier, target_scope, reason, dry_run,
+    -- rows_affected, policy_citation, dispatcher, detail)` and carries NO
+    -- idempotency key and NO expected state — the two columns 047 added and
+    -- the two this call must record. Routing a keyed mutation through it
+    -- would silently drop both, leaving a key that never replays.
     INSERT INTO derived.mutation_audit
         (actor, dispatcher, action_class, action_tier, target_scope,
-         reason, dry_run, rows_affected, policy_citation,
+         reason, dry_run, rows_affected, policy_citation, detail,
          idempotency_key, expected_state)
     VALUES (session_user, session_user, 'admission_release_set', 'operate',
             'admission_release_pointer:' || p_release_identity,
-            p_reason, false, 1, p_policy_citation,
+            p_reason, p_dry_run, affected_, p_policy_citation,
+            jsonb_build_object('previous_release', current_,
+                               'requested_release', p_release_identity),
             p_idempotency_key, p_expected_state)
     RETURNING audit_id INTO audit_id_;
 
-    -- SUPERSEDE, NEVER REWRITE. The old row keeps its actor, reason and
-    -- timestamp; only its current flag clears. A rollback is then visible in
-    -- the table as exactly what it was.
-    UPDATE admission_release_pointer SET is_current = false WHERE is_current;
-    INSERT INTO admission_release_pointer
-        (release_identity, is_current, set_by, reason, audit_id)
-    VALUES (p_release_identity, true, session_user, p_reason, audit_id_);
+    -- The pointer row is back-linked to the audit row that authorized it.
+    -- Written after, because the audit id does not exist until the INSERT
+    -- above returns; both are in one transaction, so a reader never sees the
+    -- pointer without its link.
+    IF affected_ = 1 THEN
+        UPDATE admission_release_pointer SET audit_id = audit_id_
+         WHERE is_current;
+    END IF;
 
-    RETURN result_ || jsonb_build_object('rows_affected', 1,
-                                         'audit_id', audit_id_);
+    RETURN jsonb_build_object(
+        'action', 'admission_release_set',
+        'dry_run', p_dry_run,
+        'replayed', false,
+        'previous_release', current_,
+        'requested_release', p_release_identity,
+        'changed', (coalesce(current_, '') IS DISTINCT FROM p_release_identity),
+        'rows_affected', affected_,
+        'audit_id', audit_id_,
+        'idempotency_key', p_idempotency_key);
 END;
 $$;
 

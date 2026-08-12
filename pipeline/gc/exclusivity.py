@@ -58,6 +58,18 @@ EXCLUDED_DIRECTORIES = ("scripts", "test", "tests", "sims", "RuBR", "docs")
 PRODUCTION_TREES = ("pipeline", "submission", "observability", "database",
                     "alerts", "modules", "aws")
 
+#: Files that MENTION a deletion call without making one: this module (whose
+#: regex necessarily contains the very strings it hunts) and the test that
+#: greps for the harness cleanups. Listed by exact path rather than skipped by
+#: a heuristic, because "a file that talks about deletion" and "a file that
+#: deletes" must not be told apart by guesswork — and the first version of
+#: this scanner flagged its own source, which is the honest demonstration of
+#: why the exception has to be explicit.
+SELF_REFERENTIAL = (
+    "pipeline/gc/exclusivity.py",
+    "pipeline/contract/test_deletion_exclusivity.py",
+)
+
 
 def _is_excluded(relative_path):
     parts = relative_path.split(os.sep)
@@ -91,6 +103,8 @@ def find_deletion_routes(root):
                 full = os.path.join(dirpath, filename)
                 relative = os.path.relpath(full, root)
                 if _is_excluded(relative):
+                    continue
+                if relative.replace(os.sep, "/") in SELF_REFERENTIAL:
                     continue
                 try:
                     with open(full, "r", encoding="utf-8",
