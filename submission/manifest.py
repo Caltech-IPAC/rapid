@@ -44,9 +44,11 @@ launcher queried the database at submit time, wrote the answers into a
 container to fetch. Those DB-derived answers are per-invocation facts and
 belong here — carried in the manifest the job already reads, checksummed
 with it, one object per submission rather than one per job.
-`ProcessingUnit.fields` held an open dict for exactly this; `UnitFacts`
-gives the recurring ones names and types, while `fields` stays open for
-what a job type needs beyond them.
+`ProcessingUnit.fields` held an open dict for exactly this and `UnitFacts`
+an all-optional object beside it; rule 11 prohibits both shapes, and D4
+replaced them with one typed, closed, per-job-type payload
+(`submission.payloads`) that declares its own facts and validates the
+required ones at construction.
 
 The .ini path itself is not deleted here — that is W5's switch and W6's
 fence. This establishes where the facts live so the switch has somewhere
@@ -90,8 +92,9 @@ MIN_ARRAY_SIZE = 2
 #: is the reference-image observation window, whose authoritative value is
 #: release content."
 #:
-#: Enumerated, not an open dict, for the same reason `UnitFacts` names its
-#: facts: an open bag of overrides is a second configuration surface with no
+#: Enumerated, not an open dict, for the same reason the unit payloads name
+#: their facts: an open bag of overrides is a second configuration surface
+#: with no
 #: schema, and "science-affecting" would stop being a decidable property of
 #: a manifest. Adding an override is a deliberate schema change reviewed as
 #: one.
@@ -154,200 +157,24 @@ class ReferenceObservationWindow:
                    end_mjdobs=raw["end_mjdobs"])
 
 
-@dataclasses.dataclass(frozen=True)
-class UnitFacts:
-    """The per-invocation facts a job used to read from its own .ini.
-
-    Inventoried from the launcher's job_config writer
-    (awsBatchSubmitJobs_launchSingleSciencePipeline.py, the sections it
-    fills from database queries rather than from the master .ini). These
-    are the FIELDS, not the mechanism: what the job needs to know about
-    its own unit, however it arrives.
-
-    Every one of them is per-invocation by the placement criterion — they
-    identify *this* SCA's inputs and are different for every child of an
-    array. None of them is science tuning (that is release content) and
-    none is operational configuration (that is the parameter tree).
-
-    All are optional because job types need different subsets: a
-    registration job has no science image and a reference-image job has
-    no reference image yet. A job type that needs one and finds it absent
-    fails at startup with a named missing fact, which is a better failure
-    than a KeyError deep in a stage.
-
-    Attributes
-    ----------
-    rid : int, optional
-        Row identifier of the L2 file this unit processes (L2Files.rid) —
-        the launcher's ``RID``, and the anchor for every other lookup.
-    fid : int, optional
-        Filter identifier (L2FileMeta.fid).
-    filter_name : str, optional
-        Filter name (Filters.filter), resolved from `fid` at submit time
-        so the job does not re-query for a string.
-    field : int, optional
-        Sky-tile identifier the science image falls in (L2Files.field).
-    rtid : int, optional
-        Roman tessellation identifier from the tessellation database.
-        Equal to `field` by construction; carried explicitly because the
-        two come from different stores and a disagreement is a real
-        fault worth being able to see.
-    expid : int, optional
-        Exposure identifier (L2Files.expid).
-    mjdobs : float, optional
-        Observation MJD (L2Files.mjdobs).
-    exptime : float, optional
-        Exposure time (L2Files.exptime).
-    infobits : int, optional
-        Quality bits on the science image (L2Files.infobits).
-    status : int, optional
-        Row status (L2Files.status).
-    science_image_uri : str, optional
-        S3 location of the science image (L2Files.filename).
-    psfid : int, optional
-        Identifier of the best PSF for this SCA and filter (PSFs.psfid).
-    psf_uri : str, optional
-        S3 location of that PSF (PSFs.filename).
-    reference_image_id : int, optional
-        Identifier of the best reference image (RefImages.rfid), or None
-        when none exists and one must be built.
-    reference_image_uri : str, optional
-        S3 location of that reference image (RefImages.filename).
-    reference_image_infobits : int, optional
-        Quality bits on the reference image (RefImages.infobits).
-    reference_image_ppid : int, optional
-        Which pipeline produced the reference image — the dedicated
-        reference-image pipeline or the science pipeline. Not derivable
-        from the job's own type, which is why it is carried.
-    images_to_coadd : int, optional
-        How many overlapping images the reference-image build will
-        coadd, counted at submit time. -1 where an existing reference
-        image is being reused.
-    coadd_inputs_uri : str, optional
-        S3 location of the CSV listing those inputs.
-    coadd_input_identities : list, optional
-        The coadd inputs' MISSION identities, ``[[expid, sca, infobits],
-        ...]``, as `submission.gathering.coadd_input_identities` derives
-        them. What a reference image's product key digests its inputs as
-        (rule 10) — carried separately from `coadd_inputs_checksum`
-        precisely because that checksum is over a document whose rows embed
-        `input_rid` and `filename`, and hashing it would put a surrogate id
-        and a path into product identity. Absent means the manifest predates
-        deterministic product identity; registration says so by name rather
-        than computing a key over inputs it does not have.
-    coadd_inputs_checksum : str, optional
-        SHA-256, hex, of exactly the CSV bytes `coadd_inputs_uri` named when
-        the unit was gathered. A URI on its own is not a citation — it names a
-        key, and the coadd-input object is the one thing here whose bytes could
-        legitimately differ between two gathering passes, because the overlap
-        query sees more frames as the survey advances. Without this the
-        consuming stages downloaded whatever was at the key and could not tell
-        it apart from what was published. Absent means the manifest predates
-        this fact, which the stages treat as legacy and do not fail on.
-    sky_position : dict, optional
-        The science image's own centre and corners:
-        ``{"ra0":..., "dec0":..., "ra1".."ra4":..., "dec1".."dec4":...}``
-        (L2FileMeta). A nested mapping rather than eighteen flat keys,
-        because they are only ever read together.
-    tile_position : dict, optional
-        The sky tile's centre and corners, same shape, from the
-        tessellation database.
-    reference_position : dict, optional
-        The reference image's centre and corners, same shape, computed at
-        submit time by tangent-plane projection.
-    overlapping_fields : list, optional
-        Tessellation identifiers the science image overlaps.
-    reference_overlapping_fields : list, optional
-        Tessellation identifiers the reference image overlaps.
-    reference_image_version : int, optional
-        Version of the reference image (RefImages.version).
-    pid : int, optional
-        Identifier of the difference image this unit is about
-        (DiffImages.pid). Set by alert-production gathering, which names it
-        as the promoted difference-image identity a unit's alerts are drawn
-        from.
-    difference_image_uri : str, optional
-        S3 URI of the difference image (DiffImages.filename).
-    difference_image_version : int, optional
-        Version of the difference image (DiffImages.version).
-    """
-
-    rid: int | None = None
-    fid: int | None = None
-    filter_name: str | None = None
-    field: int | None = None
-    rtid: int | None = None
-    expid: int | None = None
-    mjdobs: float | None = None
-    exptime: float | None = None
-    infobits: int | None = None
-    status: int | None = None
-    science_image_uri: str | None = None
-    psfid: int | None = None
-    psf_uri: str | None = None
-    reference_image_id: int | None = None
-    reference_image_uri: str | None = None
-    reference_image_infobits: int | None = None
-    reference_image_ppid: int | None = None
-    reference_image_version: int | None = None
-    pid: int | None = None
-    difference_image_uri: str | None = None
-    difference_image_version: int | None = None
-    images_to_coadd: int | None = None
-    coadd_inputs_uri: str | None = None
-    coadd_inputs_checksum: str | None = None
-    coadd_input_identities: list | None = None
-    sky_position: dict[str, float] | None = None
-    tile_position: dict[str, float] | None = None
-    reference_position: dict[str, float] | None = None
-    overlapping_fields: list[int] | None = None
-    reference_overlapping_fields: list[int] | None = None
-
-    def to_dict(self) -> dict[str, Any]:
-        """Serializable form, absent facts omitted.
-
-        Omitted rather than written as null, per the adopted
-        absent-not-sentinel rule: a fact that was never resolved and a
-        fact resolved to nothing are different, and only the first is
-        what an omitted key means here.
-        """
-        return {name: value
-                for name, value in dataclasses.asdict(self).items()
-                if value is not None}
-
-    @classmethod
-    def from_dict(cls, raw: dict[str, Any]) -> "UnitFacts":
-        known = {f.name for f in dataclasses.fields(cls)}
-        unknown = set(raw) - known
-        if unknown:
-            # A fact this schema version does not know is not silently
-            # dropped: it means the manifest was written by a newer
-            # submitter, and guessing at the rest would be worse than
-            # refusing.
-            raise ValueError(
-                "unit facts carry unknown keys "
-                + ", ".join(sorted(unknown))
-                + "; the manifest was written against a different schema")
-        return cls(**raw)
-
-    def require(self, *names: str) -> None:
-        """Assert that named facts are present.
-
-        What a job type's startup calls to turn "this job needs a science
-        image" into one named failure instead of an AttributeError three
-        stages later.
-
-        Raises
-        ------
-        ValueError
-            Naming every absent fact at once, not just the first.
-        """
-        missing = [name for name in names if getattr(self, name, None) is None]
-        if missing:
-            raise ValueError(
-                "the manifest does not carry required per-invocation facts: "
-                + ", ".join(missing))
-
+# `UnitFacts` LIVED HERE AND IS RETIRED (rule 11, brief D item D4).
+#
+# It was a frozen dataclass of thirty members, every one `X | None = None`
+# under one blanket rationale — the "all-optional fact object" rule 11
+# names as prohibited beside the open `fields` dict. The blanket default
+# destroyed the distinction that matters: "this job type has no such fact"
+# and "this job type needs this fact and the submitter did not resolve it"
+# were the same value, so a unit missing an input it could not run without
+# was built, submitted, scheduled, and failed in a stage rather than at
+# construction.
+#
+# Its members now live on the per-job-type payloads in
+# `submission.payloads`, required where the job type requires them and
+# optional only with a per-member stated reason. Two were dropped rather
+# than moved — `images_to_coadd` and `reference_position` were declared and
+# documented but never written by any gatherer and never read by any
+# consumer, so carrying them forward would have carried the shape without
+# the content.
 
 @dataclasses.dataclass(frozen=True)
 class ProcessingUnit:
@@ -369,13 +196,35 @@ class ProcessingUnit:
         subject derivation. A crossmatch unit no longer carries a
         date-ordinal in `exposure` and a `0` in `sca`; it carries a
         `CrossmatchPayload(proc_date=..., field=...)` and nothing else.
-    facts : UnitFacts
-        The per-invocation facts for this unit — what the launcher used
-        to write into a per-job .ini. See `UnitFacts`.
+
+        Since D4 it is ALSO where the per-invocation facts live — what the
+        launcher used to write into a per-job `.ini`, and what `UnitFacts`
+        carried as thirty all-optional members until rule 11 retired that
+        shape. `facts` below is an alias onto this one object, so a unit has
+        exactly one carrier rather than a typed one beside an untyped one.
     """
 
     payload: Any
-    facts: UnitFacts = dataclasses.field(default_factory=UnitFacts)
+
+    @property
+    def facts(self):
+        """The per-invocation facts — WHICH ARE THE PAYLOAD.
+
+        An alias, not a second object. `UnitFacts` used to be a separate
+        member, and having two carriers is precisely what rule 11 calls a
+        "parallel untyped fact carrier": the same fact could live in either,
+        and which one a reader consulted decided what it saw.
+
+        Kept as a NAME because `StageContext.fact()` and `optional_fact()`
+        read facts by string name off `unit.facts`, and every science and
+        reference-image stage calls them. Those call sites are asking the
+        right question — "what did the submitter resolve for this unit?" —
+        and the answer is now the typed payload. Retargeting the alias
+        migrates all of them without touching one, while `fact()` itself
+        gained the check that the name is one the payload DECLARES, so a
+        typo is a named failure instead of a silent None.
+        """
+        return self.payload
 
     @property
     def job_type(self) -> str:
@@ -501,18 +350,21 @@ class ProcessingUnit:
         return f"{run_id}:{subject}"
 
     def to_dict(self) -> dict[str, Any]:
-        """The wire form: a typed payload and the facts, and nothing else.
+        """The wire form: ONE typed payload, and nothing else.
 
-        NO `fields` KEY EXISTS, at any schema version this method can
-        produce — that is rule 11's wire-format half, and the acceptance
-        suite asserts it over the serialized JSON rather than over this
-        code. No `exposure` or `sca` key appears for a grain that does not
-        declare one, either: the payload renders exactly its own
-        components.
+        Rule 11's wire-format half, and the acceptance suite asserts it over
+        the serialized JSON rather than over this code:
+
+          * NO `fields` key, at any schema version this method can produce.
+          * NO `facts` key either — that was the all-optional `UnitFacts`
+            object, retired in D4. Its members are payload members now, so
+            they serialize inside `payload` where their job type declares
+            them, and a job type that does not declare one emits no key for
+            it rather than emitting null.
+          * No `exposure` or `sca` key for a grain that does not declare
+            one: the payload renders exactly its own components.
         """
-        facts = self.facts.to_dict()
-        return {"payload": self.payload.to_dict(),
-                **({"facts": facts} if facts else {})}
+        return {"payload": self.payload.to_dict()}
 
     @classmethod
     def from_dict(cls, raw: dict[str, Any], job_type: str = None
@@ -545,8 +397,19 @@ class ProcessingUnit:
             raise ValueError(
                 "rebuilding a processing unit needs its manifest's job "
                 "type, which selects the payload type")
-        return cls(payload=payloads.from_dict(job_type, payload_raw),
-                   facts=UnitFacts.from_dict(raw.get("facts", {})))
+        if "facts" in raw:
+            # A `facts` key means a manifest written before D4 retired the
+            # all-optional carrier. Refused rather than merged into the
+            # payload for the same reason a version-3 unit is refused: a
+            # reader that accepts both shapes keeps the prohibited one alive
+            # as a supported input, and the two disagree about which member
+            # is authoritative whenever both carry one.
+            raise ValueError(
+                "a processing unit carries a `facts` key; the all-optional "
+                "UnitFacts carrier was retired in D4 (rule 11) and its "
+                "members are payload members now. Such a manifest predates "
+                "schema version 4 and is refused, not translated.")
+        return cls(payload=payloads.from_dict(job_type, payload_raw))
 
 
 class Manifest:
@@ -713,7 +576,7 @@ class Manifest:
         bad: list[str] = []
         for index, unit in enumerate(self.units):
             try:
-                unit.facts.require(*names)
+                unit.payload.require(*names)
             except ValueError as exc:
                 bad.append(f"index {index} ({unit.key}): {exc}")
         if bad:

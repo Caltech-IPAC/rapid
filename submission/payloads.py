@@ -126,8 +126,18 @@ def _freeze(payload, name):
     constructor completing its own initialization.
     """
     value = getattr(payload, name, None)
-    if value is not None and not isinstance(value, tuple):
-        object.__setattr__(payload, name, tuple(value))
+    if value is None:
+        return
+    # NESTED SEQUENCES ARE NORMALIZED TOO. `coadd_input_identities` is a
+    # sequence OF sequences — `((expid, sca, infobits), ...)` — and JSON
+    # returns every level as a list, so freezing only the outer one would
+    # leave `((1,2,3),)` and `([1,2,3],)` comparing unequal for the same
+    # manifest written and read back.
+    normalized = tuple(
+        tuple(item) if isinstance(item, (list, tuple)) else item
+        for item in value)
+    if normalized != value:
+        object.__setattr__(payload, name, normalized)
 
 
 class UnitPayload:
@@ -164,6 +174,41 @@ class UnitPayload:
         meant before this change.
         """
         return (self.JOB_TYPE, *self.components())
+
+    def declares(self, name) -> bool:
+        """Is `name` a component or invocation fact this payload declares?
+
+        The question `StageContext.fact()` asks before reading. Under the
+        old open dict there was nothing to ask: a name nobody had ever
+        declared returned None exactly like a declared-but-unresolved one.
+        """
+        return name in self.COMPONENTS or name in self.INVOCATION_FACTS
+
+    def require(self, *names: str) -> None:
+        """Assert that named facts are present, naming every absent one.
+
+        Carried over from `UnitFacts.require` unchanged in contract — a job
+        type's startup calls it to turn "this job needs a science image"
+        into one named failure instead of an AttributeError three stages
+        later. What changed is that it can now also catch a name this job
+        type does not declare AT ALL, which the old all-optional object
+        reported as merely absent.
+        """
+        missing, undeclared = [], []
+        for name in names:
+            if not self.declares(name):
+                undeclared.append(name)
+            elif getattr(self, name, None) is None:
+                missing.append(name)
+        if undeclared:
+            raise PayloadError(
+                f"a {self.JOB_TYPE} unit does not declare "
+                + ", ".join(undeclared)
+                + f"; it declares {sorted(set(self.COMPONENTS) | set(self.INVOCATION_FACTS))}")
+        if missing:
+            raise ValueError(
+                "the manifest does not carry required per-invocation facts: "
+                + ", ".join(missing))
 
     def to_dict(self) -> dict[str, Any]:
         """The wire form: the grain, then exactly the declared components.
@@ -204,13 +249,160 @@ class ExposureScaPayload(UnitPayload):
 
 
 @dataclasses.dataclass(frozen=True)
-class SciencePayload(ExposureScaPayload):
+class ImagingPayload(ExposureScaPayload):
+    """The per-invocation facts an L2-image job type resolves at submission.
+
+    Shared by science and reference-image because ONE gathering helper
+    resolves them for both — `submission.gathering.science_facts`, called
+    with `make_references` deciding only which units are yielded, not what
+    facts they carry. Two payload classes duplicating this list would be two
+    places for it to drift.
+
+    **THESE WERE `UnitFacts`, AND EVERY ONE WAS `X | None = None`.** Rule 11
+    names that shape as prohibited alongside the open dict: "no parallel
+    untyped fact carriers (all-optional fact objects or open field
+    dictionaries duplicating typed state)". The distinction the blanket
+    default destroyed is the one that matters here — "this job type does not
+    have this fact" and "this job type needs this fact and the submitter did
+    not resolve it" looked identical, so a unit missing an input it could not
+    run without was built, submitted and scheduled, and failed in a stage.
+
+    Below, the members the L2 lookup ALWAYS resolves are required and
+    validated at construction. The ones that are legitimately absent are
+    optional WITH A STATED REASON, per member — which is the standard rule 11
+    sets, and the reason each comment exists.
+    """
+
+    # -- required: the L2 row's own identity and geometry ------------------
+    # `science_facts` resolves every one of these from `get_l2filemeta_record`
+    # and `get_info_for_l2file` before it returns, and raises `GatheringError`
+    # if either row is missing. A unit that reached submission without them
+    # has no science image to process.
+    rid: int = None
+    fid: int = None
+    field: int = None
+    rtid: int = None
+    expid: int = None
+    mjdobs: float = None
+    exptime: float = None
+    infobits: int = None
+    science_image_uri: str = None
+    sky_position: dict = None
+    tile_position: dict = None
+
+    # -- optional, each for its own stated reason --------------------------
+
+    #: The filter's NAME, resolved from `fid` at submit time so the job does
+    #: not re-query for a string. Optional because it is a convenience
+    #: denormalization of `fid` (which IS required): a manifest written
+    #: before it was resolved still names the filter by id, and the one
+    #: reader (`reference_image.add_header_keywords`) is writing a FITS
+    #: header comment, not making a decision.
+    filter_name: str = None
+
+    #: The best PSF for this SCA and filter. Optional because a unit whose
+    #: SCA has no registered PSF is a real state — `science_facts` looks it
+    #: up and leaves both absent when the lookup finds nothing — and the
+    #: science stage's `download_inputs` is where that becomes a failure,
+    #: with the message naming the PSF rather than the manifest.
+    psfid: int = None
+    psf_uri: str = None
+
+    #: The reference image to subtract against. **ABSENCE IS THE BRANCH**,
+    #: not an omission: `optional_fact("reference_image_id")` returning None
+    #: is what selects build-a-reference over use-an-existing-one. This is
+    #: the case `StageContext.optional_fact`'s own docstring cites as the
+    #: clearest example of a legitimately-absent fact, and it is why that
+    #: accessor exists at all.
+    reference_image_id: int = None
+    reference_image_uri: str = None
+    reference_image_infobits: int = None
+    reference_image_version: int = None
+    #: Which pipeline produced the reference image. Carried because it is
+    #: not derivable from the job's own type — a reference image may have
+    #: been built by the dedicated reference pipeline or by an earlier
+    #: science run. Optional exactly when `reference_image_id` is.
+    reference_image_ppid: int = None
+
+    #: The tessellation identifiers the science image overlaps. Optional
+    #: because it is a submit-time convenience for the coadd path: only the
+    #: reference-image build reads it, and only when it is building.
+    overlapping_fields: tuple = ()
+    reference_overlapping_fields: tuple = ()
+
+    INVOCATION_FACTS = (
+        "rid", "fid", "field", "rtid", "expid", "mjdobs", "exptime",
+        "infobits", "science_image_uri", "sky_position", "tile_position",
+        "filter_name", "psfid", "psf_uri", "reference_image_id",
+        "reference_image_uri", "reference_image_infobits",
+        "reference_image_version", "reference_image_ppid",
+        "overlapping_fields", "reference_overlapping_fields",
+    )
+
+    #: The members above that a unit cannot be built without. Named as a
+    #: tuple rather than checked inline so the required set is readable as
+    #: one list and so subclasses can extend it.
+    REQUIRED_FACTS = (
+        "rid", "fid", "field", "rtid", "expid", "mjdobs", "exptime",
+        "infobits", "science_image_uri", "sky_position", "tile_position",
+    )
+
+    def __post_init__(self):
+        super().__post_init__()
+        for name in self.REQUIRED_FACTS:
+            _require(getattr(self, name), name, self.JOB_TYPE)
+        _freeze(self, "overlapping_fields")
+        _freeze(self, "reference_overlapping_fields")
+
+
+@dataclasses.dataclass(frozen=True)
+class SciencePayload(ImagingPayload):
     JOB_TYPE = JOB_TYPE_SCIENCE
 
 
 @dataclasses.dataclass(frozen=True)
-class ReferenceImagePayload(ExposureScaPayload):
+class ReferenceImagePayload(ImagingPayload):
+    """A reference-image build: the imaging facts plus its coadd inputs.
+
+    The three coadd members are REQUIRED here and absent from
+    `SciencePayload`, which is the whole point of discriminating by job
+    type: a reference-image unit that does not say what it coadds cannot
+    build anything, while a science unit has no coadd inputs at all and
+    would have carried three permanently-None members under the old shape.
+    """
+
     JOB_TYPE = JOB_TYPE_REFERENCE_IMAGE
+
+    #: The CSV listing the coadd inputs, and the checksum of exactly the
+    #: bytes that were published — a URI alone is not a citation, and this
+    #: object's bytes could legitimately differ between gathering passes.
+    coadd_inputs_uri: str = None
+    coadd_inputs_checksum: str = None
+    #: The coadd inputs' MISSION identities, `((expid, sca, infobits), ...)`.
+    #: **REQUIRED**, and required here rather than optional because it is a
+    #: component of this product's deterministic identity (rule 10): a
+    #: reference image whose inputs are unknown cannot have a product key,
+    #: and computing one without them would claim an identity the product
+    #: does not have. This is the member fix round 1 called out for having
+    #: been added to the all-optional carrier — it lands here instead.
+    coadd_input_identities: tuple = ()
+
+    INVOCATION_FACTS = ImagingPayload.INVOCATION_FACTS + (
+        "coadd_inputs_uri", "coadd_inputs_checksum", "coadd_input_identities",
+    )
+    REQUIRED_FACTS = ImagingPayload.REQUIRED_FACTS + (
+        "coadd_inputs_uri", "coadd_inputs_checksum",
+    )
+
+    def __post_init__(self):
+        super().__post_init__()
+        if not self.coadd_input_identities:
+            raise PayloadError(
+                f"a {self.JOB_TYPE} unit requires 'coadd_input_identities'; "
+                f"they are an input component of the product key (rule 10) "
+                f"and a reference image whose inputs are unknown cannot have "
+                f"a deterministic identity")
+        _freeze(self, "coadd_input_identities")
 
 
 @dataclasses.dataclass(frozen=True)
@@ -247,9 +439,16 @@ class AlertProductionPayload(ExposureScaPayload):
     #: legitimately precede it.
     promotion_sequence: int = None
 
+    #: The sky tile this unit's alerts fall in. Optional for a stated
+    #: reason: `resolve_ownership` records it as the attempt's `sky_tile`
+    #: when it is known, and an alert unit is identified by its promoted
+    #: difference image rather than by the tile, so an absent one costs the
+    #: attempt record a cross-reference and costs the job nothing.
+    rtid: int = None
+
     INVOCATION_FACTS = ("promoted_attempt_id", "release_identity",
                         "difference_image_pid", "difference_image_product",
-                        "role_resolved_from", "promotion_sequence")
+                        "role_resolved_from", "promotion_sequence", "rtid")
 
     def __post_init__(self):
         super().__post_init__()

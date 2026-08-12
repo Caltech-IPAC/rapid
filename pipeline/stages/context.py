@@ -189,11 +189,30 @@ class StageContext:
 
     @property
     def facts(self) -> Any:
-        """The manifest's `UnitFacts` for this processing unit."""
+        """This unit's per-invocation facts — its TYPED payload.
+
+        Named `facts` because that is what every stage calls them and what
+        `fact()`/`optional_fact()` read. Since D4 there is one carrier, not
+        a typed payload beside an all-optional facts object.
+        """
         return self.unit.facts
 
     def fact(self, name: str) -> Any:
         """One per-invocation fact, required.
+
+        Reads the unit's TYPED payload (`submission.payloads`), which is what
+        `unit.facts` now names — D4 retired the all-optional `UnitFacts`
+        object and moved its members onto the per-job-type payloads. Every
+        call site is unchanged: they were already asking the right question,
+        and the answer simply has a type now.
+
+        **A NAME THIS JOB TYPE DOES NOT DECLARE IS ITS OWN FAILURE.** Under
+        the old object every one of thirty members existed on every unit and
+        defaulted to None, so `fact("psf_uri")` on a crossmatch unit and
+        `fact("psf_uri")` on a science unit whose PSF lookup found nothing
+        raised the identical message. They are different faults — the first
+        is a coding error, the second a submission gap — and only the second
+        is `input_missing`.
 
         Raises
         ------
@@ -203,7 +222,16 @@ class StageContext:
             missing fact means the submitter did not describe the unit fully —
             not that the deployment is misconfigured.
         """
-        value = getattr(self.unit.facts, name, None)
+        payload = self.unit.facts
+        if not payload.declares(name):
+            raise InputError(
+                f"the job type {self.job_type!r} does not declare the fact "
+                f"{name!r}; its payload declares "
+                f"{sorted(set(payload.COMPONENTS) | set(payload.INVOCATION_FACTS))}. "
+                f"Asking for a fact a job type has no place for is a coding "
+                f"error, not a gap in the submission.",
+                unit=self.unit.key, fact=name)
+        value = getattr(payload, name, None)
         if value is None:
             raise InputError(
                 f"the manifest carries no {name!r} for unit "

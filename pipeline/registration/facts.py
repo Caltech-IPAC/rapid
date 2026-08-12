@@ -134,7 +134,7 @@ def unit_provenance(unit, job_type=None):
     than this reaching into a context.
 
     Absent facts are OMITTED rather than written as null, matching
-    `UnitFacts.to_dict`'s adopted absent-not-sentinel rule. A key that is not
+    the payloads' adopted absent-not-sentinel rule. A key that is not
     there is a fact the manifest did not carry, and the registrar's
     `MissingRecordFact` says so by name; a key present and null would be a
     claim that the value is known to be nothing.
@@ -142,7 +142,8 @@ def unit_provenance(unit, job_type=None):
     facts = getattr(unit, "facts", None)
     provenance = {}
 
-    # `sca` comes from the UNIT, not from `UnitFacts` — it is half of the
+    # `sca` comes from the unit's SUBJECT rather than its facts — it is half
+    # of the
     # unit's identity (`exposure/sca`) rather than a queried attribute of it.
     # It was the one required registrar fact with nowhere at all to come from,
     # because nothing ever looked at the unit itself.
@@ -155,7 +156,8 @@ def unit_provenance(unit, job_type=None):
         return provenance
 
     # The identity facts the operations tables key on. Named individually
-    # rather than copied wholesale from `UnitFacts.to_dict()`: the manifest
+    # rather than copied wholesale from the payload's `to_dict()`: the
+    # manifest
     # carries things a record has no business asserting — the coadd-input CSV's
     # checksum, the overlapping-field lists — and a record that grew a new key
     # every time the manifest schema did would make "what does a record carry"

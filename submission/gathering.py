@@ -50,7 +50,7 @@ from database.modules.utils.roman_tessellation_db import (
     RomanTessellationClosedForm)
 from . import blocked
 from . import payloads
-from .manifest import ProcessingUnit, UnitFacts
+from .manifest import ProcessingUnit
 from .routes import (JOB_TYPE_ALERT_PRODUCTION, JOB_TYPE_CATALOG_LOAD,
                      JOB_TYPE_CROSSMATCH, JOB_TYPE_MERGE_CURRENCY,
                      JOB_TYPE_MERGE_DEDUP, JOB_TYPE_REFERENCE_IMAGE,
@@ -269,7 +269,7 @@ def _tile_position(rtid: int) -> dict[str, float] | None:
 
 def science_facts(handle: UnitSource, rid: int, field: int, fid: int,
                   reference_ppid: int | None = None,
-                  science_ppid: int | None = None) -> UnitFacts:
+                  science_ppid: int | None = None) -> dict:
     """Resolve one science unit's per-invocation facts.
 
     The fact set the deleted `awsBatchSubmitJobs_launchSingleSciencePipeline`
@@ -319,7 +319,7 @@ def science_facts(handle: UnitSource, rid: int, field: int, fid: int,
     if info is None or len(info) < 8:
         raise GatheringError(f"rid {rid} has no L2Files row")
 
-    facts = UnitFacts(
+    facts = dict(
         rid=int(rid),
         fid=int(fid),
         field=int(field),
@@ -333,7 +333,10 @@ def science_facts(handle: UnitSource, rid: int, field: int, fid: int,
         mjdobs=_maybe_float(info[4]),
         exptime=_maybe_float(info[5]),
         infobits=_maybe_int(info[6]),
-        status=_maybe_int(info[7]),
+        # `status` was resolved here and carried as a `UnitFacts` member that
+        # NOTHING ever read (survey of every accessor, D4). Dropped rather
+        # than moved onto the payload: carrying a fact no consumer wants is
+        # how an all-optional carrier grows in the first place.
         science_image_uri=_maybe_str(info[0]),
         sky_position=_sky_position(meta),
         tile_position=_tile_position(int(field)),
@@ -345,7 +348,7 @@ def science_facts(handle: UnitSource, rid: int, field: int, fid: int,
         raise GatheringError(
             f"filter lookup failed for fid {fid}: {exc}") from exc
     if filter_name is not None:
-        facts = _replace(facts, filter_name=str(filter_name))
+        facts["filter_name"] = str(filter_name)
 
     try:
         psf = handle.get_best_psf(sca, fid)
@@ -353,18 +356,17 @@ def science_facts(handle: UnitSource, rid: int, field: int, fid: int,
         raise GatheringError(
             f"PSF lookup failed for sca {sca} fid {fid}: {exc}") from exc
     if psf is not None and len(psf) >= 2 and psf[0] is not None:
-        facts = _replace(facts, psfid=_maybe_int(psf[0]),
-                         psf_uri=_maybe_str(psf[1]))
+        facts["psfid"] = _maybe_int(psf[0])
+        facts["psf_uri"] = _maybe_str(psf[1])
 
     reference = _best_reference(handle, reference_ppid, science_ppid,
                                 field, fid)
     if reference is not None:
-        facts = _replace(
-            facts,
-            reference_image_id=_maybe_int(reference.get("rfid")),
-            reference_image_uri=_maybe_str(reference.get("filename")),
-            reference_image_infobits=_maybe_int(reference.get("infobits")),
-            reference_image_ppid=_maybe_int(reference.get("ppid")))
+        facts["reference_image_id"] = _maybe_int(reference.get("rfid"))
+        facts["reference_image_uri"] = _maybe_str(reference.get("filename"))
+        facts["reference_image_infobits"] = _maybe_int(
+            reference.get("infobits"))
+        facts["reference_image_ppid"] = _maybe_int(reference.get("ppid"))
     return facts
 
 
@@ -457,8 +459,8 @@ def gather_science_units(handle: UnitSource, start, end,
                                     if make_references else JOB_TYPE_SCIENCE)
             candidates.append(ProcessingUnit(
                 payload=payloads.build(job_type_for_payload,
-                                       exposure=int(exposure), sca=int(sca)),
-                facts=facts))
+                                       exposure=int(exposure), sca=int(sca),
+                                       **facts)))
 
     # THE RESUBMISSION GATE (final convergence round, 2026-08-09): the two
     # EXPOSURE_SCA arrival-driven types were the last state-blind
@@ -600,8 +602,7 @@ def gather_campaign_units(handle: UnitSource) -> Iterator[ProcessingUnit]:
             campaign_name, campaign_id, work_unit_id, exposure, sca)
         yield ProcessingUnit(
             payload=payloads.build(job_type, exposure=int(exposure),
-                                   sca=int(sca)),
-            facts=facts)
+                                   sca=int(sca), **facts))
 
 
 def _campaign_unit_l2_identity(handle: UnitSource, exposure: int, sca: int,
@@ -1163,10 +1164,21 @@ def gather_reference_units(handle: UnitSource, start, end,
         # than an error.
         _release_blocked_unit(on_unblocked, unit)
 
+        # The coadd facts complete a REFERENCE-IMAGE payload, which requires
+        # all three (`coadd_input_identities` is a product-key input, rule
+        # 10). The unit was gathered with the imaging facts; this rebuilds it
+        # with the full set rather than mutating a frozen payload.
         yield dataclasses.replace(
-            unit, facts=_replace(facts, coadd_inputs_uri=uri,
-                                 coadd_inputs_checksum=checksum,
-                                 coadd_input_identities=coadd_identities))
+            unit,
+            payload=payloads.build(
+                JOB_TYPE_REFERENCE_IMAGE,
+                exposure=unit.payload.exposure, sca=unit.payload.sca,
+                coadd_inputs_uri=uri, coadd_inputs_checksum=checksum,
+                coadd_input_identities=coadd_identities,
+                **{name: getattr(unit.payload, name)
+                   for name in unit.payload.INVOCATION_FACTS
+                   if not name.startswith("coadd_")
+                   and getattr(unit.payload, name) is not None}))
 
 
 def _blocked_identity(unit):
@@ -1352,8 +1364,7 @@ def gather_catalog_load_units(handle: UnitSource, proc_date: str
                 # unit's catalogues come from. A unit with none loads
                 # nothing and records that through its effect counts —
                 # the empty-product-set disposition, not an error.
-                product_inputs=tuple(inputs)),
-            facts=UnitFacts())
+                product_inputs=tuple(inputs)))
 
 
 def gather_crossmatch_units(handle: UnitSource, proc_date: str
@@ -1434,8 +1445,8 @@ def gather_crossmatch_units(handle: UnitSource, proc_date: str
             payload=payloads.build(
                 JOB_TYPE_CROSSMATCH,
                 proc_date=str(proc_date), field=field,
-                target_tables=(f"astroobjects_{field}", f"merges_{field}")),
-            facts=UnitFacts(field=field))
+                target_tables=(f"astroobjects_{field}",
+                               f"merges_{field}")))
 
 
 def _per_field_units(handle: UnitSource, job_type: str, prototype: str
@@ -1495,8 +1506,7 @@ def _per_field_units(handle: UnitSource, job_type: str, prototype: str
             continue
         yield ProcessingUnit(
             payload=payloads.build(job_type, field=field,
-                                   target_table=f"{prototype}_{field}"),
-            facts=UnitFacts(field=field))
+                                   target_table=f"{prototype}_{field}"))
 
 
 def gather_statistics_units(handle: UnitSource) -> Iterator[ProcessingUnit]:
@@ -1618,12 +1628,7 @@ def gather_alert_production_units(handle: UnitSource, release_identity: str,
                 difference_image_pid=pid,
                 difference_image_product=_maybe_str(row[4]),
                 role_resolved_from=_maybe_str(row[5]),
-                promotion_sequence=_maybe_int(row[7])),
-            # `pid` IS the declared difference-image identity, and it is what
-            # `batch_produce` is called with. It rides in the facts because
-            # `UnitFacts.pid` is its one home — and now also in the payload,
-            # which is where the ALERT unit's own declared inputs live.
-            facts=UnitFacts(pid=pid, expid=expid))
+                promotion_sequence=_maybe_int(row[7])))
 
 
 def initialize_alert_watermark(handle: UnitSource, release_identity: str,
@@ -1700,11 +1705,6 @@ def _sca_of(handle: UnitSource, rid: int) -> int:
     if meta is None or meta[0] is None:
         raise GatheringError(f"rid {rid} has no SCA in L2FileMeta")
     return int(meta[0])
-
-
-def _replace(facts: UnitFacts, **changes: Any) -> UnitFacts:
-    """`dataclasses.replace` for the frozen facts record."""
-    return dataclasses.replace(facts, **changes)
 
 
 def _maybe_int(value: Any) -> int | None:
