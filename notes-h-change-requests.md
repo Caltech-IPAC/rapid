@@ -173,6 +173,31 @@ and exclusive within this repository's production code.
 
 ---
 
+## CR-H7 — Version the simulation input buckets (fix round 1)
+
+The admission manifest records each source object's **immutable version
+reference** so a replay can name the exact bytes rather than whatever now sits
+at that key. Fix round 1 wired that enumeration into all three ingest scripts,
+which now call `head_object` on every input and record whatever `VersionId`
+comes back.
+
+**If the input bucket is not versioned, `VersionId` is absent** and the column
+is NULL — at which point the manifest's `byte_custody` value
+(`external-versioned`) overstates the guarantee, because there is no external
+version to pin. The scripts still work and the admission is still recorded;
+what degrades is the strength of the replay claim.
+
+**Requested:** enable `VersioningConfiguration: Status: Enabled` on the
+simulation input buckets (`roman-rapid-inputs-gbtds-sim` and any sibling the
+ingest scripts read), as `rapid-product-buckets.yaml` already does for
+`roman-rapid-products` and `roman-rapid-alerts`.
+
+**Until it lands:** record the honest custody. An operator running an ingest
+against an unversioned input bucket should pass `byte_custody='none'`, which
+says the replay rests on recorded facts alone. This is a one-word change at
+each `begin_admission_run` call site and is deliberately left to whoever knows
+the deployed bucket configuration rather than being guessed here.
+
 ## CR-H6 — Widen the legacy `checksum varchar(32)` columns (restates CR-8)
 
 Already raised by brief D and still unlanded; restated because H depends on
