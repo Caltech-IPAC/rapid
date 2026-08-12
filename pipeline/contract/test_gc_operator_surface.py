@@ -194,31 +194,69 @@ def test_gc_compute_plan_computes_from_real_state_and_records_a_plan():
 
 
 def test_gc_compute_plan_refuses_a_plan_over_its_bound_at_computation():
-    """Refused at computation, never truncated at execution."""
-    from pipeline.gc.plans import PlanBoundExceeded
+    """Refused at computation, never truncated at execution.
+
+    **THE BOUND IS TESTED AT `record_plan`, NOT THROUGH THE ANTI-JOIN**, and
+    the reason is worth stating: on this scratch database no inventory key can
+    be canonically attributed (no attempt reconstructs to a
+    `science/r/u/attempt-...` prefix), so every object is retained as
+    unattributable and the candidate list is EMPTY — a plan of zero never
+    exceeds a bound of one. A first revision of this test drove the CLI and
+    asserted a refusal that could not fire, which would have read as "the
+    bound is enforced" while proving nothing.
+
+    So the candidates are constructed directly for this one assertion. That is
+    the honest shape: the bound is a property of `record_plan`, and this
+    exercises exactly it, with the CLI-level path covered by the test above.
+    """
+    from pipeline.gc.inventory import InventoryObject
+    from pipeline.gc.plans import GCPlanRepository, PlanBoundExceeded
+    from pipeline.gc.references import Candidate
+    import datetime
+
     conn = fixture.connect()
-    path = inventory_file([
-        {"bucket": BUCKET, "key": "science/r/u/attempt-0000000001/%d.fits" % i,
-         "version_id": "v1", "size": 1,
-         "last_modified": "2026-08-01T00:00:00Z"} for i in range(3)])
     try:
         require_gc_schema(conn)
-        # An allowlisted class and a horizon, so the objects would otherwise
-        # be real candidates and the bound is what refuses them.
-        args = parse(["gc-compute-plan", "--inventory", path,
-                      "--inventory-id", "inv-bound-%s" % fixture.RUN_TAG,
-                      "--inventory-taken-at", "2026-08-12T09:00:00Z",
-                      "--freshness", "999999999", "--prefix", "science/",
-                      "--max-deletions", "1", "--allow-class", "anything",
-                      "--horizon-seconds", "60",
-                      "--horizon-provenance", "test",
-                      "--reason", "bound test", "--apply"])
-        with pytest.raises(PlanBoundExceeded):
-            operatorctl_main._cmd_gc_compute(conn, args, _Out(),
-                                             manifest_reader=_stub_reader)
-    finally:
+        with conn.cursor() as cur:
+            cur.execute("SELECT count(*) FROM gc_plans")
+            before = cur.fetchone()[0]
+
+        moment = datetime.datetime(2026, 8, 12, tzinfo=datetime.timezone.utc)
+        objects = [InventoryObject(bucket=BUCKET,
+                                   key="science/bound/%d.fits" % i,
+                                   version_id="v1", size=1,
+                                   last_modified=moment) for i in range(3)]
+        candidates = [Candidate(obj=o, object_class="difference_image",
+                                attempt_id=None,
+                                canonical_prefix="science/bound")
+                      for o in objects]
+
+        class _Inventory(object):
+            inventory_id = "inv-bound-%s" % fixture.RUN_TAG
+            taken_at = moment
+            complete = True
+
+        _Inventory.objects = tuple(objects)
+
+        repo = GCPlanRepository(conn)
+        with pytest.raises(PlanBoundExceeded) as caught:
+            repo.record_plan(
+                candidates=candidates, retained_counts={},
+                inventory=_Inventory(), declared_buckets=(BUCKET,),
+                declared_prefixes=("science/",), horizon_seconds=60,
+                horizon_provenance="test", max_deletions=1, allowlist=(),
+                reason="bound test",
+                idempotency_key="bound-%s" % fixture.RUN_TAG,
+                computed_by="contract-test")
+        assert "REFUSED AT COMPUTATION" in str(caught.value)
         conn.rollback()
-        os.unlink(path)
+
+        # AND NO PARTIAL PLAN WAS WRITTEN — the bound is checked before any
+        # row, so a refused plan leaves nothing behind.
+        with conn.cursor() as cur:
+            cur.execute("SELECT count(*) FROM gc_plans")
+            assert cur.fetchone()[0] == before
+    finally:
         conn.close()
 
 
