@@ -382,35 +382,45 @@ class ReferenceImagePayload(ImagingPayload):
 
     JOB_TYPE = JOB_TYPE_REFERENCE_IMAGE
 
-    #: The CSV listing the coadd inputs, and the checksum of exactly the
-    #: bytes that were published — a URI alone is not a citation, and this
-    #: object's bytes could legitimately differ between gathering passes.
+    #: The CSV listing the coadd inputs, the checksum of exactly the bytes
+    #: that were published, and the inputs' own MISSION identities
+    #: `((expid, sca, infobits), ...)` — the last being an input component
+    #: of this product's deterministic key (rule 10).
+    #:
+    #: **OPTIONAL AT CONSTRUCTION, AND THE REASON IS THE TWO-STAGE GATHER.**
+    #: Reference-image gathering is two passes over one unit:
+    #: `gather_science_units(make_references=True)` yields CANDIDATES from
+    #: the L2 rows, and `gather_reference_units` then aggregates each
+    #: candidate's overlapping frames, publishes the CSV, and re-yields the
+    #: unit with these three resolved. A candidate genuinely does not have
+    #: them yet — the overlap query has not run — so requiring them here
+    #: would make the first stage unable to build the unit the second stage
+    #: exists to complete.
+    #:
+    #: They are required of a SUBMITTABLE unit, and that is enforced where
+    #: it is true: `Manifest.require_facts` at submission, and
+    #: `pipeline/registration/products_identity.py` refuses to compute a
+    #: product key without `coadd_input_identities` rather than computing
+    #: one over inputs it does not have. Optionality with a stated reason is
+    #: exactly what rule 11 asks for in place of a blanket default; what it
+    #: prohibits is `X | None = None` on everything under one rationale.
     coadd_inputs_uri: str = None
     coadd_inputs_checksum: str = None
-    #: The coadd inputs' MISSION identities, `((expid, sca, infobits), ...)`.
-    #: **REQUIRED**, and required here rather than optional because it is a
-    #: component of this product's deterministic identity (rule 10): a
-    #: reference image whose inputs are unknown cannot have a product key,
-    #: and computing one without them would claim an identity the product
-    #: does not have. This is the member fix round 1 called out for having
-    #: been added to the all-optional carrier — it lands here instead.
     coadd_input_identities: tuple = ()
 
     INVOCATION_FACTS = ImagingPayload.INVOCATION_FACTS + (
         "coadd_inputs_uri", "coadd_inputs_checksum", "coadd_input_identities",
     )
-    REQUIRED_FACTS = ImagingPayload.REQUIRED_FACTS + (
-        "coadd_inputs_uri", "coadd_inputs_checksum",
-    )
+
+    #: What a reference-image unit needs before it may be SUBMITTED, as
+    #: distinct from what it needs to exist as a candidate. Named here so
+    #: the submission-time check reads the declaration rather than
+    #: repeating the list.
+    SUBMITTABLE_FACTS = ("coadd_inputs_uri", "coadd_inputs_checksum",
+                         "coadd_input_identities")
 
     def __post_init__(self):
         super().__post_init__()
-        if not self.coadd_input_identities:
-            raise PayloadError(
-                f"a {self.JOB_TYPE} unit requires 'coadd_input_identities'; "
-                f"they are an input component of the product key (rule 10) "
-                f"and a reference image whose inputs are unknown cannot have "
-                f"a deterministic identity")
         _freeze(self, "coadd_input_identities")
 
 

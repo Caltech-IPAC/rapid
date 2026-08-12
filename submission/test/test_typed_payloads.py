@@ -21,7 +21,8 @@ from submission.test import payload_fixtures as fixtures
 from submission.manifest import ProcessingUnit
 from submission.routes import (JOB_TYPE_ALERT_PRODUCTION,
                                JOB_TYPE_CATALOG_LOAD, JOB_TYPE_CROSSMATCH,
-                               JOB_TYPE_MERGE_DEDUP, JOB_TYPE_SCIENCE,
+                               JOB_TYPE_MERGE_DEDUP,
+                               JOB_TYPE_REFERENCE_IMAGE, JOB_TYPE_SCIENCE,
                                JOB_TYPE_STATISTICS)
 from submission.subjects import SubjectError, subject_for
 
@@ -183,6 +184,42 @@ def test_a_date_sca_unit_has_an_sca_but_no_exposure():
 # ---------------------------------------------------------------------------
 # The registry is closed
 # ---------------------------------------------------------------------------
+
+
+def test_a_reference_candidate_may_lack_its_coadd_facts_but_a_submission_may_not():
+    """The one optionality that is a STAGE distinction, asserted both ways.
+
+    Reference-image gathering is two passes: the first yields candidates
+    from the L2 rows, the second aggregates the overlapping frames and
+    completes them. So a candidate legitimately has no `coadd_inputs_uri` —
+    the overlap query has not run — while a unit about to be SUBMITTED must
+    have all three, because `coadd_input_identities` is an input component
+    of the product key (rule 10).
+
+    Both halves are asserted here so the optionality cannot quietly widen
+    into "these are never checked". This is the shape rule 11 asks for:
+    optional for a stated reason, with the requirement enforced where it is
+    actually true.
+    """
+    from submission.manifest import Manifest
+
+    candidate = payloads.build(
+        JOB_TYPE_REFERENCE_IMAGE, exposure=90002, sca=4,
+        **fixtures.IMAGING_FACTS)
+    assert candidate.coadd_inputs_uri is None
+    assert candidate.coadd_input_identities == ()
+
+    manifest = Manifest([ProcessingUnit(payload=candidate)],
+                        batch_id="run-1", job_type=JOB_TYPE_REFERENCE_IMAGE)
+    with pytest.raises(ValueError) as raised:
+        manifest.require_facts(*candidate.SUBMITTABLE_FACTS)
+    assert "coadd_inputs_uri" in str(raised.value)
+
+    # The completed unit the second gathering stage yields passes.
+    completed = Manifest([ProcessingUnit(payload=fixtures.reference_payload())],
+                         batch_id="run-1",
+                         job_type=JOB_TYPE_REFERENCE_IMAGE)
+    completed.require_facts(*candidate.SUBMITTABLE_FACTS)
 
 
 def test_an_undeclared_job_type_cannot_build_a_payload():

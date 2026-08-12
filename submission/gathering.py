@@ -1164,21 +1164,19 @@ def gather_reference_units(handle: UnitSource, start, end,
         # than an error.
         _release_blocked_unit(on_unblocked, unit)
 
-        # The coadd facts complete a REFERENCE-IMAGE payload, which requires
-        # all three (`coadd_input_identities` is a product-key input, rule
-        # 10). The unit was gathered with the imaging facts; this rebuilds it
-        # with the full set rather than mutating a frozen payload.
+        # THE SECOND STAGE COMPLETES THE CANDIDATE. `gather_science_units`
+        # yielded this unit with its imaging facts resolved and its coadd
+        # facts absent — the overlap query had not run yet. Now it has, so
+        # the payload is rebuilt with all three. `dataclasses.replace` on
+        # the frozen payload rather than on the unit: one object changes,
+        # and the subject components are carried through unchanged, which is
+        # what keeps the completed unit the SAME unit the candidate was.
         yield dataclasses.replace(
             unit,
-            payload=payloads.build(
-                JOB_TYPE_REFERENCE_IMAGE,
-                exposure=unit.payload.exposure, sca=unit.payload.sca,
+            payload=dataclasses.replace(
+                unit.payload,
                 coadd_inputs_uri=uri, coadd_inputs_checksum=checksum,
-                coadd_input_identities=coadd_identities,
-                **{name: getattr(unit.payload, name)
-                   for name in unit.payload.INVOCATION_FACTS
-                   if not name.startswith("coadd_")
-                   and getattr(unit.payload, name) is not None}))
+                coadd_input_identities=coadd_identities))
 
 
 def _blocked_identity(unit):
