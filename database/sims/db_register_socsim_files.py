@@ -14,6 +14,16 @@ to_zone = tz.gettz('America/Los_Angeles')
 
 import modules.utils.rapid_pipeline_subs as util
 import database.modules.utils.rapid_db as db
+
+# The carved admission repository (rule 20). `RAPIDDB` is frozen, so the
+# admission record — content identity, release stamp, recorded facts — is
+# written through `pipeline/repositories/admission.py` rather than by a new
+# method on that class.
+from database.sims.admission_bridge import (begin_admission_run,
+                                            enumerate_source,
+                                            record_exposure_admission,
+                                            record_l2file_admission,
+                                            seal_admission_run)
 import database.modules.utils.roman_tessellation_db as sqlite
 
 
@@ -85,17 +95,36 @@ if roman_tessellation_dbname is None:
 roman_tessellation_db = sqlite.RomanTessellationNSIDE512()
 
 
-# Set DONTCHECKALREADYINGESTED to skip existence-checking of the FITS files
-# already ingested, which are found by querying the L2Files database table for
-# filenames (without S3-bucket names).
+# THE `DONTCHECKALREADYINGESTED` OPT-OUT IS GONE (rule 20, brief H).
+#
+# It used to read an environment variable here and, when unset, build a set of
+# already-ingested FITS BASENAMES by querying L2Files, then skip any input
+# whose basename was in it. That was the ONLY thing standing between a
+# replayed ingest and duplicate admissions, and it was defective three ways:
+#
+#   * it was a CONVENTION WITH A KILL SWITCH, not an invariant — one
+#     environment variable disabled it entirely;
+#   * the variable was tested with `is None`, so `DONTCHECKALREADYINGESTED=0`
+#     and `=false` both DISABLED the check, which is the opposite of what
+#     either spelling reads as;
+#   * it was FILENAME-SCOPED and client-side — two concurrent ingests both
+#     pass a Python membership test, and a file re-delivered under a different
+#     name was admitted twice.
+#
+# Admission idempotency is now the DATABASE'S, against a real constraint:
+# `pipeline/repositories/admission.py` inserts with `ON CONFLICT ...
+# RETURNING`, so a repeat RECEIVES the existing admission and a concurrent
+# repeat does not race. There is deliberately no replacement escape hatch; if
+# one is ever genuinely needed it goes through the mutation contract (actor,
+# reason, idempotency key, dry-run, audit ledger) and never a bare environment
+# variable. Recorded as proposal P-H3.
+#
+# The scan below no longer pre-filters: every enumerated object is offered to
+# the admission repository, which returns the existing admission for anything
+# already admitted. That is strictly more correct and costs one round trip per
+# already-ingested file.
 
-skip_already_ingested_check = os.getenv('DONTCHECKALREADYINGESTED')
-
-do_already_ingested_check = False
-if skip_already_ingested_check is None:
-    do_already_ingested_check = True
-
-print(f"do_already_ingested_check = {do_already_ingested_check}")
+do_already_ingested_check = False    # retained: read by the scan loop below
 
 
 # Open database connections for parallel access.
@@ -489,6 +518,31 @@ def register_exposure(dbh,header,wcs):
 
     expid = dbh.expid
     fid = dbh.fid
+
+    # THE ADMISSION RECORD IS WRITTEN THROUGH THE CARVED REPOSITORY (rule 20).
+    #
+    # `add_exposure` above still writes the legacy `exposures` row — no reader
+    # is migrated, exactly as brief D migrated none — but the ADMISSION, with
+    # its content identity, its release stamp and its recorded facts, is a
+    # separate durable record written here. That is what makes a repeat return
+    # its existing admission instead of silently overwriting `created`, which
+    # is what `addexposure`'s update branch does today
+    # (`008-functions.sql:331-345`).
+    #
+    # `add_exposure` reports failure by setting `exit_code = 67` and returning,
+    # leaving `dbh.expid` as None — and NONE of the three ingest scripts has
+    # ever checked it, so that None flowed on as the L2 insert's expid. It is
+    # checked here, because the admission cannot be written without it.
+    if expid is None:
+        raise RuntimeError(
+            "add_exposure did not return an expid (exit_code=%s); the "
+            "exposure was not admitted. Continuing would insert L2 rows "
+            "against a NULL expid." % getattr(dbh, "exit_code", "?"))
+
+    record_exposure_admission(dbh, dateobs, expid, {
+        "mjdobs": mjdobs, "field": field, "hp6": hp6, "hp9": hp9,
+        "filter": filter, "exptime": exptime, "infobits": infobits,
+        "status": status})
 
     print("expid =",expid)
     print("fid =",fid)

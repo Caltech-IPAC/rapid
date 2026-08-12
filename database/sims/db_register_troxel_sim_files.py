@@ -10,6 +10,13 @@ from astropy.wcs import WCS
 import modules.utils.rapid_pipeline_subs as util
 import database.modules.utils.rapid_db as db
 import database.modules.utils.roman_tessellation_db as sqlite
+
+# The carved admission repository (rule 20); RAPIDDB is frozen.
+from database.sims.admission_bridge import (begin_admission_run,
+                                            enumerate_source,
+                                            record_exposure_admission,
+                                            record_l2file_admission,
+                                            seal_admission_run)
 from pipeline.runtime.process import run_tool, run_shell
 from pipeline.runtime.errors import ToolError
 
@@ -170,6 +177,26 @@ def register_exposure(dbh,header,expid,fid):
 
     expid = dbh.expid
     fid = dbh.fid
+
+    # THE ADMISSION RECORD GOES THROUGH THE CARVED REPOSITORY (rule 20), as in
+    # the other two ingest scripts.
+    #
+    # NOTE FOR THE REVIEWER: this script has two pre-existing defects brief H
+    # found but does not fix (proposal P-H2) — `dbh.add_l2file(...)` at its L2
+    # registration names a method that does not exist on RAPIDDB (only
+    # `add_l2file_fourth_order` and `add_l2file_fifth_order` do), and its
+    # `register_l2filemeta` call passes 17 of 19 arguments. Both raise on the
+    # first L2 file, so this script's L2 path is dead today. The exposure path
+    # above does work, and it is admitted correctly here.
+    if expid is None:
+        raise RuntimeError(
+            "add_exposure did not return an expid (exit_code=%s); the "
+            "exposure was not admitted." % getattr(dbh, "exit_code", "?"))
+
+    record_exposure_admission(dbh, dateobs, expid, {
+        "mjdobs": mjdobs, "field": field, "hp6": hp6, "hp9": hp9,
+        "filter": filter, "exptime": exptime, "infobits": infobits,
+        "status": status})
 
     print("expid =",expid)
     print("fid =",fid)

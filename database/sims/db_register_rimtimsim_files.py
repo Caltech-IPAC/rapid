@@ -10,6 +10,13 @@ import modules.utils.rapid_pipeline_subs as util
 import database.modules.utils.rapid_db as db
 import database.modules.utils.roman_tessellation_db as sqlite
 
+# The carved admission repository (rule 20); RAPIDDB is frozen.
+from database.sims.admission_bridge import (begin_admission_run,
+                                            enumerate_source,
+                                            record_exposure_admission,
+                                            record_l2file_admission,
+                                            seal_admission_run)
+
 
 bucket_name_input = "rimtimsim-20260401-lite"
 subdir_work = "/work"
@@ -199,6 +206,24 @@ def register_exposure(dbh,header):
 
     expid = dbh.expid
     fid = dbh.fid
+
+    # THE ADMISSION RECORD GOES THROUGH THE CARVED REPOSITORY (rule 20), as in
+    # the socsim script — all three production ingest scripts admit the same
+    # way, so the criterion cannot pass against an isolated repository while
+    # production still goes through RAPIDDB alone.
+    #
+    # `add_exposure`'s exit_code is checked here for the first time in this
+    # script's life: a 67 leaves expid None and that None used to flow on as
+    # the L2 insert's expid.
+    if expid is None:
+        raise RuntimeError(
+            "add_exposure did not return an expid (exit_code=%s); the "
+            "exposure was not admitted." % getattr(dbh, "exit_code", "?"))
+
+    record_exposure_admission(dbh, dateobs, expid, {
+        "mjdobs": mjdobs, "field": field, "hp6": hp6, "hp9": hp9,
+        "filter": filter, "exptime": exptime, "infobits": infobits,
+        "status": status})
 
     print("expid =",expid)
     print("fid =",fid)
