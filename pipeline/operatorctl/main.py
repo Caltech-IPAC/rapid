@@ -21,6 +21,8 @@ The safe call is the short one.
 import argparse
 import sys
 
+from pipeline.intent.application_contract import ApplicationContractUnmet
+from pipeline.intent.schema_contract import SchemaContractUnmet
 from pipeline.operatorctl import actions
 from pipeline.operatorctl.contract import (OperatorError, new_idempotency_key,
                                            render_plan)
@@ -181,6 +183,44 @@ def build_parser():
     audit.add_argument("--limit", type=int, default=20)
     audit.set_defaults(func=_cmd_audit)
 
+    # --- release pointer (H2) ---------------------------------------------
+    release = sub.add_parser(
+        "set-admission-release",
+        help="switch the release future admissions are stamped with",
+        description="Point future admissions at a release. Affects ONLY "
+                    "admissions made after the change: it never rewrites an "
+                    "existing admission's stamp and never touches in-flight "
+                    "work, which is exactly rule 18's rollback clause. The "
+                    "named release must already be registered.")
+    release.add_argument("--release-identity", required=True)
+    release.add_argument("--expect-current", default=None,
+                         help="the release the dry run showed as current. "
+                              "The apply REFUSES if the pointer has moved "
+                              "since")
+    _mutation_arguments(release, "the admission release pointer")
+    release.set_defaults(func=_cmd_set_release)
+
+    # --- GC (H3/H4) --------------------------------------------------------
+    gc_approve = sub.add_parser(
+        "gc-approve-plan",
+        help="approve a recomputed GC plan for execution",
+        description="Approval is a DISTINCT recorded act with its own actor. "
+                    "A plan cannot reach EXECUTING without both a recorded "
+                    "recomputation and a recorded approval — that is the "
+                    "two-pass requirement. Self-approval by the computing "
+                    "actor is permitted in this single-operator system and "
+                    "is recorded as such.")
+    gc_approve.add_argument("--plan-id", type=int, required=True)
+    _mutation_arguments(gc_approve, "a GC plan")
+    gc_approve.set_defaults(func=_cmd_gc_approve)
+
+    gc_show = sub.add_parser(
+        "gc-plan", help="show a recorded GC plan and its items",
+        description="The plan as recorded, with its candidate checksum, its "
+                    "horizon and provenance, and its items by status.")
+    gc_show.add_argument("--plan-id", type=int, required=True)
+    gc_show.set_defaults(func=_cmd_gc_show)
+
     return parser
 
 
@@ -327,6 +367,127 @@ def _cmd_audit(conn, args, out):
     return EXIT_OK
 
 
+def _cmd_set_release(conn, args, out):
+    from pipeline.operatorctl.contract import call_function
+    key = args.idempotency_key or new_idempotency_key("release")
+    expected = ({"current_release": args.expect_current}
+                if args.expect_current is not None else None)
+    import json as _json
+    result = call_function(
+        conn,
+        "SELECT derived.set_admission_release(%s, %s, %s, %s, %s, %s)",
+        (key, args.release_identity, args.reason,
+         _json.dumps(expected) if expected is not None else None,
+         not args.apply, args.policy_citation))
+    print(render_plan("admission_release_set",
+                      "admission_release_pointer:%s" % args.release_identity,
+                      args.reason, key, result, args.apply), file=out)
+    return EXIT_OK
+
+
+def _cmd_gc_approve(conn, args, out):
+    from pipeline.gc.plans import GCPlanRepository
+    key = args.idempotency_key or new_idempotency_key("gc-approve")
+    repo = GCPlanRepository(conn)
+    plan = repo.plan(args.plan_id)
+    if plan is None:
+        print("rapidctl: no GC plan %s" % args.plan_id, file=sys.stderr)
+        return EXIT_USAGE
+    if not args.apply:
+        result = {"action": "gc_approve_plan", "plan_id": args.plan_id,
+                  "state": plan.state, "candidates": plan.candidate_count,
+                  "candidate_checksum": plan.candidate_checksum,
+                  "dry_run": True, "rows_affected": 0}
+    else:
+        # THE ACTOR IS THE DATABASE'S OWN `session_user`, not a CLI argument.
+        # An operator-supplied actor string would be an operator attesting to
+        # their own identity, which is exactly what an audit actor must not
+        # be — every other mutation in this package takes it from
+        # `session_user` for the same reason.
+        with conn.cursor() as cur:
+            cur.execute("SELECT session_user")
+            actor = cur.fetchone()[0]
+        approved = repo.approve(args.plan_id, approved_by=actor,
+                                reason=args.reason)
+        conn.commit()
+        result = dict(approved, action="gc_approve_plan", dry_run=False,
+                      rows_affected=1)
+    print(render_plan("gc_approve_plan", "gc_plan:%s" % args.plan_id,
+                      args.reason, key, result, args.apply), file=out)
+    return EXIT_OK
+
+
+def _cmd_gc_show(conn, args, out):
+    from pipeline.gc.plans import GCPlanRepository
+    repo = GCPlanRepository(conn)
+    plan = repo.plan(args.plan_id)
+    if plan is None:
+        print("rapidctl: no GC plan %s" % args.plan_id, file=sys.stderr)
+        return EXIT_USAGE
+    print("GC PLAN %s" % plan.plan_id, file=out)
+    print("  state              : %s" % plan.state, file=out)
+    print("  candidates         : %s" % plan.candidate_count, file=out)
+    print("  candidate checksum : %s" % plan.candidate_checksum, file=out)
+    print("  horizon (seconds)  : %s" % (plan.horizon_seconds
+                                         if plan.horizon_seconds is not None
+                                         else "<unset — deletes nothing>"),
+          file=out)
+    print("  approved by        : %s" % (plan.approved_by or "<not approved>"),
+          file=out)
+    with conn.cursor() as cur:
+        cur.execute("SELECT status, count(*) FROM gc_plan_items"
+                    " WHERE plan_id = %s GROUP BY status ORDER BY status",
+                    (args.plan_id,))
+        rows = cur.fetchall()
+    if rows:
+        print("  items by status:", file=out)
+        for status, count in rows:
+            print("    %-22s %s" % (status, count), file=out)
+    return EXIT_OK
+
+
+def _preflight(conn):
+    """Assert the deployed schema and this application satisfy rule 18.
+
+    **`rapidctl` DID NOT PREFLIGHT AT ALL** before this — verified by grep at
+    the branch point: zero matches for `schema_contract` or `preflight` across
+    all six files of `pipeline/operatorctl/`. Four of the five entry points
+    do (`pipeline/reconciler/main.py:168`, `pipeline/operator/service.py:698`,
+    `pipeline/entrypoints/job.py:954`, and `pipeline/publisher/service.py:68`
+    with its own narrower probe); this one did not.
+
+    Scoped in narrowly and deliberately, per the brief: H adds an operator
+    surface to `rapidctl` (the release pointer and the GC plan), and shipping
+    a new operator surface behind the one entry point that does not preflight
+    would be adding to the defect. This is NOT extended to the other four.
+
+    Follows `reconciler/main.py:168-183`'s three-line pattern exactly.
+    """
+    from database.modules.utils.rapid_db_connect import ConnectionExecutor
+    from pipeline.intent.schema_contract import verify_schema_contract
+
+    verified = verify_schema_contract(ConnectionExecutor(conn).execute)
+
+    # THE APPLICATION HALF (rule 18's "application/schema contract"). Kept
+    # tolerant of a missing image digest here: `rapidctl` is an operator tool
+    # run from a shell, not a payload container, so requiring the container's
+    # own digest would refuse to start the tool for a fact it has no way to
+    # know. The release identity IS required — that is the half that decides
+    # what an admission gets stamped with.
+    from pipeline.intent.application_contract import (
+        ApplicationContractUnmet, verify_application_contract)
+    try:
+        verify_application_contract(
+            execute=ConnectionExecutor(conn).execute,
+            require_image_digest=False)
+    except ApplicationContractUnmet:
+        # RE-RAISED, NOT SWALLOWED — fail-closed is the requirement. Caught
+        # only to make the failure legible as a contract failure rather than
+        # an arbitrary exception from an import.
+        raise
+    return verified
+
+
 def main(argv=None, out=None):
     """Parse, run one subcommand in one operator session, return an exit code.
 
@@ -339,6 +500,7 @@ def main(argv=None, out=None):
 
     try:
         with operator_session() as conn:
+            _preflight(conn)
             return args.func(conn, args, out)
     except OperatorSessionError as exc:
         print("rapidctl: %s" % exc, file=sys.stderr)
@@ -349,6 +511,16 @@ def main(argv=None, out=None):
         # the refusal plainly and without a traceback.
         print("rapidctl: REFUSED — %s" % exc, file=sys.stderr)
         return exc.exit_code
+    except SchemaContractUnmet as exc:
+        # THE LEGIBLE PREFLIGHT FAILURE, not a raw undefined-function error
+        # from whichever query happened to run first. It names every missing
+        # migration and why this build needs each one.
+        print("rapidctl: %s" % exc, file=sys.stderr)
+        return EXIT_CONFIG
+    except ApplicationContractUnmet as exc:
+        # Rule 18's application half, failing closed.
+        print("rapidctl: %s" % exc, file=sys.stderr)
+        return EXIT_CONFIG
     except Exception as exc:                      # noqa: BLE001
         # Everything else, including DBUnavailable and DBCredentialError.
         # Typed at the source; presented here rather than as a traceback,

@@ -515,6 +515,102 @@ CREATE TRIGGER gc_plan_items_terminal_frozen
     FOR EACH ROW EXECUTE FUNCTION derived.gc_completed_items_are_frozen();
 
 -- ---------------------------------------------------------------------------
+-- `gc_plan_execute` JOINS DRAFT 047'S ENUMERATED EXTERNAL ACTION CLASSES.
+--
+-- 047's `record_external_action` refuses any class outside its literal list
+-- (`047:549-554`), and it refuses it deliberately: "an open text column would
+-- make this function a general-purpose audit-row writer, which is the thing
+-- 031 deliberately refuses to grant anyone". A GC execution IS an external
+-- operator action in exactly that sense — its target is S3, outside this
+-- database — so it belongs in the enumeration rather than in a widened
+-- column, and adding it here keeps 047's refusal intact for everything else.
+--
+-- CREATE OR REPLACE with the identical signature: the argument list is a
+-- function's identity in PostgreSQL, so replacing rather than overloading is
+-- what keeps 047's existing grants attached. The body is 047's, verbatim,
+-- with one string added to the IN list.
+-- ---------------------------------------------------------------------------
+CREATE OR REPLACE FUNCTION derived.record_external_action(
+    p_idempotency_key text,
+    p_action_class    text,
+    p_target_scope    text,
+    p_reason          text,
+    p_expected_state  jsonb DEFAULT NULL,
+    p_dry_run         boolean DEFAULT true,
+    p_rows_affected   integer DEFAULT 0,
+    p_detail          jsonb DEFAULT NULL,
+    p_policy_citation text DEFAULT NULL,
+    p_dispatcher      text DEFAULT NULL
+) RETURNS jsonb
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = derived, public, pg_temp
+AS $$
+DECLARE
+    v_audit_id bigint;
+    v_replay   jsonb;
+    v_affected integer;
+BEGIN
+    IF p_reason IS NULL OR length(btrim(p_reason)) = 0 THEN
+        RAISE EXCEPTION 'a reason is mandatory on every mutation (7a ruling 5)';
+    END IF;
+    IF p_idempotency_key IS NULL OR length(btrim(p_idempotency_key)) = 0 THEN
+        RAISE EXCEPTION 'an idempotency key is mandatory on a keyed call';
+    END IF;
+    IF p_target_scope IS NULL OR length(btrim(p_target_scope)) = 0 THEN
+        RAISE EXCEPTION 'a target scope is required — there is no unscoped action';
+    END IF;
+    IF p_action_class NOT IN ('external_batch_terminate',
+                              'external_evidence_supersede',
+                              'gc_plan_execute') THEN
+        RAISE EXCEPTION
+          'action_class % is not an external operator action', p_action_class;
+    END IF;
+
+    IF NOT p_dry_run THEN
+        PERFORM pg_advisory_xact_lock(hashtext('rapid.mutation_key'),
+                                      hashtext(p_idempotency_key));
+        v_replay := derived.mutation_replay(p_idempotency_key,
+                                            p_action_class, p_target_scope);
+        IF v_replay IS NOT NULL THEN
+            RETURN v_replay;
+        END IF;
+    END IF;
+
+    -- 030's CHECK forbids a dry run claiming rows changed, so the count is
+    -- forced to zero on the rehearsal path rather than trusted from a caller
+    -- that may have counted what it *would* have done.
+    v_affected := CASE WHEN p_dry_run THEN 0 ELSE coalesce(p_rows_affected, 0) END;
+
+    INSERT INTO derived.mutation_audit
+        (actor, dispatcher, action_class, action_tier, target_scope,
+         reason, dry_run, rows_affected, policy_citation, detail,
+         idempotency_key, expected_state)
+    VALUES (session_user, coalesce(p_dispatcher, session_user),
+            p_action_class, 'operate', p_target_scope,
+            p_reason, p_dry_run, v_affected, p_policy_citation, p_detail,
+            p_idempotency_key, p_expected_state)
+    RETURNING audit_id INTO v_audit_id;
+
+    RETURN jsonb_build_object(
+        'action', p_action_class,
+        'dry_run', p_dry_run,
+        'replayed', false,
+        'rows_affected', v_affected,
+        'idempotency_key', p_idempotency_key,
+        'audit_id', v_audit_id);
+END;
+$$;
+
+COMMENT ON FUNCTION derived.record_external_action(text, text, text, text,
+    jsonb, boolean, integer, jsonb, text, text) IS
+    'Records an operator action whose target is outside this database (an '
+    'AWS Batch termination, an S3 closure record, a GC plan execution) in '
+    'the same audited history as every database mutation. Enumerated action '
+    'classes only — a general audit writer is exactly what 031 refuses to '
+    'grant. DRAFT 052 adds gc_plan_execute to the enumeration.';
+
+-- ---------------------------------------------------------------------------
 -- Grants: DRAFT 050's posture, not 048's blanket one. Guarded on role
 -- existence so this file still applies to a bare scratch database.
 --
