@@ -865,6 +865,64 @@ def coadd_input_rows(handle: UnitSource, rid: int, fid: int, mjdobs: float,
     return rows
 
 
+#: The positions of the mission-identity columns in a `coadd_input_rows` row.
+#: The row is built as `[input_rid, *image[1:11], filename, expid, sca, field,
+#: mjdobs, exptime, infobits, status, vbest, version]`, so these three are
+#: fixed by that construction and named here rather than repeated as literals
+#: at the read site — a column inserted into that list must move these
+#: together with it, and one place to change is the whole point.
+_COADD_EXPID_COLUMN = 12
+_COADD_SCA_COLUMN = 13
+_COADD_INFOBITS_COLUMN = 17
+
+
+def coadd_input_identities(rows: Iterable[Sequence[Any]]) -> list:
+    """The coadd inputs' MISSION identities: `[[expid, sca, infobits], ...]`.
+
+    What a reference image's product key digests its inputs as (rule 10).
+    Deliberately NOT the CSV's checksum and NOT `input_rid`/`filename`: the
+    first hides a path-and-surrogate dependency behind a digest, and the
+    other two are exactly the forbidden identity sources — a database
+    surrogate and a storage path.
+
+    `infobits` is included because it is a property of the input file's
+    CONTENT (its quality mask), so two L2 files sharing an `(expid, sca)`
+    but differing in quality are genuinely different inputs to a coadd.
+
+    Returned as lists rather than tuples because this value is serialized
+    into the manifest as JSON, where a tuple round-trips as a list anyway —
+    returning what survives the round trip means the value compares equal
+    to itself after a manifest write and read, which a tuple would not.
+
+    Order is NOT fixed here. `coadd_input_rows` returns the overlap query's
+    order (`order by dist`, which has no tie-breaker), and the canonical
+    total order is imposed where identity is computed
+    (`pipeline.registration.identity.ordered_science_inputs`) so that one
+    definition governs. Sorting here as well would be a second place for the
+    order to be defined, and two definitions of a canonical order is one too
+    many.
+    """
+    identities = []
+    for row in rows:
+        expid = row[_COADD_EXPID_COLUMN]
+        sca = row[_COADD_SCA_COLUMN]
+        if expid is None or sca is None:
+            # A coadd input with no mission identity cannot enter a product
+            # key, and silently dropping it would change the product's
+            # identity to one computed over fewer inputs than were actually
+            # coadded — a key that claims a provenance the product does not
+            # have.
+            raise GatheringError(
+                f"a coadd input row carries no mission identity "
+                f"(expid={expid!r}, sca={sca!r}); a reference image's "
+                f"product key is a digest over its inputs' identities and "
+                f"cannot be computed over an unidentified one")
+        infobits = row[_COADD_INFOBITS_COLUMN]
+        identities.append([int(expid), int(sca),
+                           0 if infobits is None else int(infobits)])
+    return identities
+
+
 def publish_coadd_inputs(s3_client, bucket: str, key: str,
                          rows: Iterable[Sequence[Any]]) -> tuple[str, str]:
     """Write the coadd-inputs CSV to S3. Return `(uri, checksum)`.
@@ -1078,6 +1136,21 @@ def gather_reference_units(handle: UnitSource, start, end,
         logger.info("unit %s: %d coadd inputs at %s",
                     unit.key, len(rows), uri)
 
+        # THE COADD INPUTS' OWN IDENTITIES, carried separately from the CSV
+        # (rule 10). A reference image's product key is a digest over its
+        # ordered inputs, and those inputs must enter it by MISSION identity
+        # — `(expid, sca)` — never by `input_rid`, never by `filename`, and
+        # never as the CSV's checksum. The checksum is the tempting shortcut
+        # and it is specifically forbidden: the CSV's rows embed `input_rid`
+        # and `filename`, so hashing that document would put a surrogate id
+        # and a path into product identity with a digest hiding the fact.
+        #
+        # Derived HERE because this is where the rows exist. The consuming
+        # stage reads the CSV for the pixels; identity is a submission fact
+        # and is resolved at submission, in the same pass that published the
+        # list it describes.
+        coadd_identities = coadd_input_identities(rows)
+
         # THE DEPENDENCY IS SATISFIED (rule 13's second half). If an earlier
         # pass parked this unit blocked on reference coverage, the coverage
         # now exists — this very pass just aggregated it — so the unit is
@@ -1089,7 +1162,8 @@ def gather_reference_units(handle: UnitSource, start, end,
 
         yield dataclasses.replace(
             unit, facts=_replace(facts, coadd_inputs_uri=uri,
-                                 coadd_inputs_checksum=checksum))
+                                 coadd_inputs_checksum=checksum,
+                                 coadd_input_identities=coadd_identities))
 
 
 def _blocked_identity(unit):

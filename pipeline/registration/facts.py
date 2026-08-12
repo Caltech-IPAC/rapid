@@ -160,9 +160,19 @@ def unit_provenance(unit, job_type=None):
     # checksum, the overlapping-field lists — and a record that grew a new key
     # every time the manifest schema did would make "what does a record carry"
     # unanswerable.
+    # `coadd_input_identities` joins this list for rule 10: a reference
+    # image's product key digests its ordered coadd inputs by their MISSION
+    # identities, and registration reads the record and nothing else — so the
+    # identities have to be IN the record. It is the one manifest fact here
+    # that is a list of lists rather than a scalar, and it is carried because
+    # the alternative — re-reading the coadd CSV at registration time — would
+    # make product identity depend on an object that may have been deleted,
+    # and would read `input_rid` and `filename` out of it, which are the
+    # forbidden identity sources.
     for name in ("rid", "fid", "field", "rtid", "mjdobs", "exptime",
                  "infobits", "reference_image_id", "reference_image_infobits",
-                 "reference_image_version", "pid", "difference_image_version"):
+                 "reference_image_version", "pid", "difference_image_version",
+                 "coadd_input_identities"):
         value = getattr(facts, name, None)
         if value is not None:
             provenance[name] = value

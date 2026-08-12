@@ -29,6 +29,7 @@ substituting a default is how the old chain registered products of failed runs.
 
 import logging
 
+from pipeline.registration import products_identity
 from pipeline.runtime.science_config import DIFFERENCE_IMAGE_ROLE
 from submission.routes import JOB_TYPE_REFERENCE_IMAGE, JOB_TYPE_SCIENCE
 
@@ -155,7 +156,7 @@ def role_product(record, science, role, attempt_id=None, fallback_roles=None):
 
 
 def register_reference_image(dbh, record, science, attempt_id=None,
-                             record_sequence=None):
+                             record_sequence=None, identity_repository=None):
     """The reference-image body. (Legacy `registerCompletedJobsInDB.py`.)
 
     Order is the legacy order and it matters: `add_refimage` inserts the row
@@ -219,6 +220,23 @@ def register_reference_image(dbh, record, science, attempt_id=None,
                                        "rfcatid": dbh.rfcatid,
                                        "svid": dbh.svid})
 
+    # THE IDENTITY MODEL (rule 10), written inside this same transaction.
+    # Additive: everything above is unchanged and every legacy column stays
+    # populated exactly as before, because the production reader set is
+    # broader than the registration writers. What this adds is the product
+    # row keyed by a deterministic digest, one artifact row per published
+    # file, and the binding between them.
+    #
+    # `identity_repository is None` is the pre-rollout path and the unit
+    # suites' path — the legacy registration is complete on its own, and
+    # was for as long as this module has existed.
+    if identity_repository is not None:
+        identity = products_identity.register_reference_identity(
+            identity_repository, record, science, attempt_id,
+            record_sequence, rfid, version)
+        if identity is not None:
+            registered["identity"] = identity
+
     logger.info("attempt %s registered reference image rfid=%s version=%s "
                 "with %d catalog(s)", attempt_id, rfid, version,
                 len(registered["catalogs"]))
@@ -226,7 +244,8 @@ def register_reference_image(dbh, record, science, attempt_id=None,
 
 
 def register_difference_image(dbh, record, science, attempt_id=None,
-                              record_sequence=None, fallback_roles=None):
+                              record_sequence=None, fallback_roles=None,
+                              identity_repository=None):
     """The difference-image body. (Legacy `registerCompletedJobsInDB.py`.)
 
     Same shape as the reference body — `add_diffimage`, then `update_diffimage`
@@ -304,13 +323,34 @@ def register_difference_image(dbh, record, science, attempt_id=None,
     # The product that filled the role is logged and returned, not just the
     # pid: an operator reading either has to be able to tell WHICH difference
     # image the row points at without going back to the release content.
+    result = {"pid": pid, "version": version,
+              "product": difference_product,
+              "role_resolved_from": role_source}
+
+    # THE IDENTITY MODEL (rule 10), in this same transaction. See the
+    # reference body's note; the difference here is that the product key is
+    # COMPOSITIONAL — it digests the reference image by the reference's own
+    # product key, so a difference image cannot get an identity until its
+    # reference has one. `register_difference_identity` returns None in that
+    # case and registration proceeds legacy-only, which is the correct
+    # behaviour during rollout: an invented key would be worse than none.
+    #
+    # `difference_product` is the published NAME that filled the role — the
+    # artifact that realizes this product. The other two published
+    # difference images become artifacts with no product row, exactly as
+    # `cdf/science/pipeline.toml:73-75` records the design.
+    if identity_repository is not None:
+        identity = products_identity.register_difference_identity(
+            identity_repository, record, science, attempt_id,
+            record_sequence, pid, version, difference_product)
+        if identity is not None:
+            result["identity"] = identity
+
     logger.info("attempt %s registered difference image pid=%s version=%s "
                 "(role %s ← %s, resolved from the %s)", attempt_id, pid,
                 version, DIFFERENCE_IMAGE_ROLE, difference_product,
                 role_source)
-    return {"pid": pid, "version": version,
-            "product": difference_product,
-            "role_resolved_from": role_source}
+    return result
 
 
 def _check(dbh, call, attempt_id):
@@ -407,7 +447,7 @@ def read_record(store, row):
     return body
 
 
-def registrar(dbh, store, fallback_roles=None):
+def registrar(dbh, store, fallback_roles=None, identity_repository=None):
     """Build the `register(row, verdict)` callback the consumer injects.
 
     `store` is the records store: the registrar fetches each attempt's terminal
@@ -482,12 +522,14 @@ def registrar(dbh, store, fallback_roles=None):
         record_sequence = row.get("terminal_record_sequence")
 
         if job_type == JOB_TYPE_REFERENCE_IMAGE:
-            return register_reference_image(resolve(), body, science,
-                                            attempt_id, record_sequence)
+            return register_reference_image(
+                resolve(), body, science, attempt_id, record_sequence,
+                identity_repository=identity_repository)
         if job_type == JOB_TYPE_SCIENCE:
-            return register_difference_image(resolve(), body, science,
-                                             attempt_id, record_sequence,
-                                             fallback_roles=fallback_roles)
+            return register_difference_image(
+                resolve(), body, science, attempt_id, record_sequence,
+                fallback_roles=fallback_roles,
+                identity_repository=identity_repository)
         # Unreachable while `REGISTRABLE_JOB_TYPES` and the two branches above
         # agree — `is_registrable` has already returned for anything else. It
         # is kept as the guard for exactly that disagreement: a type added to

@@ -224,6 +224,16 @@ class UnitFacts:
         image is being reused.
     coadd_inputs_uri : str, optional
         S3 location of the CSV listing those inputs.
+    coadd_input_identities : list, optional
+        The coadd inputs' MISSION identities, ``[[expid, sca, infobits],
+        ...]``, as `submission.gathering.coadd_input_identities` derives
+        them. What a reference image's product key digests its inputs as
+        (rule 10) — carried separately from `coadd_inputs_checksum`
+        precisely because that checksum is over a document whose rows embed
+        `input_rid` and `filename`, and hashing it would put a surrogate id
+        and a path into product identity. Absent means the manifest predates
+        deterministic product identity; registration says so by name rather
+        than computing a key over inputs it does not have.
     coadd_inputs_checksum : str, optional
         SHA-256, hex, of exactly the CSV bytes `coadd_inputs_uri` named when
         the unit was gathered. A URI on its own is not a citation — it names a
@@ -285,6 +295,7 @@ class UnitFacts:
     images_to_coadd: int | None = None
     coadd_inputs_uri: str | None = None
     coadd_inputs_checksum: str | None = None
+    coadd_input_identities: list | None = None
     sky_position: dict[str, float] | None = None
     tile_position: dict[str, float] | None = None
     reference_position: dict[str, float] | None = None

@@ -278,6 +278,54 @@ def _stage_of(record):
         outcome=StageOutcome(value) if value else StageOutcome.SUCCESS)
 
 
+def definition_provenance(job_type, logger):
+    """The workflow definition this attempt's job type ran under.
+
+    Half of rule 10's process specification: the reviewed definition file's
+    byte checksum, which is what `derived.load_workflow_definition` records
+    at load and what makes a definition version immutable
+    (`pipeline/intent/definitions.py` — "the checksum recorded at load is the
+    sha256 of this file's bytes"). The other half is the release
+    science-content digest, recorded beside this.
+
+    **NOT the `ppid`.** `ppid` is a routing fact — which pipeline a row
+    belongs to — shared by science and reprocessing and carrying no version
+    at all. A product key built on `ppid` alone would be identical across
+    two genuinely different reviewed processes, which is the failure rule 10
+    exists to prevent.
+
+    Absent rather than fatal where the definition cannot be read. A job type
+    with no shipped definition file is a real configuration state — the
+    startup completeness check is what fails closed on it, and it does so
+    with a systemic message — and turning it into an exception HERE would
+    kill an attempt inside provenance seeding, before any stage ran, with a
+    message about a file rather than about the work. Registration then names
+    the absent component when it tries to compute a key, which is where the
+    fact actually matters.
+    """
+    from pipeline.intent import definitions
+
+    try:
+        shipped = definitions.shipped_definitions()
+    except Exception as exc:                      # noqa: BLE001 — see above
+        logger.warning(
+            "could not read the shipped workflow definitions (%s); this "
+            "attempt's record will carry no definition checksum and "
+            "registration will name it as a missing product-key component "
+            "rather than computing a key without it", exc)
+        return {}
+
+    definition = shipped.get(job_type)
+    if definition is None:
+        logger.warning(
+            "no shipped workflow definition declares job_type=%r; this "
+            "attempt's record will carry no definition checksum", job_type)
+        return {}
+
+    return {"definition_checksum": definition["checksum"],
+            "definition_version": definition["version"]}
+
+
 def tessellation_provenance(parameters, science, logger):
     """The tessellation version and digest this attempt runs against.
 
@@ -406,9 +454,27 @@ def registrar_for(context, conn=None):
         # connection and commits per call, which is NOT transactional with any
         # watermark — which is why `dispatch_registration` never takes this
         # branch.
+        #
+        # NO IDENTITY REPOSITORY ON THIS BRANCH, deliberately. The product
+        # and artifact rows must commit with the watermark, and this branch
+        # is the one that cannot promise that. Registering identity rows on a
+        # self-committing connection would durably write a product row for an
+        # attempt whose watermark never advanced — the exact shape of round-3
+        # finding #8, reintroduced through the new tables.
         return registrar(rapid_db.RAPIDDB, store)
 
-    return registrar(lambda: rapid_db.RAPIDDB.borrowing(conn), store)
+    # THE IDENTITY REPOSITORY BORROWS THE SAME CONNECTION as the legacy
+    # handle, so product rows, artifact rows, legacy version rows and the
+    # watermark are one transaction (rule 10's cardinality is only meaningful
+    # if the rows enforcing it commit atomically with the rest). It is built
+    # eagerly rather than lazily because constructing it costs one attribute
+    # assignment and no round trips — unlike the RAPIDDB handle, whose
+    # `__init__` issues two queries, which is what the laziness above exists
+    # to defer.
+    from pipeline.repositories.products import ProductRepository
+
+    return registrar(lambda: rapid_db.RAPIDDB.borrowing(conn), store,
+                     identity_repository=ProductRepository(conn))
 
 
 def dispatch_registration(context) -> None:
@@ -650,6 +716,19 @@ def _run(workload_class: str) -> int:
         context.record(release_content_digest=science_digest,
                        product_roles=science_config.product_roles(science),
                        **tessellation_provenance(parameters, science, logger))
+
+        # THE PROCESS SPECIFICATION'S OTHER HALF (rule 10). A product key
+        # digests the SPECIFIED science process, which is the reviewed
+        # workflow definition plus the release science content — the digest
+        # recorded above is the second of those two. The first is the
+        # definition file's own byte checksum, and it is recorded here for the
+        # same reason the release digest is: registration reads the record and
+        # nothing else, so a key that a replay must reproduce exactly cannot
+        # depend on re-reading a file from whatever image happens to be
+        # running at registration time. The definition ships INSIDE this
+        # image, so this process reading it is this process reporting what it
+        # executed under.
+        context.record(**definition_provenance(manifest.job_type, logger))
 
         # THE UNIT'S OWN IDENTITY (round-3 finding #2). Provenance carried
         # three keys — the release digest and the two tessellation facts — and
