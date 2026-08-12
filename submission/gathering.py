@@ -1403,14 +1403,21 @@ def _association_claim_position(handle: UnitSource):
     one happened, and because the contract tier asserts the ordered behaviour
     against a database that DOES carry the draft.
     """
-    try:
-        position = handle.get_association_claim_position()
-    except RapidDBCallFailed as exc:
-        raise GatheringError(
-            f"association watermark read failed: {exc}") from exc
-    except AttributeError:
-        # A handle predating the method at all — the operator probes and the
-        # older stubs. Same reading as an absent table.
+    # `hasattr` rather than catching AttributeError around the CALL. The
+    # intent is "a handle predating this method" — the operator probes and the
+    # older stubs — but a try/except around the call also swallows an
+    # AttributeError raised from INSIDE a real implementation, and the most
+    # likely such error is a closed connection (`self.cur` gone). That would
+    # read as "the ordering schema is absent" and silently switch the ordering
+    # guarantee off during a database outage, which is precisely the class of
+    # quiet degradation this gate exists to prevent.
+    if hasattr(handle, "get_association_claim_position"):
+        try:
+            position = handle.get_association_claim_position()
+        except RapidDBCallFailed as exc:
+            raise GatheringError(
+                f"association watermark read failed: {exc}") from exc
+    else:
         position = None
 
     if position is None:
@@ -1419,9 +1426,12 @@ def _association_claim_position(handle: UnitSource):
             "applied); gathering without the rule 19 ordering gate")
         return None
 
-    row = position[0] if isinstance(position, (list, tuple)) and position and \
-        isinstance(position[0], (list, tuple)) else position
-    wm_date, wm_field = row[0], row[1]
+    # A bare `(proc_date, field)` two-tuple — the shape
+    # `RAPIDDB.get_association_claim_position` returns. Unpacked positionally
+    # rather than defensively unwrapped: a handle answering some other shape
+    # is a bug to surface here, not one to absorb into a guess about which
+    # element was meant.
+    wm_date, wm_field = position
     return (None if wm_date is None else str(wm_date),
             None if wm_field is None else int(wm_field))
 
@@ -1435,13 +1445,17 @@ def _earliest_owed_date(handle: UnitSource):
     watermark check is what distinguishes an ordered deployment from an
     unordered one, so nothing is lost by collapsing them here.
     """
+    # `hasattr`, not a try/except around the call — same reasoning as the
+    # watermark read: an AttributeError from inside a real implementation is a
+    # fault to surface, not a schema-absence signal to act on.
+    if not hasattr(handle, "get_earliest_unaccepted_crossmatch_date"):
+        return None
+
     try:
         owed = handle.get_earliest_unaccepted_crossmatch_date()
     except RapidDBCallFailed as exc:
         raise GatheringError(
             f"earliest-unaccepted crossmatch date read failed: {exc}") from exc
-    except AttributeError:
-        return None
     if owed is None:
         return None
     row = owed[0] if isinstance(owed, (list, tuple)) and owed else owed

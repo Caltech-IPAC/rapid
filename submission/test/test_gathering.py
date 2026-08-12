@@ -872,7 +872,9 @@ class PostDbGatheringTests(unittest.TestCase):
         def __init__(self, scas=(), fields=(), per_field=(), failure=0,
                      products=None, incomplete_catalog_load=(),
                      gatherable_catalog_load=None, blocking_crossmatch=(),
-                     blocking_per_field=()):
+                     blocking_per_field=(), watermark=None,
+                     earliest_owed=None, watermark_failure=0,
+                     owed_failure=0):
             self.scas = list(scas)
             self.fields = list(fields)
             self.per_field = list(per_field)
@@ -900,6 +902,25 @@ class PostDbGatheringTests(unittest.TestCase):
                 else list(gatherable_catalog_load))
             self.blocking_crossmatch = list(blocking_crossmatch)
             self.blocking_per_field = list(blocking_per_field)
+            # The association claim watermark (conformance rule 19, brief F2).
+            # `None` by DEFAULT, and that default is load-bearing: it is the
+            # database that has not adopted DRAFT 049, for which the ordering
+            # gate degrades to the previous unordered gathering. Every test
+            # above that predates the gate therefore keeps its old
+            # expectations unchanged — the degradation is asserted directly by
+            # `test_crossmatch_without_the_ordering_schema_yields_every_ready_
+            # field`, and demonstrated incidentally by all of them.
+            #
+            # `(None, None)` is the ORIGIN — the schema is there and nothing
+            # has been accepted yet — which is a different answer from `None`
+            # and gates rather than degrades. A stub that could not tell those
+            # two apart could not test the distinction the whole gate rests on.
+            self.watermark = watermark
+            # The cross-date half: the earliest processing date still owing
+            # crossmatch work. Only consulted when the watermark is present.
+            self.earliest_owed = earliest_owed
+            self.watermark_failure = watermark_failure
+            self.owed_failure = owed_failure
 
         def get_scas_with_science_jobs_for_processing_date(self, proc_date):
             self.asked_for.append(("scas", proc_date))
@@ -960,6 +981,28 @@ class PostDbGatheringTests(unittest.TestCase):
             _refuse_if_failed(
                 self, "get_fields_with_blocking_attempt_for_job_type_since")
             return None if self.failure else self.blocking_per_field
+
+        # The ordering gate's two reads (conformance rule 19, brief F2). These
+        # take their failure from `watermark_failure` rather than the shared
+        # `failure` switch, and that is not a convenience: `failure` refuses
+        # the FIRST query a pass makes, which for crossmatch is the
+        # catalog-load coverage check — so a test using it would raise before
+        # the watermark was ever read and would still pass while this method
+        # was completely unguarded. A gate needs a failure switch that can
+        # reach IT.
+        def get_association_claim_position(self, association_set=None,
+                                           lane=None):
+            self.asked_for.append(("watermark", association_set, lane))
+            self.exit_code = self.watermark_failure or self.failure
+            _refuse_if_failed(self, "get_association_claim_position")
+            return None if self.failure else self.watermark
+
+        def get_earliest_unaccepted_crossmatch_date(self,
+                                                    association_set=None):
+            self.asked_for.append(("earliest_owed", association_set))
+            self.exit_code = self.owed_failure or self.failure
+            _refuse_if_failed(self, "get_earliest_unaccepted_crossmatch_date")
+            return None if self.failure else self.earliest_owed
 
     # -- the resubmission gates (mission mock, live 2026-08-09) ------------
 
@@ -1149,6 +1192,180 @@ class PostDbGatheringTests(unittest.TestCase):
         with self.assertRaises(GatheringError):
             list(gather_crossmatch_units(
                 self.Source(fields=[1], failure=67), "20260808"))
+
+    # -- crossmatch: the ordering gate (conformance rule 19, brief F2) -----
+    #
+    # Readiness is not order. The two gates above answer "is this unit
+    # runnable"; these answer "is it this unit's turn", asked afterwards and
+    # separately. The property is that a pass yields AT MOST ONE unit — the
+    # next in canonical `(proc_date, field)` order strictly ahead of the live
+    # lane's watermark — so §2.5's hard concurrency cap of 1 falls out of the
+    # claim discipline rather than out of a queue property. No route or queue
+    # changed; crossmatch is still CLASS_BULK on the unbounded bulk queue.
+
+    def test_crossmatch_at_the_origin_claims_only_the_lowest_field(self):
+        # `(None, None)` is the origin: the ordering schema IS there and
+        # nothing has been accepted in this set yet. Two fields are ready and
+        # exactly one is claimable — the lowest, because canonical order is
+        # ascending. The old behaviour would have yielded both, which is the
+        # whole difference the gate makes.
+        units = list(gather_crossmatch_units(
+            self.Source(fields=[4641774, 4641773], watermark=(None, None)),
+            "20260808"))
+
+        self.assertEqual([u.payload.field for u in units], [4641773])
+
+    def test_crossmatch_claims_the_field_after_the_watermark(self):
+        # Mid-date: the watermark sits on f1, so f2 is the frontier's
+        # successor. f1 is NOT re-yielded — it was accepted, and acceptance is
+        # what put the watermark there.
+        units = list(gather_crossmatch_units(
+            self.Source(fields=[4641773, 4641774],
+                        watermark=("20260808", 4641773)),
+            "20260808"))
+
+        self.assertEqual([u.payload.field for u in units], [4641774])
+
+    def test_crossmatch_yields_nothing_when_the_date_is_exhausted(self):
+        # The watermark is on the highest ready field, so no field of this
+        # date is ahead of the frontier. Nothing claimable is an empty yield,
+        # not an exception: the same "nothing ready yet" answer every other
+        # gatherer gives, and the next date's pass is what moves things on.
+        units = list(gather_crossmatch_units(
+            self.Source(fields=[4641773, 4641774],
+                        watermark=("20260808", 4641774)),
+            "20260808"))
+
+        self.assertEqual(units, [])
+
+    def test_crossmatch_yields_nothing_for_a_date_behind_the_watermark(self):
+        # A stale pass for an already-advanced-past date. Every unit of it was
+        # accepted — that is what moved the watermark to a LATER date — so
+        # re-gathering it would resubmit accepted work.
+        units = list(gather_crossmatch_units(
+            self.Source(fields=[4641773, 4641774],
+                        watermark=("20260809", 4641773)),
+            "20260808"))
+
+        self.assertEqual(units, [])
+
+    def test_crossmatch_waits_behind_an_earlier_date_still_owing_work(self):
+        # ACCEPTANCE CRITERION 1, SECOND HALF — the case the whole item
+        # exists for. §2.5: "serial execution does not by itself guarantee
+        # that a later observation's association cannot run ahead of an
+        # earlier one still in retry". Gathering is invoked once per date, so
+        # the watermark alone cannot see that 20260808 is still in retry while
+        # THIS pass asks about 20260809: a failed-and-retryable unit did not
+        # advance the watermark, because only acceptance does, so the frontier
+        # is silent about it. `earliest_owed` is the fact that closes it, and
+        # naming an earlier date stops this pass dead.
+        units = list(gather_crossmatch_units(
+            self.Source(fields=[4641773, 4641774],
+                        watermark=("20260808", 4641773),
+                        earliest_owed="20260808"),
+            "20260809"))
+
+        self.assertEqual(units, [])
+
+    def test_crossmatch_claims_a_later_date_once_no_earlier_one_is_owed(self):
+        # The converse, and the reason the gate is a comparison rather than a
+        # presence check: `earliest_owed` naming THIS date means the earliest
+        # outstanding work is the work of this pass, so there is no
+        # predecessor to wait behind and the date's lowest ready field is
+        # claimable. A gate that blocked on any owed date at all would
+        # deadlock the pipeline the moment it had work to do.
+        units = list(gather_crossmatch_units(
+            self.Source(fields=[4641774, 4641773],
+                        watermark=("20260808", 4641774),
+                        earliest_owed="20260809"),
+            "20260809"))
+
+        self.assertEqual([u.payload.field for u in units], [4641773])
+
+    def test_crossmatch_without_the_ordering_schema_yields_every_ready_field(
+            self):
+        # THE EXPLICIT DEGRADATION. `association_watermarks` ships as a DRAFT
+        # under `migrations-draft/`, so a database that has not adopted it
+        # answers `None` — not `(None, None)` — and gathering then behaves
+        # exactly as it did before the gate: unordered, every ready field.
+        # That is deliberate: the ordering is a property of the deployed
+        # schema, so raising here would take the crossmatch chain down on
+        # every unadopted database in the fleet. The cross-date fact is not
+        # even asked for, because an unordered deployment has no frontier for
+        # it to qualify.
+        source = self.Source(fields=[4641773, 4641774], watermark=None)
+
+        units = list(gather_crossmatch_units(source, "20260808"))
+
+        self.assertEqual([u.payload.field for u in units],
+                         [4641773, 4641774])
+        self.assertNotIn(("earliest_owed", None), source.asked_for)
+
+    def test_the_ordering_gate_does_not_replace_the_blocking_attempt_gate(
+            self):
+        # The gates COMPOSE: readiness first, order second, over what
+        # readiness left. The lowest field is blocked (a pending-or-successful
+        # attempt), so it is not a claimable predecessor at all and the
+        # frontier's successor is the next READY one — not "nothing, because
+        # the field after the watermark is unavailable".
+        units = list(gather_crossmatch_units(
+            self.Source(fields=[4641773, 4641774],
+                        blocking_crossmatch=[4641773],
+                        watermark=(None, None)),
+            "20260808"))
+
+        self.assertEqual([u.payload.field for u in units], [4641774])
+
+    def test_an_incomplete_catalog_load_stops_the_pass_before_the_watermark(
+            self):
+        # Ordering is asked only of units that are RUNNABLE. A date whose
+        # catalog load is incomplete has nothing runnable, so the pass returns
+        # before the watermark is read at all — the ordering gate never gets
+        # to nominate a unit whose data is not there.
+        source = self.Source(fields=[4641773], incomplete_catalog_load=[7],
+                             watermark=(None, None))
+
+        units = list(gather_crossmatch_units(source, "20260808"))
+
+        self.assertEqual(units, [])
+        self.assertNotIn(("watermark", None, None), source.asked_for)
+
+    def test_a_failed_watermark_read_raises_rather_than_gathering_unordered(
+            self):
+        # The silent-failure class again, and it bites HARDER here than
+        # elsewhere: `rapid_db` reports failure by returning None, and None is
+        # exactly the value that means "no ordering schema". An unguarded read
+        # would therefore turn a database outage into a silent loss of the
+        # ordering guarantee — gathering every ready field, unordered, on a
+        # database that does carry the schema. The refusal is what keeps
+        # "degraded" distinguishable from "broken".
+        source = self.Source(fields=[4641773], watermark=(None, None),
+                             watermark_failure=67)
+
+        with self.assertRaises(GatheringError) as caught:
+            list(gather_crossmatch_units(source, "20260808"))
+
+        self.assertIn("67", str(caught.exception))
+        # It is THIS read that refused, not an earlier one raising first: the
+        # pass reached the watermark, which is the only way this test proves
+        # anything about the watermark's own guard.
+        self.assertIn(("watermark", None, None), source.asked_for)
+
+    def test_a_failed_earliest_owed_read_raises(self):
+        # The cross-date fact carries the same weight as the watermark and
+        # fails the same way: None means "nothing owed", so an unguarded read
+        # would let a later date claim past an earlier one still in retry —
+        # precisely the §2.5 violation the gate exists to prevent — on the
+        # strength of a query that never ran.
+        source = self.Source(fields=[4641773],
+                             watermark=("20260808", 4641773),
+                             owed_failure=67)
+
+        with self.assertRaises(GatheringError) as caught:
+            list(gather_crossmatch_units(source, "20260809"))
+
+        self.assertIn("67", str(caught.exception))
+        self.assertIn(("earliest_owed", None), source.asked_for)
 
     # -- the corpus-wide per-field job types -------------------------------
 
