@@ -39,6 +39,7 @@ against are the same schema, and 044-046 remain the next free numbers.
 | `047-idempotency-and-expected-state.sql` | the mutation contract's two missing fields: an `idempotency_key` / `expected_state` column pair on `derived.mutation_audit`, keyed OVERLOADS of `add_problem_category` and `retry_parked_attempts` taking both, the shared `derived.mutation_replay` lookup, and `derived.record_external_action` for operator actions whose target is outside this database | G2, G3 |
 | `048-products-and-artifacts.sql` | `products` (one row per deterministic product key, UNIQUE-constrained), `artifacts` (one row per published file per attempt, replay-unique on attempt + record sequence + published name, full 64-character checksum with its algorithm), `product_artifacts` (the current binding, one current row per product), plus a nullable `product_id` FK on `refimages` and `diffimages` | D1, D2 |
 | `049-association-sets-and-watermarks.sql` | `association_sets` (immutable set identity, at most one live prompt set, seeded as a well-known row), `association_watermarks` keyed `(association_set, lane)` with a sequence-shaped `(proc_date, field)` value, `derived.live_association_set()` as the single well-known-row lookup, `derived.association_table_name` for set-scoped clone naming, and `derived.advance_association_watermark` as the CAS-guarded monotonic advance | F1 |
+| `050-alert-outbox-and-publisher.sql` | `alert_outbox` (rule 14's transactional outbox: one row per alert packet, `alert_id` UNIQUE, the dispatch envelope write-once by trigger, a PENDING → IN_FLIGHT → SENT/REFUSED state machine with claim token and lease), `delivery_policies` (per-release authorization, default-DENY, checked before every send), `insert_alert_outbox_packet` (the collision-guarding insert path), two health views for §2.8's outbox clocks, and the `rapid_publisher` NOLOGIN service role with column-level UPDATE on the state columns alone | E1 |
 
 ## Brief G's draft (047), for its reviewer
 
@@ -189,6 +190,84 @@ tests skip there and the rest of the suite still gates regressions.
 The acceptance runs on rapid-admin apply the base stream and then these
 drafts, in order, which is the only venue where the draft-schema tests
 actually execute.
+
+## Brief E's draft (050), for its reviewer
+
+Written against stream head **83f1a38283167132654706ea092d047312f35d4b**
+(44 stream files) — the same 44-file stream C, G, D and F were written and
+accepted against. 050 is the next free number after F's 049. It depends on
+**037** (the emission state model whose confirm CAS its rows commit beside)
+and on **DRAFT 048** (the `products` / `diffimages.product_id` binding the
+product-key identity basis joins through).
+
+Seven review points, each a decision rather than a default:
+
+1. **The outbox rows commit in the ALERT-EFFECT CONFIRMATION transaction, and
+   the file says so plainly rather than claiming rule-9 acceptance.** Rule 14
+   asks for "the same transaction as the database effect that produced them".
+   In today's topology that effect is `alert_production.py`'s confirm CAS +
+   `alert_published` milestone, NOT rule 9's result-acceptance transaction —
+   the registration consumer that owns the latter cannot construct these
+   packets (no provider, no cutouts, no schema). The remaining architectural
+   gap is recorded in the migration header verbatim for the re-score.
+2. **The order inside that transaction is fixed and load-bearing**: confirm
+   CAS → token check → outbox rows → milestone. The confirm CAS can affect
+   zero rows WITHOUT raising (a takeover is a recorded no-op), so a claimant
+   that inserted first would leave packets behind for an emission it never
+   confirmed, and the publisher — which knows nothing about emissions — would
+   deliver them. A losing claimant commits neither.
+3. **The payload, its checksum AND the pinned schema-version UUID are all
+   stored, because "identical bytes" is a claim about the WIRE.** The producer
+   frames with the registry's LATEST version at publish time
+   (`SchemaVersionNumber={"LatestVersion": True}`), so the same payload
+   re-framed after a registry bump yields different wire bytes. The publisher
+   frames strictly from the stored fields and never asks the registry on the
+   send path; that is the whole mechanism, and the pinned UUID is write-once
+   under the same protection as the bytes.
+4. **Immutability is a TRIGGER, not a grant** (030's append-only pattern). The
+   table owner and any SECURITY DEFINER function bypass column grants, and
+   "identical bytes on resend" must not depend on getting a grant map right.
+   Narrower than 030's: rows are not append-only — the state machine must move
+   — so what is frozen is the DISPATCH ENVELOPE (identity, bytes, checksum,
+   pinned version, topic, release, `created_at`). `SENT`/`REFUSED` rows are
+   undeletable by anyone, `PENDING` ones remain deletable by the owner
+   (draining a mis-built batch nobody has seen is legitimate).
+5. **The pipeline writer is INSERT-ONLY, deliberately NOT copying 048's
+   table-wide INSERT/UPDATE/DELETE posture** (`048:404`). The outbox is
+   different by design: the pipeline writes packets and then has no further
+   business with them. It cannot move a row's state (that is the publisher's
+   protocol and racing it would break the claim), cannot touch ack columns,
+   and cannot delete any row — `PENDING` included, because a bug that deleted
+   its own undelivered packets would look exactly like alerts that were never
+   produced. The ALL-UPDATE / ALL-DELETE revokes are stated explicitly so the
+   posture survives a later blanket grant written by habit.
+6. **`rapid_publisher` has NO group membership**, which is where it departs
+   from 016's orchestrator. That role joined `rapid_pipeline_write` because it
+   writes what the payload writes; the publisher does not — it reads two
+   tables and updates state columns on one. It gets direct grants of exactly
+   that and nothing else, a narrower boundary than a group can express, for
+   the one process that touches the outside world. It CONNECTS DIRECTLY (no
+   `SET ROLE`): it is transaction-mode pooled (§2.2) and `SET ROLE` needs a
+   session lane (`operatorctl/session.py:37-43`).
+7. **`p_sca` is declared `integer` though the column is `smallint`.**
+   PostgreSQL will not implicitly narrow integer → smallint to resolve a
+   function call, so a caller passing a plain Python int through psycopg2 gets
+   "function ... does not exist" — a message that names the function it is
+   looking at and reads as though the migration never applied. Found live on
+   this branch's second acceptance run. The assignment to the smallint column
+   still range-checks the value, so the check moves rather than disappearing.
+
+**Applied and re-applied cleanly** in the recorded acceptance run
+(`BRIEF-E-DRAFT-050: PASS exit=0`, `BRIEF-E-DRAFT-050-REAPPLY: PASS exit=0`
+— idempotent), with the full contract tier at 251 passed / **zero skips** and
+`BRIEF-E-OVERALL: PASS exit=0`.
+
+**Deployment still owes two things this file cannot do**, both drafted as
+`rapid_systems` change-request text in the brief-E worker's ledger: the
+LOGIN/password association pass for `rapid_publisher` (from
+`rapid/db/service/publisher`), and a pgbouncer user line so the pooler admits
+it with a deliberately sized pool. Until the first runs, the role cannot
+authenticate at all, by construction.
 
 ## Style
 
