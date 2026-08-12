@@ -68,7 +68,11 @@ class PublisherFixture:
         self.conn = conn
         self.execute = fixture.executor(conn)
         self.release = f"pub-{fixture.RUN_TAG}-{uuid.uuid4().hex[:8]}"
-        self.repository = OutboxRepository(self.execute)
+        # SCOPED TO THIS TEST'S RELEASE. See OutboxRepository.only_release:
+        # the contract tier shares one database, and an unscoped publisher
+        # correctly claims other tests' PENDING rows.
+        self.repository = OutboxRepository(self.execute,
+                                           only_release=self.release)
         self.alert_ids = []
         if authorized is not None:
             self.set_policy(authorized)
@@ -452,7 +456,8 @@ def test_two_overlapping_cycles_cannot_both_claim_one_row(outbox, second_conn):
     """
     outbox.add_packet(payload=b"contested")
 
-    other = OutboxRepository(fixture.executor(second_conn))
+    other = OutboxRepository(fixture.executor(second_conn),
+                             only_release=outbox.release)
 
     first = outbox.repository.claim_batch("cycle-one")
     second = other.claim_batch("cycle-two")

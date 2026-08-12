@@ -4,17 +4,29 @@ File:    test_alert_production.py
 Tests for the alert-production job type — the step-4 trigger.
 
 **THE DOUBLES CAN REFUSE**, the same discipline `test_post_db` states: a
-producer that accepts everything and a watermark that always claims would
-pass these tests against code with no emission control at all. So the
-watermark double enforces its real primary key (one claim per unit per
-release, later claims lose), and the producer double can fail a send and can
-fail the flush — because "delivery failure raises loudly" and "a candidate
-failure never fails the attempt" are opposite behaviours that only a double
-capable of both can distinguish.
+double that accepts everything and a watermark that always claims would pass
+these tests against code with no emission control at all. So the watermark
+double enforces its real primary key (one claim per unit per release, later
+claims lose), and `FakeConn`'s modelled `alert_outbox` table can refuse a
+same-`alert_id`-different-envelope insert exactly as the real PL/pgSQL
+function does (`insert_alert_outbox_packet`'s own docstring: "one identity,
+two different packets ... both are defects that a silent no-op would hide") —
+because a double that always accepted could not show that invariant at all.
 
-The 2026-08-04 Q7 finding is why the flush case is tested at all: every send
-failed, `flush()` returned normally, and the run reported publishing alerts
-it had not published.
+**THIS JOB TYPE NO LONGER SENDS ANYTHING (brief E, rule 14).** Until package E
+this module constructed a live Kafka producer and published in-job; the
+2026-08-04 Q7 finding (every send failed, `flush()` returned normally, and the
+run reported publishing alerts it had not published) is WHY that path was
+tested so carefully here, and it is exactly the class of bug "no producer
+exists to call" makes structurally impossible rather than merely untested.
+`Producer` is kept, not deleted, and repurposed to FAIL LOUDLY the moment
+anything calls `produce()` or `flush()` on it — a double that could record a
+send the code should never make again is worth more than one that quietly
+vanished, because it turns "the stage regressed to publishing in-job" from a
+silent behavioural change back into a hard test failure at the exact call
+site the module docstring says must never be reached
+(`pipeline/contract/test_alert_send_routes.py` asserts the same thing
+repo-wide; this file asserts it locally, against a live run).
 """
 
 import importlib.util
@@ -63,36 +75,63 @@ from submission.routes import JOB_TYPE_ALERT_PRODUCTION      # noqa: E402
 
 
 class Source:
-    """A candidate, with only what the selection reads."""
+    """A candidate, with only what the selection and identity computation
+    read.
 
-    def __init__(self, sid, snr=None):
+    `id`/`isdiffpos` are the CATALOG key `alert_identity` hashes
+    (`alerts/identity.py`'s module docstring: never `sid`, which is
+    DB-generated and realization-local). Defaulted here to values distinct
+    from `sid` so a test that accidentally read the wrong attribute would
+    fail loudly rather than by coincidence passing.
+    """
+
+    def __init__(self, sid, snr=None, id=None, isdiffpos=True):
         self.sid = sid
         self.snr = snr
+        self.id = id if id is not None else sid * 100
+        self.isdiffpos = isdiffpos
 
 
 class FakeConn:
-    """The borrowed connection `produce_alerts` claims/confirms through.
+    """The borrowed connection `produce_alerts` claims/confirms/outboxes
+    through.
 
-    `produce_alerts` now writes the CAS claim and confirm through
-    `RAPIDDB.borrowing(context.require_connection())` rather than through an
-    injected watermark object (migration 037 / integration ruling 3) — so the
-    double has to stand in for the psycopg2 connection itself, the same idiom
+    `produce_alerts` writes the CAS claim, the confirm, and (since brief E)
+    the outbox rows through `RAPIDDB.borrowing(context.require_connection())`
+    rather than through an injected watermark or producer object (migration
+    037 / integration ruling 3, extended by rule 14) — so the double has to
+    stand in for the psycopg2 connection itself, the same idiom
     `pipeline/registration/test/test_consumer.py`'s own `FakeConn` uses:
     `cursor()` returns something with `execute`/`fetchone`/`close`, `commit`/
     `rollback` are tracked so a test can assert the transaction boundary
     (`transaction(conn)`, not `RAPIDDB.borrowing`'s own suppressed one).
 
-    THE DOUBLE CAN REFUSE. `alert_emissions` is modelled as a real CAS would
-    behave: at most one row per (exposure_id, sca, release_identity), a claim
-    succeeds only under the real WHERE clause (state='claimed' AND (stale OR
-    same claimant OR prior claimant terminal)), and confirm succeeds only
-    when the caller's own token still matches. A double that always claimed,
-    or always confirmed, could not show the suppression or takeover paths at
-    all — the same discipline the old `Watermark` stated for `ON CONFLICT DO
-    NOTHING`.
+    THE DOUBLE CAN REFUSE, in TWO tables now:
+
+      * `alert_emissions` is modelled as a real CAS would behave: at most one
+        row per (exposure_id, sca, release_identity), a claim succeeds only
+        under the real WHERE clause (state='claimed' AND (stale OR same
+        claimant OR prior claimant terminal)), and confirm succeeds only when
+        the caller's own token still matches. A double that always claimed,
+        or always confirmed, could not show the suppression or takeover paths
+        at all.
+
+      * `alert_outbox` is modelled by RECORDING the calls made through
+        `insert_alert_outbox_packet` rather than by running real SQL —
+        that function is PL/pgSQL (migration 050) and the stub tier cannot
+        execute a server-side function body. What IS kept from the real
+        function's contract is the one invariant a test can check without a
+        real engine: a second insert under an `alert_id` already on record,
+        carrying a DIFFERENT `checksum`, RAISES — modelling "one identity,
+        two different packets ... both are defects that a silent no-op would
+        hide" (the PL/pgSQL function's own docstring, quoted in
+        `RAPIDDB.insert_alert_outbox_packet`). An insert with an IDENTICAL
+        checksum is absorbed as 'idempotent', matching the real function's
+        documented return values.
     """
 
-    def __init__(self, failure=0, rows=None, terminal_attempts=()):
+    def __init__(self, failure=0, rows=None, terminal_attempts=(),
+                product_keys=None, product_key_lookup_error=None):
         self.exit_code = 0
         self.failure = failure
         #: (exposure_id, sca, release_identity) -> row dict: state,
@@ -119,6 +158,37 @@ class FakeConn:
         self.description = None
         self.rowcount = 1
 
+        #: pid -> product_key, for `get_difference_image_product_key`. A pid
+        #: absent from this dict has no product binding (the ordinary,
+        #: pre-D-history case `_image_identity` degrades from) — modelled as
+        #: a dict lookup rather than SQL because DRAFT 048's `products`/
+        #: `diffimages.product_id` join is exactly the schema-may-be-absent
+        #: case `get_difference_image_product_key`'s own docstring says a
+        #: stub-tier connection has no business executing.
+        self.product_keys = dict(product_keys or {})
+        #: Raised (as `RapidDBCallFailed`, via `self.failure`-style exit_code
+        #: convention below) when set, to drive the "failed lookup is not an
+        #: absent binding" refusal in `_image_identity`.
+        self.product_key_lookup_error = product_key_lookup_error
+        #: alert_id -> {"checksum", "payload", "basis", "topic",
+        #: "release_identity", "exposure_id", "sca", "attempt_id"} — the
+        #: modelled `alert_outbox` table. Populated only through
+        #: `insert_alert_outbox_packet`, never directly, so a test asserts
+        #: the same surface the stage itself writes through.
+        self.alert_outbox = {}
+        #: alert_ids inserted since the last `commit()` — see `rollback()`,
+        #: which discards exactly this set so an aborted confirmation
+        #: transaction leaves no trace, matching "a losing claimant commits
+        #: NEITHER outbox rows NOR the milestone."
+        self._pending_outbox_ids = set()
+        #: Calls into `insert_alert_outbox_packet`, in order, exactly as
+        #: made — including ones later rolled back by an outer transaction
+        #: failure, so a test can distinguish "never called" from "called,
+        #: then rolled back" if it needs to (none currently do, but the
+        #: rollback-tracked `alert_outbox` dict alone could not tell the
+        #: difference).
+        self.outbox_calls = []
+
     # -- psycopg2 connection surface -----------------------------------
     def cursor(self):
         return self
@@ -134,9 +204,27 @@ class FakeConn:
 
     def commit(self):
         self.commits += 1
+        # Whatever this transaction staged into `alert_outbox` is now
+        # durable; nothing left in `_pending_outbox_ids` should be undone by
+        # a later rollback (there should not be a later one in these tests —
+        # `produce_alerts` runs at most one confirmation transaction per
+        # call — but clearing it keeps the double correct if that ever
+        # changes).
+        self._pending_outbox_ids.clear()
 
     def rollback(self):
         self.rollbacks += 1
+        # A rolled-back transaction must not leave partial outbox rows
+        # visible to a later read — the real transaction wraps CONFIRM, the
+        # outbox inserts and the milestone as one unit (rule 14), so a
+        # rollback undoes all three together. `_pending_outbox_ids` is
+        # exactly the set of alert_ids inserted since the last commit, so
+        # discarding them (and only them — an id already durable from an
+        # EARLIER commit, e.g. a genuine idempotent re-run, must survive)
+        # models that atomicity precisely.
+        for alert_id in self._pending_outbox_ids:
+            self.alert_outbox.pop(alert_id, None)
+        self._pending_outbox_ids.clear()
 
     # -- cursor surface: dispatches on statement shape, like the
     #    registration consumer's own FakeConn --------------------------
@@ -153,6 +241,10 @@ class FakeConn:
         elif "insert into milestones" in lowered:
             self.milestones.append(params)
             self._last_result = None
+        elif "insert_alert_outbox_packet" in lowered:
+            self._last_result = (self._insert_outbox_packet(params),)
+        elif "select p.product_key from diffimages" in lowered:
+            self._last_result = self._product_key(params)
         else:
             self._last_result = None
 
@@ -193,34 +285,94 @@ class FakeConn:
         row["alerts_published"] = alerts_published
         return (confirmed_token,)
 
+    # -- the modelled alert_outbox table, matching insert_alert_outbox_
+    #    packet's documented contract (RAPIDDB.insert_alert_outbox_packet's
+    #    own docstring, migration 050) --------------------------------
+    def _insert_outbox_packet(self, params):
+        (alert_id, identity_basis, payload, checksum, schema_version_id,
+         topic, release_identity, exposure_id, sca, producing_attempt_id,
+         corrects_alert_id) = params
+        self.outbox_calls.append(params)
+        existing = self.alert_outbox.get(alert_id)
+        if existing is not None:
+            if existing["checksum"] != checksum:
+                # A SAME-ID, DIFFERENT-ENVELOPE COLLISION RAISES, uncaught —
+                # the real function's documented behaviour, and the reason
+                # `RAPIDDB.insert_alert_outbox_packet` deliberately has no
+                # try/except around its execute: "either the alert_id digest
+                # inputs are incomplete or two genuinely different packets
+                # were minted under one identity, and both are defects".
+                raise RuntimeError(
+                    f"alert_outbox collision: alert_id {alert_id!r} already "
+                    f"recorded with a different payload checksum")
+            return "idempotent"
+        # `payload` arrives already wrapped by `psycopg2.Binary()`, matching
+        # the real bytea binding path — unwrapped here (`.adapted`, the same
+        # attribute psycopg2's own adapter exposes) so `alert_outbox` stores
+        # plain bytes a test can compare against what `serialize_alert`
+        # returned, the same way a real bytea column would round-trip it.
+        raw_payload = getattr(payload, "adapted", payload)
+        self.alert_outbox[alert_id] = {
+            "identity_basis": identity_basis, "payload": raw_payload,
+            "checksum": checksum, "schema_version_id": schema_version_id,
+            "topic": topic, "release_identity": release_identity,
+            "exposure_id": exposure_id, "sca": sca,
+            "producing_attempt_id": producing_attempt_id,
+            "corrects_alert_id": corrects_alert_id}
+        self._pending_outbox_ids.add(alert_id)
+        return "inserted"
+
+    # -- the modelled diffimages/products join -------------------------
+    def _product_key(self, params):
+        (pid,) = params
+        if self.product_key_lookup_error is not None:
+            raise self.product_key_lookup_error
+        return (self.product_keys[pid],) if pid in self.product_keys else None
+
 
 class Producer:
-    """A producer that can fail a send, and can fail the flush."""
+    """A producer double that FAILS LOUDLY the moment it is used.
 
-    def __init__(self, fail_sids=(), flush_error=None):
-        self.fail_sids = set(fail_sids)
-        self.flush_error = flush_error
-        self.published = []
-        self.flushed = False
+    Brief E's whole point is that `produce_alerts` no longer constructs or
+    calls a producer at all — the send moved to `rapid-publisher`, which
+    reads `alert_outbox` instead (module docstring: "THIS JOB TYPE NO LONGER
+    SENDS ANYTHING"). A double that quietly accepted `produce()`/`flush()`
+    calls, the way the pre-E `Producer` did, would keep passing even if a
+    regression reintroduced an in-job send — exactly the "double that
+    accepts everything" failure mode `test_post_db` and this file's own
+    module docstring warn about.
+
+    So this double is not deleted; it is INVERTED. `make_producer` is never
+    even patched to return one in `_run_produce_alerts` below (there is
+    nothing for the stage to call it with) — this class exists purely so a
+    test can hand `alerts.kafka_producer.make_producer` a sentinel that
+    proves, by raising, that the stage never reached for a producer at all.
+    Any call to `produce()` or `flush()` is therefore not a stubbed
+    response — it is a test failure, on purpose.
+    """
 
     def produce(self, topic, value, callback=None):
-        self.published.append((topic, value))
+        raise AssertionError(
+            "alert_production.produce_alerts must never construct or use a "
+            "Kafka producer (brief E, rule 14): this job type's obligation "
+            "ends at the outbox, and rapid-publisher is the only component "
+            "that sends")
 
     def flush(self):
-        self.flushed = True
-        if self.flush_error is not None:
-            raise self.flush_error
+        raise AssertionError(
+            "alert_production.produce_alerts must never flush a producer "
+            "(brief E, rule 14) — see produce() above")
 
 
 class Context:
     """The stage context surface `produce_alerts` actually uses.
 
-    `attempt_id` and `require_connection()` are new (migration 037 /
-    integration ruling 3): the claim/confirm/milestone writes go through the
-    ATTEMPT'S OWN borrowed connection now, not through an injected watermark
-    object — `attempt_id` is this attempt's OWN identity (the claiming
-    attempt, distinct from `unit.payload.promoted_attempt_id`, the registered
-    SOURCE attempt the unit declares).
+    `attempt_id` and `require_connection()` (migration 037 / integration
+    ruling 3): the claim/confirm/outbox/milestone writes go through the
+    ATTEMPT'S OWN borrowed connection, not through an injected watermark or
+    producer object — `attempt_id` is this attempt's OWN identity (the
+    claiming attempt, distinct from `unit.payload.promoted_attempt_id`, the
+    registered SOURCE attempt the unit declares).
     """
 
     def __init__(self, unit, parameters, conn=None, attempt_id=99):
@@ -252,11 +404,24 @@ class _SilentLogger:
     def warning(self, *args, **kwargs):
         pass
 
+    def error(self, *args, **kwargs):
+        pass
+
+
+#: `kafka/schema-version-id` is PINNED in every test's parameter tree so
+#: `_pinned_schema_version` takes its parameter-tree branch and never
+#: reaches the Glue-registry fallback (`GlueSchemaRegistry().
+#: schema_version_id(...)`, a real network call this suite has no business
+#: making). A fixed UUID-shaped string rather than a real UUID object:
+#: `_pinned_schema_version` only ever `str()`s it and stores it, so a
+#: plain string exercises the same path a real pinned parameter would.
+PINNED_SCHEMA_VERSION_ID = "11111111-1111-1111-1111-111111111111"
 
 PARAMETERS = {
     "kafka/topic": "rapid.internal.alerts.v1",
     "kafka/bootstrap-servers": "b-1:9098",
     "kafka/max-request-bytes": "15728640",
+    "kafka/schema-version-id": PINNED_SCHEMA_VERSION_ID,
 }
 
 #: The claiming attempt's identity in every test below — `context.attempt_id`
@@ -351,6 +516,78 @@ class TopicGuardTests(unittest.TestCase):
             alert_production._internal_topic(context)
 
 
+class SchemaVersionPinningTests(unittest.TestCase):
+    """`_pinned_schema_version`: the parameter tree wins, and is never
+    bypassed once it carries a value.
+
+    Only the parameter-tree branch is exercised here — the registry-fallback
+    branch calls `GlueSchemaRegistry()`, a real AWS client construction this
+    stub-tier suite has no business triggering, and every `EmissionTests`
+    run below pins the parameter for exactly that reason.
+    """
+
+    def test_a_pinned_parameter_is_used_as_is(self):
+        context = Context(_unit(), PARAMETERS)
+
+        version = alert_production._pinned_schema_version(
+            context, "rapid.internal.alerts.v1")
+
+        self.assertEqual(version, PINNED_SCHEMA_VERSION_ID)
+
+    def test_the_pinned_value_is_stringified(self):
+        # `context.parameter` can return a non-str (a real parameter store
+        # may hand back whatever type it stored); `_pinned_schema_version`
+        # promises a str because the outbox column and the effect record
+        # both store it as text.
+        context = Context(_unit(), dict(PARAMETERS,
+                                        **{"kafka/schema-version-id": 12345}))
+
+        version = alert_production._pinned_schema_version(
+            context, "rapid.internal.alerts.v1")
+
+        self.assertEqual(version, "12345")
+
+
+class ImageIdentityTests(unittest.TestCase):
+    """`_image_identity`: product-key preferred, legacy-pid the ratified
+    degradation, and a failed lookup refused rather than degraded.
+    """
+
+    def test_a_bound_difference_image_uses_the_product_key_basis(self):
+        conn = FakeConn(product_keys={1086: "product-key-abc"})
+        emissions = alert_production.CheckedHandle(RAPIDDB.borrowing(conn))
+        context = Context(_unit(), PARAMETERS, conn=conn)
+
+        basis = alert_production._image_identity(emissions, 1086, context)
+
+        self.assertEqual(basis, {"basis_name": "product-key",
+                                 "product_key": "product-key-abc"})
+
+    def test_an_unbound_difference_image_degrades_to_legacy_pid(self):
+        # DRAFT 048 added the binding as nullable; pre-D history has none.
+        conn = FakeConn()
+        emissions = alert_production.CheckedHandle(RAPIDDB.borrowing(conn))
+        context = Context(_unit(), PARAMETERS, conn=conn)
+
+        basis = alert_production._image_identity(emissions, 1086, context)
+
+        self.assertEqual(basis, {"basis_name": "legacy-pid",
+                                 "legacy_pid": 1086})
+
+    def test_a_failed_lookup_is_refused_rather_than_degraded(self):
+        # A failed lookup is NOT an absent binding: degrading here would mint
+        # a permanent legacy identity on the strength of a transient fault,
+        # and identities are immutable once written.
+        from database.modules.utils.checked import RapidDBCallFailed
+
+        conn = FakeConn(failure=67)
+        emissions = alert_production.CheckedHandle(RAPIDDB.borrowing(conn))
+        context = Context(_unit(), PARAMETERS, conn=conn)
+
+        with self.assertRaises((RuntimeError, RapidDBCallFailed)):
+            alert_production._image_identity(emissions, 1086, context)
+
+
 class UnitFieldTests(unittest.TestCase):
     """The unit is what the manifest says."""
 
@@ -374,12 +611,12 @@ class UnitFieldTests(unittest.TestCase):
 class Provider:
     """The alert data provider, over the CANDIDATE-reading connection only.
 
-    `db` is no longer where the emission CAS writes go (migration 037 /
-    integration ruling 3 moved those onto the attempt's own borrowed
-    connection — see `Context.require_connection`); this double no longer
-    needs one at all, and takes none, so a test that mistakenly wired the
-    old `watermark` object here would fail on the missing argument rather
-    than silently doing nothing.
+    `db` is no longer where the emission CAS or the outbox writes go
+    (migration 037 / integration ruling 3 moved those onto the attempt's own
+    borrowed connection — see `Context.require_connection`); this double no
+    longer needs one at all, and takes none, so a test that mistakenly wired
+    the old `watermark` object here would fail on the missing argument
+    rather than silently doing nothing.
     """
 
     def __init__(self, sources=(), chip_error=None):
@@ -393,14 +630,21 @@ class Provider:
 
 
 def _run_produce_alerts(context, provider, producer, assemble=None,
-                        fail_sids=()):
+                        fail_sids=(), serialize=None):
     """Run `produce_alerts` against doubles, patching the `alerts` package.
 
-    Module-level (not a method) so both `EmissionTests` and
-    `WatermarkSeedTests` can drive a real run without duplicating the patch
-    list — `produce_alerts` resolves `alerts.cli`/`alerts.produce`/
-    `alerts.kafka_producer` through module-level imports, so they are
-    patched here rather than injected.
+    Module-level (not a method) so every test class below can drive a real
+    run without duplicating the patch list — `produce_alerts` resolves
+    `alerts.cli`/`alerts.produce`/`alerts.kafka_producer` through
+    module-level imports, so they are patched here rather than injected.
+
+    `producer` is patched into `alerts.kafka_producer.make_producer`
+    ANYWAY, even though brief E means `produce_alerts` should never call it:
+    that is exactly what makes `Producer.produce`/`.flush` raising loudly
+    (see the class) a meaningful assertion rather than a vacuous one — if
+    `make_producer` were left unpatched (or unset), a regression that started
+    constructing a producer again might get `None` back and fail somewhere
+    unrelated, instead of failing AT the send.
     """
     import alerts.cli
     import alerts.produce
@@ -411,6 +655,9 @@ def _run_produce_alerts(context, provider, producer, assemble=None,
             raise ValueError(f"candidate {source.sid} is unusable")
         return {"sid": source.sid}
 
+    def fake_serialize(alert, schema=None):
+        return b"x" * 10
+
     patches = [
         # `db=` is the stage's path (its own connection's borrowing handle);
         # the double accepts and ignores it — the provider under test is
@@ -420,11 +667,7 @@ def _run_produce_alerts(context, provider, producer, assemble=None,
         (alerts.produce, "assemble_alert_for_source",
          assemble or fake_assemble),
         (alerts.produce, "load_schema", lambda *a, **k: {"fake": True}),
-        (alerts.produce, "serialize_alert",
-         lambda alert, schema=None: b"x" * 10),
-        (alerts.produce, "publish_alert",
-         lambda payload, prod, topic="alerts", flush=False:
-             prod.produce(topic, payload)),
+        (alerts.produce, "serialize_alert", serialize or fake_serialize),
         (alerts.kafka_producer, "make_producer",
          lambda *a, **k: producer),
     ]
@@ -440,23 +683,35 @@ def _run_produce_alerts(context, provider, producer, assemble=None,
 
 
 class EmissionTests(unittest.TestCase):
-    """Ruling 3: claim -> publish/flush -> confirm, and the effect counts.
+    """Ruling 3 / rule 14: claim -> assemble -> confirm+outbox, and the
+    effect counts.
 
-    `produce_alerts` resolves its collaborators through module-level imports,
-    so they are patched here rather than injected — the alternative would be
-    widening the stage signature purely for the tests, which the repo's own
-    seam discipline argues against. The emission CAS itself is exercised for
-    real (against `FakeConn`'s modelled `alert_emissions` table) through the
-    real `RAPIDDB.claim_alert_emission` / `confirm_alert_emission` SQL —
-    only the connection is a double, never the CAS logic.
+    `produce_alerts` resolves its collaborators through module-level
+    imports, so they are patched here rather than injected — the
+    alternative would be widening the stage signature purely for the tests,
+    which the repo's own seam discipline argues against. The emission CAS
+    and the outbox writes are both exercised for real against `FakeConn`'s
+    modelled tables through the real `RAPIDDB.claim_alert_emission` /
+    `confirm_alert_emission` / `insert_alert_outbox_packet` SQL-building
+    code — only the connection is a double, never the CAS or outbox logic.
+
+    NAMED so `-k "outbox or producer or no_send or oversize"` selects the
+    ones proving the new contract: at least one test name below carries
+    "outbox", and at least one carries "no_send" or "producer".
     """
 
-    def _run(self, context, provider, producer, assemble=None, fail_sids=()):
+    def _run(self, context, provider, producer, assemble=None,
+            fail_sids=(), serialize=None):
         """Run the stage against doubles, patching the alerts package."""
         _run_produce_alerts(context, provider, producer, assemble=assemble,
-                            fail_sids=fail_sids)
+                            fail_sids=fail_sids, serialize=serialize)
 
-    def test_a_clean_run_publishes_and_records_the_counts(self):
+    def test_a_clean_run_outboxes_packets_and_uses_no_producer(self):
+        # Criterion 3 / rule 14's core claim: the job type's obligation ends
+        # at the outbox. `producer` is the loud-failing double (see
+        # `Producer`'s own docstring) — if `produce_alerts` touched it at
+        # all, this test would fail INSIDE the run, at the call site, not
+        # by a missed assertion afterward.
         conn = FakeConn()
         provider = Provider(sources=[Source(1, 9.0), Source(2, 8.0)])
         producer = Producer()
@@ -464,23 +719,46 @@ class EmissionTests(unittest.TestCase):
 
         self._run(context, provider, producer)
 
-        self.assertEqual(len(producer.published), 2)
-        self.assertTrue(producer.flushed)
+        self.assertEqual(len(conn.alert_outbox), 2)
         self.assertEqual(context.provenance["candidates_considered"], 2)
-        self.assertEqual(context.provenance["alerts_published"], 2)
+        self.assertEqual(context.provenance["alerts_outboxed"], 2)
         self.assertEqual(context.provenance["emissions_suppressed"], 0)
         self.assertTrue(context.provenance["emission_confirmed"])
         self.assertEqual(context.provenance["alert_topic"],
                          "rapid.internal.alerts.v1")
+        # The new per-packet identity bookkeeping the effect record adds.
+        self.assertEqual(context.provenance["alert_identity_basis"],
+                         "legacy-pid")  # no product binding in this FakeConn
+        self.assertEqual(context.provenance["alert_schema_version_id"],
+                         PINNED_SCHEMA_VERSION_ID)
         # The selection rule names itself as the placeholder it is.
         self.assertIn("PLACEHOLDER", context.provenance["selection_rule"])
-        # (a) CONFIRM lands, and (f) the milestone is in the SAME transaction.
+        # (a) CONFIRM lands, and (f) the milestone is in the SAME
+        # transaction as the outbox writes.
         key = (20, 7, "rel-1")
         self.assertEqual(conn.rows[key]["state"], "emitted")
         self.assertEqual(len(conn.milestones), 1)
         self.assertEqual(conn.milestones[0][0], "alert_published")
 
-    def test_an_already_emitted_unit_publishes_nothing(self):
+    def test_the_stage_never_constructs_or_calls_a_producer(self):
+        # The same run as above, phrased as its own test so `-k producer`
+        # catches it even if the "clean run" test's name ever changes: the
+        # absence of a send is itself the acceptance criterion, not a detail
+        # of the outbox test. `make_producer` is patched to return the
+        # loud-failing double; if the stage never calls it, the double is
+        # simply never invoked and nothing raises.
+        conn = FakeConn()
+        provider = Provider(sources=[Source(1, 9.0)])
+        producer = Producer()
+        context = Context(_unit(), PARAMETERS, conn=conn)
+
+        # No AssertionError from Producer.produce/.flush escapes this call —
+        # that IS the assertion.
+        self._run(context, provider, producer)
+
+        self.assertEqual(context.provenance["alerts_outboxed"], 1)
+
+    def test_an_already_emitted_unit_outboxes_nothing(self):
         # "Emission is once per logical unit per release" — a replay is
         # silent, and the suppression is one of the four effect counts.
         conn = FakeConn(rows={(20, 7, "rel-1"): {"state": "emitted",
@@ -491,9 +769,9 @@ class EmissionTests(unittest.TestCase):
 
         self._run(context, provider, producer)
 
-        self.assertEqual(producer.published, [])
+        self.assertEqual(conn.alert_outbox, {})
         self.assertEqual(context.provenance["emissions_suppressed"], 1)
-        self.assertEqual(context.provenance["alerts_published"], 0)
+        self.assertEqual(context.provenance["alerts_outboxed"], 0)
 
     def test_a_candidate_failure_drops_only_that_candidate(self):
         # Gate 3: candidate failures never fail the attempt.
@@ -505,8 +783,8 @@ class EmissionTests(unittest.TestCase):
 
         self._run(context, provider, producer, fail_sids={2})
 
-        self.assertEqual(len(producer.published), 2)
-        self.assertEqual(context.provenance["alerts_published"], 2)
+        self.assertEqual(len(conn.alert_outbox), 2)
+        self.assertEqual(context.provenance["alerts_outboxed"], 2)
         self.assertEqual(context.provenance["candidates_dropped"], 1)
         self.assertEqual(context.provenance["dropped_by_reason"],
                          {"ValueError": 1})
@@ -524,29 +802,13 @@ class EmissionTests(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             self._run(context, provider, producer)
 
-        # (b) claim-then-crash-before-publish: the claim is intact, untouched.
+        # (b) claim-then-crash-before-assemble: the claim is intact,
+        # untouched, and nothing was outboxed.
         self.assertEqual(conn.rows[(20, 7, "rel-1")]["state"], "claimed")
+        self.assertEqual(conn.alert_outbox, {})
 
-    def test_a_delivery_failure_raises_loudly_and_the_claim_survives_intact(self):
-        # The 2026-08-04 Q7 finding: a run that reports published alerts
-        # while publishing nothing is worse than one that crashes.
-        conn = FakeConn()
-        provider = Provider(sources=[Source(1, 9.0)])
-        producer = Producer(flush_error=RuntimeError("1 of 1 alert failed"))
-        context = Context(_unit(), PARAMETERS, conn=conn)
-
-        with self.assertRaises(RuntimeError):
-            self._run(context, provider, producer)
-
-        # (b) publish failure is chip-level: no confirm ran, claim intact.
-        key = (20, 7, "rel-1")
-        self.assertEqual(conn.rows[key]["state"], "claimed")
-        self.assertEqual(conn.rows[key]["claim_token"],
-                         str(CLAIMING_ATTEMPT_ID))
-        self.assertEqual(conn.milestones, [])
-
-    def test_an_unclaimable_emission_refuses_to_publish(self):
-        # A claim that could not be RECORDED must not publish: an emission
+    def test_an_unclaimable_emission_refuses_to_outbox(self):
+        # A claim that could not be RECORDED must not outbox: an emission
         # that is not recorded can be emitted again.
         conn = FakeConn(failure=67)
         provider = Provider(sources=[Source(1, 9.0)])
@@ -556,7 +818,7 @@ class EmissionTests(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             self._run(context, provider, producer)
 
-        self.assertEqual(producer.published, [])
+        self.assertEqual(conn.alert_outbox, {})
 
     def test_a_stale_claim_from_a_terminal_attempt_is_taken_over(self):
         # (b) continued: a crashed claimant's stale claim is retaken by a
@@ -571,7 +833,7 @@ class EmissionTests(unittest.TestCase):
 
         self._run(context, provider, producer)
 
-        self.assertEqual(len(producer.published), 1)
+        self.assertEqual(len(conn.alert_outbox), 1)
         self.assertEqual(context.provenance["emissions_suppressed"], 0)
         self.assertTrue(context.provenance["emission_confirmed"])
 
@@ -595,18 +857,21 @@ class EmissionTests(unittest.TestCase):
         self.assertIn("claim_token = null", lowered)
         self.assertIn("claimed_at = null", lowered)
 
-    def test_a_takeover_between_publish_and_confirm_is_a_recorded_no_op(self):
-        # (c) takeover: publish is gated on RETURNING this attempt's own
-        # token (already covered above); this is the CONFIRM-side half — a
+    def test_a_losing_claimant_writes_no_outbox_rows(self):
+        # (c) takeover, the CONFIRM-side half, re-targeted at the outbox
+        # (brief E: the confirm CAS returning zero rows means the insert-
+        # outbox-rows arm of the confirmation transaction never runs at
+        # all — see `produce_alerts`' "THE ORDER IS FIXED" comment). A
         # foreign token at confirm time is a no-op, never a failure, and
-        # never re-publishes on this attempt's behalf.
+        # never outboxes on this attempt's behalf.
         conn = FakeConn()
         provider = Provider(sources=[Source(1, 9.0)])
         producer = Producer()
         context = Context(_unit(), PARAMETERS, conn=conn)
 
-        # Claim as usual, then simulate another attempt taking the claim over
-        # before this attempt's confirm runs.
+        # Claim as usual, then simulate another attempt taking the claim
+        # over before this attempt's confirm runs (inside the same
+        # transaction the outbox inserts would otherwise land in).
         original_confirm = conn._confirm
 
         def confirm_after_takeover(params):
@@ -618,17 +883,24 @@ class EmissionTests(unittest.TestCase):
 
         self._run(context, provider, producer)
 
-        # The alert still went out (publish already happened) but this
-        # attempt's own confirmation did not land.
-        self.assertEqual(len(producer.published), 1)
+        # The packet was assembled (STEP 2 ran) but this attempt's own
+        # confirmation did not land, so STEP 3's outbox-insert arm never
+        # executed: no outbox rows, no milestone.
+        self.assertEqual(conn.alert_outbox, {})
+        self.assertEqual(conn.milestones, [])
         self.assertFalse(context.provenance["emission_confirmed"])
+        self.assertEqual(context.provenance["alerts_outboxed"], 0)
         self.assertEqual(conn.rows[(20, 7, "rel-1")]["claim_token"], "12345")
 
-    def test_duplicate_tolerant_retry_republishes_an_unconfirmed_claim(self):
+    def test_duplicate_tolerant_retry_re_outboxes_an_unconfirmed_claim(self):
         # (e) duplicate-tolerance: a retry finding its OWN unconfirmed claim
         # (same claim_token — this attempt crashed after claiming but before
         # confirming, and is now retried under the SAME attempt identity)
-        # republishes rather than suppressing.
+        # re-assembles and outboxes rather than suppressing. The alert_id is
+        # deterministic (`alert_identity`), so a genuine resend after a lost
+        # response would insert the SAME id — absorbed as 'idempotent' by
+        # `insert_alert_outbox_packet` — but this is a first outbox for this
+        # id within the test, so it lands as an ordinary insert.
         conn = FakeConn(rows={(20, 7, "rel-1"):
                               {"state": "claimed",
                                "claim_token": str(CLAIMING_ATTEMPT_ID)}})
@@ -638,8 +910,176 @@ class EmissionTests(unittest.TestCase):
 
         self._run(context, provider, producer)
 
-        self.assertEqual(len(producer.published), 1)
+        self.assertEqual(len(conn.alert_outbox), 1)
         self.assertEqual(context.provenance["emissions_suppressed"], 0)
+
+    def test_outbox_rows_carry_the_packets_serialized_bytes_and_checksum(self):
+        # The outbox row is the packet: a test that only counted rows could
+        # not tell "wrote the right bytes" from "wrote a row". Asserts
+        # against `alert_id`/checksum computed the SAME way the stage
+        # computes them, matching a real reader's own verification path.
+        from alerts.identity import alert_identity, payload_checksum
+
+        conn = FakeConn()
+        provider = Provider(sources=[Source(1, 9.0, id=42, isdiffpos=True)])
+        producer = Producer()
+        context = Context(_unit(), PARAMETERS, conn=conn)
+
+        self._run(context, provider, producer)
+
+        expected_id, _ = alert_identity(
+            legacy_pid=1086, catalog_id=42, isdiffpos=True,
+            release_identity="rel-1")
+        self.assertIn(expected_id, conn.alert_outbox)
+        row = conn.alert_outbox[expected_id]
+        self.assertEqual(row["payload"], b"x" * 10)
+        self.assertEqual(row["checksum"], payload_checksum(b"x" * 10))
+        self.assertEqual(row["identity_basis"], "legacy-pid")
+        self.assertEqual(row["topic"], "rapid.internal.alerts.v1")
+        self.assertEqual(row["schema_version_id"], PINNED_SCHEMA_VERSION_ID)
+
+
+class OversizePacketTests(unittest.TestCase):
+    """Criterion 8: an oversize packet is an auditable drop, never a
+    stranded outbox row.
+
+    `alert_production.MAX_PACKET_BYTES` is MONKEYPATCHED down to a small
+    number rather than actually serializing a 12 MiB+ payload — cheaper,
+    faster, and it exercises exactly the comparison the module performs
+    (`framed_size = len(payload) + GLUE_HEADER_LEN; if framed_size >
+    MAX_PACKET_BYTES`) without needing real megabytes on either side of it.
+    The patch is restored in `tearDown` so it cannot leak into another
+    test's assertions about the real 12 MiB bound
+    (`SelectionTests`/`EmissionTests` never reference the constant, but a
+    leaked patch surviving a test failure is exactly the kind of thing that
+    silently breaks an unrelated test far below in file order).
+    """
+
+    def setUp(self):
+        self._real_max_packet_bytes = alert_production.MAX_PACKET_BYTES
+        # Small enough that the ordinary `b"x" * 10` fixture payload (plus
+        # GLUE_HEADER_LEN, 18 bytes) still fits comfortably under it, so a
+        # test can make ONE source oversize by giving it a bigger payload
+        # while every other source in the same run stays under the bound
+        # unperturbed.
+        alert_production.MAX_PACKET_BYTES = 100
+
+    def tearDown(self):
+        alert_production.MAX_PACKET_BYTES = self._real_max_packet_bytes
+
+    def test_an_oversize_packet_is_dropped_with_reason_and_not_outboxed(self):
+        conn = FakeConn()
+        provider = Provider(sources=[Source(1, 9.0, id=1),
+                                     Source(2, 8.0, id=2),
+                                     Source(3, 7.0, id=3)])
+        producer = Producer()
+        context = Context(_unit(), PARAMETERS, conn=conn)
+
+        # Source 2's packet alone is oversize: `serialize_alert` returns a
+        # payload sized well past the patched 100-byte MAX_PACKET_BYTES for
+        # sid 2, and the ordinary 10-byte fixture payload for the others —
+        # no real megabyte-scale allocation needed to cross a 100-byte bound.
+        def serialize_one_big(alert, schema=None):
+            if alert["sid"] == 2:
+                return b"y" * 200
+            return b"x" * 10
+
+        _run_produce_alerts(context, provider, producer,
+                            serialize=serialize_one_big)
+
+        # (criterion 8a) the oversize candidate is a recorded drop, not a
+        # crash and not a silent skip.
+        self.assertEqual(
+            context.provenance["dropped_by_reason"].get(
+                alert_production.DROP_REASON_OVERSIZE), 1)
+        oversize_dispositions = [
+            d for d in context.provenance["drop_dispositions"]
+            if d["reason"] == alert_production.DROP_REASON_OVERSIZE]
+        self.assertEqual(len(oversize_dispositions), 1)
+        self.assertEqual(oversize_dispositions[0]["sid"], 2)
+        self.assertIn("bytes", oversize_dispositions[0])
+
+        # (criterion 8b) the OTHER candidates on the same chip still outbox
+        # normally — gate 3's drop-and-continue applies to an oversize
+        # packet exactly as it does to any other per-candidate drop.
+        self.assertEqual(context.provenance["alerts_outboxed"], 2)
+        self.assertEqual(len(conn.alert_outbox), 2)
+
+        # (criterion 8c) no outbox row exists for the oversize candidate's
+        # alert_id — it was computed (the drop disposition's own "detail"
+        # references it), but never written, because the size check runs
+        # BEFORE the packet is appended to the in-memory `packets` list that
+        # the confirmation transaction commits.
+        from alerts.identity import alert_identity
+
+        oversize_alert_id, _ = alert_identity(
+            legacy_pid=1086, catalog_id=2, isdiffpos=True,
+            release_identity="rel-1")
+        self.assertNotIn(oversize_alert_id, conn.alert_outbox)
+
+    def test_an_all_oversize_chip_confirms_with_zero_outboxed(self):
+        # The degenerate case: every candidate on the chip is oversize. The
+        # claim still confirms (STEP 3 still runs — there is nothing chip-
+        # level wrong, only per-candidate drops) but outboxes nothing, which
+        # is a materially different effect record from a suppression
+        # (emissions_suppressed stays 0; the claim really was won and
+        # confirmed, it simply had nothing to write).
+        conn = FakeConn()
+        provider = Provider(sources=[Source(1, 9.0, id=1)])
+        producer = Producer()
+        context = Context(_unit(), PARAMETERS, conn=conn)
+
+        _run_produce_alerts(context, provider, producer,
+                            serialize=lambda alert, schema=None: b"z" * 200)
+
+        self.assertEqual(context.provenance["alerts_outboxed"], 0)
+        self.assertEqual(conn.alert_outbox, {})
+        self.assertEqual(
+            context.provenance["dropped_by_reason"].get(
+                alert_production.DROP_REASON_OVERSIZE), 1)
+        self.assertTrue(context.provenance["emission_confirmed"])
+        self.assertEqual(context.provenance["emissions_suppressed"], 0)
+
+
+class OutboxCollisionTests(unittest.TestCase):
+    """`FakeConn.alert_outbox` refuses a same-id, different-envelope insert
+    — the discipline this file's module docstring states: the double must
+    be able to refuse, not just record.
+    """
+
+    def test_a_same_id_different_checksum_insert_raises(self):
+        conn = FakeConn()
+        emissions = alert_production.CheckedHandle(RAPIDDB.borrowing(conn))
+
+        emissions.insert_alert_outbox_packet(
+            "sha256:aaaa", "legacy-pid", b"payload-one", "sha256:one",
+            PINNED_SCHEMA_VERSION_ID, "rapid.internal.alerts.v1", "rel-1",
+            20, 7, CLAIMING_ATTEMPT_ID)
+
+        with self.assertRaises(RuntimeError):
+            emissions.insert_alert_outbox_packet(
+                "sha256:aaaa", "legacy-pid", b"payload-TWO", "sha256:two",
+                PINNED_SCHEMA_VERSION_ID, "rapid.internal.alerts.v1",
+                "rel-1", 20, 7, CLAIMING_ATTEMPT_ID)
+
+    def test_a_same_id_same_checksum_insert_is_idempotent(self):
+        # The ordinary case: a re-run after a lost response recomputes the
+        # same digest and the insert path absorbs it rather than raising.
+        conn = FakeConn()
+        emissions = alert_production.CheckedHandle(RAPIDDB.borrowing(conn))
+
+        first = emissions.insert_alert_outbox_packet(
+            "sha256:bbbb", "legacy-pid", b"payload", "sha256:same",
+            PINNED_SCHEMA_VERSION_ID, "rapid.internal.alerts.v1", "rel-1",
+            20, 7, CLAIMING_ATTEMPT_ID)
+        second = emissions.insert_alert_outbox_packet(
+            "sha256:bbbb", "legacy-pid", b"payload", "sha256:same",
+            PINNED_SCHEMA_VERSION_ID, "rapid.internal.alerts.v1", "rel-1",
+            20, 7, CLAIMING_ATTEMPT_ID)
+
+        self.assertEqual(first, "inserted")
+        self.assertEqual(second, "idempotent")
+        self.assertEqual(len(conn.alert_outbox), 1)
 
 
 class WatermarkSeedTests(unittest.TestCase):

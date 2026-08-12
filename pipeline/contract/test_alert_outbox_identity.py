@@ -32,6 +32,37 @@ SCHEMA_VERSION = "0a1b2c3d-4e5f-6a7b-8c9d-0e1f2a3b4c5d"
 OTHER_SCHEMA_VERSION = "9f8e7d6c-5b4a-3928-1716-0f5e4d3c2b1a"
 TOPIC = "rapid.internal.alerts.v1"
 
+#: A run-unique base for the sky fields these tests place images on.
+#:
+#: `refimages_vbest_current_unique` is a partial unique index over
+#: `(field, fid, ppid)` where `vbest` — one current reference image per field,
+#: filter and pipeline — and `fixture.make_diffimage` mints a `vbest=1`
+#: reference for every image it builds. Two runs of this suite against ONE
+#: database (which the tier explicitly supports: "a re-run is safe, two runs
+#: may overlap") therefore collide on a hard-coded field number, and the
+#: failure looks like a defect in the code under test rather than in the
+#: fixture. Derived from `RUN_TAG` for the same reason `fixture.scope` is.
+FIELD_BASE = 700_000 + (int(fixture.RUN_TAG[:6], 16) % 200_000)
+
+
+def _fixed_id(marker):
+    """A stable-within-a-run, unique-across-runs alert id.
+
+    `alert_id` is UNIQUE, and this suite deliberately provokes that constraint
+    — so a literal like `"sha256:" + "1" * 64` collides with the PREVIOUS run's
+    leftover row rather than with the row the test just wrote, and the failure
+    arrives at the wrong assertion. `marker` keeps the ids readable in a
+    transcript; `RUN_TAG` keeps them apart.
+
+    The result must satisfy `alert_outbox_alert_id_shape_ck`
+    (`^sha256:[0-9a-f]{64}$`), so `marker` is a hex digit and the tail is
+    padded with hex — a fixture that produced a well-intentioned but invalid id
+    would fail on the shape CHECK and look exactly like the identity defect
+    these tests hunt.
+    """
+    body = (marker * 8 + fixture.RUN_TAG)[:64].ljust(64, "0")
+    return "sha256:" + body
+
 
 @pytest.fixture
 def outbox_db(conn):
@@ -84,7 +115,7 @@ def test_the_database_enforces_alert_id_uniqueness(outbox_db):
     it.
     """
     conn, execute, release = outbox_db
-    alert_id = "sha256:" + "1" * 64
+    alert_id = _fixed_id("a")
     _insert(execute, alert_id, release)
     conn.commit()
 
@@ -108,7 +139,7 @@ def test_an_identical_reinsert_is_absorbed_as_idempotent(outbox_db):
     reports it as such.
     """
     conn, execute, release = outbox_db
-    alert_id = "sha256:" + "2" * 64
+    alert_id = _fixed_id("b")
 
     assert _insert(execute, alert_id, release, payload=b"same") == "inserted"
     assert _insert(execute, alert_id, release, payload=b"same") == "idempotent"
@@ -128,7 +159,7 @@ def test_a_same_id_insert_with_a_different_checksum_fails_loudly(outbox_db):
     contradictory bytes under one key.
     """
     conn, execute, release = outbox_db
-    alert_id = "sha256:" + "3" * 64
+    alert_id = _fixed_id("c")
     _insert(execute, alert_id, release, payload=b"first")
     conn.commit()
 
@@ -149,7 +180,7 @@ def test_a_same_id_insert_with_a_different_schema_version_fails_loudly(
     because they fail for different reasons.
     """
     conn, execute, release = outbox_db
-    alert_id = "sha256:" + "4" * 64
+    alert_id = _fixed_id("d")
     _insert(execute, alert_id, release, payload=b"fixed",
             schema_version=SCHEMA_VERSION)
     conn.commit()
@@ -206,7 +237,7 @@ def test_a_later_product_binding_does_not_remint_an_outboxed_identity(
                     "is no binding to add")
 
     attempt_id = fixture.make_attempt(conn, lifecycle="terminal_without_start")
-    pid = fixture.make_diffimage(conn, attempt_id, field=7001, ppid=15)
+    pid = fixture.make_diffimage(conn, attempt_id, field=FIELD_BASE + 1, ppid=15)
     conn.commit()
 
     legacy_id, _payload = alert_identity(
@@ -250,8 +281,15 @@ def test_the_basis_selection_reads_the_real_product_join(outbox_db):
     from database.modules.utils.rapid_db import RAPIDDB
 
     attempt_id = fixture.make_attempt(conn, lifecycle="terminal_without_start")
-    unbound = fixture.make_diffimage(conn, attempt_id, field=7002, ppid=15)
-    bound = fixture.make_diffimage(conn, attempt_id, field=7003, ppid=15)
+    # ONE ATTEMPT PER DIFFERENCE IMAGE. `diffimages_attempt_unique` is on
+    # `(attempt_id, registered_record_sequence)` and the fixture writes
+    # sequence 1 for every row, so two images under one attempt collide — the
+    # schema saying an attempt registers one difference image, which is true of
+    # the pipeline and had to be true of the fixture too.
+    unbound = fixture.make_diffimage(conn, attempt_id, field=FIELD_BASE + 2, ppid=15)
+    bound = fixture.make_diffimage(
+        conn, fixture.make_attempt(conn, lifecycle="terminal_without_start"),
+        field=FIELD_BASE + 3, ppid=15)
     product_key = "sha256:" + uuid.uuid4().hex + uuid.uuid4().hex[:32]
     execute(
         "INSERT INTO products"
@@ -299,7 +337,7 @@ def test_the_basis_column_refuses_an_unknown_value(outbox_db):
     conn, execute, release = outbox_db
 
     with pytest.raises(psycopg2.errors.CheckViolation):
-        _insert(execute, "sha256:" + "5" * 64, release, basis="invented-basis")
+        _insert(execute, _fixed_id("e"), release, basis="invented-basis")
     conn.rollback()
 
 

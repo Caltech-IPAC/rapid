@@ -62,11 +62,34 @@ DEFAULT_BATCH = 20
 
 
 class OutboxRepository:
-    """The outbox's four short transactions, over an injected executor."""
+    """The outbox's four short transactions, over an injected executor.
 
-    def __init__(self, execute, lease=CLAIM_LEASE):
+    `only_release` restricts every claim to ONE release identity. Production
+    passes nothing and drains the whole outbox, which is the point of a single
+    publisher; it exists because the CONTRACT TIER shares one long-lived
+    database with every other test in the run, and a publisher that correctly
+    claims every PENDING row will happily claim the rows another test is in the
+    middle of asserting about. Found on this branch's third acceptance run,
+    where four publisher tests failed with counts three and four rows too high
+    and nothing wrong with the publisher.
+
+    It is a FILTER, never a fallback: it narrows what a cycle considers and
+    changes nothing about the claim's atomicity, its ordering, or its
+    finalization, so the properties the tests assert are the production ones.
+    The alternative — truncating the table between tests — is exactly what this
+    tier's fixture-honesty discipline forbids.
+    """
+
+    def __init__(self, execute, lease=CLAIM_LEASE, only_release=None):
         self.execute = execute
         self.lease = lease
+        self.only_release = only_release
+
+    def _release_filter(self, params):
+        """`(sql_fragment, params)` narrowing a statement to one release."""
+        if self.only_release is None:
+            return "", params
+        return " AND release_identity = %s", params + [self.only_release]
 
     # -- the claim ---------------------------------------------------------
 
@@ -87,18 +110,19 @@ class OutboxRepository:
         re-evaluate `state = 'PENDING'` and find nothing — a wasted cycle that
         looks like an empty outbox.
         """
+        scope, params = self._release_filter([claim_token])
         rows = self.execute(
             "UPDATE alert_outbox SET"
             "   state = 'IN_FLIGHT', claim_token = %s, claimed_at = now()"
             " WHERE outbox_id IN ("
             "   SELECT outbox_id FROM alert_outbox"
-            "    WHERE state = 'PENDING'"
+            "    WHERE state = 'PENDING'" + scope +
             "    ORDER BY created_at, alert_id"
             "    LIMIT %s FOR UPDATE SKIP LOCKED)"
             " RETURNING alert_id, identity_basis, payload, payload_checksum,"
             "           schema_version_id, topic, release_identity,"
             "           resend_count, created_at",
-            [claim_token, int(limit)])
+            params + [int(limit)])
         # RE-SORTED, because RETURNING's order is the UPDATE's execution
         # order and is NOT promised to be the subquery's ORDER BY. The send
         # order is part of the contract (acceptance 4), so it is established
@@ -133,16 +157,18 @@ class OutboxRepository:
         window. It is incremented by `return_for_resend`, which is reached only
         when a send actually happened and its outcome was ambiguous.
         """
+        scope, params = self._release_filter([])
         rows = self.execute(
             "UPDATE alert_outbox SET"
             "   state = 'PENDING', claim_token = NULL, claimed_at = NULL"
             " WHERE outbox_id IN ("
             "   SELECT outbox_id FROM alert_outbox"
             f"   WHERE state = 'IN_FLIGHT' AND claimed_at < now() - {self.lease}"
+            + scope +
             "    ORDER BY claimed_at"
             "    LIMIT %s FOR UPDATE SKIP LOCKED)"
             " RETURNING alert_id",
-            [int(limit)])
+            params + [int(limit)])
         reclaimed = list(rows or [])
         if reclaimed:
             logger.warning(

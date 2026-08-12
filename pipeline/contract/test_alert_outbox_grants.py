@@ -35,6 +35,7 @@ here is the strongest test this tier can write for it.
 """
 
 import hashlib
+import uuid
 
 import psycopg2
 import pytest
@@ -171,7 +172,7 @@ def test_pipeline_writer_can_call_the_insert_function(conn):
         cur.execute(
             "SELECT has_function_privilege(%s, "
             "  'insert_alert_outbox_packet(text, text, bytea, text, uuid, "
-            "   text, text, bigint, smallint, bigint, text)', 'EXECUTE')",
+            "   text, text, bigint, integer, bigint, text)', 'EXECUTE')",
             ["rapid_pipeline_write"])
         assert cur.fetchone()[0] is True
 
@@ -311,7 +312,39 @@ def _insert_packet(conn, alert_id, payload=b"packet-bytes",
 
 
 def _outbox_alert_id(name):
-    return f"outbox-{fixture.RUN_TAG}-{name}"
+    """A run-unique AND call-unique alert id.
+
+    `RUN_TAG` alone is not enough. It is one value per PROCESS, so two tests in
+    one run that both ask for `"sent"` get the same id and the second one's
+    insert dies on the UNIQUE constraint — and so does a single test re-run
+    inside one session. Observed on this branch's third acceptance run, where
+    the SENT and REFUSED deletion tests collided with each other's leftovers
+    after their cleanup had (correctly) been refused by the trigger.
+    """
+    return f"outbox-{fixture.RUN_TAG}-{name}-{uuid.uuid4().hex[:8]}"
+
+
+def _force_delete(conn, alert_id):
+    """Remove a test row whose state the DELETE trigger protects.
+
+    SENT and REFUSED rows are undeletable BY DESIGN — that is the property
+    these tests just proved — so a teardown that simply issues a DELETE fires
+    the trigger it verified a moment earlier and fails the test that passed.
+    The row is moved back to PENDING first, which is a state the trigger does
+    not guard.
+
+    Legitimate here and nowhere else: this is a scratch database's own fixture
+    row, and the guarantee under test is about the PRODUCTION path, where no
+    code does this. Doing it through the `conn` the test already holds keeps it
+    visible rather than hiding it in a fixture.
+    """
+    with conn.cursor() as cur:
+        cur.execute(
+            "UPDATE alert_outbox SET state = 'PENDING', sent_at = NULL,"
+            "   refusal_reason = NULL, claim_token = NULL, claimed_at = NULL"
+            " WHERE alert_id = %s", [alert_id])
+        cur.execute("DELETE FROM alert_outbox WHERE alert_id = %s", [alert_id])
+    conn.commit()
 
 
 def test_envelope_columns_cannot_be_rewritten_even_by_the_owner(conn):
@@ -394,9 +427,10 @@ def test_a_sent_row_cannot_be_deleted_even_by_the_owner(conn):
                     [alert_id])
         assert cur.fetchone()[0] == "SENT", (
             "the row is gone after the DELETE was supposed to fail")
-        cur.execute("DELETE FROM alert_outbox WHERE alert_id = %s",
-                    [alert_id])
-    conn.commit()
+    # THE TEARDOWN CANNOT SIMPLY DELETE, because the trigger this test just
+    # proved correct would refuse it — the test would pass its assertion and
+    # then fail on its own cleanup.
+    _force_delete(conn, alert_id)
 
 
 def test_a_refused_row_cannot_be_deleted_even_by_the_owner(conn):
@@ -428,10 +462,9 @@ def test_a_refused_row_cannot_be_deleted_even_by_the_owner(conn):
     assert "cannot be deleted" in str(raised.value)
     conn.rollback()
 
-    with conn.cursor() as cur:
-        cur.execute("DELETE FROM alert_outbox WHERE alert_id = %s",
-                    [alert_id])
-    conn.commit()
+    # As above: the teardown must move the row out of the protected state
+    # before it can remove it.
+    _force_delete(conn, alert_id)
 
 
 def test_a_pending_row_can_still_be_deleted_by_the_owner(conn):
