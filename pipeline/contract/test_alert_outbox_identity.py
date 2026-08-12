@@ -268,17 +268,19 @@ def test_a_later_product_binding_does_not_remint_an_outboxed_identity(
 def test_the_basis_selection_reads_the_real_product_join(outbox_db):
     """Which basis a REAL difference image takes, through the real query.
 
-    `get_difference_image_product_key` is what the alert-production stage asks
-    before minting identities, and its answer decides the basis permanently for
-    every packet on that chip. An image with no binding must answer None — not
-    raise, not return an empty string — and an image with one must answer its
-    key.
+    `AlertOutboxRepository.product_key_for_difference_image` is what the
+    alert-production stage asks before minting identities, and its answer
+    decides the basis permanently for every packet on that chip. An image with
+    no binding must answer None — not raise, not return an empty string — and
+    an image with one must answer its key.
+
+    THROUGH THE CARVED REPOSITORY, not a `RAPIDDB` method: `RAPIDDB` is frozen
+    (brief G's ratified merge decision, rule 17), and an earlier revision of
+    this work put the query there and was correctly refused.
     """
     conn, execute, _release = outbox_db
     if not fixture.has_table(conn, "products"):
         pytest.skip("DRAFT 048 is not applied (no products table)")
-
-    from database.modules.utils.rapid_db import RAPIDDB
 
     attempt_id = fixture.make_attempt(conn, lifecycle="terminal_without_start")
     # ONE ATTEMPT PER DIFFERENCE IMAGE. `diffimages_attempt_unique` is on
@@ -302,9 +304,16 @@ def test_the_basis_selection_reads_the_real_product_join(outbox_db):
             " WHERE pid = %s", [product_key, bound])
     conn.commit()
 
-    handle = RAPIDDB.borrowing(conn)
-    assert handle.get_difference_image_product_key(unbound) is None
-    assert handle.get_difference_image_product_key(bound) == product_key
+    from pipeline.repositories.alert_outbox import AlertOutboxRepository
+
+    repository = AlertOutboxRepository(conn)
+    assert repository.product_key_for_difference_image(unbound) is None
+    assert repository.product_key_for_difference_image(bound) == product_key
+    # AND THE SCHEMA PROBE ANSWERS TRUE HERE, which is what distinguishes the
+    # `None` above from the one an unapplied DRAFT 048 would produce. Both
+    # send the caller to the legacy basis; only this one means "this image has
+    # no binding" rather than "no database on this host has bindings at all".
+    assert repository.product_binding_present() is True
 
 
 def test_a_legacy_basis_packet_records_its_basis_in_the_row(outbox_db):

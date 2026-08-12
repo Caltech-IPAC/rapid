@@ -150,11 +150,23 @@ class FakeConn:
         self.rollbacks = 0
         self.statements = []
         self.milestones = []
-        #: `ConnectionExecutor.execute` (the milestone writer's path) reads
-        #: `cur.description`/`cur.rowcount` — None/1 models "an INSERT with
-        #: no RETURNING clause", exactly `record_milestone`'s statement
-        #: shape, so the executor takes the `rowcount` branch rather than
-        #: trying to `fetchall()` a result set that was never produced.
+        #: `cur.description` is None for a statement that produced no result
+        #: set and non-None for one that did — psycopg2's own contract, and
+        #: the discriminator TWO different callers read.
+        #:
+        #: `ConnectionExecutor.execute` (the milestone writer's path) takes
+        #: the `rowcount` branch when it is None, which models "an INSERT with
+        #: no RETURNING clause" — exactly `record_milestone`'s statement
+        #: shape. `AlertOutboxRepository._query` reads it for the same reason
+        #: and returns `[]` rather than calling `fetchall()` on a statement
+        #: that produced nothing.
+        #:
+        #: It is therefore SET PER STATEMENT by `execute` below rather than
+        #: fixed at None: a double that always claimed "no result set" would
+        #: make the repository's SELECTs return `[]`, and the stage would read
+        #: that as "no product binding" and "the insert returned no row" —
+        #: two wrong answers that look like data rather than like a broken
+        #: double.
         self.description = None
         self.rowcount = 1
 
@@ -166,6 +178,15 @@ class FakeConn:
         #: case `get_difference_image_product_key`'s own docstring says a
         #: stub-tier connection has no business executing.
         self.product_keys = dict(product_keys or {})
+        #: Whether DRAFT 048's `products` / `diffimages.product_id` binding
+        #: exists AT ALL on this modelled database, as distinct from existing
+        #: and being empty for a given pid. The repository probes the catalog
+        #: before it joins, so the double has to answer that probe — and the
+        #: two answers are different facts the identity basis must not
+        #: conflate: "048 is unapplied" and "this image has no binding" both
+        #: yield the legacy basis, while a failed LOOKUP must refuse to choose
+        #: a basis at all.
+        self.product_binding_present = True
         #: Raised (as `RapidDBCallFailed`, via `self.failure`-style exit_code
         #: convention below) when set, to drive the "failed lookup is not an
         #: absent binding" refusal in `_image_identity`.
@@ -234,6 +255,11 @@ class FakeConn:
         if self.failure:
             self._last_result = None
             raise RuntimeError(f"stubbed query failure ({self.failure})")
+        # `description` is set per statement — see its comment above. A
+        # statement that produces a result set gets a non-None value; one that
+        # does not keeps None. The value's CONTENT is never read by anything,
+        # only its None-ness, so a one-column placeholder is enough.
+        self.description = [("result",)]
         if "insert into alert_emissions" in lowered and "on conflict" in lowered:
             self._last_result = self._claim(params)
         elif "update alert_emissions" in lowered and "state = 'emitted'" in lowered:
@@ -241,12 +267,26 @@ class FakeConn:
         elif "insert into milestones" in lowered:
             self.milestones.append(params)
             self._last_result = None
+            self.description = None
         elif "insert_alert_outbox_packet" in lowered:
             self._last_result = (self._insert_outbox_packet(params),)
         elif "select p.product_key from diffimages" in lowered:
             self._last_result = self._product_key(params)
+        # THE REPOSITORY'S SCHEMA PROBES. `AlertOutboxRepository` asks the
+        # catalog whether DRAFT 050 and DRAFT 048 are applied before it reads
+        # or writes — that is what keeps "the schema is absent" apart from
+        # "the query failed", and on the confirmation path it is what avoids
+        # aborting the caller's transaction to find out. The double answers
+        # YES to both by default, because these tests exercise the deployed
+        # case; `product_binding` is flipped by the tests that want the
+        # legacy-pid degradation.
+        elif "to_regclass('public.alert_outbox')" in lowered:
+            self._last_result = ("alert_outbox",)
+        elif "to_regclass('public.products')" in lowered:
+            self._last_result = (self.product_binding_present,)
         else:
             self._last_result = None
+            self.description = None
 
     def fetchone(self):
         return self._last_result
@@ -297,14 +337,26 @@ class FakeConn:
         if existing is not None:
             if existing["checksum"] != checksum:
                 # A SAME-ID, DIFFERENT-ENVELOPE COLLISION RAISES, uncaught —
-                # the real function's documented behaviour, and the reason
-                # `RAPIDDB.insert_alert_outbox_packet` deliberately has no
-                # try/except around its execute: "either the alert_id digest
-                # inputs are incomplete or two genuinely different packets
-                # were minted under one identity, and both are defects".
-                raise RuntimeError(
+                # the real function's documented behaviour: "either the
+                # alert_id digest inputs are incomplete or two genuinely
+                # different packets were minted under one identity, and both
+                # are defects".
+                #
+                # IT CARRIES `pgcode = 'P0001'`, which is what makes this
+                # double faithful rather than merely loud. PL/pgSQL's bare
+                # `RAISE EXCEPTION` reports exactly that SQLSTATE, and
+                # `AlertOutboxRepository._query` keys on it to decide what to
+                # re-raise UNWRAPPED: a collision must escape the repository's
+                # typed-error vocabulary and fail the attempt, while a genuine
+                # query failure becomes `RepositoryQueryFailed`. A double that
+                # raised a bare `RuntimeError` here would be wrapped like any
+                # other failure and would prove the opposite of what this test
+                # claims.
+                error = RuntimeError(
                     f"alert_outbox collision: alert_id {alert_id!r} already "
                     f"recorded with a different payload checksum")
+                error.pgcode = "P0001"
+                raise error
             return "idempotent"
         # `payload` arrives already wrapped by `psycopg2.Binary()`, matching
         # the real bytea binding path — unwrapped here (`.adapted`, the same
@@ -562,12 +614,22 @@ class ImageIdentityTests(unittest.TestCase):
     degradation, and a failed lookup refused rather than degraded.
     """
 
+    # THE COLLABORATOR IS THE CARVED REPOSITORY, not a `RAPIDDB` handle.
+    # `RAPIDDB` is frozen (brief G's ratified merge decision, rule 17), so the
+    # two calls brief E needs live in `pipeline/repositories/alert_outbox.py`
+    # and these tests drive that class over the same `FakeConn`.
+
+    def _repository(self, conn):
+        from pipeline.repositories.alert_outbox import AlertOutboxRepository
+
+        return AlertOutboxRepository(conn)
+
     def test_a_bound_difference_image_uses_the_product_key_basis(self):
         conn = FakeConn(product_keys={1086: "product-key-abc"})
-        emissions = alert_production.CheckedHandle(RAPIDDB.borrowing(conn))
         context = Context(_unit(), PARAMETERS, conn=conn)
 
-        basis = alert_production._image_identity(emissions, 1086, context)
+        basis = alert_production._image_identity(
+            self._repository(conn), 1086, context)
 
         self.assertEqual(basis, {"basis_name": "product-key",
                                  "product_key": "product-key-abc"})
@@ -575,10 +637,26 @@ class ImageIdentityTests(unittest.TestCase):
     def test_an_unbound_difference_image_degrades_to_legacy_pid(self):
         # DRAFT 048 added the binding as nullable; pre-D history has none.
         conn = FakeConn()
-        emissions = alert_production.CheckedHandle(RAPIDDB.borrowing(conn))
         context = Context(_unit(), PARAMETERS, conn=conn)
 
-        basis = alert_production._image_identity(emissions, 1086, context)
+        basis = alert_production._image_identity(
+            self._repository(conn), 1086, context)
+
+        self.assertEqual(basis, {"basis_name": "legacy-pid",
+                                 "legacy_pid": 1086})
+
+    def test_an_unapplied_draft_048_also_degrades_to_legacy_pid(self):
+        # THE OTHER WAY TO HAVE NO PRODUCT KEY, and it must not look like a
+        # failure. A database built from the authoritative stream alone has no
+        # `products` table at all — the repository answers that from a CATALOG
+        # PROBE rather than by letting a join fail, which is what keeps the
+        # caller's confirmation transaction out of an aborted state.
+        conn = FakeConn(product_keys={1086: "product-key-abc"})
+        conn.product_binding_present = False
+        context = Context(_unit(), PARAMETERS, conn=conn)
+
+        basis = alert_production._image_identity(
+            self._repository(conn), 1086, context)
 
         self.assertEqual(basis, {"basis_name": "legacy-pid",
                                  "legacy_pid": 1086})
@@ -587,14 +665,14 @@ class ImageIdentityTests(unittest.TestCase):
         # A failed lookup is NOT an absent binding: degrading here would mint
         # a permanent legacy identity on the strength of a transient fault,
         # and identities are immutable once written.
-        from database.modules.utils.checked import RapidDBCallFailed
+        from pipeline.repositories.errors import RepositoryQueryFailed
 
         conn = FakeConn(failure=67)
-        emissions = alert_production.CheckedHandle(RAPIDDB.borrowing(conn))
         context = Context(_unit(), PARAMETERS, conn=conn)
 
-        with self.assertRaises((RuntimeError, RapidDBCallFailed)):
-            alert_production._image_identity(emissions, 1086, context)
+        with self.assertRaises((RuntimeError, RepositoryQueryFailed)):
+            alert_production._image_identity(
+                self._repository(conn), 1086, context)
 
 
 class UnitFieldTests(unittest.TestCase):
@@ -1056,38 +1134,73 @@ class OutboxCollisionTests(unittest.TestCase):
     be able to refuse, not just record.
     """
 
+    def _repository(self, conn):
+        from pipeline.repositories.alert_outbox import AlertOutboxRepository
+
+        return AlertOutboxRepository(conn)
+
     def test_a_same_id_different_checksum_insert_raises(self):
         conn = FakeConn()
-        emissions = alert_production.CheckedHandle(RAPIDDB.borrowing(conn))
+        outbox = self._repository(conn)
 
-        emissions.insert_alert_outbox_packet(
+        outbox.insert_packet(
             "sha256:aaaa", "legacy-pid", b"payload-one", "sha256:one",
             PINNED_SCHEMA_VERSION_ID, "rapid.internal.alerts.v1", "rel-1",
             20, 7, CLAIMING_ATTEMPT_ID)
 
-        with self.assertRaises(RuntimeError):
-            emissions.insert_alert_outbox_packet(
+        # AND IT ESCAPES THE REPOSITORY'S TYPED VOCABULARY. The raise is a
+        # hard invariant violation, not a query that failed to run, so the
+        # repository re-raises it UNWRAPPED rather than as
+        # `RepositoryQueryFailed` — which the caller catches and treats as a
+        # recoverable database fault. Asserting the negative is the whole
+        # point of this test: wrapping it would silently downgrade a
+        # corruption signal into a retryable one.
+        from pipeline.repositories.errors import RepositoryQueryFailed
+
+        with self.assertRaises(RuntimeError) as caught:
+            outbox.insert_packet(
                 "sha256:aaaa", "legacy-pid", b"payload-TWO", "sha256:two",
                 PINNED_SCHEMA_VERSION_ID, "rapid.internal.alerts.v1",
                 "rel-1", 20, 7, CLAIMING_ATTEMPT_ID)
+        self.assertNotIsInstance(caught.exception, RepositoryQueryFailed)
+
+    def test_an_ordinary_query_failure_is_typed_as_a_repository_error(self):
+        # THE OTHER SIDE OF THE SAME DISCRIMINATOR. A failure that is NOT the
+        # migration's own P0001 raise — a dropped connection, a typo, a
+        # permissions error — must become `RepositoryQueryFailed`, which the
+        # confirmation path catches and reports as "nothing was committed".
+        # Without this test the pass-through above could be implemented as
+        # "never wrap anything" and still look correct.
+        from pipeline.repositories.errors import RepositoryQueryFailed
+
+        conn = FakeConn(failure=67)
+        outbox = self._repository(conn)
+
+        with self.assertRaises(RepositoryQueryFailed):
+            outbox.insert_packet(
+                "sha256:cccc", "legacy-pid", b"payload", "sha256:c",
+                PINNED_SCHEMA_VERSION_ID, "rapid.internal.alerts.v1", "rel-1",
+                20, 7, CLAIMING_ATTEMPT_ID)
 
     def test_a_same_id_same_checksum_insert_is_idempotent(self):
         # The ordinary case: a re-run after a lost response recomputes the
         # same digest and the insert path absorbs it rather than raising.
         conn = FakeConn()
-        emissions = alert_production.CheckedHandle(RAPIDDB.borrowing(conn))
+        outbox = self._repository(conn)
 
-        first = emissions.insert_alert_outbox_packet(
+        first = outbox.insert_packet(
             "sha256:bbbb", "legacy-pid", b"payload", "sha256:same",
             PINNED_SCHEMA_VERSION_ID, "rapid.internal.alerts.v1", "rel-1",
             20, 7, CLAIMING_ATTEMPT_ID)
-        second = emissions.insert_alert_outbox_packet(
+        second = outbox.insert_packet(
             "sha256:bbbb", "legacy-pid", b"payload", "sha256:same",
             PINNED_SCHEMA_VERSION_ID, "rapid.internal.alerts.v1", "rel-1",
             20, 7, CLAIMING_ATTEMPT_ID)
 
-        self.assertEqual(first, "inserted")
-        self.assertEqual(second, "idempotent")
+        self.assertEqual(first.outcome, "inserted")
+        self.assertTrue(first.was_written)
+        self.assertEqual(second.outcome, "idempotent")
+        self.assertFalse(second.was_written)
         self.assertEqual(len(conn.alert_outbox), 1)
 
 

@@ -187,10 +187,19 @@ def _as_role_expect_insufficient_privilege(conn, role, statement, params=None):
     a savepoint a second attempt in the same test would fail on "current
     transaction is aborted" rather than on the property under test — the
     same reason the envelope-rewrite trigger test below uses one.
+
+    `role` is composed through `sql.Identifier`, not interpolated, matching
+    `test_repositories.py`'s discipline for any identifier a statement
+    cannot bind as a parameter (`SET ROLE` takes an identifier, not a
+    value, so `%s` is not an option here) — even though every caller in
+    this file passes one of two fixed literals, never anything
+    caller-supplied.
     """
+    from psycopg2 import sql
+
     with conn.cursor() as cur:
         cur.execute("SAVEPOINT role_attempt")
-        cur.execute("SET LOCAL ROLE %s" % role)  # role names are not params
+        cur.execute(sql.SQL("SET LOCAL ROLE {}").format(sql.Identifier(role)))
     try:
         with pytest.raises(psycopg2.errors.InsufficientPrivilege):
             with conn.cursor() as cur:
@@ -216,8 +225,10 @@ def _as_role_expect_success(conn, role, statement, params=None):
     failure here SHOULD abort the test's transaction and fail loudly,
     exactly like any other unexpected exception in a test.
     """
+    from psycopg2 import sql
+
     with conn.cursor() as cur:
-        cur.execute("SET LOCAL ROLE %s" % role)  # role names are not params
+        cur.execute(sql.SQL("SET LOCAL ROLE {}").format(sql.Identifier(role)))
     cur = conn.cursor()
     cur.execute(statement, params)
     return cur
@@ -314,6 +325,185 @@ def test_pipeline_writer_reads_policies_but_cannot_write_them(conn):
             "rapid_pipeline_write holds %s on delivery_policies" % privilege)
 
 
+# ---- 1b. THE SAME PROPERTIES, PROVOKED FOR REAL AS rapid_pipeline_write ----
+#
+# The four tests above ask the catalog what the grant map says. These five
+# ask PostgreSQL to actually try the operation as the constrained role and
+# assert what it does — the "what does the database actually refuse"
+# question this file's header explains. Both tiers are kept.
+
+def test_pipeline_writer_can_really_insert_a_packet_through_the_function(conn):
+    """The one write path the writer needs, actually exercised as the role.
+
+    Mirrors `test_pipeline_writer_can_call_the_insert_function` above, which
+    only asks `has_function_privilege`. This calls the function FOR REAL as
+    `rapid_pipeline_write` and confirms the row lands — proving both the
+    EXECUTE grant on the function and the INSERT grant on the table underneath
+    it actually cooperate to let the writer's one legitimate write path work,
+    not merely that each grant exists in isolation.
+    """
+    _require_schema(conn)
+    if not _role_exists(conn, "rapid_pipeline_write"):
+        pytest.skip("rapid_pipeline_write is not present in this database")
+
+    alert_id = _outbox_alert_id("writer-can-insert")
+    payload = b"writer-real-insert-bytes"
+    checksum = "sha256:" + hashlib.sha256(payload).hexdigest()
+    try:
+        cur = _as_role_expect_success(
+            conn, "rapid_pipeline_write",
+            "SELECT insert_alert_outbox_packet("
+            "  %s, 'product-key', %s, %s, %s::uuid, 'alerts.live', 'live',"
+            "  1, 1, NULL)",
+            [alert_id, psycopg2.Binary(payload), checksum,
+             "00000000-0000-0000-0000-a0000000000a"])
+        assert cur.fetchone()[0] == "inserted"
+
+        with conn.cursor() as cur:
+            cur.execute("SELECT count(*) FROM alert_outbox"
+                        " WHERE alert_id = %s", [alert_id])
+            assert cur.fetchone()[0] == 1, (
+                "rapid_pipeline_write's insert did not produce a visible row "
+                "inside its own transaction")
+    finally:
+        conn.rollback()
+
+
+def test_pipeline_writer_cannot_really_update_state(conn):
+    """The writer cannot move a row's state, provoked as a real UPDATE.
+
+    Mirrors the table-level catalog assertion in
+    `test_pipeline_writer_holds_insert_but_not_update_or_delete`. `state` is
+    also one of the publisher's own writable columns (`PUBLISHER_WRITABLE_
+    COLUMNS`), so this specifically confirms the writer cannot reach into the
+    publisher's half of the protocol and race its claim.
+    """
+    _require_schema(conn)
+    if not _role_exists(conn, "rapid_pipeline_write"):
+        pytest.skip("rapid_pipeline_write is not present in this database")
+
+    alert_id = _outbox_alert_id("writer-cannot-update-state")
+    _insert_packet(conn, alert_id)
+    conn.commit()
+    try:
+        _as_role_expect_insufficient_privilege(
+            conn, "rapid_pipeline_write",
+            "UPDATE alert_outbox SET state = 'SENT' WHERE alert_id = %s",
+            [alert_id])
+    finally:
+        conn.rollback()
+    _force_delete(conn, alert_id)
+
+
+def test_pipeline_writer_cannot_really_update_payload(conn):
+    """The writer cannot rewrite the dispatch envelope either, by GRANT —
+    a separate mechanism from the trigger tests in section 3 below.
+
+    This is the distinction the file's header names explicitly: for
+    `rapid_pipeline_write`, an attempted UPDATE of ANY column — envelope or
+    state — is refused by the column-level absence of any UPDATE grant at
+    all, before the envelope-immutability trigger ever gets a row to
+    inspect. The trigger tests down in section 3 prove the DEEPER guarantee
+    (immutability holds even for the owner, who has no grant to be refused
+    by); this test proves the SHALLOWER one that ordinarily fires first for
+    this particular role.
+    """
+    _require_schema(conn)
+    if not _role_exists(conn, "rapid_pipeline_write"):
+        pytest.skip("rapid_pipeline_write is not present in this database")
+
+    alert_id = _outbox_alert_id("writer-cannot-update-payload")
+    _insert_packet(conn, alert_id)
+    conn.commit()
+    try:
+        _as_role_expect_insufficient_privilege(
+            conn, "rapid_pipeline_write",
+            "UPDATE alert_outbox SET payload = %s WHERE alert_id = %s",
+            [psycopg2.Binary(b"rewritten-by-writer"), alert_id])
+    finally:
+        conn.rollback()
+    _force_delete(conn, alert_id)
+
+
+def test_pipeline_writer_cannot_really_delete_a_pending_row(conn):
+    """PENDING included, provoked as a real DELETE — criterion 7's own phrase.
+
+    This is the specific case 050's own comment calls out: a pipeline bug
+    that deleted its own undelivered packet would look, to any consumer,
+    exactly like an alert that was never produced. The row here is left
+    PENDING deliberately (never claimed or sent), which is also the one
+    state the DELETE-undeletable TRIGGER in section 3 does NOT guard — so a
+    green result here is entirely down to the GRANT, not a trigger picking
+    up slack the grant map fails to document.
+    """
+    _require_schema(conn)
+    if not _role_exists(conn, "rapid_pipeline_write"):
+        pytest.skip("rapid_pipeline_write is not present in this database")
+
+    alert_id = _outbox_alert_id("writer-cannot-delete-pending")
+    _insert_packet(conn, alert_id)
+    conn.commit()
+    try:
+        _as_role_expect_insufficient_privilege(
+            conn, "rapid_pipeline_write",
+            "DELETE FROM alert_outbox WHERE alert_id = %s", [alert_id])
+    finally:
+        conn.rollback()
+
+    with conn.cursor() as cur:
+        cur.execute("SELECT 1 FROM alert_outbox WHERE alert_id = %s",
+                    [alert_id])
+        assert cur.fetchone() is not None, (
+            "the PENDING row is gone after the DELETE was supposed to be "
+            "refused by the grant")
+    with conn.cursor() as cur:
+        cur.execute("DELETE FROM alert_outbox WHERE alert_id = %s",
+                    [alert_id])
+    conn.commit()
+
+
+def test_pipeline_writer_cannot_really_write_delivery_policies(conn):
+    """Read-only on policies, provoked as real INSERT/UPDATE/DELETE attempts.
+
+    Mirrors `test_pipeline_writer_reads_policies_but_cannot_write_them`
+    above with actual statements: a production code path taking this role
+    must not be able to change which releases are authorized, only read
+    that fact — asserted here as three separate real refusals rather than
+    one catalog reading per privilege, so a mistake in any one grant clause
+    shows up as its own attempted operation actually failing.
+
+    Three calls to the helper in a row, each closing its own SAVEPOINT
+    before the next opens: `_as_role_expect_insufficient_privilege` already
+    rolls back to its own savepoint internally, which is what makes chaining
+    three attempts in one test transaction safe without an outer rollback
+    between them.
+    """
+    _require_schema(conn)
+    if not _role_exists(conn, "rapid_pipeline_write"):
+        pytest.skip("rapid_pipeline_write is not present in this database")
+
+    release_identity = "contract-writer-" + fixture.RUN_TAG
+    _as_role_expect_insufficient_privilege(
+        conn, "rapid_pipeline_write",
+        "INSERT INTO delivery_policies"
+        "  (release_identity, authorized, reason, actor)"
+        " VALUES (%s, true, 'test', 'test')", [release_identity])
+    _as_role_expect_insufficient_privilege(
+        conn, "rapid_pipeline_write",
+        "UPDATE delivery_policies SET authorized = false"
+        " WHERE release_identity = 'live'")
+    _as_role_expect_insufficient_privilege(
+        conn, "rapid_pipeline_write",
+        "DELETE FROM delivery_policies WHERE release_identity = 'live'")
+
+    with conn.cursor() as cur:
+        cur.execute("SELECT 1 FROM delivery_policies"
+                    " WHERE release_identity = %s", [release_identity])
+        assert cur.fetchone() is None, (
+            "the writer's blocked INSERT somehow left a row behind")
+    conn.rollback()
+
+
 # ============================================================================
 # 2. rapid_publisher: SELECT both tables, UPDATE state/claim/ack ONLY
 # ============================================================================
@@ -394,6 +584,240 @@ def test_publisher_holds_no_write_of_any_kind_on_delivery_policies(conn):
         assert _table_priv(conn, "rapid_publisher", "delivery_policies",
                            privilege) is False, (
             "rapid_publisher holds %s on delivery_policies" % privilege)
+
+
+# ---- 2b. THE SAME PROPERTIES, PROVOKED FOR REAL AS rapid_publisher --------
+#
+# Same split as 1b above: the four tests over this table ask the catalog,
+# these six ask PostgreSQL to actually run the statement as rapid_publisher.
+
+def test_publisher_can_really_claim_a_row(conn):
+    """The publisher's one write, actually exercised: claim moves state.
+
+    Mirrors `test_publisher_holds_update_on_exactly_the_state_claim_ack_
+    columns` above (catalog only) by actually issuing the claim UPDATE the
+    real publisher issues, then reading the row back INSIDE the same
+    transaction to confirm PostgreSQL both permitted the write and
+    persisted it — not merely that the ACL bit is set.
+    """
+    _require_schema(conn)
+    if not _role_exists(conn, "rapid_publisher"):
+        pytest.skip("rapid_publisher is not present in this database")
+
+    alert_id = _outbox_alert_id("publisher-can-claim")
+    _insert_packet(conn, alert_id)
+    conn.commit()
+    try:
+        cur = _as_role_expect_success(
+            conn, "rapid_publisher",
+            "UPDATE alert_outbox SET state = 'IN_FLIGHT',"
+            "   claim_token = 'contract-claim-token', claimed_at = now()"
+            " WHERE alert_id = %s", [alert_id])
+        assert cur.rowcount == 1
+
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT state, claim_token FROM alert_outbox"
+                " WHERE alert_id = %s", [alert_id])
+            state, claim_token = cur.fetchone()
+            assert state == "IN_FLIGHT", (
+                "rapid_publisher's claim UPDATE did not change the row's "
+                "state inside its own transaction")
+            assert claim_token == "contract-claim-token"
+    finally:
+        conn.rollback()
+    _force_delete(conn, alert_id)
+
+
+def test_publisher_cannot_really_update_payload(conn):
+    """The GRANT refuses this — a DIFFERENT mechanism from the TRIGGER.
+
+    This is the distinction the file's header calls out by name: the
+    publisher's UPDATE grant is a COLUMN-level grant (`GRANT UPDATE (state,
+    claim_token, ...)`), and `payload` is simply not in that list — so this
+    UPDATE fails on the executor's column-ACL check before any row exists
+    for the envelope-immutability trigger to inspect. Contrast with
+    `test_envelope_columns_cannot_be_rewritten_even_by_the_owner` in section
+    3 below, which provokes the SAME column on the SAME table but as the
+    owner, who holds no column grant to be refused by at all — there the
+    trigger is the only thing standing in the way, and it is what raises.
+    Both refusals exist, are asserted separately, and must not be confused
+    for one mechanism wearing two names.
+    """
+    _require_schema(conn)
+    if not _role_exists(conn, "rapid_publisher"):
+        pytest.skip("rapid_publisher is not present in this database")
+
+    alert_id = _outbox_alert_id("publisher-cannot-update-payload")
+    _insert_packet(conn, alert_id)
+    conn.commit()
+    try:
+        _as_role_expect_insufficient_privilege(
+            conn, "rapid_publisher",
+            "UPDATE alert_outbox SET payload = %s WHERE alert_id = %s",
+            [psycopg2.Binary(b"rewritten-by-publisher"), alert_id])
+    finally:
+        conn.rollback()
+    _force_delete(conn, alert_id)
+
+
+def test_publisher_cannot_really_update_schema_version_id(conn):
+    """The pinned schema-version UUID is envelope, not state — same GRANT
+    boundary as `payload`, checked as its own column.
+
+    `schema_version_id` is not merely "another envelope column" for the
+    publisher's purposes — it is the field 050's header names as the whole
+    reason a resend can be byte-identical after a registry bump. A publisher
+    that could rewrite it could make a resend silently frame under a
+    different schema version than the first send, which is precisely the
+    property `PUBLISHER_WRITABLE_COLUMNS` excluding it is meant to prevent.
+    """
+    _require_schema(conn)
+    if not _role_exists(conn, "rapid_publisher"):
+        pytest.skip("rapid_publisher is not present in this database")
+
+    alert_id = _outbox_alert_id("publisher-cannot-update-schema-version")
+    _insert_packet(conn, alert_id)
+    conn.commit()
+    try:
+        _as_role_expect_insufficient_privilege(
+            conn, "rapid_publisher",
+            "UPDATE alert_outbox SET schema_version_id = %s"
+            " WHERE alert_id = %s",
+            ["00000000-0000-0000-0000-a0000000000b", alert_id])
+    finally:
+        conn.rollback()
+    _force_delete(conn, alert_id)
+
+
+def test_publisher_cannot_really_insert(conn):
+    """A second inserter would be a second, ungoverned way for packets to
+    appear — provoked as a real bare INSERT.
+
+    Mirrors `test_publisher_holds_neither_insert_nor_delete_on_alert_outbox`
+    above with an actual statement, using the full column list a hand-built
+    INSERT needs (the publisher has no `insert_alert_outbox_packet`-style
+    function to call through, so this is the same shape of bare INSERT
+    `test_alert_id_unique_is_enforced_by_a_bare_duplicate_insert` uses in
+    section 5, run as the constrained role instead of the owner).
+    """
+    _require_schema(conn)
+    if not _role_exists(conn, "rapid_publisher"):
+        pytest.skip("rapid_publisher is not present in this database")
+
+    alert_id = _outbox_alert_id("publisher-cannot-insert")
+    payload = b"publisher-should-not-be-able-to-insert-this"
+    checksum = "sha256:" + hashlib.sha256(payload).hexdigest()
+    try:
+        _as_role_expect_insufficient_privilege(
+            conn, "rapid_publisher",
+            "INSERT INTO alert_outbox (alert_id, identity_basis,"
+            "   payload, payload_checksum, schema_version_id, topic,"
+            "   release_identity, exposure_id, sca)"
+            " VALUES (%s, 'product-key', %s, %s,"
+            "   '00000000-0000-0000-0000-a0000000000c'::uuid,"
+            "   'alerts.live', 'live', 1, 1)",
+            [alert_id, psycopg2.Binary(payload), checksum])
+    finally:
+        conn.rollback()
+
+    with conn.cursor() as cur:
+        cur.execute("SELECT 1 FROM alert_outbox WHERE alert_id = %s",
+                    [alert_id])
+        assert cur.fetchone() is None, (
+            "the publisher's blocked INSERT somehow left a row behind")
+
+
+def test_publisher_cannot_really_delete(conn):
+    """The publisher drains the outbox; it does not empty it — a real DELETE
+    of a PENDING row, refused before the delivered-row trigger even applies.
+
+    The row here is PENDING (never claimed), which the trigger in section 3
+    does not guard at all — so, exactly as for the writer's equivalent test
+    above, a green result here is entirely the GRANT's doing.
+    """
+    _require_schema(conn)
+    if not _role_exists(conn, "rapid_publisher"):
+        pytest.skip("rapid_publisher is not present in this database")
+
+    alert_id = _outbox_alert_id("publisher-cannot-delete")
+    _insert_packet(conn, alert_id)
+    conn.commit()
+    try:
+        _as_role_expect_insufficient_privilege(
+            conn, "rapid_publisher",
+            "DELETE FROM alert_outbox WHERE alert_id = %s", [alert_id])
+    finally:
+        conn.rollback()
+
+    with conn.cursor() as cur:
+        cur.execute("SELECT 1 FROM alert_outbox WHERE alert_id = %s",
+                    [alert_id])
+        assert cur.fetchone() is not None, (
+            "the PENDING row is gone after the DELETE was supposed to be "
+            "refused by the grant")
+    with conn.cursor() as cur:
+        cur.execute("DELETE FROM alert_outbox WHERE alert_id = %s",
+                    [alert_id])
+    conn.commit()
+
+
+def test_publisher_cannot_really_write_delivery_policies(conn):
+    """The publisher must not be able to authorize its own deliveries —
+    provoked as three real write attempts, mirroring the writer's equivalent
+    test in section 1b above.
+
+    Three calls to the helper in a row, each closing its own SAVEPOINT
+    before the next opens — see the equivalent writer test above for why
+    that needs no outer rollback between attempts.
+    """
+    _require_schema(conn)
+    if not _role_exists(conn, "rapid_publisher"):
+        pytest.skip("rapid_publisher is not present in this database")
+
+    release_identity = "contract-publisher-" + fixture.RUN_TAG
+    _as_role_expect_insufficient_privilege(
+        conn, "rapid_publisher",
+        "INSERT INTO delivery_policies"
+        "  (release_identity, authorized, reason, actor)"
+        " VALUES (%s, true, 'test', 'test')", [release_identity])
+    _as_role_expect_insufficient_privilege(
+        conn, "rapid_publisher",
+        "UPDATE delivery_policies SET authorized = false"
+        " WHERE release_identity = 'live'")
+    _as_role_expect_insufficient_privilege(
+        conn, "rapid_publisher",
+        "DELETE FROM delivery_policies WHERE release_identity = 'live'")
+
+    with conn.cursor() as cur:
+        cur.execute("SELECT 1 FROM delivery_policies"
+                    " WHERE release_identity = %s", [release_identity])
+        assert cur.fetchone() is None, (
+            "the publisher's blocked INSERT somehow left a row behind")
+    conn.rollback()
+
+
+def test_publisher_can_really_select_both_tables(conn):
+    """The read half of the publisher's contract, actually exercised.
+
+    Mirrors `test_publisher_holds_select_on_both_tables` above: the
+    publisher's whole job is to read packets and read the policy that gates
+    them, so a real SELECT against each table — not just a catalog
+    privilege reading — is the behavioural half of that same fact.
+    """
+    _require_schema(conn)
+    if not _role_exists(conn, "rapid_publisher"):
+        pytest.skip("rapid_publisher is not present in this database")
+
+    try:
+        with conn.cursor() as cur:
+            cur.execute("SET LOCAL ROLE rapid_publisher")
+            cur.execute("SELECT count(*) FROM alert_outbox")
+            cur.fetchone()
+            cur.execute("SELECT count(*) FROM delivery_policies")
+            cur.fetchone()
+    finally:
+        conn.rollback()
 
 
 # ============================================================================
