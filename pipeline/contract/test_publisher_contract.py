@@ -104,13 +104,21 @@ class PublisherFixture:
         self.conn.commit()
 
     def add_packet(self, payload=b"packet-bytes", schema_version=None,
-                   created_offset_seconds=0, alert_id=None):
+                   created_offset_seconds=0, alert_id=None,
+                   created_at=None):
         """One PENDING outbox row. Returns its alert_id.
 
         `created_offset_seconds` places the row deliberately in time so the
         ORDER test can build rows whose `created_at` order differs from their
         `alert_id` order — otherwise a publisher that sorted by the wrong key
         would pass by coincidence.
+
+        `created_at` sets an ABSOLUTE timestamp, which is how the tie-break
+        test gives several rows the identical instant one confirmation
+        transaction would write. It has to happen at INSERT: `created_at` is
+        part of the write-once dispatch envelope, so an UPDATE afterwards is
+        refused by the trigger — correctly, and the first version of that test
+        was refused exactly that way.
         """
         alert_id = alert_id or ("sha256:" + uuid.uuid4().hex + uuid.uuid4().hex)[:71]
         self.execute(
@@ -119,10 +127,11 @@ class PublisherFixture:
             "   schema_version_id, topic, release_identity, exposure_id, sca,"
             "   created_at)"
             " VALUES (%s, 'product-key', %s, %s, %s, %s, %s, 1, 1,"
-            "         now() + (%s * interval '1 second'))",
+            "         coalesce(%s::timestamptz,"
+            "                  now() + (%s * interval '1 second')))",
             [alert_id, __import__("psycopg2").Binary(payload),
              _checksum(payload), schema_version or SCHEMA_VERSION, TOPIC,
-             self.release, created_offset_seconds])
+             self.release, created_at, created_offset_seconds])
         self.conn.commit()
         self.alert_ids.append(alert_id)
         return alert_id
@@ -232,25 +241,21 @@ def test_the_tie_break_orders_rows_sharing_one_created_at(outbox):
     order within a chip would be whatever the plan produced, and two publishers
     could disagree about which packet is next.
     """
+    # ONE SHARED INSTANT, set at INSERT — what a confirmation transaction
+    # actually writes for a whole chip's packets, and the only way the
+    # tie-break is exercised at all.
+    #
+    # Two earlier versions of this got it wrong in instructive ways. The first
+    # let each row take its own `now()`: every `add_packet` commits separately,
+    # so the rows arrived already totally ordered by `created_at`, the
+    # tie-break never engaged, and the test would have passed against a
+    # publisher that ignored it. The second forced the timestamps equal with an
+    # UPDATE afterwards — and was refused by the write-once envelope trigger,
+    # correctly, because `created_at` is part of the dispatch envelope.
     ids = sorted(_ordered_id(c) for c in "def")
     for alert_id in reversed(ids):
         outbox.add_packet(payload=alert_id.encode(), alert_id=alert_id,
-                          created_offset_seconds=0)
-
-    # THE TIMESTAMPS ARE FORCED EQUAL, which the fixture alone cannot do:
-    # each `add_packet` commits its own transaction, so each row gets its own
-    # `now()` microsecond and they arrive already totally ordered by
-    # `created_at`. The tie-break would then never be exercised and the test
-    # would pass against a publisher that ignored it — which is exactly what
-    # happened on this branch's second acceptance run, where the rows came back
-    # in insertion order (f, e, d) and the assertion caught it.
-    #
-    # One UPDATE to a single literal reproduces what one confirmation
-    # transaction actually writes: a whole chip's packets sharing one instant.
-    outbox.execute(
-        "UPDATE alert_outbox SET created_at = timestamptz '2026-01-01 00:00:00+00'"
-        " WHERE release_identity = %s", [outbox.release])
-    outbox.conn.commit()
+                          created_at="2026-01-01 00:00:00+00")
 
     broker = RecordingBroker()
     outbox.cycle(broker).run_once()
