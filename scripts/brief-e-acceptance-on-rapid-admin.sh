@@ -72,6 +72,14 @@ trap 'rm -f "$tarball"' EXIT
 # The repo subset the suites need, plus this branch's drafts. Same exclusions
 # as the operational runner (`sims/`, `RuBR/`, `c/` are not imported by either
 # tier), with `migrations-draft/` added — the whole point of this run.
+#
+# `.github` JOINS THE LIST for brief E. Acceptance 10 requires the workflow's
+# entry-point loop to name all five console scripts, and
+# `test_publisher_startup.py` asserts exactly that by reading the workflow
+# file — which was not staged, so the test read a path that did not exist and
+# failed on this host while passing everywhere the repo is checked out. Found
+# on this branch's first acceptance run. Staging the directory is the honest
+# fix: the file is part of what the acceptance is about.
 # `--exclude='._*'` as well as `--no-xattrs`: on this macOS `tar`, the flag
 # stops the xattrs being ARCHIVED but AppleDouble `._<name>` sidecars already
 # present on disk are ordinary files and ship anyway. They land beside the
@@ -89,6 +97,7 @@ tar --no-xattrs --exclude='._*' -czf "$tarball" \
     alerts \
     aws \
     migrations-draft \
+    .github \
     pyproject.toml
 echo ">> repo tarball: $(du -h "$tarball" | cut -f1)"
 

@@ -38,7 +38,9 @@ needs no schema — it therefore runs in CI too, and CI is where a
 reintroduction is most likely to be caught early.
 """
 
+import io
 import pathlib
+import tokenize
 import unittest
 
 #: The repository root: this file is `<root>/pipeline/contract/<name>.py`.
@@ -73,8 +75,54 @@ ALLOWED_CONSTRUCTION_SITES = (
 )
 
 
+def code_without_comments(source):
+    """`source` with comments and docstrings removed, for scanning.
+
+    THE REASON THIS EXISTS is recorded in the module docstring: a raw-text scan
+    punished `alert_production.py` for EXPLAINING why it no longer builds a
+    producer, because the explanation names the factory. Observed live on the
+    first acceptance run of this branch.
+
+    `tokenize` is used rather than a regex because it is Python's own lexer: a
+    regex for `#.*$` deletes the contents of any string containing a hash, and
+    a regex for triple-quoted blocks cannot tell a docstring from a multi-line
+    string literal that matters. String LITERALS are kept — a send route built
+    from `getattr(mod, "make_producer")` should still be caught — except where
+    the string is a statement on its own, which is what a docstring is.
+
+    A file that does not tokenize (a syntax error) returns unchanged rather
+    than raising: this scan is not the place to discover that, and failing here
+    would attribute a parse error to the send-route rule.
+    """
+    try:
+        tokens = list(tokenize.generate_tokens(io.StringIO(source).readline))
+    except (tokenize.TokenError, IndentationError, SyntaxError):
+        return source
+
+    kept = []
+    previous_type = tokenize.INDENT
+    for token in tokens:
+        if token.type == tokenize.COMMENT:
+            continue
+        # A docstring is a STRING token standing alone as a statement — that
+        # is, one preceded by NEWLINE, INDENT, DEDENT, or nothing at all.
+        if token.type == tokenize.STRING and previous_type in (
+                tokenize.NEWLINE, tokenize.NL, tokenize.INDENT,
+                tokenize.DEDENT, tokenize.ENCODING):
+            previous_type = token.type
+            continue
+        kept.append(token.string)
+        if token.type not in (tokenize.NL, tokenize.COMMENT):
+            previous_type = token.type
+    return "\n".join(kept)
+
+
 def _python_sources():
-    """Every shipped .py file outside the test trees, as (relative path, text).
+    """Every shipped .py file outside the test trees, as (path, code).
+
+    The text yielded is COMMENT- AND DOCSTRING-FREE (see
+    `code_without_comments`), so the scan reads what the module does rather
+    than what it says about itself.
 
     Test files are excluded wholesale: they legitimately name the forbidden
     symbols, both to stub them and — in this very module — to assert about
@@ -91,7 +139,8 @@ def _python_sources():
                 continue
             if path.name.startswith("test_") or path.name == "conftest.py":
                 continue
-            yield relative, path.read_text(encoding="utf-8", errors="replace")
+            yield relative, code_without_comments(
+                path.read_text(encoding="utf-8", errors="replace"))
 
 
 class OnlyRouteTests(unittest.TestCase):
@@ -129,7 +178,8 @@ class OnlyRouteTests(unittest.TestCase):
         # brief E2) and it is the single most likely place for one to come
         # back — a future edit "restoring" in-job publishing would look
         # locally reasonable and would silently reopen the whole gap.
-        text = (ROOT / "pipeline/stages/alert_production.py").read_text()
+        text = code_without_comments(
+            (ROOT / "pipeline/stages/alert_production.py").read_text())
         for name in PRODUCTION_TRANSPORT_NAMES:
             self.assertNotIn(
                 name, text,
@@ -147,7 +197,7 @@ class OnlyRouteTests(unittest.TestCase):
         # rather than "unrecognized arguments"), so the assertion is about
         # BEHAVIOUR — it must not be able to build a producer — rather than
         # about the flag's absence.
-        text = (ROOT / "alerts/cli.py").read_text()
+        text = code_without_comments((ROOT / "alerts/cli.py").read_text())
         for name in PRODUCTION_TRANSPORT_NAMES:
             self.assertNotIn(
                 name, text,
@@ -161,10 +211,18 @@ class OnlyRouteTests(unittest.TestCase):
         # structurally here as well as behaviourally in the outbox contract
         # tests, because this is the property most likely to be undone by an
         # innocent-looking refactor that "simplifies" framing.
-        text = (ROOT / "pipeline/publisher/cycle.py").read_text()
+        text = code_without_comments(
+            (ROOT / "pipeline/publisher/cycle.py").read_text())
         self.assertIn("frame_alert", text)
-        for forbidden in ("GlueSchemaRegistry", "schema_version_id(",
-                          "LatestVersion"):
+        # THE FORBIDDEN NAMES ARE THE REGISTRY'S, not the row's. An earlier
+        # version of this test forbade the substring `schema_version_id(`,
+        # which matched the cycle passing its own row-derived
+        # `schema_version_id` variable to a helper — a false positive on the
+        # correct implementation. What must be absent is any way to ASK the
+        # registry: its class, and the API shape that requests the latest
+        # version.
+        for forbidden in ("GlueSchemaRegistry", "LatestVersion",
+                          "get_schema_version"):
             self.assertNotIn(
                 forbidden, text,
                 f"the publisher cycle names {forbidden!r}: framing on the "

@@ -98,28 +98,39 @@ fi
 # ALL FIVE (acceptance 10). A wheel that declares a console script but cannot
 # execute it is exactly the "scaffold is not a deployment" defect.
 #
-# `--help` is the cheapest call that proves the console script exists, the
-# module imports, and the argument parsing works. THE SERVICES ARE NOT RUN
-# WITHOUT IT: `rapid-publisher` with no arguments would try to start, and this
-# check is about installation, not about behaviour (its fail-closed startup is
-# asserted separately, in the contract tier, where the absence of credentials
-# is the thing under test rather than an accident of the environment).
+# WHAT IS ASSERTED IS THAT THE SHIM RESOLVED AND THE MODULE IMPORTED — not
+# that the command succeeded. This matches the workflow's own loop
+# (`.github/workflows/contract-tests.yml`) exactly, and the match is
+# deliberate: three of these five are long-running SERVICES with no `--help`
+# at all, so they attempt to START and exit non-zero on their own missing
+# environment (70, EXIT_START_FAILED, having logged what was absent). That is
+# a correct entry point behaving correctly with no AWS region on this host.
 #
-# A FAILING ENTRY POINT FAILS THE RUN. F's version of this block printed a
-# FAIL line and let the run continue — the same criteria-aggregation defect
-# its own criteria loop had fixed one section below, left unfixed here. Brief
-# E's acceptance 10 names the entry points explicitly, so a red one is a red
-# acceptance.
+# A FIRST VERSION OF THIS BLOCK GRADED ON THE EXIT CODE and reported
+# `rapid-publisher: FAIL exit=70` — alongside `rapid-reconciler: FAIL exit=70`,
+# which is a service that has shipped and run in production since brief B. Two
+# identical results, one of them impossible to be a real defect: the check was
+# wrong, not the entry points. An ImportError is the failure that matters here,
+# because it is the one that means the wheel is broken.
+#
+# A FAILING ENTRY POINT STILL FAILS THE RUN (acceptance 10), on that criterion.
 entrypoint_rc=0
 for cmd in rapid-reconciler rapid-operator rapid-job rapidctl rapid-publisher
 do
-    if "${STAGE_DIR}/venv/bin/$cmd" --help >>"$LOG" 2>&1; then
-        echo "BRIEF-E-ENTRYPOINT-$cmd: PASS exit=0"
-    else
-        rc=$?
+    if [ ! -x "${STAGE_DIR}/venv/bin/$cmd" ]; then
         entrypoint_rc=1
-        echo "BRIEF-E-ENTRYPOINT-$cmd: FAIL exit=$rc"
-        "${STAGE_DIR}/venv/bin/$cmd" --help 2>&1 | tail -15
+        echo "BRIEF-E-ENTRYPOINT-$cmd: FAIL exit=1 (not installed)"
+        continue
+    fi
+    out=$("${STAGE_DIR}/venv/bin/$cmd" --help 2>&1)
+    rc=$?
+    printf '%s\n' "$out" >>"$LOG"
+    if printf '%s\n' "$out" | grep -qi 'ModuleNotFoundError\|ImportError'; then
+        entrypoint_rc=1
+        echo "BRIEF-E-ENTRYPOINT-$cmd: FAIL exit=1 (import error)"
+        printf '%s\n' "$out" | tail -15
+    else
+        echo "BRIEF-E-ENTRYPOINT-$cmd: PASS resolved exit=$rc (imported)"
     fi
 done
 echo "BRIEF-E-ENTRYPOINTS: exit=$entrypoint_rc"
