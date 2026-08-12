@@ -101,6 +101,14 @@ def _preflight_schema(conn):
     # module's local `_executor`: that one COMMITS each statement, which is
     # right for the repository's short transactions and wrong for a read-only
     # startup probe.
+    #
+    # **THIS UNIT DOES NOT YET SUPPLY WHAT THIS CHECK READS** — see CR-R1 in
+    # `notes-r-change-requests.md`. `rapid-alert-publication.yaml` sets only
+    # `AWS_REGION` and `PYTHONUNBUFFERED`. Until that CR lands, deploying this
+    # branch makes the publisher refuse to start, naming both missing
+    # variables — a diagnosable start failure with a one-line fix, which is
+    # the intended behaviour of a fail-closed check meeting an incomplete
+    # deployment.
     from database.modules.utils.rapid_db_connect import ConnectionExecutor
     from pipeline.intent.application_contract import (
         verify_application_contract)

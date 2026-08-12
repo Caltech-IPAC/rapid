@@ -200,6 +200,15 @@ def _preflight_schema(conn):
     # The executor is the same one-callable executor the schema half took, so
     # the registration check runs on the service's own connection and costs
     # one further read-only SELECT.
+    #
+    # **THIS UNIT DOES NOT YET SUPPLY WHAT THIS CHECK READS** — see CR-R1 in
+    # `notes-r-change-requests.md`. `rapid-reconciler-service.yaml` passes
+    # only the role ARN, the DB secret id and the poll interval; the VPO's
+    # unit is the one that carries `RAPID_RELEASE_IDENTITY` and
+    # `RAPID_IMAGE_DIGEST`. Until that CR lands, deploying this branch makes
+    # the reconciler refuse to start, naming both variables. That is the check
+    # working — the alternative, relaxing it to start anyway, is the silent
+    # unattributable-results state rule 18 exists to forbid.
     verify_application_contract(ConnectionExecutor(conn).execute)
     return verified
 
