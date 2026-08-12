@@ -416,7 +416,15 @@ class _SilentLogger:
 #: making). A fixed UUID-shaped string rather than a real UUID object:
 #: `_pinned_schema_version` only ever `str()`s it and stores it, so a
 #: plain string exercises the same path a real pinned parameter would.
-PINNED_SCHEMA_VERSION_ID = "11111111-1111-1111-1111-111111111111"
+#:
+#: The last group carries a hex LETTER deliberately: a UUID's final group is
+#: twelve hex characters, and an all-numeric one is indistinguishable from an
+#: AWS account id to `.githooks/pre-push`, which hard-blocks any twelve-digit
+#: run in this PUBLIC repository with no allowlist. The fix is to stop writing
+#: account-shaped strings, not to weaken a guard protecting a public repo —
+#: the same resolution `pipeline/contract/fixture.py` reached for its
+#: synthetic ARNs.
+PINNED_SCHEMA_VERSION_ID = "11111111-1111-1111-1111-a11111111111"
 
 PARAMETERS = {
     "kafka/topic": "rapid.internal.alerts.v1",
