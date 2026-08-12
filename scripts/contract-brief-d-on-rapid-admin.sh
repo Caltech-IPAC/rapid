@@ -229,6 +229,7 @@ echo "BRIEF-D-PASS2-RESULT: ${pass2_line:-<no summary line>}"
 # payload construction need no database), so they are selected here without
 # the `-m contract` marker the database-tier lines carry; the loop passes
 # the marker per spec for that reason.
+crit_rc=0
 for spec in \
     "CRIT1-DETERMINISM:pipeline/contract/test_product_identity.py:determinism or varies:contract" \
     "CRIT2-HYGIENE:pipeline/contract/test_product_identity.py:hygiene or forbidden:contract" \
@@ -259,10 +260,19 @@ for spec in \
         "${STAGE_DIR}/${name}.log" 2>/dev/null | tail -1)
     echo "BRIEF-D-${name}: exit=$rc ${line}"
     if [ "$rc" -ne 0 ]; then
+        # A FAILING CRITERION FAILS THE RUN. Brief G's version of this loop
+        # printed each criterion's exit code and then dropped it: the final
+        # verdict was computed from the suite, stub and pass-1 codes alone.
+        # That is safe only while every criterion's tests are also inside
+        # the contract suite — and criteria 7 and 8 are stub-tier files, so
+        # a red criterion reported BRIEF-D-OVERALL: PASS. Observed live on
+        # this branch before this line existed.
+        crit_rc=1
         grep -E '^(FAILED|ERROR)' "${STAGE_DIR}/${name}.log" | head -10
         grep -E '^E ' "${STAGE_DIR}/${name}.log" | head -15
     fi
 done
+echo "BRIEF-D-CRITERIA: exit=$crit_rc"
 
 if [ "$suite_rc" -ne 0 ]; then
     echo "--- BRIEF-D-PASS2 failures ---"
@@ -295,9 +305,11 @@ fi
 tail -4 "${STAGE_DIR}/stub-tier.log"
 echo "BRIEF-D-STUB-TIER: exit=$stub_rc"
 
-if [ "$suite_rc" -eq 0 ] && [ "$stub_rc" -eq 0 ] && [ "$pass1_rc" -eq 0 ]; then
+if [ "$suite_rc" -eq 0 ] && [ "$stub_rc" -eq 0 ] && [ "$pass1_rc" -eq 0 ] \
+        && [ "$crit_rc" -eq 0 ] && [ "$reapply_rc" -eq 0 ]; then
     echo "BRIEF-D-OVERALL: PASS exit=0"
     exit 0
 fi
-echo "BRIEF-D-OVERALL: FAIL exit=1 (pass1=$pass1_rc contract=$suite_rc stub=$stub_rc)"
+echo "BRIEF-D-OVERALL: FAIL exit=1 (pass1=$pass1_rc contract=$suite_rc " \
+     "stub=$stub_rc criteria=$crit_rc reapply=$reapply_rc)"
 exit 1

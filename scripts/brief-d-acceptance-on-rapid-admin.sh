@@ -72,7 +72,13 @@ trap 'rm -f "$tarball"' EXIT
 # The repo subset the suites need, plus this branch's drafts. Same exclusions
 # as the operational runner (`sims/`, `RuBR/`, `c/` are not imported by either
 # tier), with `migrations-draft/` added — the whole point of this run.
-tar --no-xattrs -czf "$tarball" \
+# `--exclude='._*'` as well as `--no-xattrs`: on this macOS `tar`, the flag
+# stops the xattrs being ARCHIVED but AppleDouble `._<name>` sidecars already
+# present on disk are ordinary files and ship anyway. They land beside the
+# real sources with a `.py` suffix and binary content, so any tool that walks
+# the tree by extension trips over them — brief D's fields-reader scanner did
+# exactly that and reported 128 unparseable "sources".
+tar --no-xattrs --exclude='._*' -czf "$tarball" \
     scripts \
     cdf \
     database \

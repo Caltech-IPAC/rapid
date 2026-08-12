@@ -310,6 +310,14 @@ def test_no_production_module_reads_a_units_fields_attribute():
             for name in files:
                 if not name.endswith(".py"):
                     continue
+                # macOS AppleDouble sidecars. `tar` on the laptop writes a
+                # `._<name>` companion for any file carrying extended
+                # attributes, and they arrive on the far side alongside the
+                # real sources — binary, `.py`-suffixed, and unparseable.
+                # Skipped by name rather than by parse failure so a REAL
+                # unparseable source still reports as one.
+                if name.startswith("._"):
+                    continue
                 path = os.path.join(current, name)
                 # `errors="replace"` because the tree contains at least one
                 # legacy source file that is not valid UTF-8. A scanner that
