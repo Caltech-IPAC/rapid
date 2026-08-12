@@ -381,11 +381,16 @@ def _precreate(writer, manifest, run_id, binding, moment, execute=None):
             logical_job_id, manifest.batch_id, binding,
             job_type=manifest.job_type)
 
-        try:
-            identity_fields = attempt_identity_fields(manifest.job_type, unit)
-        except UnknownJobType:
-            identity_fields = {"exposure_id": unit.exposure, "sca": unit.sca,
-                               "sky_tile": getattr(unit.facts, "rtid", None)}
+        # NO EXPOSURE/SCA FALLBACK REMAINS (rule 11). This used to catch
+        # `UnknownJobType` and write `exposure_id`/`sca` off the unit — safe
+        # only while every unit carried that pair regardless of grain, which
+        # is exactly the sentinel-carrier defect the typed payloads removed.
+        # For a field-grained unit the fallback would now raise, and writing
+        # a field number into `exposure_id` is the thing co-design ruling 2
+        # names by name. A job type with no declared subject cannot build a
+        # payload and so cannot reach this loop at all; if one somehow does,
+        # the raise is the correct outcome.
+        identity_fields = attempt_identity_fields(manifest.job_type, unit)
 
         attempt_id = writer.create_submitted(
             AttemptIdentity(

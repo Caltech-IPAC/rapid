@@ -19,6 +19,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
+from submission import payloads
 from submission.manifest import ProcessingUnit
 from submission.routes import (JOB_TYPE_ALERT_PRODUCTION,
                                JOB_TYPE_CATALOG_LOAD, JOB_TYPE_CROSSMATCH,
@@ -65,33 +66,46 @@ class GrainDeclarationTests(unittest.TestCase):
 
 class DedupSubjectTests(unittest.TestCase):
     def test_two_crossmatch_fields_share_no_subject(self):
-        a = ProcessingUnit(exposure=20260808, sca=0,
-                           fields={"proc_date": "20260808", "field": 101})
-        b = ProcessingUnit(exposure=20260808, sca=0,
-                           fields={"proc_date": "20260808", "field": 202})
+        a = ProcessingUnit(payload=payloads.build(
+            JOB_TYPE_CROSSMATCH, proc_date="20260808", field=101,
+            target_tables=("t",)))
+        b = ProcessingUnit(payload=payloads.build(
+            JOB_TYPE_CROSSMATCH, proc_date="20260808", field=202,
+            target_tables=("t",)))
         self.assertNotEqual(a.dedup_key(JOB_TYPE_CROSSMATCH),
                             b.dedup_key(JOB_TYPE_CROSSMATCH))
 
     def test_a_missing_declared_component_is_refused(self):
         # A crossmatch unit missing "field" is not degraded identity, it is
         # no identity — silently omitting it would let two units with
-        # different missing components collide.
-        bare = ProcessingUnit(exposure=20260808, sca=0,
-                              fields={"proc_date": "20260808"})
-        with self.assertRaises(SubjectError):
-            bare.dedup_key(JOB_TYPE_CROSSMATCH)
+        # different missing components collide. The refusal has moved
+        # earlier: a payload missing a declared component cannot be BUILT
+        # at all now (PayloadError at construction), so there is no bare
+        # unit left to reach `dedup_key` with.
+        with self.assertRaises(payloads.PayloadError):
+            payloads.build(JOB_TYPE_CROSSMATCH, proc_date="20260808",
+                           target_tables=("t",))
 
     def test_science_dedup_key_is_the_storage_key_shape(self):
-        unit = ProcessingUnit(exposure=90000, sca=1)
+        unit = ProcessingUnit(payload=payloads.build(
+            JOB_TYPE_SCIENCE, exposure=90000, sca=1))
         self.assertEqual(unit.dedup_key(JOB_TYPE_SCIENCE),
                          (JOB_TYPE_SCIENCE, 90000, 1))
 
-    def test_an_unregistered_job_type_falls_back_to_exposure_sca(self):
-        # Registration and any job type the registry does not cover keep
-        # the pre-ruling exposure/SCA identity rather than raising.
-        unit = ProcessingUnit(exposure=42, sca=3)
-        self.assertEqual(unit.dedup_key(JOB_TYPE_REGISTRATION),
-                         (JOB_TYPE_REGISTRATION, 42, 3))
+    def test_dedup_key_refuses_a_job_type_the_payload_disagrees_with(self):
+        # Registration has no declared payload type at all now (not in
+        # payloads.PAYLOAD_TYPES), so a registration unit cannot be built
+        # to begin with — the old "unregistered job type falls back to
+        # exposure/SCA" behaviour is gone by construction, not just
+        # untested (manifest.py's ProcessingUnit.dedup_key docstring:
+        # "NO FALLBACK REMAINS"). What is left to test at this seam is the
+        # surviving mismatch check: dedup_key(job_type) raises when asked
+        # for a job type other than the one the unit's own payload
+        # declares.
+        unit = ProcessingUnit(payload=payloads.build(
+            JOB_TYPE_SCIENCE, exposure=42, sca=3))
+        with self.assertRaises(SubjectError):
+            unit.dedup_key(JOB_TYPE_REGISTRATION)
 
 
 class AttemptIdentityFieldTests(unittest.TestCase):

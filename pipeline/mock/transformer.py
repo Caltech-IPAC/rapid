@@ -86,6 +86,7 @@ from pipeline.intent.writer import (
     WorkUnitWriter,
 )
 from pipeline.runtime.boundaries import ObjectStore
+from submission import payloads
 from submission.manifest import ProcessingUnit
 from submission.routes import JOB_TYPE_SCIENCE
 
@@ -570,7 +571,9 @@ def create_mock_campaign_from_staged(
         campaign_name, "test", definition=definition, now=moment)
 
     for rid, sca, fid, expid, field in enumerated:
-        unit = ProcessingUnit(exposure=expid, sca=sca)
+        unit = ProcessingUnit(
+            payload=payloads.build(JOB_TYPE_SCIENCE, exposure=expid,
+                                   sca=sca))
         input_scope = build_input_scope(JOB_TYPE_SCIENCE, unit)
         identity = WorkUnitIdentity(
             job_type=JOB_TYPE_SCIENCE, input_scope=input_scope,

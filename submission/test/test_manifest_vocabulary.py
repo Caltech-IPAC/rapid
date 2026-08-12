@@ -13,9 +13,12 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
+from submission import payloads  # noqa: E402
 from submission.manifest import Manifest, ProcessingUnit, UnitFacts  # noqa: E402
 from submission.routes import (  # noqa: E402
-    CLASS_BULK, CLASS_PROMPT, LANE_SESSION, LANE_TRANSACTION, RouteError,
+    CLASS_BULK, CLASS_PROMPT, JOB_TYPE_CROSSMATCH, JOB_TYPE_REFERENCE_IMAGE,
+    JOB_TYPE_REGISTRATION, JOB_TYPE_SCIENCE, LANE_SESSION, LANE_TRANSACTION,
+    RouteError,
 )
 
 

@@ -109,14 +109,25 @@ PLACEHOLDER_TOP_N_BY_SNR = 500
 
 
 def _unit_field(context, name):
-    """One declared field of the unit, or a named failure.
+    """One declared component of the unit's TYPED payload, or a failure.
 
     Same contract as the post-DB chain's `_unit_field`: the unit is what the
     manifest says, and a stage that cannot find its declared input fails
     naming it rather than rediscovering it from the catalog.
+
+    Reads the payload rather than the retired open `fields` dict (rule 11).
+    The two helpers stay separate rather than being factored into one,
+    matching what was here before: they raise different exceptions with
+    different wording for two different chains, and a shared helper would
+    have to take both as parameters to say anything useful.
     """
-    fields = getattr(context.unit, "fields", None) or {}
-    value = fields.get(name)
+    payload = getattr(context.unit, "payload", None)
+    if payload is None:
+        raise InputError(
+            "the alert-production unit carries no typed payload; manifest "
+            "schema version 4 refuses the pre-rule-11 `fields` shape rather "
+            "than translating it")
+    value = getattr(payload, name, None)
     if value is None:
         raise InputError(
             f"the alert-production unit does not declare {name!r}; it is a "
@@ -165,7 +176,7 @@ def produce_alerts(context) -> None:
     # The REGISTERED SOURCE attempt — the promotion that made this unit
     # eligible (migration 037's `alert_emissions.attempt_id`). Distinct from
     # this attempt's OWN identity below, which is the CLAIM identity.
-    source_attempt_id = int(_unit_field(context, "attempt_id"))
+    source_attempt_id = int(_unit_field(context, "promoted_attempt_id"))
     release_identity = str(_unit_field(context, "release_identity"))
     exposure = int(context.unit.exposure)
     sca = int(context.unit.sca)

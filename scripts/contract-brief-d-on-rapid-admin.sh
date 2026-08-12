@@ -129,9 +129,21 @@ echo "BRIEF-D-PASS1-RESULT: ${pass1_line:-<no summary line>}"
 echo "BRIEF-D-PASS1-SKIPS:"
 "$VPY" -m pytest pipeline/contract -m contract -p no:cacheprovider \
     --no-header -q -rs >"${STAGE_DIR}/pass1-skips.log" 2>&1
+skips_rc=$?
+# THE RE-RUN'S OWN EXIT CODE IS REPORTED. This block re-invokes pytest to
+# get `-rs` skip reasons, and an earlier version reported nothing at all
+# when that invocation failed — a silent empty section that reads exactly
+# like "there were no skips". The count and the exit code are printed
+# unconditionally so an empty list is distinguishable from a failed re-run.
+skip_lines=$(grep -cE '^SKIPPED' "${STAGE_DIR}/pass1-skips.log" 2>/dev/null)
+echo "BRIEF-D-PASS1-SKIPS-RERUN: exit=$skips_rc lines=${skip_lines:-0}"
 grep -E '^SKIPPED' "${STAGE_DIR}/pass1-skips.log" \
     | sed -E 's/^SKIPPED \[([0-9]+)\] .*: /[\1] /' \
-    | sort | uniq -c | head -10
+    | sort | uniq -c | head -12
+if [ "${skip_lines:-0}" -eq 0 ]; then
+    echo "--- no SKIPPED lines; the re-run's own tail follows ---"
+    tail -15 "${STAGE_DIR}/pass1-skips.log"
+fi
 if [ "$pass1_rc" -ne 0 ]; then
     echo "--- BRIEF-D-PASS1 failures ---"
     grep -E '^(FAILED|ERROR)' "${STAGE_DIR}/contract-pytest.log" | head -20

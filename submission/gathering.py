@@ -49,6 +49,7 @@ from database.modules.utils.checked import RapidDBCallFailed
 from database.modules.utils.roman_tessellation_db import (
     RomanTessellationClosedForm)
 from . import blocked
+from . import payloads
 from .manifest import ProcessingUnit, UnitFacts
 from .routes import (JOB_TYPE_ALERT_PRODUCTION, JOB_TYPE_CATALOG_LOAD,
                      JOB_TYPE_CROSSMATCH, JOB_TYPE_MERGE_CURRENCY,
@@ -452,8 +453,12 @@ def gather_science_units(handle: UnitSource, start, end,
                     f"rid {rid} has no exposure id; a processing unit is "
                     "keyed by exposure/SCA and cannot be built without one")
             sca = _sca_of(handle, rid)
-            candidates.append(ProcessingUnit(exposure=int(exposure),
-                                             sca=int(sca), facts=facts))
+            job_type_for_payload = (JOB_TYPE_REFERENCE_IMAGE
+                                    if make_references else JOB_TYPE_SCIENCE)
+            candidates.append(ProcessingUnit(
+                payload=payloads.build(job_type_for_payload,
+                                       exposure=int(exposure), sca=int(sca)),
+                facts=facts))
 
     # THE RESUBMISSION GATE (final convergence round, 2026-08-09): the two
     # EXPOSURE_SCA arrival-driven types were the last state-blind
@@ -537,14 +542,10 @@ def gather_campaign_units(handle: UnitSource) -> Iterator[ProcessingUnit]:
     Yields `ProcessingUnit` built through the exact same `science_facts`
     call `gather_science_units` makes for the same `(exposure, sca)` — so a
     campaign unit and an arrival-driven unit over the same L2 row are
-    indistinguishable downstream of gathering. `unit.fields["job_type"]` is
-    NOT set here (unlike the post-DB gatherers): the campaign gatherer's
-    units are exposure/SCA-grain exactly like plain science units
-    (`submission.subjects.SUBJECTS`'s `JOB_TYPE_SCIENCE` row already
-    declares that grain), so `dedup_key`/`logical_job_key` need no extra
-    field to disambiguate them, and setting a redundant `fields["job_type"]`
-    here would be a second home for a fact the manifest's own `job_type`
-    already carries.
+    indistinguishable downstream of gathering. The unit's job type now rides
+    in its typed payload (`submission.payloads`), which every unit carries —
+    a campaign unit builds a `SciencePayload` exactly as a plain science
+    unit does, so the two are the same shape as well as the same grain.
     """
     try:
         rows = handle.get_ready_test_campaign_units()
@@ -597,8 +598,10 @@ def gather_campaign_units(handle: UnitSource) -> Iterator[ProcessingUnit]:
         logger.info(
             "campaign %s (id=%s): gathered work unit %s as %s/%s",
             campaign_name, campaign_id, work_unit_id, exposure, sca)
-        yield ProcessingUnit(exposure=int(exposure), sca=int(sca),
-                             facts=facts)
+        yield ProcessingUnit(
+            payload=payloads.build(job_type, exposure=int(exposure),
+                                   sca=int(sca)),
+            facts=facts)
 
 
 def _campaign_unit_l2_identity(handle: UnitSource, exposure: int, sca: int,
@@ -1230,35 +1233,37 @@ def _release_blocked_unit(on_unblocked, unit):
 # submission rather than from re-running the discovery query against a catalog
 # that has since changed.
 #
-# THE UNITS ARE NOT EXPOSURE/SCA, AND `ProcessingUnit` STILL CARRIES THEM.
-# The array layer knows one carrier, and `ProcessingUnit(exposure, sca)` is
-# it. These follow the pattern gathering already used for units not keyed by
-# exposure: the real key (processing date, SCA, or field) rides in `fields`,
-# and `exposure`/`sca` carry a stable synthetic identity that keeps `unit.key`
-# unique, which is
-# what `logical_job_key` needs to keep run-scoped rows from colliding.
+# THE UNITS ARE NOT EXPOSURE/SCA, AND THEY NO LONGER PRETEND TO BE (rule 11).
+# These job types once rode the array layer's single carrier: the real key
+# (processing date, SCA, or field) went into the open `fields` dict, while
+# `exposure` carried a synthetic date ordinal and `sca` a fixed `0`, purely
+# so `unit.key` stayed unique. Each now builds the typed payload its own
+# grain declares (`submission.payloads`), so the key is derived from what the
+# unit actually is and there is no synthetic identity to keep unique.
 
 
-def _proc_date_ordinal(proc_date: str) -> int:
-    """`yyyymmdd` as an integer, for the synthetic unit key.
+def _validate_proc_date(proc_date: str) -> str:
+    """Refuse a processing date that is not `yyyymmdd`.
 
-    The unit key must be unique per unit and stable across a retry of the
-    same unit — that is all `ProcessingUnit.key` promises. A processing date
-    is already an integer written as a string, so it needs no hashing.
+    Kept from `_proc_date_ordinal`, which this replaces. That function
+    existed to manufacture the synthetic `exposure` ordinal the typed
+    payloads made unnecessary — but its VALIDATION is still worth having in
+    the same place, because the date is now a subject component and a
+    malformed one would reach the payload, the storage key and the attempt
+    record before anything objected.
 
     Raises
     ------
     GatheringError
-        If the date is not `yyyymmdd`. A malformed date would silently
-        produce colliding unit keys, so it is refused where it is read
-        rather than propagated into a manifest.
+        If the date is not `yyyymmdd`.
     """
     text = str(proc_date)
     if not (len(text) == 8 and text.isdigit()):
         raise GatheringError(
-            f"processing date {proc_date!r} is not yyyymmdd; the unit key is "
-            f"derived from it and a malformed date collides silently")
-    return int(text)
+            f"processing date {proc_date!r} is not yyyymmdd; it is a subject "
+            f"component of this unit and a malformed one would reach the "
+            f"storage key and the attempt record unchallenged")
+    return text
 
 
 def gather_catalog_load_units(handle: UnitSource, proc_date: str
@@ -1290,7 +1295,7 @@ def gather_catalog_load_units(handle: UnitSource, proc_date: str
     zero-padded C-core keys, the older ones are not — because no component is
     reconstructed.
     """
-    ordinal = _proc_date_ordinal(proc_date)
+    proc_date = _validate_proc_date(proc_date)
 
     # THE RESUBMISSION GATE (mission mock, live 2026-08-09): enumerate only
     # SCAs still LACKING a pending-or-successful catalog-load attempt for
@@ -1335,20 +1340,20 @@ def gather_catalog_load_units(handle: UnitSource, proc_date: str
                   for row in products or ()]
 
         yield ProcessingUnit(
-            exposure=ordinal, sca=sca,
-            facts=UnitFacts(),
-            fields={"proc_date": str(proc_date), "sca": sca,
-                    "job_type": JOB_TYPE_CATALOG_LOAD,
-                    # The declared input: the table this unit loads. Named in
-                    # the manifest so the unit's target is a submission fact
-                    # rather than something the job builds from its own
-                    # environment and hopes matches.
-                    "target_table": f"sources_{proc_date}_{sca}",
-                    # The declared inputs: which registered products this
-                    # unit's catalogues come from. A unit with none loads
-                    # nothing and records that through its effect counts —
-                    # the empty-product-set disposition, not an error.
-                    "product_inputs": inputs})
+            payload=payloads.build(
+                JOB_TYPE_CATALOG_LOAD,
+                proc_date=str(proc_date), sca=sca,
+                # The declared input: the table this unit loads. Named in
+                # the manifest so the unit's target is a submission fact
+                # rather than something the job builds from its own
+                # environment and hopes matches.
+                target_table=f"sources_{proc_date}_{sca}",
+                # The declared inputs: which registered products this
+                # unit's catalogues come from. A unit with none loads
+                # nothing and records that through its effect counts —
+                # the empty-product-set disposition, not an error.
+                product_inputs=tuple(inputs)),
+            facts=UnitFacts())
 
 
 def gather_crossmatch_units(handle: UnitSource, proc_date: str
@@ -1383,7 +1388,7 @@ def gather_crossmatch_units(handle: UnitSource, proc_date: str
     resolve on its own, and an empty yield is exactly what every other
     gatherer does for "nothing ready yet".
     """
-    ordinal = _proc_date_ordinal(proc_date)
+    proc_date = _validate_proc_date(proc_date)
 
     try:
         incomplete = handle.get_scas_with_incomplete_catalog_load_for_processing_date(
@@ -1426,12 +1431,11 @@ def gather_crossmatch_units(handle: UnitSource, proc_date: str
         if field in blocked_fields:
             continue
         yield ProcessingUnit(
-            exposure=ordinal, sca=0,
-            facts=UnitFacts(field=field),
-            fields={"proc_date": str(proc_date), "field": field,
-                    "job_type": JOB_TYPE_CROSSMATCH,
-                    "target_tables": [f"astroobjects_{field}",
-                                      f"merges_{field}"]})
+            payload=payloads.build(
+                JOB_TYPE_CROSSMATCH,
+                proc_date=str(proc_date), field=field,
+                target_tables=(f"astroobjects_{field}", f"merges_{field}")),
+            facts=UnitFacts(field=field))
 
 
 def _per_field_units(handle: UnitSource, job_type: str, prototype: str
@@ -1490,10 +1494,9 @@ def _per_field_units(handle: UnitSource, job_type: str, prototype: str
         if field in blocked_fields:
             continue
         yield ProcessingUnit(
-            exposure=field, sca=0,
-            facts=UnitFacts(field=field),
-            fields={"field": field, "job_type": job_type,
-                    "target_table": f"{prototype}_{field}"})
+            payload=payloads.build(job_type, field=field,
+                                   target_table=f"{prototype}_{field}"),
+            facts=UnitFacts(field=field))
 
 
 def gather_statistics_units(handle: UnitSource) -> Iterator[ProcessingUnit]:
@@ -1607,18 +1610,20 @@ def gather_alert_production_units(handle: UnitSource, release_identity: str,
                 f"exposure/SCA identity; the alert unit is keyed by it")
 
         yield ProcessingUnit(
-            exposure=int(expid), sca=int(sca),
+            payload=payloads.build(
+                JOB_TYPE_ALERT_PRODUCTION,
+                exposure=int(expid), sca=int(sca),
+                promoted_attempt_id=attempt_id,
+                release_identity=str(release_identity),
+                difference_image_pid=pid,
+                difference_image_product=_maybe_str(row[4]),
+                role_resolved_from=_maybe_str(row[5]),
+                promotion_sequence=_maybe_int(row[7])),
             # `pid` IS the declared difference-image identity, and it is what
             # `batch_produce` is called with. It rides in the facts because
-            # `UnitFacts.pid` is its one home, not in `fields` beside it.
-            facts=UnitFacts(pid=pid, expid=expid),
-            fields={"job_type": JOB_TYPE_ALERT_PRODUCTION,
-                    "attempt_id": attempt_id,
-                    "release_identity": str(release_identity),
-                    "difference_image_pid": pid,
-                    "difference_image_product": _maybe_str(row[4]),
-                    "role_resolved_from": _maybe_str(row[5]),
-                    "promotion_sequence": _maybe_int(row[7])})
+            # `UnitFacts.pid` is its one home — and now also in the payload,
+            # which is where the ALERT unit's own declared inputs live.
+            facts=UnitFacts(pid=pid, expid=expid))
 
 
 def initialize_alert_watermark(handle: UnitSource, release_identity: str,

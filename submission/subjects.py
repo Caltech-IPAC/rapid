@@ -11,29 +11,33 @@ Integration review 2026-08, composite ruling 2 (rapid_plan/decisions.md):
     (exposure/SCA) is retained only for product-producing job types
     (product keys embed it; database-effect types mint none)."
 
-WHY A REGISTRY AND NOT A METHOD ON `ProcessingUnit`. The subject a unit is
-deduplicated and keyed by is a property of its JOB TYPE, not of the unit's
-own exposure/sca fields — `ProcessingUnit(exposure=ordinal, sca=0, ...)`
-for a crossmatch unit carries the processing-date ordinal in `exposure`
-and a fixed sentinel in `sca` (`submission/gathering.py`,
-`gather_crossmatch_units`), which is a STORAGE-KEY-SHAPED carrier the
-array layer needs, not the unit's real identity. The real identity — the
-declared subject — lives in `unit.fields`, and only the job type knows
-which keys of `fields` it is. This module is the one place that mapping
-is written down, so `ProcessingUnit.dedup_key` (manifest.py) and the
+WHY A REGISTRY. The subject a unit is deduplicated and keyed by is a
+property of its JOB TYPE. This module is the one place that mapping is
+written down, so `ProcessingUnit.dedup_key` (manifest.py) and the
 operator's gatherer registry (`pipeline/operator/gathering.py`) read the
 same declaration rather than each re-deriving it.
 
-THE V25 DEFECT THIS CLOSES. Before this module existed, deduplication was
+THE V25 DEFECT THIS CLOSED. Before this module existed, deduplication was
 `unit.key` for every job type — `f"{exposure:06d}/{sca:02d}"`. Crossmatch
-gathering yields `ProcessingUnit(exposure=_proc_date_ordinal(proc_date),
-sca=0, ...)` per FIELD, so every field of one processing date produced the
-SAME storage-path key and the accumulator's `_pending_keys` set (a plain
-`set[str]` of `.key` values, `submission/batching.py`) silently dropped
-every field after the first. `dedup_key` below is what
-`ReadyWorkAccumulator` and `ProcessingUnit.logical_job_key` are changed to
-use instead, so two units are the same unit only when their DECLARED
-SUBJECT agrees.
+gathering yielded one unit per FIELD, all carrying the processing date's
+ordinal in `exposure` and a fixed `0` in `sca`, so every field of one date
+produced the SAME storage-path key and the accumulator's `_pending_keys`
+set (a plain `set[str]` of `.key` values, `submission/batching.py`)
+silently dropped every field after the first. `dedup_key` was what
+`ReadyWorkAccumulator` and `ProcessingUnit.logical_job_key` changed to use,
+so two units are the same unit only when their DECLARED SUBJECT agrees.
+
+**AND WHAT D3/D4 CHANGED (rule 11).** That first repair left the sentinel
+representation in place and routed identity AROUND it: the real components
+lived in an open `ProcessingUnit.fields` dict, which this module read with
+`.get()`. Rule 11 prohibits both halves — the sentinel carrier and the
+untyped parallel dict — so units now carry a typed, closed, per-job-type
+payload (`submission.payloads`) that declares its own grain and components
+and validates them at construction. A crossmatch unit no longer HAS an
+`exposure` to put a date ordinal in. This registry survives as the
+job-type -> grain mapping and as the place the two declarations are checked
+against each other; what it no longer does is reconstruct identity from an
+untyped dict.
 """
 
 import dataclasses
@@ -92,12 +96,12 @@ class JobTypeSubject:
         database-effect job type (co-design ruling 2's other half): it
         declares an EMPTY product set and calls `product_prefix()` never.
     components : tuple of str
-        The `unit.fields` keys (in order) that make up this grain's
-        subject, beyond the job type itself. Exposure/SCA-grain units
-        need none named here — their subject is `(job_type, exposure,
-        sca)`, read from the unit's own typed attributes, which is why
-        the storage key and the dedup key coincide for exactly these two
-        types.
+        The payload component names (in order) that make up this grain's
+        subject, beyond the job type itself. Kept as a declaration here so
+        the registry and the payload type can be CHECKED against each other
+        (`subject_for` does exactly that) rather than one being derived from
+        the other — two independent statements that must agree catch a
+        mismatch that one statement cannot.
     """
 
     job_type: str
@@ -112,30 +116,48 @@ class JobTypeSubject:
         because two job types sharing a grain (both DATE_FIELD, say)
         must never collide on subject identity.
 
+        **READ FROM THE UNIT'S TYPED PAYLOAD** (rule 11). This used to read
+        `unit.fields.get(name)` — an open dictionary — which is the "parallel
+        untyped fact carrier... duplicating typed state" the rule prohibits,
+        and it meant a subject's components were validated here, at
+        derivation time, rather than at the unit's creation. Now the payload
+        validates its own components at construction
+        (`submission.payloads`), so a unit that exists has a complete
+        subject by construction and this method reads declared attributes
+        rather than probing a dict.
+
+        The fail-loud path is kept for the case that remains reachable: a
+        unit whose payload declares a DIFFERENT job type than the one being
+        asked for. That is a caller bug, and the old signature could not
+        detect it at all.
+
         Raises
         ------
         SubjectError
-            A declared component is absent from `unit.fields`. A subject
-            with a missing component is not a degraded identity, it is no
-            identity — silently omitting it would let two units with
-            different missing components collide.
+            The unit's payload does not belong to this job type, or does not
+            declare the components this grain needs. A subject with a
+            missing component is not a degraded identity, it is no identity.
         """
-        if self.grain == GRAIN_EXPOSURE_SCA:
-            return (self.job_type, int(unit.exposure), int(unit.sca))
-        values = []
-        missing = []
-        for name in self.components:
-            value = unit.fields.get(name)
-            if value is None:
-                missing.append(name)
-            else:
-                values.append(value)
-        if missing:
+        payload = getattr(unit, "payload", None)
+        if payload is None:
+            raise SubjectError(
+                f"job type {self.job_type!r} needs a typed unit payload to "
+                f"derive a subject; this unit carries none. Units written "
+                f"against the pre-rule-11 representation carried an open "
+                f"`fields` dict instead, and it is refused rather than read "
+                f"(no compatibility parser rebuilds a typed subject from a "
+                f"sentinel carrier).")
+        if payload.JOB_TYPE != self.job_type:
+            raise SubjectError(
+                f"asked for a {self.job_type!r} subject from a "
+                f"{payload.JOB_TYPE!r} unit; a payload declares its own job "
+                f"type and the two must agree")
+        if payload.GRAIN != self.grain:
             raise SubjectError(
                 f"job type {self.job_type!r} declares grain {self.grain!r} "
-                f"needing {', '.join(self.components)}, but unit.fields is "
-                f"missing {', '.join(missing)} (unit.fields={unit.fields!r})")
-        return (self.job_type, *values)
+                f"but its payload declares {payload.GRAIN!r}; the registry "
+                f"and the payload type disagree")
+        return payload.subject()
 
 
 # The declared set. One row per job type that gathering actually produces
@@ -248,15 +270,16 @@ def build_input_scope(job_type: str, unit: Any) -> str:
     convention for what is, in every declared grain, a short tuple of
     ints/strings with no nesting.
 
-    Falls back to `(exposure, sca)` — the storage-path shape — for a job
-    type outside the typed-identity registry, consistent with
-    `attempt_identity_fields`'s and `ProcessingUnit.dedup_key`'s own
-    `UnknownJobType` fallback.
+    **NO EXPOSURE/SCA FALLBACK** (rule 11). This used to catch
+    `UnknownJobType` and fall back to `(exposure, sca)` — the storage-path
+    shape — which was safe only while every unit carried that pair whatever
+    its grain. With typed payloads a field-grained unit has no exposure at
+    all, so the fallback would raise rather than quietly mis-scope; and a
+    job type with no declared subject cannot build a payload, so no unit of
+    one can reach here. The raise is the correct outcome, and it is the same
+    removal `attempt_identity_fields` and `ProcessingUnit.dedup_key` made.
     """
-    try:
-        subject = subject_for(job_type).subject_for(unit)
-    except UnknownJobType:
-        subject = (job_type, unit.exposure, unit.sca)
+    subject = subject_for(job_type).subject_for(unit)
     return "/".join(str(component) for component in subject[1:])
 
 
@@ -268,9 +291,10 @@ def parse_exposure_sca_scope(input_scope: str) -> tuple[int, int]:
     Only the exposure/SCA grain is invertible generically: `build_input_scope`
     drops `job_type` and joins the remaining subject components positionally,
     and for EXPOSURE_SCA those components are always exactly `(exposure,
-    sca)` in that order (`JobTypeSubject.subject_for`'s own branch: `(self.
-    job_type, int(unit.exposure), int(unit.sca))`) — so parsing back is
-    unambiguous. The other grains (date/SCA, date/field, field) are not
+    sca)` in that order — so parsing back is
+    unambiguous — `ExposureScaPayload.COMPONENTS` is `("exposure", "sca")`
+    in that order, and `subject()` emits them so. The other grains
+    (date/SCA, date/field, field) are not
     parsed here: nothing in this v1 needs to invert them, and a generic
     inverse would have to know each grain's component NAMES, which only
     `SUBJECTS`' declarations carry, not the string itself.
@@ -305,40 +329,46 @@ def attempt_identity_fields(job_type: str, unit: Any) -> dict[str, Any]:
 
     Co-design ruling 2: "Attempt-record identifier columns carry only
     applicable identifiers — never a field number in an exposure/SCA
-    sentinel." A `ProcessingUnit` always carries `exposure`/`sca` (the
-    array layer's typed carrier, see `manifest.ProcessingUnit.key`'s
-    docstring), but which of those, plus `field`/`processing_date`, is a
-    REAL identifier of the attempt depends on the job type's declared
-    grain:
+    sentinel." Which identifiers are REAL for an attempt depends on the job
+    type's declared grain:
 
     * EXPOSURE_SCA (science, reference-image, alert-production) —
       `exposure_id`/`sca` are real; `field`/`processing_date` are absent.
-    * DATE_SCA (catalog load) — `sca` and `processing_date` are real;
-      `exposure_id` is the synthetic date-ordinal carrier and is NOT an
-      identifier — omitted here rather than written as if it were.
-    * DATE_FIELD (crossmatch) — `field` and `processing_date` are real;
-      `exposure_id`/`sca` are the synthetic carriers and are omitted.
-    * FIELD (statistics, the three sweeps) — `field` is real; `exposure_id`
-      (the field-as-exposure carrier, see `_per_field_units`) and `sca`
-      are omitted.
+    * DATE_SCA (catalog load) — `sca` and `processing_date` are real.
+    * DATE_FIELD (crossmatch) — `field` and `processing_date` are real.
+    * FIELD (statistics, the three sweeps) — `field` is real.
+
+    **THE OMISSIONS ARE NOW STRUCTURAL** (rule 11). This function used to
+    read every value out of the open `fields` dict and carefully omit the
+    synthetic carriers — the date-ordinal in `exposure_id`, the fixed
+    `sca=0` — because a unit carried them whether or not they meant
+    anything. With typed payloads there is nothing to omit: a crossmatch
+    payload has no `exposure` attribute at all, so writing one into an
+    attempt record is no longer a discipline this function enforces but a
+    shape the type system refuses. What survives is the MAPPING from grain
+    to attempt-record column names, which is genuinely this module's job.
 
     Returns a dict of exactly the keyword arguments
     `observability.attempts.AttemptIdentity` should receive beyond
-    `run_id`/`logical_job_id` — never a key whose value is a synthetic
-    carrier rather than a fact about the attempt.
+    `run_id`/`logical_job_id`.
     """
     declared = subject_for(job_type)
+    payload = getattr(unit, "payload", None)
+    if payload is None:
+        raise SubjectError(
+            f"a {job_type!r} unit needs a typed payload to derive its "
+            f"attempt identity; this unit carries none")
     if declared.grain == GRAIN_EXPOSURE_SCA:
-        return {"exposure_id": unit.exposure, "sca": unit.sca,
+        return {"exposure_id": payload.exposure, "sca": payload.sca,
                "sky_tile": getattr(unit.facts, "rtid", None)}
     if declared.grain == GRAIN_DATE_SCA:
-        return {"sca": unit.fields.get("sca"),
-               "processing_date": unit.fields.get("proc_date")}
+        return {"sca": payload.sca,
+               "processing_date": payload.proc_date}
     if declared.grain == GRAIN_DATE_FIELD:
-        return {"field": unit.fields.get("field"),
-               "processing_date": unit.fields.get("proc_date")}
+        return {"field": payload.field,
+               "processing_date": payload.proc_date}
     if declared.grain == GRAIN_FIELD:
-        return {"field": unit.fields.get("field")}
+        return {"field": payload.field}
     raise SubjectError(
         f"job type {job_type!r} declares grain {declared.grain!r}, which "
         f"has no attempt-identity mapping yet")

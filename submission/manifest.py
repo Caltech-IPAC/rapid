@@ -69,8 +69,10 @@ import hashlib
 import json
 from typing import Any, Iterable, Iterator
 
+from . import payloads
 from .routes import JOB_TYPE_SCIENCE, Route, route_for, validate_route
-from .subjects import UnknownJobType, subject_for
+from .subjects import (GRAIN_EXPOSURE_SCA, SubjectError, UnknownJobType,
+                       subject_for)
 
 # Batch's hard ceiling on array children (design/compute.md § Submission).
 MAX_ARRAY_SIZE = 10000
@@ -359,85 +361,119 @@ class ProcessingUnit:
 
     Attributes
     ----------
-    exposure : int
-        Roman exposure identifier.
-    sca : int
-        Sensor chip assembly number within the exposure.
+    payload : UnitPayload
+        The unit's TYPED, CLOSED, per-job-type payload
+        (`submission.payloads`) — its grain plus the named components that
+        grain declares. This replaced two things at once (rule 11): the
+        `exposure: int` / `sca: int` pair every unit carried regardless of
+        whether it had them, and the open `fields: dict[str, Any]` that fed
+        subject derivation. A crossmatch unit no longer carries a
+        date-ordinal in `exposure` and a `0` in `sca`; it carries a
+        `CrossmatchPayload(proc_date=..., field=...)` and nothing else.
     facts : UnitFacts
         The per-invocation facts for this unit — what the launcher used
         to write into a per-job .ini. See `UnitFacts`.
-    fields : dict
-        Any additional per-unit values a job type needs beyond the named
-        facts. Kept open deliberately: `UnitFacts` names what recurs, and
-        this stays for what does not, so a new job type does not need a
-        schema change to carry one extra value.
     """
 
-    exposure: int
-    sca: int
+    payload: Any
     facts: UnitFacts = dataclasses.field(default_factory=UnitFacts)
-    fields: dict[str, Any] = dataclasses.field(default_factory=dict)
+
+    @property
+    def job_type(self) -> str:
+        """The job type this unit's payload declares.
+
+        A unit now KNOWS its own job type, because its payload type is
+        per-job-type. That removes the reason `dedup_key` took a `job_type`
+        parameter — the parameter survives for callers that still pass one,
+        and disagreeing with the payload is an error rather than a silent
+        preference.
+        """
+        return self.payload.JOB_TYPE
+
+    @property
+    def exposure(self) -> int:
+        """The exposure, for exposure/SCA-grain units ONLY.
+
+        Raises for every other grain rather than returning a sentinel. That
+        is the whole of rule 11's first clause: a crossmatch unit has no
+        exposure, and the old representation answered that question with a
+        processing-date ordinal.
+        """
+        return self._component("exposure")
+
+    @property
+    def sca(self) -> int:
+        """The SCA, for grains that declare one (exposure/SCA, date/SCA)."""
+        return self._component("sca")
+
+    def _component(self, name):
+        if name not in self.payload.COMPONENTS:
+            raise SubjectError(
+                f"a {self.payload.JOB_TYPE!r} unit is {self.payload.GRAIN!r}"
+                f"-grained and has no {name!r}; it declares "
+                f"{list(self.payload.COMPONENTS)}. Asking for one is the "
+                f"sentinel-carrier defect rule 11 prohibits — the old "
+                f"representation answered with a placeholder value.")
+        return getattr(self.payload, name)
 
     @property
     def key(self) -> str:
-        """Stable string identity for this unit, for dedup and logging.
+        """Stable string identity for this unit, for storage paths and logs.
 
         NOT a database identity: it names a processing unit, and the same
-        exposure/SCA is processed by every run that reprocesses it. Use
+        subject is processed by every run that reprocesses it. Use
         `logical_job_key` for anything that has to be unique across runs.
 
-        Zero-padded per the storage design's key schema (§ Key schema,
-        component law: exposure 6 digits, SCA 2 digits) — this is the
-        component every product key under `product_prefix()` embeds, so an
-        unpadded value here was an unpadded value in every product key ever
-        written.
+        **DERIVED FROM THE TYPED SUBJECT COMPONENTS** (rule 11). It used to
+        be `f"{exposure:06d}/{sca:02d}"` for every job type, which is why a
+        crossmatch unit needed a date ordinal in `exposure` — the key was
+        built from fields that unit did not have. Now each grain renders its
+        own declared components, so the key of a non-exposure grain is built
+        from what that grain actually is.
 
-        **THE STORAGE-PATH KEY, NOT THE DEDUP KEY** (co-design ruling 2).
-        `exposure`/`sca` are typed carriers the array layer understands for
-        every job type — a crossmatch unit puts its processing-date ordinal
-        in `exposure` and a fixed `0` in `sca` (`submission/gathering.py`,
-        `gather_crossmatch_units`), which is NOT this unit's identity, only
-        its shape. Use `dedup_key(job_type)` for deduplication and
-        `logical_job_key(run_id, job_type)` for the run-scoped identity;
-        both derive from the job type's DECLARED subject
-        (`submission.subjects`), and only for the two product-producing job
-        types (science, reference-image) does that subject coincide with
-        this key — which is why `product_prefix()` may still embed `.key`
-        for exactly those two and no other.
+        Exposure/SCA keys keep their exact previous spelling — zero-padded
+        per the storage design's key schema (§ Key schema, component law:
+        exposure 6 digits, SCA 2 digits) — because that string is embedded
+        in every product key ever written under `product_prefix()`, and
+        changing its shape would orphan every existing object.
         """
-        return f"{self.exposure:06d}/{self.sca:02d}"
+        payload = self.payload
+        if payload.GRAIN == GRAIN_EXPOSURE_SCA:
+            return f"{payload.exposure:06d}/{payload.sca:02d}"
+        return "/".join(str(getattr(payload, name)).replace("/", "-")
+                        for name in payload.COMPONENTS)
 
-    def dedup_key(self, job_type: str) -> tuple[Any, ...]:
-        """This unit's declared-subject identity for one job type.
+    def dedup_key(self, job_type: str = None) -> tuple[Any, ...]:
+        """This unit's declared-subject identity.
 
-        THE FIX FOR THE V25 DEFECT: `ReadyWorkAccumulator` (batching.py)
-        used to dedup on `.key` for every job type, so two crossmatch units
-        for different FIELDS of one processing date — both
-        `ProcessingUnit(exposure=<date ordinal>, sca=0, ...)` — carried the
-        same `.key` and the second silently vanished from the waiting set.
-        `subjects.subject_for(job_type).subject_for(unit)` reads the real
-        identity out of `unit.fields` (or, for exposure/SCA-grain types,
-        out of `exposure`/`sca` themselves), so two units collide here only
-        when their DECLARED subjects agree.
+        THE V25 DEFECT'S FIX, now structural rather than compensatory.
+        `ReadyWorkAccumulator` (batching.py) used to dedup on `.key` for
+        every job type, so two crossmatch units for different FIELDS of one
+        processing date — both `exposure=<date ordinal>, sca=0` — carried
+        the same `.key` and the second silently vanished from the waiting
+        set. The first repair read the real identity out of `unit.fields`
+        through the subject registry; this one removes the collision at its
+        source, because the two units no longer share a representation to
+        collide in. Both `.key` and this now distinguish them.
 
-        `job_type` is a parameter rather than a unit attribute because a
-        `ProcessingUnit` does not always know its own job type — science and
-        reference-image units never set `fields["job_type"]` (only the
-        `Manifest` they end up in does; see `gather_science_units`) — while
-        every caller that needs a dedup key already has the job type at
-        hand: the accumulator was constructed with it, and a manifest names
-        it.
+        `job_type` is accepted for the callers that still pass one and is
+        CHECKED against the payload rather than trusted: a caller asking for
+        a science subject from a crossmatch unit has a bug, and the old
+        signature could not tell.
 
-        **JOB TYPES OUTSIDE THE TYPED-IDENTITY REGISTRY** (registration,
-        reprocessing — not gathered through this path at all) fall back to
-        `(job_type, exposure, sca)`: the exposure/SCA identity every job
-        type used before this ruling, which is exactly right for them
-        because neither has a grain other than exposure/SCA today.
+        **NO FALLBACK REMAINS.** The old code fell back to
+        `(job_type, exposure, sca)` for job types outside the typed-identity
+        registry — the path brief D requires re-examined. Every gathered job
+        type is now in `payloads.PAYLOAD_TYPES`, and a job type without a
+        payload cannot construct a unit at all, so the fallback has nothing
+        left to catch and its removal cannot silently re-shape an identity.
         """
-        try:
-            return subject_for(job_type).subject_for(self)
-        except UnknownJobType:
-            return (job_type, self.exposure, self.sca)
+        if job_type is not None and job_type != self.payload.JOB_TYPE:
+            raise SubjectError(
+                f"asked for a {job_type!r} dedup key from a "
+                f"{self.payload.JOB_TYPE!r} unit; a unit's payload declares "
+                f"its job type and the two must agree")
+        return self.payload.subject()
 
     def logical_job_key(self, run_id: Any, job_type: str) -> str:
         """This unit's RUN-SCOPED logical-job identity (review finding #3).
@@ -466,16 +502,52 @@ class ProcessingUnit:
         return f"{run_id}:{subject}"
 
     def to_dict(self) -> dict[str, Any]:
+        """The wire form: a typed payload and the facts, and nothing else.
+
+        NO `fields` KEY EXISTS, at any schema version this method can
+        produce — that is rule 11's wire-format half, and the acceptance
+        suite asserts it over the serialized JSON rather than over this
+        code. No `exposure` or `sca` key appears for a grain that does not
+        declare one, either: the payload renders exactly its own
+        components.
+        """
         facts = self.facts.to_dict()
-        return {"exposure": self.exposure, "sca": self.sca,
-                **({"facts": facts} if facts else {}),
-                **({"fields": self.fields} if self.fields else {})}
+        return {"payload": self.payload.to_dict(),
+                **({"facts": facts} if facts else {})}
 
     @classmethod
-    def from_dict(cls, raw: dict[str, Any]) -> "ProcessingUnit":
-        return cls(exposure=int(raw["exposure"]), sca=int(raw["sca"]),
-                   facts=UnitFacts.from_dict(raw.get("facts", {})),
-                   fields=raw.get("fields", {}))
+    def from_dict(cls, raw: dict[str, Any], job_type: str = None
+                  ) -> "ProcessingUnit":
+        """Rebuild a unit from its wire form.
+
+        **NO COMPATIBILITY PARSER.** A version-3 payload — the sentinel
+        `{"exposure": ..., "sca": ..., "fields": {...}}` shape — is refused
+        by `Manifest.from_dict` before reaching here, and nothing in this
+        method reconstructs a typed subject from a sentinel exposure/SCA.
+        Brief D is explicit that such a parser must not exist: it would
+        keep the prohibited representation alive as an accepted input
+        forever, which is how a "temporary" compatibility path becomes the
+        format.
+
+        `job_type` selects the payload type. It comes from the manifest,
+        which names it once for all its units, rather than from each unit —
+        a per-unit job type would let one manifest carry two, which nothing
+        supports and the batch layer could not submit.
+        """
+        payload_raw = raw.get("payload")
+        if payload_raw is None:
+            raise ValueError(
+                "a processing unit carries no `payload`; units written at "
+                "manifest schema version 3 carried `exposure`/`sca`/`fields` "
+                "instead, and those are refused rather than translated "
+                "(rule 11 — no compatibility parser rebuilding typed "
+                "subjects from sentinel carriers)")
+        if job_type is None:
+            raise ValueError(
+                "rebuilding a processing unit needs its manifest's job "
+                "type, which selects the payload type")
+        return cls(payload=payloads.from_dict(job_type, payload_raw),
+                   facts=UnitFacts.from_dict(raw.get("facts", {})))
 
 
 class Manifest:
@@ -494,7 +566,19 @@ class Manifest:
     # default; a version-2 manifest predates the override vocabulary, and
     # reading one as version 3 would silently claim it carried no override
     # when the concept did not exist to carry.
-    SCHEMA_VERSION = 3
+    # 4 (D3): units carry a TYPED PAYLOAD instead of `exposure`/`sca`/
+    # `fields`. A version-3 unit is `{"exposure": ..., "sca": ...,
+    # "fields": {...}}` — the sentinel carrier and the open dict rule 11
+    # prohibits — and is REFUSED rather than translated. There is
+    # deliberately NO compatibility parser rebuilding a typed subject from a
+    # sentinel exposure/SCA: such a parser would keep the prohibited
+    # representation alive as an accepted input indefinitely, and a
+    # crossmatch unit's version-3 form does not contain the information to
+    # rebuild from (its `field` is in `fields`, its `exposure` is a date
+    # ordinal that means nothing to the typed payload). Manifests are
+    # per-run artifacts written and read within one submission's lifetime,
+    # so refusing the old shape strands nothing that is still running.
+    SCHEMA_VERSION = 4
 
     def __init__(self, units: Iterable[ProcessingUnit],
                  batch_id: str | None = None,
@@ -732,7 +816,12 @@ class Manifest:
         window = (ReferenceObservationWindow.from_dict(window_raw)
                   if window_raw is not None else None)
 
-        manifest = cls((ProcessingUnit.from_dict(u) for u in raw["units"]),
+        # The job type is threaded into every unit's reconstruction: it
+        # selects the payload type. A manifest names its job type once, for
+        # all its units — a per-unit job type would let one manifest carry
+        # two, which the batch layer could not submit as one array.
+        manifest = cls((ProcessingUnit.from_dict(u, job_type)
+                        for u in raw["units"]),
                        batch_id=raw.get("batch_id"),
                        job_type=job_type,
                        reference_observation_window=window)

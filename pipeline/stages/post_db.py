@@ -73,22 +73,45 @@ MERGES_COLUMNS = ("aid", "sid")
 
 
 def _unit_field(context, name: str):
-    """One value from the unit's open `fields` mapping, required.
+    """One declared value from the unit's TYPED payload, required.
 
     The post-DB units are keyed by processing date, SCA or field rather than
-    by exposure, so their real identity rides in `ProcessingUnit.fields`. A
-    missing key means the manifest did not describe this unit, which is
-    `input_missing` — the same classification `context.fact` gives for an
-    absent `UnitFacts` entry.
+    by exposure, so their real identity rides in the unit's payload
+    (`submission.payloads`). A missing value means the manifest did not
+    describe this unit, which is `input_missing` — the same classification
+    `context.fact` gives for an absent `UnitFacts` entry.
+
+    **READ FROM THE PAYLOAD, NOT AN OPEN DICT** (rule 11). This used to read
+    `ProcessingUnit.fields`, an open `dict[str, Any]` — the "parallel
+    untyped fact carrier" the rule prohibits. The lookup shape is kept
+    deliberately: every call site asks for one named value and wants one
+    named failure, and that contract is unchanged. What changed is that the
+    name must be one the payload type DECLARES, so a typo is a failure here
+    rather than a silently-absent key that the old dict answered with a
+    `KeyError` about a name nothing had ever declared.
     """
-    fields = getattr(context.unit, "fields", None) or {}
-    if name not in fields:
-        present = ", ".join(sorted(fields)) or "nothing"
+    payload = getattr(context.unit, "payload", None)
+    if payload is None:
         raise InputError(
-            f"the manifest does not carry {name!r} for this unit; it names: "
-            f"{present}. Post-DB units are enumerated at submission and the "
-            f"job type does not discover its own work.")
-    return fields[name]
+            "this unit carries no typed payload; units written against the "
+            "pre-rule-11 manifest schema carried an open `fields` dict "
+            "instead, and manifest schema version 4 refuses them rather "
+            "than translating them.")
+    declared = tuple(payload.COMPONENTS) + tuple(payload.INVOCATION_FACTS)
+    if name not in declared:
+        raise InputError(
+            f"a {payload.JOB_TYPE!r} unit does not declare {name!r}; it "
+            f"declares: {', '.join(declared) or 'nothing'}. Post-DB units "
+            f"are enumerated at submission and the job type does not "
+            f"discover its own work.")
+    value = getattr(payload, name, None)
+    if value is None:
+        raise InputError(
+            f"the manifest does not carry {name!r} for this "
+            f"{payload.JOB_TYPE!r} unit, though its payload type declares "
+            f"it. Post-DB units are enumerated at submission and the job "
+            f"type does not discover its own work.")
+    return value
 
 
 # ---------------------------------------------------------------------------

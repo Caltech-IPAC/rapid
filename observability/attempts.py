@@ -562,11 +562,18 @@ class AttemptWriter:
         attempt_ids: list[int] = []
         for index, unit in enumerate(submission.manifest.units):
             logical_job_id = f"{submission.batch_id}:{index}"
+            # THE APPLICABLE IDENTIFIERS, PER GRAIN (rule 11, co-design
+            # ruling 2). This wrote `exposure_id`/`sca` unconditionally, which
+            # was correct only while every unit carried that pair whatever its
+            # grain — the sentinel carrier the typed payloads removed. A
+            # field-grained unit has no exposure, and writing its field number
+            # into `exposure_id` is the smuggling the ruling prohibits.
+            from submission.subjects import attempt_identity_fields
+
             identity = AttemptIdentity(
                 run_id=run_id,
                 logical_job_id=logical_job_id,
-                exposure_id=unit.exposure,
-                sca=unit.sca,
+                **attempt_identity_fields(submission.manifest.job_type, unit),
             )
             # The logical job is recorded first, so the binding exists before
             # any attempt row can need to copy it — and so a runtime that
