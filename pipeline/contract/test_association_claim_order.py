@@ -200,6 +200,75 @@ def test_the_claim_path_reads_the_row_the_acceptance_path_writes(
         conn.commit()
 
 
+def test_the_stage_resolves_its_association_scope_from_the_registry(conn):
+    """The F3 stage seam, against a real database.
+
+    `crossmatch_sources` and `create_field_tables` HAVE NO OTHER TEST — not
+    before this brief and not after it; the stage functions are exercised only
+    by a live pipeline run. So a green suite says nothing about the code that
+    resolves a unit's association scope, and the seam most likely to be wrong
+    is the one this asserts: `_ConnLike` lending the acceptance transaction's
+    own cursor to helpers written to take a connection.
+
+    Asserted here rather than left to a live run because the alternative is
+    discovering it in the pipeline. A unit declaring no set must land on the
+    live set through the well-known-row lookup, which is the day-one case and
+    the only one production takes today.
+    """
+    _require_schema(conn)
+
+    from pipeline.stages.post_db import _ConnLike, _association_scope
+
+    class _Payload:
+        """A unit that declares no association set — today's payload shape.
+
+        `CrossmatchPayload` carries no `association_set` field, so the scope
+        must come from the registry. Constructed rather than imported so the
+        test states which attribute it is asserting the absence of.
+        """
+
+    class _Unit:
+        payload = _Payload()
+
+    class _Context:
+        unit = _Unit()
+
+    with conn.cursor() as cur:
+        association_set, kind, lane = _association_scope(cur, _Context())
+
+    assert association_set == sets.live_association_set(conn)
+    assert kind == sets.KIND_LIVE_PROMPT
+    assert lane == sets.DEFAULT_LANE
+
+    # And the lent cursor really is the caller's, not a new one: the helpers
+    # must read inside the acceptance transaction's snapshot, or the set
+    # registry read would sit outside the transaction whose atomicity is the
+    # whole point of F3.
+    with conn.cursor() as cur:
+        lent = _ConnLike(cur)
+        with lent.cursor() as borrowed:
+            assert borrowed is cur
+
+
+def test_the_live_set_resolves_to_todays_clone_names(conn):
+    """A live unit's target tables are unprefixed — no rename on adoption.
+
+    The stage computes its target names through `sets.table_name` now, so this
+    pins that the live path still produces exactly what `gather_crossmatch_
+    units` puts in the payload's `target_tables`. If these ever disagree the
+    stage would create one pair of tables and the unit would declare another.
+    """
+    _require_schema(conn)
+    field = 4641773
+    association_set = sets.live_association_set(conn)
+    kind = sets.set_kind(conn, association_set)
+
+    assert sets.table_name("astroobjects", association_set, field, kind) == \
+        f"astroobjects_{field}"
+    assert sets.table_name("merges", association_set, field, kind) == \
+        f"merges_{field}"
+
+
 def test_gathering_without_the_draft_schema_keeps_todays_behaviour(conn):
     """The explicit degradation, asserted rather than assumed.
 
