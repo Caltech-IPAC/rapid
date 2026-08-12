@@ -139,6 +139,15 @@ def test_no_reader_selects_star_from_the_altered_tables():
     pattern = re.compile(
         r"select\s+\*\s+from\s+(refimages|diffimages)\b", re.IGNORECASE)
 
+    # THIS FILE IS EXCLUDED, and that exclusion is the interesting part.
+    # The first version of this test reported itself: the pattern it scans
+    # for is written down here, so the scanner matched its own source. A
+    # scanner that cannot be run over the tree containing it is a scanner
+    # nobody will keep running — and the honest exclusion is this file by
+    # path, not a weakened pattern that would also stop matching the real
+    # thing.
+    this_file = os.path.abspath(__file__)
+
     offenders = []
     for directory in ("pipeline", "submission", "alerts", "database",
                       "modules", "observability"):
@@ -150,6 +159,8 @@ def test_no_reader_selects_star_from_the_altered_tables():
                 if not name.endswith(".py"):
                     continue
                 path = os.path.join(current, name)
+                if os.path.abspath(path) == this_file:
+                    continue
                 with open(path, encoding="utf-8", errors="replace") as handle:
                     body = handle.read()
                 if pattern.search(body):

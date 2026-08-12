@@ -115,7 +115,9 @@ def test_replay_of_the_same_attempt_and_sequence_writes_nothing_new(conn):
     """
     _require_schema(conn)
     repository = _repository(conn)
-    attempt_id = fixture.make_attempt(conn, terminal_record_sequence=1)
+    attempt_id = fixture.make_attempt(
+        conn, lifecycle="terminal_without_start",
+        terminal_record_sequence=1)
     key, payload = _key_for(_unique_exposure())
 
     _register(conn, repository, key, payload, attempt_id, 1)
@@ -147,11 +149,15 @@ def test_retry_under_a_new_attempt_keeps_the_product_and_moves_the_binding(
     repository = _repository(conn)
     key, payload = _key_for(_unique_exposure(1))
 
-    first_attempt = fixture.make_attempt(conn, terminal_record_sequence=1)
+    first_attempt = fixture.make_attempt(
+        conn, lifecycle="terminal_without_start",
+        terminal_record_sequence=1)
     product_a, artifact_a = _register(conn, repository, key, payload,
                                       first_attempt, 1, checksum="d" * 64)
 
-    second_attempt = fixture.make_attempt(conn, terminal_record_sequence=1)
+    second_attempt = fixture.make_attempt(
+        conn, lifecycle="terminal_without_start",
+        terminal_record_sequence=1)
     product_b, artifact_b = _register(conn, repository, key, payload,
                                       second_attempt, 1, checksum="e" * 64)
 
@@ -189,8 +195,12 @@ def test_byte_identical_retry_still_writes_a_new_artifact(conn):
     key, payload = _key_for(_unique_exposure(2))
     checksum = "f" * 64
 
-    first = fixture.make_attempt(conn, terminal_record_sequence=1)
-    second = fixture.make_attempt(conn, terminal_record_sequence=1)
+    first = fixture.make_attempt(
+        conn, lifecycle="terminal_without_start",
+        terminal_record_sequence=1)
+    second = fixture.make_attempt(
+        conn, lifecycle="terminal_without_start",
+        terminal_record_sequence=1)
     _, artifact_a = _register(conn, repository, key, payload, first, 1,
                               checksum=checksum)
     _, artifact_b = _register(conn, repository, key, payload, second, 1,
@@ -215,9 +225,13 @@ def test_changing_one_identity_component_makes_a_new_product(conn):
     key_b, payload_b = _key_for(exposure, release_digest="9" * 64)
     assert key_a != key_b
 
-    attempt = fixture.make_attempt(conn, terminal_record_sequence=1)
+    attempt = fixture.make_attempt(
+        conn, lifecycle="terminal_without_start",
+        terminal_record_sequence=1)
     product_a, _ = _register(conn, repository, key_a, payload_a, attempt, 1)
-    other = fixture.make_attempt(conn, terminal_record_sequence=1)
+    other = fixture.make_attempt(
+        conn, lifecycle="terminal_without_start",
+        terminal_record_sequence=1)
     product_b, _ = _register(conn, repository, key_b, payload_b, other, 1)
 
     assert product_a.product_id != product_b.product_id
@@ -284,7 +298,9 @@ def test_artifact_replay_uniqueness_is_a_database_constraint(conn):
         assert column in definition
 
     repository = _repository(conn)
-    attempt = fixture.make_attempt(conn, terminal_record_sequence=1)
+    attempt = fixture.make_attempt(
+        conn, lifecycle="terminal_without_start",
+        terminal_record_sequence=1)
     repository.upsert_artifact(
         attempt_id=attempt, record_sequence=1, published_name="dup",
         uri="s3://bucket/a.fits", checksum="a" * 64)
@@ -314,7 +330,9 @@ def test_exactly_one_current_binding_per_product_is_enforced(conn):
 
     repository = _repository(conn)
     key, payload = _key_for(_unique_exposure(5))
-    attempt = fixture.make_attempt(conn, terminal_record_sequence=1)
+    attempt = fixture.make_attempt(
+        conn, lifecycle="terminal_without_start",
+        terminal_record_sequence=1)
     product, artifact = _register(conn, repository, key, payload, attempt, 1)
     second = repository.upsert_artifact(
         attempt_id=attempt, record_sequence=1, published_name="second",

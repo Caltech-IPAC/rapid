@@ -60,7 +60,9 @@ def test_a_failure_after_the_writes_rolls_all_of_them_back(conn,
 
     repository = ProductRepository(conn)
     key, payload = _key(0)
-    attempt = fixture.make_attempt(conn, terminal_record_sequence=1)
+    attempt = fixture.make_attempt(
+        conn, lifecycle="terminal_without_start",
+        terminal_record_sequence=1)
     conn.commit()          # the attempt row is fixture, not part of the test
 
     try:

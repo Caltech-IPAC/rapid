@@ -49,7 +49,9 @@ def test_an_artifact_round_trips_all_64_hex_characters(conn):
     from pipeline.repositories.products import ProductRepository
 
     repository = ProductRepository(conn)
-    attempt = fixture.make_attempt(conn, terminal_record_sequence=1)
+    attempt = fixture.make_attempt(
+        conn, lifecycle="terminal_without_start",
+        terminal_record_sequence=1)
     written = repository.upsert_artifact(
         attempt_id=attempt, record_sequence=1,
         published_name="checksum-roundtrip",
@@ -102,7 +104,9 @@ def test_a_truncated_checksum_is_refused_by_the_database(conn):
     _require_schema(conn)
     import psycopg2
 
-    attempt = fixture.make_attempt(conn, terminal_record_sequence=1)
+    attempt = fixture.make_attempt(
+        conn, lifecycle="terminal_without_start",
+        terminal_record_sequence=1)
     with pytest.raises(psycopg2.errors.CheckViolation):
         with conn.cursor() as cur:
             cur.execute(
