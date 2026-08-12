@@ -44,6 +44,7 @@ interface to its four post-DB subprocesses "expires when those scripts become
 bulk-queue job types").
 """
 
+import contextlib
 import csv
 import logging
 import os
@@ -52,6 +53,8 @@ from psycopg2 import sql
 
 import modules.utils.rapid_pipeline_subs as util
 from database.modules.utils.rapid_db_connect import transaction
+from pipeline.association import sets as association_sets
+from pipeline.association import watermark as association_watermark
 from pipeline.runtime.errors import InputError
 from pipeline.stages import catalog_db
 
@@ -503,14 +506,120 @@ def create_field_tables(context) -> None:
     field = int(_unit_field(context, "field"))
 
     with transaction(conn) as cursor:
-        _place_in_data_tablespace(cursor, context.logger)
-        for prototype in ("astroobjects", "merges"):
-            catalog_db.create_child_table(
-                cursor, f"{prototype}_{field}", prototype)
+        # SET-SCOPED CLONE NAMING (conformance rule 19, brief F1). The live
+        # prompt set keeps today's names exactly — `astroobjects_4641773` —
+        # so adopting the set model renames nothing, moves no data and needs
+        # no backfill. A non-live set materializes its own family under its
+        # own prefix, and REPROCESSING ISOLATION IS THEN STRUCTURAL: a
+        # reprocessing set cannot mutate the live tables because it never
+        # names them. There is no rule to enforce and no grant to withhold —
+        # the isolation is a property of the names this computes. The single
+        # place that computation lives is `association_sets.table_name`, whose
+        # SQL twin is `derived.association_table_name`.
+        association_set, set_kind, _lane = _association_scope(cursor, context)
+        names = {
+            prototype: association_sets.table_name(
+                prototype, association_set, field, set_kind)
+            for prototype in ("astroobjects", "merges")}
 
-    context.produce("astroobjects_table", f"astroobjects_{field}")
-    context.produce("merges_table", f"merges_{field}")
-    context.record(field=field)
+        _place_in_data_tablespace(cursor, context.logger)
+        for prototype, name in names.items():
+            catalog_db.create_child_table(cursor, name, prototype)
+
+    context.produce("astroobjects_table", names["astroobjects"])
+    context.produce("merges_table", names["merges"])
+    context.record(field=field, association_set=association_set)
+
+
+def _association_scope(cursor, context):
+    """This unit's `(association_set, kind, lane)`.
+
+    The set comes from the unit when it declares one and from the well-known
+    live row otherwise — `pipeline.association.sets.live_association_set`, the
+    single lookup the brief allows. Nothing here spells the live set's value,
+    which is what keeps "day one there is exactly one set" from becoming "day
+    one the live set is hard-coded in the stage".
+
+    One lane per set initially (§2.5), so `lane` is the module's named
+    default rather than a literal 0 at this call site.
+    """
+    declared = getattr(getattr(context.unit, "payload", None),
+                       "association_set", None)
+    if declared is None:
+        association_set = association_sets.live_association_set(
+            _ConnLike(cursor))
+    else:
+        association_set = int(declared)
+    kind = association_sets.set_kind(_ConnLike(cursor), association_set)
+    return association_set, kind, association_sets.DEFAULT_LANE
+
+
+class _ConnLike:
+    """Adapt an open cursor to the `conn.cursor()` shape the set helpers want.
+
+    `pipeline.association.sets` takes a CONNECTION because its other callers
+    (the operator surface, the contract tests) hold one and are not inside a
+    transaction. This stage IS inside one, and opening a second cursor on the
+    same connection would be harmless but pointless — worse, taking a fresh
+    connection here would read the set registry OUTSIDE the transaction whose
+    atomicity is the whole point. So the cursor already in hand is lent to
+    those helpers instead, which keeps every read in this function inside the
+    acceptance transaction's snapshot.
+    """
+
+    def __init__(self, cursor):
+        self._cursor = cursor
+
+    def cursor(self):
+        return contextlib.nullcontext(self._cursor)
+
+
+def _advance_association_watermark(cursor, context, association_set, lane,
+                                   position, proc_date, field):
+    """CAS the lane's watermark to this unit. Returns whether it moved.
+
+    `position` is the POST-LOCK re-read, and comparing against it is what
+    tells this unit's turn from a stale one. Three outcomes, all normal:
+
+      * ahead of the frontier and the CAS moves it — the ordinary acceptance;
+      * at or behind the frontier — a STALE RETRY landing late (F3). The CAS
+        refuses, the watermark does not regress, and the associations this
+        unit just wrote are not duplicates because `merges_aid_sid_unique`
+        (migration 027, reaching every clone through `INCLUDING INDEXES` in
+        `create_field_tables`) makes the merge rows unique on `(aid, sid)`
+        and `radec_index` makes the object identity a deterministic function
+        of position rather than an assignment. To be exact about which
+        mechanism guarantees what, since the brief asks: the UNIQUE INDEX is
+        what refuses a second identical merge row, and `radec_index` is what
+        makes the second run compute the SAME `aid` for the same source so
+        that the index has an identical row to refuse. Neither alone would
+        do it — a deterministic aid with no unique index would duplicate
+        happily, and a unique index over a nondeterministic aid would admit
+        a second row under a different identity;
+      * ahead of the frontier but a concurrent duplicate advanced it first —
+        the lease serialized them, this one re-read too early to see it, and
+        the CAS refuses. Converges on the same state as the first.
+
+    A refusal is logged and reported, never raised. Raising would turn a
+    correct convergence into a failed attempt and a retry loop.
+    """
+    ahead = association_watermark.is_ahead_of(position, proc_date, field)
+    if not ahead:
+        context.logger.info(
+            "field %d of %s is at or behind the association watermark %r; "
+            "not advancing (stale retry — the associations converge through "
+            "merges_aid_sid_unique and radec_index)",
+            field, proc_date, position)
+        return False
+
+    advanced = association_watermark.advance(
+        cursor, association_set, lane, proc_date, field)
+    if not advanced:
+        context.logger.info(
+            "field %d of %s lost the watermark CAS for set %d lane %d; a "
+            "concurrent attempt at the same unit advanced it first",
+            field, proc_date, association_set, lane)
+    return advanced
 
 
 def crossmatch_sources(context) -> None:
@@ -546,6 +655,26 @@ def crossmatch_sources(context) -> None:
     merges_csv = context.scratch(f"{merges}.csv")
 
     with transaction(conn) as cursor:
+        # THE ACCEPTANCE TRANSACTION (conformance rule 19, brief F3). The
+        # associations this unit writes and the watermark saying they are the
+        # set's frontier commit together or not at all — that atomicity is the
+        # rule's own words, "advanced in the same transaction as the accepted
+        # associations", and it is what makes a crashed unit leave the
+        # frontier where it was rather than ahead of rows that never landed.
+        #
+        # The three steps mirror the registrar's discipline
+        # (`pipeline/registration/consumer.py:104-171`), in its order:
+        #
+        #   1. the lane lease as the FIRST statement of the transaction,
+        #   2. a post-lock RE-READ of the watermark, because the claim that
+        #      brought this unit here was made by an unlocked read in a
+        #      gathering pass that may be minutes old,
+        #   3. the CAS-guarded advance, at the end, with the rows.
+        association_set, set_kind, lane = _association_scope(cursor, context)
+        association_watermark.acquire_lane_lease(cursor, association_set, lane)
+        position = association_watermark.read_watermark(
+            cursor, association_set, lane)
+
         matched, new_objects = _crossmatch_field(
             cursor, context, field, proc_date, float(radius),
             astroobjects, objects_csv, merges_csv)
@@ -556,12 +685,20 @@ def crossmatch_sources(context) -> None:
         merges_result = catalog_db.load_through_staging(
             cursor, merges_csv, merges, "merges", MERGES_COLUMNS)
 
+        advanced = _advance_association_watermark(
+            cursor, context, association_set, lane, position, proc_date, field)
+
     context.record_effect(
         rows_written=objects_result["rows_written"] + merges_result["rows_written"],
         sources_matched=matched,
         astroobjects_written=objects_result["rows_written"],
         merges_written=merges_result["rows_written"],
         new_astroobjects=new_objects,
+        # Whether this unit moved the set's frontier. False is a normal
+        # outcome — a stale retry, or a duplicate attempt whose twin advanced
+        # it first — and recording it is what makes those cases visible in the
+        # effect counts rather than indistinguishable from an advance.
+        watermark_advanced=advanced,
         load_rate_rows_per_second=merges_result["rate"])
     context.logger.info(
         "field %d: %d matched, %d new object(s), %d merge row(s)",
@@ -587,11 +724,29 @@ def _crossmatch_field(cursor, context, field: int, proc_date: str,
         merges_writer = csv.writer(merges_handle)
 
         for sources_table in _source_tables_for_unit(context, proc_date):
+            # CANONICAL DETECTION ORDER (conformance rule 19, brief F3).
+            # Rule 19's `(observation_time, detection_id)` at the DETECTION
+            # grain is `(mjdobs, sid)`: `sources.mjdobs` is the exposure's MJD
+            # (007-sources-family.sql:101, indexed by `sources_mjdobs_idx`) and
+            # `sid` is the monotone insert identity, defaulted from the single
+            # global `sources_sid_seq` that every child shares. Both halves are
+            # real columns, so the mapping's `sid`-alone fallback does not
+            # apply here.
+            #
+            # This is not a performance hint. Within a job the order decides
+            # which source is seen FIRST, and `_crossmatch_field`'s `seen` set
+            # makes first-seen the winner for a source matched more than once —
+            # so an unordered scan makes the association output depend on
+            # PostgreSQL's physical row order, which is to say on vacuum
+            # timing. Ordering it makes the same inputs give the same
+            # associations, which is what pins criterion 6's idempotency to
+            # something stronger than luck.
             cursor.execute(
                 sql.SQL(
                     "SELECT a.sid, b.aid FROM {sources} AS a, {objects} AS b "
                     "WHERE q3c_join(a.ra, a.dec, b.ra0, b.dec0, %s) "
-                    "AND a.field = %s AND a.flags = 0").format(
+                    "AND a.field = %s AND a.flags = 0 "
+                    "ORDER BY a.mjdobs, a.sid").format(
                         sources=sql.Identifier(sources_table),
                         objects=sql.Identifier(astroobjects)),
                 (radius, field))
@@ -600,10 +755,16 @@ def _crossmatch_field(cursor, context, field: int, proc_date: str,
                 seen.add(sid)
                 matched_total += 1
 
+            # The same canonical order, for the same reason: this loop MINTS
+            # object identities for unmatched sources, and two sources close
+            # enough to hash to one `aid` would otherwise be resolved by scan
+            # order. `radec_index` is deterministic in position, so ordering
+            # this makes the whole assignment deterministic in the input rows.
             cursor.execute(
                 sql.SQL(
                     "SELECT sid, ra, dec, fluxfit FROM {sources} "
-                    "WHERE field = %s AND flags = 0").format(
+                    "WHERE field = %s AND flags = 0 "
+                    "ORDER BY mjdobs, sid").format(
                         sources=sql.Identifier(sources_table)),
                 (field,))
             for sid, ra, dec, flux in cursor.fetchall():

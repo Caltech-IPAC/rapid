@@ -166,6 +166,22 @@ class UnitSource(Protocol):
     def get_fields_with_blocking_attempt_for_job_type_since(
             self, job_type: str, since: Any) -> Sequence[Any]: ...
 
+    # The association claim watermark (rule 19, brief F2). Read through the
+    # handle like every other gathering fact, so the ordering gate is testable
+    # with the same stub the readiness gates use. `None` means the schema is
+    # absent — see `_association_claim_position` for why that degrades to
+    # today's unordered behaviour rather than to an exception.
+    def get_association_claim_position(
+            self, association_set: int | None = ...,
+            lane: int | None = ...) -> Any: ...
+
+    # The earliest processing date that still owes crossmatch work — the
+    # cross-date half of the ordering gate (brief F2). Gathering is invoked
+    # per date, so the watermark alone cannot tell a later date that an
+    # earlier one is still in retry; this answers exactly that.
+    def get_earliest_unaccepted_crossmatch_date(
+            self, association_set: int | None = ...) -> Any: ...
+
     def get_blocking_exposure_scas_for_job_type(
             self, job_type: str, expids: Sequence[int]) -> Sequence[Any]: ...
 
@@ -1365,6 +1381,172 @@ def gather_catalog_load_units(handle: UnitSource, proc_date: str
                 product_inputs=tuple(inputs)))
 
 
+def _association_claim_position(handle: UnitSource):
+    """The live lane's watermark, or `None` when the schema is absent.
+
+    Returns `(watermark_proc_date, watermark_field)` — the last ACCEPTED
+    unit's position in the canonical order — where `(None, None)` is the
+    origin and means nothing has been accepted in this set yet.
+
+    **A DATABASE WITHOUT DRAFT 049 DEGRADES TO TODAY'S BEHAVIOUR, EXPLICITLY.**
+    The ordering discipline needs `association_watermarks`, which ships as a
+    DRAFT under `migrations-draft/` and is not in the authoritative stream
+    until its owner adopts it. The handle answers `None` when the table is not
+    there, and this returns `None`, and the caller then gathers exactly as it
+    did before — unordered, every ready field. That is the honest degradation:
+    the ordering is a property of the deployed schema, so a deployment without
+    it does not get to CLAIM the ordering, and pretending otherwise by raising
+    would take the whole crossmatch chain down on every database in the fleet
+    that has not adopted 049 yet.
+
+    It is degradation and not a silent pass because the log line says which
+    one happened, and because the contract tier asserts the ordered behaviour
+    against a database that DOES carry the draft.
+    """
+    try:
+        position = handle.get_association_claim_position()
+    except RapidDBCallFailed as exc:
+        raise GatheringError(
+            f"association watermark read failed: {exc}") from exc
+    except AttributeError:
+        # A handle predating the method at all — the operator probes and the
+        # older stubs. Same reading as an absent table.
+        position = None
+
+    if position is None:
+        logger.info(
+            "crossmatch: no association watermark available (DRAFT 049 not "
+            "applied); gathering without the rule 19 ordering gate")
+        return None
+
+    row = position[0] if isinstance(position, (list, tuple)) and position and \
+        isinstance(position[0], (list, tuple)) else position
+    wm_date, wm_field = row[0], row[1]
+    return (None if wm_date is None else str(wm_date),
+            None if wm_field is None else int(wm_field))
+
+
+def _earliest_owed_date(handle: UnitSource):
+    """The earliest processing date still owing crossmatch work, or `None`.
+
+    The cross-date half of the ordering gate. `None` means either "nothing is
+    owed" or "the ordering schema is absent"; both readings make the same
+    decision downstream (do not block this date on an earlier one), and the
+    watermark check is what distinguishes an ordered deployment from an
+    unordered one, so nothing is lost by collapsing them here.
+    """
+    try:
+        owed = handle.get_earliest_unaccepted_crossmatch_date()
+    except RapidDBCallFailed as exc:
+        raise GatheringError(
+            f"earliest-unaccepted crossmatch date read failed: {exc}") from exc
+    except AttributeError:
+        return None
+    if owed is None:
+        return None
+    row = owed[0] if isinstance(owed, (list, tuple)) and owed else owed
+    value = row[0] if isinstance(row, (list, tuple)) and row else row
+    return None if value is None else str(value)
+
+
+def _next_claimable_field(candidates: Sequence[int], proc_date: str,
+                          position, earliest_owed=None) -> Iterator[int]:
+    """Yield AT MOST ONE field: the next one in canonical order, or nothing.
+
+    Canonical claim order is ascending `(proc_date, field)` — the vocabulary
+    mapping's reading of rule 19's `(observation_time, detection_id)` at the
+    grain association is actually claimed in. `position` is the watermark;
+    a unit is claimable only when it is strictly AHEAD of it.
+
+    **THE HARD CONCURRENCY CAP OF 1 (§2.5) FALLS OUT OF THIS, NOT OUT OF A
+    QUEUE PROPERTY.** One lane, one next unit, and nothing claimable past an
+    unaccepted predecessor: a pass yields one unit, and the next unit is not
+    yielded until that one's acceptance advances the watermark. No route
+    changed, no queue depth changed, no Batch setting is load-bearing.
+
+    **AN EARLIER FAILED-AND-RETRYABLE UNIT BLOCKS EVERY LATER ONE.** This is
+    the §2.5 sentence the whole item exists for: "serial execution does not by
+    itself guarantee that a later observation's association cannot run ahead
+    of an earlier one still in retry". A failed-retryable unit did not advance
+    the watermark — acceptance is what advances it — so the frontier still
+    sits behind it and nothing later is ahead of the frontier by one step. The
+    blocking is therefore not a rule this function enforces on top of the
+    watermark; it IS the watermark, read correctly.
+
+    Concretely, for a gathering pass on date `d` with watermark `(wd, wf)`:
+
+      * `d < wd` — the whole date is behind the frontier. Nothing.
+      * `d == wd` — the next field of this date strictly greater than `wf`,
+        if it is ready. If the ready field set skips over `wf`'s successors
+        because they are blocked or unready, the smallest READY field ahead of
+        `wf` is next: a blocked field is not a claimable predecessor, and the
+        resubmission gate already means "in flight or done".
+      * `d > wd` — the date is ahead of the frontier, so its smallest ready
+        field is next, BUT ONLY IF NO EARLIER DATE IS STILL OWED. Gathering is
+        invoked once per date (`pipeline/operator/gathering.py:246-249`), so
+        the watermark alone cannot see that d1 is still in retry while this
+        pass asks about d2. `earliest_owed` is the fact that closes it: the
+        earliest processing date with crossmatch work not yet accepted. When
+        that date is earlier than this one, this pass yields NOTHING — which
+        is acceptance criterion 1's second half, "(d1,f1) failed-retryable and
+        (d2,f1) ready gathers nothing", and §2.5's sentence made operational.
+
+    `position is None` means no ordering schema (see
+    `_association_claim_position`) and yields the candidates unchanged.
+    """
+    if position is None:
+        for field in candidates:
+            yield field
+        return
+
+    wm_date, wm_field = position
+    ready = sorted(candidates)
+    if not ready:
+        return
+
+    if wm_date is None:
+        # The origin: nothing accepted in this set yet, so the smallest ready
+        # field of this date is the frontier's successor.
+        yield ready[0]
+        return
+
+    if str(proc_date) < str(wm_date):
+        # Behind the frontier. A date whose units were all accepted has
+        # nothing left to claim, and a stale gathering pass for it yields
+        # nothing rather than re-submitting accepted work.
+        logger.info(
+            "crossmatch: processing date %s is behind the association "
+            "watermark (%s, %s); nothing claimable",
+            proc_date, wm_date, wm_field)
+        return
+
+    if str(proc_date) == str(wm_date):
+        ahead = [f for f in ready if f > int(wm_field)]
+        if not ahead:
+            logger.info(
+                "crossmatch: no field of processing date %s is ahead of the "
+                "association watermark (%s, %s); nothing claimable",
+                proc_date, wm_date, wm_field)
+            return
+        yield ahead[0]
+        return
+
+    # `proc_date > wm_date`: ahead of the frontier by date. Claimable only if
+    # no EARLIER date still owes work — the failed-and-retryable predecessor
+    # case (§2.5). An earlier owed date did not advance the watermark, because
+    # acceptance is what advances it, so it is still the frontier's successor
+    # and this later date waits behind it.
+    if earliest_owed is not None and str(earliest_owed) < str(proc_date):
+        logger.info(
+            "crossmatch: processing date %s is ahead of the association "
+            "watermark (%s, %s) but date %s still owes crossmatch work; "
+            "later units are not claimable past an unaccepted predecessor",
+            proc_date, wm_date, wm_field, earliest_owed)
+        return
+
+    yield ready[0]
+
+
 def gather_crossmatch_units(handle: UnitSource, proc_date: str
                             ) -> Iterator[ProcessingUnit]:
     """Yield crossmatch units — one per (processing date, field).
@@ -1396,6 +1578,41 @@ def gather_crossmatch_units(handle: UnitSource, proc_date: str
     next poll" is the intended behaviour for a data dependency that will
     resolve on its own, and an empty yield is exactly what every other
     gatherer does for "nothing ready yet".
+
+    **ORDERED CLAIMING BEHIND THE WATERMARK** (conformance rule 19, target
+    §2.5, brief F2). Readiness is not order. Once the two readiness gates
+    above have said which fields COULD run, this yields AT MOST ONE of them:
+    the next unit in canonical `(proc_date, field)` order that is strictly
+    ahead of the live lane's watermark. Both readiness gates are unchanged —
+    they answer "is this unit runnable", and the ordering gate answers "is it
+    this unit's turn", which is a different question asked afterwards.
+
+    §2.5's hard concurrency cap of 1 falls out of that claim discipline rather
+    than being configured anywhere: one lane, one next unit, and nothing
+    claimable past an unaccepted predecessor. NO ROUTE OR QUEUE CHANGED —
+    crossmatch remains `CLASS_BULK` on the unbounded bulk queue
+    (`submission/routes.py`). That is deliberate and is the reading this
+    implementation records: ordering enforcement belongs in the claim path,
+    where the pipeline can reason about it, and NEVER in a Batch queue
+    property. The scheduler stays free-running; correctness never depends on
+    Batch running things in the order it received them, because Batch is
+    never told an order to begin with.
+
+    A unit earlier in canonical order that is failed-and-retryable therefore
+    blocks every later unit in its set: it did not advance the watermark —
+    only acceptance does — so the frontier still sits behind it. On TERMINAL
+    disposition the watermark may pass it, and does so EXPLICITLY: a cancelled
+    or parked unit is skipped by an operator advancing the watermark past it
+    (`derived.advance_association_watermark`), never by gathering quietly
+    deciding a unit no longer counts. The disposition rule, fixed here: only
+    ACCEPTANCE advances the watermark automatically; cancellation and parking
+    advance it only through that explicit operator action, and until one
+    happens the set stays stopped at the disposed unit. A set that silently
+    stepped over its own failures would be an ordering guarantee that quietly
+    stops guaranteeing exactly when it matters.
+
+    On a database without DRAFT 049 this degrades to the previous unordered
+    behaviour with a log line saying so — see `_association_claim_position`.
     """
     proc_date = _validate_proc_date(proc_date)
 
@@ -1435,10 +1652,24 @@ def gather_crossmatch_units(handle: UnitSource, proc_date: str
     blocked_fields = {int(row[0] if isinstance(row, (list, tuple)) else row)
                       for row in blocked or ()}
 
+    # THE ORDERING GATE (rule 19, brief F2). Everything above this point is
+    # READINESS — is this date's data complete, is this field already in
+    # flight. Ordering is a separate question asked afterwards, and it is
+    # asked here, in the CLAIM PATH, not of the queue: the scheduler stays
+    # free-running and crossmatch stays CLASS_BULK on the unbounded bulk
+    # queue (`submission/routes.py`), unchanged. Correctness never depends on
+    # Batch preserving an order, because Batch is never told one.
+    position = _association_claim_position(handle)
+    earliest_owed = _earliest_owed_date(handle) if position is not None else None
+    candidates = []
     for field in fields or ():
         field = int(field[0] if isinstance(field, (list, tuple)) else field)
         if field in blocked_fields:
             continue
+        candidates.append(field)
+
+    for field in _next_claimable_field(candidates, proc_date, position,
+                                       earliest_owed):
         yield ProcessingUnit(
             payload=payloads.build(
                 JOB_TYPE_CROSSMATCH,
