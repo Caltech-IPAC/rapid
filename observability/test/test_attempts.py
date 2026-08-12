@@ -118,10 +118,25 @@ class RecordingExecutor:
         return self.calls[-1]
 
 
-class FakeUnit:
-    def __init__(self, exposure, sca):
-        self.exposure = exposure
-        self.sca = sca
+def FakeUnit(exposure, sca):
+    """A REAL science `ProcessingUnit`, despite the name kept for its callers.
+
+    It used to be a two-attribute stand-in carrying `exposure` and `sca`,
+    which was sufficient while every unit carried that pair whatever its
+    grain. `create_submitted_batch` now derives the applicable identity
+    columns per grain (`submission.subjects.attempt_identity_fields`), so a
+    stub with no typed payload cannot answer what the writer asks it — and,
+    more to the point, a stub that ANSWERED anyway would let this suite pass
+    against a unit shape production cannot produce. Building the real thing
+    is both simpler and honest: `ProcessingUnit` is a frozen dataclass over
+    a frozen payload, with no I/O to avoid.
+    """
+    from submission import payloads
+    from submission.manifest import ProcessingUnit
+    from submission.routes import JOB_TYPE_SCIENCE
+
+    return ProcessingUnit(payload=payloads.build(
+        JOB_TYPE_SCIENCE, exposure=exposure, sca=sca))
 
 
 class FakeManifest:
