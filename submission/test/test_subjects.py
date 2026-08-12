@@ -112,12 +112,15 @@ class AttemptIdentityFieldTests(unittest.TestCase):
     """Refusal: a field-grain unit carries NO exposure/SCA sentinel identity."""
 
     def test_field_grain_identity_carries_no_sentinel(self):
-        # `_per_field_units` (submission/gathering.py) puts the field number
-        # in `exposure` as a synthetic array-layer carrier — `sca` is a
-        # fixed 0. Neither is a real identifier of a statistics attempt, so
-        # neither may appear in the identity fields written to the row.
-        unit = ProcessingUnit(exposure=4678622, sca=0,
-                              fields={"field": 4678622})
+        # The old sentinel — `_per_field_units` putting the field number in
+        # `exposure` as a synthetic array-layer carrier, with `sca` fixed at
+        # 0 — no longer exists as a representation to construct: a
+        # StatisticsPayload has no `exposure`/`sca` attribute at all, only
+        # `field`. This is now a structural guarantee (payloads.py) rather
+        # than a behaviour `attempt_identity_fields` has to enforce, but the
+        # assertion on its OUTPUT still holds unchanged.
+        unit = ProcessingUnit(payload=payloads.build(
+            JOB_TYPE_STATISTICS, field=4678622, target_table="t_stats"))
         identity = attempt_identity_fields(JOB_TYPE_STATISTICS, unit)
 
         self.assertEqual(identity, {"field": 4678622})
@@ -125,8 +128,9 @@ class AttemptIdentityFieldTests(unittest.TestCase):
         self.assertNotIn("sca", identity)
 
     def test_date_field_grain_identity_carries_no_sentinel(self):
-        unit = ProcessingUnit(exposure=20260808, sca=0,
-                              fields={"proc_date": "20260808", "field": 101})
+        unit = ProcessingUnit(payload=payloads.build(
+            JOB_TYPE_CROSSMATCH, proc_date="20260808", field=101,
+            target_tables=("t",)))
         identity = attempt_identity_fields(JOB_TYPE_CROSSMATCH, unit)
 
         self.assertEqual(identity,
@@ -135,8 +139,9 @@ class AttemptIdentityFieldTests(unittest.TestCase):
         self.assertNotIn("sca", identity)
 
     def test_date_sca_grain_identity_carries_the_real_sca_not_the_ordinal(self):
-        unit = ProcessingUnit(exposure=20260808, sca=7,
-                              fields={"proc_date": "20260808", "sca": 7})
+        unit = ProcessingUnit(payload=payloads.build(
+            JOB_TYPE_CATALOG_LOAD, proc_date="20260808", sca=7,
+            target_table="t_cat"))
         identity = attempt_identity_fields(JOB_TYPE_CATALOG_LOAD, unit)
 
         self.assertEqual(identity,
@@ -144,7 +149,8 @@ class AttemptIdentityFieldTests(unittest.TestCase):
         self.assertNotIn("exposure_id", identity)
 
     def test_exposure_sca_grain_identity_is_unchanged(self):
-        unit = ProcessingUnit(exposure=90000, sca=1)
+        unit = ProcessingUnit(payload=payloads.build(
+            JOB_TYPE_SCIENCE, exposure=90000, sca=1))
         identity = attempt_identity_fields(JOB_TYPE_SCIENCE, unit)
 
         self.assertEqual(identity["exposure_id"], 90000)
@@ -160,19 +166,22 @@ class InputScopeGrammarTests(unittest.TestCase):
     """
 
     def test_build_matches_the_delimited_shape_seams_used_to_hardcode(self):
-        unit = ProcessingUnit(exposure=90000, sca=7)
+        unit = ProcessingUnit(payload=payloads.build(
+            JOB_TYPE_SCIENCE, exposure=90000, sca=7))
         self.assertEqual(build_input_scope(JOB_TYPE_SCIENCE, unit),
                          "90000/7")
 
     def test_round_trip_recovers_the_original_exposure_and_sca(self):
-        unit = ProcessingUnit(exposure=90000, sca=7)
+        unit = ProcessingUnit(payload=payloads.build(
+            JOB_TYPE_SCIENCE, exposure=90000, sca=7))
         scope = build_input_scope(JOB_TYPE_SCIENCE, unit)
         self.assertEqual(parse_exposure_sca_scope(scope), (90000, 7))
 
     def test_round_trip_holds_for_reference_image_too(self):
         # The other EXPOSURE_SCA-grain, product-producing job type — proof
         # the grammar is grain-shaped, not science-specific.
-        unit = ProcessingUnit(exposure=12345, sca=3)
+        unit = ProcessingUnit(payload=payloads.build(
+            JOB_TYPE_REFERENCE_IMAGE, exposure=12345, sca=3))
         scope = build_input_scope(JOB_TYPE_REFERENCE_IMAGE, unit)
         self.assertEqual(parse_exposure_sca_scope(scope), (12345, 3))
 
@@ -197,6 +206,7 @@ class InputScopeGrammarTests(unittest.TestCase):
         # functions independently agree.
         from pipeline.seams import _input_scope_for
 
-        unit = ProcessingUnit(exposure=90000, sca=7)
+        unit = ProcessingUnit(payload=payloads.build(
+            JOB_TYPE_SCIENCE, exposure=90000, sca=7))
         self.assertEqual(_input_scope_for(JOB_TYPE_SCIENCE, unit),
                          build_input_scope(JOB_TYPE_SCIENCE, unit))

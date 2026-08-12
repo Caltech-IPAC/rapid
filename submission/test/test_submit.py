@@ -14,8 +14,10 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
+from submission import payloads
 from submission.batching import Batch
 from submission.manifest import Manifest, ProcessingUnit
+from submission.routes import JOB_TYPE_SCIENCE
 from submission.submit import (build_submit_kwargs, publish_manifest,
                                submit_batch)
 
@@ -51,7 +53,9 @@ class FakeBatchClient:
 
 def make_batch(count, batch_id="batch-1"):
     manifest = Manifest(
-        [ProcessingUnit(exposure=90210, sca=i + 1) for i in range(count)],
+        [ProcessingUnit(payload=payloads.build(
+            JOB_TYPE_SCIENCE, exposure=90210, sca=i + 1))
+         for i in range(count)],
         batch_id=batch_id)
     return Batch(manifest=manifest, reason="size")
 
@@ -134,7 +138,10 @@ def test_manifest_is_keyed_by_batch_id(store):
 
 def test_publishing_a_manifest_without_a_batch_id_is_an_error(store):
     with pytest.raises(ValueError, match="batch_id"):
-        publish_manifest(Manifest([ProcessingUnit(1, 1)]), store)
+        publish_manifest(
+            Manifest([ProcessingUnit(payload=payloads.build(
+                JOB_TYPE_SCIENCE, exposure=1, sca=1))]),
+            store)
 
 
 # ---------------------------------------------------------------------------

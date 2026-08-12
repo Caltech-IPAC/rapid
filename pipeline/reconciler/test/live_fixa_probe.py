@@ -122,10 +122,13 @@ def probe_incomplete_binding():
 
 def probe_run_scoped_identity(conn):
     """#3: two runs over one exposure/SCA are two logical jobs, not one."""
+    from submission import payloads
     from submission.manifest import ProcessingUnit
+    from submission.routes import JOB_TYPE_SCIENCE
 
     writer = AttemptWriter(dbc.ConnectionExecutor(conn))
-    unit = ProcessingUnit(exposure=999001, sca=1)
+    unit = ProcessingUnit(
+        payload=payloads.build(JOB_TYPE_SCIENCE, exposure=999001, sca=1))
 
     first = unit.logical_job_key(f"{RUN}-a")
     second = unit.logical_job_key(f"{RUN}-b")
@@ -162,10 +165,13 @@ def probe_run_scoped_identity(conn):
 
 def probe_claim_without_start(conn):
     """#9 and #10: claim, then prove the never-started window is reachable."""
+    from submission import payloads
     from submission.manifest import ProcessingUnit
+    from submission.routes import JOB_TYPE_SCIENCE
 
     writer = AttemptWriter(dbc.ConnectionExecutor(conn))
-    unit = ProcessingUnit(exposure=999002, sca=2)
+    unit = ProcessingUnit(
+        payload=payloads.build(JOB_TYPE_SCIENCE, exposure=999002, sca=2))
     logical = unit.logical_job_key(RUN)
     scheduler_job = f"{RUN}-job-claim"
 
@@ -220,10 +226,13 @@ def probe_claim_without_start(conn):
 def probe_started_cas(conn):
     """#10: the started transition is a real compare-and-set."""
     from observability.attempts import AttemptNotFound
+    from submission import payloads
     from submission.manifest import ProcessingUnit
+    from submission.routes import JOB_TYPE_SCIENCE
 
     writer = AttemptWriter(dbc.ConnectionExecutor(conn))
-    unit = ProcessingUnit(exposure=999003, sca=3)
+    unit = ProcessingUnit(
+        payload=payloads.build(JOB_TYPE_SCIENCE, exposure=999003, sca=3))
     logical = unit.logical_job_key(RUN)
     scheduler_job = f"{RUN}-job-cas"
 
@@ -279,10 +288,13 @@ def probe_resolver_refusals(conn):
     """#28: the resolver refuses to resolve across identities."""
     import psycopg2
 
+    from submission import payloads
     from submission.manifest import ProcessingUnit
+    from submission.routes import JOB_TYPE_SCIENCE
 
     writer = AttemptWriter(dbc.ConnectionExecutor(conn))
-    unit = ProcessingUnit(exposure=999004, sca=4)
+    unit = ProcessingUnit(
+        payload=payloads.build(JOB_TYPE_SCIENCE, exposure=999004, sca=4))
     logical = unit.logical_job_key(RUN)
     scheduler_job = f"{RUN}-job-refuse"
 
@@ -321,7 +333,9 @@ def probe_resolver_refusals(conn):
     # taken, so this is a separate logical job whose row the RECONCILER
     # created (scheduler index, no application index), claimed by attempt 1,
     # and then contended for by attempt 2.
-    logical_b = ProcessingUnit(exposure=999005, sca=5).logical_job_key(RUN)
+    logical_b = ProcessingUnit(
+        payload=payloads.build(JOB_TYPE_SCIENCE, exposure=999005, sca=5)
+    ).logical_job_key(RUN)
     scheduler_b = f"{RUN}-job-claimed"
     writer.create_logical_job(logical_b, RUN, binding_for("1"),
                               scheduler_job_id=scheduler_b)

@@ -22,8 +22,10 @@ from submission.routes import (  # noqa: E402
 )
 
 
-def units(count=2, exposure=90210):
-    return [ProcessingUnit(exposure=exposure, sca=n + 1) for n in range(count)]
+def units(count=2, exposure=90210, job_type=JOB_TYPE_SCIENCE):
+    return [ProcessingUnit(payload=payloads.build(job_type, exposure=exposure,
+                                                  sca=n + 1))
+           for n in range(count)]
 
 
 def science_facts(**overrides):
@@ -47,12 +49,14 @@ def science_facts(**overrides):
 # --- job type and route ----------------------------------------------
 
 def test_a_manifest_names_its_job_type():
-    manifest = Manifest(units(), batch_id="b1", job_type="reference-image")
+    manifest = Manifest(units(job_type=JOB_TYPE_REFERENCE_IMAGE), batch_id="b1",
+                        job_type="reference-image")
     assert manifest.job_type == "reference-image"
 
 
 def test_the_job_type_fixes_the_route():
-    manifest = Manifest(units(), job_type="reference-image")
+    manifest = Manifest(units(job_type=JOB_TYPE_REFERENCE_IMAGE),
+                        job_type="reference-image")
     assert manifest.workload_class == CLASS_BULK
     assert manifest.db_lane == LANE_TRANSACTION
     assert manifest.ppid == 12
@@ -65,8 +69,9 @@ def test_a_session_lane_job_type_carries_the_session_lane():
     # identity — a bare `units()` here would have every unit collide on
     # the same missing-field subject.
     crossmatch_units = [
-        ProcessingUnit(exposure=20260808, sca=0,
-                       fields={"proc_date": "20260808", "field": field})
+        ProcessingUnit(payload=payloads.build(
+            JOB_TYPE_CROSSMATCH, proc_date="20260808", field=field,
+            target_tables=("xmatch_20260808",)))
         for field in (101, 202)
     ]
     manifest = Manifest(crossmatch_units, job_type="crossmatch")
@@ -82,9 +87,17 @@ def test_an_unknown_job_type_is_refused_at_construction():
 
 
 def test_the_job_type_survives_a_round_trip():
-    original = Manifest(units(), batch_id="b1", job_type="registration")
+    # JUDGEMENT CALL: was job_type="registration". Registration has no
+    # payload type (`payloads.PAYLOAD_TYPES`), and a unit's payload now
+    # dictates the only job type it can belong to (`ProcessingUnit.dedup_key`
+    # has "no fallback" for a job type outside the typed-identity registry —
+    # "a job type without a payload cannot construct a unit at all"). Swapped
+    # to reference-image, a payload-bearing job type distinct from science,
+    # to keep exercising the same round-trip-of-job-type property.
+    original = Manifest(units(job_type=JOB_TYPE_REFERENCE_IMAGE), batch_id="b1",
+                        job_type="reference-image")
     restored = Manifest.from_json(original.to_json())
-    assert restored.job_type == "registration"
+    assert restored.job_type == "reference-image"
     assert restored == original
 
 
@@ -104,16 +117,25 @@ def test_schema_version_1_manifests_are_refused():
 
 
 def test_two_manifests_differing_only_in_job_type_are_not_equal():
-    left = Manifest(units(), batch_id="b1", job_type="science")
-    right = Manifest(units(), batch_id="b1", job_type="reprocessing")
+    # JUDGEMENT CALL: was job_type="reprocessing" on the right. Reprocessing
+    # has no payload type, so its units cannot be constructed at all (see
+    # the round-trip test above) — swapped to reference-image, still a
+    # payload-bearing job type distinct from "science" on the left.
+    left = Manifest(units(job_type=JOB_TYPE_SCIENCE), batch_id="b1",
+                    job_type="science")
+    right = Manifest(units(job_type=JOB_TYPE_REFERENCE_IMAGE), batch_id="b1",
+                     job_type="reference-image")
     assert left != right
 
 
 def test_the_job_type_is_in_the_checksum():
     # The checksum is what a starting job proves its manifest by; a
     # rerouted manifest must not check out as the same one.
-    left = Manifest(units(), batch_id="b1", job_type="science")
-    right = Manifest(units(), batch_id="b1", job_type="reprocessing")
+    # JUDGEMENT CALL: was job_type="reprocessing" on the right — see above.
+    left = Manifest(units(job_type=JOB_TYPE_SCIENCE), batch_id="b1",
+                    job_type="science")
+    right = Manifest(units(job_type=JOB_TYPE_REFERENCE_IMAGE), batch_id="b1",
+                     job_type="reference-image")
     assert left.checksum() != right.checksum()
 
 
@@ -149,30 +171,38 @@ def test_validate_for_rejects_the_wrong_queue():
 # --- key zero-padding (catalog co-design, storage.md § Key schema) ----
 
 def test_key_zero_pads_exposure_to_six_digits_and_sca_to_two():
-    unit = ProcessingUnit(exposure=1, sca=2)
+    unit = ProcessingUnit(payload=payloads.build(JOB_TYPE_SCIENCE, exposure=1,
+                                                 sca=2))
     assert unit.key == "000001/02"
 
 
 def test_key_does_not_truncate_a_component_that_already_fills_its_width():
-    unit = ProcessingUnit(exposure=123456, sca=42)
+    unit = ProcessingUnit(payload=payloads.build(JOB_TYPE_SCIENCE,
+                                                 exposure=123456, sca=42))
     assert unit.key == "123456/42"
 
 
 def test_key_padding_keeps_two_different_units_distinct():
-    assert (ProcessingUnit(exposure=1, sca=2).key
-           != ProcessingUnit(exposure=12, sca=2).key)
+    assert (ProcessingUnit(payload=payloads.build(
+                JOB_TYPE_SCIENCE, exposure=1, sca=2)).key
+           != ProcessingUnit(payload=payloads.build(
+                JOB_TYPE_SCIENCE, exposure=12, sca=2)).key)
 
 
 # --- per-invocation facts ---------------------------------------------
 
 def test_facts_default_to_empty_and_serialize_away():
-    unit = ProcessingUnit(exposure=1, sca=2)
-    assert unit.to_dict() == {"exposure": 1, "sca": 2}
+    unit = ProcessingUnit(payload=payloads.build(JOB_TYPE_SCIENCE, exposure=1,
+                                                 sca=2))
+    assert unit.to_dict() == {"payload": {"grain": "exposure_sca",
+                                          "exposure": 1, "sca": 2}}
 
 
 def test_facts_round_trip_with_their_types():
-    unit = ProcessingUnit(exposure=90210, sca=1, facts=science_facts())
-    restored = ProcessingUnit.from_dict(unit.to_dict())
+    unit = ProcessingUnit(payload=payloads.build(JOB_TYPE_SCIENCE,
+                                                 exposure=90210, sca=1),
+                          facts=science_facts())
+    restored = ProcessingUnit.from_dict(unit.to_dict(), JOB_TYPE_SCIENCE)
     assert restored == unit
     assert restored.facts.mjdobs == 60553.25
     assert restored.facts.overlapping_fields == [511, 512, 513]

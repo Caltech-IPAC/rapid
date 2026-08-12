@@ -22,8 +22,9 @@ import boto3
 from database.modules.utils import rapid_db_connect as dbc
 from observability.attempts import ExecutionBinding
 from pipeline import seams
+from submission import payloads
 from submission.manifest import ProcessingUnit, UnitFacts
-from submission.routes import JOB_TYPE_REGISTRATION, route_for
+from submission.routes import JOB_TYPE_REGISTRATION, JOB_TYPE_SCIENCE, route_for
 
 logging.basicConfig(level=logging.INFO,
                     format="%(asctime)s %(levelname)s %(name)s %(message)s")
@@ -57,8 +58,27 @@ def main():
     # One unit. Registration's unit is a pass, not a per-SCA image, but it
     # still keys like every other unit so the run-scoped logical-job identity
     # and the array-index binding work unchanged.
-    unit = ProcessingUnit(exposure=999200, sca=1,
-                          facts=UnitFacts(rid=None))
+    #
+    # FLAGGED (payload migration, see the migration report): JOB_TYPE_REGISTRATION
+    # has NO entry in `payloads.PAYLOAD_TYPES` — it is deliberately out of the
+    # typed-payload registry's scope (submission/subjects.py's own docstring
+    # names "registration, reprocessing" as excluded). There is therefore no
+    # payload type this call can legitimately declare JOB_TYPE_REGISTRATION
+    # under. Built here as a SciencePayload only to keep this live probe's
+    # `ProcessingUnit` construction syntactically valid post-migration; the
+    # payload's declared job_type ("science") does NOT match the job_type this
+    # probe submits under (JOB_TYPE_REGISTRATION, below). This is very likely
+    # to raise downstream: `seams.submit_units` -> `_attach_work_unit` ->
+    # `_input_scope_for` -> `subjects.build_input_scope` calls
+    # `subjects.subject_for(JOB_TYPE_REGISTRATION)`, and registration has no
+    # entry in `subjects.SUBJECTS` either — so this probe appears to already
+    # be broken against the current `submit_units`/`subjects` contract,
+    # independent of this construction fix. Not resolved here: no non-test
+    # file may be touched by this task, and the fix belongs to whoever owns
+    # the registration-submission contract.
+    unit = ProcessingUnit(
+        payload=payloads.build(JOB_TYPE_SCIENCE, exposure=999200, sca=1),
+        facts=UnitFacts(rid=None))
 
     print(f"=== W8 live registration, run {RUN} ===")
     print(f"    definition {latest['jobDefinitionArn']}")
