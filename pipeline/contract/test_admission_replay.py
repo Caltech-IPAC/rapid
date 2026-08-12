@@ -216,6 +216,14 @@ def test_an_unsealed_manifest_is_refused():
 
         dateobs = _dateobs("2026-03-03", tag)
         expid = an_exposure(conn, dateobs)
+        # COMMITTED BEFORE THE REFUSAL IS PROVOKED. The refusal aborts the
+        # transaction and the `conn.rollback()` below discards everything
+        # uncommitted in it — including the `exposures` row this admission's
+        # FK needs. A first version left it uncommitted and the retry then
+        # failed with `admission_exposures_expid_fk`, which reads as a schema
+        # problem and is really a fixture-lifetime one.
+        conn.commit()
+
         with pytest.raises(Exception) as caught:
             repo.admit_exposure(dateobs=dateobs, expid=expid, facts=FACTS,
                                 release_identity=release,
