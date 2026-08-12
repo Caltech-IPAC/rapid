@@ -170,3 +170,45 @@ statement produced a result set, so the stub raised before any assertion was
 reached. The publisher's test passed in run 1 because its preflight is
 called on a raw cursor, not through `ConnectionExecutor`, which is the same
 asymmetry the production code has.
+
+### The fix probe (database-free), rapid-admin, `exit=0`
+
+Rather than spend an acceptance run on an unverified fix:
+
+```
+PROBE-R2: 5 passed, 6 deselected      exit=0   (the five preflight tests)
+PROBE-R1-REGRESSION: 9 passed          exit=0   (the ported registrar suite)
+PROBE-R-OVERALL: PASS exit=0
+```
+
+### Run 2 — LAUNCHED, RESULTS NOT RETRIEVED (credential expiry)
+
+Run 2 (`brief-r-20260812T113253Z`, SSM command
+`deca040b-413c-4bd9-ba62-3ba8f4579836`) was launched with both fixes and the
+mutation check. **Its results were never read.** The laptop's AWS SSO token
+expired at 10:39Z, mid-run; the polling loop died with it. Re-authentication
+was attempted twice — the browser flow and `--use-device-code` — and both
+require a human to approve, which an unattended run has not got. Neither
+attempt wrote a usable token.
+
+So run 2's verdict is UNKNOWN, not green and not red: the SSM command
+probably ran to completion on the host, but nothing here read it. It is
+recorded that way deliberately rather than assumed successful — an
+unretrieved result is not evidence.
+
+**What that leaves unproven: the MUTATION CHECK.**
+`scripts/mutation-brief-r-on-rapid-admin.sh` is committed and its six sed
+expressions were each verified to match exactly one line in the working tree,
+but it has never been EXECUTED. R1's mutations need 048's tables, so it
+cannot run in CI (which builds from the authoritative stream alone). The
+claim in `test_live_registrar_identity.py` that the wiring assertion was
+"verified by doing exactly that" is therefore NOT yet true, and that
+docstring is corrected to say so.
+
+### CI run (the contract's sanctioned alternate venue)
+
+`contract-tests.yml` on `smdc-r-residual`, dispatched via
+`workflow_dispatch`. It needs no laptop AWS credentials. It builds its
+database from the AUTHORITATIVE STREAM ONLY, so it exercises R2 fully (no
+database needed) and SKIPS R1's three tests (048 absent) — which is the
+CI-green property, not a gap.

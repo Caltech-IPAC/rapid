@@ -126,11 +126,16 @@ def test_the_live_registrar_passes_an_identity_repository(conn, capture,
                                                           records_bucket_env):
     """048 present: the LIVE path wires the repository, on the pass's own conn.
 
-    **THIS IS THE MUTATION-CHECKED ASSERTION** (H round 2's standard). Remove
-    the `identity_repository=` argument from
-    `pipeline/operator/registrar.py:for_connection` and this test fails on
-    `assert repository is not None` — verified by doing exactly that, not by
-    inspection. See `notes-r-evidence.md`.
+    **THE MUTATION CHECK FOR THIS ASSERTION IS WRITTEN BUT NOT YET RUN.**
+    Removing the `identity_repository=` argument from
+    `pipeline/operator/registrar.py:for_connection` should fail this test on
+    `assert repository is not None`, and
+    `scripts/mutation-brief-r-on-rapid-admin.sh` performs exactly that
+    mutation — but the acceptance run carrying it lost its AWS credentials
+    before its results could be read, so nothing has yet OBSERVED this test
+    go red. Stated as pending rather than claimed: an unrun check is not
+    evidence, and H round 2's standard is that a green must be earned.
+    Re-run that script on rapid-admin to close it. See `notes-r-evidence.md`.
     """
     for table in IDENTITY_TABLES:
         if not fixture.has_table(conn, table):
