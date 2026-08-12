@@ -84,6 +84,41 @@ directory or `scripts/`, e.g. `pipeline/runtime/test/run-on-rapid-admin.sh:211`,
 `pipeline/registration/test/run-fixd-chain-on-rapid-db.sh:134`. These are the
 enumerated approved exclusions for the criterion-11 exclusivity assertion.
 
+## Two schema facts the brief states incorrectly
+
+Both were caught by verifying against the head rather than trusting the brief,
+and both would have produced SQL that fails to execute or silently mis-joins.
+
+1. **`work_units` has no `unit_key` column, and its primary key is
+   `work_unit_id`, not `unit_id`.** `036-intent-schema-v1.sql:111-122` gives
+   the table `work_unit_id`, `job_type`, `input_scope`, `operational_class`,
+   `definition_version`, `state`, `blocked_reason`, `superseded_by_unit_id`,
+   `created_at`, `updated_at`. The persisted unit identity is
+   `(job_type, input_scope)`. `ProcessingUnit.key` — the value
+   `product_prefix()` interpolates — is the declared-subject tuple joined with
+   `/`, and `input_scope` is that same grammar with the leading `job_type`
+   element dropped (`submission/subjects.build_input_scope`, wrapped at
+   `pipeline/seams.py:411`). The canonical round trip therefore rebuilds the
+   unit key as `job_type || '/' || input_scope`, which is what
+   `reference_sql.attempt_facts` does.
+
+2. **`superseded_by_unit_id` DOES exist** — `036-intent-schema-v1.sql:118`,
+   with its FK at `:123-124`, its self-reference CHECK at `:149`, and the
+   partial unique index on `superseded_by_unit_id IS NULL` at `:185-190`. The
+   brief says "there is no `superseded_by_unit_id` column; do not invent one"
+   while defining FULLY DISCHARGED.
+
+   **The brief's ruling is nonetheless implemented exactly as written**, and
+   the correction does not change the code. The instruction's *substance* is
+   that FULLY DISCHARGED must not be read as the schema's supersession
+   concept — and it is not: `is_fully_discharged` tests
+   `state IN ('complete','cancelled')`, the registration watermark, and the
+   live-attempt count, and never consults supersession. The column's existence
+   is recorded here only so the next reader is not misled into thinking a
+   supersession-based predicate was unavailable rather than deliberately
+   unused. Using it would in fact be wrong: a unit can be superseded from any
+   state, including `ready`, so a superseded unit is not thereby discharged.
+
 ## The re-derived reference set — three classes the brief's list omits
 
 The brief requires the reference set be **re-derived** by enumerating every S3
