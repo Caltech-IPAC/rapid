@@ -38,6 +38,7 @@ against are the same schema, and 044-046 remain the next free numbers.
 | `046-cancel-work-units-function.sql` | `derived.cancel_work_units`, the audited mutation-API entry point, plus the work-unit lock in `derived.retry_parked_attempts` | C3 |
 | `047-idempotency-and-expected-state.sql` | the mutation contract's two missing fields: an `idempotency_key` / `expected_state` column pair on `derived.mutation_audit`, keyed OVERLOADS of `add_problem_category` and `retry_parked_attempts` taking both, the shared `derived.mutation_replay` lookup, and `derived.record_external_action` for operator actions whose target is outside this database | G2, G3 |
 | `048-products-and-artifacts.sql` | `products` (one row per deterministic product key, UNIQUE-constrained), `artifacts` (one row per published file per attempt, replay-unique on attempt + record sequence + published name, full 64-character checksum with its algorithm), `product_artifacts` (the current binding, one current row per product), plus a nullable `product_id` FK on `refimages` and `diffimages` | D1, D2 |
+| `049-association-sets-and-watermarks.sql` | `association_sets` (immutable set identity, at most one live prompt set, seeded as a well-known row), `association_watermarks` keyed `(association_set, lane)` with a sequence-shaped `(proc_date, field)` value, `derived.live_association_set()` as the single well-known-row lookup, `derived.association_table_name` for set-scoped clone naming, and `derived.advance_association_watermark` as the CAS-guarded monotonic advance | F1 |
 
 ## Brief G's draft (047), for its reviewer
 
@@ -104,12 +105,70 @@ Four review points, each argued at length in the file's own header:
 Applied twice in the acceptance run to demonstrate idempotence
 (`BRIEF-D-DRAFT-048-REAPPLY: PASS exit=0`).
 
+## Brief F's draft (049), for its reviewer
+
+Written against stream head **043** (`rapid_systems` at
+`e2b5ebcf3eb33e1bb3afd9b392525ac1507ce62d`, 44 stream files), the same head
+briefs C, G and D were written and accepted against. 049 is the next free
+number after D's 048.
+
+Six review points, each of which was a decision rather than a default:
+
+1. **The live set keeps today's clone names.** `derived.association_table_name`
+   returns `astroobjects_<field>` unchanged for the live prompt set and
+   `astroobjects_s<set>_<field>` for any other. Adopting this file therefore
+   renames nothing, moves no data and needs no backfill, and every existing
+   reader keeps working. Reprocessing isolation is a consequence of the naming
+   rather than a rule anything enforces: a reprocessing set cannot mutate the
+   live tables because it never names them.
+2. **The watermark value is sequence-shaped, not boolean** — the last accepted
+   unit's `(proc_date, field)`, which is the canonical claim order's own key.
+   This mirrors the registration watermark deliberately so re-acceptance and
+   supersession need no special case, and the guard is the UPDATE's own WHERE
+   clause, never a read-then-write in the application.
+3. **`watermark_proc_date` is `text`, not `date`.** The pipeline's processing
+   date is a zero-padded `YYYYMMDD` string everywhere
+   (`submission.payloads.CrossmatchPayload.proc_date`), and text comparison of
+   that form is the same order as date comparison. A `date` column would need
+   a conversion at every comparison and would silently mis-order against a
+   string-shaped argument.
+4. **At most one live prompt set**, enforced by a partial unique index rather
+   than by convention. The design says "the live set" in the singular
+   throughout; this is where that becomes true.
+5. **No table-level write grant on `association_sets`.** Sets are registered by
+   migration or by an operator procedure, never by a pipeline job: the set
+   identity is immutable, and a job that could mint one could silently escape
+   the ordering it is supposed to obey. The read role is `rapid_read`, per
+   `002-grants.sql` — not `rapid_pipeline_read`, which does not exist.
+6. **`derived.association_table_name` is dropped before creation and its
+   parameters are `p_`-prefixed.** Naming a parameter after the column it
+   compares against made PL/pgSQL resolve the qualified reference as a table
+   and fail with "missing FROM-clause entry"; `CREATE OR REPLACE` cannot then
+   rename the parameters of an already-created function, so the drop is what
+   lets a database holding an earlier revision take the corrected one.
+
+The new advisory-lock namespace is `AL 0x414C`, placed as LEVEL 3 beneath the
+existing `R4 0x5234` / `W6 0x5732` (level 1) and `WU 0x5755` (level 2). The
+existing order is unchanged and unreordered; AL is the lowest level, which is
+what keeps the order total and therefore deadlock-free. The four namespaces
+are asserted pairwise distinct in the contract tier.
+
+Applied twice in the acceptance run to demonstrate idempotence
+(`BRIEF-F-DRAFT-049-REAPPLY: PASS exit=0`), and the recorded acceptance run
+reported `BRIEF-F-PASS2-SKIPS: 0` with all seven criteria green.
+
 ## How the application behaves while these are unapplied
 
 Every code path that needs draft schema **probes for it and degrades
 explicitly** rather than assuming it. `pipeline.intent.cancellation.
 is_available` asks `pg_proc` whether 046's function exists; the contract tests
 covering C1 and C3's cancellation skip cleanly when their schema is absent.
+`RAPIDDB.get_association_claim_position` probes `to_regclass` for 049's
+`association_watermarks` and answers `None` when it is not there, at which
+point `gather_crossmatch_units` logs that it is gathering without the rule 19
+ordering gate and behaves exactly as it did before brief F. The ordering is a
+property of the deployed schema, so a deployment without it does not get to
+claim the ordering — and is not broken by its absence either.
 That is what keeps `smdc` CI green — CI builds its database from the
 authoritative stream, which does not contain these files, so the draft-schema
 tests skip there and the rest of the suite still gates regressions.
