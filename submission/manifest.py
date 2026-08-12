@@ -71,8 +71,7 @@ from typing import Any, Iterable, Iterator
 
 from . import payloads
 from .routes import JOB_TYPE_SCIENCE, Route, route_for, validate_route
-from .subjects import (GRAIN_EXPOSURE_SCA, SubjectError, UnknownJobType,
-                       subject_for)
+from .subjects import GRAIN_EXPOSURE_SCA, SubjectError
 
 # Batch's hard ceiling on array children (design/compute.md § Submission).
 MAX_ARRAY_SIZE = 10000

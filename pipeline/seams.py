@@ -370,7 +370,7 @@ def _precreate(writer, manifest, run_id, binding, moment, execute=None):
     error by message text any more; see `pipeline.intent.errors`.
     """
     from observability.attempts import AttemptIdentity
-    from submission.subjects import UnknownJobType, attempt_identity_fields
+    from submission.subjects import attempt_identity_fields
 
     attempt_ids = []
     for index, unit in enumerate(manifest.units):
