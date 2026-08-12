@@ -90,63 +90,92 @@ def _public_methods(text):
     return methods
 
 
+#: The sha256 of `database/modules/utils/rapid_db.py` at the branch point
+#: (`smdc` @ 066c353). **RECORDED RATHER THAN COMPUTED FROM GIT**, and that is
+#: the point: the acceptance host stages a TARBALL, not a clone, so every
+#: git-based form of this assertion SKIPS there — which is precisely the venue
+#: where it most needs to run, and a skipped criterion proves nothing (the
+#: PASS2 zero-skip gate exists because of exactly this failure mode).
+#:
+#: A recorded digest needs no history, no remote ref and no working tree, so
+#: it runs identically in CI, on rapid-admin and on a laptop. Updating it is
+#: a deliberate act that shows up in a diff — which is the correct amount of
+#: friction for editing a frozen class.
+RAPID_DB_BRANCH_POINT_SHA256 = (
+    "665a8a2e0c6fa45ef7575a4a6e7270db59e41dffc9ab5d102f9eb09785164dba")
+
+
+def _file_digest(path):
+    import hashlib
+    with open(path, "rb") as handle:
+        return hashlib.sha256(handle.read()).hexdigest()
+
+
 def test_rapiddb_gains_no_new_method_on_this_branch():
     """Criterion 12 — asserted MECHANICALLY, not by review.
 
     `RAPIDDB` is frozen (rule 17; brief G's ratified merge decision), and this
     is the arc's most repeated regression: the D, F and E workers each added a
-    method to this class and each needed a fix round to carve it back out.
-    An assertion is what stops the fourth occurrence being discovered at a
-    merge gate.
+    method to this class and each needed a fix round to carve it back out. An
+    assertion is what stops a fourth occurrence being found at a merge gate.
 
-    Compares the file's public method set against the branch point rather than
-    against a hard-coded list: a hard-coded list would have to be updated by
-    the very edit it is meant to catch.
+    **THE GIT-FREE FORM IS THE ONE THAT MATTERS.** Where history is available
+    the method set is diffed against the branch point; where it is not — the
+    acceptance host, which stages a tarball — the recorded digest is compared
+    instead, so the criterion is exercised in BOTH venues rather than skipping
+    in the one that counts.
     """
+    current = os.path.join(REPO_ROOT, RAPID_DB)
+    assert os.path.isfile(current), RAPID_DB
+
     branch_point = subprocess.run(
         ["git", "merge-base", "HEAD", "origin/smdc"],
         cwd=REPO_ROOT, capture_output=True, text=True)
-    if branch_point.returncode != 0:
-        # Fall back to the recorded branch point when the remote ref is not
-        # fetched (the acceptance host stages a tarball, not a clone).
-        base = "066c353"
-    else:
+    if branch_point.returncode == 0:
         base = branch_point.stdout.strip()
+        before = subprocess.run(["git", "show", "%s:%s" % (base, RAPID_DB)],
+                                cwd=REPO_ROOT, capture_output=True, text=True)
+        if before.returncode == 0:
+            with open(current, "r", encoding="utf-8") as handle:
+                after_text = handle.read()
+            added = _public_methods(after_text) - _public_methods(
+                before.stdout)
+            assert not added, (
+                "RAPIDDB is FROZEN (rule 17) and this branch adds %d public "
+                "method(s) to it: %s. New database access is a carved "
+                "repository under pipeline/repositories/ — connection owned "
+                "by the caller, named-record returns, typed errors. The D, F "
+                "and E workers each broke this and each needed a fix round."
+                % (len(added), sorted(added)))
+            return
 
-    before = subprocess.run(["git", "show", "%s:%s" % (base, RAPID_DB)],
-                            cwd=REPO_ROOT, capture_output=True, text=True)
-    if before.returncode != 0:
-        pytest.skip("no git history available here (%s)"
-                    % before.stderr.strip()[:80])
-
-    with open(os.path.join(REPO_ROOT, RAPID_DB), "r",
-              encoding="utf-8") as handle:
-        after_text = handle.read()
-
-    added = _public_methods(after_text) - _public_methods(before.stdout)
-    assert not added, (
-        "RAPIDDB is FROZEN (rule 17) and this branch adds %d public "
-        "method(s) to it: %s. New database access is a carved repository "
-        "under pipeline/repositories/ — connection owned by the caller, "
-        "named-record returns, typed errors. The D, F and E workers each "
-        "broke this and each needed a fix round."
-        % (len(added), sorted(added)))
+    # NO HISTORY: assert the recorded digest instead, and do NOT skip.
+    assert _file_digest(current) == RAPID_DB_BRANCH_POINT_SHA256, (
+        "%s differs from its recorded branch-point digest; RAPIDDB is frozen "
+        "(rule 17). If this file was legitimately changed by a ratified "
+        "decision, update RAPID_DB_BRANCH_POINT_SHA256 in the same commit — "
+        "the friction is deliberate." % RAPID_DB)
 
 
 def test_rapid_db_is_byte_identical_with_the_branch_point():
     """The stronger form: this branch does not touch the file at all.
 
-    Stronger than the method-set assertion and deliberately kept alongside it:
+    Stronger than the method-set assertion and kept alongside it deliberately:
     the method-set check would pass an edit that changed a method's BODY,
-    which is still an edit to a frozen class.
+    which is still an edit to a frozen class. Falls back to the recorded
+    digest for the same reason as above, so it too runs on the acceptance
+    host rather than skipping there.
     """
+    current = os.path.join(REPO_ROOT, RAPID_DB)
     changed = subprocess.run(
         ["git", "diff", "--name-only", "origin/smdc...HEAD", "--", RAPID_DB],
         cwd=REPO_ROOT, capture_output=True, text=True)
-    if changed.returncode != 0:
-        pytest.skip("no git history available here")
-    assert not changed.stdout.strip(), (
-        "%s is modified on this branch; RAPIDDB is frozen" % RAPID_DB)
+    if changed.returncode == 0:
+        assert not changed.stdout.strip(), (
+            "%s is modified on this branch; RAPIDDB is frozen" % RAPID_DB)
+        return
+    assert _file_digest(current) == RAPID_DB_BRANCH_POINT_SHA256, (
+        "%s differs from its recorded branch-point digest" % RAPID_DB)
 
 
 def test_the_admission_carve_exists_and_is_where_new_access_lives():
