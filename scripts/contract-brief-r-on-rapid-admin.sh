@@ -371,6 +371,27 @@ for spec in \
 done
 echo "BRIEF-R-CRITERIA: exit=$crit_rc"
 
+# --- THE MUTATION CHECK ------------------------------------------------------
+# A green criterion proves nothing until the test has been shown to go RED
+# when the wiring it tests is removed (H round 2's standard). R is entirely
+# wiring, so this is not an extra: a test that passes with and without the
+# `identity_repository=` argument is a test that measures nothing, and the
+# defect R1 exists to close is precisely a wiring that was absent while
+# everything reported success.
+#
+# Run HERE, after the criteria and before the stub tier, because the R1
+# mutations need base+drafts — 048's tables must exist for the wiring's own
+# branch to be reachable.
+"${STAGE_DIR}/repo/scripts/mutation-brief-r-on-rapid-admin.sh" "$STAGE_DIR" \
+    >"${STAGE_DIR}/mutation.log" 2>&1
+mutation_rc=$?
+grep -E '^(MUTATION-|=== )' "${STAGE_DIR}/mutation.log"
+if [ "$mutation_rc" -ne 0 ]; then
+    echo "--- BRIEF-R-MUTATION detail ---"
+    tail -25 "${STAGE_DIR}/mutation.log"
+fi
+echo "BRIEF-R-MUTATION: exit=$mutation_rc"
+
 if [ "$suite_rc" -ne 0 ]; then
     echo "--- BRIEF-R-PASS2 failures ---"
     grep -E '^(FAILED|ERROR)' "${STAGE_DIR}/pass2.log" | head -20
@@ -405,13 +426,17 @@ echo "BRIEF-R-STUB-TIER: exit=$stub_rc"
 # SIX TERMS, NOT FIVE: `entrypoint_rc` joins F's list because acceptance 10
 # names the entry points, and a check whose result cannot fail the run is a
 # check that reports rather than gates.
+# SEVEN TERMS: `mutation_rc` joins the conjunction for the same reason
+# `entrypoint_rc` did in E — a check whose result cannot fail the run is a
+# check that reports rather than gates, and R's whole subject is wiring whose
+# absence went unnoticed while every other signal stayed green.
 if [ "$suite_rc" -eq 0 ] && [ "$stub_rc" -eq 0 ] && [ "$pass1_rc" -eq 0 ] \
         && [ "$crit_rc" -eq 0 ] && [ "$reapply_rc" -eq 0 ] \
-        && [ "$entrypoint_rc" -eq 0 ]; then
+        && [ "$entrypoint_rc" -eq 0 ] && [ "$mutation_rc" -eq 0 ]; then
     echo "BRIEF-R-OVERALL: PASS exit=0"
     exit 0
 fi
 echo "BRIEF-R-OVERALL: FAIL exit=1 (pass1=$pass1_rc contract=$suite_rc " \
      "stub=$stub_rc criteria=$crit_rc reapply=$reapply_rc " \
-     "entrypoints=$entrypoint_rc)"
+     "entrypoints=$entrypoint_rc mutation=$mutation_rc)"
 exit 1

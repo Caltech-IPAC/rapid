@@ -186,6 +186,14 @@ class _StubCursor:
     def __init__(self, recorder):
         self._recorder = recorder
         self._rows = []
+        #: `ConnectionExecutor.execute` returns ROWS when `description` is not
+        #: None and `rowcount` when it is — that attribute is the driver's
+        #: discriminator between "produced a result set" and "did not", and a
+        #: cursor double without it raises AttributeError before any assertion
+        #: in this file is reached. Every statement these preflights issue is
+        #: a SELECT, so it is set unconditionally rather than toggled.
+        self.description = (("column", None, None, None, None, None, None),)
+        self.rowcount = 0
 
     def __enter__(self):
         return self

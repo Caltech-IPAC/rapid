@@ -23,6 +23,47 @@ import unittest
 from pipeline.operator import registrar as opregistrar
 
 
+class FakeConnection:
+    """A connection double that can ANSWER the DRAFT-048 catalog probe.
+
+    Package R's wiring asks the catalog whether 048's tables exist before it
+    builds an identity repository, so a bare `object()` no longer stands in
+    for a connection here — it has no `cursor()`. The double answers rather
+    than accepts: `present` decides the probe's verdict, so a test can put
+    the wiring on either branch deliberately and neither branch is the
+    accident of an unconfigured stub.
+
+    The connection IDENTITY is what these tests are about, so instances are
+    distinguishable by identity exactly as the `object()`s they replace were.
+    """
+
+    def __init__(self, present=True):
+        self.present = present
+        self.statements = []
+
+    def cursor(self):
+        return self._Cursor(self)
+
+    class _Cursor:
+        def __init__(self, conn):
+            self._conn = conn
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def execute(self, statement, params=None):
+            self._conn.statements.append(statement)
+
+        def fetchone(self):
+            return (self._conn.present,)
+
+        def close(self):
+            pass
+
+
 class ProductionRegistrarTests(unittest.TestCase):
     """Production must default to production."""
 
@@ -181,10 +222,20 @@ class RegistrarConnectionTests(unittest.TestCase):
         # that swallowed it silently would let the pre-binding replay path
         # regress without a test noticing. Tracking the real signature is
         # what makes this fake able to refuse a wrong call.
-        def fake_registrar(dbh, store, fallback_roles=None):
+        #
+        # `identity_repository` JOINS IT FOR THE SAME REASON, and the fake
+        # earned its keep here: package R wired it into this factory, and this
+        # double — modelling the real signature rather than **kwargs — refused
+        # the new call with a TypeError the moment it appeared. That is the
+        # double working. What R1 asserts about the value passed lives in
+        # `pipeline/contract/test_live_registrar_identity.py`, on a real
+        # connection; this file's subject is still the connection binding.
+        def fake_registrar(dbh, store, fallback_roles=None,
+                           identity_repository=None):
             captured["dbh"] = dbh
             captured["store"] = store
             captured["fallback_roles"] = fallback_roles
+            captured["identity_repository"] = identity_repository
             return lambda *a, **k: None
 
         import pipeline.registration.products as products_mod
@@ -195,7 +246,7 @@ class RegistrarConnectionTests(unittest.TestCase):
         factory = opregistrar.production_registrar()
         self.assertIsNotNone(factory)
 
-        pass_connection = object()
+        pass_connection = FakeConnection()
         callback = opregistrar.registration_callback(factory, pass_connection)
         self.assertIsNotNone(callback)
 
@@ -239,13 +290,13 @@ class RegistrarConnectionTests(unittest.TestCase):
         import pipeline.registration.products as products_mod
         real_registrar = products_mod.registrar
         products_mod.registrar = (
-            lambda dbh, store, fallback_roles=None:
+            lambda dbh, store, fallback_roles=None, identity_repository=None:
                 captured.append(dbh) or (lambda *a, **k: None))
         self.addCleanup(setattr, products_mod, "registrar", real_registrar)
 
         factory = opregistrar.production_registrar()
 
-        connections = [object(), object(), object()]
+        connections = [FakeConnection(), FakeConnection(), FakeConnection()]
         for conn in connections:
             opregistrar.registration_callback(factory, conn)
 
