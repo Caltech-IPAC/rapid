@@ -116,6 +116,8 @@ from alerts.kafka_producer import GLUE_HEADER_LEN
 from database.modules.utils.checked import CheckedHandle, RapidDBCallFailed
 from database.modules.utils.rapid_db import RAPIDDB
 from database.modules.utils.rapid_db_connect import ConnectionExecutor, transaction
+from pipeline.repositories.alert_outbox import AlertOutboxRepository
+from pipeline.repositories.errors import RepositoryQueryFailed
 from pipeline.runtime.errors import InputError
 
 logger = logging.getLogger(__name__)
@@ -274,6 +276,15 @@ def produce_alerts(context) -> None:
     # query can never be read as "no row" and fall through to an unguarded
     # publish.
     emissions = CheckedHandle(RAPIDDB.borrowing(conn))
+    # THE OUTBOX WRITES GO THROUGH A CARVED REPOSITORY, not through the handle
+    # above. `RAPIDDB` is frozen (brief G's ratified merge decision; target
+    # rule 17 puts new access behind narrow typed repositories), so the two
+    # calls brief E adds — the packet insert and the identity-basis lookup —
+    # live in `pipeline/repositories/alert_outbox.py` beside D's products and
+    # F's association repositories. Same connection, so they participate in
+    # this attempt's transactions exactly as the emission CAS does; different
+    # failure vocabulary, which is the point of the carve.
+    outbox = AlertOutboxRepository(conn)
 
     # STEP 1: THE CLAIM, in its own transaction, committed BEFORE any
     # publishing starts (integration ruling 3: "a crash after a committed
@@ -332,7 +343,7 @@ def produce_alerts(context) -> None:
     # the same for every candidate on it. The NAME (for the outbox column and
     # the effect record) is kept apart from the KWARGS (`alert_identity`'s
     # image argument) — see the call site below for what conflating them cost.
-    image_basis = _image_identity(emissions, pid, context)
+    image_basis = _image_identity(outbox, pid, context)
     image_kwargs = {key: value for key, value in image_basis.items()
                     if key != "basis_name"}
 
@@ -448,17 +459,17 @@ def produce_alerts(context) -> None:
                     # 'idempotent'.
                     #
                     # A GENUINE COLLISION RAISES, AND IS NOT CAUGHT HERE —
-                    # deliberately. The `except RapidDBCallFailed` below
-                    # handles ordinary query failure (the handle's exit_code
-                    # convention); a same-id-different-envelope collision is
-                    # not that. It raises psycopg2's own error straight
-                    # through `CheckedHandle`, unwinds this transaction, and
-                    # FAILS THE ATTEMPT. That is the intended outcome: it
-                    # means either the digest inputs are incomplete or two
-                    # different packets were minted under one identity, and
-                    # both are defects that must stop the pipeline rather than
-                    # be recorded as a drop and continued past.
-                    emissions.insert_alert_outbox_packet(
+                    # deliberately. The `except RepositoryQueryFailed` below
+                    # handles ordinary query failure; a same-id-different-
+                    # envelope collision is not that. The repository re-raises
+                    # the migration's own P0001 UNWRAPPED, so it unwinds this
+                    # transaction and FAILS THE ATTEMPT. That is the intended
+                    # outcome: it means either the digest inputs are
+                    # incomplete or two different packets were minted under
+                    # one identity, and both are defects that must stop the
+                    # pipeline rather than be recorded as a drop and continued
+                    # past.
+                    outbox.insert_packet(
                         packet["alert_id"], image_basis["basis_name"],
                         packet["payload"], packet["checksum"],
                         schema_version_id, topic, release_identity,
@@ -469,7 +480,18 @@ def produce_alerts(context) -> None:
                 writer.record_milestone(
                     "alert_published", _utcnow(), exposure_id=exposure,
                     sca=sca, producing_attempt_id=claiming_attempt_id)
-    except RapidDBCallFailed as exc:
+    except (RapidDBCallFailed, RepositoryQueryFailed) as exc:
+        # TWO VOCABULARIES, ONE OUTCOME. `RapidDBCallFailed` is the emission
+        # CAS's (the `CheckedHandle` adapter over frozen `RAPIDDB`);
+        # `RepositoryQueryFailed` is the outbox repository's. They are the same
+        # event as far as this handler is concerned — a database call in the
+        # confirmation transaction did not execute — and both are caught here
+        # so a failed outbox insert is not louder than a failed confirm.
+        #
+        # A COLLISION IS DELIBERATELY NOT IN THIS LIST: the repository lets the
+        # migration's own P0001 through unwrapped precisely so it escapes this
+        # handler and fails the attempt.
+        #
         # NOTHING WAS DELIVERED, so this is materially different from what it
         # meant before brief E. The transaction rolled back: no outbox rows,
         # no milestone, no confirmed emission — and no packets on the wire
@@ -619,7 +641,7 @@ def _pinned_schema_version(context, topic):
             f"be framed by a registry lookup at send time") from exc
 
 
-def _image_identity(emissions, pid, context):
+def _image_identity(outbox, pid, context):
     """Which identity basis this chip's packets use, and its image component.
 
     Returns the keyword arguments `alerts.identity.alert_identity` takes, plus
@@ -643,12 +665,16 @@ def _image_identity(emissions, pid, context):
 
     product_key = None
     try:
-        product_key = emissions.get_difference_image_product_key(pid)
-    except RapidDBCallFailed as exc:
+        product_key = outbox.product_key_for_difference_image(pid)
+    except RepositoryQueryFailed as exc:
         # A FAILED LOOKUP IS NOT AN ABSENT BINDING. Degrading to the legacy
         # basis here would mint permanent legacy identities for images that
         # may well have product keys, on the strength of a transient database
         # fault — and the identities are immutable once written.
+        #
+        # The repository already separates the two: a database with no DRAFT
+        # 048 answers None from a catalog PROBE, never from a failed query, so
+        # this branch is reached only by a genuine fault.
         raise RuntimeError(
             f"could not determine whether difference image pid {pid} has a "
             f"product binding: {exc}. Refusing to choose an identity basis on "

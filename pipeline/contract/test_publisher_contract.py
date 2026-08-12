@@ -350,6 +350,102 @@ def test_an_ambiguous_acknowledgement_resends_and_counts(outbox):
     assert claim_token is None
 
 
+def test_a_real_broker_refusal_reaches_refused_through_the_production_sender(
+        outbox):
+    """END TO END through the REAL classification path, not a stub shortcut.
+
+    Every other refusal test here hands the cycle a stub that raises
+    `DefiniteRefusal` directly — which proves the cycle's REFUSED branch is
+    correct and proves NOTHING about whether production can reach it. It could
+    not: the production sender raised a bare `RuntimeError` for every failure,
+    so a message the broker would never accept retried forever at the head of
+    the queue while this suite stayed green.
+
+    So this test starts where a real failure starts — a transport raising a
+    kafka-python-shaped error — and runs it through
+    `service.ProducerSender`, the object `main()` actually builds, into the
+    cycle, and asserts the ROW ends `REFUSED` in the database.
+    """
+    from pipeline.publisher.service import ProducerSender
+
+    class _Refusing:
+        """A transport raising the real client's oversize-record error."""
+
+        def __init__(self):
+            self.sent = []
+
+        def send(self, topic, value, key=None):
+            self.sent.append((topic, value, key))
+            raise type("MessageSizeTooLargeError", (Exception,), {})(
+                "record exceeds message.max.bytes")
+
+        def flush(self):
+            pass
+
+    transport = _Refusing()
+    sender = ProducerSender(type("_P", (), {"transport": transport})())
+    alert_id = outbox.add_packet()
+
+    counts = outbox.cycle(sender).run_once()
+
+    assert counts["refused"] == 1
+    state, _resends, reason, _sent_at, _token = outbox.state(alert_id)
+    assert state == "REFUSED"
+    assert "MessageSizeTooLargeError" in reason
+
+    # AND IT IS NOT RESENT. The row is terminal, so a second cycle claims
+    # nothing and the transport sees no second attempt.
+    again = outbox.cycle(sender).run_once()
+    assert again["claimed"] == 0
+    assert len(transport.sent) == 1
+
+
+def test_a_real_ambiguous_failure_resends_through_the_production_sender(outbox):
+    """The other half of the same path, and the reason the default is safe.
+
+    A timeout through the REAL sender must NOT terminalize: the row returns to
+    PENDING with its counter incremented and the identical bytes go out again.
+    Asserted end to end for the same reason as the refusal above — the
+    classification is only correct if both branches are reachable from a real
+    transport error.
+    """
+    from pipeline.publisher.service import ProducerSender
+
+    class _Flaky:
+        """Ambiguous once, then accepting — a real timeout, then success."""
+
+        def __init__(self):
+            self.sent = []
+            self.failed = False
+
+        def send(self, topic, value, key=None):
+            self.sent.append((topic, value, key))
+            if not self.failed:
+                self.failed = True
+                raise TimeoutError("no acknowledgement within the timeout")
+            return None
+
+        def flush(self):
+            pass
+
+    transport = _Flaky()
+    sender = ProducerSender(type("_P", (), {"transport": transport})())
+    alert_id = outbox.add_packet(payload=b"ambiguous-then-sent")
+
+    first = outbox.cycle(sender).run_once()
+    assert first["resend"] == 1
+    assert first["refused"] == 0
+    state, resends, _reason, _sent_at, _token = outbox.state(alert_id)
+    assert state == "PENDING"
+    assert resends == 1
+
+    second = outbox.cycle(sender).run_once()
+    assert second["sent"] == 1
+    # IDENTICAL BYTES AND KEY on the resend, compared at the transport.
+    assert transport.sent[0][1] == transport.sent[1][1]
+    assert transport.sent[0][2] == transport.sent[1][2]
+
+
 def test_a_definite_refusal_is_terminal_and_never_resent(outbox):
     """A refusal retried forever is a loop against a fixed answer."""
     alert_id = outbox.add_packet()

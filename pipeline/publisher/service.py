@@ -44,6 +44,8 @@ import os
 import sys
 import time
 
+from pipeline.publisher.classification import classify
+from pipeline.publisher.cycle import DefiniteRefusal
 from pipeline.runtime import service_kernel
 
 logger = logging.getLogger("rapid.publisher")
@@ -276,17 +278,70 @@ class _ProducerSender:
         self.producer = producer
 
     def send(self, topic, wire_bytes, key=None):
-        future = self.producer.transport.send(topic, wire_bytes, key=key)
-        self.producer.transport.flush()
+        """Send one framed packet, classifying any failure before raising.
+
+        THE CLASSIFICATION IS THE POINT OF THIS METHOD. The cycle distinguishes
+        a definite refusal (terminal, `REFUSED`) from an ambiguous outcome
+        (resend), and it does so by exception TYPE: `DefiniteRefusal` versus
+        anything else. So this is the one place that can decide which a real
+        broker error is — and until this method classified them, it raised a
+        bare `RuntimeError` for every failure, which made `DefiniteRefusal`
+        unreachable in production and left a message the broker would never
+        accept retrying forever at the head of the queue.
+
+        Both paths raise; the cycle catches. Nothing is swallowed here, because
+        a send whose outcome this method cannot report is exactly the case the
+        at-least-once contract exists for.
+        """
+        try:
+            future = self.producer.transport.send(topic, wire_bytes, key=key)
+            self.producer.transport.flush()
+        except Exception as exc:                            # noqa: BLE001
+            # A SYNCHRONOUS raise from the transport — kafka-python raises
+            # `MessageSizeTooLargeError` from `send()` itself when the record
+            # exceeds the configured `max_request_size`, without ever reaching
+            # a broker, so the definite classes are not only found on futures.
+            self._raise_classified(exc, topic)
+
         if hasattr(future, "succeeded") and not future.succeeded():
-            # The transport reported a definite outcome and it was a failure.
-            # Classified as ambiguous unless the transport says otherwise:
-            # kafka-python's error taxonomy does not cleanly separate "the
-            # broker refused" from "the send did not complete", and the
-            # conservative reading resends (consumers deduplicate) rather than
-            # dropping a packet that may never have been rejected.
-            raise RuntimeError(f"send did not succeed: {future.exception!r}")
+            # THE ASYNCHRONOUS path: the send was accepted for delivery and
+            # its future resolved to a failure. `future.exception` is the
+            # broker's own error, which is what carries the taxonomy.
+            self._raise_classified(getattr(future, "exception", None), topic)
         return _metadata(future)
+
+    def _raise_classified(self, error, topic):
+        """Re-raise `error` as a definite refusal or as an ambiguous failure.
+
+        `DefiniteRefusal` is the cycle's terminal signal; every other exception
+        it sees is treated as ambiguous, so an ambiguous outcome is re-raised
+        as itself (or wrapped, when there is nothing to re-raise) rather than
+        being converted into a second vocabulary.
+        """
+        verdict, reason = classify(error)
+        if verdict == "definite":
+            logger.error(
+                "packet for topic %s was DEFINITELY refused: %s", topic,
+                reason)
+            raise DefiniteRefusal(reason) from error
+        logger.warning("send to topic %s failed ambiguously: %s", topic,
+                       reason)
+        if isinstance(error, BaseException):
+            raise error
+        raise RuntimeError(reason)
+
+
+#: The production sender, under a name the tests can name.
+#:
+#: `_ProducerSender` stays private-by-convention because nothing outside this
+#: module CONSTRUCTS one in production — `main` does, and that is the whole
+#: intended use. But brief E's fix round requires the contract tests to drive
+#: the REAL classification path rather than a re-implementation of it, and a
+#: test reaching through an underscore is a test that will be "tidied" away by
+#: someone who reasonably reads the underscore as "not part of the surface".
+#: The alias says the classification path IS part of the surface, for the
+#: tests, deliberately.
+ProducerSender = _ProducerSender
 
 
 def _metadata(future):

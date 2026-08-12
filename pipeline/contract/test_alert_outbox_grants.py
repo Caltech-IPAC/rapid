@@ -32,6 +32,64 @@ included. The contract connection (`fixture.connect()`) authenticates as the
 scratch database's owning superuser, which is exactly the role every grant
 in 050 is deliberately written to still refuse. Provoking the trigger from
 here is the strongest test this tier can write for it.
+
+**WHY SECTIONS 1-2 BELOW ALSO INCLUDE BEHAVIOURAL TESTS NOW, NOT ONLY THE
+CATALOG-METADATA ONES.** A supervisor review of this file found the original
+grant tests too weak: `has_table_privilege`/`has_column_privilege` prove what
+the grant MAP says, but not what the database actually does when a
+constrained role attempts the operation — the two can disagree (a role
+reached through an unexpected membership path, a RLS policy layered on top,
+a grant recorded correctly but never actually applied to this scratch
+database). So both kinds of test are kept, deliberately, and answer two
+different questions: the catalog-metadata tests (already here, unchanged)
+answer "what does the grant map say", and the new real-operation tests below
+answer "what does the database actually refuse". Neither subsumes the
+other — a passing catalog test with a failing behavioural test would mean
+the grant map lies; a passing behavioural test with a failing catalog test
+would mean the refusal works today but for a reason the grant map does not
+document (fragile, likely to break silently on a future change).
+
+**MECHANISM: `SET LOCAL ROLE`, INSIDE A TRANSACTION, THEN ROLLBACK.** The
+contract connection is a superuser, and PostgreSQL grants superusers an
+unconditional exemption from `SET ROLE`'s normal membership check — a
+superuser may `SET ROLE` to ANY role, including one it holds no membership
+in at all (PostgreSQL docs, `SET ROLE`: "database superusers can set to any
+role"). That is what makes `SET LOCAL ROLE rapid_pipeline_write` usable here
+even though 050 explicitly gives that role NO membership grant to the
+superuser or to anything else.
+
+The subtlety that matters, and that must not be glossed over: `SET ROLE`
+does NOT make the session administratively less privileged in every sense —
+`session_user` stays the superuser, and a role that is itself flagged
+`SUPERUSER` would carry that status forward. But `rapid_pipeline_write` and
+`rapid_publisher` are both plain roles (050 creates `rapid_publisher`
+`NOLOGIN` with no superuser bit; `rapid_pipeline_write` likewise), and for a
+non-superuser target role, `SET ROLE` DOES make `current_user` that role for
+every subsequent privilege check in the session — `has_table_privilege` and
+its friends read `current_user` by default, and so does the executor's own
+ACL check on each statement. That is the exact property these tests need:
+an `UPDATE`/`INSERT`/`DELETE` issued after `SET LOCAL ROLE rapid_publisher`
+is authorized (or refused) as `rapid_publisher` would be, not as the
+superuser would be.
+
+`SET LOCAL` rather than plain `SET`: scoped to the current transaction only,
+so it unwinds automatically at COMMIT or ROLLBACK without a second statement
+to undo it — the same reason `test_double_agreement.py`'s SAVEPOINT pattern
+below exists for the trigger tests, applied one level up. Every behavioural
+test in sections 1-2 therefore has the shape: (implicit) BEGIN, `SET LOCAL
+ROLE x`, attempt the operation, assert the outcome, then ROLLBACK — even the
+"CAN" tests, which assert success and THEN roll back rather than commit, so
+a passing test never leaves a role-authored row for a later test to trip
+over. Where a "CAN" test needs to see its effect land (row count, changed
+column), it asserts that from inside the same still-open transaction, before
+the rollback — reading your own writes inside one transaction needs no
+commit.
+
+A statement that RAISES aborts the enclosing transaction (the same fact
+`test_envelope_columns_cannot_be_rewritten_even_by_the_owner` below already
+documents), so every refusal-attempt here runs inside its own SAVEPOINT and
+rolls back to it before the next statement, rather than letting the whole
+test transaction go aborted after the first expected failure.
 """
 
 import hashlib
@@ -104,6 +162,65 @@ def _column_priv(conn, role, table, column, privilege):
         cur.execute("SELECT has_column_privilege(%s, %s, %s, %s)",
                     [role, table, column, privilege])
         return cur.fetchone()[0]
+
+
+def _as_role_expect_insufficient_privilege(conn, role, statement, params=None):
+    """Attempt one statement AS `role` and assert PostgreSQL itself refuses it.
+
+    This is the behavioural counterpart to `_table_priv`/`_column_priv`
+    above: instead of asking the catalog what the grant map says, it asks
+    the database to actually try — the same authorization check the real
+    executor runs on a real statement from a real connection authenticated
+    as that role.
+
+    `psycopg2.errors.InsufficientPrivilege` SPECIFICALLY, not bare
+    `psycopg2.Error`. A test that caught any error would pass equally well
+    if the table did not exist, if the column were misspelled, or if some
+    unrelated CHECK constraint fired first — none of which says anything
+    about the grant under test. `InsufficientPrivilege` is the SQLSTATE
+    class (42501) PostgreSQL raises specifically for an ACL check failure,
+    so catching exactly that ties the assertion to the grant and nothing
+    else.
+
+    Runs inside a SAVEPOINT so the caller's transaction survives the
+    expected failure: a RAISE aborts the enclosing transaction, and without
+    a savepoint a second attempt in the same test would fail on "current
+    transaction is aborted" rather than on the property under test — the
+    same reason the envelope-rewrite trigger test below uses one.
+    """
+    with conn.cursor() as cur:
+        cur.execute("SAVEPOINT role_attempt")
+        cur.execute("SET LOCAL ROLE %s" % role)  # role names are not params
+    try:
+        with pytest.raises(psycopg2.errors.InsufficientPrivilege):
+            with conn.cursor() as cur:
+                cur.execute(statement, params)
+    finally:
+        with conn.cursor() as cur:
+            cur.execute("ROLLBACK TO SAVEPOINT role_attempt")
+
+
+def _as_role_expect_success(conn, role, statement, params=None):
+    """Attempt one statement AS `role` and assert PostgreSQL PERMITS it.
+
+    The mirror image of `_as_role_expect_insufficient_privilege`: some of
+    criterion 7's properties are "CAN", not "CANNOT" (the writer's own
+    insert path, the publisher's state-column update), and those need
+    exactly the same real-operation proof — a catalog `has_*_privilege`
+    reading that says True would not, by itself, show that PostgreSQL's
+    executor agrees when actually asked to run the statement.
+
+    Returns the cursor so the caller can inspect `rowcount` or fetch a
+    result while still inside the role-scoped transaction, before the
+    caller rolls back. Not wrapped in its own SAVEPOINT: an unexpected
+    failure here SHOULD abort the test's transaction and fail loudly,
+    exactly like any other unexpected exception in a test.
+    """
+    with conn.cursor() as cur:
+        cur.execute("SET LOCAL ROLE %s" % role)  # role names are not params
+    cur = conn.cursor()
+    cur.execute(statement, params)
+    return cur
 
 
 # ============================================================================
