@@ -308,6 +308,63 @@ def make_attempt(conn, work_unit_id=None, error_category=None,
         return cur.fetchone()[0]
 
 
+def _insert_filling_required(conn, table, returning, values):
+    """Insert a row, filling every other required column from the CATALOG.
+
+    Returns the `returning` column of the new row.
+
+    **WHY THE CATALOG AND NOT A COLUMN LIST.** `l2files` has around fifty
+    NOT NULL columns — the full SIP distortion solution, `ctype`/`cunit`
+    pairs, forty-odd polynomial coefficients — none of which any test here
+    reads. Hand-enumerating them produces a fixture that is mostly noise and
+    that breaks whenever the schema gains a column, and the failure arrives as
+    a NotNullViolation on a name nobody recognises, one column per round trip.
+
+    So the caller supplies only the columns its ASSERTIONS depend on, and this
+    fills the rest with type-appropriate placeholders read from
+    `information_schema`: columns with a default are left to it, generated
+    identities are skipped, and everything else gets a zero, an empty-ish
+    string or `now()`. The fixture then states exactly what the test cares
+    about, which is also what makes it readable.
+
+    This is a fixture convenience, never a production path: nothing outside
+    the contract tier builds rows this way, because a real writer knows what
+    its columns mean.
+    """
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT column_name, data_type FROM information_schema.columns"
+            " WHERE table_schema = 'public' AND table_name = %s"
+            "   AND is_nullable = 'NO'"
+            "   AND column_default IS NULL"
+            "   AND is_identity = 'NO'"
+            " ORDER BY ordinal_position", [table])
+        required = cur.fetchall()
+
+    row = dict(values)
+    for name, data_type in required:
+        if name in row:
+            continue
+        if data_type in ("timestamp with time zone", "timestamp without "
+                         "time zone", "date"):
+            row[name] = "now()"
+        elif data_type in ("character varying", "text", "character"):
+            row[name] = "x"
+        else:
+            row[name] = 0
+
+    columns = list(row)
+    placeholders = ", ".join(
+        "now()" if row[c] == "now()" else "%s" for c in columns)
+    params = [row[c] for c in columns if row[c] != "now()"]
+
+    with conn.cursor() as cur:
+        cur.execute(
+            f"INSERT INTO {table} ({', '.join(columns)})"
+            f" VALUES ({placeholders}) RETURNING {returning}", params)
+        return cur.fetchone()[0]
+
+
 def _diffimage_parents(conn, field, tag):
     """The four FK parents a `diffimages` row needs. Returns their ids.
 
@@ -331,34 +388,26 @@ def _diffimage_parents(conn, field, tag):
                 "empty table means the stream was not fully applied")
         fid = row[0]
 
-        cur.execute(
-            "INSERT INTO exposures (dateobs, field, fid, exptime, mjdobs,"
-            "                       hp6, hp9)"
-            " VALUES (now(), %s, %s, 100.0, 60000.0, 1, 1) RETURNING expid",
-            [field, fid])
-        expid = cur.fetchone()[0]
+    expid = _insert_filling_required(
+        conn, "exposures", "expid",
+        {"field": field, "fid": fid, "exptime": 100.0, "mjdobs": 60000.0})
 
-        cur.execute(
-            "INSERT INTO l2files (expid, sca, version, vbest, field, fid,"
-            "                     dateobs, mjdobs, exptime, filename,"
-            "                     checksum, crval1, crval2, crpix1, crpix2,"
-            "                     cd11, cd12, cd21, cd22)"
-            " VALUES (%s, 1, 1, 1, %s, %s, now(), 60000.0, 100.0, %s, %s,"
-            "         10.0, 10.0, 1.0, 1.0, 1.0, 0.0, 0.0, 1.0)"
-            " RETURNING rid",
-            [expid, field, fid, f"l2/{RUN_TAG}/{tag}.fits", tag[:8]])
-        rid = cur.fetchone()[0]
+    rid = _insert_filling_required(
+        conn, "l2files", "rid",
+        {"expid": expid, "sca": 1, "version": 1, "vbest": 1,
+         "field": field, "fid": fid,
+         "filename": f"l2/{RUN_TAG}/{tag}.fits", "checksum": tag[:8]})
 
+    with conn.cursor() as cur:
         cur.execute(
             "SELECT coalesce(max(version), 0) + 1 FROM refimages"
             " WHERE field = %s AND fid = %s AND ppid = 12", [field, fid])
         version = cur.fetchone()[0]
-        cur.execute(
-            "INSERT INTO refimages (field, hp6, hp9, fid, ppid, version,"
-            "                       vbest, svid, filename, checksum)"
-            " VALUES (%s, 1, 1, %s, 12, %s, 1, 1, %s, %s) RETURNING rfid",
-            [field, fid, version, f"ref/{RUN_TAG}/{tag}.fits", tag[:8]])
-        rfid = cur.fetchone()[0]
+
+    rfid = _insert_filling_required(
+        conn, "refimages", "rfid",
+        {"field": field, "fid": fid, "ppid": 12, "version": version,
+         "vbest": 1, "filename": f"ref/{RUN_TAG}/{tag}.fits"})
 
     return expid, rid, fid, rfid
 
@@ -399,19 +448,28 @@ def make_diffimage(conn, attempt_id, field, ppid, created=None, vbest=1,
 
     with conn.cursor() as cur:
         cur.execute(
-            "INSERT INTO diffimages"
-            "  (rid, expid, sca, ppid, version, vbest, rfid, field, hp6, hp9,"
-            "   fid, jd, ra0, dec0, ra1, dec1, ra2, dec2, ra3, dec3, ra4,"
-            "   dec4, infobitssci, infobitsref, filename, status, svid,"
-            "   created, attempt_id, registered_record_sequence)"
-            " VALUES (%s, %s, %s, %s, 1, %s, %s, %s, 1, 1,"
-            "         %s, 2460000.5, 10.0, 10.0, 10.0, 10.0, 10.1, 10.0,"
-            "         10.1, 10.1, 10.0, 10.1, 0, 0, %s, 0, 1,"
-            "         COALESCE(%s::timestamptz, now()), %s, 1)"
-            " RETURNING pid",
-            [rid, expid, sca, ppid, vbest, rfid, field, fid,
-             f"diffimages/{RUN_TAG}/{tag}.fits", created, attempt_id])
-        return cur.fetchone()[0]
+            "SELECT coalesce(max(version), 0) + 1 FROM diffimages"
+            " WHERE rid = %s AND ppid = %s", [rid, ppid])
+        version = cur.fetchone()[0]
+
+    pid = _insert_filling_required(
+        conn, "diffimages", "pid",
+        {"rid": rid, "expid": expid, "sca": sca, "ppid": ppid,
+         "version": version, "vbest": vbest, "rfid": rfid, "field": field,
+         "fid": fid, "filename": f"diffimages/{RUN_TAG}/{tag}.fits",
+         "attempt_id": attempt_id, "registered_record_sequence": 1,
+         # The ten ra/dec CHECKs want ra in [0, 360) and dec in [-90, 90].
+         # Zero satisfies both, but naming them keeps the row a plausible
+         # pointing rather than a corner case at the coordinate origin.
+         "ra0": 10.0, "dec0": 10.0, "ra1": 10.0, "dec1": 10.0,
+         "ra2": 10.1, "dec2": 10.0, "ra3": 10.1, "dec3": 10.1,
+         "ra4": 10.0, "dec4": 10.1})
+
+    if created is not None:
+        with conn.cursor() as cur:
+            cur.execute("UPDATE diffimages SET created = %s::timestamptz"
+                        " WHERE pid = %s", [created, pid])
+    return pid
 
 
 def make_completed_attempt(conn, rapid_outcome="success", field=None,
