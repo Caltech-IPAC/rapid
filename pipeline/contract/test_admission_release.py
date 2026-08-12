@@ -750,7 +750,7 @@ def test_a_replayed_key_does_not_double_apply(conn):
 
         # THE POINTER MOVED ONCE. Two rows naming r2 would mean the mutation
         # ran twice regardless of what the second call reported.
-        r2_rows = [r for r in _pointer_rows(conn, (r2,))]
+        r2_rows = _pointer_rows(conn, (r2,))
         assert len(r2_rows) == 1, (
             "the replayed call inserted a second pointer row; the key did "
             "not prevent the double-apply, found %d rows" % len(r2_rows))

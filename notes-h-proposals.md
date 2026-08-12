@@ -84,6 +84,40 @@ tests only `is None`, so `DONTCHECKALREADYINGESTED=0` and
 from the other two scripts entirely, so those two have never had even the
 filename-scoped guard.
 
+## P-H9 — Two signature defects in DRAFT 051, found and fixed in-run
+
+**Recorded because the way they were found is the reusable lesson, not
+because they survived.** Both were in `derived.set_admission_release`, and
+both would have been fatal on its first real call:
+
+1. **`derived.mutation_replay` was called with one argument.** 047 defines it
+   with three — `(p_idempotency_key, p_action_class, p_target_scope)` — and
+   raises RA002 when a key was used for a *different* action, which a
+   one-argument call could not express. No one-argument overload exists, so
+   every call would have failed with `undefined_function`.
+
+2. **`derived.write_mutation_audit` was called with eight arguments in the
+   wrong order.** Its real signature (`031-mutation-functions.sql:77-86`) is
+   `(action_class, action_tier, target_scope, reason, dry_run, rows_affected,
+   policy_citation, dispatcher, detail)` — nine parameters, and **it carries
+   no idempotency key and no expected state at all**. 047's own header says
+   the keyed functions must therefore write their audit row INLINE, which is
+   exactly what the fix does.
+
+**THE LESSON, WHICH IS WHY THIS IS RECORDED:** the first acceptance smoke
+applied DRAFT 051, re-applied it idempotently, created all six tables and all
+three functions, and fired both triggers — **and passed while carrying both
+defects**, because it never CALLED the function. Applying a migration proves
+its SQL parses and its objects are created; PL/pgSQL resolves a callee's
+signature at execution, not at creation, so an unexecuted function body is
+unverified no matter how green the apply looks.
+
+The second smoke (`SMOKE051B-*`) calls it: dry run, real apply, replay,
+unknown release, wrong expected state, supersession, empty reason, empty key.
+**Any DRAFT function this arc ships should be exercised, not merely applied.**
+That generalizes beyond H and is worth carrying into the next brief's
+harness template.
+
 ## P-H4 — Self-approval of a GC plan is permitted, and recorded as such
 
 **Decision taken (the brief's stated conservative default):** the approving

@@ -584,12 +584,25 @@ BEGIN
             USING ERRCODE = 'RA002';
     END IF;
 
-    -- REPLAY BEFORE ANYTHING ELSE. A re-run with the same key returns the
-    -- recorded outcome instead of applying a second time (047's shared
-    -- lookup; dry runs never consume a key).
-    replay_ := derived.mutation_replay(p_idempotency_key);
-    IF replay_ IS NOT NULL AND NOT p_dry_run THEN
-        RETURN replay_ || jsonb_build_object('replayed', true);
+    -- REPLAY BEFORE ANY EFFECT, AND ONLY ON A REAL RUN. 047's lookup takes
+    -- (key, action_class, target_scope) — all three, because a key reused for
+    -- a DIFFERENT action is a caller bug it raises RA002 for, and a one-
+    -- argument call could not tell those apart. The advisory lock is 047's
+    -- own pattern too: it serializes concurrent first-uses of one key so two
+    -- callers cannot both miss the replay and both apply.
+    --
+    -- A DRY RUN NEVER CONSUMES A KEY (047's stated review point 2): every
+    -- apply would otherwise replay its own preview.
+    IF NOT p_dry_run THEN
+        PERFORM pg_advisory_xact_lock(hashtext('rapid.mutation_key'),
+                                      hashtext(p_idempotency_key));
+        replay_ := derived.mutation_replay(p_idempotency_key,
+                                           'admission_release_set',
+                                           'admission_release_pointer:'
+                                           || p_release_identity);
+        IF replay_ IS NOT NULL THEN
+            RETURN replay_;
+        END IF;
     END IF;
 
     SELECT release_identity INTO current_
@@ -629,11 +642,25 @@ BEGIN
         RETURN result_ || jsonb_build_object('rows_affected', 0);
     END IF;
 
-    audit_id_ := derived.write_mutation_audit(
-        'admission_release_set',
-        'admission_release_pointer:' || p_release_identity,
-        p_reason, 1, p_idempotency_key, p_expected_state, false,
-        p_policy_citation);
+    -- THE AUDIT ROW IS WRITTEN INLINE, NOT THROUGH `write_mutation_audit`.
+    --
+    -- 047's header states the reason and this file follows it: that function
+    -- (031:77-86) takes `(action_class, action_tier, target_scope, reason,
+    -- dry_run, rows_affected, policy_citation, dispatcher, detail)` and
+    -- carries NO idempotency key and NO expected state — the two columns 047
+    -- added and the two this call must record. Routing a keyed mutation
+    -- through it would silently drop both, leaving a key that never replays.
+    -- So the keyed functions insert directly, exactly as 047's own
+    -- `record_external_action` and its keyed overloads do.
+    INSERT INTO derived.mutation_audit
+        (actor, dispatcher, action_class, action_tier, target_scope,
+         reason, dry_run, rows_affected, policy_citation,
+         idempotency_key, expected_state)
+    VALUES (session_user, session_user, 'admission_release_set', 'operate',
+            'admission_release_pointer:' || p_release_identity,
+            p_reason, false, 1, p_policy_citation,
+            p_idempotency_key, p_expected_state)
+    RETURNING audit_id INTO audit_id_;
 
     -- SUPERSEDE, NEVER REWRITE. The old row keeps its actor, reason and
     -- timestamp; only its current flag clears. A rollback is then visible in
