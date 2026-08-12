@@ -152,13 +152,14 @@ if __name__ == '__main__':
         # Query RAPID operations database for representative science image,
         # in order to find the sky positions of its four corners.
 
-        query = f"SELECT rid FROM l2files WHERE vbest > 0 AND field = {field} limit 1;"
+        query = f"SELECT rid,filename FROM l2files WHERE vbest > 0 AND field = {field} limit 1;"
 
         sql_queries = []
         sql_queries.append(query)
         l2files_record = dbh.execute_sql_queries(sql_queries,debug)
 
         rid = l2files_record[0][0]
+        filename = l2files_record[0][1]
 
 
         # Query database for associated L2FileMeta record.
@@ -202,7 +203,7 @@ if __name__ == '__main__':
 
         # Find union using set operations
 
-        union_list = list(set(rtids_list).union(neighboring_rtids))
+        union_list = list(set(rtids_list).union(sciimg_overlapping_rtids))
         union_list.sort()
 
         # Compare lists.
@@ -257,6 +258,53 @@ if __name__ == '__main__':
         keys_list = list(rtid_dict.keys())
         keys_list.sort()
         print(f"Method 3: Fields overlapping image = {keys_list}")
+
+
+        # Method #4
+
+        print(f"Try downloading {filename}...")
+
+        science_image_filename_gz,subdirs,downloaded_from_bucket = util.download_file_from_s3_bucket(s3_client,filename)
+
+        if not downloaded_from_bucket:
+            print(f"Error: L2 file not downloaded ({filename}); quitting...")
+            exit(64)
+
+        science_image_filename = science_image_filename_gz.replace(".fits.gz",".fits")
+
+        gunzip_cmd = ['gunzip', '-f', science_image_filename_gz]
+        exitcode_from_gunzip = util.execute_command(gunzip_cmd)
+
+        hdul = fits.open(science_image_filename)
+        hdr = hdul[0].header
+        data = hdul[0].data
+
+        wcs = WCS(hdr) # Initialize WCS object from FITS header
+
+        rtid_dict_method4 = {}
+
+        x_list = [*range(0,naxis1,500)]
+        y_list = [*range(0,naxis2,500)]
+        x_list.append(naxis1)
+        y_list.append(naxis2)
+
+        for y in y_list:
+            for x in x_list:
+
+                # x,y must be zero-based.
+                celestial_coords = wcs.pixel_to_world(x, y)
+
+                ra = celestial_coords.ra.deg
+                dec = celestial_coords.dec.deg
+
+                roman_tessellation_db.get_rtid(ra,dec)
+                rtid = roman_tessellation_db.rtid
+
+                rtid_dict_method4[rtid] = 1
+
+        keys_list_method4 = list(rtid_dict_method4.keys())
+        keys_list_method4.sort()
+        print(f"Method 4: Fields overlapping image = {keys_list_method4}")
 
 
     # Code-timing benchmark.
