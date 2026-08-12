@@ -320,20 +320,32 @@ fi
 # `alerts/test/` is ALSO outside `testpaths`, which lists pipeline,
 # observability, submission and database. An explicit path argument overrides
 # `testpaths`, so naming the file works — but only with the marker fixed too.
+# Brief H's TWELVE criteria, in the brief's order. Criteria 1, 6 (the pure
+# half), 11 and 12 are stub-tier — they assert over payloads and over the
+# source tree, needing no database — so they carry an explicit `-m "not live"`
+# of their own. That marker is not decoration: this repo's
+# `[tool.pytest.ini_options]` sets `addopts = "-m 'not contract and not live'"`,
+# so a criterion passing NO marker inherits that default and DESELECTS the
+# auto-marked `pipeline/contract/` tests, reporting exit 5 (no tests collected)
+# while the files themselves are fine. Brief E hit exactly that on three
+# criteria; the explicit marker displaces the inherited default rather than
+# fighting it.
 crit_rc=0
 for spec in \
-    "CRIT1-IDENTITY-DIGEST:alerts/test/test_identity.py::not live" \
-    "CRIT1-IDENTITY-DB:pipeline/contract/test_alert_outbox_identity.py::contract" \
-    "CRIT2-CONFIRM-ATOMICITY:pipeline/contract/test_alert_outbox_confirmation.py::contract" \
-    "CRIT3-NO-BATCH-SENDS:pipeline/contract/test_alert_send_routes.py::contract" \
-    "CRIT3-NO-BATCH-SENDS-STUB:pipeline/stages/test/test_alert_production.py:outbox or producer or no_send or oversize:not live" \
-    "CRIT4-PUBLISHER-WIRE:pipeline/contract/test_publisher_contract.py:order or key or identical or ambiguous or refus or already_sent:contract" \
-    "CRIT5-CRASH-WINDOWS:pipeline/contract/test_publisher_contract.py:crash or lease or reclaim or overlapping or atomic_claim:contract" \
-    "CRIT6-DELIVERY-POLICY:pipeline/contract/test_publisher_contract.py:policy or unauthorized or revocation or authoriz:contract" \
-    "CRIT7-GRANTS-IMMUTABILITY:pipeline/contract/test_alert_outbox_grants.py::contract" \
-    "CRIT8-OVERSIZE-DROP:pipeline/stages/test/test_alert_production.py:oversize:not live" \
-    "CRIT9-LEGACY-BASIS:pipeline/contract/test_alert_outbox_identity.py:legacy:contract" \
-    "CRIT10-ENTRYPOINTS:pipeline/contract/test_publisher_startup.py::contract" ; do
+    "CRIT1-ADMISSION-IDENTITY:pipeline/contract/test_admission_identity.py::not live" \
+    "CRIT2-ADMISSION-IDEMPOTENCE:pipeline/contract/test_admission_repository.py:idempot or conflict or write_once or returns or duplicate or version:contract" \
+    "CRIT3-CONCURRENT-ADMISSION:pipeline/contract/test_admission_repository.py:concurrent:contract" \
+    "CRIT4-REPLAYABILITY:pipeline/contract/test_admission_replay.py::contract" \
+    "CRIT4-CALL-SITES:pipeline/contract/test_admission_replay.py:script or env_var:not live" \
+    "CRIT5-RELEASE-END-TO-END:pipeline/contract/test_admission_release.py::contract" \
+    "CRIT6-PREFLIGHT-APP:pipeline/contract/test_application_contract.py::not live" \
+    "CRIT6-PREFLIGHT-DB:pipeline/contract/test_application_contract.py::contract" \
+    "CRIT7-REFERENCE-SET:pipeline/contract/test_gc_eligibility.py:referenced or retained or scope or attribut or round_trip or allowlist or inventory or surface:contract" \
+    "CRIT8-HORIZON-ELIGIBILITY:pipeline/contract/test_gc_eligibility.py:horizon or ineligible or discharg or live_attempt or registration or absence or eligible:contract" \
+    "CRIT9-PLAN-INTEGRITY:pipeline/contract/test_gc_execution.py:checksum or bound or rewritten or transition or approval or reappears:contract" \
+    "CRIT10-EXECUTION-SAFETY:pipeline/contract/test_gc_execution.py:exact or version_changed or registered or absent or failure or fence or crash or resume or terminal or commit or unapproved:contract" \
+    "CRIT11-DELETION-EXCLUSIVITY:pipeline/contract/test_deletion_exclusivity.py:deletion or exclusion or executor:not live" \
+    "CRIT12-RAPIDDB-FROZEN:pipeline/contract/test_deletion_exclusivity.py:rapiddb or rapid_db or carve:not live" ; do
     # Four colon-separated fields: name, target, -k expression, -m marker.
     # Split by successive prefix/suffix removal rather than by IFS word
     # splitting, because an empty middle field must stay empty rather than
