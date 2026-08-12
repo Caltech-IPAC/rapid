@@ -342,13 +342,14 @@ class Producer:
     accepts everything" failure mode `test_post_db` and this file's own
     module docstring warn about.
 
-    So this double is not deleted; it is INVERTED. `make_producer` is never
-    even patched to return one in `_run_produce_alerts` below (there is
-    nothing for the stage to call it with) — this class exists purely so a
-    test can hand `alerts.kafka_producer.make_producer` a sentinel that
-    proves, by raising, that the stage never reached for a producer at all.
-    Any call to `produce()` or `flush()` is therefore not a stubbed
-    response — it is a test failure, on purpose.
+    So this double is not deleted; it is INVERTED. `_run_produce_alerts`
+    below still patches `alerts.kafka_producer.make_producer` to return one
+    of these — DELIBERATELY, so that if a regression ever made
+    `produce_alerts` call `make_producer()` again, the call would succeed
+    (there would be something to call it WITH) and the very next line,
+    `producer.produce(...)` or `.flush()`, is what actually catches the
+    regression, by raising. Any call to `produce()` or `flush()` is
+    therefore not a stubbed response — it is a test failure, on purpose.
     """
 
     def produce(self, topic, value, callback=None):

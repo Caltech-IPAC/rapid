@@ -55,6 +55,21 @@ def _checksum(payload):
     return "sha256:" + hashlib.sha256(payload).hexdigest()
 
 
+def _ordered_id(marker):
+    """An alert id whose SORT POSITION is set by `marker`, unique per run.
+
+    The ordering tests need ids whose relative order they control, and fixed
+    literals (`"a" * 64`) would collide with the previous run's leftovers —
+    this suite provokes the UNIQUE constraint deliberately elsewhere, so a
+    collision here fails at an unrelated assertion. The marker leads and the
+    run tag trails, so the marker still decides the order.
+
+    Hex only: `alert_outbox_alert_id_shape_ck` is `^sha256:[0-9a-f]{64}$`.
+    """
+    tag = fixture.RUN_TAG.rjust(24, "0")[:24]
+    return "sha256:" + marker * 40 + tag
+
+
 class PublisherFixture:
     """One test's outbox rows, its repository, and its cleanup.
 
@@ -195,11 +210,11 @@ def test_sends_in_created_at_then_alert_id_order(outbox):
     against either implementation.
     """
     third = outbox.add_packet(payload=b"c", created_offset_seconds=2,
-                              alert_id="sha256:" + "a" * 64)
+                              alert_id=_ordered_id("a"))
     first = outbox.add_packet(payload=b"a", created_offset_seconds=0,
-                              alert_id="sha256:" + "c" * 64)
+                              alert_id=_ordered_id("c"))
     second = outbox.add_packet(payload=b"b", created_offset_seconds=1,
-                               alert_id="sha256:" + "b" * 64)
+                               alert_id=_ordered_id("b"))
 
     broker = RecordingBroker()
     counts = outbox.cycle(broker).run_once()
@@ -217,7 +232,7 @@ def test_the_tie_break_orders_rows_sharing_one_created_at(outbox):
     order within a chip would be whatever the plan produced, and two publishers
     could disagree about which packet is next.
     """
-    ids = sorted("sha256:" + c * 64 for c in "def")
+    ids = sorted(_ordered_id(c) for c in "def")
     for alert_id in reversed(ids):
         outbox.add_packet(payload=alert_id.encode(), alert_id=alert_id,
                           created_offset_seconds=0)

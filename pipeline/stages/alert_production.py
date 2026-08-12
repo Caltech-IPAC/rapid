@@ -303,7 +303,12 @@ def produce_alerts(context) -> None:
         # suppression, one of the four effect counts the design names, and
         # closes successfully — never a failure.
         context.record_effect(
-            candidates_considered=0, alerts_published=0,
+            # `alerts_outboxed`, matching the confirmed path's own count — the
+            # suppression arm kept the retired `alerts_published` name and so
+            # reported this attempt's outcome under a different key from every
+            # other outcome, which is exactly the drift the rename was meant to
+            # end.
+            candidates_considered=0, alerts_outboxed=0,
             emissions_suppressed=1,
             suppression_reason=(
                 "already emitted, or claimed by a live attempt, under this "
@@ -324,8 +329,12 @@ def produce_alerts(context) -> None:
     # behind "identical bytes on resend" — see `_pinned_schema_version`.
     schema_version_id = _pinned_schema_version(context, topic)
     # Which identity basis this chip's packets use, decided once: the image is
-    # the same for every candidate on it.
+    # the same for every candidate on it. The NAME (for the outbox column and
+    # the effect record) is kept apart from the KWARGS (`alert_identity`'s
+    # image argument) — see the call site below for what conflating them cost.
     image_basis = _image_identity(emissions, pid, context)
+    image_kwargs = {key: value for key, value in image_basis.items()
+                    if key != "basis_name"}
 
     considered = 0
     outboxed = 0
@@ -363,11 +372,20 @@ def produce_alerts(context) -> None:
             # THE CATALOG KEY, NOT `sid` (brief E's fixed reading). `sid` is
             # DB-generated at catalog load and realization-local; `(id,
             # isdiffpos)` is the catalogue's own conflict identity.
+            # `basis_name` is THIS module's label for the row's column and the
+            # effect record; it is not one of `alert_identity`'s parameters,
+            # and the identity's own basis discriminator is derived inside the
+            # digest from which image kwarg was given. Spreading the whole dict
+            # raised TypeError on every candidate — swallowed by the
+            # drop-and-continue catch below, so every chip outboxed nothing
+            # while reporting a clean run. Caught by the stage tests before
+            # this branch shipped; the two are kept apart here so the mistake
+            # cannot recur silently.
             packet_id, _identity_payload = alert_identity(
                 catalog_id=getattr(source, "id", None),
                 isdiffpos=getattr(source, "isdiffpos", None),
                 release_identity=release_identity,
-                **image_basis)
+                **image_kwargs)
         except Exception as exc:  # noqa: BLE001 - a candidate, not the chip
             # PER-CANDIDATE DROP (gate 3). The reason is the exception's type
             # rather than its message: the counts are grouped by reason and a
