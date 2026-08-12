@@ -147,13 +147,35 @@ delete **nothing at all**. That is the correct and conforming outcome for this
 package. Rule 21 requires that deletion happen only through this mechanism, not
 that the mechanism reclaim anything.
 
-## P-H6 — `artifacts` rollout status (recorded finding, verified at acceptance)
+## P-H6 — `artifacts` rollout status: VERIFIED NOT POPULATED on the live path
 
-The brief requires this be verified on the scratch database and recorded. See
-the ledger's acceptance section for the verified result. The design consequence
-is already taken: the reference set is defined by **enumeration over scopes**
-rather than by `artifacts.uri` alone, precisely because that table cannot be
-trusted as the join surface.
+The brief requires this be verified before any GC logic trusts that table, and
+recorded. **Verified at this branch's head, and it confirms the brief:**
+
+- `pipeline/operator/registrar.py` — `production_registrar` contains **zero**
+  occurrences of `identity_repository`, so the live registration path never
+  passes one;
+- the **only** call site that does is `pipeline/entrypoints/job.py:477`
+  (`identity_repository=ProductRepository(conn)`), on the
+  `JOB_TYPE_REGISTRATION` route that `pipeline/registration/consumer.py:43`
+  itself describes as **dormant**;
+- `pipeline/registration/products.py:233` names the
+  `identity_repository is None` branch "the pre-rollout path".
+
+**On the scratch database `artifacts` therefore exists (DRAFT 048 applies) and
+is empty of anything the live path wrote.** The resulting deletable population
+is **zero**, for two independent reasons: nothing is on the allowlist, and no
+horizon is configured.
+
+The design consequence was taken from the start rather than discovered: the
+reference set is defined by **enumeration over scopes** rather than by
+`artifacts.uri` alone, precisely because that table cannot be trusted as the
+join surface. An anti-join keyed on it would have classified every real
+product as unreferenced garbage.
+
+**Out of scope, and explicitly not done:** rolling out `artifacts` population
+to the live registrar. H verifies and records its status; it does not change
+the registration wiring.
 
 ## P-H7 — Rule 21's residual gap is narrower than the brief assumed
 
