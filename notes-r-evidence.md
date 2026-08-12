@@ -267,3 +267,26 @@ the doubles those changes invalidated, R's own harness scripts, and these
 notes. No schema was added or proposed. `rapid_systems` was read
 READ-ONLY and never edited. No merge, no PR — branch `smdc-r-residual`
 pushed, worktree retained.
+
+## Scratch state left behind (needs credentials to clear)
+
+The on-host footprint is self-cleaning: both harness scripts remove their
+`/var/tmp/<run-id>` stage and their throwaway PostgreSQL container by trap,
+on success or failure. Nothing was left on rapid-admin, and rapid-db was
+never touched.
+
+Two S3 staging prefixes could not be swept, because the SSO token expired
+before either could be reached:
+
+| Prefix | State |
+|---|---|
+| `db-migrations-staging/brief-r-20260812T112803Z` | RETAINED by design (run 1 failed; the harness keeps a failed run's payload for diagnosis) |
+| `db-migrations-staging/brief-r-20260812T113253Z` | unknown — run 2's outcome was never read |
+| `db-migrations-staging/brief-r-probe-20260812T113021Z` | already removed, `exit=0` |
+
+Both are inert tarballs in the build-artifacts bucket
+(`rapid-build-artifacts-<account>`, the account derived at runtime as the
+harness scripts do — this repo is PUBLIC and `.githooks/pre-push` blocks the
+SMDC account number outright, which is how the first draft of this paragraph
+was caught). Clear with `aws s3 rm --recursive` on either prefix once SSO is
+available.
