@@ -270,7 +270,9 @@ for spec in \
     "CRIT4-LANE-LEASE:pipeline/contract/test_association_watermark.py:lease or lock_order:contract" \
     "CRIT5-SET-ISOLATION:pipeline/contract/test_association_watermark.py:isolation or clone_family or live_prompt or live_set_lookup:contract" \
     "CRIT6-RADEC-IDEMPOTENCY:pipeline/contract/test_association_watermark.py:radec:contract" \
-    "CRIT7-WITHIN-JOB-ORDER:pipeline/contract/test_association_watermark.py:canonical_detection or temporal_column or python_and_sql:contract" ; do
+    "CRIT7-WITHIN-JOB-ORDER:pipeline/contract/test_association_watermark.py:canonical_detection or temporal_column or python_and_sql:contract" \
+    "FIX2-GATE-AGREEMENT:pipeline/contract/test_association_work_inventory.py:agree or boundary or vbest_flip:contract" \
+    "FIX3-REAL-SQL:pipeline/contract/test_association_work_inventory.py:executes or accepted_pair or schema_probe or query_failure:contract" ; do
     # Four colon-separated fields: name, target, -k expression, -m marker.
     # Split by successive prefix/suffix removal rather than by IFS word
     # splitting, because an empty middle field must stay empty rather than

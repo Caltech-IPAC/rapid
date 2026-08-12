@@ -46,6 +46,8 @@ import logging
 from typing import Any, Iterable, Iterator, Protocol, Sequence
 
 from database.modules.utils.checked import RapidDBCallFailed
+from pipeline.repositories.association import AssociationRepository
+from pipeline.repositories.errors import RepositoryQueryFailed
 from database.modules.utils.roman_tessellation_db import (
     RomanTessellationClosedForm)
 from . import blocked
@@ -166,21 +168,13 @@ class UnitSource(Protocol):
     def get_fields_with_blocking_attempt_for_job_type_since(
             self, job_type: str, since: Any) -> Sequence[Any]: ...
 
-    # The association claim watermark (rule 19, brief F2). Read through the
-    # handle like every other gathering fact, so the ordering gate is testable
-    # with the same stub the readiness gates use. `None` means the schema is
-    # absent — see `_association_claim_position` for why that degrades to
-    # today's unordered behaviour rather than to an exception.
-    def get_association_claim_position(
-            self, association_set: int | None = ...,
-            lane: int | None = ...) -> Any: ...
-
-    # The earliest processing date that still owes crossmatch work — the
-    # cross-date half of the ordering gate (brief F2). Gathering is invoked
-    # per date, so the watermark alone cannot tell a later date that an
-    # earlier one is still in retry; this answers exactly that.
-    def get_earliest_unaccepted_crossmatch_date(
-            self, association_set: int | None = ...) -> Any: ...
+    # THE ORDERING GATE'S TWO READS ARE DELIBERATELY ABSENT FROM THIS
+    # PROTOCOL. `RAPIDDB` is frozen (brief G's ratified merge decision), so
+    # the association watermark and the earliest-owed date are read through
+    # `pipeline.repositories.association.AssociationRepository` over the
+    # handle's connection instead of through new handle methods — see
+    # `_association_repository`. What this protocol declares is what gathering
+    # asks the LEGACY handle for, and that set does not grow.
 
     def get_blocking_exposure_scas_for_job_type(
             self, job_type: str, expids: Sequence[int]) -> Sequence[Any]: ...
@@ -1381,6 +1375,36 @@ def gather_catalog_load_units(handle: UnitSource, proc_date: str
                 product_inputs=tuple(inputs)))
 
 
+def _association_repository(handle):
+    """An `AssociationRepository` over the handle's connection, or `None`.
+
+    **THE CARVED PATH, NOT A `RAPIDDB` METHOD.** `RAPIDDB` is frozen (brief G's
+    ratified merge decision): no new capability lands in it. The two reads the
+    ordering gate needs are therefore a repository over a connection, and this
+    is the seam that gets one from a gathering handle — `RAPIDDB.conn` is an
+    attribute, and `CheckedHandle` passes non-callables through unchecked, so
+    no new method is added to the frozen class and none is needed.
+
+    Returns `None` when the handle exposes no usable connection, which is the
+    case for the operator probes and every gathering stub. Those callers get
+    the same unordered behaviour a database without DRAFT 049 gets, and the
+    log line in `_association_claim_position` says which happened.
+
+    A test double may instead supply `association_repository` directly, so the
+    stub tier can exercise the ordering arithmetic without a database — the
+    contract tier is where the SQL itself executes, which is the division the
+    stub-blind rule draws.
+    """
+    injected = getattr(handle, "association_repository", None)
+    if injected is not None:
+        return injected
+
+    conn = getattr(handle, "conn", None)
+    if conn is None:
+        return None
+    return AssociationRepository(conn)
+
+
 def _association_claim_position(handle: UnitSource):
     """The live lane's watermark, or `None` when the schema is absent.
 
@@ -1403,22 +1427,15 @@ def _association_claim_position(handle: UnitSource):
     one happened, and because the contract tier asserts the ordered behaviour
     against a database that DOES carry the draft.
     """
-    # `hasattr` rather than catching AttributeError around the CALL. The
-    # intent is "a handle predating this method" — the operator probes and the
-    # older stubs — but a try/except around the call also swallows an
-    # AttributeError raised from INSIDE a real implementation, and the most
-    # likely such error is a closed connection (`self.cur` gone). That would
-    # read as "the ordering schema is absent" and silently switch the ordering
-    # guarantee off during a database outage, which is precisely the class of
-    # quiet degradation this gate exists to prevent.
-    if hasattr(handle, "get_association_claim_position"):
+    repository = _association_repository(handle)
+    if repository is None:
+        position = None
+    else:
         try:
-            position = handle.get_association_claim_position()
-        except RapidDBCallFailed as exc:
+            position = repository.claim_position()
+        except RepositoryQueryFailed as exc:
             raise GatheringError(
                 f"association watermark read failed: {exc}") from exc
-    else:
-        position = None
 
     if position is None:
         logger.info(
@@ -1445,22 +1462,15 @@ def _earliest_owed_date(handle: UnitSource):
     watermark check is what distinguishes an ordered deployment from an
     unordered one, so nothing is lost by collapsing them here.
     """
-    # `hasattr`, not a try/except around the call — same reasoning as the
-    # watermark read: an AttributeError from inside a real implementation is a
-    # fault to surface, not a schema-absence signal to act on.
-    if not hasattr(handle, "get_earliest_unaccepted_crossmatch_date"):
+    repository = _association_repository(handle)
+    if repository is None:
         return None
 
     try:
-        owed = handle.get_earliest_unaccepted_crossmatch_date()
-    except RapidDBCallFailed as exc:
+        return repository.earliest_unaccepted_date()
+    except RepositoryQueryFailed as exc:
         raise GatheringError(
             f"earliest-unaccepted crossmatch date read failed: {exc}") from exc
-    if owed is None:
-        return None
-    row = owed[0] if isinstance(owed, (list, tuple)) and owed else owed
-    value = row[0] if isinstance(row, (list, tuple)) and row else row
-    return None if value is None else str(value)
 
 
 def _next_claimable_field(candidates: Sequence[int], proc_date: str,

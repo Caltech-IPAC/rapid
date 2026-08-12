@@ -308,6 +308,66 @@ def make_attempt(conn, work_unit_id=None, error_category=None,
         return cur.fetchone()[0]
 
 
+def make_diffimage(conn, attempt_id, field, ppid, created=None, vbest=1,
+                   sca=1):
+    """One `diffimages` row, minimal but real, for the work-inventory tests.
+
+    Returns its `pid`.
+
+    Every column the science-work predicate reads is a PARAMETER here —
+    `ppid`, `vbest`, `field`, `created` — because the whole point of the
+    agreement test is to place rows at the edges of those predicates and see
+    whether two queries classify them the same way. A builder that fixed any
+    of them would quietly remove the case it was meant to cover.
+
+    The geometry columns are filled with in-range constants: `diffimages` has
+    ten CHECK constraints on ra/dec, so a fixture cannot skip them, and the
+    tests reading these rows care about the ordering predicates rather than
+    where on the sky the image was.
+
+    `attempt_id` requires `registered_record_sequence` alongside it
+    (`diffimages_attempt_identity_check`, migration 018) — both halves or
+    neither, so the pair is written together here.
+    """
+    tag = uuid.uuid4().hex[:8]
+    with conn.cursor() as cur:
+        cur.execute(
+            "INSERT INTO diffimages"
+            "  (rid, expid, sca, ppid, version, vbest, rfid, field, hp6, hp9,"
+            "   fid, jd, ra0, dec0, ra1, dec1, ra2, dec2, ra3, dec3, ra4,"
+            "   dec4, infobitssci, infobitsref, filename, status, svid,"
+            "   created, attempt_id, registered_record_sequence)"
+            " VALUES (1, 1, %s, %s, 1, %s, 1, %s, 1, 1,"
+            "         1, 2460000.5, 10.0, 10.0, 10.0, 10.0, 10.1, 10.0,"
+            "         10.1, 10.1, 10.0, 10.1, 0, 0, %s, 0, 1,"
+            "         COALESCE(%s::timestamptz, now()), %s, 1)"
+            " RETURNING pid",
+            [sca, ppid, vbest, field, f"diffimages/{RUN_TAG}/{tag}.fits",
+             created, attempt_id])
+        return cur.fetchone()[0]
+
+
+def set_attempt_outcome(conn, attempt_id, rapid_outcome, field=None,
+                        processing_date=None):
+    """Give an attempt an outcome, and optionally its (date, field) identity.
+
+    `make_attempt` deliberately builds a row that satisfies the lifecycle
+    CHECK constraints and nothing more; the work-inventory tests need attempts
+    that carry an outcome and a subject, which is a separate concern from
+    being well-formed. Written as an UPDATE rather than more `make_attempt`
+    parameters so the state machine's own constraints are what admit or refuse
+    the combination.
+    """
+    with conn.cursor() as cur:
+        cur.execute(
+            "UPDATE attempts"
+            "   SET rapid_outcome = %s,"
+            "       field = COALESCE(%s, field),"
+            "       processing_date = COALESCE(%s::date, processing_date)"
+            " WHERE attempt_id = %s",
+            [rapid_outcome, field, processing_date, attempt_id])
+
+
 def unit_state(conn, work_unit_id):
     with conn.cursor() as cur:
         cur.execute(

@@ -43,6 +43,7 @@ from submission.routes import (
     JOB_TYPE_SOURCE_CURRENCY,
     JOB_TYPE_STATISTICS,
 )
+from pipeline.repositories.errors import RepositoryQueryFailed
 from submission.subjects import SubjectError
 
 
@@ -62,6 +63,37 @@ def _refuse_if_failed(source, method):
     code = getattr(source, "exit_code", 0)
     if code >= FAILURE_THRESHOLD:
         raise RapidDBCallFailed(method, code)
+
+
+class _StubAssociationRepository:
+    """A double for `AssociationRepository`, shaped like the real one.
+
+    Two methods, the two the claim path calls, with the same return contract:
+    `claim_position` answers `None` for "DRAFT 049 not applied" and a
+    `(proc_date, field)` pair otherwise — where `(None, None)` is the origin,
+    a genuinely different state from `None`.
+
+    IT CAN REFUSE. Both methods raise `RepositoryQueryFailed` when their
+    switch is set, because the production code catches exactly that and turns
+    it into a `GatheringError`. A double that could only succeed would leave
+    the failure path — the one that decides whether a database outage silently
+    disables the ordering guarantee — untested by construction.
+    """
+
+    def __init__(self, source):
+        self._source = source
+
+    def claim_position(self, association_set=None, lane=None):
+        self._source.asked_for.append(("watermark", association_set, lane))
+        if self._source.watermark_failure:
+            raise RepositoryQueryFailed("claim_position")
+        return self._source.watermark
+
+    def earliest_unaccepted_date(self, association_set=None):
+        self._source.asked_for.append(("earliest_owed", association_set))
+        if self._source.owed_failure:
+            raise RepositoryQueryFailed("earliest_unaccepted_date")
+        return self._source.earliest_owed
 
 
 class StubSource:
@@ -982,27 +1014,25 @@ class PostDbGatheringTests(unittest.TestCase):
                 self, "get_fields_with_blocking_attempt_for_job_type_since")
             return None if self.failure else self.blocking_per_field
 
-        # The ordering gate's two reads (conformance rule 19, brief F2). These
-        # take their failure from `watermark_failure` rather than the shared
-        # `failure` switch, and that is not a convenience: `failure` refuses
-        # the FIRST query a pass makes, which for crossmatch is the
-        # catalog-load coverage check — so a test using it would raise before
-        # the watermark was ever read and would still pass while this method
-        # was completely unguarded. A gate needs a failure switch that can
-        # reach IT.
-        def get_association_claim_position(self, association_set=None,
-                                           lane=None):
-            self.asked_for.append(("watermark", association_set, lane))
-            self.exit_code = self.watermark_failure or self.failure
-            _refuse_if_failed(self, "get_association_claim_position")
-            return None if self.failure else self.watermark
-
-        def get_earliest_unaccepted_crossmatch_date(self,
-                                                    association_set=None):
-            self.asked_for.append(("earliest_owed", association_set))
-            self.exit_code = self.owed_failure or self.failure
-            _refuse_if_failed(self, "get_earliest_unaccepted_crossmatch_date")
-            return None if self.failure else self.earliest_owed
+        # THE ORDERING GATE IS NOT A HANDLE METHOD. `RAPIDDB` is frozen
+        # (brief G's ratified merge decision), so the two reads go through
+        # `pipeline.repositories.association.AssociationRepository` over a
+        # connection. The stub therefore injects a repository double at the
+        # same seam the production code takes it from — `association_
+        # repository` on the handle — rather than growing two methods the real
+        # handle does not have. A stub shaped like an interface that no longer
+        # exists is the stub-blind failure in its purest form: it would pass
+        # forever against code nothing calls.
+        #
+        # The failure switches stay per-read rather than reusing the shared
+        # `failure`, and that is not a convenience: `failure` refuses the
+        # FIRST query a pass makes, which for crossmatch is the catalog-load
+        # coverage check — so a test using it would raise before the watermark
+        # was ever read and would still pass while the gate was completely
+        # unguarded. A gate needs a failure switch that can reach IT.
+        @property
+        def association_repository(self):
+            return _StubAssociationRepository(self)
 
     # -- the resubmission gates (mission mock, live 2026-08-09) ------------
 
@@ -1333,11 +1363,14 @@ class PostDbGatheringTests(unittest.TestCase):
     def test_a_failed_watermark_read_raises_rather_than_gathering_unordered(
             self):
         # The silent-failure class again, and it bites HARDER here than
-        # elsewhere: `rapid_db` reports failure by returning None, and None is
-        # exactly the value that means "no ordering schema". An unguarded read
-        # would therefore turn a database outage into a silent loss of the
-        # ordering guarantee — gathering every ready field, unordered, on a
-        # database that does carry the schema. The refusal is what keeps
+        # elsewhere: `None` is exactly the value that means "no ordering
+        # schema", so a read that answered None on failure would turn a
+        # database outage into a silent loss of the ordering guarantee —
+        # gathering every ready field, unordered, on a database that does
+        # carry the schema. `AssociationRepository` RAISES
+        # `RepositoryQueryFailed` instead of returning a sentinel, which is
+        # the whole reason the carved repositories replaced `RAPIDDB`'s
+        # `exit_code = 67; return None` convention. The refusal is what keeps
         # "degraded" distinguishable from "broken".
         source = self.Source(fields=[4641773], watermark=(None, None),
                              watermark_failure=67)
