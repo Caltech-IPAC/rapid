@@ -308,6 +308,45 @@ def make_attempt(conn, work_unit_id=None, error_category=None,
         return cur.fetchone()[0]
 
 
+def make_pending_attempt(conn, job_type, field=None, processing_date=None):
+    """One attempt IN FLIGHT for a given job type, subject and date.
+
+    Returns its attempt_id.
+
+    `submitted` is the state the resubmission and acceptance gates read as
+    "in flight", so this is what an accepted-but-unfinished (date, field)
+    pair looks like. `attempts_state_submitted_check` (migration 013)
+    requires the binding triple at `schema_version >= 2` and forbids every
+    outcome column, so the row is written COMPLETE in one INSERT: building it
+    in pieces means passing through a state the schema refuses, and the
+    refusal arrives as a CheckViolation on the intermediate row rather than
+    on anything the test meant to assert.
+
+    The logical job carries the job type, because that is what the gates
+    join on.
+    """
+    logical_job_id, run_id = make_logical_job(conn)
+    tag = uuid.uuid4().hex[:8]
+    with conn.cursor() as cur:
+        cur.execute("UPDATE logical_jobs SET job_type = %s"
+                    " WHERE logical_job_id = %s", [job_type, logical_job_id])
+        cur.execute("SELECT coalesce(max(schema_version), 1) FROM attempts")
+        schema_version = cur.fetchone()[0]
+        cur.execute(
+            "INSERT INTO attempts"
+            "  (run_id, schema_version, logical_job_id, lifecycle_state,"
+            "   created_at, submitted_at, binding_job_definition_arn,"
+            "   binding_image_digest, binding_manifest_checksum,"
+            "   field, processing_date)"
+            " VALUES (%s, %s, %s, 'submitted', now(), now(), %s,"
+            "         'sha256:' || %s, 'sha256:' || %s, %s, %s::date)"
+            " RETURNING attempt_id",
+            [run_id, schema_version, logical_job_id,
+             f"arn:aws:batch:us-east-1:000000000000:job-definition/{tag}:1",
+             tag, tag, field, processing_date])
+        return cur.fetchone()[0]
+
+
 def _foreign_key_targets(conn, table):
     """`{column: (parent_table, parent_column)}` for one table's simple FKs.
 

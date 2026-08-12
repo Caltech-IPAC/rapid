@@ -41,6 +41,12 @@ def _require_schema(conn):
 
 SCIENCE_PPID = ppid_for(JOB_TYPE_SCIENCE)
 
+#: The post-processing pipeline (`009-seed-data.sql`), used as "some other
+#: pipeline's rows". Named from the seed data rather than computed from
+#: SCIENCE_PPID: `diffimages.ppid` is a foreign key, so only a real pipeline
+#: id can be written at all.
+OTHER_PPID = 17
+
 #: Fields well outside anything the pipeline uses, tagged per run so two runs
 #: of this suite never see each other's rows. The gates read the whole corpus,
 #: so the tests filter their comparisons to these fields rather than assuming
@@ -152,7 +158,11 @@ def test_the_two_gates_agree_on_every_edge_state(conn, clean_fields):
     _seed(conn, field=fields[1], created=day, vbest=0)
     _seed(conn, field=fields[2], created=day, rapid_outcome="failure")
     _seed(conn, field=fields[3], created="2026-08-02T12:00:00+00:00")
-    _seed(conn, field=fields[4], created=day, ppid=SCIENCE_PPID + 1)
+    # A REAL other pipeline (17, post-processing), not `SCIENCE_PPID + 1`:
+    # `diffimages.ppid` is a foreign key into `pipelines`, so an invented id
+    # is refused outright — and a test that has to invent one is not
+    # describing a state the system can reach anyway.
+    _seed(conn, field=fields[4], created=day, ppid=OTHER_PPID)
     conn.commit()
 
     sibling = sorted(f for f in _sibling_fields(conn, proc_date)
@@ -338,30 +348,14 @@ def test_an_accepted_pair_leaves_the_owed_inventory(conn, clean_fields):
     assert (proc_date, fields[0]) in _owed_pairs(), \
         "the seeded pair should be owed before any crossmatch attempt exists"
 
-    # A pending crossmatch attempt for that (date, field). `make_attempt`
-    # builds a `submitted` row, whose CHECK requires the binding triple at
-    # schema_version >= 2 (migration 013) — the subject columns are added by
-    # the same UPDATE so the row is only ever written complete.
-    crossmatch_attempt = fixture.make_attempt(conn, lifecycle="submitted")
-    with conn.cursor() as cur:
-        cur.execute(
-            "UPDATE attempts"
-            "   SET field = %s, processing_date = %s::date,"
-            "       binding_job_definition_arn ="
-            "         coalesce(binding_job_definition_arn, %s),"
-            "       binding_image_digest ="
-            "         coalesce(binding_image_digest, 'sha256:crossmatch'),"
-            "       binding_manifest_checksum ="
-            "         coalesce(binding_manifest_checksum, 'sha256:manifest')"
-            " WHERE attempt_id = %s",
-            [fields[0], proc_date,
-             "arn:aws:batch:us-east-1:000000000000:job-definition/xm:1",
-             crossmatch_attempt])
-        cur.execute(
-            "UPDATE logical_jobs SET job_type = 'crossmatch'"
-            " WHERE logical_job_id ="
-            "   (SELECT logical_job_id FROM attempts WHERE attempt_id = %s)",
-            [crossmatch_attempt])
+    # A pending crossmatch attempt for that (date, field), built COMPLETE in
+    # one INSERT rather than patched afterwards: `attempts_state_submitted_
+    # check` (migration 013) requires the binding triple at schema_version
+    # >= 2 and forbids every outcome column, so a row is only ever valid as a
+    # whole. Writing it in pieces means writing it through a state the schema
+    # refuses.
+    crossmatch_attempt = fixture.make_pending_attempt(
+        conn, job_type="crossmatch", field=fields[0], processing_date=proc_date)
     conn.commit()
 
     assert (proc_date, fields[0]) not in _owed_pairs(), (
