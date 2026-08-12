@@ -278,19 +278,46 @@ shared laxity. Recorded as a candidate CR.
 
 ## P-H12 — What fix round 1 wired, and what it deliberately did not
 
-**Wired (was designed in round 1, reachable only now):**
+**Wired AND PROVEN (round 1 unless noted) — each has a test that fails if the
+wiring is removed:**
 
 - the full admission lifecycle in all three ingest scripts, including the
   crash ordering (seal last, and only on a clean run);
 - L2 admission at each script's L2 registration, which is what actually
   repairs `addl2file`'s `max(version)+1`;
-- `rapidctl gc-compute-plan`, `gc-recompute-plan` and `gc-execute-plan`, the
-  executor's first production call sites;
 - the admitted release reaching `ExecutionBinding` at `pipeline/seams.py`;
 - **N1**: active-manifest bodies are read and expanded, with a reader that can
   refuse and a plan-level refusal when one cannot be read;
 - **N2**: the fence re-verifies the owner's discharge inside the critical
-  section.
+  section;
+- `rapidctl gc-compute-plan` and `gc-recompute-plan`, and
+  `gc-execute-plan`'s DRY-RUN branch;
+- **`gc-execute-plan --apply` through the real CLI dispatch — PROVEN IN FIX
+  ROUND 2, not round 1** (see below).
+
+**WIRED BUT UNPROVEN IN ROUND 1, and why that mattered.** Round 1 listed all
+three `gc-*` subcommands as done without qualification. That was true of the
+code and **false of the evidence** for one of them: no test drove
+`gc-execute-plan --apply` through `build_parser()` → `args.func` into the
+apply branch at `main.py:612-618`. The test that claimed to
+(`test_gc_operator_surface.py`, then headed "the executor is GENUINELY
+REACHED from the operator surface") constructed `Executor` directly and never
+entered `_cmd_gc_execute` — so it substituted the executor **by never
+entering the code that constructs it**, and a typo in that branch, or a
+dropped `set_defaults(func=...)` mapping, would have passed a fully green
+suite.
+
+Nothing unsafe shipped — the state machine refuses execution outside
+`APPROVED`/`EXECUTING` — but the gap is fix round 1's own stated failure mode
+reproduced one layer inside the fix, and a ledger that cannot be trusted on
+"closed" is worth less than no ledger. Fix round 2 closes it with a test that
+patches `boto3.client` at the boundary so the production line still runs
+`_S3Versions(boto3.client("s3"))`, asserts the dispatch mapping, the S3 client
+construction, exact-`VersionId` deletion, the `session_user` actor and the
+audit row; plus a second test that the same CLI path refuses an unapproved
+plan. The misleading docstring was corrected rather than the test deleted:
+what it actually checks — the executor's own behaviour against a stub — is
+worth checking, and it now says so.
 
 **Deliberately NOT done, and why:**
 

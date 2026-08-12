@@ -307,12 +307,27 @@ def test_gc_execute_plan_dry_run_verifies_the_checksum_and_deletes_nothing():
         conn.close()
 
 
-def test_gc_execute_plan_drives_the_executor_against_an_approved_plan():
-    """B3's core: the executor is GENUINELY REACHED from the operator surface.
+def test_the_executor_deletes_by_exact_version_and_audits_the_run():
+    """The EXECUTOR's own behaviour against a stub — nothing about the CLI.
 
-    Asserted through the stub's own call log rather than by a zero exit code —
-    the executor having a production call site at all is the thing that was
-    missing, and "the command returned 0" would not prove it ran.
+    **THIS TEST DOES NOT ENTER `_cmd_gc_execute` AND DOES NOT PROVE THE CLI
+    PATH.** An earlier revision was headed "the executor is GENUINELY REACHED
+    from the operator surface" and claimed that "everything else on the path
+    is the production code". Both were false as written: it constructs
+    `Executor` directly, so it substitutes the executor BY NEVER ENTERING THE
+    CODE THAT CONSTRUCTS IT, and a typo in the apply branch would not have
+    failed it. Fix round 2 corrected the claim rather than deleting the test,
+    because what it actually checks is worth checking.
+
+    What it proves: given an approved plan, the executor deletes by exact
+    `VersionId`, marks the item `deleted`, and `record_execution` writes one
+    run-level audit row under the enumerated `gc_plan_execute` class.
+
+    The CLI path — `build_parser()` → `args.func` → the apply branch at
+    `main.py:612-618` — is proven by
+    `test_gc_execute_plan_apply_drives_the_executor_through_the_cli` below,
+    which is the test the review asked for and the one that fails if that
+    branch breaks.
     """
     conn = fixture.connect()
     try:
@@ -324,9 +339,6 @@ def test_gc_execute_plan_drives_the_executor_against_an_approved_plan():
 
         stub = StubS3(versions={(BUCKET, key): "v1"})
 
-        # The subcommand builds its own boto3-backed S3 surface, so the
-        # executor is substituted at the one seam a test may legitimately
-        # take — everything else on the path is the production code.
         from pipeline.gc.execute import Executor
         from pipeline.operatorctl.gc import record_execution
         executor = Executor(conn, stub, actor="contract-test")
@@ -337,8 +349,7 @@ def test_gc_execute_plan_drives_the_executor_against_an_approved_plan():
                                   dry_run=False)
 
         assert stub.delete_calls == [(BUCKET, key, "v1")], (
-            "the executor was not reached, or deleted by key rather than by "
-            "exact version")
+            "the executor deleted by key rather than by exact version")
         assert item_statuses(conn, plan.plan_id)[0][1] == "deleted"
         # The run-level operator act is in the ledger under the enumerated
         # class DRAFT 052 added.
@@ -349,6 +360,166 @@ def test_gc_execute_plan_drives_the_executor_against_an_approved_plan():
                         "   AND idempotency_key = %s",
                         ("exec-%s" % fixture.RUN_TAG,))
             assert cur.fetchone()[0] == 1
+    finally:
+        conn.close()
+
+
+def test_gc_execute_plan_apply_drives_the_executor_through_the_cli(
+        monkeypatch):
+    """B3's core, properly: `gc-execute-plan --apply` THROUGH THE REAL CLI.
+
+    **THIS IS THE TEST THE APPLY BRANCH NEVER HAD**, and its absence is the
+    one item fix round 1 left open. Every other execution test either drives
+    the dry-run branch or builds `Executor` itself, so a typo inside
+    `main.py:612-618` — or a dropped `set_defaults(func=...)` mapping — would
+    have passed a fully green suite. That is fix round 1's own stated failure
+    mode reproduced one layer inside the fix, which is why it is closed here.
+
+    THE PATH EXERCISED IS THE REAL ONE, end to end:
+
+      * `build_parser().parse_args([...])` — so the subcommand must exist,
+        accept `--apply`, and carry the mutation-contract arguments;
+      * `args.func` — so the `set_defaults(func=_cmd_gc_execute)` mapping must
+        be present and point at the right body;
+      * the apply branch itself — so `_S3Versions(...)`, `_session_user(conn)`,
+        `still_referenced_check(...)` and `record_execution(...)` must all be
+        constructed and called as written.
+
+    **BOTO3 IS SUBSTITUTED AT THE BOUNDARY, NOT BYPASSED.** `boto3.client` is
+    patched, so `main.py:613` still executes `_S3Versions(boto3.client("s3"))`
+    — the wrapper is really constructed, by the production line, around a fake
+    client. That is the difference between substituting a dependency and
+    skipping the code under test. The manifest reader is patched for the same
+    reason as elsewhere in this file: leftover `submissions` rows point at
+    buckets this host cannot read, and the resulting refusal is correct
+    behaviour asserted in `test_gc_manifest_expansion.py`.
+
+    `main()` itself is not called: it opens its own `operator_session()`, and
+    a contract test must run against the fixture's connection. The dispatch it
+    performs — `args.func(conn, args, out)` — is performed here identically,
+    which is the whole of what `main()` adds over this.
+    """
+    conn = fixture.connect()
+    try:
+        require_gc_schema(conn)
+        from pipeline.contract.test_gc_execution import (StubS3, approved_plan,
+                                                          item_statuses)
+
+        key = "science/r/u/attempt-0000000001/cliexec.fits"
+        repo, plan = approved_plan(conn, (key,), "cliexec-" + fixture.RUN_TAG)
+
+        stub = StubS3(versions={(BUCKET, key): "v1"})
+        built = []
+
+        class _FakeBoto3Client(object):
+            """Stands in for the boto3 S3 client `main.py:613` constructs.
+
+            It implements the two calls `_S3Versions` makes of a real client —
+            `head_object` and `delete_object` — and forwards them to the stub,
+            so the assertions below are about what the PRODUCTION wrapper did
+            with a client, not about what a hand-built surface chose to do.
+            """
+
+            def head_object(self, Bucket, Key, **kwargs):
+                version = stub.head_version(Bucket, Key)
+                if version is None:
+                    error = Exception("NoSuchKey")
+                    error.response = {"Error": {"Code": "404"}}
+                    raise error
+                return {"VersionId": version}
+
+            def delete_object(self, Bucket, Key, VersionId=None, **kwargs):
+                assert VersionId is not None, (
+                    "the CLI path deleted by key alone; on a versioning-"
+                    "enabled bucket that installs a delete marker over "
+                    "whatever is current")
+                stub.delete_version(Bucket, Key, VersionId)
+                return {}
+
+        def _fake_client(service, *args, **kwargs):
+            built.append(service)
+            return _FakeBoto3Client()
+
+        # Patched on the boto3 module itself, because `main.py:612` does a
+        # local `import boto3` inside the branch — so the attribute is
+        # resolved at call time, which is exactly what makes this substitution
+        # reach the production line rather than replace it.
+        import boto3
+        monkeypatch.setattr(boto3, "client", _fake_client)
+        monkeypatch.setattr(
+            "pipeline.operatorctl.gc.s3_manifest_reader",
+            lambda client=None: _stub_reader)
+
+        # THE REAL PARSER, THE REAL DISPATCH.
+        args = parse(["gc-execute-plan", "--plan-id", str(plan.plan_id),
+                      "--reason", "fix round 2: the CLI apply path",
+                      "--idempotency-key", "cliexec-%s" % fixture.RUN_TAG,
+                      "--apply"])
+        assert args.apply is True
+        assert args.func is operatorctl_main._cmd_gc_execute, (
+            "the gc-execute-plan subcommand does not dispatch to "
+            "_cmd_gc_execute; a dropped func mapping is exactly what this "
+            "test exists to catch")
+
+        out = _Out()
+        rc = args.func(conn, args, out)
+        assert rc == operatorctl_main.EXIT_OK
+
+        # THE APPLY BRANCH RAN: it built an S3 client...
+        assert built == ["s3"], (
+            "the apply branch did not construct its S3 client; either it was "
+            "not reached or main.py:612-613 changed")
+        # ...and drove the executor through it, by EXACT VersionId.
+        assert stub.delete_calls == [(BUCKET, key, "v1")], (
+            "the executor was not reached through the CLI, or the deletion "
+            "did not go by exact VersionId")
+        assert item_statuses(conn, plan.plan_id)[0][1] == "deleted"
+
+        # The run-level operator act is recorded under the enumerated class,
+        # with the key the operator supplied — proving `record_execution` was
+        # called from the branch and not merely importable.
+        with conn.cursor() as cur:
+            cur.execute("SELECT actor, rows_affected FROM derived.mutation_audit"
+                        " WHERE action_class = 'gc_plan_execute'"
+                        "   AND idempotency_key = %s",
+                        ("cliexec-%s" % fixture.RUN_TAG,))
+            row = cur.fetchone()
+        assert row is not None, (
+            "the CLI apply path wrote no audit row under gc_plan_execute")
+        actor, rows_affected = row
+        # The actor came from `_session_user(conn)` — the database's own
+        # session_user — not from a CLI argument.
+        with conn.cursor() as cur:
+            cur.execute("SELECT session_user")
+            assert actor == cur.fetchone()[0]
+        assert rows_affected == 1, "the deleted count reached the ledger"
+
+        # And the operator saw the per-outcome tally the branch prints.
+        assert "items by outcome:" in out.text
+        assert "deleted" in out.text
+    finally:
+        conn.close()
+
+
+def test_gc_execute_plan_apply_refuses_an_unapproved_plan_through_the_cli():
+    """The same CLI path, and it must REFUSE outside APPROVED/EXECUTING.
+
+    The safety property the review accepted by inspection, now exercised
+    through the dispatch that reaches it: compute, recompute, approve and
+    execute are distinct recorded steps, so `--apply` on a merely-COMPUTED
+    plan raises rather than deleting.
+    """
+    from pipeline.gc.references import PlanRefused
+    conn = fixture.connect()
+    try:
+        require_gc_schema(conn)
+        from pipeline.contract.test_gc_execution import record_a_plan
+        repo, plan = record_a_plan(conn, tag="cliunapp-" + fixture.RUN_TAG)
+
+        args = parse(["gc-execute-plan", "--plan-id", str(plan.plan_id),
+                      "--reason", "unapproved", "--apply"])
+        with pytest.raises(PlanRefused):
+            args.func(conn, args, _Out())
     finally:
         conn.close()
 

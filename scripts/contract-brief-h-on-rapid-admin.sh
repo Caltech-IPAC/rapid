@@ -351,6 +351,7 @@ for spec in \
     "FIX1-B4-BINDING-WIRED:pipeline/contract/test_admission_wiring.py:submission_seam or exposure_grain:not live" \
     "FIX1-B4-BINDING-DB:pipeline/contract/test_admission_wiring.py:reaches_a_real or worker_process:contract" \
     "FIX1-B3-OPERATOR-SURFACE:pipeline/contract/test_gc_operator_surface.py::contract" \
+    "FIX2-B3-CLI-APPLY-PATH:pipeline/contract/test_gc_operator_surface.py:through_the_cli:contract" \
     "FIX1-N1-MANIFEST-EXPANSION:pipeline/contract/test_gc_manifest_expansion.py::not live" \
     "FIX1-N1-MANIFEST-EXPANSION-DB:pipeline/contract/test_gc_manifest_expansion.py::contract" \
     "FIX1-N2-FENCE-RECHECK:pipeline/contract/test_gc_execution.py:discharge_watermark or still_discharged:contract" ; do
