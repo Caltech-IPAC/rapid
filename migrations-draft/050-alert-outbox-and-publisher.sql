@@ -363,7 +363,22 @@ CREATE OR REPLACE FUNCTION insert_alert_outbox_packet(
     p_topic text,
     p_release_identity text,
     p_exposure_id bigint,
-    p_sca smallint,
+    -- `integer`, NOT `smallint`, even though the COLUMN is smallint.
+    --
+    -- PostgreSQL resolves function calls by parameter type and will not
+    -- implicitly narrow integer -> smallint to find a candidate, so a caller
+    -- passing a plain Python int through psycopg2 — which binds it as
+    -- `integer` — gets "function insert_alert_outbox_packet(..., integer,
+    -- ...) does not exist", a message that names the function it is looking
+    -- at and reads as though the migration never applied. Observed live on
+    -- this branch's second acceptance run, where the function was present and
+    -- every call site failed.
+    --
+    -- Declaring the parameter wider than the column is the right way round:
+    -- the assignment to the smallint column below still range-checks the
+    -- value, so an out-of-range SCA is refused by the column rather than
+    -- silently accepted — the check moves, it does not disappear.
+    p_sca integer,
     p_producing_attempt_id bigint,
     p_corrects_alert_id text DEFAULT NULL)
 RETURNS text LANGUAGE plpgsql AS $$
@@ -416,7 +431,7 @@ END;
 $$;
 
 COMMENT ON FUNCTION insert_alert_outbox_packet(text, text, bytea, text, uuid,
-    text, text, bigint, smallint, bigint, text) IS
+    text, text, bigint, integer, bigint, text) IS
     'The outbox insert path. Absorbs an identical re-insert (the idempotent '
     're-run after a lost response) and RAISES on a same-alert_id collision '
     'whose payload checksum, pinned schema version or any other envelope '
@@ -622,7 +637,7 @@ BEGIN
         REVOKE UPDATE, DELETE ON alert_outbox FROM rapid_pipeline_write;
         -- The insert path is a function; the writer must be able to call it.
         GRANT EXECUTE ON FUNCTION insert_alert_outbox_packet(text, text,
-            bytea, text, uuid, text, text, bigint, smallint, bigint, text)
+            bytea, text, uuid, text, text, bigint, integer, bigint, text)
             TO rapid_pipeline_write;
         -- The pipeline reads policies (it records whether a release is
         -- authorized alongside the packet) but never writes them.
@@ -669,6 +684,6 @@ $$;
 REVOKE ALL ON FUNCTION reject_alert_outbox_envelope_rewrite() FROM PUBLIC;
 REVOKE ALL ON FUNCTION reject_delivered_alert_outbox_delete() FROM PUBLIC;
 REVOKE ALL ON FUNCTION insert_alert_outbox_packet(text, text, bytea, text,
-    uuid, text, text, bigint, smallint, bigint, text) FROM PUBLIC;
+    uuid, text, text, bigint, integer, bigint, text) FROM PUBLIC;
 
 COMMIT;

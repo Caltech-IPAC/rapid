@@ -205,7 +205,7 @@ def test_a_later_product_binding_does_not_remint_an_outboxed_identity(
         pytest.skip("DRAFT 048 is not applied (no products table), so there "
                     "is no binding to add")
 
-    attempt_id = fixture.make_attempt(conn)
+    attempt_id = fixture.make_attempt(conn, lifecycle="terminal_without_start")
     pid = fixture.make_diffimage(conn, attempt_id, field=7001, ppid=15)
     conn.commit()
 
@@ -249,7 +249,7 @@ def test_the_basis_selection_reads_the_real_product_join(outbox_db):
 
     from database.modules.utils.rapid_db import RAPIDDB
 
-    attempt_id = fixture.make_attempt(conn)
+    attempt_id = fixture.make_attempt(conn, lifecycle="terminal_without_start")
     unbound = fixture.make_diffimage(conn, attempt_id, field=7002, ppid=15)
     bound = fixture.make_diffimage(conn, attempt_id, field=7003, ppid=15)
     product_key = "sha256:" + uuid.uuid4().hex + uuid.uuid4().hex[:32]

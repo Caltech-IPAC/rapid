@@ -39,22 +39,20 @@ the publisher's classification rather than assume it.
 from pipeline.publisher.cycle import DefiniteRefusal
 
 
-class RecordingBroker:
-    """Accepts every send and records the wire form.
+class _Recorder:
+    """What every stub here shares: a record of what reached the wire.
 
-    `sent` is a list of `(topic, wire_bytes, key)` in the order the publisher
-    sent them, which is what the ordering, keying and byte-identity assertions
-    read. The metadata returned is the shape a real transport's record metadata
-    has, so the row's `broker_metadata` column is exercised with something
-    realistic rather than None.
+    THE ACCESSORS LIVE ON THE BASE, not on the accepting stub alone. The first
+    version of this module put `keys` and `payloads` on `RecordingBroker` only,
+    and the byte-identity test — which necessarily uses `FlakyBroker`, because
+    only a stub that fails once can produce a resend to compare — died with
+    `AttributeError: 'FlakyBroker' object has no attribute 'payloads'` instead
+    of comparing anything. A FAILED send is exactly when the record matters
+    most: the assertion is about what a retry reproduces.
     """
 
     def __init__(self):
         self.sent = []
-
-    def send(self, topic, wire_bytes, key=None):
-        self.sent.append((topic, wire_bytes, key))
-        return {"topic": topic, "partition": 0, "offset": len(self.sent) - 1}
 
     @property
     def keys(self):
@@ -65,7 +63,22 @@ class RecordingBroker:
         return [wire for _topic, wire, _key in self.sent]
 
 
-class AmbiguousBroker:
+class RecordingBroker(_Recorder):
+    """Accepts every send and records the wire form.
+
+    `sent` is a list of `(topic, wire_bytes, key)` in the order the publisher
+    sent them, which is what the ordering, keying and byte-identity assertions
+    read. The metadata returned is the shape a real transport's record metadata
+    has, so the row's `broker_metadata` column is exercised with something
+    realistic rather than None.
+    """
+
+    def send(self, topic, wire_bytes, key=None):
+        self.sent.append((topic, wire_bytes, key))
+        return {"topic": topic, "partition": 0, "offset": len(self.sent) - 1}
+
+
+class AmbiguousBroker(_Recorder):
     """Every send fails with an UNKNOWN outcome — the at-least-once case.
 
     Raises a plain exception rather than `DefiniteRefusal`, which is precisely
@@ -79,7 +92,7 @@ class AmbiguousBroker:
     """
 
     def __init__(self, error=None):
-        self.sent = []
+        super().__init__()
         self.error = error or TimeoutError(
             "no acknowledgement within the request timeout; the broker may or "
             "may not have taken this message")
@@ -89,7 +102,7 @@ class AmbiguousBroker:
         raise self.error
 
 
-class RefusingBroker:
+class RefusingBroker(_Recorder):
     """Every send is DEFINITELY refused — terminal, never retried.
 
     `DefiniteRefusal` is the publisher's explicit signal for "this will not
@@ -98,7 +111,7 @@ class RefusingBroker:
     """
 
     def __init__(self, reason="message exceeds the topic's maximum size"):
-        self.sent = []
+        super().__init__()
         self.reason = reason
 
     def send(self, topic, wire_bytes, key=None):
@@ -106,7 +119,7 @@ class RefusingBroker:
         raise DefiniteRefusal(self.reason)
 
 
-class FlakyBroker:
+class FlakyBroker(_Recorder):
     """Ambiguous for the first `failures` sends, then accepting.
 
     THE RESEND PATH END TO END, and the only stub that can demonstrate
@@ -116,7 +129,7 @@ class FlakyBroker:
     """
 
     def __init__(self, failures=1):
-        self.sent = []
+        super().__init__()
         self.remaining_failures = failures
 
     def send(self, topic, wire_bytes, key=None):
@@ -129,7 +142,7 @@ class FlakyBroker:
         return {"topic": topic, "partition": 0, "offset": len(self.sent) - 1}
 
 
-class CrashingBroker:
+class CrashingBroker(_Recorder):
     """Sends normally, then raises a BaseException to model a process kill.
 
     Used for the crash-window tests. `KeyboardInterrupt` derives from
@@ -146,7 +159,7 @@ class CrashingBroker:
     """
 
     def __init__(self, crash_after_send=True):
-        self.sent = []
+        super().__init__()
         self.crash_after_send = crash_after_send
 
     def send(self, topic, wire_bytes, key=None):

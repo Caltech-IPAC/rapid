@@ -111,7 +111,7 @@ def _emission_state(execute, exposure, sca, release):
 def test_the_three_effects_commit_together(emission):
     """Confirm CAS, outbox rows and milestone: one atom, all present."""
     conn, execute, exposure, sca, release = emission
-    attempt_id = fixture.make_attempt(conn)
+    attempt_id = fixture.make_attempt(conn, lifecycle="terminal_without_start")
     conn.commit()
     token = str(attempt_id)
     assert _claim(conn, exposure, sca, release, token, attempt_id) == token
@@ -139,7 +139,7 @@ def test_a_forced_failure_rolls_back_all_three(emission):
     exists to make unrepresentable.
     """
     conn, execute, exposure, sca, release = emission
-    attempt_id = fixture.make_attempt(conn)
+    attempt_id = fixture.make_attempt(conn, lifecycle="terminal_without_start")
     conn.commit()
     token = str(attempt_id)
     _claim(conn, exposure, sca, release, token, attempt_id)
@@ -176,8 +176,8 @@ def test_a_losing_claimant_commits_neither_packets_nor_milestone(emission):
     did not raise must have succeeded.
     """
     conn, execute, exposure, sca, release = emission
-    attempt_a = fixture.make_attempt(conn)
-    attempt_b = fixture.make_attempt(conn)
+    attempt_a = fixture.make_attempt(conn, lifecycle="terminal_without_start")
+    attempt_b = fixture.make_attempt(conn, lifecycle="terminal_without_start")
     conn.commit()
     token_a, token_b = str(attempt_a), str(attempt_b)
 
@@ -225,7 +225,7 @@ def test_a_rerun_after_a_lost_response_writes_no_duplicates(emission):
     second PACKET, and neither substitutes for the other.
     """
     conn, execute, exposure, sca, release = emission
-    attempt_id = fixture.make_attempt(conn)
+    attempt_id = fixture.make_attempt(conn, lifecycle="terminal_without_start")
     conn.commit()
     token = str(attempt_id)
     _claim(conn, exposure, sca, release, token, attempt_id)
@@ -259,7 +259,7 @@ def test_outbox_rows_are_visible_only_after_the_commit(emission):
     back.
     """
     conn, execute, exposure, sca, release = emission
-    attempt_id = fixture.make_attempt(conn)
+    attempt_id = fixture.make_attempt(conn, lifecycle="terminal_without_start")
     conn.commit()
     token = str(attempt_id)
     _claim(conn, exposure, sca, release, token, attempt_id)

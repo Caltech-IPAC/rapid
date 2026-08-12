@@ -218,6 +218,21 @@ def test_the_tie_break_orders_rows_sharing_one_created_at(outbox):
         outbox.add_packet(payload=alert_id.encode(), alert_id=alert_id,
                           created_offset_seconds=0)
 
+    # THE TIMESTAMPS ARE FORCED EQUAL, which the fixture alone cannot do:
+    # each `add_packet` commits its own transaction, so each row gets its own
+    # `now()` microsecond and they arrive already totally ordered by
+    # `created_at`. The tie-break would then never be exercised and the test
+    # would pass against a publisher that ignored it — which is exactly what
+    # happened on this branch's second acceptance run, where the rows came back
+    # in insertion order (f, e, d) and the assertion caught it.
+    #
+    # One UPDATE to a single literal reproduces what one confirmation
+    # transaction actually writes: a whole chip's packets sharing one instant.
+    outbox.execute(
+        "UPDATE alert_outbox SET created_at = timestamptz '2026-01-01 00:00:00+00'"
+        " WHERE release_identity = %s", [outbox.release])
+    outbox.conn.commit()
+
     broker = RecordingBroker()
     outbox.cycle(broker).run_once()
 

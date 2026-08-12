@@ -305,18 +305,32 @@ fi
 # happens when a stub-tier criterion is selected with a marker it does not
 # carry ("no tests ran", exit 4, a criterion that looked selected and was
 # never run).
+#
+# THE STUB-TIER LINES CARRY AN EXPLICIT `-m` OF THEIR OWN, and must. This
+# repo's `[tool.pytest.ini_options]` sets `addopts = "-m 'not contract and not
+# live'"` so a bare `pytest` never opens a database — which means a criterion
+# passing NO marker still inherits that default expression, and the auto-marked
+# `pipeline/contract/` tests are deselected by it. On this branch's second
+# acceptance run three criteria reported exit 5 (no tests collected) for that
+# reason while the files themselves were fine. So a stub-tier line says
+# `-m "not live"`: it re-states the intent (skip the manual tier) and displaces
+# the inherited default rather than fighting it.
+#
+# `alerts/test/` is ALSO outside `testpaths`, which lists pipeline,
+# observability, submission and database. An explicit path argument overrides
+# `testpaths`, so naming the file works — but only with the marker fixed too.
 crit_rc=0
 for spec in \
-    "CRIT1-IDENTITY-DIGEST:alerts/test/test_identity.py:::" \
+    "CRIT1-IDENTITY-DIGEST:alerts/test/test_identity.py::not live" \
     "CRIT1-IDENTITY-DB:pipeline/contract/test_alert_outbox_identity.py::contract" \
     "CRIT2-CONFIRM-ATOMICITY:pipeline/contract/test_alert_outbox_confirmation.py::contract" \
     "CRIT3-NO-BATCH-SENDS:pipeline/contract/test_alert_send_routes.py::contract" \
-    "CRIT3-NO-BATCH-SENDS-STUB:pipeline/stages/test/test_alert_production.py:outbox or producer or no_send or oversize:" \
+    "CRIT3-NO-BATCH-SENDS-STUB:pipeline/stages/test/test_alert_production.py:outbox or producer or no_send or oversize:not live" \
     "CRIT4-PUBLISHER-WIRE:pipeline/contract/test_publisher_contract.py:order or key or identical or ambiguous or refus or already_sent:contract" \
     "CRIT5-CRASH-WINDOWS:pipeline/contract/test_publisher_contract.py:crash or lease or reclaim or overlapping or atomic_claim:contract" \
     "CRIT6-DELIVERY-POLICY:pipeline/contract/test_publisher_contract.py:policy or unauthorized or revocation or authoriz:contract" \
     "CRIT7-GRANTS-IMMUTABILITY:pipeline/contract/test_alert_outbox_grants.py::contract" \
-    "CRIT8-OVERSIZE-DROP:pipeline/stages/test/test_alert_production.py:oversize:" \
+    "CRIT8-OVERSIZE-DROP:pipeline/stages/test/test_alert_production.py:oversize:not live" \
     "CRIT9-LEGACY-BASIS:pipeline/contract/test_alert_outbox_identity.py:legacy:contract" \
     "CRIT10-ENTRYPOINTS:pipeline/contract/test_publisher_startup.py::contract" ; do
     # Four colon-separated fields: name, target, -k expression, -m marker.
