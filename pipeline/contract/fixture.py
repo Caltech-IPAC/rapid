@@ -342,7 +342,7 @@ def make_pending_attempt(conn, job_type, field=None, processing_date=None):
             "         'sha256:' || %s, 'sha256:' || %s, %s, %s::date)"
             " RETURNING attempt_id",
             [run_id, schema_version, logical_job_id,
-             f"arn:aws:batch:us-east-1:000000000000:job-definition/{tag}:1",
+             f"arn:aws:batch:us-east-1:account:job-definition/{tag}:1",
              tag, tag, field, processing_date])
         return cur.fetchone()[0]
 
@@ -638,7 +638,7 @@ def make_completed_attempt(conn, rapid_outcome="success", field=None,
             " RETURNING attempt_id",
             [run_id, schema_version, logical_job_id,
              f"job-{tag}", f"sha-{tag}", tag, tag, rapid_outcome,
-             f"arn:aws:batch:us-east-1:000000000000:job-definition/f-{tag}:1",
+             f"arn:aws:batch:us-east-1:account:job-definition/f-{tag}:1",
              tag, tag,
              f"records/{RUN_TAG}/{tag}.json",
              field, processing_date])
