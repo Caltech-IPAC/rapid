@@ -257,6 +257,26 @@ def is_product_producing(job_type: str) -> bool:
 # direction is written down.
 
 
+def input_scope_from_subject(subject: tuple) -> str:
+    """`work_units.input_scope` from an already-computed subject tuple.
+
+    The same grammar as `build_input_scope`, for callers that HAVE a
+    subject but no unit. The mock transformer is the one such caller: it
+    enumerates already-registered L2 rows and needs their input scopes to
+    create work units, and it has the `(exposure, sca)` identity in hand
+    without ever building a processing unit.
+
+    It used to build a throwaway `ProcessingUnit` to pass to
+    `build_input_scope`. That worked while a unit was two integers; since
+    D4 a science payload requires its resolved facts, so the throwaway
+    would have had to invent eleven values it does not have and does not
+    use — inventing data to satisfy a validator is exactly what that
+    validator exists to prevent. Splitting the subject-only path out is the
+    honest fix: one grammar, two entry points, no fabricated facts.
+    """
+    return "/".join(str(component) for component in subject[1:])
+
+
 def build_input_scope(job_type: str, unit: Any) -> str:
     """`work_units.input_scope` for one manifest unit — the FORWARD grammar.
 
@@ -279,8 +299,7 @@ def build_input_scope(job_type: str, unit: Any) -> str:
     one can reach here. The raise is the correct outcome, and it is the same
     removal `attempt_identity_fields` and `ProcessingUnit.dedup_key` made.
     """
-    subject = subject_for(job_type).subject_for(unit)
-    return "/".join(str(component) for component in subject[1:])
+    return input_scope_from_subject(subject_for(job_type).subject_for(unit))
 
 
 def parse_exposure_sca_scope(input_scope: str) -> tuple[int, int]:

@@ -715,8 +715,15 @@ class RecordReadingTests(unittest.TestCase):
         return row
 
     def test_a_valid_record_is_returned(self):
+        # `read_record` parses the stored bytes with `json.loads`, so any
+        # sequence in `self.body` (e.g. `coadd_input_identities`) comes back
+        # a list even though it was a tuple going in. That is a property of
+        # JSON, not a bug in `read_record`, so the expected value is
+        # `self.body` round-tripped through the same JSON encode/decode
+        # rather than the pre-serialization dict with its tuples intact.
         self.assertEqual(
-            self.body, products.read_record(self.store, self._row()))
+            json.loads(json.dumps(self.body)),
+            products.read_record(self.store, self._row()))
 
     def test_bytes_that_do_not_match_the_cited_checksum_are_refused(self):
         # An object silently replaced at a known key would otherwise be

@@ -464,8 +464,10 @@ def create_mock_campaign_from_staged(
     get_campaign_unit_source_l2_identity` reads back — the campaign
     gatherer's other half of this round trip.
 
-    `input_scope` is built via `submission.subjects.build_input_scope` —
-    THE SHARED GRAMMAR, not a second convention. Using the exact function
+    `input_scope` is built via `submission.subjects
+    .input_scope_from_subject` — THE SHARED GRAMMAR, not a second
+    convention (`build_input_scope` is the same grammar's unit-taking entry
+    point, and delegates to it). Using the exact function
     `pipeline.seams._input_scope_for` delegates to is what guarantees a
     unit created here and the SAME unit later found by `pipeline.seams.
     _attach_work_unit` (when the accumulator submits it) agree on identity
@@ -523,7 +525,7 @@ def create_mock_campaign_from_staged(
         the database, not an unready state.
     """
     from submission.routes import JOB_TYPE_SCIENCE
-    from submission.subjects import build_input_scope
+    from submission.subjects import input_scope_from_subject
 
     moment = now or datetime.datetime.now(datetime.timezone.utc)
 
@@ -571,10 +573,16 @@ def create_mock_campaign_from_staged(
         campaign_name, "test", definition=definition, now=moment)
 
     for rid, sca, fid, expid, field in enumerated:
-        unit = ProcessingUnit(
-            payload=payloads.build(JOB_TYPE_SCIENCE, exposure=expid,
-                                   sca=sca))
-        input_scope = build_input_scope(JOB_TYPE_SCIENCE, unit)
+        # THE SUBJECT, NOT A UNIT. This built a throwaway `ProcessingUnit`
+        # purely to hand `build_input_scope` something to read a subject
+        # off. Since D4 a science payload validates its resolved facts at
+        # construction, and this loop has none of them — it enumerates
+        # already-registered L2 rows to CREATE work units, long before any
+        # gathering pass resolves facts for them. Inventing eleven values to
+        # satisfy the validator would defeat the validator; asking for the
+        # scope of a subject this loop genuinely has is the honest call.
+        input_scope = input_scope_from_subject(
+            (JOB_TYPE_SCIENCE, int(expid), int(sca)))
         identity = WorkUnitIdentity(
             job_type=JOB_TYPE_SCIENCE, input_scope=input_scope,
             operational_class="test",

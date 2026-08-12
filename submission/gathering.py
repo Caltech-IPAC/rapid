@@ -449,7 +449,7 @@ def gather_science_units(handle: UnitSource, start, end,
         for row in chosen:
             rid = int(row[0])
             facts = science_facts(handle, rid, field, fid)
-            exposure = facts.expid
+            exposure = facts.get("expid")
             if exposure is None:
                 raise GatheringError(
                     f"rid {rid} has no exposure id; a processing unit is "

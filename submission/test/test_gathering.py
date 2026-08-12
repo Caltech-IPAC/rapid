@@ -139,33 +139,43 @@ class StubSource:
 
 class ScienceFactsTests(unittest.TestCase):
 
+    # NOTE ON THIS CLASS: `submission.gathering.science_facts()` is typed
+    # `-> dict` and IS a plain dict, deliberately — its two callers
+    # (`gather_science_units`, `gather_campaign_units`) spread it with
+    # `**facts` straight into `payloads.build(...)`, which is what turns it
+    # into a typed `SciencePayload`. These tests originally read it with
+    # attribute access (`facts.rid`) as though it were already a payload;
+    # retargeted at dict access (`facts["rid"]`) to match the function's own
+    # return-type annotation and its two real call sites, rather than
+    # weakening what each assertion actually checks.
+
     def test_every_fact_traces_to_its_column(self):
         facts = science_facts(StubSource(), 101, field=4678622, fid=8)
-        self.assertEqual(facts.rid, 101)
-        self.assertEqual(facts.fid, 8)
-        self.assertEqual(facts.field, 4678622)
-        self.assertEqual(facts.expid, 5001)
-        self.assertEqual(facts.mjdobs, 61680.5)
-        self.assertEqual(facts.exptime, 139.8)
-        self.assertEqual(facts.infobits, 0)
+        self.assertEqual(facts["rid"], 101)
+        self.assertEqual(facts["fid"], 8)
+        self.assertEqual(facts["field"], 4678622)
+        self.assertEqual(facts["expid"], 5001)
+        self.assertEqual(facts["mjdobs"], 61680.5)
+        self.assertEqual(facts["exptime"], 139.8)
+        self.assertEqual(facts["infobits"], 0)
         # `status` was deleted as a dead member (D4): resolved by
         # `science_facts` in the past but never read by any consumer, and
         # `SciencePayload` declares no such component or invocation fact.
-        self.assertEqual(facts.science_image_uri, "s3://in/exp1_sca7.fits")
-        self.assertEqual(facts.filter_name, "F146")
+        self.assertEqual(facts["science_image_uri"], "s3://in/exp1_sca7.fits")
+        self.assertEqual(facts["filter_name"], "F146")
 
     def test_rtid_is_carried_not_looked_up(self):
         # W7 retired the per-source R-tree query; rtid equals field by
         # construction in this tessellation. Re-adding a lookup here would
         # reintroduce exactly what the retirement removed.
         facts = science_facts(StubSource(), 101, field=4678622, fid=8)
-        self.assertEqual(facts.rtid, facts.field)
+        self.assertEqual(facts["rtid"], facts["field"])
 
     def test_sky_position_is_all_or_nothing(self):
         facts = science_facts(StubSource(), 101, field=4678622, fid=8)
-        self.assertEqual(facts.sky_position["ra0"], 10.0)
-        self.assertEqual(facts.sky_position["dec4"], -43.4)
-        self.assertEqual(len(facts.sky_position), 10)
+        self.assertEqual(facts["sky_position"]["ra0"], 10.0)
+        self.assertEqual(facts["sky_position"]["dec4"], -43.4)
+        self.assertEqual(len(facts["sky_position"]), 10)
 
     def test_a_half_populated_corner_set_is_absent_entirely(self):
         # A half-populated mapping is worse than an absent one: a consumer
@@ -175,22 +185,26 @@ class ScienceFactsTests(unittest.TestCase):
                        10.3, -43.3, 10.4, -43.4)
         facts = science_facts(StubSource(meta=broken), 101,
                               field=4678622, fid=8)
-        self.assertIsNone(facts.sky_position)
+        self.assertIsNone(facts["sky_position"])
 
     def test_psf_facts_are_absent_when_no_psf_exists(self):
         facts = science_facts(StubSource(psf=None), 101,
                               field=4678622, fid=8)
-        self.assertIsNone(facts.psfid)
-        self.assertIsNone(facts.psf_uri)
+        self.assertNotIn("psfid", facts)
+        self.assertNotIn("psf_uri", facts)
 
     def test_absent_facts_are_omitted_not_nulled(self):
         # The adopted absent-not-sentinel rule: a fact never resolved and a
         # fact resolved to nothing are different, and only the first is what
-        # an omitted key means.
+        # an omitted key means. Retargeted at `facts` itself rather than
+        # `facts.to_dict()` — a plain dict has no such method, and
+        # `science_facts` already omits an unresolved key rather than
+        # writing it as null (see its own `if ... is not None:` guards), so
+        # the dict IS the wire-shaped form here.
         facts = science_facts(StubSource(psf=None, reference=None), 101,
                               field=4678622, fid=8)
-        self.assertNotIn("psf_uri", facts.to_dict())
-        self.assertNotIn("reference_image_uri", facts.to_dict())
+        self.assertNotIn("psf_uri", facts)
+        self.assertNotIn("reference_image_uri", facts)
 
     def test_a_missing_metadata_row_raises_rather_than_guessing(self):
         with self.assertRaises(GatheringError) as ctx:
@@ -221,7 +235,7 @@ class ReferenceSelectionTests(unittest.TestCase):
         source = StubSource(reference=self._reference_under(12))
         facts = science_facts(source, 101, field=4678622, fid=8,
                               reference_ppid=12, science_ppid=15)
-        self.assertEqual(facts.reference_image_id, 900)
+        self.assertEqual(facts["reference_image_id"], 900)
         self.assertEqual(source.reference_calls, [12])
 
     def test_it_falls_back_to_the_science_ppid(self):
@@ -230,7 +244,7 @@ class ReferenceSelectionTests(unittest.TestCase):
         source = StubSource(reference=self._reference_under(15))
         facts = science_facts(source, 101, field=4678622, fid=8,
                               reference_ppid=12, science_ppid=15)
-        self.assertEqual(facts.reference_image_id, 900)
+        self.assertEqual(facts["reference_image_id"], 900)
         self.assertEqual(source.reference_calls, [12, 15])
 
     def test_the_matching_ppid_is_recorded_as_provenance(self):
@@ -240,18 +254,21 @@ class ReferenceSelectionTests(unittest.TestCase):
         source = StubSource(reference=self._reference_under(15))
         facts = science_facts(source, 101, field=4678622, fid=8,
                               reference_ppid=12, science_ppid=15)
-        self.assertEqual(facts.reference_image_ppid, 15)
+        self.assertEqual(facts["reference_image_ppid"], 15)
 
     def test_no_reference_anywhere_leaves_the_facts_absent(self):
         # Not an error: "no reference exists yet" is a legitimate state, and
         # whether a unit is submittable without one is the job type's call,
-        # made by `require`, not gathering's.
+        # made by `require`, not gathering's. Retargeted at `assertNotIn` —
+        # `science_facts` OMITS an unresolved reference key entirely (see
+        # its own `if reference is not None:` guard) rather than writing it
+        # as null, so "absent" means missing from the dict, not None.
         def none_at_all(source, ppid, field, fid):
             source.exit_code = 7
             return None
         source = StubSource(reference=none_at_all)
         facts = science_facts(source, 101, field=4678622, fid=8)
-        self.assertIsNone(facts.reference_image_id)
+        self.assertNotIn("reference_image_id", facts)
 
     def test_a_real_query_failure_is_not_read_as_no_reference(self):
         # exit_code 7 means "none yet"; anything else nonzero is a failure
@@ -1442,10 +1459,23 @@ class GatherCampaignUnitsTests(unittest.TestCase):
         # Same science_facts call, same source rid — the campaign unit and
         # gather_science_units's own unit for rid 101 must carry identical
         # facts, proving the downstream chain runs unmodified.
+        #
+        # JUDGEMENT CALL: `campaign_units[0].facts` is a `SciencePayload`
+        # (gather_campaign_units spreads `science_facts`'s raw dict into
+        # `payloads.build`), while `direct_facts` here is that same raw
+        # dict — `science_facts()` is typed `-> dict` and returns one, it
+        # is never a payload. The two are never equal by `assertEqual`
+        # regardless of D4, so this compares every key `direct_facts`
+        # resolved against the same-named attribute on the built payload,
+        # which is the "identical facts" claim the original assertion meant.
         campaign_units = list(gather_campaign_units(self._source()))
         direct_facts = science_facts(StubSource(), 101, field=4678622, fid=8)
 
-        self.assertEqual(campaign_units[0].facts, direct_facts)
+        payload = campaign_units[0].facts
+        for name, value in direct_facts.items():
+            self.assertEqual(getattr(payload, name), value,
+                             f"fact {name!r} disagreed between the campaign "
+                             f"unit's payload and a direct science_facts call")
 
     def test_no_ready_rows_yields_nothing(self):
         self.assertEqual(

@@ -20,6 +20,7 @@ from submission.routes import JOB_TYPE_SCIENCE
 from submission.startup import (PIPELINE_PARAMETER_PATH, ParameterFetchError,
                                 configuration_digest, fetch_parameters,
                                 resolve_job_context)
+from submission.test import payload_fixtures as fixtures
 
 
 class FakeSsm:
@@ -61,8 +62,8 @@ CONFIG = {name.removeprefix("/rapid/pipeline/"): value
 
 def manifest_of(count=18, batch_id="b-1"):
     return Manifest(
-        [ProcessingUnit(payload=payloads.build(JOB_TYPE_SCIENCE,
-                                               exposure=90210, sca=i + 1))
+        [ProcessingUnit(payload=fixtures.science_payload(exposure=90210,
+                                                          sca=i + 1))
          for i in range(count)], batch_id=batch_id)
 
 

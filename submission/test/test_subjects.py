@@ -32,6 +32,7 @@ from submission.subjects import (GRAIN_DATE_FIELD, GRAIN_DATE_SCA,
                                  SubjectError, attempt_identity_fields,
                                  build_input_scope, is_product_producing,
                                  parse_exposure_sca_scope, subject_for)
+from submission.test import payload_fixtures as fixtures
 
 
 class GrainDeclarationTests(unittest.TestCase):
@@ -87,8 +88,8 @@ class DedupSubjectTests(unittest.TestCase):
                            target_tables=("t",))
 
     def test_science_dedup_key_is_the_storage_key_shape(self):
-        unit = ProcessingUnit(payload=payloads.build(
-            JOB_TYPE_SCIENCE, exposure=90000, sca=1))
+        unit = ProcessingUnit(payload=fixtures.science_payload(
+            exposure=90000, sca=1))
         self.assertEqual(unit.dedup_key(JOB_TYPE_SCIENCE),
                          (JOB_TYPE_SCIENCE, 90000, 1))
 
@@ -102,8 +103,8 @@ class DedupSubjectTests(unittest.TestCase):
         # surviving mismatch check: dedup_key(job_type) raises when asked
         # for a job type other than the one the unit's own payload
         # declares.
-        unit = ProcessingUnit(payload=payloads.build(
-            JOB_TYPE_SCIENCE, exposure=42, sca=3))
+        unit = ProcessingUnit(payload=fixtures.science_payload(
+            exposure=42, sca=3))
         with self.assertRaises(SubjectError):
             unit.dedup_key(JOB_TYPE_REGISTRATION)
 
@@ -149,8 +150,8 @@ class AttemptIdentityFieldTests(unittest.TestCase):
         self.assertNotIn("exposure_id", identity)
 
     def test_exposure_sca_grain_identity_is_unchanged(self):
-        unit = ProcessingUnit(payload=payloads.build(
-            JOB_TYPE_SCIENCE, exposure=90000, sca=1))
+        unit = ProcessingUnit(payload=fixtures.science_payload(
+            exposure=90000, sca=1))
         identity = attempt_identity_fields(JOB_TYPE_SCIENCE, unit)
 
         self.assertEqual(identity["exposure_id"], 90000)
@@ -166,22 +167,22 @@ class InputScopeGrammarTests(unittest.TestCase):
     """
 
     def test_build_matches_the_delimited_shape_seams_used_to_hardcode(self):
-        unit = ProcessingUnit(payload=payloads.build(
-            JOB_TYPE_SCIENCE, exposure=90000, sca=7))
+        unit = ProcessingUnit(payload=fixtures.science_payload(
+            exposure=90000, sca=7))
         self.assertEqual(build_input_scope(JOB_TYPE_SCIENCE, unit),
                          "90000/7")
 
     def test_round_trip_recovers_the_original_exposure_and_sca(self):
-        unit = ProcessingUnit(payload=payloads.build(
-            JOB_TYPE_SCIENCE, exposure=90000, sca=7))
+        unit = ProcessingUnit(payload=fixtures.science_payload(
+            exposure=90000, sca=7))
         scope = build_input_scope(JOB_TYPE_SCIENCE, unit)
         self.assertEqual(parse_exposure_sca_scope(scope), (90000, 7))
 
     def test_round_trip_holds_for_reference_image_too(self):
         # The other EXPOSURE_SCA-grain, product-producing job type — proof
         # the grammar is grain-shaped, not science-specific.
-        unit = ProcessingUnit(payload=payloads.build(
-            JOB_TYPE_REFERENCE_IMAGE, exposure=12345, sca=3))
+        unit = ProcessingUnit(payload=fixtures.reference_payload(
+            exposure=12345, sca=3))
         scope = build_input_scope(JOB_TYPE_REFERENCE_IMAGE, unit)
         self.assertEqual(parse_exposure_sca_scope(scope), (12345, 3))
 
@@ -206,7 +207,7 @@ class InputScopeGrammarTests(unittest.TestCase):
         # functions independently agree.
         from pipeline.seams import _input_scope_for
 
-        unit = ProcessingUnit(payload=payloads.build(
-            JOB_TYPE_SCIENCE, exposure=90000, sca=7))
+        unit = ProcessingUnit(payload=fixtures.science_payload(
+            exposure=90000, sca=7))
         self.assertEqual(_input_scope_for(JOB_TYPE_SCIENCE, unit),
                          build_input_scope(JOB_TYPE_SCIENCE, unit))

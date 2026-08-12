@@ -24,8 +24,15 @@ from submission.routes import (  # noqa: E402
 
 
 def units(count=2, exposure=90210, job_type=JOB_TYPE_SCIENCE):
-    return [ProcessingUnit(payload=payloads.build(job_type, exposure=exposure,
-                                                  sca=n + 1))
+    # A unit's payload must carry every required fact its job type declares
+    # (D4) — `payloads.build` with only `exposure`/`sca` can no longer
+    # construct a science or reference-image unit, so this helper goes
+    # through the fixtures, which resolve the rest. `field_payload`-style
+    # bare `payloads.build` remains fine for the other job types, which have
+    # no required facts beyond their grain components.
+    builder = (fixtures.reference_payload if job_type == JOB_TYPE_REFERENCE_IMAGE
+              else fixtures.science_payload)
+    return [ProcessingUnit(payload=builder(exposure=exposure, sca=n + 1))
            for n in range(count)]
 
 
@@ -182,41 +189,56 @@ def test_validate_for_rejects_the_wrong_queue():
 # --- key zero-padding (catalog co-design, storage.md § Key schema) ----
 
 def test_key_zero_pads_exposure_to_six_digits_and_sca_to_two():
-    unit = ProcessingUnit(payload=payloads.build(JOB_TYPE_SCIENCE, exposure=1,
-                                                 sca=2))
+    unit = ProcessingUnit(payload=fixtures.science_payload(exposure=1, sca=2))
     assert unit.key == "000001/02"
 
 
 def test_key_does_not_truncate_a_component_that_already_fills_its_width():
-    unit = ProcessingUnit(payload=payloads.build(JOB_TYPE_SCIENCE,
-                                                 exposure=123456, sca=42))
+    unit = ProcessingUnit(payload=fixtures.science_payload(exposure=123456,
+                                                            sca=42))
     assert unit.key == "123456/42"
 
 
 def test_key_padding_keeps_two_different_units_distinct():
-    assert (ProcessingUnit(payload=payloads.build(
-                JOB_TYPE_SCIENCE, exposure=1, sca=2)).key
-           != ProcessingUnit(payload=payloads.build(
-                JOB_TYPE_SCIENCE, exposure=12, sca=2)).key)
+    assert (ProcessingUnit(payload=fixtures.science_payload(
+                exposure=1, sca=2)).key
+           != ProcessingUnit(payload=fixtures.science_payload(
+                exposure=12, sca=2)).key)
 
 
 # --- per-invocation facts ---------------------------------------------
 
 def test_facts_default_to_empty_and_serialize_away():
-    unit = ProcessingUnit(payload=payloads.build(JOB_TYPE_SCIENCE, exposure=1,
-                                                 sca=2))
-    assert unit.to_dict() == {"payload": {"grain": "exposure_sca",
-                                          "exposure": 1, "sca": 2}}
+    # JUDGEMENT CALL: the original built a bare science payload with only
+    # exposure/sca and asserted NO facts serialize at all. D4 made the
+    # eleven imaging facts required at construction, so that bare payload
+    # can no longer be built — there is no science unit with zero facts to
+    # retarget onto. What "absent facts serialize away" still means for a
+    # fully-resolved payload is that a fact nobody resolved (here `psfid`/
+    # `psf_uri`, both genuinely optional per `ImagingPayload`'s docstring)
+    # is omitted from the wire form rather than written as null, while every
+    # required fact IS present. That is the same absent-not-sentinel rule
+    # the original test exercised, now demonstrated on the one class of
+    # fact that can still be absent.
+    unit = ProcessingUnit(payload=fixtures.science_payload(exposure=1, sca=2))
+    written = unit.to_dict()["payload"]
+    assert "psfid" not in written and "psf_uri" not in written, (
+        "the fixture resolves no PSF, so no psfid/psf_uri key may appear")
+    assert written["exposure"] == 1
+    assert written["sca"] == 2
 
 
 def test_facts_round_trip_with_their_types():
-    unit = ProcessingUnit(payload=payloads.build(JOB_TYPE_SCIENCE,
-                                                 exposure=90210, sca=1),
-                          facts=science_facts())
+    unit = ProcessingUnit(payload=science_facts())
     restored = ProcessingUnit.from_dict(unit.to_dict(), JOB_TYPE_SCIENCE)
     assert restored == unit
     assert restored.facts.mjdobs == 60553.25
-    assert restored.facts.overlapping_fields == [511, 512, 513]
+    # `_freeze` normalizes sequence members to tuples on construction, but
+    # `overlapping_fields` round-trips through `unit.to_dict()` -> JSON-
+    # shaped dict -> `from_dict` in this test WITHOUT an actual JSON
+    # encode/decode pass (no `json.dumps`/`json.loads` in between), so it
+    # is still the tuple `payloads.build` normalized it to, not a list.
+    assert restored.facts.overlapping_fields == (511, 512, 513)
     assert restored.facts.sky_position == {"ra0": 10.5, "dec0": -20.25}
 
 
@@ -260,21 +282,32 @@ def test_require_passes_when_every_fact_is_present():
 
 def test_a_reference_image_id_of_none_means_one_must_be_built():
     # The launcher's rfid=None branch: no existing reference image.
+    # JUDGEMENT CALL: the original also set `images_to_coadd=14` and
+    # `coadd_inputs_uri=...` on the science payload and asserted
+    # `facts.images_to_coadd == 14`. Both members are gone: manifest.py's
+    # own retirement note says `images_to_coadd` and `reference_position`
+    # were declared and documented but never written by any gatherer and
+    # never read by any consumer, so D4 dropped them rather than moving
+    # them onto a payload — and `coadd_inputs_uri` is a
+    # `ReferenceImagePayload`-only member, invalid on `SciencePayload`
+    # (`science_facts()` builds the latter). Retargeted at
+    # `overlapping_fields`, a genuinely optional science fact
+    # (`ImagingPayload`'s docstring: "a submit-time convenience for the
+    # coadd path"), to keep exercising "an optional fact besides the
+    # reference-image ones round-trips to None/absent same as before."
     facts = science_facts(reference_image_id=None, reference_image_uri=None,
-                          images_to_coadd=14,
-                          coadd_inputs_uri="s3://files/inputs_jid7.csv")
+                          overlapping_fields=())
     assert facts.reference_image_id is None
-    assert facts.images_to_coadd == 14
+    assert facts.overlapping_fields == ()
     assert "reference_image_id" not in facts.to_dict()
+    assert "overlapping_fields" not in facts.to_dict()
 
 
 # --- manifest-wide fact requirements ----------------------------------
 
 def test_require_facts_passes_when_every_unit_carries_them():
     manifest = Manifest(
-        [ProcessingUnit(payload=payloads.build(JOB_TYPE_SCIENCE,
-                                               exposure=90210, sca=n + 1),
-                        facts=science_facts())
+        [ProcessingUnit(payload=science_facts(sca=n + 1))
          for n in range(3)],
         job_type="science")
     manifest.require_facts("rid", "science_image_uri")
@@ -307,13 +340,18 @@ def test_require_facts_names_the_offending_indices():
 
 
 def test_require_facts_truncates_a_long_list_but_states_the_total():
+    # JUDGEMENT CALL: the original asked for "rid" — now a REQUIRED fact, so
+    # a unit missing it cannot be constructed and no manifest of 15 such
+    # units can exist to exercise the truncation. Retargeted at `psf_uri`,
+    # genuinely optional (an SCA may have no registered PSF), which the
+    # fixture leaves unresolved on every unit by default.
     manifest = Manifest(
-        [ProcessingUnit(payload=payloads.build(JOB_TYPE_SCIENCE,
-                                               exposure=90210, sca=n + 1))
+        [ProcessingUnit(payload=fixtures.science_payload(exposure=90210,
+                                                          sca=n + 1))
          for n in range(15)],
         job_type="science")
     with pytest.raises(ValueError) as caught:
-        manifest.require_facts("rid")
+        manifest.require_facts("psf_uri")
     message = str(caught.value)
     assert "15 of 15 units" in message
     assert message.rstrip().endswith("...")
@@ -321,9 +359,7 @@ def test_require_facts_truncates_a_long_list_but_states_the_total():
 
 def test_facts_survive_a_full_manifest_round_trip():
     manifest = Manifest(
-        [ProcessingUnit(payload=payloads.build(JOB_TYPE_SCIENCE,
-                                               exposure=90210, sca=n + 1),
-                        facts=science_facts(rid=n))
+        [ProcessingUnit(payload=science_facts(sca=n + 1, rid=n))
          for n in range(3)],
         batch_id="b1", job_type="science")
     restored = Manifest.from_json(manifest.to_json())
