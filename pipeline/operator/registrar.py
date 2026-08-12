@@ -12,7 +12,25 @@ phase, then re-bound per registration connection, versus resolved once
 before anything runs).
 """
 
+import logging
 import os
+
+logger = logging.getLogger("rapid.operator.registrar")
+
+#: The probe for DRAFT 048's two identity tables, asked of the catalog before
+#: any identity statement runs.
+#:
+#: BOTH TABLES, not just `products`: `register_identity` writes a product row
+#: AND artifact rows AND the binding between them, so a schema carrying one
+#: without the other is as unusable as one carrying neither — and probing only
+#: the first would turn that into the aborted transaction the probe exists to
+#: prevent. Spelled `to_regclass`, matching the probes in
+#: `repositories/alert_outbox.py`, `repositories/admission.py` and
+#: `repositories/association.py` rather than introducing a fourth spelling.
+_IDENTITY_TABLES_PROBE = (
+    "SELECT to_regclass('public.products') IS NOT NULL"
+    "   AND to_regclass('public.artifacts') IS NOT NULL"
+    "   AND to_regclass('public.product_artifacts') IS NOT NULL")
 
 
 def production_registrar(replay_pre_binding_roles=False, parameters=None,
@@ -111,10 +129,98 @@ def production_registrar(replay_pre_binding_roles=False, parameters=None,
         print("*** replaying pre-binding records against the running "
               "release's product roles: {}".format(fallback_roles))
 
+    from pipeline.repositories.products import ProductRepository
+
+    def identity_repository_for(conn):
+        """`ProductRepository(conn)`, or None where DRAFT 048 is not deployed.
+
+        **THE PROBE IS WHAT MAKES THIS WIRING SAFE TO SHIP AHEAD OF 048**, and
+        it is not optional. 048 is still a DRAFT — it is not in the
+        authoritative migration stream — so the live registrar will run against
+        databases without `products`/`artifacts` for as long as the change
+        request is pending. Passing a repository unconditionally there would
+        NOT degrade: `register_identity` calls `upsert_product` first thing,
+        `ProductRepository._query` re-raises the UndefinedTable as
+        `RepositoryQueryFailed`, nothing between there and the consumer catches
+        it, and the per-attempt transaction rolls back. Every registration
+        would fail, permanently, for want of a table the legacy path does not
+        need — a durable rejection, which is exactly what D's P8 forbids
+        ("legacy-only, log why, never invent a key, never durably reject").
+
+        ASKED OF THE CATALOG, NOT DISCOVERED BY CATCHING `UndefinedTable`.
+        `pipeline/repositories/alert_outbox.py` states the rule for this same
+        pair of tables and this same reason: a failed statement ABORTS the
+        surrounding transaction, and this runs inside the registration
+        consumer's per-attempt transaction, which also carries the legacy rows
+        and the watermark. Recovering with a rollback would discard those; the
+        probe never puts the transaction in that state. "This schema is not
+        deployed" and "this query is wrong" stay two distinct facts.
+
+        ONE PROBE PER REGISTRATION PASS, not per attempt — this is called once
+        per connection, and a pass's schema does not change under it.
+        """
+        with conn.cursor() as cur:
+            cur.execute(_IDENTITY_TABLES_PROBE)
+            row = cur.fetchone()
+        present = bool(row and (row[0] if not isinstance(row, dict)
+                                else next(iter(row.values()))))
+        if not present:
+            # LOGGED AT WARNING, not info: on a database that HAS 048 this
+            # line never appears, so its presence is the operator's signal
+            # that products and artifacts are not being recorded for this
+            # pass and rule 10's cardinality is not being enforced yet.
+            logger.warning(
+                "registration is running LEGACY-ONLY: DRAFT 048's products "
+                "and artifacts tables are not deployed on this database, so "
+                "no product or artifact rows will be written for this pass. "
+                "The legacy registration is complete and unaffected.")
+            return None
+        return ProductRepository(conn)
+
     def for_connection(conn):
-        """The callback for ONE registration pass, on ITS connection."""
+        """The callback for ONE registration pass, on ITS connection.
+
+        THE IDENTITY REPOSITORY BORROWS THIS PASS'S CONNECTION, which is what
+        makes the products and artifacts tables populate on the LIVE path.
+        Until this, package D's identity machinery was code-complete and
+        DORMANT: the only call site passing an `identity_repository` was
+        `entrypoints.job.registrar_for`, on the `JOB_TYPE_REGISTRATION` route
+        the operator service never takes, so `products.py`'s
+        `identity_repository is None` branch — the one its own comment calls
+        "the pre-rollout path" — was the only branch production ever ran.
+        `pipeline/gc/references.py` records the consequence: `artifacts` was
+        the table meant to record published files and was never populated,
+        so an anti-join keyed on `artifacts.uri` would have classified every
+        real product as unreferenced garbage.
+
+        Built HERE, per connection, rather than once in the enclosing factory:
+        the repository is bound to one connection, and the operator's three
+        phases each open their own registration connection. One repository
+        built once could only ever belong to one of them — the same reason
+        this layer is a factory at all (round-4 finding #2). Constructing it
+        costs one attribute assignment and no round trips, which is why it is
+        eager here while the RAPIDDB handle stays lazy: that handle's
+        `__init__` issues two queries.
+
+        THE SAME CONNECTION AS THE LEGACY HANDLE, deliberately. Product rows,
+        artifact rows, the legacy version rows and the registration watermark
+        then commit or roll back together — rule 10's cardinality is only
+        meaningful if the rows enforcing it are atomic with the watermark.
+        Two connections would be round-3 finding #8 reintroduced through the
+        new tables. Note that the class import is at factory scope but the
+        INSTANCE is per-connection; importing the module cannot bind a
+        connection, so nothing is shared across phases.
+
+        Degradation for a database without DRAFT 048 is D's P8, and it is
+        `identity_repository_for`'s catalog probe that delivers it: absent the
+        tables the repository is None, which is `products.py`'s existing
+        pre-rollout branch — legacy registration complete, no identity rows,
+        nothing rejected. This wiring never invents a key and never durably
+        refuses an attempt for want of the new tables.
+        """
         return registrar(lambda: rapid_db.RAPIDDB.borrowing(conn), store,
-                         fallback_roles=fallback_roles)
+                         fallback_roles=fallback_roles,
+                         identity_repository=identity_repository_for(conn))
 
     return for_connection
 

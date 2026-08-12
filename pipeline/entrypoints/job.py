@@ -951,6 +951,8 @@ def _database(route, job_env, endpoint, credentials):
         connection,
     )
     from observability.attempts import AttemptWriter
+    from pipeline.intent.application_contract import (
+        verify_application_contract)
     from pipeline.intent.schema_contract import verify_schema_contract
 
     application_name = f"rapid-payload:{job_env.scheduler_job_id}"
@@ -971,6 +973,20 @@ def _database(route, job_env, endpoint, credentials):
         # science stage with an UndefinedColumn — and a failure this early
         # costs one attempt, not one attempt plus a partial product.
         verify_schema_contract(execute.execute)
+        # THE APPLICATION HALF, on the same argument as the schema half above
+        # and in the same place (rule 18 names "the application/schema
+        # contract" as one contract with two halves; only the schema half was
+        # checked here). It matters MOST for the payload, for the reason the
+        # comment above already gives: a job pinned to an old release and
+        # started after a deployment is the routine way old code meets a new
+        # schema, and a payload that cannot state its own release is one whose
+        # products cannot be attributed to one — an unattributable product,
+        # rather than an unattributable service.
+        #
+        # `require_image_digest` stays TRUE: the payload IS a container, and
+        # its digest is the one fact it can most legitimately be required to
+        # know. `rapidctl`'s relaxation is for a tool run from a shell.
+        verify_application_contract(execute.execute)
         # The connection itself is yielded alongside the writer (post-DB chain
         # conversion). The database-effect job types write through it as a
         # BORROWED connection — co-design ruling 4 — so their writes and this

@@ -668,9 +668,12 @@ def _connection_factory(session, endpoint):
 
 
 def _verify_work_streams(session, endpoint):
-    """Run the two fail-closed startup checks (rules 18 and 12), in order.
+    """Run the three fail-closed startup checks (rules 18 and 12), in order.
 
-    Opens ONE short read-only connection, runs both checks, closes it. Not
+    Rule 18 supplies two of them — the schema half and the application half —
+    and rule 12 the work-stream completeness check.
+
+    Opens ONE short read-only connection, runs all three, closes it. Not
     folded into `_execute_factory`'s per-pass connection: these are startup
     gates that must have answered before the first poll, and they read
     `schema_migrations` and `workflow_definitions` — SELECT-granted
@@ -694,6 +697,8 @@ def _verify_work_streams(session, endpoint):
     """
     from database.modules.utils.rapid_db_connect import (ConnectionExecutor,
                                                          connection)
+    from pipeline.intent.application_contract import (
+        verify_application_contract)
     from pipeline.intent.definitions import verify_work_stream_completeness
     from pipeline.intent.schema_contract import verify_schema_contract
 
@@ -702,10 +707,24 @@ def _verify_work_streams(session, endpoint):
                     endpoint=endpoint, credentials=credentials) as conn:
         execute = ConnectionExecutor(conn).execute
         migrations = verify_schema_contract(execute)
+        # THE APPLICATION HALF (rule 18), between the two checks that were
+        # already here and for the same fail-closed reason. It runs AFTER the
+        # schema check by the ordering argument above — its registration probe
+        # reads `admission_releases`, a DRAFT 051 table, and a missing
+        # migration should be reported as a missing migration rather than as
+        # whatever this check makes of its absence.
+        #
+        # `require_image_digest` is left at its default TRUE: this is a
+        # deployed service whose unit supplies the digest, not `rapidctl`'s
+        # shell-run operator tool, which is the one case that relaxation
+        # exists for. The identity is returned and logged so a preflighted
+        # process is distinguishable in the journal from one that is not.
+        identity = verify_application_contract(execute)
         verified = verify_work_stream_completeness(execute)
     logger.info("schema preflight passed (%d required migrations); "
+                "application preflight passed (release %s); "
                 "work-stream completeness check passed (%d streams)",
-                migrations, verified)
+                migrations, identity["release_identity"], verified)
 
 
 def _execute_factory(session, endpoint):

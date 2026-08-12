@@ -177,11 +177,30 @@ def _preflight_schema(conn):
     and needs no privileges beyond what the service already holds.
     """
     from database.modules.utils.rapid_db_connect import ConnectionExecutor
+    from pipeline.intent.application_contract import (
+        verify_application_contract)
     from pipeline.intent.schema_contract import verify_schema_contract
 
     verified = verify_schema_contract(ConnectionExecutor(conn).execute)
     logger.info("schema preflight passed: %s required migrations present",
                 verified)
+
+    # THE APPLICATION HALF (rule 18: the "application/schema contract" is two
+    # halves, and only the schema half was checked here). `rapidctl` was the
+    # ONE entry point calling it, wired by package H and deliberately not
+    # extended at the time; this is that extension, following
+    # `operatorctl/main.py:_preflight`'s call exactly.
+    #
+    # `require_image_digest` STAYS TRUE HERE, unlike `rapidctl`'s call. That
+    # relaxation is for an operator tool run from a shell, which has no
+    # container digest to know. The reconciler is a deployed SERVICE whose
+    # unit supplies both variables, so accepting a missing digest would
+    # accept exactly the misdeployment this check exists to catch.
+    #
+    # The executor is the same one-callable executor the schema half took, so
+    # the registration check runs on the service's own connection and costs
+    # one further read-only SELECT.
+    verify_application_contract(ConnectionExecutor(conn).execute)
     return verified
 
 

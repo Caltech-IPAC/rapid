@@ -89,6 +89,26 @@ def _preflight_schema(conn):
     logger.info("schema preflight passed: alert_outbox and delivery_policies "
                 "are present")
 
+    # THE APPLICATION HALF (rule 18). This module's schema check above is a
+    # narrower probe than the other services' — the publisher's subject is two
+    # tables, so it asks for those rather than running the migration contract —
+    # but the application half is not narrower for anyone: a process that
+    # cannot say which release it is cannot have its published alerts
+    # attributed to a release, and the publisher is the component whose output
+    # LEAVES the system. Fail-closed here, before the send loop is built.
+    #
+    # Called with the ConnectionExecutor the other four use rather than this
+    # module's local `_executor`: that one COMMITS each statement, which is
+    # right for the repository's short transactions and wrong for a read-only
+    # startup probe.
+    from database.modules.utils.rapid_db_connect import ConnectionExecutor
+    from pipeline.intent.application_contract import (
+        verify_application_contract)
+
+    identity = verify_application_contract(ConnectionExecutor(conn).execute)
+    logger.info("application preflight passed: release %s",
+                identity["release_identity"])
+
 
 def _require_brokers(parameters):
     """The broker list, or a named start failure.
