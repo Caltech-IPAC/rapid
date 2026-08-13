@@ -174,6 +174,21 @@ _ATTACH_SQL = (
     " WHERE attempt_id = ANY(%s) AND submission_id IS NULL"
 )
 
+#: The reconciler's ambiguity path needs the submission's STATE (to let a
+#: FOUND/LOST record decide over the clock) and its JOB_NAME/JOB_QUEUE (the
+#: attempts row does not carry them — `pipeline.reconciler.service._OPEN_
+#: COLUMNS` selects no job name at all, since a re-query is keyed by name,
+#: not id). Joined through `attempts.submission_id`, the FK
+#: `attach_attempts` maintains, so this is one read rather than the
+#: reconciler open-coding a second `submissions` query outside this module.
+_SUBMISSION_FOR_ATTEMPT_SQL = (
+    "SELECT s.submission_id, s.state, s.job_name, s.job_queue,"
+    "       s.resolution_deadline"
+    "  FROM submissions s"
+    "  JOIN attempts a ON a.submission_id = s.submission_id"
+    " WHERE a.attempt_id = %s"
+)
+
 
 def is_available(execute):
     """Is DRAFT 044's `submissions` table present in this database?
@@ -330,6 +345,26 @@ def attach_attempts(execute, submission_id, attempt_ids):
     if not attempt_ids:
         return 0
     return execute(_ATTACH_SQL, [submission_id, list(attempt_ids)])
+
+
+def submission_for_attempt(execute, attempt_id):
+    """The submission record linked to one attempt, or `None`.
+
+    `None` covers two cases the caller must treat alike: no submission row
+    exists for this attempt at all (every pre-044 attempt, and any attempt a
+    submission pass could not open a record for — submissions fails OPEN),
+    or the join found nothing for another reason. Either way there is no
+    durable evidence to consult, and the caller's own backstop applies.
+
+    Read-only, no transaction of its own — one SELECT, exactly like
+    `open_submissions`.
+    """
+    rows = execute(_SUBMISSION_FOR_ATTEMPT_SQL, [attempt_id])
+    if not rows:
+        return None
+    columns = ("submission_id", "state", "job_name", "job_queue",
+               "resolution_deadline")
+    return dict(zip(columns, rows[0]))
 
 
 def resolve(execute, row, describe, now=None):
