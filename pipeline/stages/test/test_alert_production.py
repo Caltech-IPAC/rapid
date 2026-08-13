@@ -68,6 +68,7 @@ _install_third_party_stubs()
 
 from database.modules.utils.checked import RapidDBCallFailed  # noqa: E402
 from database.modules.utils.rapid_db import RAPIDDB        # noqa: E402
+from pipeline.repositories.errors import RepositoryQueryFailed  # noqa: E402
 from pipeline.runtime.errors import InputError             # noqa: E402
 from pipeline.stages import alert_production                # noqa: E402
 from submission import payloads                             # noqa: E402
@@ -935,7 +936,13 @@ class EmissionTests(unittest.TestCase):
         producer = Producer()
         context = Context(_unit(), PARAMETERS, conn=conn)
 
-        with self.assertRaises(RuntimeError):
+        # `failure=67` fails EVERY query, so the first one raises — which,
+        # now that the stage probes for DRAFT 050 before claiming, is the
+        # schema probe (`RepositoryQueryFailed`, not `RuntimeError`-based
+        # like the claim's own `RapidDBCallFailed`). Either way the property
+        # under test is the same: a DB fault before or at the claim fails
+        # the chip and nothing reaches the outbox.
+        with self.assertRaises((RuntimeError, RepositoryQueryFailed)):
             self._run(context, provider, producer)
 
         self.assertEqual(conn.alert_outbox, {})
