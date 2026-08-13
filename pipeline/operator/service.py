@@ -728,10 +728,49 @@ def _verify_work_streams(session, endpoint):
 
 
 def _execute_factory(session, endpoint):
-    """A context manager yielding the submission `execute` callable.
+    """A context manager yielding `(execute, protocol_commit)` for a pass.
 
     Same per-call credential fetch as `_connection_factory`: the secret is
     resolved fresh inside `factory()`, not closed over from `main()`.
+
+    **`autocommit_each=False` (fix-txn-core, finding 2).** This used to build
+    `ConnectionExecutor(conn)` — the default `autocommit_each=True` — which
+    meant every single statement `pipeline.seams.submit_units` issues through
+    the `execute` this yields committed AS ITS OWN TRANSACTION: the work-unit
+    advisory lock (transaction-scoped, so it released the instant its own
+    one-statement transaction committed — essentially immediately, well
+    before the CAS it exists to protect even ran), the work-unit CAS UPDATE,
+    the `unit_events` INSERT, and the attempt's `work_unit_id` FK attachment
+    were four independently-committed writes with no atomicity across them
+    and a lock that guarded nothing. A crash between any two could leave a
+    work-unit transition committed with no matching `unit_events` row, or
+    `submitted` committed with no attempt ever attached — a gap
+    reconciliation cannot find, because nothing points at it.
+
+    With `autocommit_each=False`, this whole per-pass connection becomes ONE
+    real transaction — exactly the scope `LiveSubmitter.submit`'s own
+    docstring already claimed for it ("each submission takes its own
+    transaction, exactly as the old operator's `with connection(...)` blocks
+    did") but that the default executor never actually delivered. Nothing
+    commits until `submit_units` says so, at the two boundaries its
+    docstring documents (before `SubmitJob`, and after the post-Batch
+    bookkeeping) — which is also finding 3's and finding 4's mechanism: a
+    protocol write that fails partway, or a scheduler-id backfill that comes
+    up short, now leaves its transaction uncommitted rather than half-durable.
+
+    `protocol_commit` is yielded alongside `execute` — a zero-argument
+    `conn.commit` — rather than the raw connection, so `pipeline.seams`
+    (which takes only injected callables, never a connection, by design)
+    still has exactly the seam it is written against; see `submit_units`'s
+    docstring for what calling it twice accomplishes and why. If the block
+    this context manager wraps exits WITHOUT that final commit having run —
+    an exception propagating out of `submit_units`, most obviously — nothing
+    written since the last commit survives: `connection(...)`'s own `finally`
+    closes the connection, and psycopg2 rolls back whatever transaction is
+    still open on a connection that closes without a commit. That is exactly
+    the "abort, do not leave partial state durable" behaviour findings 3 and
+    4 require, for free, from the existing connection lifecycle — no explicit
+    rollback call is needed here.
     """
     import contextlib
 
@@ -743,7 +782,8 @@ def _execute_factory(session, endpoint):
         credentials = service_kernel.database_credentials(session)
         with connection("rapid-vpo-submit", lane="transaction",
                         endpoint=endpoint, credentials=credentials) as conn:
-            yield ConnectionExecutor(conn).execute
+            executor = ConnectionExecutor(conn, autocommit_each=False)
+            yield executor.execute, conn.commit
     return factory
 
 
