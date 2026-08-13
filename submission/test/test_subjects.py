@@ -211,3 +211,71 @@ class InputScopeGrammarTests(unittest.TestCase):
             exposure=90000, sca=7))
         self.assertEqual(_input_scope_for(JOB_TYPE_SCIENCE, unit),
                          build_input_scope(JOB_TYPE_SCIENCE, unit))
+
+
+class AlertProductionSubjectGrainTests(unittest.TestCase):
+    """The alert-production work-unit subject carries the release (finding
+    13, fix-state-gate): identical exposure/SCA under two releases must be
+    two distinct subjects, because emission is scoped once per unit per
+    RELEASE (`submission.gathering.gather_alert_production_units`'s own
+    docstring), not once per unit ever.
+    """
+
+    def test_the_subject_carries_the_release_identity(self):
+        unit = ProcessingUnit(payload=fixtures.alert_payload(
+            exposure=90000, sca=7, release_identity="rel-1"))
+        self.assertEqual(
+            unit.dedup_key(JOB_TYPE_ALERT_PRODUCTION),
+            (JOB_TYPE_ALERT_PRODUCTION, 90000, 7, "rel-1"))
+
+    def test_two_releases_over_one_exposure_sca_are_two_subjects(self):
+        # THE DEFECT, DIRECTLY: under the old COMPONENTS (exposure, sca
+        # only), these two units shared one subject and therefore one
+        # work_units row.
+        release_a = ProcessingUnit(payload=fixtures.alert_payload(
+            exposure=90000, sca=7, release_identity="rel-a"))
+        release_b = ProcessingUnit(payload=fixtures.alert_payload(
+            exposure=90000, sca=7, release_identity="rel-b"))
+        self.assertNotEqual(
+            release_a.dedup_key(JOB_TYPE_ALERT_PRODUCTION),
+            release_b.dedup_key(JOB_TYPE_ALERT_PRODUCTION))
+
+    def test_two_releases_build_two_different_input_scopes(self):
+        release_a = ProcessingUnit(payload=fixtures.alert_payload(
+            exposure=90000, sca=7, release_identity="rel-a"))
+        release_b = ProcessingUnit(payload=fixtures.alert_payload(
+            exposure=90000, sca=7, release_identity="rel-b"))
+        scope_a = build_input_scope(JOB_TYPE_ALERT_PRODUCTION, release_a)
+        scope_b = build_input_scope(JOB_TYPE_ALERT_PRODUCTION, release_b)
+        self.assertNotEqual(scope_a, scope_b)
+        self.assertEqual(scope_a, "90000/7/rel-a")
+        self.assertEqual(scope_b, "90000/7/rel-b")
+
+    def test_the_same_release_over_one_exposure_sca_is_one_subject(self):
+        # The other half: this must still collide, or two gathering passes
+        # over the same promotion under the same release would create two
+        # work units for what is genuinely one piece of work.
+        first = ProcessingUnit(payload=fixtures.alert_payload(
+            exposure=90000, sca=7, release_identity="rel-1"))
+        second = ProcessingUnit(payload=fixtures.alert_payload(
+            exposure=90000, sca=7, release_identity="rel-1"))
+        self.assertEqual(
+            first.dedup_key(JOB_TYPE_ALERT_PRODUCTION),
+            second.dedup_key(JOB_TYPE_ALERT_PRODUCTION))
+
+    def test_the_grain_stays_exposure_sca_for_dedup_purposes(self):
+        # Co-design ruling 2's parenthetical: alert production's GRAIN is
+        # still EXPOSURE_SCA (dedup shape), unchanged by this finding —
+        # only the work-unit SUBJECT (COMPONENTS) grew to include the
+        # release. Conflating the two would have been the wrong fix.
+        self.assertEqual(subject_for(JOB_TYPE_ALERT_PRODUCTION).grain,
+                         GRAIN_EXPOSURE_SCA)
+
+    def test_release_identity_is_not_omitted_from_the_wire_form(self):
+        # It moved from INVOCATION_FACTS to COMPONENTS; to_dict()'s
+        # component loop writes every declared component unconditionally,
+        # so this must still be a required, always-present wire key rather
+        # than falling through the absent-omitted invocation-facts path.
+        unit = ProcessingUnit(payload=fixtures.alert_payload(
+            exposure=90000, sca=7, release_identity="rel-1"))
+        self.assertEqual(unit.payload.to_dict()["release_identity"], "rel-1")

@@ -452,10 +452,29 @@ class ReferenceImagePayload(ImagingPayload):
 
 @dataclasses.dataclass(frozen=True)
 class AlertProductionPayload(ExposureScaPayload):
-    """Alert production's unit IS the promoted attempt, keyed exposure/SCA.
+    """Alert production's unit IS the promoted attempt, keyed exposure/SCA
+    AND release (finding 13, fix-state-gate).
 
     Exposure/SCA-grained for dedup — two gathering passes over the same
     promoted attempt must collide — while producing no products at all.
+
+    **`release_identity` IS A SUBJECT COMPONENT, NOT MERELY AN INVOCATION
+    FACT.** It used to live only in `INVOCATION_FACTS`, so the work-unit
+    subject `ExposureScaPayload.subject()` derives (via `COMPONENTS`) was
+    exposure/SCA alone — an invocation fact of THIS run, not part of what
+    made the unit's identity. But emission is "once per unit per release"
+    by design (`submission.gathering.gather_alert_production_units`'s own
+    docstring), so two releases over the same promoted exposure/SCA are two
+    DIFFERENT units of work, not one unit invoked twice. Under the old
+    subject, release B's gathered unit found release A's work unit —
+    already `submitted` or `complete` — and either double-submitted (before
+    finding 1's authorization gate existed) or, with that gate alone, was
+    silently suppressed forever (release B's emission never authorized
+    because the unit reads as already-done). Overriding `COMPONENTS` here
+    to include `release_identity` gives the two releases two distinct
+    `input_scope` strings and therefore two distinct `work_units` rows —
+    closing both the duplicate-emission and the suppressed-emission window
+    at once, which is why this must land together with finding 1.
 
     Its per-invocation facts describe WHICH promotion this unit is drawing
     from. Every one is required and none is defaulted: a unit that cannot
@@ -491,7 +510,22 @@ class AlertProductionPayload(ExposureScaPayload):
     #: attempt record a cross-reference and costs the job nothing.
     rtid: int = None
 
-    INVOCATION_FACTS = ("promoted_attempt_id", "release_identity",
+    #: `release_identity` joins `exposure`/`sca` here (finding 13) so the
+    #: subject `ExposureScaPayload.subject()` builds from `COMPONENTS`
+    #: carries the release. NOT appended to the parent's tuple — the order
+    #: matches `subject_for`'s `(job_type, *values)` convention, exposure
+    #: and sca first as every other exposure/SCA-grain declaration has them,
+    #: release last as the addition this finding makes.
+    COMPONENTS = ("exposure", "sca", "release_identity")
+
+    #: `release_identity` is now a subject component (above), not merely an
+    #: invocation fact — removed from this tuple so `to_dict()` does not
+    #: also try to write it through the absent-omitted invocation-facts
+    #: loop, which would be a second, differently-behaved home for the same
+    #: value (`UnitPayload.to_dict` always writes every declared
+    #: `COMPONENTS` member unconditionally, matching every other subject
+    #: component's wire treatment).
+    INVOCATION_FACTS = ("promoted_attempt_id",
                         "difference_image_pid", "difference_image_product",
                         "role_resolved_from", "promotion_sequence", "rtid")
 
