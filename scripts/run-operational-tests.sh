@@ -52,6 +52,9 @@ pipeline.operator.test.test_registrar
 pipeline.operator.test.test_mjd_window
 pipeline.operator.test.test_gathering_registry
 pipeline.intent.test.test_writer
+pipeline.intent.test.test_schema_contract
+pipeline.association.test.test_watermark
+pipeline.publisher.test.test_service
 pipeline.mock.test.test_transformer
 submission.test.test_batching
 submission.test.test_subjects
