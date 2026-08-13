@@ -203,7 +203,7 @@ for input_fits_file in input_fits_files:
     elif "146" in filter:
         translated_filter = filter.replace("F146","W146").strip()
     else:
-        print(f"*** Error: Unexpected filter = {filter}")
+        print(f"*** Error: Unexpected filter = {filter}; quitting...")
         exit(64)
 
     hdr["FILTER"] = translated_filter
@@ -303,11 +303,23 @@ for input_fits_file in input_fits_files:
     rm_cmd = ['rm','-f',input_fits_file]
     exitcode_from_rm = util.execute_command(rm_cmd)
 
+    if exitcode_from_rm > 0:
+        print(f"*** Error from rm -f {input_fits_file}; quitting...")
+        exit(64)
+
     rm_cmd = ['rm','-f',output_fits_file]
     exitcode_from_rm = util.execute_command(rm_cmd)
 
+    if exitcode_from_rm > 0:
+        print(f"*** Error from rm -f {output_fits_file}; quitting...")
+        exit(64)
+
     rm_cmd = ['rm','-f',gzipped_output_fits_file]
     exitcode_from_rm = util.execute_command(rm_cmd)
+
+    if exitcode_from_rm > 0:
+        print(f"*** Error from rm -f {gzipped_output_fits_file}; quitting...")
+        exit(64)
 
 
 # Termination.
