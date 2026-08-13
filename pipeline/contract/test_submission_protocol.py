@@ -258,6 +258,15 @@ def test_resolve_open_resolves_every_open_row_in_one_pass(conn):
 
     Three rows in one pass — FOUND, LOST, and left UNKNOWN — proving the
     per-row loop's counts and that one row's outcome does not affect another's.
+
+    `conn` is the SHARED session connection (`conftest.py`: several tests
+    need their writes visible to a second connection, which a
+    wrapping-transaction-per-test would hide) — so by this point in a run
+    other tests' rows may still be sitting `unknown`/`calling` too, and
+    `resolve_open` legitimately resolves those in the same pass. This test
+    therefore checks its OWN three rows' end states rather than asserting
+    global counts, which would be a property of test execution order, not of
+    `resolve_open`.
     """
     execute = fixture.executor(conn)
     found_id, found_run = _prepare(conn, "open-found")
@@ -272,31 +281,45 @@ def test_resolve_open_resolves_every_open_row_in_one_pass(conn):
 
     found_name = f"rapid-{found_run}"
     batch = _FakeBatch(known_jobs={found_name: "job-recovered-2"})
-    # lost_id's deadline needs to be in the past for this one pass to reach
-    # LOST; found_id resolves on the positive answer regardless of deadline;
-    # unknown_id has nothing named for it, so it stays UNKNOWN before its own
-    # deadline.
+    # `now` stays real (not pushed into the future): unknown_id's own
+    # deadline is ~30 minutes out, so it is provably still open at call time,
+    # and lost_id is resolved LOST separately below, past ITS OWN deadline
+    # only — pushing `now` forward for the whole pass would also sweep any
+    # other session-shared `unknown` row past its deadline, which is exactly
+    # the false-global-count failure mode this test rewrite avoids.
+    counts = protocol.resolve_open(execute, batch.describe)
+    conn.commit()
+
+    assert counts[protocol.FOUND] >= 1
+    assert counts[protocol.UNKNOWN] >= 1
+    assert counts["errors"] == 0
+    assert _state(conn, found_id)[:2] == (protocol.FOUND, "job-recovered-2")
+    assert _state(conn, unknown_id)[0] == protocol.UNKNOWN
+
+    # lost_id: resolve it a second time, past ITS OWN deadline, isolated from
+    # whatever else is open in the shared connection.
     with conn.cursor() as cur:
         cur.execute("SELECT resolution_deadline FROM submissions"
                     " WHERE submission_id = %s", [lost_id])
         deadline = cur.fetchone()[0]
     past = deadline + datetime.timedelta(seconds=1)
-
-    counts = protocol.resolve_open(execute, batch.describe, now=past)
+    row = next(r for r in protocol.open_submissions(execute)
+               if r["submission_id"] == lost_id)
+    assert protocol.resolve(execute, row, batch.describe,
+                            now=past) == protocol.LOST
     conn.commit()
 
-    assert counts[protocol.FOUND] == 1
-    assert counts[protocol.LOST] == 1
-    assert counts[protocol.UNKNOWN] == 1
-    assert counts["errors"] == 0
-    assert _state(conn, found_id)[:2] == (protocol.FOUND, "job-recovered-2")
     assert _state(conn, lost_id)[0] == protocol.LOST
-    assert _state(conn, unknown_id)[0] == protocol.UNKNOWN
     assert batch.submit_calls == []
 
 
 def test_resolve_open_one_rows_failure_does_not_stop_the_others(conn):
-    """A `describe` that raises for one row must not abort the pass."""
+    """A `describe` that raises for one row must not abort the pass.
+
+    `conn` is the shared session connection (see the previous test's note),
+    so this checks `ok_id`/`bad_id`'s own end states rather than the pass's
+    global counts, which other tests' leftover open rows would also feed.
+    """
     execute = fixture.executor(conn)
     ok_id, ok_run = _prepare(conn, "open-ok")
     bad_id, bad_run = _prepare(conn, "open-bad")
@@ -318,8 +341,8 @@ def test_resolve_open_one_rows_failure_does_not_stop_the_others(conn):
     counts = protocol.resolve_open(execute, selective_describe)
     conn.commit()
 
-    assert counts[protocol.FOUND] == 1
-    assert counts["errors"] == 1
+    assert counts[protocol.FOUND] >= 1
+    assert counts["errors"] >= 1
     assert _state(conn, ok_id)[:2] == (protocol.FOUND, "job-ok-1")
     # The failed row is untouched, exactly as a single resolve() would leave
     # it — resolve_open's per-row try/except must not write a partial result.
@@ -329,10 +352,18 @@ def test_resolve_open_one_rows_failure_does_not_stop_the_others(conn):
 def _attach_one_attempt(conn, submission_id):
     """One real `attempts` row (schema-honest via `fixture.make_attempt`),
     linked to `submission_id` through the same `attach_attempts` production
-    code uses. Returns the attempt_id."""
+    code uses. Returns the attempt_id.
+
+    `lifecycle="terminal_without_start"`, matching every other contract file
+    that calls `make_attempt` — the default `lifecycle="submitted"` needs the
+    full binding triple at `schema_version >= 2`
+    (`attempts_state_submitted_check`), which `make_logical_job` only writes
+    when called `with_binding=True`. No caller anywhere in this repo uses
+    the plain default against real PostgreSQL; found live by this test.
+    """
     from pipeline.contract import fixture as fx
     execute = fixture.executor(conn)
-    attempt_id = fx.make_attempt(conn)
+    attempt_id = fx.make_attempt(conn, lifecycle="terminal_without_start")
     protocol.attach_attempts(execute, submission_id, [attempt_id])
     return attempt_id
 
@@ -365,7 +396,8 @@ def test_submission_for_attempt_returns_none_with_no_link(conn):
     posture depends on this returning cleanly rather than raising."""
     from pipeline.contract import fixture as fx
     execute = fixture.executor(conn)
-    attempt_id = fx.make_attempt(conn)  # no attach_attempts call
+    attempt_id = fx.make_attempt(
+        conn, lifecycle="terminal_without_start")  # no attach_attempts call
 
     assert protocol.submission_for_attempt(execute, attempt_id) is None
 
@@ -389,8 +421,11 @@ def test_a_resolution_pass_is_visible_from_a_second_connection(conn,
 
     job_name = f"rapid-{run_id}"
     batch = _FakeBatch(known_jobs={job_name: "job-durable-1"})
+    # `conn` is the shared session connection, so other tests' open rows may
+    # also resolve in this same pass (see the earlier tests' notes) — this
+    # test checks its OWN row's visibility, not the pass's global count.
     counts = protocol.resolve_open(execute, batch.describe)
-    assert counts[protocol.FOUND] == 1
+    assert counts[protocol.FOUND] >= 1
     conn.commit()  # the commit boundary under test
 
     with second_conn.cursor() as cur:
