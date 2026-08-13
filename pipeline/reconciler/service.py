@@ -33,6 +33,7 @@ import time
 from observability.attempts import (
     RECONCILER_ERROR_CATEGORIES, AttemptWriter, LifecycleState,
     ProductDisposition, RapidOutcome)
+from pipeline.intent.lock import lock_work_unit
 from pipeline.intent.retry_policy import (
     CLOSE_COMPLETE, PARK_BLOCKED, RETRY_READY, blocked_reason_for,
     disposition_for_terminal_attempt, policy_version)
@@ -698,8 +699,70 @@ class ReconcilerService:
             submitted_at=template.get("submitted_at") or self._now(),
             scheduler_job_id=job_id,
             scheduler_attempt_index=scheduler_attempt_index)
+        self._inherit_work_unit(template, attempt_id)
         self.conn.commit()
         return attempt_id
+
+    def _inherit_work_unit(self, template, attempt_id):
+        """Give a scheduler-discovered row its template sibling's work unit.
+
+        **FINDING 18.** `resolve_attempt()` (migration 039's DB function)
+        neither takes nor writes `work_unit_id` in any of its historical
+        versions, and migration 036's own header states population is a
+        CODE-LEVEL responsibility of writers — no DB-side function or
+        trigger anywhere writes the column. `_attach_work_unit` covers the
+        submitter's path; a row resolved HERE, for an attempt Batch reports
+        but no submitter wrote, went through neither and was left with
+        `work_unit_id IS NULL`. `_close_work_unit`'s own guard then skips
+        it silently forever (the `if work_unit_id is None: return` above),
+        so a retry the scheduler itself discovered could terminalize
+        without ever reaching its work unit, and `_work_unit_series` could
+        not see it as a sibling either.
+
+        The template row is another attempt of the SAME logical job (see
+        `_resolve_discovered`'s docstring: identity is copied from an
+        existing row of the same job), so its `work_unit_id`, when it has
+        one, is the correct one to inherit — this is attribution, not a
+        new decision about which unit the work belongs to.
+
+        Taken under the work-unit lock, in the same transaction `_resolve_
+        one` commits: this is a disposition-adjacent write (it is what lets
+        a later disposition find the row at all), so it follows the same
+        lock-then-write discipline `pipeline.intent.lock` states for every
+        other write that touches a work unit's standing.
+
+        Guarded (`WHERE work_unit_id IS NULL`) rather than unconditional:
+        a re-resolve of a row that already carries an FK (this method
+        raced another resolver, or ran twice) must not overwrite an
+        already-correct value with a possibly-stale template read.
+        """
+        template_work_unit_id = template.get("work_unit_id")
+        if template_work_unit_id is None:
+            # No sibling has one either (pre-intent-layer, or the job type's
+            # workflow definition is not loaded) — nothing to inherit, and
+            # this row is left NULL exactly like every other pre-intent-layer
+            # attempt, which `_close_work_unit`'s own guard already expects.
+            return
+
+        execute = _Executor(self.conn)
+        lock_work_unit(execute, template_work_unit_id)
+        result = execute(
+            "UPDATE attempts SET work_unit_id = %s"
+            " WHERE attempt_id = %s AND work_unit_id IS NULL",
+            [template_work_unit_id, attempt_id])
+        # `execute` answers an int (the real driver's rowcount) or a list
+        # (the unit-test stub, which has no rowcount of its own to report) —
+        # the same either-shape the repo's other guarded-UPDATE callers
+        # normalize (`submission.protocol._require_one`).
+        affected = result if isinstance(result, int) else len(result or [])
+        if affected:
+            logger.info(
+                "attempt %s inherited work unit %s from its template "
+                "sibling", attempt_id, template_work_unit_id)
+        else:
+            logger.debug(
+                "attempt %s already carried a work unit by the time its "
+                "inheritance UPDATE ran; leaving it as-is", attempt_id)
 
     # -- one attempt -----------------------------------------------------
 

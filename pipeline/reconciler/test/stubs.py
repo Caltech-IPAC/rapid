@@ -211,6 +211,9 @@ class FakeConnection:
         if "pg_advisory_xact_lock" in lowered:
             return [(None,)], [("locked",)]
 
+        if lowered.startswith("select resolve_attempt("):
+            return self._resolve_attempt(params)
+
         # `submission.protocol.is_available` — this fake models a database
         # with no `submissions` table by default (every existing reconciler
         # test predates rule 7 package S), so the probe must answer FALSE
@@ -238,6 +241,24 @@ class FakeConnection:
             self._maybe_raise("update_submission")
             return self._update_submission(text, params)
 
+        if lowered.startswith("update attempts") and "work_unit_id = %s" in lowered \
+                and "where attempt_id = %s and work_unit_id is null" in lowered:
+            # `_inherit_work_unit` (finding 18): the guarded FK-inheritance
+            # UPDATE. Modelled with the real guard, not folded into the
+            # generic branch below, because the guard's whole POINT is that
+            # a row which already carries a work_unit_id must not be
+            # overwritten — a stub that always "wrote" it could not tell
+            # that case from a legitimate first inheritance. Rowcount
+            # reported the same way `_update_submission`'s CAS does: rows
+            # present (len 1) when the guard matched, empty when it did not.
+            work_unit_id, attempt_id = params
+            row = self.rows.get(attempt_id)
+            description = [("rowcount",)]
+            if row is None or row.get("work_unit_id") is not None:
+                return [], description
+            row["work_unit_id"] = work_unit_id
+            return [(1,)], description
+
         if lowered.startswith("update attempts"):
             attempt_id = params[-1] if params else None
             self.closed_attempts[attempt_id] = (text, params)
@@ -253,6 +274,45 @@ class FakeConnection:
         exc = self.route_raises.get(branch)
         if exc is not None:
             raise exc
+
+    def _resolve_attempt(self, params):
+        """`AttemptWriter.resolve_attempt`'s DB function, claim-or-create.
+
+        Modelled well enough for the reconciler suite's purposes: a row
+        already carrying this (run_id, logical_job_id, scheduler_job_id,
+        scheduler_attempt_index) is returned unchanged (the claim half);
+        otherwise a NEW row is created and added to `self.rows` (the create
+        half), with a fresh id one past the highest existing one — mirroring
+        the real function's identity-resolving INSERT closely enough that
+        `_inherit_work_unit` (finding 18) has an actual new row to write
+        onto, rather than the placeholder rowcount the unmatched-statement
+        fallback used to stand in for an attempt id.
+        """
+        (run_id, logical_job_id, scheduler_job_id, application_attempt_index,
+         scheduler_attempt_index, created_at, submitted_at, exposure_id, sca,
+         sky_tile, _schema_version) = params
+
+        for attempt_id, row in self.rows.items():
+            if (row.get("run_id") == run_id
+                    and row.get("logical_job_id") == logical_job_id
+                    and row.get("scheduler_job_id") == scheduler_job_id
+                    and row.get("scheduler_attempt_index")
+                    == scheduler_attempt_index):
+                return [(attempt_id,)], [("resolve_attempt",)]
+
+        new_id = max(self.rows, default=0) + 1
+        self.rows[new_id] = {
+            "attempt_id": new_id, "run_id": run_id,
+            "logical_job_id": logical_job_id,
+            "scheduler_job_id": scheduler_job_id,
+            "lifecycle_state": "submitted",
+            "application_attempt_index": application_attempt_index,
+            "scheduler_attempt_index": scheduler_attempt_index,
+            "exposure_id": exposure_id, "sca": sca, "sky_tile": sky_tile,
+            "submitted_at": submitted_at, "started_at": None, "ended_at": None,
+            "work_unit_id": None,
+        }
+        return [(new_id,)], [("resolve_attempt",)]
 
     def _select_attempts(self, text, params):
         columns = _columns_of(text)

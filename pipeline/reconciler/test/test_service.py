@@ -1292,6 +1292,62 @@ class SchedulerDiscoveryTests(unittest.TestCase):
         self.assertEqual(1, body["scheduler_attempt_index"])
         self.assertEqual(137, body["scheduler_observed_exit"])
 
+    def test_a_discovered_retry_inherits_its_template_siblings_work_unit(self):
+        """FINDING 18: a scheduler-discovered row must not be born orphaned.
+
+        `resolve_attempt()` never writes `work_unit_id` — no DB function or
+        trigger does, by migration 036's own design — so without explicit
+        inheritance in this repo's code, attempt 1's newly-resolved row
+        would carry `work_unit_id IS NULL` forever, `_close_work_unit`
+        would skip it silently the moment it terminalizes, and
+        `_work_unit_series` would never count it as a sibling of attempt 2.
+        """
+        rows = [attempt_row(2, lifecycle_state="started",
+                            application_attempt_index=2,
+                            work_unit_id=55)]
+        svc, conn, _, _, _ = build(rows, [self._retry_job()])
+
+        summary = svc.poll_once()
+
+        self.assertEqual(1, summary["discovered"])
+        resolved_id = max(conn.rows)
+        self.assertNotEqual(2, resolved_id,
+                            "the resolver must have created a NEW row")
+        self.assertEqual(
+            55, conn.rows[resolved_id]["work_unit_id"],
+            "the discovered row must inherit its template's work unit, not "
+            "be left NULL")
+
+        # Visible to a work-unit-series decision, not just present on the row:
+        # this is the sibling census `_close_work_unit` consults.
+        siblings = [attempt_id for attempt_id, row in conn.rows.items()
+                   if row.get("work_unit_id") == 55 and attempt_id != 2]
+        self.assertEqual(
+            [resolved_id], siblings,
+            "the resolved row must be findable as a sibling of work unit 55")
+
+    def test_inheritance_does_not_overwrite_an_already_set_work_unit(self):
+        """The guard (`WHERE work_unit_id IS NULL`) matters: a race or a
+        second resolution pass over the same row must never clobber a
+        value another writer already attached."""
+        rows = [attempt_row(2, lifecycle_state="started",
+                            application_attempt_index=2,
+                            work_unit_id=55)]
+        svc, conn, _, _, _ = build(rows, [self._retry_job()])
+
+        svc.poll_once()
+        resolved_id = max(conn.rows)
+        # First pass: inherited normally.
+        self.assertEqual(55, conn.rows[resolved_id]["work_unit_id"])
+
+        # Simulate a second pass finding the SAME row, now carrying a
+        # different (already-correct) work unit — inheritance must leave it.
+        conn.rows[resolved_id]["work_unit_id"] = 999
+        svc._inherit_work_unit(rows[0], resolved_id)
+        self.assertEqual(
+            999, conn.rows[resolved_id]["work_unit_id"],
+            "an already-set work_unit_id must never be overwritten")
+
 
 class ResilienceTests(unittest.TestCase):
     def test_one_bad_attempt_does_not_take_the_cycle_down(self):
@@ -1927,7 +1983,16 @@ class SubmissionRecordDecidesOverTheClockTests(unittest.TestCase):
 
         summary = svc.poll_once()
 
-        self.assertEqual(1, summary["waiting"])
+        # Two numbered-but-unmatched observations also send this row's pair
+        # through `_resolve_discovered` first, which resolves each into its
+        # own row (attempt 1 has neither index, so both count as unknown) —
+        # both still RUNNING at the scheduler, so all three rows (the
+        # original plus its two newly-resolved siblings) land `waiting`,
+        # none `classified`. What this test is actually pinning is the
+        # criterion 10 redirect: a FOUND submission record must not itself
+        # force a classification the scheduler's own RUNNING status
+        # contradicts.
+        self.assertEqual(3, summary["waiting"])
         self.assertEqual(0, summary.get("classified", 0))
 
     def test_the_attempt_ran_distinction_is_preserved_under_lost(self):
