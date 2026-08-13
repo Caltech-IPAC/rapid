@@ -83,6 +83,25 @@ def add_problem_category(conn, idempotency_key, category, description, reason,
          _json(expected_state), dry_run, policy_citation))
 
 
+def repair_refused_outbox_rows(conn, idempotency_key, release_identity, reason,
+                               expected_state=None, max_rows=200, dry_run=True,
+                               policy_citation=None):
+    """Move REFUSED alert_outbox rows for one release back to PENDING.
+
+    ``expected_state`` is the REFUSED count the operator saw, as
+    ``{"candidates": n}``: the apply refuses if the population moved
+    between the rehearsal and the decision — the same shape
+    ``retry_parked_attempts`` uses, for the same reason (draft 053's
+    header: this targets specific state, not a fire-and-forget action).
+    """
+    return call_function(
+        conn,
+        "SELECT derived.repair_refused_outbox_rows(%s, %s, %s, %s::jsonb, "
+        "                                          %s, %s, %s)",
+        (idempotency_key, release_identity, reason, _json(expected_state),
+         max_rows, dry_run, policy_citation))
+
+
 def record_external_action(conn, idempotency_key, action_class, target_scope,
                            reason, expected_state=None, dry_run=True,
                            rows_affected=0, detail=None,

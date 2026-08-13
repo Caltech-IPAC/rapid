@@ -92,6 +92,27 @@ def build_parser():
     _mutation_arguments(retry, "attempts in a run")
     retry.set_defaults(func=_cmd_retry_parked)
 
+    repair_outbox = sub.add_parser(
+        "repair-refused-outbox",
+        help="move REFUSED alert_outbox rows for one release back to PENDING",
+        description="Repair after an operator has fixed the external "
+                    "condition (broker ACL, client/broker version) that "
+                    "terminalized delivery — the classification itself is "
+                    "unchanged, and the repaired rows re-enter the ordinary "
+                    "PENDING flow to be claimed, authorized and sent by the "
+                    "next publisher cycle exactly as any other PENDING row.")
+    repair_outbox.add_argument("--release-identity", required=True,
+                               help="the mandatory scope — there is no "
+                                    "unscoped repair")
+    repair_outbox.add_argument("--max-rows", type=int, default=200,
+                               help="bound on the population (default 200)")
+    repair_outbox.add_argument("--expect-candidates", type=int, default=None,
+                               help="the REFUSED count seen in the dry run. "
+                                    "The apply REFUSES if the population has "
+                                    "moved since")
+    _mutation_arguments(repair_outbox, "REFUSED outbox rows for a release")
+    repair_outbox.set_defaults(func=_cmd_repair_refused_outbox)
+
     category = sub.add_parser(
         "add-problem-category",
         help="extend the problems-taxonomy vocabulary",
@@ -325,6 +346,22 @@ def _cmd_retry_parked(conn, args, out):
                       "attempts:run_id=%s:limit=%s" % (args.run_id,
                                                        args.max_attempts),
                       args.reason, key, result, args.apply), file=out)
+    return EXIT_OK
+
+
+def _cmd_repair_refused_outbox(conn, args, out):
+    expected = ({"candidates": args.expect_candidates}
+                if args.expect_candidates is not None else None)
+    key = args.idempotency_key or new_idempotency_key("repair-outbox")
+    result = actions.repair_refused_outbox_rows(
+        conn, key, args.release_identity, args.reason,
+        expected_state=expected, max_rows=args.max_rows,
+        dry_run=not args.apply, policy_citation=args.policy_citation)
+    print(render_plan(
+        "repair_refused_outbox",
+        "alert_outbox:release_identity=%s:limit=%s" % (args.release_identity,
+                                                        args.max_rows),
+        args.reason, key, result, args.apply), file=out)
     return EXIT_OK
 
 
