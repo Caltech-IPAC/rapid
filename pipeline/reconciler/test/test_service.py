@@ -15,10 +15,10 @@ DIAGNOSTICS = "roman-rapid-diagnostics"
 
 def build(rows, jobs, now=utc(2026, 8, 6, 12, 0, 0), lease_granted=True,
           records=None, submissions_available=False, submissions=None,
-          named_jobs=None, list_jobs_raises=None):
+          named_jobs=None, list_jobs_raises=None, route_raises=None):
     conn = FakeConnection(rows=rows, lease_granted=lease_granted,
                           submissions_available=submissions_available,
-                          submissions=submissions)
+                          submissions=submissions, route_raises=route_raises)
     batch = FakeBatch(jobs=jobs, named_jobs=named_jobs,
                       list_jobs_raises=list_jobs_raises)
     store = records or InMemoryObjectStore()
@@ -1619,6 +1619,18 @@ class HealthTests(unittest.TestCase):
         self.assertEqual(4, fine.calls)
 
 
+def _refusing_submit_job(**kwargs):
+    """A `submit_job` that ACTIVELY RAISES, for criterion 12's fake.
+
+    Mirrors `test_submission_protocol.py`'s `_FakeBatch.submit_job`: no test
+    in this file is entitled to call it, so it refuses hard rather than
+    silently permitting the one thing rule 7 forbids for a submission row.
+    """
+    raise AssertionError(
+        "submit_job was called for a submission row that already exists; "
+        "rule 7 forbids repeating the API call for a submission record")
+
+
 def submission_row(submission_id=100, state="unknown", job_name="rapid-1",
                    job_queue="contract-queue", resolution_deadline=None,
                    **overrides):
@@ -1912,21 +1924,19 @@ class SubmissionRecordDecidesOverTheClockTests(unittest.TestCase):
         # through to the existing horizon backstop, and is logged (checked
         # via the rollback count: the failed SELECT's aborted transaction is
         # cleared exactly like every other caught exception in this file).
+        #
+        # Fault injection goes through FakeConnection's declared
+        # `route_raises` capability (mirroring FakeBatch's
+        # `list_jobs_raises`), not a monkeypatch of `conn.route` in the test
+        # body — the verifier's gap-2 finding.
         row = attempt_row(1, scheduler_job_id=None,
                           submitted_at=utc(2026, 8, 6, 11, 0, 0),
                           submission_id=100)
         svc, conn, _, _, _ = build(
             [row], jobs=[], now=utc(2026, 8, 6, 12, 0, 0),
-            submissions_available=True, submissions=[])
-
-        def explode(text, params=None):
-            if "from submissions" in text.lower() and "join attempts" in \
-                    text.lower():
-                raise RuntimeError("the submissions read failed")
-            return real_route(text, params)
-
-        real_route = conn.route
-        conn.route = explode
+            submissions_available=True, submissions=[],
+            route_raises={"submission_for_attempt":
+                          RuntimeError("the submissions read failed")})
 
         summary = svc.poll_once()
 
@@ -1938,9 +1948,14 @@ class SubmissionRecordDecidesOverTheClockTests(unittest.TestCase):
 
     def test_never_calls_submit_job_reaching_this_path(self):
         # Criterion 12, the protocol invariant: resolution is re-query only.
-        # FakeBatch has no submit_job at all, so a caller that reached for it
-        # would AttributeError rather than silently succeed — the same
-        # refusal discipline test_submission_protocol.py's _FakeBatch uses.
+        # `hasattr(batch, "submit_job")` being False only proves this path
+        # never reached for a method the object doesn't have — it would not
+        # catch code that separately imported a real Batch client and called
+        # `submit_job` on that instead (the verifier's gap-3 finding). A
+        # `RaisingSubmitBatch` closes that: it has a real `submit_job` that
+        # actively raises AssertionError, the same discipline
+        # test_submission_protocol.py's `_FakeBatch` uses, so ANY submit
+        # attempt through this client is a hard failure, not an absence.
         row = attempt_row(1, scheduler_job_id=None,
                           submitted_at=utc(2026, 8, 6, 8, 0, 0),
                           submission_id=100)
@@ -1948,9 +1963,84 @@ class SubmissionRecordDecidesOverTheClockTests(unittest.TestCase):
         svc, _, batch, _, _ = build(
             [row], jobs=[], now=utc(2026, 8, 6, 12, 0, 0),
             submissions_available=True, submissions=submissions)
-        self.assertFalse(hasattr(batch, "submit_job"))
+        batch.submit_job = _refusing_submit_job
 
-        svc.poll_once()  # must not raise AttributeError
+        svc.poll_once()  # must not raise AssertionError
+
+
+class S1FeedsS2WithinOneCycleTests(unittest.TestCase):
+    """S1 and S2 must COMPOSE within a single `poll_once` call.
+
+    Every other S2 test above pre-seeds `submissions` state directly
+    (`state="found"`/`"lost"` handed straight to `build()`), which proves
+    `_reconcile_unresolved`'s READ of a submission record, but never proves
+    that record can come from THIS SAME cycle's own S1 resolution pass —
+    the actual end-to-end behaviour the package exists to deliver (the
+    verifier's gap-1 finding). These tests start with the submission still
+    open/unresolved, let `_resolve_submissions` (which runs first in
+    `poll_once`, before the `if not rows:` early return) resolve it against
+    `FakeBatch`, and then assert on the SAME `poll_once` call's outcome for
+    the linked attempt.
+    """
+
+    def test_s1s_own_found_resolution_feeds_s2_within_the_same_cycle(self):
+        # No pre-seeded "found" state: the submission starts "calling" (an
+        # interrupted-mid-call row, one of the two open states resolve_open
+        # sweeps) and is unresolved until THIS poll's own S1 pass resolves
+        # it. submitted_at is far past the submission horizon, so if S2 read
+        # stale (still-open) submission state, or if S1 hadn't run at all,
+        # the row would fall through to the horizon backstop and classify
+        # never-resolved instead.
+        row = attempt_row(1, scheduler_job_id=None,
+                          submitted_at=utc(2026, 8, 6, 8, 0, 0),
+                          submission_id=100)
+        submissions = [submission_row(submission_id=100, state="calling",
+                                      job_name="rapid-100")]
+        svc, conn, batch, _, _ = build(
+            [row], jobs=[], now=utc(2026, 8, 6, 12, 0, 0),
+            submissions_available=True, submissions=submissions,
+            named_jobs={("rapid-100", "contract-queue"): "job-100"})
+
+        summary = svc.poll_once()
+
+        # S1 actually ran and resolved it, in this cycle.
+        self.assertTrue(batch.list_jobs_calls)
+        self.assertEqual("found", conn.submissions[100]["state"])
+        self.assertEqual(1, summary["submission_found"])
+        # S2 read that same-cycle result: waiting, not classified.
+        self.assertEqual(1, summary["waiting"])
+        self.assertEqual(0, summary.get("classified", 0))
+        self.assertEqual("submitted", conn.rows[1]["lifecycle_state"])
+
+    def test_s1s_own_lost_resolution_feeds_s2_within_the_same_cycle(self):
+        # The LOST counterpart: the submission starts "unknown" with a
+        # deadline already past `now`, so S1's OWN pass concludes LOST this
+        # cycle (no pre-seeded state), and S2 classifies without waiting on
+        # `beyond_submission_horizon` — submitted_at here is only 5 minutes
+        # old, well inside the 30-minute horizon, so a classify only happens
+        # if S2 is reading THIS cycle's LOST verdict, not falling through to
+        # the clock.
+        row = attempt_row(1, scheduler_job_id=None,
+                          submitted_at=utc(2026, 8, 6, 11, 55, 0),
+                          submission_id=100)
+        submissions = [submission_row(
+            submission_id=100, state="unknown",
+            resolution_deadline=utc(2026, 8, 6, 11, 0, 0))]
+        svc, conn, batch, _, _ = build(
+            [row], jobs=[], now=utc(2026, 8, 6, 12, 0, 0),
+            submissions_available=True, submissions=submissions)
+
+        summary = svc.poll_once()
+
+        # S1 actually ran and concluded LOST, in this cycle (no describe
+        # match — named_jobs is empty, so the re-query is negative).
+        self.assertTrue(batch.list_jobs_calls)
+        self.assertEqual("lost", conn.submissions[100]["state"])
+        self.assertEqual(1, summary["submission_lost"])
+        # S2 read that same-cycle result: classified, not waiting.
+        self.assertEqual(1, summary["classified"])
+        self.assertEqual("terminal_without_start",
+                         conn.rows[1]["lifecycle_state"])
 
 
 if __name__ == "__main__":
