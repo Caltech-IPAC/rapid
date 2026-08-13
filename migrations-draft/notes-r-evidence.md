@@ -183,6 +183,13 @@ PROBE-R-OVERALL: PASS exit=0
 
 ### Run 2 — LAUNCHED, RESULTS NOT RETRIEVED (credential expiry)
 
+> **RESOLVED 2026-08-12 (morning follow-up):** run 2's SSM output was
+> retrieved with a fresh session — fully green, including the mutation
+> check (`MUTATION-OVERALL: PASS exit=0`, `BRIEF-R-OVERALL: PASS
+> exit=0`) — and the mutation check was independently re-executed the
+> same morning with the same verdict. The UNKNOWN below is historical.
+> Both S3 staging prefixes in the custody table have been swept.
+
 Run 2 (`brief-r-20260812T113253Z`, SSM command
 `deca040b-413c-4bd9-ba62-3ba8f4579836`) was launched with both fixes and the
 mutation check. **Its results were never read.** The laptop's AWS SSO token
