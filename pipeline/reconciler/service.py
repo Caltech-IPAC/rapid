@@ -40,13 +40,14 @@ from pipeline.intent.writer import (
     BLOCKED, COMPLETE, FAILED, READY, SUBMITTED, WRITER_RECONCILER,
     WorkUnitNotFound, WorkUnitWriter)
 from pipeline.runtime import termination
+from submission import protocol as submission_protocol
 
 from . import closure as closure_mod
 from . import reconstruction
 from . import retention as retention_mod
 from .horizons import beyond_grace_horizon, beyond_submission_horizon
 from .lease import attempt_lease, reread_attempt
-from .scheduler import describe_in_batches, observations_for_job
+from .scheduler import batch_describer, describe_in_batches, observations_for_job
 
 logger = logging.getLogger("rapid.reconciler.service")
 
@@ -151,6 +152,13 @@ _OPEN_COLUMNS = (
     # the "only FK-carrying attempts drive transitions" rule the task brief
     # states.
     "work_unit_id",
+    # The submission-protocol FK (DRAFT migration 044, `protocol.
+    # attach_attempts`). NULL on every pre-044 row and on any attempt a
+    # submission pass could not open a durable record for (submissions fails
+    # OPEN — see `pipeline.seams._open_submission`). `_reconcile_unresolved`
+    # reads this to ask the submission record, not the clock, what happened
+    # to an ambiguous child (rule 7 package S).
+    "submission_id",
 )
 
 # Built once, from a module-level tuple of literal identifiers — there is no
@@ -382,7 +390,9 @@ class ReconcilerService:
         rows = self.open_attempts()
         summary = {"open": len(rows), "observed": 0, "classified": 0,
                    "skipped": 0, "deferred": 0, "waiting": 0, "errors": 0,
-                   "discovered": 0}
+                   "discovered": 0, "submission_found": 0, "submission_lost": 0,
+                   "submission_unknown": 0}
+        self._resolve_submissions(summary)
         if not rows:
             # Nothing to do is not a failure to work (#24) — and it is still a
             # poll, so it still heartbeats. This is exactly the case the old
@@ -507,6 +517,57 @@ class ReconcilerService:
         logger.info("poll: %s", summary)
         self.write_heartbeat(summary)
         return summary
+
+    def _resolve_submissions(self, summary):
+        """Re-query Batch for every open submission (rule 7, package S).
+
+        Run once per cycle, BEFORE `poll_once`'s `if not rows:` early return
+        (S1's binding constraint): open submissions can exist when zero
+        attempts are in an open lifecycle state, and a pass placed after that
+        return would silently never run in exactly that case.
+
+        Fails OPEN, unlike `_resolve_discovered`'s admission-style caller:
+        `submission.protocol` degrades to a no-op on a pre-044 database
+        (`is_available`), and a raise anywhere in this method — the
+        availability probe included — is caught here so the pass itself
+        cannot kill the cycle. `resolve_open` already isolates each row's own
+        failure; this guards the pass as a whole, the same posture
+        `_resolve_discovered`'s caller in `poll_once` takes for discovery.
+        """
+        try:
+            if not submission_protocol.is_available(_Executor(self.conn)):
+                return
+            counts = submission_protocol.resolve_open(
+                _Executor(self.conn), batch_describer(self.batch),
+                now=self._now())
+        except Exception:  # noqa: BLE001 - the pass must not kill the cycle
+            self._safe_rollback()
+            logger.exception("resolving open submissions failed")
+            summary["errors"] += 1
+            return
+
+        # Committed per resolved row, not once for the whole pass: a single
+        # long transaction spanning every row's Batch re-query would hold a
+        # transaction open across external API calls for the length of the
+        # pass — the same posture rule 7 forbids for SubmitJob, applied here
+        # by the same reasoning even though nothing here submits. Each
+        # resolved row's UPDATE is already durable by the time the next
+        # row's `describe` call goes out.
+        resolved = counts[submission_protocol.FOUND] \
+            + counts[submission_protocol.LOST] \
+            + counts[submission_protocol.UNKNOWN]
+        if resolved:
+            self.conn.commit()
+        else:
+            # Nothing to commit, but `resolve_open` ran a read-only SELECT
+            # (`open_submissions`) through this connection; leave no
+            # transaction open behind it.
+            self.conn.rollback()
+
+        summary["submission_found"] += counts[submission_protocol.FOUND]
+        summary["submission_lost"] += counts[submission_protocol.LOST]
+        summary["submission_unknown"] += counts[submission_protocol.UNKNOWN]
+        summary["errors"] += counts["errors"]
 
     def _log_group_for(self, row):
         """Which CloudWatch group holds this attempt's stream.
@@ -1528,14 +1589,78 @@ class ReconcilerService:
 
     # -- the never-resolved case -----------------------------------------
 
+    def _submission_classification(self, row):
+        """What the durable submission record says about this attempt, if
+        anything — `FOUND`, `LOST`, or `None` (open/ambiguous or no record).
+
+        FAILS OPEN, unlike admission's fail-closed posture (`pipeline.seams`,
+        "a protocol failure NEVER blocks a submission"). Three ways this
+        degrades to `None` rather than raising:
+
+        * No `attempts.submission_id` on the row (pre-044, or a row a
+          submission pass could not attach) — `submission_for_attempt`
+          itself returns `None` for that case.
+        * The lookup raises — logged and treated as "nothing to conclude
+          from", never as evidence of absence. A bookkeeping read failing is
+          not the same fact as a job not existing, and must not block
+          reconciliation or be mistaken for a LOST verdict.
+        """
+        attempt_id = row.get("attempt_id")
+        submission_id = row.get("submission_id")
+        if not submission_id:
+            return None
+        try:
+            submission = submission_protocol.submission_for_attempt(
+                _Executor(self.conn), attempt_id)
+        except Exception:  # noqa: BLE001 - fail open, never block on this
+            self._safe_rollback()
+            logger.exception(
+                "could not read the submission record for attempt %s; "
+                "falling through to the submission-anchored horizon",
+                attempt_id)
+            return None
+        if submission is None:
+            return None
+        state = submission.get("state")
+        if state in (submission_protocol.FOUND, submission_protocol.LOST):
+            return state
+        return None
+
     def _reconcile_unresolved(self, row):
         """A pre-created child the scheduler cannot account for.
 
-        Bounded by the submission-anchored horizon, not the grace horizon:
-        there is no scheduler-terminal observation to be graceful after.
+        Reached two ways (S2, rule 7 package): (a) partitioned unresolved at
+        `poll_once` because `scheduler_job_id IS NULL`; (b) redirected from
+        `_reconcile_attempt` when Batch returned the job but no attempt
+        observation could be paired — those rows DO carry a
+        `scheduler_job_id`, so nothing here may assume it is absent.
+
+        THE SUBMISSION RECORD DECIDES FIRST, THE HORIZON IS THE BACKSTOP
+        (`horizons.py`'s own docstring). A durable FOUND/LOST record is
+        positive evidence; a clock is not — so the clock is consulted only
+        where there is no such evidence to consult (open/ambiguous, or no
+        submission row at all: every pre-044 attempt).
         """
-        if not beyond_submission_horizon(row.get("submitted_at"),
-                                         now=self._now()):
+        classification = self._submission_classification(row)
+        if classification == submission_protocol.FOUND:
+            # The re-query is positive: the job exists and is running. This
+            # is the case the clock got wrong — it must not be classified
+            # never-resolved, however far past the horizon `submitted_at` is,
+            # and it must not be resubmitted.
+            return "waiting"
+        if classification == submission_protocol.LOST:
+            # A negative re-query past ITS OWN deadline
+            # (`RESOLUTION_HORIZON_SECONDS`, enforced inside `protocol.
+            # resolve`) is positive evidence of absence. Classification may
+            # proceed without also waiting on the submission-anchored
+            # horizon — the two horizons are kept equal, but requiring both
+            # to elapse would let the slower of two agreeing clocks delay a
+            # conclusion the evidence already supports.
+            pass
+        elif not beyond_submission_horizon(row.get("submitted_at"),
+                                           now=self._now()):
+            # No submission evidence either way (still open/ambiguous, or no
+            # submission row at all — the backstop's two legitimate roles).
             # Inside the submission-anchored horizon: queue time, not a fault.
             return "waiting"
 
