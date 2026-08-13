@@ -8,9 +8,13 @@ identical fixture data."
 **WHAT THE MIGRATION ACTUALLY DID TO THESE TABLES**, which is what decides
 what can break: it added ONE nullable column (`product_id`) plus an index
 and a foreign key to each of `refimages` and `diffimages`. It changed no
-existing column, no existing constraint and no existing row. So the ways a
-reader could break are exactly three, and each is tested here rather than
-argued:
+existing column, no existing constraint and no existing row. (CR-8 —
+rapid_systems migration 054, out of D's scope — later appended a second
+nullable column, `checksum_algorithm`, the same `ADD COLUMN` way; see
+`TRAILING_COLUMNS_AFTER_PRODUCT_ID` below. Everything in this module's
+reasoning holds for an appended column regardless of which migration
+appended it.) So the ways a reader could break are exactly three, and each
+is tested here rather than argued:
 
   1. A `SELECT *` whose caller unpacks positionally would gain a field and
      shift everything after it. (Surveyed: every `select *` in the tree is
@@ -61,22 +65,43 @@ def _columns(conn, table):
 # ---------------------------------------------------------------------------
 
 
+#: Columns appended AFTER `product_id` by later migrations, in the order
+#: they were added — each its own `ADD COLUMN`, so each one only extends
+#: the tail rather than disturbing anything before it. `checksum_algorithm`
+#: is CR-8 (rapid_systems migration 054), landed after D's `product_id`
+#: (048) in stream order; widening `checksum` itself is an `ALTER COLUMN
+#: ... TYPE`, not an append, so it does not appear here.
+TRAILING_COLUMNS_AFTER_PRODUCT_ID = ("checksum_algorithm",)
+
+
 @pytest.mark.parametrize("table", ALTERED_TABLES)
 def test_the_migration_added_exactly_one_column_and_it_is_last(conn, table):
-    """`product_id` is appended, nullable, and nothing else moved.
+    """`product_id` is appended, nullable, and nothing before it moved.
 
     Appended matters: a column added in the MIDDLE would shift the ordinal
     positions every positional unpack depends on. PostgreSQL's `ADD COLUMN`
     always appends, so this asserts the property rather than establishing
     it — which is the point, because the property is what the readers rely
     on and an assertion is what survives a future edit to this file.
+
+    `product_id` is no longer literally the LAST column: CR-8 (054)
+    appended `checksum_algorithm` after it. That is a second `ADD COLUMN`,
+    which only extends the tail — a positional unpack that already
+    tolerated `product_id`'s arrival tolerates this one the same way, and
+    nothing between `product_id` and the columns every reader actually
+    selects has shifted. The test now asserts `product_id` is immediately
+    followed by exactly the known, later-appended trailing columns, not
+    that it is the last column absolutely.
     """
     _require_schema(conn)
     columns = _columns(conn, table)
-    assert columns[-1] == "product_id", (
-        f"{table}.product_id is at position {columns.index('product_id')} of "
-        f"{len(columns)}, not last; every positional unpack of a "
-        f"`select *` over this table has shifted")
+    expected_tail = ("product_id",) + TRAILING_COLUMNS_AFTER_PRODUCT_ID
+    actual_tail = tuple(columns[-len(expected_tail):])
+    assert actual_tail == expected_tail, (
+        f"{table}'s trailing columns are {actual_tail}, not {expected_tail}; "
+        f"either a migration inserted a column ahead of product_id (shifting "
+        f"every positional unpack of a `select *` over this table) or a new "
+        f"appended column needs adding to TRAILING_COLUMNS_AFTER_PRODUCT_ID")
 
     with conn.cursor() as cur:
         cur.execute(
