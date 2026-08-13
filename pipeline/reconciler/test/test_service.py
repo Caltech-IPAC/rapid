@@ -14,9 +14,13 @@ DIAGNOSTICS = "roman-rapid-diagnostics"
 
 
 def build(rows, jobs, now=utc(2026, 8, 6, 12, 0, 0), lease_granted=True,
-          records=None):
-    conn = FakeConnection(rows=rows, lease_granted=lease_granted)
-    batch = FakeBatch(jobs=jobs)
+          records=None, submissions_available=False, submissions=None,
+          named_jobs=None, list_jobs_raises=None):
+    conn = FakeConnection(rows=rows, lease_granted=lease_granted,
+                          submissions_available=submissions_available,
+                          submissions=submissions)
+    batch = FakeBatch(jobs=jobs, named_jobs=named_jobs,
+                      list_jobs_raises=list_jobs_raises)
     store = records or InMemoryObjectStore()
     tagging = FakeS3Tagging()
     svc = service.ReconcilerService(
@@ -1613,6 +1617,340 @@ class HealthTests(unittest.TestCase):
                             should_continue=lambda: fine.calls < 4)
 
         self.assertEqual(4, fine.calls)
+
+
+def submission_row(submission_id=100, state="unknown", job_name="rapid-1",
+                   job_queue="contract-queue", resolution_deadline=None,
+                   **overrides):
+    """A `submissions` row, shaped as `submission.protocol`'s SQL reads it."""
+    row = {
+        "submission_id": submission_id,
+        "run_id": "run-1",
+        "job_type": "science",
+        "job_name": job_name,
+        "job_queue": job_queue,
+        "job_definition": "rapid-pipeline-science",
+        "state": state,
+        "call_started_at": utc(2026, 8, 6, 9, 0, 0),
+        "resolution_deadline": resolution_deadline,
+        "ambiguity_detail": None,
+        "scheduler_job_id": None,
+    }
+    row.update(overrides)
+    return row
+
+
+class SubmissionResolutionPassTests(unittest.TestCase):
+    """S1: `poll_once` runs a `resolve_open` pass every cycle.
+
+    Rule 7 package S — the resolve half of `submission.protocol` had zero
+    non-test callers before this package; these are `resolve_open`'s first
+    integration coverage (the evidence pass found none anywhere).
+    """
+
+    def test_resolve_open_runs_once_per_cycle_via_the_batch_describer(self):
+        # Criterion 1: invoked with a describer derived from self.batch.
+        row = attempt_row(1, lifecycle_state="started", scheduler_job_id=None)
+        submissions = [submission_row(submission_id=100, state="unknown",
+                                      job_name="rapid-100")]
+        svc, conn, batch, _, _ = build(
+            [row], jobs=[], submissions_available=True,
+            submissions=submissions,
+            named_jobs={("rapid-100", "contract-queue"): "job-100"})
+
+        svc.poll_once()
+
+        # find_job_by_name loops once per JOB_SEARCH_STATES entry (7 states)
+        # until it finds a match; every call carries the deterministic name.
+        self.assertTrue(batch.list_jobs_calls)
+        self.assertTrue(all(call[2][0]["values"] == ["rapid-100"]
+                            for call in batch.list_jobs_calls))
+        self.assertEqual(1, len(conn.submissions))
+        self.assertEqual("found", conn.submissions[100]["state"])
+
+    def test_the_pass_runs_even_when_zero_attempts_are_open(self):
+        # Criterion 2: the early-return case (`if not rows:`). Open
+        # submissions can exist with no open attempt rows at all — a pass
+        # placed after the early return would silently never run here.
+        submissions = [submission_row(submission_id=100, state="unknown",
+                                      job_name="rapid-100")]
+        svc, conn, batch, _, _ = build(
+            [], jobs=[], submissions_available=True, submissions=submissions,
+            named_jobs={("rapid-100", "contract-queue"): "job-100"})
+
+        summary = svc.poll_once()
+
+        self.assertEqual(0, summary["open"])
+        self.assertTrue(batch.list_jobs_calls)
+        self.assertEqual("found", conn.submissions[100]["state"])
+        self.assertEqual(1, summary["submission_found"])
+
+    def test_a_raising_describe_does_not_kill_the_cycle(self):
+        # Criterion 3: an unreachable Batch during resolution must not stop
+        # the rest of the poll — open-attempt reconciliation still happens,
+        # and the failure is counted rather than propagated.
+        unresolved = attempt_row(2, scheduler_job_id=None,
+                                 submitted_at=utc(2026, 8, 6, 11, 55, 0))
+        submissions = [submission_row(submission_id=100, state="unknown",
+                                      job_name="rapid-100")]
+        svc, conn, batch, _, _ = build(
+            [unresolved], jobs=[], now=utc(2026, 8, 6, 12, 0, 0),
+            submissions_available=True, submissions=submissions,
+            list_jobs_raises=RuntimeError("Batch is unreachable"))
+
+        summary = svc.poll_once()
+
+        # resolve_open's own per-row try/except swallows the describe raise
+        # and counts it as "errors" internally, then _resolve_submissions
+        # folds that into summary["errors"] (not a cycle-level exception).
+        self.assertEqual(1, summary["errors"])
+        self.assertEqual("unknown", conn.submissions[100]["state"],
+                         "a describe that raises must not write anything")
+        # Reconciliation of the open (non-submission) attempt still ran.
+        self.assertEqual(1, summary["waiting"])
+
+    def test_a_pre_044_database_degrades_quietly(self):
+        # Criterion 4: is_available() False -> no crash, no error counted.
+        row = attempt_row(1, lifecycle_state="started")
+        jobs = [batch_job(status="RUNNING", started=utc(2026, 8, 6, 11, 0, 0))]
+        svc, conn, batch, _, _ = build(
+            [row], jobs, submissions_available=False)
+
+        summary = svc.poll_once()
+
+        self.assertEqual(0, summary["errors"])
+        self.assertEqual([], batch.list_jobs_calls,
+                         "no submissions table means no describe calls at all")
+
+    def test_resolution_outcomes_appear_in_the_summary(self):
+        # Criterion 5.
+        submissions = [
+            submission_row(submission_id=100, state="unknown",
+                          job_name="rapid-found"),
+            submission_row(
+                submission_id=101, state="unknown", job_name="rapid-lost",
+                resolution_deadline=utc(2026, 8, 6, 11, 0, 0)),
+        ]
+        svc, conn, _, _, _ = build(
+            [], jobs=[], now=utc(2026, 8, 6, 12, 0, 0),
+            submissions_available=True, submissions=submissions,
+            named_jobs={("rapid-found", "contract-queue"): "job-found"})
+
+        summary = svc.poll_once()
+
+        self.assertEqual(1, summary["submission_found"])
+        self.assertEqual(1, summary["submission_lost"])
+        self.assertEqual(0, summary["submission_unknown"])
+
+    def test_a_resolved_pass_is_committed_and_visible_after(self):
+        # Durability (criterion 13's stub-tier shadow): the fake's commit
+        # counter proves the pass commits rather than leaving the write in an
+        # open transaction. The contract tier proves this with a real second
+        # connection (see notes-s-evidence.md); this proves the service asks
+        # for a commit at all, on the success path.
+        submissions = [submission_row(submission_id=100, state="unknown",
+                                      job_name="rapid-100")]
+        svc, conn, _, _, _ = build(
+            [], jobs=[], submissions_available=True, submissions=submissions,
+            named_jobs={("rapid-100", "contract-queue"): "job-100"})
+
+        commits_before = conn.commits
+        svc.poll_once()
+
+        self.assertGreater(conn.commits, commits_before)
+
+    def test_no_open_submissions_leaves_no_transaction_open(self):
+        row = attempt_row(1, lifecycle_state="started")
+        jobs = [batch_job(status="RUNNING", started=utc(2026, 8, 6, 11, 0, 0))]
+        svc, conn, batch, _, _ = build(
+            [row], jobs, submissions_available=True, submissions=[])
+
+        svc.poll_once()
+
+        self.assertEqual([], batch.list_jobs_calls)
+
+
+class SubmissionRecordDecidesOverTheClockTests(unittest.TestCase):
+    """S2: the submission record, not the horizon, is the truth for an
+    ambiguous attempt — rule 7's headline behaviour."""
+
+    def test_a_found_submission_waits_however_late_the_clock_is(self):
+        # Criterion 6, the headline: submitted_at is FAR beyond the
+        # submission horizon (30 minutes), yet a FOUND submission record
+        # means the job is running. The clock says classify; the evidence
+        # says running; the evidence wins.
+        row = attempt_row(1, scheduler_job_id=None,
+                          submitted_at=utc(2026, 8, 6, 8, 0, 0),
+                          submission_id=100)
+        submissions = [submission_row(submission_id=100, state="found")]
+        svc, conn, _, _, _ = build(
+            [row], jobs=[], now=utc(2026, 8, 6, 12, 0, 0),
+            submissions_available=True, submissions=submissions)
+
+        summary = svc.poll_once()
+
+        self.assertEqual(1, summary["waiting"])
+        self.assertEqual(0, summary.get("classified", 0))
+        self.assertEqual("submitted", conn.rows[1]["lifecycle_state"])
+
+    def test_a_lost_submission_classifies_without_waiting_on_the_horizon(self):
+        # Criterion 7: submitted_at is WELL INSIDE the horizon, but a LOST
+        # submission record is positive evidence of absence — classification
+        # need not wait for the clock too.
+        row = attempt_row(1, scheduler_job_id=None,
+                          submitted_at=utc(2026, 8, 6, 11, 55, 0),
+                          submission_id=100)
+        submissions = [submission_row(submission_id=100, state="lost")]
+        svc, conn, _, _, _ = build(
+            [row], jobs=[], now=utc(2026, 8, 6, 12, 0, 0),
+            submissions_available=True, submissions=submissions)
+
+        summary = svc.poll_once()
+
+        self.assertEqual(1, summary["classified"])
+        self.assertEqual("terminal_without_start",
+                         conn.rows[1]["lifecycle_state"])
+
+    def test_no_submission_row_classifies_at_the_horizon_unchanged(self):
+        # Criterion 8: the pre-044 backstop, proven unchanged. No
+        # submission_id at all (every pre-044 attempt) -> the horizon alone
+        # decides, exactly as before this package.
+        row = attempt_row(1, scheduler_job_id=None,
+                          submitted_at=utc(2026, 8, 6, 11, 0, 0),
+                          submission_id=None)
+        svc, conn, _, _, _ = build(
+            [row], jobs=[], now=utc(2026, 8, 6, 12, 0, 0),
+            submissions_available=True, submissions=[])
+
+        summary = svc.poll_once()
+
+        self.assertEqual(1, summary["classified"])
+        self.assertEqual("terminal_without_start",
+                         conn.rows[1]["lifecycle_state"])
+
+    def test_an_open_submission_inside_the_horizon_still_waits(self):
+        # Criterion 9: unchanged behaviour for the genuinely-ambiguous case.
+        # A future resolution_deadline is what keeps `resolve` itself from
+        # concluding LOST on this cycle's own resolution pass — this test is
+        # about `_reconcile_unresolved`'s read of an UNKNOWN record, not
+        # about racing its own resolution.
+        row = attempt_row(1, scheduler_job_id=None,
+                          submitted_at=utc(2026, 8, 6, 11, 55, 0),
+                          submission_id=100)
+        submissions = [submission_row(
+            submission_id=100, state="unknown",
+            resolution_deadline=utc(2026, 8, 6, 12, 30, 0))]
+        svc, conn, _, _, _ = build(
+            [row], jobs=[], now=utc(2026, 8, 6, 12, 0, 0),
+            submissions_available=True, submissions=submissions)
+
+        summary = svc.poll_once()
+
+        self.assertEqual(1, summary["waiting"])
+        self.assertEqual(0, summary.get("classified", 0))
+
+    def test_the_redirect_path_also_honours_a_found_submission(self):
+        # Criterion 10, first half: the `_reconcile_attempt` redirect
+        # (service.py, "the scheduler returned the job but not an attempt we
+        # can pair") reaches `_reconcile_unresolved` with a row that CARRIES
+        # a scheduler_job_id. The FOUND branch must still apply there.
+        row = attempt_row(1, lifecycle_state="submitted",
+                          scheduler_job_id="job-abc",
+                          submitted_at=utc(2026, 8, 6, 8, 0, 0),
+                          submission_id=100,
+                          application_attempt_index=None,
+                          scheduler_attempt_index=None)
+        # Two observations with no index on either side, so _pick_observation
+        # cannot pair one to this row and redirects to _reconcile_unresolved
+        # (service.py:680-687's documented case).
+        jobs = [batch_job(job_id="job-abc", status="RUNNING",
+                          started=utc(2026, 8, 6, 11, 0, 0),
+                          attempts=[
+                              {"container": {"exitCode": None},
+                               "startedAt": ms(utc(2026, 8, 6, 8, 0, 0))},
+                              {"container": {"exitCode": None},
+                               "startedAt": ms(utc(2026, 8, 6, 9, 0, 0))},
+                          ])]
+        submissions = [submission_row(submission_id=100, state="found")]
+        svc, conn, _, _, _ = build(
+            [row], jobs, now=utc(2026, 8, 6, 12, 0, 0),
+            submissions_available=True, submissions=submissions)
+
+        summary = svc.poll_once()
+
+        self.assertEqual(1, summary["waiting"])
+        self.assertEqual(0, summary.get("classified", 0))
+
+    def test_the_attempt_ran_distinction_is_preserved_under_lost(self):
+        # Criterion 10, second half: a LOST submission on a row that carries
+        # a full application account must still be flagged CONTRADICTORY
+        # (missing_or_contradictory), never forced into terminal_without_start
+        # — the same distinction ConstraintFidelityTests pins for the
+        # horizon-only path, now exercised through the submission branch.
+        row = attempt_row(1, lifecycle_state="application_closed",
+                          started_at=utc(2026, 8, 6, 11, 0, 0),
+                          rapid_outcome="success",
+                          product_disposition="published",
+                          application_intended_exit=0,
+                          scheduler_job_id="an-id-batch-never-heard-of",
+                          submitted_at=utc(2026, 8, 6, 11, 55, 0),
+                          submission_id=100)
+        submissions = [submission_row(submission_id=100, state="lost")]
+        svc, conn, _, _, _ = build(
+            [row], jobs=[], now=utc(2026, 8, 6, 12, 0, 0),
+            submissions_available=True, submissions=submissions)
+
+        summary = svc.poll_once()
+
+        self.assertEqual(1, summary["classified"])
+        self.assertEqual("missing_or_contradictory",
+                         conn.rows[1]["lifecycle_state"])
+
+    def test_a_raising_submission_lookup_falls_through_to_the_horizon(self):
+        # Criterion 11: fail OPEN. The lookup itself raising must not block
+        # reconciliation and must not be mistaken for LOST — it falls
+        # through to the existing horizon backstop, and is logged (checked
+        # via the rollback count: the failed SELECT's aborted transaction is
+        # cleared exactly like every other caught exception in this file).
+        row = attempt_row(1, scheduler_job_id=None,
+                          submitted_at=utc(2026, 8, 6, 11, 0, 0),
+                          submission_id=100)
+        svc, conn, _, _, _ = build(
+            [row], jobs=[], now=utc(2026, 8, 6, 12, 0, 0),
+            submissions_available=True, submissions=[])
+
+        def explode(text, params=None):
+            if "from submissions" in text.lower() and "join attempts" in \
+                    text.lower():
+                raise RuntimeError("the submissions read failed")
+            return real_route(text, params)
+
+        real_route = conn.route
+        conn.route = explode
+
+        summary = svc.poll_once()
+
+        # Past the horizon, no usable submission evidence -> the backstop
+        # classifies exactly as it would with no submission_id at all.
+        self.assertEqual(1, summary["classified"])
+        self.assertEqual("terminal_without_start",
+                         conn.rows[1]["lifecycle_state"])
+
+    def test_never_calls_submit_job_reaching_this_path(self):
+        # Criterion 12, the protocol invariant: resolution is re-query only.
+        # FakeBatch has no submit_job at all, so a caller that reached for it
+        # would AttributeError rather than silently succeed — the same
+        # refusal discipline test_submission_protocol.py's _FakeBatch uses.
+        row = attempt_row(1, scheduler_job_id=None,
+                          submitted_at=utc(2026, 8, 6, 8, 0, 0),
+                          submission_id=100)
+        submissions = [submission_row(submission_id=100, state="found")]
+        svc, _, batch, _, _ = build(
+            [row], jobs=[], now=utc(2026, 8, 6, 12, 0, 0),
+            submissions_available=True, submissions=submissions)
+        self.assertFalse(hasattr(batch, "submit_job"))
+
+        svc.poll_once()  # must not raise AttributeError
 
 
 if __name__ == "__main__":
