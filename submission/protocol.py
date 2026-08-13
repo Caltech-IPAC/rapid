@@ -402,6 +402,46 @@ def resolve(execute, row, describe, now=None):
     scheduler_job_id = describe(row["job_name"], row["job_queue"])
 
     if scheduler_job_id:
+        # KNOWN GAP, DOCUMENTED RATHER THAN SILENTLY LEFT (finding 4,
+        # fix-txn-core investigation — punted, not fixed, see
+        # LEDGER-fix-txn-core.md's "punted" section for the full analysis).
+        #
+        # This records the PARENT submission as FOUND, with the parent's own
+        # `scheduler_job_id` — but for an array submission it does NOT
+        # backfill any CHILD attempt's `scheduler_job_id`, the way
+        # `pipeline.seams._bind_scheduler_jobs` does for the direct
+        # (never-ambiguous) success path. Note that `_OPEN_SQL` does not even
+        # SELECT `array_size` today — `resolve`/`resolve_open` cannot
+        # currently tell an array submission from a single-job one without
+        # a further query, which any real fix here would also need to add.
+        # `pipeline.seams` derives each child id as
+        # `f"{parent_job_id}:{index}"` using the Python loop position
+        # (`enumerate(attempt_ids)`) at submission time — state that exists
+        # only in that process's memory and was never written anywhere this
+        # function, running later in a different process with only a
+        # `submissions` row in scope, can recover. The `attempts` rows this
+        # submission created carry a `logical_job_id` keyed by the manifest
+        # unit's declared SUBJECT (exposure/SCA, or another job type's typed
+        # fields — see `submission.manifest.ProcessingUnit.logical_job_key`),
+        # never by array index, so there is no existing column or string
+        # format to parse an index back out of. Closing this gap for real
+        # needs either a new `attempts` column recording each row's array
+        # index at `_precreate` time, or an ordered index->logical_job_id
+        # mapping persisted on the `submissions` row itself — a schema change
+        # (a new DRAFT migration) that was out of scope for this pass.
+        #
+        # PRACTICAL IMPACT, STATED PRECISELY: only submissions that were
+        # ambiguous (`calling`/`unknown`) AND array jobs (`array_size > 1`)
+        # AND positively found here are affected. Their children keep NULL
+        # `scheduler_job_id` even after this marks the parent FOUND — exactly
+        # the same unaddressable-by-scheduler-id state
+        # `SubmissionBookkeepingFailed` now prevents on the direct path, but
+        # here it is not raised, because there is nothing to retry into: the
+        # index mapping needed to backfill correctly does not exist yet. The
+        # rows remain findable by logical job and are not lost — reconciler
+        # closure keys on `attempts`, not on `submissions.scheduler_job_id` —
+        # but they are not addressable by scheduler id, which the reconciler
+        # uses to correlate CloudWatch/Batch events per-child.
         mark_found(execute, submission_id, scheduler_job_id, now=moment)
         return FOUND
 
