@@ -1781,6 +1781,43 @@ class SubmissionResolutionPassTests(unittest.TestCase):
 
         self.assertEqual([], batch.list_jobs_calls)
 
+    def test_a_raising_open_submissions_read_rolls_back(self):
+        # Coverage gap 2: `_resolve_submissions`'s own try/except
+        # (service.py:543) must call `_safe_rollback` when the pass itself
+        # raises — not merely leave the database unwritten for some other
+        # reason. `test_a_raising_describe_does_not_kill_the_cycle` (above)
+        # exercises a DIFFERENT raise: `resolve_open`'s own per-row try/except
+        # in `submission.protocol` already isolates a `describe` failure, so
+        # that raise never reaches `_resolve_submissions`'s except-clause at
+        # all. This test instead makes `open_submissions`'s own SELECT raise
+        # via `route_raises`, which fails inside `resolve_open` before its
+        # per-row loop starts — a raise that DOES propagate up to
+        # `_resolve_submissions`, exercising the except-clause this gap
+        # flagged as unpinned.
+        #
+        # Calls `_resolve_submissions` directly (this file's own idiom for a
+        # focused private-method pin — see `_log_group_for`/`_next_sequence`
+        # above) rather than through `poll_once`: `open_attempts()`'s own
+        # `_select` helper does an unconditional read-only-snapshot rollback
+        # on every poll (service.py:348), which would swamp the one call
+        # under test and make the count assertion pass whether or not
+        # `_resolve_submissions` itself ever rolls back.
+        svc, conn, batch, _, _ = build(
+            [], jobs=[], now=utc(2026, 8, 6, 12, 0, 0),
+            submissions_available=True, submissions=[],
+            route_raises={
+                "select_open_submissions": RuntimeError("read failed")})
+        summary = {"errors": 0}
+
+        rollbacks_before = conn.rollbacks
+        svc._resolve_submissions(summary)
+
+        self.assertEqual(1, summary["errors"])
+        self.assertEqual(rollbacks_before + 1, conn.rollbacks,
+                         "_resolve_submissions's except-clause must call "
+                         "_safe_rollback exactly once on a raise, not merely "
+                         "happen to leave nothing written")
+
 
 class SubmissionRecordDecidesOverTheClockTests(unittest.TestCase):
     """S2: the submission record, not the horizon, is the truth for an
@@ -1966,6 +2003,58 @@ class SubmissionRecordDecidesOverTheClockTests(unittest.TestCase):
         batch.submit_job = _refusing_submit_job
 
         svc.poll_once()  # must not raise AssertionError
+
+
+class OrdinaryPathIgnoresSubmissionStateTests(unittest.TestCase):
+    """Coverage gap 3: S2's classification is consulted ONLY on the
+    unresolved/redirect paths, never on `_reconcile_attempt`'s ordinary
+    paired-observation path (`_pick_observation` returns a real observation).
+
+    Every existing S2 test drives a row with `scheduler_job_id=None`
+    (straight to `_reconcile_unresolved`) or an unindexed multi-observation
+    row (the documented redirect, criterion 10). None puts a `submission_id`
+    on a row that ALSO pairs cleanly to a single scheduler observation — the
+    ordinary case `_reconcile_attempt` handles by calling `_classify`
+    directly (service.py:773) without ever calling `_submission_classification`
+    or `_reconcile_unresolved`. This is the regression pin the ledger names:
+    "a resolvable attempt with a FOUND submission record still uses the
+    observation, not the submission state."
+    """
+
+    def test_a_resolvable_attempt_uses_the_observation_not_a_found_submission(
+            self):
+        # The row pairs to ONE observation (single job, no index needed —
+        # `_pick_observation`'s unambiguous single-observation case), which
+        # is terminal and past the grace horizon, so the ordinary path
+        # (service.py:749-773) must reach `_classify` and produce
+        # "classified". The submission record says FOUND — if S2's logic
+        # were wrongly consulted here (as `_reconcile_unresolved` does on
+        # the unresolved/redirect paths), FOUND unconditionally returns
+        # "waiting" (service.py:1653-1658) and this attempt would never
+        # classify at all. The two outcomes are mutually exclusive in the
+        # summary, so this pins which path actually ran.
+        row = attempt_row(1, lifecycle_state="started",
+                          started_at=utc(2026, 8, 6, 11, 0, 0),
+                          submission_id=100)
+        store = InMemoryObjectStore()
+        seed_record(store, row, application_record(1))
+        jobs = [batch_job(status="FAILED", exit_code=70,
+                          started=utc(2026, 8, 6, 11, 0, 0),
+                          stopped=utc(2026, 8, 6, 11, 5, 0))]
+        submissions = [submission_row(submission_id=100, state="found")]
+        svc, conn, _, _, _ = build(
+            [row], jobs, records=store, submissions_available=True,
+            submissions=submissions)
+
+        summary = svc.poll_once()
+
+        self.assertEqual(1, summary["classified"])
+        self.assertEqual(0, summary["waiting"],
+                         "a FOUND submission record must not be consulted "
+                         "on the ordinary paired-observation path — only "
+                         "the scheduler observation decides here")
+        self.assertEqual("terminal_after_start",
+                         conn.rows[1]["lifecycle_state"])
 
 
 class S1FeedsS2WithinOneCycleTests(unittest.TestCase):

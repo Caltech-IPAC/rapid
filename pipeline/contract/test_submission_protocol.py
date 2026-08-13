@@ -44,6 +44,7 @@ before this package — from a second, independent connection.
 """
 
 import datetime
+import threading
 
 import pytest
 
@@ -400,6 +401,81 @@ def test_submission_for_attempt_returns_none_with_no_link(conn):
         conn, lifecycle="terminal_without_start")  # no attach_attempts call
 
     assert protocol.submission_for_attempt(execute, attempt_id) is None
+
+
+def test_two_concurrent_resolution_passes_do_not_double_transition_a_row(
+        conn, second_conn):
+    """Coverage gap 1: concurrent polls racing the resolution pass.
+
+    `resolve_open` takes no row lock (`open_submissions`'s `_OPEN_SQL` is a
+    plain SELECT — see its definition) — the only thing preventing two
+    overlapping reconciler cycles from both resolving the same UNKNOWN row is
+    `mark_lost`'s CAS (`_MARK_LOST_SQL`'s `WHERE ... AND state = 'unknown'`).
+    Genuinely concurrent: two connections, two threads, a barrier so both
+    read the row via `open_submissions` before either writes — that ordering
+    is what makes it a race rather than two serialized calls that would
+    trivially see `lost` on the second read.
+
+    Both racers see a negative `describe` (the job stays permanently
+    unfound), past the deadline, so both attempt `mark_lost` on the SAME row.
+    Exactly one must win; the other must get zero CAS rows, which `resolve`
+    surfaces as `SubmissionStateConflict` (`_require_one`'s only caller path
+    here) rather than a silent second write or a corrupted mixed state.
+    """
+    submission_id, _run_id = _prepare(conn, "race")
+    execute_a = fixture.executor(conn)
+    protocol.mark_calling(execute_a, submission_id)
+    conn.commit()
+    past = (datetime.datetime.now(datetime.timezone.utc)
+            - datetime.timedelta(seconds=1))
+    protocol.mark_unknown(execute_a, submission_id, detail="x",
+                          horizon_seconds=-1)
+    conn.commit()
+
+    def never_found(job_name, job_queue):
+        return None  # both racers see a negative re-query -> LOST
+
+    barrier = threading.Barrier(2)
+    outcomes = {}
+
+    def race(slot, connection):
+        execute = fixture.executor(connection)
+        row = next(r for r in protocol.open_submissions(execute)
+                   if r["submission_id"] == submission_id)
+        barrier.wait(timeout=30)          # both have now SELECTed the row
+        try:
+            state = protocol.resolve(execute, row, never_found, now=past
+                                     + datetime.timedelta(seconds=2))
+            connection.commit()
+            outcomes[slot] = ("won", state)
+        except protocol.SubmissionStateConflict:
+            connection.rollback()
+            outcomes[slot] = ("refused", None)
+        except Exception as exc:          # noqa: BLE001 - reported, not hidden
+            connection.rollback()
+            outcomes[slot] = (f"raised:{type(exc).__name__}", None)
+
+    threads = [threading.Thread(target=race, args=(slot, connection))
+               for slot, connection in (("a", conn), ("b", second_conn))]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=60)
+
+    assert len(outcomes) == 2, f"only {outcomes} completed"
+    won = [slot for slot, (result, _state) in outcomes.items()
+           if result == "won"]
+    refused = [slot for slot, (result, _state) in outcomes.items()
+              if result == "refused"]
+    assert len(won) == 1, f"expected exactly one winner, got {outcomes}"
+    assert len(refused) == 1, f"expected exactly one refusal, got {outcomes}"
+    assert outcomes[won[0]][1] == protocol.LOST
+
+    # AND THE ROW LANDED EXACTLY ONCE: no double transition, no split state.
+    final_state, job_id, _call, resolved = _state(conn, submission_id)
+    assert final_state == protocol.LOST
+    assert job_id is None
+    assert resolved is not None
 
 
 def test_a_resolution_pass_is_visible_from_a_second_connection(conn,
