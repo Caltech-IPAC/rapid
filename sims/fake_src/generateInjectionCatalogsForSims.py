@@ -197,7 +197,7 @@ if __name__ == '__main__':
 
         # Find union using set operations
 
-        union_list = list(set(rtids_list).union(neighboring_rtids))
+        union_list = list(set(rtids_list).union(sciimg_overlapping_rtids))
 
 
         # Compare lists.
@@ -219,12 +219,12 @@ if __name__ == '__main__':
 
             s3_full_name_injection_catalog = f"s3://{job_info_s3_bucket_base}/injection_catalogs_subdir/injection_catalog_rtid{rtid}.json"
 
-            print("Try downloading {s3_full_name_injection_catalog}...")
+            print(f"Try downloading {s3_full_name_injection_catalog}...")
 
             injection_catalog_filename,subdirs,downloaded_from_bucket = util.download_file_from_s3_bucket(s3_client,s3_full_name_injection_catalog)
 
             if downloaded_from_bucket:
-                print("Injection catalog file {s3_full_name_injection_catalog} already exists; skipping...")
+                print(f"Injection catalog file {s3_full_name_injection_catalog} already exists; skipping...")
                 continue
 
 
