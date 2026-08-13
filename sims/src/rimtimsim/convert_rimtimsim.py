@@ -153,12 +153,6 @@ for input_fits_file in input_fits_files:
     hdr["EXPTIME"] = exptime
 
 
-    # Add ZPTMAG keyword.
-
-    zptmag = 25.85726796291789           # From Ryan for F213.
-    hdr["ZPTMAG"] = zptmag
-
-
     # Add SCA_NUM keyword.
 
     detector = hdr["DETECTOR"]
@@ -182,8 +176,12 @@ for input_fits_file in input_fits_files:
     # (8 rows)
 
     filter = hdr["FILTER"]
+
+    zptmag = 0.0                                                     # Placeholder.
+
     if "213" in filter:
         translated_filter = filter.replace("F213","K213").strip()
+        zptmag = 25.85726796291789                                   # From Ryan for F213.
     elif "184" in filter:
         translated_filter = filter.replace("F184","F184").strip()
     elif "158" in filter:
@@ -196,6 +194,7 @@ for input_fits_file in input_fits_files:
         translated_filter = filter.replace("F106","Y106").strip()
     elif "087" in filter:
         translated_filter = filter.replace("F087","Z087").strip()
+        zptmag = 26.29818407774948                                   # From Ryan for F087.
     elif "146" in filter:
         translated_filter = filter.replace("F146","W146").strip()
     else:
@@ -203,6 +202,11 @@ for input_fits_file in input_fits_files:
         exit(64)
 
     hdr["FILTER"] = translated_filter
+
+
+    # Add ZPTMAG keyword.
+
+    hdr["ZPTMAG"] = zptmag
 
 
     # print input and output FITS filenames.
