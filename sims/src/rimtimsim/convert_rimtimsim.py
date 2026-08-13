@@ -53,6 +53,9 @@ for my_bucket_input_object in my_bucket_input.objects.all():
 
     input_fits_files.append(only_fname_input)
 
+n_input_fits_files = len(input_fits_files)
+print(f"n_input_fits_files = {n_input_fits_files}")
+
 
 # Loop over input FITS files.
 
@@ -75,6 +78,8 @@ for input_fits_file in input_fits_files:
 
     output_fits_file = input_fits_file.replace("_lvl02_RAPIDSIMS","")\
         .replace("_field03_rampfitted_exposureno","").replace("sim.fits","_lite.fits")
+
+    print("output_fits_file =",output_fits_file)
 
 
     # Read input FITS file.
@@ -209,12 +214,6 @@ for input_fits_file in input_fits_files:
     hdr["ZPTMAG"] = zptmag
 
 
-    # print input and output FITS filenames.
-
-    print("input_fits_file =",input_fits_file)
-    print("output_fits_file =",output_fits_file)
-
-
     # Modify CTYPE1 and CTYPE2 keyword values from TAN to TAN-SIP.
 
     hdr["CTYPE1"] = "RA---TAN-SIP"
@@ -305,6 +304,9 @@ for input_fits_file in input_fits_files:
     exitcode_from_rm = util.execute_command(rm_cmd)
 
     rm_cmd = ['rm','-f',output_fits_file]
+    exitcode_from_rm = util.execute_command(rm_cmd)
+
+    rm_cmd = ['rm','-f',gzipped_output_fits_file]
     exitcode_from_rm = util.execute_command(rm_cmd)
 
 
