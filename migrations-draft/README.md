@@ -3,16 +3,20 @@
 **This directory formerly held nine DRAFT SQL files staged against
 `IPAC-SW/rapid_systems`, the authoritative migration stream this repository
 cannot edit.** They were adopted verbatim (byte-identical SQL bodies) into
-`rapid_systems` on 2026-08-12, landing at `rapid_systems` main
-`1d169afc9744740bdec13ff9d07d585f06a52fcf` as migrations 044-052. Three
-further migrations were authored `rapid_systems`-side in the same session:
-053 (`retry_parked_attempts` revives `'blocked'`), 054 (widens
+`rapid_systems` on 2026-08-12 as migrations 044-052. Three further
+migrations were authored `rapid_systems`-side in the same session: 053
+(`retry_parked_attempts` revives `'blocked'`), 054 (widens
 `refimages.checksum`/`diffimages.checksum` to `varchar(64)` with a
 `checksum_algorithm` column — CR-8), and 055 (`addExposure`/`addL2File`
-rewritten idempotent). The contract tier now consumes all of this from the
-pinned stream (`.github/workflows/contract-tests.yml`); nothing here is
-vendored or read locally, so the nine `.sql` files were deleted rather than
-kept as a second copy that could drift from what was actually applied.
+rewritten idempotent). The contract tier's pinned revision
+(`.github/workflows/contract-tests.yml`) is `rapid_systems` main
+`28ea260bee930f3336f3728e4486785a4708f7f3`, one commit past 044-055's
+landing — the first live apply run found 053's `COMMENT ON FUNCTION
+derived.retry_parked_attempts` was bare-name and ambiguous against 047's
+overload of the same name, and 28ea260 fixes it by qualifying the
+signature. Nothing here is vendored or read locally, so the nine `.sql`
+files were deleted rather than kept as a second copy that could drift from
+what was actually applied.
 
 | Draft here (deleted) | Landed as | Purpose | Brief item |
 |---|---|---|---|
