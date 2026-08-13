@@ -90,25 +90,20 @@ tests run instead of skipping there; on any database still short of a given
 migration (e.g. an environment mid-rollout) they continue to skip cleanly,
 exactly as designed.
 
-## Proposed, not yet landed
+## Adopted separately, 2026-08-13
 
-`DRAFT-repair-refused-outbox.sql` — `derived.repair_refused_outbox_rows`,
-an audited operate-tier repair moving REFUSED `alert_outbox` rows for one
-`release_identity` back to PENDING after an operator has fixed the external
-condition (broker ACL, client/broker version) that terminalized them via
-`pipeline/publisher/classification.py`'s definite-refusal mapping. Follows
-`retry_parked_attempts`' shape (draft 047) rather than
-`record_external_action`'s: the target is a table in this database, so the
-function computes its own REFUSED population, checks an optional
-`{"candidates": n}` expected-state, and performs the UPDATE in-transaction.
-Deliberately unnumbered — see the file's own header — because 053-055 are
-already landed for other work; requires 047 and 050. Wired through
-`pipeline/operatorctl/actions.py:repair_refused_outbox_rows` and the
-`rapidctl repair-refused-outbox` subcommand
-(`pipeline/operatorctl/main.py`), granted to `rapid_operator` only. Not
-reviewed or applied against a live database yet — the actual migration
-lives in `rapid_systems`, which this repository cannot edit; landing it is
-an external step for that stream's owner.
+`DRAFT-repair-refused-outbox.sql` (deleted, same convention as the table
+above) — `derived.repair_refused_outbox_rows`, an audited operate-tier
+repair moving REFUSED `alert_outbox` rows for one `release_identity` back
+to PENDING after an operator has fixed the external condition (broker ACL,
+client/broker version) that terminalized them. Landed in `rapid_systems`
+as migration 059 (SQL body verbatim) and applied; the contract tier's
+`RAPID_SYSTEMS_REF` pin was bumped past it in the same change. Wired
+through `pipeline/operatorctl/actions.py:repair_refused_outbox_rows` and
+the `rapidctl repair-refused-outbox` subcommand
+(`pipeline/operatorctl/main.py`), granted to `rapid_operator` only. A
+contract-tier test for the new function is still owed now that the pin
+includes it.
 
 ## Package R (unrelated to the adopted drafts above)
 

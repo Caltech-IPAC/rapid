@@ -89,7 +89,7 @@ jobs:
       # the run's own log as evidence: "record the revision used" is part of
       # the required outcome, and a run that cannot say which schema it tested
       # against has not demonstrated anything reproducible.
-      RAPID_SYSTEMS_REF: 28ea260bee930f3336f3728e4486785a4708f7f3
+      RAPID_SYSTEMS_REF: 1cdce67a017634495e1a9c6a7bdbbe000f483ae2
 
     steps:
       - name: check out rapid
