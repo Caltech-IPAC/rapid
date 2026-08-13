@@ -222,15 +222,28 @@ jobs:
           # guaranteed to a `with:` input, and a ref that silently resolved
           # to empty would check out the default branch — testing against an
           # unpinned schema while claiming a pinned one.
-          ref: 28ea260bee930f3336f3728e4486785a4708f7f3
+          ref: b9dcf6d4b3c568063cec25d65af5834c36eb337f
           token: ${{ secrets.RAPID_SYSTEMS_READ_TOKEN }}
           path: rapid_systems
           persist-credentials: false
 
       - name: record the migration-stream revision
+        # ALSO THE DRIFT GUARD: this literal and the RAPID_SYSTEMS_REF env
+        # var above are the same fact written twice (the literal because
+        # `with:` inputs can't trust the env context — see the checkout
+        # step's comment; the env var because the suite records it as
+        # evidence). Two copies can drift, and a drifted pair is worse than
+        # either alone: the run's log then claims a schema it never tested
+        # (this happened — a bump of the env var alone recorded 1cdce67
+        # while the tier ran 28ea260's schema). Fail loudly instead.
         run: |
           cd rapid_systems
           echo "BRIEF-B-RAPID-SYSTEMS-REV: $(git rev-parse HEAD)"
+          if [ "$(git rev-parse HEAD)" != "$RAPID_SYSTEMS_REF" ]; then
+            echo "PIN DRIFT: checkout ref $(git rev-parse HEAD) != RAPID_SYSTEMS_REF $RAPID_SYSTEMS_REF" >&2
+            echo "Update BOTH the checkout step's ref literal and env.RAPID_SYSTEMS_REF together." >&2
+            exit 1
+          fi
           ls cloudformation/db-migrations/*.sql | wc -l
 
       - name: run the contract suite against the applied stream
