@@ -26,6 +26,7 @@ RimTimSim              rimtimsimdb              Observation range of reference i
 OpenUniverse           fakesourcesdb            For fake-source injection (copy of specialdb)
 RimTimSim              rimtimsims2db            For fake-source injection (emptied copy of fakesourcesdb)
 SOC GBTDS Sims         socsimsdb                For fake-source injection (emptied copy of rimtimsims2db)
+RimTimSim              rimtimsims3db            New sims delivered on 6/22/26 (emptied copy of socsimsdb)
 ===============      ===================      =====================================================================
 
 
