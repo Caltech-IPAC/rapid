@@ -253,6 +253,16 @@ class TimedProvider:
                            lambda: self.inner.get_forced_photometry(
                                detection, obj))
 
+    def get_ss_matches(self, detection):
+        return self._timed("get_ss_matches", detection.sid,
+                           lambda: self.inner.get_ss_matches(detection))
+
+    def get_ref_matches(self, detection):
+        # near-zero per source in the batch flow (answers from the chip's
+        # one vectorized pass, which is timed inside iter_sources_prefetch)
+        return self._timed("get_ref_matches", detection.sid,
+                           lambda: self.inner.get_ref_matches(detection))
+
     def get_cutouts(self, detection):
         return self._timed("get_cutouts", detection.sid,
                            lambda: self.inner.get_cutouts(detection))

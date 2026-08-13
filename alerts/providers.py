@@ -46,8 +46,10 @@ CUTOUT_FILES : dict
     Cutout kind ("sci" / "ref") -> co-gridded product basename in the job dir.
 WCS_CARD_PREFIXES : tuple of str
     FITS header-card prefixes copied from the parent image into each cutout.
-CATALOG_FILE : str or None
-    Basename of the auxiliary catalog to cross-reference against, or None.
+REF_MATCH_RADIUS_ARCSEC : float
+    Maximum separation for reference-catalog matches.
+REF_MATCH_NMAX : int
+    Maximum reference-catalog matches kept per class (stars / galaxies).
 """
 
 import dataclasses
@@ -126,6 +128,9 @@ class Source:
     roundness2: float | None = None
     peak: float | None = None
     exptime: float | None = None
+    # solar-system candidate flag, set by get_ss_matches(); None = KONA
+    # association not run for this detection (e.g. all prv sources)
+    is_ss_candidate: bool | None = None
 
     @property
     def snr(self) -> float | None:
@@ -148,7 +153,8 @@ class Source:
             derived ``band`` key already added.
         strict : bool, optional
             If True, every Source field must be present as a key in `row`
-            (except `aid`). Errors on dropped columns instead of null.
+            (except `aid` and `is_ss_candidate`, which are filled after
+            construction). Errors on dropped columns instead of null.
 
         Returns
         -------
@@ -161,7 +167,7 @@ class Source:
         """
         names = {f.name for f in dataclasses.fields(cls)}
         if strict:
-            missing = names - set(row) - {"aid"}
+            missing = names - set(row) - {"aid", "is_ss_candidate"}
             if missing:
                 raise KeyError(
                     f"Source row is missing expected columns: "
@@ -238,6 +244,47 @@ class ForcedPhot:
     band: str | None = None
     flux: float | None = None
     fluxerr: float | None = None
+
+
+@dataclass
+class SSMatch:
+    """One known solar system object predicted near a detection.
+
+    Built by match_ss_predictions() from the KONA per-visit predictions;
+    becomes one entry of the alert's ssMatches array.
+    """
+    designation: str
+    ra: float            # predicted ICRS position at the exposure epoch [deg]
+    dec: float
+    sep: float           # angular separation from the source position [arcsec]
+    pa: float            # position angle source -> object, East of North [deg]
+    predvmag: float | None = None  # predicted V mag; None if no catalogued H
+
+
+@dataclass
+class RefMatch:
+    """One reference-image catalog source near a detection.
+
+    Built by match_refcat() from the field's mosaic SExtractor catalog
+    (see the reference-catalog cross-match section below); becomes one
+    entry of the alert's refStarMatches or refGalaxyMatches array. The
+    star/galaxy split is made at match time by CLASS_STAR, but each match
+    keeps its own class_star so consumers can re-cut.
+    """
+    source_id: str       # SExtractor NUMBER, unique within the field catalog
+    ra: float            # catalog position, ICRS [deg]
+    dec: float
+    sep: float           # angular separation from the detection [arcsec]
+    pa: float            # position angle detection -> catalog source,
+                         # East of North [deg]
+    class_star: float    # SExtractor star/galaxy score (1 = point-like)
+    flags: int           # SExtractor extraction flags of the catalog source
+    mag_auto: float | None = None       # MAG_AUTO [instrumental mag]
+    mag_err_auto: float | None = None
+    elong: float | None = None          # A/B axis ratio
+    fwhm: float | None = None           # [arcsec]
+    half_light_radius: float | None = None  # FLUX_RADIUS at 0.5 [arcsec]
+    kron_radius: float | None = None    # Kron factor [units of A_IMAGE]
 
 
 @dataclass
@@ -406,78 +453,293 @@ def extract_stamp(image_data: np.ndarray | None, x: float | None,
 
 
 # ---------------------------------------------------------------------------
-# Per-source readers (auxiliary source catalog)
+# Solar-system association (KONA)
 #
-# The catalog product is not settled yet -- candidates are the difference-
-# image SExtractor catalog and the photutils psf-fit catalog -- so these
-# readers stay product-agnostic: parse_catalog returns opaque (rows, index)
-# and match_catalog_row does the nearest-neighbour lookup on them.
-#
-# Both are STUBS
+# KONA (modules/solarsystem/rapid_kona.py) predicts, per exposure, where
+# known solar system objects fall: {designation: (ra_deg, dec_deg, vmag)}.
+# match_ss_predictions() associates those predictions with one detection
+# position; the provider exposes it as get_ss_matches() using whatever
+# kona_lookup callable it was constructed with.
 # ---------------------------------------------------------------------------
 
-# Basename of the catalog to cross-reference against, beside the cutout FITS
-# in the job dir. Unset until the product is chosen ; while None, _load_catalog()
-# and cross reference is a no-op.
-CATALOG_FILE = None
+ROMAN_PIXEL_SCALE_ARCSEC = 0.11  # WFI plate scale [arcsec/pixel]
+
+# Report known objects within the cutout stamp's inscribed circle.
+SS_MATCH_RADIUS_ARCSEC = STAMP_HALF_WIDTH * ROMAN_PIXEL_SCALE_ARCSEC  # ~7.0
+
+# Keep at most this many matches per alert (nearest first).
+SS_MATCH_NMAX = 3
+
+# A match closer than this makes the detection a solar-system candidate
+# (diaSource.isSSCandidate). TODO: tune once KONA runs on real fields;
+# should comfortably exceed the ephemeris + astrometry error budget.
+SS_CANDIDATE_SEP_ARCSEC = .5
 
 
-def parse_catalog(path: str) -> tuple[Any, Any]:
-    """Parse the auxiliary source catalog for position matching (STUB).
+def match_ss_predictions(ra: float, dec: float,
+                         predictions: dict[str, tuple[float, float, float | None]],
+                         radius_arcsec: float = SS_MATCH_RADIUS_ARCSEC,
+                         n_max: int = SS_MATCH_NMAX) -> list[SSMatch]:
+    """Associate KONA predictions with one detection position.
 
-    Port from generate_alerts.py:parse_sextractor / load_psf_catalog.
+    Parameters
+    ----------
+    ra, dec : float
+        Detection position, ICRS [deg].
+    predictions : dict
+        ``{designation: (ra_deg, dec_deg, vmag_or_None)}`` for the
+        detection's exposure, as produced by rapid_kona.kona().
+    radius_arcsec : float, optional
+        Maximum angular separation to report.
+    n_max : int, optional
+        Keep at most this many matches, nearest first.
+
+    Returns
+    -------
+    list of SSMatch
+        The nearest predictions within `radius_arcsec`, sorted by
+        separation; empty when none are close enough.
+    """
+    if not predictions:
+        return []
+    desigs = list(predictions)
+    pred = np.array([predictions[d][:2] for d in desigs], dtype=float)
+    ra0, dec0 = np.radians(ra), np.radians(dec)
+    pra, pdec = np.radians(pred[:, 0]), np.radians(pred[:, 1])
+
+    # Vincenty angular separation (numerically stable at all separations)
+    dra = pra - ra0
+    num = np.hypot(np.cos(pdec) * np.sin(dra),
+                   np.cos(dec0) * np.sin(pdec)
+                   - np.sin(dec0) * np.cos(pdec) * np.cos(dra))
+    den = (np.sin(dec0) * np.sin(pdec)
+           + np.cos(dec0) * np.cos(pdec) * np.cos(dra))
+    sep_arcsec = np.degrees(np.arctan2(num, den)) * 3600.0
+
+    # position angle detection -> prediction, East of North [0, 360) deg
+    pa_deg = np.degrees(np.arctan2(
+        np.sin(dra) * np.cos(pdec),
+        np.cos(dec0) * np.sin(pdec)
+        - np.sin(dec0) * np.cos(pdec) * np.cos(dra))) % 360.0
+
+    keep = np.flatnonzero(sep_arcsec <= radius_arcsec)
+    keep = keep[np.argsort(sep_arcsec[keep])][:n_max]
+    # entry[2] is the predicted V mag; tolerate pre-vmag KONA output, which
+    # wrote (ra, dec) 2-tuples
+    return [SSMatch(designation=desigs[i],
+                    ra=float(pred[i, 0]), dec=float(pred[i, 1]),
+                    sep=float(sep_arcsec[i]), pa=float(pa_deg[i]),
+                    predvmag=(entry[2] if len(entry := predictions[desigs[i]]) > 2
+                              else None))
+            for i in keep]
+
+
+# ---------------------------------------------------------------------------
+# Reference-catalog cross-match
+#
+# The reference-image pipeline runs SExtractor on each field's coadd mosaic
+# and registers the catalog in the refimcatalogs table (cattype=1), so a
+# chip's counterpart catalog is located from its diffimages row:
+#     pid -> diffimages.rfid -> refimcatalogs.filename (s3://...)
+# The catalog is staged and parsed once per rfid (many chips share one
+# reference image), partitioned into star/galaxy KD-trees by CLASS_STAR,
+# and all detections on a chip are matched in one vectorized pass (see
+# AlertDataProvider.iter_sources / get_ref_matches).
+#
+# Matching is in sky coordinates: the mosaic does not share the chip's
+# pixel grid, and every alertable source has reference coverage by
+# construction (subtraction requires it), so "no match within radius"
+# cleanly means "no counterpart above the reference-catalog depth".
+# ---------------------------------------------------------------------------
+
+REFCAT_CATTYPE = 1  # refimcatalogs.cattype of the mosaic SExtractor catalog
+
+# Maximum separation for a reported match. TODO: tune against the measured
+# chance-coincidence rate (rho * pi * r^2) once run over real fields.
+REF_MATCH_RADIUS_ARCSEC = 5.0
+
+# Keep at most this many matches per class (stars / galaxies), nearest first.
+REF_MATCH_NMAX = 3
+
+# CLASS_STAR partition: >= STAR_MIN -> star tree, < GALAXY_MAX -> galaxy
+# tree. Equal thresholds make the split exhaustive; moving them apart
+# excludes an unclassifiable middle band from both trees.
+# TODO: settle the threshold(s) with the team (possible three-way split);
+# CLASS_STAR is unreliable at faint mags, so each match carries its score.
+REFCAT_STAR_MIN_CLASS = 0.9
+REFCAT_GALAXY_MAX_CLASS = 0.9
+
+# Mosaic pixel scale, to convert SExtractor pixel sizes to arcsec
+# (awaicgen_pixelscale_absolute in cdf/awsBatchSubmitJobs_launch*.ini).
+REFCAT_PIXEL_SCALE_ARCSEC = 0.11
+
+# SExtractor writes 99.0 in MAG_*/MAGERR_* for failed measurements.
+REFCAT_MAG_SENTINEL = 99.0
+
+# Catalog columns kept by load_refcat(); the rest of the mosaic catalog's
+# 115 columns are dropped at parse time. FLUX_RADIUS_1 is the second
+# PHOT_FLUXFRAC entry (0.25,0.5,...) = the half-light radius; astropy's
+# sextractor reader names vector-column elements NAME, NAME_1, NAME_2, ...
+REFCAT_COLUMNS = (
+    "NUMBER", "ALPHAWIN_J2000", "DELTAWIN_J2000", "FLAGS", "CLASS_STAR",
+    "MAG_AUTO", "MAGERR_AUTO", "ELONGATION", "FWHM_IMAGE",
+    "FLUX_RADIUS_1", "KRON_RADIUS",
+)
+
+
+@dataclass
+class RefCatalog:
+    """One reference image's catalog, partitioned for nearest-N matching.
+
+    Built by load_refcat(). `coords` holds one astropy SkyCoord per class
+    ("star" / "galaxy"; None when the class has no rows) -- astropy caches
+    the KD-tree on the SkyCoord instance, so matching many detections
+    against the same RefCatalog reuses one tree per class. `rows` maps a
+    class-subset position back to its original catalog row, and `columns`
+    holds the kept columns over the full catalog, in row order.
+    """
+    columns: dict[str, np.ndarray]
+    coords: dict[str, Any]        # class -> SkyCoord of the subset, or None
+    rows: dict[str, np.ndarray]   # class -> original row index per subset entry
+
+
+def load_refcat(path: str) -> RefCatalog | None:
+    """Parse a reference-image SExtractor catalog for cross-matching.
 
     Parameters
     ----------
     path : str
-        Path to the staged catalog file.
+        Path to the staged catalog file (SExtractor ASCII_HEAD format).
 
     Returns
     -------
-    rows : object or None
-        Table of catalog rows, or None if the file is missing or empty.
-    index : object or None
-        Spatial index (e.g. a cKDTree) over the rows' (x, y) pixel
-        positions, for nearest-neighbour lookup.
-
-    Raises
-    ------
-    NotImplementedError
-        Always, until the catalog product is chosen and this is ported.
+    RefCatalog or None
+        The parsed, star/galaxy-partitioned catalog; None (with a logged
+        warning) when the file is unreadable, empty, or missing expected
+        columns -- the cross-match then degrades to "not run".
     """
-    raise NotImplementedError(
-        "catalog parsing not implemented yet; port from "
-        "add-alert-generation:alerts/roman_rapid_alerts/generate_alerts.py")
+    from astropy import units as u
+    from astropy.coordinates import SkyCoord
+    from astropy.io import ascii as astropy_ascii
+
+    try:
+        # typed Any: pylance mis-infers astropy's ascii.read overloads
+        table: Any = astropy_ascii.read(path, format="sextractor")
+    except Exception:
+        logger.warning("Could not parse reference catalog %s", path,
+                       exc_info=True)
+        return None
+    if len(table) == 0:
+        logger.warning("Reference catalog %s is empty", path)
+        return None
+    missing = [c for c in REFCAT_COLUMNS if c not in table.colnames]
+    if missing:
+        logger.warning(
+            "Reference catalog %s is missing columns %s (SExtractor "
+            "parameter file changed?); cross-match skipped", path, missing)
+        return None
+
+    columns = {name: np.asarray(table[name], dtype=float)
+               for name in REFCAT_COLUMNS}
+    class_star = columns["CLASS_STAR"]
+    masks = {"star": class_star >= REFCAT_STAR_MIN_CLASS,
+             "galaxy": class_star < REFCAT_GALAXY_MAX_CLASS}
+    coords: dict[str, Any] = {}
+    rows: dict[str, np.ndarray] = {}
+    for cls, mask in masks.items():
+        # np.flatnonzero keeps the subset -> original-row mapping that
+        # match_refcat() needs to recover full catalog rows from KD-tree
+        # indices (which are positions within the subset)
+        idx = np.flatnonzero(mask)
+        rows[cls] = idx
+        coords[cls] = (SkyCoord(columns["ALPHAWIN_J2000"][idx] * u.deg,
+                                columns["DELTAWIN_J2000"][idx] * u.deg)
+                       if idx.size else None)
+    return RefCatalog(columns=columns, coords=coords, rows=rows)
 
 
-def match_catalog_row(x: float, y: float, index: Any, rows: Any,
-                      radius: float = 3.0) -> Any:
-    """Find the catalog row nearest to a pixel position (STUB).
+def _ref_match_from_row(columns: dict[str, np.ndarray], row: int,
+                        sep: float, pa: float) -> RefMatch:
+    """Build one RefMatch from catalog row `row` at the given sep/PA."""
+    def val(name: str) -> float:
+        return float(columns[name][row])
 
-    Port from generate_alerts.py:match_psf.
+    mag: float | None = val("MAG_AUTO")
+    mag_err: float | None = val("MAGERR_AUTO")
+    if mag is not None and mag >= REFCAT_MAG_SENTINEL:
+        mag = mag_err = None
+    return RefMatch(
+        source_id=str(int(val("NUMBER"))),
+        ra=val("ALPHAWIN_J2000"), dec=val("DELTAWIN_J2000"),
+        sep=sep, pa=pa,
+        class_star=val("CLASS_STAR"), flags=int(val("FLAGS")),
+        mag_auto=mag, mag_err_auto=mag_err,
+        elong=val("ELONGATION"),
+        fwhm=val("FWHM_IMAGE") * REFCAT_PIXEL_SCALE_ARCSEC,
+        half_light_radius=val("FLUX_RADIUS_1") * REFCAT_PIXEL_SCALE_ARCSEC,
+        kron_radius=val("KRON_RADIUS"),
+    )
+
+
+def match_refcat(ra: Any, dec: Any, catalog: RefCatalog,
+                 radius_arcsec: float = REF_MATCH_RADIUS_ARCSEC,
+                 n_max: int = REF_MATCH_NMAX,
+                 ) -> list[tuple[list[RefMatch], list[RefMatch]]]:
+    """Match detection positions against a reference catalog.
+
+    One vectorized pass for any number of detections: per class the
+    nth-nearest catalog neighbor of every detection is queried for
+    n = 1..n_max (astropy reuses the KD-tree cached on the class
+    SkyCoord), then matches beyond `radius_arcsec` are dropped --
+    nthneighbor always returns something, so the radius is a mask on the
+    result, not a query parameter. This is also why the per-class match
+    count doubles as a crowding diagnostic: len == n_max means the
+    neighborhood may extend beyond what is reported.
 
     Parameters
     ----------
-    x, y : float
-        Pixel position to match.
-    index, rows : object
-        The spatial index and row table from parse_catalog().
-    radius : float, optional
-        Maximum match distance in pixels.
+    ra, dec : float or array-like
+        Detection position(s), ICRS [deg].
+    catalog : RefCatalog
+        The parsed catalog from load_refcat().
+    radius_arcsec : float, optional
+        Maximum separation to report.
+    n_max : int, optional
+        Keep at most this many matches per class, nearest first.
 
     Returns
     -------
-    object or None
-        The nearest catalog row within `radius`, or None if there is no
-        match.
-
-    Raises
-    ------
-    NotImplementedError
-        Always, until the catalog product is chosen and this is ported.
+    list of (list of RefMatch, list of RefMatch)
+        Per detection, in input order: (star matches, galaxy matches),
+        each nearest-first and at most `n_max` long.
     """
-    raise NotImplementedError(
-        "catalog position matching not implemented yet")
+    from astropy import units as u
+    from astropy.coordinates import SkyCoord
+
+    ra = np.atleast_1d(np.asarray(ra, dtype=float))
+    dec = np.atleast_1d(np.asarray(dec, dtype=float))
+    src = SkyCoord(ra * u.deg, dec * u.deg)
+    results: list[tuple[list[RefMatch], list[RefMatch]]] = \
+        [([], []) for _ in range(ra.size)]
+
+    for slot, cls in enumerate(("star", "galaxy")):
+        coords = catalog.coords[cls]
+        if coords is None:
+            continue  # class has no catalog rows
+        subset_to_row = catalog.rows[cls]
+        # ascending nthneighbor keeps each result list nearest-first
+        for n in range(1, min(n_max, len(subset_to_row)) + 1):
+            idx, sep2d, _ = src.match_to_catalog_sky(coords, nthneighbor=n)
+            pa = src.position_angle(coords[idx])
+            idx = np.atleast_1d(idx)
+            sep_arcsec = np.atleast_1d(sep2d.arcsec)
+            pa_deg = np.atleast_1d(pa.deg) % 360.0
+            for i in np.flatnonzero(sep_arcsec <= radius_arcsec):
+                row = int(subset_to_row[idx[i]])
+                results[i][slot].append(_ref_match_from_row(
+                    catalog.columns, row,
+                    float(sep_arcsec[i]), float(pa_deg[i])))
+    return results
 
 
 # ---------------------------------------------------------------------------
@@ -503,7 +765,8 @@ class AlertDataProvider:
         get_* calls below answer from that prefetch instead of querying
     """
 
-    def __init__(self, db: Any, diff_flavor: str = "sfft") -> None:
+    def __init__(self, db: Any, diff_flavor: str = "sfft",
+                 kona_lookup: Any = None, refcat: bool = True) -> None:
         """
         Parameters
         ----------
@@ -511,6 +774,19 @@ class AlertDataProvider:
             The database connection (anything exposing ``.conn.cursor()``).
         diff_flavor : {"sfft", "zogy"}, optional
             Which differencing algorithm is used.
+        kona_lookup : callable, optional
+            ``expid -> {designation: (ra, dec, vmag)} or None``, giving the
+            KONA solar-system predictions for an exposure -- an index over
+            the daily up-to-date positions download (file format TBD; a
+            plain dict's ``.get`` works once it is loaded). While None,
+            get_ss_matches() reports "association not run": ssMatches and
+            isSSCandidate stay null.
+        refcat : bool, optional
+            Whether to cross-match detections against the field's
+            reference-image catalog (see get_ref_matches). When False, or
+            whenever a chip's catalog cannot be located/staged/parsed,
+            matching reports "not run": refStarMatches and
+            refGalaxyMatches stay null.
 
         Raises
         ------
@@ -522,6 +798,13 @@ class AlertDataProvider:
                              f"{sorted(DIFF_FLAVORS)}, not {diff_flavor!r}")
         self.db = db
         self.diff_flavor = diff_flavor
+        self.kona_lookup = kona_lookup
+        self.refcat_enabled = bool(refcat)
+        # KONA predictions cache: one exposure's detections are processed
+        # together, so cache the last expid's dict (None = no KONA data
+        # for that exposure).
+        self._kona_expid: int | None = None
+        self._kona_predictions: dict[str, tuple] | None = None
         # Per-chip prefetch state, filled by iter_sources(pid). While the
         # current chip matches source.pid, get_object_for_source() and
         # get_prv_detections() answer from these dicts.
@@ -538,12 +821,16 @@ class AlertDataProvider:
         self._staging_dir = tempfile.mkdtemp(prefix="rapid_cutouts_")
         self._s3: Any = None          # lazily built, retry-configured S3 client
         self._forced_phot_logged = False  # log the not-implemented note once
-        # Auxiliary-catalog cross-reference state. The catalog is staged and
-        # parsed once per pid -- same lifetime as _images. While CATALOG_FILE
-        # is unset, _load_catalog() short-circuits before any query or stage,
-        # so cross-referencing costs nothing beyond a cache check per source.
-        self._catalog_pid: int | None = None
-        self._catalog: tuple[Any, Any] = (None, None)  # (rows, index) from parse_catalog
+        # Reference-catalog cross-match state. The catalog is a per-
+        # reference-image product shared by many chips, so it is staged and
+        # parsed once per rfid (the parse/stage outcome is cached even when
+        # it fails, so a broken catalog is not re-attempted per chip);
+        # _chip_refmatches holds the current chip's per-sid results from
+        # one vectorized match_refcat() pass (see _match_chip_refcat).
+        self._refcat_rfid: int | None = None
+        self._refcat: RefCatalog | None = None
+        self._chip_refmatches: dict[
+            int, tuple[list[RefMatch], list[RefMatch]]] = {}
 
     def _query(self, sql: str,
                params: Sequence[Any] | None = None) -> list[dict[str, Any]]:
@@ -669,9 +956,7 @@ class AlertDataProvider:
             raise ValueError(f"Source {sid} not found")
         row = rows[0]
         row["band"] = row.get("filter_name")
-        source = Source.from_row(row, strict=True)
-        self._crossref(source)
-        return source
+        return Source.from_row(row, strict=True)
 
     def iter_sources(self, pid: int) -> Iterator[Source]:
         """Iterate over every detection on one difference image (chip).
@@ -702,10 +987,9 @@ class AlertDataProvider:
         sources = []
         for row in rows:
             row["band"] = row.get("filter_name")
-            source = Source.from_row(row, strict=True)
-            self._crossref(source)
-            sources.append(source)
+            sources.append(Source.from_row(row, strict=True))
         self._prefetch_chip(pid, sources)
+        self._match_chip_refcat(pid, sources)
         yield from sources
 
     def _prefetch_chip(self, pid: int, sources: list[Source],
@@ -888,6 +1172,44 @@ class AlertDataProvider:
                 "Forced photometry not yet available for alert assembly")
             self._forced_phot_logged = True
         return []
+
+    def get_ss_matches(self, detection: Source) -> list[SSMatch] | None:
+        """Associate a detection with nearby known solar system objects.
+
+        Matches the exposure's KONA predictions against the detection
+        position (see match_ss_predictions) and sets
+        ``detection.is_ss_candidate`` as a side effect: True when the
+        nearest match is within SS_CANDIDATE_SEP_ARCSEC, False when the
+        association ran clean, None when it could not run.
+
+        Parameters
+        ----------
+        detection : Source
+            The triggering detection; modified in place (is_ss_candidate).
+
+        Returns
+        -------
+        list of SSMatch or None
+            Nearest predictions within SS_MATCH_RADIUS_ARCSEC (at most
+            SS_MATCH_NMAX, nearest first); empty list when the association
+            ran and found nothing; None when there is no KONA data for the
+            exposure (no kona_lookup configured, or it returned None).
+        """
+        if self.kona_lookup is None:
+            detection.is_ss_candidate = None
+            return None
+        if self._kona_expid != detection.expid:
+            self._kona_predictions = self.kona_lookup(detection.expid)
+            self._kona_expid = detection.expid
+        predictions = self._kona_predictions
+        if predictions is None:
+            detection.is_ss_candidate = None
+            return None
+        matches = match_ss_predictions(detection.ra, detection.dec,
+                                       predictions)
+        detection.is_ss_candidate = bool(
+            matches and matches[0].sep <= SS_CANDIDATE_SEP_ARCSEC)
+        return matches
 
     def get_cutouts(self, detection: Source) -> Cutouts:
         """Cut the three image stamps around a detection's position.
@@ -1108,74 +1430,114 @@ class AlertDataProvider:
                 self._images[key] = (None, None)
                 break
 
-    # -- Auxiliary-catalog cross-reference ---------------------------------
+    # -- Reference-catalog cross-match --------------------------------------
 
-    def _load_catalog(self, pid: int) -> tuple[Any, Any]:
-        """Load (and cache) the chip's auxiliary source catalog.
+    def _load_refcat(self, rfid: int) -> RefCatalog | None:
+        """Stage and parse (and cache) a reference image's catalog.
 
-        Staged and parsed once per pid -- same lifetime as _images. While
-        CATALOG_FILE is None this does nothing.
+        Parameters
+        ----------
+        rfid : int
+            The reference image (refimages.rfid) whose mosaic SExtractor
+            catalog (refimcatalogs, REFCAT_CATTYPE) to load.
+
+        Returns
+        -------
+        RefCatalog or None
+            The parsed catalog, or None when it is not registered, cannot
+            be staged, or does not parse -- each with a logged warning.
+            The outcome (including None) is cached per rfid, so a broken
+            catalog is not re-attempted for every chip that shares it.
+        """
+        if self._refcat_rfid == rfid:
+            return self._refcat
+        self._refcat = None
+        self._refcat_rfid = rfid
+        rows = self._query("""
+            SELECT filename FROM refimcatalogs
+            WHERE rfid = %s AND cattype = %s
+            ORDER BY rfcatid DESC
+        """, (rfid, REFCAT_CATTYPE))
+        if not rows:
+            logger.warning(
+                "no refimcatalogs row (cattype=%s) for rfid=%s; "
+                "reference-catalog matching not run", REFCAT_CATTYPE, rfid)
+            return None
+        if len(rows) > 1:
+            logger.warning(
+                "rfid=%s has %d cattype=%s refimcatalogs rows; using the "
+                "newest", rfid, len(rows), REFCAT_CATTYPE)
+        # optional product: a staging failure skips matching, never aborts
+        path = self._stage(rows[0]["filename"], required=False)
+        if path is not None:
+            self._refcat = load_refcat(path)
+        return self._refcat
+
+    def _refcat_for_pid(self, pid: int) -> RefCatalog | None:
+        """Locate, stage, and parse the reference catalog behind a chip."""
+        rows = self._query(
+            "SELECT rfid FROM diffimages WHERE pid = %s", (pid,))
+        if not rows or rows[0]["rfid"] is None:
+            logger.warning("no diffimages.rfid for pid=%s; "
+                           "reference-catalog matching not run", pid)
+            return None
+        return self._load_refcat(int(rows[0]["rfid"]))
+
+    def _match_chip_refcat(self, pid: int, sources: list[Source]) -> None:
+        """Cross-match every chip detection against the reference catalog.
+
+        One vectorized match_refcat() pass over the whole chip; the
+        per-sid results land in _chip_refmatches, which get_ref_matches()
+        answers from. Left empty when matching is disabled or the catalog
+        is unavailable, so get_ref_matches() reports "not run".
 
         Parameters
         ----------
         pid : int
             Processing ID of the chip (diffimages.pid).
-
-        Returns
-        -------
-        rows : object or None
-        index : object or None
-            The pair from parse_catalog(), or (None, None) when
-            cross-referencing is not wired up yet (CATALOG_FILE unset) or
-            the diffimages row / catalog file is missing -- _crossref()
-            then degrades to a no-op (the null-cutout ladder).
+        sources : list of Source
+            Every detection on the chip (from iter_sources()).
         """
-        if self._catalog_pid == pid:
-            return self._catalog
-        self._catalog = (None, None)
-        self._catalog_pid = pid
-        if CATALOG_FILE is None:
-            return self._catalog
-        rows = self._query(
-            "SELECT filename FROM diffimages WHERE pid = %s", (pid,))
-        if rows:
-            job_dir = os.path.dirname(rows[0]["filename"])
-            # the catalog is an optional cross-reference: skip (don't abort)
-            # if it can't be staged
-            path = self._stage(f"{job_dir}/{CATALOG_FILE}", required=False)
-            if path is not None:
-                self._catalog = parse_catalog(path)
-        else:
-            logger.warning("No diffimages row for pid=%s; catalog "
-                           "cross-reference skipped", pid)
-        return self._catalog
+        self._chip_refmatches = {}
+        if not self.refcat_enabled or not sources:
+            return
+        catalog = self._refcat_for_pid(pid)
+        if catalog is None:
+            return
+        results = match_refcat(np.array([s.ra for s in sources]),
+                               np.array([s.dec for s in sources]), catalog)
+        self._chip_refmatches = dict(zip((s.sid for s in sources), results))
 
-    def _crossref(self, source: Source) -> None:
-        """Pull auxiliary-catalog fields onto a source by position match.
+    def get_ref_matches(
+            self, detection: Source,
+    ) -> tuple[list[RefMatch], list[RefMatch]] | None:
+        """The nearest reference-catalog stars and galaxies to a detection.
 
-        Cross-references `source` against the chip's auxiliary source
-        catalog and would pull extra per-source fields (apFlux, shape
-        moments, elong, raErr/decErr, ...) onto it. A no-op when the
-        catalog or a matching row is unavailable, so a source with no
-        catalog counterpart still yields a valid (stub-null) alert.
-
-        The attribute assignments are intentionally left as a TODO: they
-        land in lockstep with (a) new optional fields on Source and (b)
-        flipping the matching params to IMPLEMENTED in param_registry.py.
-        See generate_alerts.py:build_alert for a field->column mapping and
-        the FILTER_ZP_EFF nJy calibration.
+        These become the alert's refStarMatches and refGalaxyMatches
+        arrays. In the batch flow the whole chip was already matched in
+        one pass (see _match_chip_refcat); the single-alert flow matches
+        just this detection against the (cached per rfid) catalog.
 
         Parameters
         ----------
-        source : Source
-            The detection to enrich, modified in place (once implemented).
+        detection : Source
+            The triggering detection.
+
+        Returns
+        -------
+        (list of RefMatch, list of RefMatch) or None
+            Star and galaxy matches within REF_MATCH_RADIUS_ARCSEC (at
+            most REF_MATCH_NMAX each, nearest first); empty lists when
+            matching ran and found nothing nearby; None when it could not
+            run (disabled, or the catalog is unavailable).
         """
-        rows, index = self._load_catalog(source.pid)
-        if rows is None:
-            return
-        match = match_catalog_row(source.xfit, source.yfit, index, rows)
-        if match is None:
-            return
-        # TODO: assign cross-referenced attributes onto `source` from the
-        # matched catalog row, once Source gains those fields and the registry
-        # marks them IMPLEMENTED. Until then the match is intentionally unused.
+        if not self.refcat_enabled:
+            return None
+        # Batch flow: the chip's results (or the fact that matching could
+        # not run: sid absent) are already in memory.
+        if self._chip_pid is not None and self._chip_pid == detection.pid:
+            return self._chip_refmatches.get(detection.sid)
+        catalog = self._refcat_for_pid(detection.pid)
+        if catalog is None:
+            return None
+        return match_refcat(detection.ra, detection.dec, catalog)[0]

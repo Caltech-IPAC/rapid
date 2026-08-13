@@ -51,6 +51,52 @@ PRODUCT_OFFSETS = {
 
 CHIP_PID = 99          # the fake chip's diffimages.pid
 CHIP_FIELD = 3         # all fake sources live in Roman field 3
+CHIP_RFID = 555        # the chip's reference image (diffimages.rfid)
+
+
+def write_sextractor_refcat(path, entries):
+    """Write a minimal SExtractor ASCII_HEAD catalog for load_refcat().
+
+    Only the columns REFCAT_COLUMNS needs are written. The header skips
+    column index 11 on purpose: FLUX_RADIUS is a vector column in the
+    real catalogs (one element per PHOT_FLUXFRAC entry) and SExtractor
+    declares only its first element, so astropy names the undeclared
+    column FLUX_RADIUS_1 -- the half-light radius the provider reads.
+
+    Parameters
+    ----------
+    path : str or pathlib.Path
+        File to write.
+    entries : list of dict
+        One catalog row each: requires "ra", "dec", "class_star";
+        "flags", "mag", "mag_err", "elong", "fwhm_pix",
+        "flux_radius_pix", "kron_radius" have defaults. NUMBER is
+        assigned 1..N in list order.
+    """
+    header = "\n".join((
+        "#   1 NUMBER          Running object number",
+        "#   2 ALPHAWIN_J2000  Windowed right ascension (J2000) [deg]",
+        "#   3 DELTAWIN_J2000  Windowed declination (J2000) [deg]",
+        "#   4 FLAGS           Extraction flags",
+        "#   5 CLASS_STAR      S/G classifier output",
+        "#   6 MAG_AUTO        Kron-like elliptical aperture magnitude [mag]",
+        "#   7 MAGERR_AUTO     RMS error for AUTO magnitude [mag]",
+        "#   8 ELONGATION      A_IMAGE/B_IMAGE",
+        "#   9 FWHM_IMAGE      FWHM assuming a gaussian core [pixel]",
+        "#  10 FLUX_RADIUS     Fraction-of-light radii [pixel]",
+        "#  12 KRON_RADIUS     Kron apertures in units of A or B",
+    ))
+    lines = [header]
+    for num, e in enumerate(entries, start=1):
+        lines.append(" ".join(str(v) for v in (
+            num, e["ra"], e["dec"], e.get("flags", 0), e["class_star"],
+            e.get("mag", 20.0), e.get("mag_err", 0.1),
+            e.get("elong", 1.1), e.get("fwhm_pix", 3.0),
+            2.0 * e.get("flux_radius_pix", 2.0),   # 0.25-fraction radius
+            e.get("flux_radius_pix", 2.0),         # 0.5 -> FLUX_RADIUS_1
+            e.get("kron_radius", 3.5))))
+    Path(path).write_text("\n".join(lines) + "\n")
+    return str(path)
 
 
 @pytest.fixture(scope="session")
@@ -119,6 +165,15 @@ class ChipData:
         # diffimages.filename: the DB stores the zogy path; the provider
         # derives the job directory from it and picks the flavored file
         self.diff_filename = str(job_dir / "zogy_diffimage_masked.fits")
+
+        # Reference-catalog cross-match: diffimages.rfid locates the
+        # refimcatalogs row, whose filename the provider stages (a plain
+        # path passes _stage() untouched). None = no catalog registered,
+        # so matching degrades to "not run" -- the default keeps tests
+        # that don't care about cross-matching catalog-free; tests that
+        # do set this to a write_sextractor_refcat() file.
+        self.rfid = CHIP_RFID
+        self.refcat_filename = None
 
         # diffimages rows for resolve_pid(expid, sca): reprocessing
         # campaigns leave several rows per (expid, sca), more than one
@@ -220,8 +275,13 @@ class FakeCursor:
                            and c["vbest"] > 0),
                           key=lambda c: -c["pid"])
             self._rows = [{"pid": c["pid"]} for c in best]
+        elif "FROM refimcatalogs" in sql:             # _load_refcat(rfid)
+            rfid, cattype = params
+            self._rows = ([{"filename": d.refcat_filename}]
+                          if d.refcat_filename and rfid == d.rfid
+                          and cattype == 1 else [])
         elif "FROM diffimages" in sql:
-            self._rows = ([{"filename": d.diff_filename}]
+            self._rows = ([{"filename": d.diff_filename, "rfid": d.rfid}]
                           if d.diff_filename else [])
         elif "WHERE s.sid" in sql:                    # get_detection(sid)
             self._rows = [dict(r) for r in d._all_detections()
@@ -293,10 +353,16 @@ def chip_data(tpv_header, job_dir):
 
 @pytest.fixture()
 def make_provider(chip_data):
-    """Factory for independent AlertDataProviders over the same fake chip."""
+    """Factory for independent AlertDataProviders over the same fake chip.
+
+    kona_lookup is passed through to the provider (see providers.py), so
+    tests can inject solar-system predictions for the fake chip's
+    exposure (expid 42) without any KONA machinery.
+    """
     from alerts.providers import AlertDataProvider
 
-    def _make(diff_flavor="sfft"):
-        return AlertDataProvider(FakeDB(chip_data), diff_flavor=diff_flavor)
+    def _make(diff_flavor="sfft", kona_lookup=None, refcat=True):
+        return AlertDataProvider(FakeDB(chip_data), diff_flavor=diff_flavor,
+                                 kona_lookup=kona_lookup, refcat=refcat)
 
     return _make

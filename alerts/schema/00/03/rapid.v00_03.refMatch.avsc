@@ -1,0 +1,98 @@
+{
+    "namespace": "rapid.v00_03",
+    "name": "refMatch",
+    "doc": "Reference-image catalog source near the triggering source",
+    "version": "00.03",
+    "type": "record",
+    "fields": [
+        {
+            "name": "sourceId",
+            "type": "string",
+            "doc": "SExtractor NUMBER of the reference source, unique within this field's mosaic catalog"
+        },
+        {
+            "name": "ra",
+            "type": "double",
+            "doc": "Right ascension of the reference source; ICRS [deg]"
+        },
+        {
+            "name": "dec",
+            "type": "double",
+            "doc": "Declination of the reference source; ICRS [deg]"
+        },
+        {
+            "name": "sep",
+            "type": "float",
+            "doc": "Angular separation from the triggering source position [arcsec]"
+        },
+        {
+            "name": "pa",
+            "type": "float",
+            "doc": "Position angle from the triggering source to the reference source, East of North [deg]"
+        },
+        {
+            "name": "classStar",
+            "type": "float",
+            "doc": "SExtractor CLASS_STAR star/galaxy score (1 = point-like); the star/galaxy array split uses providers.REFCAT_STAR_MIN_CLASS, recorded here so consumers can re-cut"
+        },
+        {
+            "name": "flags",
+            "type": "int",
+            "doc": "SExtractor extraction FLAGS bitmask of the reference source (2 = blended, 4 = saturated, ...)"
+        },
+        {
+            "name": "magAuto",
+            "type": [
+                "null",
+                "float"
+            ],
+            "default": null,
+            "doc": "Kron-like automatic-aperture magnitude MAG_AUTO (instrumental; nJy calibration pending); null when the measurement failed [mag]"
+        },
+        {
+            "name": "magErrAuto",
+            "type": [
+                "null",
+                "float"
+            ],
+            "default": null,
+            "doc": "Uncertainty in magAuto; null with magAuto [mag]"
+        },
+        {
+            "name": "elong",
+            "type": [
+                "null",
+                "float"
+            ],
+            "default": null,
+            "doc": "SExtractor ELONGATION (major/minor axis ratio)"
+        },
+        {
+            "name": "fwhm",
+            "type": [
+                "null",
+                "float"
+            ],
+            "default": null,
+            "doc": "FWHM assuming a Gaussian core (FWHM_IMAGE) [arcsec]"
+        },
+        {
+            "name": "halfLightRadius",
+            "type": [
+                "null",
+                "float"
+            ],
+            "default": null,
+            "doc": "Radius enclosing half of the source flux (FLUX_RADIUS at fraction 0.5); with magAuto, supports size-normalized host separations [arcsec]"
+        },
+        {
+            "name": "kronRadius",
+            "type": [
+                "null",
+                "float"
+            ],
+            "default": null,
+            "doc": "Kron aperture scale factor (KRON_RADIUS, dimensionless; multiplies the profile's A_IMAGE per SExtractor convention)"
+        }
+    ]
+}

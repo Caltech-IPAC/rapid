@@ -34,7 +34,7 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Any, Callable, TypeAlias
 
-VERSION = "00.02"
+VERSION = "00.03"
 
 # Keep for type checking and function hints
 AvroType: TypeAlias = str | list["AvroType"] | dict[str, Any]
@@ -131,7 +131,6 @@ NOT_USED = Status.NOT_USED
 
 # Shared stub-source descriptions
 _FP = "forced photometry (products not integrated)"
-_SS = "KONA solar-system association (not integrated)"
 
 # PhotUtils PSFPhotometry bitwise fit-condition flags (sources.flags), as
 # defined in photutils/psf/_components.py define_flags() for photutils 3.0.0.
@@ -324,25 +323,10 @@ DIA_SOURCE_PARAMS = (
     Param("refFlux_flag",  ["null", "boolean"], "Reference flux measurement failed (stub)",
                     STUB, "may fold into flags bitmask (spreadsheet: 'flags dict?')"),
     Param("isSSCandidate", ["null", "boolean"], "Suspected solar system object: a known SS object is predicted "
-                                                "within the separation cut of this source (see ssMatches); "
-                                                "null if association was not run (stub)",
-                    STUB, _SS), #TODO: state the separation cut in the doc once chosen
-
-    # --- Nearest reference-image source (all stubs) ------------------------------
-    # Param("distnr",        ["null", "float"],  "Distance to nearest reference-image source (stub) [arcsec]",
-    #                 STUB, "cross-match to reference-image catalog (not run)"),
-    # Param("ranr",          ["null", "double"], "RA of nearest reference-image source (stub) [deg]",
-    #                 STUB, "cross-match to reference-image catalog (not run)"),
-    # Param("decnr",         ["null", "double"], "Dec of nearest reference-image source (stub) [deg]",
-    #                 STUB, "cross-match to reference-image catalog (not run)"),
-    # Param("magnr",         ["null", "float"],  "Magnitude of nearest reference-image source (stub) [mag]",
-    #                 STUB, "cross-match to reference-image catalog (not run)"),
-    # Param("sigmagnr",      ["null", "float"],  "1-sigma uncertainty in magnr (stub) [mag]",
-    #                 STUB, "cross-match to reference-image catalog (not run)"),
-    # Param("chinr",         ["null", "float"],  "Chi parameter of nearest reference-image source (stub)",
-    #                 STUB, "cross-match to reference-image catalog (not run)"),
-    # Param("sharpnr",       ["null", "float"],  "Sharpness parameter of nearest reference-image source (stub)",
-    #                 STUB, "cross-match to reference-image catalog (not run)"),
+                                                "within SS_CANDIDATE_SEP_ARCSEC of this source (see ssMatches); "
+                                                "null if association was not run for this detection",
+                    IMPLEMENTED, "computed: KONA predictions within providers.SS_CANDIDATE_SEP_ARCSEC",
+                    attr="is_ss_candidate"), #TODO: tune the separation cut
 
     # --- Roman-specific identifiers & tiling ------------------------------------
     Param("field",         "int",              "Roman field identifier",
@@ -502,23 +486,81 @@ DIA_OBJECT_PARAMS = (
 
 
 # ---------------------------------------------------------------------------
-# ssMatch -- known solar system object predicted near the triggering source
-# (entire record is stubs; filled from KONA per-visit output at assembly time)
+# ssMatch -- known solar system object predicted near the triggering source,
+# built from providers.SSMatch (KONA per-visit predictions, associated at
+# alert-assembly time)
 # ---------------------------------------------------------------------------
+
+_SS_SRC = "computed at assembly from KONA predictions (modules/solarsystem/rapid_kona.py)"
 
 SS_MATCH_PARAMS = (
     Param("designation",   "string",           "MPC designation of the solar system object",
-                        STUB, _SS),
+                        IMPLEMENTED, _SS_SRC),
     Param("ra",            "double",           "Predicted right ascension of the object at midpointMjd; ICRS [deg]",
-                        STUB, _SS),
+                        IMPLEMENTED, _SS_SRC),
     Param("dec",           "double",           "Predicted declination of the object at midpointMjd; ICRS [deg]",
-                        STUB, _SS),
-    Param("sep",           "float",            "Angular separation from the diaObject position [arcsec]",
-                        STUB, _SS),
-    Param("pa",            "float",            "Position angle from the diaObject to the object, East of North [deg]",
-                        STUB, _SS),
-    Param("predVMag",      ["null", "float"],  "Predicted V-band magnitude from MPC H/G photometric parameters [mag]",
-                        STUB, _SS),
+                        IMPLEMENTED, _SS_SRC),
+    Param("sep",           "float",            "Angular separation from the triggering source position [arcsec]",
+                        IMPLEMENTED, _SS_SRC),
+    Param("pa",            "float",            "Position angle from the triggering source to the object, East of North [deg]",
+                        IMPLEMENTED, _SS_SRC),
+    Param("predVMag",      ["null", "float"],  "Predicted V-band magnitude from MPC H/G photometric parameters; "
+                                               "null when the object has no catalogued H [mag]",
+                        IMPLEMENTED, _SS_SRC, attr="predvmag"),
+)
+
+
+# ---------------------------------------------------------------------------
+# refMatch -- reference-image catalog source near the triggering source,
+# built from providers.RefMatch (per-field mosaic SExtractor catalog, matched
+# at alert-assembly time; see the cross-match section of providers.py).
+#
+# Match-record envelope convention (enforced by produce._validate_registry):
+# every *Match record opens with a string identifier followed by
+# ra, dec, sep, pa; survey/catalog-specific fields come after, keeping their
+# native column semantics. Future external catalogs (Gaia, NED, ...) each
+# get their own record and alert array following the same convention.
+# ---------------------------------------------------------------------------
+
+_REF_SRC = ("computed at assembly from the reference-image mosaic SExtractor "
+            "catalog (refimcatalogs cattype=1, located via diffimages.rfid)")
+
+REF_MATCH_PARAMS = (
+    Param("sourceId",      "string",           "SExtractor NUMBER of the reference source, unique within "
+                                               "this field's mosaic catalog",
+                        IMPLEMENTED, _REF_SRC, attr="source_id"),
+    Param("ra",            "double",           "Right ascension of the reference source; ICRS [deg]",
+                        IMPLEMENTED, _REF_SRC),
+    Param("dec",           "double",           "Declination of the reference source; ICRS [deg]",
+                        IMPLEMENTED, _REF_SRC),
+    Param("sep",           "float",            "Angular separation from the triggering source position [arcsec]",
+                        IMPLEMENTED, _REF_SRC),
+    Param("pa",            "float",            "Position angle from the triggering source to the reference "
+                                               "source, East of North [deg]",
+                        IMPLEMENTED, _REF_SRC),
+    Param("classStar",     "float",            "SExtractor CLASS_STAR star/galaxy score (1 = point-like); the "
+                                               "star/galaxy array split uses providers.REFCAT_STAR_MIN_CLASS, "
+                                               "recorded here so consumers can re-cut",
+                        IMPLEMENTED, _REF_SRC, attr="class_star"),
+    Param("flags",         "int",              "SExtractor extraction FLAGS bitmask of the reference source "
+                                               "(2 = blended, 4 = saturated, ...)",
+                        IMPLEMENTED, _REF_SRC),
+    Param("magAuto",       ["null", "float"],  "Kron-like automatic-aperture magnitude MAG_AUTO (instrumental; "
+                                               "nJy calibration pending); null when the measurement failed [mag]",
+                        IMPLEMENTED, _REF_SRC, attr="mag_auto"),
+    Param("magErrAuto",    ["null", "float"],  "Uncertainty in magAuto; null with magAuto [mag]",
+                        IMPLEMENTED, _REF_SRC, attr="mag_err_auto"),
+    Param("elong",         ["null", "float"],  "SExtractor ELONGATION (major/minor axis ratio)",
+                        IMPLEMENTED, _REF_SRC),
+    Param("fwhm",          ["null", "float"],  "FWHM assuming a Gaussian core (FWHM_IMAGE) [arcsec]",
+                        IMPLEMENTED, _REF_SRC),
+    Param("halfLightRadius", ["null", "float"], "Radius enclosing half of the source flux (FLUX_RADIUS at "
+                                               "fraction 0.5); with magAuto, supports size-normalized host "
+                                               "separations [arcsec]",
+                        IMPLEMENTED, _REF_SRC, attr="half_light_radius"),
+    Param("kronRadius",    ["null", "float"],  "Kron aperture scale factor (KRON_RADIUS, dimensionless; "
+                                               "multiplies the profile's A_IMAGE per SExtractor convention)",
+                        IMPLEMENTED, _REF_SRC, attr="kron_radius"),
 )
 
 
@@ -549,11 +591,26 @@ ALERT_PARAMS = (
                                  "Forced photometry history at the object position",
                         STUB, _FP),
 
-    # --- Solar system (stub) ---------------------------------------------------
+    # --- Solar system -----------------------------------------------------------
     Param("ssMatches",          ["null", {"type": "array", "items": "@ssMatch"}],
-                                "Nearest known solar system objects within the cutout at the triggering "
-                                "epoch; null if association was not run, empty if none found (stub)",
-                        STUB, _SS),
+                                "Nearest known solar system objects (max 3) within the cutout radius "
+                                "(SS_MATCH_RADIUS_ARCSEC, ~7 arcsec) of the triggering source; "
+                                "null if association was not run, empty if none found",
+                        IMPLEMENTED, "produce.assemble_alert() via provider.get_ss_matches()"),
+
+    # --- Reference-catalog cross-match -------------------------------------------
+    Param("refStarMatches",     ["null", {"type": "array", "items": "@refMatch"}],
+                                "Nearest star-classified reference-catalog sources (max 3, nearest "
+                                "first) within REF_MATCH_RADIUS_ARCSEC of the triggering source; "
+                                "null if matching was not run (catalog unavailable), empty if none "
+                                "within the radius; a full array (3) means the neighborhood may "
+                                "extend beyond what is reported (crowding)",
+                        IMPLEMENTED, "produce.assemble_alert() via provider.get_ref_matches()"),
+    Param("refGalaxyMatches",   ["null", {"type": "array", "items": "@refMatch"}],
+                                "Nearest galaxy-classified reference-catalog sources (max 3, nearest "
+                                "first) within REF_MATCH_RADIUS_ARCSEC of the triggering source; "
+                                "null/empty semantics as refStarMatches",
+                        IMPLEMENTED, "produce.assemble_alert() via provider.get_ref_matches()"),
 
     # --- Image cutouts ----------------------------------------------------------
     Param("cutoutDifference",   ["null", "bytes"],   "FITS cutout of difference image",
@@ -580,6 +637,7 @@ RECORDS = (
     Record("diaForcedSource", "Forced photometry measurement at a diaObject position",   DIA_FORCED_SOURCE_PARAMS),
     Record("diaObject",       "Astronomical object derived from DIASources",             DIA_OBJECT_PARAMS),
     Record("ssMatch",         "Known solar system object predicted near the triggering source (stub)", SS_MATCH_PARAMS),
+    Record("refMatch",        "Reference-image catalog source near the triggering source",             REF_MATCH_PARAMS),
     Record("alert",           "Top-level alert record",                                  ALERT_PARAMS),
 )
 

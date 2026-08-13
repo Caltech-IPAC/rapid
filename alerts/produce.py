@@ -42,9 +42,10 @@ import fastavro.write
 from fastavro.types import Schema
 
 from .param_registry import (ALERT_PARAMS, DIA_FORCED_SOURCE_PARAMS, DIA_OBJECT_PARAMS,
-                     DIA_SOURCE_PARAMS, RECORDS, VERSION, Param, Status, is_nullable)
+                     DIA_SOURCE_PARAMS, REF_MATCH_PARAMS, SS_MATCH_PARAMS,
+                     RECORDS, VERSION, Param, Status, is_nullable)
 from .providers import (PRV_WINDOW_DAYS, AlertDataProvider, Source,
-                        ForcedPhot, ObjectRecord)
+                        ForcedPhot, ObjectRecord, RefMatch, SSMatch)
 
 logger = logging.getLogger(__name__)
 
@@ -57,7 +58,15 @@ BUILDER_DATA_CLASSES = {
     "diaSource": Source,
     "diaForcedSource": ForcedPhot,
     "diaObject": ObjectRecord,
+    "ssMatch": SSMatch,
+    "refMatch": RefMatch,
 }
+
+# Every match record ("ssMatch", "refMatch", future "gaiaMatch", ...) must
+# open with this envelope after its leading string identifier, so consumers
+# can handle match geometry generically; survey-specific fields follow with
+# their native semantics. Enforced by _validate_registry().
+MATCH_ENVELOPE = ("ra", "dec", "sep", "pa")
 
 
 # ---------------------------------------------------------------------------
@@ -112,6 +121,16 @@ def _validate_registry() -> None:
                 problems.append(
                     f"{record.name}.{p.name} reads {data_cls.__name__}."
                     f"{p.attr or p.name}, which does not exist")
+        # every match record shares the envelope convention (see
+        # MATCH_ENVELOPE), so consumers can treat match geometry uniformly
+        if record.name.endswith("Match"):
+            names = tuple(p.name for p in record.params)
+            if (len(names) < 5 or names[1:5] != MATCH_ENVELOPE
+                    or record.params[0].avro != "string"):
+                problems.append(
+                    f"{record.name} must open with the match-record "
+                    f"envelope: a string identifier, then "
+                    f"{'/'.join(MATCH_ENVELOPE)} (got {names[:5]})")
     if problems:
         raise ValueError("param_registry.py is inconsistent:\n  "
                          + "\n  ".join(problems))
@@ -221,6 +240,38 @@ def build_dia_forced_source(forced_phot: ForcedPhot) -> dict[str, Any]:
     return build_record(DIA_FORCED_SOURCE_PARAMS, forced_phot)
 
 
+def build_ss_match(match: SSMatch) -> dict[str, Any]:
+    """Build an ssMatch record dict from a providers.SSMatch.
+
+    Parameters
+    ----------
+    match : providers.SSMatch
+        One known solar system object predicted near the detection.
+
+    Returns
+    -------
+    dict
+        ssMatch param name -> value, per the registry.
+    """
+    return build_record(SS_MATCH_PARAMS, match)
+
+
+def build_ref_match(match: RefMatch) -> dict[str, Any]:
+    """Build a refMatch record dict from a providers.RefMatch.
+
+    Parameters
+    ----------
+    match : providers.RefMatch
+        One reference-catalog source matched near the detection.
+
+    Returns
+    -------
+    dict
+        refMatch param name -> value, per the registry.
+    """
+    return build_record(REF_MATCH_PARAMS, match)
+
+
 # ---------------------------------------------------------------------------
 # Alert assembly
 # ---------------------------------------------------------------------------
@@ -290,6 +341,21 @@ def assemble_alert_for_source(provider: AlertDataProvider,
             prv_dia_forced_sources = [build_dia_forced_source(fp)
                                       for fp in forced]
 
+    # Solar-system association; also sets source.is_ss_candidate, so it must
+    # run before build_dia_source(source) below. None = association could
+    # not run (no KONA data); [] = ran and found nothing nearby.
+    ss_matches = provider.get_ss_matches(source)
+
+    # Reference-catalog cross-match: None = matching could not run
+    # (disabled, or the chip's catalog is unavailable); otherwise the
+    # nearest star- and galaxy-classified reference sources.
+    ref_matches = provider.get_ref_matches(source)
+    ref_star_matches = ref_galaxy_matches = None
+    if ref_matches is not None:
+        stars, galaxies = ref_matches
+        ref_star_matches = [build_ref_match(m) for m in stars]
+        ref_galaxy_matches = [build_ref_match(m) for m in galaxies]
+
     cutouts = provider.get_cutouts(source)
 
     alert = {
@@ -300,7 +366,10 @@ def assemble_alert_for_source(provider: AlertDataProvider,
         "prvDiaSources": prv_dia_sources,
         "diaObject": dia_object,
         "prvDiaForcedSources": prv_dia_forced_sources,
-        "ssMatches": None,
+        "ssMatches": (None if ss_matches is None
+                      else [build_ss_match(m) for m in ss_matches]),
+        "refStarMatches": ref_star_matches,
+        "refGalaxyMatches": ref_galaxy_matches,
         "cutoutDifference": cutouts.difference,
         "cutoutScience": cutouts.science,
         "cutoutReference": cutouts.template,

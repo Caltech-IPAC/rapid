@@ -10,19 +10,28 @@ import kete
 import click
 import sys
 import logging
+import math
 import os
 import asdf
 
-#put at the very top, and point to where ever we want the orbit files cached
-#there is also an option to make this an environment variable instead
-kete.cache.Cached_Directory("./")
+#IAU HG model default slope parameter, used when the orbit table has no G
+DEFAULT_G_PARAM = 0.15
+
+#kete 3.x removed kete.cache.Cached_Directory; the download cache (SPICE
+#kernels + orbit catalog) location is now passed to kona() as cache_dir
 
 
-def kona(input_files,mpc_local=None,median_jd=None,mpc_save=None,logger=None):
+def kona(input_files,mpc_local=None,median_jd=None,mpc_save=None,logger=None,cache_dir=None):
     #input_files should be a list, or a comma-seperated string of full-paths
-    
+
     if logger==None:
         logger=init_log()
+
+    if cache_dir is not None:
+        #point kete's download cache at cache_dir for this process; kete 3.x
+        #reads KETE_CACHE_DIR on each cache access (default ~/.kete)
+        os.makedirs(cache_dir,exist_ok=True)
+        os.environ["KETE_CACHE_DIR"]=cache_dir
 
     if mpc_local is not None and os.path.exists(mpc_local):
         #in the case that a file with the MPC orbits moved to a central date is provided, read that
@@ -33,7 +42,15 @@ def kona(input_files,mpc_local=None,median_jd=None,mpc_save=None,logger=None):
         logger.info("Fetching orbits from MPC")
         orbits = kete.horizons.fetch_known_orbit_data()
         #comet_orbits = kete.mpc.fetch_known_comet_orbit_data()
-        mpc_states = kete.mpc.table_to_states(orbits)# + kete.mpc.table_to_states(comet_orbits) 
+        #table_to_states moved from kete.mpc to kete.conversion in kete 3.x
+        mpc_states = kete.conversion.table_to_states(orbits)# + kete.conversion.table_to_states(comet_orbits) 
+
+    #H/G photometric parameters by designation, for predicted V magnitudes.
+    #The orbit table is disk-cached by kete, so this is cheap after the first
+    #download of the day; needed here even when states came from mpc_local,
+    #which stores orbital states only. H or G may be NaN.
+    orbits = kete.horizons.fetch_known_orbit_data()
+    mag_params = {str(d): (h, g) for d, h, g in zip(orbits.desig, orbits.H, orbits.G)}
 
     if median_jd is not None:
         #move the orbits to a local date. If you don't do this, individual runs will potentially take a long time
@@ -98,23 +115,46 @@ def kona(input_files,mpc_local=None,median_jd=None,mpc_save=None,logger=None):
     visible_objs = kete.fov_state_check(curr_states,fovs)
 
 
+    results={}
     for visible_obj, in_tree, input_file in zip(visible_objs,trees,input_files):
         logger.info(f"Found {len(visible_obj.states):d} visible objects near the FoV")
     
         obj_in_fov={}
         if len(visible_obj.states)>0:
-            logger.info(f"{'Name':<15} {'RA':<10} {'DEC':<10}")
-            logger.info("-"*45)
+            logger.info(f"{'Name':<15} {'RA':<10} {'DEC':<10} {'Vmag':<5}")
+            logger.info("-"*52)
             for state in visible_obj.states:
                 vec = (state.pos - visible_obj.fov.observer.pos).as_equatorial
-                logger.info(f"{state.desig:15s} {vec.ra:10.6f} {vec.dec:+9.6f}")
-                obj_in_fov[state.desig]=(vec.ra,vec.dec)
+                #predicted V-band magnitude from the IAU HG model; None when
+                #the object has no catalogued H (or the model returns nan,
+                #which it does beyond 160 deg phase angle)
+                h_mag, g_param = mag_params.get(state.desig, (float('nan'), float('nan')))
+                if math.isnan(g_param):
+                    g_param = DEFAULT_G_PARAM
+                vmag = None
+                if not math.isnan(h_mag):
+                    vmag = kete.flux.hg_apparent_mag(sun2obj=state.pos,
+                                                     sun2obs=visible_obj.fov.observer.pos,
+                                                     h_mag=h_mag, g_param=g_param)
+                    if not math.isfinite(vmag):
+                        vmag = None
+                logger.info(f"{state.desig:15s} {vec.ra:10.6f} {vec.dec:+9.6f} "
+                            f"{'-----' if vmag is None else format(vmag, '5.2f')}")
+                obj_in_fov[state.desig]=(vec.ra,vec.dec,vmag)
 
         #^*^
-        #Now add the list of found objects with RA/Dec to the ASDF metadata
+        #Now add the list of found objects with RA/Dec/Vmag to the ASDF metadata
         in_tree["roman"]["meta"]["rapid"]["sso_kona"]=obj_in_fov
         in_tree.write_to(input_file)
-        
+        results[input_file]=obj_in_fov
+
+    return results
+
+
+def read_sso_kona(input_file):
+    #Read back the {desig: (ra, dec, vmag)} results written by kona()
+    with asdf.open(input_file) as in_tree:
+        return dict(in_tree["roman"]["meta"]["rapid"].get("sso_kona") or {})
 
 
 def init_log(logfile=None):
@@ -143,14 +183,14 @@ class helpExit(click.Command):
 @click.option("--mpc_local",help="[full path to parquet file holding the MPC orbit file propagated to a median JD]",required=False,default=None)
 @click.option("--median_jd",help="[median Julian Date to advance the MPC orbit file to]",required=False,default=None,type=float)
 @click.option("--mpc_save",help="[full path to parquet output file to store the MPC orbit states after moving to median_jd]",required=False,default=None)
-def bespoke_kona(input_file,mpc_local,median_jd,mpc_save):
+@click.option("--cache_dir",help="[directory for kete's download cache (SPICE kernels, orbit catalog); default ~/.kete]",required=False,default=None)
+def bespoke_kona(input_file,mpc_local,median_jd,mpc_save,cache_dir):
     logger=init_log()
     logger.info("command echo:")
     logger.info(sys.argv)
-    call_back=kona(input_file=input_file,mpc_local=mpc_local,median_jd=median_jd,mpc_save=mpc_save,logger=logger)
-    if call_back>0:
-        print("***Error encountered in rapid_kona: {:d}".format(call_back))
-        sys.exit(call_back)
+    results=kona(input_files=input_file,mpc_local=mpc_local,median_jd=median_jd,mpc_save=mpc_save,logger=logger,cache_dir=cache_dir)
+    for fname,found in results.items():
+        logger.info(f"{fname}: {len(found)} known objects recorded")
 
 
 if __name__ == "__main__":
