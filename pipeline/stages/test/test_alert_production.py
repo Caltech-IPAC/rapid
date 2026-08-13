@@ -66,6 +66,7 @@ def _install_third_party_stubs() -> None:
 
 _install_third_party_stubs()
 
+from database.modules.utils.checked import RapidDBCallFailed  # noqa: E402
 from database.modules.utils.rapid_db import RAPIDDB        # noqa: E402
 from pipeline.runtime.errors import InputError             # noqa: E402
 from pipeline.stages import alert_production                # noqa: E402
@@ -1204,6 +1205,133 @@ class OutboxCollisionTests(unittest.TestCase):
         self.assertEqual(len(conn.alert_outbox), 1)
 
 
+class SystemicFailureTests(unittest.TestCase):
+    """Finding 10: a systemic failure during assembly fails the chip — it
+    must never be absorbed as a per-candidate drop, and a nonempty
+    selection that assembles zero packets by ordinary candidate-shaped
+    exceptions must not confirm a zero-packet emission as a success.
+
+    Named so `-k systemic` selects this class.
+    """
+
+    def test_a_forbidden_identity_input_fails_the_chip_not_the_candidate(self):
+        # ForbiddenIdentityInput means the code minting identities put a
+        # forbidden key in the payload — a design defect, not a fact about
+        # one candidate. It must propagate and fail the attempt rather than
+        # being recorded as a drop.
+        from alerts.identity import ForbiddenIdentityInput
+
+        conn = FakeConn()
+        provider = Provider(sources=[Source(1, 9.0), Source(2, 8.0)])
+        producer = Producer()
+        context = Context(_unit(), PARAMETERS, conn=conn)
+
+        def bad_assemble(prov, source):
+            raise ForbiddenIdentityInput("path")
+
+        with self.assertRaises(ForbiddenIdentityInput):
+            _run_produce_alerts(context, provider, producer,
+                                assemble=bad_assemble)
+
+        # (b)-style: the claim is left intact for later recovery, and
+        # nothing was outboxed — the same shape as a chip-level failure.
+        self.assertEqual(conn.rows[(20, 7, "rel-1")]["state"], "claimed")
+        self.assertEqual(conn.alert_outbox, {})
+
+    def test_a_type_error_during_assembly_fails_the_chip(self):
+        # finding 10's own precedent: a TypeError from a programming defect
+        # (e.g. spreading the wrong dict into alert_identity's kwargs) must
+        # not be swallowed as "this candidate's data was bad".
+        conn = FakeConn()
+        provider = Provider(sources=[Source(1, 9.0)])
+        producer = Producer()
+        context = Context(_unit(), PARAMETERS, conn=conn)
+
+        def broken_assemble(prov, source):
+            raise TypeError("alert_identity() got multiple values for "
+                            "argument 'legacy_pid'")
+
+        with self.assertRaises(TypeError):
+            _run_produce_alerts(context, provider, producer,
+                                assemble=broken_assemble)
+
+        self.assertEqual(conn.rows[(20, 7, "rel-1")]["state"], "claimed")
+        self.assertEqual(conn.alert_outbox, {})
+
+    def test_a_db_call_failure_during_assembly_fails_the_chip(self):
+        # RapidDBCallFailed / RepositoryQueryFailed mean the connection or a
+        # query is broken — a chip-wide fact, not a per-candidate one.
+        conn = FakeConn()
+        provider = Provider(sources=[Source(1, 9.0), Source(2, 8.0)])
+        producer = Producer()
+        context = Context(_unit(), PARAMETERS, conn=conn)
+
+        def broken_assemble(prov, source):
+            raise RapidDBCallFailed("get_object_for_source", 67)
+
+        with self.assertRaises(RapidDBCallFailed):
+            _run_produce_alerts(context, provider, producer,
+                                assemble=broken_assemble)
+
+        self.assertEqual(conn.rows[(20, 7, "rel-1")]["state"], "claimed")
+        self.assertEqual(conn.alert_outbox, {})
+
+    def test_every_candidate_failing_identically_fails_the_chip(self):
+        # The exact shape finding 10 describes: every selected candidate
+        # fails via the ordinary per-candidate catch (a ValueError, still
+        # candidate-shaped by type), but ALL of them do, uniformly — which
+        # is itself evidence of a systemic problem the old code confirmed
+        # as a clean, zero-packet success.
+        conn = FakeConn()
+        provider = Provider(sources=[Source(1, 9.0), Source(2, 8.0),
+                                     Source(3, 7.0)])
+        producer = Producer()
+        context = Context(_unit(), PARAMETERS, conn=conn)
+
+        self.assertRaises(
+            RuntimeError, _run_produce_alerts, context, provider, producer,
+            fail_sids={1, 2, 3})
+
+        # The claim is left intact, exactly like a chip-level failure —
+        # NOT confirmed with alerts_outboxed=0.
+        self.assertEqual(conn.rows[(20, 7, "rel-1")]["state"], "claimed")
+        self.assertEqual(conn.alert_outbox, {})
+
+    def test_a_partial_candidate_failure_still_confirms(self):
+        # The uniform-failure guard must not fire when only SOME candidates
+        # fail — that is ordinary gate-3 drop-and-continue, unchanged.
+        conn = FakeConn()
+        provider = Provider(sources=[Source(1, 9.0), Source(2, 8.0),
+                                     Source(3, 7.0)])
+        producer = Producer()
+        context = Context(_unit(), PARAMETERS, conn=conn)
+
+        _run_produce_alerts(context, provider, producer, fail_sids={2})
+
+        self.assertEqual(len(conn.alert_outbox), 2)
+        self.assertTrue(context.provenance["emission_confirmed"])
+
+    def test_an_all_oversize_chip_still_confirms(self):
+        # The uniform-failure guard is scoped to the GENERIC per-candidate
+        # catch only — an all-oversize chip stays the ratified "confirms
+        # with zero outboxed" outcome (OversizePacketTests), never raised.
+        conn = FakeConn()
+        provider = Provider(sources=[Source(1, 9.0, id=1)])
+        producer = Producer()
+        context = Context(_unit(), PARAMETERS, conn=conn)
+        real_max = alert_production.MAX_PACKET_BYTES
+        alert_production.MAX_PACKET_BYTES = 100
+        try:
+            _run_produce_alerts(
+                context, provider, producer,
+                serialize=lambda alert, schema=None: b"z" * 200)
+        finally:
+            alert_production.MAX_PACKET_BYTES = real_max
+
+        self.assertTrue(context.provenance["emission_confirmed"])
+        self.assertEqual(context.provenance["alerts_outboxed"], 0)
+
+
 class ConfirmationObservabilityTests(unittest.TestCase):
     """Finding 11: a swallowed DB failure during CONFIRM is recorded and
     logged distinctly from an ordinary takeover — observability only, the
@@ -1273,6 +1401,66 @@ class ConfirmationObservabilityTests(unittest.TestCase):
 
         self.assertFalse(context.provenance["confirmation_db_failure"])
         self.assertTrue(context.provenance["emission_confirmed"])
+
+
+class AggregatePacketBudgetTests(unittest.TestCase):
+    """Finding 16: a total-byte budget on accumulated packets, independent
+    of `MAX_PACKET_BYTES`'s per-packet cap.
+
+    `alert_production.MAX_TOTAL_PACKET_BYTES` is MONKEYPATCHED down, the
+    same idiom `OversizePacketTests` uses for `MAX_PACKET_BYTES` — cheap
+    and exercises the real comparison without real gigabytes on either
+    side.
+    """
+
+    def setUp(self):
+        self._real_max_total = alert_production.MAX_TOTAL_PACKET_BYTES
+
+    def tearDown(self):
+        alert_production.MAX_TOTAL_PACKET_BYTES = self._real_max_total
+
+    def test_exceeding_the_aggregate_budget_fails_the_chip(self):
+        # Three candidates, each individually well under MAX_PACKET_BYTES,
+        # but their SUM crosses a small patched aggregate budget.
+        alert_production.MAX_TOTAL_PACKET_BYTES = 25
+
+        conn = FakeConn()
+        provider = Provider(sources=[Source(1, 9.0, id=1), Source(2, 8.0, id=2),
+                                     Source(3, 7.0, id=3)])
+        producer = Producer()
+        context = Context(_unit(), PARAMETERS, conn=conn)
+
+        with self.assertRaises(RuntimeError) as caught:
+            _run_produce_alerts(
+                context, provider, producer,
+                serialize=lambda alert, schema=None: b"x" * 10)
+
+        self.assertIn("aggregate budget", str(caught.exception))
+        # Chip-level failure: claim left intact, nothing outboxed.
+        self.assertEqual(conn.rows[(20, 7, "rel-1")]["state"], "claimed")
+        self.assertEqual(conn.alert_outbox, {})
+
+    def test_comfortably_under_the_aggregate_budget_confirms_normally(self):
+        # The default budget is untouched here (not patched down), so
+        # ordinary small test payloads stay comfortably under it.
+        conn = FakeConn()
+        provider = Provider(sources=[Source(1, 9.0), Source(2, 8.0)])
+        producer = Producer()
+        context = Context(_unit(), PARAMETERS, conn=conn)
+
+        _run_produce_alerts(context, provider, producer)
+
+        self.assertTrue(context.provenance["emission_confirmed"])
+        self.assertEqual(context.provenance["alerts_outboxed"], 2)
+
+    def test_the_default_budget_is_a_fraction_of_the_documented_worker_memory(self):
+        # docs/source/ops/bulk_run.rst documents the shared science job
+        # definition's machines as 16 GB; this stage's own budget must stay
+        # a bounded fraction of that, not something larger than the worker
+        # itself could ever satisfy.
+        sixteen_gb = 16 * 1024 * 1024 * 1024
+        self.assertGreater(alert_production.MAX_TOTAL_PACKET_BYTES, 0)
+        self.assertLess(alert_production.MAX_TOTAL_PACKET_BYTES, sixteen_gb)
 
 
 class WatermarkSeedTests(unittest.TestCase):

@@ -124,15 +124,34 @@ import logging
 # copy of its length here would silently disagree if the format ever changed.
 # Module-scope because it is a constant, not a collaborator — every other
 # `alerts` import in this module is deliberately lazy (see `produce_alerts`).
+from alerts.identity import ForbiddenIdentityInput
 from alerts.kafka_producer import GLUE_HEADER_LEN
 from database.modules.utils.checked import CheckedHandle, RapidDBCallFailed
 from database.modules.utils.rapid_db import RAPIDDB
-from database.modules.utils.rapid_db_connect import ConnectionExecutor, transaction
+from database.modules.utils.rapid_db_connect import (ConnectionExecutor,
+                                                      DBError, transaction)
 from pipeline.repositories.alert_outbox import AlertOutboxRepository
 from pipeline.repositories.errors import RepositoryQueryFailed
 from pipeline.runtime.errors import InputError
 
 logger = logging.getLogger(__name__)
+
+#: Exceptions the per-candidate catch below must NEVER absorb as a per-
+#: candidate drop, because each is a SYSTEMIC signal rather than a fact about
+#: one candidate's data: a database fault (`DBError`, `RapidDBCallFailed`,
+#: `RepositoryQueryFailed`) means the connection or a query is broken for
+#: every candidate on the chip, not just this one; `ForbiddenIdentityInput`
+#: means the code minting identities put a forbidden key in the payload — a
+#: design defect that reproduces identically for every candidate; and a bare
+#: `TypeError`/`AttributeError`/`NameError` is a programming error (finding
+#: 10's own precedent: spreading the wrong dict into `alert_identity`'s
+#: kwargs raised `TypeError` on every candidate, and the old blanket catch
+#: swallowed it, confirming the emission with zero packets outboxed). All of
+#: these must fail the chip loudly rather than be recorded as gate 3's
+#: per-candidate drop-and-continue.
+SYSTEMIC_EXCEPTIONS = (DBError, RapidDBCallFailed, RepositoryQueryFailed,
+                       ForbiddenIdentityInput, TypeError, AttributeError,
+                       NameError)
 
 #: The claim CAS's own staleness threshold, restated here ONLY as
 #: documentation (the actual SQL literal lives in
@@ -181,6 +200,39 @@ MAX_PACKET_BYTES = 12 * 1024 * 1024
 #: because it is a vocabulary term the effect counts group by, and a reason
 #: spelled differently in two places would split one category into two.
 DROP_REASON_OVERSIZE = "OversizePacket"
+
+#: The largest TOTAL size the in-memory `packets` accumulator may reach
+#: across one chip's assembly loop (finding 16), independent of
+#: `MAX_PACKET_BYTES`'s per-packet cap.
+#:
+#: `MAX_PACKET_BYTES` bounds one packet; nothing previously bounded their
+#: SUM. Up to `PLACEHOLDER_TOP_N_BY_SNR` (500) packets accumulate in memory
+#: between STEP 2 and the STEP 3 confirmation transaction (by design — see
+#: the module docstring's "nothing in this loop writes"), so 500 candidates
+#: each near the 12 MiB per-packet cap is ~6 GiB permitted before this
+#: guard, on a worker with no budget of its own to appeal to.
+#:
+#: `JOB_TYPE_ALERT_PRODUCTION` is routed onto `batch/job-definition-science`
+#: (`submission/routes.py`), the same job definition `JOB_TYPE_SCIENCE`
+#: uses, and `docs/source/ops/bulk_run.rst` documents that job definition's
+#: machines as 4 vCPUs / 16 GB memory / 20 GB disk. This bound is set to a
+#: fraction of that 16 GB — not a number invented from nothing, but not a
+#: number to trust exactly either: it is the ONLY worker-sizing figure this
+#: repo documents for the job definition this job type actually runs under,
+#: never one written specifically for alert-production's own footprint, so
+#: the fraction below is deliberately conservative rather than tuned tight
+#: against it. 1/8 of 16 GB leaves the rest for the provider's own
+#: connections, fastavro/schema machinery, cutout buffers read and released
+#: per candidate, and ordinary Python/interpreter overhead running in the
+#: same process — none of which this guard can see or bound.
+#:
+#: Ordinary traffic is nowhere near this: 500 packets at the ~200 KB typical
+#: size the `MAX_PACKET_BYTES` comment cites is ~100 MB, roughly 1/20th of
+#: this budget. Like `MAX_PACKET_BYTES`, this is a guard against a
+#: pathological run (many packets each near the per-packet cap), not a
+#: tuning knob for normal traffic.
+MAX_TOTAL_PACKET_BYTES = 2 * 1024 * 1024 * 1024  # 2 GiB (1/8 of the 16 GB
+                                                  # science job definition)
 
 #: The PLACEHOLDER selection, labelled as one.
 #:
@@ -364,6 +416,21 @@ def produce_alerts(context) -> None:
     dropped_by_reason: dict = {}
     drop_dispositions: list = []
     packets: list = []
+    #: Count of candidates dropped by the GENERIC per-candidate catch below
+    #: (assembly/serialization/identity raised something candidate-shaped),
+    #: as distinct from the oversize-packet drop (its own explicit, sized
+    #: check, never a symptom of a broken candidate). Only THIS count feeds
+    #: the uniform-failure guard after the loop — an all-oversize chip is a
+    #: legitimate, auditable "nothing to write" outcome (criterion 8) and
+    #: must keep confirming, exactly as before; an all-*-Exception chip is
+    #: the shape finding 10 describes and must not.
+    candidate_exception_drops = 0
+    #: Running total of `packets`' payload bytes, checked against
+    #: `MAX_TOTAL_PACKET_BYTES` as each packet is appended (finding 16).
+    #: Tracked incrementally rather than summed at the end so the guard can
+    #: stop accumulating AT the crossing, not after 500 candidates' worth of
+    #: payloads are already resident.
+    total_packet_bytes = 0
 
     try:
         sources = list(provider.iter_sources(pid))
@@ -399,16 +466,26 @@ def produce_alerts(context) -> None:
             # effect record; it is not one of `alert_identity`'s parameters,
             # and the identity's own basis discriminator is derived inside the
             # digest from which image kwarg was given. Spreading the whole dict
-            # raised TypeError on every candidate — swallowed by the
-            # drop-and-continue catch below, so every chip outboxed nothing
+            # raised TypeError on every candidate — a SYSTEMIC failure the old
+            # blanket catch below swallowed, so every chip outboxed nothing
             # while reporting a clean run. Caught by the stage tests before
             # this branch shipped; the two are kept apart here so the mistake
-            # cannot recur silently.
+            # cannot recur silently, and `SYSTEMIC_EXCEPTIONS` (finding 10)
+            # is what now keeps a TypeError of this shape from being absorbed
+            # a second time by a different bug.
             packet_id, _identity_payload = alert_identity(
                 catalog_id=getattr(source, "id", None),
                 isdiffpos=getattr(source, "isdiffpos", None),
                 release_identity=release_identity,
                 **image_kwargs)
+        except SYSTEMIC_EXCEPTIONS:
+            # NOT A CANDIDATE FAILURE — a database fault, a broken repository
+            # call, a design defect in identity minting, or a programming
+            # error. Every one of these means the chip's OTHER candidates are
+            # in exactly the same jeopardy, so re-raising and failing the
+            # attempt is correct; absorbing it here is what let finding 10's
+            # defect confirm a zero-packet emission as a clean success.
+            raise
         except Exception as exc:  # noqa: BLE001 - a candidate, not the chip
             # PER-CANDIDATE DROP (gate 3). The reason is the exception's type
             # rather than its message: the counts are grouped by reason and a
@@ -420,6 +497,7 @@ def produce_alerts(context) -> None:
                                       "detail": str(exc)[:200]})
             context.logger.warning("candidate sid=%s dropped (%s): %s",
                                    sid, reason, exc)
+            candidate_exception_drops += 1
             continue
 
         # THE SIZE CHECK, BEFORE THE CONFIRM TRANSACTION (brief E2). Measured
@@ -444,8 +522,55 @@ def produce_alerts(context) -> None:
                 sid, framed_size, MAX_PACKET_BYTES, packet_id)
             continue
 
+        # THE AGGREGATE BUDGET, BEFORE APPENDING (finding 16). The per-packet
+        # check above bounds one packet; nothing previously bounded their
+        # SUM, and up to `PLACEHOLDER_TOP_N_BY_SNR` (500) packets accumulate
+        # in memory between here and the STEP 3 confirmation transaction by
+        # design (see the module docstring). Checked against the SAME framed
+        # size the per-packet cap uses, so the two guards agree on what
+        # "size" means. A CHIP-LEVEL failure, not a per-candidate drop: the
+        # accumulator being over budget is a fact about the SUM, not about
+        # this one candidate that happened to cross it, and gate 3's
+        # drop-and-continue accounting assumes each drop is independent —
+        # which this explicitly is not. The claim is left `claimed`,
+        # untouched, exactly like the other chip-level failures above; a
+        # later attempt (retried with a narrower selection, or once the
+        # pathological chip is understood) can still confirm it.
+        if total_packet_bytes + framed_size > MAX_TOTAL_PACKET_BYTES:
+            raise RuntimeError(
+                f"unit {exposure}/{sca} release {release_identity}: "
+                f"assembling difference image pid {pid}'s candidates would "
+                f"accumulate {total_packet_bytes + framed_size} bytes of "
+                f"in-memory packets ({len(packets) + 1} of {considered} "
+                f"candidates so far), over the "
+                f"{MAX_TOTAL_PACKET_BYTES}-byte aggregate budget; refusing "
+                f"to continue assembling rather than risk exhausting the "
+                f"worker's memory. Claim left 'claimed' for later recovery.")
+        total_packet_bytes += framed_size
+
         packets.append({"alert_id": packet_id, "payload": payload,
                         "checksum": payload_checksum(payload), "sid": sid})
+
+    # THE UNIFORM-FAILURE GUARD (finding 10). A nonempty selection that
+    # assembled zero packets via the GENERIC per-candidate catch — as
+    # opposed to the oversize check, which is its own explicit, legitimate
+    # "nothing to write" outcome (criterion 8, `OversizePacketTests`) — means
+    # every selected candidate hit the same wall. `SYSTEMIC_EXCEPTIONS`
+    # above already re-raises the failures that are ALWAYS a chip-wide
+    # signal; this catches the remaining case where a genuinely
+    # candidate-shaped exception (by type) nonetheless struck every
+    # candidate on the chip, which is itself evidence of a systemic problem
+    # gate 3's per-candidate scope was never meant to hide. Raised BEFORE
+    # STEP 3, so the claim is left `claimed` for a later attempt exactly as
+    # a chip-level failure is, rather than confirming an emission that
+    # published nothing.
+    if (considered > 0 and not packets
+            and candidate_exception_drops == considered):
+        raise RuntimeError(
+            f"every one of the {considered} selected candidate(s) for "
+            f"difference image pid {pid} failed during assembly "
+            f"(dropped_by_reason={dropped_by_reason!r}); refusing to "
+            f"confirm a zero-packet emission as a success")
 
     # STEP 3: CONFIRM + THE alert_published MILESTONE, in ONE transaction
     # (integration ruling 3 / 6: "Emission confirmation and the
