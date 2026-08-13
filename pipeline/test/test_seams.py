@@ -27,6 +27,11 @@ BINDING = ExecutionBinding(
     job_definition_rev=10, image_digest="sha256:abc",
     release_identity="rel-1", manifest_checksum="placeholder")
 
+#: A sentinel distinguishing "the caller passed no `protocol_commit`
+#: override" from "the caller explicitly passed None" (which means "do not
+#: commit", a real, distinct case `submit_units`'s docstring documents).
+_MISSING = object()
+
 
 #: A monotonic call counter shared by the doubles, so a test can assert that
 #: one call happened before another. The submission ORDER is the contract
@@ -105,9 +110,31 @@ class RecordingExecute:
     real SQLSTATE, because production classifies on SQLSTATE rather than
     message text (`pipeline.intent.errors`) — a double that can only raise a
     hand-crafted message cannot exercise the branch that runs.
+
+    Extended again (fix-txn-core, findings 2-4) to stand in for the
+    `submissions` table too. Before this, `_open_submission`'s
+    `protocol.is_available` probe and `protocol.prepare`'s
+    `RETURNING submission_id` fell through to the unconditional `return 1`
+    below — a bare rowcount, not the `[(submission_id,)]` row shape
+    `_single_value` needs — and every test in this class that reached
+    `_open_submission` was silently surviving that via the OLD
+    catch-and-degrade behaviour `_open_submission` used to have: the
+    resulting `TypeError` was swallowed by its blanket `except Exception`
+    and logged as "the submission proceeds without one". Finding 3 narrows
+    that catch to `is_available` alone, so a double this thin now surfaces
+    the `TypeError` as a real test failure instead of a silently-degraded
+    pass — which is precisely the "no more silently swallowing a broken
+    protocol write" behaviour the finding exists to produce, and exactly why
+    this double needed to grow up rather than the fix being narrowed back
+    down to keep it passing.
+
+    `submissions_available` defaults to True (DRAFT 044 IS applied, this
+    class's ordinary posture) with the full six-state machine reachable
+    through `submissions_by_id`; set it False to exercise the pre-protocol
+    degrade path this class predates.
     """
 
-    def __init__(self, clock=None):
+    def __init__(self, clock=None, submissions_available=True):
         self.statements = []
         self.next_id = 100
         self.next_work_unit_id = 1
@@ -129,6 +156,24 @@ class RecordingExecute:
         self.unique_violation_scopes: set[tuple[str, str]] = set()
         #: The work_unit_id a simulated race winner holds.
         self.race_winner_id = 4242
+        #: Whether DRAFT 044 (submissions) is "applied" in this double —
+        #: `protocol.is_available`'s answer. False exercises the
+        #: pre-protocol degrade path `_open_submission` still has.
+        self.submissions_available = submissions_available
+        self.next_submission_id = 900
+        #: submission_id -> {"state": str, "attempt_ids": set[int]}.
+        self.submissions_by_id: dict[int, dict] = {}
+        #: When set, `attach_attempts`'s UPDATE reports one row short of what
+        #: was asked — simulating the "some attempt was not linked" case
+        #: finding 3's hard count-check exists to catch.
+        self.attach_short_by: int = 0
+        #: When set, `mark_bound`'s UPDATE (the WHERE state = 'calling' CAS)
+        #: matches nothing — simulating a lost race or a wrong submission_id.
+        self.fail_mark_bound = False
+        #: How many of the NEXT scheduler-id backfill UPDATEs report a
+        #: zero rowcount (the SQL guard's no-op case), simulating a short
+        #: backfill for finding 4's hard-check tests.
+        self.backfill_short_by_rows: int = 0
 
     def __call__(self, statement, params=None):
         call = self.clock.tick()
@@ -184,9 +229,60 @@ class RecordingExecute:
                     row["state"] = params[0]
                     job_type = jt
             return 1 if job_type is not None else 0
+        # -- submission/protocol.py's statements (findings 2-4) -------------
+        if "information_schema.tables" in statement:
+            return [(1,)] if self.submissions_available else []
+        if "INSERT INTO submissions" in statement:
+            submission_id = self.next_submission_id
+            self.next_submission_id += 1
+            self.submissions_by_id[submission_id] = {
+                "state": "prepared", "attempt_ids": set()}
+            return [(submission_id,)]
+        if "UPDATE attempts SET submission_id" in statement:
+            submission_id, attempt_ids = params
+            row = self.submissions_by_id[submission_id]
+            attached = list(attempt_ids)
+            if self.attach_short_by:
+                attached = attached[:len(attached) - self.attach_short_by]
+            row["attempt_ids"].update(attached)
+            return len(attached)
+        if "SET state = 'calling'" in statement:
+            submission_id = params[-1]
+            row = self.submissions_by_id.get(submission_id)
+            if row is None or row["state"] != "prepared":
+                return 0
+            row["state"] = "calling"
+            return 1
+        if "SET state = 'bound'" in statement:
+            submission_id = params[-1]
+            row = self.submissions_by_id.get(submission_id)
+            if self.fail_mark_bound or row is None or row["state"] != "calling":
+                return 0
+            row["state"] = "bound"
+            row["scheduler_job_id"] = params[0]
+            return 1
+        if "SET state = 'unknown'" in statement:
+            submission_id = params[-1]
+            row = self.submissions_by_id.get(submission_id)
+            if row is None or row["state"] != "calling":
+                return 0
+            row["state"] = "unknown"
+            return 1
         if "RETURNING attempt_id" in statement or "resolve_attempt" in statement:
             self.next_id += 1
             return [(self.next_id,)]
+        if statement.startswith("UPDATE attempts SET scheduler_job_id"):
+            # The array-child backfill (`AttemptWriter.
+            # backfill_scheduler_job_ids`). `backfill_short_by_rows` lets a
+            # test simulate the SQL-guarded no-op case (`WHERE
+            # scheduler_job_id IS NULL` matched nothing) for the first N
+            # calls, without reaching for a mock — finding 4's hard-check on
+            # a short backfill is exercised through the real return-value
+            # contract `_rowcount` reads, exactly as production does.
+            if self.backfill_short_by_rows:
+                self.backfill_short_by_rows -= 1
+                return 0
+            return 1
         return 1
 
 
@@ -198,15 +294,28 @@ class SubmitUnitsTests(unittest.TestCase):
         self.batch = FakeBatchClient(clock=self.clock)
         self.s3 = FakeS3()
         self.execute = RecordingExecute(clock=self.clock)
+        #: Calls to `protocol_commit`, recorded against the shared clock so a
+        #: test can order a commit relative to `submit_job` and to the
+        #: statements in `self.execute.statements` (fix-txn-core, findings
+        #: 2-4: `protocol_commit` is now called TWICE per successful
+        #: submission — once before SubmitJob, once after the post-Batch
+        #: bookkeeping — and both instants are asserted below).
+        self.commits: list[int] = []
 
-    def _submit(self, count=2):
+    def _commit(self):
+        self.commits.append(self.clock.tick())
+
+    def _submit(self, count=2, protocol_commit=_MISSING):
+        if protocol_commit is _MISSING:
+            protocol_commit = self._commit
         return seams.submit_units(
             units(count), job_type="science", queue="rapid-queue-prompt",
             job_definition="rapid-pipeline-science", binding=BINDING,
             manifest_bucket="bucket", manifest_prefix="submissions",
             s3_client=self.s3, batch_client=self.batch,
             execute=self.execute, run_id="run-1",
-            now=utc(2026, 8, 6, 12, 0, 0))
+            now=utc(2026, 8, 6, 12, 0, 0),
+            protocol_commit=protocol_commit)
 
     def test_one_array_job_not_one_submit_per_unit(self):
         submission, _ = self._submit(count=3)
@@ -295,8 +404,17 @@ class SubmitUnitsTests(unittest.TestCase):
         # SubmitJob answers.
         self._submit(count=2)
 
+        # NARROWED to `UPDATE attempts` specifically (fix-txn-core): with the
+        # submission-protocol path now actually reachable in this double
+        # (previously `_open_submission` silently failed and never got this
+        # far — see `RecordingExecute`'s docstring), `protocol.mark_bound`'s
+        # `UPDATE submissions SET state = 'bound', scheduler_job_id = %s...`
+        # ALSO matches the old, looser "scheduler_job_id = %s" + "UPDATE"
+        # filter, which is a different write on a different table and not
+        # what this test means to count.
         backfills = [params for sql, params in self.execute.statements
-                     if "scheduler_job_id = %s" in sql and "UPDATE" in sql]
+                     if sql.startswith("UPDATE attempts")
+                     and "scheduler_job_id = %s" in sql]
         self.assertEqual(2, len(backfills))
         assigned = {p for params in backfills for p in params
                     if isinstance(p, str) and p.startswith("job-")}
@@ -333,6 +451,84 @@ class SubmitUnitsTests(unittest.TestCase):
         self.assertIn(submission.manifest_checksum, logicals[0])
         # ...and NOT the placeholder the caller passed in.
         self.assertNotIn("placeholder", logicals[0])
+
+    # -- fix-txn-core: protocol_commit's two boundaries (findings 2-4) ------
+
+    def test_protocol_commit_is_called_before_and_after_submit_job(self):
+        # `submit_units`'s docstring names two commit instants: between
+        # marking `calling` and calling Batch (rule 7's durability
+        # requirement), and after the post-Batch bookkeeping (finding 4's
+        # atomic mark-bound-and-backfill). Both must fire, in that order,
+        # bracketing the one `submit_job` call — never zero, never one,
+        # never after a third unrelated point.
+        self._submit(count=2)
+
+        self.assertEqual(2, len(self.commits))
+        first_commit, second_commit = self.commits
+        self.assertLess(first_commit, self.batch.submitted_at_call,
+                        "the `calling` marker must commit before SubmitJob")
+        self.assertGreater(second_commit, self.batch.submitted_at_call,
+                           "the bound+backfill commit must follow SubmitJob")
+
+    def test_no_protocol_commit_supplied_means_no_commit_is_ever_called(self):
+        # `protocol_commit=None` is a real, documented case (every caller
+        # predating this brief): the protocol's writes simply ride in the
+        # caller's own transaction, uncommitted by this function. A
+        # submission still succeeds end to end; `self.commits` (fed only by
+        # the `self._commit` this test deliberately did NOT pass in) stays
+        # empty, proving `submit_units` never reaches for a commit callable
+        # of its own when the caller supplied none.
+        submission, attempt_ids = self._submit(count=1, protocol_commit=None)
+
+        self.assertEqual(1, len(attempt_ids))
+        self.assertEqual("job-parent", submission.job_id)
+        self.assertEqual([], self.commits)
+
+    def test_a_short_attach_aborts_before_submit_job_is_ever_called(self):
+        # FINDING 3. `attach_attempts`'s reported count is now hard-checked:
+        # a short attach means the submission row would be PREPARED but not
+        # fully wired to its attempts, invisible to every resolution pass
+        # (`open_submissions` never selects `prepared`), so this must abort
+        # BEFORE `submit_batch` runs rather than silently degrade and
+        # proceed — the narrowed contract `_open_submission`'s docstring
+        # describes.
+        from submission.protocol import SubmissionProtocolError
+
+        self.execute.attach_short_by = 1
+
+        with self.assertRaises(SubmissionProtocolError):
+            self._submit(count=2)
+
+        self.assertIsNone(
+            self.batch.submitted_at_call,
+            "SubmitJob must never be called once the protocol row is known "
+            "to be only partially wired to its attempts")
+
+    def test_a_short_backfill_raises_rather_than_warns(self):
+        # FINDING 4. `_bind_scheduler_jobs` used to `logger.warning` and
+        # return a short count; a caller that never checked the return value
+        # (the live path, before this brief) sailed on with `bound` durably
+        # recorded and one or more children permanently unaddressable by
+        # scheduler id. It must now raise `SubmissionBookkeepingFailed`
+        # instead — loud, typed, and distinct from `SubmissionFailed`
+        # because Batch DID accept the job here; `submit_job` must never be
+        # called again for it. Driven through the double's real return-value
+        # contract (`self.execute.backfill_short_by_rows`), the same
+        # SQL-guard-matched-nothing shape `AttemptWriter.
+        # backfill_scheduler_job_ids` reads in production — not a mock of
+        # the writer itself.
+        self.execute.backfill_short_by_rows = 1
+
+        with self.assertRaises(seams.SubmissionBookkeepingFailed) as caught:
+            self._submit(count=2)
+
+        self.assertEqual("run-1", caught.exception.run_id)
+        self.assertEqual("job-parent", caught.exception.scheduler_job_id)
+        # The second (post-Batch) commit must NOT have fired: a caller
+        # relying on `protocol_commit` never sees `bound` become durable
+        # over an incomplete backfill.
+        self.assertEqual(1, len(self.commits),
+                         "only the pre-Batch commit may have fired")
 
 
 class AttachWorkUnitTests(unittest.TestCase):
