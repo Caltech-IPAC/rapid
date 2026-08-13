@@ -1412,20 +1412,26 @@ def _association_claim_position(handle: UnitSource):
     unit's position in the canonical order — where `(None, None)` is the
     origin and means nothing has been accepted in this set yet.
 
-    **A DATABASE WITHOUT DRAFT 049 DEGRADES TO TODAY'S BEHAVIOUR, EXPLICITLY.**
-    The ordering discipline needs `association_watermarks`, which ships as a
-    DRAFT under `migrations-draft/` and is not in the authoritative stream
-    until its owner adopts it. The handle answers `None` when the table is not
-    there, and this returns `None`, and the caller then gathers exactly as it
-    did before — unordered, every ready field. That is the honest degradation:
-    the ordering is a property of the deployed schema, so a deployment without
-    it does not get to CLAIM the ordering, and pretending otherwise by raising
-    would take the whole crossmatch chain down on every database in the fleet
-    that has not adopted 049 yet.
+    **A DATABASE WITHOUT MIGRATION 049 DEGRADES TO TODAY'S BEHAVIOUR,
+    EXPLICITLY.** 049 (`association_watermarks`) landed in the authoritative
+    stream on 2026-08-12 (`migrations-draft/README.md`), so this is no longer
+    "the draft is unadopted" — it is the ordinary lag between a migration
+    landing and a given database's applier run. This module has NO SCHEMA
+    VISIBILITY OF ITS OWN to tell the two apart: gathering runs on hosts with
+    no science stack (this file must not import the payload's stage
+    packages), and `pipeline.intent.schema_contract`'s per-route preflight
+    (`ROUTE_MIGRATIONS["crossmatch"]`) runs in the PAYLOAD, at job start, on
+    whatever database THAT job resolves — a process this module has already
+    finished submitting to by the time it runs, on a connection gathering
+    does not share. So the degradation stays: the handle answers `None` when
+    the table is not there, and this returns `None`, and the caller then
+    gathers exactly as it did before — unordered, every ready field. Raising
+    here would take the whole crossmatch chain down on every database behind
+    049, for a fact this layer cannot distinguish from "not adopted yet".
 
     It is degradation and not a silent pass because the log line says which
     one happened, and because the contract tier asserts the ordered behaviour
-    against a database that DOES carry the draft.
+    against a database that DOES carry the migration.
     """
     repository = _association_repository(handle)
     if repository is None:

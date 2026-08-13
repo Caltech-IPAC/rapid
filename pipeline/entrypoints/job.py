@@ -953,7 +953,8 @@ def _database(route, job_env, endpoint, credentials):
     from observability.attempts import AttemptWriter
     from pipeline.intent.application_contract import (
         verify_application_contract)
-    from pipeline.intent.schema_contract import verify_schema_contract
+    from pipeline.intent.schema_contract import (required_for_route,
+                                                  verify_schema_contract)
 
     application_name = f"rapid-payload:{job_env.scheduler_job_id}"
     with connection(application_name, lane=route.db_lane, endpoint=endpoint,
@@ -968,11 +969,20 @@ def _database(route, job_env, endpoint, credentials):
         # is what distinguishes it from the illegal direction, an image
         # NEWER than the database it was scheduled against.
         #
+        # `required_for_route` layers this route's OWN migrations (e.g. 049
+        # for crossmatch, 050 for alert-production) on top of the floor every
+        # route shares — see schema_contract.ROUTE_MIGRATIONS. Preflighting
+        # per-route rather than against the bare floor is what makes this
+        # check catch a database behind on a migration only THIS route's SQL
+        # touches, instead of passing and leaving that gap for the first
+        # unguarded query to find at runtime.
+        #
         # Raising here happens before any product work, so the attempt fails
         # at its start with a named migration rather than part-way through a
         # science stage with an UndefinedColumn — and a failure this early
         # costs one attempt, not one attempt plus a partial product.
-        verify_schema_contract(execute.execute)
+        verify_schema_contract(
+            execute.execute, required=required_for_route(route.job_type))
         # THE APPLICATION HALF, on the same argument as the schema half above
         # and in the same place (rule 18 names "the application/schema
         # contract" as one contract with two halves; only the schema half was

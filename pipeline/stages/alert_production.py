@@ -349,6 +349,21 @@ def produce_alerts(context) -> None:
     # this attempt's transactions exactly as the emission CAS does; different
     # failure vocabulary, which is the point of the carve.
     outbox = AlertOutboxRepository(conn)
+    # DEFENSE IN DEPTH, NOT THE PRIMARY GUARD: the payload entrypoint already
+    # preflighted DRAFT 050 for this route before this stage ever ran
+    # (`pipeline/entrypoints/job.py:_database`, `schema_contract.
+    # ROUTE_MIGRATIONS["alert-production"]`). This probe catches the one case
+    # the preflight cannot — a schema that regressed between preflight and
+    # this stage running, or a future call path that reaches `produce_alerts`
+    # without going through the payload entrypoint — and does so BEFORE any
+    # candidate is claimed or assembled, rather than letting the first
+    # `insert_packet` fail deep inside the confirmation transaction after the
+    # claim is already committed.
+    if not outbox.outbox_schema_present():
+        raise RuntimeError(
+            "DRAFT 050 (alert_outbox) is not applied on this database; "
+            "the alert-production route's schema preflight should have "
+            "caught this at startup")
 
     # STEP 1: THE CLAIM, in its own transaction, committed BEFORE any
     # publishing starts (integration ruling 3: "a crash after a committed

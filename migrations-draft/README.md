@@ -56,15 +56,39 @@ test that asserted the pre-CR-8 truncation as a known defect
 
 ## How the application behaves toward this schema now
 
-Every code path that needs this schema still probes for it and degrades
-explicitly rather than assuming it — `pg_proc`/`to_regclass` checks in
-`pipeline.intent.cancellation`, `RAPIDDB.get_association_claim_position`,
-and the contract tier's own `pytest.skip` gates all key off the deployed
-schema, not off a hardcoded assumption of drift from `smdc` CI. Now that
-`smdc` CI's pinned `rapid_systems` revision carries 044-055, those
-draft-schema contract tests run instead of skipping there; on any database
-still short of a given migration (e.g. an environment mid-rollout) they
-continue to skip cleanly, exactly as designed.
+Two different mechanisms cover this now, at two different points, and which
+one applies depends on whether the caller can see the route.
+
+**The payload entrypoint preflights per route, at startup, and fails
+closed.** `pipeline.intent.schema_contract.ROUTE_MIGRATIONS` layers 049
+(`association_watermarks`) onto the crossmatch route's floor and 050
+(`alert_outbox`) onto alert-production's, composed by `required_for_route`
+and checked by `pipeline/entrypoints/job.py:_database` before any product
+work starts. This closed the schema-preflight gap a 2026-08 review found: a
+database behind 049 or 050 used to pass the (route-blind) preflight and then
+raise `UndefinedTable`/`UndefinedFunction` at the first unguarded call —
+`pipeline/association/watermark.py`'s read/advance and
+`pipeline/repositories/alert_outbox.py`'s insert had no probe of their own.
+`AlertOutboxRepository.outbox_schema_present()` is now called at the top of
+`produce_alerts` too, as defense in depth for whatever might reach that stage
+without going through the payload's own preflight — it is not the primary
+guard.
+
+**Submission-time gathering still probes and degrades, because it has no
+preflight to lean on.** `submission/gathering.py`'s
+`_association_claim_position` (crossmatch's ordering gate) runs on hosts with
+no science stack, before any payload — and therefore before any
+`schema_contract` preflight — exists for the job it is about to submit. It
+still answers "no watermark" and gathers unordered when 049 is absent,
+exactly as before; that degradation was never the schema-preflight gap
+described above, because gathering genuinely cannot see the schema the way
+the payload's own connection can. `pipeline.intent.cancellation`'s `pg_proc`/`to_regclass`
+checks and the contract tier's own `pytest.skip` gates are unaffected by any
+of this and continue to key off the deployed schema. Now that `smdc` CI's
+pinned `rapid_systems` revision carries 044-055, the draft-schema contract
+tests run instead of skipping there; on any database still short of a given
+migration (e.g. an environment mid-rollout) they continue to skip cleanly,
+exactly as designed.
 
 ## Package R (unrelated to the adopted drafts above)
 

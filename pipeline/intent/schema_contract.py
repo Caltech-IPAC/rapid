@@ -35,6 +35,17 @@ gets commented out. Adding SQL against a new migration's objects means adding
 that migration to this list — that is the maintenance cost, and it is the
 point.
 
+**`REQUIRED_MIGRATIONS` VS `ROUTE_MIGRATIONS`.** Every route claims an
+attempt and a work unit, so `REQUIRED_MIGRATIONS` — the attempt/work-unit
+machinery — binds every route the same way, and every preflight caller checks
+it unconditionally regardless of which route it is or whether it is a route
+at all (the reconciler and operatorctl preflight with no route in view). A
+migration whose objects only ONE route's SQL touches belongs in
+`ROUTE_MIGRATIONS` instead, keyed by job type, checked only by a caller that
+knows the route — see that dict's own docstring for why a route-specific
+migration in the global floor would be a false startup failure for every
+OTHER caller.
+
 **HOW `schema_migrations` IS POPULATED.** By the applier
 (`apply-db-migrations.sh`), one row per file, never by the migration files
 themselves — each file's own trailer says so. So this table records what the
@@ -116,6 +127,62 @@ REQUIRED_MIGRATIONS = (
      "the scoped retry transition the reconciler's closure policy issues "
      "(pipeline/reconciler/service.py)"),
 )
+
+#: Per-route floors, layered ON TOP of `REQUIRED_MIGRATIONS` rather than
+#: replacing it. `REQUIRED_MIGRATIONS` is what every route needs — the
+#: attempt/work-unit machinery no job type can run without, and every
+#: preflight caller (payload or service) checks it unconditionally. This is
+#: what ONE route additionally needs, keyed by the `submission.routes`
+#: job-type string, and checked only by a caller that KNOWS which route it is
+#: about to run — currently just the payload entrypoint
+#: (`pipeline/entrypoints/job.py:_database`, via `required_for_route`).
+#:
+#: 049 and 050 are NOT in `REQUIRED_MIGRATIONS` despite both routes being
+#: unconditionally implemented (`submission.routes.IMPLEMENTED_JOB_TYPES` has
+#: no rollout flag for either): the reconciler and operatorctl preflight too,
+#: and neither touches `association_watermarks` or `alert_outbox` — putting
+#: route-specific migrations in the global floor would fail THEM closed over
+#: schema they never query, which is exactly the false-startup-failure this
+#: module's own derivation rule warns against. The per-route floor is the
+#: correct shape for that reason alone, independent of any future rollout
+#: flag.
+#: Keyed by the LITERAL job-type strings `submission.routes.
+#: JOB_TYPE_CROSSMATCH` / `JOB_TYPE_ALERT_PRODUCTION` carry, not by an
+#: import of those constants: this module is preflighted at the very start
+#: of five different entrypoints (`pipeline/entrypoints/job.py`,
+#: `pipeline/reconciler/main.py`, `pipeline/operatorctl/main.py`,
+#: `pipeline/operator/service.py`) and stays free of every import beyond
+#: `logging` on purpose, the same reason `REQUIRED_MIGRATIONS` above needs
+#: nothing but tuples of strings. `pipeline/intent/test/test_schema_contract.
+#: py` is what catches the two drifting apart if either side is renamed.
+ROUTE_MIGRATIONS: dict[str, tuple] = {
+    "crossmatch": (
+        ("049-association-sets-and-watermarks.sql",
+         "`association_watermarks`, read and CAS-advanced by every "
+         "crossmatch unit's acceptance transaction "
+         "(pipeline/association/watermark.py, "
+         "pipeline/stages/post_db.py:crossmatch_sources)"),
+    ),
+    "alert-production": (
+        ("050-alert-outbox-and-publisher.sql",
+         "`alert_outbox` and `insert_alert_outbox_packet`, written by "
+         "every alert-production unit's confirmation transaction "
+         "(pipeline/repositories/alert_outbox.py, "
+         "pipeline/stages/alert_production.py)"),
+    ),
+}
+
+
+def required_for_route(job_type, base=REQUIRED_MIGRATIONS):
+    """The floor one route's payload preflights against: `base` plus its own.
+
+    The composition every call site would otherwise hand-roll — `base +
+    ROUTE_MIGRATIONS.get(job_type, ())` — kept here so the two lists stay a
+    single addition rather than a pattern copied at each preflight call site.
+    An unknown `job_type` contributes nothing extra, which is correct: a job
+    type absent from `ROUTE_MIGRATIONS` needs only what every route needs.
+    """
+    return tuple(base) + ROUTE_MIGRATIONS.get(job_type, ())
 
 
 def applied_migrations(execute):

@@ -56,6 +56,11 @@ logger = logging.getLogger("rapid.association.watermark")
 #: `pipeline.intent.lock.WORK_UNIT_NAMESPACE` records for itself.
 LANE_LEASE_NAMESPACE = 0x414C  # 'AL'
 
+#: The probe for migration 049, matching `pipeline.repositories.association.
+#: AssociationRepository`'s own — same table, same reason: "not deployed" and
+#: "the query is wrong" are two facts a caller must never conflate.
+_SCHEMA_PROBE = "SELECT to_regclass('public.association_watermarks')"
+
 _READ_SQL = (
     "SELECT watermark_proc_date, watermark_field"
     "  FROM association_watermarks"
@@ -79,6 +84,23 @@ _ADVANCE_SQL = (
     "   AND (watermark_proc_date IS NULL"
     "        OR (watermark_proc_date, watermark_field) < (%s, %s))"
 )
+
+
+def schema_present(cursor):
+    """Is migration 049 (`association_watermarks`) applied on this database?
+
+    DEFENSE IN DEPTH, NOT THE PRIMARY GUARD: the payload entrypoint already
+    preflights this for the crossmatch route before any unit runs
+    (`pipeline/entrypoints/job.py:_database`, `schema_contract.
+    ROUTE_MIGRATIONS["crossmatch"]`). This is what a caller checks anyway
+    before opening the acceptance transaction, so a schema that regressed
+    between preflight and this unit running fails on one cheap SELECT rather
+    than inside the transaction, after the lane lease is already held, on the
+    first `UndefinedTable` from `read_watermark` or `advance`.
+    """
+    cursor.execute(_SCHEMA_PROBE)
+    row = cursor.fetchone()
+    return row is not None and row[0] is not None
 
 
 def acquire_lane_lease(cursor, association_set, lane):

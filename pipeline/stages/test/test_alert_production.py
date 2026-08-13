@@ -188,6 +188,13 @@ class FakeConn:
         #: yield the legacy basis, while a failed LOOKUP must refuse to choose
         #: a basis at all.
         self.product_binding_present = True
+        #: Whether DRAFT 050's `alert_outbox` table exists AT ALL on this
+        #: modelled database. `True` by default (these tests exercise the
+        #: deployed case); flipped by the test asserting `produce_alerts`'s
+        #: own defense-in-depth probe refuses BEFORE claiming anything,
+        #: rather than failing deep inside the confirmation transaction on
+        #: the first `insert_alert_outbox_packet` call.
+        self.outbox_schema_present = True
         #: Raised (as `RapidDBCallFailed`, via `self.failure`-style exit_code
         #: convention below) when set, to drive the "failed lookup is not an
         #: absent binding" refusal in `_image_identity`.
@@ -282,7 +289,8 @@ class FakeConn:
         # case; `product_binding` is flipped by the tests that want the
         # legacy-pid degradation.
         elif "to_regclass('public.alert_outbox')" in lowered:
-            self._last_result = ("alert_outbox",)
+            self._last_result = (
+                ("alert_outbox",) if self.outbox_schema_present else (None,))
         elif "to_regclass('public.products')" in lowered:
             self._last_result = (self.product_binding_present,)
         else:
@@ -845,6 +853,30 @@ class EmissionTests(unittest.TestCase):
         self._run(context, provider, producer)
 
         self.assertEqual(context.provenance["alerts_outboxed"], 1)
+
+    def test_a_database_without_draft_050_refuses_before_claiming_anything(
+            self):
+        # The stage's own defense-in-depth probe: the payload entrypoint's
+        # per-route schema preflight (schema_contract.ROUTE_MIGRATIONS)
+        # should already have refused to start a database missing DRAFT
+        # 050, so this is the fallback for whatever reaches `produce_alerts`
+        # without going through that preflight. It must fire BEFORE the
+        # emission claim — a claim committed here and never confirmed
+        # (because the outbox insert would fail later) would be a stranded
+        # `claimed` row a later attempt has to take over, for a fault that
+        # was knowable up front.
+        conn = FakeConn()
+        conn.outbox_schema_present = False
+        provider = Provider(sources=[Source(1, 9.0)])
+        producer = Producer()
+        context = Context(_unit(), PARAMETERS, conn=conn)
+
+        with self.assertRaises(RuntimeError) as caught:
+            self._run(context, provider, producer)
+
+        self.assertIn("050", str(caught.exception))
+        self.assertEqual(conn.rows, {})
+        self.assertEqual(conn.alert_outbox, {})
 
     def test_an_already_emitted_unit_outboxes_nothing(self):
         # "Emission is once per logical unit per release" — a replay is

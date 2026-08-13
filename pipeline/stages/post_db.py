@@ -55,7 +55,7 @@ import modules.utils.rapid_pipeline_subs as util
 from database.modules.utils.rapid_db_connect import transaction
 from pipeline.association import sets as association_sets
 from pipeline.association import watermark as association_watermark
-from pipeline.runtime.errors import InputError
+from pipeline.runtime.errors import DBError, InputError
 from pipeline.stages import catalog_db
 
 logger = logging.getLogger(__name__)
@@ -653,6 +653,21 @@ def crossmatch_sources(context) -> None:
 
     objects_csv = context.scratch(f"{astroobjects}.csv")
     merges_csv = context.scratch(f"{merges}.csv")
+
+    # DEFENSE IN DEPTH, NOT THE PRIMARY GUARD: the payload entrypoint already
+    # preflighted migration 049 for this route before this unit ran
+    # (`pipeline/entrypoints/job.py:_database`, `schema_contract.
+    # ROUTE_MIGRATIONS["crossmatch"]`). Checked here, before the acceptance
+    # transaction opens and the lane lease is taken, so a schema that
+    # regressed between preflight and this unit running fails on one cheap
+    # SELECT rather than deep inside the transaction, lease held, on the
+    # first UndefinedTable from `read_watermark` or `advance`.
+    with conn.cursor() as probe_cursor:
+        if not association_watermark.schema_present(probe_cursor):
+            raise DBError(
+                "migration 049 (association_watermarks) is not applied on "
+                "this database; the crossmatch route's schema preflight "
+                "should have caught this at startup")
 
     with transaction(conn) as cursor:
         # THE ACCEPTANCE TRANSACTION (conformance rule 19, brief F3). The
