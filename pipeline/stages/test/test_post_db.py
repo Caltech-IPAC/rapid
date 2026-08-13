@@ -74,6 +74,15 @@ class CursorRefusal(Exception):
     """What the double raises where the real server would raise."""
 
 
+# The privilege keywords a table grant may name, mirroring the allow-list
+# `derived.create_child_table()` (rapid_systems migration 072) applies
+# server-side now that grant-copying moved out of catalog_db.py.
+_PRIVILEGES = frozenset({
+    "SELECT", "INSERT", "UPDATE", "DELETE", "TRUNCATE", "REFERENCES",
+    "TRIGGER",
+})
+
+
 class RecordingCursor:
     """Executes against a tiny in-memory catalog, and refuses like Postgres.
 
@@ -116,6 +125,17 @@ class RecordingCursor:
         text = self._record(statement)
         lowered = " ".join(text.lower().split())
 
+        if "derived.create_child_table" in lowered:
+            # DB-HARDENING (rapid_systems migration 072): the pipeline no
+            # longer composes CREATE TABLE/ALTER TABLE/GRANT itself — it
+            # calls this SECURITY DEFINER function, which does the same
+            # work server-side. The double replays the pre-072 sequence
+            # (CREATE ... LIKE ... INCLUDING INDEXES, optional ALTER ...
+            # INHERIT, GRANT-from-prototype) into its own catalog and
+            # statement log, so every assertion written against that
+            # sequence's text/effects still exercises the same properties
+            # without re-deriving them from a bare boolean return.
+            return self._create_child_table_function(params)
         if lowered.startswith("create table") or lowered.startswith("create temp table"):
             return self._create_table(text, lowered)
         if lowered.startswith("insert into"):
@@ -223,6 +243,55 @@ class RecordingCursor:
             # that says nothing about the code under test.
             "temp_on_commit": "on commit drop" in lowered,
         }
+        self.rowcount = 1
+        return None
+
+    def _create_child_table_function(self, params):
+        name, prototype, inherit = params
+        already_present = name in self.catalog
+
+        # -- CREATE TABLE IF NOT EXISTS <name> (LIKE <prototype> ...) ------
+        create_text = (
+            f'CREATE TABLE IF NOT EXISTS "{name}" (LIKE "{prototype}" '
+            f'INCLUDING DEFAULTS INCLUDING CONSTRAINTS INCLUDING INDEXES)')
+        self.statements.append(create_text)
+        if not already_present:
+            template = self.catalog.get(prototype)
+            if template is None:
+                raise CursorRefusal(f'relation "{prototype}" does not exist')
+            self.catalog[name] = {
+                "columns": template["columns"],
+                "unique": template["unique"],
+                "rows": [],
+                "temp_on_commit": False,
+            }
+
+        # -- ALTER TABLE <name> INHERIT <prototype>, guarded like the real
+        # function guards it (pg_inherits lookup, at most once per child) --
+        if inherit:
+            inherits = self.catalog[name].setdefault("inherits", set())
+            if prototype not in inherits:
+                self.statements.append(
+                    f'ALTER TABLE "{name}" INHERIT "{prototype}"')
+                inherits.add(prototype)
+
+        # -- GRANT <privileges> ON TABLE <name> TO <grantee>, only on a
+        # fresh create — an existing clone is not re-granted, matching the
+        # real function's `IF v_created THEN` guard -------------------------
+        if not already_present:
+            grants = self.catalog.get(prototype, {}).get("grants", [])
+            by_grantee: dict[str, list[str]] = {}
+            for grantee, privilege in grants:
+                by_grantee.setdefault(grantee, []).append(privilege)
+            for grantee, privileges in sorted(by_grantee.items()):
+                allowed = sorted(p for p in privileges if p in _PRIVILEGES)
+                if not allowed:
+                    continue
+                self.statements.append(
+                    f'GRANT {", ".join(allowed)} ON TABLE "{name}" '
+                    f'TO "{grantee}"')
+
+        self._result = [(not already_present,)]
         self.rowcount = 1
         return None
 

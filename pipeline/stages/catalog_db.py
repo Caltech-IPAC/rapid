@@ -148,6 +148,18 @@ def create_child_table(cursor, tablename: str, prototype: str,
     """Create one per-field or per-date child table, carrying the prototype's
     indexes. Returns True if it was created, False if it already existed.
 
+    **DB-HARDENING: routed through `derived.create_child_table()` (rapid_
+    systems migration 072), not composed here.** `rapid_pipeline_write` no
+    longer holds `CREATE ON SCHEMA public` (migration 073 revokes the grant
+    003 issued) — this SECURITY DEFINER function is now the only way this
+    role can create a table in `public`, and it re-validates the prototype
+    (against the same four-name allowlist) and the child-table name/
+    ownership shape independently of `validate_child_name` below, so this
+    call is not the sole enforcement point even though it still runs first.
+    The function's own body carries the `INCLUDING INDEXES`/`INHERIT`/
+    grant-copy logic this docstring used to describe directly; see 072's
+    header in rapid_systems for the full account of what moved and why.
+
     **`INCLUDING INDEXES` IS THE FIX** (co-design ruling 6). The old clone
     path used `LIKE <prototype> INCLUDING DEFAULTS INCLUDING CONSTRAINTS`,
     which copies column defaults and CHECK constraints and nothing else — no
@@ -168,105 +180,14 @@ def create_child_table(cursor, tablename: str, prototype: str,
     """
     validate_child_name(tablename, prototype)
 
-    # `IF NOT EXISTS` rather than a prior existence probe: the probe was a
-    # separate round trip whose answer could be stale by the time the CREATE
-    # ran, and two units of the same field racing is a real shape here.
     cursor.execute(
-        sql.SQL("CREATE TABLE IF NOT EXISTS {child} "
-                "(LIKE {proto} INCLUDING DEFAULTS INCLUDING CONSTRAINTS "
-                "INCLUDING INDEXES)").format(
-            child=sql.Identifier(tablename), proto=sql.Identifier(prototype)))
-    created = cursor.rowcount != 0 if cursor.rowcount is not None else True
-
-    if inherit:
-        # The sources children inherit the prototype so a query against
-        # `sources` sees them. Guarded by catalog lookup because ALTER TABLE
-        # ... INHERIT has no IF NOT EXISTS and re-issuing it on an already
-        # inheriting child raises.
-        cursor.execute(
-            "SELECT 1 FROM pg_inherits i"
-            " JOIN pg_class c ON c.oid = i.inhrelid"
-            " JOIN pg_class p ON p.oid = i.inhparent"
-            " WHERE c.relname = %s AND p.relname = %s",
-            (tablename, prototype))
-        if cursor.fetchone() is None:
-            cursor.execute(
-                sql.SQL("ALTER TABLE {child} INHERIT {proto}").format(
-                    child=sql.Identifier(tablename),
-                    proto=sql.Identifier(prototype)))
-
-    if created:
-        grant_like_prototype(cursor, tablename, prototype)
+        "SELECT derived.create_child_table(%s, %s, %s)",
+        (tablename, prototype, inherit))
+    created = cursor.fetchone()[0]
 
     logger.info("child table %s ready (prototype %s, indexes carried)",
                 tablename, prototype)
     return created
-
-
-def grant_like_prototype(cursor, tablename: str, prototype: str) -> None:
-    """Give a fresh clone the same table grants its prototype carries.
-
-    **FOUND LIVE.** `LIKE ... INCLUDING INDEXES` copies structure, not
-    privileges, and a clone is owned by whichever role created it — so a
-    merge-dedup unit against a freshly created `merges_<field>` died with
-    `psycopg2.errors.InsufficientPrivilege: permission denied for table
-    merges_4641773`. The table existed, carried the right unique index, and
-    was unreadable by the role the Batch payload connects as.
-
-    The old `crossMatchSources.py:1000-1010` issued a hand-written GRANT
-    block after each CREATE for exactly this reason. The conversion replaced
-    the CREATE and dropped the GRANTs with it — the kind of gap only a live
-    run finds, because a test double has no privilege system to refuse you.
-
-    **Read from the prototype rather than hardcoded.** The old block named
-    `rapidreadrole`, `rapidadminrole` and `rapidporole` as literals; the live
-    database's roles are `rapid_read`, `rapid_pipeline_write` and
-    `rapid_admin`, so that list had already drifted out of date. Copying
-    whatever the prototype actually grants means the clone tracks the
-    migration baseline automatically and there is no second list to go
-    stale — the same reasoning as `INCLUDING INDEXES` over a hand-written
-    index list.
-    """
-    cursor.execute(
-        "SELECT grantee, privilege_type"
-        "  FROM information_schema.role_table_grants"
-        " WHERE table_schema = 'public' AND table_name = %s",
-        (prototype,))
-    grants: dict[str, list[str]] = {}
-    for grantee, privilege in cursor.fetchall():
-        grants.setdefault(grantee, []).append(privilege)
-
-    if not grants:
-        logger.warning(
-            "prototype %s carries no table grants; clone %s gets none either",
-            prototype, tablename)
-        return
-
-    for grantee, privileges in sorted(grants.items()):
-        # Privilege keywords are SQL, not identifiers, and come from the
-        # catalog rather than from a caller — but they are still checked
-        # against the known set rather than interpolated on trust.
-        allowed = [p for p in privileges if p in _PRIVILEGES]
-        if not allowed:
-            continue
-        cursor.execute(
-            sql.SQL("GRANT {privileges} ON TABLE {child} TO {grantee}").format(
-                privileges=sql.SQL(", ").join(
-                    sql.SQL(p) for p in sorted(allowed)),
-                child=sql.Identifier(tablename),
-                grantee=sql.Identifier(grantee)))
-
-    logger.info("clone %s granted the prototype's privileges (%s)",
-                tablename, ", ".join(sorted(grants)))
-
-
-# The privilege keywords a table grant may name. An allow-list because these
-# are composed as SQL keywords rather than as quoted identifiers; anything
-# outside it is skipped rather than interpolated.
-_PRIVILEGES = frozenset({
-    "SELECT", "INSERT", "UPDATE", "DELETE", "TRUNCATE", "REFERENCES",
-    "TRIGGER",
-})
 
 
 def load_through_staging(cursor, csv_path: str, tablename: str,
