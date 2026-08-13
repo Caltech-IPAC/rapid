@@ -1204,6 +1204,77 @@ class OutboxCollisionTests(unittest.TestCase):
         self.assertEqual(len(conn.alert_outbox), 1)
 
 
+class ConfirmationObservabilityTests(unittest.TestCase):
+    """Finding 11: a swallowed DB failure during CONFIRM is recorded and
+    logged distinctly from an ordinary takeover — observability only, the
+    self-healing (claim-stays-'claimed', later attempt retries) behaviour
+    is unchanged.
+
+    Named so `-k confirmation_db_failure` selects this class.
+    """
+
+    def test_a_confirm_db_failure_is_flagged_in_provenance(self):
+        conn = FakeConn()
+        provider = Provider(sources=[Source(1, 9.0)])
+        producer = Producer()
+        context = Context(_unit(), PARAMETERS, conn=conn)
+
+        # The CONFIRM statement itself raises — modelling a DB fault at
+        # exactly the step finding 11 targets.
+        original_confirm = conn._confirm
+
+        def failing_confirm(params):
+            raise RuntimeError("stubbed confirm failure")
+
+        conn._confirm = failing_confirm
+
+        _run_produce_alerts(context, provider, producer)
+
+        conn._confirm = original_confirm  # restore, though unused after
+
+        self.assertTrue(context.provenance["confirmation_db_failure"])
+        self.assertFalse(context.provenance["emission_confirmed"])
+        self.assertEqual(context.provenance["alerts_outboxed"], 0)
+        # Self-healing UNCHANGED: nothing committed, claim stays 'claimed'.
+        self.assertEqual(conn.rows[(20, 7, "rel-1")]["state"], "claimed")
+        self.assertEqual(conn.alert_outbox, {})
+        self.assertEqual(conn.milestones, [])
+
+    def test_an_ordinary_takeover_is_not_flagged_as_a_db_failure(self):
+        # The existing takeover path (no DB fault, just a losing race) must
+        # NOT be flagged — the field distinguishes the two, not conflates
+        # them.
+        conn = FakeConn()
+        provider = Provider(sources=[Source(1, 9.0)])
+        producer = Producer()
+        context = Context(_unit(), PARAMETERS, conn=conn)
+
+        original_confirm = conn._confirm
+
+        def confirm_after_takeover(params):
+            key = (20, 7, "rel-1")
+            conn.rows[key]["claim_token"] = "12345"
+            return original_confirm(params)
+
+        conn._confirm = confirm_after_takeover
+
+        _run_produce_alerts(context, provider, producer)
+
+        self.assertFalse(context.provenance["confirmation_db_failure"])
+        self.assertFalse(context.provenance["emission_confirmed"])
+
+    def test_a_clean_run_is_not_flagged(self):
+        conn = FakeConn()
+        provider = Provider(sources=[Source(1, 9.0)])
+        producer = Producer()
+        context = Context(_unit(), PARAMETERS, conn=conn)
+
+        _run_produce_alerts(context, provider, producer)
+
+        self.assertFalse(context.provenance["confirmation_db_failure"])
+        self.assertTrue(context.provenance["emission_confirmed"])
+
+
 class WatermarkSeedTests(unittest.TestCase):
     """(g) seed rows carry `watermark_seed`, never the live claim state."""
 

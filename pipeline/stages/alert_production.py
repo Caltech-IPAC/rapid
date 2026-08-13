@@ -457,6 +457,10 @@ def produce_alerts(context) -> None:
     # let a LOSING claimant commit packets for an emission it did not confirm
     # — and the publisher would deliver them. Under this order a loser commits
     # neither.
+    #: Set True only by the DB-failure catch below (finding 11) — the
+    #: observability flag distinguishing "the confirm failed" from an
+    #: ordinary takeover, in the provenance record below.
+    confirmation_db_failure = False
     try:
         with transaction(conn) as _:
             confirmed_token = emissions.confirm_alert_emission(
@@ -511,13 +515,32 @@ def produce_alerts(context) -> None:
         # 'claimed' and a later attempt (retry or takeover) redoes the work and
         # confirms. Logged rather than raised for the same reason as before:
         # the attempt's science succeeded and failing it here would invite a
-        # retry of the whole job for a database fault at its last step.
+        # retry of the whole job for a database fault at its last step —
+        # THE SELF-HEALING BEHAVIOUR ITSELF IS UNCHANGED (finding 11's ruled
+        # scope: observability only). What changes is how loud and how
+        # identifiable this event is in the meantime: this used to be a
+        # bare module-`logger` warning, invisible until the 1-hour staleness
+        # window let a later attempt take the claim over — this is now an
+        # `context.logger.error` (the attempt-scoped, structured logger
+        # every other loud path in this stage already uses, captured to the
+        # per-stage diagnostics bundle with this attempt's own job/attempt
+        # identity, unlike the plain module logger) and a dedicated
+        # `confirmation_db_failure` provenance flag, so the gap between "the
+        # confirm silently failed" and "a later attempt confirms" is no
+        # longer indistinguishable from an ordinary clean run in either the
+        # log stream or the terminal record.
         outboxed = 0
-        logger.warning(
-            "assembled %d packet(s) for %s/%s but the confirmation "
-            "transaction failed; NOTHING was committed and nothing was sent "
-            "(claim left 'claimed' for later recovery): %s",
-            len(packets), exposure, sca, exc)
+        confirmation_db_failure = True
+        context.logger.error(
+            "unit %s/%s release %s: assembled %d packet(s) but the "
+            "CONFIRMATION TRANSACTION FAILED (%s: %s); NOTHING was "
+            "committed and nothing was sent. The claim stays 'claimed' for "
+            "a later attempt to retry or take over (self-healing by "
+            "design, within CLAIM_STALENESS=%s) — but until then this "
+            "unit's alerts are NOT emitted. attempt_id=%s claim_token=%s",
+            exposure, sca, release_identity, len(packets),
+            type(exc).__name__, exc, CLAIM_STALENESS, claiming_attempt_id,
+            claim_token)
         confirmed_token = None
 
     if confirmed_token != claim_token:
@@ -528,11 +551,19 @@ def produce_alerts(context) -> None:
         # assembles and outboxes the same packets under the same deterministic
         # ids, and the publisher delivers them once.
         outboxed = 0
-        context.logger.warning(
-            "unit %s/%s: claim was taken over before confirm (or the confirm "
-            "failed); %d assembled packet(s) were DISCARDED uncommitted — the "
-            "takeover attempt outboxes them under the same deterministic "
-            "alert ids", exposure, sca, len(packets))
+        if confirmation_db_failure:
+            # Already logged loudly, above, at `error` level with the
+            # database exception and this attempt's identity — a second,
+            # generic "taken over (or the confirm failed)" warning here
+            # would blur the one signal finding 11 asks to make clear, so
+            # this arm is skipped for that case specifically.
+            pass
+        else:
+            context.logger.warning(
+                "unit %s/%s: claim was taken over before confirm; %d "
+                "assembled packet(s) were DISCARDED uncommitted — the "
+                "takeover attempt outboxes them under the same "
+                "deterministic alert ids", exposure, sca, len(packets))
 
     context.record_effect(
         candidates_considered=considered,
@@ -553,6 +584,15 @@ def produce_alerts(context) -> None:
         drop_dispositions=drop_dispositions,
         emissions_suppressed=0,
         emission_confirmed=(confirmed_token == claim_token),
+        # FINDING 11: the one bit that told an operator "the confirm failed
+        # at the database" apart from an ordinary, healthy takeover was
+        # buried in a log line at a level (module-`logger.warning`, no
+        # attempt identity) nothing polls. `emission_confirmed=False` alone
+        # cannot carry that distinction — a takeover is also
+        # `emission_confirmed=False` and is not a defect — so this field
+        # says explicitly which of the two happened, readable straight out
+        # of the terminal record without correlating log lines.
+        confirmation_db_failure=confirmation_db_failure,
         alert_topic=topic,
         alert_identity_basis=image_basis["basis_name"],
         alert_schema_version_id=str(schema_version_id),
