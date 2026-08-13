@@ -16,7 +16,11 @@ main.py`, `pipeline/operator/service.py`), through the same kernel: configure
 logging, install the stop signal, resolve the parameter tree under an assumed
 role, resolve the endpoint and the credential, preflight fail-closed, then loop
 until signalled. Exit codes are the kernel's shared vocabulary so systemd's
-`Restart=always` and an operator's journal read the same way for all three.
+`Restart=always` and an operator's journal read the same way for all three —
+including `EXIT_UNHEALTHY`: a single failed cycle is retried in place, but
+`CONSECUTIVE_FAILURE_THRESHOLD` in a row raises `PublisherUnhealthy` and exits
+for a restart, the same bounded mechanism `pipeline/reconciler/service.py`
+uses for the identical symptom (a process alive and doing nothing).
 
 **IT CONNECTS DIRECTLY AS `rapid_publisher` — NEVER `SET ROLE`.** The publisher
 is transaction-mode pooled (minimal viable target §2.2), and `SET ROLE` needs a
@@ -56,6 +60,16 @@ logger = logging.getLogger("rapid.publisher")
 #: steady state between exposures, and a process that exited on it would be
 #: restarted by systemd in a loop that reads as a crash loop in the journal.
 POLL_SECONDS = 5
+
+#: Consecutive cycle failures after which the publisher reports itself
+#: unhealthy and exits `EXIT_UNHEALTHY`, mirroring the reconciler's
+#: `POLL_FAILURE_THRESHOLD` (`pipeline/reconciler/service.py`). 60 at the
+#: publisher's 5s cycle period is five minutes — the same interval
+#: `outbox.CLAIM_LEASE` already treats as the bound between a crash and its
+#: rows becoming visibly stuck, so a dead connection or a rotated credential
+#: surfaces to the supervisor on the same timescale an operator would
+#: already notice the outbox itself.
+CONSECUTIVE_FAILURE_THRESHOLD = 60
 
 #: The application_name pooled connections carry, so `pg_stat_activity` and the
 #: pooler both attribute this process's connections to it by name.
@@ -153,8 +167,21 @@ def _topic_guard(prefixes):
     return allowed
 
 
+class PublisherUnhealthy(RuntimeError):
+    """Consecutive cycles failed past the threshold: the publisher cannot work.
+
+    Raised out of `run_forever` so the process EXITS and its supervisor
+    restarts it — the same shape as the reconciler's `ReconcilerUnhealthy`
+    (`pipeline/reconciler/main.py`). Without this, a publisher wedged against
+    a dead connection or a rotated credential stays up, logging exceptions
+    forever, while systemd sees a healthy process and `EXIT_UNHEALTHY` — which
+    already exists in the shared kernel — is never reached.
+    """
+
+
 def run_forever(build_cycle, poll_seconds=POLL_SECONDS,
-                should_continue=lambda: True, sleep=time.sleep):
+                should_continue=lambda: True, sleep=time.sleep,
+                failure_threshold=CONSECUTIVE_FAILURE_THRESHOLD):
     """Cycle until signalled. Returns the number of cycles run.
 
     `build_cycle` is a callable returning a fresh `PublisherCycle` — fresh
@@ -162,22 +189,47 @@ def run_forever(build_cycle, poll_seconds=POLL_SECONDS,
     per-connection credential fetch real (a rotated secret is picked up by the
     next cycle, with no restart).
 
-    A CYCLE THAT RAISES DOES NOT KILL THE PROCESS. The outbox is durable and
-    the claim has a lease, so a failed cycle costs at most one lease interval
-    of latency on the rows it held. Exiting instead would turn a transient
-    database blip into a restart, and the rows would wait exactly as long.
+    A CYCLE THAT RAISES DOES NOT KILL THE PROCESS BY ITSELF. The outbox is
+    durable and the claim has a lease, so a failed cycle costs at most one
+    lease interval of latency on the rows it held. Exiting on the first
+    failure would turn a transient database blip into a restart, and the rows
+    would wait exactly as long.
+
+    CONSECUTIVE FAILURES ARE DIFFERENT. Past `failure_threshold` in a row the
+    publisher is not delivering anything and staying up says otherwise — the
+    process looked alive while every packet queued behind a connection that
+    was never coming back. `PublisherUnhealthy` is raised so the caller can
+    exit `EXIT_UNHEALTHY` and let the supervisor restart into a fresh
+    connection and a fresh credential fetch, exactly as the reconciler does
+    for the same symptom.
     """
     cycles = 0
+    consecutive_failures = 0
     while should_continue():
         cycles += 1
         try:
             counts = build_cycle().run_once()
         except Exception:                                   # noqa: BLE001
+            consecutive_failures += 1
             logger.exception(
-                "publisher cycle failed; the claimed rows keep their lease "
-                "and are reclaimed after it expires")
+                "publisher cycle failed (%d consecutive, threshold %d); the "
+                "claimed rows keep their lease and are reclaimed after it "
+                "expires", consecutive_failures, failure_threshold)
+            if consecutive_failures >= failure_threshold:
+                raise PublisherUnhealthy(
+                    f"{consecutive_failures} consecutive cycle failures "
+                    f"(threshold {failure_threshold}); the publisher is "
+                    f"running but delivering nothing. Exiting so the "
+                    f"supervisor restarts it — a stale connection or a "
+                    f"rotated credential is re-established by a fresh "
+                    f"process, and staying up would mean no packet is sent "
+                    f"for as long as this lasts.")
             sleep(poll_seconds)
             continue
+        if consecutive_failures:
+            logger.info("publisher recovered after %d failed cycle(s)",
+                       consecutive_failures)
+        consecutive_failures = 0
         if counts["claimed"] or counts["reclaimed"]:
             logger.info(
                 "cycle: %d claimed, %d sent, %d resend, %d refused, %d held, "
@@ -249,6 +301,19 @@ def main():
 
         run_forever(build_cycle, poll_seconds=poll_seconds,
                     should_continue=lambda: running["go"])
+    except PublisherUnhealthy:
+        # NOT a start failure. `PublisherUnhealthy` subclasses RuntimeError,
+        # so the handler below would catch it and tell the journal "the
+        # publisher could not start" about a process that had been running
+        # and cycling for however long it took to exhaust the threshold —
+        # the reconciler's own `ReconcilerUnhealthy` handling
+        # (`pipeline/reconciler/main.py`) draws the same distinction, for the
+        # same reason: the restart is right, but an operator reading the
+        # journal deserves to know it was a running process going unhealthy,
+        # not a process that never came up.
+        logger.exception("the publisher is unhealthy and is exiting so the "
+                         "supervisor restarts it")
+        return service_kernel.EXIT_UNHEALTHY
     except Exception:                                       # noqa: BLE001
         logger.exception("the publisher could not start")
         return service_kernel.EXIT_START_FAILED
