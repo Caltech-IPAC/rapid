@@ -108,6 +108,42 @@ class SubmissionFailed(RuntimeError):
         self.attempt_ids = tuple(attempt_ids)
 
 
+class SubmissionBookkeepingFailed(RuntimeError):
+    """Batch accepted the job, but the post-call bookkeeping did not commit.
+
+    A different failure mode than `SubmissionFailed`, and deliberately a
+    different exception, because the right response is different. When
+    `SubmitJob` itself fails the row-level state is unambiguous (nothing was
+    accepted, or its acceptance is unknown and the protocol row says so) and
+    the caller's only sound move is to leave the pre-created rows as
+    reconciliation cases. Here `SubmitJob` **succeeded** — `submission.job_id`
+    is real and Batch is, right now, running (or about to run) every array
+    child — so `submit_job` must NEVER be called again for this run
+    (`submission/protocol.py`'s module docstring, rule 3). What failed is
+    purely OUR bookkeeping: marking the submission row `bound` and backfilling
+    each child's `scheduler_job_id` onto its attempt row, which (finding 4,
+    fix-txn-core) now commit together as one transaction so a partial
+    backfill can never become the durable last word silently.
+
+    Because that transaction never committed, the rows are exactly where they
+    were before this call — `submitted`, no scheduler id, the `calling`
+    marker (or nothing, on the pre-protocol degrade path) still recorded
+    durably from step 2a. That is a SAFE state to retry the bookkeeping from:
+    the reconciler's submission-anchored horizon already treats a row in this
+    shape as a reconciliation case, and re-running the backfill (never the
+    call) is exactly what a retry should do. `scheduler_job_id` is carried
+    here specifically so a caller that wants to retry need not re-derive it
+    from `submission.child_job_id`.
+    """
+
+    def __init__(self, message, run_id=None, scheduler_job_id=None,
+                attempt_ids=()):
+        super().__init__(message)
+        self.run_id = run_id
+        self.scheduler_job_id = scheduler_job_id
+        self.attempt_ids = tuple(attempt_ids)
+
+
 def submit_units(units, job_type, queue, job_definition, binding,
                  manifest_bucket, manifest_prefix, s3_client, batch_client,
                  execute, run_id=None, reason="vpo", job_name=None,
@@ -148,26 +184,53 @@ def submit_units(units, job_type, queue, job_definition, binding,
     authoritative value is release content.
 
     `protocol_commit` is a zero-argument callable that COMMITS the caller's
-    transaction, and it exists for one narrow, load-bearing reason (rule 7,
-    brief C1). The submission record's `calling` state must be DURABLE at the
-    instant `submit_job` goes out: a row saying "a request is in flight" is
-    worthless if it is still uncommitted when the process dies, because the
-    pass that later finds the wreckage sees `prepared` and confidently
-    concludes no call was made — a wrong answer stated with certainty, which
-    is worse than the no-answer this protocol replaces. So the caller supplies
-    the commit and this function calls it between marking `calling` and
-    calling Batch.
+    transaction, and it is called TWICE, at the two instants this function's
+    own transactional shape requires a boundary (fix-txn-core, findings 2-4 —
+    see `pipeline.operator.service._execute_factory`, which is what actually
+    supplies it on the live path: `ConnectionExecutor(conn,
+    autocommit_each=False)`, so nothing here commits unless this function
+    says so):
 
-    That is NOT a transaction spanning `SubmitJob` — it is the mechanism by
-    which none does. Rule 7's first clause ("No transaction spans SubmitJob")
-    still holds and is strengthened: the transaction is deliberately CLOSED
-    before the call, leaving nothing open across it.
+    1. BEFORE `submit_batch`, between marking the submission record `calling`
+       and calling Batch (rule 7, brief C1, unchanged from the original
+       reasoning). The submission record's `calling` state must be DURABLE at
+       the instant `submit_job` goes out: a row saying "a request is in
+       flight" is worthless if it is still uncommitted when the process dies,
+       because the pass that later finds the wreckage sees `prepared` and
+       confidently concludes no call was made — a wrong answer stated with
+       certainty, which is worse than the no-answer this protocol replaces.
+       This same commit is also what makes finding 2's fix real rather than
+       cosmetic: with `autocommit_each=False`, EVERYTHING from the work-unit
+       advisory lock through the CAS transition through the `unit_events` row
+       through the attempt's `work_unit_id` FK attachment is now one
+       transaction, and this is the point at which all of it becomes durable
+       — before Batch is ever called, exactly where rule 7 already required a
+       boundary for a different reason. Two findings, one commit.
+
+       That is NOT a transaction spanning `SubmitJob` — it is the mechanism
+       by which none does. Rule 7's first clause ("No transaction spans
+       SubmitJob") still holds and is strengthened: the transaction is
+       deliberately CLOSED before the call, leaving nothing open across it.
+
+    2. AFTER step 4 (backfilling the scheduler job ids Batch assigned),
+       before this function returns (finding 4). Marking the submission
+       `bound` and backfilling every child's `scheduler_job_id` must commit
+       TOGETHER or not at all: `_bind_scheduler_jobs` now raises
+       `SubmissionBookkeepingFailed` rather than warning when the backfill
+       count comes up short, and because nothing between the first commit
+       and here has committed yet, that raise leaves the connection's
+       transaction uncommitted — so the caller's eventual rollback (or the
+       connection simply closing without a commit) discards the `bound`
+       write along with the failed backfill, rather than leaving `bound`
+       durable with orphaned children. See `_bind_scheduler_jobs` and
+       `SubmissionBookkeepingFailed` for why this is a safe, retryable state
+       and specifically NOT a reason to call `submit_job` again.
 
     None means "do not commit", leaving the protocol's writes in the caller's
     transaction. Every caller predating this brief passes nothing and keeps
-    its existing transaction shape; what it forgoes is the durability of the
-    `calling` marker, which is no worse than the pre-protocol behaviour it
-    already had.
+    its existing transaction shape; what it forgoes is the durability
+    guarantee both commits above exist for, which is no worse than the
+    pre-protocol behaviour such a caller already had.
     """
     moment = now or datetime.datetime.now(datetime.timezone.utc)
     manifest = Manifest(units=list(units), batch_id=run_id, job_type=job_type,
@@ -275,7 +338,29 @@ def submit_units(units, job_type, queue, job_definition, binding,
     _mark_submission_bound(execute, submission_id, submission.job_id)
 
     # 4. Backfill the child job ids the scheduler has now assigned.
+    #
+    #    ATOMIC WITH STEP 3a (finding 4, fix-txn-core).
+    #    `_mark_submission_bound` and `_bind_scheduler_jobs` used to be two
+    #    independently-autocommitted writes: the submission could land
+    #    durably `bound` while the backfill that was supposed to follow it
+    #    silently warned and left children unaddressable by scheduler id
+    #    forever. With `execute` now running inside one uncommitted
+    #    transaction (finding 2) and `_bind_scheduler_jobs` raising rather
+    #    than warning on a short backfill (below), neither write is durable
+    #    until the commit two lines down — so a backfill failure here leaves
+    #    BOTH uncommitted, and `bound` never becomes the durable last word
+    #    over an incomplete backfill.
     _bind_scheduler_jobs(writer, submission, attempt_ids)
+
+    if protocol_commit is not None:
+        # DURABLE BEFORE RETURNING (finding 4). Without this, a caller that
+        # commits only once — at the pre-Batch boundary `_open_submission`
+        # already uses — would have `bound` and every backfilled
+        # scheduler_job_id sitting in the SAME open transaction this
+        # function's caller may or may not ever commit, which reopens
+        # exactly the gap this finding closes: Batch has unambiguously
+        # accepted the job, and that fact is not yet safe from a crash.
+        protocol_commit()
 
     logger.info("submitted %s batch %s as job %s (%d children, %d rows)",
                 job_type, submission.batch_id, submission.job_id,
@@ -286,7 +371,8 @@ def submit_units(units, job_type, queue, job_definition, binding,
 def submit_gathered(units, job_type, queue, job_definition, binding,
                     manifest_bucket, manifest_prefix, s3_client, batch_client,
                     execute, run_id, max_batch_size=None, reason="vpo",
-                    now=None, reference_observation_window=None):
+                    now=None, reference_observation_window=None,
+                    protocol_commit=None):
     """Batch a gathered unit list and submit every batch. The VPO's entry.
 
     `submit_units` submits ONE array job, which is the right unit of work for
@@ -301,6 +387,23 @@ def submit_gathered(units, job_type, queue, job_definition, binding,
     identity is what its children resolve their unit by. Reusing one identity
     across batches would put two different unit lists under one manifest key —
     which the manifest store now refuses outright.
+
+    `protocol_commit` (finding 3, fix-txn-core) is forwarded to EVERY
+    `submit_units` call unchanged — this function does not call it itself.
+    Before fix-txn-core this parameter did not exist here at all, which meant
+    `submit_units`'s `protocol_commit` slot was unreachable from the one
+    caller (`pipeline.operator.submitters.LiveSubmitter.submit`) that goes
+    through this function: `submit_gathered` is `LiveSubmitter`'s entire
+    entry point, so a parameter this function did not accept and forward was
+    a parameter the live path could never supply, however carefully
+    `submit_units` itself documented it. Each batch this loop submits is a
+    separate array job with its own pre-Batch and post-Batch commit points
+    (see `submit_units`'s docstring); passing the SAME `protocol_commit`
+    callable to every iteration is correct because it is bound to the one
+    connection this whole gathering pass shares (`LiveSubmitter.submit`
+    opens exactly one `_execute_factory()` context for every batch a poll
+    cuts), and each `submit_units` call commits it at its own two boundaries
+    regardless of how many other batches share the connection.
 
     Returns the list of (submission, attempt_ids) pairs, one per batch. A
     batch that fails to submit raises: its rows remain as reconciliation
@@ -328,7 +431,8 @@ def submit_gathered(units, job_type, queue, job_definition, binding,
             # Every batch of one gathering pass carries the same override:
             # they are one submission cut by the array ceiling, not runs
             # under different windows.
-            reference_observation_window=reference_observation_window))
+            reference_observation_window=reference_observation_window,
+            protocol_commit=protocol_commit))
     return results
 
 
@@ -741,41 +845,107 @@ def _open_submission(execute, *, batch, job_name, queue, job_definition,
     `protocol_commit` for why durability at that exact instant is what makes
     the record worth having.
 
-    A protocol failure NEVER blocks a submission. If the record cannot be
-    opened, the submission still proceeds: the protocol's purpose is to make
-    an ambiguous outcome resolvable, and refusing to submit because the
-    bookkeeping failed would convert a diagnosis aid into an outage. The
-    failure is logged, `None` is returned, and the path degrades to exactly
-    the pre-protocol behaviour.
+    **THE "PROTOCOL FAILURE NEVER BLOCKS A SUBMISSION" RULE IS NARROWED HERE
+    (finding 3, fix-txn-core), and precisely: it now means "the protocol
+    being ABSENT never blocks a submission," not "a protocol write failing
+    partway through never blocks a submission."** Those used to be one
+    `except Exception` and one return value, which is exactly the conflation
+    `is_available`'s own docstring warns against one level up: "the table is
+    not deployed" and "the write went wrong" are different facts, and this
+    function used to answer both of them with the same `None`.
+
+    The distinction matters because the two failures leave the world in
+    different states. DRAFT 044 not being applied at all means NOTHING was
+    attempted — there is no partial row, nothing to resolve, and degrading to
+    the pre-protocol behaviour costs nothing beyond the diagnosis this
+    protocol adds. That case is still caught here, still logged at debug, and
+    still returns None exactly as before — see the `is_available` branch
+    below, which is now the ONLY thing this function still catches and
+    swallows.
+
+    A failure PARTWAY THROUGH `prepare` / `attach_attempts` / `mark_calling`
+    is a different animal once the table demonstrably exists: it leaves a
+    `prepared` row that is EITHER not yet committed (harmless — the whole
+    attempt, prepare included, rolls back with everything else this
+    transaction touched, because nothing commits until the call below) OR,
+    if a caller ever changes the commit boundary to sit before this returns,
+    a row that IS durably `prepared` but never wired to its attempts and
+    never marked `calling`. `PREPARED` rows are excluded from
+    `protocol.open_submissions()` (`_OPEN_SQL` only selects `calling`/
+    `unknown`) — so a half-written `prepared` row that somehow survives is
+    invisible to every resolution pass, permanently, which is worse than no
+    protocol row at all. The only response that cannot produce that orphan
+    is to make the failure loud enough that it aborts BEFORE `submit_batch`
+    runs, so a genuinely uncommittable local transaction (this function's
+    caller now owns one real transaction per finding 2) rolls the partial
+    `prepare` back along with everything else in it, and Batch is never
+    called against a manifest whose bookkeeping this process already knows
+    is broken.
+
+    So: `prepare`, `attach_attempts` (now HARD-CHECKED — its return is the
+    row count `execute` reports, and a count that does not equal
+    `len(attempt_ids)` is exactly as much a failure as an exception, because
+    it means some pre-created attempt row was not linked to this submission)
+    and `mark_calling` run OUTSIDE the try/except below and PROPAGATE
+    whatever they raise — `protocol.SubmissionProtocolError` for the
+    attach-count mismatch (matching the vocabulary `submission.protocol`
+    already defines for "the protocol itself is broken"), or whatever
+    `prepare`/`mark_calling` themselves raise on a real database error. No
+    caller in this codebase currently catches `SubmissionProtocolError`
+    (checked at fix-txn-core time), so today this reaches `submit_units`'s
+    caller — `pipeline.operator.operator.run_pass`, uncaught — and from
+    there the operator service's own poll-failure-threshold restart
+    machinery, which is exactly the "hard abort, not a retry-in-place"
+    response finding 3 asks for: a poll that cannot durably open its
+    submission record does not get to call Batch this cycle, and the next
+    poll (or the next process, after a restart) tries again from scratch
+    with fresh manifest/rows/protocol row, never from this half-written one.
     """
     from submission import protocol
 
-    try:
-        if not protocol.is_available(execute):
-            logger.debug(
-                "the submissions table is absent (DRAFT 044 not applied); "
-                "submitting without a durable submission record")
-            return None
-
-        submission_id = protocol.prepare(
-            execute,
-            run_id=str(batch.manifest.batch_id),
-            job_type=batch.manifest.job_type,
-            job_name=job_name or f"rapid-{batch.manifest.batch_id}",
-            job_queue=queue,
-            job_definition=job_definition,
-            manifest_checksum=binding.manifest_checksum,
-            manifest_uri=manifest_uri,
-            array_size=batch.manifest.array_size,
-            now=moment)
-        protocol.attach_attempts(execute, submission_id, attempt_ids)
-        protocol.mark_calling(execute, submission_id, now=moment)
-    except Exception as exc:  # noqa: BLE001 - bookkeeping must not gate work
-        logger.warning(
-            "could not open the submission record for run %s: %s; the "
-            "submission proceeds without one",
-            batch.manifest.batch_id, exc)
+    if not protocol.is_available(execute):
+        # THE ONE CASE STILL CAUGHT AND SWALLOWED: the protocol is genuinely
+        # ABSENT (DRAFT 044 not applied), which is a real, expected, steady
+        # state until the change request lands — not a partial write. See the
+        # docstring's "narrowed here" paragraph for why this is the only
+        # branch that keeps the old degrade-and-proceed behaviour.
+        logger.debug(
+            "the submissions table is absent (DRAFT 044 not applied); "
+            "submitting without a durable submission record")
         return None
+
+    submission_id = protocol.prepare(
+        execute,
+        run_id=str(batch.manifest.batch_id),
+        job_type=batch.manifest.job_type,
+        job_name=job_name or f"rapid-{batch.manifest.batch_id}",
+        job_queue=queue,
+        job_definition=job_definition,
+        manifest_checksum=binding.manifest_checksum,
+        manifest_uri=manifest_uri,
+        array_size=batch.manifest.array_size,
+        now=moment)
+
+    attached = protocol.attach_attempts(execute, submission_id, attempt_ids)
+    if attached != len(attempt_ids):
+        # THE HARD CHECK finding 3 adds: attach_attempts's own docstring
+        # already guards against overwriting a differently-owned row
+        # (`WHERE ... submission_id IS NULL`), but a caller that never
+        # checked its return could not tell "every attempt linked" from
+        # "some attempt was already claimed by something else" — a
+        # PREPARED row that is wired to fewer attempts than it claims is
+        # exactly the half-written state the docstring above says must not
+        # be allowed to reach `submit_batch`.
+        raise protocol.SubmissionProtocolError(
+            f"submission for run {batch.manifest.batch_id} attached "
+            f"{attached} of {len(attempt_ids)} pre-created attempt row(s); "
+            f"the submission record would be PREPARED but not fully wired "
+            f"to its attempts, which no resolution pass can find "
+            f"(PREPARED rows are outside protocol.open_submissions()) — "
+            f"aborting before SubmitJob is called rather than proceeding "
+            f"with a bookkeeping row this protocol can never resolve")
+
+    protocol.mark_calling(execute, submission_id, now=moment)
 
     if commit is not None:
         # DURABLE BEFORE THE CALL. Without this the `calling` marker is
@@ -836,6 +1006,19 @@ def _bind_scheduler_jobs(writer, submission, attempt_ids):
     replayed submission cannot overwrite an id already recorded, and the
     writer raises if it cannot verify the row count — an unverifiable backfill
     is not a backfill.
+
+    **A SHORT BACKFILL NOW RAISES (finding 4, fix-txn-core) — it used to only
+    `logger.warning`.** That was silent data loss with a paper trail nobody
+    reads: a submission durably `bound`, with one or more array children
+    permanently unaddressable by scheduler id, discoverable only by grepping
+    logs for a warning that carries no alerting weight. `submit_units` now
+    calls this BEFORE its post-Batch commit (see that function's docstring on
+    `protocol_commit`'s second call), so a raise here reaches the caller with
+    nothing yet durable — `bound` and every already-backfilled id in this
+    same batch stay uncommitted and are discarded together, which is what
+    makes retrying the bookkeeping (never the call) a sound response. See
+    `SubmissionBookkeepingFailed` for the exact contract a caller retries
+    against.
     """
     assignments = []
     for index, attempt_id in enumerate(attempt_ids):
@@ -845,13 +1028,15 @@ def _bind_scheduler_jobs(writer, submission, attempt_ids):
 
     updated = writer.backfill_scheduler_job_ids(assignments)
     if updated != len(assignments):
-        # Not fatal: the rows exist and the reconciler can still find them by
-        # logical job. But it means some child is unaddressable by scheduler
-        # id until it resolves itself, which is worth saying loudly.
-        logger.warning(
-            "backfilled %d of %d scheduler job ids for run %s; the remainder "
-            "are reconciliation cases until their runtimes resolve them",
-            updated, len(assignments), submission.batch_id)
+        raise SubmissionBookkeepingFailed(
+            f"backfilled {updated} of {len(assignments)} scheduler job ids "
+            f"for run {submission.batch_id}, job {submission.job_id}: Batch "
+            f"has already accepted this job and it must not be resubmitted, "
+            f"but the child scheduler-id bookkeeping did not complete and "
+            f"has not been committed. Retry the backfill for this "
+            f"submission; do not call submit_job again for it.",
+            run_id=submission.batch_id, scheduler_job_id=submission.job_id,
+            attempt_ids=attempt_ids)
     return updated
 
 

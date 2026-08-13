@@ -122,10 +122,18 @@ class LiveSubmitter:
             The submission context: clients, buckets, binding, queue and
             definition, as the operator resolves them once per pass.
         execute_factory : callable
-            Returns a context manager yielding a database execute
-            callable. A factory rather than a connection because each
-            submission takes its own transaction, exactly as the old
-            operator's `with connection(...)` blocks did.
+            Returns a context manager yielding `(execute, protocol_commit)`:
+            a database execute callable, and a zero-argument callable that
+            commits the same connection's transaction. A factory rather than
+            a connection because each submission takes its own transaction,
+            exactly as the old operator's `with connection(...)` blocks did
+            — and, since fix-txn-core (finding 2), an ACTUAL transaction:
+            `pipeline.operator.service._execute_factory` is the concrete
+            factory this class is built with in production, and its
+            docstring is where the autocommit-per-statement defect this
+            replaced is explained in full. `protocol_commit` is threaded
+            straight through to `submit_gathered`/`submit_units` unchanged;
+            see their docstrings for the two instants it is called at.
         max_batch_size : int, optional
             The accumulator's size trigger, from the parameter tree.
         """
@@ -142,6 +150,17 @@ class LiveSubmitter:
         `RehearsalSubmitter` shares — the reachability test walks names,
         and a module-level import would put the seam in this module's
         globals where both classes live.
+
+        **`protocol_commit` IS WIRED THROUGH HERE, FOR REAL, FOR THE FIRST
+        TIME (fix-txn-core, finding 3).** Before this, `submit_gathered` did
+        not even accept the parameter, so however carefully `submit_units`
+        documented `protocol_commit`'s durability guarantee, this — the
+        ONLY live call site that reaches `submit_gathered` — had no way to
+        supply one: the `calling` marker's commit-before-`SubmitJob`
+        contract was dead code on the one path that submits anything for
+        real. `self._execute_factory()` now yields the `(execute,
+        protocol_commit)` pair `pipeline.operator.service._execute_factory`
+        builds; both are unpacked here and passed straight through.
         """
         from pipeline.seams import submit_gathered
 
@@ -152,7 +171,7 @@ class LiveSubmitter:
             return []
 
         route = operational_class.route
-        with self._execute_factory() as execute:
+        with self._execute_factory() as (execute, protocol_commit):
             return submit_gathered(
                 units,
                 job_type=route.job_type,
@@ -166,7 +185,8 @@ class LiveSubmitter:
                 execute=execute,
                 run_id=run_id,
                 max_batch_size=self._max_batch_size,
-                reference_observation_window=reference_observation_window)
+                reference_observation_window=reference_observation_window,
+                protocol_commit=protocol_commit)
 
     def __repr__(self):
         return "LiveSubmitter(can_submit=True)"
