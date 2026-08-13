@@ -546,13 +546,21 @@ class ReconcilerService:
             summary["errors"] += 1
             return
 
-        # Committed per resolved row, not once for the whole pass: a single
-        # long transaction spanning every row's Batch re-query would hold a
-        # transaction open across external API calls for the length of the
-        # pass — the same posture rule 7 forbids for SubmitJob, applied here
-        # by the same reasoning even though nothing here submits. Each
-        # resolved row's UPDATE is already durable by the time the next
-        # row's `describe` call goes out.
+        # ONE COMMIT PER PASS THAT RESOLVED SOMETHING — not per row. The
+        # distinction is worth stating because the weaker property is the one
+        # that holds: `resolve_open` returns before anything is committed, so
+        # this pass's UPDATEs share a transaction that stays open across every
+        # Batch re-query the pass makes. That is not rule 7's SubmitJob
+        # prohibition (nothing here submits, and re-query is idempotent), but
+        # it does mean a crash mid-pass loses the whole pass's resolutions
+        # rather than keeping the rows already resolved.
+        #
+        # ACCEPTED, NOT OVERLOOKED: losing them is harmless. Every lost row
+        # simply stays `calling`/`unknown` and is re-queried next pass — the
+        # protocol's own posture for an interrupted resolution — whereas
+        # committing per row would need `resolve_open` to own the boundary,
+        # which it does not. Revisit if the pass ever grows long enough that
+        # holding one transaction across its Batch calls starts to matter.
         resolved = counts[submission_protocol.FOUND] \
             + counts[submission_protocol.LOST] \
             + counts[submission_protocol.UNKNOWN]
