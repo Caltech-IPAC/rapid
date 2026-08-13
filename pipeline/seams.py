@@ -231,9 +231,51 @@ def submit_units(units, job_type, queue, job_definition, binding,
     its existing transaction shape; what it forgoes is the durability
     guarantee both commits above exist for, which is no worse than the
     pre-protocol behaviour such a caller already had.
+
+    **STEP 0, BEFORE THE MANIFEST EXISTS: WORK-UNIT AUTHORIZATION (finding
+    1, fix-state-gate).** `_authorize_units` decides, PER UNIT, whether this
+    call is the one entitled to submit it — the `ready -> submitted` CAS
+    winner, or the creator of a fresh unit — and only units it authorizes
+    survive into the manifest. Everything else in this function used to run
+    unconditionally against whatever `units` it was handed: a re-gathered
+    subject whose work unit was already `submitted` (a second operator
+    replica, a stale gathered list) or `blocked`/`complete`/`failed` under
+    the mutation API still got an attempt row and still rode into
+    `submit_batch`, because `_attach_work_unit`'s non-ready branch attached
+    without transitioning but never told its caller "this one is not
+    yours". The CAS in `WorkUnitWriter.transition_unit` always guaranteed
+    only one WINNER of `ready -> submitted`; it never stopped every OTHER
+    caller from submitting anyway.
+
+    This has to run before `Manifest(...)` below, not after: a manifest's
+    unit list and checksum are fixed at construction (`Manifest.units` is a
+    tuple), so an unauthorized unit cannot be dropped once the manifest
+    exists without republishing a different manifest under the same
+    identity — which the manifest store already refuses. Filtering first
+    means the array job Batch actually runs never contained the
+    unauthorized unit at all, rather than containing it and being asked to
+    un-contain it after the fact.
+
+    `execute is None` (predates the intent-layer ruling, IR-13) skips
+    authorization entirely and submits every unit unfiltered — the same
+    posture `_precreate`'s own `execute=None` branch already has for
+    attaching work units, extended here for the same reason: a caller with
+    no intent-layer connection has no work_units table to authorize against.
     """
     moment = now or datetime.datetime.now(datetime.timezone.utc)
-    manifest = Manifest(units=list(units), batch_id=run_id, job_type=job_type,
+    units = list(units)
+    work_unit_ids = None
+    if execute is not None:
+        authorized, work_unit_ids = _authorize_units(
+            execute, job_type, units, moment)
+        if len(authorized) != len(units):
+            logger.info(
+                "run %s: %d of %d gathered %s unit(s) were not authorized "
+                "for submission (their work unit is not 'ready') and are "
+                "excluded from this manifest", run_id, len(authorized),
+                len(units), job_type)
+        units = authorized
+    manifest = Manifest(units=units, batch_id=run_id, job_type=job_type,
                         reference_observation_window=(
                             reference_observation_window))
     batch = Batch(manifest=manifest, reason=reason)
@@ -287,10 +329,13 @@ def submit_units(units, job_type, queue, job_definition, binding,
     )
 
     # 2. The rows, BEFORE SubmitJob. No scheduler job ids yet — nothing has
-    #    assigned any.
+    #    assigned any. `work_unit_ids` (step 0) carries the ALREADY-DECIDED
+    #    work_unit_id for each surviving unit, in manifest order — see
+    #    `_precreate`'s docstring for why it now ATTACHES to a decision made
+    #    here rather than deciding again itself.
     writer = AttemptWriter(execute)
     attempt_ids = _precreate(writer, batch.manifest, run_id, bound, moment,
-                             execute=execute)
+                             execute=execute, work_unit_ids=work_unit_ids)
 
     # 2a. THE SUBMISSION RECORD (rule 7, brief C1). Opened `prepared` — the
     #     manifest exists and the rows exist, but nothing has been asked of
@@ -463,7 +508,8 @@ def _admission_units_of(manifest):
     return units
 
 
-def _precreate(writer, manifest, run_id, binding, moment, execute=None):
+def _precreate(writer, manifest, run_id, binding, moment, execute=None,
+               work_unit_ids=None):
     """One logical job and one attempt row per array child, before SubmitJob.
 
     The logical_job_id MUST be the id the runtime will resolve with — the
@@ -532,6 +578,25 @@ def _precreate(writer, manifest, run_id, binding, moment, execute=None):
     means the deployment step did not run for an enabled stream, which is a
     hard error and propagates as one. Nothing here classifies a database
     error by message text any more; see `pipeline.intent.errors`.
+
+    **ATTACHES TO A DECISION MADE EARLIER; NO LONGER DECIDES (finding 1,
+    fix-state-gate).** `work_unit_ids` is the per-unit `work_unit_id` list
+    `submit_units` computed via `_authorize_units` BEFORE the manifest — and
+    therefore before this loop — ever existed: authorization has to run
+    before an unauthorized unit can be excluded from the manifest at all
+    (see `submit_units`'s own docstring, "STEP 0"), so by the time this
+    function runs, every unit in `manifest.units` is already a known
+    ready->submitted CAS winner or fresh-unit creator with a settled
+    `work_unit_id`. This loop just writes that id onto the new attempt row
+    (`_set_attempt_work_unit`) rather than re-running the find-or-create/CAS
+    dispatch `_attach_work_unit` used to run here — running it a second time
+    per unit would be redundant work at best and, worse, a second
+    read-modify-write against a row the authorization pass may have already
+    moved, racing against itself.
+
+    `work_unit_ids=None` (matching `execute=None`) skips attachment
+    entirely — the caller had no intent-layer connection to authorize
+    against in the first place, so there is nothing to attach.
     """
     from observability.attempts import AttemptIdentity
     from submission.subjects import attempt_identity_fields
@@ -564,9 +629,8 @@ def _precreate(writer, manifest, run_id, binding, moment, execute=None):
             created_at=moment, submitted_at=moment,
             binding=binding)
 
-        if execute is not None:
-            _attach_work_unit(execute, manifest.job_type, unit,
-                              attempt_id, moment)
+        if execute is not None and work_unit_ids is not None:
+            _set_attempt_work_unit(execute, attempt_id, work_unit_ids[index])
 
         attempt_ids.append(attempt_id)
     return attempt_ids
@@ -596,8 +660,78 @@ def _input_scope_for(job_type, unit):
     return build_input_scope(job_type, unit)
 
 
+def _authorize_units(execute, job_type, units, moment):
+    """Decide, PER UNIT, whether this call may submit it (finding 1).
+
+    The gate `_attach_work_unit` never had: that function ran the SAME
+    find-or-create/CAS dispatch this one runs, but its non-ready branch
+    (`_transition_or_defer`, below) ATTACHED the attempt's FK regardless of
+    what it found — `submitted` (another replica, or a stale gathered list
+    re-offering a unit already in flight), `blocked`/`complete`/`failed`
+    under the mutation API, all attached exactly like a fresh `ready` unit
+    did. The CAS in `WorkUnitWriter.transition_unit` guaranteed only one
+    WINNER of `ready -> submitted`; nothing stopped every LOSER — or every
+    caller that was never in the race at all, because the unit was already
+    settled before this poll started — from being handed an attempt row and
+    riding into `submit_batch` anyway.
+
+    Called from `submit_units` BEFORE the manifest exists (see that
+    function's own docstring, "STEP 0"), so an unauthorized unit can be
+    dropped from `units` before it is ever checksummed into a manifest or
+    given an attempt row — this is the FIRST-LINE gate finding 5's
+    `state = 'ready'` gathering-SQL predicate is meant to make rare, and the
+    LAST-LINE one that closes what a stale gathered list or a second
+    operator replica can still slip past it.
+
+    Returns `(authorized_units, work_unit_ids)`: `authorized_units` is the
+    subset of `units` (in the SAME relative order) this call may submit,
+    and `work_unit_ids[i]` is the settled `work_unit_id` for
+    `authorized_units[i]` — carried forward so `_precreate` attaches to a
+    decision already made rather than re-deciding (see its own docstring).
+    A unit dropped here is logged at INFO with its work unit's state and
+    otherwise silently excluded: this is the ordinary "someone else already
+    owns this" outcome the gate exists to produce, not an error.
+    """
+    authorized_units = []
+    work_unit_ids = []
+    for unit in units:
+        work_unit_id, ok = _decide_work_unit(execute, job_type, unit, moment)
+        if ok:
+            authorized_units.append(unit)
+            work_unit_ids.append(work_unit_id)
+    return authorized_units, work_unit_ids
+
+
 def _attach_work_unit(execute, job_type, unit, attempt_id, moment):
-    """Find-or-create this unit's work unit, transition it, and attach it.
+    """Find-or-create this unit's work unit, decide, and attach if authorized.
+
+    A thin wrapper over `_decide_work_unit` kept for its own direct callers
+    (`pipeline.mock.transformer`'s campaign-unit path, and this module's
+    test suite) that need "decide and attach" as one call rather than the
+    two-phase decide-then-attach `submit_units`/`_precreate` now use. See
+    `_decide_work_unit` for the full find-or-create/CAS/race-tolerance
+    contract; this function adds only the attempt-row attachment
+    (`_set_attempt_work_unit`) `_decide_work_unit` itself does not do.
+
+    **NOT AUTHORIZED MEANS NOT ATTACHED (finding 1).** This used to attach
+    unconditionally — `_transition_or_attach`'s non-ready branch attached
+    the attempt's FK to a `submitted`/`blocked`/`complete`/`failed` unit
+    exactly as it attached to a fresh `ready` one. A caller reaching this
+    function with a unit whose work unit is not authorized for submission
+    gets no FK write; see `_decide_work_unit` for what "not authorized"
+    means and why silently skipping it here (rather than raising) is
+    correct — an existing caller of THIS function that wants the old
+    submit-regardless behaviour never existed on the live path, which now
+    goes through `_authorize_units`/`_precreate` instead.
+    """
+    work_unit_id, ok = _decide_work_unit(execute, job_type, unit, moment)
+    if ok:
+        _set_attempt_work_unit(execute, attempt_id, work_unit_id)
+    return work_unit_id
+
+
+def _decide_work_unit(execute, job_type, unit, moment):
+    """Find-or-create this unit's work unit, and decide if it is submittable.
 
     **THE FIND-OR-CREATE SHAPE (task brief: document the exact SQL shape).**
     `WorkUnitWriter.find_current_unit` issues one SELECT against the
@@ -661,7 +795,7 @@ def _attach_work_unit(execute, job_type, unit, attempt_id, moment):
         so if the winner transitions first, this one raises
         `WorkUnitNotFound` and does not double-submit; or
       * `submitted` — the winner already transitioned, and this caller takes
-        the attach-without-transition branch.
+        the not-authorized branch (finding 1) rather than attaching to it.
 
     In both orderings exactly one ready->submitted event fires. The CAS in
     `WorkUnitWriter.transition_unit` is what makes that true under real
@@ -677,6 +811,14 @@ def _attach_work_unit(execute, job_type, unit, attempt_id, moment):
     the startup completeness check, so a missing definition at work-unit
     creation is now a hard error, as it should always have been. A
     foreign-key violation here propagates.
+
+    Returns `(work_unit_id, authorized)`. `authorized` is True only for the
+    `ready -> submitted` CAS winner (fresh-unit creator, or the transitioner
+    of a pre-existing ready unit — see `_transition_or_defer`); every other
+    outcome returns the settled `work_unit_id` (for logging/diagnostics)
+    alongside `authorized=False`, and callers (`_authorize_units`,
+    `_attach_work_unit`) must not create an attempt or a Batch submission
+    for it (finding 1).
     """
     identity = WorkUnitIdentity(
         job_type=job_type, input_scope=_input_scope_for(job_type, unit),
@@ -712,7 +854,8 @@ def _attach_work_unit(execute, job_type, unit, attempt_id, moment):
             # migration 036's partial unique index refused ours. The row we
             # needed exists — so re-SELECT it and fall through to the SAME
             # state dispatch a pre-existing unit takes. Both racers end up
-            # returning one work_unit_id.
+            # returning one work_unit_id, and AT MOST one of them is
+            # authorized (finding 1) — see `_transition_or_defer`.
             existing = work_writer.find_current_unit(
                 identity.job_type, identity.input_scope)
             if existing is None:
@@ -724,54 +867,55 @@ def _attach_work_unit(execute, job_type, unit, attempt_id, moment):
                 raise
             logger.info(
                 "lost the work-unit claim race for %s/%s; resolved to the "
-                "winning unit %s for attempt %s",
-                job_type, identity.input_scope, existing["work_unit_id"],
-                attempt_id)
-            work_unit_id = _transition_or_attach(
+                "winning unit %s", job_type, identity.input_scope,
+                existing["work_unit_id"])
+            return _transition_or_defer(
                 execute, work_writer, existing, job_type,
-                identity.input_scope, attempt_id, moment)
-            _set_attempt_work_unit(execute, attempt_id, work_unit_id)
-            return
+                identity.input_scope, moment)
         work_writer.transition_unit(
             work_unit_id, READY, SUBMITTED, writer=WRITER_ORCHESTRATOR,
             now=moment)
-    else:
-        work_unit_id = _transition_or_attach(
-            execute, work_writer, existing, job_type, identity.input_scope,
-            attempt_id, moment)
+        return work_unit_id, True
 
-    _set_attempt_work_unit(execute, attempt_id, work_unit_id)
+    return _transition_or_defer(execute, work_writer, existing, job_type,
+                                identity.input_scope, moment)
 
 
-def _transition_or_attach(execute, work_writer, existing, job_type,
-                          input_scope, attempt_id, moment):
-    """Transition a pre-existing unit ready->submitted, or just attach to it.
+def _transition_or_defer(execute, work_writer, existing, job_type,
+                         input_scope, moment):
+    """Transition a pre-existing READY unit, or defer to whoever owns it.
 
-    Factored out of `_attach_work_unit` because the race-loser path needs
+    Factored out of `_decide_work_unit` because the race-loser path needs
     exactly this dispatch (rule 6: "attaching to a unit already `submitted`
     must not authorize a second submission path") and duplicating it was how
-    the two branches would drift. Returns the work_unit_id either way.
+    the two branches would drift. Returns `(work_unit_id, authorized)`.
 
-    **SUBMISSION OWNERSHIP STAYS EXCLUSIVE.** The `state != READY` branch
-    attaches the attempt's FK and issues no transition, so nothing here can
-    produce a second ready->submitted event for a unit already submitted. The
+    **SUBMISSION OWNERSHIP STAYS EXCLUSIVE, AND SO DOES ATTACHMENT (finding
+    1).** Renamed from `_transition_or_attach`: the `state != READY` branch
+    used to attach the attempt's FK anyway ("attach without transitioning
+    rather than issuing an illegal edge"), which is exactly the gap finding
+    1 closes — a unit already `submitted`/`blocked`/`complete`/`failed`
+    is not this caller's to submit, so this function now DEFERS (returns
+    `authorized=False`) rather than attaching, and the caller
+    (`_authorize_units`) excludes the unit from the manifest entirely. The
     READY branch's `transition_unit` is CAS-guarded on `state = 'ready'`, so
     two callers that both read `ready` still yield exactly one transition —
     the loser raises `WorkUnitNotFound` from the CAS rather than firing a
-    duplicate.
+    duplicate (that raise propagates uncaught, same as before; a caller
+    racing this closely is a genuine concurrent-CAS collision, not the
+    already-settled-state case this function's dispatch otherwise handles).
     """
     work_unit_id = existing["work_unit_id"]
     if existing["state"] != READY:
-        # Already submitted (a retry re-running _precreate for a unit whose
-        # work unit is mid-flight), parked `blocked` by retry policy, or
-        # otherwise not workable right now — attach without transitioning
-        # rather than issuing an illegal edge. The attempt still gets its FK;
-        # the work unit's own state is left to whichever writer owns it.
-        logger.debug(
-            "work unit %s for %s/%s is %s, not ready; attaching attempt %s "
-            "without a transition",
-            work_unit_id, job_type, input_scope, existing["state"], attempt_id)
-        return work_unit_id
+        # Already submitted (a retry re-running gathering for a unit whose
+        # work unit is mid-flight), parked `blocked` by retry policy,
+        # closed `complete`/`failed`, or `quarantined` — not this caller's
+        # to submit. DEFER: no FK attach, no transition, no attempt for it.
+        logger.info(
+            "work unit %s for %s/%s is %s, not ready; not authorized for "
+            "submission by this pass", work_unit_id, job_type, input_scope,
+            existing["state"])
+        return work_unit_id, False
     # THE CAMPAIGN-STAGED CASE (and any other pre-created-ready unit): a unit
     # already exists in 'ready', created by another writer (the mock
     # transformer, part 5, or a genuine upstream validation/ingest stage this
@@ -779,7 +923,7 @@ def _transition_or_attach(execute, work_writer, existing, job_type,
     # writer='orchestrator', never re-creating.
     work_writer.transition_unit(
         work_unit_id, READY, SUBMITTED, writer=WRITER_ORCHESTRATOR, now=moment)
-    return work_unit_id
+    return work_unit_id, True
 
 
 def _set_attempt_work_unit(execute, attempt_id, work_unit_id):

@@ -531,6 +531,165 @@ class SubmitUnitsTests(unittest.TestCase):
                          "only the pre-Batch commit may have fired")
 
 
+class SubmissionAuthorizationTests(unittest.TestCase):
+    """Finding 1 (fix-state-gate), exercised through `submit_units` itself
+    rather than at the `_attach_work_unit`/`_decide_work_unit` unit level:
+    a unit whose work unit is not `ready` must never reach Batch, and never
+    get an attempt row, however it arrived in the gathered list — a stale
+    poll, a second operator replica, or a re-gathered blocked/completed
+    subject.
+    """
+
+    def setUp(self):
+        self.clock = CallClock()
+        self.batch = FakeBatchClient(clock=self.clock)
+        self.s3 = FakeS3()
+        self.execute = RecordingExecute(clock=self.clock)
+
+    def _submit(self, unit_list, **overrides):
+        kwargs = dict(
+            job_type="science", queue="rapid-queue-prompt",
+            job_definition="rapid-pipeline-science", binding=BINDING,
+            manifest_bucket="bucket", manifest_prefix="submissions",
+            s3_client=self.s3, batch_client=self.batch,
+            execute=self.execute, run_id="run-1",
+            now=utc(2026, 8, 6, 12, 0, 0))
+        kwargs.update(overrides)
+        return seams.submit_units(unit_list, **kwargs)
+
+    def _seed_scope(self, unit, state, work_unit_id=555):
+        from submission.subjects import subject_for
+        subject = subject_for("science").subject_for(unit)
+        scope = "/".join(str(c) for c in subject[1:])
+        self.execute.work_units_by_scope[("science", scope)] = {
+            "work_unit_id": work_unit_id, "state": state}
+        return scope
+
+    def test_an_already_submitted_units_subject_is_excluded_not_resubmitted(self):
+        # THE DEFECT, DIRECTLY: a re-gathered subject whose work unit is
+        # already `submitted` (a stale gathered list, or a second operator
+        # replica that already claimed it) must not get a second attempt
+        # row or a second Batch job.
+        unit = units(count=1)[0]
+        self._seed_scope(unit, "submitted")
+
+        with self.assertRaises(ValueError):
+            # Manifest() itself refuses an empty unit list — the whole
+            # batch had exactly one unit and it was excluded, so there is
+            # nothing left to submit. This is the correct outcome, not an
+            # incidental one: see the "everything excluded" test below for
+            # the assertion on WHY nothing was submitted.
+            self._submit([unit])
+
+        self.assertIsNone(self.batch.submitted_at_call,
+                          "SubmitJob must never be called for a unit whose "
+                          "work unit is not ready")
+        creates = [s for s, _ in self.execute.statements
+                  if "INSERT INTO attempts" in s]
+        self.assertEqual([], creates,
+                         "an unauthorized unit must get no attempt row")
+
+    def test_blocked_and_complete_subjects_are_also_excluded(self):
+        from submission.subjects import subject_for
+
+        for state in ("blocked", "complete", "failed", "quarantined"):
+            with self.subTest(state=state):
+                execute = RecordingExecute(clock=CallClock())
+                unit = units(count=1)[0]
+                subject = subject_for("science").subject_for(unit)
+                scope = "/".join(str(c) for c in subject[1:])
+                execute.work_units_by_scope[("science", scope)] = {
+                    "work_unit_id": 555, "state": state}
+                batch = FakeBatchClient()
+
+                with self.assertRaises(ValueError):
+                    seams.submit_units(
+                        [unit], job_type="science", queue="rapid-queue-prompt",
+                        job_definition="rapid-pipeline-science",
+                        binding=BINDING, manifest_bucket="bucket",
+                        manifest_prefix="submissions", s3_client=FakeS3(),
+                        batch_client=batch, execute=execute, run_id="run-1",
+                        now=utc(2026, 8, 6, 12, 0, 0))
+
+                self.assertIsNone(batch.submitted_at_call)
+
+    def test_a_mixed_batch_submits_only_the_authorized_units(self):
+        # The realistic shape: gathering returns several units, one of
+        # which is a stale re-offer of an already-submitted subject. The
+        # manifest built and the array job submitted must contain only the
+        # units this call is authorized to submit — not zero (the other
+        # units ARE ready) and not all of them (the stale one is not).
+        fresh_units = units(count=2, base=91000)
+        stale_unit = units(count=1, base=90000)[0]
+        self._seed_scope(stale_unit, "submitted", work_unit_id=555)
+
+        submission, attempt_ids = self._submit(
+            fresh_units + [stale_unit])
+
+        self.assertEqual(2, submission.array_size,
+                         "only the two fresh units are in the array job")
+        self.assertEqual(2, len(attempt_ids))
+        self.assertIsNotNone(self.batch.submitted_at_call)
+
+    def test_a_fresh_unit_alongside_a_blocked_one_is_still_authorized(self):
+        # The gate must not be all-or-nothing at the batch level: excluding
+        # one unauthorized unit must not also exclude its authorized
+        # batch-mates.
+        fresh_unit = units(count=1, base=91000)[0]
+        blocked_unit = units(count=1, base=90000)[0]
+        self._seed_scope(blocked_unit, "blocked", work_unit_id=556)
+
+        submission, attempt_ids = self._submit([fresh_unit, blocked_unit])
+
+        self.assertEqual(1, submission.array_size)
+        self.assertEqual(1, len(attempt_ids))
+
+    def test_a_pre_existing_ready_unit_is_still_authorized_and_transitions(self):
+        # The positive case, asserted alongside the negative ones above so
+        # a regression that excludes EVERYTHING (not just non-ready units)
+        # would fail here: a unit whose work unit already exists in
+        # 'ready' (the campaign-staging shape) is authorized, transitions
+        # ready->submitted, and reaches Batch exactly as a fresh unit does.
+        unit = units(count=1)[0]
+        self._seed_scope(unit, "ready", work_unit_id=777)
+
+        submission, attempt_ids = self._submit([unit])
+
+        self.assertEqual(1, submission.array_size)
+        self.assertEqual(1, len(attempt_ids))
+        transitions = [params for sql, params in self.execute.statements
+                      if "UPDATE work_units SET state" in sql]
+        self.assertEqual(1, len(transitions))
+        self.assertIn("submitted", transitions[0])
+        self.assertIn(777, transitions[0])
+
+    def test_a_second_replicas_submit_units_call_defers_to_the_first(self):
+        # THE STATED SCENARIO: "two operator replicas... submits duplicate
+        # Batch jobs." Simulated as two submit_units calls sharing one
+        # execute/database double — the second call's unit is the SAME
+        # (job_type, input_scope) the first call's submit_units already
+        # transitioned to 'submitted'.
+        unit = units(count=1)[0]
+
+        first_submission, first_attempts = self._submit([unit])
+        self.assertEqual(1, first_submission.array_size)
+        self.assertEqual(1, len(first_attempts))
+
+        second_batch = FakeBatchClient(clock=self.clock)
+        with self.assertRaises(ValueError):
+            seams.submit_units(
+                [unit], job_type="science", queue="rapid-queue-prompt",
+                job_definition="rapid-pipeline-science", binding=BINDING,
+                manifest_bucket="bucket", manifest_prefix="submissions",
+                s3_client=self.s3, batch_client=second_batch,
+                execute=self.execute, run_id="run-2",
+                now=utc(2026, 8, 6, 12, 5, 0))
+
+        self.assertIsNone(second_batch.submitted_at_call,
+                          "the second replica must never call SubmitJob "
+                          "for a unit the first replica already submitted")
+
+
 class AttachWorkUnitTests(unittest.TestCase):
     """`_precreate` attaches a work_unit_id to every new attempt (ruling 13).
 
@@ -680,25 +839,41 @@ class AttachWorkUnitTests(unittest.TestCase):
         # by calling _attach_work_unit twice directly against one shared
         # fake executor — the second call's SELECT now finds what the
         # first call's INSERT created, exactly the re-SELECT-on-conflict
-        # shape `_attach_work_unit`'s docstring describes, without needing
+        # shape `_decide_work_unit`'s docstring describes, without needing
         # real thread concurrency to prove the resolution is idempotent.
+        #
+        # **ONLY ONE CALLER IS AUTHORIZED (finding 1, fix-state-gate).**
+        # This test used to assert that BOTH calls attached their attempt's
+        # FK to the shared work unit — which was finding 1's bug stated as
+        # a passing test: the second call finds the unit already
+        # `submitted` by the first and, before this fix, attached to it
+        # anyway. Only the first caller (the `ready -> submitted` CAS
+        # winner) may attach; the second must be deferred, not attached to
+        # a unit it does not own.
         from pipeline.seams import _attach_work_unit
         unit = units(count=1)[0]
 
-        _attach_work_unit(self.execute, "science", unit, attempt_id=501,
-                          moment=utc(2026, 8, 6, 12, 0, 0))
-        _attach_work_unit(self.execute, "science", unit, attempt_id=502,
-                          moment=utc(2026, 8, 6, 12, 0, 1))
+        first_id = _attach_work_unit(self.execute, "science", unit,
+                                     attempt_id=501,
+                                     moment=utc(2026, 8, 6, 12, 0, 0))
+        second_id = _attach_work_unit(self.execute, "science", unit,
+                                      attempt_id=502,
+                                      moment=utc(2026, 8, 6, 12, 0, 1))
 
         creates = [s for s, _ in self.execute.statements
                    if "INSERT INTO work_units" in s]
         self.assertEqual(1, len(creates),
                          "only the first caller creates the work unit")
+        # Both calls resolve to the SAME work_unit_id — the identity
+        # question is answered identically either way.
+        self.assertEqual(first_id, second_id)
         updates = [params for sql, params in self.execute.statements
                    if "UPDATE attempts SET work_unit_id" in sql]
-        self.assertEqual(2, len(updates))
-        self.assertEqual(updates[0][0], updates[1][0],
-                         "both attempts attach to the SAME work unit")
+        self.assertEqual(1, len(updates),
+                         "only the authorized (first) caller attaches; the "
+                         "second finds the unit already submitted and is "
+                         "deferred, not attached")
+        self.assertIn(first_id, updates[0])
 
 
 class CampaignUnitTransitionIntegrityTests(unittest.TestCase):
