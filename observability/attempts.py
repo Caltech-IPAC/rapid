@@ -486,7 +486,8 @@ class AttemptWriter:
     def create_submitted(self, identity: AttemptIdentity, created_at: Any,
                          submitted_at: Any,
                          scheduler_job_id: str | None = None,
-                         binding: ExecutionBinding | None = None) -> int:
+                         binding: ExecutionBinding | None = None,
+                         array_index: int | None = None) -> int:
         """Create one `submitted` row and return its attempt_id.
 
         `created_at` is logical-job creation; `submitted_at` is the moment the
@@ -498,11 +499,16 @@ class AttemptWriter:
         `scheduler_job_id` is optional because an array child does not have one
         yet at creation time; `backfill_scheduler_job_ids` fills it in.
 
-        `binding` is REQUIRED at schema_version >= 2: migration 013's amended
-        submitted-state constraint demands the execution binding, and a writer
-        declaring version 2 is one that must supply it. It is checked here
-        rather than left to the database so the failure names the missing
-        thing instead of arriving as a constraint violation.
+        `array_index` (migration 060) is this row's position in its Batch
+        array submission — 0-based, 0 for a single-child submission, NULL for
+        a caller that predates the column (there is no other legitimate
+        reason to omit it on a new operational attempt; see the migration's
+        own comment). It is what lets FOUND recovery
+        (`submission.protocol.resolve`) re-derive `<parent job id>:<index>`
+        for a submission whose post-call backfill was lost — the same fact
+        `_bind_scheduler_jobs` already derives from the manifest loop
+        position at submission time, now persisted so a later process, with
+        only a `submissions` row in scope, can recover it too.
         """
         if binding is None and self.schema_version >= 2:
             raise ValueError(
@@ -520,9 +526,9 @@ class AttemptWriter:
             "  created_at, submitted_at,"
             "  binding_job_definition_arn, binding_job_definition_rev,"
             "  binding_image_digest, binding_release_identity,"
-            "  binding_manifest_checksum"
+            "  binding_manifest_checksum, array_index"
             ") VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,"
-            "          %s, %s, %s, %s, %s)"
+            "          %s, %s, %s, %s, %s, %s)"
             " RETURNING attempt_id"
         )
         params = [
@@ -536,11 +542,13 @@ class AttemptWriter:
             binding.image_digest if binding else None,
             binding.release_identity if binding else None,
             binding.manifest_checksum if binding else None,
+            array_index,
         ]
         rows = self._execute(sql, params)
         attempt_id = _single_value(rows)
-        logger.info("created submitted attempt %s for %s/%s", attempt_id,
-                    identity.run_id, identity.logical_job_id)
+        logger.info("created submitted attempt %s for %s/%s (array index %s)",
+                    attempt_id, identity.run_id, identity.logical_job_id,
+                    array_index)
         return attempt_id
 
     def create_submitted_for_submission(self, submission: Any, run_id: str,
@@ -558,6 +566,11 @@ class AttemptWriter:
         ``<parent>:<index>``), so they are set at creation. A caller that cannot
         derive them — a submission path where the parent id is not yet known —
         creates rows without them and backfills.
+
+        Also records each row's `array_index` (migration 060) as the same
+        loop position the scheduler job id is derived from — this path
+        already knows it, so there is no reason to leave it NULL the way a
+        pre-050 row would be.
         """
         attempt_ids: list[int] = []
         for index, unit in enumerate(submission.manifest.units):
@@ -587,7 +600,7 @@ class AttemptWriter:
             attempt_ids.append(self.create_submitted(
                 identity, created_at=created_at, submitted_at=submitted_at,
                 scheduler_job_id=submission.child_job_id(index),
-                binding=binding))
+                binding=binding, array_index=index))
         logger.info("created %d attempt rows for batch %s",
                     len(attempt_ids), submission.batch_id)
         return attempt_ids

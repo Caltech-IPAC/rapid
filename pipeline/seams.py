@@ -519,6 +519,16 @@ def _precreate(writer, manifest, run_id, binding, moment, execute=None,
     row, and every pre-created row is orphaned in `submitted` until a horizon
     classifies it. The two sides agreeing is the whole mechanism.
 
+    **RECORDS ITS OWN ARRAY POSITION (migration 060, closing finding 4's
+    FOUND-recovery gap).** The loop below already enumerates `manifest.units`
+    in the exact order `_bind_scheduler_jobs` later re-derives Batch child ids
+    from (`<parent job id>:<index>`) — that order IS the array order, fixed
+    once the manifest is checksummed. `array_index=index` persists that same
+    position onto the row via `create_submitted`, so a FOUND recovery running
+    later, in a different process, with only a `submissions` row in scope
+    (`submission.protocol.resolve`), can re-derive it too, rather than only
+    the in-memory loop that created the rows ever knowing it.
+
     **The key is run-scoped (review finding #3).** It used to be `unit.key` —
     exposure/SCA — which is a global identity: `logical_jobs` has a global
     primary key on it, so reprocessing one exposure/SCA under a second run hit
@@ -627,7 +637,7 @@ def _precreate(writer, manifest, run_id, binding, moment, execute=None,
                 logical_job_id=logical_job_id,
                 **identity_fields),
             created_at=moment, submitted_at=moment,
-            binding=binding)
+            binding=binding, array_index=index)
 
         if execute is not None and work_unit_ids is not None:
             _set_attempt_work_unit(execute, attempt_id, work_unit_ids[index])

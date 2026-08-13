@@ -132,6 +132,17 @@ class RecordingExecute:
     class's ordinary posture) with the full six-state machine reachable
     through `submissions_by_id`; set it False to exercise the pre-protocol
     degrade path this class predates.
+
+    Extended again (migration 060, finding 4's FOUND-recovery close) to
+    model `attempts.array_index` and `attempts.scheduler_job_id` well enough
+    for `submission.protocol.backfill_found_children`'s two statements
+    (`_COUNT_UNBOUND_CHILDREN_SQL`, `_BACKFILL_FOUND_CHILDREN_SQL`) to read
+    and write real per-row state, via `attempts_by_id`. `INSERT INTO
+    attempts` now seeds a row there keyed by the id it returns, recording
+    the array_index the INSERT carries as its last parameter (matching
+    `AttemptWriter.create_submitted`'s column list) — so a test that submits
+    through `submit_units` and then resolves FOUND exercises the same rows
+    end to end, rather than a second, independently-seeded fixture.
     """
 
     def __init__(self, clock=None, submissions_available=True):
@@ -174,13 +185,33 @@ class RecordingExecute:
         #: zero rowcount (the SQL guard's no-op case), simulating a short
         #: backfill for finding 4's hard-check tests.
         self.backfill_short_by_rows: int = 0
+        #: attempt_id -> {"scheduler_job_id": str|None, "array_index":
+        #: int|None, "submission_id": int|None}. Seeded by `INSERT INTO
+        #: attempts` (migration 060: the array_index INSERT carries is
+        #: recorded here) and updated by `attach_attempts`'s UPDATE and by
+        #: `backfill_found_children`'s count/UPDATE pair — the state a FOUND
+        #: recovery test needs to exist independent of a real database.
+        self.attempts_by_id: dict[int, dict] = {}
 
     def __call__(self, statement, params=None):
         call = self.clock.tick()
         self.statements.append((statement, params))
-        if "INSERT INTO attempts" in statement \
-                and self.first_attempt_insert_call is None:
-            self.first_attempt_insert_call = call
+        if statement.startswith("INSERT INTO attempts"):
+            if self.first_attempt_insert_call is None:
+                self.first_attempt_insert_call = call
+            self.next_id += 1
+            # `array_index` is this INSERT's last bound parameter
+            # (`AttemptWriter.create_submitted`'s column list); `scheduler_
+            # job_id` is its fourth (after schema_version, run_id,
+            # logical_job_id) — read positionally rather than re-parsing the
+            # SQL text, matching how this double already treats every other
+            # INSERT here.
+            self.attempts_by_id[self.next_id] = {
+                "scheduler_job_id": params[3] if params else None,
+                "array_index": params[-1] if params else None,
+                "submission_id": None,
+            }
+            return [(self.next_id,)]
         if "INSERT INTO logical_jobs" in statement:
             # `ON CONFLICT DO NOTHING RETURNING logical_job_id` — one row back
             # when the insert landed (FixA, #3: a conflict is verified, not
@@ -245,6 +276,10 @@ class RecordingExecute:
             if self.attach_short_by:
                 attached = attached[:len(attached) - self.attach_short_by]
             row["attempt_ids"].update(attached)
+            for attempt_id in attached:
+                if attempt_id in self.attempts_by_id:
+                    self.attempts_by_id[attempt_id]["submission_id"] = \
+                        submission_id
             return len(attached)
         if "SET state = 'calling'" in statement:
             submission_id = params[-1]
@@ -268,11 +303,43 @@ class RecordingExecute:
                 return 0
             row["state"] = "unknown"
             return 1
+        if "SET state = 'found'" in statement:
+            # `protocol.mark_found`: CALLING or UNKNOWN -> FOUND, the
+            # resolution pass's positive outcome (migration 060's
+            # `FoundRecoveryTests` is this handler's first exerciser — the
+            # class's own docstring on `resolve`'s FOUND branch had no
+            # coverage through this double before).
+            submission_id = params[-1]
+            row = self.submissions_by_id.get(submission_id)
+            if row is None or row["state"] not in ("calling", "unknown"):
+                return 0
+            row["state"] = "found"
+            row["scheduler_job_id"] = params[0]
+            return 1
         if "RETURNING attempt_id" in statement or "resolve_attempt" in statement:
             self.next_id += 1
             return [(self.next_id,)]
         if statement.startswith("UPDATE attempts SET scheduler_job_id"):
-            # The array-child backfill (`AttemptWriter.
+            if "|| array_index" in statement:
+                # `submission.protocol._BACKFILL_FOUND_CHILDREN_SQL` (migration
+                # 060, FOUND recovery): set-based, one UPDATE for every
+                # attached child still missing a scheduler id AND carrying a
+                # recorded array_index. Rows with no recorded array_index
+                # (simulating a pre-060 attempt) are the guard's job to skip,
+                # exactly as the real `WHERE ... array_index IS NOT NULL`
+                # does — this double applies the same two-part WHERE against
+                # `attempts_by_id` rather than trusting a fixed return value.
+                scheduler_job_id, submission_id = params
+                updated = 0
+                for row in self.attempts_by_id.values():
+                    if (row["submission_id"] == submission_id
+                            and row["scheduler_job_id"] is None
+                            and row["array_index"] is not None):
+                        row["scheduler_job_id"] = (
+                            f"{scheduler_job_id}:{row['array_index']}")
+                        updated += 1
+                return updated
+            # The direct-path array-child backfill (`AttemptWriter.
             # backfill_scheduler_job_ids`). `backfill_short_by_rows` lets a
             # test simulate the SQL-guarded no-op case (`WHERE
             # scheduler_job_id IS NULL` matched nothing) for the first N
@@ -282,7 +349,24 @@ class RecordingExecute:
             if self.backfill_short_by_rows:
                 self.backfill_short_by_rows -= 1
                 return 0
+            scheduler_job_id, attempt_id = params
+            if attempt_id in self.attempts_by_id:
+                self.attempts_by_id[attempt_id]["scheduler_job_id"] = \
+                    scheduler_job_id
             return 1
+        if statement.startswith("SELECT count(*), count(array_index)"):
+            # `submission.protocol._COUNT_UNBOUND_CHILDREN_SQL`: how many of
+            # this submission's attached attempts still have no scheduler
+            # id, and how many of THOSE also carry a recorded array_index —
+            # the split `backfill_found_children` validates its own UPDATE
+            # count against.
+            submission_id = params[0]
+            unbound = [row for row in self.attempts_by_id.values()
+                      if row["submission_id"] == submission_id
+                      and row["scheduler_job_id"] is None]
+            with_index = [row for row in unbound
+                         if row["array_index"] is not None]
+            return [(len(unbound), len(with_index))]
         return 1
 
 
@@ -420,6 +504,21 @@ class SubmitUnitsTests(unittest.TestCase):
                     if isinstance(p, str) and p.startswith("job-")}
         self.assertEqual({"job-parent:0", "job-parent:1"}, assigned)
 
+    def test_array_index_is_recorded_at_precreate_in_manifest_order(self):
+        # Migration 060 (finding 4's FOUND-recovery gap). `_precreate` writes
+        # each row's array position — the SAME `enumerate(manifest.units)`
+        # position `_bind_scheduler_jobs` later re-derives Batch child ids
+        # from — so a later FOUND recovery pass has it to read back, rather
+        # than only the in-memory loop that created the rows ever knowing it.
+        self._submit(count=3)
+
+        inserts = [params for sql, params in self.execute.statements
+                   if sql.startswith("INSERT INTO attempts")]
+        self.assertEqual(3, len(inserts))
+        # `array_index` is the INSERT's last bound parameter (see
+        # `AttemptWriter.create_submitted`'s column list).
+        self.assertEqual([0, 1, 2], [params[-1] for params in inserts])
+
     def test_a_submit_job_failure_leaves_reconciliation_cases_not_orphans(self):
         # Review finding #2's second half. Rows already exist when SubmitJob
         # fails. They are NOT rolled back: they are correct, they simply have
@@ -529,6 +628,146 @@ class SubmitUnitsTests(unittest.TestCase):
         # over an incomplete backfill.
         self.assertEqual(1, len(self.commits),
                          "only the pre-Batch commit may have fired")
+
+
+class FoundRecoveryTests(unittest.TestCase):
+    """Migration 060: FOUND recovery backfills array children (finding 4's
+    second half).
+
+    Drives real pre-created rows through `submit_units` (so `array_index` is
+    recorded exactly as the live path records it), then simulates the
+    scenario the migration exists for — Batch accepted the parent but the
+    process died before the direct-path backfill ran — by clearing the
+    rows' `scheduler_job_id` and the submission's state back to `unknown`,
+    and calls `submission.protocol.resolve` directly against the SAME
+    `RecordingExecute`, exactly as a resolution pass would.
+    """
+
+    def setUp(self):
+        self.clock = CallClock()
+        self.batch = FakeBatchClient(clock=self.clock)
+        self.s3 = FakeS3()
+        self.execute = RecordingExecute(clock=self.clock)
+
+    def _submit_and_orphan(self, count):
+        """Submit `count` array children, then simulate a lost backfill.
+
+        Returns `(submission_id, attempt_ids)`. The submission row is left
+        `unknown` (as `_mark_submission_unknown` would leave a genuinely
+        ambiguous call) and every attached attempt's `scheduler_job_id` is
+        cleared back to NULL — the direct-path backfill DID run inside
+        `submit_units` (there is no other way to get real `array_index`-
+        bearing rows through this double), so this undoes only that one
+        write, leaving `array_index` itself untouched, which is the fact
+        this whole mechanism depends on having survived.
+        """
+        submission, attempt_ids = seams.submit_units(
+            units(count), job_type="science", queue="rapid-queue-prompt",
+            job_definition="rapid-pipeline-science", binding=BINDING,
+            manifest_bucket="bucket", manifest_prefix="submissions",
+            s3_client=self.s3, batch_client=self.batch,
+            execute=self.execute, run_id="run-1",
+            now=utc(2026, 8, 6, 12, 0, 0), protocol_commit=None)
+
+        submission_id = next(
+            sid for sid, row in self.execute.submissions_by_id.items()
+            if row["state"] == "bound")
+        self.execute.submissions_by_id[submission_id]["state"] = "unknown"
+        for attempt_id in attempt_ids:
+            self.execute.attempts_by_id[attempt_id]["scheduler_job_id"] = None
+        return submission_id, submission, attempt_ids
+
+    def _row_for(self, submission_id, submission, array_size):
+        return {
+            "submission_id": submission_id, "job_name": "irrelevant",
+            "job_queue": "rapid-queue-prompt", "array_size": array_size,
+        }
+
+    def test_found_recovery_backfills_exactly_the_null_scheduler_id_children(
+            self):
+        submission_id, submission, attempt_ids = self._submit_and_orphan(3)
+        row = self._row_for(submission_id, submission, array_size=3)
+
+        from submission import protocol
+        outcome = protocol.resolve(
+            self.execute, row, describe=lambda name, queue: submission.job_id)
+
+        self.assertEqual(protocol.FOUND, outcome)
+        recovered = [self.execute.attempts_by_id[aid]["scheduler_job_id"]
+                    for aid in attempt_ids]
+        self.assertEqual(
+            [f"{submission.job_id}:{i}" for i in range(3)], recovered)
+        self.assertEqual(
+            "found", self.execute.submissions_by_id[submission_id]["state"])
+
+    def test_found_recovery_validates_the_updated_row_count(self):
+        # `backfill_found_children` returns (updated, expected); resolve()
+        # logs a warning rather than raising when they disagree (a FOUND
+        # submission must still be recorded FOUND — the recovery gap is not
+        # a reason to leave the submission open), but the two counts must
+        # still be independently readable and correct.
+        from submission import protocol
+
+        submission_id, submission, _attempt_ids = self._submit_and_orphan(2)
+
+        updated, expected = protocol.backfill_found_children(
+            self.execute, submission_id, submission.job_id)
+
+        self.assertEqual(2, expected)
+        self.assertEqual(2, updated)
+
+    def test_null_array_index_rows_are_skipped_not_guessed(self):
+        # A row that predates migration 060 carries no array_index. FOUND
+        # recovery must leave it exactly as it was — NULL scheduler_job_id —
+        # rather than guessing a position for it.
+        from submission import protocol
+
+        submission_id, submission, attempt_ids = self._submit_and_orphan(3)
+        # Simulate one pre-060 row among the three: its array_index was
+        # never recorded.
+        pre_060_id = attempt_ids[1]
+        self.execute.attempts_by_id[pre_060_id]["array_index"] = None
+
+        updated, expected = protocol.backfill_found_children(
+            self.execute, submission_id, submission.job_id)
+
+        self.assertEqual(2, expected, "only the two indexed rows count")
+        self.assertEqual(2, updated)
+        self.assertIsNone(
+            self.execute.attempts_by_id[pre_060_id]["scheduler_job_id"],
+            "a row with no recorded array_index must be left NULL, never "
+            "guessed at")
+        other_ids = [aid for aid in attempt_ids if aid != pre_060_id]
+        for attempt_id in other_ids:
+            self.assertIsNotNone(
+                self.execute.attempts_by_id[attempt_id]["scheduler_job_id"])
+
+    def test_single_job_submissions_are_never_sent_through_the_array_backfill(
+            self):
+        # array_size == 1: `resolve`'s dispatch must not call
+        # backfill_found_children at all — a single job's own scheduler id
+        # is the bare parent id, not `<parent>:0`, which the backfill
+        # formula would produce if it ran.
+        from submission import protocol
+
+        submission_id, submission, attempt_ids = self._submit_and_orphan(1)
+        row = self._row_for(submission_id, submission, array_size=1)
+
+        outcome = protocol.resolve(
+            self.execute, row, describe=lambda name, queue: submission.job_id)
+
+        self.assertEqual(protocol.FOUND, outcome)
+        # The one attempt's scheduler_job_id stays NULL: nothing in this
+        # test path re-derives a single-job id from the parent, and the
+        # direct (never-ambiguous) backfill is what normally supplies it.
+        self.assertIsNone(
+            self.execute.attempts_by_id[attempt_ids[0]]["scheduler_job_id"])
+        count_calls = [sql for sql, _ in self.execute.statements
+                      if sql.startswith("SELECT count(*), count(array_index)")]
+        self.assertEqual(
+            [], count_calls,
+            "backfill_found_children must not even be asked for an "
+            "array_size == 1 submission")
 
 
 class SubmissionAuthorizationTests(unittest.TestCase):

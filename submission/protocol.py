@@ -158,7 +158,7 @@ _MARK_LOST_SQL = (
 _OPEN_SQL = (
     "SELECT submission_id, run_id, job_type, job_name, job_queue,"
     "       job_definition, state, call_started_at, resolution_deadline,"
-    "       ambiguity_detail"
+    "       ambiguity_detail, array_size"
     "  FROM submissions"
     " WHERE state IN ('calling', 'unknown')"
     " ORDER BY submission_id"
@@ -172,6 +172,37 @@ _AVAILABLE_SQL = (
 _ATTACH_SQL = (
     "UPDATE attempts SET submission_id = %s"
     " WHERE attempt_id = ANY(%s) AND submission_id IS NULL"
+)
+
+#: The FOUND-recovery backfill (migration 060, closing finding 4). Set-based
+#: rather than one UPDATE per attempt, because every attached child's id is
+#: derivable from the SAME parent id by the SAME formula
+#: (`<parent job id>:<array_index>`) — there is no per-row decision to make,
+#: only a join to restrict to this submission's still-unbound array children.
+#: Guarded exactly like `_bind_scheduler_jobs`'s direct-path backfill and
+#: `attach_attempts` above: `scheduler_job_id IS NULL` so a replayed
+#: resolution pass cannot overwrite an id already recorded, and
+#: `array_index IS NOT NULL` so a pre-060 row (which has no recorded position
+#: and must not be guessed at) is left exactly as it was — untouched, not
+#: defaulted to some assumed order.
+_BACKFILL_FOUND_CHILDREN_SQL = (
+    "UPDATE attempts SET scheduler_job_id = %s || ':' || array_index"
+    " WHERE submission_id = %s"
+    "   AND scheduler_job_id IS NULL"
+    "   AND array_index IS NOT NULL"
+)
+
+#: Count of this submission's attached attempts whose `scheduler_job_id` is
+#: still NULL — both the rows the backfill above CAN fix (`array_index`
+#: recorded) and the ones it cannot (pre-060, `array_index IS NULL`) — so the
+#: backfill's updated-row count can be validated against "how many did we
+#: expect to fix", and a short backfill (some attached attempt has no
+#: recorded array_index) is distinguished from a full one rather than
+#: silently under-counted.
+_COUNT_UNBOUND_CHILDREN_SQL = (
+    "SELECT count(*), count(array_index)"
+    "  FROM attempts"
+    " WHERE submission_id = %s AND scheduler_job_id IS NULL"
 )
 
 #: The reconciler's ambiguity path needs the submission's STATE (to let a
@@ -330,7 +361,7 @@ def open_submissions(execute):
     rows = execute(_OPEN_SQL, [])
     columns = ("submission_id", "run_id", "job_type", "job_name", "job_queue",
                "job_definition", "state", "call_started_at",
-               "resolution_deadline", "ambiguity_detail")
+               "resolution_deadline", "ambiguity_detail", "array_size")
     return [dict(zip(columns, row)) for row in (rows or [])]
 
 
@@ -345,6 +376,59 @@ def attach_attempts(execute, submission_id, attempt_ids):
     if not attempt_ids:
         return 0
     return execute(_ATTACH_SQL, [submission_id, list(attempt_ids)])
+
+
+def backfill_found_children(execute, submission_id, scheduler_job_id):
+    """FOUND recovery: derive each attached child's `scheduler_job_id`.
+
+    Migration 060 closes the gap `resolve`'s own FOUND branch used to
+    document at length: an attempt pre-created before this column existed
+    carried nothing that let a later process — running with only a
+    `submissions` row in scope, never the in-memory manifest loop that
+    created the rows — recover which array position it held. With
+    `array_index` recorded at `_precreate` time (`pipeline.seams`), the
+    position IS on the row, and Batch's own `<parent>:<index>` addressing
+    makes the rest a pure derivation rather than a lookup.
+
+    Returns `(updated, expected)`: `updated` is the row count the guarded
+    UPDATE actually touched, and `expected` is how many of this submission's
+    attached attempts were eligible (`scheduler_job_id IS NULL AND
+    array_index IS NOT NULL`) — the two agree exactly when every attached
+    child that COULD be backfilled WAS. A caller compares this against the
+    total still-unbound count (which `_COUNT_UNBOUND_CHILDREN_SQL` also
+    reports) to tell "fully recovered" from "some children predate the
+    column and are left NULL, never guessed at" — both real, distinguishable
+    outcomes, not failures of this function.
+
+    A single-child submission (`array_size` 1, `array_index` 0) is backfilled
+    by the same UPDATE and formula as an array child — `<job_id>:0` — which
+    is deliberately NOT what a single job's own scheduler id looks like
+    (Batch does not suffix a non-array job). Callers must not invoke this for
+    a submission whose `array_size` is 1; see `resolve`'s own dispatch, which
+    only calls this for `array_size > 1`.
+    """
+    total_unbound, unbound_with_index = _single_row(
+        execute(_COUNT_UNBOUND_CHILDREN_SQL, [submission_id]))
+    expected = unbound_with_index or 0
+    if expected == 0:
+        return 0, 0
+    updated = execute(
+        _BACKFILL_FOUND_CHILDREN_SQL, [str(scheduler_job_id), submission_id])
+    updated = updated if isinstance(updated, int) else len(updated or [])
+    skipped = total_unbound - expected
+    if skipped:
+        logger.warning(
+            "submission %s FOUND recovery: %d attached attempt(s) have no "
+            "recorded array_index (predate migration 060) and were left "
+            "NULL rather than guessed at; %d/%d addressable child(ren) "
+            "backfilled from parent job %s", submission_id, skipped,
+            updated, expected, scheduler_job_id)
+    else:
+        logger.info(
+            "submission %s FOUND recovery: backfilled %d/%d child "
+            "scheduler_job_id(s) from parent job %s", submission_id,
+            updated, expected, scheduler_job_id)
+    return updated, expected
 
 
 def submission_for_attempt(execute, attempt_id):
@@ -380,7 +464,10 @@ def resolve(execute, row, describe, now=None):
     The three outcomes:
 
     * **Found.** The job exists. Recorded as `found` with its id; the work is
-      running and must not be resubmitted.
+      running and must not be resubmitted. For an array submission, every
+      attached child attempt whose `scheduler_job_id` is still NULL is also
+      backfilled here, from the same parent id and each row's own
+      `array_index` (migration 060) — see `backfill_found_children`.
     * **Not found, before the deadline.** Left open. Batch is eventually
       consistent — a job submitted moments ago can be missing from a listing —
       so an early negative is "not visible yet", not "absent". The row is
@@ -402,46 +489,25 @@ def resolve(execute, row, describe, now=None):
     scheduler_job_id = describe(row["job_name"], row["job_queue"])
 
     if scheduler_job_id:
-        # KNOWN GAP, DOCUMENTED RATHER THAN SILENTLY LEFT (finding 4,
-        # fix-txn-core investigation — punted, not fixed, see
-        # LEDGER-fix-txn-core.md's "punted" section for the full analysis).
+        # ARRAY-CHILD BACKFILL (migration 060, closing the gap this branch
+        # used to only document — see git history for the analysis that
+        # concluded it needed a schema change, `LEDGER-fix-txn-core.md`'s
+        # "punted" section). `array_size` (now selected by `_OPEN_SQL`) tells
+        # array submissions from single-job ones; for an array submission,
+        # every attached child whose `scheduler_job_id` is still NULL and
+        # whose `array_index` was recorded at `_precreate` time is
+        # addressable as `<parent job id>:<array_index>` — Batch's own
+        # child-naming scheme — so the backfill below is a pure derivation,
+        # done here BEFORE `mark_found` in the same transaction as marking
+        # the submission FOUND, mirroring `pipeline.seams.submit_units`'s
+        # atomic mark-bound-and-backfill on the direct path.
         #
-        # This records the PARENT submission as FOUND, with the parent's own
-        # `scheduler_job_id` — but for an array submission it does NOT
-        # backfill any CHILD attempt's `scheduler_job_id`, the way
-        # `pipeline.seams._bind_scheduler_jobs` does for the direct
-        # (never-ambiguous) success path. Note that `_OPEN_SQL` does not even
-        # SELECT `array_size` today — `resolve`/`resolve_open` cannot
-        # currently tell an array submission from a single-job one without
-        # a further query, which any real fix here would also need to add.
-        # `pipeline.seams` derives each child id as
-        # `f"{parent_job_id}:{index}"` using the Python loop position
-        # (`enumerate(attempt_ids)`) at submission time — state that exists
-        # only in that process's memory and was never written anywhere this
-        # function, running later in a different process with only a
-        # `submissions` row in scope, can recover. The `attempts` rows this
-        # submission created carry a `logical_job_id` keyed by the manifest
-        # unit's declared SUBJECT (exposure/SCA, or another job type's typed
-        # fields — see `submission.manifest.ProcessingUnit.logical_job_key`),
-        # never by array index, so there is no existing column or string
-        # format to parse an index back out of. Closing this gap for real
-        # needs either a new `attempts` column recording each row's array
-        # index at `_precreate` time, or an ordered index->logical_job_id
-        # mapping persisted on the `submissions` row itself — a schema change
-        # (a new DRAFT migration) that was out of scope for this pass.
-        #
-        # PRACTICAL IMPACT, STATED PRECISELY: only submissions that were
-        # ambiguous (`calling`/`unknown`) AND array jobs (`array_size > 1`)
-        # AND positively found here are affected. Their children keep NULL
-        # `scheduler_job_id` even after this marks the parent FOUND — exactly
-        # the same unaddressable-by-scheduler-id state
-        # `SubmissionBookkeepingFailed` now prevents on the direct path, but
-        # here it is not raised, because there is nothing to retry into: the
-        # index mapping needed to backfill correctly does not exist yet. The
-        # rows remain findable by logical job and are not lost — reconciler
-        # closure keys on `attempts`, not on `submissions.scheduler_job_id` —
-        # but they are not addressable by scheduler id, which the reconciler
-        # uses to correlate CloudWatch/Batch events per-child.
+        # Rows with no recorded `array_index` (pre-060) are left NULL, never
+        # guessed at — `backfill_found_children` itself logs the split (full
+        # recovery vs. some children predating the column), so this call
+        # site does not duplicate that accounting.
+        if (row.get("array_size") or 1) > 1:
+            backfill_found_children(execute, submission_id, scheduler_job_id)
         mark_found(execute, submission_id, scheduler_job_id, now=moment)
         return FOUND
 
@@ -515,3 +581,17 @@ def _single_value(rows):
             "expected one returned row from the submissions INSERT, got none")
     first = rows[0]
     return first[0] if isinstance(first, (list, tuple)) else first
+
+
+def _single_row(rows):
+    """The one row a single-row aggregate SELECT returns, as a plain tuple.
+
+    `_COUNT_UNBOUND_CHILDREN_SQL` is a bare `count(*)` with no GROUP BY, so it
+    always returns exactly one row — never zero, unlike `_single_value`'s
+    RETURNING callers, which is why this does not share that function's
+    empty-result error: an aggregate with no matching rows still returns one
+    row of zeros, and that is a legitimate answer (this submission has no
+    attached attempts yet), not a protocol failure.
+    """
+    row = rows[0] if rows else (0, 0)
+    return tuple(row) if isinstance(row, (list, tuple)) else (row,)
