@@ -175,6 +175,15 @@ files respectively.
 
 ## Coverage gaps (not tested, arguably should be)
 
+**CLOSED 2026-08-13 (dcb60c8)** — the three open gaps below are now
+pinned: `test_two_concurrent_resolution_passes_do_not_double_transition_a_row`
+(contract tier), `test_a_raising_open_submissions_read_rolls_back` and
+`test_a_resolvable_attempt_uses_the_observation_not_a_found_submission`
+(stub tier); all mutation-checked, CI 541 passed. The fourth item
+(S1/S2 same-cycle composition) was already covered at 72ead77 by
+`S1FeedsS2WithinOneCycleTests`. Original gap descriptions kept below
+for the record.
+
 - **Concurrent polls / advisory lock interaction with `_resolve_submissions`**
   — untested. `_resolve_submissions` runs before the lease/lock machinery
   that guards individual attempt rows; no test exercises two overlapping
