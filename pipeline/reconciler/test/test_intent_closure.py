@@ -218,10 +218,15 @@ class WorkUnitClosureTests(unittest.TestCase):
 
         # THE SERIES CENSUS IS THE MECHANISM, asserted directly: it reports an
         # accepted sibling, which is what makes the closure a no-op.
-        sibling_accepted, losses = svc._work_unit_series(55, 1)
+        sibling_accepted, losses, sibling_open = svc._work_unit_series(55, 1)
         self.assertTrue(sibling_accepted,
                         "the census did not see the accepted sibling")
         self.assertEqual(0, losses)
+        # The accepted sibling is `terminal_after_start`, not open — finding
+        # 6's guard must not fire here, or this test's whole point (a
+        # NO-OP from the accepted-sibling rule, not from the open-sibling
+        # one) would be untested.
+        self.assertFalse(sibling_open)
 
         before = len([1 for text, params in conn.statements
                       if "UPDATE work_units SET state" in text
@@ -234,6 +239,107 @@ class WorkUnitClosureTests(unittest.TestCase):
             before, len(after),
             "the unit was transitioned despite already having an accepted "
             "attempt; an intermediate physical failure cast the unit's verdict")
+
+    def test_a_failed_attempt_leaves_the_unit_alone_while_a_sibling_runs(self):
+        """FINDING 6: an earlier superseded attempt must not reopen a work
+        unit whose later attempt is still in flight.
+
+        Batch starts a retry only after the previous attempt stops, but the
+        RECONCILER'S grace horizon is anchored per attempt — so attempt 1
+        (which stopped first) can clear its own horizon and reach
+        `_close_work_unit` while attempt 2 (which Batch already started) is
+        still `started` at the scheduler. Before this repair, attempt 1's
+        `RETRY_READY` disposition (a scheduler loss) transitioned the unit
+        straight back to `ready` with no read of the sibling's
+        `lifecycle_state` anywhere in the series census — a gatherer could
+        then submit a THIRD attempt while the second was still running, and
+        the second's own eventual success could no longer complete the
+        unit: its `submitted -> complete` CAS expects `submitted`, and the
+        unit was `ready` (or `submitted` again, under attempt 3) by then.
+        """
+        lost = attempt_row(1, lifecycle_state="started",
+                           started_at=utc(2026, 8, 6, 11, 0, 0),
+                           work_unit_id=55)
+        running = attempt_row(2, lifecycle_state="started",
+                              started_at=utc(2026, 8, 6, 11, 10, 0),
+                              work_unit_id=55)
+        jobs = [batch_job(status="FAILED", exit_code=137,
+                          started=utc(2026, 8, 6, 11, 0, 0),
+                          stopped=utc(2026, 8, 6, 11, 5, 0))]
+        svc, conn, _, _, _ = build([lost], jobs)
+        # The running sibling lives in the table for the series census to
+        # find, injected directly for the same reason
+        # `test_a_failure_beside_an_accepted_sibling_leaves_the_unit_alone`
+        # does: a poll that also reconciled it would issue ITS transition
+        # too, and the question here is narrower — what does attempt 1's
+        # failure do to a unit whose OTHER attempt is still running?
+        conn.rows[running["attempt_id"]] = dict(running)
+
+        sibling_accepted, losses, sibling_open = svc._work_unit_series(55, 1)
+        self.assertTrue(sibling_open,
+                        "the census did not see the running sibling")
+        self.assertFalse(sibling_accepted)
+
+        before = len([1 for text, params in conn.statements
+                      if "UPDATE work_units SET state" in text
+                      and 55 in params])
+        svc._close_work_unit(dict(lost), outcome="failed")
+        after = [(text, params) for text, params in conn.statements
+                 if "UPDATE work_units SET state" in text and 55 in params]
+
+        self.assertEqual(
+            before, len(after),
+            "the unit was transitioned while a sibling attempt was still "
+            "open; an earlier superseded attempt reopened work a later "
+            "attempt is still doing")
+        # The running sibling's own row is untouched by attempt 1's closure.
+        self.assertEqual("started", conn.rows[2]["lifecycle_state"])
+
+    def test_a_full_poll_leaves_the_unit_alone_while_a_sibling_runs(self):
+        """The same finding-6 scenario, end to end through `poll_once`
+        rather than a direct `_close_work_unit` call: attempt 1's row is
+        already past its grace horizon and reconciles to a scheduler-loss
+        disposition in this cycle; attempt 2's row is still `started` and
+        the scheduler still reports it RUNNING, so it stays `waiting`. The
+        unit must come out of this poll untouched either way.
+        """
+        lost = attempt_row(1, lifecycle_state="started",
+                           application_attempt_index=1,
+                           started_at=utc(2026, 8, 6, 11, 0, 0),
+                           work_unit_id=55)
+        running = attempt_row(2, lifecycle_state="started",
+                              application_attempt_index=2,
+                              started_at=utc(2026, 8, 6, 11, 10, 0),
+                              work_unit_id=55)
+        # One job, two attempts in its history: the first stopped (a
+        # scheduler-visible loss, exit 137) and the second is still running
+        # — exactly the shape Batch produces for an in-flight retry.
+        jobs = [batch_job(status="RUNNING", started=utc(2026, 8, 6, 11, 10, 0),
+                          attempts=[
+                              {"container": {"exitCode": 137},
+                               "startedAt": utc(2026, 8, 6, 11, 0, 0)
+                                   .timestamp() * 1000,
+                               "stoppedAt": utc(2026, 8, 6, 11, 5, 0)
+                                   .timestamp() * 1000},
+                              {"container": {"exitCode": None},
+                               "startedAt": utc(2026, 8, 6, 11, 10, 0)
+                                   .timestamp() * 1000},
+                          ])]
+        svc, conn, _, _, _ = build(
+            [lost, running], jobs, now=utc(2026, 8, 6, 11, 30, 0))
+
+        summary = svc.poll_once()
+
+        self.assertEqual(1, summary["classified"])
+        self.assertEqual(1, summary["waiting"])
+        transitions = [text for text, params in conn.statements
+                       if "UPDATE work_units SET state" in text
+                       and 55 in params]
+        self.assertEqual(
+            [], transitions,
+            "the unit was transitioned while attempt 2 was still running")
+        self.assertEqual("terminal_after_start", conn.rows[1]["lifecycle_state"])
+        self.assertEqual("started", conn.rows[2]["lifecycle_state"])
 
     def test_the_transition_is_written_inside_the_same_lease_as_the_close(self):
         # Same-transaction atomicity (see `_close_work_unit`'s docstring) is

@@ -1451,7 +1451,8 @@ class ReconcilerService:
             error_category=error_category)
 
     def _work_unit_series(self, work_unit_id, exclude_attempt_id):
-        """The sibling attempts of one work unit: succeeded-yet? and loss count.
+        """The sibling attempts of one work unit: succeeded-yet? loss count?
+        still open?
 
         **WHY THE SERIES AND NOT THE ROW** (rule 4, verbatim: "closure
         decisions consult the current attempt series, not the single attempt
@@ -1465,7 +1466,7 @@ class ReconcilerService:
         container that died, which is precisely the "closes from an
         intermediate physical failure" the rule forbids.
 
-        So the closure sites ask the series two questions this method
+        So the closure sites ask the series three questions this method
         answers in ONE round trip:
 
           * has any OTHER attempt at this work already been accepted? If so
@@ -1473,11 +1474,30 @@ class ReconcilerService:
           * how many scheduler-visible losses has the series absorbed? —
             the input to `retry_policy`'s ceiling, which is a property of
             the UNIT's history, not of any one attempt.
+          * is any OTHER attempt still open (`submitted`/`started`/
+            `application_closed` — `OPEN_STATES`)? (FINDING 6.) Ordinary
+            polling timing puts two attempts of one unit through this
+            method at genuinely different times: Batch starts a retry only
+            after the previous attempt stops, but the RECONCILER'S grace
+            horizon is anchored per attempt, so an earlier-stopped, earlier
+            superseded attempt can clear its own horizon and reach
+            `_close_work_unit` while a LATER attempt Batch already started
+            is still running. Before this field existed, that earlier
+            attempt's `RETRY_READY` disposition moved the unit straight
+            back to `ready` — with no read of `lifecycle_state` anywhere in
+            this method, an in-flight sibling was invisible to the
+            decision. A gatherer could then submit a third attempt while
+            the second was still running, and the second's own eventual
+            success could no longer complete the unit at all: its
+            `submitted -> complete` CAS expects the unit to still be
+            `submitted`, and by then it was `ready` (or `submitted` again,
+            under attempt 3).
 
         `exclude_attempt_id` keeps the triggering row out of its own census:
         its disposition is the caller's argument, and at this point in the
         transaction its own UPDATE has already landed, so counting it would
-        double-count the very loss being classified.
+        double-count the very loss being classified (or see its own row as
+        a "still open" sibling of itself).
 
         Runs on the same connection and therefore the same transaction as
         the closure it informs (see `_close_work_unit`'s atomicity note), so
@@ -1485,13 +1505,14 @@ class ReconcilerService:
         reading, not a stale snapshot.
         """
         rows = self._execute_on_conn(
-            "SELECT registered_at, error_category"
+            "SELECT registered_at, error_category, lifecycle_state"
             "  FROM attempts"
             " WHERE work_unit_id = %s AND attempt_id <> %s",
             [work_unit_id, exclude_attempt_id])
         sibling_accepted = False
         scheduler_losses = 0
-        for registered_at, error_category in rows or ():
+        sibling_open = False
+        for registered_at, error_category, lifecycle_state in rows or ():
             # ACCEPTANCE, NOT "the row looks successful": rule 4 admits
             # `complete` only "from an accepted (registered) result", and
             # `registered_at` is the column the registrar stamps inside the
@@ -1505,7 +1526,9 @@ class ReconcilerService:
                 sibling_accepted = True
             if error_category in RECONCILER_ERROR_CATEGORIES:
                 scheduler_losses += 1
-        return sibling_accepted, scheduler_losses
+            if lifecycle_state in OPEN_STATES:
+                sibling_open = True
+        return sibling_accepted, scheduler_losses, sibling_open
 
     def _execute_on_conn(self, sql, params):
         """One read on the caller's open transaction. See `_Executor`."""
@@ -1606,8 +1629,27 @@ class ReconcilerService:
         # work must be able to complete the unit" also runs the other way —
         # an EARLIER-reconciled success must not be undone by a
         # later-reconciled failure.
-        sibling_accepted, scheduler_losses = self._work_unit_series(
-            work_unit_id, attempt_id)
+        sibling_accepted, scheduler_losses, sibling_open = \
+            self._work_unit_series(work_unit_id, attempt_id)
+
+        # FINDING 6. A sibling still `submitted`/`started`/`application_
+        # closed` means Batch has another attempt of this SAME work in
+        # flight right now — refuse ANY disposition, success or failure,
+        # until it settles. Unconditional on `succeeded`: even a success
+        # here must wait, because forcing a transition while another
+        # attempt is mid-flight is exactly the "superseded attempt reopens
+        # the unit out from under a running sibling" defect this guards,
+        # whichever direction the transition would go. The next poll that
+        # reaches this row (or the sibling's own eventual closure) retries
+        # the decision once nothing is left in flight.
+        if sibling_open:
+            logger.info(
+                "attempt %s reached a terminal disposition for work unit "
+                "%s, but another attempt of it is still open; leaving the "
+                "unit untouched rather than transitioning around a "
+                "sibling that is still running", attempt_id, work_unit_id)
+            return
+
         if not succeeded and sibling_accepted:
             logger.info(
                 "attempt %s failed but work unit %s already has an accepted "
