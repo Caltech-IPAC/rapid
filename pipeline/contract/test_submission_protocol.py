@@ -6,12 +6,16 @@ acceptance criterion 1).
      the horizon; `submit_job` is demonstrably not re-invoked for the same
      record; BOUND path unchanged."
 
-**THESE SKIP WHERE DRAFT MIGRATION 044 IS ABSENT**, which is everywhere the
-authoritative stream is applied without this branch's drafts — CI included.
-The `submissions` table is a change request against `rapid_systems`, not part
-of the deployed schema, so the tier probes for it (`fixture.has_table`) and
-skips cleanly rather than failing. The rapid-admin acceptance run applies base
-+ drafts and therefore executes them.
+**THESE SKIP WHERE MIGRATION 044 IS ABSENT.** 044 (`submissions`) was a DRAFT
+against `rapid_systems` when this module was first written; it and eight
+siblings were adopted verbatim into `rapid_systems` main on 2026-08-12
+(`migrations-draft/README.md`), and `smdc` CI's pinned revision
+(`.github/workflows/contract-tests.yml`) now carries it — so these tests RUN
+in CI today, rather than skipping there as the original docstring here said.
+The probe (`fixture.has_table`) stays: any database genuinely short of 044
+(a mid-rollout environment, an older pin) still skips cleanly instead of
+failing, which is the property worth keeping regardless of where the
+migration currently lives.
 
 Why the contract tier: every state this protocol depends on is enforced by a
 CHECK constraint that only PostgreSQL evaluates —
@@ -26,6 +30,17 @@ header states the discipline ("DOUBLES MUST BE ABLE TO REFUSE"): the fake here
 counts `submit_job` invocations and the tests assert that count is zero, so
 the double's job is to catch the protocol calling something it must not,
 rather than to make the happy path pass.
+
+**PACKAGE S ADDITIONS** (rule 7's reconciler wiring, the last rapid-side
+PARTIAL): `resolve_open` had zero test coverage anywhere before this — every
+test above drives `resolve` on one row — so the tests below are its first,
+covering the per-row loop and one row's failure not stopping the pass.
+`submission_for_attempt` is the new lookup `pipeline.reconciler.service`
+needs to let a durable FOUND/LOST record decide over the submission-anchored
+horizon; its tests cover the join through `attempts.submission_id` and the
+no-link case the reconciler's fail-open posture depends on. The durability
+test proves `resolve_open`'s commit boundary — undocumented and untested
+before this package — from a second, independent connection.
 """
 
 import datetime
@@ -236,6 +251,153 @@ def test_an_unreachable_scheduler_resolves_nothing(conn):
     conn.rollback()
 
     assert _state(conn, submission_id)[0] == protocol.UNKNOWN
+
+
+def test_resolve_open_resolves_every_open_row_in_one_pass(conn):
+    """`resolve_open`'s first coverage (evidence pass: it had none).
+
+    Three rows in one pass — FOUND, LOST, and left UNKNOWN — proving the
+    per-row loop's counts and that one row's outcome does not affect another's.
+    """
+    execute = fixture.executor(conn)
+    found_id, found_run = _prepare(conn, "open-found")
+    lost_id, _ = _prepare(conn, "open-lost")
+    unknown_id, _ = _prepare(conn, "open-unknown")
+    for submission_id in (found_id, lost_id, unknown_id):
+        protocol.mark_calling(execute, submission_id)
+    conn.commit()
+    protocol.mark_unknown(execute, lost_id, detail="ConnectionReset")
+    protocol.mark_unknown(execute, unknown_id, detail="ConnectionReset")
+    conn.commit()
+
+    found_name = f"rapid-{found_run}"
+    batch = _FakeBatch(known_jobs={found_name: "job-recovered-2"})
+    # lost_id's deadline needs to be in the past for this one pass to reach
+    # LOST; found_id resolves on the positive answer regardless of deadline;
+    # unknown_id has nothing named for it, so it stays UNKNOWN before its own
+    # deadline.
+    with conn.cursor() as cur:
+        cur.execute("SELECT resolution_deadline FROM submissions"
+                    " WHERE submission_id = %s", [lost_id])
+        deadline = cur.fetchone()[0]
+    past = deadline + datetime.timedelta(seconds=1)
+
+    counts = protocol.resolve_open(execute, batch.describe, now=past)
+    conn.commit()
+
+    assert counts[protocol.FOUND] == 1
+    assert counts[protocol.LOST] == 1
+    assert counts[protocol.UNKNOWN] == 1
+    assert counts["errors"] == 0
+    assert _state(conn, found_id)[:2] == (protocol.FOUND, "job-recovered-2")
+    assert _state(conn, lost_id)[0] == protocol.LOST
+    assert _state(conn, unknown_id)[0] == protocol.UNKNOWN
+    assert batch.submit_calls == []
+
+
+def test_resolve_open_one_rows_failure_does_not_stop_the_others(conn):
+    """A `describe` that raises for one row must not abort the pass."""
+    execute = fixture.executor(conn)
+    ok_id, ok_run = _prepare(conn, "open-ok")
+    bad_id, bad_run = _prepare(conn, "open-bad")
+    protocol.mark_calling(execute, ok_id)
+    protocol.mark_calling(execute, bad_id)
+    conn.commit()
+    protocol.mark_unknown(execute, ok_id, detail="x")
+    protocol.mark_unknown(execute, bad_id, detail="x")
+    conn.commit()
+
+    ok_name = f"rapid-{ok_run}"
+    bad_name = f"rapid-{bad_run}"
+
+    def selective_describe(job_name, job_queue):
+        if job_name == bad_name:
+            raise RuntimeError("Batch is unreachable for this one job")
+        return "job-ok-1" if job_name == ok_name else None
+
+    counts = protocol.resolve_open(execute, selective_describe)
+    conn.commit()
+
+    assert counts[protocol.FOUND] == 1
+    assert counts["errors"] == 1
+    assert _state(conn, ok_id)[:2] == (protocol.FOUND, "job-ok-1")
+    # The failed row is untouched, exactly as a single resolve() would leave
+    # it — resolve_open's per-row try/except must not write a partial result.
+    assert _state(conn, bad_id)[0] == protocol.UNKNOWN
+
+
+def _attach_one_attempt(conn, submission_id):
+    """One real `attempts` row (schema-honest via `fixture.make_attempt`),
+    linked to `submission_id` through the same `attach_attempts` production
+    code uses. Returns the attempt_id."""
+    from pipeline.contract import fixture as fx
+    execute = fixture.executor(conn)
+    attempt_id = fx.make_attempt(conn)
+    protocol.attach_attempts(execute, submission_id, [attempt_id])
+    return attempt_id
+
+
+def test_submission_for_attempt_reads_the_linked_row(conn):
+    """`submission_for_attempt` — package S's new lookup, and its first
+    coverage: the join through `attempts.submission_id`, exactly the FK
+    `attach_attempts` maintains."""
+    execute = fixture.executor(conn)
+    submission_id, run_id = _prepare(conn, "lookup")
+    attempt_id = _attach_one_attempt(conn, submission_id)
+    conn.commit()
+
+    found = protocol.submission_for_attempt(execute, attempt_id)
+
+    assert found["submission_id"] == submission_id
+    assert found["state"] == protocol.PREPARED
+    assert found["job_name"] == f"rapid-{run_id}"
+    assert found["job_queue"] == "contract-queue"
+
+    protocol.mark_calling(execute, submission_id)
+    conn.commit()
+    updated = protocol.submission_for_attempt(execute, attempt_id)
+    assert updated["state"] == protocol.CALLING
+
+
+def test_submission_for_attempt_returns_none_with_no_link(conn):
+    """No `submission_id` on the attempt (pre-044, or a failed-open
+    submission pass) -> `None`, never an error. The reconciler's fail-open
+    posture depends on this returning cleanly rather than raising."""
+    from pipeline.contract import fixture as fx
+    execute = fixture.executor(conn)
+    attempt_id = fx.make_attempt(conn)  # no attach_attempts call
+
+    assert protocol.submission_for_attempt(execute, attempt_id) is None
+
+
+def test_a_resolution_pass_is_visible_from_a_second_connection(conn,
+                                                                second_conn):
+    """Durability, criterion 13 — proven, not assumed.
+
+    `resolve_open`'s docstring states no commit boundary (the evidence pass
+    flagged this explicitly). The reconciler commits per resolved row
+    (`ReconcilerService._resolve_submissions`'s own comment); this proves
+    that choice actually lands: after a pass that resolves a row AND commits,
+    an independent connection sees the committed state, not merely this one.
+    """
+    execute = fixture.executor(conn)
+    submission_id, run_id = _prepare(conn, "durable")
+    protocol.mark_calling(execute, submission_id)
+    conn.commit()
+    protocol.mark_unknown(execute, submission_id, detail="x")
+    conn.commit()
+
+    job_name = f"rapid-{run_id}"
+    batch = _FakeBatch(known_jobs={job_name: "job-durable-1"})
+    counts = protocol.resolve_open(execute, batch.describe)
+    assert counts[protocol.FOUND] == 1
+    conn.commit()  # the commit boundary under test
+
+    with second_conn.cursor() as cur:
+        cur.execute("SELECT state, scheduler_job_id FROM submissions"
+                    " WHERE submission_id = %s", [submission_id])
+        state, job_id = cur.fetchone()
+    assert (state, job_id) == (protocol.FOUND, "job-durable-1")
 
 
 def test_an_interrupted_call_is_as_ambiguous_as_a_judged_one(conn):
