@@ -214,8 +214,9 @@ class ProductRepository:
         comes back.
 
         The checksum is stored WHOLE. The legacy `refimages.checksum` and
-        `diffimages.checksum` columns are `varchar(32)` and truncate a
-        SHA-256 to half its length; `artifacts.checksum` is CHECK-
+        `diffimages.checksum` columns were `varchar(32)` and truncated a
+        SHA-256 to half its length, until CR-8 (`rapid_systems` migration
+        054) widened both to `varchar(64)`; `artifacts.checksum` is CHECK-
         constrained to the full 64 hex characters against the recorded
         algorithm, so a truncated value fails loudly here instead of being
         silently stored and later compared as equal to the wrong bytes.

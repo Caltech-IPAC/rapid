@@ -59,9 +59,12 @@ logger = logging.getLogger("rapid.registration.artifacts")
 CHECKSUM_ALGORITHM = "sha256"
 
 #: How long a full hex SHA-256 is. The legacy `refimages.checksum` and
-#: `diffimages.checksum` columns are `varchar(32)` and truncate exactly this
-#: (`006-core-tables.sql:393,448`; the casts at `rapid_db.py:1936,2182`) — a
-#: latent defect flagged by brief D and NOT reproduced here.
+#: `diffimages.checksum` columns were `varchar(32)` and truncated exactly
+#: this (`006-core-tables.sql:393,448`; the casts at `rapid_db.py:1936,2182`)
+#: — a latent defect flagged by brief D, NOT reproduced here, and fixed by
+#: CR-8 (`rapid_systems` migration 054, which widened both columns to
+#: `varchar(64)`). `l2files.checksum` (`006-core-tables.sql:259`) is a
+#: separate column CR-8 left untouched and still truncates.
 SHA256_HEX_LENGTH = 64
 
 
@@ -93,7 +96,7 @@ def _entry_checksum(entry, name):
         raise ArtifactRecordingError(
             f"the published entry {name!r} carries a {len(checksum)}-"
             f"character checksum; a {CHECKSUM_ALGORITHM} digest is "
-            f"{SHA256_HEX_LENGTH} hex characters. A short value here is the "
+            f"{SHA256_HEX_LENGTH} hex characters. A short value here is a "
             f"legacy varchar(32) truncation reaching a column that does not "
             f"have it, and storing it would make a later comparison succeed "
             f"against the wrong bytes")

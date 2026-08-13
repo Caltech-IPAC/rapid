@@ -3,20 +3,26 @@
 "An artifact row round-trips all 64 hex chars of a real SHA-256 (fixture
 strings >= 64 chars; algorithm recorded)."
 
-**THE DEFECT THIS IS MEASURED AGAINST IS LIVE IN THE SCHEMA.**
-`refimages.checksum` and `diffimages.checksum` are `character varying(32)`
-(`006-core-tables.sql:393,448`), and the pipeline computes SHA-256 in hex —
-64 characters (`pipeline/stages/publishing.py:_digest`). So every product
-checksum the pipeline has ever written to those columns was silently
-truncated to its first 32 characters. That is not a cosmetic loss: a
-truncated digest compares EQUAL for any two files sharing a 128-bit prefix,
-and the comparison that would catch corrupted bytes succeeds instead.
+**THE DEFECT THIS WAS MEASURED AGAINST WAS LIVE IN THE SCHEMA, AND CR-8
+FIXED IT.** `refimages.checksum` and `diffimages.checksum` were
+`character varying(32)` (`006-core-tables.sql:393,448`), and the pipeline
+computes SHA-256 in hex — 64 characters
+(`pipeline/stages/publishing.py:_digest`). Every product checksum the
+pipeline wrote to those columns before CR-8 (`rapid_systems`
+`054-refimages-diffimages-checksum-widen.sql`) was silently truncated to
+its first 32 characters — not a cosmetic loss: a truncated digest compares
+EQUAL for any two files sharing a 128-bit prefix, and the comparison that
+would catch corrupted bytes succeeded instead.
 
-Brief D flags that as a latent defect and a candidate change request, and
-requires the artifact table to simply do it right. These tests assert the
-"right", and one of them asserts the legacy defect still exists — so that
-when someone widens those columns, a test tells them this note is stale
-rather than leaving the claim to rot.
+Brief D flagged that as a latent defect and a candidate change request, and
+required the artifact table to simply do it right — that is what the
+round-trip tests below assert. CR-8 (054) went further and widened the
+legacy columns themselves to `varchar(64)` plus a `checksum_algorithm`
+column and a CHECK tying the two together, mirroring `artifacts.checksum`'s
+own shape. `test_the_legacy_columns_are_widened_and_this_is_known` asserts
+THAT shape now, so that if the widening is ever reverted, a test tells
+whoever did it that this note is stale rather than leaving the claim to
+rot.
 """
 
 import hashlib
@@ -139,14 +145,17 @@ def test_a_missing_checksum_is_refused(conn):
         artifact_layer._entry_checksum({}, "sfft_diffimage")
 
 
-def test_the_legacy_columns_still_truncate_and_this_is_known(conn):
-    """The flagged latent defect, asserted so the flag cannot go stale.
+def test_the_legacy_columns_are_widened_and_this_is_known(conn):
+    """CR-8's fix, asserted so a revert cannot go unnoticed.
 
-    Brief D puts fixing this OUT of scope — the artifact table does it
-    right, and widening a live column is its own change request. This test
-    records the defect's existence rather than its absence, so whoever
-    eventually widens `refimages.checksum` sees this test fail and knows to
-    retire the note instead of discovering the claim was untrue years later.
+    Brief D put fixing this OUT of scope; CR-8 (`rapid_systems` migration
+    054) picked it up and widened both legacy columns to `varchar(64)` with
+    a `checksum_algorithm` companion column and a CHECK tying the two
+    together, mirroring `artifacts.checksum`'s own shape. This test records
+    the fix's presence rather than its absence, so whoever reverts
+    `refimages.checksum`/`diffimages.checksum` back to `varchar(32)` sees
+    this test fail and knows to retire the note instead of discovering the
+    claim was untrue years later.
     """
     with conn.cursor() as cur:
         cur.execute(
@@ -159,8 +168,20 @@ def test_the_legacy_columns_still_truncate_and_this_is_known(conn):
 
     assert rows, "neither legacy product table was found"
     for table_name, maximum in rows:
-        assert maximum == 32, (
-            f"{table_name}.checksum is now varchar({maximum}) rather than "
-            f"varchar(32) — the truncation brief D flagged has been fixed, "
-            f"so this test and the notes citing it are stale and should be "
-            f"retired")
+        assert maximum == 64, (
+            f"{table_name}.checksum is varchar({maximum}) rather than "
+            f"varchar(64) — CR-8's widening (rapid_systems migration 054) "
+            f"is not applied on this database, so a full SHA-256 written "
+            f"here still truncates")
+
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT table_name FROM information_schema.columns"
+            " WHERE table_name IN ('refimages', 'diffimages')"
+            "   AND column_name = 'checksum_algorithm'"
+            " ORDER BY table_name")
+        algorithm_rows = {row[0] for row in cur.fetchall()}
+
+    assert algorithm_rows == {"refimages", "diffimages"}, (
+        f"expected checksum_algorithm on both refimages and diffimages "
+        f"(CR-8, migration 054); found it on {sorted(algorithm_rows)!r}")
