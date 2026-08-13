@@ -3298,6 +3298,23 @@ class RAPIDDB:
         blocking — those are reconciliation states whose outcome resolves
         within the reconciler's grace horizon, and counting them would
         block retries of attempts the reconciler later marks failed.
+
+        THE WORK-UNIT READY GATE (finding 5, fix-state-gate; ruled fix — see
+        `submission.gathering`'s module docstring for the full ruling text).
+        Gathering is the FIRST line of defense against resubmitting a
+        subject whose work is already owned by an attempt in flight or
+        settled; finding 1's authorization gate in `pipeline.seams` is the
+        LAST line, for whatever a stale poll or a second operator replica
+        slips past this one. `work_units.input_scope` for catalog-load is
+        `'{proc_date}/{sca}'` (co-design ruling 2's DATE_SCA grain,
+        `submission.subjects.build_input_scope`'s grammar) — built here with
+        `||` rather than read back through Python, because this predicate is
+        evaluated once per candidate SCA in the correlated subquery, not
+        once for a single row. A SCA with NO work_units row at all (nothing
+        has ever gathered it) is NOT excluded — only an EXISTING row whose
+        state is not 'ready' blocks it, per the ruling's own carve-out
+        ("Work units whose subject has never been seen... must of course
+        remain gatherable").
         '''
 
         self.exit_code = 0
@@ -3320,11 +3337,19 @@ class RAPIDDB:
                 "  and (la.lifecycle_state in ('submitted','started') " +\
                 "       or la.rapid_outcome = 'success')" +\
                 ") " +\
+                "and not exists (" +\
+                "  select 1 from work_units wu " +\
+                "  where wu.job_type = %s " +\
+                "  and wu.input_scope = cast(%s as text) || '/' || sc.sca::text " +\
+                "  and wu.superseded_by_unit_id is null " +\
+                "  and wu.state != 'ready'" +\
+                ") " +\
                 "order by sc.sca;"
 
         from submission.routes import JOB_TYPE_CATALOG_LOAD, JOB_TYPE_SCIENCE, ppid_for
 
         params = (ppid_for(JOB_TYPE_SCIENCE), proc_date, proc_date,
+                  JOB_TYPE_CATALOG_LOAD, proc_date,
                   JOB_TYPE_CATALOG_LOAD, proc_date)
 
         print('query = {}, params = {}'.format(query, params))
@@ -3352,22 +3377,41 @@ class RAPIDDB:
         set (mission mock, live finding 2026-08-09; same blocking predicate
         as the catalog-load gather set, see that method's docstring).
         Failed attempts do not block: re-gathering is the retry path.
+
+        THE WORK-UNIT READY GATE (finding 5, fix-state-gate; see
+        `get_scas_with_gatherable_catalog_load_for_processing_date`'s
+        docstring for the full ruling text). Extended with a second
+        exclusion clause, UNIONed rather than joined into the first so a
+        field is excluded whether an ATTEMPT blocks it or a WORK UNIT does
+        — the two are independent reasons for the same outcome. Crossmatch's
+        `input_scope` is `'{proc_date}/{field}'` (DATE_FIELD grain). A field
+        with no work_units row at all is not excluded (nothing has ever
+        gathered it); only an EXISTING non-ready row does.
         '''
 
         self.exit_code = 0
 
-        query = "select distinct la.field from Attempts la " +\
-                "join logical_jobs lj on lj.logical_job_id = la.logical_job_id " +\
-                "where lj.job_type = %s " +\
-                "and la.processing_date = cast(%s as date) " +\
-                "and la.field is not null " +\
-                "and (la.lifecycle_state in ('submitted','started') " +\
-                "     or la.rapid_outcome = 'success') " +\
-                "order by la.field;"
+        query = "select field from (" +\
+                "  select distinct la.field as field from Attempts la " +\
+                "  join logical_jobs lj on lj.logical_job_id = la.logical_job_id " +\
+                "  where lj.job_type = %s " +\
+                "  and la.processing_date = cast(%s as date) " +\
+                "  and la.field is not null " +\
+                "  and (la.lifecycle_state in ('submitted','started') " +\
+                "       or la.rapid_outcome = 'success') " +\
+                "  union " +\
+                "  select (split_part(wu.input_scope, '/', 2))::int as field " +\
+                "  from work_units wu " +\
+                "  where wu.job_type = %s " +\
+                "  and split_part(wu.input_scope, '/', 1) = cast(%s as text) " +\
+                "  and wu.superseded_by_unit_id is null " +\
+                "  and wu.state != 'ready'" +\
+                ") blocking " +\
+                "order by field;"
 
         from submission.routes import JOB_TYPE_CROSSMATCH
 
-        params = (JOB_TYPE_CROSSMATCH, proc_date)
+        params = (JOB_TYPE_CROSSMATCH, proc_date, JOB_TYPE_CROSSMATCH, proc_date)
 
         print('query = {}, params = {}'.format(query, params))
 
@@ -3397,20 +3441,49 @@ class RAPIDDB:
         predicate as the other gates, failed attempts free the subject).
         Scoped to the caller's enumerated exposures so the query never
         scans the whole attempts corpus.
+
+        THE WORK-UNIT READY GATE (finding 5, fix-state-gate; see
+        `get_scas_with_gatherable_catalog_load_for_processing_date`'s
+        docstring for the full ruling text). This method is called only for
+        `science`/`reference-image` (`submission.gathering.
+        gather_science_units`'s one call site), never `alert-production` —
+        so `input_scope` here is always the plain two-component
+        `'{exposure}/{sca}'` (EXPOSURE_SCA grain), not alert-production's
+        three-component `'{exposure}/{sca}/{release}'` (finding 13); reading
+        it back as exactly two `split_part` components is therefore
+        unambiguous for the job types this method actually serves. The
+        work-unit branch reads `(exposure, sca)` directly off `input_scope`
+        rather than joining through `Attempts` — a work unit parked
+        `blocked`/`complete`/`failed` by the mutation API with no attempt at
+        all (or none the reconciler has yet recorded) would be invisible to
+        an `Attempts`-joined predicate, and the whole point of this gate is
+        to block on the WORK UNIT's own state, independent of what attempt
+        history exists for it.
         '''
 
         self.exit_code = 0
 
-        query = "select distinct la.exposure_id, la.sca from Attempts la " +\
-                "join logical_jobs lj on lj.logical_job_id = la.logical_job_id " +\
-                "where lj.job_type = %s " +\
-                "and la.exposure_id = any(%s) " +\
-                "and la.sca is not null " +\
-                "and (la.lifecycle_state in ('submitted','started') " +\
-                "     or la.rapid_outcome = 'success') " +\
-                "order by la.exposure_id, la.sca;"
+        query = "select exposure_id, sca from (" +\
+                "  select distinct la.exposure_id as exposure_id, la.sca as sca " +\
+                "  from Attempts la " +\
+                "  join logical_jobs lj on lj.logical_job_id = la.logical_job_id " +\
+                "  where lj.job_type = %s " +\
+                "  and la.exposure_id = any(%s) " +\
+                "  and la.sca is not null " +\
+                "  and (la.lifecycle_state in ('submitted','started') " +\
+                "       or la.rapid_outcome = 'success') " +\
+                "  union " +\
+                "  select (split_part(wu.input_scope, '/', 1))::bigint as exposure_id, " +\
+                "         (split_part(wu.input_scope, '/', 2))::int as sca " +\
+                "  from work_units wu " +\
+                "  where wu.job_type = %s " +\
+                "  and (split_part(wu.input_scope, '/', 1))::bigint = any(%s) " +\
+                "  and wu.superseded_by_unit_id is null " +\
+                "  and wu.state != 'ready'" +\
+                ") blocking " +\
+                "order by exposure_id, sca;"
 
-        params = (job_type, list(expids))
+        params = (job_type, list(expids), job_type, list(expids))
 
         print('query = {}, params = {}'.format(query, params))
 
@@ -3445,20 +3518,38 @@ class RAPIDDB:
         day-cadence is a recorded, revisitable judgment call — a real
         sweep cadence policy is an open design item; this gate exists so
         enablement is bounded, not to decide that policy.
+
+        THE WORK-UNIT READY GATE (finding 5, fix-state-gate; see
+        `get_scas_with_gatherable_catalog_load_for_processing_date`'s
+        docstring for the full ruling text). Field-grain `input_scope` is
+        the bare field id (co-design ruling 2: FIELD grain declares only
+        `field`), so this is an exact-match join, not a `split_part` parse.
+        Deliberately NOT filtered by `since` — the day-cadence is a policy
+        on how often ATTEMPTS may be submitted, not on a work unit's own
+        settled state; a unit parked `blocked` last week is still not this
+        pass's to resubmit today regardless of the attempt-side window.
         '''
 
         self.exit_code = 0
 
-        query = "select distinct la.field from Attempts la " +\
-                "join logical_jobs lj on lj.logical_job_id = la.logical_job_id " +\
-                "where lj.job_type = %s " +\
-                "and la.submitted_at >= %s " +\
-                "and la.field is not null " +\
-                "and (la.lifecycle_state in ('submitted','started') " +\
-                "     or la.rapid_outcome = 'success') " +\
-                "order by la.field;"
+        query = "select field from (" +\
+                "  select distinct la.field as field from Attempts la " +\
+                "  join logical_jobs lj on lj.logical_job_id = la.logical_job_id " +\
+                "  where lj.job_type = %s " +\
+                "  and la.submitted_at >= %s " +\
+                "  and la.field is not null " +\
+                "  and (la.lifecycle_state in ('submitted','started') " +\
+                "       or la.rapid_outcome = 'success') " +\
+                "  union " +\
+                "  select wu.input_scope::int as field " +\
+                "  from work_units wu " +\
+                "  where wu.job_type = %s " +\
+                "  and wu.superseded_by_unit_id is null " +\
+                "  and wu.state != 'ready'" +\
+                ") blocking " +\
+                "order by field;"
 
-        params = (job_type, since)
+        params = (job_type, since, job_type)
 
         print('query = {}, params = {}'.format(query, params))
 
@@ -3646,12 +3737,31 @@ class RAPIDDB:
                 "  and ap.sca = a.sca "
                 "  and ap.lifecycle_state in ('submitted', 'started')"
                 ") "
+                # THE WORK-UNIT READY GATE (finding 5, fix-state-gate; see
+                # get_scas_with_gatherable_catalog_load_for_processing_date's
+                # docstring for the full ruling text). Alert production's
+                # work-unit input_scope carries the RELEASE too (finding 13
+                # — 'exposure/sca/release', not just 'exposure/sca'), because
+                # emission is scoped once per unit per release: a work unit
+                # settled for release A must not block gathering for release
+                # B over the same promotion, which is exactly what finding
+                # 13 makes the input_scope distinguish. Scoped by
+                # release_identity here for the same reason.
+                "and not exists ("
+                "  select 1 from work_units wu "
+                "  where wu.job_type = %s "
+                "  and wu.input_scope = a.exposure_id::text || '/' || a.sca::text "
+                "                       || '/' || %s "
+                "  and wu.superseded_by_unit_id is null "
+                "  and wu.state != 'ready'"
+                ") "
                 "order by a.registered_at, a.attempt_id"
         )
         from submission.routes import JOB_TYPE_ALERT_PRODUCTION
 
         params = [JOB_TYPE_CATALOG_LOAD, release_identity,
-                  JOB_TYPE_ALERT_PRODUCTION]
+                  JOB_TYPE_ALERT_PRODUCTION, JOB_TYPE_ALERT_PRODUCTION,
+                  release_identity]
 
         if limit is not None:
             query += " limit %s"
