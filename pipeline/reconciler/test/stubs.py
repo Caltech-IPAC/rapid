@@ -164,7 +164,8 @@ class FakeConnection:
     """
 
     def __init__(self, rows=None, lease_granted=True,
-                 submissions_available=False, submissions=None):
+                 submissions_available=False, submissions=None,
+                 route_raises=None):
         self.rows = {row["attempt_id"]: dict(row) for row in (rows or [])}
         self.statements = []
         self.commits = 0
@@ -180,6 +181,16 @@ class FakeConnection:
         #: `job_name`, `job_queue`, `resolution_deadline`.
         self.submissions = {row["submission_id"]: dict(row)
                             for row in (submissions or [])}
+        #: REFUSAL-CAPABLE, mirroring `FakeBatch.list_jobs_raises`: a test
+        #: can make one chosen query branch fail instead of answering.
+        #: `{branch: exception}`, branch one of "select_attempts",
+        #: "submission_for_attempt", "select_open_submissions",
+        #: "update_submission" — the same four `route()` dispatches to below.
+        #: Without this, a test wanting a database-read failure had no
+        #: sanctioned way to get one and had to monkeypatch `conn.route`
+        #: directly in the test body (the gap the verifier found in
+        #: criterion 11's original test).
+        self.route_raises = dict(route_raises or {})
 
     def cursor(self):
         return FakeCursor(self)
@@ -212,15 +223,19 @@ class FakeConnection:
                 else ([], [("?column?",)])
 
         if lowered.startswith("select") and "from attempts" in lowered:
+            self._maybe_raise("select_attempts")
             return self._select_attempts(text, params)
 
         if "from submissions" in lowered and "join attempts" in lowered:
+            self._maybe_raise("submission_for_attempt")
             return self._select_submission_for_attempt(text, params)
 
         if lowered.startswith("select") and "from submissions" in lowered:
+            self._maybe_raise("select_open_submissions")
             return self._select_open_submissions()
 
         if lowered.startswith("update submissions"):
+            self._maybe_raise("update_submission")
             return self._update_submission(text, params)
 
         if lowered.startswith("update attempts"):
@@ -232,6 +247,12 @@ class FakeConnection:
             return None
 
         return None
+
+    def _maybe_raise(self, branch):
+        """Raise this branch's declared exception, if a test set one."""
+        exc = self.route_raises.get(branch)
+        if exc is not None:
+            raise exc
 
     def _select_attempts(self, text, params):
         columns = _columns_of(text)
