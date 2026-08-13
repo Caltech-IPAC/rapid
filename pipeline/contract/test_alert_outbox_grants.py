@@ -7,6 +7,12 @@
      INSERT/DELETE outbox rows, cannot write policies; SENT/REFUSED rows
      undeletable by either (trigger, not grant, is the backstop)."
 
+067 (fix #9b) narrows the writer's path further than this original quote:
+the raw table INSERT it names is now REVOKED, and the writer reaches the
+table only through EXECUTE on `insert_alert_outbox_packet` (SECURITY
+DEFINER). The property the quote states — the writer cannot UPDATE or
+DELETE — is unchanged; only the shape of its one write path is narrower.
+
 **THESE SKIP WHERE DRAFT MIGRATION 050 IS ABSENT.** `migrations-draft/
 050-alert-outbox-and-publisher.sql` is a proposed change request against
 `rapid_systems`, not part of the authoritative stream — CI builds from that
@@ -235,23 +241,36 @@ def _as_role_expect_success(conn, role, statement, params=None):
 
 
 # ============================================================================
-# 1. rapid_pipeline_write: INSERT-only on alert_outbox
+# 1. rapid_pipeline_write: EXECUTE-only (via insert_alert_outbox_packet) on
+#    alert_outbox — no raw table INSERT since 067 (fix #9b)
 # ============================================================================
 
-def test_pipeline_writer_holds_insert_but_not_update_or_delete(conn):
+def test_pipeline_writer_holds_no_raw_insert_but_can_execute_the_insert_function(conn):
     """The writer that produces packets has no further business with them.
 
     050's own comment states the risk this closes: a pipeline bug that could
     UPDATE or DELETE its own outbox rows would look, from a consumer's
     vantage point, exactly like alerts that were never produced — silently,
     because the row's absence or mutation leaves no trace of what happened.
+
+    FIX #9b (067) removed the raw table INSERT this test used to assert:
+    `insert_alert_outbox_packet` skipped its own collision comparison
+    entirely for any caller that wrote the table directly rather than
+    calling the function, an exact bypass of the guard the function exists
+    to enforce. The write path is now EXECUTE on the function alone — a
+    SECURITY DEFINER call the raw grant is no longer needed to reach — so
+    this test asserts the table grant is GONE and the function grant is the
+    one thing standing in for it.
     """
     _require_schema(conn)
     if not _role_exists(conn, "rapid_pipeline_write"):
         pytest.skip("rapid_pipeline_write is not present in this database")
 
     assert _table_priv(conn, "rapid_pipeline_write", "alert_outbox",
-                       "INSERT") is True
+                       "INSERT") is False, (
+        "rapid_pipeline_write holds a raw table INSERT on alert_outbox; "
+        "067 revoked this so insert_alert_outbox_packet's collision "
+        "comparison cannot be bypassed by writing the table directly")
     assert _table_priv(conn, "rapid_pipeline_write", "alert_outbox",
                        "UPDATE") is False, (
         "rapid_pipeline_write holds UPDATE on alert_outbox; the writer must "
@@ -262,6 +281,9 @@ def test_pipeline_writer_holds_insert_but_not_update_or_delete(conn):
         "rapid_pipeline_write holds DELETE on alert_outbox; deleting a "
         "PENDING row it wrote would look exactly like an alert that was "
         "never produced")
+    # The EXECUTE grant that replaces the raw INSERT as the writer's one
+    # path onto the table is asserted separately, by
+    # `test_pipeline_writer_can_call_the_insert_function` below.
 
 
 def test_pipeline_writer_holds_no_update_on_any_individual_column(conn):
@@ -286,11 +308,12 @@ def test_pipeline_writer_holds_no_update_on_any_individual_column(conn):
 def test_pipeline_writer_can_call_the_insert_function(conn):
     """The one write path the writer needs, granted explicitly.
 
-    INSERT-only on the table plus EXECUTE on `insert_alert_outbox_packet` is
-    the whole of the writer's outbox posture; a writer holding table INSERT
-    but denied the function would be unable to write through the collision
-    guard at all, which would be a different (and self-defeating) defect
-    from the one this file's other tests check for.
+    Since 067 (fix #9b) revoked the raw table INSERT, EXECUTE on
+    `insert_alert_outbox_packet` is the whole of the writer's outbox write
+    posture — a writer denied this grant would have no way onto the table
+    at all, not even through the collision guard, which would be a
+    different (and self-defeating) defect from the ones this file's other
+    tests check for.
     """
     _require_schema(conn)
     if not _role_exists(conn, "rapid_pipeline_write"):
@@ -337,10 +360,13 @@ def test_pipeline_writer_can_really_insert_a_packet_through_the_function(conn):
 
     Mirrors `test_pipeline_writer_can_call_the_insert_function` above, which
     only asks `has_function_privilege`. This calls the function FOR REAL as
-    `rapid_pipeline_write` and confirms the row lands — proving both the
-    EXECUTE grant on the function and the INSERT grant on the table underneath
-    it actually cooperate to let the writer's one legitimate write path work,
-    not merely that each grant exists in isolation.
+    `rapid_pipeline_write` and confirms the row lands — proving the EXECUTE
+    grant actually carries the writer through to a persisted row, not merely
+    that the grant exists in isolation. Since 067 (fix #9b) made the
+    function SECURITY DEFINER and revoked the writer's raw table INSERT,
+    the function's OWN privilege is what reaches the table now — there is
+    no longer a second table-level grant underneath it for this call to
+    depend on.
     """
     _require_schema(conn)
     if not _role_exists(conn, "rapid_pipeline_write"):
@@ -373,10 +399,11 @@ def test_pipeline_writer_cannot_really_update_state(conn):
     """The writer cannot move a row's state, provoked as a real UPDATE.
 
     Mirrors the table-level catalog assertion in
-    `test_pipeline_writer_holds_insert_but_not_update_or_delete`. `state` is
-    also one of the publisher's own writable columns (`PUBLISHER_WRITABLE_
-    COLUMNS`), so this specifically confirms the writer cannot reach into the
-    publisher's half of the protocol and race its claim.
+    `test_pipeline_writer_holds_no_raw_insert_but_can_execute_the_insert_
+    function`. `state` is also one of the publisher's own writable columns
+    (`PUBLISHER_WRITABLE_COLUMNS`), so this specifically confirms the writer
+    cannot reach into the publisher's half of the protocol and race its
+    claim.
     """
     _require_schema(conn)
     if not _role_exists(conn, "rapid_pipeline_write"):
@@ -866,25 +893,35 @@ def _outbox_alert_id(name):
 
 
 def _force_delete(conn, alert_id):
-    """Remove a test row whose state the DELETE trigger protects.
+    """Remove a test row that is still in a NON-terminal state.
 
-    SENT and REFUSED rows are undeletable BY DESIGN — that is the property
-    these tests just proved — so a teardown that simply issues a DELETE fires
-    the trigger it verified a moment earlier and fails the test that passed.
-    The row is moved back to PENDING first, which is a state the trigger does
-    not guard.
+    Before 067, this reset SENT/REFUSED rows to PENDING with a direct UPDATE
+    and then deleted them — 067's state-transition trigger (fix #9c) closes
+    that shortcut: SENT has no outbound arrow on the legal transition graph
+    at all (it is terminal, by design — see 067's header), and REFUSED ->
+    PENDING is legal ONLY through `derived.repair_refused_outbox_rows`,
+    which sets the session GUC the trigger checks. A per-test teardown has
+    no business calling that audited repair path on every cleanup.
 
-    Legitimate here and nowhere else: this is a scratch database's own fixture
-    row, and the guarantee under test is about the PRODUCTION path, where no
-    code does this. Doing it through the `conn` the test already holds keeps it
-    visible rather than hiding it in a fixture.
+    So this helper no longer resets state — it only clears a row that is
+    still PENDING or IN_FLIGHT (the DELETE trigger, `alert_outbox_delivered_
+    undeletable`, is unconditional on `state` and refuses SENT/REFUSED
+    regardless of who issues the DELETE, this scratch connection's
+    superuser included). A caller that reaches this with a SENT or REFUSED
+    row leaves it in place deliberately: that permanence is now the
+    guarantee under test, not a fixture inconvenience to route around, and
+    every alert_id here is already unique per call (`_outbox_alert_id`), so
+    a left-behind row never collides with a later test.
     """
     with conn.cursor() as cur:
-        cur.execute(
-            "UPDATE alert_outbox SET state = 'PENDING', sent_at = NULL,"
-            "   refusal_reason = NULL, claim_token = NULL, claimed_at = NULL"
-            " WHERE alert_id = %s", [alert_id])
-        cur.execute("DELETE FROM alert_outbox WHERE alert_id = %s", [alert_id])
+        cur.execute("SELECT state FROM alert_outbox WHERE alert_id = %s",
+                    [alert_id])
+        row = cur.fetchone()
+    if row is None or row[0] in ("SENT", "REFUSED"):
+        return
+    with conn.cursor() as cur:
+        cur.execute("DELETE FROM alert_outbox WHERE alert_id = %s",
+                    [alert_id])
     conn.commit()
 
 
@@ -969,8 +1006,11 @@ def test_a_sent_row_cannot_be_deleted_even_by_the_owner(conn):
         assert cur.fetchone()[0] == "SENT", (
             "the row is gone after the DELETE was supposed to fail")
     # THE TEARDOWN CANNOT SIMPLY DELETE, because the trigger this test just
-    # proved correct would refuse it — the test would pass its assertion and
-    # then fail on its own cleanup.
+    # proved correct would refuse it. Pre-067 this reset the row to PENDING
+    # first; 067 makes SENT terminal with no outbound transition at all, so
+    # `_force_delete` now leaves a SENT row in place rather than resetting
+    # it — the row's permanence past this test is the guarantee, not a loose
+    # end, and its alert_id is unique to this call.
     _force_delete(conn, alert_id)
 
 
@@ -1003,8 +1043,12 @@ def test_a_refused_row_cannot_be_deleted_even_by_the_owner(conn):
     assert "cannot be deleted" in str(raised.value)
     conn.rollback()
 
-    # As above: the teardown must move the row out of the protected state
-    # before it can remove it.
+    # As above: pre-067 the teardown moved the row out of the protected
+    # state before removing it. 067 makes that reset illegal except through
+    # `derived.repair_refused_outbox_rows` (the audited path), which a
+    # per-test teardown has no business invoking — so `_force_delete` now
+    # leaves this REFUSED row in place instead, its alert_id unique to this
+    # call.
     _force_delete(conn, alert_id)
 
 
