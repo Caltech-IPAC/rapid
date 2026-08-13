@@ -566,8 +566,8 @@ REF_MATCH_NMAX = 3
 # excludes an unclassifiable middle band from both trees.
 # TODO: settle the threshold(s) with the team (possible three-way split);
 # CLASS_STAR is unreliable at faint mags, so each match carries its score.
-REFCAT_STAR_MIN_CLASS = 0.9
-REFCAT_GALAXY_MAX_CLASS = 0.9
+REFCAT_STAR_MIN_CLASS = 0.5
+REFCAT_GALAXY_MAX_CLASS = 0.5
 
 # Mosaic pixel scale, to convert SExtractor pixel sizes to arcsec
 # (awaicgen_pixelscale_absolute in cdf/awsBatchSubmitJobs_launch*.ini).
