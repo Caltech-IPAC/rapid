@@ -13,7 +13,7 @@ import database.modules.utils.rapid_db as db
 import database.modules.utils.roman_tessellation_db as sqlite
 
 
-bucket_name_input = "rimtimsim-20260401-lite"
+bucket_name_input = "rimtimsim-260622-lite"
 subdir_work = "/work"
 
 aws_access_key_id = os.getenv('AWS_ACCESS_KEY_ID')
@@ -85,7 +85,6 @@ def compute_center_sky_position(header,wcs):
 
     x0 = 0.5 * naxis1 + 0.5 - 1.0     # Integer pixel coordinates are zero-based and centered on pixel.
     y0 = 0.5 * naxis2 + 0.5 - 1.0
-
 
     sky0 = wcs.pixel_to_world(x0, y0)
 

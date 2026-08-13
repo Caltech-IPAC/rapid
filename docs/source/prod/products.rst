@@ -365,6 +365,29 @@ Other cross-matches:
   current plan is to include the top 3 closest matches for each catalog,
   potentially taking into account the half-light radius for extended sources.
 
+Sample Alert Packet
+==================================
+
+.. warning::
+
+   **This sample file is for exploratory purposes only.**
+
+   Production-level avro files will be schema-less and will require
+   versioning with Confluent schema in order to use. This file's schema
+   may become out of date from the current alert code.
+
+:download:`sample_alert.avro <sample_alert.avro>` (schema version ``00.02``).
+
+This is a standard Avro object container file with the schema embedded, so
+it can be read without any RAPID code, e.g.::
+
+    import fastavro
+    with open("sample_alert.avro", "rb") as f:
+        alert = next(fastavro.reader(f))
+
+The ``cutoutDifference``, ``cutoutScience``, and ``cutoutReference`` values
+are FITS files as raw bytes (e.g. ``astropy.io.fits.open(io.BytesIO(...))``).
+
 .. _alert-packet-contents:
 
 Alert Packet Contents

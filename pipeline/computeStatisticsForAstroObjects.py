@@ -1,4 +1,3 @@
-import boto3
 import os
 import numpy as np
 import configparser
@@ -11,7 +10,6 @@ to_zone = tz.gettz('America/Los_Angeles')
 
 import database.modules.utils.rapid_db as db
 import modules.utils.rapid_pipeline_subs as util
-import database.modules.utils.roman_tessellation_db as sqlite
 
 swname = "computeStatisticsForAstroObjects.py"
 swvers = "1.0"
@@ -96,11 +94,6 @@ else:
     num_cores = int(num_cores)
 
 print("num_cores =",num_cores)
-
-
-# Get S3 client.
-
-s3_client = boto3.client('s3')
 
 
 # Define columns to be populated in AstroObjectsMeta tables.
@@ -214,7 +207,23 @@ def run_single_core_job(fields,source_child_tables,index_thread):
 
         sql_queries = []
         sql_queries.append(query)
-        records = dbh.execute_sql_queries(sql_queries,thread_debug)
+
+        try:
+            records = dbh.execute_sql_queries(sql_queries,thread_debug)
+        except Exception as e:
+            fh.write(f"*** Error: Exception raised in dbh.execute_sql_queries " +
+                     f"(query={query},e={e});  quitting...\n")
+            fh.flush()
+            fh.close()
+            dbh.close()
+            raise
+
+        if dbh.exit_code >= 64:
+            fh.write(f"*** Error from dbh.execute_sql_queries (query={query}); quitting...\n")
+            fh.flush()
+            fh.close()
+            dbh.close()
+            raise RuntimeError(f"*** Error from dbh.execute_sql_queries (query={query}); quitting...")
 
         for record in records:
             fh.write(f"record = {record}\n")
@@ -237,7 +246,23 @@ def run_single_core_job(fields,source_child_tables,index_thread):
 
         sql_queries = []
         sql_queries.append(query)
-        records = dbh.execute_sql_queries(sql_queries,thread_debug)
+
+        try:
+            records = dbh.execute_sql_queries(sql_queries,thread_debug)
+        except Exception as e:
+            fh.write(f"*** Error: Exception raised in dbh.execute_sql_queries " +
+                     f"(query={query},e={e});  quitting...\n")
+            fh.flush()
+            fh.close()
+            dbh.close()
+            raise
+
+        if dbh.exit_code >= 64:
+            fh.write(f"*** Error from dbh.execute_sql_queries (query={query}); quitting...\n")
+            fh.flush()
+            fh.close()
+            dbh.close()
+            raise RuntimeError(f"*** Error from dbh.execute_sql_queries (query={query}); quitting...")
 
         aids_list = []
         for record in records:
@@ -249,9 +274,10 @@ def run_single_core_job(fields,source_child_tables,index_thread):
 
         if n_aids_list > 0:
 
-            aids_comma_separated_string = ",".join(aids_list)
+            aids_comma_separated_string = ",".join(str(a) for a in aids_list)
 
-            fh.write(f"Deleting records for aid = {aid} in {astroobjects_tablename} database table...\n")
+            fh.write(f"Deleting records for aids = {aids_comma_separated_string} in " +
+                     f"{astroobjects_tablename} database table...\n")
             fh.flush()
 
             query = f"DELETE FROM {astroobjects_tablename} " +\
@@ -262,12 +288,29 @@ def run_single_core_job(fields,source_child_tables,index_thread):
 
             sql_queries = []
             sql_queries.append(query)
-            records = dbh.execute_sql_queries(sql_queries,thread_debug)
+
+            try:
+                records = dbh.execute_sql_queries(sql_queries,thread_debug)
+            except Exception as e:
+                fh.write(f"*** Error: Exception raised in dbh.execute_sql_queries " +
+                         f"(query={query},e={e});  quitting...\n")
+                fh.flush()
+                fh.close()
+                dbh.close()
+                raise
+
+            if dbh.exit_code >= 64:
+                fh.write(f"*** Error from dbh.execute_sql_queries (query={query}); quitting...\n")
+                fh.flush()
+                fh.close()
+                dbh.close()
+                raise RuntimeError(f"*** Error from dbh.execute_sql_queries (query={query}); quitting...")
 
             for record in records:
                 fh.write(f"record = {record}\n")
 
-            fh.write(f"Deleting records for aid = {aid} in {astroobjectsmeta_tablename} database table...\n")
+            fh.write(f"Deleting records for aid = {aids_comma_separated_string} in " +
+                     f"{astroobjectsmeta_tablename} database table...\n")
             fh.flush()
 
             query = f"DELETE FROM {astroobjectsmeta_tablename} " +\
@@ -278,7 +321,23 @@ def run_single_core_job(fields,source_child_tables,index_thread):
 
             sql_queries = []
             sql_queries.append(query)
-            records = dbh.execute_sql_queries(sql_queries,thread_debug)
+
+            try:
+                records = dbh.execute_sql_queries(sql_queries,thread_debug)
+            except Exception as e:
+                fh.write(f"*** Error: Exception raised in dbh.execute_sql_queries " +
+                         f"(query={query},e={e});  quitting...\n")
+                fh.flush()
+                fh.close()
+                dbh.close()
+                raise
+
+            if dbh.exit_code >= 64:
+                fh.write(f"*** Error from dbh.execute_sql_queries (query={query}); quitting...\n")
+                fh.flush()
+                fh.close()
+                dbh.close()
+                raise RuntimeError(f"*** Error from dbh.execute_sql_queries (query={query}); quitting...")
 
             for record in records:
                 fh.write(f"record = {record}\n")
@@ -314,7 +373,23 @@ def run_single_core_job(fields,source_child_tables,index_thread):
         fh.flush()
 
         sql_queries = [query]
-        all_records = dbh.execute_sql_queries(sql_queries,thread_debug)
+
+        try:
+            all_records = dbh.execute_sql_queries(sql_queries,thread_debug)
+        except Exception as e:
+            fh.write(f"*** Error: Exception raised in dbh.execute_sql_queries " +
+                     f"(query={query},e={e});  quitting...\n")
+            fh.flush()
+            fh.close()
+            dbh.close()
+            raise
+
+        if dbh.exit_code >= 64:
+            fh.write(f"*** Error from dbh.execute_sql_queries (query={query}); quitting...\n")
+            fh.flush()
+            fh.close()
+            dbh.close()
+            raise RuntimeError(f"*** Error from dbh.execute_sql_queries (query={query}); quitting...")
 
         fh.write(f"Total records from UNION ALL query = {len(all_records)}\n")
 
@@ -347,7 +422,23 @@ def run_single_core_job(fields,source_child_tables,index_thread):
         query = f"SELECT DISTINCT aid FROM {merges_tablename};"
 
         sql_queries = [query]
-        all_aids_records = dbh.execute_sql_queries(sql_queries,thread_debug)
+
+        try:
+            all_aids_records = dbh.execute_sql_queries(sql_queries,thread_debug)
+        except Exception as e:
+            fh.write(f"*** Error: Exception raised in dbh.execute_sql_queries " +
+                     f"(query={query},e={e});  quitting...\n")
+            fh.flush()
+            fh.close()
+            dbh.close()
+            raise
+
+        if dbh.exit_code >= 64:
+            fh.write(f"*** Error from dbh.execute_sql_queries (query={query}); quitting...\n")
+            fh.flush()
+            fh.close()
+            dbh.close()
+            raise RuntimeError(f"*** Error from dbh.execute_sql_queries (query={query}); quitting...")
 
         not_best_aids = [str(record[0]) for record in all_aids_records if record[0] not in best_aids]
 
@@ -361,7 +452,23 @@ def run_single_core_job(fields,source_child_tables,index_thread):
                 f"DELETE FROM {astroobjects_tablename} WHERE aid IN ({not_best_aids_str});",
                 f"DELETE FROM {astroobjectsmeta_tablename} WHERE aid IN ({not_best_aids_str});"
             ]
-            dbh.execute_sql_queries(sql_queries,thread_debug)
+
+            try:
+                dbh.execute_sql_queries(sql_queries,thread_debug)
+            except Exception as e:
+                fh.write(f"*** Error: Exception raised in dbh.execute_sql_queries " +
+                         f"(e={e});  quitting...\n")
+                fh.flush()
+                fh.close()
+                dbh.close()
+                raise
+
+            if dbh.exit_code >= 64:
+                fh.write(f"*** Error from dbh.execute_sql_queries; quitting...\n")
+                fh.flush()
+                fh.close()
+                dbh.close()
+                raise RuntimeError(f"*** Error from dbh.execute_sql_queries (query={query}); quitting...")
 
 
         # Loop over astroobjects for current field:
@@ -399,12 +506,23 @@ def run_single_core_job(fields,source_child_tables,index_thread):
 
         # Load records into AstroObjectsMeta_<field> database tables.
 
-        dbh.copy_data_from_file_into_database(astroobjectsmeta_table_file,astroobjectsmeta_tablename,astroobjectsmeta_columns)
+        try:
+            dbh.copy_data_from_file_into_database(astroobjectsmeta_table_file,astroobjectsmeta_tablename,astroobjectsmeta_columns)
+        except Exception as e:
+            fh.write(f"*** Error: Exception raised in dbh.copy_data_from_file_into_database " +
+                     f"(astroobjectsmeta_table_file={astroobjectsmeta_table_file}, " +
+                     f"astroobjectsmeta_tablename={astroobjectsmeta_tablename}, e={e});  quitting...\n")
+            fh.flush()
+            fh.close()
+            dbh.close()
+            raise
 
         if dbh.exit_code >= 64:
             fh.write(f"*** Error bulk-loading data from file ({astroobjectsmeta_table_file}) " +
                      f"into specified database table ({astroobjectsmeta_tablename}); quitting...\n")
             fh.flush()
+            fh.close()
+            dbh.close()
             raise RuntimeError(f"*** Error bulk-loading data from file ({astroobjectsmeta_table_file}) " +
                                f"into specified database table ({astroobjectsmeta_tablename}); quitting...")
 
@@ -415,70 +533,6 @@ def run_single_core_job(fields,source_child_tables,index_thread):
         diff_time_benchmark = thread_end_time_benchmark - thread_start_time_benchmark
         fh.write(f"Elapsed time in seconds to bulk copy records into " +
                  f"{astroobjectsmeta_tablename} database table = {diff_time_benchmark}\n")
-        fh.flush()
-        thread_start_time_benchmark = thread_end_time_benchmark
-
-
-        # Drop empty astroobjects_<field>, astroobjectsmeta_<field>, and
-        # merges_<field> database tables.
-
-        query = f"SELECT count(*) FROM {astroobjects_tablename};"
-
-        fh.write(f"query = {query}\n")
-
-        sql_queries = []
-        sql_queries.append(query)
-        records = dbh.execute_sql_queries(sql_queries,thread_debug)
-
-        fh.write(f"records = {records}\n")
-
-        astroobjects_table_count = records[0][0]    # Do not catch exception; handle manually.
-
-        query = f"SELECT count(*) FROM {merges_tablename};"
-
-        fh.write(f"query = {query}\n")
-
-        sql_queries = []
-        sql_queries.append(query)
-        records = dbh.execute_sql_queries(sql_queries,thread_debug)
-
-        fh.write(f"records = {records}\n")
-
-        merges_table_count = records[0][0]    # Do not catch exception; handle manually.
-
-        if (astroobjects_table_count == 0) or (merges_table_count == 0):
-
-            fh.write(f"Dropping {astroobjects_tablename} database table...\n")
-
-            query = f"DROP TABLE {astroobjects_tablename};"
-
-            sql_queries = []
-            sql_queries.append(query)
-            records = dbh.execute_sql_queries(sql_queries,thread_debug)
-
-            fh.write(f"Dropping {astroobjectsmeta_tablename} database table...\n")
-
-            query = f"DROP TABLE {astroobjectsmeta_tablename};"
-
-            sql_queries = []
-            sql_queries.append(query)
-            records = dbh.execute_sql_queries(sql_queries,thread_debug)
-
-            fh.write(f"Dropping {merges_tablename} database table...\n")
-
-            query = f"DROP TABLE {merges_tablename};"
-
-            sql_queries = []
-            sql_queries.append(query)
-            records = dbh.execute_sql_queries(sql_queries,thread_debug)
-
-
-        # Code-timing benchmark.
-
-        thread_end_time_benchmark = time.time()
-        diff_time_benchmark = thread_end_time_benchmark - thread_start_time_benchmark
-        fh.write(f"Elapsed time in seconds to drop empty {astroobjects_tablename}, " +
-                 f"{merges_tablename}, and {astroobjectsmeta_tablename} database table = {diff_time_benchmark}\n")
         fh.flush()
         thread_start_time_benchmark = thread_end_time_benchmark
 
@@ -499,7 +553,7 @@ def run_single_core_job(fields,source_child_tables,index_thread):
                 fh.write(f"File deleted successfully ({file_path})...\n")
                 fh.flush()
             else:
-                fh.write(f"The file does not exist({file_path})...\n")
+                fh.write(f"File does not exist({file_path})...\n")
                 fh.flush()
 
 
@@ -571,12 +625,25 @@ if __name__ == '__main__':
         exit(dbh.exit_code)
 
     sql_queries = []
-    sql_queries.append(f"select tablename from pg_tables where schemaname='public' and tablename like 'astroobjects\_%';")
-    records = dbh.execute_sql_queries(sql_queries,debug)
+    query = f"select tablename from pg_tables where schemaname='public' and tablename like 'astroobjects\\_%';"
+    sql_queries.append(query)
+
+    try:
+        records = dbh.execute_sql_queries(sql_queries,debug)
+    except Exception as e:
+        print(f"*** Error: Exception raised in dbh.execute_sql_queries " +
+                         f"(query={query},e={e});  quitting...")
+        dbh.close()
+        exit(64)
+
+    if dbh.exit_code >= 64:
+        print(f"*** Error from dbh.execute_sql_queries (query={query}); quitting...")
+        dbh.close()
+        exit(dbh.exit_code)
 
     fields_list = []
     for record in records:
-        field = record[0].replace("astroobjects_","")
+        field = record[0].removeprefix("astroobjects_")
         fields_list.append(field)
 
 
@@ -584,8 +651,21 @@ if __name__ == '__main__':
     # (avoids expensive inheritance scan across all child tables).
 
     sql_queries = []
-    sql_queries.append("SELECT tablename FROM pg_tables WHERE schemaname='public' AND tablename ~ '^sources_[0-9]+_[0-9]+$' ORDER BY tablename;")
-    records = dbh.execute_sql_queries(sql_queries,debug)
+    query = "SELECT tablename FROM pg_tables WHERE schemaname='public' AND tablename ~ '^sources_[0-9]+_[0-9]+$' ORDER BY tablename;"
+    sql_queries.append(query)
+
+    try:
+        records = dbh.execute_sql_queries(sql_queries,debug)
+    except Exception as e:
+        print(f"*** Error: Exception raised in dbh.execute_sql_queries " +
+                         f"(query={query},e={e});  quitting...")
+        dbh.close()
+        exit(64)
+
+    if dbh.exit_code >= 64:
+        print(f"*** Error from dbh.execute_sql_queries (query={query}); quitting...")
+        dbh.close()
+        exit(dbh.exit_code)
 
     source_child_tables = [record[0] for record in records]
     print(f"Number of source child tables = {len(source_child_tables)}")
@@ -603,7 +683,7 @@ if __name__ == '__main__':
     # Defer creating indexes on all astroobjectsmeta_<field> database tables until
     # after the tables have been populated.
 
-    print("Creating tables and indexes for all astroobjectsmeta_<field> database tables...")
+    print("Creating tables and grants for all astroobjectsmeta_<field> database tables...")
 
     sql_queries = []
 
@@ -629,7 +709,18 @@ if __name__ == '__main__':
 
         sql_queries.append(f"ALTER TABLE {tablename} SET UNLOGGED;")
 
-    dbh.execute_sql_queries(sql_queries,debug)
+    try:
+        dbh.execute_sql_queries(sql_queries,debug)
+    except Exception as e:
+        print(f"*** Error: Exception raised in dbh.execute_sql_queries " +
+              f"(e={e});  quitting...")
+        dbh.close()
+        exit(64)
+
+    if dbh.exit_code >= 64:
+        print(f"*** Error: Exception raised in dbh.execute_sql_queries;  quitting...")
+        dbh.close()
+        exit(dbh.exit_code)
 
 
     # Code-timing benchmark.
@@ -662,7 +753,7 @@ if __name__ == '__main__':
 
     # Create indexes on all astroobjectsmeta_<field> database tables.
 
-    print("Creating tables and indexes for all astroobjectsmeta_<field> database tables...")
+    print("Creating indexes for all astroobjectsmeta_<field> database tables...")
 
     sql_queries = []
 
@@ -676,9 +767,20 @@ if __name__ == '__main__':
         sql_queries.append(f"CREATE INDEX {tablename}_nsources_idx ON {tablename} (nsources);")
         sql_queries.append(f"CREATE INDEX {tablename}_meanradec_idx ON {tablename} (q3c_ang2ipix(meanra, meandec));")
 
-        sql_queries.append(f"CLUSTER {tablename}_meanradec_idx ON {tablename};")
+        sql_queries.append(f"CLUSTER {tablename} USING {tablename}_meanradec_idx;")
 
-    dbh.execute_sql_queries(sql_queries,debug)
+    try:
+        dbh.execute_sql_queries(sql_queries,debug)
+    except Exception as e:
+        print(f"*** Error: Exception raised in dbh.execute_sql_queries " +
+              f"(e={e});  quitting...")
+        dbh.close()
+        exit(64)
+
+    if dbh.exit_code >= 64:
+        print(f"*** Error: Exception raised in dbh.execute_sql_queries;  quitting...")
+        dbh.close()
+        exit(dbh.exit_code)
 
 
     # Code-timing benchmark.
@@ -703,7 +805,19 @@ if __name__ == '__main__':
 
         sql_queries = []
         sql_queries.append(query)
-        records = dbh.execute_sql_queries(sql_queries,debug)
+
+        try:
+            records = dbh.execute_sql_queries(sql_queries,debug)
+        except Exception as e:
+            print(f"*** Error: Exception raised in dbh.execute_sql_queries " +
+                  f"(e={e});  quitting...")
+            dbh.close()
+            exit(64)
+
+        if dbh.exit_code >= 64:
+            print(f"*** Error: Exception raised in dbh.execute_sql_queries;  quitting...")
+            dbh.close()
+            exit(dbh.exit_code)
 
         print(f"records = {records}")
 
@@ -717,13 +831,36 @@ if __name__ == '__main__':
 
             sql_queries = []
             sql_queries.append(query)
-            records = dbh.execute_sql_queries(sql_queries,debug)
+
+            try:
+                records = dbh.execute_sql_queries(sql_queries,debug)
+            except Exception as e:
+                print(f"*** Error: Exception raised in dbh.execute_sql_queries " +
+                      f"(e={e});  quitting...")
+                dbh.close()
+                exit(64)
+
+            if dbh.exit_code >= 64:
+                print(f"*** Error: Exception raised in dbh.execute_sql_queries;  quitting...")
+                dbh.close()
+                exit(dbh.exit_code)
 
         else:
 
             print(f"Vacuuming and analyzing {tablename} database table...")
 
-            dbh.vacuum_analyze_table(tablename)
+            try:
+                dbh.vacuum_analyze_table(tablename)
+            except Exception as e:
+                print(f"*** Error: Exception raised in dbh.vacuum_analyze_table " +
+                      f"(tablename={tablename},e={e});  quitting...")
+                dbh.close()
+                exit(64)
+
+            if dbh.exit_code >= 64:
+                print(f"*** Error: Exception raised in dbh.vacuum_analyze_table (tablename={tablename});  quitting...")
+                dbh.close()
+                exit(dbh.exit_code)
 
 
     # Code-timing benchmark.

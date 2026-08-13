@@ -53,6 +53,9 @@ Look-up table all of the filter IDs versus Roman Space Telescope filter names in
        8 | W146
     (8 rows)
 
+A new set of rimtimsimbs was delivered on 6/22/26, which has a greater variety of injected transients.
+These have been loaded into the following RAPID operations database: rimtimsims3db.
+
 
 5/30/2025
 ************************************

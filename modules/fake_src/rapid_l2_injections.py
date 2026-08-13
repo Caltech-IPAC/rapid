@@ -16,7 +16,6 @@ import romanisim.psf
 import romanisim.wcs
 from romanisim.image import inject_sources_into_l2
 
-from modules.fake_src.injectionLightCurveModels import SinusoidalLightCurve, GaussianLightCurve
 
 
 class GriddedEPSF:
@@ -169,51 +168,72 @@ def _evaluate_catalogs_at_mjd(catalog_list_file, image_mjdobs, image_size, image
     with open(catalog_list_file, 'r') as fh:
         input_catalogs = [line.strip() for line in fh if line.strip()]
 
-    ra_out, dec_out, flux_out, xpix_out, ypix_out = [], [], [], [], []
+    ra_parts, dec_parts, flux_parts, xpix_parts, ypix_parts = [], [], [], [], []
+    ny, nx = image_size
 
     for catalog_path in input_catalogs:
         with open(catalog_path, 'r') as f:
-            catalog_sources_dict = json.load(f)
-        catalog_sources = np.array(list(catalog_sources_dict.values()))
+            catalog_sources = list(json.load(f).values())
 
         ra_coords = np.array([s['ra'] for s in catalog_sources])
         dec_coords = np.array([s['dec'] for s in catalog_sources])
 
         # Convert to pixel positions; keep sources within 50 px of the image edge
         xpos, ypos = image_wcs.toImage(ra_coords, dec_coords, units='deg')
-        ny, nx = image_size
         on_image = ((xpos >= -50.0) & (xpos < nx + 50.0) &
                     (ypos >= -50.0) & (ypos < ny + 50.0))
 
-        for source, x_i, y_i in zip(catalog_sources[on_image], xpos[on_image], ypos[on_image]):
-            if source['type'] == 'sinusoidal':
-                mag = SinusoidalLightCurve(
-                    image_mjdobs,
-                    source['parameters']['magnitude'],
-                    source['parameters']['amplitude'],
-                    source['parameters']['period'],
-                    source['parameters']['phase'])
-                flux_maggies = 10**(-0.4 * mag)
-            elif source['type'] == 'gaussian':
-                static_flux = 10**(-0.4 * source['parameters']['magnitude'])
-                peak_amplitude = static_flux * (10**(0.4 * source['parameters']['peak_amplitude']) - 1.0)
-                flux_maggies = GaussianLightCurve(
-                    image_mjdobs,
-                    source['parameters']['peak_time'],
-                    peak_amplitude,
-                    source['parameters']['sigma'],
-                    static_flux)
-            else:
-                raise ValueError(f"Unknown light curve type: {source['type']}")
+        if not np.any(on_image):
+            continue
 
-            ra_out.append(source['ra'])
-            dec_out.append(source['dec'])
-            flux_out.append(flux_maggies)
-            xpix_out.append(x_i)
-            ypix_out.append(y_i)
+        sources_on = [s for s, m in zip(catalog_sources, on_image) if m]
+        x_on = xpos[on_image]
+        y_on = ypos[on_image]
+        ra_on = ra_coords[on_image]
+        dec_on = dec_coords[on_image]
 
-    return (np.array(ra_out), np.array(dec_out), np.array(flux_out),
-           np.array(xpix_out), np.array(ypix_out))
+        types = np.array([s['type'] for s in sources_on])
+        fluxes = np.empty(len(sources_on))
+
+        # Vectorize sinusoidal sources
+        sin_mask = types == 'sinusoidal'
+        if np.any(sin_mask):
+            sin_src = [s for s, m in zip(sources_on, sin_mask) if m]
+            magnitudes = np.array([s['parameters']['magnitude'] for s in sin_src])
+            amplitudes = np.array([s['parameters']['amplitude'] for s in sin_src])
+            periods = np.array([s['parameters']['period'] for s in sin_src])
+            phases = np.array([s['parameters']['phase'] for s in sin_src])
+            mags = magnitudes + amplitudes * np.sin(2 * np.pi * (image_mjdobs / periods + phases))
+            fluxes[sin_mask] = 10**(-0.4 * mags)
+
+        # Vectorize gaussian sources
+        gauss_mask = types == 'gaussian'
+        if np.any(gauss_mask):
+            gauss_src = [s for s, m in zip(sources_on, gauss_mask) if m]
+            magnitudes = np.array([s['parameters']['magnitude'] for s in gauss_src])
+            peak_amps = np.array([s['parameters']['peak_amplitude'] for s in gauss_src])
+            peak_times = np.array([s['parameters']['peak_time'] for s in gauss_src])
+            sigmas = np.array([s['parameters']['sigma'] for s in gauss_src])
+            static_flux = 10**(-0.4 * magnitudes)
+            peak_amplitude = static_flux * (10**(0.4 * peak_amps) - 1.0)
+            gauss_component = peak_amplitude * np.exp(-0.5 * ((image_mjdobs - peak_times) / sigmas) ** 2)
+            fluxes[gauss_mask] = static_flux + gauss_component
+
+        unknown = ~(sin_mask | gauss_mask)
+        if np.any(unknown):
+            raise ValueError(f"Unknown light curve type: {types[unknown][0]}")
+
+        ra_parts.append(ra_on)
+        dec_parts.append(dec_on)
+        flux_parts.append(fluxes)
+        xpix_parts.append(x_on)
+        ypix_parts.append(y_on)
+
+    if ra_parts:
+        return (np.concatenate(ra_parts), np.concatenate(dec_parts),
+                np.concatenate(flux_parts), np.concatenate(xpix_parts),
+                np.concatenate(ypix_parts))
+    return (np.array([]), np.array([]), np.array([]), np.array([]), np.array([]))
 
 
 def inject_variable_stars_into_l2(asdf_path, catalog_list_file, output_path,

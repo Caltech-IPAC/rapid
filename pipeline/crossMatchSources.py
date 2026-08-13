@@ -146,7 +146,7 @@ print(f"Merges columns: {merges_cols_comma_separated_string}")
 # Custom methods for parallel processing, taking advantage of multiple cores on the job-launcher machine.
 #-------------------------------------------------------------------------------------------------------------
 
-def run_single_core_job_stage_1_crossmatching(scas,fields,index_thread):
+def run_single_core_job_stage_1_crossmatching(tables_to_crossmatch_list,fields,index_thread):
 
 
     '''
@@ -193,6 +193,7 @@ def run_single_core_job_stage_1_crossmatching(scas,fields,index_thread):
     if dbh.exit_code >= 64:
         fh.write(f"*** Error opening database connection (dbh.exit_code={dbh.exit_code}); quitting...\n")
         fh.flush()
+        fh.close()
         raise RuntimeError(f"*** Error opening database connection (dbh.exit_code={dbh.exit_code}); quitting...\n")
 
 
@@ -215,16 +216,35 @@ def run_single_core_job_stage_1_crossmatching(scas,fields,index_thread):
 
         expids_dict = {}
 
-        for sca in scas:
+        for table_to_crossmatch_tuple in tables_to_crossmatch_list:
 
-            sources_tablename = f"sources_{proc_date}_{sca}"
+            obs_date = table_to_crossmatch_tuple[0]
+            sca = table_to_crossmatch_tuple[1]
+
+            sources_tablename = f"sources_{obs_date}_{sca}"
 
             query = f"SELECT distinct expid,mjdobs FROM {sources_tablename} " +\
                 f"WHERE field = {field} AND flags = 0;"
 
             sql_queries = []
             sql_queries.append(query)
-            records = dbh.execute_sql_queries(sql_queries,thread_debug)
+
+            try:
+                records = dbh.execute_sql_queries(sql_queries,thread_debug)
+            except Exception as e:
+                fh.write(f"*** Error: Exception raised in dbh.execute_sql_queries " +
+                         f"(query={query},e={e});  quitting...\n")
+                fh.flush()
+                fh.close()
+                dbh.close()
+                raise
+
+            if dbh.exit_code >= 64:
+                fh.write(f"*** Error from dbh.execute_sql_queries (query={query}); quitting...\n")
+                fh.flush()
+                fh.close()
+                dbh.close()
+                raise RuntimeError(f"*** Error from dbh.execute_sql_queries (query={query}); quitting...")
 
             for record in records:
                 expid = record[0]
@@ -250,9 +270,12 @@ def run_single_core_job_stage_1_crossmatching(scas,fields,index_thread):
             with (open(astroobjects_table_file, "w") as csv_astroobjects_fh,
                  open(merges_table_file, "w") as csv_merges_fh):
 
-                for sca in scas:
+                for table_to_crossmatch_tuple in tables_to_crossmatch_list:
 
-                    sources_tablename = f"sources_{proc_date}_{sca}"
+                    obs_date = table_to_crossmatch_tuple[0]
+                    sca = table_to_crossmatch_tuple[1]
+
+                    sources_tablename = f"sources_{obs_date}_{sca}"
 
                     query = f"SELECT a.sid,b.aid FROM {sources_tablename} AS a, " +\
                         f"{astroobjects_tablename} AS b " +\
@@ -261,7 +284,23 @@ def run_single_core_job_stage_1_crossmatching(scas,fields,index_thread):
 
                     sql_queries = []
                     sql_queries.append(query)
-                    records = dbh.execute_sql_queries(sql_queries,thread_debug)
+
+                    try:
+                        records = dbh.execute_sql_queries(sql_queries,thread_debug)
+                    except Exception as e:
+                        fh.write(f"*** Error: Exception raised in dbh.execute_sql_queries " +
+                                 f"(query={query},e={e});  quitting...\n")
+                        fh.flush()
+                        fh.close()
+                        dbh.close()
+                        raise
+
+                    if dbh.exit_code >= 64:
+                        fh.write(f"*** Error from dbh.execute_sql_queries (query={query}); quitting...\n")
+                        fh.flush()
+                        fh.close()
+                        dbh.close()
+                        raise RuntimeError(f"*** Error from dbh.execute_sql_queries (query={query}); quitting...")
 
 
                     # Code-timing benchmark.
@@ -288,6 +327,8 @@ def run_single_core_job_stage_1_crossmatching(scas,fields,index_thread):
                         # even for unlogged table.
 
                         '''
+                        This method is deprecated.
+
                         dbh.add_merge_to_field(merges_tablename,aid,sid)
                         '''
 
@@ -300,7 +341,6 @@ def run_single_core_job_stage_1_crossmatching(scas,fields,index_thread):
                         nums = nums + num + ","
 
                         # Slice the string to get all but the last character, then add the newline character
-                        newline_character = "\n"
                         line_to_write_to_file = nums[:-1] + newline_character
 
                         csv_merges_fh.write(line_to_write_to_file)
@@ -314,7 +354,7 @@ def run_single_core_job_stage_1_crossmatching(scas,fields,index_thread):
                     thread_start_time_benchmark = thread_end_time_benchmark
 
 
-                    # Query for all sources for the field of interest in Sources_<proc_date>_<sca> and load into memory.
+                    # Query for all sources for the field of interest in Sources_<obs_date>_<sca> and load into memory.
                     # For the sources that were not matched for the field of interest,
                     # create AstroObjects_<field> record and then Merges_<field> record.
 
@@ -323,7 +363,23 @@ def run_single_core_job_stage_1_crossmatching(scas,fields,index_thread):
 
                     sql_queries = []
                     sql_queries.append(query)
-                    records = dbh.execute_sql_queries(sql_queries,thread_debug)
+
+                    try:
+                        records = dbh.execute_sql_queries(sql_queries,thread_debug)
+                    except Exception as e:
+                        fh.write(f"*** Error: Exception raised in dbh.execute_sql_queries " +
+                                 f"(query={query},e={e});  quitting...\n")
+                        fh.flush()
+                        fh.close()
+                        dbh.close()
+                        raise
+
+                    if dbh.exit_code >= 64:
+                        fh.write(f"*** Error from dbh.execute_sql_queries (query={query}); quitting...\n")
+                        fh.flush()
+                        fh.close()
+                        dbh.close()
+                        raise RuntimeError(f"*** Error from dbh.execute_sql_queries (query={query}); quitting...")
 
                     for record in records:
 
@@ -410,12 +466,22 @@ def run_single_core_job_stage_1_crossmatching(scas,fields,index_thread):
 
             # Load records into AstroObjects_<field> database tables.
 
-            dbh.copy_data_from_file_into_database(astroobjects_table_file,astroobjects_tablename,astroobjects_columns)
+            try:
+                dbh.copy_data_from_file_into_database(astroobjects_table_file,astroobjects_tablename,astroobjects_columns)
+            except Exception as e:
+                fh.write(f"*** Error: Exception raised in dbh.copy_data_from_file_into_database " +
+                         f"(astroobjects_table_file={astroobjects_table_file},e={e});  quitting...\n")
+                fh.flush()
+                fh.close()
+                dbh.close()
+                raise
 
             if dbh.exit_code >= 64:
                 fh.write(f"*** Error bulk-loading data from file ({astroobjects_table_file}) " +
                          f"into specified database table ({astroobjects_tablename}); quitting...\n")
                 fh.flush()
+                fh.close()
+                dbh.close()
                 raise RuntimeError(f"*** Error bulk-loading data from file ({astroobjects_table_file}) " +
                                    f"into specified database table ({astroobjects_tablename}); quitting...")
 
@@ -432,12 +498,22 @@ def run_single_core_job_stage_1_crossmatching(scas,fields,index_thread):
 
             # Load records into Merges_<field> database tables.
 
-            dbh.copy_data_from_file_into_database(merges_table_file,merges_tablename,merges_columns)
+            try:
+                dbh.copy_data_from_file_into_database(merges_table_file,merges_tablename,merges_columns)
+            except Exception as e:
+                fh.write(f"*** Error: Exception raised in dbh.copy_data_from_file_into_database " +
+                         f"(merges_table_file={merges_table_file},e={e});  quitting...\n")
+                fh.flush()
+                fh.close()
+                dbh.close()
+                raise
 
             if dbh.exit_code >= 64:
                 fh.write(f"*** Error bulk-loading data from file ({merges_table_file}) " +
                          f"into specified database table ({merges_tablename}); quitting...\n")
                 fh.flush()
+                fh.close()
+                dbh.close()
                 raise RuntimeError(f"*** Error bulk-loading data from file ({merges_table_file}) " +
                                    f"into specified database table ({merges_tablename}); quitting...")
 
@@ -488,6 +564,7 @@ def run_single_core_job_stage_1_crossmatching(scas,fields,index_thread):
     if dbh.exit_code >= 64:
         fh.write(f"*** Error closing database connection (dbh.exit_code={dbh.exit_code}); quitting...\n")
         fh.flush()
+        fh.close()
         raise RuntimeError(f"*** Error closing database connection (dbh.exit_code={dbh.exit_code}); quitting...")
 
     fh.write(f"\nEnd of run_single_core_job: index_thread={index_thread}\n")
@@ -499,7 +576,7 @@ def run_single_core_job_stage_1_crossmatching(scas,fields,index_thread):
     return message
 
 
-def run_single_core_job_stage_2_crossmatching(scas,fields,index_thread):
+def run_single_core_job_stage_2_crossmatching(tables_to_crossmatch_list,fields,index_thread):
 
 
     '''
@@ -545,6 +622,7 @@ def run_single_core_job_stage_2_crossmatching(scas,fields,index_thread):
     if dbh.exit_code >= 64:
         fh.write(f"*** Error opening database connection (dbh.exit_code={dbh.exit_code}); quitting...\n")
         fh.flush()
+        fh.close()
         raise RuntimeError(f"*** Error opening database connection (dbh.exit_code={dbh.exit_code}); quitting...\n")
 
 
@@ -636,9 +714,12 @@ def run_single_core_job_stage_2_crossmatching(scas,fields,index_thread):
                 # 2. Speed it up by restricting cross-matching within the inclusion radius.
                 # 3. Register Merges_<field> records for cross-matches.
 
-                for sca in scas:
+                for table_to_crossmatch_tuple in tables_to_crossmatch_list:
 
-                    sources_tablename = f"sources_{proc_date}_{sca}"
+                    obs_date = table_to_crossmatch_tuple[0]
+                    sca = table_to_crossmatch_tuple[1]
+
+                    sources_tablename = f"sources_{obs_date}_{sca}"
 
                     if n_adjacent_fields == 8:
 
@@ -659,7 +740,25 @@ def run_single_core_job_stage_2_crossmatching(scas,fields,index_thread):
 
                     sql_queries = []
                     sql_queries.append(query)
-                    records = dbh.execute_sql_queries(sql_queries,thread_debug)
+
+                    try:
+                        records = dbh.execute_sql_queries(sql_queries,thread_debug)
+                    except Exception as e:
+                        fh.write(f"*** Error: Exception raised in dbh.execute_sql_queries " +
+                                 f"(query={query},e={e});  quitting...\n")
+                        fh.flush()
+                        fh.close()
+                        dbh.close()
+                        roman_tessellation_db.close()
+                        raise
+
+                    if dbh.exit_code >= 64:
+                        fh.write(f"*** Error from dbh.execute_sql_queries (query={query}); quitting...\n")
+                        fh.flush()
+                        fh.close()
+                        dbh.close()
+                        roman_tessellation_db.close()
+                        raise RuntimeError(f"*** Error from dbh.execute_sql_queries (query={query}); quitting...")
 
 
                     # Code-timing benchmark.
@@ -704,19 +803,31 @@ def run_single_core_job_stage_2_crossmatching(scas,fields,index_thread):
                     thread_start_time_benchmark = thread_end_time_benchmark
 
 
-                    # End of loop over scas.
+                    # End of loop over SCAs.
 
-                    fh.write(f"Loop end: index_field,field,sca = {index_field},{field},{sca}\n")
+                    fh.write(f"Loop end over SCAs: index_field,field,sca = {index_field},{field},{sca}\n")
 
 
         # Load records into Merges_<field> database tables.
 
-        dbh.copy_data_from_file_into_database(merges_table_file,merges_tablename,merges_columns)
+        try:
+            dbh.copy_data_from_file_into_database(merges_table_file,merges_tablename,merges_columns)
+        except Exception as e:
+            fh.write(f"*** Error: Exception raised in dbh.copy_data_from_file_into_database " +
+                     f"(merges_table_file={merges_table_file},e={e});  quitting...\n")
+            fh.flush()
+            fh.close()
+            dbh.close()
+            roman_tessellation_db.close()
+            raise
 
         if dbh.exit_code >= 64:
             fh.write(f"*** Error bulk-loading data from file ({merges_table_file}) " +
                      f"into specified database table ({merges_tablename}); quitting...\n")
             fh.flush()
+            fh.close()
+            dbh.close()
+            roman_tessellation_db.close()
             raise RuntimeError(f"*** Error bulk-loading data from file ({merges_table_file}) " +
                                f"into specified database table ({merges_tablename}); quitting...")
 
@@ -762,6 +873,7 @@ def run_single_core_job_stage_2_crossmatching(scas,fields,index_thread):
     if dbh.exit_code >= 64:
         fh.write(f"*** Error closing database connection (dbh.exit_code={dbh.exit_code}); quitting...\n")
         fh.flush()
+        fh.close()
         raise RuntimeError(f"*** Error closing database connection (dbh.exit_code={dbh.exit_code}); quitting...")
 
     roman_tessellation_db.close()
@@ -775,13 +887,13 @@ def run_single_core_job_stage_2_crossmatching(scas,fields,index_thread):
     return message
 
 
-def execute_parallel_processes_stage_1_crossmatching(scas_list,fields_list,num_cores):
+def execute_parallel_processes_stage_1_crossmatching(tables_to_crossmatch_list,fields_list,num_cores):
 
     print("num_cores =",num_cores)
 
     with ProcessPoolExecutor(max_workers=num_cores) as executor:
         # Submit all tasks to the executor and store the futures in a list
-        futures = [executor.submit(run_single_core_job_stage_1_crossmatching,scas_list,fields_list,thread_index) for thread_index in range(num_cores)]
+        futures = [executor.submit(run_single_core_job_stage_1_crossmatching,tables_to_crossmatch_list,fields_list,thread_index) for thread_index in range(num_cores)]
 
         # Iterate over completed futures and update progress
         for i, future in enumerate(as_completed(futures)):
@@ -802,13 +914,13 @@ def execute_parallel_processes_stage_1_crossmatching(scas_list,fields_list,num_c
         exit(64)
 
 
-def execute_parallel_processes_stage_2_crossmatching(scas_list,fields_list,num_cores):
+def execute_parallel_processes_stage_2_crossmatching(tables_to_crossmatch_list,fields_list,num_cores):
 
     print("num_cores =",num_cores)
 
     with ProcessPoolExecutor(max_workers=num_cores) as executor:
         # Submit all tasks to the executor and store the futures in a list
-        futures = [executor.submit(run_single_core_job_stage_2_crossmatching,scas_list,fields_list,thread_index) for thread_index in range(num_cores)]
+        futures = [executor.submit(run_single_core_job_stage_2_crossmatching,tables_to_crossmatch_list,fields_list,thread_index) for thread_index in range(num_cores)]
 
         # Iterate over completed futures and update progress
         for i, future in enumerate(as_completed(futures)):
@@ -851,46 +963,181 @@ if __name__ == '__main__':
         exit(dbh.exit_code)
 
 
-    # Query for unique SCAs that have sources tables associated with processing date
-    # (cannot always assume there will be 18).
-    # Query the sources tables for list of unique fields.
+    # Query database for all normal RAPID science-pipeline Jobs records
+    # that are associated with the given processing date.
+    # Returns a list of job IDs.
 
-    scas_dict = {}
-    fields_dict = {}
+    try:
+        recs = dbh.get_jids_of_normal_science_pipeline_jobs_for_processing_date(proc_date)
+    except Exception as e:
+        print(f"*** Error: Exception raised in dbh.get_jids_of_normal_science_pipeline_jobs_for_processing_date " +
+              f"(proc_date={proc_date},e={e});  quitting...")
+        dbh.close()
+        exit(64)
 
-    for i in range(18):
+    if dbh.exit_code >= 64:
+        print("*** Error from {}; quitting ".format(swname))
+        dbh.close()
+        exit(dbh.exit_code)
 
-        sca = i + 1
-        tablename = f"sources_{proc_date}_{sca}"
+
+    # Set up to launch multi-processing for cross-matching all sources database tables
+    # that are associated with a given processing date.
+
+    jid_list = []
+    meta_list = []
+
+    for jid in recs:
+
+        try:
+            job_dict = dbh.get_info_for_job(jid)
+        except Exception as e:
+            print(f"*** Error: Exception raised in dbh.get_info_for_job " +
+                  f"(jid={jid},e={e});  quitting...")
+            dbh.close()
+            exit(64)
+
+        if dbh.exit_code >= 64:
+            print(f"*** Error: Exception raised in dbh.get_info_for_job " +
+                  f"(jid={jid});  quitting...")
+            dbh.close()
+            exit(dbh.exit_code)
+
+        rid = job_dict["rid"]
+
+        try:
+            l2file_dict = dbh.get_l2file_info_for_sources(rid)
+        except Exception as e:
+            print(f"*** Error: Exception raised in dbh.get_l2file_info_for_sources " +
+                  f"(rid={rid},e={e});  quitting...")
+            dbh.close()
+            exit(64)
+
+        if dbh.exit_code >= 64:
+            print(f"*** Error: Exception raised in dbh.get_l2file_info_for_sources " +
+                  f"(rid={rid});  quitting...")
+            dbh.close()
+            exit(dbh.exit_code)
+
+        crval1 = l2file_dict['crval1']
+        crval2 = l2file_dict['crval2']
+        crpix1 = l2file_dict['crpix1']
+        crpix2 = l2file_dict['crpix2']
+        cd11 = l2file_dict['cd11']
+        cd12 = l2file_dict['cd12']
+        cd21 = l2file_dict['cd21']
+        cd22 = l2file_dict['cd22']
+        expid = l2file_dict["expid"]
+        sca = l2file_dict["sca"]
+        fid = l2file_dict["fid"]
+        field = l2file_dict["field"]
+        hp6 = l2file_dict["hp6"]
+        hp9 = l2file_dict["hp9"]
+        mjdobs = l2file_dict["mjdobs"]
+        dateobs = l2file_dict["dateobs"]
+
+
+        # Load Sources record metadata into a dictionary that can be appended to a list,
+        # and then unpacked later.
+
+        meta_dict = {}
+
+        meta_dict["jid"] = jid
+        meta_dict["expid"] = expid
+        meta_dict["sca"] = sca
+        meta_dict["fid"] = fid
+        meta_dict["field"] = field
+        meta_dict["hp6"] = hp6
+        meta_dict["hp9"] = hp9
+        meta_dict["mjdobs"] = mjdobs
+        meta_dict["dateobs"] = dateobs
+
+
+        # Append to lists.
+
+        jid_list.append(jid)
+        meta_list.append(meta_dict)
+
+        print("jid =",jid)
+
+
+    # Figure out which Source child tables need to be cross-matched.
+
+    table_crossmatch_obs_date_sca_dict = {}      # Dictionary key is (obs_date,sca) tuple.
+
+    for jid,meta_dict in zip(jid_list,meta_list):
+
+        sca = meta_dict["sca"]
+        dateobs = meta_dict["dateobs"]
+        obs_date = str(dateobs).split()[0].replace("-","")
+
+        sources_tablename = f"sources_{obs_date}_{sca}"
 
         sql_queries = []
-        sql_queries.append(f"SELECT to_regclass('public.{tablename}') IS NOT NULL;")
-        records = dbh.execute_sql_queries(sql_queries,debug)
+        sql_queries.append(f"SELECT to_regclass('public.{sources_tablename}') IS NOT NULL;")
+
+        try:
+            records = dbh.execute_sql_queries(sql_queries,debug)
+        except Exception as e:
+            print(f"*** Error: Exception raised in dbh.execute_sql_queries " +
+                  f"(e={e});  quitting...")
+            dbh.close()
+            exit(64)
+
+        if dbh.exit_code >= 64:
+            print("*** Error from {}; quitting ".format(swname))
+            dbh.close()
+            exit(dbh.exit_code)
 
         table_exists_flag = records[0][0]
 
-        if table_exists_flag is not True:
-            continue
+        if table_exists_flag:
 
-        scas_dict[sca] = 1
+            table_crossmatch_key = (obs_date,sca)
+            table_crossmatch_obs_date_sca_dict[table_crossmatch_key] = 1
+
+
+    tables_to_crossmatch_list = list(table_crossmatch_obs_date_sca_dict.keys())
+    n_tables_to_crossmatch_list = len(tables_to_crossmatch_list)
+    print("n_tables_to_crossmatch_list =",n_tables_to_crossmatch_list)
+
+
+    # Find all distinct fields covered by the Sources child tables,
+    # only for records with flags=0.
+
+    fields_dict = {}
+
+    for table_to_crossmatch_tuple in tables_to_crossmatch_list:
+
+        obs_date = table_to_crossmatch_tuple[0]
+        sca = table_to_crossmatch_tuple[1]
+
+        sources_tablename = f"sources_{obs_date}_{sca}"
 
         sql_queries = []
-        sql_queries.append(f"select distinct field from {tablename} WHERE flags = 0;")
-        records = dbh.execute_sql_queries(sql_queries,debug)
+        sql_queries.append(f"select distinct field from {sources_tablename} WHERE flags = 0;")
+
+        try:
+            records = dbh.execute_sql_queries(sql_queries,debug)
+        except Exception as e:
+            print(f"*** Error: Exception raised in dbh.execute_sql_queries " +
+                  f"(e={e});  quitting...")
+            dbh.close()
+            exit(64)
+
+        if dbh.exit_code >= 64:
+            print("*** Error from {}; quitting ".format(swname))
+            dbh.close()
+            exit(dbh.exit_code)
 
         for record in records:
             field = record[0]
             fields_dict[field] = 1
 
-    scas_list = list(scas_dict.keys())
+
     fields_list = list(fields_dict.keys())
-
-    nscas = len(scas_list)
     nfields = len(fields_list)
-
-    print("scas_list =",scas_list)
-    print("fields_list =",fields_list)
-    print("nscas,nfields =",nscas,nfields)
+    print("nfields =",nfields)
 
 
     # Code-timing benchmark.
@@ -901,7 +1148,7 @@ if __name__ == '__main__':
     start_time_benchmark = end_time_benchmark
 
 
-    # Assume astoobjects_<field> and merges_<field> database tables are created in tandem,
+    # Assume astroobjects_<field> and merges_<field> database tables are created in tandem,
     # so we only need to test for the existence of the former table.
 
     already_made_dict = {}
@@ -912,7 +1159,19 @@ if __name__ == '__main__':
 
         sql_queries = []
         sql_queries.append(f"SELECT to_regclass('public.{tablename1}') IS NOT NULL;")
-        records = dbh.execute_sql_queries(sql_queries,debug)
+
+        try:
+            records = dbh.execute_sql_queries(sql_queries,debug)
+        except Exception as e:
+            print(f"*** Error: Exception raised in dbh.execute_sql_queries " +
+                  f"(e={e});  quitting...")
+            dbh.close()
+            exit(64)
+
+        if dbh.exit_code >= 64:
+            print("*** Error from {}; quitting ".format(swname))
+            dbh.close()
+            exit(dbh.exit_code)
 
         table_exists_flag = records[0][0]
 
@@ -931,7 +1190,7 @@ if __name__ == '__main__':
 
         table_exists_flag = already_made_dict[field]
 
-        if table_exists_flag is True:
+        if table_exists_flag:
             continue
 
         tablename1 = f"astroobjects_{field}"
@@ -941,7 +1200,18 @@ if __name__ == '__main__':
         sql_queries.append(f"CREATE TABLE {tablename1} (LIKE astroobjects INCLUDING DEFAULTS INCLUDING CONSTRAINTS);")
         sql_queries.append(f"CREATE TABLE {tablename2} (LIKE merges INCLUDING DEFAULTS INCLUDING CONSTRAINTS);")
 
-    dbh.execute_sql_queries(sql_queries,debug)
+    try:
+        records = dbh.execute_sql_queries(sql_queries,debug)
+    except Exception as e:
+        print(f"*** Error: Exception raised in dbh.execute_sql_queries " +
+              f"(e={e});  quitting...")
+        dbh.close()
+        exit(64)
+
+    if dbh.exit_code >= 64:
+        print("*** Error from {}; quitting ".format(swname))
+        dbh.close()
+        exit(dbh.exit_code)
 
 
     # Create indexes and grants on astroobjects and merges database tables for all fields associated with processing date.
@@ -958,7 +1228,7 @@ if __name__ == '__main__':
         tablename1 = f"astroobjects_{field}"
         tablename2 = f"merges_{field}"
 
-        if table_exists_flag is False:        # The following is done once, when the tables are created.
+        if not table_exists_flag:        # The following is done once, when the tables are created.
 
             sql_queries.append(f"CREATE INDEX {tablename1}_aid_idx ON {tablename1} (aid);")
             sql_queries.append(f"CREATE INDEX {tablename1}_radec_idx ON {tablename1} (q3c_ang2ipix(ra0, dec0));")
@@ -980,7 +1250,18 @@ if __name__ == '__main__':
         sql_queries.append(f"ALTER TABLE {tablename1} SET UNLOGGED;")
         sql_queries.append(f"ALTER TABLE {tablename2} SET UNLOGGED;")
 
-    dbh.execute_sql_queries(sql_queries,debug)
+    try:
+        records = dbh.execute_sql_queries(sql_queries,debug)
+    except Exception as e:
+        print(f"*** Error: Exception raised in dbh.execute_sql_queries " +
+              f"(e={e});  quitting...")
+        dbh.close()
+        exit(64)
+
+    if dbh.exit_code >= 64:
+        print("*** Error from {}; quitting ".format(swname))
+        dbh.close()
+        exit(dbh.exit_code)
 
 
     # Code-timing benchmark.
@@ -1010,10 +1291,10 @@ if __name__ == '__main__':
     #########################################################################################
 
     if num_cores > 1:
-        execute_parallel_processes_stage_1_crossmatching(scas_list,fields_list,num_cores)
+        execute_parallel_processes_stage_1_crossmatching(tables_to_crossmatch_list,fields_list,num_cores)
     else:
         thread_index = 0
-        run_single_core_job_stage_1_crossmatching(scas_list,fields_list,thread_index)
+        run_single_core_job_stage_1_crossmatching(tables_to_crossmatch_list,fields_list,thread_index)
 
 
     # Code-timing benchmark.
@@ -1051,7 +1332,18 @@ if __name__ == '__main__':
         #sql_queries.append(f"ALTER TABLE {tablename1} SET LOGGED;")                # For speed, do not log.
         #sql_queries.append(f"ALTER TABLE {tablename2} SET LOGGED;")
 
-    dbh.execute_sql_queries(sql_queries,debug)
+    try:
+        records = dbh.execute_sql_queries(sql_queries,debug)
+    except Exception as e:
+        print(f"*** Error: Exception raised in dbh.execute_sql_queries " +
+              f"(e={e});  quitting...")
+        dbh.close()
+        exit(64)
+
+    if dbh.exit_code >= 64:
+        print("*** Error from {}; quitting ".format(swname))
+        dbh.close()
+        exit(dbh.exit_code)
 
 
     # Code-timing benchmark.
@@ -1081,10 +1373,10 @@ if __name__ == '__main__':
     #####################################################################################
 
     if num_cores > 1:
-        execute_parallel_processes_stage_2_crossmatching(scas_list,fields_list,num_cores)
+        execute_parallel_processes_stage_2_crossmatching(tables_to_crossmatch_list,fields_list,num_cores)
     else:
         thread_index = 0
-        run_single_core_job_stage_2_crossmatching(scas_list,fields_list,thread_index)
+        run_single_core_job_stage_2_crossmatching(tables_to_crossmatch_list,fields_list,thread_index)
 
 
     # Code-timing benchmark.

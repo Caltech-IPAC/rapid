@@ -13,7 +13,7 @@ import modules.utils.rapid_pipeline_subs as util
 import database.modules.utils.rapid_db as db
 import database.modules.utils.roman_tessellation_db as sqlite
 
-swname = "generateInjectionCatalogsForSims.py"
+swname = "compare_methods_overlapping_fields.py"
 swvers = "1.0"
 cfg_filename_only = "awsBatchSubmitJobs_launchSingleSciencePipeline.ini"
 
@@ -44,9 +44,9 @@ start_time_benchmark_at_start = start_time_benchmark
 
 # Compute processing datetime (UT) and processing datetime (Pacific time).
 
-datetime_utc_now = datetime.utcnow()
+datetime_utc_now = datetime.now(timezone.utc)
 proc_utc_datetime = datetime_utc_now.strftime('%Y-%m-%dT%H:%M:%SZ')
-datetime_pt_now = datetime_utc_now.replace(tzinfo=timezone.utc).astimezone(tz=to_zone)
+datetime_pt_now = datetime_utc_now.astimezone(tz=to_zone)
 proc_pt_datetime_started = datetime_pt_now.strftime('%Y-%m-%dT%H:%M:%S PT')
 proc_date = datetime_pt_now.strftime('%Y%m%d')
 
@@ -103,6 +103,9 @@ debug = int(config_input['JOB_PARAMS']['debug'])
 fake_sources_dict = config_input['FAKE_SOURCES']
 injection_catalogs_subdir = fake_sources_dict['injection_catalogs_subdir']
 
+naxis1 = int(config_input['INSTRUMENT']['naxis1_sciimage'])
+naxis2 = int(config_input['INSTRUMENT']['naxis2_sciimage'])
+
 
 #-------------------------------------------------------------------------------------------------------------
 # Main program.
@@ -112,9 +115,7 @@ if __name__ == '__main__':
 
 
     '''
-    Generate all fake-source injection catalogs with fixed sky positions for the fields covered
-    by the simulations and upload them to s3://rapid-pipeline-files/injection_catalogs_subdir.
-    Field number is also known as rtid (Roman tessellation ID).
+    Compare methods of finding all fields that a given science image overlaps.
     '''
 
 
@@ -151,13 +152,14 @@ if __name__ == '__main__':
         # Query RAPID operations database for representative science image,
         # in order to find the sky positions of its four corners.
 
-        query = f"SELECT rid FROM l2files WHERE vbest > 0 AND field = {field} limit 1;"
+        query = f"SELECT rid,filename FROM l2files WHERE vbest > 0 AND field = {field} limit 1;"
 
         sql_queries = []
         sql_queries.append(query)
-        records = dbh.execute_sql_queries(sql_queries,debug)
+        l2files_record = dbh.execute_sql_queries(sql_queries,debug)
 
-        rid = records[0][0]
+        rid = l2files_record[0][0]
+        filename = l2files_record[0][1]
 
 
         # Query database for associated L2FileMeta record.
@@ -169,11 +171,12 @@ if __name__ == '__main__':
             exit(dbh.exit_code)
 
 
+        # Method 1
         # Compute all fields that overlap the science image using get_overlapping_rtids method.
         # This method returns a tuple per record: (rtid,ramin,ramax,decmin,decmax);
         # E.g.,(4649964, 268.0224304199219, 268.1103515625, -28.588502883911133, -28.503568649291992)
 
-        print(f"Fields returned for science-image field = {field}")
+        print(f"Method 1: Fields returned for science-image field = {field}")
 
         rtid_records_list = roman_tessellation_db.get_overlapping_rtids(ra0,dec0,ra1,dec1,ra2,dec2,ra3,dec3,ra4,dec4)
 
@@ -181,9 +184,11 @@ if __name__ == '__main__':
         for rtid_record in rtid_records_list:
             rtid = rtid_record[0]
             rtids_list.append(rtid)
-        print(f"Fields returned by method get_overlapping_rtids = {rtids_list}")
+        rtids_list.sort()
+        print(f"Method 1: Fields returned by method get_overlapping_rtids = {rtids_list}")
 
 
+        # Method 2
         # Alternatively, compute all fields that overlap the science image using get_all_neighboring_rtids method.
         # This method identifies all surrounding sky tiles (which should be a superset of the actual overlapping fields).
 
@@ -192,13 +197,14 @@ if __name__ == '__main__':
         sciimg_overlapping_rtids = [field]
         for neighboring_rtid in neighboring_rtids:
             sciimg_overlapping_rtids.append(neighboring_rtid)
-        print(f"Fields returned by method get_all_neighboring_rtids = {sciimg_overlapping_rtids}")
+        sciimg_overlapping_rtids.sort()
+        print(f"Method 2: Fields returned by method get_all_neighboring_rtids = {sciimg_overlapping_rtids}")
 
 
         # Find union using set operations
 
         union_list = list(set(rtids_list).union(sciimg_overlapping_rtids))
-
+        union_list.sort()
 
         # Compare lists.
 
@@ -206,60 +212,105 @@ if __name__ == '__main__':
         set_b = set(sciimg_overlapping_rtids)
 
         result = [item for item in rtids_list if item not in set_b]
+        result.sort()
         print(f"Fields returned by method get_overlapping_rtids that are not returned by method get_all_neighboring_rtids = {result}")
 
         result = [item for item in sciimg_overlapping_rtids if item not in set_a]
+        result.sort()
         print(f"Fields returned by method get_all_neighboring_rtids that are not returned by method get_overlapping_rtids = {result}")
 
-
-        # Skip injection-catalog generation for given rtid in list if it
-        # already exists in the S3 bucket.
-
-        for rtid in union_list:
-
-            s3_full_name_injection_catalog = f"s3://{job_info_s3_bucket_base}/injection_catalogs_subdir/injection_catalog_rtid{rtid}.json"
-
-            print(f"Try downloading {s3_full_name_injection_catalog}...")
-
-            injection_catalog_filename,subdirs,downloaded_from_bucket = util.download_file_from_s3_bucket(s3_client,s3_full_name_injection_catalog)
-
-            if downloaded_from_bucket:
-                print(f"Injection catalog file {s3_full_name_injection_catalog} already exists; skipping...")
-                continue
+        print(f"Methods 1 and 2: Union of fields = {union_list}")
 
 
-            # Launch script to generate injection catalog for field.
+        # Method #3
+        # Get field numbers (rtids) of all sky tiles containing sky positions
+        # in given science image.
 
-            generate_injection_catalog_cmd = [python_cmd,
-                                              generate_injection_catalog_code,
-                                              str(rtid)]
+        l2file_dict = dbh.get_l2file_info_for_sources(rid)
 
-            exitcode_from_generate_injection_catalog_cmd = util.execute_command(generate_injection_catalog_cmd)
+        crval1 = l2file_dict['crval1']
+        crval2 = l2file_dict['crval2']
+        crpix1 = l2file_dict['crpix1']
+        crpix2 = l2file_dict['crpix2']
+        cd11 = l2file_dict['cd11']
+        cd12 = l2file_dict['cd12']
+        cd21 = l2file_dict['cd21']
+        cd22 = l2file_dict['cd22']
+
+        rtid_dict = {}
+
+        x_list = [*range(0,naxis1,500)]
+        y_list = [*range(0,naxis2,500)]
+        x_list.append(naxis1)
+        y_list.append(naxis2)
+
+        for y in y_list:
+            for x in x_list:
+
+                # x,y,crpix1,crpix2 must be zero-based.
+                ra,dec = util.tan_proj2(x,y,crpix1-1,crpix2-1,crval1,crval2,cd11,cd12,cd21,cd22)
+
+                roman_tessellation_db.get_rtid(ra,dec)
+                rtid = roman_tessellation_db.rtid
+
+                rtid_dict[rtid] = 1
+
+        keys_list = list(rtid_dict.keys())
+        keys_list.sort()
+        print(f"Method 3: Fields overlapping image = {keys_list}")
 
 
-            # Optionally upload fake-source injection catalog to product S3 bucket.
+        # Method #4
 
-            if upload_to_bucket:
+        print(f"Try downloading {filename}...")
 
-                s3_object_name_injection_catalog = f"{injection_catalogs_subdir}/" + injection_catalog_filename
+        science_image_filename_gz,subdirs,downloaded_from_bucket = util.download_file_from_s3_bucket(s3_client,filename)
 
-                util.upload_files_to_s3_bucket(s3_client,job_info_s3_bucket_base,[injection_catalog_filename],[s3_object_name_injection_catalog])
+        if not downloaded_from_bucket:
+            print(f"Error: L2 file not downloaded ({filename}); quitting...")
+            exit(64)
 
+        science_image_filename = science_image_filename_gz.replace(".fits.gz",".fits")
 
-        # Code-timing benchmark.
+        gunzip_cmd = ['gunzip', '-f', science_image_filename_gz]
+        exitcode_from_gunzip = util.execute_command(gunzip_cmd)
 
-        end_time_benchmark = time.time()
-        diff_time_benchmark = end_time_benchmark - start_time_benchmark
-        print(f"Elapsed time in seconds to compute all injection catalogs associated with field = {diff_time_benchmark}")
-        start_time_benchmark = end_time_benchmark
+        hdul = fits.open(science_image_filename)
+        hdr = hdul[0].header
+        data = hdul[0].data
 
-        print(f"End of loop: field = {field}")
+        wcs = WCS(hdr) # Initialize WCS object from FITS header
+
+        rtid_dict_method4 = {}
+
+        x_list = [*range(0,naxis1,500)]
+        y_list = [*range(0,naxis2,500)]
+        x_list.append(naxis1)
+        y_list.append(naxis2)
+
+        for y in y_list:
+            for x in x_list:
+
+                # x,y must be zero-based.
+                celestial_coords = wcs.pixel_to_world(x, y)
+
+                ra = celestial_coords.ra.deg
+                dec = celestial_coords.dec.deg
+
+                roman_tessellation_db.get_rtid(ra,dec)
+                rtid = roman_tessellation_db.rtid
+
+                rtid_dict_method4[rtid] = 1
+
+        keys_list_method4 = list(rtid_dict_method4.keys())
+        keys_list_method4.sort()
+        print(f"Method 4: Fields overlapping image = {keys_list_method4}")
 
 
     # Code-timing benchmark.
 
     end_time_benchmark = time.time()
-    print("Elapsed time in seconds to generate all injection catalogs =",
+    print("Elapsed time in seconds to compare methods of computing science-image overlapping fields =",
         end_time_benchmark - start_time_benchmark)
     start_time_benchmark = end_time_benchmark
 
