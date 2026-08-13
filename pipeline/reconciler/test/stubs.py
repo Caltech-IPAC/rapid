@@ -18,12 +18,37 @@ class FakeBatch:
 
     Records every `describe_jobs` call so a test can assert the batching
     behaviour — that 250 ids became three calls, not 250.
+
+    Also answers `list_jobs` (no paginator, so `find_job_by_name` falls back
+    to the single-call path deliberately) for `batch_describer`'s callers —
+    package S's re-query path. Keyed by (jobName, jobQueue, jobStatus)
+    against `named_jobs`, so a test can place a job in exactly ONE of the
+    states `JOB_SEARCH_STATES` loops over, matching real Batch (a job has
+    one status) rather than answering every state identically, which would
+    manufacture the "N jobs share this name" collision warning for every
+    call. REFUSAL-CAPABLE: `list_jobs_raises`, set by a test, makes every
+    `list_jobs` call raise instead of answering — the shape criteria 3 and 11
+    need (a describe that raises must not be mistaken for a negative).
     """
 
-    def __init__(self, jobs=None, chunk_limit=100):
+    def __init__(self, jobs=None, chunk_limit=100, named_jobs=None,
+                list_jobs_raises=None):
         self.jobs = {job["jobId"]: job for job in (jobs or [])}
         self.calls = []
         self.chunk_limit = chunk_limit
+        #: `{(job_name, job_queue): (job_id, job_status)}` — a job "found" by
+        #: name search, independent of `self.jobs` (which is keyed by id,
+        #: for `describe_jobs`). A name with no entry here is not found, in
+        #: any state `find_job_by_name` searches. `job_status` defaults to
+        #: "RUNNING" when the entry is a bare id (the common case: a test
+        #: only cares that the job WAS found, not which live state).
+        self.named_jobs = {
+            key: value if isinstance(value, tuple) else (value, "RUNNING")
+            for key, value in dict(named_jobs or {}).items()}
+        self.list_jobs_calls = []
+        #: An exception instance (or class) to raise on every `list_jobs`
+        #: call — an unreachable Batch, not a negative answer.
+        self.list_jobs_raises = list_jobs_raises
 
     def describe_jobs(self, jobs):
         self.calls.append(list(jobs))
@@ -32,6 +57,18 @@ class FakeBatch:
                 f"describe_jobs called with {len(jobs)} ids, over the "
                 f"{self.chunk_limit} limit")
         return {"jobs": [self.jobs[i] for i in jobs if i in self.jobs]}
+
+    def list_jobs(self, jobQueue, jobStatus, filters):  # noqa: N803
+        self.list_jobs_calls.append((jobQueue, jobStatus, filters))
+        if self.list_jobs_raises is not None:
+            raise self.list_jobs_raises
+        job_name = filters[0]["values"][0]
+        entry = self.named_jobs.get((job_name, jobQueue))
+        if entry is None or entry[1] != jobStatus:
+            return {"jobSummaryList": []}
+        job_id, _ = entry
+        return {"jobSummaryList": [
+            {"jobName": job_name, "jobId": job_id, "createdAt": 0}]}
 
 
 class FakeClientError(Exception):
@@ -126,13 +163,23 @@ class FakeConnection:
     reimplement PostgreSQL.
     """
 
-    def __init__(self, rows=None, lease_granted=True):
+    def __init__(self, rows=None, lease_granted=True,
+                 submissions_available=False, submissions=None):
         self.rows = {row["attempt_id"]: dict(row) for row in (rows or [])}
         self.statements = []
         self.commits = 0
         self.rollbacks = 0
         self.lease_granted = lease_granted
         self.closed_attempts = {}
+        #: `submission.protocol.is_available` — False models a database
+        #: without DRAFT 044, which is every existing (pre-package-S) test's
+        #: assumption. A package-S test that needs `submissions` opts in.
+        self.submissions_available = submissions_available
+        #: `submissions` rows keyed by `submission_id`, in the shape
+        #: `submission.protocol`'s own SQL constants read: `state`,
+        #: `job_name`, `job_queue`, `resolution_deadline`.
+        self.submissions = {row["submission_id"]: dict(row)
+                            for row in (submissions or [])}
 
     def cursor(self):
         return FakeCursor(self)
@@ -153,8 +200,28 @@ class FakeConnection:
         if "pg_advisory_xact_lock" in lowered:
             return [(None,)], [("locked",)]
 
+        # `submission.protocol.is_available` — this fake models a database
+        # with no `submissions` table by default (every existing reconciler
+        # test predates rule 7 package S), so the probe must answer FALSE
+        # rather than falling through to the unmatched-statement branch
+        # below, which returns a truthy rowcount and would make every test
+        # here silently believe DRAFT 044 is applied. `self.submissions_
+        # available` lets a package-S test opt in.
+        if "information_schema.tables" in lowered and "submissions" in lowered:
+            return ([(1,)], [("?column?",)]) if self.submissions_available \
+                else ([], [("?column?",)])
+
         if lowered.startswith("select") and "from attempts" in lowered:
             return self._select_attempts(text, params)
+
+        if "from submissions" in lowered and "join attempts" in lowered:
+            return self._select_submission_for_attempt(text, params)
+
+        if lowered.startswith("select") and "from submissions" in lowered:
+            return self._select_open_submissions()
+
+        if lowered.startswith("update submissions"):
+            return self._update_submission(text, params)
 
         if lowered.startswith("update attempts"):
             attempt_id = params[-1] if params else None
@@ -209,6 +276,68 @@ class FakeConnection:
         description = [(name,) for name in columns]
         return ([tuple(row.get(name) for name in columns) for row in matched],
                 description)
+
+    def _select_submission_for_attempt(self, text, params):
+        """`submission.protocol.submission_for_attempt`'s join, modelled
+        directly over `self.rows`/`self.submissions` rather than a real
+        JOIN: the attempt row already carries `submission_id`."""
+        attempt_id = params[0]
+        row = self.rows.get(attempt_id)
+        submission = self.submissions.get(row.get("submission_id")) \
+            if row else None
+        description = [("submission_id",), ("state",), ("job_name",),
+                       ("job_queue",), ("resolution_deadline",)]
+        if submission is None:
+            return [], description
+        values = (submission.get("submission_id"), submission.get("state"),
+                  submission.get("job_name"), submission.get("job_queue"),
+                  submission.get("resolution_deadline"))
+        return [values], description
+
+    def _select_open_submissions(self):
+        """`submission.protocol.open_submissions` — `state IN ('calling',
+        'unknown')`, oldest first, matching `_OPEN_SQL` exactly."""
+        columns = ("submission_id", "run_id", "job_type", "job_name",
+                  "job_queue", "job_definition", "state", "call_started_at",
+                  "resolution_deadline", "ambiguity_detail")
+        matched = [row for row in self.submissions.values()
+                  if row.get("state") in ("calling", "unknown")]
+        matched.sort(key=lambda row: row["submission_id"])
+        description = [(name,) for name in columns]
+        return ([tuple(row.get(name) for name in columns) for row in matched],
+                description)
+
+    def _update_submission(self, text, params):
+        """`mark_found`/`mark_lost`/etc — the CAS `WHERE ... AND state = ...`
+        matched as a rowcount, exactly as psycopg2 reports an UPDATE."""
+        submission_id = params[-1]
+        submission = self.submissions.get(submission_id)
+        lowered = text.lower()
+        if submission is None:
+            return [], [("rowcount",)]  # no such row: CAS matches nothing
+        if "set state = 'found'" in lowered:
+            expected = ("calling", "unknown")
+            new_state = "found"
+        elif "set state = 'lost'" in lowered:
+            expected = ("unknown",)
+            new_state = "lost"
+        elif "set state = 'unknown'" in lowered:
+            expected = ("calling",)
+            new_state = "unknown"
+        elif "set state = 'bound'" in lowered:
+            expected = ("calling",)
+            new_state = "bound"
+        elif "set state = 'calling'" in lowered:
+            expected = ("prepared",)
+            new_state = "calling"
+        else:
+            return None
+        if submission.get("state") not in expected:
+            return [], [("rowcount",)]  # zero rows: the CAS did not match
+        submission["state"] = new_state
+        if new_state == "found":
+            submission["scheduler_job_id"] = params[0]
+        return [(1,)], [("rowcount",)]
 
 
 def _render_composed(statement):
