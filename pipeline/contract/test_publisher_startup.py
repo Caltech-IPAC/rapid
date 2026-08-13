@@ -342,6 +342,12 @@ class ApplicationPreflightTests(unittest.TestCase):
 
         class _Route:
             db_lane = "transaction"
+            # The preflight composes the route's own migration floor from
+            # `job_type` (schema_contract.required_for_route) — a route
+            # double without one no longer matches the seam. Science has no
+            # route-specific migrations, so the floor this test exercises is
+            # exactly the shared `REQUIRED_MIGRATIONS`, as before.
+            job_type = "science"
 
         class _JobEnv:
             scheduler_job_id = "job-preflight-test"
