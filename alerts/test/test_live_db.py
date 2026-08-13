@@ -17,21 +17,38 @@ the pipeline ever changes convention, this test fails loudly and tells
 us to update the conversion -- without it, that change would silently
 shift every cutout by one pixel.
 
+Also here: the end-to-end production round trip (D16, partial) -- a real
+alert for a pinned source (ROUNDTRIP_SID, chosen for determinism),
+assembled through AlertDataProvider (DB rows + S3-staged cutouts),
+Avro-serialized, and decoded back -- and the KONA --kona-file wiring
+against the same alert.
+
 TODO (test plan, not yet implemented):
-  D16 single-alert live check: produce a real alert, all three cutouts
-      present, each clip's WCS puts the DB ra/dec at the stamp center
+  D16 remainder: each clip's WCS puts the DB ra/dec at the stamp center
       (< 80 mas), cross-clip agreement < 1 mas
   D18 batch-level: batch_produce(pid) count equals the sources row count
       for that pid; decode a sample of the produced alerts
 """
 
+import io
+import json
+import math
 import os
 import sys
+import tempfile
 import warnings
 from pathlib import Path
 
+import fastavro
+import fitsio
 import pytest
 
+from alerts.cli import load_kona_predictions
+from alerts.param_registry import VERSION
+from alerts.produce import assemble_alert, load_schema, serialize_alert
+from alerts.providers import (REF_MATCH_RADIUS_ARCSEC,
+                              SS_CANDIDATE_SEP_ARCSEC, STAMP_HALF_WIDTH,
+                              AlertDataProvider)
 from wcs_eval import separation_mas, tpv_pixel_to_sky
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
@@ -134,6 +151,130 @@ def fetch_s3_fits_header(url):
         except ValueError:
             header[name] = value
     return header
+
+
+# ---------------------------------------------------------------------------
+# End-to-end production round trip (D16, partial)
+# ---------------------------------------------------------------------------
+
+class _DBShim:
+    """Duck-types RAPIDDB for AlertDataProvider: just .conn.cursor()."""
+
+    def __init__(self, conn):
+        self.conn = conn
+
+
+@pytest.fixture(scope="module")
+def live_provider(db_conn):
+    return AlertDataProvider(_DBShim(db_conn))
+
+
+# Pinned round-trip source (Emily, Aug 2026): a well-populated detection
+# (28-source object, near the ecliptic) kept fixed so runs are
+# deterministic and comparable. If reprocessing ever drops it, this
+# fixture fails loudly -- pick a new sid and update the pin.
+ROUNDTRIP_SID = 2240034736
+
+
+@pytest.fixture(scope="module")
+def roundtrip_sid(db_conn):
+    """The pinned sid, verified to still exist with a difference image."""
+    with db_conn.cursor() as cur:
+        cur.execute("""
+            SELECT s.sid FROM sources s JOIN diffimages d ON s.pid = d.pid
+            WHERE s.sid = %s
+        """, (ROUNDTRIP_SID,))
+        row = cur.fetchone()
+    assert row, (
+        f"pinned sid {ROUNDTRIP_SID} no longer exists with a difference "
+        f"image (reprocessing?) -- choose a new sid and update "
+        f"ROUNDTRIP_SID in {__name__}")
+    return ROUNDTRIP_SID
+
+
+@pytest.fixture(scope="module")
+def live_alert(live_provider, roundtrip_sid):
+    """One real alert, assembled once and shared by the tests below.
+
+    Module-scoped because assembly stages the chip's three ~67 MB products
+    from S3; the provider caches them per chip, so every dependent test
+    reuses one download.
+    """
+    return assemble_alert(live_provider, roundtrip_sid)
+
+
+def test_live_alert_roundtrip(live_alert, roundtrip_sid):
+    """A real alert serializes and decodes intact, cutouts included."""
+    schema = load_schema()
+    blob = serialize_alert(live_alert, schema=schema)
+    decoded = fastavro.schemaless_reader(io.BytesIO(blob), schema)
+
+    assert decoded["diaSourceId"] == roundtrip_sid
+    assert decoded["schemaVersion"] == VERSION
+    side = 2 * STAMP_HALF_WIDTH + 1
+    for field in ("cutoutDifference", "cutoutScience", "cutoutReference"):
+        assert decoded[field], f"{field} missing from live alert"
+        # the bytes must be a real FITS image of the expected stamp size
+        fd, tmp = tempfile.mkstemp(suffix=".fits")
+        try:
+            os.close(fd)
+            with open(tmp, "wb") as f:
+                f.write(decoded[field])
+            assert fitsio.read(tmp).shape == (side, side), field
+        finally:
+            os.unlink(tmp)
+    print(f"live round trip: sid={roundtrip_sid}, {len(blob)} bytes")
+
+
+def test_live_kona_file_wiring(live_provider, roundtrip_sid, tmp_path):
+    """--kona-file plumbing over the live DB: a predictions file keyed by
+    the real exposure yields populated ssMatches and the candidate flag."""
+    detection = live_provider.get_detection(roundtrip_sid)
+    sep_in = 0.5 * SS_CANDIDATE_SEP_ARCSEC
+    dra = sep_in / 3600.0 / math.cos(math.radians(detection.dec))
+    kona_file = tmp_path / "kona.json"
+    kona_file.write_text(json.dumps({
+        str(detection.expid): {"FAKE 1": [detection.ra + dra,
+                                          detection.dec, 21.7]}}))
+
+    provider = AlertDataProvider(
+        _DBShim(live_provider.db.conn),
+        kona_lookup=load_kona_predictions(kona_file).get)
+    alert = assemble_alert(provider, roundtrip_sid)
+
+    assert alert["diaSource"]["isSSCandidate"] is True
+    assert alert["ssMatches"][0]["designation"] == "FAKE 1"
+    assert alert["ssMatches"][0]["sep"] == pytest.approx(sep_in, abs=0.01)
+
+
+def test_live_refcat_matching(live_provider, live_alert, roundtrip_sid):
+    """Reference-catalog cross-match over the live DB and S3: the pinned
+    chip's pid -> rfid -> refimcatalogs join resolves, the mosaic catalog
+    stages and parses, and the alert carries the three-state arrays.
+
+    Uses the module-scoped live_alert, so this shares the provider's
+    staged catalog and images with the round-trip test.
+    """
+    detection = live_provider.get_detection(roundtrip_sid)
+    matches = live_provider.get_ref_matches(detection)
+    if matches is None:
+        pytest.skip("no reference catalog registered for the pinned "
+                    "chip's rfid (refimcatalogs); matching reported "
+                    "'not run' as designed")
+
+    stars, galaxies = matches
+    for match_list, alert_key in ((stars, "refStarMatches"),
+                                  (galaxies, "refGalaxyMatches")):
+        packed = live_alert[alert_key]
+        assert packed is not None
+        assert [m.source_id for m in match_list] == \
+            [m["sourceId"] for m in packed]
+        # nearest-first, all within the radius
+        seps = [m["sep"] for m in packed]
+        assert seps == sorted(seps)
+        assert all(s <= REF_MATCH_RADIUS_ARCSEC for s in seps)
+    print(f"live refcat match: sid={roundtrip_sid}, "
+          f"{len(stars)} stars, {len(galaxies)} galaxies")
 
 
 def test_db_positions_match_wcs_at_xfit_plus_one(db_conn):

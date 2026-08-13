@@ -19,9 +19,9 @@ cd alerts
 python3.11 -m pytest test/ -q
 ```
 
-That runs the whole suite (38 tests). The live-database tests
-(`test_live_db.py`) **skip** unless the database environment is set (see
-below) — a skipped run is normal and not a failure.
+That runs the whole suite. The live-database tests (`test_live_db.py`)
+**skip** unless the database environment is set (see below) — a skipped
+run is normal and not a failure.
 
 ## What each file is
 
@@ -34,7 +34,9 @@ below) — a skipped run is normal and not a failure.
 | `test_provider.py` | `DatabaseProvider` behavior over a fake DB + synthetic job directory: `resolve_pid`, flavor selection, the cutout-failure degradation ladder, batch/single byte-identity, and `--save` archive round-trip. |
 | `test_benchmark.py` | The benchmark harness itself: the timing/memory/size JSONL is well-formed and `TimedProvider` is transparent. |
 | `test_benchmark_forced_phot.py` | Offline pieces of the forced-photometry cost benchmark: footprint geometry (incl. RA wrap), FP stdout/lightcurve parsing, run selection, the cost fit, and the report path. |
-| `test_live_db.py` | Live-database integration: the pixel-convention sentinel. **Skips** without DB access (see below). |
+| `test_ss_match.py` | Solar-system (KONA) association: sep/PA geometry vs astropy, radius/nearest-3 selection, the `--kona-file` loader, and the three ssMatches states end-to-end over the fake chip. |
+| `test_ref_match.py` | Reference-catalog cross-match: SExtractor-catalog parsing, the star/galaxy partition and its subset→row index mapping, sep/PA geometry vs the KONA matcher, radius/nearest-3 selection, batch ≡ single, and the three refStarMatches/refGalaxyMatches states end-to-end over the fake chip (pid → rfid → refimcatalogs routing). |
+| `test_live_db.py` | Live-database integration: the pixel-convention sentinel, the end-to-end production round trip (real alert → Avro → decode, cutouts FITS-verified), the `--kona-file` wiring against a real alert, and the reference-catalog match against the real mosaic catalog. **Skips** without DB access (see below). |
 
 ### Support modules (imported by the tests, not run directly)
 
@@ -49,6 +51,8 @@ below) — a skipped run is normal and not a failure.
 |------|------|
 | `benchmark.py` | Timing + memory + output-size benchmark of batch production against the live database. |
 | `benchmark_forced_phot.py` | Forced-photometry cost benchmark: decision data for alert-time FP vs storing FP products (see below). |
+| `gen_sample_alert.py` | Regenerates the **synthetic** `schema/<ver>/sample_data/alert.json` from the registry (run after schema changes). For a real alert use `python -m alerts.cli <sid> --save file.avro`. |
+| `inspect_alert.py` | Decodes a produced alert archive and sanity-checks fields and cutout WCS by hand: `python test/inspect_alert.py file.avro`. |
 
 Retired: `avro_producer.py` and `avro_consumer.py`, the standalone
 `confluent_kafka` smoke scripts. The producer is kafka-python now
