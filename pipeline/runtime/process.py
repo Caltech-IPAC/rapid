@@ -34,10 +34,12 @@ the returned `ToolResult` (so the caller can parse it). The old per-stage
 `.out` files died with the container; these do not.
 """
 
+import contextlib
 import os
 import re
 import shlex
 import subprocess
+import tempfile
 import time
 from typing import Any, Iterable, Sequence
 
@@ -167,9 +169,17 @@ def render_argv(argv: Sequence[str]) -> str:
     return redact(" ".join(shlex.quote(str(a)) for a in argv))
 
 
-def _write_capture(capture_path: str | None, argv_text: str, stdout: str,
-                   stderr: str, returncode: int) -> None:
-    """Append one command's full record to the stage capture file."""
+def _append_capture_file(capture_path: str | None, argv_text: str,
+                         stdout_path: str | None, stderr_path: str | None,
+                         returncode: int) -> None:
+    """Append one command's full record to the stage capture file.
+
+    Streamed from the stdout/stderr spool files rather than passed as
+    in-memory strings — the spool files are exactly what a subprocess run
+    with redirected output leaves behind, and copying them in chunks means a
+    pathologically noisy tool never requires its full output to exist as one
+    Python string.
+    """
     if capture_path is None:
         return
     directory = os.path.dirname(capture_path)
@@ -177,32 +187,90 @@ def _write_capture(capture_path: str | None, argv_text: str, stdout: str,
         os.makedirs(directory, exist_ok=True)
     with open(capture_path, "a", encoding="utf-8") as handle:
         handle.write(f"$ {argv_text}\n")
-        if stdout:
-            handle.write(stdout if stdout.endswith("\n") else stdout + "\n")
-        if stderr:
+        _copy_capture_body(stdout_path, handle)
+        if stderr_path is not None and os.path.getsize(stderr_path) > 0:
             handle.write("--- stderr ---\n")
-            handle.write(stderr if stderr.endswith("\n") else stderr + "\n")
+            _copy_capture_body(stderr_path, handle)
         handle.write(f"--- exit {returncode} ---\n\n")
 
 
-def _mirror(argv_text: str, stdout: str, stderr: str, logger: Any) -> None:
-    """Mirror captured output to the logger, line by line.
+def _copy_capture_body(spool_path: str | None, handle: Any) -> None:
+    if spool_path is None or os.path.getsize(spool_path) == 0:
+        return
+    ended_with_newline = True
+    with open(spool_path, "r", encoding="utf-8", errors="replace") as source:
+        while True:
+            chunk = source.read(_COPY_CHUNK_CHARS)
+            if not chunk:
+                break
+            handle.write(chunk)
+            ended_with_newline = chunk.endswith("\n")
+    if not ended_with_newline:
+        handle.write("\n")
+
+
+# Chunk size for copying a spooled stdout/stderr file into the capture file.
+# Bounds how much of a single command's output is in memory at once, same
+# purpose as MIRROR_LINE_LIMIT below but for the file-copy path.
+_COPY_CHUNK_CHARS = 65536
+
+# How much of a single command's stdout/stderr, read from the tail of its
+# spool file, is kept as `ToolResult.stdout`/`.stderr` and is available for
+# `ToolError`'s `*_tail` fields. The full text always reaches the capture
+# file (streamed from disk, never held whole in memory); this is what a
+# caller reading `result.stdout` actually gets for the common case of small
+# tool output, and what an exception message quotes for a large one.
+CAPTURED_TEXT_LIMIT = 1_000_000
+
+
+def _read_capture_tail(spool_path: str | None) -> str:
+    """Read the last `CAPTURED_TEXT_LIMIT` bytes of a spooled output file.
+
+    A bounded read regardless of how large the file grew — the whole point
+    of spooling to disk rather than `capture_output=True` is that a chatty
+    tool's output is never required to exist as one in-memory string.
+    """
+    if spool_path is None:
+        return ""
+    size = os.path.getsize(spool_path)
+    if size == 0:
+        return ""
+    with open(spool_path, "rb") as handle:
+        if size > CAPTURED_TEXT_LIMIT:
+            handle.seek(size - CAPTURED_TEXT_LIMIT)
+            prefix = "...(truncated)...\n"
+        else:
+            prefix = ""
+        raw = handle.read()
+    return prefix + raw.decode("utf-8", errors="replace")
+
+
+def _mirror_spooled(stdout_path: str | None, stderr_path: str | None,
+                    logger: Any) -> None:
+    """Mirror spooled output to the logger, line by line, from disk.
 
     Line by line rather than one blob: the safety stream is queried by line,
     and a 5,000-line tool output delivered as a single record is one
     unsearchable wall. Bounded — a tool that emits a million lines would
     otherwise turn the safety stream into the durable store, which the design
-    explicitly refuses.
+    explicitly refuses. Reading from the spool file rather than an in-memory
+    string means only the first MIRROR_LINE_LIMIT lines are ever materialized,
+    regardless of how large the tool's actual output was.
     """
-    for label, text in (("out", stdout), ("err", stderr)):
-        if not text:
+    for label, path in (("out", stdout_path), ("err", stderr_path)):
+        if path is None or os.path.getsize(path) == 0:
             continue
-        lines = text.splitlines()
-        for line in lines[:MIRROR_LINE_LIMIT]:
-            logger.info("  [%s] %s", label, redact(line))
-        if len(lines) > MIRROR_LINE_LIMIT:
+        shown = 0
+        total = 0
+        with open(path, "r", encoding="utf-8", errors="replace") as handle:
+            for line in handle:
+                total += 1
+                if shown < MIRROR_LINE_LIMIT:
+                    logger.info("  [%s] %s", label, redact(line.rstrip("\n")))
+                    shown += 1
+        if total > MIRROR_LINE_LIMIT:
             logger.info("  [%s] ... %d more line(s) in the capture file",
-                        label, len(lines) - MIRROR_LINE_LIMIT)
+                        label, total - MIRROR_LINE_LIMIT)
 
 
 # How many lines of a single command's stdout/stderr reach the logger. The
@@ -229,6 +297,14 @@ def run_tool(argv: Sequence[str], cwd: str | None = None,
     did not do its job — and all four carry `error_category="tool_failure"`
     with the argv, exit code, and captured output in `details`.
 
+    Stdout and stderr are redirected straight to spool files rather than
+    captured via `capture_output=True` — a tool that emits gigabytes of
+    output would otherwise force `subprocess` to hold all of it as one
+    in-memory string before this function ever sees it. `ToolResult.stdout`/
+    `.stderr` and `ToolError`'s `*_tail` fields carry up to
+    `CAPTURED_TEXT_LIMIT` characters read back from the spool; the full text
+    always reaches the capture file, streamed from disk.
+
     `_run` is a test injection point for `subprocess.run`; nothing in
     production passes it.
     """
@@ -248,60 +324,69 @@ def run_tool(argv: Sequence[str], cwd: str | None = None,
     log.info("run: %s", argv_text)
     started = time.monotonic()
 
-    try:
-        completed = run(argv, cwd=cwd, env=env, timeout=timeout,
-                        input=input_text, capture_output=True, text=True,
-                        shell=False)
-    except FileNotFoundError as exc:
-        duration = time.monotonic() - started
-        _write_capture(capture_path, argv_text, "", str(exc), 127)
-        log.error("tool not found: %s (%s)", argv[0], exc)
-        raise ToolError(
-            f"tool not found: {argv[0]!r} — is it installed and on PATH? "
-            f"(argv: {argv_text})",
-            argv=argv_text, returncode=127, duration_s=duration,
-        ) from exc
-    except PermissionError as exc:
-        duration = time.monotonic() - started
-        _write_capture(capture_path, argv_text, "", str(exc), 126)
-        log.error("tool not executable: %s (%s)", argv[0], exc)
-        raise ToolError(
-            f"tool not executable: {argv[0]!r} ({exc})",
-            argv=argv_text, returncode=126, duration_s=duration,
-        ) from exc
-    except subprocess.TimeoutExpired as exc:
-        duration = time.monotonic() - started
-        stdout = _as_text(exc.stdout)
-        stderr = _as_text(exc.stderr)
-        _write_capture(capture_path, argv_text, stdout, stderr, -1)
-        log.error("tool timed out after %ss: %s", timeout, argv_text)
-        raise ToolError(
-            f"tool timed out after {timeout}s: {argv_text}",
-            argv=argv_text, returncode=None, timeout_s=timeout,
-            duration_s=duration,
-            stderr_tail=redact(_tail(stderr), extra_sensitive),
-        ) from exc
+    with _spool_pair(capture_path) as (stdout_path, stderr_path):
+        try:
+            with open(stdout_path, "wb") as out_f, \
+                 open(stderr_path, "wb") as err_f:
+                completed = run(argv, cwd=cwd, env=env, timeout=timeout,
+                                input=input_text, stdout=out_f, stderr=err_f,
+                                text=True, shell=False)
+        except FileNotFoundError as exc:
+            duration = time.monotonic() - started
+            _spill(str(exc), stderr_path)
+            _append_capture_file(capture_path, argv_text, stdout_path,
+                                 stderr_path, 127)
+            log.error("tool not found: %s (%s)", argv[0], exc)
+            raise ToolError(
+                f"tool not found: {argv[0]!r} — is it installed and on PATH? "
+                f"(argv: {argv_text})",
+                argv=argv_text, returncode=127, duration_s=duration,
+            ) from exc
+        except PermissionError as exc:
+            duration = time.monotonic() - started
+            _spill(str(exc), stderr_path)
+            _append_capture_file(capture_path, argv_text, stdout_path,
+                                 stderr_path, 126)
+            log.error("tool not executable: %s (%s)", argv[0], exc)
+            raise ToolError(
+                f"tool not executable: {argv[0]!r} ({exc})",
+                argv=argv_text, returncode=126, duration_s=duration,
+            ) from exc
+        except subprocess.TimeoutExpired as exc:
+            duration = time.monotonic() - started
+            _spill(exc.stdout, stdout_path)
+            _spill(exc.stderr, stderr_path)
+            _append_capture_file(capture_path, argv_text, stdout_path,
+                                 stderr_path, -1)
+            stderr_tail = _read_capture_tail(stderr_path)
+            log.error("tool timed out after %ss: %s", timeout, argv_text)
+            raise ToolError(
+                f"tool timed out after {timeout}s: {argv_text}",
+                argv=argv_text, returncode=None, timeout_s=timeout,
+                duration_s=duration,
+                stderr_tail=redact(_tail(stderr_tail), extra_sensitive),
+            ) from exc
 
-    duration = time.monotonic() - started
-    stdout = completed.stdout or ""
-    stderr = completed.stderr or ""
-    _write_capture(capture_path, argv_text, stdout, stderr,
-                   completed.returncode)
-    _mirror(argv_text, stdout, stderr, log)
+        duration = time.monotonic() - started
+        _append_capture_file(capture_path, argv_text, stdout_path,
+                             stderr_path, completed.returncode)
+        _mirror_spooled(stdout_path, stderr_path, log)
+        stdout = _read_capture_tail(stdout_path)
+        stderr = _read_capture_tail(stderr_path)
 
-    if completed.returncode != 0:
-        log.error("tool failed with exit %s: %s", completed.returncode,
-                  argv_text)
-        raise ToolError(
-            f"{argv[0]!r} exited {completed.returncode} (argv: {argv_text})",
-            argv=argv_text, returncode=completed.returncode,
-            duration_s=duration,
-            stdout_tail=redact(_tail(stdout), extra_sensitive),
-            stderr_tail=redact(_tail(stderr), extra_sensitive),
-        )
+        if completed.returncode != 0:
+            log.error("tool failed with exit %s: %s", completed.returncode,
+                      argv_text)
+            raise ToolError(
+                f"{argv[0]!r} exited {completed.returncode} (argv: {argv_text})",
+                argv=argv_text, returncode=completed.returncode,
+                duration_s=duration,
+                stdout_tail=redact(_tail(stdout), extra_sensitive),
+                stderr_tail=redact(_tail(stderr), extra_sensitive),
+            )
 
-    log.info("ok: %s (%.3fs)", argv[0], duration)
-    return ToolResult(argv, stdout, stderr, duration, capture_path)
+        log.info("ok: %s (%.3fs)", argv[0], duration)
+        return ToolResult(argv, stdout, stderr, duration, capture_path)
 
 
 def run_shell(command: str, cwd: str | None = None, env: dict | None = None,
@@ -337,45 +422,52 @@ def run_shell(command: str, cwd: str | None = None, env: dict | None = None,
     log.info("run (shell): %s", shown)
     started = time.monotonic()
 
-    try:
-        completed = run(command, cwd=cwd, env=env, timeout=timeout,
-                        capture_output=True, text=True, shell=True)
-    except subprocess.TimeoutExpired as exc:
+    with _spool_pair(capture_path) as (stdout_path, stderr_path):
+        try:
+            with open(stdout_path, "wb") as out_f, \
+                 open(stderr_path, "wb") as err_f:
+                completed = run(command, cwd=cwd, env=env, timeout=timeout,
+                                stdout=out_f, stderr=err_f, text=True,
+                                shell=True)
+        except subprocess.TimeoutExpired as exc:
+            duration = time.monotonic() - started
+            _spill(exc.stdout, stdout_path)
+            _spill(exc.stderr, stderr_path)
+            _append_capture_file(capture_path, shown, stdout_path,
+                                 stderr_path, -1)
+            stderr_tail = _read_capture_tail(stderr_path)
+            log.error("shell command timed out after %ss: %s", timeout, shown)
+            raise ToolError(
+                f"shell command timed out after {timeout}s: {shown}",
+                argv=shown, returncode=None, timeout_s=timeout,
+                duration_s=duration, shell=True,
+                stderr_tail=redact(_tail(stderr_tail), extra_sensitive),
+            ) from exc
+
         duration = time.monotonic() - started
-        stdout = _as_text(exc.stdout)
-        stderr = _as_text(exc.stderr)
-        _write_capture(capture_path, shown, stdout, stderr, -1)
-        log.error("shell command timed out after %ss: %s", timeout, shown)
-        raise ToolError(
-            f"shell command timed out after {timeout}s: {shown}",
-            argv=shown, returncode=None, timeout_s=timeout,
-            duration_s=duration, shell=True,
-            stderr_tail=redact(_tail(stderr), extra_sensitive),
-        ) from exc
+        _append_capture_file(capture_path, shown, stdout_path, stderr_path,
+                             completed.returncode)
+        _mirror_spooled(stdout_path, stderr_path, log)
+        stdout = _read_capture_tail(stdout_path)
+        stderr = _read_capture_tail(stderr_path)
 
-    duration = time.monotonic() - started
-    stdout = completed.stdout or ""
-    stderr = completed.stderr or ""
-    _write_capture(capture_path, shown, stdout, stderr, completed.returncode)
-    _mirror(shown, stdout, stderr, log)
+        if completed.returncode != 0:
+            # A shell reports "command not found" as exit 127 rather than
+            # raising FileNotFoundError, so the missing-binary case arrives
+            # here. It is still a tool_failure — same category, same class —
+            # which is the point of the two paths having one contract.
+            log.error("shell command failed with exit %s: %s",
+                      completed.returncode, shown)
+            raise ToolError(
+                f"shell command exited {completed.returncode}: {shown}",
+                argv=shown, returncode=completed.returncode, shell=True,
+                duration_s=duration,
+                stdout_tail=redact(_tail(stdout), extra_sensitive),
+                stderr_tail=redact(_tail(stderr), extra_sensitive),
+            )
 
-    if completed.returncode != 0:
-        # A shell reports "command not found" as exit 127 rather than raising
-        # FileNotFoundError, so the missing-binary case arrives here. It is
-        # still a tool_failure — same category, same class — which is the
-        # point of the two paths having one contract.
-        log.error("shell command failed with exit %s: %s",
-                  completed.returncode, shown)
-        raise ToolError(
-            f"shell command exited {completed.returncode}: {shown}",
-            argv=shown, returncode=completed.returncode, shell=True,
-            duration_s=duration,
-            stdout_tail=redact(_tail(stdout), extra_sensitive),
-            stderr_tail=redact(_tail(stderr), extra_sensitive),
-        )
-
-    log.info("ok (shell) (%.3fs)", duration)
-    return ToolResult([command], stdout, stderr, duration, capture_path)
+        log.info("ok (shell) (%.3fs)", duration)
+        return ToolResult([command], stdout, stderr, duration, capture_path)
 
 
 # How much of a failed command's output travels in the exception's details —
@@ -400,3 +492,48 @@ def _as_text(value: Any) -> str:
     if isinstance(value, bytes):
         return value.decode("utf-8", errors="replace")
     return str(value)
+
+
+@contextlib.contextmanager
+def _spool_pair(capture_path: str | None):
+    """Two temp file paths for a command's stdout/stderr, cleaned up on exit.
+
+    Spooled next to the capture file when there is one (same filesystem,
+    same lifecycle as the bundle it will join), otherwise in the system temp
+    directory — the case tests exercise by calling `run_tool` with no
+    `capture_path` at all.
+    """
+    directory = os.path.dirname(capture_path) if capture_path else None
+    if directory:
+        os.makedirs(directory, exist_ok=True)
+    out_fd, out_path = tempfile.mkstemp(prefix=".run-tool-out-", dir=directory)
+    os.close(out_fd)
+    err_fd, err_path = tempfile.mkstemp(prefix=".run-tool-err-", dir=directory)
+    os.close(err_fd)
+    try:
+        yield out_path, err_path
+    finally:
+        for path in (out_path, err_path):
+            with contextlib.suppress(OSError):
+                os.remove(path)
+
+
+def _spill(value: Any, spool_path: str) -> None:
+    """Write already-in-memory partial output (from an injected exception)
+    to its spool file, so the rest of the pipeline can treat every path the
+    same way: read the tail back from disk.
+
+    Only reached when something upstream of this module — a test's `_run`
+    injection, chiefly — hands `TimeoutExpired` a stdout/stderr value
+    directly rather than leaving it on disk the way a real redirected
+    subprocess does (confirmed: with `stdout=`/`stderr=` set to real file
+    objects rather than `PIPE`, `TimeoutExpired.stdout`/`.stderr` are `None`
+    and the partial output is already in the spool file written by the OS).
+    """
+    if value is None:
+        return
+    text = _as_text(value)
+    if not text:
+        return
+    with open(spool_path, "a", encoding="utf-8") as handle:
+        handle.write(text)

@@ -54,11 +54,11 @@ does not exist.
 import dataclasses
 import datetime
 import decimal
-import io
 import json
 import os
 import re
 import tarfile
+import tempfile
 from typing import Any
 
 from pipeline.runtime.boundaries import checksum
@@ -290,9 +290,15 @@ def start_attempt(writer: Any, attempt_id: Any, provenance: Any,
 def build_bundle(bundle_dir: str) -> bytes:
     """Tar and gzip a bundle staging directory into bytes.
 
-    Built in memory rather than to a file: the bundle is uploaded immediately
-    and never read locally, and a temp file would be one more thing to clean
-    up on a path whose whole job is to work when things are going wrong.
+    Spooled through a temp file next to `bundle_dir` while the archive is
+    built, rather than accumulated in a `BytesIO`: this step runs before
+    `write_terminal_record` on every exit path (the module docstring's
+    order), so a large diagnostics tree growing one Python `bytes` object
+    across the whole walk was capable of exhausting memory precisely while
+    the process was trying to record its own failure. The temp file is
+    removed once its contents are read back; `ObjectStore.put_if_absent`
+    still takes `bytes`, so the final read is unavoidable, but nothing
+    intermediate to the walk is held in the heap.
 
     Deterministic within a run — members are added in sorted order — so two
     builds of an unchanged directory produce the same archive and the
@@ -305,23 +311,30 @@ def build_bundle(bundle_dir: str) -> bytes:
             f"bundle staging directory {bundle_dir!r} does not exist",
             path=bundle_dir)
 
-    buffer = io.BytesIO()
-    # mtime=0 in the gzip header, for the same determinism reason as the
-    # member mtimes below.
-    with tarfile.open(fileobj=buffer, mode="w:gz",
-                      compresslevel=6, format=tarfile.PAX_FORMAT) as tar:
-        for root, dirs, files in os.walk(bundle_dir):
-            dirs.sort()
-            for name in sorted(files):
-                full = os.path.join(root, name)
-                arcname = os.path.relpath(full, bundle_dir)
-                info = tar.gettarinfo(full, arcname=arcname)
-                info.mtime = 0
-                info.uid = info.gid = 0
-                info.uname = info.gname = ""
-                with open(full, "rb") as handle:
-                    tar.addfile(info, handle)
-    return buffer.getvalue()
+    parent = os.path.dirname(os.path.normpath(bundle_dir)) or "."
+    fd, spool_path = tempfile.mkstemp(prefix=".bundle-", suffix=".tar.gz",
+                                      dir=parent)
+    try:
+        with os.fdopen(fd, "wb") as spool:
+            # mtime=0 in the gzip header, for the same determinism reason as
+            # the member mtimes below.
+            with tarfile.open(fileobj=spool, mode="w:gz",
+                              compresslevel=6, format=tarfile.PAX_FORMAT) as tar:
+                for root, dirs, files in os.walk(bundle_dir):
+                    dirs.sort()
+                    for name in sorted(files):
+                        full = os.path.join(root, name)
+                        arcname = os.path.relpath(full, bundle_dir)
+                        info = tar.gettarinfo(full, arcname=arcname)
+                        info.mtime = 0
+                        info.uid = info.gid = 0
+                        info.uname = info.gname = ""
+                        with open(full, "rb") as handle:
+                            tar.addfile(info, handle)
+        with open(spool_path, "rb") as handle:
+            return handle.read()
+    finally:
+        os.remove(spool_path)
 
 
 def upload_bundle(store: Any, key: str, body: bytes) -> dict:

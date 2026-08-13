@@ -310,6 +310,30 @@ class TestBundle(unittest.TestCase):
         with self.assertRaises(StorageError):
             termination.build_bundle(os.path.join(self._tmp.name, "nope"))
 
+    def test_build_bundle_leaves_no_spool_file_behind(self):
+        """`build_bundle` spools the tar to a temp file beside `bundle_dir`
+        while building it (finding 17: an unbounded `BytesIO` would hold the
+        whole archive in memory during the walk, at exactly the moment a
+        crashing attempt is trying to record its own failure). The spool
+        must not survive the call, on success or on failure.
+        """
+        with open(self.workdir.stage_log_path("calibrate"), "w",
+                  encoding="utf-8") as handle:
+            handle.write("hello\n")
+        parent = os.path.dirname(os.path.normpath(self.workdir.bundle_dir))
+        before = set(os.listdir(parent))
+        termination.build_bundle(self.workdir.bundle_dir)
+        after = set(os.listdir(parent))
+        self.assertEqual(before, after)
+
+    def test_build_bundle_leaves_no_spool_file_on_a_missing_directory(self):
+        parent = self._tmp.name
+        before = set(os.listdir(parent))
+        with self.assertRaises(StorageError):
+            termination.build_bundle(os.path.join(parent, "nope"))
+        after = set(os.listdir(parent))
+        self.assertEqual(before, after)
+
     def test_replayed_upload_is_accepted_not_a_collision(self):
         store = InMemoryObjectStore()
         body = b"bundle-bytes"

@@ -170,8 +170,73 @@ class RunToolCaptureFileTests(unittest.TestCase):
             self.assertIn("--- exit 5 ---", contents)
 
     def test_capture_path_none_writes_nothing_and_does_not_raise(self):
-        # capture_path is optional; _write_capture is a no-op when it's None.
+        # capture_path is optional; _append_capture_file is a no-op when it's
+        # None.
         run_tool(["/bin/echo", "no capture"], capture_path=None)
+
+    def test_no_spool_file_survives_a_successful_run(self):
+        # finding 17: stdout/stderr are redirected to spool files rather than
+        # captured in memory. The spool must be cleaned up on every path, or
+        # a long-lived worker running many tools would leak temp files
+        # exactly as fast as it used to leak memory.
+        with tempfile.TemporaryDirectory() as tmp:
+            capture_path = os.path.join(tmp, "stage.out")
+            run_tool(["/bin/echo", "hi"], capture_path=capture_path)
+            leftovers = [n for n in os.listdir(tmp) if n != "stage.out"]
+            self.assertEqual(leftovers, [])
+
+    def test_no_spool_file_survives_a_failed_run(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            capture_path = os.path.join(tmp, "stage.out")
+            with self.assertRaises(ToolError):
+                run_tool(["/bin/sh", "-c", "exit 1"], capture_path=capture_path)
+            leftovers = [n for n in os.listdir(tmp) if n != "stage.out"]
+            self.assertEqual(leftovers, [])
+
+    def test_no_spool_file_survives_a_missing_binary(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            capture_path = os.path.join(tmp, "stage.out")
+            with self.assertRaises(ToolError):
+                run_tool(["/definitely/not/a/real/binary-xyz"],
+                         capture_path=capture_path)
+            leftovers = [n for n in os.listdir(tmp) if n != "stage.out"]
+            self.assertEqual(leftovers, [])
+
+    def test_capture_file_holds_output_larger_than_the_captured_text_limit(self):
+        # The capture file is streamed from the spool in chunks; it must
+        # carry the FULL output even when that output is larger than what
+        # ToolResult.stdout keeps in memory, which is the whole point of
+        # writing to disk rather than through subprocess.run(capture_output).
+        from pipeline.runtime import process as process_module
+
+        oversized = process_module.CAPTURED_TEXT_LIMIT + 1000
+        with tempfile.TemporaryDirectory() as tmp:
+            capture_path = os.path.join(tmp, "stage.out")
+            script = f"head -c {oversized} /dev/zero | tr '\\0' 'a'; echo"
+            run_tool(["/bin/sh", "-c", script], capture_path=capture_path)
+            with open(capture_path, encoding="utf-8") as handle:
+                contents = handle.read()
+            self.assertGreaterEqual(contents.count("a"), oversized)
+
+
+class ToolResultCapturedTextLimitTests(unittest.TestCase):
+    """`ToolResult.stdout`/`.stderr` and the `ToolError` tails are bounded to
+    CAPTURED_TEXT_LIMIT, read from the tail of the spool file — the fix for
+    finding 17's unbounded `capture_output=True` buffering."""
+
+    def test_stdout_is_truncated_past_the_captured_text_limit(self):
+        from pipeline.runtime import process as process_module
+
+        oversized = process_module.CAPTURED_TEXT_LIMIT + 1000
+        script = f"head -c {oversized} /dev/zero | tr '\\0' 'a'"
+        result = run_tool(["/bin/sh", "-c", script])
+        self.assertLess(len(result.stdout), oversized)
+        self.assertIn("...(truncated)...", result.stdout)
+
+    def test_small_output_is_not_marked_truncated(self):
+        result = run_tool(["/bin/echo", "small"])
+        self.assertNotIn("...(truncated)...", result.stdout)
+        self.assertEqual(result.stdout.strip(), "small")
 
 
 class RunToolLoggerMirrorTests(unittest.TestCase):
