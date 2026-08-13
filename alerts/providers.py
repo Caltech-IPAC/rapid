@@ -901,14 +901,24 @@ class AlertDataProvider:
         if (self._chip_pid is not None and self._chip_pid == detection.pid
                 and window_days <= self._chip_window_days):
             cutoff = detection.mjdobs - window_days
+            # Strict prior (ruled 2026-08-13): history is s.mjdobs <
+            # detection.mjdobs only. A same-instant detection is not
+            # history, and backfill/reprocessing can otherwise leave
+            # later detections in the prefetch -- exclude both rather
+            # than relying on sid inequality alone.
             return [s for s in self._chip_history.get(obj.aid, [])
-                    if s.sid != detection.sid and s.mjdobs >= cutoff]
+                    if s.sid != detection.sid and cutoff <= s.mjdobs < detection.mjdobs]
 
         # Single-alert flow: same sources -> Source mapping as
         # get_detection(), but selecting the object's other detections.
         field = int(detection.field)
         if not self._partition_exists(field):
             return []  # no partition -> no recorded history
+        # Strict prior (ruled 2026-08-13): history is s.mjdobs <
+        # detection.mjdobs only. A same-instant detection is not
+        # history, and backfill/reprocessing can otherwise leave later
+        # detections in `sources` -- exclude both rather than relying
+        # on sid inequality alone.
         rows = self._query(f"""
             SELECT s.*, f.filter AS filter_name, e.exptime
             FROM sources s
@@ -916,9 +926,10 @@ class AlertDataProvider:
             JOIN filters f ON s.fid = f.fid
             JOIN exposures e ON s.expid = e.expid
             WHERE m.aid = %s AND s.sid != %s
-              AND s.mjdobs >= %s
+              AND s.mjdobs >= %s AND s.mjdobs < %s
             ORDER BY s.mjdobs
-        """, (obj.aid, detection.sid, detection.mjdobs - window_days))
+        """, (obj.aid, detection.sid, detection.mjdobs - window_days,
+              detection.mjdobs))
         detections = []
         for row in rows:
             row["band"] = row.get("filter_name")

@@ -248,11 +248,11 @@ class FakeCursor:
             aid = d._aid_of(params[0])
             self._rows = [dict(d.objects[aid])] if aid is not None else []
         elif "m.aid = %s" in sql:                     # single-alert prv
-            aid, trigger_sid, cutoff = params
+            aid, trigger_sid, cutoff, trigger_mjdobs = params
             self._rows = sorted(
                 (dict(r) for r in d._all_detections()
                  if d._aid_of(r["sid"]) == aid and r["sid"] != trigger_sid
-                 and r["mjdobs"] >= cutoff),
+                 and cutoff <= r["mjdobs"] < trigger_mjdobs),
                 key=lambda r: r["mjdobs"])
         else:
             raise KeyError(f"FakeCursor has no route for query: {sql}")

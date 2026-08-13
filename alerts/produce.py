@@ -279,6 +279,9 @@ def assemble_alert_for_source(provider: AlertDataProvider,
         if prv:
             prv_dia_sources = [build_dia_source(p) for p in prv]
 
+        # get_prv_detections() guarantees every p.mjdobs < source.mjdobs
+        # (strict prior, ruled 2026-08-13), so last_mjd == source.mjdobs
+        # here and can never postdate validity_mjd below.
         mjds = [source.mjdobs] + [p.mjdobs for p in prv]
         obj.first_mjd = min(mjds)
         obj.last_mjd = max(mjds)

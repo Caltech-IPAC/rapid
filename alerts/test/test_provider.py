@@ -15,8 +15,6 @@ TODO (test plan, not yet implemented):
       null cutouts (and a warning), the other images unaffected
   B10 per-chip caching: images load once per pid (count load_fits_image
       calls); pid change reloads and replaces staged files
-  B12 prefetch semantics: prv window filtering per-trigger, multi-field
-      chips, independent ObjectRecords for sources sharing an object
   E20 CLI surface: bad args exit nonzero
 """
 
@@ -27,11 +25,11 @@ import fastavro
 import pytest
 
 from alerts import providers
-from alerts.produce import (batch_produce, load_schema,
-                                  open_alert_archive, produce_alert)
+from alerts.produce import (assemble_alert_for_source, batch_produce,
+                                  load_schema, open_alert_archive, produce_alert)
 from alerts.providers import AlertDataProvider
 
-from conftest import CHIP_PID, PRODUCT_OFFSETS, FakeDB
+from conftest import CHIP_PID, PRODUCT_OFFSETS, FakeDB, make_source_row
 from test_clips import clip_to_numpy
 
 
@@ -72,6 +70,61 @@ def test_missing_field_partition_degrades_to_unassociated(make_provider,
     single = make_provider()                              # single-alert flow
     detection = single.get_detection(9001)
     assert single.get_object_for_source(detection) is None
+
+
+# ---------------------------------------------------------------------------
+# History is strict prior (ruled 2026-08-13): prvDiaSources and
+# diaObject.lastMjd must admit only detections with mjdobs strictly before
+# the triggering detection's own mjdobs. Backfill/reprocessing can leave
+# later-mjd rows in `sources` ahead of an earlier trigger being (re)alerted,
+# and a same-instant detection is deliberately not history either. Checked
+# in both the batch prefetch path (iter_sources -> get_prv_detections) and
+# the single-alert path (produce_alert -> get_prv_detections), which must
+# agree.
+# ---------------------------------------------------------------------------
+
+def test_history_excludes_future_and_same_instant_detections(make_provider,
+                                                              chip_data,
+                                                              tpv_header):
+    trigger_sid = 9001                 # merged to aid 777, mjdobs 60500.5
+    trigger_mjdobs = 60500.5
+    future_sid, same_instant_sid = 9101, 9102
+    chip_data.history += [
+        make_source_row(future_sid, 150.2, 200.4, trigger_mjdobs + 1.0,
+                        tpv_header, pid=44),
+        make_source_row(same_instant_sid, 150.2, 200.4, trigger_mjdobs,
+                        tpv_header, pid=44),
+    ]
+    chip_data.history_merges[future_sid] = 777
+    chip_data.history_merges[same_instant_sid] = 777
+
+    # single-alert path
+    single = make_provider()
+    detection = single.get_detection(trigger_sid)
+    obj = single.get_object_for_source(detection)
+    prv = single.get_prv_detections(detection, obj)
+    prv_sids = {s.sid for s in prv}
+    assert future_sid not in prv_sids
+    assert same_instant_sid not in prv_sids
+    assert prv_sids == {1001, 1002}
+    assert max(s.mjdobs for s in prv) < trigger_mjdobs
+
+    # batch path: same assertions from the chip-wide prefetch
+    batch = make_provider()
+    sources = {s.sid: s for s in batch.iter_sources(CHIP_PID)}
+    batch_detection = sources[trigger_sid]
+    batch_obj = batch.get_object_for_source(batch_detection)
+    batch_prv = batch.get_prv_detections(batch_detection, batch_obj)
+    batch_prv_sids = {s.sid for s in batch_prv}
+    assert future_sid not in batch_prv_sids
+    assert same_instant_sid not in batch_prv_sids
+    assert batch_prv_sids == {1001, 1002}
+    assert max(s.mjdobs for s in batch_prv) < trigger_mjdobs
+
+    # diaObject.lastDiaSourceMjd must never postdate validityStartMjd
+    packet = assemble_alert_for_source(make_provider(), detection)
+    assert (packet["diaObject"]["lastDiaSourceMjd"]
+            == packet["diaObject"]["validityStartMjd"] == trigger_mjdobs)
 
 
 # ---------------------------------------------------------------------------
