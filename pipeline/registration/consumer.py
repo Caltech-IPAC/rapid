@@ -91,6 +91,8 @@ import logging
 
 from observability.attempts import LifecycleState
 from observability.registration import RegistrationDecision, decide
+from pipeline.intent.writer import (
+    COMPLETE, SUBMITTED, WRITER_RECONCILER, WorkUnitNotFound, WorkUnitWriter)
 from pipeline.registration.products import (
     MissingRecordFact, RecordValidationRejected, RegistrationFailed)
 
@@ -142,6 +144,16 @@ _COLUMNS = (
     # The watermark, so a caller can see what a candidate was last registered
     # at without a second query (review finding #5).
     "registered_at", "registered_record_sequence",
+    # The intent-layer FK (finding 7 repair). NULL on every pre-intent-layer
+    # row and on any attempt whose definition-FK guard held it back at
+    # submission time (see `pipeline.seams._attach_work_unit`) — mirroring
+    # `pipeline.reconciler.service._OPEN_COLUMNS`'s own comment on this same
+    # column verbatim, because it is the identical "absent means absence"
+    # guard one layer up: `register_batch` completes the work unit here
+    # rather than the reconciler completing it on a bare `rapid_outcome`
+    # read, and a row with no work unit has nothing for that completion to
+    # act on.
+    "work_unit_id",
 )
 
 # THE REGISTERED WATERMARK (review finding #5).
@@ -525,6 +537,104 @@ def record_l2_available(attempt_id, row, cursor=None):
     return True
 
 
+def _cursor_executor(cursor):
+    """A `pipeline.intent.writer.Executor` over a plain DB-API cursor.
+
+    `WorkUnitWriter` takes a bare `execute(sql, params)` callable — the same
+    contract `pipeline.reconciler.service._Executor(conn)` provides for the
+    reconciler's own writes — so completion can share `register_batch`'s
+    already-open cursor rather than opening a second one: this IS the same
+    transaction the product rows, the registration outcome and the watermark
+    are committing in, which is the whole point (see `_complete_work_unit`).
+    """
+    def execute(statement, params=None):
+        cursor.execute(statement, params)
+        if cursor.description is not None:
+            return cursor.fetchall()
+        return cursor.rowcount
+
+    return execute
+
+
+def _complete_work_unit(attempt_id, work_unit_id, cursor):
+    """The `submitted -> complete` transition, now that the result is
+    ACCEPTED (FINDING 7).
+
+    **WHY THIS MOVED HERE FROM THE RECONCILER.** The reconciler used to
+    complete a work unit the moment `rapid_outcome == success` — before
+    registration had run at all; `pipeline.registration.consumer.
+    candidates()`'s own query only selects rows the reconciler has ALREADY
+    left terminal (`lifecycle_state IN (terminal_after_start,
+    terminal_without_start) AND terminal_record_sequence >= 1`), so
+    registration is strictly downstream of that closure. A unit marked
+    `complete` on the application's own say-so could then have its
+    registration fail or be rejected while sitting `complete`, with nothing
+    left able to retry it — `submitted -> complete` is the only edge into
+    `complete` the transition graph admits (`pipeline.intent.writer.
+    _TRANSITION_GRAPH`), so once wrongly taken there is no way back to
+    `submitted` short of the mutation API.
+
+    Rule 4 (`pipeline.intent.retry_policy`'s module docstring) says a unit
+    closes "only from an accepted result" — and `_work_unit_series` in the
+    reconciler already reads `registered_at`, not `rapid_outcome`, when
+    judging whether a SIBLING attempt succeeded, for exactly that reason.
+    This function applies the identical standard to the attempt's own
+    outcome: this call site is reached only after `mark_registered` has
+    already run in THIS SAME transaction (see `register_batch`), so
+    `registered_at` and the completion below share one commit — an accepted
+    result and the fact of its acceptance land together, or neither lands.
+
+    **WRITER IDENTITY.** `WRITER_RECONCILER` — migration 036's closed
+    four-writer vocabulary (`pipeline.intent.writer.WRITERS`) has no fifth
+    "registrar" class, and the module's own docstring states writer
+    identity names a TRANSITION CLASS, not a call site: "the SAME Python
+    function is invoked by more than one transition-class writer in
+    practice... the design's exclusivity rule is a CODE discipline over WHO
+    passes which value". Completion is the "the reconciler closes" class
+    that same docstring names, wherever in the codebase the call happens to
+    live now.
+
+    **THE LOCK, AND ITS ORDER.** `transition_unit` takes the work-unit lock
+    itself (`pipeline.intent.lock.lock_work_unit`) before its CAS — this
+    function does not take it separately, matching the "one choke point"
+    discipline `transition_unit`'s own docstring states. The order is R4
+    (this module's per-attempt lease, held since `_acquire_attempt_lease`
+    at the top of `register_batch`'s transaction) then WU (taken here,
+    underneath it) — exactly the order `pipeline.intent.lock`'s module
+    docstring requires and names this registration path as an example of
+    ("a registration that transitions a work unit does so under both").
+
+    **A CAS MISS IS LOGGED, NOT RAISED.** Mirrors `_close_work_unit`'s own
+    posture in the reconciler: a unit not currently `submitted` (finding
+    6's own guard left it there because a sibling was still open, or an
+    operator already force-transitioned it, or a second registration pass
+    reaches an attempt another pass already completed) means another
+    writer already resolved it. The registration this call is part of has
+    already committed the product rows and the watermark by the time this
+    runs; refusing to complete a unit someone else has already dispositioned
+    is not a reason to roll all of that back.
+    """
+    if work_unit_id is None:
+        # Every pre-intent-layer row, and every row whose job type has no
+        # loaded workflow_definitions row yet — mirrors
+        # `pipeline.reconciler.service._close_work_unit`'s identical guard
+        # verbatim: absent means absence, not a sentinel, one layer up.
+        return
+    work_writer = WorkUnitWriter(_cursor_executor(cursor))
+    try:
+        work_writer.transition_unit(
+            work_unit_id, SUBMITTED, COMPLETE, writer=WRITER_RECONCILER,
+            detail={"deciding_attempt_id": attempt_id,
+                    "disposition": "close_complete"})
+    except WorkUnitNotFound:
+        logger.info(
+            "work unit %s (attempt %s) was not in 'submitted' when "
+            "registration accepted its result; another writer already "
+            "resolved it, so this registration's own product writes and "
+            "watermark still commit without forcing the work unit",
+            work_unit_id, attempt_id)
+
+
 #: The rejection sibling of `_RECORD_OUTCOME_SQL` (integration ruling 4):
 #: same append-once-by-identity, GREATEST-high-water-mark idiom, a distinct
 #: top-level key so a rejection event can never be mistaken for a promotion
@@ -832,6 +942,16 @@ def register_batch(conn, rows, register=None, run=None, dry_run=False):
                 # inside it. See `record_l2_available` for the timing change
                 # this implies and why nothing observes it.
                 record_l2_available(verdict.attempt_id, row, cursor=cur)
+                # THE WORK UNIT'S OWN `submitted -> complete` (FINDING 7),
+                # LAST and in the SAME envelope as everything above. The
+                # reconciler no longer completes a unit on a bare
+                # `rapid_outcome == success` read — this is the one and only
+                # place that transition happens now, reached only once the
+                # product rows, the outcome document and the watermark have
+                # all landed in this same uncommitted transaction. See
+                # `_complete_work_unit` for the full reasoning.
+                _complete_work_unit(verdict.attempt_id,
+                                    row.get("work_unit_id"), cur)
         except Exception:  # noqa: BLE001 - counted, not swallowed
             run.failed += 1
             logger.exception(

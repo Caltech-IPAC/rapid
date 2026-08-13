@@ -32,7 +32,19 @@ from pipeline.runtime.boundaries import InMemoryObjectStore
 
 
 class WorkUnitClosureTests(unittest.TestCase):
-    def test_success_closes_the_work_unit_complete(self):
+    def test_success_leaves_the_work_unit_submitted_for_registration(self):
+        # WAS `test_success_closes_the_work_unit_complete` (finding 7
+        # repair). The reconciler used to transition `submitted -> complete`
+        # the moment `rapid_outcome == success`, reading nothing about
+        # whether the result was ever ACCEPTED — registration runs strictly
+        # afterward, over rows already terminal, so a unit could sit
+        # `complete` with a result that later failed or was rejected at
+        # registration, and nothing could rerun it. The reconciler now
+        # issues NO work-unit transition on success at all; the unit stays
+        # `submitted`, and `pipeline.registration.consumer.register_batch`
+        # is what completes it, atomically with the product writes, once
+        # the result is genuinely accepted (see
+        # `test_consumer.RegistrationCompletesTheWorkUnitTests`).
         row = attempt_row(1, lifecycle_state="application_closed",
                           started_at=utc(2026, 8, 6, 11, 0, 0),
                           rapid_outcome="success",
@@ -52,11 +64,14 @@ class WorkUnitClosureTests(unittest.TestCase):
         self.assertEqual(1, summary["classified"])
         transitions = [(text, params) for text, params in conn.statements
                        if "UPDATE work_units SET state" in text]
-        self.assertEqual(1, len(transitions))
-        text, params = transitions[0]
-        self.assertIn("complete", params)
-        self.assertIn(42, params)
-        self.assertIn("submitted", params)
+        self.assertEqual(
+            [], transitions,
+            "the reconciler must not transition the work unit on success; "
+            "registration does, once the result is accepted")
+        # The ATTEMPT still closes normally — only the work unit's
+        # transition is deferred.
+        self.assertEqual("terminal_after_start",
+                         conn.rows[1]["lifecycle_state"])
 
     def test_application_failure_parks_the_work_unit_blocked(self):
         # WAS `test_failure_closes_the_work_unit_failed` (rule 4 repair). An
@@ -352,15 +367,21 @@ class WorkUnitClosureTests(unittest.TestCase):
         # the SAME commit, with nothing rolled back in between. (A poll also
         # commits its open-set read and its heartbeat separately — those are
         # outside the lease and are not what this test is about.)
+        #
+        # AN APPLICATION FAILURE, NOT A SUCCESS (finding 7 repair). Success
+        # no longer transitions the work unit through the reconciler at all
+        # (see `test_success_leaves_the_work_unit_submitted_for_registration`),
+        # so it can no longer stand in for "the reconciler writes a
+        # work-unit transition inside the attempt's own lease" — a park
+        # (still a reconciler-driven `_close_work_unit` call) is the
+        # narrowest case left that exercises the same atomicity property.
         row = attempt_row(1, lifecycle_state="application_closed",
                           started_at=utc(2026, 8, 6, 11, 0, 0),
-                          rapid_outcome="success",
-                          product_disposition="published",
+                          rapid_outcome="failure", product_disposition="none",
                           terminal_record_sequence=0,
                           work_unit_id=42)
         store = InMemoryObjectStore()
-        seed_record(store, row, application_record(
-            1, rapid_outcome="success", product_disposition="published"))
+        seed_record(store, row, application_record(1))
         jobs = [batch_job(status="SUCCEEDED", exit_code=0,
                           started=utc(2026, 8, 6, 11, 0, 0),
                           stopped=utc(2026, 8, 6, 11, 5, 0))]

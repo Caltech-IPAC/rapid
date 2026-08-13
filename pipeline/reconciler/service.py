@@ -1444,11 +1444,30 @@ class ReconcilerService:
         # Note `_close_work_unit` also checks the series before applying any
         # of this: if a sibling attempt was already accepted, this row's
         # failure changes nothing about the unit.
+        #
+        # SUCCESS DOES NOT CLOSE THE UNIT HERE (FINDING 7). It used to:
+        # `rapid_outcome == SUCCESS` drove `submitted -> complete` directly,
+        # reading nothing about whether the result was ever ACCEPTED.
+        # Registration runs strictly after this — `pipeline.registration.
+        # consumer.candidates()` only selects rows already in a terminal
+        # state — so a unit could be marked `complete` here and then have
+        # its registration fail or be rejected while sitting complete,
+        # blocking a valid rerun with nothing left to retry it. Rule 4 (see
+        # `pipeline.intent.retry_policy`'s module docstring) is explicit
+        # that a unit closes "only from an accepted result", and
+        # `_work_unit_series` above reads `registered_at`, not
+        # `rapid_outcome`, for exactly that reason — the same standard now
+        # applies to the attempt's OWN success, not only to how its
+        # siblings are judged. The unit is left `submitted`;
+        # `pipeline.registration.consumer.register_batch` performs the
+        # `submitted -> complete` transition itself, atomically with the
+        # product writes and the registration watermark, once the result is
+        # actually accepted.
         outcome = body.get("rapid_outcome")
-        self._close_work_unit(
-            row, outcome="complete" if outcome == RapidOutcome.SUCCESS.value
-            else "failed",
-            error_category=error_category)
+        if outcome == RapidOutcome.SUCCESS.value:
+            return
+        self._close_work_unit(row, outcome="failed",
+                              error_category=error_category)
 
     def _work_unit_series(self, work_unit_id, exclude_attempt_id):
         """The sibling attempts of one work unit: succeeded-yet? loss count?
@@ -1554,6 +1573,22 @@ class ReconcilerService:
           application failure    -> submitted -> blocked    (park-until-
                                     change; "never tombstoned")
           policy exhausted       -> submitted -> failed     (the ceiling)
+
+        **NO CALLER PASSES `outcome="complete"` ANY MORE (FINDING 7).** The
+        reconciler's own SUCCESS path used to call this with
+        `outcome="complete"` the moment the application reported success —
+        before registration had any say. That is gone (see `_transition`'s
+        SUCCESS branch above, which now returns without calling this
+        method at all): completion is registration's write, performed
+        atomically with the product rows in
+        `pipeline.registration.consumer.register_batch`, because rule 4
+        admits `complete` only "from an accepted (registered) result", and
+        this reconciler has no way to know a result was accepted. The
+        `outcome="complete"` branch below is kept rather than deleted — it
+        remains a correct, generic implementation of the disposition
+        table above, and removing it would make this method silently
+        wrong the day a future caller legitimately needs it — but as of
+        this repair nothing in this module reaches it.
 
         **WHAT CHANGED AND WHY** (rule 4 repair). Every call site used to
         pass `outcome="failed"` for any terminal disposition that was not

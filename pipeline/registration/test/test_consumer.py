@@ -284,6 +284,133 @@ class OneTransactionPerAttemptTests(unittest.TestCase):
         self.assertEqual((7, 3), (params[2], params[1]))
 
 
+class RegistrationCompletesTheWorkUnitTests(unittest.TestCase):
+    """FINDING 7: the work unit completes here, not on a bare success read.
+
+    The reconciler used to transition a work unit `submitted -> complete`
+    the moment `rapid_outcome == success` — before registration had run at
+    all. A registration that later failed or was rejected then had a
+    `complete` unit with an unaccepted result and nothing able to rerun it.
+    The unit now stays `submitted` until THIS module accepts the result,
+    and does so atomically with the product rows and the watermark — the
+    same "one transaction per attempt" property `OneTransactionPerAttemptTests`
+    pins for the watermark, extended to the work unit.
+    """
+
+    def test_a_successful_registration_completes_the_work_unit(self):
+        conn = FakeConn()
+        consumer.register_batch(
+            conn, [reconciled(1, work_unit_id=42)],
+            register=product_writer(conn))
+
+        self.assertEqual("complete", conn.work_units[42])
+        completions = [(statement, params) for statement, params
+                       in conn.committed
+                       if statement.lower().startswith(
+                           "update work_units set state")]
+        self.assertEqual(1, len(completions))
+        _, params = completions[0]
+        self.assertEqual("complete", params[0])
+        self.assertEqual(42, params[3])
+        self.assertEqual("submitted", params[4])
+
+    def test_the_completion_commits_with_the_product_rows_and_watermark(self):
+        # The atomicity property itself: one commit carries the product
+        # write, the watermark AND the work-unit completion, or none of
+        # them survive. Mirrors
+        # `OneTransactionPerAttemptTests.test_the_watermark_and_the_
+        # product_rows_commit_together` with the completion folded in.
+        conn = FakeConn()
+        consumer.register_batch(
+            conn, [reconciled(1, work_unit_id=42)],
+            register=product_writer(conn))
+
+        self.assertEqual(1, conn.commits,
+                         "one attempt is one transaction, so one commit")
+        committed = " ".join(statement for statement, _ in conn.committed)
+        self.assertIn("addDiffImage", committed)
+        self.assertIn("registered_record_sequence", committed)
+        self.assertIn("work_units", committed,
+                      "the work-unit completion is not in the committed "
+                      "transaction")
+
+    def test_a_registration_failure_leaves_the_work_unit_submitted(self):
+        # THE WHOLE FINDING, restated as a negative: nothing about this
+        # attempt's registration commits, so the unit it would have
+        # completed must not move either.
+        conn = FakeConn()
+
+        def explode(row, verdict):
+            raise RuntimeError("no")
+
+        consumer.register_batch(conn, [reconciled(1, work_unit_id=42)],
+                                register=explode)
+
+        self.assertNotIn(42, conn.work_units,
+                         "the work unit was touched despite the "
+                         "registration never committing")
+        self.assertEqual(0, conn.commits)
+
+    def test_a_validation_rejection_leaves_the_work_unit_submitted(self):
+        # A REJECTION (integration ruling 4) commits its OWN outcome event
+        # but must not complete the work unit — the record was refused, not
+        # accepted, and rule 4 admits `complete` only from an accepted
+        # result.
+        from pipeline.registration.products import MissingRecordFact
+
+        conn = FakeConn()
+
+        def reject(row, verdict):
+            raise MissingRecordFact("no bundle_key on this record")
+
+        run = consumer.register_batch(
+            conn, [reconciled(1, work_unit_id=42)], register=reject)
+
+        self.assertEqual(1, run.rejected)
+        self.assertEqual(1, conn.commits,
+                         "the rejection's own outcome event still commits")
+        self.assertNotIn(42, conn.work_units,
+                         "a rejected record must not complete the unit it "
+                         "was rejected for")
+
+    def test_a_null_work_unit_id_completes_nothing(self):
+        # Every pre-intent-layer row, and every row whose job type has no
+        # loaded workflow_definitions row — mirrors the reconciler's
+        # identical `_close_work_unit` guard. The registration itself must
+        # still succeed; there is simply no work unit to complete.
+        conn = FakeConn()
+        run = consumer.register_batch(
+            conn, [reconciled(1, work_unit_id=None)],
+            register=product_writer(conn))
+
+        self.assertEqual(1, run.registered)
+        self.assertEqual({}, conn.work_units)
+        completions = [statement for statement, _ in conn.statements
+                      if statement.lower().startswith(
+                          "update work_units set state")]
+        self.assertEqual([], completions)
+
+    def test_a_unit_no_longer_submitted_does_not_fail_the_registration(self):
+        # Mirrors `_close_work_unit`'s own posture in the reconciler: a CAS
+        # miss (another writer already resolved the unit — an operator
+        # override, or finding 6's own guard having left a sibling to
+        # settle it differently) is logged, not raised. The product rows
+        # and the watermark this registration already wrote must still
+        # commit; refusing to force a unit someone else has already
+        # dispositioned is not a reason to roll all of that back.
+        conn = FakeConn(work_units={42: "blocked"})
+        run = consumer.register_batch(
+            conn, [reconciled(1, work_unit_id=42)],
+            register=product_writer(conn))
+
+        self.assertEqual(1, run.registered)
+        self.assertEqual(0, run.failed)
+        self.assertEqual("blocked", conn.work_units[42],
+                         "a unit already off 'submitted' must not be forced")
+        self.assertEqual(1, conn.commits,
+                         "the registration's own writes must still commit")
+
+
 class WatermarkSequenceTests(unittest.TestCase):
     """The watermark records the sequence it registered at, not a boolean.
 
@@ -402,9 +529,21 @@ class FakeConn:
     which every existing test relies on meaning "not registered yet, and no
     stale-supersession signal", i.e. registration proceeds exactly as it did
     before this lease existed.
+
+    AMENDED for finding 7. `_complete_work_unit`'s `UPDATE work_units SET
+    state = ...` needs a real CAS over SOME state, or `WorkUnitWriter.
+    transition_unit`'s `_require_one_row` cannot tell "matched" from "did
+    not" — `work_units`, a dict of work_unit_id -> state, is that state,
+    defaulting every id to `submitted` (the state a candidate row is
+    always in per the module's own invariant: the reconciler no longer
+    completes a unit, so every registration candidate's unit is still
+    exactly where it was left). `description`/`fetchall` are modelled only
+    for the two statement shapes finding 7 actually issues (the work-unit
+    UPDATE and its `INSERT INTO unit_events`); every other statement this
+    fake answers is a plain `execute()`-then-`fetchone()`, unchanged.
     """
 
-    def __init__(self, watermarks=None):
+    def __init__(self, watermarks=None, work_units=None):
         self.statements = []
         self.committed = []
         self.commits = 0
@@ -416,8 +555,14 @@ class FakeConn:
         #: here to exercise the skip paths; unset attempt ids re-read as
         #: (None, None) — "proceed", the pre-lease default.
         self.watermarks = dict(watermarks or {})
+        #: work_unit_id -> state, mutated by `_complete_work_unit`'s CAS.
+        #: Unset ids default to 'submitted' on first reference (see
+        #: `execute`) — the only state a registration candidate's work unit
+        #: is ever found in, absent a test deliberately pre-empting it.
+        self.work_units = dict(work_units or {})
         self._pending = []
         self._last_result = None
+        self._last_description = None
 
     def cursor(self):
         return self
@@ -435,6 +580,7 @@ class FakeConn:
         self.statements.append((statement, params))
         self._pending.append((statement, params))
         self._last_result = None
+        self._last_description = None
         lowered = statement.lower()
         if "pg_advisory_xact_lock" in lowered:
             self.lease_acquisitions.append(params)
@@ -443,9 +589,37 @@ class FakeConn:
               and lowered.strip().startswith("select")):
             attempt_id = params[0] if params else None
             self._last_result = self.watermarks.get(attempt_id, (None, None))
+        elif lowered.startswith("update work_units set state"):
+            to_state, _blocked_reason, _moment, work_unit_id, from_state = params
+            current = self.work_units.setdefault(work_unit_id, "submitted")
+            if current == from_state:
+                self.work_units[work_unit_id] = to_state
+                self._last_result = [(1,)]
+            else:
+                self._last_result = []
+            self._last_description = [("rowcount",)]
+        elif lowered.startswith("insert into unit_events"):
+            self._last_result = []
+            self._last_description = [("rowcount",)]
 
     def fetchone(self):
         return self._last_result
+
+    def fetchall(self):
+        return list(self._last_result or [])
+
+    @property
+    def description(self):
+        return self._last_description
+
+    @property
+    def rowcount(self):
+        # Only reached by `_cursor_executor` for statements with no result
+        # set (`description is None`) — the WU lock's bare `SELECT
+        # pg_advisory_xact_lock(...)`, which this fake otherwise no-ops.
+        # 1 mirrors a real driver reporting one row affected/returned for a
+        # SELECT with no meaningful count of its own.
+        return 1
 
     def commit(self):
         self.commits += 1
