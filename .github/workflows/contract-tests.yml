@@ -89,7 +89,7 @@ jobs:
       # the run's own log as evidence: "record the revision used" is part of
       # the required outcome, and a run that cannot say which schema it tested
       # against has not demonstrated anything reproducible.
-      RAPID_SYSTEMS_REF: 69ef611e44adc7ec76a006d27485cfb10cd658de
+      RAPID_SYSTEMS_REF: 2ca7def39f019d0f070a180c30d09fb36d00b8c2
 
     steps:
       - name: check out rapid
@@ -222,7 +222,7 @@ jobs:
           # guaranteed to a `with:` input, and a ref that silently resolved
           # to empty would check out the default branch — testing against an
           # unpinned schema while claiming a pinned one.
-          ref: 69ef611e44adc7ec76a006d27485cfb10cd658de
+          ref: 2ca7def39f019d0f070a180c30d09fb36d00b8c2
           token: ${{ secrets.RAPID_SYSTEMS_READ_TOKEN }}
           path: rapid_systems
           persist-credentials: false
