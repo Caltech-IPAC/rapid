@@ -1263,13 +1263,23 @@ def _progress(conn, run_id):
     return counts
 
 
-def run_registration(conn, register=None):
+def run_registration(conn, register=None, store=None):
     """Invoke registration as the records consumer.
 
     A function call, not a subprocess: the four scripts this replaces had no
     importable entry point at all — each was a `__main__` block — which is
     precisely why the VPO had to exec them and why their exit codes were the
     only channel back. The run's counts are returned directly.
+
+    `store` (2026-08-14, closing the fencing gap between the two
+    registration paths) is forwarded to `register_batch` as its own
+    `store=`, which is what makes it hold `pipeline.registration.consumer.
+    _bind_fence` over each attempt's bind. It is the operator's half of the
+    wiring `pipeline.operator.registration.run_pass`'s docstring describes;
+    that function now forwards unconditionally, since this parameter has
+    landed. `store=None` (any caller predating this parameter, or one that
+    genuinely has no records store) fences nothing, exactly as
+    `register_batch`'s own docstring warns.
     """
     from pipeline.registration import candidates, register_batch
 
@@ -1279,4 +1289,4 @@ def run_registration(conn, register=None):
     # (review finding #5): omitting the callback used to become a dry run
     # whose decisions were reported as registrations.
     return register_batch(conn, rows, register=register,
-                          dry_run=register is None)
+                          dry_run=register is None, store=store)

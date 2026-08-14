@@ -1,11 +1,11 @@
 """`pipeline.operator.registration.run_pass`: the operator's registration
 step, and its `store` parameter (2026-08-14) — the GC-fence records store
-threaded through toward `pipeline.registration.consumer.register_batch`'s
-own `store=` fencing argument.
+threaded through to `pipeline.registration.consumer.register_batch`'s own
+`store=` fencing argument.
 
-`run_pass` calls `pipeline.seams.run_registration`, which does not accept
-`store` as of this wave (that wiring is a filed integration request, see
-`run_pass`'s own docstring). These tests stub `pipeline.seams.
+`run_pass` calls `pipeline.seams.run_registration`, which now accepts and
+forwards `store` unconditionally (the integration request `run_pass`'s
+docstring used to describe has landed). These tests stub `pipeline.seams.
 run_registration` directly rather than exercising a real database, matching
 this module's own dependency shape: `run_pass` never touches SQL itself,
 it only calls through to `run_registration` and reduces the result.
@@ -52,11 +52,11 @@ def _install_fake_seams(run_registration):
 
 class RunPassStoreForwardingTests(unittest.TestCase):
 
-    def test_store_none_calls_run_registration_without_a_store_kwarg_error(self):
-        # The overwhelmingly common case today: no caller passes `store` at
-        # all (the operator/service wiring that would build one is a
-        # separate integration request), so this must behave exactly as it
-        # did before this parameter existed.
+    def test_store_none_is_forwarded_as_none(self):
+        # The overwhelmingly common case for a caller with no records
+        # store (a rehearsal, or a class that does not register): `store`
+        # reaches `run_registration` as None, exactly as before this
+        # parameter existed.
         calls = []
 
         def fake_run_registration(conn, register=None, store=None):
@@ -69,7 +69,13 @@ class RunPassStoreForwardingTests(unittest.TestCase):
         self.assertEqual(calls, [("CONN", "REG", None)])
         self.assertEqual(verdict.registered, 1)
 
-    def test_store_is_forwarded_when_run_registration_accepts_it(self):
+    def test_store_genuinely_reaches_run_registration(self):
+        # THE POINT OF THIS PARAMETER: a caller that supplies a records
+        # store (the operator's fence store, built by `Operator._register`)
+        # must see it forwarded through to `run_registration` — and from
+        # there to `register_batch`'s own `store=`, which is what holds the
+        # GC bind fence over the attempt. A caller passing `store=None`
+        # explicitly is indistinguishable from one that omits it.
         calls = []
 
         def fake_run_registration(conn, register=None, store=None):
@@ -81,42 +87,6 @@ class RunPassStoreForwardingTests(unittest.TestCase):
             opregistration.run_pass("CONN", register="REG", store=store)
 
         self.assertEqual(calls, [("CONN", "REG", store)])
-
-    def test_store_falls_back_unfenced_when_run_registration_predates_the_kwarg(self):
-        # THE FORWARD-COMPATIBILITY CONTRACT THIS WAVE ADDS. Simulates
-        # today's real `pipeline.seams.run_registration`, which has no
-        # `store` parameter: a naive unconditional forward would raise
-        # TypeError and take down every real registration pass. `run_pass`
-        # must retry without `store` instead, and must still return a
-        # usable verdict.
-        calls = []
-
-        def old_run_registration(conn, register=None):  # no `store` param
-            calls.append((conn, register))
-            return _FakeRun(registered=3)
-
-        store = object()
-        with _install_fake_seams(old_run_registration):
-            verdict = opregistration.run_pass("CONN", register="REG",
-                                              store=store)
-
-        self.assertEqual(calls, [("CONN", "REG")])
-        self.assertEqual(verdict.registered, 3)
-
-    def test_store_none_against_a_run_registration_predating_the_kwarg_never_retries(self):
-        # No store, old signature: the first call already succeeds (both
-        # signatures accept `register` alone), so there is exactly one call
-        # and no TypeError to catch in the first place.
-        calls = []
-
-        def old_run_registration(conn, register=None):
-            calls.append((conn, register))
-            return _FakeRun()
-
-        with _install_fake_seams(old_run_registration):
-            opregistration.run_pass("CONN", register="REG")
-
-        self.assertEqual(calls, [("CONN", "REG")])
 
 
 if __name__ == "__main__":

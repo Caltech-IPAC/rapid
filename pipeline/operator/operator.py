@@ -91,17 +91,28 @@ class Operator:
         The cadence, from the parameter tree.
     clock : callable, optional
         Monotonic seconds, injected for testing the age trigger.
+    records_store : object, optional
+        The GC fence's records store (2026-08-14), forwarded to
+        `pipeline.operator.registration.run_pass` as its `store=` on every
+        registration pass — see that function's docstring for what an
+        unfenced (`None`) pass risks. Built once by the caller, the same
+        way `pipeline.entrypoints.job.dispatch_registration` builds its own
+        over the records bucket, and handed to every operator that
+        registers; `None` where the operator has no `connection_factory`
+        either (a rehearsal, or a class that does not register).
     """
 
     def __init__(self, operational_class, submitter, gather,
                  max_batch_size, max_wait_seconds, clock=None,
-                 registrar_factory=None, connection_factory=None):
+                 registrar_factory=None, connection_factory=None,
+                 records_store=None):
         operational_class.require_implemented()
         self.operational_class = operational_class
         self.submitter = submitter
         self._gather = gather
         self._registrar_factory = registrar_factory
         self._connection_factory = connection_factory
+        self._records_store = records_store
         self.accumulator = ReadyWorkAccumulator(
             max_batch_size=int(max_batch_size),
             max_wait_seconds=float(max_wait_seconds),
@@ -200,7 +211,8 @@ class Operator:
         with self._connection_factory() as conn:
             register = (self._registrar_factory(conn)
                         if self._registrar_factory else None)
-            return opregistration.run_pass(conn, register=register)
+            return opregistration.run_pass(conn, register=register,
+                                           store=self._records_store)
 
 
 def build_accumulator_cadence(parameters):

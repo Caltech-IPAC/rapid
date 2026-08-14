@@ -454,6 +454,28 @@ def main(argv=None):
         # fetches its own, fresh, at the moment it opens a connection —
         # see `_database_credentials`.
 
+        # THE BIND FENCE'S RECORDS STORE (2026-08-14, closing the fencing
+        # gap between the two registration paths — see `pipeline.operator.
+        # registration.run_pass`'s docstring). Built once, here, the same
+        # way `pipeline.entrypoints.job.dispatch_registration` builds its
+        # own fence store over the records bucket (`job.py:542`), and
+        # handed to every operator below; construction is stateless (an S3
+        # client and a bucket name), so building it once for however many
+        # operators need it costs nothing extra. `None` under rehearsal,
+        # which registers nothing and so fences nothing.
+        records_store = None
+        if not rehearsing:
+            from pipeline.runtime.boundaries import S3ObjectStore
+
+            records_bucket = parameters.get("s3/records-bucket")
+            if not records_bucket:
+                raise KeyError(
+                    "the parameter tree does not carry 's3/records-bucket'; "
+                    "the registration bind fence reads records through it "
+                    "and there is no safe default to substitute")
+            records_store = S3ObjectStore(records_bucket,
+                                          client=session.client("s3"))
+
         logger.info(
             "VPO starting: mode=%s window=%s..%s dispositions=%s "
             "cadence=(%s units, %ss)",
@@ -595,7 +617,11 @@ def main(argv=None):
                     registrar_factory=(
                         None if rehearsing or not registers_this_class
                         else _production_registrar(
-                            parameters, session.client("s3")))))
+                            parameters, session.client("s3"))),
+                    records_store=(
+                        records_store
+                        if not rehearsing and registers_this_class
+                        else None)))
 
         if args.once:
             worst = 0

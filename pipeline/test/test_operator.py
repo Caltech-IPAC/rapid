@@ -451,8 +451,8 @@ class TestRegistrationGranularity(unittest.TestCase):
         import pipeline.seams as seams
 
         original = seams.run_registration
-        seams.run_registration = lambda conn, register=None: FakeRun(
-            registered=3, failed=14)
+        seams.run_registration = lambda conn, register=None, store=None: (
+            FakeRun(registered=3, failed=14))
         try:
             verdict = opregistration.run_pass(conn=None)
         finally:

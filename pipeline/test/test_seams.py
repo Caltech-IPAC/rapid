@@ -1440,6 +1440,61 @@ class RunRegistrationTests(unittest.TestCase):
         self.assertEqual([], marks,
                          "a decision pass must not advance the watermark")
 
+    def test_store_reaches_register_batch_and_is_read_for_the_bind_fence(self):
+        # THE GC FENCE'S RECORDS STORE (2026-08-14): `store` must genuinely
+        # reach `register_batch` and, through it, `read_record` — proven
+        # here by a spy `.get(key)` actually firing, not by mocking
+        # `register_batch` itself and asserting on the call arguments.
+        # `decide()`'s DECISION-pass path (no `register` callback) never
+        # reads a record at all, so this exercises a REAL registration
+        # (dry_run=False) with a `register` callback supplied — otherwise
+        # `store` would never be consulted and the test would pass for the
+        # wrong reason.
+        #
+        # `read_record(store, row)` runs BEFORE `_transaction(conn)` opens
+        # (`register_batch`'s own "THE BIND FENCE WRAPS THE TRANSACTION"
+        # comment), so the spy fires and this assertion is valid regardless
+        # of whether the transaction itself completes against `FakeConnection`
+        # — modelling that full transaction (milestones, product rows, the
+        # watermark) is the consumer wave's own test surface
+        # (`pipeline/registration/test/test_consumer.py`), not this seam's.
+        # `FakeConnection` does not model every statement a real registration
+        # transaction issues, so the attempt fails inside `register_batch`'s
+        # own per-attempt `except Exception` (counted as `failed`, rolled
+        # back, still a candidate — its documented behaviour, not a bug this
+        # test is exercising); what matters here is that the fence read
+        # already happened before that failure.
+        key = "attempts/1/terminal.json"
+        conn = FakeConnection(rows=[
+            attempt_row(1, lifecycle_state="terminal_after_start",
+                        started_at=utc(2026, 8, 6, 11, 0, 0),
+                        rapid_outcome="success",
+                        product_disposition="published",
+                        terminal_record_sequence=1,
+                        terminal_record_key=key,
+                        terminal_record_checksum=None)])
+
+        gets = []
+
+        class SpyStore:
+            def get(self, k):
+                gets.append(k)
+                # Deliberately invalid JSON: this test only asserts the
+                # store was consulted for the fence, not that a full valid
+                # record was supplied.
+                return b"not json"
+
+        def register(row, decision):
+            pass
+
+        run = seams.run_registration(conn, register=register,
+                                     store=SpyStore())
+
+        self.assertEqual(gets, [key],
+                         "run_registration did not forward `store` through "
+                         "to register_batch's bind-fence record read")
+        self.assertEqual(run.failed, 1)
+
 
 if __name__ == "__main__":
     unittest.main()

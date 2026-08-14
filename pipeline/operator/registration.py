@@ -104,8 +104,8 @@ def run_pass(conn, register=None, store=None):
     be; it does not get an exception that would end the pass at the first
     bad item.
 
-    **`store` IS THE GC FENCE'S RECORDS STORE (2026-08-14, closing the
-    fencing gap between the two registration paths).** `pipeline.
+    `store` IS THE GC FENCE'S RECORDS STORE (2026-08-14, closing the
+    fencing gap between the two registration paths). `pipeline.
     entrypoints.job.dispatch_registration` (the `JOB_TYPE_REGISTRATION`
     Batch job route) builds an `S3ObjectStore` over the records bucket and
     passes it to `register_batch` as `store=`, which is what makes
@@ -114,39 +114,15 @@ def run_pass(conn, register=None, store=None):
     unfenced bind can register a URI GC is mid-delete on. THIS path — the
     operator's own registration step, `pipeline.operator.operator.
     Operator._register` -> `run_pass` -> `pipeline.seams.run_registration`
-    -> `register_batch` — has never passed one: `run_registration`
-    (`pipeline/seams.py`, not owned by this wave) does not accept a `store`
-    parameter at all yet, so this path is a no-op fence exactly as
-    `register_batch`'s own docstring warns ("a `store is None` caller ...
-    fences nothing"). `store` is threaded through HERE as far as this
-    module's ownership reaches; wiring `pipeline.seams.run_registration` to
-    accept and forward it to `register_batch`, and wiring `Operator.
-    _register` to build and pass a records-bucket `S3ObjectStore` the same
-    way `job.py:542` does, are integration requests against those two
-    files (this wave's ledger) — this parameter is where the caller-side
-    half of that wiring lands once they do.
+    -> `register_batch` — now passes one too: `Operator._register` builds a
+    records-bucket `S3ObjectStore` the same way `job.py:542` does and
+    passes it through here. `store=None` (a caller with no records store,
+    e.g. a test exercising submission only) fences nothing, exactly as
+    `register_batch`'s own docstring warns.
     """
     from pipeline.seams import run_registration
 
-    # FORWARD-COMPATIBLE, NOT ASSUMED LANDED: `run_registration` does not
-    # accept `store` as of this wave (see the integration request in this
-    # parameter's own docstring above). Calling it with an unsupported
-    # keyword would raise `TypeError` and take down every real invocation
-    # of this pass — worse than the unfenced status quo. Try the forwarding
-    # call first so this activates automatically the moment `pipeline.
-    # seams.run_registration` adds the parameter, and fall back to the
-    # unfenced call (today's actual behaviour) rather than crash. A caller
-    # that passed no `store` at all sees no behaviour change either way.
-    try:
-        run = run_registration(conn, register=register, store=store)
-    except TypeError:
-        if store is not None:
-            logger.warning(
-                "registration pass: a records store was supplied for GC "
-                "fencing, but pipeline.seams.run_registration does not "
-                "accept 'store' yet (integration request pending); this "
-                "pass proceeds UNFENCED")
-        run = run_registration(conn, register=register)
+    run = run_registration(conn, register=register, store=store)
     verdict = RegistrationVerdict(run)
 
     if verdict.total_failure:
