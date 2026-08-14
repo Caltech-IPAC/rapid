@@ -3294,8 +3294,8 @@ class RAPIDDB:
 
         try:
             return records
-        except Exception as e:
-            print(f"*** Error on return (query={query}): {error}; returning without argument...")
+        except Exception as error:
+            print(f"*** Error on return (query={query},self.exit_code={self.exit_code}): {error}; returning without argument...")
             return
 
 
