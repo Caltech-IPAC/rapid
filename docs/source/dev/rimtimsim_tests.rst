@@ -550,22 +550,23 @@ generates the file products in parallel via the AWS Batch service.
 
     rimtimsims3db=> select ppid,exitcode,count(*) from jobs where cast(launched as date) = '20260813' group by ppid, exitcode order by ppid, exitcode;
 
- ppid | exitcode | count
-------+----------+-------
-   12 |        0 |     2
-   15 |        0 |   263
-   17 |        0 |   263
-(3 rows)
+     ppid | exitcode | count
+    ------+----------+-------
+       12 |        0 |     2
+       15 |        0 |   263
+       17 |        0 |   263
+    (3 rows)
 
 The pipeline IDs 12, 15, and 17 (``ppid``) refer to the RAPID reference-image pipeline,
 the RAPID science pipeline, and the RAPID post-processing pipeline, respectively.
 
-The RAPID science pipelines took ~1.3 hours for the ``K213`` filter and
-~30 minutes to run for the ``Z087`` filter.
+The pipeline processing was done in parallel under AWS Batch.
+The RAPID science pipelines took ~1.3 hours per instance for the ``K213`` filter and
+~30 minutes per instance for the ``Z087`` filter.
 The two instances of the RAPID reference-image pipeline took
 ~14 minutes for the ``K213`` filter and
 ~33 minutes to run for the ``Z087`` filter.
-As shown in the table below for the longest running science pipeline instance (``jid=143944``),
+As shown in the table below for the longest running science-pipeline instance (``jid=143944``),
 generating PhotUtils catalogs is the dominant factor affecting pipeline performance.
 
 =================================================================  =====================
