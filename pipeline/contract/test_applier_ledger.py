@@ -128,9 +128,18 @@ def shadow_ledger(conn):
     try:
         yield conn
     finally:
-        with conn.cursor() as cur:
-            cur.execute("DROP TABLE schema_migrations")
-        conn.commit()
+        # ROLLBACK, never DROP. The temp table deliberately SHADOWS
+        # `public.schema_migrations` so the tests can exercise the applier's
+        # real statements verbatim (bare table name, no rewriting) — but
+        # while it exists, `derived.region0_schema_head`, a PERMANENT view
+        # over the real ledger (028:172), rebinds to it. A plain
+        # `DROP TABLE` then fails with DependentObjectsStillExist, and
+        # `DROP ... CASCADE` would take that real view out of the database
+        # with it. Rolling the whole fixture back discards the temp table
+        # and the rebinding together, leaves the view untouched, and also
+        # undoes whatever rows the test wrote — which is what "without
+        # touching the rows the rest of the suite depends on" requires.
+        conn.rollback()
 
 
 def test_first_apply_records_filename_and_sha256(shadow_ledger):
