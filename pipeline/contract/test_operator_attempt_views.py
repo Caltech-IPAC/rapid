@@ -267,7 +267,7 @@ def test_attempts_by_state_excludes_other_states(conn):
     """The state filter is exact — a row in a DIFFERENT lifecycle_state,
     however old, is not returned for a query naming another state.
     """
-    attempt_id = fixture.make_attempt(conn, error_category="APPLICATION_FAILED")
+    attempt_id = fixture.make_attempt(conn, error_category="tool_failure")
     _age_ended_at(conn, attempt_id, hours_ago=5)
 
     rows = actions.attempts_by_state(conn, "terminal_after_start",
@@ -281,18 +281,29 @@ def test_attempts_by_state_ages_from_submitted_at_with_no_other_timestamp(
     """A `submitted` row has no `ended_at`/`started_at` at all — the
     docstring's own COALESCE(ended_at, started_at, submitted_at) is
     exercised down to its last fallback, not assumed.
+
+    `attempts_state_submitted_check` requires the binding triple
+    (`binding_job_definition_arn`/`binding_image_digest`/
+    `binding_manifest_checksum`) NOT NULL at `schema_version >= 2` — the
+    same requirement `_submitted_attempt_with_own_run_id` documents and
+    satisfies — so this hand-built INSERT supplies it too, the same way.
     """
     logical_job_id, run_id = fixture.make_logical_job(conn)
+    tag = uuid.uuid4().hex[:8]
     with conn.cursor() as cur:
         cur.execute("SELECT coalesce(max(schema_version), 1) FROM attempts")
         schema_version = cur.fetchone()[0]
         cur.execute(
             "INSERT INTO attempts"
             "  (run_id, schema_version, logical_job_id, lifecycle_state,"
-            "   created_at, submitted_at)"
-            " VALUES (%s, %s, %s, 'submitted', now(), now())"
+            "   created_at, submitted_at, binding_job_definition_arn,"
+            "   binding_image_digest, binding_manifest_checksum)"
+            " VALUES (%s, %s, %s, 'submitted', now(), now(), %s,"
+            "         'sha256:' || %s, 'sha256:' || %s)"
             " RETURNING attempt_id",
-            [run_id, schema_version, logical_job_id])
+            [run_id, schema_version, logical_job_id,
+             "arn:aws:batch:us-east-1:account:job-definition/%s:1" % tag,
+             tag, tag])
         attempt_id = cur.fetchone()[0]
     conn.commit()
     _age_submitted_at(conn, attempt_id, hours_ago=5)
@@ -442,13 +453,22 @@ def test_attempt_detail_includes_stages_ordered_by_started_at(conn):
     `stage_name` alone would pass a same-named-as-ordered fixture without
     ever being caught.
 
-    Uses the plain `fixture.make_attempt` (shared default run_id) rather
-    than `_submitted_attempt_with_own_run_id`: `attempt_stages` is keyed by
-    `attempt_id` alone (its own FK), never by `run_id`, so this test is not
-    exposed to the shared-run_id/submissions-LATERAL trap that helper
-    exists to avoid.
+    Uses `_submitted_attempt_with_own_run_id` rather than the plain
+    `fixture.make_attempt(conn, lifecycle="submitted")`: a bare `submitted`
+    attempt needs the binding triple
+    (`binding_job_definition_arn`/`binding_image_digest`/
+    `binding_manifest_checksum`) NOT NULL at `schema_version >= 2` per
+    `attempts_state_submitted_check`, and `make_attempt` does not set it —
+    every OTHER caller of `make_attempt` in this repository passes a
+    non-`submitted` `lifecycle` for exactly this reason.
+    `_submitted_attempt_with_own_run_id` already builds a schema-valid
+    `submitted` row with that triple present; the unique-run_id property it
+    also provides is unneeded here (`attempt_stages` is keyed by
+    `attempt_id` alone, never by `run_id`, so this test was never exposed
+    to the shared-run_id/submissions-LATERAL trap that helper exists to
+    avoid) but is harmless.
     """
-    attempt_id = fixture.make_attempt(conn, lifecycle="submitted")
+    attempt_id, _ = _submitted_attempt_with_own_run_id(conn, "stage-order")
     with conn.cursor() as cur:
         cur.execute(
             "INSERT INTO attempt_stages"
@@ -484,7 +504,7 @@ def test_attempt_detail_reads_registration_outcome_off_the_core_row(conn):
     core row, unaffected by any other test's rows under the same run_id,
     so the shared-run_id/submissions-LATERAL trap does not apply here.
     """
-    attempt_id = fixture.make_attempt(conn, error_category="APPLICATION_FAILED")
+    attempt_id = fixture.make_attempt(conn, error_category="tool_failure")
     with conn.cursor() as cur:
         cur.execute(
             "UPDATE attempts SET registration_outcome = %s::jsonb"
