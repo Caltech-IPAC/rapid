@@ -40,6 +40,35 @@ import pytest
 
 from wcs_eval import tpv_pixel_to_sky
 
+
+def pytest_collection_modifyitems(config, items):
+    """Auto-mark `live` by filename (D5), the same convention the rest of
+    the repo uses for its `live_*.py` manual-tier modules -- but here the
+    file IS `test_`-prefixed (`test_live_db.py`) and so collects and would
+    otherwise be selected by a bare `pytest`. Its two tests already
+    self-skip when the DB/AWS environment is incomplete
+    (`db_unavailable_reason()` in that file), but a self-skip is weaker than
+    `addopts = "-m 'not contract and not live'"` never selecting them at
+    all: on a host where DBSERVER/AWS credentials happen to be ambient
+    (rapid-admin, an operator's laptop with the tunnel up), a bare `pytest`
+    would reach out and connect. This closes that gap without moving the
+    file or its self-skip logic, which stays as the second line of defense
+    for anyone who runs it with `-m live` explicitly.
+
+    Scoped to this directory rather than a repo-root conftest: a root-level
+    `conftest.py` collides under `--import-mode=importlib` with this very
+    file's own `from conftest import ...` convention (both would import as
+    bare top-level module `conftest`, and pytest's rootdir-conftest wins the
+    race, shadowing this one and breaking `test_clips.py`/`test_provider.py`
+    /`test_benchmark.py`'s imports of `CHIP_PID` et al.) -- confirmed by
+    trying it. Directory-scoped avoids the collision and matches
+    `pipeline/contract/conftest.py`'s own precedent for auto-marking by
+    location.
+    """
+    for item in items:
+        if item.path.name.startswith("test_live_"):
+            item.add_marker(pytest.mark.live)
+
 # per-product DC offsets added to chip_image, so a stamp's values identify
 # its source file (see job_dir)
 PRODUCT_OFFSETS = {

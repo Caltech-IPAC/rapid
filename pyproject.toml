@@ -171,8 +171,23 @@ markers = [
 # must not try to open a database connection and fail for want of one — the
 # CI job and the rapid-admin runner both select the tier explicitly with
 # `-m contract`.
-addopts = "-m 'not contract and not live'"
-testpaths = ["pipeline", "observability", "submission", "database"]
+#
+# --import-mode=importlib (D5): `database/modules/utils/test/` is the only
+# `test/` directory in the tree carrying an `__init__.py` while its parents
+# (`database/`, `database/modules/`) deliberately carry none (PEP 420
+# namespace packages -- see the `[tool.setuptools]` comment above). Under the
+# default `prepend` import mode pytest cannot build a unique dotted module
+# path through an un-packaged parent, so it falls back to inserting
+# `database/modules/utils/` onto `sys.path` and importing the directory as
+# bare top-level `test` -- which collides with every other package in the
+# tree also named `test`, and a bare whole-repo `pytest` failed collection
+# outright (5 errors) before this line, on this pre-existing conflict alone.
+# `importlib` mode imports each test file by its file path instead of by
+# constructed dotted name, so the collision never arises; it needs no
+# `__init__.py` added anywhere and does not touch the namespace-package
+# layout `[tool.setuptools]` already commits to.
+addopts = "-m 'not contract and not live' --import-mode=importlib"
+testpaths = ["pipeline", "observability", "submission", "database", "alerts"]
 
 [tool.ruff]
 # Match the line length the existing code is written to.

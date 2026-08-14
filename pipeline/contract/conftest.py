@@ -9,17 +9,38 @@ serve a pytest run in CI and any other runner on rapid-admin.
 database-requiring test to the default (`-m 'not contract and not live'`)
 selection. A tier whose membership depends on remembering to say so is a tier
 that leaks.
+
+**PATH-SCOPED, NOT SESSION-WIDE** (D5 fix, found while generalizing this
+pattern for `alerts/`). `pytest_collection_modifyitems` is a global hook: it
+fires once per collection session with EVERY item pytest collected in that
+run, not just the items under this directory. The original version here
+looped over the whole `items` list unconditionally and so marked every test
+in the session `contract` whenever this conftest was loaded at all --
+harmless for a directory-scoped `pytest pipeline/contract` invocation (every
+item genuinely was under here), but silently wrong the moment a run spans
+this directory AND any sibling (`pytest pipeline`, or any multi-dir
+invocation, which is exactly what a marker-driven whole-tree run needs to
+do): the default `-m 'not contract and not live'` selection then deselected
+EVERYTHING, contract and stub tests alike, because every item outside this
+directory got the `contract` marker too. This is the "whole-tree collection
+deselects everything" quirk on record -- root-caused here, not a fact of
+pytest to route around.
 """
+
+from pathlib import Path
 
 import pytest
 
 from pipeline.contract import fixture
 
+_HERE = Path(__file__).resolve().parent
+
 
 def pytest_collection_modifyitems(config, items):
-    """Mark everything in this package `contract`."""
+    """Mark every item actually collected FROM THIS DIRECTORY `contract`."""
     for item in items:
-        item.add_marker(pytest.mark.contract)
+        if _HERE in item.path.resolve().parents:
+            item.add_marker(pytest.mark.contract)
 
 
 @pytest.fixture(scope="session")
