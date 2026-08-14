@@ -120,6 +120,18 @@ class FakeS3Tagging:
             tag["Key"]: tag["Value"] for tag in Tagging["TagSet"]}
 
 
+#: The ONLY value `FakeConnection.route` may return to mean "this statement
+#: is recognized and its effect is intentionally not modelled as data —
+#: report it as ordinary void success." Distinct from Python's `None`
+#: precisely so that Python's `None` stays available to a branch as an
+#: ordinary "nothing found" value without being read as this sentinel by
+#: accident, and so `route` returning nothing at all (falling off the end,
+#: or an `if`/`elif` chain with no matching branch and no explicit
+#: `return`) is a `None` that reaches `FakeCursor.execute` and is NOT this
+#: sentinel — see `execute` below for what that now does.
+VOID_SUCCESS = object()
+
+
 class FakeCursor:
     def __init__(self, conn):
         self.conn = conn
@@ -138,11 +150,27 @@ class FakeCursor:
             else _render_composed(statement)
         self.conn.statements.append((text, params))
         handler = self.conn.route(text, params)
-        if handler is None:
+        if handler is VOID_SUCCESS:
             self.description = None
             self.rowcount = 1
             self._rows = []
             return
+        if handler is None:
+            # UNRECOGNIZED SQL RAISES, LOUDLY (round-4/wave-E finding #10).
+            # This used to be indistinguishable from `VOID_SUCCESS` above —
+            # both were plain `None` — so a statement `route` genuinely did
+            # not recognize silently became "1 row affected" instead of a
+            # test failure. That let a caller believe a write had happened
+            # (a CAS matched, a transition landed) when the stub had done
+            # nothing at all, which is the opposite of what a stub testing
+            # transaction discipline and CAS semantics is for. A test that
+            # needs a new statement shape modelled gets a clear failure
+            # naming the exact text, not a false green.
+            raise AssertionError(
+                "FakeConnection.route did not recognize this statement — "
+                "add a route for it (or return stubs.VOID_SUCCESS if its "
+                "effect is genuinely not worth modelling as data): "
+                f"{text!r} params={params!r}")
         rows, description = handler
         self._rows = list(rows)
         self.description = description
@@ -172,6 +200,17 @@ class FakeConnection:
         self.rollbacks = 0
         self.lease_granted = lease_granted
         self.closed_attempts = {}
+        #: `write_heartbeat`'s inserts into `reconciler_runs`, as
+        #: `(rows_classified, poll_seconds, reconciler_host)` — recorded
+        #: rather than routed to `VOID_SUCCESS` unconditionally so a test can
+        #: assert on `poll_seconds` actually landing (wave-E finding #2:
+        #: `ReconcilerService.poll_seconds` used to never be assigned, so
+        #: every heartbeat row silently recorded NULL regardless of the real
+        #: interval). Previously unrouted entirely — this statement fell
+        #: through `route()` to the old blanket "unrecognized SQL is fake
+        #: success" fallback (wave-E finding #10), so a test could not have
+        #: asserted on it even if one had tried.
+        self.heartbeats = []
         #: `submission.protocol.is_available` — False models a database
         #: without DRAFT 044, which is every existing (pre-package-S) test's
         #: assumption. A package-S test that needs `submissions` opts in.
@@ -213,6 +252,13 @@ class FakeConnection:
 
         if lowered.startswith("select resolve_attempt("):
             return self._resolve_attempt(params)
+
+        if lowered.startswith("insert into reconciler_runs"):
+            # `write_heartbeat` — recorded rather than a bare `VOID_SUCCESS`
+            # so `poll_seconds` threading (wave-E finding #2) is actually
+            # assertable; see `self.heartbeats`'s own comment.
+            self.heartbeats.append(tuple(params))
+            return VOID_SUCCESS
 
         # `submission.protocol.is_available` — this fake models a database
         # with no `submissions` table by default (every existing reconciler
@@ -265,7 +311,16 @@ class FakeConnection:
             row = self.rows.get(attempt_id)
             if row is not None and "lifecycle_state = %s" in lowered:
                 row["lifecycle_state"] = params[0]
-            return None
+            # `submission_outcome_at_closure`'s write-once stamp
+            # (`ReconcilerService._stamp_submission_outcome`, wave-E finding
+            # #1) lands here too — a plain `UPDATE attempts SET
+            # submission_outcome_at_closure = COALESCE(...)` with no
+            # `lifecycle_state` clause — and is genuinely fine to report as
+            # void success like every other `attempts` UPDATE this branch
+            # already covers; modelling migration 081's COALESCE semantics
+            # as data would need `self.rows` to track the column, which no
+            # existing reconciler test asserts on.
+            return VOID_SUCCESS
 
         if "derived.transition_work_unit" in lowered:
             # C1 (campaign ruling R5, migration 077): `WorkUnitWriter.
