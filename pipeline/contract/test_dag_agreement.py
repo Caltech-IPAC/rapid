@@ -226,18 +226,23 @@ def _unit_in_state(conn, scope_name, state):
     if state == COMPLETE:
         attempt_id = _make_terminal_attempt(conn, unit_id)
         conn.commit()
+        writer.transition_unit(
+            unit_id, SUBMITTED, COMPLETE, writer=WRITER_RECONCILER,
+            detail={"deciding_attempt_id": attempt_id})
         # NAMED, not ALL — same reasoning as `test_work_unit_grants.py`'s
-        # `_complete_with_guc_enforced`: forces exactly the one deferred
-        # trigger the completion-acceptance clause lives in to fire at the
-        # next statement rather than at commit, without perturbing any
-        # other deferred constraint the transaction might hold.
+        # `_complete_with_guc_enforced`, and in the SAME ORDER: the forcing
+        # statement must come AFTER the transition call. `derived.
+        # transition_work_unit` issues its UPDATE and then INSERTs the
+        # `unit_events` row as a later statement, so setting the constraint
+        # IMMEDIATE first makes the 036 no-event-row check fire between the
+        # two — the exact UPDATE-then-INSERT ordering trap 080 moved the
+        # completion-acceptance clause out of. After the call, both rows
+        # exist and forcing the queued deferred check surfaces any
+        # acceptance refusal here in the fixture rather than at commit.
         with conn.cursor() as cur:
             cur.execute(
                 "SET CONSTRAINTS work_units_check_event_recorded_trg"
                 " IMMEDIATE")
-        writer.transition_unit(
-            unit_id, SUBMITTED, COMPLETE, writer=WRITER_RECONCILER,
-            detail={"deciding_attempt_id": attempt_id})
         conn.commit()
         return unit_id
     writer.transition_unit(unit_id, SUBMITTED, state, writer=WRITER_RECONCILER)
