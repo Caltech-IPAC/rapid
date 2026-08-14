@@ -120,8 +120,10 @@ def _install_third_party_stubs() -> None:
 
 _install_third_party_stubs()
 
-from pipeline.stages.sequences import SEQUENCES, sequence_for  # noqa: E402
+from pipeline.stages.sequences import (  # noqa: E402
+    EFFECT_CLASS_JOB_TYPES, SEQUENCES, sequence_for)
 from submission.routes import JOB_TYPES, JOB_TYPE_REGISTRATION, RouteError  # noqa: E402
+from submission.subjects import SUBJECTS  # noqa: E402
 
 
 # ---------------------------------------------------------------------------
@@ -175,6 +177,50 @@ class SequenceVocabularyTests(unittest.TestCase):
             self.assertIn(job_type, JOB_TYPES,
                           f"{job_type!r} has a stage sequence but is not in "
                           f"submission.routes.JOB_TYPES")
+
+
+# ---------------------------------------------------------------------------
+# EFFECT_CLASS_JOB_TYPES must coincide with subjects.SUBJECTS's
+# product_producing declarations (2026-08-14 ruling: the six post-DB job
+# types close through the same effect-confirmation boundary as alert
+# production, so effect-class membership IS "not product-producing", not a
+# second hand-maintained set that could drift from it).
+# ---------------------------------------------------------------------------
+
+class EffectClassCoincidenceTests(unittest.TestCase):
+
+    def test_effect_class_job_types_equals_non_product_producing_subjects(self):
+        # Computed independently from `subjects.SUBJECTS` — not by importing
+        # `sequences.EFFECT_CLASS_JOB_TYPES`'s own derivation — so this
+        # fails if the two definitions ever diverge, not merely if the
+        # derivation raises.
+        expected = frozenset(
+            subject.job_type for subject in SUBJECTS
+            if not subject.product_producing and subject.job_type in SEQUENCES)
+        self.assertEqual(
+            EFFECT_CLASS_JOB_TYPES, expected,
+            "EFFECT_CLASS_JOB_TYPES has diverged from submission.subjects."
+            "SUBJECTS's product_producing declarations")
+
+    def test_every_post_db_job_type_is_effect_class(self):
+        # The six post-DB types by name, so a future edit that silently
+        # drops one from either registry is caught by name, not only by set
+        # equality against a second derivation.
+        post_db_types = {
+            "catalog-load", "crossmatch", "statistics",
+            "merge-currency-sweep", "source-currency-sweep", "merge-dedup",
+        }
+        self.assertTrue(
+            post_db_types.issubset(EFFECT_CLASS_JOB_TYPES),
+            f"expected all of {sorted(post_db_types)} in "
+            f"EFFECT_CLASS_JOB_TYPES, got {sorted(EFFECT_CLASS_JOB_TYPES)}")
+
+    def test_alert_production_is_still_effect_class(self):
+        self.assertIn("alert-production", EFFECT_CLASS_JOB_TYPES)
+
+    def test_science_and_reference_image_are_not_effect_class(self):
+        self.assertNotIn("science", EFFECT_CLASS_JOB_TYPES)
+        self.assertNotIn("reference-image", EFFECT_CLASS_JOB_TYPES)
 
 
 # ---------------------------------------------------------------------------

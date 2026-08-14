@@ -19,20 +19,31 @@ rows written, rows removed — rides in the attempt record through
 NOT extended to cover database effects; the disposition record is what
 already fits.
 
-That has one consequence worth stating plainly: `_execute` in the entrypoint
-derives `ProductDisposition.NONE` from an empty `published_products`, and
-`observability.registration.decide` SKIPs `none` with "attempt succeeded but
-produced no products". So these attempts close successfully, are never
-registration candidates, and never poison the registration pass — which is
-the same hole round-3 finding #7 closed for post-process.
+**EFFECT-CLASS, LIKE ALERT PRODUCTION** (ruling R1, extended to the six
+post-DB types). These are `submission.subjects.is_product_producing() ==
+False` — a database-effect job type, ruling 2's other half — and every
+non-product-producing job type now closes through the effect-confirmation
+boundary, not through the plain published/none split. Each stage here writes
+inside a transaction, then RE-QUERIES after that transaction commits
+(`_verify_effect`, `_verify_no_superseded_rows`) to confirm the write is
+durably visible, and produces the result as the `effect_outcome` stage fact
+(`"confirmed"` or `"unconfirmed"`) the same way alert production's claim/
+confirm protocol does. `pipeline.entrypoints.job._execute` maps that fact to
+`ProductDisposition.EFFECT_CONFIRMED`/`EFFECT_UNCONFIRMED` and its fail-closed
+guard refuses to close `success`+`none` for a database effect this attempt
+recorded no verified outcome for — so, UNLIKE THIS MODULE'S EARLIER
+DOCSTRING, these attempts ARE registration candidates: `_apply_skip_
+disposition` (`pipeline.registration.consumer`) is what disposes an
+`effect_confirmed`/`effect_unconfirmed` verdict, not `observability.
+registration.decide`'s published/none path.
 
 **The unit is what the manifest says, never what the catalog holds.** Every
 one of these scripts discovered its own work at runtime: `to_regclass` probes
 across SCAs 1-18, `select distinct field` from tables the previous step had
-just written, `pg_tables like 'merges_%'`. Here the unit arrives in
-`unit.fields`, gathered at submission (`submission.gathering`), and a stage
-that cannot find its declared target fails naming it rather than quietly
-processing nothing.
+just written, `pg_tables like 'merges_%'`. Here the unit arrives in the
+unit's typed payload (`submission.payloads`), gathered at submission
+(`submission.gathering`), and a stage that cannot find its declared target
+fails naming it rather than quietly processing nothing.
 
 **Configuration is release content.** `match_radius` and the PSF-catalogue
 filenames come from `cdf/science/pipeline.toml` through `context.science`,
@@ -59,6 +70,119 @@ from pipeline.runtime.errors import DBError, InputError
 from pipeline.stages import catalog_db
 
 logger = logging.getLogger(__name__)
+
+#: The effect-outcome vocabulary these stages report through `context.produce
+#: ("effect_outcome", ...)` — the same two values `RAPIDDB.CONFIRM_OUTCOME_
+#: CONFIRMED`/`CONFIRM_OUTCOME_UNCONFIRMED` use (`database.modules.utils.
+#: rapid_db`), because `pipeline.entrypoints.job._EFFECT_OUTCOME_TO_
+#: DISPOSITION` maps that exact vocabulary to a `ProductDisposition` and this
+#: module does not get to invent a second spelling of it. Only these two
+#: values are reachable here: a post-DB unit has no concurrent claimant to
+#: defer to and nothing pre-existing to find "terminally satisfied" —
+#: `held_by_live_owner`/`deferred`/`terminally_satisfied` are alert-
+#: production's claim/confirm vocabulary for a shared subject, and these
+#: stages each own their table exclusively for the unit's one transaction.
+EFFECT_OUTCOME_CONFIRMED = "confirmed"
+EFFECT_OUTCOME_UNCONFIRMED = "unconfirmed"
+
+
+def _verify_effect(conn, context, description: str, query, params,
+                   expected: int) -> str:
+    """Re-query the database, AFTER the writing transaction has committed,
+    to confirm the effect this unit just wrote is durably visible.
+
+    **A REAL POST-WRITE VERIFICATION, NOT A TRUST OF THE WRITE STATEMENT'S
+    OWN REPORT.** `cursor.rowcount` on the INSERT/DELETE that just ran is
+    the database's word for what one statement did, inside a transaction
+    that might still roll back for a reason outside that statement's view
+    (a later statement in the same `with transaction(conn)` block, or the
+    commit itself). This runs on a FRESH cursor, in a NEW transaction opened
+    only after `transaction(conn)`'s own commit has returned, and asks the
+    question the effect-lifecycle boundary actually cares about: is this
+    fact true of the database right now. `conn.autocommit` is off
+    (`database.modules.utils.rapid_db_connect`), so the new cursor's first
+    statement opens its own transaction and reads read-committed state —
+    which includes this unit's own just-committed write.
+
+    Returns `EFFECT_OUTCOME_CONFIRMED` when the re-query matches what the
+    unit expected to find, `EFFECT_OUTCOME_UNCONFIRMED` otherwise — a
+    mismatch (or a query that itself fails) means this attempt cannot state
+    that its database effect landed, which is exactly the
+    `disposition_for_unconfirmed_effect` retry path's job to handle, not
+    something this stage papers over with a raised exception.
+    """
+    try:
+        with conn.cursor() as cursor:
+            cursor.execute(query, params)
+            row = cursor.fetchone()
+        conn.commit()
+    except Exception as exc:  # noqa: BLE001 - classified by the caller's fail-closed guard
+        context.logger.error(
+            "%s: post-write verification query failed (%s: %s); the effect "
+            "cannot be confirmed", description, type(exc).__name__, exc)
+        try:
+            conn.rollback()
+        except Exception:  # noqa: BLE001
+            context.logger.exception(
+                "rollback of the failed verification query also failed")
+        return EFFECT_OUTCOME_UNCONFIRMED
+
+    found = int(row[0]) if row else 0
+    if found != expected:
+        context.logger.error(
+            "%s: post-write verification found %d, expected %d; the "
+            "effect is not confirmed", description, found, expected)
+        return EFFECT_OUTCOME_UNCONFIRMED
+
+    context.logger.info("%s: post-write verification confirmed (%d)",
+                        description, found)
+    return EFFECT_OUTCOME_CONFIRMED
+
+
+def _verify_no_superseded_rows(conn, context, description: str,
+                               tablename: str, join_column: str,
+                               identity_table: str,
+                               identity_column: str) -> str:
+    """Confirm a currency sweep's DELETE landed: re-run its own predicate.
+
+    The same NOT-EXISTS shape `catalog_db.delete_superseded_rows` deletes
+    by (`vbest IN (1, 2)` is current), asked AFTER the deleting transaction
+    has committed, on a fresh cursor. A currency sweep's effect is not a row
+    count — a demotion after this sweep committed legitimately leaves new
+    superseded rows behind, and counting them would misread ordinary
+    ongoing operation as an unconfirmed effect. What confirms is that the
+    rows THIS sweep found superseded, at the moment it deleted them, are no
+    longer among the CURRENT set of superseded rows for that predicate
+    computed fresh — which a re-run of the identical predicate finding zero
+    (immediately after this sweep's own commit, before anything else could
+    have written a new demotion) verifies directly.
+    """
+    query = sql.SQL(
+        "SELECT count(*) FROM {child} WHERE NOT EXISTS ("
+        "  SELECT 1 FROM {identity} WHERE {identity}.{idcol} = "
+        "  {child}.{joincol} AND {identity}.vbest IN (1, 2))").format(
+            child=sql.Identifier(tablename),
+            identity=sql.Identifier(identity_table),
+            idcol=sql.Identifier(identity_column),
+            joincol=sql.Identifier(join_column))
+    return _verify_effect(conn, context, description, query, (), 0)
+
+
+def _table_count(cursor, tablename: str) -> int:
+    """`SELECT count(*)` on a child table, INSIDE the writing transaction.
+
+    Used to compute a before/after expectation for `_verify_effect`'s
+    post-commit re-query — the table is this unit's own (a (date, SCA) or
+    (date, field) or field grain owns its child table exclusively for the
+    unit's transaction), so a plain `before + written` is a sound
+    expectation for what the post-commit count should be.
+    """
+    cursor.execute(
+        sql.SQL("SELECT count(*) FROM {table}").format(
+            table=sql.Identifier(tablename)))
+    row = cursor.fetchone()
+    return int(row[0]) if row else 0
+
 
 # The sources child table's column list, in COPY order. Carried verbatim from
 # `loadPSFCatIntoDBSourcesTable.py:165-194`, where it was built by 30
@@ -371,7 +495,15 @@ def load_sources(context) -> None:
         # AN EMPTY PRODUCT SET IS A REAL OUTCOME, NOT A FAILURE (ruling 2).
         # The unit had no catalogues to load; it closes successfully with an
         # effect count of zero, which is a different and more useful statement
-        # than either a failure or a silent success.
+        # than either a failure or a silent success. Still an effect-class
+        # unit, so it still confirms: the table this unit owns must exist
+        # and be queryable, even though the row count it confirms is zero.
+        outcome = _verify_effect(
+            conn, context, f"catalog load {table} (empty product set)",
+            sql.SQL("SELECT count(*) FROM {table}").format(
+                table=sql.Identifier(table)),
+            (), 0)
+        context.produce("effect_outcome", outcome)
         context.record_effect(rows_written=0, load_rate_rows_per_second=0.0)
         context.logger.info("no catalogues for %s; nothing loaded", table)
         return
@@ -380,8 +512,16 @@ def load_sources(context) -> None:
     rows = _write_sources_csv(context, catalogs, csv_path)
 
     with transaction(conn) as cursor:
+        before = _table_count(cursor, table)
         result = catalog_db.load_through_staging(
             cursor, csv_path, table, "sources", SOURCES_COLUMNS)
+
+    outcome = _verify_effect(
+        conn, context, f"catalog load {table}",
+        sql.SQL("SELECT count(*) FROM {table}").format(
+            table=sql.Identifier(table)),
+        (), before + result["rows_written"])
+    context.produce("effect_outcome", outcome)
 
     context.record_effect(
         rows_written=result["rows_written"],
@@ -690,6 +830,9 @@ def crossmatch_sources(context) -> None:
         position = association_watermark.read_watermark(
             cursor, association_set, lane)
 
+        objects_before = _table_count(cursor, astroobjects)
+        merges_before = _table_count(cursor, merges)
+
         matched, new_objects = _crossmatch_field(
             cursor, context, field, proc_date, float(radius),
             astroobjects, objects_csv, merges_csv)
@@ -702,6 +845,27 @@ def crossmatch_sources(context) -> None:
 
         advanced = _advance_association_watermark(
             cursor, context, association_set, lane, position, proc_date, field)
+
+    objects_outcome = _verify_effect(
+        conn, context, f"crossmatch {astroobjects}",
+        sql.SQL("SELECT count(*) FROM {table}").format(
+            table=sql.Identifier(astroobjects)),
+        (), objects_before + objects_result["rows_written"])
+    merges_outcome = _verify_effect(
+        conn, context, f"crossmatch {merges}",
+        sql.SQL("SELECT count(*) FROM {table}").format(
+            table=sql.Identifier(merges)),
+        (), merges_before + merges_result["rows_written"])
+    # BOTH TABLES MUST CONFIRM. This unit's effect is the pair together —
+    # objects and their merge rows land in the same transaction — so a
+    # verification that only checked one would call the unit confirmed
+    # while silently trusting the other's write. `unconfirmed` on either
+    # is `unconfirmed` for the unit.
+    outcome = (EFFECT_OUTCOME_CONFIRMED
+              if (objects_outcome == EFFECT_OUTCOME_CONFIRMED
+                  and merges_outcome == EFFECT_OUTCOME_CONFIRMED)
+              else EFFECT_OUTCOME_UNCONFIRMED)
+    context.produce("effect_outcome", outcome)
 
     context.record_effect(
         rows_written=objects_result["rows_written"] + merges_result["rows_written"],
@@ -802,24 +966,24 @@ def _crossmatch_field(cursor, context, field: int, proc_date: str,
 def _source_tables_for_unit(context, proc_date: str):
     """The source child tables this crossmatch unit reads.
 
-    Declared by the submitter in the manifest. Falls back to nothing rather
+    Declared by the submitter in the manifest, on `CrossmatchPayload.
+    source_tables` (`submission.payloads`). Falls back to nothing rather
     than probing the catalog: a unit that names no source tables loaded no
     sources, and the honest outcome is an effect count of zero.
 
-    **A LATENT DEFECT, FLAGGED RATHER THAN FIXED HERE (brief D scope).**
-    This read `fields["source_tables"]`, and NO gatherer has ever written
-    that key — `gather_crossmatch_units` writes the unit's TARGET tables
-    (`astroobjects_<field>`, `merges_<field>`) and nothing else. So this
-    function has always returned `[]` and `crossmatch_sources` has always
-    iterated over nothing. Moving to the typed payload is what surfaced it:
-    an open dict answers `.get()` for a key nobody sets with a silent None,
-    while a closed payload has to be asked for something it declares.
-
-    Kept behaviourally identical — still an empty list — because deciding
-    what a crossmatch unit's source tables ARE is a submission-design
-    question outside package D, and inventing an answer here would change
-    what the stage does under cover of a representation change. Recorded as
-    a change request in D's ledger.
+    **STILL A STRUCTURAL NO-OP AS OF THIS WAVE, BUT NOW A NAMED ONE.**
+    `source_tables` exists on the typed payload (added this wave,
+    optional) so this function has something declared to read, but NO
+    GATHERER POPULATES IT YET — `gather_crossmatch_units`
+    (`submission/gathering.py`) still constructs a `CrossmatchPayload` with
+    only `target_tables`. Until that lands (integration request filed
+    against `submission/gathering.py`, this wave's ledger), this returns
+    `[]` and `crossmatch_sources` iterates over nothing, exactly as it has
+    since the pre-typed-payload representation first surfaced the gap. What
+    changed is the shape of the gap: an open dict used to answer `.get()`
+    for a key nobody set with a silent None; a closed payload now has a
+    declared, typed, always-present-but-still-empty tuple, which is what
+    let this function stop reading a key the payload type never declared.
     """
     payload = getattr(context.unit, "payload", None)
     if payload is None:
@@ -892,6 +1056,16 @@ def compute_statistics(context) -> None:
                     merges=sql.Identifier(f"merges_{field}")))
         written = cursor.rowcount or 0
 
+    # The table is wholesale-rebuilt (DELETE then repopulate in the same
+    # transaction), so the post-commit expectation is `written` alone, not
+    # `before + written` — there is no "before" left once the delete lands.
+    outcome = _verify_effect(
+        conn, context, f"statistics {target}",
+        sql.SQL("SELECT count(*) FROM {table}").format(
+            table=sql.Identifier(target)),
+        (), written)
+    context.produce("effect_outcome", outcome)
+
     context.record_effect(rows_written=written, rows_removed=removed,
                           statistics_table=target)
     context.logger.info("field %d statistics: %d row(s) rebuilt", field, written)
@@ -933,6 +1107,12 @@ def sweep_merge_currency(context) -> None:
             join_column="sid", identity_table="diffimages",
             identity_column="pid")
 
+    outcome = _verify_no_superseded_rows(
+        conn, context, f"merge currency sweep {table}", table,
+        join_column="sid", identity_table="diffimages",
+        identity_column="pid")
+    context.produce("effect_outcome", outcome)
+
     context.record_effect(rows_removed=removed, swept_table=table)
     context.logger.info("merge currency sweep on %s: %d row(s) removed",
                         table, removed)
@@ -956,6 +1136,12 @@ def sweep_source_currency(context) -> None:
             cursor, table, "merges",
             join_column="sid", identity_table="l2files",
             identity_column="rid")
+
+    outcome = _verify_no_superseded_rows(
+        conn, context, f"source currency sweep {table}", table,
+        join_column="sid", identity_table="l2files",
+        identity_column="rid")
+    context.produce("effect_outcome", outcome)
 
     context.record_effect(rows_removed=removed, swept_table=table)
     context.logger.info("source currency sweep on %s: %d row(s) removed",
@@ -1001,6 +1187,13 @@ def check_merge_duplicates(context) -> None:
                           duplicate_groups=duplicates, checked_table=table)
 
     if duplicates:
+        # A DEFECT REPORT, NOT AN EFFECT TO CONFIRM. This unit writes
+        # nothing, so there is no `effect_outcome` to produce on the way
+        # out here — `_execute`'s fail-closed guard only asks for one on a
+        # SUCCESS close, and raising routes this attempt through the
+        # `RuntimeErrorBase` catch in `pipeline.entrypoints.job._execute`
+        # instead, which classifies it FAILURE+NONE without ever reaching
+        # the effect-class branch.
         raise InputError(
             f"{table} holds {duplicates} duplicate (aid, sid) group(s). "
             f"Migration 027 put a unique index on the merges prototype and "
@@ -1009,6 +1202,23 @@ def check_merge_duplicates(context) -> None:
             f"the constraint or was created by something that bypassed it. "
             f"Reported rather than deleted: the rows are the evidence.",
             duplicate_groups=duplicates, table=table)
+
+    # THE CHECK IS ITS OWN CONFIRMATION: a should-find-nothing check's
+    # effect is the fact that the invariant held, and re-running the same
+    # count on a fresh cursor is what says that is still true right now,
+    # not just at the moment the first cursor read it inside the (read-only)
+    # transaction above. The identity columns are `count_duplicate_groups`'s
+    # own — read from `CONFLICT_TARGETS` rather than restated, so the two
+    # queries cannot drift on which columns define a duplicate.
+    keys = sql.SQL(", ").join(
+        sql.Identifier(c) for c in catalog_db.CONFLICT_TARGETS["merges"])
+    query = sql.SQL(
+        "SELECT count(*) FROM (SELECT {keys} FROM {child} GROUP BY {keys} "
+        "HAVING count(*) > 1) AS duplicates").format(
+            keys=keys, child=sql.Identifier(table))
+    outcome = _verify_effect(
+        conn, context, f"merge dedup check {table}", query, (), 0)
+    context.produce("effect_outcome", outcome)
 
     context.logger.info("%s: no duplicate (aid, sid) groups, as expected",
                         table)

@@ -33,6 +33,7 @@ from submission.routes import (
     JOB_TYPE_STATISTICS,
     RouteError,
 )
+from submission.subjects import is_product_producing
 
 from pipeline.stages import alert_production, post_db, reference_image, science
 
@@ -103,28 +104,42 @@ SEQUENCES = {
 }
 
 
-#: The job types whose stages settle a database effect through the
-#: claim/confirm protocol (`RAPIDDB.claim_alert_emission` /
-#: `confirm_alert_emission`) and report it as the `effect_outcome` stage
-#: fact — ruling R1, effect-lifecycle completion boundary. Distinct from
-#: `submission.subjects.is_product_producing`'s split: that boundary is
-#: product-producing (science, reference-image) vs database-effect
-#: (everything else), and every one of the six post-DB job types in
-#: `SEQUENCES` above is database-effect WITHOUT being claim/confirm-based —
-#: they report `rows_written`/`rows_removed` through `record_effect` and
-#: close a plain `success`/`none` pair, which `observability.registration
-#: .decide` already SKIPs correctly. This narrower set is what
+#: The job types whose stages settle a database effect and report it as the
+#: `effect_outcome` stage fact — ruling R1, effect-lifecycle completion
+#: boundary, EXTENDED to all six post-DB job types alongside alert
+#: production (Ben, 2026-08-14: "the six post-DB job types ... become
+#: EFFECT-CLASS, closing through the existing effect-confirmation boundary
+#: exactly like alert-production"). This is what
 #: `pipeline.entrypoints.job._execute`'s fail-closed guard checks: a
 #: successful attempt whose job type is IN this set but produced no
 #: `effect_outcome` fact is a classified failure (a stage that returned
 #: without recording its effect outcome, silently), never a silent
 #: `success`+`none`.
 #:
-#: A SET, not a per-stage remember-to-check: the guard reads this once at
-#: the derivation site rather than trusting each of an arbitrary number of
-#: future effect stages to enforce it on itself — the whole point of a
-#: CENTRAL fail-closed guard.
-EFFECT_CLASS_JOB_TYPES = frozenset({JOB_TYPE_ALERT_PRODUCTION})
+#: **DERIVED FROM `submission.subjects.is_product_producing`, NOT A SECOND
+#: HAND-MAINTAINED SET.** Before this ruling, effect-class (claim/confirm-
+#: based, alert production alone) and database-effect (`product_producing
+#: =False`, all seven non-product job types) were genuinely two different
+#: splits — the module docstring here used to draw that distinction
+#: explicitly. The ruling collapses them: every database-effect job type
+#: now closes through the SAME effect-confirmation boundary, whether its
+#: confirmation is alert production's claim/confirm token protocol or a
+#: post-DB stage's post-write re-query (`pipeline.stages.post_db.
+#: _verify_effect`). With the two splits now equal in membership, deriving
+#: this set from `subjects.SUBJECTS` — `not product_producing`, the same
+#: authority `is_product_producing` reads — means a future job type can
+#: only drift from this guard's coverage by drifting from its own
+#: declared subject, which `submission.subjects.JobTypeSubject.subject_for`
+#: already refuses to allow silently.
+#:
+#: `sequence_for` restricts this to job types `SEQUENCES` actually declares
+#: a stage sequence for — `subjects.SUBJECTS` also names job types (like
+#: registration, were it ever added there) this module has no sequence for
+#: at all, and this set has no business claiming those need `effect_
+#: outcome` from a sequence that will never run.
+EFFECT_CLASS_JOB_TYPES = frozenset(
+    job_type for job_type in SEQUENCES
+    if not is_product_producing(job_type))
 
 
 def sequence_for(job_type: str) -> tuple:
