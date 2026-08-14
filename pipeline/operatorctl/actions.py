@@ -265,6 +265,78 @@ SELECT stage_name, outcome, started_at, duration_ms
  ORDER BY started_at, stage_name
 """
 
+# `rapidctl work-units`'s population — the panel this package never had.
+# Before this, the ONLY `work_units` reference anywhere in `operatorctl` was
+# the LEFT JOIN inside `_ATTEMPT_CORE` above, reachable only per-attempt via
+# `show-attempt`; there was no way to list work units by state at all, no way
+# to see a stuck unit's `blocked_reason` without already knowing which
+# attempt to ask about (and a blocked unit may have no attempt yet — that is
+# exactly the case an operator most needs this for), and nothing anywhere
+# read `unit_events`. This is "what is stuck and why" in one query: state,
+# the job identity, why it is blocked if it is, how long it has sat there,
+# and which campaign owns it.
+#
+# AGE IS MEASURED FROM THE UNIT'S OWN `updated_at`, not from a joined
+# `unit_events` row — `work_units.updated_at` is stamped on every write that
+# creates or transitions the row (`WorkUnitWriter.create_work_unit`/
+# `transition_unit`, both in `pipeline/intent/writer.py`), so it is already
+# the exact "how long has this row looked like this" fact without a second
+# query or a LATERAL join per unit. `unit-events` (below) is the place to
+# read the transition history itself.
+#
+# LEFT JOIN campaigns: `campaign_id` is nullable (a work unit created outside
+# a campaign has none), and an INNER join would silently drop every
+# non-campaign unit from a listing whose whole purpose is showing what is
+# stuck — the same reason `_ATTEMPT_CORE` LEFT JOINs `work_units`/
+# `submissions` rather than requiring them.
+_WORK_UNITS_BASE = """
+SELECT w.work_unit_id, w.job_type, w.input_scope, w.operational_class,
+       w.state, w.blocked_reason, w.campaign_id, c.campaign_name,
+       w.created_at, w.updated_at,
+       extract(epoch FROM (now() - w.updated_at)) AS age_in_state_seconds
+  FROM work_units w
+  LEFT JOIN campaigns c ON c.campaign_id = w.campaign_id
+"""
+
+# Two shapes of the same query rather than one with an optional clause
+# spliced in as a string: `--state` (repeatable) filters to an explicit,
+# operator-named set via `= ANY(%s)`; `--non-terminal` filters to the
+# three states that mean "still moving" (`blocked`, `ready`, `submitted`)
+# via `NOT IN (...)` naming the four terminal ones explicitly — the same
+# discipline `pipeline.gc.references.ELIGIBLE_OWNER_STATES`'s docstring
+# uses ("the literal predicate, because `failed` and `quarantined` are
+# called terminal elsewhere in this codebase") rather than a vaguer
+# "not complete" that would silently admit a state nobody meant to include
+# if the vocabulary grows. Composing the two as one parameterized WHERE
+# would need to handle "neither given" (list everything) and "both given"
+# (an operator asking two different questions at once) as extra cases;
+# kept as two literal statements instead, chosen once in Python before any
+# SQL runs, so each one's WHERE clause is exactly what it says and nothing
+# is threaded together at the string level.
+_WORK_UNITS_BY_STATE = _WORK_UNITS_BASE + \
+    " WHERE w.state = ANY(%s)" \
+    " ORDER BY w.updated_at ASC" \
+    " LIMIT %s"
+
+_WORK_UNITS_NON_TERMINAL = _WORK_UNITS_BASE + \
+    " WHERE w.state NOT IN ('complete', 'failed', 'quarantined',"  \
+    "                       'cancelled')" \
+    " ORDER BY w.updated_at ASC" \
+    " LIMIT %s"
+
+# `rapidctl unit-events <work_unit_id>`'s population — the unit's own
+# transition history, oldest first (the creation event has `from_state IS
+# NULL`, migration 036: "from_state NULL on the unit's first event
+# (creation)"), so reading top-to-bottom is reading the unit's life in
+# order.
+_UNIT_EVENTS = """
+SELECT unit_event_id, from_state, to_state, writer, occurred_at, reason,
+       detail
+  FROM unit_events
+ WHERE work_unit_id = %s
+ ORDER BY unit_event_id
+"""
+
 
 def attempts_by_state(conn, state, older_than_seconds):
     """`rapidctl attempts --state ... --older-than ...`'s population.
@@ -300,6 +372,38 @@ def attempt_detail(conn, attempt_id):
 def unreconciled_break_glass(conn):
     """Region 7's panel: open sessions lacking a close and a passing sweep."""
     return _rows(conn, _UNRECONCILED, ())
+
+
+def work_units_by_state(conn, states, limit=200):
+    """`rapidctl work-units --state ...`'s population, one or more states.
+
+    ``states`` is a non-empty sequence of exact `work_units.state` values —
+    the CLI's ``--state`` is repeatable and passes every named value here in
+    one call, matched with ``= ANY(%s)`` rather than one query per state.
+    """
+    if not states:
+        raise ValueError("work_units_by_state needs at least one state; "
+                         "an empty list would be `= ANY('{}')`, which "
+                         "matches nothing and is never what an operator "
+                         "typing --state meant")
+    return _rows(conn, _WORK_UNITS_BY_STATE, (list(states), limit))
+
+
+def work_units_non_terminal(conn, limit=200):
+    """`rapidctl work-units --non-terminal`'s population: blocked/ready/
+    submitted — everything still actively moving through the machine.
+    """
+    return _rows(conn, _WORK_UNITS_NON_TERMINAL, (limit,))
+
+
+def unit_events_for_work_unit(conn, work_unit_id):
+    """`rapidctl unit-events <work_unit_id>`'s population: the unit's own
+    transition history, oldest first. Returns `[]` for an unknown
+    `work_unit_id` — there is no separate existence check, matching
+    `attempts_by_state`'s own convention of returning what the query finds
+    rather than probing for the row first.
+    """
+    return _rows(conn, _UNIT_EVENTS, (work_unit_id,))
 
 
 def recent_mutations(conn, limit=20, with_draft_columns=None):
