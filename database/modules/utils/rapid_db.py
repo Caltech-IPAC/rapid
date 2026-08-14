@@ -3259,11 +3259,12 @@ class RAPIDDB:
 
             # Execute query.
 
+            records = []
+
             try:
                 self.cur.execute(query)
 
                 try:
-                    records = []
                     nrecs = 0
                     for record in self.cur:
                         if nrecs == 0:            # Print first record returned as a sanity check.
