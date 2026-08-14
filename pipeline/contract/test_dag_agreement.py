@@ -24,7 +24,8 @@ actually lands, an event row is recorded) when driven through the writer
 identity the edge allows; every ordered pair NOT in `_TRANSITION_GRAPH`
 (excluding self-transitions, which 076's trigger explicitly no-ops rather
 than refuses — `IF NEW.state IS NOT DISTINCT FROM OLD.state THEN RETURN
-NEW`) must be REFUSED with SQLSTATE RA001. Campaigns: the same two
+NEW`) must be REFUSED with SQLSTATE RA011 (invariant violation,
+per migration 086). Campaigns: the same two
 properties over `_CAMPAIGN_GRAPH`.
 
 **WRITER-GATE SEMANTICS ARE HONORED, NOT RE-TESTED.** Five work-unit edges
@@ -87,18 +88,18 @@ from pipeline.intent.writer import (_CAMPAIGN_GRAPH, _TRANSITION_GRAPH,
                                     WRITER_VALIDATION_INGEST, CampaignWriter,
                                     WorkUnitIdentity, WorkUnitWriter)
 
-#: RA001 — the one SQLSTATE every 076 refusal (DAG, writer, supersession,
-#: completion-acceptance) carries. Read directly via `sqlstate_of`-style
-#: attribute access rather than imported from `pipeline.intent.errors`:
-#: that module's own header states it classifies driver errors the DATABASE
-#: raised through the two families it documents (23505/23503), and RA001
-#: is deliberately a THIRD, application-defined vocabulary
-#: (`pipeline.intent.writer._RA001`, "the same convention
-#: `pipeline.operatorctl.contract` reads") — reading it the same way this
-#: module's own `transition_unit` does (`_sqlstate_of`) rather than
-#: reaching into a sibling's predicate for a code that module was never
-#: about.
-_RA001 = "RA001"
+#: RA011 — the SQLSTATE every INVARIANT-shaped 076 refusal (DAG, writer,
+#: supersession, completion-acceptance) carries since migration 086 split
+#: it out of RA001, which now means only a genuine CAS miss
+#: (`pipeline.operatorctl.contract.SQLSTATE_INVARIANT_VIOLATION` vs
+#: `SQLSTATE_EXPECTED_STATE_MISMATCH`). An illegal edge is the canonical
+#: invariant case: no retry can ever make it legal. Read directly via
+#: `sqlstate_of`-style attribute access rather than imported from
+#: `pipeline.intent.errors`: that module's own header states it classifies
+#: driver errors through the two families it documents (23505/23503), and
+#: the RA0xx family is deliberately a THIRD, application-defined
+#: vocabulary.
+_RA011 = "RA011"
 
 
 def _sqlstate(exc):
@@ -293,7 +294,7 @@ def test_every_declared_work_unit_edge_is_accepted(conn, from_state, to_state):
 @pytest.mark.parametrize("from_state,to_state", _WORK_UNIT_NON_EDGES)
 def test_every_non_edge_is_refused_by_the_trigger(conn, from_state, to_state):
     """Every ordered pair `_TRANSITION_GRAPH` does NOT declare is refused
-    with RA001 by 076's trigger — driven through `derived.
+    with RA011 by 076's trigger — driven through `derived.
     transition_work_unit` DIRECTLY rather than through
     `WorkUnitWriter.transition_unit`, whose own Python-side graph check
     would refuse the identical call before any SQL ran and prove only that
@@ -314,8 +315,8 @@ def test_every_non_edge_is_refused_by_the_trigger(conn, from_state, to_state):
                  blocked_reason, "dag-agreement: non-edge probe", None, True])
     conn.rollback()
 
-    assert _sqlstate(caught.value) == _RA001, (
-        f"{from_state}->{to_state}: expected RA001 (illegal transition), "
+    assert _sqlstate(caught.value) == _RA011, (
+        f"{from_state}->{to_state}: expected RA011 (illegal transition), "
         f"got {caught.value!r} — the Python graph refuses this pair but "
         f"the SQL trigger did not")
     assert fixture.unit_state(conn, unit_id)[0] == from_state, (
@@ -419,8 +420,8 @@ def test_every_campaign_non_edge_is_refused_by_the_trigger(
                [to_state, campaign_id])
     conn.rollback()
 
-    assert _sqlstate(caught.value) == _RA001, (
-        f"campaign {from_state}->{to_state}: expected RA001, got "
+    assert _sqlstate(caught.value) == _RA011, (
+        f"campaign {from_state}->{to_state}: expected RA011, got "
         f"{caught.value!r} — the Python graph refuses this pair but the "
         f"SQL trigger did not")
     assert _campaign_state(conn, campaign_id) == from_state, (

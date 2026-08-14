@@ -27,6 +27,13 @@ import uuid
 # silently when it does.
 SQLSTATE_EXPECTED_STATE_MISMATCH = "RA001"
 SQLSTATE_IDEMPOTENCY_CONFLICT = "RA002"
+# Raised by the schema's invariant layer (052/064/067's GC and outbox
+# functions since their inception; 076/077's work-unit and campaign
+# functions since migration 086 split them out of RA001): a state-machine,
+# vocabulary, or structural violation. The OPPOSITE remedy from RA001 —
+# the world did not move, the call itself is illegal, and retrying will
+# never help.
+SQLSTATE_INVARIANT_VIOLATION = "RA011"
 
 
 class OperatorError(Exception):
@@ -62,6 +69,24 @@ class IdempotencyConflict(OperatorError):
     exit_code = 66
 
 
+class InvariantViolation(OperatorError):
+    """The call itself is illegal — a schema-enforced invariant refused it.
+
+    RA011: an illegal state transition, an unknown vocabulary value, a
+    set-once field being reassigned, a supersession cycle. Distinct from
+    `ExpectedStateMismatch` (RA001) because the remedies are OPPOSITE:
+    RA001 means the world moved since the dry run — look again and re-run;
+    RA011 means the world never moves this way — re-running is never the
+    fix, the command (or the operator's model of the state machine) is
+    wrong. Presenting one as the other sends an operator into a retry loop
+    against a wall, which is the misclassification migration 086 exists
+    to end.
+    """
+
+    error_category = "invariant_violation"
+    exit_code = 67
+
+
 def new_idempotency_key(prefix="rapidctl"):
     """Mint a key for a caller that did not supply one.
 
@@ -89,6 +114,8 @@ def classify(exc):
         return ExpectedStateMismatch(_message_of(exc))
     if code == SQLSTATE_IDEMPOTENCY_CONFLICT:
         return IdempotencyConflict(_message_of(exc))
+    if code == SQLSTATE_INVARIANT_VIOLATION:
+        return InvariantViolation(_message_of(exc))
     return None
 
 

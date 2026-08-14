@@ -38,11 +38,12 @@ WHAT THIS FILE COVERS, per the task brief's own enumeration, and where:
                                       terminal_record_sequence < 1)
   * supersession cycles            — section 5 (076's multi-row acyclicity
                                       walk, `work_units_check_supersession`)
-  * the withheld case both ways    — section 4 (clause (d): a CONSUMED
-                                      withheld disposition passes; an
-                                      UNCONSUMED one — no registered_at, no
-                                      effect_confirmed, and no consumed
-                                      terminal_record_sequence — still fails)
+  * the withheld case both ways    — section 4 (both REFUSED since
+                                      migration 084 removed 'withheld'
+                                      from clause (d) as dead vocabulary;
+                                      the consumed case is the regression
+                                      guard that the predicate stays
+                                      narrowed)
 
 **SECTION 4 SETS THE GUC LOCALLY, INSIDE ITS OWN TRANSACTION, EVERY TIME —
 AND, AS OF 083, THE DATABASE-LEVEL DEFAULT IS 'on'.** 076/080 shipped the
@@ -142,15 +143,17 @@ def _as_role_expect_insufficient_privilege(conn, role, statement, params=None):
             cur.execute("ROLLBACK TO SAVEPOINT role_attempt")
 
 
-def _expect_ra001(conn, statement, params=None, match=None):
-    """Attempt one statement and assert 076/077 refuse it with RA001.
+def _expect_ra011(conn, statement, params=None, match=None):
+    """Attempt one statement and assert 076/077 refuse it with RA011.
 
     A SAVEPOINT-scoped attempt, mirroring `test_operator_grants.py`'s own
-    convention of asserting the SQLSTATE rather than message text — RA001
-    (`pipeline.intent.errors`, `pipeline.operatorctl.contract`) is the
-    custom code 077's functions and 076's triggers both raise for every
-    refusal, so this is the one predicate every case in this file's
-    refusal battery can share.
+    convention of asserting the SQLSTATE rather than message text. RA011
+    (`pipeline.operatorctl.contract.SQLSTATE_INVARIANT_VIOLATION`) is what
+    076's triggers and 077's functions raise for every INVARIANT-shaped
+    refusal since migration 086 split it out of RA001 — RA001 now means
+    only a genuine CAS miss ("the world moved; look again"), while every
+    case this file's refusal battery drives is a violation that no retry
+    can ever satisfy.
     """
     with conn.cursor() as cur:
         cur.execute("SAVEPOINT refusal_attempt")
@@ -158,8 +161,8 @@ def _expect_ra001(conn, statement, params=None, match=None):
         with pytest.raises(psycopg2.Error) as raised:
             with conn.cursor() as cur:
                 cur.execute(statement, params)
-        assert getattr(raised.value, "pgcode", None) == "RA001", (
-            f"expected SQLSTATE RA001, got {getattr(raised.value, 'pgcode', None)}: "
+        assert getattr(raised.value, "pgcode", None) == "RA011", (
+            f"expected SQLSTATE RA011, got {getattr(raised.value, 'pgcode', None)}: "
             f"{raised.value}")
         if match is not None:
             assert match in str(raised.value), (
@@ -509,7 +512,7 @@ def test_a_mutation_only_edge_is_NOT_refused_at_the_sql_layer_a_known_gap(
         "expected the spoofed writer to be exactly what landed, since "
         "nothing rewrites it — if this assertion ever fails because the "
         "call was refused instead, the SQL-layer gap this test documents "
-        "has been closed and this test should be rewritten to expect RA001")
+        "has been closed and this test should be rewritten to expect RA011")
 
 
 def test_writer_spoofing_is_refused_by_workunitwriter_in_python(conn):
@@ -590,30 +593,26 @@ def test_the_same_edge_succeeds_with_the_correct_writer(
 # restriction), untouched — the two prior tests' worth of coverage above
 # (sections 1-3) exercise code 080 does not touch and remain valid unedited.
 #
-# CONSEQUENCE FOR THE FIVE TESTS BELOW THAT ENABLE THE GUC (all but the
-# unenforced-default test that used to close this section — replaced by
+# CONSEQUENCE FOR THE TESTS BELOW THAT ENABLE THE GUC (the unenforced-
+# default test that used to close this section was replaced by
 # `test_completion_is_enforced_by_default` and `test_completion_acceptance_
 # can_still_be_disabled_locally` once migration 083 made 'on' the ambient
-# default; see the module docstring): with 080 applied,
-# `test_mismatched_attempt_is_refused_when_enforced`, `test_unconsumed_
-# terminal_sequence_is_refused_when_enforced`, and `test_withheld_
-# unconsumed_is_refused_when_enforced` now get
-# RA001 for the SPECIFIC reason each test names — clause (a) (deciding_
-# attempt_id present) passes for all three, and the combined (b)/(c)/(d)
-# boundary check is what actually refuses each one, with the "does not
-# satisfy the acceptance boundary" message 080 preserves from 076 verbatim.
-# `test_registered_and_consumed_attempt_completes_when_enforced` and
-# `test_withheld_consumed_completes_when_enforced` — the two POSITIVE cases
-# — now succeed: with the deciding attempt correctly visible at the
-# deferred trigger's fire time, an attempt that genuinely satisfies (b),
-# (c), and (d) is no longer refused by the always-fires-first bug clause
-# (a) used to produce. NONE OF THE FIVE TEST BODIES NEEDED A NEW ASSERTION:
-# each was already written, by C2, to assert the CORRECT eventual behavior
-# (RA001 + the specific boundary message for the three refusals; COMPLETE
-# for the two successes) as the red target for this fix, not the wrong-
-# reason behavior 076-as-shipped actually produced — so 080 turns all five
-# green without touching their bodies. Only this header comment changes,
-# from describing the open defect to describing its resolution.
+# default; see the module docstring): with 080 applied, the refusals fire
+# for the SPECIFIC reason each test names — clause (a) (deciding_
+# attempt_id present) passes, and the combined (b)/(c)/(d) boundary check
+# is what actually refuses each case, with the "does not satisfy the
+# acceptance boundary" message 080 preserves from 076 verbatim. Two later
+# migrations then reshaped the assertions, not the mechanism: 084 removed
+# 'withheld' from clause (d) as dead vocabulary, flipping the old
+# consumed-withheld POSITIVE case into the refusal
+# `test_withheld_is_refused_even_when_consumed` now pins, and 086 split
+# the SQLSTATE — genuine CAS misses keep RA001, every invariant-shaped
+# refusal in this section raises RA011
+# (`pipeline.operatorctl.contract.SQLSTATE_INVARIANT_VIOLATION`), which is
+# what every refusal assertion below expects. The remaining POSITIVE case,
+# `test_registered_and_consumed_attempt_completes_when_enforced`, still
+# completes: an attempt genuinely satisfying (b), (c), and (d) passes the
+# deferred trigger with the GUC on.
 #
 # GUC ENFORCED LOCALLY, inside each test's own transaction (see module
 # docstring).
@@ -782,7 +781,7 @@ def test_mismatched_attempt_is_refused_when_enforced(conn):
         with pytest.raises(psycopg2.Error) as raised:
             _complete_with_guc_enforced(
                 conn, unit_id, other_attempt_id, "C2: mismatched attempt")
-        assert getattr(raised.value, "pgcode", None) == "RA001"
+        assert getattr(raised.value, "pgcode", None) == "RA011"
         assert "does not satisfy the acceptance boundary" in str(raised.value)
     finally:
         with conn.cursor() as cur:
@@ -809,7 +808,7 @@ def test_unconsumed_terminal_sequence_is_refused_when_enforced(conn):
         with pytest.raises(psycopg2.Error) as raised:
             _complete_with_guc_enforced(
                 conn, unit_id, attempt_id, "C2: unconsumed sequence")
-        assert getattr(raised.value, "pgcode", None) == "RA001"
+        assert getattr(raised.value, "pgcode", None) == "RA011"
         assert "does not satisfy the acceptance boundary" in str(raised.value)
     finally:
         with conn.cursor() as cur:
@@ -831,35 +830,51 @@ def test_registered_and_consumed_attempt_completes_when_enforced(conn):
     assert fixture.unit_state(conn, unit_id)[0] == COMPLETE
 
 
-def test_withheld_consumed_completes_when_enforced(conn):
-    """THE WITHHELD CASE, FIRST HALF: a CONSUMED withheld disposition IS
-    deliberate acceptance and must PASS clause (d) — `product_disposition
-    = 'withheld'` alone satisfies the acceptance half of the OR, and with
-    terminal_record_sequence >= 1 (consumed) the completion succeeds.
-    `registered_at` is deliberately NOT set here — withheld is the OTHER
-    branch of clause (d)'s OR, and this test is what would catch a
-    regression that required registered_at unconditionally.
+def test_withheld_is_refused_even_when_consumed(conn):
+    """THE WITHHELD CASE, FIRST HALF — INVERTED BY MIGRATION 084. Until
+    084, `product_disposition = 'withheld'` satisfied the acceptance half
+    of clause (d)'s OR, and this test asserted a CONSUMED withheld
+    completion SUCCEEDED. 084 removed 'withheld' from the predicate as
+    dead vocabulary: no rapid code path could ever produce the value
+    (verified at 084 time — the enum member, the SKIP arm, and the
+    completion branch were all removed from rapid the same day), so the
+    acceptance predicate was wider than reachable behaviour and a reviewer
+    reading it got a misleading answer to "what can complete a unit".
+    Post-084 the ONLY dispositions that satisfy clause (d) are
+    registration (`registered_at`) and `effect_confirmed` — so the exact
+    row shape that used to be this file's positive case must now be
+    REFUSED, and this test is the regression guard that the predicate
+    stays narrowed. The raw SQL INSERT below can still stamp the literal
+    string because 084 narrows the acceptance predicate, not the column's
+    legal values.
     """
     unit_id, attempt_id = _submitted_unit_with_attempt(
         conn, fixture.scope("withheld-consumed"), registered=False,
         product_disposition="withheld", terminal_record_sequence=1)
     conn.commit()
 
-    _complete_with_guc_enforced(conn, unit_id, attempt_id, "C2: withheld consumed")
-    conn.commit()
-    assert fixture.unit_state(conn, unit_id)[0] == COMPLETE
+    with conn.cursor() as cur:
+        cur.execute("SAVEPOINT withheld_consumed")
+    try:
+        with pytest.raises(psycopg2.Error) as raised:
+            _complete_with_guc_enforced(
+                conn, unit_id, attempt_id, "C2: withheld consumed")
+        assert getattr(raised.value, "pgcode", None) == "RA011"
+        assert "does not satisfy the acceptance boundary" in str(raised.value)
+    finally:
+        with conn.cursor() as cur:
+            cur.execute("ROLLBACK TO SAVEPOINT withheld_consumed")
+    conn.rollback()
+    assert fixture.unit_state(conn, unit_id)[0] == SUBMITTED
 
 
 def test_withheld_unconsumed_is_refused_when_enforced(conn):
     """THE WITHHELD CASE, SECOND HALF: an UNCONSUMED withheld disposition
-    must NOT pass the completion trigger. `product_disposition = 'withheld'`
-    alone, with terminal_record_sequence=0 (unconsumed — see
-    test_unconsumed_terminal_sequence_is_refused_when_enforced on why 0
-    rather than NULL) and NO registered_at, fails clause (c) even though
-    clause (d)'s OR is satisfied by the withheld value — both (c) and (d)
-    are required together, and this is the case that would catch a
-    regression treating `withheld` as sufficient on its own, without
-    consumption.
+    was refused even BEFORE 084 (clause (c) failed on
+    terminal_record_sequence=0 regardless of clause (d)); post-084 it is
+    refused twice over. Kept alongside the consumed case so the pair still
+    documents both halves of the old OR — one for the clause 084 removed,
+    one for the clause that never admitted it.
     """
     unit_id, attempt_id = _submitted_unit_with_attempt(
         conn, fixture.scope("withheld-unconsumed"), registered=False,
@@ -872,7 +887,7 @@ def test_withheld_unconsumed_is_refused_when_enforced(conn):
         with pytest.raises(psycopg2.Error) as raised:
             _complete_with_guc_enforced(
                 conn, unit_id, attempt_id, "C2: withheld unconsumed")
-        assert getattr(raised.value, "pgcode", None) == "RA001"
+        assert getattr(raised.value, "pgcode", None) == "RA011"
         assert "does not satisfy the acceptance boundary" in str(raised.value)
     finally:
         with conn.cursor() as cur:
@@ -929,7 +944,7 @@ def test_completion_is_enforced_by_default(conn):
                 cur.execute(
                     "SET CONSTRAINTS work_units_check_event_recorded_trg"
                     " IMMEDIATE")
-        assert getattr(raised.value, "pgcode", None) == "RA001"
+        assert getattr(raised.value, "pgcode", None) == "RA011"
         assert "no deciding_attempt_id recorded" in str(raised.value)
     finally:
         with conn.cursor() as cur:
@@ -990,7 +1005,7 @@ def test_a_two_hop_cycle_is_refused(conn):
     writer.supersede_unit(unit_a, unit_b, writer=WRITER_MUTATION_API)
     conn.commit()
 
-    _expect_ra001(
+    _expect_ra011(
         conn,
         "SELECT derived.supersede_unit(%s, %s, %s, %s)",
         [unit_b, unit_a, WRITER_MUTATION_API, "C2: close the 2-cycle"],
@@ -1013,7 +1028,7 @@ def test_a_three_hop_cycle_is_refused(conn):
     writer.supersede_unit(unit_b, unit_c, writer=WRITER_MUTATION_API)
     conn.commit()
 
-    _expect_ra001(
+    _expect_ra011(
         conn,
         "SELECT derived.supersede_unit(%s, %s, %s, %s)",
         [unit_c, unit_a, WRITER_MUTATION_API, "C2: close the 3-cycle"],
@@ -1067,7 +1082,7 @@ def test_reassigning_an_already_superseded_pointer_is_refused(conn):
     writer.supersede_unit(unit_a, unit_b, writer=WRITER_MUTATION_API)
     conn.commit()
 
-    _expect_ra001(
+    _expect_ra011(
         conn,
         "UPDATE work_units SET superseded_by_unit_id = %s"
         " WHERE work_unit_id = %s",
