@@ -253,13 +253,30 @@ class RecordingExecute:
             self.work_units_by_scope[(job_type, input_scope)] = {
                 "work_unit_id": work_unit_id, "state": "ready"}
             return [(work_unit_id,)]
-        if "UPDATE work_units SET state" in statement:
+        if "derived.transition_work_unit" in statement:
+            # C1 (campaign ruling R5, migration 077): `WorkUnitWriter.
+            # transition_unit` now issues this ONE call in place of the old
+            # `UPDATE work_units SET state ...` — the CAS, the advisory
+            # lock, and the `unit_events` append all live behind it. Params
+            # are the eight positional args `transition_unit` passes:
+            # `work_unit_id, from_state, to_state, writer, blocked_reason,
+            # reason, detail, lock`. This double models `work_units` as
+            # data (unlike `pipeline.reconciler.test.stubs`'s thinner
+            # double, which does not), so the CAS is applied for real
+            # against `work_units_by_scope` rather than reported
+            # unconditionally: `transition_unit` itself no longer checks
+            # this call's return value (only whether it raised), so what
+            # matters here is the state mutation the test assertions read
+            # back, not the return shape.
+            work_unit_id, from_state = params[0], params[1]
             job_type = None
             for (jt, scope), row in self.work_units_by_scope.items():
-                if row["work_unit_id"] == params[-2]:
-                    row["state"] = params[0]
-                    job_type = jt
-            return 1 if job_type is not None else 0
+                if row["work_unit_id"] == work_unit_id:
+                    if row["state"] == from_state:
+                        row["state"] = params[2]
+                        job_type = jt
+                    break
+            return [(None,)] if job_type is not None else 0
         # -- submission/protocol.py's statements (findings 2-4) -------------
         if "information_schema.tables" in statement:
             return [(1,)] if self.submissions_available else []
@@ -896,8 +913,10 @@ class SubmissionAuthorizationTests(unittest.TestCase):
 
         self.assertEqual(1, submission.array_size)
         self.assertEqual(1, len(attempt_ids))
+        # C1: the transition is now one call to `derived.transition_work_unit`
+        # (migration 077), not a raw `UPDATE work_units SET state`.
         transitions = [params for sql, params in self.execute.statements
-                      if "UPDATE work_units SET state" in sql]
+                      if "derived.transition_work_unit" in sql]
         self.assertEqual(1, len(transitions))
         self.assertIn("submitted", transitions[0])
         self.assertIn(777, transitions[0])
@@ -969,8 +988,10 @@ class AttachWorkUnitTests(unittest.TestCase):
         _, create_params = creates[0]
         self.assertIn("ready", create_params)
 
+        # C1: one call to `derived.transition_work_unit` (migration 077)
+        # replaces the old raw `UPDATE work_units SET state`.
         transitions = [(sql, params) for sql, params in self.execute.statements
-                       if "UPDATE work_units SET state" in sql]
+                       if "derived.transition_work_unit" in sql]
         self.assertEqual(1, len(transitions))
         _, transition_params = transitions[0]
         self.assertIn("submitted", transition_params)
@@ -1191,8 +1212,10 @@ class CampaignUnitTransitionIntegrityTests(unittest.TestCase):
         self.assertEqual(1, len(updates))
         self.assertIn(campaign_work_unit_id, updates[0])
 
+        # C1: one call to `derived.transition_work_unit` (migration 077)
+        # replaces the old raw `UPDATE work_units SET state`.
         transitions = [params for sql, params in self.execute.statements
-                       if "UPDATE work_units SET state" in sql]
+                       if "derived.transition_work_unit" in sql]
         self.assertEqual(1, len(transitions))
         self.assertIn("submitted", transitions[0])
 
