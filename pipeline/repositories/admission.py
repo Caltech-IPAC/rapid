@@ -145,6 +145,36 @@ class AdmissionConflict(AdmissionError):
         self.admission_identity = identity_
 
 
+class ManifestSealRaced(AdmissionError):
+    """`seal_manifest`'s own CAS matched zero rows unexpectedly.
+
+    Defense-in-depth (wave-E finding #7): `seal_manifest` reads
+    `sealed_at IS NULL` under no lock, then races that same predicate into
+    the sealing `UPDATE ... WHERE sealed_at IS NULL`. Nothing in the current
+    ingest path calls `seal_manifest` concurrently for one `manifest_id` — a
+    manifest belongs to one ingest — so this is unreachable today rather than
+    a live race being exploited. But an `UPDATE` with no `RETURNING` and no
+    rowcount check cannot tell "I sealed it" from "someone else sealed it
+    between my read and my write, and I just silently no-opped", and the
+    caller got `ManifestRecord(..., sealed=True, ...)` either way — a wrong
+    answer to "did MY seal happen" that a future caller relying on that
+    return value (rather than only on the row's final state) could act on
+    incorrectly. Raised rather than assumed away, so the day something
+    reachable races this path, it fails loud instead of lying.
+    """
+
+    error_category = "admission_manifest_seal_raced"
+
+    def __init__(self, manifest_id):
+        super().__init__(
+            "seal_manifest's CAS for manifest %r matched zero rows: the "
+            "row was not found with sealed_at IS NULL at UPDATE time, even "
+            "though it was NULL moments earlier at read time. Concurrent "
+            "sealing of one manifest is not a supported path — investigate "
+            "rather than retry." % (manifest_id,))
+        self.manifest_id = manifest_id
+
+
 class ManifestNotSealed(AdmissionError):
     """An admission cited a manifest that is not sealed.
 
@@ -372,12 +402,22 @@ class AdmissionRepository:
         import hashlib
         digest = "sha256:" + hashlib.sha256(
             canonical.encode("utf-8")).hexdigest()
-        self._query(
+        # RETURNING, not a bare rowcount-less UPDATE (wave-E finding #7): the
+        # CAS's `WHERE ... sealed_at IS NULL` guards against a concurrent
+        # sealer, but `self._query` never surfaces `cur.rowcount` for a
+        # RETURNING-less UPDATE — every prior version of this statement
+        # therefore returned success whether or not the CAS actually matched
+        # a row. Checking `rows` (not merely calling the query) is what makes
+        # the guard real.
+        sealed = self._query(
             "seal_manifest",
             "UPDATE admission_manifests"
             "   SET sealed_at = now(), entry_count = %s, entries_checksum = %s"
-            " WHERE manifest_id = %s AND sealed_at IS NULL",
+            " WHERE manifest_id = %s AND sealed_at IS NULL"
+            " RETURNING manifest_id",
             (len(entries), digest, manifest_id))
+        if not sealed:
+            raise ManifestSealRaced(manifest_id)
         return ManifestRecord(manifest_id, None, True, len(entries))
 
     def manifest_by_key(self, manifest_key):
