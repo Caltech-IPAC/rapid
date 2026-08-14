@@ -20,14 +20,33 @@ with the operator's `pipeline.operator.service`. `_database_endpoint` and
 `_database_credentials` stay here as thin wrappers rather than moving the
 call sites to the kernel names directly, so this module's own test suite
 (`pipeline/reconciler/test/test_main.py`) keeps working unchanged.
+
+**A FRESH CONNECTION, AND FRESH CREDENTIALS, PER POLL** (kernel contract:
+`service_kernel.database_credentials`'s "call this immediately before each
+connection open, not once at startup", citing `rapid_plan design/security.md`
+"Database service credentials"). This module used to resolve credentials
+once and open ONE connection for the whole `run_forever` loop — the exact
+"cached across connections" shape the operator's own `main()` was found
+violating and fixed (`pipeline.operator.service._connection_factory`,
+`_execute_factory`: a fresh connection per pass, credentials fetched inside
+the factory at each call). The reconciler now does the same at its own
+granularity, a fresh poll rather than a fresh pass: `_poll_cycle` below opens
+one connection, builds one `ReconcilerService` around it, runs exactly one
+`poll_once`, and closes it, so a rotated secret takes effect on the very
+next poll rather than only on the next process restart. `ReconcilerService`
+itself already documents that it "owns no state between polls beyond its
+connections" — this is that design realized at the process level, not a
+change to the service's own per-poll body.
 """
 
 import logging
 import os
 import sys
+import time
 
-from pipeline.reconciler.service import (POLL_SECONDS, ReconcilerService,
-                                         ReconcilerUnhealthy, run_forever)
+from pipeline.reconciler.service import (POLL_FAILURE_THRESHOLD, POLL_SECONDS,
+                                         ReconcilerService, ReconcilerUnhealthy,
+                                         run_forever)
 from pipeline.runtime import service_kernel
 from pipeline.runtime.boundaries import S3ObjectStore
 from pipeline.runtime.environment import resolve_region
@@ -54,7 +73,7 @@ def _assumed_session(role_arn, region):
         role_arn, region, role_session_name="rapid-reconciler")
 
 
-def build_service(session, parameters, conn):
+def build_service(session, parameters, conn, poll_seconds=None):
     s3 = session.client("s3")
     records_bucket = parameters["s3/records-bucket"]
     diagnostics_bucket = parameters["s3/diagnostics-bucket"]
@@ -66,6 +85,14 @@ def build_service(session, parameters, conn):
         s3_client=s3,
         records_prefix=parameters["s3/records-prefix"],
         diagnostics_bucket=diagnostics_bucket,
+        # The real poll cadence, purely for `reconciler_runs.poll_seconds` —
+        # never assigned before this fix (`ReconcilerService.__init__` never
+        # took it, `write_heartbeat` read a getattr default that was always
+        # None). `main`'s outer loop knows the true interval even though
+        # `run_forever` is called once per poll with `poll_seconds=0` here
+        # (see `run_forever`'s own docstring for why it does not stamp this
+        # itself) — so this is where the real value is threaded through.
+        poll_seconds=poll_seconds,
         # CloudWatch, for reconstructing a record with no predecessor (#16).
         # The log group is a parameter rather than a constant because it is
         # the Batch job definition's, and the definition owns that name.
@@ -213,6 +240,82 @@ def _preflight_schema(conn):
     return verified
 
 
+def _carry_health_counters(previous, service):
+    """Move the running health tally onto a freshly rebuilt service.
+
+    `_poll_cycle` below opens a fresh connection and a fresh
+    `ReconcilerService` every poll (the per-connection-open credential fetch
+    the kernel contract requires — see this module's docstring). The health
+    counters `run_forever` reads (`consecutive_poll_failures`,
+    `consecutive_unproductive_polls`, and the informational ones `health()`
+    reports) live on the SERVICE instance, not the process, so rebuilding it
+    from scratch each poll would silently reset them every cycle — a
+    reconciler that failed every one of its last four polls would look
+    freshly healthy on poll five, and `POLL_FAILURE_THRESHOLD`/
+    `CLOSURE_FAILURE_POLL_THRESHOLD` would never be reached no matter how
+    persistent the fault. `previous` is `None` on the very first poll.
+    """
+    if previous is None:
+        return service
+    service.consecutive_poll_failures = previous.consecutive_poll_failures
+    service.consecutive_unproductive_polls = \
+        previous.consecutive_unproductive_polls
+    service._closure_failures = previous._closure_failures
+    service._binding_drift = previous._binding_drift
+    service._missing_bundles = previous._missing_bundles
+    service._reconstructed_bundles = previous._reconstructed_bundles
+    return service
+
+
+def _poll_cycle(session, parameters, previous_service, poll_seconds):
+    """One poll: fresh connection, fresh credentials, one `run_forever` pass.
+
+    Delegates the actual cycle to `service.run_forever` UNCHANGED — that
+    function's health-threshold logic is shared and tested
+    (`pipeline/reconciler/test/test_service.py`) against a single
+    long-lived `service` argument, so this does not reshape it: a fresh
+    `ReconcilerService` is built here and handed to `run_forever` for
+    exactly one iteration (`should_continue` stops it after the first call).
+
+    Opening THIS poll's connection can itself fail — a network blip, a
+    credential briefly rejected — and that failure is deliberately let
+    PROPAGATE out of this function rather than absorbed here: `main`'s own
+    loop (below) counts it, exactly mirroring `run_forever`'s own
+    consecutive-failure counting but at the connect step, which is now
+    genuinely outside `run_forever`'s reach (it used to be inside — a query
+    against an already-broken long-lived connection failed inside
+    `poll_once` and was counted there — so this preserves the same
+    "transient connection trouble is retried in-process, not treated as a
+    start failure" behavior at its new location).
+    """
+    from database.modules.utils.rapid_db_connect import connection
+
+    endpoint = _database_endpoint(parameters)
+    # FRESH EVERY POLL (kernel contract: `service_kernel.database_credentials`
+    # — "call this immediately before each connection open, not once at
+    # startup"). Resolved here, inside the per-poll cycle, rather than once
+    # in `main` and closed over — see this module's docstring for the
+    # incident this replaces (the reconciler previously matched it).
+    credentials = _database_credentials(session)
+
+    with connection("rapid-reconciler", lane="transaction",
+                    endpoint=endpoint, credentials=credentials) as conn:
+        service = build_service(session, parameters, conn,
+                                poll_seconds=poll_seconds)
+        _carry_health_counters(previous_service, service)
+
+        ran = {"once": False}
+
+        def _stop_after_one():
+            first_call = not ran["once"]
+            ran["once"] = True
+            return first_call
+
+        run_forever(service, poll_seconds=0, sleep=lambda _seconds: None,
+                    should_continue=_stop_after_one)
+    return service
+
+
 def main():
     _configure_logging()
 
@@ -231,33 +334,64 @@ def main():
         region = resolve_region()
         session = _assumed_session(role_arn, region)
         parameters = fetch_parameters(client=session.client("ssm"))
-        endpoint = _database_endpoint(parameters)
-        credentials = _database_credentials(session)
         logger.info("reconciler starting: poll=%ss records=%s diagnostics=%s",
                     poll_seconds, parameters["s3/records-bucket"],
                     parameters["s3/diagnostics-bucket"])
 
-        with connection("rapid-reconciler", lane="transaction",
-                        endpoint=endpoint,
-                        credentials=credentials) as conn:
-            # THE SCHEMA PREFLIGHT (rule 18), fail-closed, before the service
-            # is built. Placed inside the connection and before
-            # `build_service` for the same reason the operator's work-stream
-            # check sits where it does: the check's entire value is refusing
-            # to START against a schema this build's SQL does not fit.
-            # Without it a missing migration surfaced as an UndefinedColumn
-            # from whichever query happened to run first, hours later,
-            # attributed to that query rather than to the deployment.
-            #
-            # A raise here lands in the `except Exception` below and exits
-            # EXIT_START_FAILED, which is what systemd's Restart=always
-            # should retry — the migration step is the fix, and a restarting
-            # service that keeps naming the missing migration in the journal
-            # is how an operator finds that out.
+        # THE SCHEMA PREFLIGHT (rule 18), fail-closed, before the first poll.
+        # A one-time startup gate, on its own short connection — mirroring
+        # the operator's `_verify_work_streams`, which is the same kind of
+        # gate for the same reason: the check's entire value is refusing to
+        # START against a schema this build's SQL does not fit, and it needs
+        # to run once before polling begins, not on every reconnect. Its own
+        # connection is fine to hold only for this one preflight query and
+        # discard — the per-poll rule this module's docstring describes
+        # governs the polling connections below, not this startup gate.
+        with connection("rapid-reconciler-preflight", lane="transaction",
+                        endpoint=_database_endpoint(parameters),
+                        credentials=_database_credentials(session)) as conn:
             _preflight_schema(conn)
-            service = build_service(session, parameters, conn)
-            run_forever(service, poll_seconds=poll_seconds,
-                        should_continue=lambda: running["go"])
+
+        service = None
+        # Consecutive failures to even OPEN this poll's connection — distinct
+        # from `service.consecutive_poll_failures`, which counts failures of
+        # an already-open `poll_once` and is carried on `service` itself
+        # (`_carry_health_counters`). A connect failure happens before any
+        # service exists to carry a counter, so `main` tracks this one, at
+        # the same threshold and with the same verdict `run_forever` reaches
+        # for its own counter — a connect failure is exactly the "stale
+        # connection, rotated credential" case `run_forever`'s docstring
+        # already names as retried in-process up to that threshold.
+        consecutive_connect_failures = 0
+        while running["go"]:
+            started = time.monotonic()
+            try:
+                service = _poll_cycle(session, parameters, service,
+                                      poll_seconds)
+            except ReconcilerUnhealthy:
+                raise
+            except Exception:  # noqa: BLE001 - retried, but counted
+                consecutive_connect_failures += 1
+                logger.exception(
+                    "reconciler could not open this poll's connection "
+                    "(%d consecutive, threshold %d)",
+                    consecutive_connect_failures, POLL_FAILURE_THRESHOLD)
+                if consecutive_connect_failures >= POLL_FAILURE_THRESHOLD:
+                    raise ReconcilerUnhealthy(
+                        f"{consecutive_connect_failures} consecutive "
+                        f"failures opening a poll connection (threshold "
+                        f"{POLL_FAILURE_THRESHOLD}); exiting so the "
+                        f"supervisor restarts it.") from None
+            else:
+                if consecutive_connect_failures:
+                    logger.info(
+                        "reconciler reconnected after %d failed attempt(s)",
+                        consecutive_connect_failures)
+                consecutive_connect_failures = 0
+            elapsed = time.monotonic() - started
+            remaining = poll_seconds - elapsed
+            if running["go"] and remaining > 0:
+                time.sleep(remaining)
     except ReconcilerUnhealthy:
         # NOT a start failure (round-3 finding #6). `ReconcilerUnhealthy`
         # subclasses RuntimeError, so the handler below caught it and told the
