@@ -502,3 +502,30 @@ Date              Software modification
 ===============   ===============================================================================================================================================================================================================================
 5/19/2026         Modified to feed ZOGY scaled std_ref_img by scalefacref (gain-matching correction).
 ===============   ===============================================================================================================================================================================================================================
+
+
+8/14/2026
+************************************
+
+Processed all images in the new set of rimtimsims delivered on 6/22/26.
+These have a greater variety of injected transients.
+There are 263 images total and two filters are included in this dataset,
+broken down as follows::
+
+    rimtimsimdb=> select sca,fid,count(*) from l2files group by sca,fid order by sca,fid;
+     sca | fid | count
+    -----+-----+-------
+       2 |   4 |   131
+       2 |   7 |   132
+    (2 rows)
+
+Included the following improvement to how the rimtimsims are prepared, as well as recent
+pipeline improvements documented on the :doc:`main page for testing </dev/tests>`.
+
+===============   ===============================================================================================================================================================================================================================
+Date              Software modification
+===============   ===============================================================================================================================================================================================================================
+8/12/2026         Modified ``sims/src/rimtimsim/convert_rimtimsim.py`` to recompute FITS-header ``CRVAL1,2`` at ``CRPIX1,2 = 2044.5`` for the new set of rimtimsims delivered on 6/22/26.
+===============   ===============================================================================================================================================================================================================================
+
+Database metadata for this test are stored in the RAPID-operations database rimtimsims3db.
