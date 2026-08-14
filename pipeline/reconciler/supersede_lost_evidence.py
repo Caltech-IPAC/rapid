@@ -77,6 +77,8 @@ BLOCKING_STATES = (
     LifecycleState.TERMINAL_WITHOUT_START.value,
 )
 
+_LIKE_ESCAPE = "\\"
+
 _SELECT = """
 SELECT attempt_id, run_id, logical_job_id, scheduler_job_id,
        lifecycle_state, scheduler_state, rapid_outcome, product_disposition,
@@ -91,13 +93,32 @@ SELECT attempt_id, run_id, logical_job_id, scheduler_job_id,
        binding_image_digest, binding_release_identity,
        binding_manifest_checksum, config_snapshot_key
   FROM attempts
- WHERE run_id LIKE %s
+ WHERE run_id LIKE %s ESCAPE '{escape}'
    AND lifecycle_state = ANY(%s)
    AND terminal_record_sequence >= 1
    AND (registered_record_sequence IS NULL
         OR registered_record_sequence < terminal_record_sequence)
  ORDER BY attempt_id
-"""
+""".format(escape=_LIKE_ESCAPE)
+
+
+def _escape_like_pattern(text):
+    """Escape `_`, `%%` and the escape character itself for a LIKE pattern.
+
+    `--run-prefix` is operator input concatenated into a `LIKE` pattern
+    (`f"{run_prefix}%"` below) with no `ESCAPE` clause — so a prefix
+    containing a literal `_` (matches any one character) or `%` (matches
+    any run of characters) was silently interpreted as a wildcard rather
+    than the literal text the operator typed, widening the row selection
+    beyond the named prefix. `run_id`s in this codebase are typically
+    hyphenated (`fixd-chain-...`), not underscored, which is exactly why
+    this went unnoticed rather than why it was safe. The backslash is
+    escaped FIRST — escaping it after `_`/`%` would double-escape the
+    backslashes those two insertions just added.
+    """
+    return (text.replace(_LIKE_ESCAPE, _LIKE_ESCAPE + _LIKE_ESCAPE)
+                .replace("_", _LIKE_ESCAPE + "_")
+                .replace("%", _LIKE_ESCAPE + "%"))
 
 
 def _now():
@@ -106,8 +127,9 @@ def _now():
 
 def select_rows(conn, run_prefix):
     """Rows whose cited record must be readable for registration to pass."""
+    pattern = _escape_like_pattern(run_prefix) + "%"
     with conn.cursor() as cur:
-        cur.execute(_SELECT, (f"{run_prefix}%", list(BLOCKING_STATES)))
+        cur.execute(_SELECT, (pattern, list(BLOCKING_STATES)))
         names = [description[0] for description in cur.description]
         rows = [dict(zip(names, row)) for row in cur.fetchall()]
     conn.rollback()  # read-only; do not hold a transaction open
