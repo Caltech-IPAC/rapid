@@ -192,6 +192,16 @@ class RecordingExecute:
         #: `backfill_found_children`'s count/UPDATE pair — the state a FOUND
         #: recovery test needs to exist independent of a real database.
         self.attempts_by_id: dict[int, dict] = {}
+        #: The next id `INSERT INTO campaigns ... RETURNING campaign_id`
+        #: hands back, so `CampaignWriter.create_campaign`'s `_single_value`
+        #: read gets a real row shape rather than a bare rowcount (see the
+        #: fallthrough's docstring note below — this is the exact statement
+        #: that fallthrough was silently mis-modeling).
+        self.next_campaign_id = 1
+        #: Every `unit_events`/`campaigns` row this double has recorded,
+        #: for a test that wants to assert on them directly rather than
+        #: only on `work_units_by_scope`'s derived state.
+        self.unit_events: list[tuple] = []
 
     def __call__(self, statement, params=None):
         call = self.clock.tick()
@@ -384,7 +394,45 @@ class RecordingExecute:
             with_index = [row for row in unbound
                          if row["array_index"] is not None]
             return [(len(unbound), len(with_index))]
-        return 1
+        if statement.startswith("UPDATE attempts SET work_unit_id"):
+            # `pipeline.seams._attach_work_unit`'s final step: filling in
+            # the FK on an attempt row that already exists, not a new
+            # attempt. Recorded onto `attempts_by_id` so a test asserting
+            # on that dict (rather than only on the raw statement list)
+            # sees the attachment too.
+            work_unit_id, attempt_id = params
+            if attempt_id in self.attempts_by_id:
+                self.attempts_by_id[attempt_id]["work_unit_id"] = work_unit_id
+            return 1
+        if "INSERT INTO campaigns" in statement:
+            # `CampaignWriter.create_campaign`'s `RETURNING campaign_id`.
+            # THE STATEMENT THE OLD BLANKET `return 1` FALLTHROUGH WAS
+            # SILENTLY MIS-MODELING (near-miss on record: commit d96a3261,
+            # caught only by count assertions on a DIFFERENT call). Reading
+            # `_single_value`'s own fallback branch shows why the old
+            # fallthrough passed: `_single_value(1)` is not None, not a
+            # list/tuple, not a dict, so it falls to `return rows` and hands
+            # back the bare int `1` as if it were a real campaign_id — every
+            # test using this double's `create_campaign` was silently
+            # getting `campaign_id == 1` regardless of what was "inserted",
+            # rather than a row shape a real cursor would return. This
+            # route returns the real `[(campaign_id,)]` row shape instead.
+            campaign_id = self.next_campaign_id
+            self.next_campaign_id += 1
+            return [(campaign_id,)]
+        if "INSERT INTO unit_events" in statement:
+            # `WorkUnitWriter._record_event`: no RETURNING clause, so the
+            # real contract is a bare rowcount — but recorded here (rather
+            # than silently accepted by the old fallthrough) so a test can
+            # assert on the event history the way `fixture.unit_events`
+            # does for the contract tier.
+            self.unit_events.append(tuple(params) if params else ())
+            return 1
+        raise AssertionError(
+            f"RecordingExecute has no route for this statement — a stub "
+            f"that silently returns 1 for anything unmatched is exactly "
+            f"the near-miss on record (commit d96a3261): {statement!r} "
+            f"params={params!r}")
 
 
 class SubmitUnitsTests(unittest.TestCase):
