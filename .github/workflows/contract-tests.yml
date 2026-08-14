@@ -28,6 +28,39 @@
 # rather than silently testing against a schema it built some other way — a
 # green run against a vendored copy of the migrations would be exactly the
 # false substrate this whole tier exists to eliminate.
+#
+# ---------------------------------------------------------------------------
+# PR-GATING (D4, process-hardening campaign, 2026-08-13): PROPOSED, NOT
+# RATIFIED. `on:` below still fires on `push` to smdc and manual dispatch
+# only — this workflow does not gate pull requests today, and the decision
+# below is to LEAVE IT THAT WAY for now rather than add `pull_request` here.
+#
+# Reasoning, weighed conservative-by-default per this run's own instruction
+# (unattended, no one to catch a wrong call before it starts blocking PRs):
+#
+#   * Caltech-IPAC/rapid is PUBLIC (verified live: `gh repo view` reports
+#     visibility PUBLIC). A `pull_request`-triggered run from a FORK gets no
+#     access to repository secrets by default — RAPID_SYSTEMS_READ_TOKEN
+#     would be absent, and this workflow's own "fail closed if the cross-org
+#     read secret is not provisioned" step would then fail EVERY fork PR,
+#     always, for a reason that has nothing to do with the PR's own change.
+#     A required check that a class of legitimate contributor can never pass
+#     is worse than no check.
+#   * The safe way to hand secrets to a `pull_request`-shaped run is
+#     `pull_request_target` (runs in the base repo's context, secrets
+#     available) — but it runs with the BASE branch's workflow file against
+#     the PR's head content, and mishandling that split is exactly how
+#     `pull_request_target` gets a fork PR arbitrary secret access; not a
+#     change to make unattended, and not evaluated in this pass.
+#   * No PR-triggered run history exists yet to gauge flakiness or runtime
+#     under PR concurrency — this is genuinely THIS repo's first Actions
+#     workflow (see header above), proven on `push` only so far.
+#
+# Revisit once: (a) push-triggered runs have a track record, and (b) a
+# pull_request_target design (or an org policy restricting who may open PRs)
+# closes the fork-secret gap above. Until then this stays a `push` gate —
+# reversible, and this comment is the record of why, per this campaign's
+# ledger (wave-d).
 name: contract-tests
 
 on:
