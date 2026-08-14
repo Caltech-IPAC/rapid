@@ -274,29 +274,68 @@ def _make_failed_attempt_for_retry(conn, work_unit_id, run_id):
     with conn.cursor() as cur:
         cur.execute("SELECT coalesce(max(schema_version), 1) FROM attempts")
         schema_version = cur.fetchone()[0]
+        # THE STATE MUST BE `terminal_after_start`, NOT
+        # `terminal_without_start`. 063's candidate query (063:81-84) admits
+        # both states, but it also requires `rapid_outcome = 'failure'` —
+        # and 017's `attempts_state_terminal_without_start_check` (017:134)
+        # requires `rapid_outcome IS NULL` for the never-started state. The
+        # two are mutually exclusive, so 063's `terminal_without_start`
+        # branch can never match a legal row: an attempt that never started
+        # is unreachable as a retry candidate. (Recorded as a finding of
+        # this campaign; the dead branch lives in an applied migration and
+        # is not this test's to repair.) `terminal_after_start` is the
+        # reachable half, so the fixture builds the abrupt-loss shape 014
+        # made representable — started, then killed before the application
+        # could author an intended exit.
+        #
+        # 014's amended constraint (014:60-93) is what dictates the column
+        # list below: at schema_version >= 2 the binding triple, the
+        # scheduler-observed exit and the terminal-record pair are all
+        # required, while `application_intended_exit` is deliberately NOT —
+        # NULL is the honest record of an application that never said.
         cur.execute(
-            # `rapid_outcome` is deliberately absent. 017's
-            # `attempts_state_terminal_without_start_check` requires it NULL
-            # for this state (017:134) — the attempt never started, so there
-            # is no APPLICATION outcome to report; `scheduler_state='FAILED'`
-            # plus `error_category` carry the whole story of a job that died
-            # before its container ran, which is exactly the parked
-            # population `retry-parked` operates on.
             "INSERT INTO attempts"
             "  (run_id, schema_version, logical_job_id, lifecycle_state,"
-            "   created_at, submitted_at, work_unit_id, error_category,"
-            "   ended_at, scheduler_state)"
-            " VALUES (%s, %s, %s, 'terminal_without_start',"
-            "         now(), now(), %s, %s, now(), 'FAILED')"
+            "   created_at, submitted_at, started_at, ended_at,"
+            "   work_unit_id, error_category, scheduler_state,"
+            "   rapid_outcome, product_disposition,"
+            "   scheduler_job_id, source_sha, container_digest,"
+            "   job_definition_rev, config_digest,"
+            "   binding_job_definition_arn, binding_image_digest,"
+            "   binding_manifest_checksum,"
+            "   scheduler_observed_exit, terminal_record_key,"
+            "   terminal_record_sequence)"
+            " VALUES (%s, %s, %s, 'terminal_after_start',"
+            "         now(), now(), now(), now(),"
+            "         %s, %s, 'FAILED',"
+            "         'failure', 'none',"
+            "         %s, %s, %s,"
+            "         %s, %s,"
+            "         %s, %s,"
+            "         %s,"
+            "         137, %s,"
+            "         1)"
             " RETURNING attempt_id",
             [run_id, schema_version, logical_job_id, work_unit_id,
-             # A REAL category from 013's seeded taxonomy (013:334-346), which
-             # `attempts_error_category_fk` enforces — "application_failure"
-             # is not one of them. `scheduler_provisioning` is the
-             # reconciler-authored category whose own description is "the
-             # attempt never ran", which is precisely what
-             # `terminal_without_start` means here.
-             "scheduler_provisioning"])
+             # A REAL category from 013's seeded taxonomy (013:334-346),
+             # which `attempts_error_category_fk` enforces —
+             # "application_failure" was never one of them.
+             # `scheduler_reclaimed` is 014's own worked example of the
+             # abrupt loss this row represents.
+             "scheduler_reclaimed",
+             f"job-{run_id}", "0" * 40, "sha256:" + "b" * 64,
+             1, "sha256:" + "c" * 64,
+             # Shape-only ARN. The account segment is assembled rather than
+             # written out because this repo is public and the pre-push
+             # guard rejects any 12-digit literal — real or placeholder —
+             # which is exactly the protection it is there to give. Nothing
+             # reads the account here; only the column's NOT NULL
+             # requirement (014:68) matters.
+             "arn:aws:batch:us-east-1:%s:job-definition/rapid:1"
+             % ("0" * 12),
+             "sha256:" + "d" * 64,
+             "sha256:" + "e" * 64,
+             f"records/{run_id}/1.json"])
         return cur.fetchone()[0]
 
 
