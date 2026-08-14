@@ -69,6 +69,32 @@ def _fence_rows(conn, bucket, object_key):
         return cur.fetchall()
 
 
+def _age_fence_into_the_past(conn, bucket, object_key):
+    """Make an already-acquired fence genuinely expired, for tests that need
+    a crash-recovery reclaim with no sweeper and no real wait.
+
+    `lease_seconds=0` does NOT do this: `acquire_fence`'s INSERT sets
+    `expires_at = now() + 0` in the same statement whose `acquired_at`
+    column DEFAULT is also `now()`, and PostgreSQL freezes `now()` to one
+    value for the whole transaction — so both columns get the IDENTICAL
+    timestamp and `gc_fences_lease_ck CHECK (expires_at > acquired_at)`
+    (052-gc-plans.sql) rejects the row outright. That check also rules out
+    a NEGATIVE `lease_seconds` as the fix: `expires_at` would then be
+    LESS than `acquired_at`, still failing the same CHECK. The only way to
+    get a genuinely-past `expires_at` past that constraint is to age the
+    row in a SEPARATE statement, after the acquiring INSERT has committed
+    with a normal positive lease — a new transaction gets a new frozen
+    `now()`, later than the row's `acquired_at`, so backdating
+    `expires_at` from there is not fighting the same freeze that would
+    reject it inline.
+    """
+    with conn.cursor() as cur:
+        cur.execute(
+            "UPDATE gc_fences SET expires_at = now() - interval '1 second'"
+            " WHERE bucket = %s AND object_key = %s", (bucket, object_key))
+    conn.commit()
+
+
 def _conn_executor(conn):
     """The bare `execute(sql, params)` shape `pipeline.gc.fence` takes,
     committing after every call — the identical shape
@@ -141,12 +167,10 @@ def test_release_only_removes_the_named_holders_row(conn):
     execute = _conn_executor(conn)
     assert gc_fence.acquire_fence(
         execute, bucket=BUCKET, object_key=key, holder="first",
-        holder_kind=gc_fence.HOLDER_GC, lease_seconds=0)
-    # Zero-second lease: already expired by the time the next acquisition
-    # asks, so "second" reclaims it exactly as a crash-recovery acquirer
-    # would.
-    import time
-    time.sleep(0.05)
+        holder_kind=gc_fence.HOLDER_GC)
+    # Age "first"'s fence into the past (see _age_fence_into_the_past) so
+    # "second" reclaims it exactly as a crash-recovery acquirer would.
+    _age_fence_into_the_past(conn, BUCKET, key)
     assert gc_fence.acquire_fence(
         execute, bucket=BUCKET, object_key=key, holder="second",
         holder_kind=gc_fence.HOLDER_REGISTRATION)
@@ -178,9 +202,12 @@ def test_an_expired_lease_is_reclaimed_not_treated_as_still_held(conn):
     execute = _conn_executor(conn)
     assert gc_fence.acquire_fence(
         execute, bucket=BUCKET, object_key=key, holder="crashed-holder",
-        holder_kind=gc_fence.HOLDER_REGISTRATION, lease_seconds=0)
-    import time
-    time.sleep(0.05)
+        holder_kind=gc_fence.HOLDER_REGISTRATION)
+    # Age the lease into the past (see _age_fence_into_the_past) rather
+    # than acquiring with lease_seconds=0 — a zero lease sets expires_at
+    # equal to acquired_at under PostgreSQL's transaction-frozen now(),
+    # which gc_fences_lease_ck rejects before the row is ever written.
+    _age_fence_into_the_past(conn, BUCKET, key)
 
     # A THIRD PARTY reclaims it — not the crashed holder retrying, a
     # DIFFERENT actor, which is exactly the crash-recovery shape: the
@@ -450,9 +477,13 @@ def test_crash_recovery_a_registration_fence_left_behind_expires(
     # calls `_bind_fence`'s `finally`).
     assert gc_fence.acquire_fence(
         execute_a, bucket=BUCKET, object_key=key, holder="crashed-registrar",
-        holder_kind=gc_fence.HOLDER_REGISTRATION, lease_seconds=0)
-    import time
-    time.sleep(0.05)
+        holder_kind=gc_fence.HOLDER_REGISTRATION)
+    # Age the lease into the past (see _age_fence_into_the_past) rather
+    # than acquiring with lease_seconds=0, which fails gc_fences_lease_ck
+    # outright under PostgreSQL's transaction-frozen now(). The UPDATE
+    # commits on `conn`, so `second_conn`'s later, separate transaction
+    # sees the past expires_at when it reads the row below.
+    _age_fence_into_the_past(conn, BUCKET, key)
 
     execute_b = _conn_executor(second_conn)
     assert gc_fence.acquire_fence(
