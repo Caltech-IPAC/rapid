@@ -47,9 +47,9 @@ never terminates the process; rule 22's isolation discipline). One object's
 failure records that object's outcome and the run continues.
 """
 
-import datetime
 import typing
 
+from pipeline.gc import fence as gc_fence
 from pipeline.gc.plans import GCPlanRepository
 
 #: How long a GC fence is held. Short, because it covers only the
@@ -286,46 +286,33 @@ class Executor:
     def _acquire_fence(self, item):
         """Take the fence over this key, or report failure.
 
-        A plain INSERT against `gc_fences_key_uq`. A conflicting row means
-        someone else — a registration, or another GC run — holds it, and the
-        item is skipped. Expired leases are reclaimed by the same statement so
-        a crashed holder cannot block a key forever; expiry is judged HERE
-        rather than by a sweeper, because a sweeper that had not run yet would
-        make an expired fence look live.
+        Delegates to `pipeline.gc.fence.acquire_fence` — the shared SQL
+        shape the registration side (`pipeline.registration.consumer`)
+        now also calls, with `holder_kind='registration'`, over its own
+        bind critical section. GC asking for the fence with
+        `holder_kind='gc'` and finding a live, unexpired
+        `holder_kind='registration'` row already blocks: the shared
+        INSERT's `ON CONFLICT ... WHERE gc_fences.expires_at < now()`
+        clause only reclaims an EXPIRED row, so a registration mid-bind
+        makes this acquisition fail exactly as a second GC run would —
+        this IS the "counterpart's participation cannot be verified"
+        clause the module docstring names, made concrete by the ON
+        CONFLICT's own WHERE rather than by a second, separately-written
+        check.
         """
-        expires = datetime.timedelta(seconds=self._lease)
-        try:
-            rows = self._repo._query(
-                "acquire_fence",
-                "INSERT INTO gc_fences"
-                " (bucket, object_key, holder, holder_kind, expires_at)"
-                " VALUES (%s, %s, %s, 'gc', now() + %s)"
-                " ON CONFLICT (bucket, object_key) DO UPDATE"
-                "    SET holder = EXCLUDED.holder,"
-                "        holder_kind = EXCLUDED.holder_kind,"
-                "        acquired_at = now(),"
-                "        expires_at = EXCLUDED.expires_at"
-                "  WHERE gc_fences.expires_at < now()"
-                " RETURNING fence_id",
-                (item.bucket, item.object_key, self._actor, expires))
-        except Exception:                             # noqa: BLE001
-            # FAILS CLOSED. An error acquiring the fence is not permission to
-            # proceed without one.
-            return False
-        return bool(rows)
+        return gc_fence.acquire_fence(
+            lambda sql, params: self._repo._query("acquire_fence", sql,
+                                                   params),
+            bucket=item.bucket, object_key=item.object_key,
+            holder=self._actor, holder_kind=gc_fence.HOLDER_GC,
+            lease_seconds=self._lease)
 
     def _release_fence(self, item):
-        try:
-            self._repo._query(
-                "release_fence",
-                "DELETE FROM gc_fences"
-                " WHERE bucket = %s AND object_key = %s AND holder = %s",
-                (item.bucket, item.object_key, self._actor))
-        except Exception:                             # noqa: BLE001
-            # A fence left behind expires on its lease; failing to release is
-            # not worth failing the run over, and re-raising here would mask
-            # the outcome the caller is about to record.
-            pass
+        gc_fence.release_fence(
+            lambda sql, params: self._repo._query("release_fence", sql,
+                                                   params),
+            bucket=item.bucket, object_key=item.object_key,
+            holder=self._actor)
 
     # -- item status writes ----------------------------------------------
 

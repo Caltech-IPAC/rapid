@@ -91,10 +91,12 @@ import logging
 
 from observability.attempts import LifecycleState
 from observability.registration import RegistrationDecision, decide
+from pipeline.gc import fence as gc_fence
 from pipeline.intent.writer import (
     COMPLETE, SUBMITTED, WRITER_RECONCILER, WorkUnitNotFound, WorkUnitWriter)
 from pipeline.registration.products import (
-    MissingRecordFact, RecordValidationRejected, RegistrationFailed)
+    MissingRecordFact, read_record, RecordValidationRejected,
+    RegistrationFailed)
 
 logger = logging.getLogger("rapid.registration")
 
@@ -734,7 +736,191 @@ def mark_registered(conn, attempt_id, record_sequence, now=None, cursor=None):
     return sequence
 
 
-def register_batch(conn, rows, register=None, run=None, dry_run=False):
+def _parse_s3_uri(uri):
+    """Split an `s3://bucket/key` URI. Returns `(bucket, key)` or `None`.
+
+    The one format every product URI this module reads is written in
+    (`pipeline.gc.inventory.InventoryObject.uri`: `"s3://%s/%s" %
+    (self.bucket, self.key)`), and the only format the fence's
+    `(bucket, object_key)` columns are keyed by. A URI that is not this
+    shape (a record authored by something that published elsewhere, or a
+    malformed entry) returns `None` rather than raising — the fence is a
+    defence-in-depth layer over deletion, not the record's own
+    completeness check, and `MissingRecordFact` already owns raising on a
+    record that cannot support registration at all.
+    """
+    prefix = "s3://"
+    if not uri or not uri.startswith(prefix):
+        return None
+    rest = uri[len(prefix):]
+    bucket, _, key = rest.partition("/")
+    if not bucket or not key:
+        return None
+    return bucket, key
+
+
+def _bind_fence_keys(record, attempt_id=None):
+    """Every `(bucket, object_key)` this attempt's registration will bind.
+
+    Read straight off `record["products"]` — the SAME list `published()`
+    indexes for the registrar bodies — rather than re-deriving which
+    entries actually get written: registration reads the record and
+    nothing else (this module's own governing rule, restated in
+    `products.py`'s header), and a fence scope that tried to predict
+    which of a reference image's up-to-three URIs or a difference image's
+    role-selected URI actually gets bound would be a second, possibly
+    disagreeing account of what `published()` already knows. Fencing
+    every published URI is a superset of what one attempt binds, never a
+    subset — which is the safe direction for a fence: over-fencing costs
+    GC a skipped item it re-verifies next pass, under-fencing is the race
+    this module exists to close.
+
+    Returns a list, possibly empty (a record with no `products` list, or
+    one whose entries are not `s3://` URIs, fences nothing — `register()`
+    will raise `MissingRecordFact` on the same absence moments later, so
+    this is not silently proceeding unguarded over a real product).
+    """
+    from pipeline.registration.products import published
+
+    try:
+        products = published(record, attempt_id=attempt_id)
+    except Exception:                                 # noqa: BLE001
+        # `published()` raises `MissingRecordFact` for a record with no
+        # `products` list at all. Not this function's failure to report —
+        # `register()` will raise the identical exception moments later
+        # inside the caller's own try/except, and this fences nothing
+        # rather than duplicating that raise here.
+        return []
+    keys = []
+    for entry in products.values():
+        parsed = _parse_s3_uri(entry.get("uri"))
+        if parsed is not None:
+            keys.append(parsed)
+    return keys
+
+
+def _fence_conn_executor(conn):
+    """A bare `execute(sql, params)` over `conn`, committing after every call.
+
+    **DELIBERATELY NOT `_cursor_executor` OVER THE PER-ATTEMPT TRANSACTION'S
+    OWN CURSOR.** `register_batch`'s per-attempt `with _transaction(conn) as
+    cur:` block does not commit until the block exits — that is the whole
+    point of round-3 finding #8, "the product rows and the watermark commit
+    together, or neither does" — so a fence row written on that cursor would
+    stay invisible to every OTHER connection (GC's, or another registration
+    pass's) until the exact moment the fence is no longer needed. A fence
+    that only becomes visible after it is released fences nothing. This
+    executor instead opens its own tiny statement-and-commit on `conn`
+    directly, exactly like `Executor._acquire_fence`/`_release_fence`'s own
+    calls through `GCPlanRepository._query` do on the GC side — each fence
+    operation is its own unit of work, deliberately outside the bind's
+    product-row transaction, so the fence row's visibility is not gated on
+    that transaction's own commit.
+    """
+    def execute(statement, params=None):
+        with conn.cursor() as cur:
+            cur.execute(statement, params)
+            if cur.description is not None:
+                result = cur.fetchall()
+            else:
+                result = cur.rowcount
+        conn.commit()
+        return result
+    return execute
+
+
+@contextlib.contextmanager
+def _bind_fence(conn, record, attempt_id):
+    """Hold the registration fence over every key this bind will touch.
+
+    **THE BIND CRITICAL SECTION, FENCED — NOT THE WHOLE UPLOAD-TO-BIND
+    INTERVAL.** Upload happens in the payload job, long before this
+    consumer ever runs; fencing that whole span would hold a lease for
+    the length of a Batch job, far past `pipeline.gc.fence`'s
+    short-lease design (GC's own `FENCE_LEASE_SECONDS = 120` is sized for
+    "one object's re-verify-and-delete", the same order of magnitude this
+    scope needs). What is fenced here is exactly the caller's `with`
+    body — `register_batch` wraps its per-attempt `with _transaction(conn)
+    as cur:` block in this, the transaction-bound call that reads the
+    record's URIs and writes them into the operations tables — which is
+    the short section `pipeline.gc.execute`'s module docstring names as
+    mitigation layer 4.
+
+    Takes `conn`, not a cursor already inside another transaction: see
+    `_fence_conn_executor`'s docstring for why the fence's own visibility
+    cannot be gated on the bind transaction's commit.
+
+    Uses `gc_fence.HOLDER_REGISTRATION`, the SAME `gc_fences` table and
+    the SAME acquire/release SQL shape GC's own `Executor` uses (via
+    `pipeline.gc.fence`, extracted from `Executor._acquire_fence` so
+    the two dialects cannot drift apart) — a `holder_kind='gc'` fence
+    live over any of this bind's keys makes acquisition here fail
+    exactly the way a `holder_kind='registration'` fence already makes
+    GC's acquisition fail (`test_the_fence_fails_closed_when_it_cannot_be_
+    acquired`), because expiry is judged by the ONE shared `WHERE
+    gc_fences.expires_at < now()` clause regardless of which holder_kind
+    is asking.
+
+    **FAILS CLOSED.** A key whose fence cannot be acquired — because GC
+    holds it, live and unexpired — raises `BindFenced` rather than
+    proceeding: registering a product whose bytes GC may be mid-delete on
+    would bind a URI that stops existing under it, which is worse than
+    refusing and letting the next pass retry (this attempt stays a
+    candidate; `register_batch`'s outer `except` already treats any
+    exception raised before or during the transaction as "counted as
+    failed, rolled back, still a candidate" — see that function's comment
+    on the `try` around the whole `with _transaction(conn)` block).
+
+    Released on every exit, success or exception — `holder=actor` scopes
+    the release so a lease that already expired and was reclaimed by
+    someone else is never deleted out from under its new holder (see
+    `pipeline.gc.fence.release_fence`'s own docstring).
+    """
+    keys = _bind_fence_keys(record, attempt_id=attempt_id)
+    actor = "registrar:%s" % attempt_id
+    execute = _fence_conn_executor(conn)
+    acquired = []
+    try:
+        for bucket, object_key in keys:
+            if not gc_fence.acquire_fence(
+                    execute, bucket=bucket, object_key=object_key,
+                    holder=actor, holder_kind=gc_fence.HOLDER_REGISTRATION):
+                raise BindFenced(bucket, object_key, attempt_id=attempt_id)
+            acquired.append((bucket, object_key))
+        yield
+    finally:
+        for bucket, object_key in acquired:
+            gc_fence.release_fence(execute, bucket=bucket,
+                                   object_key=object_key, holder=actor)
+
+
+class BindFenced(RuntimeError):
+    """A bind key's fence could not be acquired — GC holds it.
+
+    Raised by `_bind_fence`, OUTSIDE the per-attempt `with
+    _transaction(conn) as cur:` block (`register_batch` wraps that block
+    in `_bind_fence`, not the reverse) — there is no product-row
+    transaction open yet for this attempt when this can be raised, so
+    there is nothing to roll back beyond the fence acquisitions
+    `_bind_fence`'s own `finally` already releases. `register_batch`'s
+    outer `except Exception` still catches it exactly like any other
+    registration failure: counted as failed, the attempt stays a
+    candidate, and a later pass retries once GC's fence has released or
+    expired.
+    """
+
+    def __init__(self, bucket, object_key, attempt_id=None):
+        self.bucket = bucket
+        self.object_key = object_key
+        self.attempt_id = attempt_id
+        super().__init__(
+            f"attempt {attempt_id}: could not acquire the registration "
+            f"fence over s3://{bucket}/{object_key} — GC holds it live; "
+            f"this attempt's registration is deferred to a later pass")
+
+
+def register_batch(conn, rows, register=None, run=None, dry_run=False,
+                   store=None):
     """Decide and register each candidate. Returns the `RegistrationRun`.
 
     `register(row, decision)` performs the actual product registration and is
@@ -751,6 +937,21 @@ def register_batch(conn, rows, register=None, run=None, dry_run=False):
     Now a missing callback is an error unless `dry_run=True` says the caller
     meant it. The dry-run counts are also kept apart from the real ones, so a
     rehearsal can never be mistaken for a registration in a log or a metric.
+
+    `store` (brief H, GC fence registration half) is the SAME records store
+    `pipeline.registration.products.registrar` reads from — this function
+    reads the record a SECOND time through it, independently of whatever
+    `register` does internally, purely to learn which `(bucket, object_key)`
+    pairs this attempt's bind is about to touch, so it can hold the
+    registration fence over exactly them for exactly the `register()` call
+    (see `_bind_fence`). `store=None` (every caller predating this brief)
+    fences nothing and registers exactly as before — an explicit opt-in
+    rather than a silent behaviour change for existing call sites, mirroring
+    this module's own `execute is None` precedent elsewhere in the codebase.
+    A record unreadable or invalid for fencing purposes is not raised here:
+    `register()` reads the SAME record moments later through the SAME
+    verified path and raises there, which is the one place this module
+    already handles that failure as a registration failure.
     """
     if register is None and not dry_run:
         raise ValueError(
@@ -827,8 +1028,35 @@ def register_batch(conn, rows, register=None, run=None, dry_run=False):
         # One attempt whose record is incomplete must not roll back the
         # registrations of the attempts before it — those are finished units of
         # work, already committed by their own blocks.
+        #
+        # THE BIND FENCE WRAPS THE TRANSACTION, NOT THE REVERSE (brief H,
+        # GC fence registration half). Read BEFORE `_transaction(conn)`
+        # opens: the fence's own acquire/release are each their own
+        # committed statement on `conn` (`_fence_conn_executor`), so they
+        # must not be nested inside the bind's uncommitted product-row
+        # transaction, where the fence row would stay invisible to every
+        # other connection until the exact moment it is released. A
+        # `store is None` caller (every one predating this brief) fences
+        # nothing and reaches `_transaction(conn)` exactly as before.
+        fence_record = None
+        if store is not None:
+            try:
+                fence_record = read_record(store, row)
+            except Exception:                          # noqa: BLE001
+                # Unreadable or invalid — `register()` reads the SAME
+                # record moments later, inside the transaction below, and
+                # raises there (`MissingRecordFact`/
+                # `RecordValidationRejected`), which this attempt's own
+                # except-clauses already handle correctly. Nothing to
+                # fence yet is not a fencing failure.
+                fence_record = None
+
+        fence_cm = (_bind_fence(conn, fence_record, verdict.attempt_id)
+                    if fence_record is not None
+                    else contextlib.nullcontext())
+
         try:
-            with _transaction(conn) as cur:
+            with fence_cm, _transaction(conn) as cur:
                 # THE SINGLE-REGISTRAR LEASE, FIRST (integration ruling 4).
                 # Acquired before any read or write this attempt's
                 # registration performs, inside the very transaction that
@@ -889,6 +1117,13 @@ def register_batch(conn, rows, register=None, run=None, dry_run=False):
                         current_terminal_sequence, target_sequence)
                     continue
 
+                # `register()` runs INSIDE `fence_cm` (opened above, around
+                # this whole `with`) whenever `store` gave us a record to
+                # fence — the bind fence has to be held for this call and
+                # released only once it returns, but acquired/released as
+                # its OWN committed statements on `conn`, never nested
+                # inside this uncommitted transaction (see `_bind_fence`'s
+                # docstring on why).
                 try:
                     outcome = register(row, verdict)
                 except (MissingRecordFact, RecordValidationRejected) as rejection:

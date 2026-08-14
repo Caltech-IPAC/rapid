@@ -534,11 +534,26 @@ def dispatch_registration(context) -> None:
         # actually happened.
         register = registrar_for(context, conn=conn)
 
+        # THE BIND FENCE'S RECORDS STORE (brief H, GC fence registration
+        # half). A second `S3ObjectStore` over the same records bucket
+        # `registrar_for` already built one for internally — `registrar_for`
+        # does not return its own, and duplicating the (stateless) client
+        # construction here is cheaper than restructuring that function's
+        # return contract for a store `register_batch` uses read-only,
+        # purely to learn which product keys the fence needs to cover before
+        # calling `register()`. Without this, `register_batch` defaults to
+        # `store=None` and the fence is a no-op — see its docstring.
+        import boto3
+
+        from pipeline.runtime.boundaries import S3ObjectStore
+        fence_store = S3ObjectStore(context.parameter(PARAM_RECORDS_BUCKET),
+                                    client=boto3.client("s3"))
+
         rows = candidates(conn)
         logger.info("registration: %d reconciled attempt(s) to consider",
                     len(rows))
         run = register_batch(conn, rows, register=register,
-                             dry_run=register is None)
+                             dry_run=register is None, store=fence_store)
 
     if register is None and run.would_register:
         logger.warning(
