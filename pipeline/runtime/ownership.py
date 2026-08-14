@@ -35,6 +35,31 @@ completed, so the runtime raises `RecordsError` and exits nonzero, leaving the
 flagged row for the reconciler. This is the fail-loud posture's "records path
 unreachable" case: the row exists, so the failure is visible, but it is not
 one the application can record an outcome into.
+
+**WHY THIS MODULE DOES NOT ALSO CONSULT `submissions.state` (campaign C4).**
+`submission.protocol.resolve_submission_outcome` is the one function this
+codebase now uses to answer "did this attempt reach the scheduler",
+consolidating what used to be three independently-read vocabularies
+(`submissions.state`, `attempts.lifecycle_state ==
+missing_or_contradictory`, and the reconciler's `never_resolved` closure
+classification) — see that function's own docstring. `pipeline.reconciler.
+service._reconcile_unresolved` calls it; this module deliberately does NOT,
+and the reason is reachability, not an oversight. `resolve_ownership` runs
+INSIDE a container Batch has already started — the scheduler had to invoke
+this process for `resolve_ownership` to execute at all. A submission
+resolves `LOST` only from a NEGATIVE re-query of Batch's own job listing,
+past its resolution deadline (`submission.protocol.resolve`'s own
+docstring: "Found. The job exists... Not found, past the deadline.
+Recorded as lost"). Those two facts cannot coexist: a running container
+under a submission is positive proof the job exists, so `resolve()` would
+find it and mark the submission `FOUND`, never `LOST`. There is no
+`LOST`-submission state this module could observe for its OWN attempt that
+is not already evidence something upstream is badly wrong in a way a
+submission-outcome read cannot diagnose. The `missing_or_contradictory`
+check above remains the correct, and sufficient, guard for this module's
+actual reachable risk — a fact about the ATTEMPT ROW ITSELF, synchronously
+readable at claim time, not a fact about a scheduler call this process's
+own existence already answers.
 """
 
 import dataclasses

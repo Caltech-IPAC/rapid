@@ -1773,43 +1773,6 @@ class ReconcilerService:
 
     # -- the never-resolved case -----------------------------------------
 
-    def _submission_classification(self, row):
-        """What the durable submission record says about this attempt, if
-        anything — `FOUND`, `LOST`, or `None` (open/ambiguous or no record).
-
-        FAILS OPEN, unlike admission's fail-closed posture (`pipeline.seams`,
-        "a protocol failure NEVER blocks a submission"). Three ways this
-        degrades to `None` rather than raising:
-
-        * No `attempts.submission_id` on the row (pre-044, or a row a
-          submission pass could not attach) — `submission_for_attempt`
-          itself returns `None` for that case.
-        * The lookup raises — logged and treated as "nothing to conclude
-          from", never as evidence of absence. A bookkeeping read failing is
-          not the same fact as a job not existing, and must not block
-          reconciliation or be mistaken for a LOST verdict.
-        """
-        attempt_id = row.get("attempt_id")
-        submission_id = row.get("submission_id")
-        if not submission_id:
-            return None
-        try:
-            submission = submission_protocol.submission_for_attempt(
-                _Executor(self.conn), attempt_id)
-        except Exception:  # noqa: BLE001 - fail open, never block on this
-            self._safe_rollback()
-            logger.exception(
-                "could not read the submission record for attempt %s; "
-                "falling through to the submission-anchored horizon",
-                attempt_id)
-            return None
-        if submission is None:
-            return None
-        state = submission.get("state")
-        if state in (submission_protocol.FOUND, submission_protocol.LOST):
-            return state
-        return None
-
     def _reconcile_unresolved(self, row):
         """A pre-created child the scheduler cannot account for.
 
@@ -1824,15 +1787,32 @@ class ReconcilerService:
         positive evidence; a clock is not — so the clock is consulted only
         where there is no such evidence to consult (open/ambiguous, or no
         submission row at all: every pre-044 attempt).
+
+        **THE UNIFIED FACT (campaign C4).** This used to call this module's
+        own `_submission_classification`, which read only `submissions.
+        state` and FAILED OPEN — any read error was caught, logged, and
+        treated as "no evidence", falling through to the horizon-only
+        backstop with no record that the read had failed AT ALL. It now
+        calls `submission.protocol.resolve_submission_outcome`, the one
+        function `pipeline.runtime.ownership` also calls (see that module),
+        so both consumers of "did this attempt reach the scheduler" agree
+        by construction. A read error there PROPAGATES — this method raises,
+        `poll_once`'s own per-attempt try/except (unchanged) rolls back,
+        logs, and counts it in `summary["errors"]`, exactly as any other
+        per-attempt reconciliation failure already is. The previous
+        "log-and-treat-as-no-evidence" behaviour is gone: a failed read is
+        now a counted failure, not a silent downgrade to the weaker
+        horizon-only path.
         """
-        classification = self._submission_classification(row)
-        if classification == submission_protocol.FOUND:
+        outcome = submission_protocol.resolve_submission_outcome(
+            _Executor(self.conn), row)
+        if outcome == submission_protocol.SubmissionOutcome.FOUND:
             # The re-query is positive: the job exists and is running. This
             # is the case the clock got wrong — it must not be classified
             # never-resolved, however far past the horizon `submitted_at` is,
             # and it must not be resubmitted.
             return "waiting"
-        if classification == submission_protocol.LOST:
+        if outcome == submission_protocol.SubmissionOutcome.LOST:
             # A negative re-query past ITS OWN deadline
             # (`RESOLUTION_HORIZON_SECONDS`, enforced inside `protocol.
             # resolve`) is positive evidence of absence. Classification may
@@ -1843,9 +1823,17 @@ class ReconcilerService:
             pass
         elif not beyond_submission_horizon(row.get("submitted_at"),
                                            now=self._now()):
-            # No submission evidence either way (still open/ambiguous, or no
-            # submission row at all — the backstop's two legitimate roles).
-            # Inside the submission-anchored horizon: queue time, not a fault.
+            # No submission evidence either way (PENDING/CONTRADICTORY, or
+            # still open/ambiguous, or no submission row at all — the
+            # backstop's legitimate roles). Inside the submission-anchored
+            # horizon: queue time, not a fault. A CONTRADICTORY row past the
+            # horizon still falls through to the classification below,
+            # unchanged from today: this method has never special-cased
+            # `missing_or_contradictory` itself, since the row's OWN
+            # lifecycle_state is checked separately just below (`current[
+            # "lifecycle_state"] not in OPEN_STATES` — a row already
+            # missing_or_contradictory is not in OPEN_STATES and is
+            # "skipped" there, not reclassified here).
             return "waiting"
 
         attempt_id = row["attempt_id"]

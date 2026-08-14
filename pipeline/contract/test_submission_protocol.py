@@ -537,3 +537,106 @@ def test_an_interrupted_call_is_as_ambiguous_as_a_judged_one(conn):
     assert state == protocol.UNKNOWN
     assert deadline is not None
     assert batch.submit_calls == []
+
+
+# ---------------------------------------------------------------------------
+# THE UNIFIED SUBMISSION-OUTCOME FACT (campaign C4).
+#
+# `resolve_submission_outcome` collapses three vocabularies that used to be
+# read independently: `submissions.state` (this module's own FOUND/LOST),
+# `attempts.lifecycle_state == missing_or_contradictory` (a durable flag on
+# the ATTEMPT row itself), and the reconciler's `never_resolved` closure
+# classification (not exercised here — it is a label `pipeline.reconciler.
+# service._reconcile_unresolved` writes into a CLOSURE RECORD once THIS
+# function has already answered LOST/PENDING via the horizon path; the
+# closure-record shape is `pipeline.reconciler.test`'s territory, not this
+# module's). These three tests are the acceptance bar stated for C4: "the
+# three previously-divergent cases resolving to one answer" — a FOUND
+# submission, a LOST submission, and an attempt already flagged
+# CONTRADICTORY, each read through the SAME function and each producing
+# exactly the `SubmissionOutcome` the case calls for.
+# ---------------------------------------------------------------------------
+
+def _make_attempt_with_submission(conn, submission_id):
+    """A `submitted` attempt row linked to `submission_id` via the real FK
+    `attach_attempts` maintains — not a hand-set column, so the join
+    `resolve_submission_outcome` reads through is the real one."""
+    from pipeline.contract import fixture
+
+    attempt_id = fixture.make_attempt(conn)
+    execute = fixture.executor(conn)
+    attached = protocol.attach_attempts(execute, submission_id, [attempt_id])
+    assert attached == 1, "the fixture's own attach must succeed"
+    conn.commit()
+    return attempt_id
+
+
+def test_a_found_submission_resolves_found(conn):
+    """Case 1 of 3: a durably FOUND submission's linked attempt reads FOUND."""
+    from submission.protocol import SubmissionOutcome, resolve_submission_outcome
+
+    execute = fixture.executor(conn)
+    submission_id, run_id = _prepare(conn, "outcome-found")
+    protocol.mark_calling(execute, submission_id)
+    conn.commit()
+    protocol.mark_found(execute, submission_id, "job-outcome-found-1")
+    conn.commit()
+    attempt_id = _make_attempt_with_submission(conn, submission_id)
+
+    row = {"attempt_id": attempt_id, "submission_id": submission_id,
+           "lifecycle_state": "submitted"}
+    assert (resolve_submission_outcome(execute, row)
+            == SubmissionOutcome.FOUND)
+
+
+def test_a_lost_submission_resolves_lost(conn):
+    """Case 2 of 3: a durably LOST submission's linked attempt reads LOST."""
+    from submission.protocol import SubmissionOutcome, resolve_submission_outcome
+
+    execute = fixture.executor(conn)
+    submission_id, _ = _prepare(conn, "outcome-lost")
+    protocol.mark_calling(execute, submission_id)
+    conn.commit()
+    protocol.mark_unknown(execute, submission_id, detail="x")
+    conn.commit()
+    protocol.mark_lost(execute, submission_id)
+    conn.commit()
+    attempt_id = _make_attempt_with_submission(conn, submission_id)
+
+    row = {"attempt_id": attempt_id, "submission_id": submission_id,
+           "lifecycle_state": "submitted"}
+    assert (resolve_submission_outcome(execute, row)
+            == SubmissionOutcome.LOST)
+
+
+def test_a_flagged_attempt_resolves_contradictory_even_with_a_found_submission(
+        conn):
+    """Case 3 of 3: an attempt already `missing_or_contradictory` reads
+    CONTRADICTORY — checked FIRST, before the submission record is even
+    consulted, so a FOUND submission on the SAME attempt cannot override it.
+    This is the property that makes the fact durable-once: the row's own
+    recorded conclusion is authoritative over a fresh join, not raced against
+    it on every read.
+    """
+    from observability.attempts import AttemptWriter
+    from pipeline.contract import fixture
+    from submission.protocol import SubmissionOutcome, resolve_submission_outcome
+
+    execute = fixture.executor(conn)
+    submission_id, _ = _prepare(conn, "outcome-contradictory")
+    protocol.mark_calling(execute, submission_id)
+    conn.commit()
+    protocol.mark_found(execute, submission_id, "job-outcome-contradictory-1")
+    conn.commit()
+    attempt_id = _make_attempt_with_submission(conn, submission_id)
+
+    AttemptWriter(execute).mark_missing_or_contradictory(
+        attempt_id, reconciliation_class="missing",
+        reconciliation_sources=["postgres", "batch"],
+        detected_at=datetime.datetime.now(datetime.timezone.utc))
+    conn.commit()
+
+    row = {"attempt_id": attempt_id, "submission_id": submission_id,
+           "lifecycle_state": "missing_or_contradictory"}
+    assert (resolve_submission_outcome(execute, row)
+            == SubmissionOutcome.CONTRADICTORY)

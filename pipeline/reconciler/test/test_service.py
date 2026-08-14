@@ -2020,17 +2020,25 @@ class SubmissionRecordDecidesOverTheClockTests(unittest.TestCase):
         self.assertEqual("missing_or_contradictory",
                          conn.rows[1]["lifecycle_state"])
 
-    def test_a_raising_submission_lookup_falls_through_to_the_horizon(self):
-        # Criterion 11: fail OPEN. The lookup itself raising must not block
-        # reconciliation and must not be mistaken for LOST — it falls
-        # through to the existing horizon backstop, and is logged (checked
-        # via the rollback count: the failed SELECT's aborted transaction is
-        # cleared exactly like every other caught exception in this file).
+    def test_a_raising_submission_lookup_is_a_counted_error_not_a_downgrade(
+            self):
+        # C4 (campaign): the old fail-open posture ("Criterion 11") is
+        # REVERSED. `submission.protocol.resolve_submission_outcome` — the
+        # unified read this now goes through, replacing this module's own
+        # `_submission_classification` — does not catch a read failure and
+        # does not return a "no evidence" answer for one; it propagates.
+        # `poll_once`'s own per-attempt try/except (unchanged) is the
+        # boundary that catches it, exactly as any other per-attempt
+        # reconciliation failure is caught: rolled back, logged, counted in
+        # `summary["errors"]`. What must NOT happen any more is the row
+        # being silently classified `terminal_without_start` on the strength
+        # of a failed read that was mistaken for "no submission evidence" —
+        # a persistent read fault is now visible in `errors`, not absorbed.
         #
         # Fault injection goes through FakeConnection's declared
         # `route_raises` capability (mirroring FakeBatch's
         # `list_jobs_raises`), not a monkeypatch of `conn.route` in the test
-        # body — the verifier's gap-2 finding.
+        # body.
         row = attempt_row(1, scheduler_job_id=None,
                           submitted_at=utc(2026, 8, 6, 11, 0, 0),
                           submission_id=100)
@@ -2042,11 +2050,11 @@ class SubmissionRecordDecidesOverTheClockTests(unittest.TestCase):
 
         summary = svc.poll_once()
 
-        # Past the horizon, no usable submission evidence -> the backstop
-        # classifies exactly as it would with no submission_id at all.
-        self.assertEqual(1, summary["classified"])
-        self.assertEqual("terminal_without_start",
-                         conn.rows[1]["lifecycle_state"])
+        self.assertEqual(1, summary["errors"])
+        self.assertEqual(0, summary.get("classified", 0))
+        # The row is untouched — no downgrade classification was written on
+        # the strength of a failed read.
+        self.assertEqual("submitted", conn.rows[1]["lifecycle_state"])
 
     def test_never_calls_submit_job_reaching_this_path(self):
         # Criterion 12, the protocol invariant: resolution is re-query only.

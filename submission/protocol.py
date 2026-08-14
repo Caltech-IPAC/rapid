@@ -67,6 +67,7 @@ only bounds how long the re-query keeps saying "not yet".
 """
 
 import datetime
+import enum
 import logging
 
 logger = logging.getLogger("rapid.submission.protocol")
@@ -449,6 +450,126 @@ def submission_for_attempt(execute, attempt_id):
     columns = ("submission_id", "state", "job_name", "job_queue",
                "resolution_deadline")
     return dict(zip(columns, rows[0]))
+
+
+# ---------------------------------------------------------------------------
+# THE UNIFIED SUBMISSION-OUTCOME FACT (campaign C4).
+#
+# Three vocabularies used to answer "did this attempt reach the scheduler",
+# independently: `submissions.state` (this module's own FOUND/LOST — the
+# durable, evidence-backed answer), `attempts.lifecycle_state ==
+# missing_or_contradictory` (the resolver's and the reconciler's own flag
+# for "the stores disagree", written by three different producers:
+# migration 013's `resolve_attempt` function, and two call sites in
+# `pipeline.reconciler.service`), and the reconciler's `never_resolved`
+# CLOSURE CLASSIFICATION (a string recorded in the closure record when the
+# submission-anchored horizon elapses with no positive evidence either way
+# — not a state at all, a label on the record explaining why the horizon
+# path was taken).
+#
+# `resolve_submission_outcome` below is the ONE function that reads all the
+# evidence that currently exists and returns ONE answer, in the vocabulary
+# below — replacing `pipeline.reconciler.service._submission_classification`
+# (which read only `submissions.state`, fell open to `None` on any read
+# error, and left `runtime.ownership` never consulting the durable record at
+# all — see the docstring below for both fixes) as the read boundary both
+# consumers (the runtime's ownership resolver at attempt START, and the
+# reconciler's `_reconcile_unresolved` at attempt CLOSE) now share.
+#
+# WHAT THIS DOES NOT DO: it does not add a column, and it does not change
+# WHO writes `missing_or_contradictory` or WHEN `never_resolved` is
+# recorded — see this function's own docstring, and this campaign's ledger,
+# for exactly why a full write-side unification (one column, written once,
+# superseding all three) needs a schema change this migration stream is not
+# reopening, and what that column would look like as a follow-up.
+
+
+class SubmissionOutcome(str, enum.Enum):
+    """The unified answer to "did this attempt reach the scheduler".
+
+    FOUND / LOST mirror `submissions.state`'s own two terminal, positive-
+    evidence answers exactly (this module already owns that vocabulary;
+    this enum does not rename it, it re-exposes it at the fact-level API).
+    CONTRADICTORY folds in `attempts.lifecycle_state ==
+    missing_or_contradictory` — evidence conflict, wherever it was
+    produced. PENDING is "no conclusion yet": no submission row (pre-044,
+    or a row a submission pass could not attach), or one still open
+    (`calling`/`unknown`, inside its own resolution horizon) — the caller's
+    own backstop (the submission-anchored horizon, or the ownership
+    resolver's own refusal-on-terminal-state check) still applies here,
+    exactly as it did when `_submission_classification` answered `None`.
+    """
+
+    FOUND = "found"
+    LOST = "lost"
+    CONTRADICTORY = "contradictory"
+    PENDING = "pending"
+
+
+def resolve_submission_outcome(execute, row):
+    """The unified submission-outcome fact for one attempt row (campaign C4).
+
+    `row` is an attempt row dict carrying at least `attempt_id`,
+    `submission_id`, and `lifecycle_state` — the same shape both consumers
+    already have in hand (`pipeline.reconciler.service`'s `_OPEN_COLUMNS`
+    row, and `pipeline.runtime.ownership`'s post-`resolve_attempt` re-read).
+
+    ORDER OF EVIDENCE, STRONGEST FIRST:
+
+    1. `lifecycle_state == missing_or_contradictory` on the row ITSELF —
+       already a durable, already-recorded conclusion (from
+       `resolve_attempt`'s own SQL body, or from one of the reconciler's two
+       `mark_missing_or_contradictory` calls). If the row already says the
+       stores disagree, that conclusion is not re-derived or second-guessed
+       from the submission record — it is returned as `CONTRADICTORY`
+       directly, cheaper than a join and consistent with there being only
+       ONE fact once this is written.
+    2. The durable `submissions` record (`submission_for_attempt`), when one
+       is linked and DRAFT 044 is applied. `FOUND`/`LOST` map straight
+       across; any OTHER state (`prepared`, `calling`, `unknown`, or no
+       linked row at all) is `PENDING` — there is no positive evidence yet
+       either way.
+
+    **A READ ERROR IS NOW AN ERROR, NOT A SILENT DOWNGRADE** (campaign C4's
+    stated acceptance bar). `_submission_classification`, the function this
+    replaces, caught every exception from `submission_for_attempt` and
+    returned `None` — "fail open, never block on this" — which meant a
+    transient database fault was INDISTINGUISHABLE from "no submission
+    evidence exists", and a caller (the reconciler) fell through to the
+    weaker horizon-only backstop without ever learning the read had failed.
+    This function does not catch anything: a broken connection, a query
+    that cannot execute, propagates to the caller. Both current callers
+    already run inside a broader try/except at their own boundary
+    (`_reconcile_unresolved` inside `poll_once`'s per-attempt handling;
+    `resolve_ownership` inside the runtime's own fail-loud startup path)
+    that logs and counts a failure rather than crashing the process — so
+    "propagate" here does not mean "the service falls over", it means the
+    failure is COUNTED as the failure it is, instead of being silently
+    reinterpreted as an evidentiary fact.
+
+    NOT a probe for DRAFT 044's presence — a caller that has not already
+    checked `is_available` (or does not care, because `submission_id` will
+    simply be absent on every row until the migration lands) gets `PENDING`
+    from step 2's `submission_id`-absent branch, matching this module's
+    existing degrade-without-the-table posture throughout.
+    """
+    if row.get("lifecycle_state") == "missing_or_contradictory":
+        return SubmissionOutcome.CONTRADICTORY
+
+    submission_id = row.get("submission_id")
+    if not submission_id:
+        return SubmissionOutcome.PENDING
+
+    submission = submission_for_attempt(execute, row.get("attempt_id"))
+    if submission is None:
+        return SubmissionOutcome.PENDING
+
+    state = submission.get("state")
+    if state == FOUND:
+        return SubmissionOutcome.FOUND
+    if state == LOST:
+        return SubmissionOutcome.LOST
+    return SubmissionOutcome.PENDING
 
 
 def resolve(execute, row, describe, now=None):
