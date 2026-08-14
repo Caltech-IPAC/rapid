@@ -160,6 +160,63 @@ def disposition_for_terminal_attempt(*, succeeded, error_category,
     return PARK_BLOCKED
 
 
+#: The `blocked_reason` for a unit parked because its effect-attempt series
+#: exhausted the retry ceiling (ruling R1). Distinct from `UNCLASSIFIED_
+#: REASON` and `APPLICATION_PARK_PREFIX`-based reasons: those describe an
+#: attempt-level failure category, and an unconfirmed effect is not a
+#: failure category at all — it is a claim/confirm protocol outcome with no
+#: `error_category` to name. A dedicated reason string keeps an operator
+#: from reading "unclassified_failure" and looking for a failed attempt when
+#: what actually happened is a series of swallowed confirm-path database
+#: errors.
+EFFECT_RETRY_EXHAUSTED_REASON = "effect_retry_exhausted"
+
+
+def disposition_for_unconfirmed_effect(*, effect_attempt_count):
+    """What a terminal SKIP with disposition `effect_unconfirmed` means for
+    its WORK UNIT (ruling R1, effect-lifecycle completion boundary).
+
+    A SEPARATE decision function from `disposition_for_terminal_attempt`,
+    not a branch inside it, because it is invoked from a different call site
+    under a different lock: the registration consumer's SKIP-consume
+    handler, under the per-attempt lease (`pipeline.registration.consumer.
+    ATTEMPT_LEASE_NAMESPACE`), never the reconciler — an `effect_unconfirmed`
+    attempt is already `terminal_after_start` by the time registration ever
+    sees it, so the reconciler's own closure policy has already run and
+    found nothing terminal to do (the attempt's own outcome was `success`,
+    which is `CLOSE_COMPLETE`-shaped to `disposition_for_terminal_attempt`
+    — it is only the EFFECT that failed to confirm, a fact the reconciler's
+    attempt-level policy has no vocabulary for).
+
+    `effect_attempt_count` is how many of the unit's attempts have already
+    closed with an `effect_*` disposition — the unit's OWN series count for
+    THIS policy, deliberately not `scheduler_loss_count` from the sibling
+    function: a scheduler-visible loss and an unconfirmed effect are
+    different populations absorbing different ceilings, and conflating them
+    would let one exhaust the other's budget. Counted by the caller (a
+    `product_disposition = ANY('{effect_confirmed,effect_unconfirmed,
+    effect_deferred}')` scan over the unit's attempts), not here — this
+    function performs no I/O, matching `disposition_for_terminal_attempt`'s
+    own discipline.
+
+    Returns `RETRY_READY` under `SCHEDULER_RETRY_CEILING` (the SAME ceiling
+    constant — one v1 judgment call about "how many times is worth trying
+    again", not two), or `PARK_BLOCKED` at or over it. Never `CLOSE_COMPLETE`
+    or `CLOSE_FAILED` under this function directly: confirmation success
+    closes the unit through the ordinary `effect_confirmed` -> `CLOSE_
+    COMPLETE` path this function is never consulted for, and version 1 does
+    not tombstone an unconfirmed effect any more than it tombstones an
+    application failure — see the module docstring's "never tombstoned".
+    """
+    if effect_attempt_count >= SCHEDULER_RETRY_CEILING:
+        logger.warning(
+            "work unit has absorbed %d unconfirmed-effect attempts "
+            "(ceiling %d); parking rather than re-gathering again",
+            effect_attempt_count, SCHEDULER_RETRY_CEILING)
+        return PARK_BLOCKED
+    return RETRY_READY
+
+
 def blocked_reason_for(error_category):
     """The `blocked_reason` text for a parked unit.
 

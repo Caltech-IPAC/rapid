@@ -442,6 +442,12 @@ class Context:
         self.unit = unit
         self.parameters = dict(parameters)
         self.provenance = {}
+        #: The stage-to-stage product channel (ruling R1 needs it:
+        #: `produce_alerts` now calls `context.produce("effect_outcome", ...)`
+        #: to carry its claim/confirm classification to the derivation site —
+        #: see `pipeline.stages.context.StageContext`, whose real shape this
+        #: mirrors for exactly the fields `produce_alerts` actually touches).
+        self.products = {}
         self.logger = _SilentLogger()
         self.connection = conn
         self.attempt_id = attempt_id
@@ -458,6 +464,16 @@ class Context:
         self.provenance["rows_written"] = (
             self.provenance.get("rows_written", 0) + int(rows_written))
         self.provenance.update(extra)
+
+    def produce(self, name, value):
+        self.products[name] = value
+        return value
+
+    def product(self, name):
+        return self.products[name]
+
+    def has_product(self, name):
+        return name in self.products
 
 
 class _SilentLogger:

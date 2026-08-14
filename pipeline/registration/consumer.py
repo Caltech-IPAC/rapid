@@ -20,6 +20,24 @@ sequence 2. The registered-watermark column is what makes that idempotent —
 an attempt is skipped when its registered sequence already matches the current
 one, and re-registered when it does not.
 
+THE WATERMARK SPLIT (ruling R1, migration 075). The paragraph above described
+`registered_record_sequence` alone, and that was the eternal-candidates
+defect: a terminal SKIP verdict (products withheld, superseded, none, or an
+application failure) never advanced ANY watermark, because the only one that
+existed was scoped to acceptance. So a permanently-skipped attempt — one whose
+disposition will never become REGISTER — stayed a candidate forever, reread
+and redecided on every single pass, indistinguishable in the query from an
+attempt genuinely awaiting its first decision. Migration 075 adds `attempts.
+consumed_record_sequence` as the answer to a DIFFERENT question from
+`registered_record_sequence`: not "were this sequence's products accepted"
+but "has registration already reached a terminal verdict about this sequence
+at all". `_CANDIDATE_SQL` below is keyed on the consumed watermark, not the
+registered one, and BOTH REGISTER and a terminal SKIP advance it — REGISTER
+alongside `registered_at`/`registered_record_sequence` in the same statement
+(acceptance semantics are UNCHANGED: only REGISTER ever sets those two), a
+terminal SKIP alone. A DEFER never advances either watermark, because a DEFER
+is not yet a decision — see `observability.registration.RegistrationDecision`.
+
 ONE TRANSACTION PER ATTEMPT (round-3 finding #8). The watermark only means
 what the paragraph above says if it moves in the same transaction as the
 product rows it is a watermark FOR. It did not: the registrar wrote products
@@ -89,11 +107,15 @@ import datetime
 import json
 import logging
 
-from observability.attempts import LifecycleState
+from observability.attempts import LifecycleState, ProductDisposition
 from observability.registration import RegistrationDecision, decide
 from pipeline.gc import fence as gc_fence
+from pipeline.intent.retry_policy import (
+    EFFECT_RETRY_EXHAUSTED_REASON, PARK_BLOCKED, RETRY_READY,
+    disposition_for_unconfirmed_effect)
 from pipeline.intent.writer import (
-    COMPLETE, SUBMITTED, WRITER_RECONCILER, WorkUnitNotFound, WorkUnitWriter)
+    BLOCKED, COMPLETE, READY, SUBMITTED, WRITER_RECONCILER, WorkUnitNotFound,
+    WorkUnitWriter)
 from pipeline.registration.products import (
     MissingRecordFact, read_record, RecordValidationRejected,
     RegistrationFailed)
@@ -146,6 +168,16 @@ _COLUMNS = (
     # The watermark, so a caller can see what a candidate was last registered
     # at without a second query (review finding #5).
     "registered_at", "registered_record_sequence",
+    # THE CONSUMED WATERMARK (ruling R1, migration 075). Distinct from the
+    # pair above: `registered_record_sequence` keeps its ACCEPTANCE meaning
+    # unchanged — "this sequence's products are durably registered" — and is
+    # ONLY ever set by the REGISTER path. `consumed_record_sequence` answers
+    # a different question, "has registration already made a terminal
+    # decision about this sequence at all", and is set by BOTH REGISTER and
+    # a terminal SKIP verdict. See the module docstring's "THE WATERMARK
+    # SPLIT" for why one column serving both questions was the eternal-
+    # candidates defect this migration exists to close.
+    "consumed_record_sequence",
     # The intent-layer FK (finding 7 repair). NULL on every pre-intent-layer
     # row and on any attempt whose definition-FK guard held it back at
     # submission time (see `pipeline.seams._attach_work_unit`) — mirroring
@@ -158,40 +190,63 @@ _COLUMNS = (
     "work_unit_id",
 )
 
-# THE REGISTERED WATERMARK (review finding #5).
+# THE CONSUMED WATERMARK (review finding #5; split from the registered
+# watermark by ruling R1 / migration 075 — see the module docstring's "THE
+# WATERMARK SPLIT").
 #
 # Without the last predicate this selected every reconciled attempt on every
 # pass, so a registration job re-registered the same attempts forever. The
-# watermark is the SEQUENCE registered rather than a boolean, which is what
+# watermark is the SEQUENCE consumed rather than a boolean, which is what
 # makes the design's "reprocesses on a later supersession" work: an attempt
-# registered at sequence 1 whose reconciler later publishes sequence 2 has a
+# consumed at sequence 1 whose reconciler later publishes sequence 2 has a
 # record sequence ahead of its watermark and becomes a candidate again.
 _CANDIDATE_SQL = (
     "SELECT " + ", ".join(_COLUMNS) +
     " FROM attempts"
     " WHERE lifecycle_state = ANY(%s)"
     "   AND terminal_record_sequence >= 1"
-    "   AND (registered_record_sequence IS NULL"
-    "        OR registered_record_sequence < terminal_record_sequence)"
+    "   AND (consumed_record_sequence IS NULL"
+    "        OR consumed_record_sequence < terminal_record_sequence)"
     " ORDER BY attempt_id"
 )
 
+#: REGISTER: both watermarks advance together, in one statement — acceptance
+#: (`registered_at`/`registered_record_sequence`) and consumption
+#: (`consumed_record_sequence`) are the same fact for a REGISTER verdict, so
+#: there is no window in which one is ahead of the other for this path.
 _MARK_REGISTERED_SQL = (
     "UPDATE attempts"
-    "   SET registered_at = %s, registered_record_sequence = %s"
+    "   SET registered_at = %s, registered_record_sequence = %s,"
+    "       consumed_record_sequence = %s"
     " WHERE attempt_id = %s"
     "   AND (registered_record_sequence IS NULL"
     "        OR registered_record_sequence < %s)"
 )
 
+#: A terminal SKIP: consumption advances ALONE. `registered_at` and
+#: `registered_record_sequence` are left exactly as they are — a SKIP is
+#: definitionally never an accepted result, so writing either would claim an
+#: acceptance that did not happen, corrupting `pipeline.reconciler.service.
+#: _work_unit_series`'s "has any sibling been accepted" read.
+_MARK_CONSUMED_SQL = (
+    "UPDATE attempts"
+    "   SET consumed_record_sequence = %s"
+    " WHERE attempt_id = %s"
+    "   AND (consumed_record_sequence IS NULL"
+    "        OR consumed_record_sequence < %s)"
+)
+
 #: The post-lock re-read (integration ruling 4). Only the watermark columns —
-#: the candidate query's own predicate is `registered_record_sequence IS NULL
-#: OR registered_record_sequence < terminal_record_sequence`, so re-checking
+#: the candidate query's own predicate is `consumed_record_sequence IS NULL
+#: OR consumed_record_sequence < terminal_record_sequence`, so re-checking
 #: exactly that pair under the lease is what tells this attempt's turn "another
-#: writer already registered this sequence while I waited" from "I am still
-#: the one to do this".
+#: writer already consumed this sequence while I waited" from "I am still
+#: the one to do this". Reads the CONSUMED watermark (ruling R1), not the
+#: registered one — this re-read now guards SKIP's own re-entry into the
+#: transactional block exactly as it already guarded REGISTER's, which is the
+#: point of moving SKIP under the same lease (see `register_batch`).
 _REREAD_WATERMARK_SQL = (
-    "SELECT registered_record_sequence, terminal_record_sequence"
+    "SELECT consumed_record_sequence, terminal_record_sequence"
     " FROM attempts WHERE attempt_id = %s"
 )
 
@@ -223,9 +278,10 @@ def _acquire_attempt_lease(cursor, attempt_id):
 def _reread_watermark(cursor, attempt_id):
     """The post-lock watermark re-read (integration ruling 4).
 
-    Returns (registered_record_sequence, terminal_record_sequence), or None if
+    Returns (consumed_record_sequence, terminal_record_sequence), or None if
     the attempt row is gone. Called immediately after the lease is acquired
-    and before any registration work: the candidate list was built by an
+    and before any registration OR skip work (ruling R1 moved SKIP under this
+    same guard — see `register_batch`): the candidate list was built by an
     unlocked read at the start of the pass, so by the time this attempt's
     lease is held, another writer — the other call path, or an earlier
     iteration of this same pass on a re-entrant connection — may already have
@@ -637,6 +693,193 @@ def _complete_work_unit(attempt_id, work_unit_id, cursor):
             work_unit_id, attempt_id)
 
 
+#: The three effect dispositions, as plain strings — `_EFFECT_ATTEMPT_COUNT_
+#: SQL`'s `= ANY(%s)` argument and `_apply_skip_disposition`'s own dispatch
+#: both need the bare values, not the enum members (ruling R1).
+_EFFECT_DISPOSITIONS = (
+    ProductDisposition.EFFECT_CONFIRMED.value,
+    ProductDisposition.EFFECT_UNCONFIRMED.value,
+    ProductDisposition.EFFECT_DEFERRED.value,
+)
+
+_EFFECT_ATTEMPT_COUNT_SQL = (
+    "SELECT count(*) FROM attempts"
+    " WHERE work_unit_id = %s AND product_disposition = ANY(%s)"
+)
+
+
+def _effect_attempt_count(work_unit_id, cursor):
+    """How many of this unit's attempts have already closed with an
+    `effect_*` disposition (ruling R1).
+
+    The series count `pipeline.intent.retry_policy.disposition_for_
+    unconfirmed_effect` needs for its own ceiling — this module's own query,
+    distinct from the reconciler's `_work_unit_series`: that method answers
+    ATTEMPT-level questions (has a sibling been accepted, is one still open)
+    the reconciler's closure policy needs, on the reconciler's own connection
+    and transaction; this answers a narrower question registration alone
+    needs (how many effect attempts has THIS unit absorbed) on the
+    registration transaction, under the R4 lease already held. Counting
+    INCLUDES this attempt's own row — unlike `_work_unit_series`'s `exclude_
+    attempt_id`, this attempt's row has already been written by the time
+    this is called (`mark_terminal_after_start`/`mark_application_closed` ran
+    before registration ever saw it), so it is already part of the series
+    being measured, not a row still being decided.
+    """
+    cursor.execute(_EFFECT_ATTEMPT_COUNT_SQL,
+                   (work_unit_id, list(_EFFECT_DISPOSITIONS)))
+    row = cursor.fetchone()
+    return int(row[0]) if row is not None else 0
+
+
+def _apply_skip_disposition(attempt_id, work_unit_id, disposition,
+                            rapid_outcome, cursor):
+    """The unit-state half of a terminal SKIP verdict, per ruling R1's table.
+
+    Called under the SAME lease and the SAME per-attempt transaction as a
+    REGISTER verdict's `_complete_work_unit` — see `register_batch`, which
+    moved SKIP under that guard specifically so this could run there rather
+    than racing a stale terminal sequence. `disposition` and `rapid_outcome`
+    are the row's own columns, read before the lease (candidates() is
+    unlocked) but re-validated by the caller's own post-lock reread of the
+    watermark pair before this is reached — this function trusts them for
+    the CHOICE OF BRANCH, not for the CAS itself, which `transition_unit`
+    performs fresh.
+
+    Every branch below CONSUMES (the caller's `mark_consumed` call, made
+    unconditionally regardless of which branch fires) — this function's only
+    job is the unit's own state, which four of its seven cases leave
+    untouched at `submitted`.
+
+        confirmed   -> complete (the effect landed; same standard
+                       `_complete_work_unit` applies to a REGISTER verdict)
+        unconfirmed -> retry policy: ready under the ceiling, park over it
+        deferred    -> submitted, untouched (a live owner is authoritative)
+        withheld    -> complete (a deliberate, accepted non-publication)
+        superseded  -> submitted, untouched (the superseding attempt settles
+                       the unit under its own terminal record)
+        none        -> submitted, untouched, but LOGGED as an anomaly for
+                       operator attention (see below) — a product route that
+                       succeeded and produced nothing is unexpected in a way
+                       none of the other six branches are
+        (any failure outcome) -> submitted, untouched (the reconciler's own
+                       retry policy, `disposition_for_terminal_attempt`,
+                       already owns this unit's disposition for a failed
+                       attempt; registration adds nothing)
+    """
+    if work_unit_id is None:
+        # Mirrors `_complete_work_unit`'s identical guard: absent means
+        # absence, one layer up, for every pre-intent-layer or
+        # undefined-workflow row.
+        return
+
+    work_writer = WorkUnitWriter(_cursor_executor(cursor))
+
+    if disposition == ProductDisposition.EFFECT_CONFIRMED.value:
+        _transition_or_log(work_writer, work_unit_id, attempt_id, COMPLETE,
+                           disposition="close_complete_effect")
+        return
+
+    if disposition == ProductDisposition.EFFECT_UNCONFIRMED.value:
+        count = _effect_attempt_count(work_unit_id, cursor)
+        verdict = disposition_for_unconfirmed_effect(
+            effect_attempt_count=count)
+        if verdict == RETRY_READY:
+            _transition_or_log(work_writer, work_unit_id, attempt_id, READY,
+                               disposition="retry_ready_unconfirmed_effect")
+        else:
+            assert verdict == PARK_BLOCKED
+            _transition_or_log(
+                work_writer, work_unit_id, attempt_id, BLOCKED,
+                disposition="park_blocked_unconfirmed_effect",
+                blocked_reason=EFFECT_RETRY_EXHAUSTED_REASON)
+        return
+
+    if disposition == ProductDisposition.EFFECT_DEFERRED.value:
+        # A live owner (a concurrent or later claimant) is authoritative for
+        # this unit's effect. Left `submitted`, untouched — that other
+        # attempt's own terminal verdict, when it lands, is what disposes
+        # the unit; this attempt has nothing further to say about it.
+        logger.info(
+            "attempt %s: effect deferred to a live owner; work unit %s left "
+            "submitted", attempt_id, work_unit_id)
+        return
+
+    if disposition == ProductDisposition.WITHHELD.value:
+        # A DELIBERATE, ACCEPTED non-publication (module docstring language
+        # for `observability.registration.decide`'s WITHHELD branch) — the
+        # unit's work is done, the decision not to publish is itself the
+        # accepted result, so it closes complete exactly as a published
+        # result does.
+        _transition_or_log(work_writer, work_unit_id, attempt_id, COMPLETE,
+                           disposition="close_complete_withheld")
+        return
+
+    if disposition == ProductDisposition.SUPERSEDED.value:
+        # The superseding attempt's own terminal record is what settles this
+        # unit — that attempt (at a higher terminal_record_sequence) is
+        # either already a candidate or will become one, and its own SKIP or
+        # REGISTER verdict is authoritative. This attempt only consumes.
+        logger.info(
+            "attempt %s: products superseded; work unit %s left submitted "
+            "for the superseding attempt to settle", attempt_id,
+            work_unit_id)
+        return
+
+    if disposition == ProductDisposition.NONE.value:
+        if rapid_outcome == "success":
+            # SUCCESS + NONE on a product route is not one of the six
+            # ordinary verdicts above — it is a route that ran, reported
+            # success, and produced nothing to register, which is either a
+            # release with legitimately nothing to do or a stage that lost
+            # its output silently. Neither reading is registration's to
+            # decide, so the unit is left `submitted` (no closure this
+            # module is confident enough to make) and the anomaly is logged
+            # at a level an operator dashboard can filter on, per the ruling's
+            # own "surfaced as an anomaly for operator decision".
+            logger.warning(
+                "ANOMALY: attempt %s succeeded with product_disposition="
+                "'none' on a product-producing route; work unit %s left "
+                "submitted pending operator review — this is neither a "
+                "normal completion nor a normal failure", attempt_id,
+                work_unit_id)
+        # A failure/partial outcome with disposition NONE needs no comment
+        # here beyond the function docstring's own: the reconciler's retry
+        # policy already owns this unit's disposition.
+        return
+
+    # Every remaining SKIP reason (`decide`'s "application reported
+    # {outcome}" catch-all, and `terminal_without_start`'s "never started")
+    # is a FAILURE-shaped verdict at the attempt level. The reconciler's own
+    # `disposition_for_terminal_attempt` already ran for this attempt's
+    # closure (or, for `terminal_without_start`, there was no application
+    # outcome to begin with) — registration adds nothing beyond consuming
+    # the sequence so it stops being reread forever.
+
+
+def _transition_or_log(work_writer, work_unit_id, attempt_id, to_state, *,
+                       disposition, blocked_reason=None):
+    """`transition_unit(SUBMITTED, to_state, ...)`, CAS-miss logged not
+    raised — the identical posture `_complete_work_unit` already documents
+    at length for its own single case. Shared here across `_apply_skip_
+    disposition`'s several closing branches rather than repeating that
+    try/except per branch.
+    """
+    try:
+        work_writer.transition_unit(
+            work_unit_id, SUBMITTED, to_state, writer=WRITER_RECONCILER,
+            blocked_reason=blocked_reason,
+            detail={"deciding_attempt_id": attempt_id,
+                    "disposition": disposition})
+    except WorkUnitNotFound:
+        logger.info(
+            "work unit %s (attempt %s) was not in 'submitted' when "
+            "registration's SKIP verdict (%s) reached it; another writer "
+            "already resolved it, so this attempt's own consumption still "
+            "commits without forcing the work unit", work_unit_id,
+            attempt_id, disposition)
+
+
 #: The rejection sibling of `_RECORD_OUTCOME_SQL` (integration ruling 4):
 #: same append-once-by-identity, GREATEST-high-water-mark idiom, a distinct
 #: top-level key so a rejection event can never be mistaken for a promotion
@@ -709,6 +952,16 @@ def mark_registered(conn, attempt_id, record_sequence, now=None, cursor=None):
     below; it is the reason two passes racing on the same attempt cannot
     disagree about what has been registered.
 
+    **BOTH WATERMARKS, ONE STATEMENT** (ruling R1 / migration 075). REGISTER
+    is the one verdict where acceptance and consumption are the same fact —
+    see the module docstring's "THE WATERMARK SPLIT" — so `_MARK_REGISTERED_
+    SQL` sets `registered_at`/`registered_record_sequence` AND `consumed_
+    record_sequence` together rather than needing a second call to `mark_
+    consumed` after this one. The CAS predicate still guards only the
+    registered pair, unchanged: a REGISTER verdict for a sequence already
+    accepted is a no-op exactly as before, and the consumed watermark simply
+    rides along with whatever this statement decides.
+
     **THIS NO LONGER COMMITS** (round-3 finding #8). It used to end with
     `conn.commit()`, which made the watermark its own transaction — separate
     from the transaction the product rows were written in, on a separate
@@ -728,11 +981,36 @@ def mark_registered(conn, attempt_id, record_sequence, now=None, cursor=None):
     sequence = int(record_sequence if record_sequence is not None else 1)
     if cursor is not None:
         cursor.execute(_MARK_REGISTERED_SQL,
-                       (moment, sequence, attempt_id, sequence))
+                       (moment, sequence, sequence, attempt_id, sequence))
         return sequence
     with conn.cursor() as cur:
         cur.execute(_MARK_REGISTERED_SQL,
-                    (moment, sequence, attempt_id, sequence))
+                    (moment, sequence, sequence, attempt_id, sequence))
+    return sequence
+
+
+def mark_consumed(conn, attempt_id, record_sequence, cursor=None):
+    """Record that this attempt's terminal SKIP verdict CONSUMED `record_
+    sequence`, without accepting a result (ruling R1 / migration 075).
+
+    The SKIP-side sibling of `mark_registered`: advances `consumed_record_
+    sequence` ALONE, so a permanently-skipped attempt (products withheld,
+    superseded, none, or an application failure) stops being reread and
+    redecided on every pass — the eternal-candidates defect the module
+    docstring's "THE WATERMARK SPLIT" names — without ever writing
+    `registered_at` or `registered_record_sequence`, which would misstate a
+    SKIP as an accepted result.
+
+    Same CAS shape as `mark_registered`'s: the sequence only ever advances,
+    so two passes racing on the same attempt cannot disagree about what has
+    been consumed. `cursor` is required, not optional with a fallback — this
+    is called only from `register_batch`'s per-attempt transaction, under the
+    lease, and there is no legitimate caller reaching it any other way (see
+    `register_batch`'s SKIP handling for why: ruling R1 moved SKIP under the
+    same lock discipline REGISTER already had).
+    """
+    sequence = int(record_sequence if record_sequence is not None else 1)
+    cursor.execute(_MARK_CONSUMED_SQL, (sequence, attempt_id, sequence))
     return sequence
 
 
@@ -974,6 +1252,79 @@ def register_batch(conn, rows, register=None, run=None, dry_run=False,
             continue
 
         if verdict.decision is RegistrationDecision.SKIP:
+            # SKIP NOW RUNS UNDER THE SAME LEASE AS REGISTER (ruling R1).
+            # Before migration 075 a SKIP verdict never touched the database
+            # at all — nothing but a counter and a log line — which is
+            # exactly why it needed no lock: there was nothing to protect. It
+            # now WRITES (the consumed watermark, and for several
+            # dispositions the work unit's own state), and an
+            # `effect_unconfirmed` verdict specifically must not act on a
+            # terminal_record_sequence a newer attempt has already
+            # superseded — the identical staleness hazard REGISTER's lease
+            # and post-lock reread already guard against. So SKIP takes the
+            # SAME `_transaction(conn)` block, the SAME
+            # `_acquire_attempt_lease`, and the SAME re-read below, rather
+            # than a second, parallel locking discipline.
+            try:
+                with _transaction(conn) as cur:
+                    _acquire_attempt_lease(cur, verdict.attempt_id)
+                    watermark = _reread_watermark(cur, verdict.attempt_id)
+                    if watermark is None:
+                        run.skipped += 1
+                        logger.info(
+                            "attempt %s vanished between the candidate read "
+                            "and its lease; skipping", verdict.attempt_id)
+                        continue
+                    consumed_sequence, current_terminal_sequence = watermark
+                    target_sequence = row.get("terminal_record_sequence")
+                    if (consumed_sequence is not None
+                            and target_sequence is not None
+                            and consumed_sequence >= target_sequence):
+                        # Another writer already consumed this exact sequence
+                        # (or later) while this one waited on the lease — the
+                        # SKIP-side mirror of REGISTER's identical check.
+                        run.skipped += 1
+                        logger.info(
+                            "attempt %s already consumed at sequence %s "
+                            "(target was %s) by another writer under the "
+                            "same lease; skipping", verdict.attempt_id,
+                            consumed_sequence, target_sequence)
+                        continue
+                    if (current_terminal_sequence is not None
+                            and target_sequence is not None
+                            and current_terminal_sequence > target_sequence):
+                        # Superseded while waiting on the lease — leave it a
+                        # candidate at the newer sequence, exactly as
+                        # REGISTER's identical check does.
+                        run.skipped += 1
+                        logger.info(
+                            "attempt %s superseded to sequence %s (candidate "
+                            "read saw %s) while waiting on the lease; "
+                            "leaving it a candidate for a fresh pass",
+                            verdict.attempt_id, current_terminal_sequence,
+                            target_sequence)
+                        continue
+
+                    # THE FINAL UNIT STATE PER TERMINAL VERDICT (ruling R1's
+                    # table) — before the watermark write, in the SAME
+                    # envelope, matching `_complete_work_unit`'s own
+                    # "commits together or not at all" discipline on the
+                    # REGISTER side.
+                    _apply_skip_disposition(
+                        verdict.attempt_id, row.get("work_unit_id"),
+                        row.get("product_disposition"),
+                        row.get("rapid_outcome"), cur)
+                    mark_consumed(conn, verdict.attempt_id, target_sequence,
+                                 cursor=cur)
+            except Exception:  # noqa: BLE001 - counted, not swallowed
+                run.failed += 1
+                logger.exception(
+                    "consuming attempt %s's SKIP verdict failed; its "
+                    "transaction was rolled back, so no watermark and no "
+                    "unit transition were written and it remains a "
+                    "candidate", verdict.attempt_id)
+                continue
+
             run.skipped += 1
             # An application failure under a SUCCEEDED scheduler state is the
             # case the old chain got wrong by construction: its log-grep saw
@@ -1066,12 +1417,16 @@ def register_batch(conn, rows, register=None, run=None, dry_run=False,
                 # docstring ("THE SINGLE-REGISTRAR PREMISE").
                 _acquire_attempt_lease(cur, verdict.attempt_id)
 
-                # THE POST-LOCK RE-READ. `candidates()` read this row
-                # unlocked, before this attempt's turn in the loop and before
-                # the lease was held; the operator pass and the registration
-                # job route both reach this same point, so by now another
-                # writer may already have registered this exact sequence.
-                # Re-checking the watermark under the lease is what makes
+                # THE POST-LOCK RE-READ, on the CONSUMED watermark (ruling
+                # R1 — see `_REREAD_WATERMARK_SQL`'s own docstring). REGISTER
+                # sets both watermarks together in one statement (`mark_
+                # registered`), so re-reading the consumed one here catches
+                # the identical race the registered one used to: `candidates(
+                # )` read this row unlocked, before this attempt's turn in
+                # the loop and before the lease was held; the operator pass
+                # and the registration job route both reach this same point,
+                # so by now another writer may already have consumed this
+                # exact sequence. Re-checking under the lease is what makes
                 # that "stale by the time I got here" visible instead of
                 # silently re-registering.
                 watermark = _reread_watermark(cur, verdict.attempt_id)
@@ -1082,23 +1437,23 @@ def register_batch(conn, rows, register=None, run=None, dry_run=False,
                         "attempt %s vanished between the candidate read and "
                         "its lease; skipping", verdict.attempt_id)
                     continue
-                registered_sequence, current_terminal_sequence = watermark
+                consumed_sequence, current_terminal_sequence = watermark
                 target_sequence = row.get("terminal_record_sequence")
-                if (registered_sequence is not None
+                if (consumed_sequence is not None
                         and target_sequence is not None
-                        and registered_sequence >= target_sequence):
+                        and consumed_sequence >= target_sequence):
                     # Another writer — the other call path, or an earlier
                     # iteration racing on a re-entrant connection — already
-                    # registered this attempt at this sequence or later while
+                    # consumed this attempt at this sequence or later while
                     # this one waited on the lease. A clean no-op, not a
                     # failure: the work this attempt exists to do is already
                     # done.
                     run.skipped += 1
                     logger.info(
-                        "attempt %s already registered at sequence %s "
+                        "attempt %s already consumed at sequence %s "
                         "(target was %s) by another writer under the same "
                         "lease; skipping", verdict.attempt_id,
-                        registered_sequence, target_sequence)
+                        consumed_sequence, target_sequence)
                     continue
                 # `current_terminal_sequence` re-confirms the candidacy
                 # predicate's OTHER half under the lease: a supersession

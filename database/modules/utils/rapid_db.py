@@ -3986,7 +3986,19 @@ class RAPIDDB:
         it is new in this ruling, so it gets the fail-loud shape the wider
         codebase's `design/database.md` rule states directly, rather than
         inheriting this class's older swallow-and-flag convention.
+
+        Resets `self.exit_code = 0` first, matching every other method in
+        this class — `RAPIDDB` mutates ONE shared attribute per instance
+        rather than returning a code per call (`CheckedHandle`'s own
+        docstring), so a caller reaching this method right after a call
+        that itself set a nonzero `exit_code` (the ordinary shape here: this
+        is invoked immediately after `claim_alert_emission`, on the SAME
+        handle) would otherwise have `CheckedHandle` misreport THIS call as
+        failed over a code this method never set and does not intend to
+        raise on the `won_token == claim_token` fast path.
         '''
+
+        self.exit_code = 0
 
         if won_token == claim_token:
             return self.CLAIM_OUTCOME_WON
@@ -4114,7 +4126,19 @@ class RAPIDDB:
         does not own the outcome; a later attempt (or the taker) settles
         it. A vanished row is the conservative `CONFIRM_OUTCOME_
         UNCONFIRMED` — this attempt has no evidence its effect landed.
+
+        Resets `self.exit_code = 0` first, for the identical reason
+        `classify_claim_outcome` does — see that method's docstring. This
+        matters MOST on exactly the `db_failure=True` path: that is precisely
+        the call made right after `confirm_alert_emission` itself set a
+        nonzero `exit_code`, and this method reporting `CONFIRM_OUTCOME_
+        UNCONFIRMED` cleanly (not raising) is the whole point of that branch
+        — a caller behind `CheckedHandle` must see this call SUCCEED with
+        that answer, not have the stale code from the call before it turned
+        into a second, spurious `RapidDBCallFailed`.
         '''
+
+        self.exit_code = 0
 
         if db_failure:
             return self.CONFIRM_OUTCOME_UNCONFIRMED

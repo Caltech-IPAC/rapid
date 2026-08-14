@@ -49,19 +49,22 @@ class CandidateQueryTests(unittest.TestCase):
         consumer.candidates(conn)
         self.assertGreaterEqual(conn.rollbacks, 1)
 
-    def test_the_query_excludes_attempts_already_registered_at_this_sequence(self):
-        # REVIEW FINDING #5's other half. Without a watermark the query
-        # selected every reconciled attempt on every pass, so registration
-        # re-registered the same work forever.
-        self.assertIn("registered_record_sequence", consumer._CANDIDATE_SQL)
+    def test_the_query_excludes_attempts_already_consumed_at_this_sequence(self):
+        # REVIEW FINDING #5's other half, on the CONSUMED watermark since
+        # ruling R1 split it from the registered one (module docstring's
+        # "THE WATERMARK SPLIT"). Without it the query selected every
+        # reconciled attempt on every pass, so registration re-decided the
+        # same work forever — including permanently-SKIPped attempts, which
+        # is the eternal-candidates defect the split specifically closes.
+        self.assertIn("consumed_record_sequence", consumer._CANDIDATE_SQL)
 
     def test_the_watermark_is_a_sequence_so_supersession_re_registers(self):
         # A boolean could not express "reprocesses on a later supersession":
-        # an attempt registered at sequence 1 whose reconciler later publishes
+        # an attempt consumed at sequence 1 whose reconciler later publishes
         # sequence 2 must become a candidate again, which is what comparing
         # the watermark against the record sequence does.
         self.assertIn(
-            "registered_record_sequence < terminal_record_sequence",
+            "consumed_record_sequence < terminal_record_sequence",
             " ".join(consumer._CANDIDATE_SQL.split()))
 
 
@@ -91,6 +94,11 @@ class WatermarkTests(unittest.TestCase):
                          f"expected exactly one watermark write, got "
                          f"{[s for s, _ in conn.statements]}")
         self.assertIn(1, watermark[0][1])
+        # BOTH watermarks advance in that one statement (ruling R1's "one
+        # statement" design for REGISTER — see `_MARK_REGISTERED_SQL`'s own
+        # docstring) — asserted by content rather than a second statement
+        # count, matching this test's own stated preference just above.
+        self.assertIn("consumed_record_sequence", watermark[0][0])
         self.assertEqual(1, conn.commits)
         self.assertEqual([(consumer.ATTEMPT_LEASE_NAMESPACE, 1)],
                          conn.lease_acquisitions)
@@ -281,7 +289,11 @@ class OneTransactionPerAttemptTests(unittest.TestCase):
 
         statement, params = conn.statements[-1]
         self.assertIn("registered_record_sequence", statement)
-        self.assertEqual((7, 3), (params[2], params[1]))
+        # Params are (moment, sequence, sequence, attempt_id, sequence) —
+        # ruling R1 added the consumed-watermark sequence as a second SET
+        # value, ahead of the WHERE clause's attempt_id (see
+        # `_MARK_REGISTERED_SQL`).
+        self.assertEqual((7, 3), (params[3], params[1]))
 
 
 class RegistrationCompletesTheWorkUnitTests(unittest.TestCase):
@@ -430,16 +442,21 @@ class WatermarkSequenceTests(unittest.TestCase):
                                 register=product_writer(conn))
 
         # Filtered on the ASSIGNMENT form, not just the column name: the
-        # post-lock re-read (integration ruling 4) also selects
-        # `registered_record_sequence`, and would otherwise be counted here
-        # as a watermark write.
+        # post-lock re-read (integration ruling 4) selects `consumed_record_
+        # sequence` (ruling R1), not `registered_record_sequence`, so it is
+        # no longer ambiguous with this filter — kept as an assignment-form
+        # filter anyway, matching this test's own stated preference for
+        # being explicit about which SQL shape it means.
         watermarks = [params for statement, params in conn.committed
                       if "registered_record_sequence =" in statement]
         self.assertEqual([1, 2], [params[1] for params in watermarks],
                          "a supersession must advance the watermark to its "
                          "own sequence, or it stays a candidate forever")
-        # The CAS bound is the same sequence, so the guard is `< that`.
-        self.assertEqual([1, 2], [params[3] for params in watermarks])
+        # Params are (moment, sequence, sequence, attempt_id, sequence) —
+        # ruling R1 added the consumed-watermark sequence as a second SET
+        # value (index 2). The CAS bound is still the same sequence, now at
+        # index 4, so the guard is `< that`.
+        self.assertEqual([1, 2], [params[4] for params in watermarks])
 
 
 class RegistrationOutcomeTests(unittest.TestCase):
@@ -541,16 +558,30 @@ class FakeConn:
     for the two statement shapes finding 7 actually issues (the work-unit
     UPDATE and its `INSERT INTO unit_events`); every other statement this
     fake answers is a plain `execute()`-then-`fetchone()`, unchanged.
+
+    AMENDED for ruling R1 (migration 075, effect-lifecycle completion
+    boundary). The post-lock re-read now reads the CONSUMED watermark, not
+    the registered one — `watermarks` keeps its shape, (consumed,
+    terminal), because REGISTER still advances both together and the
+    tests that configure a raced/stale value are exercising the SAME race
+    regardless of which watermark answers it. SKIP now also opens a
+    transaction (it did not before this ruling — see the module docstring's
+    "SKIP NOW RUNS UNDER THE SAME LEASE"), so a test exercising a SKIP
+    verdict needs a real `FakeConn`, not `None`. `effect_attempt_counts` (a
+    dict of work_unit_id -> count) answers `_effect_attempt_count`'s series
+    read for an `effect_unconfirmed` verdict's retry-policy branch; unset
+    ids read as 0.
     """
 
-    def __init__(self, watermarks=None, work_units=None):
+    def __init__(self, watermarks=None, work_units=None,
+                effect_attempt_counts=None):
         self.statements = []
         self.committed = []
         self.commits = 0
         self.rollbacks = 0
         self.closed_cursors = 0
         self.lease_acquisitions = []
-        #: attempt_id -> (registered_record_sequence, terminal_record_sequence)
+        #: attempt_id -> (consumed_record_sequence, terminal_record_sequence)
         #: answered by the post-lock re-read. Configure a stale/raced value
         #: here to exercise the skip paths; unset attempt ids re-read as
         #: (None, None) — "proceed", the pre-lease default.
@@ -560,6 +591,9 @@ class FakeConn:
         #: `execute`) — the only state a registration candidate's work unit
         #: is ever found in, absent a test deliberately pre-empting it.
         self.work_units = dict(work_units or {})
+        #: work_unit_id -> effect-attempt series count (ruling R1), answered
+        #: by `_effect_attempt_count`. Unset ids read as 0.
+        self.effect_attempt_counts = dict(effect_attempt_counts or {})
         self._pending = []
         self._last_result = None
         self._last_description = None
@@ -584,11 +618,23 @@ class FakeConn:
         lowered = statement.lower()
         if "pg_advisory_xact_lock" in lowered:
             self.lease_acquisitions.append(params)
-        elif ("registered_record_sequence" in lowered
+        elif ("consumed_record_sequence" in lowered
               and "terminal_record_sequence" in lowered
               and lowered.strip().startswith("select")):
+            # THE POST-LOCK RE-READ (ruling R1: consumed, not registered —
+            # see `consumer._REREAD_WATERMARK_SQL`'s own docstring for why).
             attempt_id = params[0] if params else None
             self._last_result = self.watermarks.get(attempt_id, (None, None))
+        elif (lowered.strip().startswith("select count(*)")
+              and "product_disposition" in lowered):
+            # THE EFFECT-ATTEMPT SERIES COUNT (ruling R1,
+            # `consumer._effect_attempt_count`), answered from
+            # `effect_attempt_counts`, a dict of work_unit_id -> count the
+            # test configures. Unset ids read as 0 — no prior effect
+            # attempts, the ordinary case for a first unconfirmed effect.
+            work_unit_id = params[0] if params else None
+            self._last_result = (
+                self.effect_attempt_counts.get(work_unit_id, 0),)
         elif lowered.startswith("update work_units set state"):
             to_state, _blocked_reason, _moment, work_unit_id, from_state = params
             current = self.work_units.setdefault(work_unit_id, "submitted")
@@ -654,13 +700,17 @@ class DecisionTests(unittest.TestCase):
     def test_an_application_failure_is_refused_by_taxonomy(self):
         # The case the log-grep chain got wrong by construction: Batch says
         # SUCCEEDED and exit 0, the application says it failed.
+        #
+        # A real `FakeConn`, not `None` (ruling R1): a SKIP verdict now opens
+        # a transaction under the per-attempt lease, same as REGISTER — see
+        # the module docstring's "SKIP NOW RUNS UNDER THE SAME LEASE".
         row = reconciled(1, rapid_outcome="failure",
                          product_disposition="none",
                          scheduler_state="SUCCEEDED",
                          scheduler_observed_exit=0,
                          error_category="tool_failure")
 
-        run = consumer.register_batch(None, [row], dry_run=True)
+        run = consumer.register_batch(FakeConn(), [row], dry_run=True)
 
         self.assertEqual(0, run.registered)
         self.assertEqual(1, run.skipped)
@@ -673,19 +723,19 @@ class DecisionTests(unittest.TestCase):
                          application_intended_exit=None,
                          error_category="scheduler_provisioning")
 
-        run = consumer.register_batch(None, [row], dry_run=True)
+        run = consumer.register_batch(FakeConn(), [row], dry_run=True)
 
         self.assertEqual(0, run.registered)
         self.assertEqual(1, run.skipped)
 
     def test_superseded_products_are_not_registered(self):
         row = reconciled(1, product_disposition="superseded")
-        run = consumer.register_batch(None, [row], dry_run=True)
+        run = consumer.register_batch(FakeConn(), [row], dry_run=True)
         self.assertEqual(0, run.registered)
 
     def test_partial_success_is_not_registered_silently(self):
         row = reconciled(1, rapid_outcome="partial")
-        run = consumer.register_batch(None, [row], dry_run=True)
+        run = consumer.register_batch(FakeConn(), [row], dry_run=True)
         self.assertEqual(0, run.registered)
         self.assertEqual(1, run.skipped)
 

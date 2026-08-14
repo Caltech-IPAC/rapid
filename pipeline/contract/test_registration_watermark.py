@@ -60,8 +60,11 @@ def test_the_watermark_cas_refuses_to_move_backwards(conn):
     assert _watermark(conn, attempt_id)[0] == 2
 
     with conn.cursor() as cur:
+        # Five placeholders since ruling R1 (migration 075): moment,
+        # registered_record_sequence, consumed_record_sequence, attempt_id,
+        # the CAS bound — see `_MARK_REGISTERED_SQL`'s own docstring.
         cur.execute(_MARK_REGISTERED_SQL,
-                    ("2026-01-01T00:00:00+00:00", 1, attempt_id, 1))
+                    ("2026-01-01T00:00:00+00:00", 1, 1, attempt_id, 1))
         refused = cur.rowcount
     conn.commit()
 
