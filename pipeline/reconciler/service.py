@@ -1060,29 +1060,65 @@ class ReconcilerService:
         # retries it, and the failure is counted so service health can see a
         # persistent one. Every step here is idempotent by identity, so a
         # retry re-derives the same key and either creates or validates.
-        try:
-            written = closure_mod.publish_closure_record(
-                self.records_store, self.records_prefix, row, record)
-        except Exception:  # noqa: BLE001 - deferred, not swallowed
-            self._closure_failures += 1
-            logger.exception(
-                "could not publish the closure record for attempt %s; the row "
-                "stays open and the next poll retries it", attempt_id)
+        ok, written = self._try_closure_step(
+            attempt_id,
+            lambda: closure_mod.publish_closure_record(
+                self.records_store, self.records_prefix, row, record),
+            failure_message=(
+                "could not publish the closure record for attempt %s; the "
+                "row stays open and the next poll retries it"))
+        if not ok:
             return "deferred"
 
-        try:
-            self._stamp_bundle(row, observation, predecessor)
-        except Exception:  # noqa: BLE001 - deferred, not swallowed
-            self._closure_failures += 1
-            logger.exception(
-                "could not stamp retention for attempt %s; the closure record "
-                "is published (idempotently re-derivable) but the row stays "
-                "open so the tag is retried rather than lost", attempt_id)
+        ok, _ = self._try_closure_step(
+            attempt_id,
+            lambda: self._stamp_bundle(row, observation, predecessor),
+            failure_message=(
+                "could not stamp retention for attempt %s; the closure "
+                "record is published (idempotently re-derivable) but the "
+                "row stays open so the tag is retried rather than lost"))
+        if not ok:
             return "deferred"
 
         self._transition(row, observation, writer, record, written,
                          classification, error_category, read)
         return "classified"
+
+    def _try_closure_step(self, attempt_id, action, *, failure_message):
+        """Run one closure step; on failure, count it and report "defer".
+
+        Rider (campaign, dedupe): `_close` and `_reconcile_unresolved`
+        both run TWO steps that must each defer the attempt rather than raise
+        — publish the closure record, and stamp/write the diagnostics bundle
+        — and until now each wrote out its own `try/except Exception: bump
+        _closure_failures, log, return "deferred"` block, once per step, in
+        both methods (four near-identical blocks total). This is that
+        pattern, extracted.
+
+        Deliberately NOT a decorator or a context manager: the two methods
+        run these steps in OPPOSITE ORDER on purpose (`_close` publishes the
+        record before stamping the bundle; `_reconcile_unresolved` stamps the
+        bundle FIRST — see that method's own "THE BUNDLE COMES FIRST, AND IT
+        IS NOT OPTIONAL" comment, round-4 finding #5, for why reversing it
+        would be wrong), and each step's `failure_message` differs (bundle
+        vs. closure record, resolved vs. unresolved attempt). A shared
+        ORDER or a shared MESSAGE would be the wrong abstraction; a shared
+        try/except/count/log/report shape is not.
+
+        Returns `(True, result)` on success — `result` is whatever `action`
+        returned — and `(False, None)` after logging and counting the
+        failure. The caller's own `if not ok: return "deferred"` stays
+        exactly where it always was, so a reader tracing "when does this
+        method give up" still finds the answer at the call site, not buried
+        in this helper.
+        """
+        try:
+            result = action()
+        except Exception:  # noqa: BLE001 - deferred, not swallowed (#16)
+            self._closure_failures += 1
+            logger.exception(failure_message, attempt_id)
+            return False, None
+        return True, result
 
     @staticmethod
     def _attempt_ran(row, predecessor, observation):
@@ -1834,15 +1870,13 @@ class ReconcilerService:
             # bundle cannot be written the attempt defers with nothing
             # published, which is recoverable; the reverse order would leave a
             # published closure citing an attempt whose bundle never appeared.
-            try:
-                self._stamp_bundle(current, None, None)
-            except Exception:  # noqa: BLE001 - deferred, not swallowed (#16)
-                self._closure_failures += 1
-                logger.exception(
+            ok, _ = self._try_closure_step(
+                attempt_id, lambda: self._stamp_bundle(current, None, None),
+                failure_message=(
                     "could not write or stamp the diagnostics bundle for "
                     "unresolved attempt %s; it stays open and the next poll "
-                    "retries it rather than closing with no evidence",
-                    attempt_id)
+                    "retries it rather than closing with no evidence"))
+            if not ok:
                 return "deferred"
 
             record = closure_mod.build_closure_record(
@@ -1854,15 +1888,15 @@ class ReconcilerService:
                 classification=CLASS_NEVER_RESOLVED,
                 error_category="scheduler_provisioning",
                 now=self._now())
-            try:
-                written = closure_mod.publish_closure_record(
-                    self.records_store, self.records_prefix, current, record)
-            except Exception:  # noqa: BLE001 - deferred, not swallowed (#16)
-                self._closure_failures += 1
-                logger.exception(
+            ok, written = self._try_closure_step(
+                attempt_id,
+                lambda: closure_mod.publish_closure_record(
+                    self.records_store, self.records_prefix, current, record),
+                failure_message=(
                     "could not publish the closure record for unresolved "
-                    "attempt %s; it stays open and the next poll retries it",
-                    attempt_id)
+                    "attempt %s; it stays open and the next poll retries "
+                    "it"))
+            if not ok:
                 return "deferred"
 
             writer = AttemptWriter(_Executor(self.conn))
