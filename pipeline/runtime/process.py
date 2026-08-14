@@ -38,6 +38,7 @@ import contextlib
 import os
 import re
 import shlex
+import signal
 import subprocess
 import tempfile
 import time
@@ -47,6 +48,20 @@ from pipeline.runtime.errors import ToolError
 from pipeline.runtime.logging_setup import get_logger
 
 _logger = get_logger("process")
+
+# The deadline applied whenever a caller passes `timeout=None`. This is the
+# central-enforcement point named by the timeouts ruling: every external
+# command this module runs — including the science subs, none of which pass
+# an explicit timeout today — gets a hang-catcher without their code
+# changing. A stage that legitimately runs longer passes an explicit larger
+# `timeout` to `run_tool`/`run_shell`, which is honored unchanged; this
+# default only fills the gap where nothing was said.
+#
+# 30 minutes. No science stage in this repo is documented to run longer, and
+# a real one that turns out to needs more gets an explicit override at its
+# call site — a deliberate, reviewable statement — rather than this default
+# being raised speculatively.
+DEFAULT_TIMEOUT_S = 1800.0
 
 # Environment variable names whose VALUES are never echoed. Matched
 # case-insensitively as substrings, so `RAPID_DB_PASSWORD` and
@@ -278,6 +293,63 @@ def _mirror_spooled(stdout_path: str | None, stderr_path: str | None,
 MIRROR_LINE_LIMIT = 200
 
 
+def _run_with_group_kill(run: Any, popenargs: Any, *, timeout: float | None,
+                         input_text: str | None, shell: bool,
+                         stdout_f: Any, stderr_f: Any, cwd: str | None,
+                         env: dict | None):
+    """Run a command to completion, killing its whole process group on timeout.
+
+    `subprocess.run` only ever kills the leader process it started: on
+    `TimeoutExpired` it calls `process.kill()`, which sends the signal to one
+    PID. A timed-out tool that has spawned children of its own — a wrapper
+    script, a shell pipeline, anything under `run_shell` — leaves those
+    children running past the deadline that was supposed to bound them,
+    orphaned under init. That is the descendant-survival gap the timeouts
+    ruling calls out.
+
+    The fix is `start_new_session=True` (the child becomes its own process
+    group leader) plus `os.killpg` on timeout instead of `process.kill()`
+    (which reaches only the leader). `subprocess.run` has no hook to swap
+    that in, so this function manages the `Popen` itself for exactly the one
+    thing that differs, and otherwise mirrors `subprocess.run`'s own
+    documented contract — same `TimeoutExpired`/`FileNotFoundError`/
+    `PermissionError` shape — so nothing downstream of this call needs to
+    know which path ran.
+
+    Only takes this path when `run` is the real `subprocess.run`. The `_run`
+    test-injection point exists so a test can hand back a `TimeoutExpired`,
+    `FileNotFoundError`, etc. on demand without spawning anything — there is
+    no real process group for an injected fake to manage, so an injected
+    `_run` is called directly, unchanged from before this function existed.
+    """
+    if run is not subprocess.run:
+        return run(popenargs, cwd=cwd, env=env, timeout=timeout,
+                   input=input_text, stdout=stdout_f, stderr=stderr_f,
+                   text=True, shell=shell)
+
+    with subprocess.Popen(popenargs, cwd=cwd, env=env, stdout=stdout_f,
+                          stderr=stderr_f, text=True, shell=shell,
+                          stdin=(subprocess.PIPE if input_text is not None
+                                 else None),
+                          start_new_session=True) as process:
+        try:
+            process.communicate(input_text, timeout=timeout)
+        except subprocess.TimeoutExpired:
+            # The leader is the process group leader (start_new_session), so
+            # its own pid is also the group id: killpg reaches every
+            # descendant it spawned, not just itself.
+            with contextlib.suppress(ProcessLookupError):
+                os.killpg(process.pid, signal.SIGKILL)
+            process.wait()
+            raise
+        except:  # noqa: E722 - matches subprocess.run's own bare except
+            with contextlib.suppress(ProcessLookupError):
+                os.killpg(process.pid, signal.SIGKILL)
+            raise
+        retcode = process.poll()
+    return subprocess.CompletedProcess(process.args, retcode, None, None)
+
+
 def run_tool(argv: Sequence[str], cwd: str | None = None,
              env: dict | None = None, timeout: float | None = None,
              capture_path: str | None = None, logger: Any = None,
@@ -297,6 +369,15 @@ def run_tool(argv: Sequence[str], cwd: str | None = None,
     did not do its job — and all four carry `error_category="tool_failure"`
     with the argv, exit code, and captured output in `details`.
 
+    `timeout=None` (the default) does not mean unbounded: it means
+    `DEFAULT_TIMEOUT_S` (30 minutes) applies. This is the central enforcement
+    point the timeouts ruling calls for — every call site that never named a
+    timeout, including the legacy science subs, gets a hang-catcher without
+    their code changing. Pass an explicit `timeout` to run longer or shorter;
+    it is honored exactly as before. On a real timeout the whole process
+    group is killed, not just the child this function started directly —
+    see `_run_with_group_kill`.
+
     Stdout and stderr are redirected straight to spool files rather than
     captured via `capture_output=True` — a tool that emits gigabytes of
     output would otherwise force `subprocess` to hold all of it as one
@@ -310,6 +391,8 @@ def run_tool(argv: Sequence[str], cwd: str | None = None,
     """
     log = logger if logger is not None else _logger
     run = _run if _run is not None else subprocess.run
+    if timeout is None:
+        timeout = DEFAULT_TIMEOUT_S
 
     if isinstance(argv, (str, bytes)):
         raise TypeError(
@@ -328,9 +411,10 @@ def run_tool(argv: Sequence[str], cwd: str | None = None,
         try:
             with open(stdout_path, "wb") as out_f, \
                  open(stderr_path, "wb") as err_f:
-                completed = run(argv, cwd=cwd, env=env, timeout=timeout,
-                                input=input_text, stdout=out_f, stderr=err_f,
-                                text=True, shell=False)
+                completed = _run_with_group_kill(
+                    run, argv, cwd=cwd, env=env, timeout=timeout,
+                    input_text=input_text, shell=False,
+                    stdout_f=out_f, stderr_f=err_f)
         except FileNotFoundError as exc:
             duration = time.monotonic() - started
             _spill(str(exc), stderr_path)
@@ -410,9 +494,16 @@ def run_shell(command: str, cwd: str | None = None, env: dict | None = None,
     A caller that reaches for this because the argv is inconvenient to build
     is making the codebase's ~60 unchecked sites' mistake in a new place; the
     named variant exists so that choice is visible in review.
+
+    `timeout=None` (the default) means `DEFAULT_TIMEOUT_S` applies, exactly
+    as in `run_tool` — see its docstring. A real timeout kills the whole
+    process group the shell started, not just the shell itself, so a
+    pipeline of tools left running past the deadline does not survive it.
     """
     log = logger if logger is not None else _logger
     run = _run if _run is not None else subprocess.run
+    if timeout is None:
+        timeout = DEFAULT_TIMEOUT_S
 
     if not isinstance(command, str):
         raise TypeError(
@@ -426,9 +517,10 @@ def run_shell(command: str, cwd: str | None = None, env: dict | None = None,
         try:
             with open(stdout_path, "wb") as out_f, \
                  open(stderr_path, "wb") as err_f:
-                completed = run(command, cwd=cwd, env=env, timeout=timeout,
-                                stdout=out_f, stderr=err_f, text=True,
-                                shell=True)
+                completed = _run_with_group_kill(
+                    run, command, cwd=cwd, env=env, timeout=timeout,
+                    input_text=None, shell=True,
+                    stdout_f=out_f, stderr_f=err_f)
         except subprocess.TimeoutExpired as exc:
             duration = time.monotonic() - started
             _spill(exc.stdout, stdout_path)
