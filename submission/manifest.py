@@ -72,7 +72,8 @@ import json
 from typing import Any, Iterable, Iterator
 
 from . import payloads
-from .routes import JOB_TYPE_SCIENCE, Route, route_for, validate_route
+from .routes import (IMPLEMENTED_JOB_TYPES, JOB_TYPE_SCIENCE, Route,
+                     RouteError, route_for, validate_route)
 from .subjects import GRAIN_EXPOSURE_SCA, SubjectError
 
 # Batch's hard ceiling on array children (design/compute.md § Submission).
@@ -453,6 +454,33 @@ class Manifest:
         # S3 in a written manifest — the entrypoint's startup check is
         # the second line, not the first.
         self.route = route_for(job_type)
+        # IMPLEMENTED, NOT MERELY IN THE MATRIX (wave-E finding #9).
+        # `route_for` above only checks routes-matrix membership — the
+        # matrix names reprocessing, catalog-load and crossmatch as job
+        # types the design intends, but `IMPLEMENTED_JOB_TYPES` is the
+        # narrower "a payload actually exists for this" fact
+        # (`routes.validate_route`'s own comment, review finding #12: "The
+        # matrix accepts [them]... but no payload implements them"). Until
+        # now that check ran in exactly two places, both AFTER attempt rows
+        # already exist: `routes.validate_route`, called by
+        # `Manifest.validate_for` at CONTAINER STARTUP (after `SubmitJob`,
+        # after `resolve_attempt` claimed the row — `routes.py:350-357`
+        # documents exactly this ordering hazard for the class/queue checks
+        # it does perform this early), and `job.py:615` inside the payload
+        # itself, later still. A manifest naming an unimplemented-but-known
+        # type therefore created real attempt rows and a real `SubmitJob`
+        # call before either check ran, for a submission that could never
+        # succeed. Checking here, at manifest CONSTRUCTION on the
+        # submission side, rejects it before any row is claimed — the same
+        # design principle `IMPLEMENTED_JOB_TYPES`'s existing call sites
+        # already state, applied at the earliest point it can be.
+        if job_type not in IMPLEMENTED_JOB_TYPES:
+            raise RouteError(
+                f"job type {job_type!r} is in the route matrix but has no "
+                f"implementation in this image; implemented job types are: "
+                + ", ".join(sorted(IMPLEMENTED_JOB_TYPES))
+                + ". Rejected at manifest construction, before any attempt "
+                "is claimed, for a submission that cannot run.")
         self.job_type = job_type
         # The sole enumerated science override. None means "no override":
         # the window's authoritative value is release content, and the
