@@ -190,6 +190,118 @@ def test_batch_termination_replays_rather_than_terminating_twice(conn):
     assert len(_audit_rows(conn, key)) == 1
 
 
+def _attempt_with_scheduler_job_id(conn, scheduler_job_id):
+    """One `submitted` attempt row carrying a specific `scheduler_job_id`.
+
+    None of `fixture.py`'s existing builders set `scheduler_job_id` —
+    `make_attempt` leaves it NULL and `make_pending_attempt` never mentions
+    it — so this test needs its own, built the same way
+    `make_pending_attempt` is: complete in one INSERT, because
+    `attempts_state_submitted_check` (migration 013) requires the binding
+    triple at `schema_version >= 2` and forbids every outcome column, and
+    building a `submitted` row in pieces means passing through a state the
+    schema refuses.
+    """
+    logical_job_id, run_id = fixture.make_logical_job(conn)
+    tag = uuid.uuid4().hex[:8]
+    with conn.cursor() as cur:
+        cur.execute("SELECT coalesce(max(schema_version), 1) FROM attempts")
+        schema_version = cur.fetchone()[0]
+        cur.execute(
+            "INSERT INTO attempts"
+            "  (run_id, schema_version, logical_job_id, lifecycle_state,"
+            "   created_at, submitted_at, scheduler_job_id,"
+            "   binding_job_definition_arn, binding_image_digest,"
+            "   binding_manifest_checksum)"
+            " VALUES (%s, %s, %s, 'submitted', now(), now(), %s, %s,"
+            "         'sha256:' || %s, 'sha256:' || %s)"
+            " RETURNING attempt_id",
+            [run_id, schema_version, logical_job_id, scheduler_job_id,
+             f"arn:aws:batch:us-east-1:account:job-definition/{tag}:1",
+             tag, tag])
+        return cur.fetchone()[0], logical_job_id
+
+
+def test_batch_termination_attempt_id_narrows_the_population(conn):
+    """`--attempt-id` scopes to exactly the named attempt's job — never wider.
+
+    Three jobs are RUNNING in the queue; only one is fenced to a named
+    attempt. The narrowing must exclude the other two from the audit row
+    and from termination, not merely from the printed listing — this is
+    the exact property `--expect-candidates`-style refusal depends on:
+    the count the operator rehearsed against must be the count that is
+    actually acted on.
+    """
+    jobs = _jobs(3)
+    attempt_id, _ = _attempt_with_scheduler_job_id(conn, jobs[0]["jobId"])
+    client = _RefusingBatchClient(jobs, allow_terminate=True)
+    key = _key("batch-attempt-scope")
+
+    result, scope = terminate_jobs_audited(
+        conn, key, "rapid-queue", ["RUNNING"], "brief H: attempt scoping",
+        dry_run=False, session_factory=lambda: client, out=open("/dev/null", "w"),
+        attempt_ids=[attempt_id])
+
+    assert client.terminated == [(jobs[0]["jobId"],
+                                  "brief H: attempt scoping")], (
+        "narrowing by --attempt-id terminated something outside the "
+        "named attempt's job, or missed the named attempt's job")
+    assert result["rows_affected"] == 1
+    assert "attempt_ids=%s" % attempt_id in scope
+
+    rows = _audit_rows(conn, key)
+    assert len(rows) == 1
+    assert rows[0]["detail"]["job_count"] == 1
+    assert rows[0]["detail"]["job_ids"] == [jobs[0]["jobId"]]
+    assert rows[0]["detail"]["attempt_ids"] == [attempt_id]
+
+
+def test_batch_termination_logical_job_id_narrows_the_population(conn):
+    """`--logical-job-id` narrows the same way `--attempt-id` does."""
+    jobs = _jobs(2)
+    attempt_id, logical_job_id = _attempt_with_scheduler_job_id(
+        conn, jobs[1]["jobId"])
+    client = _RefusingBatchClient(jobs, allow_terminate=True)
+    key = _key("batch-logical-scope")
+
+    result, _ = terminate_jobs_audited(
+        conn, key, "rapid-queue", ["RUNNING"], "brief H: logical-job scoping",
+        dry_run=False, session_factory=lambda: client, out=open("/dev/null", "w"),
+        logical_job_ids=[logical_job_id])
+
+    assert client.terminated == [(jobs[1]["jobId"],
+                                  "brief H: logical-job scoping")]
+    assert result["rows_affected"] == 1
+
+
+def test_batch_termination_attempt_scope_naming_nothing_terminates_nothing(
+        conn):
+    """A named attempt whose `scheduler_job_id` matches no listed job narrows
+    the population to EMPTY, not to the unscoped population.
+
+    This is the case `_scheduler_job_ids_for_scope`'s docstring calls out
+    explicitly: an attempt scope that resolves to zero live jobs must not
+    be mistaken for "no scoping requested" and silently widen back out to
+    every RUNNING job in the queue.
+    """
+    jobs = _jobs(3)
+    # An attempt whose scheduler_job_id does not match any listed job.
+    attempt_id, _ = _attempt_with_scheduler_job_id(
+        conn, "job-not-in-the-listed-queue-%s" % fixture.RUN_TAG)
+    client = _RefusingBatchClient(jobs, allow_terminate=True)
+    key = _key("batch-attempt-scope-empty")
+
+    result, _ = terminate_jobs_audited(
+        conn, key, "rapid-queue", ["RUNNING"], "brief H: empty scope",
+        dry_run=False, session_factory=lambda: client, out=open("/dev/null", "w"),
+        attempt_ids=[attempt_id])
+
+    assert client.terminated == [], (
+        "an attempt scope naming no live job must narrow to nothing, not "
+        "widen to every job the queue/states scope found")
+    assert result["rows_affected"] == 0
+
+
 def test_batch_termination_refuses_on_expected_state_mismatch(conn):
     """The queue moved since the operator looked; the decision is stale."""
     client = _RefusingBatchClient(_jobs(5), allow_terminate=False)

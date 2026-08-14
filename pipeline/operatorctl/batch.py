@@ -36,10 +36,46 @@ from pipeline.operatorctl.actions import record_external_action
 from pipeline.operatorctl.contract import ExpectedStateMismatch
 
 
+def _scheduler_job_ids_for_scope(conn, attempt_ids, logical_job_ids):
+    """The `scheduler_job_id`s named by `--attempt-id`/`--logical-job-id`.
+
+    Returns `None` when the caller supplied neither — meaning "no attempt
+    scope was asked for", distinct from an empty set, which would mean "an
+    attempt scope was asked for and it named zero live jobs" and should
+    narrow the population to nothing rather than be mistaken for "no
+    scoping requested" and fall through to the unscoped queue/states
+    population.
+
+    A `NULL scheduler_job_id` (an array child before its post-Batch
+    backfill, or a row `_bind_scheduler_jobs` never reached — see
+    `pipeline.seams.SubmissionBookkeepingFailed`) resolves to nothing to
+    terminate for that attempt: there is no Batch job id to terminate by,
+    and this is a narrowing filter, not a promise that every named attempt
+    scope resolves to a live job.
+    """
+    if not attempt_ids and not logical_job_ids:
+        return None
+    clauses = []
+    params = []
+    if attempt_ids:
+        clauses.append("attempt_id = ANY(%s)")
+        params.append(list(attempt_ids))
+    if logical_job_ids:
+        clauses.append("logical_job_id = ANY(%s)")
+        params.append(list(logical_job_ids))
+    sql = ("SELECT scheduler_job_id FROM attempts"
+          " WHERE (%s) AND scheduler_job_id IS NOT NULL"
+          % " OR ".join(clauses))
+    with conn.cursor() as cur:
+        cur.execute(sql, params)
+        return {row[0] for row in cur.fetchall()}
+
+
 def terminate_jobs_audited(conn, idempotency_key, queue, states, reason,
                            expected_state=None, dry_run=True, region=None,
                            profile=None, policy_citation=None, out=None,
-                           session_factory=None):
+                           session_factory=None, attempt_ids=None,
+                           logical_job_ids=None):
     """List, refuse-or-terminate, and audit. Returns (result, target_scope).
 
     ``session_factory`` exists for the contract tests: the audit and
@@ -47,6 +83,15 @@ def terminate_jobs_audited(conn, idempotency_key, queue, states, reason,
     testing, and it must be testable without terminating a real job.
     A test passing a stub proves the ledger path; the AWS path itself is
     the wrapped module's, unchanged and already in use.
+
+    ``attempt_ids``/``logical_job_ids`` NARROW the queue/states population
+    to jobs whose `scheduler_job_id` matches one of the named attempts —
+    they never widen it. A job Batch returns for `queue`/`states` that
+    belongs to none of the named attempts is dropped from `jobs` before
+    anything below this point sees it: the expected-state check, the audit
+    row, and the termination loop all act on the narrowed population, so
+    `--expect-candidates`-style refusal continues to refuse against
+    exactly what will be acted on.
     """
     out = out or sys.stdout
     scope = "batch:queue=%s:states=%s" % (queue, ",".join(states))
@@ -56,6 +101,14 @@ def terminate_jobs_audited(conn, idempotency_key, queue, states, reason,
     # holding a client between unrelated invocations.
     client = _client(region, profile, session_factory)
     jobs = _list_all(client, queue, states)
+
+    allowed_job_ids = _scheduler_job_ids_for_scope(
+        conn, attempt_ids, logical_job_ids)
+    if allowed_job_ids is not None:
+        jobs = [job for job in jobs if job["jobId"] in allowed_job_ids]
+        scope += ":attempt_ids=%s:logical_job_ids=%s" % (
+            ",".join(str(a) for a in (attempt_ids or ())) or "-",
+            ",".join(logical_job_ids or ()) or "-")
 
     # Expected state checked HERE, before the audit row and before any
     # termination: the operator said how many jobs they were acting on, and
@@ -71,6 +124,9 @@ def terminate_jobs_audited(conn, idempotency_key, queue, states, reason,
     detail = {"queue": queue, "states": list(states),
               "job_count": len(jobs),
               "job_ids": [j["jobId"] for j in jobs[:200]]}
+    if allowed_job_ids is not None:
+        detail["attempt_ids"] = list(attempt_ids or ())
+        detail["logical_job_ids"] = list(logical_job_ids or ())
     # Bounded at 200 ids: the audit row records what was acted on, and a
     # queue of ten thousand jobs would otherwise put a megabyte of jsonb in
     # a history row. The count above is exact regardless.

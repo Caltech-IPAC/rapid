@@ -143,6 +143,20 @@ def build_parser():
     terminate.add_argument("--expect-jobs", type=int, default=None,
                            help="the job count seen in the dry run; the "
                                 "apply refuses if the queue has moved since")
+    terminate.add_argument(
+        "--attempt-id", dest="attempt_ids", type=int, action="append",
+        default=None, metavar="ATTEMPT_ID",
+        help="narrow the queue/states population to jobs belonging to "
+             "this attempt; repeatable. NARROWS ONLY — a job in scope by "
+             "--queue/--states that belongs to none of the named attempts "
+             "or logical jobs is excluded, never the reverse")
+    terminate.add_argument(
+        "--logical-job-id", dest="logical_job_ids", action="append",
+        default=None, metavar="LOGICAL_JOB_ID",
+        help="narrow the queue/states population to jobs belonging to "
+             "this logical job; repeatable. Same narrowing-only contract "
+             "as --attempt-id, and the two combine (a job matching either "
+             "named attempt or named logical job stays in scope)")
     terminate.add_argument("--region", default=None)
     terminate.add_argument("--profile", default=None)
     _mutation_arguments(terminate, "Batch jobs in a queue")
@@ -420,7 +434,8 @@ def _cmd_terminate_batch(conn, args, out):
         conn, key, args.queue, args.states, args.reason,
         expected_state=expected, dry_run=not args.apply,
         region=args.region, profile=args.profile,
-        policy_citation=args.policy_citation, out=out)
+        policy_citation=args.policy_citation, out=out,
+        attempt_ids=args.attempt_ids, logical_job_ids=args.logical_job_ids)
     print(render_plan("external_batch_terminate", scope, args.reason, key,
                       result, args.apply), file=out)
     return EXIT_OK
