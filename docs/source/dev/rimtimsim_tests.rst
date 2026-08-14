@@ -504,28 +504,28 @@ Date              Software modification
 ===============   ===============================================================================================================================================================================================================================
 
 
-8/14/2026
+8/13/2026
 ************************************
 
 Processed all images in the new set of rimtimsims delivered on 6/22/26.
-These have a greater variety of injected transients.
-There are 263 images total and two filters are included in this dataset,
+These simulated images have a greater variety of injected transients than earlier rimtimsim versions.
+There are 263 images total, just one SCA, and two filters included in this dataset (K213 and Z087),
 broken down as follows::
 
-    rimtimsimdb=> select sca,fid,count(*) from l2files group by sca,fid order by sca,fid;
-     sca | fid | count
-    -----+-----+-------
-       2 |   4 |   131
-       2 |   7 |   132
+    rimtimsims3db=> select sca,a.fid,filter,count(*) from l2files a, filters b where a.fid = b.fid group by sca,a.fid,filter order by sca,a.fid;
+     sca | fid | filter | count
+    -----+-----+--------+-------
+       2 |   4 | K213   |   131
+       2 |   7 | Z087   |   132
     (2 rows)
 
-Included the following improvement to how the rimtimsims are prepared, as well as recent
+Included the following improvement to how the rimtimsims are prepared for RAPID pipeline input, as well as recent
 pipeline improvements documented on the :doc:`main page for testing </dev/tests>`.
 
 ===============   ===============================================================================================================================================================================================================================
 Date              Software modification
 ===============   ===============================================================================================================================================================================================================================
-8/12/2026         Modified ``sims/src/rimtimsim/convert_rimtimsim.py`` to recompute FITS-header ``CRVAL1,2`` at ``CRPIX1,2 = 2044.5`` for the new set of rimtimsims delivered on 6/22/26.
+8/12/2026         Modified ``sims/src/rimtimsim/convert_rimtimsim.py`` to recompute FITS-header ``CRVAL1,2`` at ``CRPIX1,2 = 2044.5`` (exact image center).
 ===============   ===============================================================================================================================================================================================================================
 
-Database metadata for this test are stored in the RAPID-operations database rimtimsims3db.
+Database metadata for this test are stored in the RAPID-operations database ``rimtimsims3db``.
