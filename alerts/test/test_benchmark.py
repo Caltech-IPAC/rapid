@@ -14,6 +14,7 @@ TODO (not yet implemented):
 """
 
 import json
+import platform
 
 import fastavro
 
@@ -80,8 +81,14 @@ def test_benchmark_writes_wellformed_timing_log(make_provider, chip_data,
     # lazily, so an instantaneous psutil read can sit a fraction of a
     # percent above it.
     assert summary["peak_rss_bytes"] > 0
-    assert summary["rss_start_bytes"] > 0
-    assert 0.5 < summary["peak_rss_bytes"] / summary["rss_end_bytes"] < 2.0
+    # current_rss_bytes() documents "or None if unavailable" -- true on
+    # macOS without psutil (no /proc). The strict guarantee is platform-
+    # conditional; CI (Linux) always takes the strict branch.
+    if current_rss_bytes() is None:
+        assert summary["rss_start_bytes"] is None
+    else:
+        assert summary["rss_start_bytes"] > 0
+        assert 0.5 < summary["peak_rss_bytes"] / summary["rss_end_bytes"] < 2.0
 
     # output size: the archive was written and its size recorded, and the
     # recorded size matches the real file, which reads back as `count`
@@ -93,7 +100,13 @@ def test_benchmark_writes_wellformed_timing_log(make_provider, chip_data,
 
 
 def test_memory_helpers_available():
-    # both helpers work on the CI/dev platform (Linux); if this ever fails
-    # the summary's memory fields would silently go null
+    # peak works everywhere (ru_maxrss); current documents "or None if
+    # unavailable", which is real on macOS without psutil. On Linux -- the
+    # CI/dev platform -- both must work, or the summary's memory fields
+    # would silently go null; that strict branch is what CI enforces.
     assert peak_rss_bytes() > 0
-    assert current_rss_bytes() > 0
+    current = current_rss_bytes()
+    if platform.system() == "Linux":
+        assert current is not None
+    if current is not None:
+        assert current > 0
