@@ -19,15 +19,29 @@ changed, and a ledger that omitted it would be a record of the safe actions
 only. So this path opens the same operator session every other subcommand
 opens, and writes through ``derived.record_external_action``.
 
-THE ORDER, AND WHAT A CRASH BETWEEN THE TWO LEAVES. The audit row is
-written and committed BEFORE the terminations are issued, and updated after
-with the count actually terminated. A crash between them therefore leaves a
-recorded intent with the jobs possibly still running — an operator sees an
-action that may not have completed and can check the queue. The opposite
-order would leave terminated jobs with no record at all, which is the
-failure the audit exists to prevent: an unrecorded mutation is invisible,
-an over-recorded one is merely inaccurate and self-evidently so on
-inspection.
+THE ORDER, MATCHING `pipeline/operatorctl/gc.py`'s "record AFTER" PATTERN
+(gc.py's own header names this exact defect: "the precedent's own defect is
+not copied: `operatorctl/batch.py:80` records BEFORE the AWS action and its
+prose claims a later update the code never performs"). `derived.mutation_
+audit` is append-only — 030's one-path rule keeps no role holding UPDATE on
+it — so there never was a later update to make the docstring's old claim
+true; the row committed before the loop simply sat there, permanently
+recording `rows_affected=len(jobs)` regardless of what the loop below it
+actually managed to terminate. The fix is not a later UPDATE (there is no
+such statement to reach for) but the other half of gc.py's pattern: replay
+is checked FIRST via a read-only call to `derived.mutation_replay` — no row
+written, nothing to undo if the call is abandoned before AWS is touched —
+terminations are attempted per-job with each one's own outcome recorded,
+and `record_external_action` is called EXACTLY ONCE, AFTER, with the REAL
+per-job tally. A crash before that point leaves no audit row at all rather
+than a false one; an operator who saw the tool die mid-run has the queue
+itself to check before deciding whether to re-run. A re-run under the SAME
+key after a crash is not itself replay-protected here (nothing was
+recorded to replay against), but the re-listing pass narrows the risk: it
+lists jobs in `--states` (RUNNING by default) fresh from AWS, so a job the
+first attempt already terminated has left that state and is not re-listed
+or re-terminated — only jobs the first attempt did not reach, or that
+remained RUNNING despite it, are acted on again.
 """
 
 import sys
@@ -95,6 +109,35 @@ def terminate_jobs_audited(conn, idempotency_key, queue, states, reason,
     """
     out = out or sys.stdout
     scope = "batch:queue=%s:states=%s" % (queue, ",".join(states))
+    # THE SCOPE'S NARROWING SUFFIX IS APPENDED HERE, FROM THE CALLER'S OWN
+    # ARGUMENTS — before any AWS or database listing call, and unconditional
+    # on whether narrowing was actually requested (`allowed_job_ids is not
+    # None` used to gate this same suffix; it no longer needs to, since
+    # nothing here depends on `jobs`). This is what lets `scope` — and
+    # therefore the replay lookup below — be computed with NO calls at all:
+    # `_scheduler_job_ids_for_scope`'s only other job, narrowing the actual
+    # `jobs` list, still happens after the replay check, once one is known
+    # to be needed.
+    if attempt_ids or logical_job_ids:
+        scope += ":attempt_ids=%s:logical_job_ids=%s" % (
+            ",".join(str(a) for a in (attempt_ids or ())) or "-",
+            ",".join(logical_job_ids or ()) or "-")
+
+    # REPLAY IS CHECKED FIRST, READ-ONLY, BEFORE ANY AWS CALL OR DATABASE
+    # LISTING QUERY — never by writing the audit row up front and
+    # inspecting its `replayed` flag afterward (the shape this replaced:
+    # see the module docstring on why that made `rows_affected` a promise
+    # the code never kept). A replay means this exact key already
+    # terminated this exact scope; terminating again would be the second
+    # mutation the key exists to prevent, so the recorded outcome is
+    # returned and NEITHER AWS NOR `_scheduler_job_ids_for_scope`'s own
+    # database query is reached at all. `_replay_lookup` also raises
+    # `IdempotencyConflict` when the key was used for a different
+    # action/scope, exactly as `record_external_action` itself would.
+    replay = _replay_lookup(conn, idempotency_key, "external_batch_terminate",
+                            scope)
+    if replay is not None:
+        return replay, scope
 
     # ONE client for the whole invocation: the listing pass and every
     # termination share it, so credentials resolve once without a global
@@ -106,9 +149,6 @@ def terminate_jobs_audited(conn, idempotency_key, queue, states, reason,
         conn, attempt_ids, logical_job_ids)
     if allowed_job_ids is not None:
         jobs = [job for job in jobs if job["jobId"] in allowed_job_ids]
-        scope += ":attempt_ids=%s:logical_job_ids=%s" % (
-            ",".join(str(a) for a in (attempt_ids or ())) or "-",
-            ",".join(logical_job_ids or ()) or "-")
 
     # Expected state checked HERE, before the audit row and before any
     # termination: the operator said how many jobs they were acting on, and
@@ -133,29 +173,72 @@ def terminate_jobs_audited(conn, idempotency_key, queue, states, reason,
     if len(jobs) > 200:
         detail["job_ids_truncated"] = True
 
-    result = record_external_action(
-        conn, idempotency_key, "external_batch_terminate", scope, reason,
-        expected_state=expected_state, dry_run=dry_run,
-        rows_affected=len(jobs), detail=detail,
-        policy_citation=policy_citation)
-
-    # A replay means this exact key already terminated this exact scope.
-    # Terminating again would be the second mutation the key exists to
-    # prevent, so the recorded outcome is returned and AWS is not touched.
-    if result.get("replayed"):
-        return result, scope
-
-    for job in jobs:
-        if dry_run:
+    if dry_run:
+        # THE DRY RUN IS AUDITED TOO (unchanged from before) — a rehearsal
+        # is recorded, and 030's CHECK forbids it claiming rows changed, so
+        # `rows_affected=0` here is correct rather than `len(jobs)`: no job
+        # was terminated, dry-run or not.
+        result = record_external_action(
+            conn, idempotency_key, "external_batch_terminate", scope, reason,
+            expected_state=expected_state, dry_run=True, rows_affected=0,
+            detail=detail, policy_citation=policy_citation)
+        for job in jobs:
             print("[dry-run] would terminate %s (%s) [%s]"
                   % (job["jobId"], job.get("jobName", "?"),
                      job.get("status", "?")), file=out)
-        else:
+        return result, scope
+
+    # THE REAL WORK, PER JOB, BEFORE THE AUDIT ROW EXISTS AT ALL. Each
+    # job's own outcome is caught individually — one job Batch refuses (a
+    # state race, a permission edge, a job that finished between the list
+    # and the terminate call) does not abort the rest of the batch, and
+    # does not inflate the count of what actually happened.
+    terminated_ids = []
+    failures = []
+    for job in jobs:
+        try:
             client.terminate_job(jobId=job["jobId"], reason=reason)
-            print("terminated %s (%s)" % (job["jobId"],
-                                          job.get("jobName", "?")), file=out)
+        except Exception as exc:                      # noqa: BLE001
+            failures.append({"job_id": job["jobId"], "error": str(exc)})
+            print("FAILED to terminate %s (%s): %s"
+                  % (job["jobId"], job.get("jobName", "?"), exc), file=out)
+            continue
+        terminated_ids.append(job["jobId"])
+        print("terminated %s (%s)" % (job["jobId"], job.get("jobName", "?")),
+              file=out)
+
+    # THE AUDIT ROW IS WRITTEN AFTER, WITH THE REAL COUNT — the count of
+    # jobs actually terminated, never `len(jobs)`. `detail` carries the
+    # failures too, so a partial run's ledger entry says which jobs did not
+    # go and why, not only how many.
+    if failures:
+        detail["failures"] = failures
+    detail["terminated_job_ids"] = terminated_ids[:200]
+    result = record_external_action(
+        conn, idempotency_key, "external_batch_terminate", scope, reason,
+        expected_state=expected_state, dry_run=False,
+        rows_affected=len(terminated_ids), detail=detail,
+        policy_citation=policy_citation)
 
     return result, scope
+
+
+def _replay_lookup(conn, idempotency_key, action_class, target_scope):
+    """Read-only replay check via `derived.mutation_replay`, or None.
+
+    The same STABLE function `record_external_action`'s own SQL calls
+    internally (`047-idempotency-and-expected-state.sql`), called here
+    directly so the check can run BEFORE any AWS call without writing a
+    row — this function never inserts, it only reads `derived.mutation_
+    audit` for a prior REAL (non-dry-run) row under this key. Raises the
+    same `IdempotencyConflict` a genuine reuse-for-a-different-action
+    would raise inside `record_external_action`, via the same SQLSTATE
+    classification in `contract.classify`.
+    """
+    from pipeline.operatorctl.contract import call_function
+    return call_function(
+        conn, "SELECT derived.mutation_replay(%s, %s, %s)",
+        (idempotency_key, action_class, target_scope))
 
 
 def _list_all(client, queue, states):
