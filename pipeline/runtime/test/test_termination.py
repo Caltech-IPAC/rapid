@@ -421,6 +421,45 @@ class TestTerminalRecord(unittest.TestCase):
         self.assertEqual(record["rapid_outcome"], "failure")
         self.assertEqual(record["application_intended_exit"], 0)
 
+    def test_a_deadline_expiry_records_as_tool_failure_end_to_end(self):
+        """Deadline -> terminal failure -> category, proven from a REAL
+        timeout rather than a hand-built ToolError.
+
+        The timeouts ruling requires this chain unbroken: a stage that runs
+        past its deadline (here, DEFAULT_TIMEOUT_S applying because no
+        explicit timeout was given) must resolve to error_category
+        `tool_failure` in the terminal record, the same as any other tool
+        failure. `run_tool` is exercised directly — with an injected `_run`
+        so the test does not actually wait out a real deadline — so what is
+        proven is the whole path: TimeoutExpired -> ToolError(category=
+        "tool_failure") -> serialize_error -> the terminal record's
+        error_category field.
+        """
+        import subprocess as subprocess_module
+
+        def fake_run(*a, **k):
+            raise subprocess_module.TimeoutExpired(
+                cmd="some-slow-tool", timeout=k.get("timeout"))
+
+        from pipeline.runtime.process import run_tool
+
+        with self.assertRaises(ToolError) as ctx:
+            run_tool(["some-slow-tool"], _run=fake_run)
+        deadline_error = ctx.exception
+        self.assertEqual(deadline_error.error_category, "tool_failure")
+
+        error = serialize_error(deadline_error, redactor=None)
+        result = self.harness.terminate(outcome="failure", disposition="none",
+                                        error=error)
+        self.assertEqual(result.error_category, "tool_failure")
+
+        record = json.loads(self.harness.store.get(self.harness.record_key))
+        self.assertEqual(record["error_category"], "tool_failure")
+        self.assertEqual(record["rapid_outcome"], "failure")
+        # Fail-loud posture: a CLASSIFIED failure still intends exit 0 — the
+        # deadline was caught and recorded, not left to crash the process.
+        self.assertEqual(record["application_intended_exit"], 0)
+
     def test_a_successful_record_carries_no_error_category(self):
         """Absent, not null-valued — fields a state has not reached are absent."""
         self.harness.terminate()
