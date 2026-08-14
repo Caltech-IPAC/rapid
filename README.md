@@ -19,6 +19,15 @@ reaching the public remote. Install it once per clone:
 
     git config core.hooksPath .githooks
 
+### Running the tests
+
+    pip install -e '.[test]'
+    RAPID_SW="$PWD" scripts/run-operational-tests.sh
+
+runs the default (stub) tier, no database required. See
+[`pipeline/contract/README.md`](pipeline/contract/README.md) for the
+PostgreSQL-backed contract tier.
+
 ## License
 
 This project is licensed under the BSD 3-Clause License. See [LICENSE](LICENSE) for details.

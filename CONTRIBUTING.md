@@ -26,6 +26,29 @@ This project adheres to a [Code of Conduct](CODE_OF_CONDUCT.md). By participatin
 4. Ensure all tests pass before submitting.
 5. Submit a pull request with a clear description of the changes.
 
+### Running the Tests
+
+The suite has three tiers — stub, contract, and live — described in full in
+[`pipeline/contract/README.md`](pipeline/contract/README.md). For most
+changes, the stub tier is what you need:
+
+    pip install -e '.[test]'
+    RAPID_SW="$PWD" scripts/run-operational-tests.sh
+
+It needs no database and no network — psycopg2/boto3 are stubbed into
+`sys.modules` — and is what CI and `git push` both gate on. `RAPID_SW` is
+read fail-loud with no compiled-in default (the science configuration is
+release content, not something to guess from the working directory); for
+a checkout-rooted run, point it at the checkout.
+
+If your change touches SQL, the migration stream, or anything the stub
+tier's fakes cannot faithfully model, it likely belongs in the contract
+tier instead, which runs the same suite against a real PostgreSQL built
+from the authoritative `rapid_systems` migrations. See
+[`pipeline/contract/README.md`](pipeline/contract/README.md) for what it
+needs (a live Postgres with Q3C, `PGHOST`/`PGPORT`/etc., `RAPID_SW`, and a
+private `rapid_systems` checkout) and how to run it.
+
 ### Pull Request Guidelines
 
 - Keep pull requests focused — one feature or fix per PR.
