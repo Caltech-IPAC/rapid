@@ -80,6 +80,12 @@ concurrency:
 jobs:
   contract:
     runs-on: ubuntu-latest
+    # No step here does genuinely unbounded work (the longest is the
+    # contract suite itself against a service-container Postgres), so the
+    # GitHub Actions default of 6h is a runaway-job budget, not a real one.
+    # 60 is generous headroom over any observed run and cheap insurance
+    # against a hung step burning the whole default.
+    timeout-minutes: 60
 
     # POSTGRESQL 18 + Q3C, MATCHING THE FLEET — not the stock postgres image.
     #
