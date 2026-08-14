@@ -69,13 +69,19 @@ class FakeFuture:
 class FakeRegistry:
     """Resolves any schema name to one fixed version id, and counts calls."""
 
-    def __init__(self, version_id=SCHEMA_VERSION_ID):
+    def __init__(self, version_id=SCHEMA_VERSION_ID, definition=None):
         self.version_id = version_id
+        self.definition = definition
         self.lookups = []
+        self.definition_lookups = []
 
     def schema_version_id(self, schema_name):
         self.lookups.append(schema_name)
         return self.version_id
+
+    def schema_definition(self, schema_version_id):
+        self.definition_lookups.append(schema_version_id)
+        return self.definition
 
 
 @pytest.fixture
@@ -303,12 +309,22 @@ def test_close_releases_the_transport(producer):
 # ---------------------------------------------------------------------------
 
 class FakeGlueClient:
-    def __init__(self, version_id=SCHEMA_VERSION_ID, raise_missing=False):
+    def __init__(self, version_id=SCHEMA_VERSION_ID, raise_missing=False,
+                 definition=None):
         self.version_id = version_id
         self.raise_missing = raise_missing
+        self.definition = definition
         self.calls = []
+        self.definition_calls = []
 
-    def get_schema_version(self, SchemaId, SchemaVersionNumber):  # noqa: N803
+    def get_schema_version(self, SchemaId=None, SchemaVersionNumber=None,  # noqa: N803
+                           SchemaVersionId=None):  # noqa: N803
+        if SchemaVersionId is not None:
+            self.definition_calls.append(SchemaVersionId)
+            if self.raise_missing:
+                raise type("EntityNotFoundException", (Exception,), {})()
+            return {"SchemaDefinition": self.definition}
+
         self.calls.append(SchemaId)
         if self.raise_missing:
             raise type("EntityNotFoundException", (Exception,), {})()
@@ -337,6 +353,49 @@ def test_unregistered_schema_raises_rather_than_registering():
     registry = GlueSchemaRegistry(client=client)
     with pytest.raises(KeyError, match="not registered"):
         registry.schema_version_id("never-registered")
+
+
+# ---------------------------------------------------------------------------
+# Registry: by-UUID definition fetch (R3) — the counterpart lookup
+# `_pinned_schema_version` uses to verify a version before any outbox insert
+# ---------------------------------------------------------------------------
+
+def test_schema_definition_fetches_by_uuid():
+    client = FakeGlueClient(definition='{"type": "record", "name": "x"}')
+    registry = GlueSchemaRegistry(client=client)
+
+    definition = registry.schema_definition(SCHEMA_VERSION_ID)
+
+    assert definition == '{"type": "record", "name": "x"}'
+    assert client.definition_calls == [SCHEMA_VERSION_ID]
+
+
+def test_schema_definition_caches_lookups():
+    client = FakeGlueClient(definition='{"type": "record", "name": "x"}')
+    registry = GlueSchemaRegistry(client=client)
+    assert registry.schema_definition(SCHEMA_VERSION_ID)
+    assert registry.schema_definition(SCHEMA_VERSION_ID)
+    assert len(client.definition_calls) == 1        # immutable, one lookup
+
+
+def test_schema_definition_and_schema_version_id_caches_are_independent():
+    # A cache keyed by version id must not collide with the name-keyed
+    # cache `schema_version_id` already maintains.
+    client = FakeGlueClient(version_id=SCHEMA_VERSION_ID,
+                            definition='{"type": "record", "name": "x"}')
+    registry = GlueSchemaRegistry(client=client)
+    assert registry.schema_version_id("topic-a") == SCHEMA_VERSION_ID
+    assert registry.schema_definition(SCHEMA_VERSION_ID) == (
+        '{"type": "record", "name": "x"}')
+    assert len(client.calls) == 1
+    assert len(client.definition_calls) == 1
+
+
+def test_unregistered_schema_version_raises_rather_than_registering():
+    client = FakeGlueClient(raise_missing=True)
+    registry = GlueSchemaRegistry(client=client)
+    with pytest.raises(KeyError, match="not registered"):
+        registry.schema_definition(SCHEMA_VERSION_ID)
 
 
 def test_constructing_a_producer_makes_no_aws_call():

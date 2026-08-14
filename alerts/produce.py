@@ -396,6 +396,36 @@ def load_schema(version: str | None = None,
     return fastavro.schema.load_schema_ordered(paths)
 
 
+def parse_schema_definition(raw_definition: str) -> Schema:
+    """Parse a registry's Avro schema JSON into the same normalized form
+    `load_schema()` returns, for canonical comparison against it.
+
+    `load_schema()` runs the local .avsc tree through
+    `fastavro.schema.load_schema_ordered`, which is fastavro's own
+    `parse_schema` under the hood; this runs a schema fetched by UUID
+    (`alerts.kafka_producer.GlueSchemaRegistry.schema_definition`) through
+    `parse_schema` directly, so the two sides of a `_pinned_schema_version`
+    (`pipeline/stages/alert_production.py`) comparison are both fastavro-
+    normalized dicts, not raw text — equal regardless of whitespace or key
+    order, and unequal only on an actual structural difference (field order
+    included: it is part of an Avro record's wire encoding, not cosmetic).
+
+    Parameters
+    ----------
+    raw_definition : str
+        The registry's `SchemaDefinition` for one schema version — Avro
+        schema JSON, as `GlueSchemaRegistry.schema_definition` returns it.
+
+    Returns
+    -------
+    dict
+        Parsed fastavro schema, comparable by `==` to `load_schema()`'s
+        return value.
+    """
+    import json
+    return fastavro.schema.parse_schema(json.loads(raw_definition))
+
+
 def serialize_alert(alert_dict: dict[str, Any],
                     schema: Schema | None = None) -> bytes:
     """Serialize an alert dict to Avro bytes.

@@ -183,9 +183,14 @@ class Transport(Protocol):
 
 
 class SchemaRegistry(Protocol):
-    """Resolves a schema name to its registered schema-version UUID."""
+    """Resolves a schema name to its registered schema-version UUID, and a
+    schema-version UUID back to its registered definition.
+    """
 
     def schema_version_id(self, schema_name: str) -> str:
+        ...
+
+    def schema_definition(self, schema_version_id: str) -> str:
         ...
 
 
@@ -205,6 +210,7 @@ class GlueSchemaRegistry:
         self.region = region
         self._client = client
         self._cache: dict[str, str] = {}
+        self._definition_cache: dict[str, str] = {}
 
     @property
     def client(self) -> Any:
@@ -251,6 +257,46 @@ class GlueSchemaRegistry:
         version_id = response["SchemaVersionId"]
         self._cache[schema_name] = version_id
         return version_id
+
+    def schema_definition(self, schema_version_id: str) -> str:
+        """Return the registered Avro schema JSON for a schema-version UUID.
+
+        The by-UUID counterpart to `schema_version_id`: that resolves a
+        schema NAME to the registry's current version, this resolves a
+        VERSION back to what was actually registered. `_pinned_schema_version`
+        (`pipeline/stages/alert_production.py`) uses it to verify a pinned or
+        newly-resolved version still matches the local schema before any
+        outbox insert — the registry, not the local .avsc tree, is the
+        source of truth for what a version ID means on the wire.
+
+        Cached alongside `schema_version_id`'s cache: a schema version is
+        immutable once registered (auto-registration is off by contract), so
+        the definition behind a given UUID never changes underneath a
+        long-lived process.
+
+        Raises
+        ------
+        KeyError
+            If the schema-version UUID is not registered. Matched by name,
+            as `schema_version_id` does, so the tests can fake it without a
+            live botocore error class.
+        """
+        if schema_version_id in self._definition_cache:
+            return self._definition_cache[schema_version_id]
+
+        try:
+            response = self.client.get_schema_version(
+                SchemaVersionId=schema_version_id)
+        except Exception as exc:                      # noqa: BLE001
+            if type(exc).__name__ == "EntityNotFoundException":
+                raise KeyError(
+                    f"schema version {schema_version_id!r} is not "
+                    f"registered in Glue registry {self.registry!r}") from exc
+            raise
+
+        definition = response["SchemaDefinition"]
+        self._definition_cache[schema_version_id] = definition
+        return definition
 
 
 def _default_region() -> str:
