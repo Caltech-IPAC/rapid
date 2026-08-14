@@ -144,6 +144,16 @@ def render_plan(action, target_scope, reason, idempotency_key, result,
     comparable: an operator reviewing a dry run and then reading the
     apply's output should be able to see at a glance that the same action
     against the same scope produced the rows it said it would.
+
+    ``idempotency_key`` is ``None`` for an action that does not honor one —
+    `gc-recompute-plan` and `gc-approve-plan` are the two: `GCPlanRepository.
+    recompute`/`approve` take no key and are guarded by the PLAN'S OWN STATE
+    transition instead (a plan not in the required state is refused, which
+    is what makes a re-run safe). Printing and instructing an operator to
+    reuse a key that reaches no replay mechanism would be theatre — a
+    promise the tool cannot keep — so the key line and the "re-run under
+    the SAME key" footer are both omitted for those two rather than shown
+    with a value nothing downstream ever reads.
     """
     lines = []
     mode = "APPLY" if apply_requested else "DRY RUN"
@@ -152,7 +162,8 @@ def render_plan(action, target_scope, reason, idempotency_key, result,
     lines.append("%s: %s" % (mode, action))
     lines.append("  target scope    : %s" % target_scope)
     lines.append("  reason          : %s" % reason)
-    lines.append("  idempotency key : %s" % idempotency_key)
+    if idempotency_key is not None:
+        lines.append("  idempotency key : %s" % idempotency_key)
     if result.get("replayed"):
         lines.append("  ALREADY PERFORMED — recorded outcome returned, "
                      "nothing mutated")
@@ -167,7 +178,12 @@ def render_plan(action, target_scope, reason, idempotency_key, result,
         lines.append("  ADVISORY        : %s" % result["scale_advisory"])
     if not apply_requested and not result.get("replayed"):
         lines.append("")
-        lines.append("  Nothing was changed. Re-run with --apply and the "
-                     "SAME --idempotency-key")
-        lines.append("  to perform this action exactly once.")
+        if idempotency_key is not None:
+            lines.append("  Nothing was changed. Re-run with --apply and "
+                         "the SAME --idempotency-key")
+            lines.append("  to perform this action exactly once.")
+        else:
+            lines.append("  Nothing was changed. Re-run with --apply to "
+                         "perform this action; a second apply is refused "
+                         "by the plan's own state, not by a key.")
     return "\n".join(lines)

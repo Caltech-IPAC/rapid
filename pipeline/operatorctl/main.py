@@ -19,6 +19,7 @@ The safe call is the short one.
 """
 
 import argparse
+import os
 import sys
 
 from pipeline.intent.application_contract import ApplicationContractUnmet
@@ -37,6 +38,14 @@ EXIT_USAGE = 2
 # script sees the same meaning they already know.
 EXIT_CONFIG = 64
 EXIT_NOT_AUTHORIZED = 77
+# Anything `main` did not anticipate — the module docstring's own promise
+# ("`main` catches, prints an operator-legible account, and returns the
+# code") extended to cover the one case it did not before: an exception
+# outside the five typed families above, which used to re-raise as a raw
+# traceback. A distinct, high, unreserved code so a wrapper script can tell
+# "the tool refused" (the typed codes above) from "the tool hit something
+# nobody named yet" without parsing stderr.
+EXIT_UNEXPECTED = 70
 
 
 def _mutation_arguments(parser, scope_help):
@@ -247,6 +256,47 @@ def build_parser():
                     "separate queries.")
     show_attempt.add_argument("attempt_id", type=int)
     show_attempt.set_defaults(func=_cmd_show_attempt)
+
+    # --- work units (fix round 2, wave B) -----------------------------------
+    work_units_view = sub.add_parser(
+        "work-units",
+        help="list work units by state, or every non-terminal unit",
+        description="`work_units` had no listing view at all before this: "
+                    "the only reference anywhere in this package was the "
+                    "LEFT JOIN inside `show-attempt`'s detail query, "
+                    "reachable only per-attempt. This is the coarse panel "
+                    "— what is stuck and why — one row per unit, ordered "
+                    "oldest-in-state first so whatever has sat longest "
+                    "surfaces at the top.")
+    state_group = work_units_view.add_mutually_exclusive_group(required=True)
+    state_group.add_argument(
+        "--state", dest="states", action="append", default=None,
+        metavar="STATE",
+        help="an exact work_units.state to match (blocked, ready, "
+             "submitted, complete, failed, quarantined, cancelled); "
+             "repeatable — every named state is included")
+    state_group.add_argument(
+        "--non-terminal", action="store_true",
+        help="every unit still actively moving: blocked, ready or "
+             "submitted. Shorthand for the three states an operator "
+             "chasing something stuck almost always means, without typing "
+             "all three")
+    work_units_view.add_argument(
+        "--limit", type=int, default=200,
+        help="cap on rows returned, oldest-in-state first (default 200)")
+    work_units_view.set_defaults(func=_cmd_work_units)
+
+    unit_events_view = sub.add_parser(
+        "unit-events",
+        help="one work unit's transition history",
+        description="Every `unit_events` row for one work unit, oldest "
+                    "first — nothing in this package read `unit_events` "
+                    "at all before this. The creation event has "
+                    "`from_state` blank (migration 036: NULL on a unit's "
+                    "first event), so the first printed row is always the "
+                    "unit coming into existence.")
+    unit_events_view.add_argument("work_unit_id", type=int)
+    unit_events_view.set_defaults(func=_cmd_unit_events)
 
     # --- release pointer (H2) ---------------------------------------------
     release = sub.add_parser(
@@ -694,6 +744,81 @@ def _cmd_show_attempt(conn, args, out):
     return EXIT_OK
 
 
+def _format_age(seconds):
+    """`age_in_state_seconds` as an operator reads a duration, not a float.
+
+    Whole seconds only below one minute, otherwise the coarsest useful unit
+    — an operator scanning a listing for what has been stuck longest wants
+    "6d" or "3h", not "266400.284119" or a fully spelled-out breakdown.
+    """
+    if seconds is None:
+        return "?"
+    seconds = int(seconds)
+    if seconds < 60:
+        return "%ds" % seconds
+    minutes = seconds // 60
+    if minutes < 60:
+        return "%dm" % minutes
+    hours = minutes // 60
+    if hours < 24:
+        return "%dh" % hours
+    return "%dd" % (hours // 24)
+
+
+def _cmd_work_units(conn, args, out):
+    from pipeline.operatorctl import actions
+    if args.non_terminal:
+        rows = actions.work_units_non_terminal(conn, limit=args.limit)
+        heading = "WORK UNITS — non-terminal (blocked/ready/submitted)"
+    else:
+        rows = actions.work_units_by_state(conn, args.states,
+                                           limit=args.limit)
+        heading = "WORK UNITS — state in {%s}" % ", ".join(args.states)
+    if not rows:
+        print("No work units match.", file=out)
+        return EXIT_OK
+    print("%s — %d row(s)" % (heading, len(rows)), file=out)
+    for row in rows:
+        print("", file=out)
+        print("  work_unit %s  %s / %s  [%s]" % (
+            row["work_unit_id"], row["job_type"], row["input_scope"],
+            row["state"]), file=out)
+        print("    operational_class : %s" % row["operational_class"],
+              file=out)
+        print("    blocked_reason    : %s" % (
+            row["blocked_reason"] or "-"), file=out)
+        print("    campaign          : %s" % (
+            "%s (%s)" % (row["campaign_name"], row["campaign_id"])
+            if row["campaign_id"] is not None else "-"), file=out)
+        print("    age in state      : %s (since %s)" % (
+            _format_age(row["age_in_state_seconds"]), row["updated_at"]),
+            file=out)
+    return EXIT_OK
+
+
+def _cmd_unit_events(conn, args, out):
+    from pipeline.operatorctl import actions
+    rows = actions.unit_events_for_work_unit(conn, args.work_unit_id)
+    if not rows:
+        print("No unit_events for work unit %s (unknown id, or none "
+              "recorded)." % args.work_unit_id, file=out)
+        return EXIT_OK
+    print("UNIT EVENTS — work unit %s — %d row(s)" % (
+        args.work_unit_id, len(rows)), file=out)
+    for row in rows:
+        print("", file=out)
+        print("  event %s  %s -> %s" % (
+            row["unit_event_id"], row["from_state"] or "(created)",
+            row["to_state"]), file=out)
+        print("    writer     : %s" % row["writer"], file=out)
+        print("    occurred_at: %s" % row["occurred_at"], file=out)
+        if row.get("reason"):
+            print("    reason     : %s" % row["reason"], file=out)
+        if row.get("detail"):
+            print("    detail     : %s" % row["detail"], file=out)
+    return EXIT_OK
+
+
 def _cmd_set_release(conn, args, out):
     from pipeline.operatorctl.contract import call_function
     key = args.idempotency_key or new_idempotency_key("release")
@@ -789,7 +914,17 @@ def _cmd_gc_compute(conn, args, out, manifest_reader=None):
 def _cmd_gc_recompute(conn, args, out):
     from pipeline.gc.inventory import read_inventory
     from pipeline.gc.plans import GCPlanRepository
-    key = args.idempotency_key or new_idempotency_key("gc-recompute")
+    # NO KEY IS MINTED OR HONORED HERE. `GCPlanRepository.recompute` takes
+    # no idempotency key and reaches no replay mechanism — see
+    # `contract.render_plan`'s docstring. Re-run safety comes from the
+    # plan's own state transition (052-gc-plans.sql: `recompute` only acts
+    # on a plan in the required state), which is the guard fixed round 2
+    # adds below. A minted, printed key an operator was told to reuse
+    # would be a promise this command cannot keep.
+    if args.idempotency_key:
+        print("rapidctl: NOTE — --idempotency-key was given but "
+              "gc-recompute-plan does not use one; re-run safety comes "
+              "from the plan's own state, not from this key", file=out)
     repo = GCPlanRepository(conn)
     plan = repo.plan(args.plan_id)
     if plan is None:
@@ -804,9 +939,19 @@ def _cmd_gc_recompute(conn, args, out):
     present = {(o.bucket, o.key, o.version_id) for o in inventory.objects}
 
     if not args.apply:
+        # THE REAL ANTI-JOIN, READ-ONLY — not `len(inventory.objects)`,
+        # which is the size of the file on disk and says nothing about how
+        # many of THIS PLAN'S pending items it actually covers. Matches
+        # `pipeline/operatorctl/contract.py`'s own rule: "the plan shown IS
+        # the answer the apply will act on, minus the writing".
+        surviving, excluded, total_pending = repo.preview_recompute(
+            args.plan_id, surviving_keys=present)
         result = {"action": "gc_recompute_plan", "plan_id": args.plan_id,
                   "state": plan.state, "second_inventory": args.inventory_id,
                   "objects_in_second_inventory": len(inventory.objects),
+                  "pending_items": total_pending,
+                  "would_survive": surviving,
+                  "would_be_excluded_on_recompute": excluded,
                   "dry_run": True, "rows_affected": 0}
     else:
         excluded = repo.recompute(args.plan_id, surviving_keys=present,
@@ -817,7 +962,7 @@ def _cmd_gc_recompute(conn, args, out):
                   "excluded_on_recompute": excluded, "dry_run": False,
                   "rows_affected": excluded}
     print(render_plan("gc_recompute_plan", "gc_plan:%s" % args.plan_id,
-                      args.reason, key, result, args.apply), file=out)
+                      args.reason, None, result, args.apply), file=out)
     return EXIT_OK
 
 
@@ -933,7 +1078,14 @@ def _session_user(conn):
 
 def _cmd_gc_approve(conn, args, out):
     from pipeline.gc.plans import GCPlanRepository
-    key = args.idempotency_key or new_idempotency_key("gc-approve")
+    # NO KEY IS MINTED OR HONORED HERE — see `_cmd_gc_recompute`'s identical
+    # note. `GCPlanRepository.approve` takes no idempotency key; a second
+    # apply is refused because the plan is no longer in RECOMPUTED state
+    # after the first approval, not because of any key.
+    if args.idempotency_key:
+        print("rapidctl: NOTE — --idempotency-key was given but "
+              "gc-approve-plan does not use one; re-run safety comes from "
+              "the plan's own state, not from this key", file=out)
     repo = GCPlanRepository(conn)
     plan = repo.plan(args.plan_id)
     if plan is None:
@@ -953,13 +1105,22 @@ def _cmd_gc_approve(conn, args, out):
         with conn.cursor() as cur:
             cur.execute("SELECT session_user")
             actor = cur.fetchone()[0]
-        approved = repo.approve(args.plan_id, approved_by=actor,
-                                reason=args.reason)
+        # `args.reason` is NOT passed to `repo.approve` — see
+        # `GCPlanRepository.approve`'s docstring: `gc_plans` has no column
+        # for an approval reason distinct from the plan's own creation
+        # reason, and a parameter silently dropped by the SQL beneath it
+        # is worse than no parameter. The operator's `--reason` is still
+        # MANDATORY (the shared `_mutation_arguments` contract every
+        # subcommand carries) and still printed in this command's own
+        # plan/outcome output below, exactly as every dry run and apply
+        # already shows it — it is simply not additionally written to a
+        # column that does not exist for it.
+        approved = repo.approve(args.plan_id, approved_by=actor)
         conn.commit()
         result = dict(approved, action="gc_approve_plan", dry_run=False,
                       rows_affected=1)
     print(render_plan("gc_approve_plan", "gc_plan:%s" % args.plan_id,
-                      args.reason, key, result, args.apply), file=out)
+                      args.reason, None, result, args.apply), file=out)
     return EXIT_OK
 
 
@@ -1076,7 +1237,31 @@ def main(argv=None, out=None):
         if category in ("config_invalid", "db_unavailable"):
             print("rapidctl: %s" % exc, file=sys.stderr)
             return EXIT_CONFIG
-        raise
+        if category is not None:
+            # A TYPED REFUSAL FROM SOMEWHERE BELOW THE FIVE NAMED FAMILIES
+            # ABOVE — `pipeline.gc.plans`/`pipeline.gc.references`'s own
+            # `PlanRefused`, `PlanBoundExceeded`, `GCSchemaAbsent` chief
+            # among them (each already carries `error_category`, just never
+            # read here before). These are the tool working correctly —
+            # the same "refused, not broken" character `OperatorError`
+            # gets above — so they get the same plain, traceback-free
+            # presentation rather than falling all the way through to the
+            # UNEXPECTED branch below, which is for exceptions nobody
+            # classified at all.
+            print("rapidctl: REFUSED — %s" % exc, file=sys.stderr)
+            return EXIT_USAGE
+        # BEYOND EVERY TYPED FAMILY ABOVE, this used to re-raise — every
+        # other subcommand's failure mode printed one legible line and
+        # returned a code; this branch alone handed the operator a raw
+        # Python traceback, in the one module the docstring says owns
+        # exiting and presenting failures legibly. A full traceback is
+        # still available, opt-in, via RAPIDCTL_DEBUG=1 — for whoever is
+        # actually debugging the tool, not the operator running it.
+        if os.environ.get("RAPIDCTL_DEBUG"):
+            raise
+        print("rapidctl: UNEXPECTED — %s: %s" % (type(exc).__name__, exc),
+              file=sys.stderr)
+        return EXIT_UNEXPECTED
 
 
 if __name__ == "__main__":

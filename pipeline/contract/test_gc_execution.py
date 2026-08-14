@@ -224,15 +224,14 @@ def test_approval_is_recorded_with_its_own_actor_and_needs_a_recompute():
 
         # Approval before recomputation is refused — the two-pass requirement.
         with pytest.raises(PlanRefused):
-            repo.approve(plan.plan_id, approved_by="someone", reason="early")
+            repo.approve(plan.plan_id, approved_by="someone")
         conn.rollback()
 
         repo.recompute(plan.plan_id, surviving_keys=set(),
                        inventory=make_inventory([], "inv-2"),
                        recomputed_by="contract-test")
         conn.commit()
-        approved = repo.approve(plan.plan_id, approved_by="contract-test",
-                                reason="ok")
+        approved = repo.approve(plan.plan_id, approved_by="contract-test")
         conn.commit()
         assert approved["approved_by"] == "contract-test"
         # SELF-APPROVAL IS PERMITTED AND RECORDED AS SUCH (P-H4): a
@@ -284,7 +283,7 @@ def approved_plan(conn, keys, tag):
                                             "inv-2"),
                    recomputed_by="t")
     conn.commit()
-    repo.approve(plan.plan_id, approved_by="t", reason="ok")
+    repo.approve(plan.plan_id, approved_by="t")
     conn.commit()
     return repo, plan
 

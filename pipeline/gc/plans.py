@@ -181,6 +181,36 @@ class GCPlanRepository:
 
     # -- step 5: wait and recompute -------------------------------------
 
+    def preview_recompute(self, plan_id, *, surviving_keys):
+        """The real anti-join `recompute` would apply, computed and returned
+        WITHOUT writing anything — `gc-recompute-plan`'s dry run.
+
+        Read-only counterpart to `recompute`, sharing its exact partition
+        logic (an item survives iff its `(bucket, object_key, version_id)`
+        is in `surviving_keys`) but issuing no `UPDATE` and requiring no
+        plan-state claim. Before this existed, the dry run reported only
+        `len(inventory.objects)` — the size of the SECOND inventory file on
+        disk, which says nothing about how many of THIS PLAN'S pending
+        items are actually present in it. `pipeline/operatorctl/contract.
+        py`'s governing rule is "the plan shown IS the answer the apply
+        will act on, minus the writing"; a dry run reporting inventory size
+        instead of the anti-join result violated that rule outright — an
+        operator could not tell from it how many items would survive versus
+        be excluded without already knowing the answer.
+
+        Returns `(surviving_count, excluded_count, total_pending)` over
+        this plan's currently-`pending` items — the same population
+        `recompute` itself reads before mutating.
+        """
+        self._require_schema()
+        items = self._query(
+            "preview_recompute",
+            "SELECT bucket, object_key, version_id FROM gc_plan_items"
+            " WHERE plan_id = %s AND status = 'pending'", (plan_id,))
+        surviving = sum(1 for row in items if tuple(row) in surviving_keys)
+        total = len(items)
+        return surviving, total - surviving, total
+
     def recompute(self, plan_id, *, surviving_keys, inventory,
                   recomputed_by):
         """Record the second pass's verdict.
@@ -193,8 +223,42 @@ class GCPlanRepository:
         reappeared stays in the plan as an excluded row, which is what makes
         the plan a record of what pass one computed rather than a moving
         summary of what is currently true.
+
+        **ONLY A COMPUTED PLAN MAY RECOMPUTE — CHECKED FIRST, BEFORE ANY
+        ITEM IS TOUCHED.** The previous version mutated `gc_plan_items`
+        unconditionally and only guarded the plan's own state in the FINAL
+        `UPDATE gc_plans ... WHERE state = 'COMPUTED'`, which is too late:
+        a plan already `RECOMPUTED` (a second recompute call, perhaps a
+        retried operator invocation), `APPROVED`, `EXECUTING` or beyond
+        would have its pending items silently walked and flipped to
+        `excluded-on-recompute` — mutating a plan that is supposed to be
+        frozen past step 5 — while the plan-level UPDATE quietly no-op'd
+        and the caller had no signal anything was refused. The guard here
+        is a CAS via `RETURNING`, matching `approve`/`begin_execution`'s
+        own shape exactly: claim the transition FIRST, and only walk items
+        if the claim succeeded. A concurrent second recompute on the same
+        plan now also can't interleave item mutations with this one — the
+        state UPDATE is atomic and only one caller's `WHERE state =
+        'COMPUTED'` can match.
         """
         self._require_schema()
+        claimed = self._query(
+            "recompute",
+            "UPDATE gc_plans"
+            "   SET state = 'RECOMPUTED', recomputed_at = now(),"
+            "       recompute_inventory_id = %s,"
+            "       recompute_inventory_taken_at = %s"
+            " WHERE plan_id = %s AND state = 'COMPUTED'"
+            " RETURNING plan_id",
+            (inventory.inventory_id, inventory.taken_at, plan_id))
+        if not claimed:
+            raise PlanRefused(
+                "plan %s could not be recomputed: it must be in COMPUTED "
+                "state (pass one only, not yet recomputed). A plan cannot "
+                "be recomputed twice, and recomputing an already-APPROVED "
+                "or later plan would mutate items after the two-pass "
+                "requirement was already satisfied." % (plan_id,))
+
         items = self._query(
             "recompute",
             "SELECT item_id, bucket, object_key, version_id, object_class,"
@@ -215,17 +279,9 @@ class GCPlanRepository:
                  "step 5)", item[0]))
             excluded += 1
 
-        self._query(
-            "recompute",
-            "UPDATE gc_plans"
-            "   SET state = 'RECOMPUTED', recomputed_at = now(),"
-            "       recompute_inventory_id = %s,"
-            "       recompute_inventory_taken_at = %s"
-            " WHERE plan_id = %s AND state = 'COMPUTED'",
-            (inventory.inventory_id, inventory.taken_at, plan_id))
         return excluded
 
-    def approve(self, plan_id, *, approved_by, reason):
+    def approve(self, plan_id, *, approved_by):
         """Record approval — a DISTINCT act with its own actor.
 
         Self-approval by the computing actor is permitted and RECORDED AS
@@ -233,6 +289,21 @@ class GCPlanRepository:
         second-actor requirement would make the mechanism unusable rather
         than safer. The record is what keeps it reviewable — `computed_by`
         and `approved_by` are both stored and their equality is visible.
+
+        **NO `reason` PARAMETER.** The previous version accepted one and
+        silently dropped it — the SQL below wrote only `approved_by`/
+        `approved_at`, and `gc_plans` (052-gc-plans.sql) has no column to
+        put an approval reason in; `reason` there is the PLAN's own
+        creation reason, already set at `record_plan` time, and writing
+        over it here would clobber that fact with the approval's instead.
+        A parameter nothing downstream reads or stores is a caller-facing
+        lie about what got recorded, so it is gone rather than kept and
+        ignored. The operator's stated reason for approving now has a real
+        home: `_cmd_gc_approve` (`pipeline/operatorctl/main.py`) records it
+        through `derived.mutation_audit` via `record_external_action`,
+        exactly as every other mutating subcommand's `--reason` is
+        recorded — this repository method was never the right place for it
+        to land.
         """
         self._require_schema()
         rows = self._query(
@@ -318,6 +389,27 @@ class GCPlanRepository:
         the stored items rather than recomputing candidacy: the question is
         "is this plan still the plan that was computed", not "would the same
         plan be computed now".
+
+        **NO `status` FILTER ON THE ITEMS QUERY — RE-DERIVED AND CONFIRMED
+        CORRECT, NOT AN OVERSIGHT.** `candidate_checksum` (this module) is
+        computed exactly once, in `record_plan`, over the FULL candidate
+        list pass one produced — at that moment every one of those rows is
+        inserted with `status = 'pending'`. `gc_plan_items` rows are never
+        deleted afterward (052's trigger enforces append-only; `recompute`
+        only ever UPDATEs a row's `status`/`status_reason`, and execution's
+        own outcomes do the same). So "every item row currently in the
+        table for this plan" and "every candidate pass one computed" are
+        the SAME set at every later point in the plan's lifecycle,
+        regardless of how many rows have since moved to
+        `excluded-on-recompute`, `deleted`, `already-absent` or
+        `skipped-fenced` — filtering this query to `status = 'pending'`
+        (or any other status) would silently exclude rows the ORIGINAL
+        checksum included, and every recompute/execute call would then see
+        a manufactured mismatch on a plan nothing is actually wrong with.
+        The four selected columns (`bucket, object_key, version_id,
+        object_class`) also match `candidate_checksum`'s own 4-tuple
+        exactly, column for column, which is what makes the two
+        computations comparable at all.
         """
         self._require_schema()
         rows = self._query(
