@@ -55,7 +55,8 @@ UNITS = {
                                 target_table="sources_20260812_6"),
     JOB_TYPE_CROSSMATCH: dict(proc_date="20260812", field=4242,
                               target_tables=("astroobjects_4242",
-                                             "merges_4242")),
+                                             "merges_4242"),
+                              source_tables=("sources_20260812_6",)),
     JOB_TYPE_STATISTICS: dict(field=4242,
                               target_table="astroobjects_4242"),
 }
@@ -82,7 +83,8 @@ EXPECTED_PAYLOAD_KEYS = {
     # an ABSENT fact rather than a fact known to be empty — so it emits no
     # key, per the absent-not-sentinel rule the payloads inherited.
     JOB_TYPE_CATALOG_LOAD: {"grain", "proc_date", "sca", "target_table"},
-    JOB_TYPE_CROSSMATCH: {"grain", "proc_date", "field", "target_tables"},
+    JOB_TYPE_CROSSMATCH: {"grain", "proc_date", "field", "target_tables",
+                          "source_tables"},
     JOB_TYPE_STATISTICS: {"grain", "field", "target_table"},
 }
 
@@ -305,10 +307,12 @@ def test_the_v25_dedup_regression_stays_fixed():
     """
     first = ProcessingUnit(payload=payloads.build(
         JOB_TYPE_CROSSMATCH, proc_date="20260812", field=101,
-        target_tables=("astroobjects_101",)))
+        target_tables=("astroobjects_101",),
+        source_tables=("sources_20260812_1",)))
     second = ProcessingUnit(payload=payloads.build(
         JOB_TYPE_CROSSMATCH, proc_date="20260812", field=202,
-        target_tables=("astroobjects_202",)))
+        target_tables=("astroobjects_202",),
+        source_tables=("sources_20260812_1",)))
 
     assert first.dedup_key() != second.dedup_key()
     assert first.key != second.key

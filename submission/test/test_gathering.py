@@ -155,6 +155,9 @@ class StubSource:
     def get_info_for_l2file(self, rid):
         return self.info.get(rid)
 
+    def get_info_for_l2files(self, rids):
+        return {rid: self.info[rid] for rid in rids if rid in self.info}
+
     def get_exposure_filter(self, fid):
         return self.filter_name
 
@@ -515,7 +518,8 @@ class CoaddInputsTests(unittest.TestCase):
         self.addCleanup(patcher.stop)
 
     class Source:
-        def __init__(self, overlapping=(), info=None, overlap_failure=None):
+        def __init__(self, overlapping=(), info=None, overlap_failure=None,
+                     info_failure=None):
             self.exit_code = 0
             self.overlapping = list(overlapping)
             self.info = info or {}
@@ -524,6 +528,13 @@ class CoaddInputsTests(unittest.TestCase):
             #: stub that only ever returns rows cannot exercise the path
             #: that mattered.
             self.overlap_failure = overlap_failure
+            #: The equivalent failure switch for the batched info lookup
+            #: (2026-08-14): a separate switch from `overlap_failure` so a
+            #: test can fail THIS read specifically, with the overlap query
+            #: having already succeeded — the two reads are independent
+            #: round trips and a stub conflating their failure could not
+            #: prove which one a caller's guard actually caught.
+            self.info_failure = info_failure
             #: (rid, mjdobs) as the query actually received them — the two
             #: arguments whose values ARE the query's semantics.
             self.overlap_calls = []
@@ -531,6 +542,10 @@ class CoaddInputsTests(unittest.TestCase):
             #: window is passed rather than read from the environment, so
             #: what arrives here is the whole of what selects the frames.
             self.overlap_windows = []
+            #: Every batched-info call's rid list, in call order — proves
+            #: the caller made ONE call covering every overlapping rid
+            #: rather than one call per rid (the N+1 this batching closes).
+            self.info_calls = []
 
         def get_overlapping_l2files(self, rid, fid, mjdobs, *corners,
                                     radius_of_initial_cone_search=None,
@@ -545,6 +560,14 @@ class CoaddInputsTests(unittest.TestCase):
 
         def get_info_for_l2file(self, rid):
             return self.info.get(rid)
+
+        def get_info_for_l2files(self, rids):
+            self.info_calls.append(list(rids))
+            if self.info_failure is not None:
+                self.exit_code = self.info_failure
+                _refuse_if_failed(self, "get_info_for_l2files")
+                return None
+            return {rid: self.info[rid] for rid in rids if rid in self.info}
 
     def _overlap_row(self, rid, field=4678636):
         return [rid, 10.0, -5.0, 10.1, -5.1, 10.2, -5.2, 10.3, -5.3,
@@ -568,6 +591,53 @@ class CoaddInputsTests(unittest.TestCase):
         self.assertEqual(len(rows[0]), len(gathering.COADD_INPUT_COLUMNS))
         self.assertEqual(rows[0][0], 1)
         self.assertEqual(rows[0][11], "a.fits")
+
+    def test_l2file_info_is_read_in_one_batched_call_not_one_per_rid(self):
+        # THE FIX ITSELF (2026-08-14): the N+1 this batching closes. Three
+        # overlapping images used to mean three `get_info_for_l2file` calls;
+        # now it is one `get_info_for_l2files` call covering every
+        # overlapping rid, made once regardless of how many images overlap.
+        source = self.Source(
+            overlapping=[self._overlap_row(1), self._overlap_row(2),
+                         self._overlap_row(3)],
+            info={1: self._info("a.fits"), 2: self._info("b.fits"),
+                 3: self._info("c.fits")})
+
+        gathering.coadd_input_rows(
+            source, rid=9, fid=1, mjdobs=61679.1, sky_position=self.SKY,
+            min_images_to_coadd=1)
+
+        self.assertEqual(len(source.info_calls), 1)
+        self.assertEqual(sorted(source.info_calls[0]), [1, 2, 3])
+
+    def test_a_rid_absent_from_the_batched_result_is_skipped(self):
+        # The batched equivalent of the singular method's `info is None`:
+        # a rid the batched call did not return a row for (no L2Files row)
+        # is skipped exactly like a `None` from the singular form was.
+        source = self.Source(
+            overlapping=[self._overlap_row(1), self._overlap_row(2)],
+            info={1: self._info("a.fits")})  # rid 2 has no L2Files row
+
+        rows = gathering.coadd_input_rows(
+            source, rid=9, fid=1, mjdobs=61679.1, sky_position=self.SKY,
+            min_images_to_coadd=1)
+
+        self.assertEqual([row[11] for row in rows], ["a.fits"])
+
+    def test_a_failed_batched_info_query_raises(self):
+        # Independent of the overlap query's own guard: the overlap query
+        # succeeds, and it is specifically the batched info read that fails
+        # — proven by `info_failure` rather than `overlap_failure`.
+        source = self.Source(
+            overlapping=[self._overlap_row(1), self._overlap_row(2)],
+            info_failure=67)
+
+        with self.assertRaises(gathering.GatheringError) as ctx:
+            gathering.coadd_input_rows(
+                source, rid=9, fid=1, mjdobs=61679.1, sky_position=self.SKY,
+                min_images_to_coadd=1)
+
+        self.assertIn("67", str(ctx.exception))
 
     def test_bad_and_superseded_files_are_excluded(self):
         # status == 0 is a file marked bad; vbest == 0 is a superseded
@@ -949,6 +1019,8 @@ class PostDbGatheringTests(unittest.TestCase):
 
         def __init__(self, scas=(), fields=(), per_field=(), failure=0,
                      products=None, incomplete_catalog_load=(),
+                     completed_catalog_load=None,
+                     completed_catalog_load_failure=0,
                      gatherable_catalog_load=None, blocking_crossmatch=(),
                      blocking_per_field=(), watermark=None,
                      earliest_owed=None, watermark_failure=0,
@@ -971,6 +1043,25 @@ class PostDbGatheringTests(unittest.TestCase):
             # the refusal path, which is exactly the stub-refusal principle
             # this suite's own tests are held to.
             self.incomplete_catalog_load = list(incomplete_catalog_load)
+            # The COMPLEMENT of the above (2026-08-14): the SCAs whose
+            # catalog load for this date IS complete, which is what names
+            # the `sources_<date>_<sca>` tables `CrossmatchPayload.
+            # source_tables` declares. Defaults to a single placeholder SCA
+            # — NOT to `scas` and NOT to empty — so every existing crossmatch
+            # test, none of which sets this, still yields a unit with a
+            # non-empty (now required) `source_tables` rather than every one
+            # of them starting to raise `PayloadError`. Tests exercising
+            # `source_tables` itself pass this explicitly.
+            self.completed_catalog_load = (
+                [1] if completed_catalog_load is None
+                else list(completed_catalog_load))
+            # A SEPARATE switch from the shared `failure`, matching
+            # `watermark_failure`/`owed_failure`'s own reasoning: `failure`
+            # refuses the FIRST query a pass makes (the incomplete-coverage
+            # check), so a test using it to probe this read would never
+            # reach it — this read needs a switch that can fail IT
+            # specifically, with every earlier read still succeeding.
+            self.completed_catalog_load_failure = completed_catalog_load_failure
             # The resubmission gates (mission mock, live 2026-08-09).
             # `gatherable_catalog_load` defaults to `scas`: absent pending
             # or successful attempts, the gather set IS the science set —
@@ -1013,6 +1104,15 @@ class PostDbGatheringTests(unittest.TestCase):
             _refuse_if_failed(
                 self, "get_scas_with_incomplete_catalog_load_for_processing_date")
             return None if self.failure else self.incomplete_catalog_load
+
+        def get_scas_with_completed_catalog_load_for_processing_date(
+                self, proc_date):
+            self.asked_for.append(("completed_catalog_load", proc_date))
+            self.exit_code = self.completed_catalog_load_failure or self.failure
+            _refuse_if_failed(
+                self, "get_scas_with_completed_catalog_load_for_processing_date")
+            return (None if self.completed_catalog_load_failure or self.failure
+                   else self.completed_catalog_load)
 
         def get_fields_with_science_jobs_for_processing_date(self, proc_date):
             self.asked_for.append(("fields", proc_date))
@@ -1263,6 +1363,49 @@ class PostDbGatheringTests(unittest.TestCase):
 
         self.assertEqual(units[0].payload.target_tables,
                          ("astroobjects_101", "merges_101"))
+
+    def test_crossmatch_names_the_source_tables_for_every_completed_sca(self):
+        # THE FIX ITSELF (2026-08-14): `source_tables` is built from the
+        # completed-catalog-load complement, named `sources_<date>_<sca>`
+        # per SCA — the same naming `gather_catalog_load_units` uses for the
+        # table it loads, read here as what a crossmatch unit reads FROM.
+        units = list(gather_crossmatch_units(
+            self.Source(fields=[101],
+                        completed_catalog_load=[1, 2, 18]),
+            "20260808"))
+
+        self.assertEqual(units[0].payload.source_tables,
+                         ("sources_20260808_1", "sources_20260808_2",
+                          "sources_20260808_18"))
+
+    def test_crossmatch_source_tables_are_shared_across_every_claimed_field(
+            self):
+        # Per-date, not per-field: the ordering gate claims at most one
+        # field per pass, but were it to claim more, every unit of the same
+        # date reads the identical SCA coverage — the stage itself reads
+        # every SCA's sources table regardless of which field it is
+        # crossmatching.
+        units = list(gather_crossmatch_units(
+            self.Source(fields=[101], completed_catalog_load=[7]),
+            "20260808"))
+
+        self.assertEqual(units[0].payload.source_tables,
+                         ("sources_20260808_7",))
+
+    def test_a_failed_completed_catalog_load_query_raises(self):
+        # The complement query fails independently of the incomplete-check
+        # it mirrors: a broken read here must not silently gather units with
+        # no source tables (which `CrossmatchPayload` would now refuse to
+        # build anyway) or, worse, with a stale/empty set read as "no
+        # sources this date" rather than "the query failed". Every earlier
+        # read (the incomplete check, fields, blocking attempts, ordering
+        # gate) succeeds — `completed_catalog_load_failure` fails only this
+        # one, proving THIS read's own guard rather than an earlier one's.
+        with self.assertRaises(GatheringError):
+            list(gather_crossmatch_units(
+                self.Source(fields=[101], watermark=(None, None),
+                           completed_catalog_load_failure=67),
+                "20260808"))
 
     def test_a_failed_field_query_raises(self):
         with self.assertRaises(GatheringError):

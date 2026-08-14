@@ -80,7 +80,8 @@ def catalog_load_payload(proc_date="20260812", sca=6, **overrides):
 
 
 def crossmatch_payload(proc_date="20260812", field=4242, **overrides):
-    facts = {"target_tables": (f"astroobjects_{field}", f"merges_{field}")}
+    facts = {"target_tables": (f"astroobjects_{field}", f"merges_{field}"),
+            "source_tables": (f"sources_{proc_date}_1",)}
     facts.update(overrides)
     return payloads.build(JOB_TYPE_CROSSMATCH, proc_date=proc_date,
                           field=field, **facts)

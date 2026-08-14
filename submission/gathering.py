@@ -117,6 +117,13 @@ class UnitSource(Protocol):
 
     def get_info_for_l2file(self, rid: int) -> Sequence[Any]: ...
 
+    # The batched form (2026-08-14, closing `coadd_input_rows`'s N+1): one
+    # round trip for every rid in the overlap set instead of one per rid.
+    # Returns a dict keyed by rid; a rid with no L2Files row is simply
+    # absent, the batched equivalent of the singular method's `None`.
+    def get_info_for_l2files(
+            self, rids: Sequence[int]) -> dict[int, Sequence[Any]]: ...
+
     def get_exposure_filter(self, fid: int) -> Any: ...
 
     def get_best_psf(self, sca: int, fid: int) -> Sequence[Any]: ...
@@ -153,6 +160,13 @@ class UnitSource(Protocol):
     # The durable-state ordering predicate crossmatch (and alert production,
     # indirectly through the same fact class) gate on — co-design ruling 1.
     def get_scas_with_incomplete_catalog_load_for_processing_date(
+            self, proc_date: str) -> Sequence[Any]: ...
+
+    # The complement of the above, over the same rows (2026-08-14): the
+    # SCAs whose catalog load for this date IS complete, which is what
+    # names the `sources_<proc_date>_<sca>` tables `gather_crossmatch_units`
+    # declares as `CrossmatchPayload.source_tables`.
+    def get_scas_with_completed_catalog_load_for_processing_date(
             self, proc_date: str) -> Sequence[Any]: ...
 
     # The resubmission gates (mission mock, live 2026-08-09): gather sets
@@ -833,16 +847,25 @@ def coadd_input_rows(handle: UnitSource, rid: int, fid: int, mjdobs: float,
     overlapping = _overlapping_l2files(handle, rid, fid, corners, radius,
                                        window=window)
 
+    # BATCHED, NOT ONE `get_info_for_l2file` CALL PER OVERLAPPING IMAGE
+    # (2026-08-14, closing the N+1). One round trip for every input rid in
+    # the overlap set, before the loop below reads from it — the loop's
+    # per-row semantics (the `info is None` skip, the status/vbest filter,
+    # the field-agreement check, ordering) are unchanged; only how `info`
+    # is obtained changed, from a query per row to a dict lookup per row.
+    input_rids = [int(image[0]) for image in overlapping]
+    try:
+        info_by_rid = handle.get_info_for_l2files(input_rids)
+    except RapidDBCallFailed as exc:
+        raise GatheringError(
+            f"get_info_for_l2files failed for rids {input_rids}: "
+            f"{exc}") from exc
+
     rows: list[list[Any]] = []
     for image in overlapping:
         input_rid = int(image[0])
         field_from_overlap = image[11]
-        try:
-            info = handle.get_info_for_l2file(input_rid)
-        except RapidDBCallFailed as exc:
-            raise GatheringError(
-                f"get_info_for_l2file failed for rid {input_rid}: "
-                f"{exc}") from exc
+        info = info_by_rid.get(input_rid)
         if info is None:
             continue
 
@@ -1712,6 +1735,27 @@ def gather_crossmatch_units(handle: UnitSource, proc_date: str
             continue
         candidates.append(field)
 
+    # THE SOURCE TABLES A CLAIMED UNIT READS FROM (2026-08-14, closing the
+    # gap `CrossmatchPayload.source_tables`'s own docstring named). The
+    # readiness gate above already confirmed the whole date's catalog load
+    # is complete before any field could reach this point — `incomplete`
+    # was empty — so the completed set is simply every SCA that ran science
+    # on this date, read through the complement query rather than
+    # re-deriving "loaded" from a second notion of completeness. Read once,
+    # outside the per-field loop below: readiness, like the incomplete
+    # check above it, is a per-DATE fact, not a per-field one.
+    try:
+        completed = handle.get_scas_with_completed_catalog_load_for_processing_date(
+            proc_date)
+    except RapidDBCallFailed as exc:
+        raise GatheringError(
+            f"catalog-load coverage check failed for processing date "
+            f"{proc_date}: {exc}") from exc
+    source_tables = tuple(
+        f"sources_{proc_date}_"
+        f"{int(sca[0] if isinstance(sca, (list, tuple)) else sca)}"
+        for sca in completed or ())
+
     for field in _next_claimable_field(candidates, proc_date, position,
                                        earliest_owed):
         yield ProcessingUnit(
@@ -1719,7 +1763,8 @@ def gather_crossmatch_units(handle: UnitSource, proc_date: str
                 JOB_TYPE_CROSSMATCH,
                 proc_date=str(proc_date), field=field,
                 target_tables=(f"astroobjects_{field}",
-                               f"merges_{field}")))
+                               f"merges_{field}"),
+                source_tables=source_tables))
 
 
 def _per_field_units(handle: UnitSource, job_type: str, prototype: str

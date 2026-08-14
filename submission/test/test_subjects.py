@@ -69,10 +69,10 @@ class DedupSubjectTests(unittest.TestCase):
     def test_two_crossmatch_fields_share_no_subject(self):
         a = ProcessingUnit(payload=payloads.build(
             JOB_TYPE_CROSSMATCH, proc_date="20260808", field=101,
-            target_tables=("t",)))
+            target_tables=("t",), source_tables=("s",)))
         b = ProcessingUnit(payload=payloads.build(
             JOB_TYPE_CROSSMATCH, proc_date="20260808", field=202,
-            target_tables=("t",)))
+            target_tables=("t",), source_tables=("s",)))
         self.assertNotEqual(a.dedup_key(JOB_TYPE_CROSSMATCH),
                             b.dedup_key(JOB_TYPE_CROSSMATCH))
 
@@ -131,7 +131,7 @@ class AttemptIdentityFieldTests(unittest.TestCase):
     def test_date_field_grain_identity_carries_no_sentinel(self):
         unit = ProcessingUnit(payload=payloads.build(
             JOB_TYPE_CROSSMATCH, proc_date="20260808", field=101,
-            target_tables=("t",)))
+            target_tables=("t",), source_tables=("s",)))
         identity = attempt_identity_fields(JOB_TYPE_CROSSMATCH, unit)
 
         self.assertEqual(identity,

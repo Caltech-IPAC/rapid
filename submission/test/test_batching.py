@@ -150,8 +150,8 @@ def test_two_fields_crossmatch_units_do_not_collide_v25(clock):
     # for EVERY field of one processing date — so every field shared one
     # `.key`, and deduping on `.key` (as this accumulator did before the
     # fix) silently dropped every field after the first. Now a crossmatch
-    # unit carries a `CrossmatchPayload(proc_date=..., field=...)` with no
-    # exposure/SCA sentinel at all, and dedup keys on the declared subject
+    # unit carries a `CrossmatchPayload(proc_date=..., field=..., ...)` with
+    # no exposure/SCA sentinel at all, and dedup keys on the declared subject
     # (job type, proc_date, field). Two different fields of the same date
     # must both survive.
     acc = make_accumulator(clock, job_type=JOB_TYPE_CROSSMATCH)
@@ -160,7 +160,7 @@ def test_two_fields_crossmatch_units_do_not_collide_v25(clock):
     def crossmatch_unit(field):
         return ProcessingUnit(payload=payloads.build(
             JOB_TYPE_CROSSMATCH, proc_date=proc_date, field=field,
-            target_tables=("catalog",)))
+            target_tables=("catalog",), source_tables=("sources",)))
 
     acc.add(crossmatch_unit(101))
     acc.add(crossmatch_unit(202))

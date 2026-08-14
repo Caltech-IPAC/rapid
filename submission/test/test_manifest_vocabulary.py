@@ -89,7 +89,8 @@ def test_a_session_lane_job_type_carries_the_session_lane():
     crossmatch_units = [
         ProcessingUnit(payload=payloads.build(
             JOB_TYPE_CROSSMATCH, proc_date="20260808", field=field,
-            target_tables=("xmatch_20260808",)))
+            target_tables=("xmatch_20260808",),
+            source_tables=("sources_20260808_1",)))
         for field in (101, 202)
     ]
     manifest = Manifest(crossmatch_units, job_type="crossmatch")

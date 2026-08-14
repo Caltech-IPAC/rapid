@@ -1677,6 +1677,64 @@ class RAPIDDB:
 
 ########################################################################################################
 
+    def get_info_for_l2files(self,rids):
+
+        '''
+        The batched form of `get_info_for_l2file`: one round trip for many
+        rids instead of one per rid.
+
+        2026-08-14, closing `coadd_input_rows`'s N+1 — that gatherer calls
+        `get_info_for_l2file` once per overlapping image inside its loop,
+        which is one query per candidate reference-image input. This is the
+        same SELECT with `WHERE rid = ANY(%s)`, returning every matched row
+        keyed by `rid` in a dict rather than one row at a time — the caller
+        does the per-row lookup instead of this method doing the per-row
+        query.
+
+        SAME COLUMN ORDER, SAME 10-TUPLE SHAPE per row as
+        `get_info_for_l2file` — (filename, expid, sca, field, mjdobs,
+        exptime, infobits, status, vbest, version) — so a caller switching
+        from N calls of the singular form to one call of this form reads
+        each row identically; only the return SHAPE (a dict of rows keyed
+        by rid, rather than one bare row) differs. A rid absent from the
+        result dict is a rid with no L2Files row, the batched equivalent of
+        the singular method's `None` return — the caller's existing
+        `info is None` skip becomes a dict `.get(rid)` returning `None`
+        the same way.
+        '''
+
+        self.exit_code = 0
+
+        if not rids:
+            return {}
+
+        # Define query template.
+
+        query =\
+            "select rid,filename,expid,sca,field,mjdobs,exptime,infobits,status,vbest,version " +\
+            "from L2Files " +\
+            "where rid = ANY(%s); "
+
+        rid_list = [int(rid) for rid in rids]
+
+        params = (rid_list,)
+
+        print('query = {}, params = {}'.format(query, params))
+
+        try:
+            self.cur.execute(query, params)
+            records = self.cur.fetchall()
+
+        except (Exception, psycopg2.DatabaseError) as error:
+            print('*** Error getting batched L2Files info for rids {}: {}; skipping...'.format(rid_list,error))
+            self.exit_code = 67
+            return
+
+        return {record[0]: record[1:] for record in records}
+
+
+########################################################################################################
+
     def get_best_reference_image(self,ppid,field,fid):
 
         '''
@@ -3267,6 +3325,76 @@ class RAPIDDB:
 
         except (Exception, psycopg2.DatabaseError) as error:
             print('*** Error getting incomplete catalog-load SCAs for {}: {}; skipping...'.format(proc_date,error))
+            self.exit_code = 67
+            return
+
+        return records
+
+
+########################################################################################################
+
+    def get_scas_with_completed_catalog_load_for_processing_date(self,proc_date):
+
+        '''
+        SCAs that ran science on this date AND have a successful catalog-load
+        attempt for it — the complement of
+        `get_scas_with_incomplete_catalog_load_for_processing_date` over the
+        same underlying rows, read straight off that method's own `NOT
+        EXISTS` (this one's `EXISTS`). Crossmatch's gatherer uses this to
+        name the `sources_<proc_date>_<sca>` tables a crossmatch unit reads
+        FROM (`CrossmatchPayload.source_tables`) — it needs the SCAs that
+        loaded, not the ones that did not, and re-deriving "loaded" as
+        anything other than this method's complement would risk the two
+        queries quietly disagreeing about what "complete" means.
+
+        Same scope as the incomplete query: per processing date, not per
+        field (see that method's docstring for why), and "a successful
+        catalog-load attempt" is the same `logical_jobs.job_type =
+        'catalog-load'` row reaching `lifecycle_state = 'terminal_after_
+        start'` with `rapid_outcome = 'success'`, scoped to this SCA and
+        processing date via migration 039's applicable-identifier columns.
+
+        Returns the SCAs WITH such an attempt: paired with the incomplete
+        query, every science SCA of the date falls into exactly one of the
+        two sets.
+        '''
+
+        self.exit_code = 0
+
+        query = "select sc.sca from (" +\
+                "  select distinct d.sca from DiffImages d " +\
+                "  join Attempts a on a.attempt_id = d.attempt_id " +\
+                "  where d.ppid = %s and d.vbest = 1 " +\
+                "  and a.rapid_outcome = 'success' " +\
+                "  and d.created >= cast(%s as timestamp) " +\
+                "  and d.created < cast(%s as timestamp) + cast('1 day' as interval) " +\
+                "  and d.sca is not null" +\
+                ") sc " +\
+                "where exists (" +\
+                "  select 1 from Attempts la " +\
+                "  join logical_jobs lj on lj.logical_job_id = la.logical_job_id " +\
+                "  where lj.job_type = %s " +\
+                "  and la.sca = sc.sca " +\
+                "  and la.processing_date = cast(%s as date) " +\
+                "  and la.lifecycle_state = 'terminal_after_start' " +\
+                "  and la.rapid_outcome = 'success'" +\
+                ") " +\
+                "order by sc.sca;"
+
+        from submission.routes import JOB_TYPE_CATALOG_LOAD, JOB_TYPE_SCIENCE, ppid_for
+
+        params = (ppid_for(JOB_TYPE_SCIENCE), proc_date, proc_date,
+                  JOB_TYPE_CATALOG_LOAD, proc_date)
+
+        print('query = {}, params = {}'.format(query, params))
+
+        try:
+            self.cur.execute(query, params)
+            records = [record[0] for record in self.cur]
+            print("nrecs =",len(records))
+
+        except (Exception, psycopg2.DatabaseError) as error:
+            print('*** Error getting completed catalog-load SCAs for {}: {}; skipping...'.format(proc_date,error))
             self.exit_code = 67
             return
 

@@ -55,11 +55,16 @@ MISSING_CASES = [
     (JOB_TYPE_CATALOG_LOAD,
      dict(proc_date="20260812", sca=3), "target_table"),
     (JOB_TYPE_CROSSMATCH,
-     dict(field=1, target_tables=("t",)), "proc_date"),
+     dict(field=1, target_tables=("t",), source_tables=("s",)), "proc_date"),
     (JOB_TYPE_CROSSMATCH,
-     dict(proc_date="20260812", target_tables=("t",)), "field"),
+     dict(proc_date="20260812", target_tables=("t",),
+          source_tables=("s",)), "field"),
     (JOB_TYPE_CROSSMATCH,
-     dict(proc_date="20260812", field=1), "target_tables"),
+     dict(proc_date="20260812", field=1, source_tables=("s",)),
+     "target_tables"),
+    (JOB_TYPE_CROSSMATCH,
+     dict(proc_date="20260812", field=1, target_tables=("t",)),
+     "source_tables"),
     (JOB_TYPE_STATISTICS, dict(target_table="t"), "field"),
     (JOB_TYPE_STATISTICS, dict(field=1), "target_table"),
     (JOB_TYPE_MERGE_DEDUP, dict(target_table="t"), "field"),
@@ -129,7 +134,7 @@ def test_subject_derivation_reads_the_typed_payload():
     """`subject_for(...).subject_for(unit)` returns the payload's subject."""
     unit = ProcessingUnit(payload=payloads.build(
         JOB_TYPE_CROSSMATCH, proc_date="20260812", field=4242,
-        target_tables=("t",)))
+        target_tables=("t",), source_tables=("s",)))
     assert (subject_for(JOB_TYPE_CROSSMATCH).subject_for(unit)
             == (JOB_TYPE_CROSSMATCH, "20260812", 4242))
     assert unit.dedup_key() == (JOB_TYPE_CROSSMATCH, "20260812", 4242)
@@ -146,7 +151,7 @@ def test_asking_for_the_wrong_job_types_subject_is_an_error():
     """
     unit = ProcessingUnit(payload=payloads.build(
         JOB_TYPE_CROSSMATCH, proc_date="20260812", field=4242,
-        target_tables=("t",)))
+        target_tables=("t",), source_tables=("s",)))
     with pytest.raises(SubjectError):
         subject_for(JOB_TYPE_SCIENCE).subject_for(unit)
     with pytest.raises(SubjectError):
@@ -155,7 +160,7 @@ def test_asking_for_the_wrong_job_types_subject_is_an_error():
 
 @pytest.mark.parametrize("job_type,components", [
     (JOB_TYPE_CROSSMATCH, dict(proc_date="20260812", field=1,
-                               target_tables=("t",))),
+                               target_tables=("t",), source_tables=("s",))),
     (JOB_TYPE_STATISTICS, dict(field=1, target_table="t")),
 ])
 def test_a_non_exposure_grain_unit_has_no_exposure_at_all(job_type,
@@ -333,16 +338,26 @@ def test_a_payload_round_trips_through_its_wire_form(build):
 
 # ---------------------------------------------------------------------------
 # CrossmatchPayload.source_tables (2026-08-14): the typed home for the
-# crossmatch source-tables fix. Optional (no gatherer populates it yet — see
-# the field's own docstring and this wave's ledger for the integration
-# request against submission/gathering.py), unlike target_tables which
-# stays required.
+# crossmatch source-tables fix. REQUIRED, alongside target_tables — the
+# gatherer half landed (`gather_crossmatch_units`, submission/gathering.py)
+# and this field's optionality was scaffolding for the gap between the two
+# halves landing, not a permanent looseness.
 # ---------------------------------------------------------------------------
 
 
-def test_source_tables_defaults_to_empty_when_omitted():
-    payload = fixtures.crossmatch_payload()
-    assert payload.source_tables == ()
+def test_source_tables_is_required():
+    """A unit with no declared sources would run and read nothing — the
+    same reasoning `target_tables` already enforces, now applied to the
+    field that used to default silently to empty."""
+    with pytest.raises(payloads.PayloadError):
+        payloads.build(JOB_TYPE_CROSSMATCH, proc_date="20260812", field=1,
+                       target_tables=("t",), source_tables=())
+
+
+def test_source_tables_omitted_entirely_also_refuses():
+    with pytest.raises(payloads.PayloadError):
+        payloads.build(JOB_TYPE_CROSSMATCH, proc_date="20260812", field=1,
+                       target_tables=("t",))
 
 
 def test_source_tables_is_accepted_and_frozen():
@@ -353,24 +368,23 @@ def test_source_tables_is_accepted_and_frozen():
     assert isinstance(payload.source_tables, tuple)
 
 
-def test_source_tables_absent_from_target_tables_construction_still_works():
-    """target_tables stays REQUIRED; source_tables being new and optional
-    must not change that — a unit with no declared targets still refuses."""
+def test_target_tables_absent_still_refuses_independently():
+    """target_tables stays REQUIRED, independent of source_tables — a unit
+    with no declared targets refuses even when source_tables is supplied."""
     with pytest.raises(payloads.PayloadError):
         payloads.build(JOB_TYPE_CROSSMATCH, proc_date="20260812", field=1,
-                       target_tables=())
+                       target_tables=(), source_tables=("s",))
 
 
-def test_source_tables_is_omitted_from_the_wire_form_when_empty():
-    """The absent-not-sentinel rule `to_dict`'s own docstring states:
-    an empty sequence is omitted, exactly like target_tables would be if it
-    were ever empty (it cannot be — required) and like product_inputs is
-    on CatalogLoadPayload."""
+def test_source_tables_appears_in_the_wire_form():
+    """Unlike the optional-and-often-empty facts `to_dict`'s absent-not-
+    sentinel rule exists for, `source_tables` is required and therefore
+    never empty on a valid payload, so it always round-trips."""
     payload = fixtures.crossmatch_payload()
-    assert "source_tables" not in payload.to_dict()
+    assert "source_tables" in payload.to_dict()
 
 
-def test_source_tables_round_trips_through_the_wire_form_when_present():
+def test_source_tables_round_trips_through_the_wire_form():
     original = fixtures.crossmatch_payload(
         source_tables=("sources_20260812_1", "sources_20260812_2"))
     restored = payloads.from_dict(original.JOB_TYPE, original.to_dict())
