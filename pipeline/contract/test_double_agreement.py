@@ -162,22 +162,28 @@ def test_probe_watermark_monotonicity(conn):
     attempt_id = fixture.make_attempt(
         conn, lifecycle="terminal_without_start", terminal_record_sequence=2)
     conn.commit()
+    # _MARK_REGISTERED_SQL takes FIVE params: registered_at,
+    # registered_record_sequence, consumed_record_sequence, attempt_id, and
+    # the sequence the CAS predicate compares against (mark_registered's own
+    # callers always pass the same value for the third and fifth). Four
+    # params here previously starved psycopg2's placeholder substitution and
+    # raised IndexError before the statement ever reached the server.
     with conn.cursor() as cur:
         cur.execute(_MARK_REGISTERED_SQL,
-                    ("2026-01-01T00:00:00+00:00", 2, attempt_id, 2))
+                    ("2026-01-01T00:00:00+00:00", 2, 2, attempt_id, 2))
     conn.commit()
 
     # (1) LIVE REFUSES the backwards move: zero rows matched.
     with conn.cursor() as cur:
         cur.execute(_MARK_REGISTERED_SQL,
-                    ("2026-01-01T00:00:00+00:00", 1, attempt_id, 1))
+                    ("2026-01-01T00:00:00+00:00", 1, 1, attempt_id, 1))
         live_rows = cur.rowcount
     conn.commit()
     assert live_rows == 0, f"live matched {live_rows} rows for a lower sequence"
 
     # (2) THE DOUBLE REPORTS SUCCESS for the identical call.
     double = PermissiveExecutor()
-    assert double(_MARK_REGISTERED_SQL, (None, 1, attempt_id, 1)) == 1, (
+    assert double(_MARK_REGISTERED_SQL, (None, 1, 1, attempt_id, 1)) == 1, (
         "the permissive double refused the backwards watermark move; this "
         "probe is no longer demonstrating a divergence")
 

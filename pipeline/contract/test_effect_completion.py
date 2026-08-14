@@ -279,12 +279,24 @@ def test_claim_a_stale_claim_from_a_terminal_prior_attempt_is_a_retry_win(
             "         now(), now(), 'FAILED') RETURNING attempt_id",
             [run_id, schema_version, logical_job_id])
         prior_attempt = cur.fetchone()[0]
+        # 013's `attempts_state_submitted_check` requires the binding triple
+        # (job-definition ARN, image digest, manifest checksum) whenever
+        # schema_version >= 2 -- which this shared contract database's rows
+        # make schema_version here, via the coalesce(max(...)) above. Without
+        # it this INSERT itself violates the constraint, before the test ever
+        # reaches the CAS it means to exercise.
+        tag = uuid.uuid4().hex[:8]
         cur.execute(
             "INSERT INTO attempts (run_id, schema_version,"
-            "  logical_job_id, lifecycle_state, created_at, submitted_at)"
-            " VALUES (%s, %s, %s, 'submitted', now(), now())"
+            "  logical_job_id, lifecycle_state, created_at, submitted_at,"
+            "  binding_job_definition_arn, binding_image_digest,"
+            "  binding_manifest_checksum)"
+            " VALUES (%s, %s, %s, 'submitted', now(), now(), %s,"
+            "         'sha256:' || %s, 'sha256:' || %s)"
             " RETURNING attempt_id",
-            [run_id, schema_version, logical_job_id])
+            [run_id, schema_version, logical_job_id,
+             f"arn:aws:batch:us-east-1:account:job-definition/retry-{tag}:1",
+             tag, tag])
         retry_attempt = cur.fetchone()[0]
     conn.commit()
 
