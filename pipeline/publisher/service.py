@@ -116,13 +116,17 @@ def _preflight_schema(conn):
     # right for the repository's short transactions and wrong for a read-only
     # startup probe.
     #
-    # **THIS UNIT DOES NOT YET SUPPLY WHAT THIS CHECK READS** — see CR-R1 in
-    # `notes-r-change-requests.md`. `rapid-alert-publication.yaml` sets only
-    # `AWS_REGION` and `PYTHONUNBUFFERED`. Until that CR lands, deploying this
-    # branch makes the publisher refuse to start, naming both missing
-    # variables — a diagnosable start failure with a one-line fix, which is
-    # the intended behaviour of a fail-closed check meeting an incomplete
-    # deployment.
+    # **THE DEPLOYED UNIT SUPPLIES BOTH VARIABLES.** An earlier draft of this
+    # note recorded a gap against `rapid-alert-publication.yaml`, which set
+    # only `AWS_REGION` and `PYTHONUNBUFFERED` and would have made this check
+    # refuse to start. That unit is gone: `rapid-publisher-service.yaml`
+    # (rapid_systems) is what deploys today, and its `ExecStart` passes both
+    # `-e RAPID_IMAGE_DIGEST=__IMAGEDIGEST__` and `-e
+    # RAPID_RELEASE_IDENTITY=__RELEASE__` — the same pair
+    # `rapid-reconciler-service.yaml` and `rapid-vpo-service.yaml` supply
+    # their own processes. This check therefore passes on a normal deploy;
+    # it stays here as the fail-closed guard against a FUTURE regression in
+    # the unit file, not a documented current gap.
     from database.modules.utils.rapid_db_connect import ConnectionExecutor
     from pipeline.intent.application_contract import (
         verify_application_contract)
