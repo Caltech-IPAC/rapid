@@ -27,40 +27,29 @@ import contextlib
 import logging
 import re
 
+from pipeline.runtime import lock_order
+from pipeline.runtime.lock_order import RECONCILER_LEASE_NAMESPACE
+
 logger = logging.getLogger("rapid.reconciler.lease")
 
 # Namespace for the two-argument advisory lock form, keeping reconciliation
 # leases from colliding with any other advisory lock in the database. The
 # resolver uses the one-argument form over hashtextextended(logical_job_id),
 # which is a different key space.
-LEASE_NAMESPACE = 0x5732  # 'W6'
+#
+# CANONICAL VALUE NOW LIVES IN `pipeline.runtime.lock_order` (campaign
+# ruling C3), which is also where the full LEVEL-1/LEVEL-2 order this
+# namespace participates in is written down once. This name is kept, and
+# re-exported, so no importer of this module needs to change.
+LEASE_NAMESPACE = RECONCILER_LEASE_NAMESPACE
 
-# THE LOCK ORDER (conformance rule 9, brief C3). Three advisory-lock
-# namespaces now exist, at two levels, and the order between the levels is
-# fixed:
-#
-#   level 1, per ATTEMPT     W6  0x5732  this module (the reconciler's lease)
-#                            R4  0x5234  pipeline.registration.consumer
-#   level 2, per WORK UNIT   WU  0x5755  pipeline.intent.lock
-#
-# W6 and R4 are siblings and deliberately never serialize against each other:
-# an attempt's closure sequence and its registration sequence are different
-# critical sections over one attempt, and making them contend would risk
-# deadlock for no invariant. That reasoning is unchanged.
-#
-# What changed is that the WORK UNIT — the resource rule 9's dispositions
-# actually arbitrate — now has a lock of its own, and it is taken UNDERNEATH
-# whichever attempt lease is held:
-#
-#     attempt lease (W6 or R4)  ->  work-unit lock (WU)   ALWAYS
-#     work-unit lock            ->  attempt lease         NEVER
-#
-# That is the only order the code can take: both leases are acquired as the
-# first statement of their transaction, and the work unit is not known until
-# the attempt row has been read under the lease. Because no holder of WU ever
-# waits for W6 or R4, no cycle can form. See `pipeline.intent.lock` for the
-# full reasoning, including why the CAS in `transition_unit` remains under the
-# lock rather than being replaced by it.
+# THE LOCK ORDER (conformance rule 9, brief C3): this lease is LEVEL 1
+# ('W6'). The full two-level order — this lease and the registrar's ('R4')
+# both sit above the intent layer's per-work-unit lock ('WU'), always
+# underneath, never above — is written down ONCE, in
+# `pipeline.runtime.lock_order` (campaign ruling C3), rather than repeated
+# here. See that module for the full reasoning, including why the CAS in
+# `transition_unit` remains under the lock rather than being replaced by it.
 
 # A PostgreSQL identifier this code is willing to interpolate: lower-case
 # ASCII, digits and underscores, starting with a letter. Every column in the
@@ -94,14 +83,11 @@ def attempt_lease(conn, attempt_id, blocking=False):
     try:
         with conn.cursor() as cur:
             if blocking:
-                cur.execute("SELECT pg_advisory_xact_lock(%s, %s)",
-                            (LEASE_NAMESPACE, int(attempt_id)))
+                lock_order.acquire_blocking(cur, LEASE_NAMESPACE, attempt_id)
                 acquired = True
             else:
-                cur.execute("SELECT pg_try_advisory_xact_lock(%s, %s)",
-                            (LEASE_NAMESPACE, int(attempt_id)))
-                row = cur.fetchone()
-                acquired = bool(row[0]) if row else False
+                acquired = lock_order.try_acquire(cur, LEASE_NAMESPACE,
+                                                  attempt_id)
 
         if not acquired:
             logger.debug("attempt %s is leased by another reconciler; skipping",

@@ -119,6 +119,8 @@ from pipeline.intent.writer import (
 from pipeline.registration.products import (
     MissingRecordFact, read_record, RecordValidationRejected,
     RegistrationFailed)
+from pipeline.runtime import lock_order
+from pipeline.runtime.lock_order import REGISTRAR_LEASE_NAMESPACE
 
 logger = logging.getLogger("rapid.registration")
 
@@ -129,17 +131,19 @@ logger = logging.getLogger("rapid.registration")
 #: guard different concerns; the primitive shape is shared, the namespace is
 #: not. 0x5234 is 'R4' — this is integration ruling 4's lease.
 #:
-#: THE LOCK ORDER (conformance rule 9, brief C3). This lease is LEVEL 1, per
-#: attempt. The work-unit lock (`pipeline.intent.lock`, 0x5755 'WU') is LEVEL
-#: 2, per work unit, and is always taken UNDERNEATH this one — never the
-#: reverse, which is what makes the two-level order total and therefore
-#: deadlock-free. Acceptance is one of the dispositions rule 9 names, so a
-#: registration that transitions a work unit does so under both: R4 held from
-#: the first statement of the per-attempt transaction, WU taken inside
-#: `transition_unit` before its CAS. The full reasoning, including why W6 and
-#: R4 still do not serialize against each other, is in `pipeline.intent.lock`
-#: and repeated at `pipeline.reconciler.lease.LEASE_NAMESPACE`.
-ATTEMPT_LEASE_NAMESPACE = 0x5234
+#: THE LOCK ORDER (conformance rule 9, brief C3): this lease is LEVEL 1, per
+#: attempt, and the work-unit lock (`pipeline.intent.lock`, 'WU') is LEVEL 2,
+#: always taken UNDERNEATH this one — never the reverse. The full two-level
+#: order is written down ONCE now, in `pipeline.runtime.lock_order`
+#: (campaign ruling C3), rather than repeated here and at
+#: `pipeline.reconciler.lease.LEASE_NAMESPACE`. Acceptance is one of the
+#: dispositions rule 9 names, so a registration that transitions a work unit
+#: does so under both: R4 held from the first statement of the per-attempt
+#: transaction, WU taken inside `transition_unit` before its CAS.
+#:
+#: CANONICAL VALUE NOW LIVES IN `pipeline.runtime.lock_order`; this name is
+#: kept, and re-exported, so no importer of this module needs to change.
+ATTEMPT_LEASE_NAMESPACE = REGISTRAR_LEASE_NAMESPACE
 
 EXIT_OK = 0
 EXIT_FAILURES = 65
@@ -271,8 +275,7 @@ def _acquire_attempt_lease(cursor, attempt_id):
     registration job route doing the SAME kind of bounded work — it will
     release within one attempt's registration, not indefinitely.
     """
-    cursor.execute("SELECT pg_advisory_xact_lock(%s, %s)",
-                   (ATTEMPT_LEASE_NAMESPACE, int(attempt_id)))
+    lock_order.acquire_blocking(cursor, ATTEMPT_LEASE_NAMESPACE, attempt_id)
 
 
 def _reread_watermark(cursor, attempt_id):

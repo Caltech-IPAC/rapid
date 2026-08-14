@@ -92,6 +92,9 @@ reasoning `pipeline.reconciler.lease` gives, for the same pooler.
 import contextlib
 import logging
 
+from pipeline.runtime import lock_order
+from pipeline.runtime.lock_order import WORK_UNIT_NAMESPACE
+
 logger = logging.getLogger("rapid.intent.lock")
 
 #: The work-unit lock namespace for `pg_advisory_xact_lock`'s two-argument
@@ -106,7 +109,11 @@ logger = logging.getLogger("rapid.intent.lock")
 #: held UNDERNEATH either one. A work-unit lock that shared a namespace with
 #: an attempt lease would collide whenever a work_unit_id happened to equal an
 #: attempt_id — two unrelated identifier spaces, both dense from 1.
-WORK_UNIT_NAMESPACE = 0x5755  # 'WU'
+#:
+#: CANONICAL VALUE NOW LIVES IN `pipeline.runtime.lock_order` (campaign
+#: ruling C3): this name is kept, and re-exported, so no importer of this
+#: module needs to change — see that module for the full two-level order
+#: this namespace is LEVEL 2 of.
 
 
 @contextlib.contextmanager
@@ -141,14 +148,11 @@ def work_unit_lock(conn, work_unit_id, blocking=True):
     acquired = False
     with conn.cursor() as cur:
         if blocking:
-            cur.execute("SELECT pg_advisory_xact_lock(%s, %s)",
-                        (WORK_UNIT_NAMESPACE, int(work_unit_id)))
+            lock_order.acquire_blocking(cur, WORK_UNIT_NAMESPACE, work_unit_id)
             acquired = True
         else:
-            cur.execute("SELECT pg_try_advisory_xact_lock(%s, %s)",
-                        (WORK_UNIT_NAMESPACE, int(work_unit_id)))
-            row = cur.fetchone()
-            acquired = bool(row[0]) if row else False
+            acquired = lock_order.try_acquire(cur, WORK_UNIT_NAMESPACE,
+                                              work_unit_id)
 
     if not acquired:
         logger.debug(
@@ -175,7 +179,6 @@ def lock_work_unit(execute, work_unit_id):
     a `try_` result without a round trip it has no use for, and every such
     caller is a disposition, which should block (see `work_unit_lock`).
     """
-    execute("SELECT pg_advisory_xact_lock(%s, %s)",
-            [WORK_UNIT_NAMESPACE, int(work_unit_id)])
+    lock_order.acquire_blocking(execute, WORK_UNIT_NAMESPACE, work_unit_id)
     logger.debug("work-unit lock held for %s (executor path)", work_unit_id)
     return True
