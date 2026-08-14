@@ -212,30 +212,21 @@ def _preflight_schema(conn):
     logger.info("schema preflight passed: %s required migrations present",
                 verified)
 
-    # THE APPLICATION HALF (rule 18: the "application/schema contract" is two
-    # halves, and only the schema half was checked here). `rapidctl` was the
-    # ONE entry point calling it, wired by package H and deliberately not
-    # extended at the time; this is that extension, following
-    # `operatorctl/main.py:_preflight`'s call exactly.
+    # THE APPLICATION HALF (rule 18: the "application/schema contract" is
+    # two halves). `require_image_digest` stays TRUE here, unlike
+    # `rapidctl`'s call — that relaxation is for an operator tool run from a
+    # shell, which has no container digest to know. The reconciler is a
+    # deployed SERVICE whose unit genuinely supplies both variables:
+    # `rapid-reconciler-service.yaml` passes `-e RAPID_IMAGE_DIGEST` and
+    # `-e RAPID_RELEASE_IDENTITY` into the container (CR-R1 landed; an
+    # earlier revision of this comment — and of the publisher's docstring,
+    # corrected the same day — claimed otherwise from a stale reading of a
+    # unit file that no longer exists). So this check passes on a correct
+    # deployment and refuses a misdeployment by naming the missing variable.
     #
-    # `require_image_digest` STAYS TRUE HERE, unlike `rapidctl`'s call. That
-    # relaxation is for an operator tool run from a shell, which has no
-    # container digest to know. The reconciler is a deployed SERVICE whose
-    # unit supplies both variables, so accepting a missing digest would
-    # accept exactly the misdeployment this check exists to catch.
-    #
-    # The executor is the same one-callable executor the schema half took, so
-    # the registration check runs on the service's own connection and costs
+    # The executor is the same one-callable executor the schema half took,
+    # so the registration check runs on this preflight connection and costs
     # one further read-only SELECT.
-    #
-    # **THIS UNIT DOES NOT YET SUPPLY WHAT THIS CHECK READS** — see CR-R1 in
-    # `notes-r-change-requests.md`. `rapid-reconciler-service.yaml` passes
-    # only the role ARN, the DB secret id and the poll interval; the VPO's
-    # unit is the one that carries `RAPID_RELEASE_IDENTITY` and
-    # `RAPID_IMAGE_DIGEST`. Until that CR lands, deploying this branch makes
-    # the reconciler refuse to start, naming both variables. That is the check
-    # working — the alternative, relaxing it to start anyway, is the silent
-    # unattributable-results state rule 18 exists to forbid.
     verify_application_contract(ConnectionExecutor(conn).execute)
     return verified
 
