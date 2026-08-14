@@ -275,12 +275,19 @@ def _make_failed_attempt_for_retry(conn, work_unit_id, run_id):
         cur.execute("SELECT coalesce(max(schema_version), 1) FROM attempts")
         schema_version = cur.fetchone()[0]
         cur.execute(
+            # `rapid_outcome` is deliberately absent. 017's
+            # `attempts_state_terminal_without_start_check` requires it NULL
+            # for this state (017:134) — the attempt never started, so there
+            # is no APPLICATION outcome to report; `scheduler_state='FAILED'`
+            # plus `error_category` carry the whole story of a job that died
+            # before its container ran, which is exactly the parked
+            # population `retry-parked` operates on.
             "INSERT INTO attempts"
             "  (run_id, schema_version, logical_job_id, lifecycle_state,"
             "   created_at, submitted_at, work_unit_id, error_category,"
-            "   ended_at, scheduler_state, rapid_outcome)"
+            "   ended_at, scheduler_state)"
             " VALUES (%s, %s, %s, 'terminal_without_start',"
-            "         now(), now(), %s, %s, now(), 'FAILED', 'failure')"
+            "         now(), now(), %s, %s, now(), 'FAILED')"
             " RETURNING attempt_id",
             [run_id, schema_version, logical_job_id, work_unit_id,
              "application_failure"])
@@ -676,8 +683,6 @@ def _complete_with_guc_enforced(conn, unit_id, attempt_id, reason):
     with conn.cursor() as cur:
         cur.execute("SET LOCAL rapid.enforce_completion_acceptance = 'on'")
         cur.execute(
-            "SET CONSTRAINTS work_units_check_event_recorded_trg IMMEDIATE")
-        cur.execute(
             "SELECT derived.transition_work_unit(%s, %s, %s, %s, %s, %s, %s, %s)",
             # `p_detail` is jsonb — psycopg2 does not adapt a bare dict
             # (`pipeline.intent.writer._as_jsonb`'s own reasoning, found
@@ -685,6 +690,18 @@ def _complete_with_guc_enforced(conn, unit_id, attempt_id, reason):
             # is serialized text, matching `_as_jsonb`'s own convention.
             [unit_id, SUBMITTED, COMPLETE, WRITER_RECONCILER, None, reason,
              json.dumps({"deciding_attempt_id": attempt_id}), True])
+        # AFTER the call, never before. `transition_work_unit` UPDATEs
+        # `work_units` and THEN INSERTs the `unit_events` row, as two
+        # statements. Forcing the deferred trigger IMMEDIATE ahead of the
+        # call fires it at the UPDATE — before the function's own INSERT has
+        # run — so it reports the event row missing for every caller,
+        # including the legitimate ones. Deferring the switch to here lets
+        # both statements land first, which is exactly what the trigger's
+        # DEFERRABLE INITIALLY DEFERRED shape means at commit; this only
+        # pulls the evaluation forward so it lands inside each test's own
+        # `pytest.raises` scope rather than at a later `conn.commit()`.
+        cur.execute(
+            "SET CONSTRAINTS work_units_check_event_recorded_trg IMMEDIATE")
 
 
 def test_mismatched_attempt_is_refused_when_enforced(conn):
