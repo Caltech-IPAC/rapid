@@ -41,11 +41,15 @@ missing:
      `ExecutionBinding`, and cannot be rolled back from — and today it starts
      anyway.
 
-  2. **The application's release identity is COMPATIBLE with the release the
-     work it is about to touch was admitted under**, where "compatible" means
-     the expand/contract direction is respected rather than that the strings
-     match. `pipeline/intent/admission_release.py` owns the per-work-unit
-     version of this; here it is the process-level startup assertion.
+  2. **The release this process claims is visible against the registered
+     releases** — a loud warning (never a refusal) when it is unregistered,
+     because registration is an operator act and the real gate is the
+     admission pointer. Release COMPATIBILITY is per-work, not process-level:
+     `pipeline/intent/admission_release.py` pins each admission's release at
+     submission time, and the expand/contract direction is enforced by the
+     schema half being a floor. (A process-level comparison function lived
+     here until 2026-08-14; see the note at the bottom of this module for
+     why it was removed.)
 """
 
 import logging
@@ -83,16 +87,6 @@ class ApplicationContractUnmet(RuntimeError):
             "fails closed here rather than starting and discovering this "
             "later, one unattributable result at a time."
             % (listed, (detail + "\n") if detail else ""))
-
-
-class ApplicationSchemaIncompatible(RuntimeError):
-    """The application and the schema cannot legally run together.
-
-    Raised ONLY for the direction that is genuinely illegal. The
-    expand-window case — an old application against a newer schema — is
-    explicitly permitted, and `verify_application_contract` returns normally
-    for it.
-    """
 
 
 def application_identity(environ=None):
@@ -160,30 +154,22 @@ def verify_application_contract(execute=None, environ=None,
     return identity
 
 
-def assert_compatible(application_release, admitted_release,
-                      schema_is_newer=False):
-    """The legal-direction check, stated so it cannot become an equality.
-
-    `schema_is_newer` is the expand-window flag the schema half already
-    computes (its surplus count). **An old application against a newer schema
-    is EXPLICITLY ALLOWED TO START** — that is the deployment step rule 18
-    requires to work, and the acceptance criterion asserts it directly so this
-    check cannot silently become an equality test.
-    """
-    if schema_is_newer:
-        logger.info(
-            "application preflight: the schema carries migrations this build "
-            "does not require (expand window); starting, as rule 18 requires")
-        return True
-    if admitted_release and application_release \
-            and admitted_release != application_release:
-        raise ApplicationSchemaIncompatible(
-            "this application runs release %r but the work it is about to "
-            "touch was admitted under %r, and the schema is not in an expand "
-            "window that would make that legal. Work stays pinned to its "
-            "release (rule 18)."
-            % (application_release, admitted_release))
-    return True
+# A direction-aware release comparison, `assert_compatible(application_release,
+# admitted_release, schema_is_newer=)`, lived here until 2026-08-14 with a
+# companion `ApplicationSchemaIncompatible`. REMOVED AS DEAD BY CONSTRUCTION,
+# not merely unused: no call site could ever exist, because no process-level
+# "admitted release" exists to pass it — a service touches work admitted under
+# many releases, and release pinning is per-work, done at admission time by
+# `admission_release.reconcile` (strict, correctly so: the submitting process
+# defines the release, so no expand window applies there) and carried on the
+# `ExecutionBinding` thereafter. The expand-window asymmetry the function
+# restated ("old application against a newer schema is legal") is enforced
+# structurally by the schema half being a FLOOR — surplus migrations are
+# tolerated, missing ones refuse — and asserted by
+# `test_the_schema_half_passes_on_a_surplus`. If a per-work execution-time
+# release gate is ever wanted (an old container picking up newer-release
+# work), it belongs beside the binding read, with the admitted release in
+# hand — not here at startup with no operand.
 
 
 def _first(row):

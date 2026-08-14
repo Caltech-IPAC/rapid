@@ -10,14 +10,10 @@ what this file asserts.
 
 **MOST OF THIS NEEDS NO DATABASE, AND THAT IS THE POINT.** The application
 half is environment-driven: it reads `RAPID_RELEASE_IDENTITY` and
-`RAPID_IMAGE_DIGEST` from a dict the caller passes in, and it compares two
-strings under a direction flag. Asserting that against a real PostgreSQL
-would add a dependency the behaviour does not have, and would make the most
-important assertion in this file — the expand window — silently skippable on
-any database that had not applied a draft. So the pure tests take no `conn`
-fixture and run wherever the suite is collected. Only the one test that
-genuinely reads `admission_releases` needs a database, and it skips cleanly
-when DRAFT 051 is absent.
+`RAPID_IMAGE_DIGEST` from a dict the caller passes in. So the pure tests
+take no `conn` fixture and run wherever the suite is collected. Only the one
+test that genuinely reads `admission_releases` needs a database, and it
+skips cleanly when DRAFT 051 is absent.
 
 (Everything collected under this package is marked `contract` by
 `conftest.py`'s `pytest_collection_modifyitems`, deliberately — a tier whose
@@ -25,32 +21,27 @@ membership depends on remembering to say so is a tier that leaks. The pure
 tests here are therefore selected with the contract tier but do not require
 its database, which costs nothing and keeps the marker rule intact.)
 
-**WHY THE EXPAND WINDOW IS THE LOAD-BEARING ASSERTION.** Rule 18 requires
-that during a deployment the schema may move first and OLD WORKERS' RESULTS
-REMAIN ACCEPTABLE. A compatibility check written as an equality would satisfy
-every obvious test — matching releases pass, mismatched ones fail — and would
-refuse to start exactly the deployment step the rule mandates. The only test
-that can tell a real direction-aware check from a disguised equality is one
-that asserts the ASYMMETRIC case passes: old application, newer schema, no
-exception. `test_an_old_application_against_a_newer_schema_is_allowed` below
-is that test, and it is why this file exists.
+**WHERE THE EXPAND WINDOW IS ASSERTED.** Rule 18 requires that during a
+deployment the schema may move first and OLD WORKERS' RESULTS REMAIN
+ACCEPTABLE. That asymmetry is enforced by the schema floor — surplus
+migrations are tolerated, missing ones are not — and asserted here by
+`test_the_schema_half_passes_on_a_surplus`. (A separate direction-aware
+release comparison, `assert_compatible`, existed in
+`application_contract.py` until 2026-08-14; it was removed as dead by
+construction — no process-level "admitted release" exists for it to
+compare against, since release pinning is per-work via
+`admission_release.reconcile` at admission time. Its module records the
+rationale.)
 """
 
 import pytest
 
 from pipeline.contract import fixture
-from pipeline.intent import application_contract
 from pipeline.intent.application_contract import (IMAGE_DIGEST_ENV,
                                                   RELEASE_ENV,
                                                   ApplicationContractUnmet,
                                                   application_identity,
-                                                  assert_compatible,
                                                   verify_application_contract)
-
-#: Referenced through the module rather than imported by name purely to keep
-#: the import block inside the line limit; it is the same class.
-ApplicationSchemaIncompatible = (
-    application_contract.ApplicationSchemaIncompatible)
 
 #: A complete, plausible environment. Tests remove from it rather than
 #: building up to it, so what is MISSING in each case is stated at the call
@@ -200,126 +191,7 @@ def test_the_image_digest_is_required_by_default():
 
 
 # ---------------------------------------------------------------------------
-# 3 — THE EXPAND WINDOW. The most important assertion in this file.
-# ---------------------------------------------------------------------------
-def test_an_old_application_against_a_newer_schema_is_allowed():
-    """**THE LEGAL EXPAND CASE — AND THE ASSERTION THAT PROVES THIS CHECK IS
-    NOT A DISGUISED EQUALITY TEST.**
-
-    Rule 18's requirement, verbatim, is the reason this case must pass:
-
-        "Expand/contract migrations with a rollback window; OLD WORKERS'
-         RESULTS REMAIN ACCEPTABLE DURING A DEPLOYMENT; work stays pinned to
-         its release, and rollback changes only the release used for future
-         admissions."
-
-    An expand deployment moves the schema FIRST and leaves the old workers
-    running. During that window an old application is talking to a newer
-    schema BY DESIGN, its results are acceptable BY DESIGN, and a preflight
-    that refused to start there would refuse exactly the deployment step the
-    rule mandates. `schema_contract.py` models this by being a floor rather
-    than an equality; this is the same asymmetry from the application side.
-
-    WHY THIS TEST CANNOT BE OMITTED. Every other assertion in this file is
-    also satisfied by a check written as `application_release ==
-    admitted_release` — matching releases pass, mismatched ones raise, a
-    missing identity fails closed. An equality would look correct, review
-    correct, and quietly break every deployment. This is the ONLY assertion
-    that distinguishes the two implementations, because it is the only case
-    where a direction-aware check and an equality disagree: the releases
-    differ, and the answer must still be yes.
-
-    So: differing releases, `schema_is_newer=True`, and the required outcome
-    is a plain `True` return with NO exception of any kind.
-    """
-    result = assert_compatible(application_release="r1",
-                               admitted_release="r2",
-                               schema_is_newer=True)
-    assert result is True, (
-        "the expand window was refused. An old application against a newer "
-        "schema is the deployment step rule 18 requires to work — refusing "
-        "it makes this check a disguised equality test, which is exactly "
-        "what the flag exists to prevent")
-
-
-def test_the_expand_window_holds_however_far_apart_the_releases_are():
-    """The flag decides, not the strings' similarity.
-
-    A check that allowed the expand window only for releases that looked
-    related (a shared prefix, an adjacent version number) would be an
-    equality test with a fuzzy comparator — still the wrong shape, and still
-    liable to refuse a legitimate deployment on the day the naming scheme
-    changes. The window is a property of the DEPLOYMENT STATE, which is what
-    `schema_is_newer` carries.
-    """
-    assert assert_compatible("2024.11.0-rc4", "totally-unrelated-name",
-                             schema_is_newer=True) is True
-    assert assert_compatible("", "r2", schema_is_newer=True) is True
-
-
-# ---------------------------------------------------------------------------
-# 4 — the illegal direction IS refused
-# ---------------------------------------------------------------------------
-def test_a_release_mismatch_outside_an_expand_window_is_refused():
-    """The other side of the asymmetry, without which allowing is meaningless.
-
-    Outside a deployment window, an application running one release against
-    work admitted under another is not expand/contract — it is a worker
-    picking up work it is not pinned to, which is the rule-18 violation
-    `pipeline/intent/admission_release.py` refuses per work unit. Here it is
-    the process-level assertion of the same thing.
-
-    A check that returned True unconditionally would pass every expand test
-    above; this is what stops it.
-    """
-    with pytest.raises(ApplicationSchemaIncompatible) as caught:
-        assert_compatible(application_release="r1", admitted_release="r2",
-                          schema_is_newer=False)
-
-    # BOTH releases are named. An operator reading this needs to know which
-    # two things disagreed, not merely that something did — the same
-    # discipline `ReleaseDisagreement` follows.
-    message = str(caught.value)
-    assert "r1" in message and "r2" in message
-
-
-def test_the_default_direction_is_the_strict_one():
-    """`schema_is_newer` defaults to False, so the permissive path is opt-in.
-
-    A caller that forgets the flag gets the refusal, not the allowance. The
-    expand window is a deliberate statement about deployment state, and a
-    check that assumed it by default would permit the illegal direction every
-    time a call site was written carelessly.
-    """
-    with pytest.raises(ApplicationSchemaIncompatible):
-        assert_compatible("r1", "r2")
-
-
-# ---------------------------------------------------------------------------
-# 5 — matching releases pass in both directions
-# ---------------------------------------------------------------------------
-def test_matching_releases_pass_in_both_directions():
-    """The ordinary steady state: one release, everywhere, in or out of a
-    window.
-
-    Asserted in both directions because the expand flag must not change the
-    answer when there is nothing to disagree about. If it did, a deployment
-    would be able to flip a passing check to a failing one without any
-    release actually differing — a false alarm arriving in the middle of the
-    one operation an operator most needs to be quiet.
-    """
-    assert assert_compatible("r1", "r1", schema_is_newer=False) is True
-    assert assert_compatible("r1", "r1", schema_is_newer=True) is True
-
-    # Nothing to compare is not a disagreement either: work with no admitted
-    # release recorded is the pre-051 case, and the gate for THAT is
-    # `admission_release.reconcile`'s `require_stamp`, not this check.
-    assert assert_compatible("r1", None, schema_is_newer=False) is True
-    assert assert_compatible(None, "r2", schema_is_newer=False) is True
-
-
-# ---------------------------------------------------------------------------
-# 6 — with a database: an unregistered release WARNS, and does not refuse
+# 3 — with a database: an unregistered release WARNS, and does not refuse
 # ---------------------------------------------------------------------------
 def test_an_unregistered_release_warns_but_does_not_refuse_startup(conn,
                                                                    caplog):
@@ -443,7 +315,7 @@ def test_the_database_check_is_skipped_where_the_draft_is_absent(conn):
 
 
 # ---------------------------------------------------------------------------
-# 7 — the SCHEMA half still fails closed, legibly, with no broken database
+# 4 — the SCHEMA half still fails closed, legibly, with no broken database
 # ---------------------------------------------------------------------------
 def test_the_schema_half_fails_closed_naming_every_missing_migration():
     """Criterion 6's schema half, asserted without a database at all.
@@ -514,12 +386,11 @@ def test_the_schema_half_passes_on_a_surplus():
     """The floor allows a database AHEAD of this build — the expand window
     again, from the schema side.
 
-    Kept in this file alongside the application-side expand test on purpose:
-    criterion 6 is one contract with two halves, and the two halves must
-    agree about the direction that is legal. If either one ever became an
-    equality, a deployment would stall on the half that changed while the
-    other passed — and the file that only tested one half would still be
-    green.
+    Since assert_compatible's removal (2026-08-14) this is the ONE place the
+    legal expand direction is asserted: criterion 6 is one contract, and if
+    the floor ever became an equality a deployment would stall on the schema
+    half while everything else passed. That is why this test lives here with
+    the application-half tests rather than only in test_schema_preflight.py.
     """
     from pipeline.intent.schema_contract import (REQUIRED_MIGRATIONS,
                                                  verify_schema_contract)
