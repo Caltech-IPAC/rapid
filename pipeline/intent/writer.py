@@ -79,9 +79,17 @@ import json
 import logging
 from typing import Any, Protocol, Sequence
 
-from pipeline.intent.lock import lock_work_unit
-
 logger = logging.getLogger(__name__)
+
+#: PostgreSQL SQLSTATE the three `derived.*` writer functions (migration 077,
+#: campaign ruling R5) raise for every refusal — vocabulary, blocked_reason
+#: shape, CAS miss, self-supersession, already-superseded. Same code, same
+#: convention `pipeline.operatorctl.contract` reads for draft 047's own
+#: refusals; classified here rather than imported from that module because
+#: this one is the intent layer's own boundary, not the operator CLI's (see
+#: `pipeline.intent.errors`'s header on the two SQLSTATE-classification
+#: surfaces meeting at "nothing needs to convert between them").
+_RA001 = "RA001"
 
 # -- the six work-unit states, verbatim from migration 036 -------------------
 BLOCKED = "blocked"
@@ -307,6 +315,21 @@ def _require_known_writer(writer: str) -> None:
             f"writers migration 036 admits: {', '.join(sorted(WRITERS))}")
 
 
+def _sqlstate_of(exc: Exception) -> str | None:
+    """Read `pgcode`/`sqlstate` off a raised error, matching
+    `pipeline.intent.errors.sqlstate_of` exactly (duplicated rather than
+    imported: that module classifies the 23505/23503 family this one has no
+    business with, and this module's own convention is to not import a
+    sibling's internals — see this module's docstring on why `Executor` is
+    repeated rather than imported from `observability.attempts`).
+    """
+    for attribute in ("pgcode", "sqlstate"):
+        code = getattr(exc, attribute, None)
+        if isinstance(code, str) and len(code) == 5:
+            return code
+    return None
+
+
 class WorkUnitWriter:
     """Creates and transitions work_units rows, with their unit_events.
 
@@ -465,6 +488,50 @@ class WorkUnitWriter:
         to prevent a deadlock but to keep the acquisition visible at exactly
         one place per critical section, so reading a call site tells you where
         the section begins. It is never a way to opt out of the discipline.
+
+        **THE WRITE ITSELF GOES THROUGH `derived.transition_work_unit`**
+        (migration 077, campaign ruling R5), not a raw UPDATE — migration 078
+        revokes `rapid_pipeline_write`'s raw UPDATE on `work_units` once this
+        switch ships. The graph/writer/blocked_reason checks above are UNCHANGED
+        and still run first, so a caller gets the same Python-side error for
+        an illegal edge or a malformed call that it always did; only the CAS
+        UPDATE moves behind the function boundary, where migration 076's
+        BEFORE triggers are now the authority that additionally enforces the
+        same graph (076 is the source of truth; this module's own graph check
+        is kept for error quality — see this module's own docstring, "the
+        trigger is the backstop, not the replacement").
+
+        **THE LOCK IS NOW TAKEN INSIDE THE FUNCTION, NOT HERE.**
+        `derived.transition_work_unit` takes the identical advisory lock
+        (namespace 22357, decimal for 0x5755 'WU') before its own CAS, keyed
+        on `p_lock` — so `lock=True/False` on this method now controls the
+        function's `p_lock` argument rather than a separate Python-side
+        acquisition. This keeps "one choke point" true (077's own header:
+        "076's triggers cannot take this lock on the caller's behalf... so the
+        function takes it") without taking the SAME re-entrant lock twice for
+        no reason on every ordinary call.
+
+        **THE EVENT APPEND IS NOW THE FUNCTION'S, NOT THIS METHOD'S.**
+        `derived.transition_work_unit` inserts the `unit_events` row itself,
+        in the same statement's transaction, matching this method's own
+        former UPDATE-then-`_record_event` order exactly (077's own comment:
+        "matching writer.py's UPDATE-then-_record_event order exactly — this
+        is what 076's DEFERRED coupling trigger checks at commit"). This
+        method must NOT also call `_record_event` — doing so would double the
+        event for every transition. `reason`/`detail` are passed through to
+        the function so its event row carries them, exactly as this method's
+        own `_record_event` call used to.
+
+        **`now` IS ACCEPTED BUT NO LONGER USED.** The former raw UPDATE
+        stamped the CALLER's `now`; `derived.transition_work_unit` stamps its
+        own `pg_catalog.now()` inside the function body, so this parameter no
+        longer reaches the write. Kept in the signature rather than removed
+        so every existing `now=` call site (`submission.blocked.
+        release_blocked`, test fixtures) still parses — but a caller relying
+        on it to control the RECORDED timestamp (e.g. injecting a fixed
+        clock) no longer gets that; only wall-clock time is stamped once 077
+        is live. No contract test currently depends on this, checked at
+        C1 time.
         """
         _require_known_writer(writer)
         _require_known_state(from_state, param_name="from_state")
@@ -490,28 +557,34 @@ class WorkUnitWriter:
             raise ValueError(
                 "blocked_reason must be None unless to_state='blocked'")
 
-        moment = now or datetime.datetime.now(datetime.timezone.utc)
-
-        # THE LOCK, BEFORE THE CAS (rule 9). Ordered here rather than at the
-        # call sites so no disposition can transition without it; see the
-        # docstring for why one choke point and not six.
-        if lock:
-            lock_work_unit(self._execute, work_unit_id)
-
         sql = (
-            "UPDATE work_units SET state = %s, blocked_reason = %s,"
-            "  updated_at = %s"
-            " WHERE work_unit_id = %s AND state = %s"
+            "SELECT derived.transition_work_unit(%s, %s, %s, %s, %s, %s,"
+            "  %s, %s)"
         )
-        result = self._execute(sql, [
-            to_state, blocked_reason, moment, work_unit_id, from_state,
-        ])
-        _require_one_row(result, "transition_unit", work_unit_id,
-                         expected_state=from_state)
-
-        self._record_event(work_unit_id, from_state=from_state,
-                           to_state=to_state, writer=writer, reason=reason,
-                           detail=detail, now=moment)
+        try:
+            self._execute(sql, [
+                work_unit_id, from_state, to_state, writer, blocked_reason,
+                reason, _as_jsonb(detail), lock,
+            ])
+        except Exception as exc:  # noqa: BLE001 - RA001 reclassified below
+            if _sqlstate_of(exc) == _RA001:
+                # The Python checks above already refuse every malformed call
+                # (unknown vocabulary, wrong writer, bad blocked_reason
+                # shape) BEFORE this statement runs, so the only refusal that
+                # can reach here is 077's own CAS-miss branch — the exact
+                # case `WorkUnitNotFound` names. Re-raised as that type so
+                # every existing caller (`pipeline.registration.consumer`,
+                # `pipeline.reconciler.service`, `submission.blocked`) that
+                # catches `WorkUnitNotFound` to mean "another writer moved
+                # it first" keeps working unchanged.
+                raise WorkUnitNotFound(
+                    f"transition_unit: no row with id={work_unit_id!r} in "
+                    f"state {from_state!r}. Either it does not exist, or it "
+                    f"has already left that state — a concurrent or "
+                    f"replayed writer reached it first. Nothing was "
+                    f"written, which is the compare-and-set holding. "
+                    f"(derived.transition_work_unit: {exc})") from exc
+            raise
 
         logger.info("work unit %s: %s -> %s (writer=%s)",
                     work_unit_id, from_state, to_state, writer)
@@ -540,21 +613,30 @@ class WorkUnitWriter:
         blocked. False is an ordinary race, not an error: the caller wanted the
         unit's reason current, and a unit that is no longer blocked has no
         reason to keep current.
+
+        **Routed through `derived.amend_blocked_reason`** (migration 077,
+        R5) rather than a raw UPDATE, once 078 revokes the raw grant. That
+        function's own CAS-on-'blocked' returns a boolean exactly like this
+        method always has (it does not raise on a no-longer-blocked unit —
+        see 077's own comment: "False is an ordinary race, not an error"),
+        so this method's return contract is unchanged and there is no RA001
+        translation to do here: the ONLY refusal path the function still
+        raises through (empty/whitespace reason) is already caught by the
+        check immediately below, before any SQL runs.
+
+        `now` is accepted but no longer used — see `transition_unit`'s own
+        note on the same change; `derived.amend_blocked_reason` stamps its
+        own `pg_catalog.now()`.
         """
         if not blocked_reason:
             raise ValueError(
                 "amend_blocked_reason needs a reason; a blocked unit must "
                 "always carry one (work_units_blocked_reason_ck)")
 
-        moment = now or datetime.datetime.now(datetime.timezone.utc)
-        sql = (
-            "UPDATE work_units SET blocked_reason = %s, updated_at = %s"
-            " WHERE work_unit_id = %s AND state = %s"
-        )
-        result = self._execute(sql, [
-            blocked_reason, moment, work_unit_id, BLOCKED,
-        ])
-        if _rowcount(result, "amend_blocked_reason") == 0:
+        sql = "SELECT derived.amend_blocked_reason(%s, %s)"
+        rows = self._execute(sql, [work_unit_id, blocked_reason])
+        amended = bool(_single_value(rows))
+        if not amended:
             logger.debug(
                 "work unit %s is no longer blocked; reason not amended",
                 work_unit_id)
@@ -575,6 +657,16 @@ class WorkUnitWriter:
         transition graph. Migration 036 leaves the set-once half to code
         ("enforcement of the 'set-once' half is a code/trigger concern the
         design does not ask this migration to add") — this is that code.
+
+        **Routed through `derived.supersede_unit`** (migration 077, R5)
+        rather than a raw UPDATE, once 078 revokes the raw grant. The
+        function performs the same CAS-on-NULL UPDATE and writes the same
+        `unit_events` row itself (from_state = to_state = the unit's CURRENT
+        state, detail carrying the pointer) — this method must NOT also call
+        `_record_event`, or the event would be doubled.
+
+        `now` is accepted but no longer used — see `transition_unit`'s own
+        note; `derived.supersede_unit` stamps its own `pg_catalog.now()`.
         """
         _require_known_writer(writer)
         if old_work_unit_id == new_work_unit_id:
@@ -582,39 +674,27 @@ class WorkUnitWriter:
                 "a work unit cannot supersede itself "
                 "(work_units_not_self_superseding_ck)")
 
-        moment = now or datetime.datetime.now(datetime.timezone.utc)
-        sql = (
-            "UPDATE work_units SET superseded_by_unit_id = %s,"
-            "  updated_at = %s"
-            " WHERE work_unit_id = %s AND superseded_by_unit_id IS NULL"
-        )
-        result = self._execute(sql, [
-            new_work_unit_id, moment, old_work_unit_id,
-        ])
-        if _rowcount(result, "supersede_unit") == 0:
-            raise SupersessionConflict(
-                f"work unit {old_work_unit_id} already has a successor, or "
-                f"does not exist; supersession is a set-once pointer and "
-                f"cannot be reassigned")
-
-        # Not a state transition (from_state/to_state unchanged), so this
-        # is recorded with detail carrying the pointer rather than as a
-        # to_state the six-value CHECK would reject.
-        current = self._current_state(old_work_unit_id)
-        self._record_event(
-            old_work_unit_id, from_state=current, to_state=current,
-            writer=writer, reason=reason or "superseded",
-            detail={"superseded_by_unit_id": new_work_unit_id}, now=moment)
+        sql = "SELECT derived.supersede_unit(%s, %s, %s, %s)"
+        try:
+            self._execute(
+                sql, [old_work_unit_id, new_work_unit_id, writer, reason])
+        except Exception as exc:  # noqa: BLE001 - RA001 reclassified below
+            if _sqlstate_of(exc) == _RA001:
+                # As in `transition_unit`: the Python checks above already
+                # refuse a malformed call (unknown writer, self-supersession)
+                # before this statement runs, so the only refusal reachable
+                # here is 077's own CAS-miss branch — "already has a
+                # successor, or does not exist" — exactly
+                # `SupersessionConflict`'s case.
+                raise SupersessionConflict(
+                    f"work unit {old_work_unit_id} already has a successor, "
+                    f"or does not exist; supersession is a set-once pointer "
+                    f"and cannot be reassigned "
+                    f"(derived.supersede_unit: {exc})") from exc
+            raise
 
         logger.info("work unit %s superseded by %s",
                     old_work_unit_id, new_work_unit_id)
-
-    def _current_state(self, work_unit_id: int) -> str:
-        rows = self._execute(
-            "SELECT state FROM work_units WHERE work_unit_id = %s",
-            [work_unit_id])
-        value = _single_value(rows)
-        return value
 
     def _record_event(self, work_unit_id: int, *, from_state: str | None,
                       to_state: str, writer: str, reason: str | None,

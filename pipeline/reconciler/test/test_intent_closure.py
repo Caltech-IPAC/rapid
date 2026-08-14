@@ -13,12 +13,20 @@ inverted by that repair; they are named for what they now assert.
 This file proves that mapping and its
 NULL-skip guard, using the same `build`/`attempt_row`/`application_record`
 fixtures `test_service.py` already has — `FakeConnection.route` (stubs.py)
-answers `UPDATE work_units`/`INSERT INTO unit_events`/
-`INSERT INTO work_units`/`SELECT ... FROM work_units` with its generic
-"one row affected" fallback (any unrecognised statement returns
+answers `INSERT INTO work_units`/`SELECT ... FROM work_units` with its
+generic "one row affected" fallback (any unrecognised statement returns
 `rowcount=1`), which is sufficient here: these tests assert on the
 STATEMENTS issued and the ATTEMPT row's own final state, not on a
 work_units table this stub does not model as data.
+
+C1 (campaign ruling R5, migration 077): `WorkUnitWriter.transition_unit` no
+longer issues a raw `UPDATE work_units` / `INSERT INTO unit_events` pair —
+both now live behind one `SELECT derived.transition_work_unit(...)` call,
+which `FakeConnection.route` answers with its own dedicated branch (the CAS
+and the event append are the function's, not this stub's, to model — see
+that branch's own comment). Every assertion in this file that used to search
+for `"UPDATE work_units SET state"` now searches for
+`"derived.transition_work_unit"`.
 """
 
 import json
@@ -63,7 +71,7 @@ class WorkUnitClosureTests(unittest.TestCase):
 
         self.assertEqual(1, summary["classified"])
         transitions = [(text, params) for text, params in conn.statements
-                       if "UPDATE work_units SET state" in text]
+                       if "derived.transition_work_unit" in text]
         self.assertEqual(
             [], transitions,
             "the reconciler must not transition the work unit on success; "
@@ -96,7 +104,7 @@ class WorkUnitClosureTests(unittest.TestCase):
         svc.poll_once()
 
         transitions = [(text, params) for text, params in conn.statements
-                       if "UPDATE work_units SET state" in text]
+                       if "derived.transition_work_unit" in text]
         self.assertEqual(1, len(transitions))
         _, params = transitions[0]
         self.assertIn("blocked", params)
@@ -126,7 +134,7 @@ class WorkUnitClosureTests(unittest.TestCase):
 
         self.assertEqual(1, summary["classified"])
         transitions = [text for text, _ in conn.statements
-                       if "UPDATE work_units SET state" in text]
+                       if "derived.transition_work_unit" in text]
         self.assertEqual([], transitions,
                          "no work-unit statement for a NULL work_unit_id")
         # The attempt itself still closes normally — the guard is silent,
@@ -151,7 +159,7 @@ class WorkUnitClosureTests(unittest.TestCase):
         svc.poll_once()
 
         transitions = [(text, params) for text, params in conn.statements
-                       if "UPDATE work_units SET state" in text]
+                       if "derived.transition_work_unit" in text]
         self.assertEqual(1, len(transitions))
         _, params = transitions[0]
         self.assertIn(99, params)
@@ -188,7 +196,7 @@ class WorkUnitClosureTests(unittest.TestCase):
         svc.poll_once()
 
         transitions = [(text, params) for text, params in conn.statements
-                       if "UPDATE work_units SET state" in text]
+                       if "derived.transition_work_unit" in text]
         self.assertEqual(1, len(transitions))
         _, params = transitions[0]
         self.assertIn(7, params)
@@ -244,11 +252,11 @@ class WorkUnitClosureTests(unittest.TestCase):
         self.assertFalse(sibling_open)
 
         before = len([1 for text, params in conn.statements
-                      if "UPDATE work_units SET state" in text
+                      if "derived.transition_work_unit" in text
                       and 55 in params])
         svc._close_work_unit(dict(lost), outcome="failed")
         after = [(text, params) for text, params in conn.statements
-                 if "UPDATE work_units SET state" in text and 55 in params]
+                 if "derived.transition_work_unit" in text and 55 in params]
 
         self.assertEqual(
             before, len(after),
@@ -296,11 +304,11 @@ class WorkUnitClosureTests(unittest.TestCase):
         self.assertFalse(sibling_accepted)
 
         before = len([1 for text, params in conn.statements
-                      if "UPDATE work_units SET state" in text
+                      if "derived.transition_work_unit" in text
                       and 55 in params])
         svc._close_work_unit(dict(lost), outcome="failed")
         after = [(text, params) for text, params in conn.statements
-                 if "UPDATE work_units SET state" in text and 55 in params]
+                 if "derived.transition_work_unit" in text and 55 in params]
 
         self.assertEqual(
             before, len(after),
@@ -348,7 +356,7 @@ class WorkUnitClosureTests(unittest.TestCase):
         self.assertEqual(1, summary["classified"])
         self.assertEqual(1, summary["waiting"])
         transitions = [text for text, params in conn.statements
-                       if "UPDATE work_units SET state" in text
+                       if "derived.transition_work_unit" in text
                        and 55 in params]
         self.assertEqual(
             [], transitions,
@@ -396,19 +404,21 @@ class WorkUnitClosureTests(unittest.TestCase):
             if "UPDATE attempts SET lifecycle_state" in text)
         work_unit_close_index = next(
             i for i, (text, _) in enumerate(conn.statements)
-            if "UPDATE work_units SET state" in text)
-        event_index = next(
-            i for i, (text, _) in enumerate(conn.statements)
-            if "INSERT INTO unit_events" in text)
+            if "derived.transition_work_unit" in text)
+        # NO SEPARATE unit_events STATEMENT TO LOOK FOR (C1, migration 077):
+        # `derived.transition_work_unit` appends that row itself, inside the
+        # SAME statement as the CAS — there is no longer a second call whose
+        # ordering relative to the first could be asserted. The "unit_event
+        # lands before the lease commits" property this test used to check
+        # via a THIRD statement now holds by construction (one statement, one
+        # server-side transaction leg) rather than needing its own ordering
+        # assertion.
 
         self.assertLess(lock_index, attempt_close_index,
                         "the attempt close must happen under the lease")
         self.assertLess(attempt_close_index, work_unit_close_index,
                         "the work-unit transition follows the attempt close, "
                         "still inside the same lease")
-        self.assertLess(work_unit_close_index, event_index,
-                        "the unit_event is appended in the same call, "
-                        "before the lease commits")
         # `_classify`'s own open-set read rolls back its read-only snapshot
         # (service.py line 336-ish) BEFORE the lease is even acquired, and
         # unrelated reconciler bookkeeping may roll back its own read-only

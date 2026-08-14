@@ -316,15 +316,18 @@ class RegistrationCompletesTheWorkUnitTests(unittest.TestCase):
             register=product_writer(conn))
 
         self.assertEqual("complete", conn.work_units[42])
+        # C1 (migration 077): the completion is now one call into
+        # `derived.transition_work_unit`, not a raw `UPDATE work_units`.
         completions = [(statement, params) for statement, params
                        in conn.committed
-                       if statement.lower().startswith(
-                           "update work_units set state")]
+                       if "derived.transition_work_unit" in statement.lower()]
         self.assertEqual(1, len(completions))
         _, params = completions[0]
-        self.assertEqual("complete", params[0])
-        self.assertEqual(42, params[3])
-        self.assertEqual("submitted", params[4])
+        # work_unit_id, from_state, to_state, writer, ... (C1's positional
+        # order — see `WorkUnitWriter.transition_unit`'s call).
+        self.assertEqual(42, params[0])
+        self.assertEqual("submitted", params[1])
+        self.assertEqual("complete", params[2])
 
     def test_the_completion_commits_with_the_product_rows_and_watermark(self):
         # The atomicity property itself: one commit carries the product
@@ -342,7 +345,7 @@ class RegistrationCompletesTheWorkUnitTests(unittest.TestCase):
         committed = " ".join(statement for statement, _ in conn.committed)
         self.assertIn("addDiffImage", committed)
         self.assertIn("registered_record_sequence", committed)
-        self.assertIn("work_units", committed,
+        self.assertIn("derived.transition_work_unit", committed,
                       "the work-unit completion is not in the committed "
                       "transaction")
 
@@ -547,17 +550,24 @@ class FakeConn:
     stale-supersession signal", i.e. registration proceeds exactly as it did
     before this lease existed.
 
-    AMENDED for finding 7. `_complete_work_unit`'s `UPDATE work_units SET
-    state = ...` needs a real CAS over SOME state, or `WorkUnitWriter.
-    transition_unit`'s `_require_one_row` cannot tell "matched" from "did
-    not" — `work_units`, a dict of work_unit_id -> state, is that state,
-    defaulting every id to `submitted` (the state a candidate row is
-    always in per the module's own invariant: the reconciler no longer
-    completes a unit, so every registration candidate's unit is still
-    exactly where it was left). `description`/`fetchall` are modelled only
-    for the two statement shapes finding 7 actually issues (the work-unit
-    UPDATE and its `INSERT INTO unit_events`); every other statement this
-    fake answers is a plain `execute()`-then-`fetchone()`, unchanged.
+    AMENDED for finding 7. `_complete_work_unit`'s transition needs a real
+    CAS over SOME state, or a caller cannot tell "matched" from "did not" —
+    `work_units`, a dict of work_unit_id -> state, is that state, defaulting
+    every id to `submitted` (the state a candidate row is always in per the
+    module's own invariant: the reconciler no longer completes a unit, so
+    every registration candidate's unit is still exactly where it was left).
+
+    AMENDED for C1 (campaign ruling R5, migration 077).
+    `WorkUnitWriter.transition_unit` no longer issues a raw `UPDATE
+    work_units` / `INSERT INTO unit_events` pair — both now live behind one
+    `SELECT derived.transition_work_unit(...)` call. This fake models that
+    ONE statement: it applies the same CAS against `work_units` the raw
+    UPDATE used to, and on a miss raises the RA001-shaped error the real
+    function raises (`pipeline.intent.errors.FakePgError`) rather than
+    returning zero rows — `WorkUnitWriter` now reclassifies that into
+    `WorkUnitNotFound` itself, so this fake no longer needs to emulate the
+    rowcount-based path at all. `unit_events` is no longer written
+    separately by this fake, matching the function owning that append.
 
     AMENDED for ruling R1 (migration 075, effect-lifecycle completion
     boundary). The post-lock re-read now reads the CONSUMED watermark, not
@@ -635,18 +645,22 @@ class FakeConn:
             work_unit_id = params[0] if params else None
             self._last_result = (
                 self.effect_attempt_counts.get(work_unit_id, 0),)
-        elif lowered.startswith("update work_units set state"):
-            to_state, _blocked_reason, _moment, work_unit_id, from_state = params
+        elif "derived.transition_work_unit" in lowered:
+            # The eight positional args `WorkUnitWriter.transition_unit`
+            # passes (C1): work_unit_id, from_state, to_state, writer,
+            # blocked_reason, reason, detail, lock.
+            (work_unit_id, from_state, to_state, _writer, _blocked_reason,
+             _reason, _detail, _lock) = params
             current = self.work_units.setdefault(work_unit_id, "submitted")
             if current == from_state:
                 self.work_units[work_unit_id] = to_state
-                self._last_result = [(1,)]
+                self._last_result = [(None,)]  # the function returns void
             else:
-                self._last_result = []
-            self._last_description = [("rowcount",)]
-        elif lowered.startswith("insert into unit_events"):
-            self._last_result = []
-            self._last_description = [("rowcount",)]
+                from pipeline.intent.errors import FakePgError
+                raise FakePgError(
+                    "RA001",
+                    f"no work unit {work_unit_id} in state {from_state!r}")
+            self._last_description = [("transition_work_unit",)]
 
     def fetchone(self):
         return self._last_result

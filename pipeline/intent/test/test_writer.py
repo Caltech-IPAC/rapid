@@ -9,7 +9,7 @@ house convention (`observability/test/test_attempts.py`'s
 
 import unittest
 
-from pipeline.intent.lock import WORK_UNIT_NAMESPACE
+from pipeline.intent.errors import FakePgError
 from pipeline.intent.writer import (
     ABANDONED,
     ACTIVE,
@@ -37,15 +37,31 @@ from pipeline.intent.writer import (
 
 
 class RecordingExecutor:
-    """Captures every statement issued, in order. See observability's twin."""
+    """Captures every statement issued, in order. See observability's twin.
 
-    def __init__(self, returning: int = 1, affected: int = 1):
+    `raise_ra001` simulates migration 077's SECURITY DEFINER functions
+    (`derived.transition_work_unit`/`amend_blocked_reason`/`supersede_unit`)
+    refusing a call — the CAS-miss/self-supersession/etc. case those
+    functions raise RA001 for (see `pipeline.intent.writer`'s own
+    `_sqlstate_of`/`_RA001` handling). It fires on the FIRST statement whose
+    SQL contains `raise_ra001_on` (a substring, `derived.` function names by
+    convention) rather than unconditionally, so a test can still exercise the
+    unrelated statements — e.g. `create_work_unit`'s INSERT — that precede it
+    in the same call.
+    """
+
+    def __init__(self, returning: int = 1, affected: int = 1,
+                raise_ra001_on: str | None = None):
         self.calls: list[tuple[str, list]] = []
         self._next_id = returning
         self.affected = affected
+        self._raise_ra001_on = raise_ra001_on
 
     def __call__(self, sql, params):
         self.calls.append((" ".join(sql.split()), list(params)))
+        if self._raise_ra001_on and self._raise_ra001_on in sql:
+            raise FakePgError(
+                "RA001", "no work unit matched the compare-and-set")
         if "RETURNING" in sql:
             value = self._next_id
             self._next_id += 1
@@ -231,148 +247,196 @@ class TransitionLegalityTests(unittest.TestCase):
 
 
 class TransitionCasTests(unittest.TestCase):
-    """The SQL-level compare-and-set: a legal edge that matches zero rows."""
+    """The call into `derived.transition_work_unit` (migration 077, R5):
+    the writer's Python graph check still runs first, but the actual
+    CAS/lock/event-append now live behind that one function call — see
+    `pipeline.intent.writer.transition_unit`'s own docstring on the switch.
+    """
 
     def test_matching_zero_rows_raises_work_unit_not_found(self):
-        execute = RecordingExecutor(affected=0)
+        # The function's own CAS-miss branch raises RA001; this module
+        # reclassifies it to WorkUnitNotFound so every existing catcher
+        # keeps working (`pipeline.registration.consumer`,
+        # `pipeline.reconciler.service`, `submission.blocked`).
+        execute = RecordingExecutor(
+            raise_ra001_on="derived.transition_work_unit")
         writer = WorkUnitWriter(execute)
         with self.assertRaises(WorkUnitNotFound):
             writer.transition_unit(1, READY, SUBMITTED,
                                    writer=WRITER_ORCHESTRATOR)
 
     def _find_call(self, execute, fragment):
-        """The first recorded statement containing `fragment`, with its params.
-
-        FOUND BY CONTENT, NOT BY POSITION. These two tests used to index
-        `execute.calls[0]` and `[1]`, which encoded an assumption about how
-        many statements `transition_unit` issues — and brief C's rule-9 repair
-        added one, the work-unit advisory lock that now precedes the CAS. The
-        tests then failed for naming the wrong index while the behaviour each
-        asserts was entirely intact, which is a test measuring the wrong
-        thing: neither cares WHERE the UPDATE sits in the sequence, only that
-        it is issued with the right predicate and parameters. Searching by
-        content says that directly, and survives the next statement anyone
-        legitimately adds.
-        """
+        """The first recorded statement containing `fragment`, with its params."""
         for sql, params in execute.calls:
             if fragment in sql:
                 return sql, params
         self.fail(f"no recorded statement contained {fragment!r}; "
                   f"statements were: {[sql for sql, _ in execute.calls]}")
 
-    def test_the_update_matches_on_work_unit_id_and_from_state(self):
+    def test_calls_the_constrained_function_with_work_unit_id_and_from_state(self):
         execute = RecordingExecutor()
         writer = WorkUnitWriter(execute)
         writer.transition_unit(99, READY, SUBMITTED, writer=WRITER_ORCHESTRATOR)
-        sql, params = self._find_call(
-            execute, "WHERE work_unit_id = %s AND state = %s")
+        sql, params = self._find_call(execute, "derived.transition_work_unit")
         self.assertIn(99, params)
         self.assertIn(READY, params)
+        self.assertIn(SUBMITTED, params)
+        self.assertIn(WRITER_ORCHESTRATOR, params)
 
-    def test_the_work_unit_lock_precedes_the_cas(self):
-        """Rule 9's discipline, asserted at the writer that enforces it.
-
-        The lock has to come BEFORE the CAS, not merely be present: its
-        purpose is to serialize the decision, and a lock taken after the
-        update would serialize nothing that matters. Position is the whole
-        claim here, which is why this test — unlike the two around it —
-        legitimately asserts on ordering.
+    def test_no_separate_lock_or_event_statement_is_issued(self):
+        """Rule 9's lock and the unit_events append are now the FUNCTION'S,
+        not this module's — `derived.transition_work_unit` takes the same
+        advisory lock and writes the same event row itself, in the same
+        statement's transaction (see 077's own header and this module's
+        docstring on why calling `_record_event` here would double it). A
+        second, Python-issued lock or INSERT would mean the switch was only
+        half made.
         """
         execute = RecordingExecutor()
         writer = WorkUnitWriter(execute)
         writer.transition_unit(7, READY, SUBMITTED, writer=WRITER_ORCHESTRATOR)
 
         statements = [sql for sql, _ in execute.calls]
-        lock_index = next(i for i, sql in enumerate(statements)
-                          if "pg_advisory_xact_lock" in sql)
-        cas_index = next(i for i, sql in enumerate(statements)
-                         if "UPDATE work_units" in sql)
-        self.assertLess(lock_index, cas_index)
+        self.assertEqual(
+            1, len(statements),
+            f"expected exactly one statement (the function call), got "
+            f"{statements}")
+        self.assertIn("derived.transition_work_unit", statements[0])
 
-        _sql, params = self._find_call(execute, "pg_advisory_xact_lock")
-        self.assertIn(WORK_UNIT_NAMESPACE, params)
-        self.assertIn(7, params)
-
-    def test_transition_writes_a_unit_event(self):
+    def test_p_lock_defaults_true_and_is_passed_through(self):
         execute = RecordingExecutor()
         writer = WorkUnitWriter(execute)
-        writer.transition_unit(1, READY, SUBMITTED, writer=WRITER_ORCHESTRATOR)
-        event_sql, event_params = self._find_call(
-            execute, "INSERT INTO unit_events")
-        self.assertIn(READY, event_params)
-        self.assertIn(SUBMITTED, event_params)
-        self.assertIn(WRITER_ORCHESTRATOR, event_params)
+        writer.transition_unit(7, READY, SUBMITTED, writer=WRITER_ORCHESTRATOR)
+        _sql, params = self._find_call(execute, "derived.transition_work_unit")
+        self.assertIs(params[-1], True)
+
+    def test_lock_false_passes_p_lock_false(self):
+        # The narrow re-entrant case: a caller that already holds the unit's
+        # lock (e.g. the cancellation path) asks the function to skip its own
+        # acquisition.
+        execute = RecordingExecutor()
+        writer = WorkUnitWriter(execute)
+        writer.transition_unit(7, READY, SUBMITTED, writer=WRITER_ORCHESTRATOR,
+                               lock=False)
+        _sql, params = self._find_call(execute, "derived.transition_work_unit")
+        self.assertIs(params[-1], False)
 
     def test_blocking_transition_requires_reason(self):
         # submitted->blocked IS in the graph now (rule 4 repair): retry
         # policy v1 parks application failures rather than tombstoning them,
-        # so the reconciler needs this edge and the graph gained it. This
-        # test previously asserted the graph REFUSED the edge, and noted that
-        # the missing-reason ValueError branch was therefore unreachable —
-        # now the edge is legal, so the assertion this test is named for is
-        # the one it can finally make: entering `blocked` without a reason is
-        # refused, because migration 036's
+        # so the reconciler needs this edge and the graph gained it. Entering
+        # `blocked` without a reason is refused in PYTHON, before the
+        # function is ever called — migration 036's
         # `work_units_blocked_reason_ck` makes a blocked unit with no reason
         # unrepresentable and a caller must not learn that from a constraint
         # violation three layers down.
         execute = RecordingExecutor()
-        execute._select_result = [("submitted",)]
         writer = WorkUnitWriter(execute)
         with self.assertRaises(ValueError):
             writer.transition_unit(1, SUBMITTED, BLOCKED,
                                    writer=WRITER_ORCHESTRATOR)
+        self.assertEqual([], execute.calls,
+                         "no SQL must be issued for a malformed blocked_reason")
 
     def test_blocking_transition_with_a_reason_is_legal(self):
         # The other half: with a reason, the edge fires and the reason lands
-        # in the UPDATE's parameters. Guards against a future graph edit
-        # silently removing the edge retry policy depends on.
+        # in the function call's parameters. Guards against a future graph
+        # edit silently removing the edge retry policy depends on.
         execute = RecordingExecutor()
-        execute._select_result = [("submitted",)]
         writer = WorkUnitWriter(execute)
         writer.transition_unit(1, SUBMITTED, BLOCKED,
                                writer=WRITER_RECONCILER,
                                blocked_reason="application_failure:tool_failure")
-        updates = [call for call in execute.calls
-                   if call[0].startswith("UPDATE work_units")]
-        self.assertTrue(updates, "no work_units UPDATE was issued")
-        self.assertIn("application_failure:tool_failure", updates[0][1])
+        _sql, params = self._find_call(execute, "derived.transition_work_unit")
+        self.assertIn("application_failure:tool_failure", params)
+
+
+class AmendBlockedReasonTests(unittest.TestCase):
+    """`derived.amend_blocked_reason` (migration 077, R5): the CAS-on-
+    'blocked' UPDATE with no unit_events append, now behind the function —
+    see `pipeline.intent.writer.amend_blocked_reason`'s docstring.
+    """
+
+    def test_empty_reason_is_refused_before_any_sql(self):
+        execute = RecordingExecutor()
+        writer = WorkUnitWriter(execute)
+        with self.assertRaises(ValueError):
+            writer.amend_blocked_reason(1, "")
+        self.assertEqual([], execute.calls)
+
+    def test_calls_the_constrained_function_and_returns_its_boolean(self):
+        execute = RecordingExecutor()
+        execute._select_result = [(True,)]
+        writer = WorkUnitWriter(execute)
+        result = writer.amend_blocked_reason(1, "missing_dependency:x")
+        self.assertTrue(result)
+        sql, params = execute.calls[0]
+        self.assertIn("derived.amend_blocked_reason", sql)
+        self.assertIn(1, params)
+        self.assertIn("missing_dependency:x", params)
+
+    def test_false_result_is_not_an_error(self):
+        # The unit was no longer blocked by CAS time — an ordinary race,
+        # matching the function's own "False is an ordinary race, not an
+        # error" contract (077), unchanged from this method's prior raw-SQL
+        # behaviour.
+        execute = RecordingExecutor()
+        execute._select_result = [(False,)]
+        writer = WorkUnitWriter(execute)
+        self.assertFalse(writer.amend_blocked_reason(1, "x"))
 
 
 class SupersedeUnitTests(unittest.TestCase):
-    def test_sets_the_pointer(self):
+    """`derived.supersede_unit` (migration 077, R5) now owns the CAS-on-NULL
+    UPDATE and its own unit_events append — see
+    `pipeline.intent.writer.supersede_unit`'s docstring on the switch.
+    """
+
+    def test_calls_the_constrained_function_with_both_ids(self):
         execute = RecordingExecutor()
-        execute._select_result = [("ready",)]
         writer = WorkUnitWriter(execute)
         writer.supersede_unit(1, 2, writer=WRITER_MUTATION_API)
-        update_sql, update_params = execute.calls[0]
-        self.assertIn("superseded_by_unit_id", update_sql)
-        self.assertIn(2, update_params)
-        self.assertIn(1, update_params)
+        sql, params = execute.calls[0]
+        self.assertIn("derived.supersede_unit", sql)
+        self.assertIn(1, params)
+        self.assertIn(2, params)
+        self.assertIn(WRITER_MUTATION_API, params)
 
     def test_cannot_supersede_self(self):
         execute = RecordingExecutor()
         writer = WorkUnitWriter(execute)
         with self.assertRaises(ValueError):
             writer.supersede_unit(1, 1, writer=WRITER_MUTATION_API)
+        self.assertEqual([], execute.calls,
+                         "no SQL must be issued for self-supersession")
 
     def test_already_superseded_raises_conflict(self):
-        execute = RecordingExecutor(affected=0)
+        # The function's own CAS-miss branch (already superseded, or the
+        # unit does not exist) raises RA001; reclassified to
+        # SupersessionConflict so existing callers keep working.
+        execute = RecordingExecutor(raise_ra001_on="derived.supersede_unit")
         writer = WorkUnitWriter(execute)
         with self.assertRaises(SupersessionConflict):
             writer.supersede_unit(1, 2, writer=WRITER_MUTATION_API)
 
-    def test_records_an_event_with_the_pointer_in_detail(self):
+    def test_no_separate_update_or_event_statement_is_issued(self):
         execute = RecordingExecutor()
-        execute._select_result = [("ready",)]
         writer = WorkUnitWriter(execute)
         writer.supersede_unit(5, 6, writer=WRITER_MUTATION_API)
-        event_sql, event_params = execute.calls[-1]
-        self.assertIn("INSERT INTO unit_events", event_sql)
-        detail = event_params[-1]
-        # `_as_jsonb` serializes (the real driver refuses a bare dict —
-        # found live); the recorded param is the deterministic JSON text.
-        import json
-        self.assertEqual({"superseded_by_unit_id": 6}, json.loads(detail))
+        statements = [sql for sql, _ in execute.calls]
+        self.assertEqual(
+            1, len(statements),
+            f"expected exactly one statement (the function call), got "
+            f"{statements}")
+        self.assertIn("derived.supersede_unit", statements[0])
+
+    def test_reason_is_passed_through(self):
+        execute = RecordingExecutor()
+        writer = WorkUnitWriter(execute)
+        writer.supersede_unit(5, 6, writer=WRITER_MUTATION_API,
+                              reason="corrected identity")
+        _sql, params = execute.calls[0]
+        self.assertIn("corrected identity", params)
 
 
 class CampaignLifecycleTests(unittest.TestCase):

@@ -267,6 +267,22 @@ class FakeConnection:
                 row["lifecycle_state"] = params[0]
             return None
 
+        if "derived.transition_work_unit" in lowered:
+            # C1 (campaign ruling R5, migration 077): `WorkUnitWriter.
+            # transition_unit` now issues this ONE call — the CAS, the
+            # work-unit advisory lock, and the `unit_events` append all live
+            # behind it — rather than a raw `UPDATE work_units` followed by a
+            # separate `INSERT INTO unit_events`. This branch is the CAS
+            # itself: `work_unit_id, from_state, to_state, writer,
+            # blocked_reason, reason, detail, lock` (the eight positional
+            # params `transition_unit` passes). No `self.rows` here models
+            # `work_units` as data (this stub only models `attempts`), so —
+            # matching this module's own stated convention for statements it
+            # does not model as data — it reports success unconditionally,
+            # `[(None,)]` (the function returns void), rather than
+            # attempting a CAS this stub has nothing to check against.
+            return [(None,)], [("transition_work_unit",)]
+
         return None
 
     def _maybe_raise(self, branch):
