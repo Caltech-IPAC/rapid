@@ -132,6 +132,13 @@ def make_source_row(sid, xfit, yfit, mjdobs, tpv_header, pid=CHIP_PID):
         "sid": sid, "expid": 42, "sca": 7, "mjdobs": mjdobs,
         "ra": ra, "dec": dec, "xfit": xfit, "yfit": yfit,
         "filter_name": "F158",             # provider derives band from this
+        # the catalogue's own per-file ordinal (migration 041 conflict
+        # identity); real callers always have it -- the query is
+        # `SELECT s.*` -- so Source.from_row(strict=True) demands it too.
+        # Distinct from sid on purpose: offset it from sid so a bug that
+        # confuses the two fields would produce a visibly wrong id, not
+        # one that happens to look right by coincidence.
+        "id": sid - 9000 if sid >= 9000 else sid - 1000,
         "xerr": 0.01, "yerr": 0.02, "fluxfit": 1234.5, "fluxerr": 56.7,
         "flags": 0, "field": CHIP_FIELD, "hp6": 123, "hp9": 4567,
         "pid": pid, "isdiffpos": True, "qfit": 0.1, "cfit": 0.05,
@@ -207,13 +214,41 @@ class ChipData:
         return {**self.merges, **self.history_merges}.get(sid)
 
 
+def _split_top_level(text, sep):
+    """Split `text` on `sep`, ignoring occurrences nested inside parens
+    (so a subquery's own commas/FROM/SELECT don't fragment the split)."""
+    parts = []
+    depth = 0
+    start = 0
+    i = 0
+    while i < len(text):
+        c = text[i]
+        if c == "(":
+            depth += 1
+        elif c == ")":
+            depth -= 1
+        elif depth == 0 and text[i:i + len(sep)] == sep:
+            parts.append(text[start:i])
+            i += len(sep)
+            start = i
+            continue
+        i += 1
+    parts.append(text[start:])
+    return parts
+
+
 def _selected_columns(sql):
     """The column names a query's SELECT list actually asks for, stripped
     of table aliases ("a.ra0" -> "ra0", "x AS y" -> "y"); None when the
-    list contains a '*' (no projection possible)."""
-    select_list = sql.split("FROM")[0].split("SELECT")[1]
+    list contains a '*' (no projection possible).
+
+    Splits only on top-level commas/FROM/SELECT -- a select-list item can
+    itself be a subquery expression (e.g. `COALESCE(x, (SELECT count(*)
+    FROM ... ) ::int) AS y`), whose own commas and FROM/SELECT keywords
+    must not be mistaken for the outer query's structure."""
+    select_list = _split_top_level(sql, "FROM")[0].split("SELECT", 1)[1]
     columns = []
-    for item in select_list.split(","):
+    for item in _split_top_level(select_list, ","):
         item = item.strip()
         if "*" in item:
             return None
