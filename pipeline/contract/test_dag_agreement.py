@@ -84,6 +84,7 @@ from pipeline.intent.writer import (_CAMPAIGN_GRAPH, _TRANSITION_GRAPH,
                                     CAMPAIGN_COMPLETE, CANCELLED, COMPLETE,
                                     DEFINED, PAUSED, QUARANTINED,
                                     READY, SUBMITTED, WRITER_MUTATION_API,
+                                    WRITER_RECONCILER,
                                     WRITER_ORCHESTRATOR,
                                     WRITER_VALIDATION_INGEST, CampaignWriter,
                                     WorkUnitIdentity, WorkUnitWriter)
@@ -219,7 +220,7 @@ def _unit_in_state(conn, scope_name, state):
     if state == BLOCKED:
         writer.transition_unit(
             unit_id, SUBMITTED, state, writer=WRITER_RECONCILER,
-            blocked_reason="dag-agreement fixture: parked to reach BLOCKED")
+            blocked_reason="missing_dependency:dag-agreement fixture, parked to reach BLOCKED")
         conn.commit()
         return unit_id
     if state == COMPLETE:
@@ -268,7 +269,7 @@ def test_every_declared_work_unit_edge_is_accepted(conn, from_state, to_state):
 
     kwargs = {}
     if to_state == BLOCKED:
-        kwargs["blocked_reason"] = "dag-agreement: declared edge probe"
+        kwargs["blocked_reason"] = "missing_dependency:dag-agreement declared edge probe"
     if to_state == COMPLETE:
         # The one edge the completion-acceptance gate (083, on by default)
         # also checks. _unit_in_state already drove SUBMITTED through a
@@ -303,7 +304,7 @@ def test_every_non_edge_is_refused_by_the_trigger(conn, from_state, to_state):
     """
     unit_id = _unit_in_state(
         conn, fixture.scope(f"dag-nonedge-{from_state}-{to_state}"), from_state)
-    blocked_reason = ("dag-agreement: non-edge probe"
+    blocked_reason = ("missing_dependency:dag-agreement non-edge probe"
                       if to_state == BLOCKED else None)
 
     with pytest.raises(Exception) as caught:  # noqa: BLE001 - classified below

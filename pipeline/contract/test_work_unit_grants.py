@@ -469,7 +469,7 @@ def _unit_in_state(conn, scope_name, state):
     if state == BLOCKED:
         writer.transition_unit(
             unit_id, SUBMITTED, state, writer=WRITER_RECONCILER,
-            blocked_reason="C2 fixture: parked for a mutation-only-edge test")
+            blocked_reason="missing_dependency:C2 fixture, parked for a mutation-only-edge test")
         conn.commit()
         return unit_id
     writer.transition_unit(unit_id, SUBMITTED, state, writer=WRITER_RECONCILER)
