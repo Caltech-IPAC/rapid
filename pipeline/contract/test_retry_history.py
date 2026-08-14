@@ -46,12 +46,23 @@ def test_abrupt_loss_then_acceptance_never_enters_failed(conn):
 
     writer.transition_unit(unit, READY, SUBMITTED, writer=WRITER_ORCHESTRATOR)
     conn.commit()
+    # `registered=True` plus `terminal_record_sequence=1` is what satisfies
+    # the completion-acceptance boundary (migrations 076/080, enabled by
+    # 083): the deciding attempt must be consumed (terminal_record_sequence
+    # >= 1) and accepted (registered_at set). Both were already true of
+    # this attempt's shape except the sequence, which defaulted to NULL.
     accepted = fixture.make_attempt(conn, work_unit_id=unit, registered=True,
-                                    lifecycle="terminal_without_start")
+                                    lifecycle="terminal_without_start",
+                                    terminal_record_sequence=1)
     assert retry_policy.disposition_for_terminal_attempt(
         succeeded=True, error_category=None) == retry_policy.CLOSE_COMPLETE
 
-    writer.transition_unit(unit, SUBMITTED, COMPLETE, writer="reconciler")
+    # `detail={"deciding_attempt_id": accepted}` is what production's own
+    # completion path stamps (`pipeline.registration.consumer`) — the
+    # accompanying unit_events row must name the deciding attempt for the
+    # completion to clear clause (a) of the acceptance boundary.
+    writer.transition_unit(unit, SUBMITTED, COMPLETE, writer="reconciler",
+                           detail={"deciding_attempt_id": accepted})
     conn.commit()
 
     assert fixture.unit_state(conn, unit)[0] == COMPLETE

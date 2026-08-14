@@ -345,8 +345,25 @@ def test_terminal_units_are_refused_not_raised(conn, _requires_cancel_function):
         conn, fixture.scope("cancel-mixed-ready"), state=READY)
     terminal = fixture.create_unit(
         conn, fixture.scope("cancel-mixed-done"), state=SUBMITTED)
+    # `terminal` is scaffolding for this test's real subject (cancellation
+    # refusing a unit already at a terminal state) — but reaching `complete`
+    # must go through the same acceptance boundary production completions
+    # do (rapid.enforce_completion_acceptance, migrations 076/080/083): a
+    # deciding attempt belonging to this unit, consumed
+    # (terminal_record_sequence >= 1) and accepted (registered_at set),
+    # named in the accompanying unit_events.detail. `fixture.make_attempt`
+    # with `registered=True`, `terminal_record_sequence=1` and the default
+    # `lifecycle="terminal_without_start"` builds exactly that attempt (the
+    # same lifecycle `test_retry_history.py`'s accepted attempt uses),
+    # matching `pipeline.registration.consumer`'s own shape (`detail=
+    # {"deciding_attempt_id": attempt_id, ...}`).
+    deciding_attempt = fixture.make_attempt(
+        conn, work_unit_id=terminal, registered=True,
+        lifecycle="terminal_without_start", terminal_record_sequence=1)
+    conn.commit()
     WorkUnitWriter(execute).transition_unit(
-        terminal, SUBMITTED, COMPLETE, writer=WRITER_RECONCILER)
+        terminal, SUBMITTED, COMPLETE, writer=WRITER_RECONCILER,
+        detail={"deciding_attempt_id": deciding_attempt})
     conn.commit()
 
     result = cancellation.cancel_work_units(

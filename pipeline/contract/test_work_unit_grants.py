@@ -44,19 +44,32 @@ WHAT THIS FILE COVERS, per the task brief's own enumeration, and where:
                                       effect_confirmed, and no consumed
                                       terminal_record_sequence — still fails)
 
-**SECTION 4 SETS THE GUC LOCALLY, INSIDE ITS OWN TRANSACTION, EVERY TIME.**
-076's completion-acceptance clause is gated OFF by default
+**SECTION 4 SETS THE GUC LOCALLY, INSIDE ITS OWN TRANSACTION, EVERY TIME —
+AND, AS OF 083, THE DATABASE-LEVEL DEFAULT IS 'on'.** 076/080 shipped the
+completion-acceptance clause gated OFF by default
 (`rapid.enforce_completion_acceptance`, current_setting default 'off') —
-076's own header explains why: the reconciler's current image can
-legitimately close a unit before registration/effect-confirmation has run
-for its deciding attempt, so enforcing the clause unconditionally would
-break production. This file does NOT flip that default: every section-4 test
-that needs the clause ENFORCED does `SET LOCAL rapid.enforce_completion_
-acceptance = 'on'` as the first statement of its own transaction — `SET
-LOCAL` reverts automatically at COMMIT or ROLLBACK, so the session-level
-(and therefore database-level) default is never durably changed by running
-this suite. This is the same discipline `test_alert_outbox_grants.py` uses
-for `SET LOCAL ROLE`.
+076's own header explained why at the time: the reconciler's then-current
+image could legitimately close a unit before registration/effect-
+confirmation had run for its deciding attempt, so enforcing the clause
+unconditionally would have broken production. That blocker was gone by the
+time 076 was even written (rapid commit 852d7cff removed the reconciler's
+own path to `complete` hours earlier), and 083
+(`ALTER DATABASE rapid SET rapid.enforce_completion_acceptance = 'on'`)
+turns the enforcement on for real, for every connection opened after it
+runs — which is every connection this suite makes. This file does NOT
+itself flip the setting: every section-4 test that needs the clause
+ENFORCED still does `SET LOCAL rapid.enforce_completion_acceptance = 'on'`
+as the first statement of its own transaction, now an explicit affirmation
+of the ambient default rather than an override of it — kept for this
+section's own self-contained-per-test discipline, and so these tests keep
+passing unchanged against an EARLIER database that has not yet run 083.
+`SET LOCAL` reverts automatically at COMMIT or ROLLBACK, so this suite never
+durably changes the session-level (and therefore database-level) setting
+either way. This is the same discipline `test_alert_outbox_grants.py` uses
+for `SET LOCAL ROLE`. `test_completion_is_enforced_by_default` and
+`test_completion_acceptance_can_still_be_disabled_locally`, at the end of
+this section, are the pair that pins the CURRENT ambient default and its
+escape hatch — see their own docstrings.
 
 **"OLD DEFINER FUNCTION" MEANS WHAT 076's OWN SAFETY ANALYSIS NAMES.** 076's
 header §4(i) lists exactly two pre-existing SECURITY DEFINER functions that
@@ -577,11 +590,14 @@ def test_the_same_edge_succeeds_with_the_correct_writer(
 # restriction), untouched — the two prior tests' worth of coverage above
 # (sections 1-3) exercise code 080 does not touch and remain valid unedited.
 #
-# CONSEQUENCE FOR THE FIVE TESTS BELOW THAT ENABLE THE GUC (all but
-# `test_completion_is_unenforced_by_default`, which leaves it off and is
-# unaffected): with 080 applied, `test_mismatched_attempt_is_refused_
-# when_enforced`, `test_unconsumed_terminal_sequence_is_refused_when_
-# enforced`, and `test_withheld_unconsumed_is_refused_when_enforced` now get
+# CONSEQUENCE FOR THE FIVE TESTS BELOW THAT ENABLE THE GUC (all but the
+# unenforced-default test that used to close this section — replaced by
+# `test_completion_is_enforced_by_default` and `test_completion_acceptance_
+# can_still_be_disabled_locally` once migration 083 made 'on' the ambient
+# default; see the module docstring): with 080 applied,
+# `test_mismatched_attempt_is_refused_when_enforced`, `test_unconsumed_
+# terminal_sequence_is_refused_when_enforced`, and `test_withheld_
+# unconsumed_is_refused_when_enforced` now get
 # RA001 for the SPECIFIC reason each test names — clause (a) (deciding_
 # attempt_id present) passes for all three, and the combined (b)/(c)/(d)
 # boundary check is what actually refuses each one, with the "does not
@@ -864,23 +880,88 @@ def test_withheld_unconsumed_is_refused_when_enforced(conn):
     conn.rollback()
 
 
-def test_completion_is_unenforced_by_default(conn):
-    """The GUC's OWN default: with no `SET LOCAL`, a completion with NO
-    deciding_attempt_id at all still succeeds — proving this suite's other
-    section-4 tests are exercising an OPT-IN check, not the deployed
-    behaviour, and confirming 076's header's own safety claim that the
-    running image is unaffected by clause (d) until the GUC is flipped for
-    real.
+def test_completion_is_enforced_by_default(conn):
+    """THE GUC'S OWN DEFAULT, UPDATED FOR MIGRATION 083.
+
+    This test originally pinned the GUC's default as OFF: with no `SET
+    LOCAL`, a completion with no `deciding_attempt_id` at all still
+    succeeded. That was true of the database this suite ran against through
+    082 — 076/080 shipped the completion-acceptance clause
+    `DEFAULT current_setting(..., true)` OFF, deliberately inert until
+    production's completion path was verified safe for it (076's header;
+    080's repair). 083 (`ALTER DATABASE rapid SET rapid.enforce_completion_
+    acceptance = 'on'`) turned that on for every connection opened after it
+    ran, which is every connection this suite makes — see the module
+    docstring's own account of the C2 refusal battery, which already
+    exercises the enforced path exhaustively via `SET LOCAL ... = 'on'` (a
+    no-op affirmation now, kept for section 4's self-contained-per-test
+    discipline regardless of the database default).
+
+    So the fact this suite's other section-4 tests were "exercising an
+    OPT-IN check, not the deployed behaviour" is no longer true, and a test
+    asserting the opposite would now assert something false of this
+    database. Rewritten to pin the CURRENT default instead: with no `SET
+    LOCAL` at all, a completion with no `deciding_attempt_id` is REFUSED —
+    the direct behavioural counterpart to `test_rapid_pipeline_write_holds_
+    no_raw_update_on_work_units`'s catalog fact above, proved here by
+    actually attempting the write with the ambient (database) default in
+    force, not a locally-set one.
     """
     unit_id, _attempt_id = _submitted_unit_with_attempt(
-        conn, fixture.scope("acceptance-unenforced"))
+        conn, fixture.scope("acceptance-enforced-by-default"))
     conn.commit()
 
     with conn.cursor() as cur:
+        cur.execute("SAVEPOINT enforced_default")
+    try:
+        with pytest.raises(psycopg2.Error) as raised:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT derived.transition_work_unit"
+                    "(%s, %s, %s, %s, %s, %s, %s, %s)",
+                    [unit_id, SUBMITTED, COMPLETE, WRITER_RECONCILER, None,
+                     "C2: enforced by default", None, True])
+                # Same reasoning as `_complete_with_guc_enforced`: the
+                # completion-acceptance check lives in a DEFERRED
+                # constraint trigger, which fires at COMMIT unless forced
+                # earlier — force it here so the refusal lands inside this
+                # `pytest.raises` scope rather than at a later commit.
+                cur.execute(
+                    "SET CONSTRAINTS work_units_check_event_recorded_trg"
+                    " IMMEDIATE")
+        assert getattr(raised.value, "pgcode", None) == "RA001"
+        assert "no deciding_attempt_id recorded" in str(raised.value)
+    finally:
+        with conn.cursor() as cur:
+            cur.execute("ROLLBACK TO SAVEPOINT enforced_default")
+    conn.rollback()
+    assert fixture.unit_state(conn, unit_id)[0] == SUBMITTED
+
+
+def test_completion_acceptance_can_still_be_disabled_locally(conn):
+    """THE BEHAVIOUR `test_completion_is_enforced_by_default` used to pin,
+    kept rather than dropped: `rapid.enforce_completion_acceptance` is a
+    real GUC, still readable and settable per-transaction
+    (`current_setting(..., true)`'s `missing_ok` shape, unchanged by 083 —
+    083 only changes the ROLE-connection default, not whether the setting
+    can still be turned off for one transaction). 083's own header names
+    the rollback path this exercises: "`ALTER DATABASE rapid RESET rapid.
+    enforce_completion_acceptance`... restores the pre-083 behaviour
+    exactly" — this test is the narrower, transaction-scoped version of the
+    same lever (`SET LOCAL ... = 'off'`), proving the escape hatch 083's own
+    rollback plan depends on still works, without touching the database
+    default any other test or connection observes.
+    """
+    unit_id, _attempt_id = _submitted_unit_with_attempt(
+        conn, fixture.scope("acceptance-disabled-locally"))
+    conn.commit()
+
+    with conn.cursor() as cur:
+        cur.execute("SET LOCAL rapid.enforce_completion_acceptance = 'off'")
         cur.execute(
             "SELECT derived.transition_work_unit(%s, %s, %s, %s, %s, %s, %s, %s)",
             [unit_id, SUBMITTED, COMPLETE, WRITER_RECONCILER, None,
-             "C2: unenforced default", None, True])
+             "C2: locally disabled", None, True])
     conn.commit()
     assert fixture.unit_state(conn, unit_id)[0] == COMPLETE
 
