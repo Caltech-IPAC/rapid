@@ -80,17 +80,23 @@ def _age_fence_into_the_past(conn, bucket, object_key):
     timestamp and `gc_fences_lease_ck CHECK (expires_at > acquired_at)`
     (052-gc-plans.sql) rejects the row outright. That check also rules out
     a NEGATIVE `lease_seconds` as the fix: `expires_at` would then be
-    LESS than `acquired_at`, still failing the same CHECK. The only way to
-    get a genuinely-past `expires_at` past that constraint is to age the
-    row in a SEPARATE statement, after the acquiring INSERT has committed
-    with a normal positive lease — a new transaction gets a new frozen
-    `now()`, later than the row's `acquired_at`, so backdating
-    `expires_at` from there is not fighting the same freeze that would
-    reject it inline.
+    LESS than `acquired_at`, still failing the same CHECK.
+
+    THE SAME CHECK CONSTRAINS THE BACKDATE, which is why this moves BOTH
+    columns rather than only `expires_at`. Aging just `expires_at` into
+    the past leaves it below the row's original `acquired_at` — still
+    `expires_at > acquired_at` violated, and CI saw exactly that as a
+    `CheckViolation` once the swallowed-error version was fixed. The lease
+    interval has to keep its shape while sliding backwards: acquire with a
+    normal positive lease, then move `acquired_at` and `expires_at`
+    together to a window that has already elapsed, so the row is a
+    well-formed lease that simply expired an hour ago.
     """
     with conn.cursor() as cur:
         cur.execute(
-            "UPDATE gc_fences SET expires_at = now() - interval '1 second'"
+            "UPDATE gc_fences"
+            "   SET acquired_at = now() - interval '2 hours',"
+            "       expires_at  = now() - interval '1 hour'"
             " WHERE bucket = %s AND object_key = %s", (bucket, object_key))
     conn.commit()
 
