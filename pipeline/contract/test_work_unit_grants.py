@@ -290,7 +290,13 @@ def _make_failed_attempt_for_retry(conn, work_unit_id, run_id):
             "         now(), now(), %s, %s, now(), 'FAILED')"
             " RETURNING attempt_id",
             [run_id, schema_version, logical_job_id, work_unit_id,
-             "application_failure"])
+             # A REAL category from 013's seeded taxonomy (013:334-346), which
+             # `attempts_error_category_fk` enforces — "application_failure"
+             # is not one of them. `scheduler_provisioning` is the
+             # reconciler-authored category whose own description is "the
+             # attempt never ran", which is precisely what
+             # `terminal_without_start` means here.
+             "scheduler_provisioning"])
         return cur.fetchone()[0]
 
 
