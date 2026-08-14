@@ -107,11 +107,27 @@ def test_the_schema_refuses_a_blocked_unit_with_no_reason(conn):
     refuses it — which is what still protects the invariant when the next
     caller writes its own UPDATE, as the mutation functions in migration 031
     do.
+
+    The unit must reach `submitted` first: `(ready, blocked)` is not an edge
+    `pipeline.intent.writer._TRANSITION_GRAPH` admits — only
+    `(submitted, blocked)` reaches `blocked` — and migration 076's trigger
+    layer now enforces that same DAG on every raw UPDATE, including this
+    one. Attempting `ready -> blocked` directly is refused by the DAG check
+    (RA001) before the statement ever reaches `work_units_blocked_reason_ck`,
+    which would prove the wrong thing: not that the reason-less write is
+    refused, but that the edge is illegal at all.
     """
     import psycopg2
     import pytest
 
+    from pipeline.intent.writer import (READY, SUBMITTED, WRITER_ORCHESTRATOR,
+                                        WorkUnitWriter)
+
     unit = fixture.create_unit(conn, fixture.scope("blocked-no-reason"))
+    writer = WorkUnitWriter(fixture.executor(conn))
+    writer.transition_unit(unit, READY, SUBMITTED, writer=WRITER_ORCHESTRATOR)
+    conn.commit()
+
     with pytest.raises(psycopg2.errors.CheckViolation) as caught:
         with conn.cursor() as cur:
             cur.execute(

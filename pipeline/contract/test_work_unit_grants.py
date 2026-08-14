@@ -254,6 +254,39 @@ def test_cancel_work_units_still_transitions_through_the_trigger_layer(conn):
     assert (READY, "cancelled", WRITER_MUTATION_API) in events
 
 
+def _make_failed_attempt_for_retry(conn, work_unit_id, run_id):
+    """A terminal, failed `attempts` row `derived.retry_parked_attempts`
+    (063) will actually select as a candidate.
+
+    `fixture.make_attempt` has no way to set `run_id` (its own
+    `make_logical_job` call always mints one) or `rapid_outcome`, and
+    063's candidate query requires ALL FOUR of: `run_id = p_run_id`,
+    `rapid_outcome = 'failure'`, a terminal `lifecycle_state`, and a
+    non-NULL `error_category` — a row missing any one of them is silently
+    excluded from the function's candidate set, not refused, which is
+    exactly how the original version of this test passed its own setup
+    and then failed three lines later on a unit the function never even
+    considered (it had no attempts row at all). Private to this module,
+    matching `_make_terminal_attempt` above's own convention for the same
+    reason: no other test in this tier needs this exact shape.
+    """
+    logical_job_id, _ = fixture.make_logical_job(conn, run_id=run_id)
+    with conn.cursor() as cur:
+        cur.execute("SELECT coalesce(max(schema_version), 1) FROM attempts")
+        schema_version = cur.fetchone()[0]
+        cur.execute(
+            "INSERT INTO attempts"
+            "  (run_id, schema_version, logical_job_id, lifecycle_state,"
+            "   created_at, submitted_at, work_unit_id, error_category,"
+            "   ended_at, scheduler_state, rapid_outcome)"
+            " VALUES (%s, %s, %s, 'terminal_without_start',"
+            "         now(), now(), %s, %s, now(), 'FAILED', 'failure')"
+            " RETURNING attempt_id",
+            [run_id, schema_version, logical_job_id, work_unit_id,
+             "application_failure"])
+        return cur.fetchone()[0]
+
+
 def test_retry_parked_attempts_still_transitions_through_the_trigger_layer(
         conn):
     """040/053/061/062/063's function, unchanged, still returns a failed
@@ -273,10 +306,17 @@ def test_retry_parked_attempts_still_transitions_through_the_trigger_layer(
     writer.transition_unit(unit_id, SUBMITTED, FAILED, writer=WRITER_RECONCILER)
     conn.commit()
 
+    # 063's candidate query selects from `attempts`, scoped by run_id — a
+    # work unit with no attempts row at all is never a candidate, so one
+    # must exist here for the function to have anything to retry.
+    run_id = f"c2-{fixture.RUN_TAG}"
+    _make_failed_attempt_for_retry(conn, unit_id, run_id)
+    conn.commit()
+
     with conn.cursor() as cur:
         cur.execute(
             "SELECT derived.retry_parked_attempts(%s, %s, %s, %s)",
-            [f"c2-{fixture.RUN_TAG}", "C2: old-definer regression", 50, False])
+            [run_id, "C2: old-definer regression", 50, False])
         cur.fetchone()
     conn.commit()
 

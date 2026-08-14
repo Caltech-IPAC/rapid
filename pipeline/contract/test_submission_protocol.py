@@ -558,12 +558,25 @@ def test_an_interrupted_call_is_as_ambiguous_as_a_judged_one(conn):
 # ---------------------------------------------------------------------------
 
 def _make_attempt_with_submission(conn, submission_id):
-    """A `submitted` attempt row linked to `submission_id` via the real FK
+    """An attempt row linked to `submission_id` via the real FK
     `attach_attempts` maintains — not a hand-set column, so the join
-    `resolve_submission_outcome` reads through is the real one."""
+    `resolve_submission_outcome` reads through is the real one.
+
+    `lifecycle="terminal_without_start"`, not the default `"submitted"` —
+    same reasoning `_attach_one_attempt` above already gives (its own
+    docstring): the default needs the full binding triple at
+    `schema_version >= 2` (`attempts_state_submitted_check`), which
+    `fixture.make_attempt` has no parameter to supply at all. The three
+    `resolve_submission_outcome` tests below construct their own `row` dict
+    with `lifecycle_state` set explicitly, so the ATTEMPT ROW's own
+    lifecycle_state is never read by the code under test — only its
+    existence and its `submission_id` FK are; `attach_attempts` requires a
+    real attempts row, not a claim about what state it is in.
+    """
     from pipeline.contract import fixture
 
-    attempt_id = fixture.make_attempt(conn)
+    attempt_id = fixture.make_attempt(
+        conn, lifecycle="terminal_without_start")
     execute = fixture.executor(conn)
     attached = protocol.attach_attempts(execute, submission_id, [attempt_id])
     assert attached == 1, "the fixture's own attach must succeed"
