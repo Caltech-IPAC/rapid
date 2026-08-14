@@ -177,15 +177,30 @@ def download_inputs(context) -> None:
     """
     science_image_uri = context.fact("science_image_uri")
 
-    gz_name, _subdirs, _ = util.download_file_from_s3_bucket(
+    gz_name, _subdirs, downloaded = util.download_file_from_s3_bucket(
         context.s3, science_image_uri,
         outputfile=context.scratch(os.path.basename(science_image_uri)))
+    if not downloaded:
+        # WAS DISCARDED (wave-E finding #5): the `_` in place of this flag
+        # meant a missing science image was not distinguished from a
+        # successful download of a filename that then failed downstream with
+        # whatever error FileNotFoundError happened to produce, unclassified.
+        # `reference_image.download_reference_psf` and `post_process`'s own
+        # download check this same flag and raise `InputError` exactly this
+        # way — the pattern this site now matches.
+        raise InputError(
+            f"the science image at {science_image_uri} could not be "
+            f"downloaded", uri=science_image_uri)
     context.produce("science_image_gz", gz_name)
 
     psf_uri = context.fact("psf_uri")
-    sci_psf, _subdirs, _ = util.download_file_from_s3_bucket(
+    sci_psf, _subdirs, downloaded = util.download_file_from_s3_bucket(
         context.s3, psf_uri,
         outputfile=context.scratch(os.path.basename(psf_uri)))
+    if not downloaded:
+        raise InputError(
+            f"the science PSF at {psf_uri} could not be downloaded",
+            uri=psf_uri)
     context.produce("science_psf", sci_psf)
 
     # The reference-image PSF. The monolith built this URI from an .ini
@@ -227,10 +242,14 @@ def download_inputs(context) -> None:
         # product, so this also stops the two paths disagreeing about which
         # PSF a difference was made with.
         ref_psf_uri = context.fact("psf_uri")
-        ref_psf, _subdirs, _ = util.download_file_from_s3_bucket(
+        ref_psf, _subdirs, downloaded = util.download_file_from_s3_bucket(
             context.s3, ref_psf_uri,
             outputfile=context.scratch(
                 "refpsf_" + os.path.basename(ref_psf_uri)))
+        if not downloaded:
+            raise InputError(
+                f"the reference-image PSF at {ref_psf_uri} could not be "
+                f"downloaded", uri=ref_psf_uri)
         context.produce("reference_psf", ref_psf)
     else:
         context.logger.info(
@@ -278,9 +297,13 @@ def _download_reference_image(context, awaicgen) -> None:
     """The `rfid is not None` branch. (Monolith lines 352-399.)"""
     reference_uri = context.fact("reference_image_uri")
 
-    image_file, _subdirs, _ = util.download_file_from_s3_bucket(
+    image_file, _subdirs, downloaded = util.download_file_from_s3_bucket(
         context.s3, reference_uri,
         outputfile=context.scratch(awaicgen["awaicgen_output_mosaic_image_file"]))
+    if not downloaded:
+        raise InputError(
+            f"the reference image at {reference_uri} could not be "
+            f"downloaded", uri=reference_uri)
     context.produce("reference_image", image_file)
 
     for key, product in (("awaicgen_output_mosaic_cov_map_file", "reference_cov_map"),
@@ -288,14 +311,26 @@ def _download_reference_image(context, awaicgen) -> None:
                           "reference_uncert_image")):
         uri = reference_uri.replace(
             os.path.basename(reference_uri), awaicgen[key])
-        downloaded, _subdirs, _ = util.download_file_from_s3_bucket(
+        # `downloaded` here names the FILENAME, not the success flag — the
+        # success flag was the discarded `_` (wave-E finding #5), a trap this
+        # loop's own variable name invited. Renamed to `filename` so the two
+        # cannot be confused at either the assignment or the call below.
+        filename, _subdirs, ok = util.download_file_from_s3_bucket(
             context.s3, uri, outputfile=context.scratch(awaicgen[key]))
-        context.produce(product, downloaded)
+        if not ok:
+            raise InputError(
+                f"the reference-image product at {uri} could not be "
+                f"downloaded", uri=uri)
+        context.produce(product, filename)
 
     sexcat_uri = reference_uri.replace("image.fits", "refimsexcat.txt")
-    sexcat, _subdirs, _ = util.download_file_from_s3_bucket(
+    sexcat, _subdirs, downloaded = util.download_file_from_s3_bucket(
         context.s3, sexcat_uri,
         outputfile=context.scratch(os.path.basename(sexcat_uri)))
+    if not downloaded:
+        raise InputError(
+            f"the reference-image source catalog at {sexcat_uri} could not "
+            f"be downloaded", uri=sexcat_uri)
     context.produce("reference_sexcat", sexcat)
 
     context.record(reference_image_infobits=context.optional_fact(
@@ -407,10 +442,14 @@ def _build_reference_image(context, awaicgen) -> None:
         reference_psf = context.product("reference_psf")
     else:
         reference_psf_uri = context.fact("psf_uri")
-        reference_psf, _subdirs, _ = util.download_file_from_s3_bucket(
+        reference_psf, _subdirs, downloaded = util.download_file_from_s3_bucket(
             context.s3, reference_psf_uri,
             outputfile=context.scratch(
                 "refpsf_" + os.path.basename(reference_psf_uri)))
+        if not downloaded:
+            raise InputError(
+                f"the reference PSF at {reference_psf_uri} could not be "
+                f"downloaded", uri=reference_psf_uri)
         context.produce("reference_psf", reference_psf)
     refimage_psfcat = rfis.generatePhotUtilsReferenceImageCatalog(
         mosaic_image_file, mosaic_uncert_image_file, reference_psf,
