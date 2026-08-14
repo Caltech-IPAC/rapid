@@ -204,6 +204,36 @@ def build_parser():
     audit.add_argument("--limit", type=int, default=20)
     audit.set_defaults(func=_cmd_audit)
 
+    attempts_view = sub.add_parser(
+        "attempts",
+        help="list attempts by lifecycle state and age",
+        description="The coarse panel: every attempt in one lifecycle "
+                    "state older than a bound. Read-only — no reason, no "
+                    "idempotency key, nothing here mutates. A row flagged "
+                    "'success+none' reported success with no product "
+                    "recorded; see `show-attempt` for the joined detail.")
+    attempts_view.add_argument("--state", required=True,
+                               help="the exact lifecycle_state to match "
+                                    "(e.g. terminal_after_start, "
+                                    "application_closed, submitted)")
+    attempts_view.add_argument(
+        "--older-than", dest="older_than", required=True,
+        help="age bound, e.g. '2h', '3d', '30m', or a bare integer of "
+             "seconds. Measured from the row's own latest timestamp "
+             "(ended_at, else started_at, else submitted_at)")
+    attempts_view.set_defaults(func=_cmd_attempts)
+
+    show_attempt = sub.add_parser(
+        "show-attempt",
+        help="the joined detail view for one attempt",
+        description="One attempt, its terminal-record columns, its "
+                    "attempt_stages rows, its registration_outcome, its "
+                    "work unit and its most recent submission — the "
+                    "operator's single place to look rather than five "
+                    "separate queries.")
+    show_attempt.add_argument("attempt_id", type=int)
+    show_attempt.set_defaults(func=_cmd_show_attempt)
+
     # --- release pointer (H2) ---------------------------------------------
     release = sub.add_parser(
         "set-admission-release",
@@ -486,6 +516,166 @@ def _cmd_audit(conn, args, out):
         print("    rows   : %s" % row["rows_affected"], file=out)
         if row.get("idempotency_key"):
             print("    key    : %s" % row["idempotency_key"], file=out)
+    return EXIT_OK
+
+
+def _parse_duration_seconds(text):
+    """Parse '2h', '3d', '30m', '90s' or a bare integer, into seconds.
+
+    No calendar arithmetic — a day here is always 86400 seconds, never a
+    DST-aware civil day — because `--older-than` bounds an age computed in
+    the database from timestamps, and the two must agree on what a unit
+    means or the CLI's own rehearsal ("N attempts older than 3d") would
+    disagree with the query it is about to run.
+    """
+    text = text.strip()
+    suffixes = {"s": 1, "m": 60, "h": 3600, "d": 86400}
+    if text and text[-1].lower() in suffixes:
+        magnitude, unit = text[:-1], text[-1].lower()
+    else:
+        magnitude, unit = text, "s"
+    try:
+        value = int(magnitude)
+    except ValueError:
+        raise argparse.ArgumentTypeError(
+            "rapidctl: --older-than %r is not a duration; use an integer "
+            "optionally suffixed s/m/h/d (e.g. '2h', '3d', '90')" % text)
+    if value < 0:
+        raise argparse.ArgumentTypeError(
+            "rapidctl: --older-than %r is negative; an age bound cannot be"
+            % text)
+    return value * suffixes[unit]
+
+
+def _cmd_attempts(conn, args, out):
+    from pipeline.operatorctl import actions
+    older_than_seconds = _parse_duration_seconds(args.older_than)
+    rows = actions.attempts_by_state(conn, args.state, older_than_seconds)
+    if not rows:
+        print("No attempts in state %r older than %s." % (
+            args.state, args.older_than), file=out)
+        return EXIT_OK
+    print("ATTEMPTS — state=%s, older than %s — %d row(s)" % (
+        args.state, args.older_than, len(rows)), file=out)
+    for row in rows:
+        anomaly = "  [success+none: no product recorded]" \
+            if row["success_with_no_product"] else ""
+        print("", file=out)
+        print("  attempt %s  run=%s  logical_job=%s" % (
+            row["attempt_id"], row["run_id"], row["logical_job_id"]),
+            file=out)
+        print("    scheduler_job : %s" % row["scheduler_job_id"], file=out)
+        print("    outcome       : %s / %s%s" % (
+            row["rapid_outcome"], row["product_disposition"], anomaly),
+            file=out)
+        print("    error_category: %s" % row["error_category"], file=out)
+        print("    submitted/started/ended : %s / %s / %s" % (
+            row["submitted_at"], row["started_at"], row["ended_at"]),
+            file=out)
+    return EXIT_OK
+
+
+def _cmd_show_attempt(conn, args, out):
+    from pipeline.operatorctl import actions
+    detail = actions.attempt_detail(conn, args.attempt_id)
+    if detail is None:
+        print("rapidctl: no attempt %s" % args.attempt_id, file=sys.stderr)
+        return EXIT_USAGE
+
+    print("ATTEMPT %s" % detail["attempt_id"], file=out)
+    print("  run_id           : %s" % detail["run_id"], file=out)
+    print("  logical_job_id   : %s" % detail["logical_job_id"], file=out)
+    print("  lifecycle_state  : %s" % detail["lifecycle_state"], file=out)
+    print("  scheduler_job_id : %s" % detail["scheduler_job_id"], file=out)
+    print("  scope            : exposure=%s sca=%s sky_tile=%s" % (
+        detail["exposure_id"], detail["sca"], detail["sky_tile"]), file=out)
+    print("  submitted/started/ended : %s / %s / %s" % (
+        detail["submitted_at"], detail["started_at"], detail["ended_at"]),
+        file=out)
+    print("", file=out)
+    print("  APPLICATION ACCOUNT", file=out)
+    print("    rapid_outcome        : %s" % detail["rapid_outcome"], file=out)
+    print("    product_disposition  : %s" % detail["product_disposition"],
+          file=out)
+    if detail["success_with_no_product"]:
+        # THE ANOMALY THE CAMPAIGN NAMES "success+none on a product route":
+        # the application reported success and recorded no product at all.
+        # Printed as its own loud line rather than left to be inferred from
+        # the two fields above — an operator scanning many rows should not
+        # have to notice this combination themselves.
+        print("    ** ANOMALY: success+none — the attempt succeeded but "
+              "no product was recorded **", file=out)
+    print("    application_intended_exit : %s" % (
+        detail["application_intended_exit"]), file=out)
+    print("    error_category       : %s" % detail["error_category"],
+          file=out)
+    print("    scheduler_state      : %s" % detail["scheduler_state"],
+          file=out)
+    print("", file=out)
+    print("  TERMINAL RECORD", file=out)
+    print("    key      : %s" % detail["terminal_record_key"], file=out)
+    print("    sequence : %s" % detail["terminal_record_sequence"], file=out)
+    print("    checksum : %s" % detail["terminal_record_checksum"], file=out)
+    print("", file=out)
+    print("  REGISTRATION", file=out)
+    print("    registered_at              : %s" % detail["registered_at"],
+          file=out)
+    print("    registered_record_sequence : %s" % (
+        detail["registered_record_sequence"]), file=out)
+    print("    registration_outcome       : %s" % (
+        detail["registration_outcome"]), file=out)
+    print("", file=out)
+    print("  STAGES (%d)" % len(detail["stages"]), file=out)
+    for stage in detail["stages"]:
+        print("    %-24s %-8s started=%s duration_ms=%s" % (
+            stage["stage_name"], stage["outcome"], stage["started_at"],
+            stage["duration_ms"]), file=out)
+    print("", file=out)
+    print("  WORK UNIT", file=out)
+    if detail["work_unit_id"] is None:
+        print("    (none — pre-intent-layer attempt or definition-FK guard "
+              "held it back at submission time)", file=out)
+    else:
+        print("    work_unit_id      : %s" % detail["work_unit_id"], file=out)
+        print("    job_type          : %s" % detail["work_unit_job_type"],
+              file=out)
+        print("    input_scope       : %s" % detail["work_unit_input_scope"],
+              file=out)
+        print("    state             : %s" % detail["work_unit_state"],
+              file=out)
+        print("    blocked_reason    : %s" % (
+            detail["work_unit_blocked_reason"]), file=out)
+        print("    operational_class : %s" % (
+            detail["work_unit_operational_class"]), file=out)
+    print("", file=out)
+    print("  SUBMISSION (most recent for this run_id)", file=out)
+    if detail["submission_id"] is None:
+        print("    (none — DRAFT 044 not applied at submission time, or "
+              "this run predates it)", file=out)
+    else:
+        print("    submission_id  : %s" % detail["submission_id"], file=out)
+        print("    job_name       : %s" % detail["submission_job_name"],
+              file=out)
+        print("    job_queue      : %s" % detail["submission_job_queue"],
+              file=out)
+        print("    state          : %s" % detail["submission_state"],
+              file=out)
+        print("    array_size     : %s" % detail["submission_array_size"],
+              file=out)
+        print("    manifest_uri   : %s" % detail["submission_manifest_uri"],
+              file=out)
+    print("", file=out)
+    print("  PROVENANCE (binding at submission time)", file=out)
+    print("    job_definition_arn : %s" % (
+        detail["binding_job_definition_arn"]), file=out)
+    print("    job_definition_rev : %s" % (
+        detail["binding_job_definition_rev"]), file=out)
+    print("    image_digest       : %s" % detail["binding_image_digest"],
+          file=out)
+    print("    release_identity   : %s" % detail["binding_release_identity"],
+          file=out)
+    print("    manifest_checksum  : %s" % (
+        detail["binding_manifest_checksum"]), file=out)
     return EXIT_OK
 
 

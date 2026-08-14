@@ -175,6 +175,128 @@ SELECT audit_id, performed_at, actor, action_class, action_tier,
 """
 
 
+# The `attempts --state --older-than` filter. Reads the attempt row alone —
+# no join — because a state/age filter over the population is the coarse
+# panel an operator scans BEFORE reaching for `show-attempt` on one row; the
+# joined detail belongs to that narrower command, not to every row of a
+# possibly-large listing.
+#
+# `rapid_outcome = 'success' AND product_disposition = 'none'` is flagged
+# in its own column rather than left for the caller to notice: the campaign
+# names this exact shape "success+none on a product route" — an attempt the
+# application reported successful while recording no product at all, which
+# is either a job type that legitimately produces none (registration,
+# reprocessing — see `pipeline.seams._operational_class_for`'s docstring on
+# both being route-vocabulary types with no product path) or a silent gap
+# in what the record captured. The CLI cannot tell those apart from this row
+# alone, so it surfaces the anomaly and leaves the judgment to the operator
+# reading it, rather than guessing either way.
+_ATTEMPTS_BY_STATE = """
+SELECT attempt_id, run_id, logical_job_id, lifecycle_state, scheduler_job_id,
+       rapid_outcome, product_disposition, error_category,
+       submitted_at, started_at, ended_at,
+       (rapid_outcome = 'success' AND product_disposition = 'none')
+         AS success_with_no_product
+  FROM attempts
+ WHERE lifecycle_state = %s
+   AND COALESCE(ended_at, started_at, submitted_at) < now() - %s::interval
+ ORDER BY COALESCE(ended_at, started_at, submitted_at)
+"""
+
+# `show-attempt`'s joined detail. One attempt row, LEFT JOINed to its work
+# unit and its submission — LEFT, because neither FK is guaranteed populated
+# (see `consumer.py`'s `_COLUMNS` comment: `work_unit_id` is NULL on every
+# pre-intent-layer row, and a submission row exists only where DRAFT 044 was
+# applied at submission time) and a detail view that inner-joined either one
+# away would silently hide the exact rows an operator is most likely to be
+# chasing down. `attempt_stages` and `registration_outcome` are NOT joined
+# here — stages are one-to-many and the outcome is already a jsonb column on
+# the attempts row — so they are read separately by `attempt_detail` below,
+# the same split `pipeline.reconciler.closure.read_attempt_stages` already
+# makes for the identical reason (a many-rows join would duplicate every
+# scalar column once per stage).
+#
+# `submissions` joins on `run_id` alone — `submissions.run_id` is written as
+# `str(batch.manifest.batch_id)` (`pipeline.seams._open_submission`) and
+# `batch.manifest.batch_id` IS `run_id` (`submit_units`: "Manifest(...,
+# batch_id=run_id, ...)"), so a submission's run_id and an attempt's run_id
+# are the same string by construction; there is no job_name column on
+# `attempts` to join through instead. One `run_id` can in principle carry
+# more than one `submissions` row (multiple job types gathered under one
+# run), so this takes the most recently created — the submission an
+# operator asking about a specific attempt almost always means — rather
+# than silently duplicating the attempt row per submission.
+_ATTEMPT_CORE = """
+SELECT a.attempt_id, a.run_id, a.logical_job_id, a.lifecycle_state,
+       a.scheduler_job_id, a.exposure_id, a.sca, a.sky_tile,
+       a.submitted_at, a.started_at, a.ended_at,
+       a.rapid_outcome, a.product_disposition,
+       a.application_intended_exit, a.scheduler_state, a.error_category,
+       a.terminal_record_key, a.terminal_record_sequence,
+       a.terminal_record_checksum,
+       a.registered_at, a.registered_record_sequence,
+       a.registration_outcome,
+       a.work_unit_id, a.binding_job_definition_arn,
+       a.binding_job_definition_rev, a.binding_image_digest,
+       a.binding_release_identity, a.binding_manifest_checksum,
+       (a.rapid_outcome = 'success' AND a.product_disposition = 'none')
+         AS success_with_no_product,
+       w.job_type AS work_unit_job_type, w.input_scope AS work_unit_input_scope,
+       w.state AS work_unit_state, w.blocked_reason AS work_unit_blocked_reason,
+       w.operational_class AS work_unit_operational_class,
+       s.submission_id, s.job_name AS submission_job_name,
+       s.job_queue AS submission_job_queue, s.state AS submission_state,
+       s.array_size AS submission_array_size,
+       s.manifest_uri AS submission_manifest_uri
+  FROM attempts a
+  LEFT JOIN work_units w ON w.work_unit_id = a.work_unit_id
+  LEFT JOIN LATERAL (
+         SELECT * FROM submissions
+          WHERE submissions.run_id = a.run_id
+          ORDER BY submissions.created_at DESC
+          LIMIT 1
+       ) s ON true
+ WHERE a.attempt_id = %s
+"""
+
+_ATTEMPT_STAGES = """
+SELECT stage_name, outcome, started_at, duration_ms
+  FROM attempt_stages WHERE attempt_id = %s
+ ORDER BY started_at, stage_name
+"""
+
+
+def attempts_by_state(conn, state, older_than_seconds):
+    """`rapidctl attempts --state ... --older-than ...`'s population.
+
+    ``older_than_seconds`` is measured from whichever of ended_at,
+    started_at or submitted_at is the latest the row has — the same
+    "furthest fact the row actually carries" COALESCE `closure.py` uses
+    for its own age reasoning, so an attempt that never started is aged
+    from its submission and one that finished is aged from its end.
+    """
+    return _rows(conn, _ATTEMPTS_BY_STATE,
+                (state, "%s seconds" % older_than_seconds))
+
+
+def attempt_detail(conn, attempt_id):
+    """`rapidctl show-attempt`'s joined view. Returns None if no such attempt.
+
+    Three queries, not one: the core row (attempt + work unit + submission,
+    all scalar), the stage list (one-to-many), and — read straight off the
+    core row rather than a fourth query — `registration_outcome`, already a
+    jsonb column. Matches the split `read_attempt_stages` already documents
+    the reasoning for: a stages join would duplicate every scalar column
+    once per stage row.
+    """
+    rows = _rows(conn, _ATTEMPT_CORE, (attempt_id,))
+    if not rows:
+        return None
+    detail = rows[0]
+    detail["stages"] = _rows(conn, _ATTEMPT_STAGES, (attempt_id,))
+    return detail
+
+
 def unreconciled_break_glass(conn):
     """Region 7's panel: open sessions lacking a close and a passing sweep."""
     return _rows(conn, _UNRECONCILED, ())
