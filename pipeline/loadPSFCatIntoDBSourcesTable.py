@@ -781,7 +781,7 @@ if __name__ == '__main__':
 
         table_exists_flag = records[0][0]
 
-        if not table_exists_flag:
+        if (not table_exists_flag) or (not do_loading):
 
             table_create_key = (obs_date,sca)
             table_create_obs_date_sca_dict[table_create_key] = 1
