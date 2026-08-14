@@ -329,3 +329,51 @@ def test_a_payload_round_trips_through_its_wire_form(build):
     restored = payloads.from_dict(original.JOB_TYPE, original.to_dict())
     assert restored.subject() == original.subject()
     assert restored == original
+
+
+# ---------------------------------------------------------------------------
+# CrossmatchPayload.source_tables (2026-08-14): the typed home for the
+# crossmatch source-tables fix. Optional (no gatherer populates it yet — see
+# the field's own docstring and this wave's ledger for the integration
+# request against submission/gathering.py), unlike target_tables which
+# stays required.
+# ---------------------------------------------------------------------------
+
+
+def test_source_tables_defaults_to_empty_when_omitted():
+    payload = fixtures.crossmatch_payload()
+    assert payload.source_tables == ()
+
+
+def test_source_tables_is_accepted_and_frozen():
+    payload = fixtures.crossmatch_payload(
+        source_tables=["sources_20260812_1", "sources_20260812_2"])
+    assert payload.source_tables == (
+        "sources_20260812_1", "sources_20260812_2")
+    assert isinstance(payload.source_tables, tuple)
+
+
+def test_source_tables_absent_from_target_tables_construction_still_works():
+    """target_tables stays REQUIRED; source_tables being new and optional
+    must not change that — a unit with no declared targets still refuses."""
+    with pytest.raises(payloads.PayloadError):
+        payloads.build(JOB_TYPE_CROSSMATCH, proc_date="20260812", field=1,
+                       target_tables=())
+
+
+def test_source_tables_is_omitted_from_the_wire_form_when_empty():
+    """The absent-not-sentinel rule `to_dict`'s own docstring states:
+    an empty sequence is omitted, exactly like target_tables would be if it
+    were ever empty (it cannot be — required) and like product_inputs is
+    on CatalogLoadPayload."""
+    payload = fixtures.crossmatch_payload()
+    assert "source_tables" not in payload.to_dict()
+
+
+def test_source_tables_round_trips_through_the_wire_form_when_present():
+    original = fixtures.crossmatch_payload(
+        source_tables=("sources_20260812_1", "sources_20260812_2"))
+    restored = payloads.from_dict(original.JOB_TYPE, original.to_dict())
+    assert restored == original
+    assert restored.source_tables == (
+        "sources_20260812_1", "sources_20260812_2")

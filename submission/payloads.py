@@ -591,10 +591,34 @@ class CrossmatchPayload(UnitPayload):
     #: crossmatch unit with no declared targets would run and write nowhere.
     target_tables: tuple = ()
 
+    #: The `sources_<date>_<sca>` child tables this unit reads FROM.
+    #:
+    #: **OPTIONAL, NOT BECAUSE IT IS OPTIONAL SCIENCE, BUT BECAUSE NO
+    #: GATHERER POPULATES IT YET** (integration request filed against
+    #: `submission/gathering.py`'s `gather_crossmatch_units`, see this
+    #: wave's ledger). `pipeline.stages.post_db._source_tables_for_unit`
+    #: read `fields["source_tables"]` under the pre-rule-11 open-dict
+    #: representation and NO gatherer ever wrote that key, so a crossmatch
+    #: unit has always read zero source tables and matched nothing — a
+    #: structural no-op the typed payload now makes visible instead of
+    #: silently answering `.get()` with None. This field is the typed home
+    #: for the fix: once the gatherer enumerates the date's completed
+    #: catalog-load target tables (`sources_{proc_date}_{sca}` for every
+    #: SCA `get_scas_with_incomplete_catalog_load_for_processing_date`
+    #: already confirms complete before yielding the unit) and passes them
+    #: here, `_source_tables_for_unit` reads real tables and the crossmatch
+    #: stops being a no-op. Required WOULD be the honest constraint — same
+    #: reasoning as `target_tables` — but making it required here, before
+    #: the gatherer supplies it, would fail every crossmatch unit's
+    #: construction outright rather than leave the existing (defective but
+    #: shipping) empty-match behaviour in place. Optional until the
+    #: gatherer lands its half; the two should become required together.
+    source_tables: tuple = ()
+
     JOB_TYPE = JOB_TYPE_CROSSMATCH
     GRAIN = GRAIN_DATE_FIELD
     COMPONENTS = ("proc_date", "field")
-    INVOCATION_FACTS = ("target_tables",)
+    INVOCATION_FACTS = ("target_tables", "source_tables")
 
     def __post_init__(self):
         _require(self.proc_date, "proc_date", self.JOB_TYPE)
@@ -604,6 +628,7 @@ class CrossmatchPayload(UnitPayload):
                 f"a {self.JOB_TYPE} unit requires 'target_tables'; a unit "
                 f"with no declared targets would run and write nowhere")
         _freeze(self, "target_tables")
+        _freeze(self, "source_tables")
 
 
 @dataclasses.dataclass(frozen=True)
