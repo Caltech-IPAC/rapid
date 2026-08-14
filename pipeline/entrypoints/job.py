@@ -807,6 +807,37 @@ def _run(workload_class: str) -> int:
     return result.intended_exit
 
 
+#: The effect-outcome vocabulary the claim/confirm protocol reports
+#: (`RAPIDDB.CLAIM_OUTCOME_*` / `CONFIRM_OUTCOME_*`), mapped to the
+#: `ProductDisposition` an effect-class attempt closes with (ruling R1). Kept
+#: here rather than beside the DB constants: this is a DERIVATION rule about
+#: what an attempt record means, not a database fact, and the two enums it
+#: bridges already live in `observability.attempts` and
+#: `database.modules.utils.rapid_db` respectively — this dict is the only
+#: place that needs to know both vocabularies at once.
+#:
+#: `won` is deliberately ABSENT: it is the claim's own intermediate outcome,
+#: always overwritten by `produce_alerts`'s confirm-time reclassification
+#: (`classify_confirm_outcome`) before the stage returns, so `_execute` never
+#: observes a bare `won` on a successful attempt — see the fail-closed guard
+#: below for what happens if it somehow did.
+_EFFECT_OUTCOME_TO_DISPOSITION = {
+    # CONFIRMED: the effect landed under this attempt's own confirmation, or
+    # was already durably confirmed by someone else (an "already emitted"
+    # read at classify time) — either way the unit's effect IS settled.
+    "confirmed": "effect_confirmed",
+    "terminally_satisfied": "effect_confirmed",
+    # UNCONFIRMED: this attempt does not know whether its effect landed (a
+    # swallowed database failure on the confirm path) — retryable, per
+    # `pipeline.intent.retry_policy.disposition_for_unconfirmed_effect`.
+    "unconfirmed": "effect_unconfirmed",
+    # DEFERRED: a live owner — a concurrent or later claimant — is
+    # authoritative for this unit's effect instead of this attempt.
+    "held_by_live_owner": "effect_deferred",
+    "deferred": "effect_deferred",
+}
+
+
 def _execute(context, job_type, recorder, logger):
     """Run the payload; return `(outcome, disposition, error)`.
 
@@ -816,6 +847,7 @@ def _execute(context, job_type, recorder, logger):
     here.
     """
     from observability.attempts import ProductDisposition, RapidOutcome
+    from pipeline.stages.sequences import EFFECT_CLASS_JOB_TYPES
 
     try:
         if job_type == JOB_TYPE_REGISTRATION:
@@ -854,9 +886,73 @@ def _execute(context, job_type, recorder, logger):
     # fact about what this attempt did, so a science attempt whose upload stage
     # somehow published nothing is also kept out of the candidate set rather
     # than being registered as a success with no products to register.
-    disposition = (ProductDisposition.PUBLISHED.value
-                   if context.published_products
-                   else ProductDisposition.NONE.value)
+    #
+    # EFFECT-CLASS ROUTES DERIVE DIFFERENTLY (ruling R1). A claim/confirm
+    # route (`EFFECT_CLASS_JOB_TYPES`) never populates `published_products` —
+    # its effect is a database action, not an S3 object — so the plain
+    # published/none split above would always read `none` for it, exactly
+    # the self-poisoning shape the comment above already tells the story of
+    # for `published`. Its disposition instead comes from the `effect_
+    # outcome` STAGE-PRODUCED CONTEXT FACT (`pipeline.stages.context.
+    # StageContext.produce`/`.product` — the ordinary stage-to-stage
+    # channel, not a new one): the stage records what the claim/confirm
+    # protocol decided, and this is where that fact is reduced to a
+    # `ProductDisposition`.
+    if job_type in EFFECT_CLASS_JOB_TYPES:
+        if not context.has_product("effect_outcome"):
+            # THE CENTRAL FAIL-CLOSED GUARD. A successful effect-class
+            # attempt that recorded no effect outcome at all is a stage that
+            # returned without reporting what it decided — a classified
+            # failure, never a silent `success`+`none`. This is the ONE
+            # place that check lives: `EFFECT_CLASS_JOB_TYPES` names every
+            # route this guard covers, so a future effect stage that forgets
+            # to call `context.produce("effect_outcome", ...)` fails loudly
+            # here rather than six stages each needing to remember their own
+            # version of this guard (or, worse, one of them not remembering).
+            logger.error(
+                "job type %r is effect-class but no stage recorded an "
+                "effect_outcome; refusing to close success+none for a "
+                "database effect this attempt cannot account for", job_type)
+            # `RuntimeErrorBase` directly, defaulting to `internal_error`
+            # (not `RecordsError`, whose own docstring reserves it for the
+            # UNRECORDABLE case that must exit nonzero — a stage that ran to
+            # completion without producing its effect fact is a classified
+            # APPLICATION failure this attempt records and closes 0 for,
+            # like the two catches above it).
+            return (RapidOutcome.FAILURE.value, ProductDisposition.NONE.value,
+                    serialize_error(
+                        RuntimeErrorBase(
+                            f"effect-class job type {job_type!r} completed "
+                            f"without recording an effect_outcome stage "
+                            f"fact; the attempt cannot state what its "
+                            f"database effect was",
+                            job_type=job_type),
+                        redactor=redact))
+        raw_outcome = context.product("effect_outcome")
+        mapped = _EFFECT_OUTCOME_TO_DISPOSITION.get(raw_outcome)
+        if mapped is None:
+            # `won` (never overwritten — see the mapping's own docstring) or
+            # any other value this derivation does not recognize. Fails
+            # closed for the identical reason the guard above does: an
+            # unrecognized outcome is not safely reducible to a disposition,
+            # and guessing one would be the quiet wrongness rule 1 warns
+            # against elsewhere in this codebase.
+            logger.error(
+                "job type %r reported effect_outcome=%r, which this "
+                "derivation does not recognize; refusing to guess a "
+                "disposition for it", job_type, raw_outcome)
+            return (RapidOutcome.FAILURE.value, ProductDisposition.NONE.value,
+                    serialize_error(
+                        RuntimeErrorBase(
+                            f"effect-class job type {job_type!r} reported "
+                            f"an unrecognized effect_outcome {raw_outcome!r}",
+                            job_type=job_type, effect_outcome=raw_outcome),
+                        redactor=redact))
+        disposition = mapped
+    else:
+        disposition = (ProductDisposition.PUBLISHED.value
+                       if context.published_products
+                       else ProductDisposition.NONE.value)
 
     # `failed` is a property returning the list of failed stage records, not a
     # method — calling it raised TypeError on every successful non-registration

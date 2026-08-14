@@ -392,6 +392,21 @@ def produce_alerts(context) -> None:
         # holds it. Either way this attempt publishes nothing. Recorded as a
         # suppression, one of the four effect counts the design names, and
         # closes successfully — never a failure.
+        #
+        # THE EFFECT OUTCOME (ruling R1). Classified via `RAPIDDB.classify_
+        # claim_outcome` — the follow-up read that tells "the unit is already
+        # settled" (`terminally_satisfied`, this attempt's own confirmation is
+        # not needed) apart from "a live claimant owns it right now"
+        # (`held_by_live_owner`, retryable later) — and carried through the
+        # ordinary `produce`/`product` stage channel as `effect_outcome`, the
+        # STAGE-PRODUCED CONTEXT FACT `pipeline.entrypoints.job._execute`
+        # reads to derive this attempt's `ProductDisposition`. It travels
+        # separately from `record_effect`'s provenance counts: those are for
+        # operators reading the terminal record, this is for the derivation
+        # site that decides what kind of terminal record to write at all.
+        effect_outcome = emissions.classify_claim_outcome(
+            exposure, sca, release_identity, won_token, claim_token)
+        context.produce("effect_outcome", effect_outcome)
         context.record_effect(
             # `alerts_outboxed`, matching the confirmed path's own count — the
             # suppression arm kept the retired `alerts_published` name and so
@@ -403,13 +418,16 @@ def produce_alerts(context) -> None:
             suppression_reason=(
                 "already emitted, or claimed by a live attempt, under this "
                 "release"),
+            effect_outcome=effect_outcome,
             alert_release_identity=release_identity,
             alert_difference_image_pid=pid)
         context.logger.info(
             "unit %s/%s not claimed by this attempt under release %s "
-            "(won_token=%r); publishing nothing",
-            exposure, sca, release_identity, won_token)
+            "(won_token=%r, effect_outcome=%s); publishing nothing",
+            exposure, sca, release_identity, won_token, effect_outcome)
         return
+
+    context.produce("effect_outcome", RAPIDDB.CLAIM_OUTCOME_WON)
 
     topic = _internal_topic(context)
     schema = load_schema()
@@ -709,6 +727,22 @@ def produce_alerts(context) -> None:
                 "takeover attempt outboxes them under the same "
                 "deterministic alert ids", exposure, sca, len(packets))
 
+    # THE EFFECT OUTCOME, RECLASSIFIED AT CONFIRM (ruling R1). `effect_
+    # outcome` was set to `won` after the claim above; the claim winning is
+    # necessary but not sufficient for the effect to be CONFIRMED — this is
+    # the same distinction `RAPIDDB.classify_confirm_outcome`'s docstring
+    # draws between "won the claim" and "the confirmed effect". Overwrites
+    # rather than a second key: the derivation site
+    # (`pipeline.entrypoints.job._execute`) reads exactly one fact per
+    # attempt, and this stage's own final word on its effect is the confirm
+    # outcome, not the intermediate claim outcome. `db_failure` is passed
+    # through rather than re-derived — see the classifier's own docstring for
+    # why a second query cannot recover that distinction after the fact.
+    effect_outcome = emissions.classify_confirm_outcome(
+        exposure, sca, release_identity, confirmed_token, claim_token,
+        db_failure=confirmation_db_failure)
+    context.produce("effect_outcome", effect_outcome)
+
     context.record_effect(
         candidates_considered=considered,
         # OUTBOX-WRITE ACCOUNTING, NOT DELIVERY ACCOUNTING, and renamed to say
@@ -727,6 +761,7 @@ def produce_alerts(context) -> None:
         dropped_by_reason=dropped_by_reason,
         drop_dispositions=drop_dispositions,
         emissions_suppressed=0,
+        effect_outcome=effect_outcome,
         emission_confirmed=(confirmed_token == claim_token),
         # FINDING 11: the one bit that told an operator "the confirm failed
         # at the database" apart from an ordinary, healthy takeover was

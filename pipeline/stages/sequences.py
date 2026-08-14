@@ -103,6 +103,30 @@ SEQUENCES = {
 }
 
 
+#: The job types whose stages settle a database effect through the
+#: claim/confirm protocol (`RAPIDDB.claim_alert_emission` /
+#: `confirm_alert_emission`) and report it as the `effect_outcome` stage
+#: fact — ruling R1, effect-lifecycle completion boundary. Distinct from
+#: `submission.subjects.is_product_producing`'s split: that boundary is
+#: product-producing (science, reference-image) vs database-effect
+#: (everything else), and every one of the six post-DB job types in
+#: `SEQUENCES` above is database-effect WITHOUT being claim/confirm-based —
+#: they report `rows_written`/`rows_removed` through `record_effect` and
+#: close a plain `success`/`none` pair, which `observability.registration
+#: .decide` already SKIPs correctly. This narrower set is what
+#: `pipeline.entrypoints.job._execute`'s fail-closed guard checks: a
+#: successful attempt whose job type is IN this set but produced no
+#: `effect_outcome` fact is a classified failure (a stage that returned
+#: without recording its effect outcome, silently), never a silent
+#: `success`+`none`.
+#:
+#: A SET, not a per-stage remember-to-check: the guard reads this once at
+#: the derivation site rather than trusting each of an arbitrary number of
+#: future effect stages to enforce it on itself — the whole point of a
+#: CENTRAL fail-closed guard.
+EFFECT_CLASS_JOB_TYPES = frozenset({JOB_TYPE_ALERT_PRODUCTION})
+
+
 def sequence_for(job_type: str) -> tuple:
     """The stage sequence for one job type.
 

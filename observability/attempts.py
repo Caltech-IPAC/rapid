@@ -114,6 +114,30 @@ class ProductDisposition(str, enum.Enum):
     WITHHELD = "withheld"
     SUPERSEDED = "superseded"
     NONE = "none"
+    # Migration 075 (ruling R1, effect-lifecycle completion boundary). The
+    # four values above describe an attempt that produces S3 PRODUCTS; these
+    # three describe an attempt whose effect is a DATABASE ACTION with no
+    # product to disposition — the claim/confirm protocol
+    # (`RAPIDDB.claim_alert_emission` / `confirm_alert_emission`) that alert
+    # production and any future effect-class route run instead of `publish`.
+    # `pipeline.stages.sequences.SEQUENCES` names which job types are
+    # effect-class; `pipeline.entrypoints.job._execute` is where an effect
+    # outcome (won / terminally_satisfied / held_by_live_owner / a swallowed
+    # confirm failure) is reduced to one of these three.
+    #: The effect committed and was confirmed — the effect-class analogue of
+    #: `PUBLISHED`.
+    EFFECT_CONFIRMED = "effect_confirmed"
+    #: The effect was claimed but its confirmation could not be verified (a
+    #: swallowed database failure on the confirm path). Retryable — see
+    #: `pipeline.intent.retry_policy.disposition_for_unconfirmed_effect`.
+    EFFECT_UNCONFIRMED = "effect_unconfirmed"
+    #: This attempt did not win the effect (a live owner already holds the
+    #: claim, or the unit is already terminally satisfied under a supersedes-
+    #: safe reading — see `held_by_live_owner`/`terminally_satisfied` in
+    #: `database.modules.utils.rapid_db.claim_alert_emission`). Not a
+    #: failure: some other attempt (this one's own retry, or a concurrent
+    #: one) is authoritative for the unit's effect.
+    EFFECT_DEFERRED = "effect_deferred"
 
 
 class StageOutcome(str, enum.Enum):

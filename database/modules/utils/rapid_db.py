@@ -3928,6 +3928,84 @@ class RAPIDDB:
 
 ########################################################################################################
 
+    #: The claim's outcome vocabulary (ruling R1, effect-lifecycle
+    #: completion boundary). `claim_alert_emission`'s own return stays
+    #: exactly as it was — the raw CAS token-or-None the DB contract tests
+    #: in `pipeline/contract/test_alert_outbox_confirmation.py` assert on
+    #: byte-for-byte — because a `won_token == claim_token` comparison IS a
+    #: correct, if coarse, classification, and rewriting its return shape
+    #: would break every existing caller and test for no gain. What was
+    #: missing is the THREE-WAY split its docstring names but the token alone
+    #: cannot express: a `None` is "a live, non-terminal claimant holds it"
+    #: (`held_by_live_owner` — retry later) and "the unit is already
+    #: terminally suppressed" (`terminally_satisfied` — a sibling attempt's
+    #: effect already committed; this attempt's own confirmation is not
+    #: needed) are opposite dispositions for the unit but identical `None`
+    #: returns. `classify_claim_outcome` is the CALLER'S follow-up read,
+    #: taken immediately after a `None` claim result, that tells the two
+    #: apart.
+    CLAIM_OUTCOME_WON = "won"
+    CLAIM_OUTCOME_TERMINALLY_SATISFIED = "terminally_satisfied"
+    CLAIM_OUTCOME_HELD_BY_LIVE_OWNER = "held_by_live_owner"
+
+    def classify_claim_outcome(self, exposure_id, sca, release_identity,
+                               won_token, claim_token):
+
+        '''
+        Classify a `claim_alert_emission` result into the three-way effect
+        outcome vocabulary (ruling R1).
+
+        `won_token` is `claim_alert_emission`'s own return value, unmodified.
+        A caller passes it straight through rather than re-deriving the
+        comparison, so the "did I win" question is answered identically in
+        one place.
+
+        Returns `CLAIM_OUTCOME_WON` without a query when `won_token ==
+        claim_token` — the CAS already answered that question, and this
+        avoids a needless round trip on the common path.
+
+        Otherwise reads `alert_emissions.state` for this (unit, release) to
+        tell `CLAIM_OUTCOME_TERMINALLY_SATISFIED` (`watermark_seed` or
+        `emitted` — a terminal-suppress state, matching `claim_alert_
+        emission`'s own WHERE clause, which never touches those states)
+        from `CLAIM_OUTCOME_HELD_BY_LIVE_OWNER` (`claimed` by someone else,
+        not stale, not this claimant, not a retry of a terminal prior
+        claimant — exactly the CAS's own negative space). A row that has
+        VANISHED between the claim attempt and this read (deleted, or never
+        existed and the claim's own INSERT lost a race it cannot lose under
+        the primary key) is reported as `held_by_live_owner` too: the
+        conservative reading, since this attempt still has not established
+        a right to publish.
+
+        This performs its own read on `self.cur` and does NOT set
+        `self.exit_code` on success; a database error during the
+        classification read raises `psycopg2.DatabaseError` (or the
+        original exception) rather than being swallowed, because unlike the
+        claim/confirm CAS statements, this method has no established
+        exit_code-on-failure contract for existing callers to preserve —
+        it is new in this ruling, so it gets the fail-loud shape the wider
+        codebase's `design/database.md` rule states directly, rather than
+        inheriting this class's older swallow-and-flag convention.
+        '''
+
+        if won_token == claim_token:
+            return self.CLAIM_OUTCOME_WON
+
+        self.cur.execute(
+            "select state from Alert_Emissions"
+            " where exposure_id = %s and sca = %s and release_identity = %s",
+            (exposure_id, sca, release_identity))
+        row = self.cur.fetchone()
+        if row is None:
+            return self.CLAIM_OUTCOME_HELD_BY_LIVE_OWNER
+        state = row[0]
+        if state in ("watermark_seed", "emitted"):
+            return self.CLAIM_OUTCOME_TERMINALLY_SATISFIED
+        return self.CLAIM_OUTCOME_HELD_BY_LIVE_OWNER
+
+
+########################################################################################################
+
     def confirm_alert_emission(self,exposure_id,sca,release_identity,
                                claim_token,alerts_published):
 
@@ -3983,6 +4061,79 @@ class RAPIDDB:
             return
 
         return row[0] if row is not None else None
+
+
+########################################################################################################
+
+    #: The confirm outcome vocabulary (ruling R1). Mirrors `classify_claim_
+    #: outcome`'s design: `confirm_alert_emission`'s own return is untouched
+    #: (the same DB contract tests assert on it directly), and this is the
+    #: caller's follow-up classification of a `None` result — but confirm's
+    #: `None` is now a FOUR-way ambiguity rather than claim's three-way one,
+    #: because the caller (`produce_alerts`) already distinguishes "the
+    #: statement raised" from "the statement returned None" by catching
+    #: around the call, so this method is reached only on the clean-None
+    #: path and never needs to reclassify the swallowed-exception case
+    #: itself — that case is `EFFECT_UNCONFIRMED` by construction at the
+    #: call site (see `pipeline.stages.alert_production.produce_alerts`'s
+    #: `confirmation_db_failure` flag) and is passed in here as `db_failure`
+    #: rather than re-derived from a second query.
+    CONFIRM_OUTCOME_CONFIRMED = "confirmed"
+    CONFIRM_OUTCOME_DEFERRED = "deferred"
+    CONFIRM_OUTCOME_UNCONFIRMED = "unconfirmed"
+
+    def classify_confirm_outcome(self, exposure_id, sca, release_identity,
+                                 confirmed_token, claim_token,
+                                 db_failure=False):
+
+        '''
+        Classify a `confirm_alert_emission` result into the effect-lifecycle
+        vocabulary `pipeline.entrypoints.job._execute` maps to a
+        `ProductDisposition` (ruling R1).
+
+        `db_failure` is the caller's own record of whether the confirm
+        statement raised and was caught (`RapidDBCallFailed` /
+        `RepositoryQueryFailed` in `produce_alerts`) — passed in rather than
+        re-derived, because a swallowed exception already told the caller
+        unambiguously that the confirm did not run to completion, and a
+        second query here could not distinguish that from an ordinary
+        takeover after the fact (the row looks the same either way once the
+        transaction has rolled back). `db_failure=True` always yields
+        `CONFIRM_OUTCOME_UNCONFIRMED` without a query.
+
+        Otherwise, `confirmed_token == claim_token` is `CONFIRM_OUTCOME_
+        CONFIRMED` without a query — the CAS already answered it. A `None`
+        (or any other) result reads `alert_emissions.state`: `emitted`
+        (this exact unit/release is now confirmed, by whichever attempt won
+        the race — the effect this attempt wanted IS satisfied, just not
+        under this attempt's own confirmation) is `CONFIRM_OUTCOME_
+        CONFIRMED` too, because the docstring's own "already confirmed"
+        case is a satisfied effect, not a deferral. `claimed` under a
+        DIFFERENT token (a newer claimant took the row over before this
+        confirm ran) is `CONFIRM_OUTCOME_DEFERRED` — this attempt's series
+        does not own the outcome; a later attempt (or the taker) settles
+        it. A vanished row is the conservative `CONFIRM_OUTCOME_
+        UNCONFIRMED` — this attempt has no evidence its effect landed.
+        '''
+
+        if db_failure:
+            return self.CONFIRM_OUTCOME_UNCONFIRMED
+        if confirmed_token == claim_token:
+            return self.CONFIRM_OUTCOME_CONFIRMED
+
+        self.cur.execute(
+            "select state from Alert_Emissions"
+            " where exposure_id = %s and sca = %s and release_identity = %s",
+            (exposure_id, sca, release_identity))
+        row = self.cur.fetchone()
+        if row is None:
+            return self.CONFIRM_OUTCOME_UNCONFIRMED
+        state = row[0]
+        if state == "emitted":
+            return self.CONFIRM_OUTCOME_CONFIRMED
+        if state == "claimed":
+            return self.CONFIRM_OUTCOME_DEFERRED
+        return self.CONFIRM_OUTCOME_UNCONFIRMED
 
 
 ########################################################################################################
