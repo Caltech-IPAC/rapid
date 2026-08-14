@@ -126,6 +126,17 @@ REQUIRED_MIGRATIONS = (
     ("040-scoped-retry-unit-transition.sql",
      "the scoped retry transition the reconciler's closure policy issues "
      "(pipeline/reconciler/service.py)"),
+    ("075-effect-lifecycle-completion-boundary.sql",
+     "`attempts.consumed_record_sequence`, the candidate predicate and "
+     "watermark every registration pass writes for EVERY terminal verdict "
+     "(pipeline/registration/consumer.py), and the "
+     "`effect_confirmed`/`effect_unconfirmed`/`effect_deferred` "
+     "`product_disposition` CHECK values a termination writes for any "
+     "effect-class attempt (pipeline/entrypoints/job.py, "
+     "observability/attempts.py) — belongs in the unconditional floor, not "
+     "`ROUTE_MIGRATIONS`, because every registration pass reads the "
+     "consumed watermark regardless of job type, exactly as 018's "
+     "registered watermark already does above"),
 )
 
 #: Per-route floors, layered ON TOP of `REQUIRED_MIGRATIONS` rather than

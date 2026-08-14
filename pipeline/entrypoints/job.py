@@ -390,7 +390,7 @@ def tessellation_provenance(parameters, science, logger):
             "tessellation_digest": digest}
 
 
-def registrar_for(context, conn=None):
+def registrar_for(context, conn):
     """The product-registration callback.
 
     What registering *means* — which operation-table rows a registered product
@@ -415,16 +415,24 @@ def registrar_for(context, conn=None):
     rather than taken off the context: a registration job does not run stages
     and has no record store of its own to reuse.
 
-    `conn` IS THE FIX for round-3 finding #8, and it is not optional in
-    production. Passing `rapid_db.RAPIDDB` bare — the class, as a factory —
-    meant the registrar opened a SECOND database connection of its own, one
-    that autocommits after every call. The consumer's watermark write was on
-    the first connection. Two connections cannot be one transaction, so the
-    product rows were durable before the watermark was even attempted, and a
-    crash between them left rows written with the attempt still a candidate:
-    the next pass registered the same products all over again.
+    `conn` IS THE FIX for round-3 finding #8, and it is REQUIRED (ruling R1
+    removed the `conn=None` legacy branch this docstring used to describe —
+    it had exactly one call site, `dispatch_registration`, which always
+    passed a connection, and no other caller in the tree ever reached it;
+    `pipeline.entrypoints.test.test_job` only ever mocks this function
+    wholesale, never exercises the branch's internals. A connectionless
+    registrar opened a SECOND database connection of its own, one that
+    autocommits after every call — the consumer's watermark write was on
+    the FIRST connection, two connections cannot be one transaction, and a
+    crash between them left product rows durable with the attempt still a
+    candidate: the next pass registered the same products all over again,
+    round-3 finding #8's own failure mode. A parameter that can only be
+    called correctly one way, with one call site that already calls it that
+    way, is not an option worth keeping open — the branch was a standing
+    invitation for a future caller to reintroduce the defect it exists to
+    prevent).
 
-    Handed a connection, the registrar builds its handle over that one instead
+    The registrar builds its handle over the given connection
     (`RAPIDDB.borrowing`), whose commits are suppressed — the consumer's
     `transaction(conn)` block owns the boundary and commits the product rows
     and the watermark together.
@@ -448,22 +456,7 @@ def registrar_for(context, conn=None):
     store = S3ObjectStore(context.parameter(PARAM_RECORDS_BUCKET),
                           client=boto3.client("s3"))
 
-    if conn is None:
-        # No connection to borrow: the legacy shape, kept so a caller outside
-        # the registration pass can still build a registrar. It opens its own
-        # connection and commits per call, which is NOT transactional with any
-        # watermark — which is why `dispatch_registration` never takes this
-        # branch.
-        #
-        # NO IDENTITY REPOSITORY ON THIS BRANCH, deliberately. The product
-        # and artifact rows must commit with the watermark, and this branch
-        # is the one that cannot promise that. Registering identity rows on a
-        # self-committing connection would durably write a product row for an
-        # attempt whose watermark never advanced — the exact shape of round-3
-        # finding #8, reintroduced through the new tables.
-        return registrar(rapid_db.RAPIDDB, store)
-
-    # THE IDENTITY REPOSITORY BORROWS THE SAME CONNECTION as the legacy
+    # THE IDENTITY REPOSITORY BORROWS THE SAME CONNECTION as the RAPIDDB
     # handle, so product rows, artifact rows, legacy version rows and the
     # watermark are one transaction (rule 10's cardinality is only meaningful
     # if the rows enforcing it commit atomically with the rest). It is built
