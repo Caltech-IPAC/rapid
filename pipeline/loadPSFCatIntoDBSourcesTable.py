@@ -911,7 +911,7 @@ if __name__ == '__main__':
             sql_queries_dict[table_create_key] = sql_queries
 
         if table_create_list:
-            with ThreadPoolExecutor(max_workers = len(table_create_list)) as executor:
+            with ThreadPoolExecutor(max_workers = min(num_cores,len(table_create_list))) as executor:
                 for table_create_tuple in table_create_list:
                     obs_date = table_create_tuple[0]
                     sca = table_create_tuple[1]
