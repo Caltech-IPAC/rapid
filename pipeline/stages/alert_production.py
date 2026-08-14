@@ -416,8 +416,12 @@ def produce_alerts(context) -> None:
     # The pinned schema-version UUID, resolved ONCE per chip and stored on
     # every packet this attempt writes. Resolved HERE, at outbox-write time,
     # rather than by the publisher at send time: that is the whole mechanism
-    # behind "identical bytes on resend" — see `_pinned_schema_version`.
-    schema_version_id = _pinned_schema_version(context, topic)
+    # behind "identical bytes on resend" — see `_pinned_schema_version`. Also
+    # verified HERE, against the registry's definition of that exact version,
+    # for the same reason: this is the last place in the pipeline that may
+    # consult the registry, so it is the only place left to catch a pin (or a
+    # resolved-latest) that no longer matches what this attempt would encode.
+    schema_version_id = _pinned_schema_version(context, topic, schema)
     # Which identity basis this chip's packets use, decided once: the image is
     # the same for every candidate on it. The NAME (for the outbox column and
     # the effect record) is kept apart from the KWARGS (`alert_identity`'s
@@ -790,8 +794,9 @@ def _internal_topic(context):
     return topic
 
 
-def _pinned_schema_version(context, topic):
-    """The schema-version UUID every packet this attempt writes is pinned to.
+def _pinned_schema_version(context, topic, schema):
+    """The schema-version UUID every packet this attempt writes is pinned to,
+    verified against the registry's own definition of that version first.
 
     RESOLVED HERE, AT OUTBOX-WRITE TIME, AND STORED — which is the entire
     mechanism behind rule 14's "identical bytes on resend". The production
@@ -810,27 +815,81 @@ def _pinned_schema_version(context, topic):
     pipeline that may consult the registry, and it does so to WRITE a value
     down, never to send. After brief E the send path has no registry access at
     all, which is what the pinning buys.
+
+    RULING R3: A VERSION ID IS NOT ENOUGH. Pinning the UUID stops the wire
+    bytes moving under a resend, but it does not, by itself, prove the UUID
+    still means what `schema` (this attempt's local `load_schema()` result)
+    means — a pin taken from params can go stale, and a resolved-latest lookup
+    can race a registry bump between the resolve and this attempt's write.
+    Either way, a packet framed to a version whose registered definition has
+    drifted from the local schema would encode as one shape and decode as
+    another. So this fetches the RESOLVED version's own definition by UUID —
+    never the registry's idea of "latest", which could be a different version
+    again by the time this runs — and compares it CANONICALLY (parsed, not
+    string-equal: whitespace and key order must not fail this) against
+    `schema` before returning. Both the pinned and the unpinned path go
+    through the same check below; nothing here is done twice.
     """
     pinned = context.parameter("kafka/schema-version-id")
-    if pinned:
-        return str(pinned)
+    version_id = str(pinned) if pinned else None
 
     from alerts.kafka_producer import GlueSchemaRegistry, schema_name_for_topic
+    registry = GlueSchemaRegistry()
+
+    if version_id is None:
+        try:
+            version_id = str(registry.schema_version_id(
+                schema_name_for_topic(topic)))
+        except Exception as exc:  # noqa: BLE001
+            # FAIL THE ATTEMPT rather than invent or defer. A packet written
+            # without a pinned version could only be framed by a registry
+            # lookup at send time, which is exactly the property this design
+            # removes; and the column is NOT NULL, so there is no partial
+            # answer to record.
+            raise InputError(
+                f"cannot resolve the schema version to pin onto this chip's "
+                f"packets for topic {topic!r} ({type(exc).__name__}: {exc}); "
+                f"the outbox row stores the version so a resend reproduces "
+                f"the first send's wire bytes, and a packet written without "
+                f"one could only be framed by a registry lookup at send "
+                f"time") from exc
+
+    _verify_schema_version(registry, version_id, schema, topic)
+    return version_id
+
+
+def _verify_schema_version(registry, version_id, schema, topic):
+    """Fail the attempt if `version_id`'s registered definition does not
+    canonically match the local `schema` — see `_pinned_schema_version`.
+
+    `parse_schema_definition` (`alerts/produce.py`) runs the fetched
+    definition through the same `fastavro.schema.parse_schema` normalization
+    `load_schema()` already applies to the local .avsc tree, so this compares
+    two normalized schema dicts rather than raw JSON text: a registered
+    definition that differs only in whitespace or key order from the local
+    tree is NOT a mismatch, only a structural difference is. Imported lazily,
+    matching `produce_alerts`' own `alerts.produce` imports — the same seam
+    the tests patch to keep this suite off real fastavro/boto3.
+    """
+    from alerts.produce import parse_schema_definition
 
     try:
-        return str(GlueSchemaRegistry().schema_version_id(
-            schema_name_for_topic(topic)))
+        raw_definition = registry.schema_definition(version_id)
+        registered = parse_schema_definition(raw_definition)
     except Exception as exc:  # noqa: BLE001
-        # FAIL THE ATTEMPT rather than invent or defer. A packet written
-        # without a pinned version could only be framed by a registry lookup
-        # at send time, which is exactly the property this design removes; and
-        # the column is NOT NULL, so there is no partial answer to record.
         raise InputError(
-            f"cannot resolve the schema version to pin onto this chip's "
-            f"packets for topic {topic!r} ({type(exc).__name__}: {exc}); the "
-            f"outbox row stores the version so a resend reproduces the first "
-            f"send's wire bytes, and a packet written without one could only "
-            f"be framed by a registry lookup at send time") from exc
+            f"cannot fetch or parse the registered definition for schema "
+            f"version {version_id!r} on topic {topic!r} "
+            f"({type(exc).__name__}: {exc}); a packet cannot be pinned to a "
+            f"version this attempt cannot verify") from exc
+
+    if registered != schema:
+        raise InputError(
+            f"schema version {version_id!r} registered for topic {topic!r} "
+            f"does not match this attempt's local schema "
+            f"(alerts/schema/latest.txt); refusing to pin packets to a "
+            f"version whose registered definition has drifted from what "
+            f"this attempt would encode")
 
 
 def _image_identity(outbox, pid, context):

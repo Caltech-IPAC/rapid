@@ -587,21 +587,72 @@ class TopicGuardTests(unittest.TestCase):
             alert_production._internal_topic(context)
 
 
-class SchemaVersionPinningTests(unittest.TestCase):
-    """`_pinned_schema_version`: the parameter tree wins, and is never
-    bypassed once it carries a value.
+class FakeSchemaRegistry:
+    """Stands in for `alerts.kafka_producer.GlueSchemaRegistry` in the
+    R3 tests: fixed answers for both lookups, no boto3, no network.
 
-    Only the parameter-tree branch is exercised here — the registry-fallback
-    branch calls `GlueSchemaRegistry()`, a real AWS client construction this
-    stub-tier suite has no business triggering, and every `EmissionTests`
-    run below pins the parameter for exactly that reason.
+    Constructed with NO ARGUMENTS by `_pinned_schema_version` (it does
+    `GlueSchemaRegistry()`), so the fixed answers are CLASS attributes,
+    set per-test before `alert_production.GlueSchemaRegistry` is patched to
+    this class — matching `test_publisher_contract.py`'s own
+    `kafka_producer.GlueSchemaRegistry.schema_version_id = ...` idiom for
+    monkeypatching a class the code under test constructs itself.
     """
 
+    latest_version_id = "22222222-2222-2222-2222-a22222222222"
+    #: schema-version UUID -> registered definition (opaque to this fake;
+    #: only ever handed to the also-patched `parse_schema_definition` below).
+    definitions: dict = {}
+
+    def schema_version_id(self, schema_name):
+        return self.latest_version_id
+
+    def schema_definition(self, schema_version_id):
+        return self.definitions[schema_version_id]
+
+
+class SchemaVersionPinningTests(unittest.TestCase):
+    """`_pinned_schema_version` / ruling R3: pinned or resolved, the
+    version's REGISTERED definition is fetched by UUID and compared
+    canonically against the local schema before any packet may be written —
+    on both paths, and a mismatch fails the attempt on both paths.
+
+    `GlueSchemaRegistry` is patched to `FakeSchemaRegistry` for every test
+    here (construction is a real AWS client otherwise) and
+    `alerts.produce.parse_schema_definition` is patched to the identity
+    function: the canonical-parse behavior itself belongs to
+    `alerts/produce.py` and `alerts/test/test_kafka_producer.py`'s own
+    tests (real fastavro normalization, whitespace/key-order
+    insensitivity); what THIS suite proves is that `_pinned_schema_version`
+    calls fetch-then-compare on both the pinned and the unpinned route, and
+    reacts correctly to what that comparison returns.
+    """
+
+    LOCAL_SCHEMA = {"type": "record", "name": "alert", "fields": []}
+
+    def setUp(self):
+        import alerts.kafka_producer
+        import alerts.produce
+        self._real_registry = alerts.kafka_producer.GlueSchemaRegistry
+        self._real_parse = alerts.produce.parse_schema_definition
+        alerts.kafka_producer.GlueSchemaRegistry = FakeSchemaRegistry
+        alerts.produce.parse_schema_definition = lambda raw: raw
+        FakeSchemaRegistry.definitions = {}
+        self.addCleanup(self._restore)
+
+    def _restore(self):
+        import alerts.kafka_producer
+        import alerts.produce
+        alerts.kafka_producer.GlueSchemaRegistry = self._real_registry
+        alerts.produce.parse_schema_definition = self._real_parse
+
     def test_a_pinned_parameter_is_used_as_is(self):
+        FakeSchemaRegistry.definitions = {
+            PINNED_SCHEMA_VERSION_ID: self.LOCAL_SCHEMA}
         context = Context(_unit(), PARAMETERS)
 
         version = alert_production._pinned_schema_version(
-            context, "rapid.internal.alerts.v1")
+            context, "rapid.internal.alerts.v1", self.LOCAL_SCHEMA)
 
         self.assertEqual(version, PINNED_SCHEMA_VERSION_ID)
 
@@ -610,13 +661,90 @@ class SchemaVersionPinningTests(unittest.TestCase):
         # may hand back whatever type it stored); `_pinned_schema_version`
         # promises a str because the outbox column and the effect record
         # both store it as text.
+        FakeSchemaRegistry.definitions = {"12345": self.LOCAL_SCHEMA}
         context = Context(_unit(), dict(PARAMETERS,
                                         **{"kafka/schema-version-id": 12345}))
 
         version = alert_production._pinned_schema_version(
-            context, "rapid.internal.alerts.v1")
+            context, "rapid.internal.alerts.v1", self.LOCAL_SCHEMA)
 
         self.assertEqual(version, "12345")
+
+    def test_pinned_and_matching_is_accepted(self):
+        # The PINNED path, verified: the pin is trusted only after its
+        # registered definition is fetched and found to match.
+        FakeSchemaRegistry.definitions = {
+            PINNED_SCHEMA_VERSION_ID: self.LOCAL_SCHEMA}
+        context = Context(_unit(), PARAMETERS)
+
+        version = alert_production._pinned_schema_version(
+            context, "rapid.internal.alerts.v1", self.LOCAL_SCHEMA)
+
+        self.assertEqual(version, PINNED_SCHEMA_VERSION_ID)
+
+    def test_pinned_and_mismatched_fails_the_attempt(self):
+        # A pin can go stale between when it was set and when this attempt
+        # runs; a packet framed to it would then decode as something other
+        # than what this attempt encoded, so the attempt must fail rather
+        # than write it.
+        FakeSchemaRegistry.definitions = {
+            PINNED_SCHEMA_VERSION_ID: {"type": "record", "name": "alert",
+                                       "fields": [{"name": "drifted",
+                                                   "type": "string"}]}}
+        context = Context(_unit(), PARAMETERS)
+
+        with self.assertRaises(InputError) as caught:
+            alert_production._pinned_schema_version(
+                context, "rapid.internal.alerts.v1", self.LOCAL_SCHEMA)
+
+        self.assertIn(PINNED_SCHEMA_VERSION_ID, str(caught.exception))
+        self.assertIn("does not match", str(caught.exception))
+
+    def test_unpinned_and_matching_is_accepted(self):
+        # The UNPINNED (resolved-latest) path, verified the same way.
+        FakeSchemaRegistry.definitions = {
+            FakeSchemaRegistry.latest_version_id: self.LOCAL_SCHEMA}
+        context = Context(_unit(), dict(
+            PARAMETERS, **{"kafka/schema-version-id": None}))
+
+        version = alert_production._pinned_schema_version(
+            context, "rapid.internal.alerts.v1", self.LOCAL_SCHEMA)
+
+        self.assertEqual(version, FakeSchemaRegistry.latest_version_id)
+
+    def test_unpinned_and_mismatched_fails_the_attempt(self):
+        # A registry bump between the resolve and this attempt's write must
+        # not let a mismatched version reach the outbox.
+        FakeSchemaRegistry.definitions = {
+            FakeSchemaRegistry.latest_version_id: {
+                "type": "record", "name": "alert",
+                "fields": [{"name": "drifted", "type": "string"}]}}
+        context = Context(_unit(), dict(
+            PARAMETERS, **{"kafka/schema-version-id": None}))
+
+        with self.assertRaises(InputError) as caught:
+            alert_production._pinned_schema_version(
+                context, "rapid.internal.alerts.v1", self.LOCAL_SCHEMA)
+
+        self.assertIn(FakeSchemaRegistry.latest_version_id,
+                      str(caught.exception))
+        self.assertIn("does not match", str(caught.exception))
+
+    def test_an_unresolvable_definition_fails_the_attempt(self):
+        # No entry for the version at all — the fetch itself fails, not the
+        # comparison. Distinct code path (the fetch-or-parse except, not the
+        # mismatch branch), and distinct from the existing
+        # `_pinned_schema_version` resolve-failure test above (that one is
+        # "cannot resolve a version id at all"; this one is "resolved a
+        # version id but cannot verify it").
+        FakeSchemaRegistry.definitions = {}
+        context = Context(_unit(), PARAMETERS)
+
+        with self.assertRaises(InputError) as caught:
+            alert_production._pinned_schema_version(
+                context, "rapid.internal.alerts.v1", self.LOCAL_SCHEMA)
+
+        self.assertIn(PINNED_SCHEMA_VERSION_ID, str(caught.exception))
 
 
 class ImageIdentityTests(unittest.TestCase):
@@ -742,10 +870,21 @@ def _run_produce_alerts(context, provider, producer, assemble=None,
     `make_producer` were left unpatched (or unset), a regression that started
     constructing a producer again might get `None` back and fail somewhere
     unrelated, instead of failing AT the send.
+
+    `GlueSchemaRegistry` and `parse_schema_definition` are patched too (R3):
+    every real run now fetches the pinned version's registered definition
+    and compares it against `load_schema()`'s (faked) return before writing
+    a single packet, so both have to be stood up here or every test in this
+    module would attempt a real boto3 client construction. `FakeSchemaRegistry`
+    (`SchemaVersionPinningTests`) owns the focused fetch/compare tests; here
+    the two fakes are wired to agree by construction — the callers below
+    are proving the OUTBOX contract, not the R3 verification itself.
     """
     import alerts.cli
     import alerts.produce
     import alerts.kafka_producer
+
+    fake_schema = {"fake": True}
 
     def fake_assemble(prov, source):
         if source.sid in fail_sids:
@@ -755,6 +894,19 @@ def _run_produce_alerts(context, provider, producer, assemble=None,
     def fake_serialize(alert, schema=None):
         return b"x" * 10
 
+    class _AgreeingRegistry:
+        """`GlueSchemaRegistry()` stand-in whose definition always equals
+        `fake_schema` under the identity `parse_schema_definition` below —
+        R3's fetch-and-compare always passes, so these tests exercise the
+        outbox/effect-count contract undisturbed by the new check.
+        """
+
+        def schema_version_id(self, schema_name):
+            return PINNED_SCHEMA_VERSION_ID
+
+        def schema_definition(self, schema_version_id):
+            return fake_schema
+
     patches = [
         # `db=` is the stage's path (its own connection's borrowing handle);
         # the double accepts and ignores it — the provider under test is
@@ -763,10 +915,12 @@ def _run_produce_alerts(context, provider, producer, assemble=None,
         (alerts.cli, "make_provider", lambda db=None: provider),
         (alerts.produce, "assemble_alert_for_source",
          assemble or fake_assemble),
-        (alerts.produce, "load_schema", lambda *a, **k: {"fake": True}),
+        (alerts.produce, "load_schema", lambda *a, **k: fake_schema),
         (alerts.produce, "serialize_alert", serialize or fake_serialize),
+        (alerts.produce, "parse_schema_definition", lambda raw: raw),
         (alerts.kafka_producer, "make_producer",
          lambda *a, **k: producer),
+        (alerts.kafka_producer, "GlueSchemaRegistry", _AgreeingRegistry),
     ]
     saved = [(mod, name, getattr(mod, name, None)) for mod, name, _ in patches]
     for mod, name, value in patches:
