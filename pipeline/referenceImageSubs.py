@@ -1,10 +1,9 @@
 import csv
 import re
-import boto3
 from botocore.exceptions import ClientError
 from astropy.io import fits
 from astropy.io import ascii
-from astropy.table import QTable, join
+from astropy.table import join
 import numpy as np
 import time
 
@@ -86,13 +85,18 @@ def generateReferenceImage(s3_client,
     jdend = 0.0
     total_exptime = 0.0
 
+    csv_records = []
+
     with open(input_images_csv_filename, newline='') as csvfile:
 
         refimage_inputs_reader = csv.reader(csvfile, delimiter=',')
 
         for row in refimage_inputs_reader:
 
-            print(', '.join(row))
+            row_as_comma_separated_string = ",".join(row)
+            csv_records.append(row_as_comma_separated_string)
+
+            print(row_as_comma_separated_string)
 
             refimage_input_metadata.append(row)
 
@@ -295,6 +299,38 @@ def generateReferenceImage(s3_client,
     n_images_to_coadd = n
 
 
+    # Write reference-image inputs that were actually used to CSV file.
+    # This is needed to populate the PostgreSQL RefImIMages database table.
+    # Upload it to the job-info S3 bucket, alongside the original input_images_csv_file.
+    # It is needed to populate the PostgreSQL RefImImages database table.
+
+    input_images_used_csv_file = "input_images_used_for_refimage_jid"+ str(jid) + ".csv"
+    input_images_used_csv_file_s3_bucket_object_name = job_proc_date + "/" + input_images_used_csv_file
+
+    f = open(input_images_used_csv_file, "w")
+    for csv_record in csv_records:
+        f.write(csv_record + "\n")
+    f.close()
+
+    uploaded_to_bucket = True
+
+    try:
+        response = s3_client.upload_file(input_images_used_csv_file,
+                                         job_info_s3_bucket,
+                                         input_images_used_csv_file_s3_bucket_object_name)
+
+        print("response =",response)
+
+    except ClientError as e:
+        print("*** Error: Failed to upload {} to s3://{}/{}"\
+            .format(input_images_used_csv_file,job_info_s3_bucket,input_images_used_csv_file_s3_bucket_object_name))
+        uploaded_to_bucket = False
+
+    if uploaded_to_bucket:
+        print("Successfully uploaded {} to s3://{}/{}"\
+            .format(input_images_used_csv_file,job_info_s3_bucket,input_images_used_csv_file_s3_bucket_object_name))
+
+
     # Write list of reference-image science input filenames for awaicgen.
 
     awaicgen_input_images_list_file = awaicgen_dict["awaicgen_input_images_list_file"]
@@ -449,6 +485,7 @@ def generateReferenceImage(s3_client,
     generateReferenceImage_return_list.append(jdend)
     generateReferenceImage_return_list.append(zprefimg)
     generateReferenceImage_return_list.append(total_exptime)
+    generateReferenceImage_return_list.append(f"s3://{job_info_s3_bucket}/{input_images_used_csv_file_s3_bucket_object_name}")
 
     return generateReferenceImage_return_list
 
