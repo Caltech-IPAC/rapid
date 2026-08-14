@@ -3265,6 +3265,7 @@ class RAPIDDB:
                 self.cur.execute(query)
 
                 try:
+                    records = []
                     nrecs = 0
                     for record in self.cur:
                         if nrecs == 0:            # Print first record returned as a sanity check.
@@ -3291,7 +3292,11 @@ class RAPIDDB:
 
         # Return records for the last query executed.  This is done for convenience and code is not generalized.
 
-        return records
+        try:
+            return records
+        except Exception as e:
+            print(f"*** Error on return (query={query}): {error}; returning without argument...")
+            return
 
 
 ########################################################################################################
