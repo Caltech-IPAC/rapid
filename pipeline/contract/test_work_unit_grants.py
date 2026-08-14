@@ -389,8 +389,12 @@ def test_a_mutation_only_edge_is_NOT_refused_at_the_sql_layer_a_known_gap(
     with conn.cursor() as cur:
         cur.execute(
             "SELECT derived.transition_work_unit(%s, %s, %s, %s, %s, %s, %s, %s)",
-            [unit_id, from_state, to_state, spoofed_writer,
-             ("spoofed" if to_state == "cancelled" else None),
+            # p_blocked_reason (position 5) is always None here — none of
+            # MUTATION_ONLY_EDGES targets 'blocked', and 077's own CHECK
+            # (transition_work_unit:153-156, restated from writer.py's
+            # transition_unit:556-558) refuses a non-NULL blocked_reason on
+            # any other to_state.
+            [unit_id, from_state, to_state, spoofed_writer, None,
              "C2: documents the SQL-layer writer-spoof gap", None, True])
     conn.commit()
     # The transition LANDED, under the wrong writer, unrefused — the gap.
@@ -435,17 +439,68 @@ def test_the_same_edge_succeeds_with_the_correct_writer(
     with conn.cursor() as cur:
         cur.execute(
             "SELECT derived.transition_work_unit(%s, %s, %s, %s, %s, %s, %s, %s)",
-            [unit_id, from_state, to_state, WRITER_MUTATION_API,
-             ("control" if to_state == "cancelled" else None),
+            # p_blocked_reason (position 5) is always None here — same
+            # reasoning as the gap test above: none of MUTATION_ONLY_EDGES
+            # targets 'blocked', so a non-NULL blocked_reason is refused by
+            # 077's own CHECK regardless of writer or edge.
+            [unit_id, from_state, to_state, WRITER_MUTATION_API, None,
              "spoof control", None, True])
     conn.commit()
     assert fixture.unit_state(conn, unit_id)[0] == to_state
 
 
 # ============================================================================
-# 4. COMPLETION-ACCEPTANCE — mismatched attempts, unconsumed terminal
-#    sequences, and the withheld case both ways. GUC enforced LOCALLY,
-#    inside each test's own transaction (see module docstring).
+# 4. COMPLETION-ACCEPTANCE — KNOWN-BROKEN AT THE TRIGGER LAYER, NOT HERE.
+# ============================================================================
+#
+# **FINDING, STATED HERE RATHER THAN WORKED AROUND (task brief C2, defect
+# 2b/2c; team-lead ruling: state plainly, do not paper over).** 076's
+# completion-acceptance clause lives inside `work_units_check_transition()`,
+# a `BEFORE UPDATE ... FOR EACH ROW` trigger (076:571-575). On a transition
+# into `complete` with the GUC on, it queries `unit_events` for the
+# ACCOMPANYING event row to read `detail ->> 'deciding_attempt_id'`
+# (076:513-520). But `derived.transition_work_unit` (077:172-196) issues
+# `UPDATE work_units` THEN `INSERT INTO unit_events` as two separate
+# statements in the same function body — so at BEFORE-UPDATE trigger-fire
+# time, for every current or future caller of this function (which is every
+# caller: `WorkUnitWriter.transition_unit` and any direct SQL call both go
+# through it), the event row for THIS completion has not been inserted yet.
+# The query at 076:513-520 therefore ALWAYS returns no row,
+# `v_attempt.deciding_attempt_id IS NULL` is ALWAYS true, and the trigger
+# ALWAYS raises "no deciding_attempt_id recorded" (076:522-528) — never the
+# clause (b)/(c)/(d) boundary message, and never success — regardless of
+# what `p_detail` actually contains. 076's OWN header (line 148-152) states
+# clause (a) was meant to be checked "at the DEFERRED constraint trigger
+# below, since the row trigger cannot see the event row" — but the actual
+# code puts the whole completion-acceptance block in the immediate trigger,
+# not the deferred one (`work_units_check_event_recorded`, 076:681-709,
+# which only checks that SOME matching event row exists — it never re-reads
+# `deciding_attempt_id`/`terminal_record_sequence`/acceptance). This is a
+# structural defect in 076, not a test-wording problem: with the GUC on,
+# EVERY completion is refused, including every legitimate one — the exact
+# outcome 076's own production-safety analysis (header §4(iii)) says must
+# not happen.
+#
+# CONSEQUENCE FOR THE FIVE TESTS BELOW THAT ENABLE THE GUC (all but
+# `test_completion_is_unenforced_by_default`, which leaves it off and is
+# unaffected): `test_mismatched_attempt_is_refused_when_enforced`,
+# `test_unconsumed_terminal_sequence_is_refused_when_enforced`, and
+# `test_withheld_unconsumed_is_refused_when_enforced` DO get RA001, but for
+# the wrong reason (clause (a) always fires first) — asserting today's
+# actual message would prove refusal for a reason the test does not claim
+# to be testing, which is the "loosen to any error will do" the task brief
+# explicitly forbids. `test_registered_and_consumed_attempt_completes_
+# when_enforced` and `test_withheld_consumed_completes_when_enforced` are
+# POSITIVE cases and fail outright — completion cannot succeed with the GUC
+# on at all, under any inputs, today. NONE OF THE FIVE IS EDITED: they stay
+# exactly as C2 wrote them, correctly red, as the acceptance evidence for
+# this finding — the same convention section 3 above already uses for its
+# own documented gap. A fix belongs in `rapid_systems` (077's write order,
+# or 076's check placement), not in this file. See the campaign's own
+# LEDGER-fix-077.md (task brief C2, defect 2b/2c) for the full analysis.
+#
+# GUC ENFORCED LOCALLY, inside each test's own transaction (see module
+# docstring).
 # ============================================================================
 
 def _identity(scope_name):
