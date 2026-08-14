@@ -22,8 +22,9 @@ one, and re-registered when it does not.
 
 THE WATERMARK SPLIT (ruling R1, migration 075). The paragraph above described
 `registered_record_sequence` alone, and that was the eternal-candidates
-defect: a terminal SKIP verdict (products withheld, superseded, none, or an
-application failure) never advanced ANY watermark, because the only one that
+defect: a terminal SKIP verdict (products superseded, none, an effect
+deferred or unconfirmed-and-parked, or an application failure) never
+advanced ANY watermark, because the only one that
 existed was scoped to acceptance. So a permanently-skipped attempt — one whose
 disposition will never become REGISTER — stayed a candidate forever, reread
 and redecided on every single pass, indistinguishable in the query from an
@@ -106,6 +107,7 @@ import contextlib
 import datetime
 import json
 import logging
+import time
 
 from observability.attempts import LifecycleState, ProductDisposition
 from observability.registration import RegistrationDecision, decide
@@ -751,24 +753,36 @@ def _apply_skip_disposition(attempt_id, work_unit_id, disposition,
 
     Every branch below CONSUMES (the caller's `mark_consumed` call, made
     unconditionally regardless of which branch fires) — this function's only
-    job is the unit's own state, which four of its seven cases leave
+    job is the unit's own state, which three of its six cases leave
     untouched at `submitted`.
 
         confirmed   -> complete (the effect landed; same standard
                        `_complete_work_unit` applies to a REGISTER verdict)
         unconfirmed -> retry policy: ready under the ceiling, park over it
         deferred    -> submitted, untouched (a live owner is authoritative)
-        withheld    -> complete (a deliberate, accepted non-publication)
         superseded  -> submitted, untouched (the superseding attempt settles
                        the unit under its own terminal record)
-        none        -> submitted, untouched, but LOGGED as an anomaly for
-                       operator attention (see below) — a product route that
-                       succeeded and produced nothing is unexpected in a way
-                       none of the other six branches are
+        none        -> submitted, untouched, and LOGGED — at ANOMALY
+                       severity for a product-producing route (a route that
+                       mints product keys and succeeded with nothing to
+                       register is unexpected), at ordinary INFO for
+                       `registration` (the one live job type this branch
+                       reaches that legitimately closes success+none: it
+                       publishes no products by design, see below)
         (any failure outcome) -> submitted, untouched (the reconciler's own
                        retry policy, `disposition_for_terminal_attempt`,
                        already owns this unit's disposition for a failed
                        attempt; registration adds nothing)
+
+    `withheld` is REMOVED (was: complete, a deliberate accepted
+    non-publication). No stage or entrypoint code path has ever produced it
+    — `pipeline.entrypoints.job._execute` derives disposition from either the
+    effect-outcome mapping (effect-class job types) or `PUBLISHED if
+    published_products else NONE` (everything else), and neither can yield
+    `withheld`. It was a dead branch this function could never reach; the
+    schema-level enum member and completion-trigger predicate that still
+    accept the string are a separate, schema-side removal (migration 084,
+    out of this module's scope).
     """
     if work_unit_id is None:
         # Mirrors `_complete_work_unit`'s identical guard: absent means
@@ -808,16 +822,6 @@ def _apply_skip_disposition(attempt_id, work_unit_id, disposition,
             "submitted", attempt_id, work_unit_id)
         return
 
-    if disposition == ProductDisposition.WITHHELD.value:
-        # A DELIBERATE, ACCEPTED non-publication (module docstring language
-        # for `observability.registration.decide`'s WITHHELD branch) — the
-        # unit's work is done, the decision not to publish is itself the
-        # accepted result, so it closes complete exactly as a published
-        # result does.
-        _transition_or_log(work_writer, work_unit_id, attempt_id, COMPLETE,
-                           disposition="close_complete_withheld")
-        return
-
     if disposition == ProductDisposition.SUPERSEDED.value:
         # The superseding attempt's own terminal record is what settles this
         # unit — that attempt (at a higher terminal_record_sequence) is
@@ -831,21 +835,50 @@ def _apply_skip_disposition(attempt_id, work_unit_id, disposition,
 
     if disposition == ProductDisposition.NONE.value:
         if rapid_outcome == "success":
-            # SUCCESS + NONE on a product route is not one of the six
-            # ordinary verdicts above — it is a route that ran, reported
-            # success, and produced nothing to register, which is either a
-            # release with legitimately nothing to do or a stage that lost
-            # its output silently. Neither reading is registration's to
-            # decide, so the unit is left `submitted` (no closure this
-            # module is confident enough to make) and the anomaly is logged
-            # at a level an operator dashboard can filter on, per the ruling's
-            # own "surfaced as an anomaly for operator decision".
+            # SUCCESS + NONE IS NO LONGER EXCLUSIVELY A PRODUCT-PRODUCING
+            # ANOMALY (2026-08-14 ruling extended effect-class to all seven
+            # non-product-producing job types, not just alert production).
+            # The old message here asserted "on a product-producing route"
+            # unconditionally, which was already wrong for `registration` —
+            # `observability.registration.is_registrable`'s own docstring
+            # names it as a route that legitimately "closes `none`, which
+            # `decide` skips", by design, every time it runs. That was true
+            # before this wave too; this wave's ruling is what makes it
+            # worth fixing HERE, because after this wave the claim is wrong
+            # for a much larger set of routes than before: `submission.
+            # subjects.is_product_producing` is False for all seven
+            # non-product-producing job types, and after task 1 every one
+            # of them reports its outcome through the EFFECT_CONFIRMED/
+            # EFFECT_UNCONFIRMED/EFFECT_DEFERRED branches above — job.
+            # _execute's fail-closed guard refuses to close success+none for
+            # any of them — so a genuine product-producing anomaly (science
+            # or reference-image losing its output silently) is now the
+            # ONLY science-pipeline case that can reach here on success,
+            # `registration` being the one routed job type that reaches it
+            # by design rather than by defect.
+            #
+            # This function has no cheap way to tell the two apart per
+            # attempt: the `attempts` table carries no `job_type` column
+            # (`pipeline.registration.products` documents the identical
+            # constraint for the REGISTER path, which reads it from the
+            # terminal record body through a store fetch this SKIP path does
+            # not make) and `_COLUMNS`/`row` selects none. So the message
+            # states what IS verifiable — this outcome is normal for
+            # `registration` and an anomaly for anything that mints product
+            # keys — rather than asserting a job type this call site cannot
+            # see.
             logger.warning(
-                "ANOMALY: attempt %s succeeded with product_disposition="
-                "'none' on a product-producing route; work unit %s left "
-                "submitted pending operator review — this is neither a "
-                "normal completion nor a normal failure", attempt_id,
-                work_unit_id)
+                "attempt %s succeeded with product_disposition='none'; work "
+                "unit %s left submitted. Normal for job type 'registration' "
+                "(it registers other attempts' products and mints none of "
+                "its own, by design). An ANOMALY for anything else: a job "
+                "type that mints product keys (science, reference-image) "
+                "succeeding with nothing to register is neither a normal "
+                "completion nor a normal failure, and a database-effect job "
+                "type (the six post-DB types, alert production) cannot "
+                "reach this branch on success at all any more — it would "
+                "have closed through EFFECT_CONFIRMED/EFFECT_UNCONFIRMED/"
+                "EFFECT_DEFERRED above instead", attempt_id, work_unit_id)
         # A failure/partial outcome with disposition NONE needs no comment
         # here beyond the function docstring's own: the reconciler's retry
         # policy already owns this unit's disposition.
@@ -997,8 +1030,9 @@ def mark_consumed(conn, attempt_id, record_sequence, cursor=None):
     sequence`, without accepting a result (ruling R1 / migration 075).
 
     The SKIP-side sibling of `mark_registered`: advances `consumed_record_
-    sequence` ALONE, so a permanently-skipped attempt (products withheld,
-    superseded, none, or an application failure) stops being reread and
+    sequence` ALONE, so a permanently-skipped attempt (products superseded,
+    none, an effect deferred or unconfirmed-and-parked, or an application
+    failure) stops being reread and
     redecided on every pass — the eternal-candidates defect the module
     docstring's "THE WATERMARK SPLIT" names — without ever writing
     `registered_at` or `registered_record_sequence`, which would misstate a
@@ -1111,7 +1145,8 @@ def _fence_conn_executor(conn):
 
 
 @contextlib.contextmanager
-def _bind_fence(conn, record, attempt_id):
+def _bind_fence(conn, record, attempt_id,
+                lease_seconds=gc_fence.DEFAULT_LEASE_SECONDS):
     """Hold the registration fence over every key this bind will touch.
 
     **THE BIND CRITICAL SECTION, FENCED — NOT THE WHOLE UPLOAD-TO-BIND
@@ -1156,16 +1191,27 @@ def _bind_fence(conn, record, attempt_id):
     the release so a lease that already expired and was reclaimed by
     someone else is never deleted out from under its new holder (see
     `pipeline.gc.fence.release_fence`'s own docstring).
+
+    `lease_seconds` (default stays `gc_fence.DEFAULT_LEASE_SECONDS`, 120 —
+    no behaviour change for an existing caller) is now a parameter rather
+    than an unstated default this function silently inherited from
+    `acquire_fence`'s own signature: sizing the lease correctly needs to
+    know how long the fenced section actually runs in practice, and that
+    was previously unmeasured. The elapsed time of the fenced `with` body
+    is logged at INFO on every exit, success or exception — instrumentation
+    for that sizing decision, not a correctness change.
     """
     keys = _bind_fence_keys(record, attempt_id=attempt_id)
     actor = "registrar:%s" % attempt_id
     execute = _fence_conn_executor(conn)
     acquired = []
+    started = time.monotonic()
     try:
         for bucket, object_key in keys:
             if not gc_fence.acquire_fence(
                     execute, bucket=bucket, object_key=object_key,
-                    holder=actor, holder_kind=gc_fence.HOLDER_REGISTRATION):
+                    holder=actor, holder_kind=gc_fence.HOLDER_REGISTRATION,
+                    lease_seconds=lease_seconds):
                 raise BindFenced(bucket, object_key, attempt_id=attempt_id)
             acquired.append((bucket, object_key))
         yield
@@ -1173,6 +1219,10 @@ def _bind_fence(conn, record, attempt_id):
         for bucket, object_key in acquired:
             gc_fence.release_fence(execute, bucket=bucket,
                                    object_key=object_key, holder=actor)
+        elapsed = time.monotonic() - started
+        logger.info(
+            "attempt %s: bind fence held %d key(s) for %.3fs (lease_seconds="
+            "%s)", attempt_id, len(acquired), elapsed, lease_seconds)
 
 
 class BindFenced(RuntimeError):

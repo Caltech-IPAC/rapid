@@ -429,17 +429,24 @@ def test_a_terminal_skip_advances_consumed_without_registering(conn):
     and `registered_record_sequence` stay NULL -- the module docstring's
     "THE WATERMARK SPLIT", proved against the real CAS statements rather
     than a fake that could not disagree with itself.
+
+    `superseded` stands in for "any terminal SKIP verdict" here -- this
+    test exercises the watermark mechanic, not the disposition branch
+    itself. It used to be `withheld`, removed 2026-08-14 as a dead
+    application-code path (`pipeline.registration.consumer._apply_skip_
+    disposition` no longer has a `withheld` branch at all -- see that
+    module's docstring for why).
     """
     _requires_075(conn)
     unit = fixture.create_unit(
         conn, fixture.scope("skip-consumes-without-registering"),
         state=SUBMITTED)
     attempt_id = _make_terminal_attempt(
-        conn, unit, product_disposition="withheld",
+        conn, unit, product_disposition="superseded",
         terminal_record_sequence=1)
     conn.commit()
 
-    result = _decide_and_apply_skip(conn, attempt_id, unit, "withheld",
+    result = _decide_and_apply_skip(conn, attempt_id, unit, "superseded",
                                     "success", 1)
     assert result == "consumed"
 
@@ -671,13 +678,6 @@ def test_final_unit_state_effect_deferred_leaves_submitted(conn):
     _requires_075(conn)
     state, _reason = _skip_and_read_state(conn, "effect_deferred")
     assert state == SUBMITTED
-
-
-def test_final_unit_state_withheld_closes_complete(conn):
-    state, _reason = _skip_and_read_state(conn, "withheld")
-    assert state == COMPLETE, (
-        "withheld is a DELIBERATE, accepted non-publication and closes "
-        "complete exactly as a published result does")
 
 
 def test_final_unit_state_superseded_leaves_submitted(conn):

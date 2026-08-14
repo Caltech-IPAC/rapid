@@ -56,10 +56,6 @@ class DecideTests(unittest.TestCase):
         result = decide(attempt(product_disposition="superseded"))
         self.assertIs(result.decision, RegistrationDecision.SKIP)
 
-    def test_withheld_products_are_skipped(self):
-        result = decide(attempt(product_disposition="withheld"))
-        self.assertIs(result.decision, RegistrationDecision.SKIP)
-
     def test_success_with_no_products_is_skipped(self):
         result = decide(attempt(product_disposition="none"))
         self.assertIs(result.decision, RegistrationDecision.SKIP)

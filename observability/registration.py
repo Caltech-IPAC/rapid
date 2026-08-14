@@ -132,9 +132,6 @@ def decide(attempt: Any) -> Registrable:
         if disposition == ProductDisposition.SUPERSEDED.value:
             return result(RegistrationDecision.SKIP,
                           "products superseded by a later attempt")
-        if disposition == ProductDisposition.WITHHELD.value:
-            return result(RegistrationDecision.SKIP,
-                          "products withheld")
         if disposition == ProductDisposition.NONE.value:
             return result(RegistrationDecision.SKIP,
                           "attempt succeeded but produced no products")

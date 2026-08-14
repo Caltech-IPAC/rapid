@@ -110,12 +110,21 @@ class RapidOutcome(str, enum.Enum):
 
 
 class ProductDisposition(str, enum.Enum):
+    #: `WITHHELD` is REMOVED (2026-08-14): no stage or entrypoint code path
+    #: ever produced it — `pipeline.entrypoints.job._execute` derives
+    #: disposition from either the effect-outcome mapping (effect-class job
+    #: types) or `PUBLISHED if published_products else NONE` (everything
+    #: else), and neither can yield `withheld`. It was a dead branch this
+    #: enum could declare but nothing could reach. The schema-level enum
+    #: value and completion-trigger predicate that still accept the string
+    #: `'withheld'` are a separate, schema-side removal (migration 084, a
+    #: different wave's scope) — this module's removal is the application
+    #: side only.
     PUBLISHED = "published"
-    WITHHELD = "withheld"
     SUPERSEDED = "superseded"
     NONE = "none"
     # Migration 075 (ruling R1, effect-lifecycle completion boundary). The
-    # four values above describe an attempt that produces S3 PRODUCTS; these
+    # three values above describe an attempt that produces S3 PRODUCTS; these
     # three describe an attempt whose effect is a DATABASE ACTION with no
     # product to disposition — the claim/confirm protocol
     # (`RAPIDDB.claim_alert_emission` / `confirm_alert_emission`) that alert
