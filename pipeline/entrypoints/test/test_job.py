@@ -550,7 +550,7 @@ class DispatchRegistrationTests(unittest.TestCase):
                  "application_intended_exit": 0, "scheduler_observed_exit": 0}]
 
         def failing(conn, candidate_rows, register=None, run=None,
-                    dry_run=False):
+                    dry_run=False, store=None):
             from pipeline.registration import RegistrationRun
             failed = RegistrationRun()
             failed.failed = 1
