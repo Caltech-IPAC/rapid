@@ -557,8 +557,23 @@ generates the file products in parallel via the AWS Batch service.
        17 |        0 |   263
     (3 rows)
 
-The pipeline IDs 12, 15, and 17 (``ppid``) refer to the RAPID reference-image pipeline,
+The above ``ppid`` values of 12, 15, and 17 (pipeline IDs) refer to the RAPID reference-image pipeline,
 the RAPID science pipeline, and the RAPID post-processing pipeline, respectively.
+
+The VPO took 3.2 hours to:
+
+====================================================================================  =====================
+Pipeline stage                                                                        Execution time (sec)
+====================================================================================  =====================
+Generate final file products, register in database, and upload to S3 bucket                   10451.31
+Load all sources into PostgreSQL database                                                       461.73
+Cross-match all Sources and AstroObjects database records                                       227.41
+Compute statistics for AstroObjects database records                                            271.54
+Total elapsed time to execute VPO on above stages                                             11411.99
+====================================================================================  =====================
+
+The VPO code is still evolving, and is not quite in optimal form
+(the number in first row in the above table can be reduced significantly).
 
 The pipeline processing was done in parallel under AWS Batch.
 The RAPID science pipelines took ~1.3 hours per instance for the ``K213`` filter and
