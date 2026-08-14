@@ -13,14 +13,25 @@ second copy of the INSERT living in `consumer.py`.
 
 **THE FENCE FAILS CLOSED** (see `pipeline.gc.execute`'s module docstring for
 the four-layer mitigation this is layer 4 of). `acquire_fence` returns
-`False` on any error acquiring it — including one caused by a holder already
-present and unexpired — and never raises past that boundary: a caller that
-cannot tell "someone else holds this" from "the database is unreachable"
-would otherwise have to choose between failing closed on infrastructure
-noise and failing open on a real conflict, and this module makes that choice
-once, centrally, in the direction rule 17/22's isolation discipline requires
-(fail closed; never let one key's fence trouble propagate to the caller's
-whole operation).
+`False` for the one genuine "not acquired" outcome — a live conflicting row,
+the `ON CONFLICT ... WHERE expires_at < now()` clause finding a holder
+already present and unexpired — and RAISES for everything else: a caller
+that cannot tell "someone else holds this" from "I could not even ask"
+would otherwise have to guess, silently, between two operator responses
+that are not interchangeable (skip this item and move on, versus stop and
+fix why the query failed).
+
+**THE STATIC-GRANT CASE THIS MUST NOT MASK.** If the role calling
+`acquire_fence` is missing `INSERT`/`UPDATE` on `gc_fences` — a grant gap,
+not a held fence — PostgreSQL raises `InsufficientPrivilege` on every
+attempt. Swallowing that into `False` identically to a live conflicting row
+(the earlier shape of this function) would render as "the fence is always
+held", which SILENTLY DISABLES ALL OF GC EXECUTION under that role: every
+item is skipped as fenced, the run reports a clean "nothing to do", and
+nothing in the output says why. That is a worse failure than a raised
+exception — a raised `InsufficientPrivilege` is loud and points straight at
+the grant; a fleet of `False`s looks like ordinary contention. So a
+database error here propagates rather than folding into the boolean.
 
 **EXPIRY IS JUDGED IN THE INSERT'S OWN `WHERE` CLAUSE, NOT BY A SWEEPER.** A
 sweeper that has not run yet would make an expired fence look live, which is
@@ -70,26 +81,35 @@ def acquire_fence(execute, *, bucket, object_key, holder, holder_kind,
     key forever; expiry is judged HERE, in the `WHERE` clause, rather
     than by a sweeper (see the module docstring).
 
-    Returns True/False. Never raises: an error acquiring the fence is
-    not permission to proceed without one, so a failure to even ASK is
-    treated identically to a conflicting row — both mean "not acquired".
+    Returns True/False for the genuine "is this key free" question only:
+    an empty `RETURNING` — the `ON CONFLICT ... WHERE expires_at < now()`
+    clause finding a live holder already there — is "not acquired", and
+    nothing else is. A DATABASE ERROR RAISES. It used to be swallowed here
+    identically to a conflicting row, which is exactly wrong under a
+    static-grant gap (see the module docstring's threat model, and P-H
+    wherever `rapid_operator` is missing `INSERT`/`UPDATE` on `gc_fences`):
+    a bare `InsufficientPrivilege` would then render as "fence held",
+    silently disabling every GC execution under that role while reporting
+    the ordinary, expected outcome. A caller cannot tell "someone holds
+    this" from "I am not permitted to even ask" if both come back `False`
+    — and the two demand opposite operator responses, skip this item versus
+    fix the grant. Only the empty-RETURNING case is swallowed into `False`;
+    everything else — permission, connectivity, a broken statement —
+    propagates so the caller sees it.
     """
     expires = datetime.timedelta(seconds=lease_seconds)
-    try:
-        rows = execute(
-            "INSERT INTO gc_fences"
-            " (bucket, object_key, holder, holder_kind, expires_at)"
-            " VALUES (%s, %s, %s, %s, now() + %s)"
-            " ON CONFLICT (bucket, object_key) DO UPDATE"
-            "    SET holder = EXCLUDED.holder,"
-            "        holder_kind = EXCLUDED.holder_kind,"
-            "        acquired_at = now(),"
-            "        expires_at = EXCLUDED.expires_at"
-            "  WHERE gc_fences.expires_at < now()"
-            " RETURNING fence_id",
-            (bucket, object_key, holder, holder_kind, expires))
-    except Exception:                                 # noqa: BLE001
-        return False
+    rows = execute(
+        "INSERT INTO gc_fences"
+        " (bucket, object_key, holder, holder_kind, expires_at)"
+        " VALUES (%s, %s, %s, %s, now() + %s)"
+        " ON CONFLICT (bucket, object_key) DO UPDATE"
+        "    SET holder = EXCLUDED.holder,"
+        "        holder_kind = EXCLUDED.holder_kind,"
+        "        acquired_at = now(),"
+        "        expires_at = EXCLUDED.expires_at"
+        "  WHERE gc_fences.expires_at < now()"
+        " RETURNING fence_id",
+        (bucket, object_key, holder, holder_kind, expires))
     return bool(rows)
 
 
