@@ -486,6 +486,34 @@ class CoaddInputsTests(unittest.TestCase):
            "ra2": 10.2, "dec2": -5.2, "ra3": 10.3, "dec3": -5.3,
            "ra4": 10.4, "dec4": -5.4}
 
+    def setUp(self):
+        # `coadd_input_rows(window=None)` — the default every test here uses
+        # except `test_an_explicit_window_is_what_reaches_the_query` — calls
+        # `reference_observation_window()`, which reads release content via
+        # `science_config.load()`, which fails loud (`ConfigError`) if
+        # `RAPID_SW` is not set (`science_config.config_path`'s own
+        # docstring: "There is deliberately no fallback to the current
+        # directory"). One test in this class
+        # (`test_the_window_comes_from_release_content_by_default`) already
+        # patched `RAPID_SW` correctly around its own call; the other eleven
+        # did not, so they read whichever `RAPID_SW` happened to be AMBIENT
+        # in the process actually running the suite — unset on a bare
+        # laptop shell (`ConfigError`, reproduced 2026-08-14: 8 of this
+        # class's 20 tests failed outright with `RAPID_SW is not set`), and
+        # whatever tree a CI/SSM runner's environment happens to export
+        # otherwise, which is a different bug: those tests would then be
+        # silently reading a REAL `cdf/science/pipeline.toml` from wherever
+        # that root points, not the fixed value they assert against. Setting
+        # it once here, for the whole class, is what "no database, no
+        # monkeypatching [outside what the test itself declares]" (this
+        # module's own docstring) actually requires for a method whose
+        # inputs are not fully passed as arguments.
+        repo_root = os.path.dirname(os.path.dirname(os.path.dirname(
+            os.path.abspath(__file__))))
+        patcher = mock.patch.dict(os.environ, {"RAPID_SW": repo_root})
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
     class Source:
         def __init__(self, overlapping=(), info=None, overlap_failure=None):
             self.exit_code = 0
@@ -597,14 +625,12 @@ class CoaddInputsTests(unittest.TestCase):
             overlapping=[self._overlap_row(1), self._overlap_row(2)],
             info={1: self._info("a.fits"), 2: self._info("b.fits")})
 
-        # RAPID_SW points at this checkout so the release content read is
-        # the repo's own `cdf/science/pipeline.toml`, not whatever tree the
-        # runner happens to be in.
-        repo_root = os.path.dirname(os.path.dirname(os.path.dirname(
-            os.path.abspath(__file__))))
+        # RAPID_SW is already patched at the checkout root by `setUp`, so
+        # the release content read here is the repo's own
+        # `cdf/science/pipeline.toml`, not whatever tree the runner happens
+        # to be in. Only the retired variables need patching here.
         with mock.patch.dict(os.environ,
-                             {"RAPID_SW": repo_root,
-                              "STARTREFIMMJDOBS": "1.0",
+                             {"STARTREFIMMJDOBS": "1.0",
                               "ENDREFIMMJDOBS": "2.0"}):
             gathering.coadd_input_rows(
                 source, rid=9, fid=1, mjdobs=61679.1, sky_position=self.SKY,
@@ -803,6 +829,20 @@ class GatherReferenceUnitsTests(unittest.TestCase):
     this module raises, so an unreachable database produced a night of
     "not yet" at INFO and no reference images.
     """
+
+    def setUp(self):
+        # Same ambient-`RAPID_SW` gap as `CoaddInputsTests.setUp` (wave-E
+        # finding #11): `_gather` below calls `gather_reference_units`,
+        # which resolves the observation window via
+        # `reference_observation_window()` when no override reaches it,
+        # exactly like `coadd_input_rows` does. Reproduced 2026-08-14: 4 of
+        # this class's tests failed outright with `RAPID_SW is not set`
+        # against an environment where it truly is unset.
+        repo_root = os.path.dirname(os.path.dirname(os.path.dirname(
+            os.path.abspath(__file__))))
+        patcher = mock.patch.dict(os.environ, {"RAPID_SW": repo_root})
+        patcher.start()
+        self.addCleanup(patcher.stop)
 
     class Source(StubSource):
         def __init__(self, overlapping=(), overlap_failure=None, **overrides):
