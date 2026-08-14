@@ -3250,6 +3250,9 @@ class RAPIDDB:
 
         self.exit_code = 0
 
+        if len(sql_queries) == 0:
+            print(f"*** Error:  sql_queries is empty; quitting...")
+            exit(64)
 
         for query in sql_queries:
 
