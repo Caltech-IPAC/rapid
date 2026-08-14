@@ -41,6 +41,7 @@ from pipeline.intent.writer import (
     BLOCKED, COMPLETE, FAILED, READY, SUBMITTED, WRITER_RECONCILER,
     WorkUnitNotFound, WorkUnitWriter)
 from pipeline.runtime import termination
+from pipeline.runtime.errors import RecordsError
 from submission import protocol as submission_protocol
 
 from . import closure as closure_mod
@@ -210,9 +211,19 @@ class ReconcilerService:
     def __init__(self, conn, batch_client, records_store, diagnostics_store,
                  s3_client, records_prefix, diagnostics_bucket,
                  logs_client=None, log_group=None, log_groups=None,
-                 now=None):
+                 now=None, poll_seconds=None):
         self.conn = conn
         self.batch = batch_client
+        #: The cadence this instance is being polled at, purely for
+        #: `write_heartbeat` to record in `reconciler_runs.poll_seconds` — the
+        #: service never reads it back to time itself; `run_forever` (or
+        #: `pipeline.reconciler.main`'s own loop) owns the actual sleep.
+        #: Never assigned before this fix, so every heartbeat row recorded
+        #: NULL regardless of the real interval and `write_heartbeat`'s
+        #: `getattr(self, "poll_seconds", None)` was silently always the
+        #: default — `run_forever` receives `poll_seconds` as its own
+        #: argument and never wrote it back onto the service it polls.
+        self.poll_seconds = poll_seconds
         self.records_store = records_store
         self.diagnostics_store = diagnostics_store
         self.s3 = s3_client
@@ -249,6 +260,19 @@ class ReconcilerService:
         #: persistent nonzero here means the reconciler is running but not
         #: closing anything — work-incapable while process-alive.
         self._closure_failures = 0
+        #: Closure steps that failed specifically because
+        #: `closure.publish_closure_record`'s supersession climb exhausted
+        #: `MAX_SUPERSESSION_CLIMB` sequences without finding a free one
+        #: (`RecordsError`) — a persistent "different content at every
+        #: sequence" fault on the records store, not the transient faults
+        #: `_closure_failures` otherwise counts indiscriminately. Distinct
+        #: from `_closure_failures` (which this ALSO increments, so nothing
+        #: reading the general counter loses visibility) because climb
+        #: exhaustion is an "investigate now" class of fault: the bounded
+        #: climb is deliberately not a retry-forever loop, and a nonzero
+        #: count here means the records store itself needs a human, not
+        #: just a future poll.
+        self._supersession_climb_exhausted = 0
         #: Attempts whose observed job definition disagreed with their
         #: recorded execution binding (#11).
         self._binding_drift = 0
@@ -307,6 +331,7 @@ class ReconcilerService:
             "healthy": self.healthy,
             "consecutive_poll_failures": self.consecutive_poll_failures,
             "closure_failures": self._closure_failures,
+            "supersession_climb_exhausted": self._supersession_climb_exhausted,
             "consecutive_unproductive_polls":
                 self.consecutive_unproductive_polls,
             "binding_drift": self._binding_drift,
@@ -378,7 +403,7 @@ class ReconcilerService:
                     "(rows_classified, poll_seconds, reconciler_host) "
                     "values (%s, %s, %s);",
                     (int(summary.get("classified", 0)),
-                     getattr(self, "poll_seconds", None),
+                     self.poll_seconds,
                      socket.gethostname()))
             self.conn.commit()
         except Exception:  # noqa: BLE001 - liveness must not break the loop
@@ -1111,9 +1136,30 @@ class ReconcilerService:
         exactly where it always was, so a reader tracing "when does this
         method give up" still finds the answer at the call site, not buried
         in this helper.
+
+        `RecordsError` gets its OWN counter and an ERROR-level log naming
+        supersession-climb exhaustion, ahead of the generic `except
+        Exception` below — `closure.publish_closure_record`'s bounded climb
+        (`MAX_SUPERSESSION_CLIMB`) raising it means the records store
+        answered "different content" at every sequence it tried, which is a
+        persistent fault on the store worth a human's attention, not the
+        same bucket as a transient network blip or a momentarily-unavailable
+        bucket that the generic counter already covers and that a later poll
+        can plausibly clear on its own.
         """
         try:
             result = action()
+        except RecordsError:
+            self._closure_failures += 1
+            self._supersession_climb_exhausted += 1
+            logger.error(
+                "supersession-climb exhaustion for attempt %s: the records "
+                "store held different content at every sequence the "
+                "publish attempt tried (MAX_SUPERSESSION_CLIMB reached); "
+                "this is a persistent records-store fault and needs "
+                "investigation, not just a retry. (%s)",
+                attempt_id, failure_message % attempt_id)
+            return False, None
         except Exception:  # noqa: BLE001 - deferred, not swallowed (#16)
             self._closure_failures += 1
             logger.exception(failure_message, attempt_id)
@@ -1305,6 +1351,50 @@ class ReconcilerService:
                 extra={"reconstructed": "true"})
         return stamped
 
+    def _stamp_submission_outcome(self, row):
+        """Write migration 081's fact, once, at whichever path closes first.
+
+        `attempts.submission_outcome_at_closure` had zero writers: the
+        column existed, `submission_protocol.resolve_submission_outcome`
+        computed the unified answer correctly wherever it was already being
+        called, but nothing ever persisted it, so a fact meant to be durable
+        was re-derived on every read and unrecoverable once the evidence it
+        was derived from aged out (081's own header: "the answer is derived
+        on every read and never recorded, so the fact is not durable and no
+        consumer can ask what the outcome WAS at the moment the row
+        closed").
+
+        Called from every path that closes a row (`_transition`'s four
+        terminal writes, and `_reconcile_unresolved`'s own two). WRITE-ONCE
+        via `COALESCE(submission_outcome_at_closure, %s)`: 081's CHECK and
+        comment are explicit that this is "written once by whichever path
+        first closes the row" — a supersession pass revisiting an
+        already-closed row (`_supersedable`) must not overwrite the fact as
+        it stood at the ORIGINAL closure with whatever the evidence says on
+        a later poll, which is a different question 081 does not ask this
+        column to answer.
+
+        Runs on `self.conn` in the caller's own open transaction/lease, so
+        the stamp commits atomically with the same statement that closes the
+        row — never a separate round trip that could land only one of the
+        two.
+
+        A read failure here is treated exactly as `_reconcile_unresolved`
+        already treats one (that method's own docstring: "A read error there
+        PROPAGATES"): this does not catch anything, so a broken evidence read
+        aborts the whole closure attempt via the caller's own per-attempt
+        try/except, rather than closing the row with a silently wrong or
+        silently absent outcome stamped beside it.
+        """
+        outcome = submission_protocol.resolve_submission_outcome(
+            _Executor(self.conn), row)
+        with self.conn.cursor() as cursor:
+            cursor.execute(
+                "UPDATE attempts SET submission_outcome_at_closure = "
+                "  COALESCE(submission_outcome_at_closure, %s)"
+                " WHERE attempt_id = %s",
+                (outcome.value, row["attempt_id"]))
+
     def _transition(self, row, observation, writer, record, written,
                     classification, error_category, read=None):
         attempt_id = row["attempt_id"]
@@ -1324,6 +1414,7 @@ class ReconcilerService:
                 reconciliation_class="contradictory",
                 reconciliation_sources=["postgres", "batch"],
                 detected_at=self._now())
+            self._stamp_submission_outcome(row)
             logger.warning(
                 "attempt %s carries application facts with no start time; "
                 "flagged contradictory rather than forced into a terminal "
@@ -1346,6 +1437,7 @@ class ReconcilerService:
                 error_category=error_category,
                 closure_record_key=written.key,
                 closure_record_sequence=landed_sequence)
+            self._stamp_submission_outcome(row)
             # A child that never started never produced an outcome. It used
             # to close the work unit `failed` unconditionally, on the reading
             # that "the design gives no third disposition beyond
@@ -1375,6 +1467,7 @@ class ReconcilerService:
                 # checksum is a pointer a reader is told to distrust and given
                 # no way to verify.
                 terminal_record_checksum=written.checksum)
+            self._stamp_submission_outcome(row)
             # ABRUPT LOSS IS THE ARCHETYPE THIS REPAIR EXISTS FOR (rule 4).
             # An OOM kill or a Spot reclaim is a physical event about a
             # container, carrying no verdict on the logical work; closing the
@@ -1459,6 +1552,7 @@ class ReconcilerService:
             terminal_record_key=written.key,
             terminal_record_sequence=landed_sequence,
             terminal_record_checksum=written.checksum)
+        self._stamp_submission_outcome(row)
 
         # SUCCESS PROPOSES complete; EVERY OTHER TERMINAL DISPOSITION GOES TO
         # RETRY POLICY (rule 4 repair). The earlier rule here was "any other
@@ -1905,6 +1999,7 @@ class ReconcilerService:
                     reconciliation_class="missing",
                     reconciliation_sources=["postgres", "batch"],
                     detected_at=self._now())
+                self._stamp_submission_outcome(current)
                 logger.warning(
                     "attempt %s has an application account but its scheduler "
                     "id %s resolves to nothing; flagged contradictory",
@@ -1917,6 +2012,7 @@ class ReconcilerService:
                 error_category="scheduler_provisioning",
                 closure_record_key=written.key,
                 closure_record_sequence=written.sequence)
+            self._stamp_submission_outcome(current)
             # A child that never resolved never did its work unit's work
             # either — but "never did the work" is not "the work can never be
             # done", and this site had been closing the unit `failed` at the
@@ -2027,6 +2123,16 @@ def run_forever(service, poll_seconds=POLL_SECONDS, sleep=time.sleep,
     the unit stayed up with `CLOSURE_FAILURE_POLL_THRESHOLD`'s stated purpose
     ("the unit flips within a knowable time") unrealized. The check belongs on
     the SUCCESS path, because that is the path the condition occurs on.
+
+    Does NOT stamp `service.poll_seconds` from this function's own
+    `poll_seconds` argument: callers that reconnect every cycle (this
+    module's `main` builds a fresh service per poll and calls this once per
+    iteration with `poll_seconds=0`, since the real cadence's sleep lives in
+    the caller's own outer loop) would overwrite the true interval a heartbeat
+    ought to record with the misleading `0`. The service's own `poll_seconds`
+    (`ReconcilerService.__init__`) is set once, by whoever builds the service
+    knowing the real cadence — `pipeline.reconciler.main.build_service` — and
+    this function only ever reads it, via `write_heartbeat`.
     """
     should_continue = should_continue or (lambda: True)
     while should_continue():
