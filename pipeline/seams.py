@@ -983,6 +983,21 @@ def _operational_class_for(job_type):
     return opclasses.PROMPT_PROCESSING
 
 
+def operational_class_for(job_type):
+    """Public accessor for `_operational_class_for`.
+
+    `submission.gathering._blocked_identity` already needs this exact
+    mapping — the module docstring there requires it be the SAME function
+    the submission path uses, so a blocked unit's identity and a submitted
+    unit's identity never diverge under migration 036's partial unique
+    index — and was reaching across the package boundary to a
+    single-underscore name to get it. A caller outside this module poking a
+    private symbol is the thing to fix, not a thing to route around with a
+    second copy of the docstring above's judgment call.
+    """
+    return _operational_class_for(job_type)
+
+
 def _open_submission(execute, *, batch, job_name, queue, job_definition,
                      manifest_uri, binding, attempt_ids, moment, commit=None):
     """Open the submission record and mark it CALLING. Returns its id or None.

@@ -1193,7 +1193,7 @@ def _blocked_identity(unit):
     """The `(job_type, input_scope, operational_class)` a blocked unit takes.
 
     Built through `submission.subjects.build_input_scope` and
-    `pipeline.seams._operational_class_for` — the SAME two functions the
+    `pipeline.seams.operational_class_for` — the SAME two functions the
     submission path uses to identify a work unit — rather than assembled
     locally. That is the whole correctness requirement of this identity: a
     unit parked at gathering and the unit later submitted for the same field
@@ -1209,12 +1209,12 @@ def _blocked_identity(unit):
     module-level import here would invert that dependency for the whole
     package; a call-time one keeps the layering and costs a dict lookup.
     """
-    from pipeline.seams import _operational_class_for
+    from pipeline.seams import operational_class_for
     from submission.subjects import build_input_scope
 
     job_type = JOB_TYPE_REFERENCE_IMAGE
     return (job_type, build_input_scope(job_type, unit),
-            _operational_class_for(job_type))
+            operational_class_for(job_type))
 
 
 def _record_blocked_unit(on_blocked, unit, dependency):
