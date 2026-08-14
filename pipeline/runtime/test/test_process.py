@@ -19,8 +19,10 @@ partial output already captured.
 """
 
 import os
+import shlex
 import subprocess
 import tempfile
+import time
 import unittest
 from unittest import mock
 
@@ -128,6 +130,100 @@ class RunToolFailureTests(unittest.TestCase):
         with self.assertRaises(ToolError) as ctx:
             run_tool(["/bin/sleep", "2"], timeout=0.2)
         self.assertEqual(ctx.exception.error_category, "tool_failure")
+
+    def test_timeout_kills_the_whole_process_group_not_just_the_leader(self):
+        # The descendant-survival gap the timeouts ruling names: a naive
+        # subprocess.run(timeout=...) kills only the leader it started
+        # directly, so a leader that has spawned its own child outlives the
+        # timeout that was supposed to bound it. Proves the opposite here —
+        # start_new_session + killpg reaches the grandchild too.
+        #
+        # A real shell script rather than an injected _run: the whole point
+        # is to observe actual OS process-group behavior, which nothing
+        # short of a real spawn can demonstrate.
+        with tempfile.TemporaryDirectory() as tmp:
+            pid_file = os.path.join(tmp, "descendant.pid")
+            # The leader backgrounds a long-lived descendant, records its
+            # pid, then itself sleeps well past the timeout — so the leader
+            # is still the one process.communicate() is waiting on when the
+            # deadline fires, and the descendant is a process the leader
+            # spawned, not the leader itself.
+            script = (
+                f"sleep 60 & echo $! > {shlex.quote(pid_file)}; "
+                f"sleep 60"
+            )
+            with self.assertRaises(ToolError):
+                run_shell(script, timeout=0.5)
+
+            # The pid file is written before the leader's own sleep starts,
+            # so by the time run_shell has raised it is reliably present.
+            with open(pid_file, encoding="utf-8") as handle:
+                descendant_pid = int(handle.read().strip())
+
+            # Give the SIGKILL a moment to land and the kernel to reap.
+            descendant_alive = True
+            for _ in range(50):
+                try:
+                    os.kill(descendant_pid, 0)
+                except ProcessLookupError:
+                    descendant_alive = False
+                    break
+                time.sleep(0.1)
+            self.assertFalse(
+                descendant_alive,
+                f"descendant pid {descendant_pid} was still alive after the "
+                f"timeout killed its leader — the group kill did not reach it")
+
+
+class DefaultTimeoutTests(unittest.TestCase):
+    """`timeout=None` means DEFAULT_TIMEOUT_S, not "no timeout" — the
+    central-enforcement point the timeouts ruling requires: every call site
+    that never named a timeout, including the legacy science subs, gets a
+    hang-catcher without their code changing."""
+
+    def test_run_tool_passes_the_default_when_timeout_is_none(self):
+        from pipeline.runtime import process as process_module
+
+        seen = {}
+
+        def fake_run(*a, **k):
+            seen["timeout"] = k.get("timeout")
+            return subprocess.CompletedProcess(a[0] if a else [], 0)
+
+        run_tool(["/bin/echo", "hi"], _run=fake_run)
+        self.assertEqual(seen["timeout"], process_module.DEFAULT_TIMEOUT_S)
+
+    def test_run_tool_explicit_timeout_overrides_the_default(self):
+        seen = {}
+
+        def fake_run(*a, **k):
+            seen["timeout"] = k.get("timeout")
+            return subprocess.CompletedProcess(a[0] if a else [], 0)
+
+        run_tool(["/bin/echo", "hi"], timeout=5, _run=fake_run)
+        self.assertEqual(seen["timeout"], 5)
+
+    def test_run_shell_passes_the_default_when_timeout_is_none(self):
+        from pipeline.runtime import process as process_module
+
+        seen = {}
+
+        def fake_run(*a, **k):
+            seen["timeout"] = k.get("timeout")
+            return subprocess.CompletedProcess(a[0] if a else "", 0)
+
+        run_shell("echo hi", _run=fake_run)
+        self.assertEqual(seen["timeout"], process_module.DEFAULT_TIMEOUT_S)
+
+    def test_run_shell_explicit_timeout_overrides_the_default(self):
+        seen = {}
+
+        def fake_run(*a, **k):
+            seen["timeout"] = k.get("timeout")
+            return subprocess.CompletedProcess(a[0] if a else "", 0)
+
+        run_shell("echo hi", timeout=5, _run=fake_run)
+        self.assertEqual(seen["timeout"], 5)
 
 
 class RunToolArgumentValidationTests(unittest.TestCase):
