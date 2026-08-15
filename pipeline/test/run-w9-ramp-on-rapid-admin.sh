@@ -103,7 +103,7 @@ podman run --rm --entrypoint="" -v "\$STAGE/repo":/w9:Z -w /w9 \\
   -e RAPID_MANIFEST_BUCKET=roman-rapid-products \\
   -e RAPID_MANIFEST_PREFIX=submissions \\
   -e RAPID_IMAGE_DIGEST="${IMAGE#*@}" \\
-  -e RAPID_RELEASE_IDENTITY="w9-ramp" \\
+  -e RAPID_RELEASE_IDENTITY="\${RAPID_RELEASE_IDENTITY:-smdc-7655dcc}" \\
   --network host \\
   "$IMAGE" python3.11 -m pipeline.test.live_w9_ramp "$PHASE" "$CAP" "$TAG" 2>&1 | tail -120
 rc=\${PIPESTATUS[0]}
