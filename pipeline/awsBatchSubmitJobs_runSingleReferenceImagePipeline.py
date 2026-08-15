@@ -342,6 +342,7 @@ if __name__ == '__main__':
         jdend = generateReferenceImage_return_list[11]
         zprefimg = generateReferenceImage_return_list[12]
         total_refimage_exptime = generateReferenceImage_return_list[13]
+        input_images_used_csv_file_s3_bucket_object_name = generateReferenceImage_return_list[14]
 
         shutil.move(f"{refimage_generation_subdir}/{awaicgen_output_mosaic_image_file}", awaicgen_output_mosaic_image_file)
         print(f"Moved {refimage_generation_subdir}/{awaicgen_output_mosaic_image_file} up to {awaicgen_output_mosaic_image_file}")
@@ -526,7 +527,7 @@ if __name__ == '__main__':
         mosaic_uncert_image_name_for_db_record = "s3://{}/{}".format(product_s3_bucket,awaicgen_output_mosaic_uncert_image_s3_bucket_object_name)
         refimage_sex_catalog_name_for_db_record = "s3://{}/{}".format(product_s3_bucket,refimage_sex_catalog_s3_bucket_object_name)
         refimage_psf_catalog_name_for_db_record = "s3://{}/{}".format(product_s3_bucket,refimage_psf_catalog_s3_bucket_object_name)
-        input_images_csv_name_for_download = "s3://{}/{}".format(job_info_s3_bucket,input_images_csv_file_s3_bucket_object_name)
+        input_images_csv_name_for_download = "s3://{}/{}".format(job_info_s3_bucket,input_images_used_csv_file_s3_bucket_object_name)
 
         product_config['REF_IMAGE']['awaicgen_output_mosaic_image_file'] = mosaic_image_name_for_db_record
         product_config['REF_IMAGE']['awaicgen_output_mosaic_cov_map_file'] = mosaic_cov_map_name_for_db_record
