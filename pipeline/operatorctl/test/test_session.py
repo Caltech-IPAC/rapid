@@ -7,9 +7,10 @@ restored `rapid_operator` on exit regardless of which tier the session had
 actually assumed — a latent privilege-widening bug waiting for a second
 tier to exist. `RAPID_OPERATOR_TIER` (`"human"`, the default, or `"agent"`)
 now selects which role `operator_session()` assumes; the role actually
-assumed is threaded back through `conn.rapid_operator_role` so
-`break_glass_role()` can restore the RIGHT role on exit, and — the security
-property that must not regress — refuse outright when called from a
+assumed is threaded back through the `_ASSUMED_ROLES` side table (keyed
+by `id(conn)` — see `session.py` for why it is a side table and not an
+attribute on the connection) so `break_glass_role()` can restore the
+RIGHT role on exit, and — the security property that must not regress — refuse outright when called from a
 session that assumed the agent tier, because the agent tier is never
 granted `rapid_break_glass` membership and this module must not depend on
 Postgres alone to enforce that.
@@ -49,7 +50,8 @@ if "psycopg2" not in sys.modules:
         sys.modules["psycopg2.extensions"] = extensions_stub
         sys.modules["psycopg2.sql"] = sql_stub
 
-from pipeline.operatorctl.session import (AGENT_OPERATOR_ROLE,
+from pipeline.operatorctl.session import (_ASSUMED_ROLES,
+                                          AGENT_OPERATOR_ROLE,
                                           OPERATOR_ROLE,
                                           BREAK_GLASS_ROLE,
                                           OperatorSessionError,
@@ -108,6 +110,41 @@ class _FakeConn:
 
 def _set_role_calls(conn):
     return [c for c in conn.calls if c.startswith("SET ROLE")]
+
+
+class _SlottedConn:
+    """A connection double that REFUSES new attributes, exactly as a real
+    `psycopg2.extensions.connection` does.
+
+    This is the double `_FakeConn` above cannot be: `_FakeConn` is an
+    ordinary Python object with a `__dict__`, so `conn.rapid_operator_role
+    = role` would have succeeded silently against it — which is exactly
+    why the original `AttributeError: 'psycopg2.extensions.connection'
+    object has no attribute 'rapid_operator_role' and no __dict__ for
+    setting new attributes` went undetected by this suite until the
+    operate tier was first driven against a real database (2026-08-15).
+    `__slots__ = ()` reproduces the C type's refusal: any attempt to set
+    an attribute not already named in `__slots__` raises `AttributeError`,
+    the same failure mode psycopg2's C extension produces for having no
+    `__dict__` at all.
+    """
+
+    __slots__ = ("failing_statements", "calls", "rolled_back", "closed")
+
+    def __init__(self, failing_statements=()):
+        self.failing_statements = list(failing_statements)
+        self.calls = []
+        self.rolled_back = 0
+        self.closed = False
+
+    def cursor(self):
+        return _FakeCursor(self)
+
+    def rollback(self):
+        self.rolled_back += 1
+
+    def close(self):
+        self.closed = True
 
 
 class OperatorCredentialsTests(unittest.TestCase):
@@ -184,36 +221,41 @@ class OperatorSessionTierSelectionTests(unittest.TestCase):
         def connect_fn(application_name, lane=None, credentials=None):
             return conn
 
+        assumed_role_in_block = None
         with unittest.mock.patch.dict("os.environ", env, clear=True):
             with operator_session(credentials=creds,
                                   connect_fn=connect_fn) as yielded:
                 self.assertIs(yielded, conn)
-        return conn
+                # `_ASSUMED_ROLES` is popped in `operator_session()`'s
+                # `finally`, so the entry only exists while the block is
+                # open — read it here, not after the `with` exits.
+                assumed_role_in_block = _ASSUMED_ROLES.get(id(conn))
+        return conn, assumed_role_in_block
 
     def test_no_env_var_set_assumes_rapid_operator_exactly_as_today(self):
-        conn = self._run({})
+        conn, assumed_role = self._run({})
         self.assertEqual(_set_role_calls(conn),
                          ["SET ROLE " + OPERATOR_ROLE])
-        self.assertEqual(conn.rapid_operator_role, OPERATOR_ROLE)
+        self.assertEqual(assumed_role, OPERATOR_ROLE)
 
     def test_tier_human_explicitly_assumes_rapid_operator(self):
-        conn = self._run({"RAPID_OPERATOR_TIER": "human"})
+        conn, assumed_role = self._run({"RAPID_OPERATOR_TIER": "human"})
         self.assertEqual(_set_role_calls(conn),
                          ["SET ROLE " + OPERATOR_ROLE])
-        self.assertEqual(conn.rapid_operator_role, OPERATOR_ROLE)
+        self.assertEqual(assumed_role, OPERATOR_ROLE)
 
     def test_tier_agent_assumes_rapid_agent_operator(self):
-        conn = self._run({"RAPID_OPERATOR_TIER": "agent"})
+        conn, assumed_role = self._run({"RAPID_OPERATOR_TIER": "agent"})
         self.assertEqual(_set_role_calls(conn),
                          ["SET ROLE " + AGENT_OPERATOR_ROLE])
-        self.assertEqual(conn.rapid_operator_role, AGENT_OPERATOR_ROLE)
+        self.assertEqual(assumed_role, AGENT_OPERATOR_ROLE)
 
     def test_the_default_path_is_byte_for_byte_unchanged(self):
         """Same SQL text for unset and for `human` — the two must be
         indistinguishable, which is the "byte-for-byte" requirement.
         """
-        default_conn = self._run({})
-        human_conn = self._run({"RAPID_OPERATOR_TIER": "human"})
+        default_conn, _ = self._run({})
+        human_conn, _ = self._run({"RAPID_OPERATOR_TIER": "human"})
         self.assertEqual(_set_role_calls(default_conn),
                          _set_role_calls(human_conn))
 
@@ -286,7 +328,8 @@ class BreakGlassRoleTests(unittest.TestCase):
 
     def test_break_glass_from_the_agent_tier_is_refused(self):
         conn = _FakeConn()
-        conn.rapid_operator_role = AGENT_OPERATOR_ROLE
+        _ASSUMED_ROLES[id(conn)] = AGENT_OPERATOR_ROLE
+        self.addCleanup(_ASSUMED_ROLES.pop, id(conn), None)
 
         with self.assertRaises(OperatorSessionError) as ctx:
             with break_glass_role(conn):
@@ -300,7 +343,8 @@ class BreakGlassRoleTests(unittest.TestCase):
 
     def test_break_glass_from_the_human_tier_still_works(self):
         conn = _FakeConn()
-        conn.rapid_operator_role = OPERATOR_ROLE
+        _ASSUMED_ROLES[id(conn)] = OPERATOR_ROLE
+        self.addCleanup(_ASSUMED_ROLES.pop, id(conn), None)
 
         with break_glass_role(conn) as bg_conn:
             self.assertIs(bg_conn, conn)
@@ -317,7 +361,8 @@ class BreakGlassRoleTests(unittest.TestCase):
         break-glass is reachable from.
         """
         conn = _FakeConn()
-        conn.rapid_operator_role = OPERATOR_ROLE
+        _ASSUMED_ROLES[id(conn)] = OPERATOR_ROLE
+        self.addCleanup(_ASSUMED_ROLES.pop, id(conn), None)
 
         with break_glass_role(conn):
             pass
@@ -325,14 +370,14 @@ class BreakGlassRoleTests(unittest.TestCase):
         self.assertEqual(conn.calls[-1], "SET ROLE " + OPERATOR_ROLE)
 
     def test_a_session_missing_the_role_marker_is_treated_as_human(self):
-        """A connection that never went through `operator_session()` (or
-        predates this attribute) has no `rapid_operator_role` set at all.
-        Defaulting that to the human tier keeps any caller that
-        constructs a connection some other way working exactly as before,
-        rather than refusing on a marker it never had reason to set.
+        """A connection that never went through `operator_session()` has
+        no entry in `_ASSUMED_ROLES` at all. Defaulting that to the human
+        tier keeps any caller that constructs a connection some other way
+        working exactly as before, rather than refusing on a marker it
+        never had reason to set.
         """
         conn = _FakeConn()
-        self.assertFalse(hasattr(conn, "rapid_operator_role"))
+        self.assertNotIn(id(conn), _ASSUMED_ROLES)
 
         with break_glass_role(conn):
             pass
@@ -346,7 +391,8 @@ class BreakGlassRoleTests(unittest.TestCase):
         conn = _FakeConn(failing_statements=[
             ("SET ROLE " + BREAK_GLASS_ROLE,
              RuntimeError("permission denied to set role"))])
-        conn.rapid_operator_role = OPERATOR_ROLE
+        _ASSUMED_ROLES[id(conn)] = OPERATOR_ROLE
+        self.addCleanup(_ASSUMED_ROLES.pop, id(conn), None)
 
         with self.assertRaises(OperatorSessionError) as ctx:
             with break_glass_role(conn):
@@ -354,6 +400,60 @@ class BreakGlassRoleTests(unittest.TestCase):
 
         self.assertIn(BREAK_GLASS_ROLE, str(ctx.exception))
         self.assertEqual(conn.rolled_back, 1)
+
+
+class OperatorSessionAgainstAnAttributeRefusingConnectionTests(
+        unittest.TestCase):
+    """Regression test for the live defect (2026-08-15):
+    `AttributeError: 'psycopg2.extensions.connection' object has no
+    attribute 'rapid_operator_role' and no __dict__ for setting new
+    attributes`.
+
+    Every other test in this module uses `_FakeConn`, an ordinary Python
+    object that accepts any attribute silently — a double that CANNOT
+    refuse what the real `psycopg2.extensions.connection` C type forbids,
+    so it could not have caught `operator_session()` setting an attribute
+    directly on the connection. `_SlottedConn` closes that gap: its
+    `__slots__ = ()`-style refusal of unknown attributes reproduces the
+    real type's behaviour, so this test would fail with the exact
+    `AttributeError` above if the fix regressed back to
+    `conn.rapid_operator_role = role`.
+    """
+
+    def test_operator_session_completes_against_an_attribute_refusing_conn(
+            self):
+        conn = _SlottedConn()
+
+        def connect_fn(application_name, lane=None, credentials=None):
+            return conn
+
+        with unittest.mock.patch.dict("os.environ", {}, clear=True):
+            with operator_session(
+                    credentials=Credentials("x", "placeholder"),
+                    connect_fn=connect_fn) as yielded:
+                self.assertIs(yielded, conn)
+                # The tier must be recorded in the side table, not on the
+                # connection — `conn` has no `__dict__` to record it in.
+                self.assertEqual(_ASSUMED_ROLES.get(id(conn)),
+                                 OPERATOR_ROLE)
+
+        self.assertEqual(_set_role_calls(conn),
+                         ["SET ROLE " + OPERATOR_ROLE])
+        # The entry must not outlive the session, or a later object
+        # reusing this freed `id()` could inherit a stale tier.
+        self.assertNotIn(id(conn), _ASSUMED_ROLES)
+
+    def test_break_glass_completes_against_an_attribute_refusing_conn(self):
+        conn = _SlottedConn()
+        _ASSUMED_ROLES[id(conn)] = OPERATOR_ROLE
+        self.addCleanup(_ASSUMED_ROLES.pop, id(conn), None)
+
+        with break_glass_role(conn) as bg_conn:
+            self.assertIs(bg_conn, conn)
+
+        self.assertEqual(_set_role_calls(conn),
+                         ["SET ROLE " + BREAK_GLASS_ROLE,
+                          "SET ROLE " + OPERATOR_ROLE])
 
 
 if __name__ == "__main__":
