@@ -1419,6 +1419,39 @@ class ReconcilerService:
                 "attempt %s carries application facts with no start time; "
                 "flagged contradictory rather than forced into a terminal "
                 "state", attempt_id)
+            # THE ATTEMPT IS FLAGGED; THE UNIT STILL NEEDS A DISPOSITION.
+            # This branch used to return here, and its two siblings below
+            # (CLASS_NEVER_STARTED, CLASS_ABRUPT_LOSS) do not — so every unit
+            # whose ONLY attempt died before writing a terminal record
+            # stranded in `submitted` forever, needing a human with operator
+            # rights to close it by hand. Work unit 352 was the first one
+            # ever produced (`missing_or_contradictory` was 0 at every gate
+            # of every prior campaign), and it took an audited
+            # `cancel_work_units` call to clear. Under launch cadence this
+            # happens once per recurring startup-class failure.
+            #
+            # `missing_or_contradictory` is a TERMINAL attempt state — the
+            # attempt is flagged for a human, not awaiting anything — so the
+            # unit behind it is as entitled to a disposition as after any
+            # other terminal state. Handing it to the same helper its
+            # siblings use means no new transition, no new writer and no new
+            # edge: the `submitted -> blocked` edge is the ordinary
+            # application-failure path.
+            #
+            # `blocked`, not `failed`: a contradictory row is application
+            # facts with no start time, which is a fault in what the
+            # application recorded rather than a scheduler-visible loss.
+            # Retry policy v1 parks that ("never tombstoned") instead of
+            # burning the logical work, and `_close_work_unit` applies that
+            # policy rather than this branch deciding for it.
+            #
+            # Safe against a live sibling by construction, not by a new
+            # check: `_close_work_unit` refuses ANY disposition while another
+            # attempt of the same unit is still open (finding 6's
+            # `sibling_open` guard), and leaves a unit alone that an operator
+            # has already moved out of `submitted`.
+            self._close_work_unit(row, outcome="failed",
+                                  error_category=error_category)
             return
 
         # The sequence the record actually LANDED at, which differs from the
