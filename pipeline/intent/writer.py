@@ -283,7 +283,8 @@ class Executor(Protocol):
 
 @dataclasses.dataclass(frozen=True)
 class WorkUnitIdentity:
-    """The work-unit identity quadruple migration 036's schema names.
+    """The work-unit identity migration 036's schema names, plus the data
+    class migration 090 added.
 
     (job_type, input_scope, operational_class, definition_version) — the
     partial unique index enforces one NON-SUPERSEDED unit per
@@ -299,6 +300,21 @@ class WorkUnitIdentity:
     input_scope: str
     operational_class: str
     definition_version: int
+
+    #: The unit's DATA class — substrate x injection, inherited from the
+    #: admission manifests covering its inputs (migration 090). Carried on
+    #: the identity because it is fixed when the unit is created and never
+    #: changes thereafter, exactly like `operational_class` beside it — and
+    #: NOT part of the uniqueness the partial unique index enforces, also
+    #: like `operational_class`: two units differing only in data class
+    #: would be two units over the same inputs, which the index is there to
+    #: prevent.
+    #:
+    #: Optional because it is genuinely absent for units whose inputs
+    #: predate the carrier, and that absence is load-bearing: it selects the
+    #: pre-data-class object-key grammar in both the builder and GC's
+    #: mirror, which is how objects already in the bucket stay attributable.
+    data_class: str = None
 
 
 def _require_known_state(state: str, *, param_name: str) -> None:
@@ -396,14 +412,20 @@ class WorkUnitWriter:
         sql = (
             "INSERT INTO work_units ("
             "  job_type, input_scope, operational_class, definition_version,"
-            "  state, blocked_reason, campaign_id, created_at, updated_at"
-            ") VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)"
+            "  state, blocked_reason, campaign_id, created_at, updated_at,"
+            "  data_class"
+            ") VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)"
             " RETURNING work_unit_id"
         )
         rows = self._execute(sql, [
             identity.job_type, identity.input_scope,
             identity.operational_class, identity.definition_version,
             state, blocked_reason, campaign_id, moment, moment,
+            # NULL where the identity carries none, which 090's CHECK
+            # admits deliberately — the class is genuinely unknown for
+            # inputs admitted before it was recorded, and NULL is what makes
+            # those units reconstruct the older object-key grammar.
+            identity.data_class,
         ])
         work_unit_id = _single_value(rows)
 

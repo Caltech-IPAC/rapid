@@ -193,9 +193,11 @@ def make_context(**overrides) -> StageContext:
         "unit": unit,
         "job_type": "science",
         "science": SCIENCE_CONFIG,
-        # `data/class` is what `product_prefix()` leads the key with. It is
-        # on the INTERIM parameter path (see `product_prefix`'s docstring),
-        # so it is a parameter here rather than a per-unit fact.
+        # `data/class` is the FALLBACK source for the leading key component
+        # (see `product_prefix`'s docstring): a unit carrying no data_class
+        # fact of its own — as this fixture's default unit does not — files
+        # under the class its deployment declares. Tests of the primary
+        # path put the class on the payload instead.
         "parameters": {"s3/products-bucket": "rapid-products",
                        "data/class": "real-pristine"},
         "logger": FakeLogger(),
@@ -541,13 +543,84 @@ class DataClassTests(unittest.TestCase):
     def test_a_missing_data_class_parameter_is_refused(self):
         # No default, by the parameter tree's standing rule: a default would
         # file every object of a misconfigured deployment under a plausible
-        # but wrong class, and nothing downstream could tell.
+        # but wrong class, and nothing downstream could tell. Reached only
+        # when the unit carries no class of its own — this fixture's unit
+        # does not — so this pins the FALLBACK's own refusal.
         context = make_context(run_id="run-1", attempt_id=1,
                                parameters={"s3/products-bucket": "b"})
 
         with self.assertRaises(ConfigError) as ctx:
             context.product_prefix()
         self.assertIn("data/class", str(ctx.exception))
+
+    def test_the_units_own_class_leads_the_key(self):
+        # THE PRIMARY PATH. The class is a property of the DATA, inherited
+        # from the admission manifests covering the unit's inputs and
+        # carried on its payload — not a deployment-wide setting.
+        unit = ProcessingUnit(payload=fixtures.science_payload(
+            exposure=1, sca=2, science_image_uri="s3://b/img.fits",
+            data_class="sim-injected"))
+        context = make_context(unit=unit, run_id="run-1", attempt_id=1)
+
+        self.assertEqual("sim-injected",
+                         context.product_prefix().split("/")[0])
+
+    def test_the_units_own_class_beats_the_deployments(self):
+        """The precedence that makes a mixed deployment correct.
+
+        The fixture's parameter says `real-pristine` and this unit says
+        `sim-injected`; the unit wins. This is the property the interim
+        parameter path could not provide — it filed EVERY unit under one
+        class, which was right only while a deployment processed one class,
+        and silently misfiled every unit of any deployment that did not.
+        Asserted as a disagreement rather than an agreement, because two
+        sources that agree cannot show which one was read.
+        """
+        unit = ProcessingUnit(payload=fixtures.science_payload(
+            exposure=1, sca=2, science_image_uri="s3://b/img.fits",
+            data_class="sim-injected"))
+        context = make_context(
+            unit=unit, run_id="run-1", attempt_id=1,
+            parameters={"s3/products-bucket": "b",
+                        "data/class": "real-pristine"})
+
+        self.assertEqual("sim-injected",
+                         context.product_prefix().split("/")[0])
+
+    def test_every_declared_class_leads_its_key_from_the_unit(self):
+        # The closed set again, but through the per-unit carrier — the
+        # parameter-path version of this test above cannot show that the
+        # fact reaches the key, only that the parameter does.
+        for data_class in DATA_CLASSES:
+            with self.subTest(data_class=data_class):
+                unit = ProcessingUnit(payload=fixtures.science_payload(
+                    exposure=1, sca=2,
+                    science_image_uri="s3://b/img.fits",
+                    data_class=data_class))
+                context = make_context(unit=unit, run_id="run-1",
+                                       attempt_id=1)
+
+                self.assertEqual(
+                    data_class, context.product_prefix().split("/")[0])
+
+    def test_an_unknown_class_on_the_unit_is_refused_too(self):
+        # The fact path gets the same refusal as the parameter path: a
+        # token outside the registry is a misfiling wherever it came from,
+        # and the per-unit carrier must not be the way one sneaks in.
+        unit = ProcessingUnit(payload=fixtures.science_payload(
+            exposure=1, sca=2, science_image_uri="s3://b/img.fits",
+            data_class="simulated-injected"))
+        context = make_context(unit=unit, run_id="run-1", attempt_id=1)
+
+        with self.assertRaises(ConfigError) as ctx:
+            context.product_prefix()
+        message = str(ctx.exception)
+        self.assertIn("simulated-injected", message)
+        # And it must say the value came from the UNIT, not from the
+        # parameter tree — an operator told to fix `data/class` when the
+        # real source is the unit's own provenance would change a setting
+        # that has no effect on this attempt.
+        self.assertIn("unit", message)
 
     def test_the_degraded_prefix_carries_the_data_class_too(self):
         # A context that lost its attempt identity is still real data of a

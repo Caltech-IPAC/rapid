@@ -166,20 +166,30 @@ class StageContext:
         makes an S3 prefix separable that way. Put it anywhere later and
         every consumer has to list the whole tree and filter.
 
-        **THE PARAMETER IS AN INTERIM PATH, NOT THE FINISHED DESIGN.** The
-        data class is a property of the DATA, so it belongs on the work unit
-        — carried from admission, through `work_units`, into the per-unit
-        payload, and read here as a fact. That is real plumbing (a schema
-        migration, the gatherers, and the payload schemas) and is not on this
-        branch. Until it lands, the class is read from the OPERATIONAL
-        PARAMETER TREE, where it is a deployment-wide setting: every unit a
-        given deployment processes is filed under the one class its
-        `data/class` parameter names. That is correct only while a deployment
-        does not mix classes, which is the assumption this stopgap rests on
-        and the reason it is a stopgap. When the per-unit carrier exists,
-        this read becomes `self.fact("data_class")` and the parameter goes
-        away — `pipeline/gc/references.py`'s `canonical_prefix()` mirror has
-        to move with it, as it does with every change to this grammar.
+        **THE CLASS IS THE UNIT'S OWN, AND THE PARAMETER IS THE FALLBACK.**
+        The data class is a property of the DATA, so it belongs on the work
+        unit: it is fixed at admission, recorded on `admission_manifests`,
+        inherited onto `work_units.data_class` at gathering (taking the most
+        restrictive class where a unit's inputs span manifests), carried in
+        the unit's payload, and read HERE as a fact. That plumbing —
+        migration 090, the gatherers, the payload schema — is what this read
+        now depends on.
+
+        The deployment-wide `data/class` parameter that used to be the only
+        source is kept as a FALLBACK, not retired. It was correct only while
+        a deployment did not mix classes, which is why it was always
+        labelled a stopgap; but units gathered before the carrier existed
+        have no fact to read, and retiring the parameter would leave them
+        with no class at all. So a fact wins where there is one, and the
+        parameter answers where there is not. A deployment that genuinely
+        mixes classes is now served correctly for every unit gathered since
+        090, which is the property the stopgap could not provide.
+
+        `pipeline/gc/references.py`'s `canonical_prefix()` mirror moves with
+        every change to this grammar, and it did with this one: it reads the
+        same class from `work_units.data_class` through `attempt_facts()`,
+        and reconstructs the pre-data-class shape when that column is NULL —
+        which is how objects written before any of this stay attributable.
 
         A context with no attempt identity — a unit test constructing a bare
         one — gets a prefix that says so rather than silently producing the
@@ -222,15 +232,30 @@ class StageContext:
         # job type must fail with its own message above — it has no business
         # building a key at all, and a missing-parameter error here would
         # misdescribe that defect as a deployment misconfiguration.
-        data_class = self.parameter("data/class")
+        #
+        # THE UNIT'S OWN CLASS FIRST, THE PARAMETER ONLY AS FALLBACK. The
+        # fact is the finished design — the data class is a property of the
+        # DATA, carried from admission through `work_units.data_class`
+        # (migration 090) into this unit's payload. The parameter is the
+        # stopgap it replaces, and it is kept rather than retired because
+        # units gathered BEFORE the carrier existed have no fact to read and
+        # must keep filing under the class their deployment declared.
+        # Retiring it would strand exactly those units; the fallback costs
+        # one branch and the interim path's own documented behaviour is what
+        # it preserves.
+        data_class = self.optional_fact("data_class")
+        source = "the unit's data_class fact"
+        if data_class is None:
+            data_class = self.parameter("data/class")
+            source = ("the parameter tree's data/class (this unit carries "
+                      "no data_class fact of its own)")
         if data_class not in DATA_CLASSES:
             raise ConfigError(
-                f"the parameter tree's data/class is {data_class!r}, which is "
-                f"not a data class; it must be one of "
-                f"{', '.join(DATA_CLASSES)}. The data class is the LEADING "
-                f"component of every object key, so an unrecognized value "
-                f"would file this attempt's objects under a prefix nothing "
-                f"lists and nothing collects.",
+                f"{source} is {data_class!r}, which is not a data class; it "
+                f"must be one of {', '.join(DATA_CLASSES)}. The data class "
+                f"is the LEADING component of every object key, so an "
+                f"unrecognized value would file this attempt's objects under "
+                f"a prefix nothing lists and nothing collects.",
                 parameter="data/class")
         # The degraded branch carries it too: a context that lost its attempt
         # identity is still real data of a known class, and filing it outside

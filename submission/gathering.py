@@ -51,6 +51,7 @@ from pipeline.repositories.errors import RepositoryQueryFailed
 from database.modules.utils.roman_tessellation_db import (
     RomanTessellationClosedForm)
 from . import blocked
+from . import data_class as data_class_rules
 from . import payloads
 from .manifest import ProcessingUnit
 from .routes import (JOB_TYPE_ALERT_PRODUCTION, JOB_TYPE_CATALOG_LOAD,
@@ -123,6 +124,14 @@ class UnitSource(Protocol):
     # absent, the batched equivalent of the singular method's `None`.
     def get_info_for_l2files(
             self, rids: Sequence[int]) -> dict[int, Sequence[Any]]: ...
+
+    # The provenance chain's read side (migration 090): the DISTINCT data
+    # classes recorded on the admission manifests covering these rids. A set
+    # rather than one value because a unit spanning manifests of different
+    # classes takes the most restrictive of them, and that combination is
+    # `submission.data_class`'s job, not the query's.
+    def get_data_classes_for_l2files(
+            self, rids: Sequence[int]) -> Sequence[Any]: ...
 
     def get_exposure_filter(self, fid: int) -> Any: ...
 
@@ -391,7 +400,55 @@ def science_facts(handle: UnitSource, rid: int, field: int, fid: int,
         facts["reference_image_infobits"] = _maybe_int(
             reference.get("infobits"))
         facts["reference_image_ppid"] = _maybe_int(reference.get("ppid"))
+
+    # THE DATA CLASS IS INHERITED HERE, at the one place both product-
+    # producing gatherers pass through. Science and reference-image are
+    # exactly the job types that mint object keys
+    # (`submission.subjects.is_product_producing`), and this function
+    # resolves the facts for both — so the class lands on every unit whose
+    # products need a leading key component, and on no unit whose products
+    # do not exist.
+    #
+    # The reference image is deliberately NOT folded into the input set,
+    # even though this unit reads one. The unit's identity is its L2 input;
+    # the reference is a resolved dependency, and a science unit does not
+    # become validation data because it differenced against a reference
+    # built from injected pixels — that reference has its own class on its
+    # own products. Widening the input set to dependencies would make the
+    # rule transitive over the whole build graph, which the design does not
+    # say and which would eventually classify everything as the least
+    # eligible thing it ever touched.
+    data_class = _data_class_for_inputs(handle, [rid])
+    if data_class is not None:
+        facts["data_class"] = data_class
     return facts
+
+
+def _data_class_for_inputs(handle: UnitSource,
+                           rids: Sequence[int]) -> str | None:
+    """The class a unit built from these L2 inputs inherits.
+
+    Absent — None — rather than defaulted when nothing knows: an L2 file
+    admitted before migration 090, or registered by a legacy path with no
+    admission row, carries no class, and inventing one would file real
+    objects under a prefix chosen by this function rather than by the data.
+    The builder's fallback to the deployment-wide parameter is what serves
+    those units, and it is a deliberate, documented path — unlike a guess
+    made here, which would be indistinguishable from knowledge.
+    """
+    try:
+        recorded = handle.get_data_classes_for_l2files(list(rids))
+    except RapidDBCallFailed as exc:
+        raise GatheringError(
+            f"data-class lookup failed for rids {list(rids)}: {exc}") from exc
+    if not recorded:
+        return None
+    # `most_restrictive` refuses an unregistered token rather than passing it
+    # through. That refusal is wanted here: the column is CHECK-constrained
+    # by 090, so a value outside the registry means the constraint was
+    # dropped or bypassed, and building an object key from it would file
+    # bytes where nothing looks.
+    return data_class_rules.most_restrictive(recorded)
 
 
 def _best_reference(handle: UnitSource, reference_ppid: int,

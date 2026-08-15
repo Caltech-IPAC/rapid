@@ -670,6 +670,29 @@ def _input_scope_for(job_type, unit):
     return build_input_scope(job_type, unit)
 
 
+def _data_class_for(unit):
+    """The `work_units.data_class` value for one manifest unit.
+
+    Read off the unit's payload, where gathering put it after inheriting it
+    from the admission manifests covering the unit's inputs
+    (`submission.gathering.science_facts`, via `submission.data_class`).
+    This function only carries it across the seam — the inheritance rule,
+    including the most-restrictive combination for a unit spanning
+    manifests, is decided at gathering where the inputs are in hand, not
+    here where only the finished unit is.
+
+    `getattr` with a None default, deliberately, and it is the one place in
+    this file where that shape is right: the field exists only on the
+    product-producing payloads (science and reference-image — the only job
+    types that mint object keys), so a crossmatch or catalog-load unit
+    genuinely has no such attribute, and its absence is the correct answer
+    rather than a missing value. A unit whose class is unknown, and a unit
+    whose job type can have no class, both give NULL — and 090's column
+    admits NULL for exactly that reason.
+    """
+    return getattr(unit.facts, "data_class", None)
+
+
 def _authorize_units(execute, job_type, units, moment):
     """Decide, PER UNIT, whether this call may submit it (finding 1).
 
@@ -833,7 +856,8 @@ def _decide_work_unit(execute, job_type, unit, moment):
     identity = WorkUnitIdentity(
         job_type=job_type, input_scope=_input_scope_for(job_type, unit),
         operational_class=_operational_class_for(job_type),
-        definition_version=1)
+        definition_version=1,
+        data_class=_data_class_for(unit))
     work_writer = WorkUnitWriter(execute)
 
     existing = work_writer.find_current_unit(

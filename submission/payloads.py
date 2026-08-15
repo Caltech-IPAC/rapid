@@ -353,6 +353,30 @@ class ImagingPayload(ExposureScaPayload):
     overlapping_fields: tuple = ()
     reference_overlapping_fields: tuple = ()
 
+    #: THE DATA CLASS THIS UNIT'S PRODUCTS ARE FILED UNDER — substrate x
+    #: injection, as one of `pipeline.stages.context.DATA_CLASSES`. The
+    #: LEADING component of every object key this unit's attempts write, so
+    #: it is per-unit provenance, not configuration: `Context.product_prefix
+    #: ()` reads it as a fact, and the deployment-wide `data/class`
+    #: parameter it replaces was a stopgap correct only while a deployment
+    #: did not mix classes.
+    #:
+    #: **ON THIS PAYLOAD AND NO OTHER, because these are the only job types
+    #: that mint object keys.** `submission.subjects.is_product_producing`
+    #: is True for exactly science and reference-image — the two this class
+    #: serves — and `product_prefix()` REFUSES every other job type outright
+    #: (co-design ruling 2), so a data class on a crossmatch or catalog-load
+    #: payload would be a field nothing could ever read. The storage design
+    #: scopes the mandate the same way: the component is mandatory "in the
+    #: product-grammar buckets", and records, pointers, metadata and logs
+    #: carry none.
+    #:
+    #: Optional, and its None is load-bearing rather than a gap: a unit
+    #: gathered before the carrier existed has no class, its objects carry
+    #: the pre-data-class key grammar, and both the builder and GC's mirror
+    #: fall back to that older shape for exactly this None.
+    data_class: str = None
+
     INVOCATION_FACTS = (
         "rid", "fid", "field", "rtid", "expid", "mjdobs", "exptime",
         "infobits", "science_image_uri", "sky_position", "tile_position",
@@ -360,6 +384,7 @@ class ImagingPayload(ExposureScaPayload):
         "reference_image_uri", "reference_image_infobits",
         "reference_image_version", "reference_image_ppid",
         "overlapping_fields", "reference_overlapping_fields",
+        "data_class",
     )
 
     #: The members a unit cannot be built without — and ONLY those.

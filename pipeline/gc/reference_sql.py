@@ -267,27 +267,29 @@ def attempt_facts(execute, run_ids=None):
     Verified against `036-intent-schema-v1.sql:111-122` on this branch's head
     rather than assumed.
 
-    **`data_class` IS ALWAYS None HERE, AND THAT IS THE INTERIM STATE.**
-    `product_prefix()` now leads the key with a data class, but that class
-    comes from the operational parameter tree, not from the unit — there is
-    NO `work_units.data_class` column to select, and this branch does not add
-    one. So every attempt reconstructs with `data_class=None`, which is the
-    pre-data-class grammar, and attribution keeps working exactly as it did
-    for every object already in the bucket.
+    **`data_class` IS NOW READ FROM THE UNIT, AND NULL IS AN ANSWER.**
+    This SELECT used to hardcode `data_class=None` because there was no
+    column to read: `product_prefix()` led the key with a class taken from
+    the deployment-wide operational parameter tree, not from the unit.
+    Migration 090 adds `work_units.data_class` and this reads it.
 
-    The full fix — carrying the data class per-unit from admission — is what
-    adds the column; when it does, this SELECT gains `w.data_class` and the
-    key emitted here stops being None for attempts that have one. The
-    explicit None is written out rather than left implicit so that the
-    absence is visibly a decision and the call site of the change is
-    obvious.
+    A NULL is not a missing value to be defaulted away — it is the value
+    that keeps old objects attributable. Every object written before 090
+    carries the pre-data-class key grammar, and its key is immutable, so
+    its unit's NULL is exactly what makes `canonical_prefix()` reconstruct
+    that older shape (see its "THE COEXISTENCE CONTRACT"). Coalescing NULL
+    to a token here — any token — would make every one of those objects
+    unattributable at a stroke, which is the silent 100%-retention failure
+    `pipeline/gc/references.py` documents. So the column is passed through
+    untouched, NULL and all.
     """
     sql = """
     SELECT a.attempt_id,
            coalesce(lj.job_type, w.job_type) AS job_type,
            a.run_id,
            CASE WHEN w.job_type IS NULL OR w.input_scope IS NULL THEN NULL
-                ELSE w.job_type || '/' || w.input_scope END AS unit_key
+                ELSE w.job_type || '/' || w.input_scope END AS unit_key,
+           w.data_class
       FROM attempts a
       LEFT JOIN logical_jobs lj ON lj.logical_job_id = a.logical_job_id
       LEFT JOIN work_units w ON w.work_unit_id = a.work_unit_id
@@ -298,14 +300,15 @@ def attempt_facts(execute, run_ids=None):
         params.append(list(run_ids))
     facts = {}
     for row in execute(sql, params) or ():
-        attempt_id, job_type, run_id, unit_key = _row_values(row, 4)
+        attempt_id, job_type, run_id, unit_key, data_class = _row_values(
+            row, 5)
         facts[attempt_id] = {"job_type": job_type, "run_id": run_id,
                              "unit_key": unit_key,
-                             # No column to read: see the docstring. None
-                             # selects the pre-data-class grammar, which is
-                             # what every object in the bucket was written
-                             # under.
-                             "data_class": None}
+                             # NULL here is a REAL ANSWER, not a missing one
+                             # — see the docstring. It selects the
+                             # pre-data-class grammar, which is what every
+                             # object written before 090 carries.
+                             "data_class": data_class}
     return facts
 
 

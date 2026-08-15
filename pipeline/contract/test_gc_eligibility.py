@@ -627,17 +627,26 @@ def _production_prefix(data_class, job_type=JOB_TYPE, run_id=RUN_ID,
                        attempt_id=ATTEMPT_ID):
     """What the REAL builder emits, for a real unit — no reimplementation.
 
-    `parameters` carries `data/class` because the data class is on the
-    INTERIM PARAMETER PATH (`StageContext.product_prefix`): it is
-    deployment-wide operational configuration until it is carried per-unit
-    from admission. When that changes, this fixture changes and the
-    assertions below do not — they are about the GRAMMAR, not its source.
+    THE CLASS IS ON THE UNIT, which is the source `product_prefix()` now
+    reads first. This fixture used to put it in `parameters` as
+    `data/class`, because the data class was deployment-wide operational
+    configuration on the interim path; migration 090 made it per-unit
+    provenance carried on the payload, and this moved with it — exactly as
+    this docstring said it would. The assertions below did not change,
+    because they are about the GRAMMAR, not its source.
+
+    Putting it on the unit is also what keeps this test honest. The
+    parameter is still accepted as a FALLBACK, so a fixture left on the old
+    path would still produce a correct prefix and this lockstep would still
+    pass — while testing the path production no longer takes for any unit
+    gathered since 090.
     """
     unit = ProcessingUnit(payload=payload_fixtures.science_payload(
-        exposure=90000, sca=1, science_image_uri="s3://b/i.fits"))
+        exposure=90000, sca=1, science_image_uri="s3://b/i.fits",
+        data_class=data_class))
     context = StageContext(
         workdir=None, unit=unit, job_type=job_type, science={},
-        parameters={"data/class": data_class}, logger=None,
+        parameters={}, logger=None,
         run_id=run_id, attempt_id=attempt_id)
     return context, context.product_prefix()
 
@@ -660,15 +669,49 @@ def test_gc_reconstructs_exactly_what_the_builder_emits(data_class):
     assert reconstructed == built
 
 
+def test_attempt_facts_selects_the_data_class_and_passes_nulls_through():
+    """The SELECT must ask for the column, and must not tidy its NULLs.
+
+    Two halves, and both matter. `attempt_facts()` used to hardcode
+    `data_class=None` because no column existed; if the SELECT does not
+    actually ask for `w.data_class`, every unit reconstructs the old grammar
+    and no new-grammar object is ever attributable — silently, since None is
+    a legal value. And if the pass-through coalesced NULL to some token, the
+    objects written before 090 would ALL stop being attributable at once.
+
+    So the query text is asserted to name the column, and a fake executor
+    returns one row of each kind to prove both travel unchanged. A live-SQL
+    execution of this same query is in the Postgres tier above, which is what
+    proves the column name is real rather than merely spelled.
+    """
+    from pipeline.gc import reference_sql
+
+    seen = {}
+
+    def execute(sql, params):
+        seen["sql"] = sql
+        return [(1, "science", "run-1", "science/90000/1", "sim-injected"),
+                (2, "science", "run-1", "science/90000/2", None)]
+
+    facts = reference_sql.attempt_facts(execute)
+
+    assert "w.data_class" in seen["sql"]
+    assert facts[1]["data_class"] == "sim-injected"
+    # NULL SURVIVES AS None. Not "", not a default token — the value that
+    # selects the pre-data-class grammar for every object already written.
+    assert facts[2]["data_class"] is None
+
+
 def test_gc_reconstructs_the_old_grammar_when_no_data_class_is_known():
     """`data_class=None` must reproduce the PRE-DATA-CLASS shape exactly.
 
     THE COEXISTENCE CONTRACT, asserted. Objects written before the data class
     led the key have immutable keys and will never acquire a leading
-    component; `None` is how they stay attributable. On the interim path
-    `attempt_facts()` yields None for every attempt, so this branch is the one
-    production takes today — if it drifted, GC would stop attributing
-    everything currently in the bucket.
+    component; `None` is how they stay attributable. `attempt_facts()` now
+    reads `work_units.data_class` (migration 090) and yields NULL for every
+    unit gathered before it, so this branch is the one production takes for
+    everything already in the bucket — if it drifted, GC would stop
+    attributing all of it at once.
 
     The expected value is built here from the components rather than by
     calling the builder with a flag it no longer has: the old grammar is a
