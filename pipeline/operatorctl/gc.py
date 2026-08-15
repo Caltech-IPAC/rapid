@@ -81,8 +81,15 @@ def compute_plan(conn, execute, *, inventory_source, inventory_id,
     WORK — real inventory, real reference queries, real anti-join — and simply
     does not write the plan.
     """
-    allowlist = (tuple(allowlist) if allowlist is not None
-                 else references.DELETABLE_CLASS_ALLOWLIST)
+    # VALIDATED HERE, NOT JUST INSIDE `classify()`. This is the
+    # `--allow-class` path: an operator-supplied allowlist is refused before
+    # it is even used to compute anything, rather than only when `classify()`
+    # happens to be reached — `validated_allowlist()` is the same guard
+    # `classify()` applies, called at THIS read point too so the mechanical
+    # refusal in `pipeline/gc/references.py` covers both consumption paths.
+    allowlist = references.validated_allowlist(
+        allowlist if allowlist is not None
+        else references.DELETABLE_CLASS_ALLOWLIST)
 
     inventory = read_inventory(
         inventory_source, inventory_id=inventory_id,

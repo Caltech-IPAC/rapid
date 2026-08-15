@@ -12,11 +12,13 @@ brief forbids changing.
 """
 
 import unittest
+from unittest import mock
 
 from observability.registration import RegistrationDecision
 from pipeline.reconciler.test.stubs import FakeConnection, attempt_row, utc
 from pipeline.registration import scoped
 from pipeline.registration.consumer import RegistrationRun
+from pipeline.runtime.boundaries import S3ObjectStore
 
 
 def reconciled(attempt_id=1, **overrides):
@@ -170,6 +172,150 @@ class DryRunTests(unittest.TestCase):
     def test_execute_flag_requests_real_registration(self):
         args = scoped._parse_args(["--run-id-prefix", "run-a", "--execute"])
         self.assertTrue(args.execute)
+
+
+class RegistrarForScopeTests(unittest.TestCase):
+    """`registrar_for_scope`'s own return shape: a `(register, store)` pair,
+    the store built over the `records_bucket` it was given.
+
+    No real S3 traffic — `S3ObjectStore.__init__` only stores the bucket and
+    client, it makes no calls, so a bare sentinel stands in for the client
+    without needing to fake any boto3 method.
+    """
+
+    def test_returns_a_two_tuple(self):
+        conn = FakeConnection(rows=[])
+        result = scoped.registrar_for_scope(
+            "records-bucket", conn, s3_client=object())
+
+        self.assertIsInstance(result, tuple)
+        self.assertEqual(2, len(result))
+
+    def test_the_second_element_is_a_store_over_the_records_bucket(self):
+        conn = FakeConnection(rows=[])
+        register, store = scoped.registrar_for_scope(
+            "records-bucket", conn, s3_client=object())
+
+        self.assertTrue(callable(register))
+        self.assertIsInstance(store, S3ObjectStore)
+        self.assertEqual("records-bucket", store.bucket)
+
+
+class LiveRegistrationFenceTests(unittest.TestCase):
+    """THE REGRESSION TEST. `run_scoped_registration`'s live-write branch
+    (`dry_run=False`) used to call `register_batch(conn, rows, register=
+    register, store=None)` — a hardcoded `None` that left every scoped
+    `--execute` run unfenced against GC deletes, per `register_batch`'s own
+    `store is not None` gate (`consumer.py`'s per-attempt loop: no store
+    means `_bind_fence` is never reached, and the attempt is registered
+    under `contextlib.nullcontext()` instead).
+
+    `register_batch` itself is patched here rather than driven through
+    `FakeConnection` — its own per-attempt transaction/lease/fence machinery
+    is `test_consumer`'s territory, and this module's brief is explicit that
+    those semantics are not under test here. What IS under test is what
+    `run_scoped_registration` hands `register_batch`: a spy that raises on
+    anything but a keyword call is enough to pin that.
+    """
+
+    def _run(self, records_bucket="records-bucket"):
+        conn = FakeConnection(rows=[reconciled(1, run_id="run-a")])
+        sentinel_register = object()
+        sentinel_store = object()
+        calls = []
+
+        def fake_registrar_for_scope(bucket, passed_conn, s3_client=None):
+            calls.append({
+                "records_bucket": bucket,
+                "conn": passed_conn,
+                "s3_client": s3_client,
+            })
+            return sentinel_register, sentinel_store
+
+        def fake_register_batch(passed_conn, rows, register=None,
+                                run=None, dry_run=False, store=None):
+            calls.append({
+                "register_batch": True,
+                "conn": passed_conn,
+                "rows": rows,
+                "register": register,
+                "store": store,
+            })
+            return RegistrationRun()
+
+        with mock.patch.object(scoped, "registrar_for_scope",
+                               fake_registrar_for_scope), \
+             mock.patch.object(scoped, "register_batch",
+                               fake_register_batch):
+            scoped.run_scoped_registration(
+                conn, run_id_prefix="run-a", dry_run=False,
+                records_bucket=records_bucket)
+
+        registrar_call = next(c for c in calls if "records_bucket" in c)
+        batch_call = next(c for c in calls if c.get("register_batch"))
+        return sentinel_store, registrar_call, batch_call
+
+    def test_register_batch_receives_a_non_none_store(self):
+        _, _, batch_call = self._run()
+        self.assertIsNotNone(batch_call["store"])
+
+    def test_register_batch_receives_the_same_store_the_registrar_built(self):
+        # Not just "non-None" — THE SAME OBJECT `registrar_for_scope` built,
+        # so the registrar and the fence are pointed at the same bucket by
+        # construction rather than by two independently-built stores that
+        # could disagree. A second, divergent `S3ObjectStore` would satisfy
+        # "non-None" while still reintroducing the bug this guards against
+        # (fencing one bucket while the registrar reads/writes another).
+        sentinel_store, _, batch_call = self._run()
+        self.assertIs(sentinel_store, batch_call["store"])
+
+    def test_registrar_for_scope_is_called_with_the_records_bucket(self):
+        _, registrar_call, _ = self._run(records_bucket="my-records-bucket")
+        self.assertEqual("my-records-bucket", registrar_call["records_bucket"])
+
+
+class DryRunNeverReachesRegisterBatchTests(unittest.TestCase):
+    """Unchanged behaviour, pinned alongside the fix above so a future edit
+    to the live-write branch cannot accidentally widen dry-run's reach: a
+    dry run returns before `register_batch` — and before `registrar_for_
+    scope` — are ever called at all (see `_dry_run_verdicts`'s docstring for
+    why: `register_batch`'s SKIP branch writes unconditionally, so a scoped
+    dry run must not call it for ANY verdict, not just avoid passing it a
+    `register` callback)."""
+
+    def test_dry_run_calls_neither_registrar_for_scope_nor_register_batch(self):
+        conn = FakeConnection(rows=[reconciled(1, run_id="run-a")])
+
+        def _unreachable(*args, **kwargs):
+            raise AssertionError("must not be reached on a dry run")
+
+        with mock.patch.object(scoped, "registrar_for_scope", _unreachable), \
+             mock.patch.object(scoped, "register_batch", _unreachable):
+            run, rows = scoped.run_scoped_registration(
+                conn, run_id_prefix="run-a", dry_run=True)
+
+        self.assertEqual(1, run.would_register)
+        self.assertEqual([1], [r["attempt_id"] for r in rows])
+
+
+class RecordsBucketRequiredTests(unittest.TestCase):
+    """The `records_bucket is None` refusal still fires before anything
+    else on the live-write branch — checked with `registrar_for_scope` and
+    `register_batch` both patched to explode, so a refusal that happened
+    AFTER either call would fail this test rather than passing by luck."""
+
+    def test_raises_before_building_a_registrar_or_calling_register_batch(self):
+        conn = FakeConnection(rows=[reconciled(1, run_id="run-a")])
+
+        def _unreachable(*args, **kwargs):
+            raise AssertionError("must not be reached with records_bucket=None")
+
+        with mock.patch.object(scoped, "registrar_for_scope", _unreachable), \
+             mock.patch.object(scoped, "register_batch", _unreachable):
+            with self.assertRaises(ValueError):
+                scoped.run_scoped_registration(
+                    conn, run_id_prefix="run-a", dry_run=False,
+                    records_bucket=None)
 
 
 class ArgParsingTests(unittest.TestCase):

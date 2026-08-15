@@ -126,6 +126,13 @@ def registrar_for_scope(records_bucket, conn, s3_client=None):
     watermark have to be one transaction, and the RAPIDDB handle is built
     lazily inside the returned closure so a scope with no candidates costs
     no cursor and no round trips.
+
+    Returns `(register, store)`. THE STORE IS RETURNED, NOT DISCARDED, because
+    `register_batch` needs the same records store a second time — to bind the
+    GC fence around each attempt before the registrar touches it. This function
+    already builds exactly that store; handing back the one object keeps the
+    registrar and the fence pointed at the same bucket by construction, rather
+    than making the caller build a second one that could disagree.
     """
     import boto3
 
@@ -136,8 +143,9 @@ def registrar_for_scope(records_bucket, conn, s3_client=None):
 
     store = S3ObjectStore(records_bucket,
                           client=s3_client or boto3.client("s3"))
-    return registrar(lambda: rapid_db.RAPIDDB.borrowing(conn), store,
-                     identity_repository=ProductRepository(conn))
+    register = registrar(lambda: rapid_db.RAPIDDB.borrowing(conn), store,
+                         identity_repository=ProductRepository(conn))
+    return register, store
 
 
 def _dry_run_verdicts(rows):
@@ -208,8 +216,16 @@ def run_scoped_registration(conn, run_id_prefix=None, attempt_ids=None,
             "False): the registrar reads each attempt's terminal record "
             "from the records store, and there is no default bucket to "
             "guess.")
-    register = registrar_for_scope(records_bucket, conn, s3_client=s3_client)
-    run = register_batch(conn, rows, register=register, store=None)
+    # THE STORE IS PASSED, AND THAT IS THE FENCE. `register_batch` binds the
+    # GC fence per attempt only when it has a records store (consumer.py's
+    # per-attempt loop falls back to `nullcontext()` when `store is None`), so
+    # the `store=None` this used to pass left every scoped `--execute` run
+    # racing GC deletes — the exact race `_bind_fence` exists to prevent. The
+    # operator and job-dispatch paths were fenced on 2026-08-14; this third
+    # entrypoint was missed, while holding the bucket it needed all along.
+    register, store = registrar_for_scope(records_bucket, conn,
+                                          s3_client=s3_client)
+    run = register_batch(conn, rows, register=register, store=store)
     return run, rows
 
 

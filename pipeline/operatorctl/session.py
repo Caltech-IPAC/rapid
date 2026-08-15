@@ -92,6 +92,19 @@ HUMAN_TIER = "human"
 AGENT_TIER = "agent"
 _TIER_ROLES = {HUMAN_TIER: OPERATOR_ROLE, AGENT_TIER: AGENT_OPERATOR_ROLE}
 
+#: Which operate tier each open operator session actually assumed, keyed by
+#: ``id(conn)``.
+#:
+#: A SIDE TABLE RATHER THAN AN ATTRIBUTE ON THE CONNECTION, because
+#: `psycopg2.extensions.connection` is a C type with no ``__dict__`` and
+#: refuses new attributes outright — `operator_session()` used to set one and
+#: died with `AttributeError` the first time either tier was driven against a
+#: real database. Entries are written by `operator_session()` on entry and
+#: removed in its `finally`, so the table never holds an id whose connection
+#: has been closed, and a later object reusing that id cannot inherit a tier
+#: it never assumed.
+_ASSUMED_ROLES = {}
+
 
 class OperatorSessionError(Exception):
     """Raised when the operate tier cannot be assumed.
@@ -196,11 +209,26 @@ def operator_session(credentials=None, connect_fn=connect):
     Unset resolves to the human tier, which is today's only behaviour,
     unchanged: same role, same connect call, same error message shape.
 
-    The role actually assumed is recorded on the connection object
-    (``conn.rapid_operator_role``) so ``break_glass_role()`` — handed
-    only the connection at each of its call sites — can tell which tier
-    it is being asked to elevate from, without every caller having to
-    carry a second value alongside `conn` for that one purpose.
+    The role actually assumed is recorded AGAINST the connection object,
+    in this module's ``_ASSUMED_ROLES`` side table, so
+    ``break_glass_role()`` — handed only the connection at each of its
+    call sites — can tell which tier it is being asked to elevate from,
+    without every caller having to carry a second value alongside `conn`
+    for that one purpose.
+
+    **IT IS A SIDE TABLE BECAUSE THE OBVIOUS VERSION DOES NOT WORK.**
+    This used to do ``conn.rapid_operator_role = role``, which raises
+    ``AttributeError: 'psycopg2.extensions.connection' object has no
+    attribute 'rapid_operator_role' and no __dict__ for setting new
+    attributes`` against a REAL connection — the C extension type
+    defines no ``__dict__``, so it takes no new attributes. Every test
+    covering this passed because their fake connections are ordinary
+    Python objects, which accept any attribute silently: the doubles
+    could not refuse what the real type forbids. The failure was
+    therefore invisible until the tier was first driven end-to-end
+    (2026-08-15). Keyed by ``id(conn)`` and removed on exit, so a
+    connection object cannot outlive its entry and a recycled id cannot
+    inherit a stale tier.
 
     The role is set once, on entry, and the session is closed on exit.
     Nothing resets the role on the way out because the connection does
@@ -224,9 +252,10 @@ def operator_session(credentials=None, connect_fn=connect):
                 raise OperatorSessionError(
                     "cannot assume %s: this login is not a member of the "
                     "operate tier (%s)" % (role, exc)) from exc
-        conn.rapid_operator_role = role
+        _ASSUMED_ROLES[id(conn)] = role
         yield conn
     finally:
+        _ASSUMED_ROLES.pop(id(conn), None)
         conn.close()
 
 
@@ -245,19 +274,19 @@ def break_glass_role(conn):
     something a bug could pull, so the migration never grants
     ``rapid_agent_operator`` membership in ``rapid_break_glass`` at all.
     This function enforces the same property one layer up, refusing
-    before it ever issues a `SET ROLE`: it checks
-    ``conn.rapid_operator_role`` (set by `operator_session()`) and
-    raises if the session is not on the human tier, so the refusal is a
+    before it ever issues a `SET ROLE`: it looks up this session's tier
+    in ``_ASSUMED_ROLES`` (recorded by `operator_session()`) and raises
+    if the session is not on the human tier, so the refusal is a
     property of this module's own logic and not merely of what the
     database happens to grant today.
 
     On exit the role returns to whichever operate tier the session
-    actually assumed — read back from ``conn.rapid_operator_role``,
-    never hard-coded to the human role — so a break-glass elevation
-    cannot leak into the rest of a command's work and a restore can
-    never itself widen privilege.
+    actually assumed — read back from ``_ASSUMED_ROLES``, never
+    hard-coded to the human role — so a break-glass elevation cannot
+    leak into the rest of a command's work and a restore can never
+    itself widen privilege.
     """
-    assumed_role = getattr(conn, "rapid_operator_role", OPERATOR_ROLE)
+    assumed_role = _ASSUMED_ROLES.get(id(conn), OPERATOR_ROLE)
     if assumed_role != OPERATOR_ROLE:
         raise OperatorSessionError(
             "break-glass is human-only: this session assumed %s, not %s "

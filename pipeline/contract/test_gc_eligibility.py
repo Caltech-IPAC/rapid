@@ -179,6 +179,21 @@ def test_allowlist_governs_an_otherwise_fully_eligible_object():
     assert only_reason(retained) == RetentionReason.NOT_ALLOWLISTED
 
 
+def test_a_real_class_on_the_allowlist_is_refused_mechanically():
+    """The sims-followup round's refusal, exercised through `classify()`.
+
+    A `real-*` token on the allowlist argument is not merely "not yet
+    allowlisted" (`RetentionReason.NOT_ALLOWLISTED`) — it is refused outright
+    by `references.validated_allowlist()`, called at the point `classify()`
+    reads its `allowlist` argument, before the per-object loop even starts.
+    `rapid_plan/research/deletable-class-allowlist-memo.md` names this as the
+    risk that actually matters: nothing in a bare tuple-membership test would
+    otherwise distinguish a simulation token from a science one.
+    """
+    with pytest.raises(references.ScienceClassNotDeletable):
+        classify([eligible_object()], allowlist=("real-pristine",))
+
+
 # ---------------------------------------------------------------------------
 # Criterion 7 — the reference surfaces. Each object is otherwise fully
 # eligible; only the reference differs.
