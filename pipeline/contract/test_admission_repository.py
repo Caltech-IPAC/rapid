@@ -1175,6 +1175,263 @@ def test_byte_custody_must_be_stated(admission_db):
 
 
 # ===========================================================================
+# 5b. RE-ENTRANCE UNDER THE REAL RUNTIME ROLE — ledger row F, closing a gap
+#     `test_opening_a_manifest_twice_returns_the_same_manifest` above cannot
+#     see by construction.
+# ===========================================================================
+#
+# **THE GAP.** Every `AdmissionRepository` write method — `open_manifest`
+# included — is `INSERT ... ON CONFLICT (...) DO UPDATE SET <col> =
+# EXCLUDED.<col> ... RETURNING`, the same "no-op write so the RETURNING has a
+# row" idiom this module's own docstring names (see admission.py:33-40).
+# PostgreSQL requires UPDATE privilege on the SET-listed column for the DO
+# UPDATE branch to authorize AT ALL, even though the write changes nothing —
+# a fact the class's own commit-free `_query` (admission.py:611) has no way
+# to route around, since it is PostgreSQL's own authorization check, not
+# application logic. Migration 093 (`rapid_systems/cloudformation/
+# db-migrations/093-admission-conflict-update-grants.sql`) grants
+# `rapid_pipeline_write` column-scoped `UPDATE (manifest_key)` on
+# `admission_manifests` to fix exactly this for `open_manifest` — and the
+# matching column sets on the other three admission tables, for the same
+# reason on `add_manifest_entry`, `admit_exposure` and `admit_l2file`.
+#
+# **WHY THE TEST ABOVE DID NOT CATCH IT.** That test calls `open_manifest`
+# twice using `admission_db`'s `repository`, which runs on `conn` — the
+# contract tier's superuser session connection (`conftest.py`'s `_session_
+# conn`, `fixture.connect()` defaulting `PGUSER` to `postgres`). A superuser
+# is exempt from every GRANT check by construction, so that test's second
+# call — the one that takes the `ON CONFLICT DO UPDATE` branch — proves the
+# SQL shape is idempotent under a connection to which the question "does
+# this role have UPDATE" never gets asked. It differs from the tests below
+# by CONNECTION IDENTITY, not by SQL shape, exactly as `test_gc_fence_roles.
+# py`'s header draws that same distinction for `gc_fences`/085. NO test
+# before this one called `open_manifest` twice AS `rapid_pipeline_write` —
+# the tier that AdmissionRepository is actually meant to run under in
+# production ingest — so the second call was, before 093, unexecutable
+# outside a superuser session and nothing here noticed.
+#
+# **MECHANISM**, copied from `test_gc_fence_roles.py`: `SET LOCAL ROLE`
+# inside the test's own transaction (postgres is exempt from the membership
+# check `SET ROLE` normally enforces), drive `repository.open_manifest`
+# through it twice, then ROLLBACK to unwind both the role and every write —
+# no `cleanup["manifests"]` bookkeeping needed, because nothing here is ever
+# committed. See `_open_manifest_twice_as_role`'s own docstring for the one
+# trap that shape has to avoid: `conn.commit()` between the two calls would
+# end the transaction and silently drop back to the superuser identity for
+# the second one, making the test pass for the wrong reason.
+
+def _require_role(conn, role):
+    with conn.cursor() as cur:
+        cur.execute("SELECT 1 FROM pg_roles WHERE rolname = %s", [role])
+        if cur.fetchone() is None:
+            pytest.skip("%s is not present in this database" % role)
+
+
+def _require_093(conn):
+    """Skip unless 093's column-scoped grant is actually present.
+
+    `has_column_privilege('rapid_pipeline_write', 'admission_manifests',
+    'manifest_key', 'UPDATE')` is the one fact only 093 grants — no earlier
+    migration gives `rapid_pipeline_write` UPDATE on `manifest_key` — so a
+    True reading here is a direct catalog proof the pin includes 093,
+    matching `test_gc_fence_roles._require_085`'s reasoning for the same gap
+    class on `gc_fences`.
+
+    MUST USE `has_column_privilege`, NOT `has_table_privilege`, HERE. 093's
+    grant is column-scoped (`GRANT UPDATE (manifest_key) ON admission_
+    manifests TO rapid_pipeline_write`), and `has_table_privilege(...,
+    'UPDATE')` reads FALSE for a role that holds only a column-scoped UPDATE
+    grant with no whole-table UPDATE alongside it — a prior investigation
+    was misled by exactly this before finding `has_column_privilege`, which
+    is scoped to ask about the column 093 actually touches.
+    """
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT has_column_privilege('rapid_pipeline_write',"
+            " 'admission_manifests', 'manifest_key', 'UPDATE')")
+        has_093 = cur.fetchone()[0]
+    if not has_093:
+        pytest.skip(
+            "the schema pin present predates migration 093 "
+            "(rapid_pipeline_write lacks column-scoped UPDATE on "
+            "admission_manifests.manifest_key); this role-scoped "
+            "re-entrance test needs 093's grant to exercise the post-fix "
+            "contract and skips cleanly without it")
+
+
+def test_open_manifest_is_re_entrant_under_its_own_tier(admission_db):
+    """`open_manifest` called TWICE, back-to-back, AS `rapid_pipeline_write`
+    — the role that runs it in production, not the superuser this file's
+    other tests connect as. See this section's header for the full defect
+    this closes (ledger row F, migration 093).
+
+    The first call takes the plain INSERT arm; the second, on the SAME
+    `manifest_key` inside the SAME transaction, is the one that has to take
+    `ON CONFLICT (manifest_key) DO UPDATE SET manifest_key = EXCLUDED.
+    manifest_key ... RETURNING` — the branch 093 exists to unblock. Both
+    calls happen before any commit, so the second sees the first's row via
+    ordinary uncommitted read-your-own-writes within one transaction; opening
+    as the superuser FIRST would prove nothing about the tier's own grant and
+    is deliberately not done here.
+    """
+    conn, repository, release, _cleanup = admission_db
+    _require_role(conn, "rapid_pipeline_write")
+    _require_093(conn)
+    key = f"manifest-{fixture.RUN_TAG}-role-reentrant"
+    try:
+        with conn.cursor() as cur:
+            cur.execute("SET LOCAL ROLE rapid_pipeline_write")
+
+        # THE TIER REALLY IS IN EFFECT — asserted directly, not assumed from
+        # the calls below succeeding. A `SET LOCAL ROLE` that silently did
+        # nothing (a typo'd role name inside a superuser session simply
+        # stays superuser) would let both `open_manifest` calls below
+        # succeed AS THE SUPERUSER and this test would pass for the wrong
+        # reason — indistinguishable from the grant actually working. That
+        # is the same stub-blind failure mode `test_gc_fence_roles.py`'s
+        # negative control exists to rule out, applied here as a positive
+        # assertion instead.
+        with conn.cursor() as cur:
+            cur.execute("SELECT current_user")
+            assert cur.fetchone()[0] == "rapid_pipeline_write", (
+                "SET LOCAL ROLE did not take effect; this test would "
+                "otherwise silently run as the superuser and prove nothing "
+                "about 093's grant")
+
+        first = repository.open_manifest(
+            manifest_key=key, source_scope=f"scope-{fixture.RUN_TAG}",
+            release_identity=release, byte_custody="external-versioned")
+
+        # THE SECOND CALL — same key, same transaction, no commit in
+        # between. This is the `ON CONFLICT DO UPDATE` branch 093's grant
+        # makes reachable under this role; before 093 this raised
+        # `psycopg2.errors.InsufficientPrivilege` on the SET-listed column.
+        second = repository.open_manifest(
+            manifest_key=key, source_scope=f"scope-{fixture.RUN_TAG}",
+            release_identity=release, byte_custody="external-versioned")
+
+        assert second.manifest_id == first.manifest_id, (
+            "the second open_manifest call under rapid_pipeline_write did "
+            "not return the same manifest as the first — the DO UPDATE arm "
+            "093 exists to unblock did not converge")
+        assert second.manifest_key == key
+    finally:
+        # ROLLBACK, not commit — unwinds `SET LOCAL ROLE` (transaction-
+        # scoped) AND both open_manifest writes together, matching
+        # `test_gc_fence_roles._role_executor`'s documented reasoning for
+        # why this tier's role-scoped tests must never commit mid-test. No
+        # `cleanup["manifests"]` entry is needed: nothing here is ever
+        # durable.
+        conn.rollback()
+
+
+def test_the_manifest_key_grant_is_column_scoped_not_table_wide(
+        admission_db):
+    """THE CONTROL ON THE TEST ABOVE, and it is a CATALOG assertion rather
+    than a second refused call — because in this schema no role can serve as
+    a behavioural negative control, and a test that can only ever skip is
+    worse than no test at all.
+
+    WHY THERE IS NO BEHAVIOURAL CONTROL TO WRITE. The obvious shape — run the
+    same second call under a role holding INSERT but not `UPDATE
+    (manifest_key)`, and watch it be refused — has no role to run under.
+    Probed live against the deployed database (2026-08-15): every role that
+    holds INSERT on `admission_manifests` (`rapid_pipeline_write`,
+    `rapid_orchestrator`, `rapid_pipeline`, `rapid_admin`, `rapid_break_glass`)
+    also holds the `manifest_key` UPDATE, and every role that lacks the UPDATE
+    (`rapid_read`, `rapid_operator`, `rapid_agent_operator`, `rapid_dashboard`,
+    `rapid_publisher`) also lacks INSERT — so it is refused on the plain
+    INSERT arm with "permission denied for table", never reaching the DO
+    UPDATE branch under test. A catalog query for a role in between returns
+    the empty set. Creating one is not available either: `rapid_orchestrator`
+    has `rolcreaterole = false`, and a contract test that shapes the schema to
+    fit itself is not asking what the schema says.
+
+    SO WHAT THIS ASSERTS INSTEAD, and why it is a real control. The risk the
+    test above carries is that 093's grant gets "repaired" later by someone
+    widening it to table-wide UPDATE — which would make that test keep passing
+    while silently handing `rapid_pipeline_write` the ability to rewrite
+    `data_class`, `release_identity` and the seal columns on any manifest.
+    That is precisely what 093's header forbids ("NOT GRANTED, DELIBERATELY:
+    `admission_manifests.data_class`") and precisely what no behavioural test
+    can notice, because widening a grant breaks nothing. This test fails on
+    that widening.
+
+    IT CAN FAIL, which is the property that makes it worth having: grant
+    table-wide UPDATE and the first assertion trips; grant UPDATE on
+    `data_class` and the second trips.
+    """
+    conn, _repository, _release, _cleanup = admission_db
+    _require_role(conn, "rapid_pipeline_write")
+    _require_093(conn)
+
+    # TABLE-WIDE UPDATE MUST BE ABSENT. `has_table_privilege(..., 'UPDATE')`
+    # answers a genuinely different question from `has_column_privilege` and
+    # reads FALSE while column-scoped grants exist — the distinction that
+    # misled the investigation behind row F, and the reason both spellings
+    # appear in this file. Here FALSE is the REQUIRED reading.
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT has_table_privilege('rapid_pipeline_write',"
+            " 'admission_manifests', 'UPDATE')")
+        assert cur.fetchone()[0] is False, (
+            "rapid_pipeline_write holds TABLE-WIDE UPDATE on "
+            "admission_manifests; 093 grants UPDATE (manifest_key) only, and "
+            "a table-wide grant would let the ingest tier rewrite data_class, "
+            "release_identity and the seal columns on any manifest")
+
+    # `data_class` STAYS UNGRANTED TO EVERY ROUTINE ROLE. Migration 090 added
+    # the column and granted UPDATE on it to nobody, deliberately: a manifest
+    # states its class at birth, and a re-classable manifest would change the
+    # data class of already-published objects underneath them. 093 kept it
+    # that way; this is the assertion that keeps the next migration from
+    # quietly not keeping it.
+    #
+    # `rapid_break_glass` IS EXCLUDED, AND THAT IS NOT A HOLE IN THIS TEST.
+    # It holds table-wide `arw` on every admission table by construction
+    # (verified in the deployed ACL, 2026-08-15) — being able to do what no
+    # routine tier may do is the entire definition of that role, and its use
+    # is a headline event that announces itself through
+    # `derived.mutation_audit` rather than being prevented by a grant. A test
+    # asserting break-glass CANNOT reclass a manifest would be asserting the
+    # break-glass role is not a break-glass role. What matters, and what is
+    # asserted, is that no tier reachable by ordinary pipeline or operator
+    # work can.
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT r.rolname FROM pg_roles r"
+            " WHERE r.rolname LIKE 'rapid\\_%' ESCAPE '\\'"
+            "   AND NOT r.rolsuper"
+            "   AND r.rolname <> 'rapid_break_glass'"
+            "   AND has_column_privilege(r.rolname, 'admission_manifests',"
+            "                            'data_class', 'UPDATE')"
+            " ORDER BY r.rolname")
+        classable = [row[0] for row in cur.fetchall()]
+    assert classable == [], (
+        "these routine roles can UPDATE admission_manifests.data_class: %s — "
+        "090 and 093 both leave it ungranted on purpose, because the class a "
+        "manifest was sealed under is what every published object's prefix "
+        "was reconstructed from" % (classable,))
+
+    # And the four columns 093 DOES grant are exactly the four the repository's
+    # no-op conflict clauses name — no more. Read from the catalog rather than
+    # restated from the migration, so the two cannot drift apart silently.
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT column_name FROM information_schema.column_privileges"
+            " WHERE grantee = 'rapid_pipeline_write'"
+            "   AND table_name = 'admission_manifests'"
+            "   AND privilege_type = 'UPDATE'"
+            " ORDER BY column_name")
+        granted = [row[0] for row in cur.fetchall()]
+    assert granted == ["entries_checksum", "entry_count", "manifest_key",
+                       "sealed_at"], (
+        "the UPDATE grant surface on admission_manifests has changed: %s. "
+        "051 granted the three seal columns; 093 added manifest_key for "
+        "open_manifest's conflict clause. Anything else is a widening that "
+        "needs its own migration and its own reasoning" % (granted,))
+
+# ===========================================================================
 # 6. THE SCHEMA-ABSENT PATH REFUSES — asserted, not assumed.
 # ===========================================================================
 def test_the_schema_probe_answers_true_where_051_is_applied(admission_db):
