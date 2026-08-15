@@ -1,0 +1,7 @@
+
+# uv scratch: the test suite is sometimes run through `uv run --with pytest`,
+# which synthesises these for that ephemeral harness. They are not this
+# repo dependency resolution and must not be committed (the pre-push scan
+# also reads their hash fragments as AWS account ids).
+uv.lock
+.venv/
