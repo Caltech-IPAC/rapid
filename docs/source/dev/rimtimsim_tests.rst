@@ -544,7 +544,8 @@ Here are details about how the test was executed via the Virtual Pipeline Operat
     python3.11 /code/pipeline/virtualPipelineOperator.py 20260813 >& virtualPipelineOperator_20260813.out &
 
 The following database query shows the RAPID pipelines ran normally for the portion that
-generates the file products in parallel via the AWS Batch service.
+generates the file products in parallel via the AWS Batch service (capable of processing
+thousands of images in parallel).
 
 .. code-block::
 
@@ -560,7 +561,7 @@ generates the file products in parallel via the AWS Batch service.
 The above ``ppid`` values of 12, 15, and 17 (pipeline IDs) refer to the RAPID reference-image pipeline,
 the RAPID science pipeline, and the RAPID post-processing pipeline, respectively.
 
-The VPO took 3.2 hours to:
+The VPO took 3.2 hours to do the following:
 
 ====================================================================================  =====================
 Pipeline stage                                                                        Execution time (sec)
@@ -571,6 +572,9 @@ Cross-match all Sources and AstroObjects database records                       
 Compute statistics for AstroObjectsMeta database records                                        271.54
 Total elapsed time to execute VPO on above stages                                             11411.99
 ====================================================================================  =====================
+
+Database-loading of sources, cross-matching, and computing lightcurve statistics were
+executed via 8 parallel processes on an 8-vCPU machine.
 
 The VPO code is still evolving, and is not quite in optimal form
 (the number in first row in the above table can be reduced significantly).
