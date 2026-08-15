@@ -68,6 +68,86 @@ class CandidateQueryTests(unittest.TestCase):
             " ".join(consumer._CANDIDATE_SQL.split()))
 
 
+class CandidateScopingTests(unittest.TestCase):
+    """`candidates()`'s optional `run_id_prefix`/`attempt_ids` scoping
+    (`pipeline.registration.scoped`, the standalone bounded-registration
+    entrypoint)."""
+
+    def test_unscoped_call_issues_byte_for_byte_the_same_sql_and_params(self):
+        # THE REGRESSION GUARD ON THE PRODUCTION PATH. `candidates()` is
+        # called unscoped by `pipeline.entrypoints.job.dispatch_registration`
+        # and `pipeline.operator.registration.run_pass` — neither passes
+        # `run_id_prefix` or `attempt_ids` — so an unscoped call must issue
+        # the EXACT SQL text and params it always has, not merely "the same
+        # rows". A scoping bug that appended an always-true predicate (or
+        # reordered params) could still pass a rows-only assertion.
+        conn = FakeConnection(rows=[reconciled(1), reconciled(2)])
+
+        consumer.candidates(conn)
+
+        self.assertEqual(1, len(conn.statements))
+        text, params = conn.statements[0]
+        self.assertEqual(consumer._CANDIDATE_SQL, text)
+        self.assertEqual((list(consumer.RECONCILED_STATES),), params)
+
+    def test_run_id_prefix_narrows_the_result_set(self):
+        # THE FIXTURE HAS MULTIPLE RUN_IDS, on purpose: a fixture containing
+        # only the target run_id cannot detect a scoping bug that returns
+        # everything regardless of the predicate — this one contains a
+        # decoy row under a different run_id that a broken scope would leak.
+        conn = FakeConnection(rows=[
+            reconciled(1, run_id="w9-ramp-science-18-abc"),
+            reconciled(2, run_id="w9-ramp-science-18-abc"),
+            reconciled(3, run_id="some-other-run-entirely"),
+        ])
+
+        rows = consumer.candidates(conn, run_id_prefix="w9-ramp-science-18-abc")
+
+        self.assertEqual([1, 2], sorted(r["attempt_id"] for r in rows))
+
+    def test_run_id_prefix_matches_the_split_batch_suffix_convention(self):
+        # `pipeline.seams.submit_gathered` splits a batch too large for one
+        # manifest into `-0`/`-1`/... suffixed child run_ids
+        # (`f"{run_id}-{index}"`). A caller scoping to the run they submitted
+        # must match every suffixed child, not just an exact, unsuffixed
+        # run_id that may never appear alone.
+        conn = FakeConnection(rows=[
+            reconciled(1, run_id="w9-ramp-science-270-xyz-0"),
+            reconciled(2, run_id="w9-ramp-science-270-xyz-1"),
+            reconciled(3, run_id="w9-ramp-science-18-different"),
+        ])
+
+        rows = consumer.candidates(conn, run_id_prefix="w9-ramp-science-270-xyz")
+
+        self.assertEqual([1, 2], sorted(r["attempt_id"] for r in rows))
+
+    def test_attempt_ids_narrows_the_result_set(self):
+        conn = FakeConnection(rows=[
+            reconciled(1, run_id="run-a"),
+            reconciled(2, run_id="run-a"),
+            reconciled(3, run_id="run-a"),
+        ])
+
+        rows = consumer.candidates(conn, attempt_ids=[1, 3])
+
+        self.assertEqual([1, 3], sorted(r["attempt_id"] for r in rows))
+
+    def test_a_scoped_call_still_respects_the_reconciled_state_gate(self):
+        # Scoping narrows an already-reconciled candidate set; it must not
+        # widen it. A non-reconciled row inside the named run_id stays
+        # excluded.
+        conn = FakeConnection(rows=[
+            reconciled(1, run_id="run-a"),
+            reconciled(2, run_id="run-a", lifecycle_state="started",
+                       rapid_outcome=None, product_disposition=None,
+                       started_at=None, application_intended_exit=None),
+        ])
+
+        rows = consumer.candidates(conn, run_id_prefix="run-a")
+
+        self.assertEqual([1], [r["attempt_id"] for r in rows])
+
+
 class WatermarkTests(unittest.TestCase):
     """Registration marks what it registered, and never moves backwards."""
 

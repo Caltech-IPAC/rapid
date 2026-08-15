@@ -405,6 +405,31 @@ class FakeConnection:
                 matched = [row for row in matched
                            if row.get("ended_at") is not None
                            and row["ended_at"] >= horizon]
+            # `pipeline.registration.consumer.candidates()`'s SCOPING
+            # PREDICATES (`run_id_prefix`/`attempt_ids`) — modelled here,
+            # not folded into a generic "any extra predicate matches
+            # everything" fallback, for the identical reason the
+            # supersession-requery predicates above are modelled rather than
+            # ignored: a stub that returned every reconciled row regardless
+            # of a `run_id LIKE`/`attempt_id = ANY` clause in the text could
+            # not tell a correctly-scoped query from an unscoped one, which
+            # is the exact bug a scoping regression test exists to catch.
+            # Params are appended in `candidates()`'s own order — states,
+            # then (if present) the LIKE pattern, then (if present) the
+            # attempt_id list — so position is read off which predicates the
+            # text actually carries, not a fixed index.
+            next_param = 1
+            if "run_id like %s" in lowered:
+                pattern = params[next_param]
+                next_param += 1
+                prefix = pattern[:-1] if pattern.endswith("%") else pattern
+                matched = [row for row in matched
+                           if row.get("run_id", "").startswith(prefix)]
+            if "attempt_id = any" in lowered:
+                wanted_ids = set(params[next_param])
+                next_param += 1
+                matched = [row for row in matched
+                           if row.get("attempt_id") in wanted_ids]
             matched.sort(key=lambda row: row["attempt_id"])
         elif "work_unit_id = %s and attempt_id <> %s" in lowered:
             # THE ATTEMPT-SERIES CENSUS (rule 4): the closure path asks its

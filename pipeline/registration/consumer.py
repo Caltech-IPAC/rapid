@@ -206,15 +206,47 @@ _COLUMNS = (
 # makes the design's "reprocesses on a later supersession" work: an attempt
 # consumed at sequence 1 whose reconciler later publishes sequence 2 has a
 # record sequence ahead of its watermark and becomes a candidate again.
-_CANDIDATE_SQL = (
+#: The `ORDER BY` is a separate constant from the `WHERE`-and-earlier text
+#: below it (`_CANDIDATE_WHERE_SQL`) precisely so a scoping predicate can be
+#: inserted BEFORE it — `candidates()` appends into the WHERE clause, and
+#: appending after `ORDER BY` would be invalid SQL. `_CANDIDATE_SQL` itself
+#: stays the exact, single concatenation every existing test asserts
+#: against (`_CANDIDATE_SQL` is also the literal string `candidates()`
+#: issues verbatim for an unscoped call — see that function's docstring).
+_CANDIDATE_WHERE_SQL = (
     "SELECT " + ", ".join(_COLUMNS) +
     " FROM attempts"
     " WHERE lifecycle_state = ANY(%s)"
     "   AND terminal_record_sequence >= 1"
     "   AND (consumed_record_sequence IS NULL"
     "        OR consumed_record_sequence < terminal_record_sequence)"
-    " ORDER BY attempt_id"
 )
+_CANDIDATE_ORDER_SQL = " ORDER BY attempt_id"
+_CANDIDATE_SQL = _CANDIDATE_WHERE_SQL + _CANDIDATE_ORDER_SQL
+
+#: SCOPING PREDICATES (scoped-registration entrypoint, `pipeline.registration.
+#: scoped`). Appended to `_CANDIDATE_SQL` only when a scope is actually
+#: passed to `candidates()` — see that function's docstring for why an
+#: unscoped call must stay byte-for-byte the SQL above, unchanged. `run_id`
+#: uses `LIKE '<prefix>%'` rather than `=` because `pipeline.seams.
+#: submit_gathered` splits a batch too large for one manifest across several
+#: run_ids by appending `-<index>` (`f"{run_id}-{index}"`), so a caller
+#: scoping to one submitted run must match every suffixed child, not just an
+#: exact run_id that may never appear alone. `attempt_ids` is the other,
+#: orthogonal way to bound a scope — an explicit list rather than a run's
+#: prefix — for a caller that already knows exactly which attempts it means.
+_RUN_ID_PREFIX_SQL = "run_id LIKE %s"
+_ATTEMPT_IDS_SQL = "attempt_id = ANY(%s)"
+
+
+def _escape_like(prefix):
+    """Escape `%`/`_`/`\\` in a LIKE prefix so it matches literally.
+
+    `run_id_prefix` is caller-supplied text, not a wildcard pattern — a
+    prefix containing a literal `%` or `_` (neither is disallowed in a
+    run_id) must not silently become a wildcard in the WHERE clause.
+    """
+    return prefix.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
 
 #: REGISTER: both watermarks advance together, in one statement — acceptance
 #: (`registered_at`/`registered_record_sequence`) and consumption
@@ -395,7 +427,8 @@ class RegistrationRun:
         }
 
 
-def candidates(conn, states=RECONCILED_STATES):
+def candidates(conn, states=RECONCILED_STATES, run_id_prefix=None,
+              attempt_ids=None):
     """Attempts the reconciler has closed and published a closure record for.
 
     The `rollback()` here is still right, and is worth saying why now that the
@@ -407,9 +440,53 @@ def candidates(conn, states=RECONCILED_STATES):
     else — not a snapshot taken minutes earlier when the candidate list was
     read. Leaving it open would also hold a snapshot for the whole pass, which
     on a pass over many attempts is a long idle-in-transaction.
+
+    **SCOPING IS OPT-IN AND ADDITIVE** (`pipeline.registration.scoped`, the
+    standalone bounded-registration entrypoint). `run_id_prefix` and
+    `attempt_ids` are both `None` by every existing caller —
+    `pipeline.entrypoints.job.dispatch_registration` (the production
+    registration job route) and `pipeline.operator.registration.run_pass`
+    (the operator's own pass) — and when neither is passed this function
+    issues the EXACT SAME SQL text and the EXACT SAME parameters it always
+    has: `_CANDIDATE_SQL` unmodified, `(list(states),)`. That is deliberate,
+    not incidental: this is a widely-called function and the unscoped path
+    is still the only production path an operator or the registration job
+    route reaches, so it must not change shape for callers that never asked
+    for a scope. Passing either argument appends the matching predicate (or
+    both, ANDed) to the query text and its own parameter to the tuple —
+    scoping narrows an already-reconciled candidate set, it does not widen
+    or replace the reconciled-state gate above it.
+
+    `run_id_prefix` matches `run_id LIKE '<prefix>%'` (escaped so the
+    prefix's own `%`/`_` are literal — see `_escape_like`), because
+    `pipeline.seams.submit_gathered` splits a batch too large for one
+    manifest into `-0`/`-1`/... suffixed child run_ids
+    (`f"{run_id}-{index}"`); an exact match on the bare run_id a caller
+    submitted could miss every suffixed child. `attempt_ids` is a plain
+    `= ANY(%s)` over an explicit, caller-known sequence — the other,
+    orthogonal way to bound a scope, usable together with or instead of a
+    prefix.
     """
+    if run_id_prefix is None and attempt_ids is None:
+        # BYTE-FOR-BYTE THE UNSCOPED PATH (see the docstring's "SCOPING IS
+        # OPT-IN AND ADDITIVE"): the exact SQL text and parameter tuple this
+        # function has always issued, untouched by the scoping machinery
+        # below.
+        sql = _CANDIDATE_SQL
+        params = [list(states)]
+    else:
+        sql = _CANDIDATE_WHERE_SQL
+        params = [list(states)]
+        if run_id_prefix is not None:
+            sql += " AND " + _RUN_ID_PREFIX_SQL
+            params.append(_escape_like(run_id_prefix) + "%")
+        if attempt_ids is not None:
+            sql += " AND " + _ATTEMPT_IDS_SQL
+            params.append(list(attempt_ids))
+        sql += _CANDIDATE_ORDER_SQL
+
     with conn.cursor() as cur:
-        cur.execute(_CANDIDATE_SQL, (list(states),))
+        cur.execute(sql, tuple(params))
         names = [description[0] for description in cur.description]
         rows = [dict(zip(names, row)) for row in cur.fetchall()]
     conn.rollback()  # read-only; do not hold a transaction open
