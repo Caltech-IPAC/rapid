@@ -364,11 +364,23 @@ def backfill(conn, dry_run=True):
         summary["sealed"] = True
 
     for expid, dateobs in sorted(exposures.items()):
-        admission = repo.admit_exposure(
-            dateobs=dateobs, expid=expid,
-            facts={"generation": GENERATION, "source": SOURCE_SCOPE},
-            release_identity=RELEASE_IDENTITY,
-            manifest_id=manifest_id)
+        try:
+            admission = repo.admit_exposure(
+                dateobs=dateobs, expid=expid,
+                facts={"generation": GENERATION, "source": SOURCE_SCOPE},
+                release_identity=RELEASE_IDENTITY,
+                manifest_id=manifest_id)
+        except AdmissionConflict as exc:
+            # Same refusal as the l2file grain below. Not reachable from a
+            # re-run of THIS script — every exposure's facts are the same two
+            # literals, so a replay agrees with itself by construction — but
+            # an exposure admitted by someone else under different facts for
+            # the same `dateobs` would land here, and that is precisely the
+            # case that must stop rather than be papered over.
+            raise SystemExit(
+                "REFUSING: %s — an existing exposure admission disagrees "
+                "with the facts this backfill would record, which it must "
+                "never overwrite" % exc)
         if admission.created:
             summary["exposures_created"] += 1
 
@@ -421,6 +433,23 @@ def main():
         conn.rollback()
         raise
     finally:
+        # RESET THE ROLE BEFORE HANDING THE CONNECTION BACK, on every path.
+        # `SET ROLE` is session state and `rollback()` does not undo it, so a
+        # failure anywhere after `_assume_writer_tier()` would return a
+        # backend to pgbouncer's pool still elevated to `rapid_pipeline_write`
+        # — for whichever client is handed it next, not just for this script.
+        # `_reset_role()` at the top of `backfill()` already makes THIS script
+        # self-healing; this makes it a good citizen of a shared pool, which
+        # is the half that self-healing cannot cover.
+        #
+        # Best-effort and last: if the connection is already broken there is
+        # no session left to reset, and raising here would mask the real
+        # exception on its way out.
+        try:
+            with conn.cursor() as cur:
+                cur.execute("RESET ROLE")
+        except Exception:                                        # noqa: BLE001
+            pass
         conn.close()
 
     print("SUMMARY: %s" % summary)
