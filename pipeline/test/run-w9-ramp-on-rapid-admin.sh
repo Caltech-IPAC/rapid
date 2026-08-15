@@ -29,6 +29,19 @@ ACCOUNT=$(aws sts get-caller-identity --query Account --output text)
 [ "$ACCOUNT" = "$RAPID_ACCOUNT" ] \
   || { echo "!! wrong account: $ACCOUNT (expected $RAPID_ACCOUNT)" >&2; exit 1; }
 
+# THE RELEASE IDENTITY IS RESOLVED HERE, ON THE OPERATOR'S SIDE, and the
+# VALUE is interpolated into the remote command below. It used to be written
+# as an escaped `\${RAPID_RELEASE_IDENTITY:-smdc-7655dcc}`, which expands on
+# rapid-admin — where the operator's environment does not reach — so exporting
+# it before running this script silently had no effect and every run took the
+# hard-coded default. Harmless while the default happened to name the deployed
+# release; not harmless once anything reads it. Migration 051's release
+# binding does: a submission whose environment disagrees with the release its
+# inputs were ADMITTED under is refused outright (rule 18, "work stays pinned
+# to the release its admission was made under"), so an unoverridable stale
+# default makes such work unsubmittable with no way to say otherwise.
+: "${RAPID_RELEASE_IDENTITY:=smdc-7655dcc}"
+
 BUCKET="rapid-build-artifacts-${ACCOUNT}"
 RUN_ID="w9-ramp-$(date -u +%Y%m%dT%H%M%SZ)"
 PREFIX="w9-ramp-staging/${RUN_ID}"
@@ -41,6 +54,7 @@ admin_id=$(aws ssm describe-instance-information \
 echo ">> target: rapid-admin ($admin_id)"
 echo ">> image:  $IMAGE"
 echo ">> step:   phase=$PHASE cap=$CAP"
+echo ">> release: $RAPID_RELEASE_IDENTITY"
 
 tarball=$(mktemp "${TMPDIR:-/tmp}/w9-ramp.XXXXXX.tar.gz")
 trap 'rm -f "$tarball"' EXIT
@@ -103,7 +117,7 @@ podman run --rm --entrypoint="" -v "\$STAGE/repo":/w9:Z -w /w9 \\
   -e RAPID_MANIFEST_BUCKET=roman-rapid-products \\
   -e RAPID_MANIFEST_PREFIX=submissions \\
   -e RAPID_IMAGE_DIGEST="${IMAGE#*@}" \\
-  -e RAPID_RELEASE_IDENTITY="\${RAPID_RELEASE_IDENTITY:-smdc-7655dcc}" \\
+  -e RAPID_RELEASE_IDENTITY="${RAPID_RELEASE_IDENTITY}" \\
   --network host \\
   "$IMAGE" python3.11 -m pipeline.test.live_w9_ramp "$PHASE" "$CAP" "$TAG" \\
   > "\$STAGE/ramp.log" 2>&1
