@@ -568,7 +568,7 @@ Pipeline stage                                                                  
 Generate final file products, register in database, and upload to S3 bucket                   10451.31
 Load all sources into PostgreSQL database                                                       461.73
 Cross-match all Sources and AstroObjects database records                                       227.41
-Compute statistics for AstroObjects database records                                            271.54
+Compute statistics for AstroObjectsMeta database records                                        271.54
 Total elapsed time to execute VPO on above stages                                             11411.99
 ====================================================================================  =====================
 
