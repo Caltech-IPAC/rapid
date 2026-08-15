@@ -330,7 +330,7 @@ def generateReferenceImage(s3_client,
     # published exactly once, by the calling stage's `upload_products`
     # (`pipeline/stages/reference_image.py`, `pipeline/stages/science.py`),
     # through `context.product_prefix()` and `publish_products` — the one
-    # place product keys are built, conditional-create, and raise on failure.
+    # place object keys are built, conditional-create, and raise on failure.
 
     awaicgen_output_mosaic_image_file = awaicgen_dict["awaicgen_output_mosaic_image_file"]
     awaicgen_output_mosaic_cov_map_file = awaicgen_dict["awaicgen_output_mosaic_cov_map_file"]

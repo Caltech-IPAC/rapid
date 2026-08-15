@@ -266,6 +266,21 @@ def attempt_facts(execute, run_ids=None):
     so the round trip rebuilds it as `job_type || '/' || input_scope`.
     Verified against `036-intent-schema-v1.sql:111-122` on this branch's head
     rather than assumed.
+
+    **`data_class` IS ALWAYS None HERE, AND THAT IS THE INTERIM STATE.**
+    `product_prefix()` now leads the key with a data class, but that class
+    comes from the operational parameter tree, not from the unit — there is
+    NO `work_units.data_class` column to select, and this branch does not add
+    one. So every attempt reconstructs with `data_class=None`, which is the
+    pre-data-class grammar, and attribution keeps working exactly as it did
+    for every object already in the bucket.
+
+    The full fix — carrying the data class per-unit from admission — is what
+    adds the column; when it does, this SELECT gains `w.data_class` and the
+    key emitted here stops being None for attempts that have one. The
+    explicit None is written out rather than left implicit so that the
+    absence is visibly a decision and the call site of the change is
+    obvious.
     """
     sql = """
     SELECT a.attempt_id,
@@ -285,7 +300,12 @@ def attempt_facts(execute, run_ids=None):
     for row in execute(sql, params) or ():
         attempt_id, job_type, run_id, unit_key = _row_values(row, 4)
         facts[attempt_id] = {"job_type": job_type, "run_id": run_id,
-                             "unit_key": unit_key}
+                             "unit_key": unit_key,
+                             # No column to read: see the docstring. None
+                             # selects the pre-data-class grammar, which is
+                             # what every object in the bucket was written
+                             # under.
+                             "data_class": None}
     return facts
 
 

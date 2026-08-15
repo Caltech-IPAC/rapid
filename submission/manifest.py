@@ -283,7 +283,7 @@ class ProcessingUnit:
         Exposure/SCA keys keep their exact previous spelling — zero-padded
         per the storage design's key schema (§ Key schema, component law:
         exposure 6 digits, SCA 2 digits) — because that string is embedded
-        in every product key ever written under `product_prefix()`, and
+        in every object key ever written under `product_prefix()`, and
         changing its shape would orphan every existing object.
         """
         payload = self.payload

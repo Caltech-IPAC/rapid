@@ -161,7 +161,10 @@ def make_context(workdir=None, **overrides) -> StageContext:
         "unit": unit,
         "job_type": "science",
         "science": {"release": {"schema_version": 1}},
-        "parameters": {"s3/products-bucket": BUCKET},
+        "parameters": {"s3/products-bucket": BUCKET,
+                       # The key's leading component, on the interim
+                       # parameter path (`StageContext.product_prefix`).
+                       "data/class": "real-pristine"},
         "logger": FakeLogger(),
         "s3": overrides.pop("s3", None) or FakeS3(),
         "run_id": "run-1",

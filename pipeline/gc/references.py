@@ -43,7 +43,7 @@ found three further classes it does not name, each recorded in
     `{prefix}/config-snapshots/sha256/{digest}.json`), where ONE OBJECT IS
     SHARED BY EVERY ARRAY CHILD of every attempt resolving to the same
     configuration — so attempt-scoped reasoning is actively wrong for it;
-  * the `unidentified-attempt` degraded prefix (`pipeline/stages/context.py:184`)
+  * the `unidentified-attempt` degraded prefix (`pipeline/stages/context.py`)
     carrying no run or attempt identity at all.
 
 Each is retained, by clause 3 (unattributable) and again by clause 0.
@@ -132,11 +132,39 @@ class Retained(typing.NamedTuple):
     detail: str = ""
 
 
-def canonical_prefix(job_type, run_id, unit_key, attempt_id):
+def canonical_prefix(job_type, run_id, unit_key, attempt_id,
+                     data_class=None):
     """Reconstruct the authoritative prefix from an attempt's own facts.
 
-    `pipeline/stages/context.py:130`'s `product_prefix()`:
-    ``{job_type}/{run_id}/{unit.key}/attempt-{attempt_id:010d}``.
+    **THIS IS A HAND-MAINTAINED MIRROR OF `product_prefix()`**
+    (`pipeline/stages/context.py`), which is the one place the grammar is
+    actually built. The two are not derived from a shared function and
+    nothing enforces their agreement at import time, so THEY MUST BE CHANGED
+    TOGETHER. The failure mode of forgetting is the quiet one: a builder that
+    has moved on and a mirror that has not attributes NOTHING, every object
+    falls to clause 3 as unattributable, and GC retains 100% of the bucket
+    without raising, logging an error, or failing a run. It fails safe and it
+    fails silently, which is why the lockstep is asserted by test
+    (`pipeline/contract/test_gc_eligibility.py`) rather than by comment.
+
+    Two grammars, and BOTH are live:
+
+      * `data_class` set — the current shape,
+        ``{data_class}/{job_type}/{run_id}/{unit_key}/attempt-{id:010d}``;
+      * `data_class` None — the shape objects written before the data class
+        led the key,
+        ``{job_type}/{run_id}/{unit_key}/attempt-{id:010d}``.
+
+    **THE COEXISTENCE CONTRACT.** Objects already in the bucket were written
+    under the old grammar and their keys are immutable — a key, once written,
+    names those bytes forever, so they will never acquire a leading
+    component. `None` therefore is not a degenerate case to be tidied away
+    later: it is how those objects stay ATTRIBUTABLE. Dropping it would make
+    every pre-existing object unattributable at a stroke, which is precisely
+    the silent 100% retention described above. On the interim parameter path
+    `attempt_facts()` yields `None` for every attempt, so today this branch
+    is the only one production takes; the other exists for when the data
+    class is carried per-unit.
 
     **POSITIVE ATTRIBUTION IS A CANONICAL ROUND TRIP, NOT A PARSE.** Parsing
     `attempt-N` out of a key and finding attempt N is NOT sufficient: it
@@ -149,22 +177,31 @@ def canonical_prefix(job_type, run_id, unit_key, attempt_id):
     if job_type is None or run_id is None or unit_key is None \
             or attempt_id is None:
         return None
-    return "%s/%s/%s/attempt-%010d" % (job_type, run_id, unit_key,
-                                       int(attempt_id))
+    prefix = "%s/%s/%s/attempt-%010d" % (job_type, run_id, unit_key,
+                                         int(attempt_id))
+    if data_class is None:
+        return prefix
+    return "%s/%s" % (data_class, prefix)
 
 
 def attribute(obj, attempt_facts):
     """The attempt this object's key canonically belongs to, or None.
 
-    `attempt_facts` maps attempt_id -> (job_type, run_id, unit_key). The
-    round trip is the whole check: an object is attributed only when some
-    attempt's RECONSTRUCTED prefix is exactly the key's prefix.
+    `attempt_facts` maps attempt_id -> (job_type, run_id, unit_key,
+    data_class). The round trip is the whole check: an object is attributed
+    only when some attempt's RECONSTRUCTED prefix is exactly the key's
+    prefix.
+
+    A `data_class` of None reconstructs the pre-data-class grammar, which is
+    what keeps objects written under it attributable — see
+    `canonical_prefix`'s coexistence contract.
 
     Returns `(attempt_id, prefix)` or `None`.
     """
     for attempt_id, facts in attempt_facts.items():
         prefix = canonical_prefix(facts.get("job_type"), facts.get("run_id"),
-                                  facts.get("unit_key"), attempt_id)
+                                  facts.get("unit_key"), attempt_id,
+                                  facts.get("data_class"))
         if prefix and obj.key.startswith(prefix + "/"):
             return attempt_id, prefix
     return None

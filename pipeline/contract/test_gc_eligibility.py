@@ -31,21 +31,52 @@ from pipeline.gc import references
 from pipeline.gc.inventory import (InventoryObject, InventoryTruncated,
                                    InventoryStale, read_inventory)
 from pipeline.gc.references import RetentionReason
+# The REAL builder, imported so the lockstep tests at the foot of this file
+# compare against what production actually emits rather than against a
+# restatement of it — a test that re-implements the grammar agrees with
+# itself forever while production disagrees.
+from pipeline.stages.context import DATA_CLASSES, StageContext
+from submission.manifest import ProcessingUnit
+from submission.test import payload_fixtures
 
 pytestmark = pytest.mark.contract
 
 #: A canonical attempt whose prefix the fixtures reconstruct. The numbers are
 #: arbitrary; the SHAPE is `product_prefix()`'s
-#: (`pipeline/stages/context.py:130`).
+#: (`pipeline/stages/context.py`).
 ATTEMPT_ID = 4242
 JOB_TYPE = "science"
 RUN_ID = "gc-run-" + fixture.RUN_TAG
 UNIT_KEY = "science/90000/1"
 
-CANONICAL_PREFIX = "%s/%s/%s/attempt-%010d" % (JOB_TYPE, RUN_ID, UNIT_KEY,
-                                               ATTEMPT_ID)
+#: The LEADING component of the current grammar. Any of `DATA_CLASSES` would
+#: do for these fixtures — the lockstep tests below parametrize over all four
+#: — so this is the standing one for tests about the other clauses.
+DATA_CLASS = "real-pristine"
+
+CANONICAL_PREFIX = "%s/%s/%s/%s/attempt-%010d" % (DATA_CLASS, JOB_TYPE,
+                                                  RUN_ID, UNIT_KEY,
+                                                  ATTEMPT_ID)
+
+#: The same attempt's key under the PRE-DATA-CLASS grammar — the shape every
+#: object already in the bucket was written under. Kept as a named constant
+#: because coexistence is a contract this suite asserts, not an accident.
+OLD_GRAMMAR_PREFIX = "%s/%s/%s/attempt-%010d" % (JOB_TYPE, RUN_ID, UNIT_KEY,
+                                                 ATTEMPT_ID)
 BUCKET = "roman-rapid-products"
-PREFIXES = ("science/",)
+
+#: The declared scope GC is pointed at. It carries the LEADING DATA CLASS,
+#: and that is an OPERATIONAL CONSEQUENCE worth stating plainly:
+#: `declared_prefixes` is caller-supplied (the `--prefix` arguments in the GC
+#: runbook), it is matched with a plain `startswith` against the object key,
+#: and the data class now comes FIRST in that key. So a caller still passing
+#: `science/` after this change matches nothing, and every object falls out
+#: at clause 1 as out-of-scope — GC would report a clean sweep having
+#: examined nothing. It fails safe (deletes nothing) and it fails quiet,
+#: which is the same shape as the mirror hazard and needs the same
+#: treatment: the runbook's prefix arguments must gain the class component.
+#: Both grammars are declared here because both are live during coexistence.
+PREFIXES = ("%s/science/" % DATA_CLASS, "science/")
 
 NOW = datetime.datetime(2026, 8, 12, 0, 0, tzinfo=datetime.timezone.utc)
 LONG_AGO = NOW - datetime.timedelta(days=400)
@@ -79,7 +110,7 @@ DISCHARGED_OWNER = {
 
 ATTEMPT_FACTS = {
     ATTEMPT_ID: {"job_type": JOB_TYPE, "run_id": RUN_ID,
-                 "unit_key": UNIT_KEY},
+                 "unit_key": UNIT_KEY, "data_class": DATA_CLASS},
 }
 
 
@@ -258,7 +289,7 @@ def test_attribution_negatives_are_retained(key, why):
     """Criterion 7's attribution negatives, each asserted separately.
 
     **THE `unidentified-attempt` CASE IS A REAL KEY SHAPE, NOT A
-    HYPOTHETICAL**: `pipeline/stages/context.py:184` returns
+    HYPOTHETICAL**: `pipeline/stages/context.py` returns
     `{job_type}/{unit.key}/unidentified-attempt` whenever `run_id` or
     `attempt_id` is absent. It carries no attempt identity, so the round trip
     cannot reconstruct it — and a naive parser looking for `attempt-N` finds
@@ -557,13 +588,152 @@ def test_the_unit_key_round_trip_matches_the_production_prefix_builder():
     `work_units` has no `unit_key` column — the persisted identity is
     `(job_type, input_scope)` — so the round trip rebuilds the key as
     `job_type || '/' || input_scope`. This asserts the reconstruction against
-    the shape `product_prefix()` builds (`pipeline/stages/context.py:130`),
+    the shape `product_prefix()` builds (`pipeline/stages/context.py`),
     including the zero-padding width, which is load-bearing.
     """
     built = references.canonical_prefix(JOB_TYPE, RUN_ID, UNIT_KEY,
-                                        ATTEMPT_ID)
+                                        ATTEMPT_ID, DATA_CLASS)
     assert built == CANONICAL_PREFIX
     assert built.endswith("attempt-%010d" % ATTEMPT_ID)
     # The zero-padding width is load-bearing: `attempt-4242` and
     # `attempt-0000004242` are different prefixes and only one is canonical.
     assert "attempt-0000004242" in built
+    # The data class LEADS, and that is the property GC depends on: a
+    # reconstruction that put it anywhere else would attribute nothing.
+    assert built.split("/")[0] == DATA_CLASS
+
+
+# ---------------------------------------------------------------------------
+# THE LOCKSTEP. `canonical_prefix()` is a HAND-MAINTAINED MIRROR of
+# `product_prefix()` — two functions, no shared code, nothing enforcing their
+# agreement at import time.
+#
+# **THE FAILURE MODE IS SILENT AND TOTAL.** If the builder's grammar moves and
+# the mirror does not, every reconstructed prefix misses, every object falls to
+# clause 3 as unattributable, and GC retains 100% of the bucket — without
+# raising, logging an error, or failing a run. It fails SAFE, which is exactly
+# what makes it undetectable in production: nothing is deleted that should not
+# be, and nothing announces that GC has stopped working.
+#
+# So the agreement is asserted HERE, against the REAL BUILDER — a genuine
+# `StageContext` calling the real `product_prefix()`, not a literal restating
+# what the mirror already says. The tests above this one compare
+# `canonical_prefix` to `CANONICAL_PREFIX`, a constant in this file; those
+# would ALL still pass if both the builder and this file's constant diverged
+# from production. Only a comparison against the builder itself closes that.
+# ---------------------------------------------------------------------------
+
+def _production_prefix(data_class, job_type=JOB_TYPE, run_id=RUN_ID,
+                       attempt_id=ATTEMPT_ID):
+    """What the REAL builder emits, for a real unit — no reimplementation.
+
+    `parameters` carries `data/class` because the data class is on the
+    INTERIM PARAMETER PATH (`StageContext.product_prefix`): it is
+    deployment-wide operational configuration until it is carried per-unit
+    from admission. When that changes, this fixture changes and the
+    assertions below do not — they are about the GRAMMAR, not its source.
+    """
+    unit = ProcessingUnit(payload=payload_fixtures.science_payload(
+        exposure=90000, sca=1, science_image_uri="s3://b/i.fits"))
+    context = StageContext(
+        workdir=None, unit=unit, job_type=job_type, science={},
+        parameters={"data/class": data_class}, logger=None,
+        run_id=run_id, attempt_id=attempt_id)
+    return context, context.product_prefix()
+
+
+@pytest.mark.parametrize("data_class", DATA_CLASSES)
+def test_gc_reconstructs_exactly_what_the_builder_emits(data_class):
+    """Byte-for-byte, across EVERY data class in the closed set.
+
+    Parametrized over all four rather than asserted for one because the
+    leading component is interpolated, and a mirror that special-cased one
+    token would pass a single-value test while attributing nothing for the
+    other three.
+    """
+    context, built = _production_prefix(data_class)
+
+    reconstructed = references.canonical_prefix(
+        context.job_type, context.run_id, context.unit.key,
+        context.attempt_id, data_class)
+
+    assert reconstructed == built
+
+
+def test_gc_reconstructs_the_old_grammar_when_no_data_class_is_known():
+    """`data_class=None` must reproduce the PRE-DATA-CLASS shape exactly.
+
+    THE COEXISTENCE CONTRACT, asserted. Objects written before the data class
+    led the key have immutable keys and will never acquire a leading
+    component; `None` is how they stay attributable. On the interim path
+    `attempt_facts()` yields None for every attempt, so this branch is the one
+    production takes today — if it drifted, GC would stop attributing
+    everything currently in the bucket.
+
+    The expected value is built here from the components rather than by
+    calling the builder with a flag it no longer has: the old grammar is a
+    FROZEN shape, not a mode of the current builder, and writing it out is
+    what makes a change to it visible in a diff.
+    """
+    context, _ = _production_prefix(DATA_CLASS)
+
+    reconstructed = references.canonical_prefix(
+        context.job_type, context.run_id, context.unit.key,
+        context.attempt_id, None)
+
+    assert reconstructed == "%s/%s/%s/attempt-%010d" % (
+        context.job_type, context.run_id, context.unit.key,
+        context.attempt_id)
+    # And it is genuinely the SHORTER key — the current grammar with its
+    # leading component stripped, not some third shape.
+    assert reconstructed == _production_prefix(DATA_CLASS)[1].split("/", 1)[1]
+
+
+@pytest.mark.parametrize("data_class", DATA_CLASSES)
+def test_an_object_under_a_new_grammar_key_is_attributed(data_class):
+    """Attribution end to end, from a key the REAL builder produced."""
+    context, prefix = _production_prefix(data_class)
+    facts = {ATTEMPT_ID: {"job_type": context.job_type,
+                          "run_id": context.run_id,
+                          "unit_key": context.unit.key,
+                          "data_class": data_class}}
+
+    attributed = references.attribute(obj("%s/diff.fits" % prefix), facts)
+
+    assert attributed == (ATTEMPT_ID, prefix)
+
+
+def test_an_old_grammar_object_is_still_attributed_with_no_data_class():
+    """COEXISTENCE: the objects already in the bucket keep their attribution.
+
+    This is the test that would fail if someone "cleaned up" the `None`
+    branch. Its failure means GC has silently stopped attributing every
+    object written before this grammar change — the whole bucket, retained
+    forever, with no error anywhere.
+    """
+    old_prefix = "%s/%s/%s/attempt-%010d" % (JOB_TYPE, RUN_ID, UNIT_KEY,
+                                             ATTEMPT_ID)
+    facts = {ATTEMPT_ID: {"job_type": JOB_TYPE, "run_id": RUN_ID,
+                          "unit_key": UNIT_KEY, "data_class": None}}
+
+    attributed = references.attribute(obj("%s/diff.fits" % old_prefix), facts)
+
+    assert attributed == (ATTEMPT_ID, old_prefix)
+
+
+def test_a_new_grammar_object_is_not_attributed_to_an_old_grammar_attempt():
+    """The two grammars must not cross-attribute.
+
+    An attempt whose facts say `data_class=None` reconstructs the old prefix,
+    and a new-grammar key does NOT start with it — the leading component is
+    in the way. Without this the `None` branch would be a wildcard that
+    matched both, and the round trip would be a parse again rather than an
+    equality.
+    """
+    _, new_prefix = _production_prefix(DATA_CLASS)
+    facts = {ATTEMPT_ID: {"job_type": JOB_TYPE, "run_id": RUN_ID,
+                          "unit_key": UNIT_KEY, "data_class": None}}
+
+    assert references.attribute(obj("%s/diff.fits" % new_prefix), facts) is None
+
+

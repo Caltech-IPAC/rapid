@@ -37,14 +37,14 @@ from submission.routes import JOB_TYPE_SCIENCE, ppid_for
 # S3OBJPRF — THE HEADER THAT POINTED AT THE WRONG PREFIX (round-3 finding #7).
 #
 # Both stamped headers carried `f"{ctx.job_type}/{ctx.unit.key}"`, the OLD
-# product-key shape, while the upload has been run- and attempt-scoped since
+# object-key shape, while the upload has been run- and attempt-scoped since
 # review finding #18 closed the overwrite hole: `product_prefix()` is
-# `job_type/run_id/unit/attempt-N`. The two disagreed, so every stamped product
-# announced in its own header an S3 prefix that nothing had ever been written
-# to — and the header is exactly what someone reads to find the object again.
-# Both now call `context.product_prefix()`, the one place product keys are
-# built, so the header names the prefix the bytes actually land under and stays
-# correct if that shape changes again.
+# `data_class/job_type/run_id/unit/attempt-N`. The two disagreed, so every
+# stamped product announced in its own header an S3 prefix that nothing had
+# ever been written to — and the header is exactly what someone reads to find
+# the object again. Both now call `context.product_prefix()`, the one place
+# object keys are built, so the header names the prefix the bytes actually
+# land under and stays correct if that shape changes again.
 
 # `compute_checksum` signals failure by returning one of these instead of a
 # digest — the monolith checked for them at line 1668 of the science script and

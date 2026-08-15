@@ -6,7 +6,7 @@ and #18).
 
 What it enforces, and why each was a defect:
 
-**Run- and attempt-scoped keys.** Product keys are built from
+**Run- and attempt-scoped keys.** Object keys are built from
 `StageContext.product_prefix` and nowhere else. The reference path built its
 own from `job_type/unit` — and its helpers from a legacy `job_type/jid…` — so a
 retry or a reprocessing run overwrote the previous attempt's objects, leaving

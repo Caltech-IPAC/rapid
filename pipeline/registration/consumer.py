@@ -841,7 +841,7 @@ def _apply_skip_disposition(attempt_id, work_unit_id, disposition,
                        the unit under its own terminal record)
         none        -> submitted, untouched, and LOGGED — at ANOMALY
                        severity for a product-producing route (a route that
-                       mints product keys and succeeded with nothing to
+                       mints object keys and succeeded with nothing to
                        register is unexpected), at ordinary INFO for
                        `registration` (the one live job type this branch
                        reaches that legitimately closes success+none: it
@@ -949,7 +949,7 @@ def _apply_skip_disposition(attempt_id, work_unit_id, disposition,
                 "unit %s left submitted. Normal for job type 'registration' "
                 "(it registers other attempts' products and mints none of "
                 "its own, by design). An ANOMALY for anything else: a job "
-                "type that mints product keys (science, reference-image) "
+                "type that mints object keys (science, reference-image) "
                 "succeeding with nothing to register is neither a normal "
                 "completion nor a normal failure, and a database-effect job "
                 "type (the six post-DB types, alert production) cannot "

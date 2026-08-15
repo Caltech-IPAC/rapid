@@ -271,7 +271,7 @@ def upload_products(context) -> None:
     a reference retry or a reprocessing run OVERWROTE the previous attempt's
     objects and left earlier records citing keys whose bytes had changed. It is
     now `context.product_prefix()`, the same run/attempt-scoped builder the
-    science path uses — the one place product keys are built.
+    science path uses — the one place object keys are built.
 
     And `upload_files_to_s3_bucket` did NOT raise: it returned a boolean nobody
     read, so exactly the swallow this docstring claimed was fixed was still

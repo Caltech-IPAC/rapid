@@ -40,6 +40,21 @@ from typing import Any
 from pipeline.runtime import science_config
 from pipeline.runtime.errors import ConfigError, InputError
 
+#: The closed set of data classes an object key may be filed under — the
+#: LEADING component of every object key.
+#:
+#: The two axes are independent and both matter to a consumer: whether the
+#: pixels came from the telescope or a simulator (`real` / `sim`), and
+#: whether sources were injected into them (`pristine` / `injected`). A
+#: single flat token for the pair keeps the key's first component one
+#: component, which is what makes an S3 prefix listing separable by it.
+#:
+#: CLOSED, AND VALIDATED ON EVERY BUILD. An unrecognized token would file
+#: real products under a prefix nothing lists and nothing garbage-collects,
+#: so `product_prefix()` refuses rather than passing the value through.
+DATA_CLASSES = ("real-pristine", "real-injected",
+                "sim-pristine", "sim-injected")
+
 
 @dataclasses.dataclass
 class StageContext:
@@ -97,7 +112,7 @@ class StageContext:
     provenance: dict = dataclasses.field(default_factory=dict)
     started_at: datetime.datetime = dataclasses.field(
         default_factory=lambda: datetime.datetime.now(datetime.timezone.utc))
-    #: This attempt's identity, for product keys (review finding #18). Set by
+    #: This attempt's identity, for object keys (review finding #18). Set by
     #: the entrypoint from the resolved ownership; absent in unit tests that
     #: construct a bare context, where `product_prefix` falls back and says so.
     run_id: Any = None
@@ -125,12 +140,12 @@ class StageContext:
     #: named failure rather than an AttributeError inside a query.
     connection: Any = None
 
-    # -- product keys --------------------------------------------------------
+    # -- object keys ---------------------------------------------------------
 
     def product_prefix(self) -> str:
         """The S3 key prefix this attempt's products are uploaded under.
 
-        **The one place product keys are built** (review finding #18). The
+        **The one place object keys are built** (review finding #18). The
         prefix used to be `job_type/exposure/sca`, carrying neither run nor
         attempt identity — so reprocessing or retrying the same exposure/SCA
         OVERWROTE the earlier attempt's objects, and every old record and
@@ -142,6 +157,29 @@ class StageContext:
         objects. The unit stays in the key because it is what a human looks
         for, and the attempt id goes last because it is the part that
         distinguishes two attempts at the same work.
+
+        **THE DATA CLASS LEADS THE KEY**, ahead of the job type:
+        ``{data_class}/{job_type}/{run_id}/{unit.key}/attempt-{id:010d}``.
+        It is first because it is the coarsest cut anything makes over this
+        bucket — simulated pixels and real ones are never mixed in a listing,
+        a lifecycle rule, or a bucket policy, and only a LEADING component
+        makes an S3 prefix separable that way. Put it anywhere later and
+        every consumer has to list the whole tree and filter.
+
+        **THE PARAMETER IS AN INTERIM PATH, NOT THE FINISHED DESIGN.** The
+        data class is a property of the DATA, so it belongs on the work unit
+        — carried from admission, through `work_units`, into the per-unit
+        payload, and read here as a fact. That is real plumbing (a schema
+        migration, the gatherers, and the payload schemas) and is not on this
+        branch. Until it lands, the class is read from the OPERATIONAL
+        PARAMETER TREE, where it is a deployment-wide setting: every unit a
+        given deployment processes is filed under the one class its
+        `data/class` parameter names. That is correct only while a deployment
+        does not mix classes, which is the assumption this stopgap rests on
+        and the reason it is a stopgap. When the per-unit carrier exists,
+        this read becomes `self.fact("data_class")` and the parameter goes
+        away — `pipeline/gc/references.py`'s `canonical_prefix()` mirror has
+        to move with it, as it does with every change to this grammar.
 
         A context with no attempt identity — a unit test constructing a bare
         one — gets a prefix that says so rather than silently producing the
@@ -157,7 +195,7 @@ class StageContext:
         `submission.subjects` declares which job types are product-
         producing; every other job type's units are not exposure/SCA
         identity at all (a crossmatch unit's `.key` is a processing-date
-        ordinal and a fixed SCA sentinel), so a product key built from it
+        ordinal and a fixed SCA sentinel), so an object key built from it
         would be a real S3 path built from a synthetic value. Those job
         types write database effects through `context.record_effect`, never
         through `publish`, so this is a defect, not a legitimate call —
@@ -170,7 +208,7 @@ class StageContext:
         except UnknownJobType:
             # A job type the typed-identity registry does not cover
             # (registration, reprocessing) is exposure/SCA-shaped by
-            # construction and keeps building product keys as every job
+            # construction and keeps building object keys as every job
             # type did before this ruling.
             product_producing = True
         if not product_producing:
@@ -180,9 +218,27 @@ class StageContext:
                 f"and must never call product_prefix(). Its unit's "
                 f".key is a synthetic carrier, not a storage identity — use "
                 f"context.record_effect() instead.")
+        # AFTER the product-producing check, deliberately. A database-effect
+        # job type must fail with its own message above — it has no business
+        # building a key at all, and a missing-parameter error here would
+        # misdescribe that defect as a deployment misconfiguration.
+        data_class = self.parameter("data/class")
+        if data_class not in DATA_CLASSES:
+            raise ConfigError(
+                f"the parameter tree's data/class is {data_class!r}, which is "
+                f"not a data class; it must be one of "
+                f"{', '.join(DATA_CLASSES)}. The data class is the LEADING "
+                f"component of every object key, so an unrecognized value "
+                f"would file this attempt's objects under a prefix nothing "
+                f"lists and nothing collects.",
+                parameter="data/class")
+        # The degraded branch carries it too: a context that lost its attempt
+        # identity is still real data of a known class, and filing it outside
+        # the class tree would put it where no consumer of that class looks.
         if self.run_id is None or self.attempt_id is None:
-            return f"{self.job_type}/{self.unit.key}/unidentified-attempt"
-        return (f"{self.job_type}/{self.run_id}/{self.unit.key}"
+            return (f"{data_class}/{self.job_type}/{self.unit.key}"
+                    f"/unidentified-attempt")
+        return (f"{data_class}/{self.job_type}/{self.run_id}/{self.unit.key}"
                 f"/attempt-{int(self.attempt_id):010d}")
 
     # -- per-invocation facts ------------------------------------------------

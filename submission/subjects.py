@@ -88,7 +88,7 @@ class JobTypeSubject:
     grain : str
         One of the five declared grains.
     product_producing : bool
-        Whether this job type's units mint product keys. Only
+        Whether this job type's units mint object keys. Only
         exposure/SCA-grain job types do — `product_prefix()`
         (`pipeline/stages/context.py`) embeds `unit.key`, and that is a
         real S3 object path, so only the two job types whose units ARE a
@@ -190,7 +190,7 @@ SUBJECTS: tuple[JobTypeSubject, ...] = (
     # Alert production is exposure/SCA-shaped in ITS OWN unit (the unit is
     # the promoted attempt, keyed by the SCA attempt — see
     # `gather_alert_production_units`), but it is NOT product-producing:
-    # it mints no product keys (co-design ruling 2's parenthetical:
+    # it mints no object keys (co-design ruling 2's parenthetical:
     # "database-effect job types declare empty product sets and mint no
     # product keys" — alert production writes `alert_emissions` rows, not
     # S3 products). So its grain is EXPOSURE_SCA for dedup purposes (two
@@ -222,7 +222,7 @@ def subject_for(job_type: str) -> JobTypeSubject:
 
 
 def is_product_producing(job_type: str) -> bool:
-    """Whether this job type's units mint product keys.
+    """Whether this job type's units mint object keys.
 
     Product-producing types are exactly the two whose subject IS the
     storage-path key: science and reference-image. Everything else is a

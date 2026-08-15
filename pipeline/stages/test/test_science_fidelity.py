@@ -223,7 +223,11 @@ def _context(products=None, science=None, facts=None, parameters=None):
         job_type="science",
         science=science if science is not None else _load_release_toml(),
         parameters=parameters or {"s3/products-bucket": "products",
-                                  "s3/inputs-bucket": "inputs"},
+                                  "s3/inputs-bucket": "inputs",
+                                  # The key's leading component, on the
+                                  # interim parameter path
+                                  # (`StageContext.product_prefix`).
+                                  "data/class": "real-pristine"},
         logger=_Logger(),
         products=dict(products or {}),
     )
@@ -866,7 +870,7 @@ class PostProcessPublicationTests(unittest.TestCase):
         """The header pointed at a prefix nothing was ever written to.
 
         S3OBJPRF was stamped as `f"{ctx.job_type}/{ctx.unit.key}"` — the OLD
-        product-key shape — while the upload has been run- and attempt-scoped
+        object-key shape — while the upload has been run- and attempt-scoped
         since review finding #18. The header is exactly what someone reads to
         find the object again, so the two must agree.
         """

@@ -148,7 +148,7 @@ def _install_third_party_stubs() -> None:
 _install_third_party_stubs()
 
 from pipeline.runtime.errors import ConfigError, InputError  # noqa: E402
-from pipeline.stages.context import StageContext  # noqa: E402
+from pipeline.stages.context import DATA_CLASSES, StageContext  # noqa: E402
 from submission.manifest import ProcessingUnit  # noqa: E402
 from submission.test import payload_fixtures as fixtures  # noqa: E402
 
@@ -193,7 +193,11 @@ def make_context(**overrides) -> StageContext:
         "unit": unit,
         "job_type": "science",
         "science": SCIENCE_CONFIG,
-        "parameters": {"s3/products-bucket": "rapid-products"},
+        # `data/class` is what `product_prefix()` leads the key with. It is
+        # on the INTERIM parameter path (see `product_prefix`'s docstring),
+        # so it is a parameter here rather than a per-unit fact.
+        "parameters": {"s3/products-bucket": "rapid-products",
+                       "data/class": "real-pristine"},
         "logger": FakeLogger(),
     }
     fields.update(overrides)
@@ -393,7 +397,7 @@ if __name__ == "__main__":
 
 
 class ProductPrefixTests(unittest.TestCase):
-    """Product keys carry run and attempt identity (implementation review #18).
+    """Object keys carry run and attempt identity (implementation review #18).
 
     The prefix was `job_type/exposure/sca`, which carries neither — so
     reprocessing or retrying the same exposure/SCA OVERWROTE the earlier
@@ -409,7 +413,18 @@ class ProductPrefixTests(unittest.TestCase):
         self.assertIn("run-1", prefix)
         self.assertIn("attempt-0000004242", prefix)
         self.assertIn(context.unit.key, prefix)
-        self.assertTrue(prefix.startswith(context.job_type))
+        self.assertIn(context.job_type, prefix)
+
+    def test_the_whole_grammar_in_one_assertion(self):
+        # The one place the SHAPE is spelled out end to end, so a change to
+        # any component fails here with the whole key visible rather than as
+        # four separate substring misses.
+        context = make_context(run_id="run-1", attempt_id=4242)
+
+        self.assertEqual(
+            "real-pristine/science/run-1/%s/attempt-0000004242"
+            % context.unit.key,
+            context.product_prefix())
 
     def test_two_attempts_at_one_unit_do_not_share_a_prefix(self):
         first = make_context(run_id="run-1", attempt_id=1).product_prefix()
@@ -429,7 +444,6 @@ class ProductPrefixTests(unittest.TestCase):
         prefix = make_context().product_prefix()
 
         self.assertIn("unidentified-attempt", prefix)
-
     def test_the_prefix_is_stable_for_one_attempt(self):
         context = make_context(run_id="run-1", attempt_id=7)
         self.assertEqual(context.product_prefix(), context.product_prefix())
@@ -459,7 +473,7 @@ class ProductPrefixTests(unittest.TestCase):
 
     def test_product_producing_job_types_are_unaffected(self):
         # The refusal is scoped to database-effect types; science and
-        # reference-image keep building product keys exactly as before.
+        # reference-image keep building object keys exactly as before.
         for job_type in ("science", "reference-image"):
             context = make_context(job_type=job_type, run_id="run-1",
                                    attempt_id=1)
@@ -467,11 +481,97 @@ class ProductPrefixTests(unittest.TestCase):
 
     def test_a_job_type_outside_the_registry_still_mints_a_key(self):
         # post-process is deliberately unregistered (ruling 9); it must keep
-        # building product keys exactly as every job type did before this
+        # building object keys exactly as every job type did before this
         # ruling, not be refused for lacking a declaration.
         context = make_context(job_type="post-process", run_id="run-1",
                                attempt_id=1)
         self.assertTrue(context.product_prefix())
+
+
+
+class DataClassTests(unittest.TestCase):
+    """The data class LEADS the key, and is validated against a closed set.
+
+    **THE PARAMETER IS AN INTERIM PATH.** The data class is a property of the
+    data and belongs on the work unit, carried from admission; until that
+    plumbing exists it is read from the operational parameter tree, where it
+    is a deployment-wide setting. These tests assert the grammar, which does
+    not change when the source does — what changes is where `product_prefix`
+    reads it from.
+
+    First is the whole point. It is the coarsest cut anything makes over the
+    products bucket, and only a LEADING component makes an S3 prefix listing
+    separable that way; put it second and every consumer must list the entire
+    tree and filter.
+    """
+
+    def test_the_data_class_is_the_first_path_component(self):
+        prefix = make_context(run_id="run-1", attempt_id=1).product_prefix()
+
+        self.assertEqual("real-pristine", prefix.split("/")[0])
+
+    def test_every_declared_data_class_leads_its_own_key(self):
+        # The closed set, each asserted to reach the key — not just to be
+        # accepted by the validator.
+        for data_class in DATA_CLASSES:
+            with self.subTest(data_class=data_class):
+                context = make_context(
+                    run_id="run-1", attempt_id=1,
+                    parameters={"data/class": data_class})
+
+                self.assertEqual(data_class,
+                                 context.product_prefix().split("/")[0])
+
+    def test_an_unknown_data_class_is_refused(self):
+        # An unrecognized token would file real products under a prefix
+        # nothing lists and nothing collects — a silent misfiling, so it is
+        # refused at the point of building rather than passed through.
+        context = make_context(run_id="run-1", attempt_id=1,
+                               parameters={"data/class": "sim"})
+
+        with self.assertRaises(ConfigError) as ctx:
+            context.product_prefix()
+        message = str(ctx.exception)
+        self.assertIn("sim", message)
+        # The message must name the valid set, not merely reject the value:
+        # an operator reading it should not have to find this module.
+        for data_class in DATA_CLASSES:
+            self.assertIn(data_class, message)
+
+    def test_a_missing_data_class_parameter_is_refused(self):
+        # No default, by the parameter tree's standing rule: a default would
+        # file every object of a misconfigured deployment under a plausible
+        # but wrong class, and nothing downstream could tell.
+        context = make_context(run_id="run-1", attempt_id=1,
+                               parameters={"s3/products-bucket": "b"})
+
+        with self.assertRaises(ConfigError) as ctx:
+            context.product_prefix()
+        self.assertIn("data/class", str(ctx.exception))
+
+    def test_the_degraded_prefix_carries_the_data_class_too(self):
+        # A context that lost its attempt identity is still real data of a
+        # known class; filing it outside the class tree would put it where
+        # no consumer of that class ever looks.
+        prefix = make_context().product_prefix()
+
+        self.assertEqual("real-pristine", prefix.split("/")[0])
+        self.assertIn("unidentified-attempt", prefix)
+
+    def test_a_database_effect_job_type_fails_on_its_own_terms(self):
+        # ORDER MATTERS. The product-producing check runs BEFORE the data
+        # class is read, so a database-effect job type raises ITS error even
+        # when the parameter is absent entirely. Reversed, a real defect
+        # (calling product_prefix() from a job type that must never call it)
+        # would be reported as a deployment misconfiguration.
+        context = make_context(job_type="statistics", run_id="run-1",
+                               attempt_id=1, parameters={})
+
+        with self.assertRaises(ConfigError) as ctx:
+            context.product_prefix()
+        message = str(ctx.exception)
+        self.assertIn("database-effect", message)
+        self.assertNotIn("data/class", message)
 
 
 # ---------------------------------------------------------------------------

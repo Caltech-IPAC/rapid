@@ -119,7 +119,11 @@ def _context(unit, job_type):
     the published URIs are built from — produces the production key shape.
     """
     return StageContext(
-        workdir=None, unit=unit, job_type=job_type, science={}, parameters={},
+        workdir=None, unit=unit, job_type=job_type, science={},
+        # `product_prefix()` leads the key with the data class, read from the
+        # parameter tree on the interim path — so a context whose published
+        # URIs must have the production shape has to carry it.
+        parameters={"data/class": "real-pristine"},
         logger=_QuietLogger(), run_id="run-1", attempt_id=1)
 
 
