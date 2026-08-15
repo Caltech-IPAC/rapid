@@ -47,7 +47,17 @@ pytestmark = pytest.mark.contract
 ATTEMPT_ID = 4242
 JOB_TYPE = "science"
 RUN_ID = "gc-run-" + fixture.RUN_TAG
-UNIT_KEY = "science/90000/1"
+#: **THE SHAPE `ProcessingUnit.key` ACTUALLY EMITS**, not the shape the SQL
+#: used to reconstruct. This read `"science/90000/1"` until 2026-08-15 —
+#: job-type-prefixed and unpadded, matching `attempt_facts()`'s old
+#: `job_type || '/' || input_scope` rather than the builder — and because
+#: every assertion in this file uses it on BOTH sides, they all agreed with
+#: each other while disagreeing with every object in the bucket. A hand-typed
+#: constant that matches the code under test rather than the world is the
+#: mechanism by which that defect survived; this one is checked against
+#: `context.unit.key` by
+#: `test_the_sql_reconstructs_the_same_unit_key_the_builder_interpolates`.
+UNIT_KEY = "090000/01"
 
 #: The LEADING component of the current grammar. Any of `DATA_CLASSES` would
 #: do for these fixtures — the lockstep tests below parametrize over all four
@@ -667,6 +677,99 @@ def test_gc_reconstructs_exactly_what_the_builder_emits(data_class):
         context.attempt_id, data_class)
 
     assert reconstructed == built
+
+
+def test_the_sql_reconstructs_the_same_unit_key_the_builder_interpolates():
+    """THE JOIN THE LOCKSTEP ABOVE DOES NOT TEST, and the defect it hid.
+
+    `test_gc_reconstructs_exactly_what_the_builder_emits` passes
+    `context.unit.key` straight into `canonical_prefix()`. Production does
+    not: it passes what `attempt_facts()` reconstructs from
+    `work_units.(job_type, input_scope)`. So both halves could be — and
+    were — individually correct while their JOIN was broken, and every
+    fixture in this file agreed with the wrong shape because `UNIT_KEY` is
+    hand-typed to match the SQL rather than the builder.
+
+    Until 2026-08-15 the SQL emitted `job_type || '/' || input_scope`:
+    `"science/90000/1"`, where the builder interpolates `"090000/01"` — a
+    doubled job type AND unpadded numbers. `attribute()` compares with
+    `startswith`, so nothing ever matched and every object was
+    UNATTRIBUTABLE. It failed safe (nothing deleted) and silent (nothing
+    raised), which is exactly why no test caught it.
+
+    This asserts the two against each other for the SAME unit, which is the
+    only comparison that can catch a divergence in either half.
+    """
+    from pipeline.gc import reference_sql
+
+    # The identity as the database holds it: `input_scope` is what
+    # `submission.subjects.input_scope_from_subject` writes — plain `str()`
+    # per component, so unpadded — for the same (exposure, sca) the fixture
+    # unit carries.
+    from submission.subjects import input_scope_from_subject
+    scope = input_scope_from_subject(("science", 90000, 1))
+    assert scope == "90000/1", "fixture assumption: input_scope is unpadded"
+
+    context, built = _production_prefix("sim-injected")
+
+    # THE SQL IS ASSERTED ON, NOT REIMPLEMENTED. Writing the CASE out again
+    # in Python would make this test agree with itself — the very fault that
+    # let the original defect live: `UNIT_KEY` in this file is hand-typed to
+    # match the SQL, so every assertion using it was tautological. Instead
+    # the query text is inspected for the two properties that were wrong,
+    # and the Postgres tier below executes the real thing.
+    seen = {}
+
+    def execute(sql, params):
+        seen["sql"] = sql
+        return []
+
+    reference_sql.attempt_facts(execute)
+    query = seen["sql"]
+
+    # (a) THE JOB TYPE MUST NOT BE PREPENDED. The key carries none —
+    # `ProcessingUnit.key` renders components only — so the old
+    # `w.job_type || '/' || w.input_scope` doubled it.
+    assert "w.job_type || '/' || w.input_scope" not in query, (
+        "the unit key must not prepend the job type: product_prefix() "
+        "interpolates ProcessingUnit.key, which carries no job_type "
+        "component, and prepending one doubled it in every reconstruction")
+
+    # (b) THE EXPOSURE/SCA GRAIN MUST BE ZERO-PADDED, to the widths the
+    # storage design's component law fixes and ProcessingUnit.key applies.
+    assert "lpad(" in query, (
+        "the unit key must zero-pad the exposure/SCA grain: input_scope is "
+        "stored unpadded ('90000/1') and the key is padded ('090000/01')")
+    assert "6, '0'" in query and "2, '0'" in query, (
+        "exposure pads to 6 and SCA to 2 — the widths ProcessingUnit.key "
+        "uses and the storage design's component law fixes")
+
+    # (c) THE PADDING IS SELECTED BY JOB TYPE, NOT BY THE SCOPE'S SHAPE.
+    # `catalog-load` is DATE/SCA-grained, so its scope ('20260809/1') is
+    # ALSO two numeric components — a digits-only predicate pads it and
+    # TRUNCATES the date to '202608', corrupting the key rather than
+    # merely mis-shaping it. Caught against live rows; pinned here.
+    assert "w.job_type IN ('science', 'reference-image')" in query, (
+        "the grain must be selected by job type: a digits-only test cannot "
+        "distinguish EXPOSURE_SCA from DATE_SCA, and padding a date "
+        "truncates it")
+    for grained_but_not_producing in ("catalog-load", "crossmatch",
+                                      "statistics", "alert-production"):
+        assert grained_but_not_producing not in query, (
+            "%s must not be padded: it either mints no object keys or is "
+            "not exposure/SCA-grained" % grained_but_not_producing)
+
+    # And the whole point, stated as the equality it has to satisfy: the
+    # unit whose input_scope is `scope` must reconstruct to the key the
+    # builder interpolated for the same unit.
+    assert context.unit.key == UNIT_KEY, (
+        "this file's UNIT_KEY constant must be what the REAL builder emits, "
+        "not what the SQL happens to reconstruct — a constant matching the "
+        "code under test rather than the world is how the original defect "
+        "survived every test in this file")
+    assert scope == "90000/1" and context.unit.key != scope, (
+        "the stored scope and the emitted key differ in shape — which is "
+        "the entire reason this reconstruction needs the CASE")
 
 
 def test_attempt_facts_selects_the_data_class_and_passes_nulls_through():

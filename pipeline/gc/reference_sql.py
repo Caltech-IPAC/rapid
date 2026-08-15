@@ -256,16 +256,54 @@ def attempt_facts(execute, run_ids=None):
     The inputs to the canonical round trip. Read from the attempt's OWN row
     rather than parsed from a key — that direction is the whole point.
 
-    **THE UNIT KEY IS RECONSTRUCTED, NOT STORED.** `work_units` has no
-    `unit_key` column: the persisted identity is `(job_type, input_scope)`,
-    and `input_scope` is the declared-subject tuple with its leading
-    `job_type` element DROPPED and the rest joined with `/`
-    (`submission/subjects.build_input_scope`, wrapped by
-    `pipeline/seams.py:411`). `ProcessingUnit.key` — the thing
-    `product_prefix()` interpolates — is that same grammar WITH the job_type,
-    so the round trip rebuilds it as `job_type || '/' || input_scope`.
-    Verified against `036-intent-schema-v1.sql:111-122` on this branch's head
-    rather than assumed.
+    **THE UNIT KEY IS RECONSTRUCTED, NOT STORED, AND THE RECONSTRUCTION WAS
+    WRONG IN TWO WAYS UNTIL 2026-08-15.** `work_units` has no `unit_key`
+    column: the persisted identity is `(job_type, input_scope)`, where
+    `input_scope` is the declared-subject tuple with its leading `job_type`
+    element DROPPED and the rest joined with `/`
+    (`submission/subjects.input_scope_from_subject`). This SELECT used to
+    rebuild the key as `job_type || '/' || input_scope`, on the stated
+    belief that `ProcessingUnit.key` "is that same grammar WITH the
+    job_type". IT IS NOT, and that false premise defeated GC completely:
+
+      * `ProcessingUnit.key` (`submission/manifest.py`) is
+        ``f"{exposure:06d}/{sca:02d}"`` for the exposure/SCA grain — ZERO
+        PADDED, and carrying NO job_type. `product_prefix()` interpolates
+        exactly that, so a real key reads
+        ``sim-injected/science/<run_id>/000121/04/attempt-0000008097/...``.
+      * `input_scope` is built with plain `str()` per component, so it is
+        UNPADDED: `121/4`. Prepending the job type then produced
+        `science/121/4`, and the reconstruction came out as
+        ``sim-injected/science/<run_id>/science/121/4/attempt-...`` — a
+        DOUBLED job type and unpadded numbers.
+
+    `attribute()` compares with `startswith`, so that prefix matched no
+    object that has ever been written. Every object fell to clause 3 as
+    UNATTRIBUTABLE, silently and universally — the exact failure
+    `pipeline/gc/references.py`'s own docstring warns the mirror can suffer,
+    arrived at through the SQL rather than through the mirror. It was latent
+    rather than damaging only because `DELETABLE_CLASS_ALLOWLIST` is empty,
+    so clause 0 retains everything anyway; it would have become load-bearing
+    the moment that allowlist gained a member.
+
+    The padding is applied HERE, in SQL, rather than by fixing
+    `input_scope`, because `input_scope` is a stored identity column with a
+    partial unique index over it: re-spelling it would rewrite the identity
+    of every existing row and orphan the units. The key shape is what has
+    to match the bucket, and this is the one place that builds it.
+
+    **ONLY THE EXPOSURE/SCA GRAIN IS PADDED, AND THE GRAIN IS SELECTED BY
+    JOB TYPE.** `ProcessingUnit.key` pads that grain and renders every
+    other with plain `str()`, so only that grain needs it here. Selecting
+    it by the SCOPE'S SHAPE does not work and was tried: `catalog-load` is
+    DATE/SCA-grained, its scope `20260809/1` is also two numeric
+    components, and padding it to six TRUNCATES the date to `202608` — a
+    corrupted key rather than merely a wrong one. Live rows caught that
+    before it shipped. The job-type list is therefore the discriminator,
+    naming the two EXPOSURE_SCA-grained product-producing types
+    (`submission.subjects`: science and reference-image; alert-production
+    shares the grain but is `product_producing=False`, so it writes no
+    objects to attribute).
 
     **`data_class` IS NOW READ FROM THE UNIT, AND NULL IS AN ANSWER.**
     This SELECT used to hardcode `data_class=None` because there was no
@@ -283,12 +321,34 @@ def attempt_facts(execute, run_ids=None):
     `pipeline/gc/references.py` documents. So the column is passed through
     untouched, NULL and all.
     """
+    # THE PADDING IS SELECTED BY JOB TYPE, NOT BY THE SCOPE'S SHAPE. A
+    # digits-and-slash test cannot tell the grains apart: catalog-load is
+    # DATE/SCA, so its scope `20260809/1` is two numeric components too, and
+    # padding it to six would TRUNCATE the date to `202608` — a corrupted
+    # reconstruction, worse than the wrong one this replaced. Caught by
+    # running the candidate SQL against live rows before shipping it.
+    #
+    # The job types listed here are exactly the EXPOSURE_SCA-grained,
+    # PRODUCT-PRODUCING pair (`submission.subjects`: science and
+    # reference-image are `product_producing=True`; alert-production shares
+    # the grain but produces no objects, so it mints no key to attribute).
+    # They are enumerated rather than joined to a registry because this is
+    # SQL and the registry is Python — and enumerating means a new
+    # product-producing job type fails this reconstruction visibly, in the
+    # contract test that pins the pair, rather than silently reconstructing
+    # an unpadded key that matches nothing.
     sql = """
     SELECT a.attempt_id,
            coalesce(lj.job_type, w.job_type) AS job_type,
            a.run_id,
-           CASE WHEN w.job_type IS NULL OR w.input_scope IS NULL THEN NULL
-                ELSE w.job_type || '/' || w.input_scope END AS unit_key,
+           CASE
+             WHEN w.job_type IS NULL OR w.input_scope IS NULL THEN NULL
+             WHEN w.job_type IN ('science', 'reference-image')
+                  AND w.input_scope ~ '^[0-9]+/[0-9]+$' THEN
+               lpad(split_part(w.input_scope, '/', 1), 6, '0') || '/' ||
+               lpad(split_part(w.input_scope, '/', 2), 2, '0')
+             ELSE w.input_scope
+           END AS unit_key,
            w.data_class
       FROM attempts a
       LEFT JOIN logical_jobs lj ON lj.logical_job_id = a.logical_job_id
