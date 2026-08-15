@@ -148,6 +148,26 @@ class Credentials(collections.namedtuple("Credentials", "user password")):
     password into any log line, traceback frame, or ``repr()`` of a
     containing structure — the exact exposure that moving the credential
     off the environment is meant to close.
+
+    **TWO WAYS TO HOLD NO PASSWORD, AND ONLY ONE OF THEM IS LEGITIMATE.**
+    The ordinary constructor still refuses a missing password, because
+    every caller that fetches one from Secrets Manager
+    (``pipeline/runtime/service_kernel.py``, ``pipeline/entrypoints/
+    job.py``) is holding a SERVICE credential, and an empty password
+    there means the secret came back malformed — exactly the case that
+    must fail at construction rather than reach libpq and be reported as
+    an authentication failure of unclear origin.
+
+    ``for_pgpass`` is the other way, and it is a DIFFERENT INTENT stated
+    explicitly rather than an empty string smuggled past a check: a
+    person connecting as themselves, whose password libpq is to resolve
+    from ``~/.pgpass`` or a trust/peer method. It carries ``password =
+    None``, and the ``None`` matters — libpq consults ``~/.pgpass`` only
+    when NO password is supplied. An empty STRING is a supplied password
+    that happens to be empty, which libpq sends as-is and the server
+    rejects, so the previously documented ``Credentials(user, "")`` shape
+    could not have reached the pgpass path even if the check had allowed
+    it through.
     """
 
     __slots__ = ()
@@ -156,8 +176,29 @@ class Credentials(collections.namedtuple("Credentials", "user password")):
         if not user or not password:
             raise DBCredentialError(
                 "an explicit database credential needs both a user and a "
-                "password")
+                "password; a credential whose password libpq is meant to "
+                "resolve from ~/.pgpass is built with "
+                "Credentials.for_pgpass(user) instead, which states that "
+                "intent rather than passing an empty one")
         return super().__new__(cls, user, password)
+
+    @classmethod
+    def for_pgpass(cls, user):
+        """A credential whose password libpq resolves, not this process.
+
+        Bypasses ``__new__``'s password check DELIBERATELY and only for
+        this named intent — see the class docstring. The user is still
+        required: without one there is no ``~/.pgpass`` line to match,
+        and libpq would fall back to the OS user, which is how a person
+        ends up connecting as an identity they did not choose.
+        """
+        if not user:
+            raise DBCredentialError(
+                "a pgpass credential still needs a login role: without one "
+                "libpq matches no ~/.pgpass line and falls back to the OS "
+                "user, which is not necessarily the role the caller means "
+                "to act as")
+        return super().__new__(cls, user, None)
 
     def __repr__(self):
         return f"Credentials(user={self.user!r}, password=<redacted>)"
@@ -286,7 +327,17 @@ def connect(application_name,
 
     if credentials is None:
         credentials = resolve_credentials()
-    user, password = Credentials(*credentials)
+    # AN ALREADY-TYPED CREDENTIAL IS TAKEN AS IT STANDS; only a raw pair is
+    # re-wrapped. The re-wrap exists so a caller passing a bare tuple still
+    # meets the completeness check, but running a `Credentials` back through
+    # `Credentials(...)` would ALSO re-run the password check — and that
+    # check refuses the pgpass credential (`password is None`) which
+    # `for_pgpass` constructed deliberately. So the one shape that has
+    # already been validated, by the constructor that knows which intent it
+    # carries, was the one shape this line would have rejected.
+    if not isinstance(credentials, Credentials):
+        credentials = Credentials(*credentials)
+    user, password = credentials
 
     # PostgreSQL truncates application_name at NAMEDATALEN-1 (63 bytes) and
     # would silently lose the lane suffix on a long component name, so the

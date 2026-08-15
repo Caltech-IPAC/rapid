@@ -122,23 +122,39 @@ class OperatorCredentialsTests(unittest.TestCase):
             creds = operator_credentials()
         self.assertEqual(creds, Credentials("brusholme", "s3cr3t"))
 
-    def test_missing_pgpassword_raises_db_credential_error(self):
-        """Pins EXISTING (not this fix's) behaviour, and documents a
-        contradiction found while writing this suite: `session.py`'s own
-        comment above the `Credentials(...)` call claims "An empty
-        password is legitimate — libpq then consults ~/.pgpass", but
-        `Credentials.__new__` in `rapid_db_connect.py` (031:154-157,
-        untouched by this change) rejects `not password` unconditionally.
-        So today, an operator with no `PGPASSWORD` set and a working
-        `~/.pgpass` cannot actually reach `operator_credentials()` — it
-        raises before the empty password ever gets a chance to fall
-        through to libpq. Pre-existing; out of scope for this change;
-        flagged rather than silently worked around.
+    def test_missing_pgpassword_yields_a_pgpass_credential(self):
+        """The contradiction the previous version of this test PINNED.
+
+        It used to assert `DBCredentialError`, and its docstring recorded
+        why: `session.py` documented an unset `PGPASSWORD` falling
+        through to `~/.pgpass`, while the `Credentials(user, "")` it
+        actually built was refused by `Credentials.__new__`'s falsy-
+        password check. The documented path was unreachable, and this
+        test held that state in place rather than fixing it.
+
+        Both halves now agree. An unset `PGPASSWORD` resolves to a
+        credential carrying `password is None` — NOT `""` — because
+        libpq consults `~/.pgpass` only when no password is supplied.
+        Asserting `is None` specifically is the point of the test: an
+        empty string would satisfy "falsy" and still not reach pgpass.
         """
         env = {"PGUSER": "brusholme"}
         with unittest.mock.patch.dict("os.environ", env, clear=True):
-            with self.assertRaises(DBCredentialError):
-                operator_credentials()
+            creds = operator_credentials()
+        self.assertEqual(creds.user, "brusholme")
+        self.assertIsNone(creds.password)
+
+    def test_an_empty_pgpassword_is_treated_as_unset(self):
+        """`PGPASSWORD=` exported empty is a person who set no password,
+        not a person whose password is the empty string — no server
+        accepts the latter, so reading it literally would turn a common
+        shell accident into an authentication failure whose message
+        names the wrong cause.
+        """
+        env = {"PGUSER": "brusholme", "PGPASSWORD": ""}
+        with unittest.mock.patch.dict("os.environ", env, clear=True):
+            creds = operator_credentials()
+        self.assertIsNone(creds.password)
 
     def test_falls_back_to_user_env_when_pguser_unset(self):
         env = {"USER": "brusholme", "PGPASSWORD": "s3cr3t"}

@@ -151,16 +151,38 @@ def operator_credentials():
     the actor (031:99), so the login this returns is the name that ends
     up in the ledger. That is the intended behaviour and the reason this
     never falls back to a shared identity.
+
+    **THE ``~/.pgpass`` PATH IS REAL, AND USED NOT TO BE.** This docstring
+    described it and the code refused it: the call passed ``""`` into
+    ``Credentials``, whose check rejects a falsy password, so an operator
+    with a working ``~/.pgpass`` and no ``PGPASSWORD`` got a
+    ``DBCredentialError`` instead of a connection. The two halves now
+    agree — an unset or empty ``PGPASSWORD`` builds
+    ``Credentials.for_pgpass(user)``, which carries ``password = None``
+    and lets libpq do the resolution this function has always claimed it
+    would. The distinction is not cosmetic: libpq consults ``~/.pgpass``
+    only when NO password is supplied, so the empty string this used to
+    pass would not have worked even had it been let through.
     """
     user = os.environ.get("PGUSER") or os.environ.get("USER")
     if not user:
         raise DBCredentialError(
             "no login role: set PGUSER to the personal login role granted "
             "rapid_operator")
-    # An empty password is legitimate — libpq then consults ~/.pgpass or a
-    # local trust/peer method, both ordinary ways for a person to connect.
+    # NO PASSWORD IS LEGITIMATE HERE, and it is now actually reachable.
+    # This comment used to claim that libpq would consult `~/.pgpass` when
+    # `PGPASSWORD` was unset, while the call below passed `""` into
+    # `Credentials`, whose check refuses a falsy password — so the
+    # documented path raised `DBCredentialError` before libpq ever saw it.
+    # `for_pgpass` states the intent the comment always described, and
+    # carries `password = None` rather than `""` because libpq consults
+    # `~/.pgpass` only when NO password is supplied; an empty string is a
+    # supplied one, sent as-is and rejected by the server.
+    password = os.environ.get("PGPASSWORD")
+    if not password:
+        return Credentials.for_pgpass(user)
     # `Credentials` validates the user and redacts the password in repr.
-    return Credentials(user, os.environ.get("PGPASSWORD", ""))
+    return Credentials(user, password)
 
 
 @contextlib.contextmanager

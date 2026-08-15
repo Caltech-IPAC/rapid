@@ -764,6 +764,56 @@ class ExplicitInterfaceTests(unittest.TestCase):
         with self.assertRaises(DBCredentialError):
             Credentials("", "s3cret")
 
+    def test_the_ordinary_constructor_still_refuses_a_missing_password(self):
+        """The half that must NOT be relaxed by `for_pgpass` existing.
+
+        Both other callers of this class — `service_kernel.py` and
+        `entrypoints/job.py` — build it from a Secrets Manager payload,
+        where an absent password means the secret came back malformed.
+        That has to fail here, at construction, rather than reach libpq
+        and return as an authentication failure that names the server
+        instead of the secret.
+        """
+        with self.assertRaises(DBCredentialError):
+            Credentials("rapid_rw", None)
+
+    def test_a_pgpass_credential_carries_none_not_an_empty_string(self):
+        """`None` is what makes libpq consult `~/.pgpass`; `""` is a
+        supplied password that happens to be empty, which is sent as-is
+        and rejected. The distinction is the whole fix, so it is asserted
+        on the value rather than on mere falsiness.
+        """
+        creds = Credentials.for_pgpass("brusholme")
+        self.assertEqual(creds.user, "brusholme")
+        self.assertIsNone(creds.password)
+        self.assertNotEqual(creds.password, "")
+
+    def test_a_pgpass_credential_still_requires_a_user(self):
+        # Without one libpq matches no ~/.pgpass line and falls back to
+        # the OS user — connecting as an identity nobody chose.
+        with self.assertRaises(DBCredentialError):
+            Credentials.for_pgpass("")
+
+    def test_connect_hands_a_pgpass_credential_to_libpq_unchanged(self):
+        """The end-to-end direction: the credential must survive
+        `connect()`'s own re-wrap and arrive at the driver as `None`.
+
+        This is where the fix would silently regress. `connect()`
+        re-wraps its `credentials` argument through `Credentials(...)`
+        so a caller passing a bare tuple still meets the completeness
+        check — and that re-wrap re-runs the very password check
+        `for_pgpass` was built to bypass. A `Credentials` instance is
+        therefore taken as it stands, and this test proves it by
+        asserting on the kwargs the driver actually received.
+        """
+        connect_fn = mock.MagicMock()
+        connect("payload", connect_fn=connect_fn,
+                endpoint=("h", "6432", "rapid"),
+                credentials=Credentials.for_pgpass("brusholme"))
+        kwargs = connect_fn.call_args.kwargs
+        self.assertEqual(kwargs["user"], "brusholme")
+        self.assertIsNone(kwargs["password"])
+
     def test_the_credential_repr_does_not_print_the_password(self):
         # Anything that reprs a structure holding one — a log line, a
         # traceback frame — would otherwise print it.
