@@ -164,8 +164,17 @@ def main():
     for submission, attempt_ids in results:
         total_children += len(attempt_ids)
         batches.append({
-            "scheduler_job_id": getattr(submission, "scheduler_job_id", None),
-            "array_size": getattr(submission, "array_size", None),
+            # `job_id`, not `scheduler_job_id`: the submission result
+            # (`submission/submit.py`) names the field `job_id`, so the old
+            # `getattr(submission, "scheduler_job_id", None)` matched nothing
+            # and silently produced null in every summary this harness has
+            # ever printed — the getattr default turning a wrong field name
+            # into a plausible-looking value rather than an AttributeError.
+            # The id itself was never missing: `attempts.scheduler_job_id` is
+            # populated correctly on the same submission, which is how the
+            # job had to be recovered by name after the fact.
+            "scheduler_job_id": submission.job_id,
+            "array_size": submission.array_size,
             "attempt_ids": list(attempt_ids),
         })
 
