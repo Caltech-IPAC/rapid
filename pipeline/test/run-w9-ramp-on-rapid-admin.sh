@@ -105,8 +105,18 @@ podman run --rm --entrypoint="" -v "\$STAGE/repo":/w9:Z -w /w9 \\
   -e RAPID_IMAGE_DIGEST="${IMAGE#*@}" \\
   -e RAPID_RELEASE_IDENTITY="\${RAPID_RELEASE_IDENTITY:-smdc-7655dcc}" \\
   --network host \\
-  "$IMAGE" python3.11 -m pipeline.test.live_w9_ramp "$PHASE" "$CAP" "$TAG" 2>&1 | tail -120
-rc=\${PIPESTATUS[0]}
+  "$IMAGE" python3.11 -m pipeline.test.live_w9_ramp "$PHASE" "$CAP" "$TAG" \\
+  > "\$STAGE/ramp.log" 2>&1
+rc=\$?
+# The summary is the ONE line this step exists to produce, and it is printed
+# LAST -- so a tail window is exactly the wrong way to carry it. At cap 90 the
+# submitter emits two log lines per unit and the summary fell outside a
+# tail -120, which read as "the step produced no summary" when in fact it had
+# submitted 90 children successfully (sims campaign W3, 2026-08-15). Grep the
+# summary out of the full log FIRST, then show a bounded tail for context.
+grep -a 'W9-RAMP-SUMMARY' "\$STAGE/ramp.log" || echo "!! no W9-RAMP-SUMMARY line in the step's output"
+echo "----- last 60 lines for context -----"
+tail -60 "\$STAGE/ramp.log"
 echo ">> ramp step exit code: \$rc"
 [ "\$rc" -eq 0 ] || exit 1
 echo "W9-RAMP-STEP-OK"
