@@ -27,6 +27,7 @@ too late), matching this repo's "doubles must be able to refuse" rule.
 
 import unittest
 
+from pipeline.gc import references
 from pipeline.gc.plans import GCPlanRepository
 from pipeline.gc.references import PlanRefused
 
@@ -214,6 +215,79 @@ class _Inventory:
 
     inventory_id = "inv-2"
     taken_at = "2026-08-14T00:00:00Z"
+
+
+class ValidatedAllowlistTests(unittest.TestCase):
+    """`references.validated_allowlist()` — the mechanical `real-*` refusal.
+
+    Per the closeout memo (`rapid_plan/research/deletable-class-allowlist-
+    memo.md`, "The risk that actually matters: real-*"): `DELETABLE_CLASS_
+    ALLOWLIST` stays `()`, but the mechanism that would consume a populated
+    one is made to refuse the science substrate on its own, rather than
+    depending on a reviewer noticing a `real-*` token in a diff. No live
+    database needed — this is a pure function.
+    """
+
+    def test_real_pristine_is_refused(self):
+        with self.assertRaises(references.ScienceClassNotDeletable):
+            references.validated_allowlist(("real-pristine",))
+
+    def test_an_unregistered_real_token_is_refused_too(self):
+        """The refusal is on the SUBSTRATE, not a hardcoded string match.
+
+        `real-pristine` is the only registered `real-*` token today, so this
+        asserts against a token the registry has never seen — proving the
+        guard reads the `real-` prefix rather than matching a literal.
+        """
+        with self.assertRaises(references.ScienceClassNotDeletable):
+            references.validated_allowlist(("real-injected",))
+
+    def test_the_refusal_names_the_offending_tokens_and_cites_the_memo(self):
+        with self.assertRaises(references.ScienceClassNotDeletable) as caught:
+            references.validated_allowlist(("real-pristine",))
+        message = str(caught.exception)
+        self.assertIn("real-pristine", message)
+        self.assertIn("deletable-class-allowlist-memo.md", message)
+
+    def test_sim_tokens_pass_through_unchanged(self):
+        """Proves the fix, not just the feature: the validator itself must
+        accept `sim-*` without the tuple ever being populated — a validator
+        that rejected everything would also make every refusal test above
+        pass, for the wrong reason.
+        """
+        result = references.validated_allowlist(("sim-injected",
+                                                  "sim-pristine"))
+        self.assertEqual(result, ("sim-injected", "sim-pristine"))
+
+    def test_the_empty_default_still_validates_fine(self):
+        self.assertEqual(references.validated_allowlist(()), ())
+        self.assertEqual(
+            references.validated_allowlist(references.
+                                            DELETABLE_CLASS_ALLOWLIST), ())
+
+    def test_a_mixed_allowlist_is_refused_for_its_real_member_alone(self):
+        with self.assertRaises(references.ScienceClassNotDeletable):
+            references.validated_allowlist(("sim-injected", "real-pristine"))
+
+
+class ClassifyValidatesTheAllowlistTests(unittest.TestCase):
+    """`classify()` calls `validated_allowlist()` itself — the OTHER
+    consumption path named by the brief, alongside `compute_plan`'s
+    `--allow-class`. A caller building the allowlist by hand and passing it
+    straight to `classify()` must be refused just as surely as one going
+    through `compute_plan`.
+    """
+
+    def test_classify_refuses_a_real_class_on_its_allowlist_argument(self):
+        with self.assertRaises(references.ScienceClassNotDeletable):
+            references.classify(
+                [], references=set(), attempt_facts={}, owners={},
+                allowlist=("real-pristine",))
+
+    def test_classify_still_accepts_an_empty_allowlist(self):
+        candidates, retained = references.classify(
+            [], references=set(), attempt_facts={}, owners={}, allowlist=())
+        self.assertEqual((candidates, retained), ([], []))
 
 
 if __name__ == "__main__":

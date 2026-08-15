@@ -51,6 +51,8 @@ Each is retained, by clause 3 (unattributable) and again by clause 0.
 
 import typing
 
+from submission import data_class as data_class_module
+
 #: Work-unit states whose objects are ELIGIBLE for deletion. The LITERAL
 #: predicate, and deliberately short.
 #:
@@ -84,7 +86,71 @@ LIVE_ATTEMPT_STATES = ("submitted", "started", "application_closed")
 #: A class joins this tuple only when a ratified proposal names it TOGETHER
 #: WITH the durable reference surface that makes its absence meaningful.
 #: Nothing has such a surface today.
+#:
+#: **STAYS EMPTY BY DECISION, NOT BY ACCIDENT**
+#: (`rapid_plan/research/deletable-class-allowlist-memo.md`, 2026-08-15). The
+#: memo's recommendation, if this is ever populated, is implemented below as
+#: `validated_allowlist()`: the science substrate (`real-*`) is refused
+#: mechanically at the point the allowlist is READ, on every path, rather
+#: than left to a reviewer noticing a data-class token in a diff.
 DELETABLE_CLASS_ALLOWLIST = ()
+
+
+class ScienceClassNotDeletable(Exception):
+    """A `real-*` data-class token was found in a deletable-class allowlist.
+
+    Refused mechanically rather than relying on review, per the memo's
+    recommendation (`rapid_plan/research/deletable-class-allowlist-memo.md`,
+    "The risk that actually matters: `real-*`"). Science is exactly one
+    cell — `real ∧ pristine` — and the storage design makes the science gate
+    non-waivable and prefix-scoped (`submission/data_class.py`'s module
+    docstring). PROVENANCE IS NOT DISPOSABILITY: an attempt's owner being
+    fully discharged proves only that the attempt is done, never that its
+    science-class bytes are unwanted, so the refusal applies to every
+    `real-*` token — not only the registered `real-pristine` — on the same
+    reasoning `submission/data_class.py.parse()` uses to refuse any
+    unregistered token rather than trust the shape of the string.
+    """
+
+    error_category = "gc_science_class_not_deletable"
+
+
+def validated_allowlist(tokens):
+    """The allowlist a caller actually gets to use, with `real-*` refused.
+
+    Called AT THE POINT THE ALLOWLIST IS READ, on every consumption path —
+    `classify()` below and `operatorctl.gc.compute_plan()`'s `--allow-class`
+    handling — so there is exactly one place this refusal can be bypassed by
+    forgetting to call it, not one per caller.
+
+    Every token is split on its substrate axis the way
+    `submission.data_class.parse()` defines it (`real|sim`), and any token
+    whose substrate is `real` is refused, REGARDLESS of whether it is a
+    registered data class. `real-pristine` is refused because it is the
+    science cell; an unregistered `real-injected` is refused for the same
+    reason `data_class.parse()` refuses unregistered tokens generally — this
+    module does not get to assume a string it has never seen is safe. Tokens
+    that do not begin with the `real-` substrate (`sim-pristine`,
+    `sim-injected`, and anything else) pass through UNCHANGED.
+
+    Returns a tuple. Raises `ScienceClassNotDeletable` naming every refused
+    token if any is found — a caller does not get a silently-filtered
+    allowlist, because that would let a `--allow-class real-pristine`
+    operator invocation believe it took effect when it was quietly dropped.
+    """
+    tokens = tuple(tokens)
+    refused = tuple(token for token in tokens
+                    if token.split("-", 1)[0] == data_class_module.
+                    SCIENCE_SUBSTRATE)
+    if refused:
+        raise ScienceClassNotDeletable(
+            "%s: science-class objects (substrate %r) are never "
+            "GC-deletable; provenance is not disposability "
+            "(rapid_plan/research/deletable-class-allowlist-memo.md, "
+            "'The risk that actually matters: real-*')"
+            % (", ".join(repr(token) for token in refused),
+               data_class_module.SCIENCE_SUBSTRATE))
+    return tokens
 
 
 class RetentionReason(object):
@@ -284,6 +350,7 @@ def classify(objects, *, references, attempt_facts, owners,
     because something else also failed". Every retention records WHICH clause
     stopped it.
     """
+    allowlist = validated_allowlist(allowlist)
     candidates, retained = [], []
     class_of = class_of or (lambda obj: "unknown")
 
