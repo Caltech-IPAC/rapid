@@ -24,6 +24,42 @@ That two-step is modelled here as ``operator_session()`` and
 because the sequence is the control: an operator session that silently
 started as break-glass would defeat the "assumed, never resident"
 property the migration went to some length to establish.
+
+HOW AN AGENT REACHES THE OPERATE TIER. An unattended agent run is a
+third category, neither of the two this module started with. It is not
+a human at a terminal — nobody is present to read a break-glass prompt
+or absorb a permission failure. It is also not a service role: a
+shared service credential run against ``derived.write_mutation_audit``
+would put a fleet-wide identity in the actor column, and every run
+would be indistinguishable from every other in the ledger. What an
+agent run has instead is a per-run LOGIN — something like
+``agent_sims_fix_2026_08`` — created for that run and granted
+membership in ``rapid_agent_operator`` (NOLOGIN, holding the same
+``rapid_read`` grant and the same EXECUTE privileges on ``derived.*``
+that ``rapid_operator`` holds). ``SET ROLE rapid_agent_operator`` makes
+that assumption explicit in the session exactly as the human path does,
+and because ``session_user`` is what ends up in
+``derived.write_mutation_audit``, the per-run login is what names the
+run in the audit trail — not a shared identity, not a human's name
+borrowed for the occasion.
+
+The agent tier is deliberately NOT granted ``rapid_break_glass``
+membership. Break-glass exists for a human to invoke, under whatever
+out-of-band scrutiny accompanies an emergency elevation; an unattended
+run reaching for it on its own would turn a safety valve into
+something a bug could pull. ``break_glass_role()`` below refuses
+outright when the session it is handed assumed the agent tier, rather
+than attempting the ``SET ROLE`` and letting Postgres deny it — the
+refusal is a property of this module's own logic, not merely of what
+the database happens to grant today.
+
+Which tier ``operator_session()`` assumes is selected by the
+``RAPID_OPERATOR_TIER`` environment variable: unset or ``"human"``
+assumes ``rapid_operator`` (today's only behaviour, preserved
+byte-for-byte), ``"agent"`` assumes ``rapid_agent_operator``. Any other
+value is refused rather than silently treated as one of the two —
+a typo in this variable picks the operate tier a run acts under, so
+guessing which one was meant is worse than stopping.
 """
 
 import contextlib
@@ -43,9 +79,18 @@ from database.modules.utils.rapid_db_connect import (Credentials,
 OPERATOR_LANE = LANE_SESSION
 
 OPERATOR_ROLE = "rapid_operator"
+AGENT_OPERATOR_ROLE = "rapid_agent_operator"
 BREAK_GLASS_ROLE = "rapid_break_glass"
 
 APPLICATION_NAME = "rapidctl"
+
+# The env var that selects which operate tier `operator_session()` assumes.
+# Values map 1:1 onto the two roles above; anything else is a config error
+# (see `_resolve_operator_role`), never a silent default.
+OPERATOR_TIER_ENV = "RAPID_OPERATOR_TIER"
+HUMAN_TIER = "human"
+AGENT_TIER = "agent"
+_TIER_ROLES = {HUMAN_TIER: OPERATOR_ROLE, AGENT_TIER: AGENT_OPERATOR_ROLE}
 
 
 class OperatorSessionError(Exception):
@@ -53,15 +98,41 @@ class OperatorSessionError(Exception):
 
     Distinct from ``DBUnavailable`` (the database is unreachable) and
     ``DBCredentialError`` (no credential could be resolved): here the
-    connection succeeded and the login is real, but this person is not a
-    member of ``rapid_operator``. That is an authorization fact with an
-    unambiguous remedy — ``GRANT rapid_operator TO <login>``, the same
-    membership grant 031:379-390 makes for the team — so it is worth its
-    own type rather than surfacing as a raw psycopg2 error whose message
-    the operator would have to interpret.
+    connection succeeded and the login is real, but this login is not a
+    member of the role it tried to assume. That is an authorization fact
+    with an unambiguous remedy — ``GRANT rapid_operator TO <login>`` for
+    the human tier, the same membership grant 031:379-390 makes for the
+    team, or ``GRANT rapid_agent_operator TO <login>`` for a per-run
+    agent login on the agent tier — so it is worth its own type rather
+    than surfacing as a raw psycopg2 error whose message the operator
+    would have to interpret. The message always names the role that was
+    actually attempted, never a role hard-coded to the human tier,
+    because the two tiers fail the same way for different logins and a
+    fixed message would send an agent run's operator toward the wrong
+    grant.
     """
 
     error_category = "not_authorized"
+
+
+def _resolve_operator_role():
+    """Return ``(tier, role)`` selected by ``RAPID_OPERATOR_TIER``.
+
+    Unset resolves to the human tier — today's only behaviour — so every
+    existing deployment that has never heard of this variable keeps
+    assuming ``rapid_operator`` exactly as before. A value present but
+    not one of the two known tiers is refused here, before any
+    connection is opened: this selects the privilege tier a run acts
+    under, and guessing a default for a typo would silently run a
+    command under the wrong identity rather than failing loudly.
+    """
+    tier = os.environ.get(OPERATOR_TIER_ENV) or HUMAN_TIER
+    try:
+        return tier, _TIER_ROLES[tier]
+    except KeyError:
+        raise OperatorSessionError(
+            "invalid %s=%r: accepted values are %r (default) and %r"
+            % (OPERATOR_TIER_ENV, tier, HUMAN_TIER, AGENT_TIER)) from None
 
 
 def operator_credentials():
@@ -94,7 +165,20 @@ def operator_credentials():
 
 @contextlib.contextmanager
 def operator_session(credentials=None, connect_fn=connect):
-    """Yield a connection with ``rapid_operator`` assumed.
+    """Yield a connection with the selected operate tier assumed.
+
+    The tier is chosen by ``RAPID_OPERATOR_TIER`` (see
+    ``_resolve_operator_role``) BEFORE anything connects — an invalid
+    value is refused without opening a connection or issuing a `SET
+    ROLE`, so a bad env var never spends a login attempt it cannot use.
+    Unset resolves to the human tier, which is today's only behaviour,
+    unchanged: same role, same connect call, same error message shape.
+
+    The role actually assumed is recorded on the connection object
+    (``conn.rapid_operator_role``) so ``break_glass_role()`` — handed
+    only the connection at each of its call sites — can tell which tier
+    it is being asked to elevate from, without every caller having to
+    carry a second value alongside `conn` for that one purpose.
 
     The role is set once, on entry, and the session is closed on exit.
     Nothing resets the role on the way out because the connection does
@@ -102,6 +186,7 @@ def operator_session(credentials=None, connect_fn=connect):
     would only matter to a pooled connection this deliberately does not
     use.
     """
+    _tier, role = _resolve_operator_role()
     conn = connect_fn(APPLICATION_NAME, lane=OPERATOR_LANE,
                       credentials=credentials or operator_credentials())
     try:
@@ -109,14 +194,15 @@ def operator_session(credentials=None, connect_fn=connect):
             try:
                 # Not parameterized because SET ROLE takes an identifier,
                 # not a value, and a placeholder is a syntax error there.
-                # The name is this module's own constant — never caller
-                # input — so there is nothing here to inject.
-                cur.execute("SET ROLE " + OPERATOR_ROLE)
+                # The name comes from this module's own tier table, never
+                # caller input — so there is nothing here to inject.
+                cur.execute("SET ROLE " + role)
             except Exception as exc:              # noqa: BLE001 — re-typed
                 conn.rollback()
                 raise OperatorSessionError(
                     "cannot assume %s: this login is not a member of the "
-                    "operate tier (%s)" % (OPERATOR_ROLE, exc)) from exc
+                    "operate tier (%s)" % (role, exc)) from exc
+        conn.rapid_operator_role = role
         yield conn
     finally:
         conn.close()
@@ -131,9 +217,30 @@ def break_glass_role(conn):
     tier, and the migration's NOINHERIT grant means it arrives only after
     this explicit second assumption.
 
-    On exit the role returns to ``rapid_operator``, so a break-glass
-    elevation cannot leak into the rest of a command's work.
+    HUMAN-ONLY. Break-glass exists for a human to invoke under whatever
+    out-of-band scrutiny accompanies an emergency elevation; an agent
+    session reaching for it unattended would turn a safety valve into
+    something a bug could pull, so the migration never grants
+    ``rapid_agent_operator`` membership in ``rapid_break_glass`` at all.
+    This function enforces the same property one layer up, refusing
+    before it ever issues a `SET ROLE`: it checks
+    ``conn.rapid_operator_role`` (set by `operator_session()`) and
+    raises if the session is not on the human tier, so the refusal is a
+    property of this module's own logic and not merely of what the
+    database happens to grant today.
+
+    On exit the role returns to whichever operate tier the session
+    actually assumed — read back from ``conn.rapid_operator_role``,
+    never hard-coded to the human role — so a break-glass elevation
+    cannot leak into the rest of a command's work and a restore can
+    never itself widen privilege.
     """
+    assumed_role = getattr(conn, "rapid_operator_role", OPERATOR_ROLE)
+    if assumed_role != OPERATOR_ROLE:
+        raise OperatorSessionError(
+            "break-glass is human-only: this session assumed %s, not %s "
+            "— an agent-tier session cannot open break-glass"
+            % (assumed_role, OPERATOR_ROLE))
     with conn.cursor() as cur:
         try:
             cur.execute("SET ROLE " + BREAK_GLASS_ROLE)
@@ -146,4 +253,4 @@ def break_glass_role(conn):
         yield conn
     finally:
         with conn.cursor() as cur:
-            cur.execute("SET ROLE " + OPERATOR_ROLE)
+            cur.execute("SET ROLE " + assumed_role)
