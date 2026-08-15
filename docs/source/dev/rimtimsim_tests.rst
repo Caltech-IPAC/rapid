@@ -628,4 +628,18 @@ Total elapsed time to run one instance of science pipeline              4896.480
 =================================================================  =====================
 
 
+Here are numbers related to extraction of lightcurves from PSF-fit difference-image catalogs:
 
+=========================================================================================  =====================
+Item                                                                                        Number
+=========================================================================================  =====================
+Number of sources loaded into Sources_<obsdate>_<sca> database tables                         25,245,610
+Number of astroObjects loaded into AstroObjects_<field> database tables                        1,808,659
+Number of merges within AND without field, loaded into Merges_<field> database tables         28,147,729
+Number of merges without field, loaded into Merges_<field> database tables                         8,981
+Number of records loaded into AstroObjectsMeta_<field> database tables                         1,808,659
+Number of Sources_<obsdate>_<sca> database tables                                                     70
+Number of AstroObjects_<field> database tables                                                         7
+Number of Merges_<field> database tables                                                               7
+Number of AstroObjectsMeta_<field> database tables                                                     7
+=========================================================================================  =====================
