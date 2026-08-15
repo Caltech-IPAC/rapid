@@ -10,8 +10,6 @@ needed a fix round for).
 import os
 import subprocess
 
-import pytest
-
 REPO_ROOT = os.path.abspath(
     os.path.join(os.path.dirname(__file__), "..", ".."))
 
@@ -90,19 +88,53 @@ def _public_methods(text):
     return methods
 
 
-#: The sha256 of `database/modules/utils/rapid_db.py` at the branch point
-#: (`smdc` @ 066c353). **RECORDED RATHER THAN COMPUTED FROM GIT**, and that is
-#: the point: the acceptance host stages a TARBALL, not a clone, so every
-#: git-based form of this assertion SKIPS there — which is precisely the venue
-#: where it most needs to run, and a skipped criterion proves nothing (the
-#: PASS2 zero-skip gate exists because of exactly this failure mode).
+#: The sha256 of `database/modules/utils/rapid_db.py` AS RATIFIED.
+#: **RECORDED RATHER THAN COMPUTED FROM GIT**, and that is the point: the
+#: acceptance host stages a TARBALL, not a clone, so every git-based form of
+#: this assertion SKIPS there — which is precisely the venue where it most
+#: needs to run, and a skipped criterion proves nothing (the PASS2 zero-skip
+#: gate exists because of exactly this failure mode).
 #:
 #: A recorded digest needs no history, no remote ref and no working tree, so
 #: it runs identically in CI, on rapid-admin and on a laptop. Updating it is
 #: a deliberate act that shows up in a diff — which is the correct amount of
 #: friction for editing a frozen class.
+#:
+#: **THE COMPARISON IS UNCONDITIONAL (2026-08-15).** It used to be a FALLBACK
+#: taken only where git history was unavailable, and that made the guard
+#: vacuous in the venue that matters most: on a push to `smdc`,
+#: `merge-base HEAD origin/smdc` is HEAD itself, so the method-set diff is
+#: always empty and the assertion always passes. A method added ON `smdc` was
+#: therefore invisible to this guard forever after, and the digest that would
+#: still have caught it was never reached. Four methods accumulated exactly
+#: that way (ratified below). The digest check now runs in EVERY venue and the
+#: git diff is an ADDITIONAL check layered on top, not the only one — so an
+#: addition fails on `smdc` too, which is what "frozen" was supposed to mean.
+#:
+#: **RATIFICATION, 2026-08-15.** This digest is no longer the branch point's.
+#: It records `rapid_db.py` as it stands at `smdc` @ 95614085, which includes
+#: four public methods added after the branch point (`smdc` @ 066c353) and
+#: deployed for some time before anyone noticed the guard had stopped
+#: guarding:
+#:
+#:   * `classify_claim_outcome`, `classify_confirm_outcome`  — `bcc989cb`
+#:   * `get_info_for_l2files`,
+#:     `get_scas_with_completed_catalog_load_for_processing_date` — `ada293c8`
+#:
+#: They are ratified as-deployed rather than carved out: both commits predate
+#: the correctness campaign, the methods are in live use, and carving them out
+#: now would be a behavioural change made to satisfy a guard that was not
+#: enforcing at the time. The names are listed HERE, and in
+#: `rapid_plan/decisions.md`, so the ratification is evidence rather than an
+#: erasure — updating the digest without naming what it absorbs is exactly the
+#: move this comment exists to prevent. The previous value, for the record,
+#: was `665a8a2e0c6fa45ef7575a4a6e7270db59e41dffc9ab5d102f9eb09785164dba`.
+#:
+#: FROM NOW ON any further addition fails in every venue. The next person to
+#: change this constant should have a ratified decision to cite, and should
+#: list what it absorbs the same way.
 RAPID_DB_BRANCH_POINT_SHA256 = (
-    "665a8a2e0c6fa45ef7575a4a6e7270db59e41dffc9ab5d102f9eb09785164dba")
+    "474cc92e27265dec8b27e3c195acd159c8af44767923bf79abdfb8bcf4069487")
 
 
 def _file_digest(path):
@@ -119,15 +151,37 @@ def test_rapiddb_gains_no_new_method_on_this_branch():
     method to this class and each needed a fix round to carve it back out. An
     assertion is what stops a fourth occurrence being found at a merge gate.
 
-    **THE GIT-FREE FORM IS THE ONE THAT MATTERS.** Where history is available
-    the method set is diffed against the branch point; where it is not — the
-    acceptance host, which stages a tarball — the recorded digest is compared
-    instead, so the criterion is exercised in BOTH venues rather than skipping
-    in the one that counts.
+    **THE DIGEST IS CHECKED IN EVERY VENUE, AND IT IS CHECKED FIRST.** This
+    used to run the git method-set diff and RETURN on success, reaching the
+    digest only where history was unavailable. That made the guard vacuous
+    exactly where it mattered: on a push to `smdc`, `merge-base HEAD
+    origin/smdc` is HEAD itself, the diff is empty by construction, and the
+    assertion passed no matter what the file contained. A method added ON
+    `smdc` was invisible to it forever after — four accumulated that way (see
+    RAPID_DB_BRANCH_POINT_SHA256's ratification note). The digest now runs
+    unconditionally; the method-set diff is an ADDITIONAL check that names
+    WHICH methods were added when history can say so.
     """
     current = os.path.join(REPO_ROOT, RAPID_DB)
     assert os.path.isfile(current), RAPID_DB
 
+    # (1) THE UNCONDITIONAL CHECK. No history, no remote ref and no working
+    #     tree required, so it is identical in CI, on rapid-admin and on a
+    #     laptop — and, critically, identical on `smdc` and on a branch.
+    assert _file_digest(current) == RAPID_DB_BRANCH_POINT_SHA256, (
+        "%s differs from its RATIFIED digest; RAPIDDB is frozen (rule 17). "
+        "New database access is a carved repository under "
+        "pipeline/repositories/ — connection owned by the caller, "
+        "named-record returns, typed errors. If this file was legitimately "
+        "changed by a ratified decision, update "
+        "RAPID_DB_BRANCH_POINT_SHA256 in the same commit AND list what the "
+        "new digest absorbs — the friction is deliberate." % RAPID_DB)
+
+    # (2) THE ADDITIONAL CHECK, where history can name names. Strictly
+    #     weaker than (1) — anything it catches, (1) has already caught —
+    #     but its failure message says WHICH methods were added, which is
+    #     the difference between "the digest moved" and a fix you can act
+    #     on. Deliberately no `return`: (1) has already run.
     branch_point = subprocess.run(
         ["git", "merge-base", "HEAD", "origin/smdc"],
         cwd=REPO_ROOT, capture_output=True, text=True)
@@ -147,14 +201,6 @@ def test_rapiddb_gains_no_new_method_on_this_branch():
                 "by the caller, named-record returns, typed errors. The D, F "
                 "and E workers each broke this and each needed a fix round."
                 % (len(added), sorted(added)))
-            return
-
-    # NO HISTORY: assert the recorded digest instead, and do NOT skip.
-    assert _file_digest(current) == RAPID_DB_BRANCH_POINT_SHA256, (
-        "%s differs from its recorded branch-point digest; RAPIDDB is frozen "
-        "(rule 17). If this file was legitimately changed by a ratified "
-        "decision, update RAPID_DB_BRANCH_POINT_SHA256 in the same commit — "
-        "the friction is deliberate." % RAPID_DB)
 
 
 def test_rapid_db_is_byte_identical_with_the_branch_point():
@@ -162,20 +208,32 @@ def test_rapid_db_is_byte_identical_with_the_branch_point():
 
     Stronger than the method-set assertion and kept alongside it deliberately:
     the method-set check would pass an edit that changed a method's BODY,
-    which is still an edit to a frozen class. Falls back to the recorded
-    digest for the same reason as above, so it too runs on the acceptance
-    host rather than skipping there.
+    which is still an edit to a frozen class.
+
+    **SAME VENUE FIX AS ABOVE (2026-08-15).** The digest comparison was the
+    fallback arm and is now unconditional. The `git diff origin/smdc...HEAD`
+    form it used to short-circuit on is empty by construction for a commit
+    that IS `origin/smdc`, so on every push to `smdc` this test asserted
+    nothing at all.
     """
     current = os.path.join(REPO_ROOT, RAPID_DB)
+
+    # (1) THE UNCONDITIONAL CHECK — byte identity against the ratified digest,
+    #     in every venue including a push to `smdc`.
+    assert _file_digest(current) == RAPID_DB_BRANCH_POINT_SHA256, (
+        "%s differs from its RATIFIED digest; RAPIDDB is frozen (rule 17). "
+        "Update RAPID_DB_BRANCH_POINT_SHA256 only with a ratified decision, "
+        "and list what the new digest absorbs." % RAPID_DB)
+
+    # (2) THE ADDITIONAL CHECK. Says "modified on this branch" rather than
+    #     "digest differs", which is the more useful message when a branch is
+    #     what did it. No `return`: (1) has already run.
     changed = subprocess.run(
         ["git", "diff", "--name-only", "origin/smdc...HEAD", "--", RAPID_DB],
         cwd=REPO_ROOT, capture_output=True, text=True)
     if changed.returncode == 0:
         assert not changed.stdout.strip(), (
             "%s is modified on this branch; RAPIDDB is frozen" % RAPID_DB)
-        return
-    assert _file_digest(current) == RAPID_DB_BRANCH_POINT_SHA256, (
-        "%s differs from its recorded branch-point digest" % RAPID_DB)
 
 
 def test_the_admission_carve_exists_and_is_where_new_access_lives():
