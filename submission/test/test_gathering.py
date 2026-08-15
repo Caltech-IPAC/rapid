@@ -103,11 +103,20 @@ class _StubAssociationRepository:
 
 
 class StubSource:
-    """The eleven methods gathering uses, and nothing else.
+    """The methods gathering uses, and nothing else.
 
     Structural, not a mock: it returns rows in the column order the real
     methods select in, so a change to that order breaks these tests the way
     it would break production.
+
+    **AND IT MUST GROW WITH THE PROTOCOL.** When `UnitSource` gained
+    `get_data_classes_for_l2files` (migration 090's provenance read), this
+    double did not, and 23 tests failed with `AttributeError` — a double
+    that cannot answer a question production asks does not fail the change
+    under test, it fails to exercise it. The count that used to open this
+    docstring ("the eleven methods") is gone deliberately: a number in prose
+    goes stale silently, which is how the gap above stayed invisible until
+    the suite ran.
     """
 
     def __init__(self, **overrides):
@@ -131,6 +140,11 @@ class StubSource:
         self.pairs = overrides.get("pairs", {8: [(4678622, 8, 48)]})
         self.l2files = overrides.get("l2files",
                                      {(4678622, 8): [(101,), (102,)]})
+        # rid -> the data class its admission manifest records (090).
+        # EMPTY by default: an L2 row registered by the legacy socsim path
+        # has no admission manifest, so the real query returns nothing for
+        # it. Override to exercise the provenance chain.
+        self.data_classes = overrides.get("data_classes", {})
         self.psf = overrides.get("psf", (77, "s3://prod/psf_sca7.fits"))
         self.reference = overrides.get("reference", None)
         self.filter_name = overrides.get("filter_name", "F146")
@@ -157,6 +171,25 @@ class StubSource:
 
     def get_info_for_l2files(self, rids):
         return {rid: self.info[rid] for rid in rids if rid in self.info}
+
+    def get_data_classes_for_l2files(self, rids):
+        """The admission manifests' classes for these inputs (migration 090).
+
+        Defaults to EMPTY, which is the honest default for this suite: the
+        campaign's L2 rows were registered by the legacy socsim path, which
+        writes no admission manifest, so the real query returns nothing for
+        them and the unit inherits no class. Tests that care about the
+        provenance chain override `data_classes` to say what the manifests
+        hold; every other test gets the same answer production gives for an
+        unadmitted input.
+
+        Returns a LIST, not a single value — a unit's inputs may span
+        manifests of different classes, and combining them is
+        `submission.data_class.most_restrictive`'s job, not the query's.
+        """
+        _refuse_if_failed(self, "get_data_classes_for_l2files")
+        return [self.data_classes[rid] for rid in rids
+                if rid in self.data_classes]
 
     def get_exposure_filter(self, fid):
         return self.filter_name
