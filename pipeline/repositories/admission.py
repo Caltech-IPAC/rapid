@@ -197,6 +197,49 @@ class ReleasePointerUnset(AdmissionError):
     error_category = "admission_release_unset"
 
 
+class ReleaseScopeConflict(AdmissionError):
+    """A release identity is being reused across a DIFFERENT source scope.
+
+    A release identity is a CLAIM ABOUT WHAT WAS ADMITTED — rule 18 stamps
+    every admission with the release it was admitted under so a later reader
+    can ask "what did release X contain" and get one answer. That claim is
+    ambiguous the moment one release identity spans two source scopes: the
+    backfill `provenance-backfill-g0001-2026-08-15` recorded
+    `source_scope='socsim-r00340'`, and nothing in `begin_admission_run`
+    (`database/sims/admission_bridge.py`) asks its caller to declare a
+    release — it reads whatever `current_release()` returns. A production
+    socsim ingest passing `source_scope='s3://<bucket>/<prefix>'`
+    (`db_register_socsim_files.py`) or a troxel/rimtimsim ingest passing its
+    own `s3://<bucket>` form would silently inherit the backfill's pointer
+    and change what that release identity means, underneath every manifest
+    already sealed against it.
+
+    Refused here rather than left to a runbook, because a runbook is a
+    reminder and not a mechanism: `open_manifest` is the one place a release
+    identity and a source scope first meet, and it already takes both
+    parameters, so this needs no call-signature change and no migration. A
+    repeat `open_manifest` for the SAME scope under the SAME release is
+    unaffected — that is the `ON CONFLICT (manifest_key) DO UPDATE` replay
+    path, and idempotent re-ingest must keep working.
+    """
+
+    error_category = "admission_release_scope_conflict"
+
+    def __init__(self, release_identity, existing_scope, requested_scope):
+        super().__init__(
+            "release %r is already recorded under source scope %r and "
+            "cannot also be opened under %r: a release identity is a claim "
+            "about what was admitted, and reusing one across source scopes "
+            "makes that claim ambiguous. If this ingest is really a new "
+            "source, set a NEW release pointer with `rapidctl "
+            "set-admission-release` before ingesting, rather than "
+            "inheriting the release currently pointed to." % (
+                release_identity, existing_scope, requested_scope))
+        self.release_identity = release_identity
+        self.existing_scope = existing_scope
+        self.requested_scope = requested_scope
+
+
 class Admission(typing.NamedTuple):
     """One admission record, as returned by the repository."""
 
@@ -299,6 +342,19 @@ class AdmissionRepository:
         written next, and `seal_manifest` runs only once they are all durable.
         A crash anywhere in between leaves an explicitly unsealed manifest,
         which `admit_*` refuses to cite.
+
+        **A RELEASE IDENTITY MAY NOT BE REUSED ACROSS SOURCE SCOPES.** Before
+        inserting, this checks whether `release_identity` is already recorded
+        under a DIFFERENT `source_scope` and, if so, raises
+        `ReleaseScopeConflict` rather than opening the manifest. This is what
+        stops a backfill's release from silently becoming a real ingest's:
+        `begin_admission_run` reads the current release pointer and never asks
+        its caller to declare one, so nothing else would stop the next ingest
+        from inheriting a one-off's identity. A repeat call for the SAME
+        scope under the SAME release still succeeds — this is the
+        `ON CONFLICT (manifest_key) DO UPDATE` replay path below, and
+        idempotent re-ingest is unaffected. See `ReleaseScopeConflict` for the
+        full reasoning.
         """
         self._require_schema()
         if byte_custody not in ("pipeline-retained", "external-versioned",
@@ -307,6 +363,14 @@ class AdmissionRepository:
                 "byte_custody must state what the replay guarantee rests on: "
                 "'pipeline-retained', 'external-versioned' or 'none'; got %r"
                 % (byte_custody,))
+        conflicting = self._query(
+            "open_manifest",
+            "SELECT DISTINCT source_scope FROM admission_manifests"
+            " WHERE release_identity = %s AND source_scope <> %s",
+            (release_identity, source_scope))
+        if conflicting:
+            raise ReleaseScopeConflict(
+                release_identity, conflicting[0][0], source_scope)
         rows = self._query(
             "open_manifest",
             "INSERT INTO admission_manifests"

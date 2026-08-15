@@ -67,7 +67,7 @@ import pytest
 from pipeline.contract import fixture
 from pipeline.repositories.admission import (
     AdmissionConflict, AdmissionError, AdmissionRepository,
-    AdmissionSchemaAbsent, ManifestNotSealed)
+    AdmissionSchemaAbsent, ManifestNotSealed, ReleaseScopeConflict)
 
 #: A run-unique base instant for the exposures these tests admit.
 #:
@@ -1152,6 +1152,129 @@ def test_opening_a_manifest_twice_returns_the_same_manifest(admission_db):
     conn.commit()
     assert third.manifest_id == first.manifest_id
     assert third.sealed is True
+
+
+def test_a_release_cannot_be_reopened_under_a_different_source_scope(
+        admission_db):
+    """THE DEFECT THIS GUARD CLOSES, against real rows.
+
+    `begin_admission_run` (`database/sims/admission_bridge.py`) reads the
+    current release pointer and never asks its caller to declare a release —
+    so nothing stops the next ingest from inheriting a one-off's identity.
+    This is the live shape: `provenance-backfill-g0001-2026-08-15` was
+    recorded under `source_scope='socsim-r00340'`; a production socsim
+    ingest passes an `s3://...` scope
+    (`database/sims/db_register_socsim_files.py`), and troxel/rimtimsim
+    ingests pass their own `s3://` forms. Reproduced here with one release
+    opened first under one scope, then a second `open_manifest` call for the
+    SAME release under a DIFFERENT scope, which must be refused rather than
+    silently recording a second manifest that muddies what the release means.
+    """
+    conn, repository, release, cleanup = admission_db
+
+    first = repository.open_manifest(
+        manifest_key=f"manifest-{fixture.RUN_TAG}-scope-a",
+        source_scope=f"scope-{fixture.RUN_TAG}-a",
+        release_identity=release, byte_custody="external-versioned")
+    cleanup["manifests"].append(first.manifest_id)
+    conn.commit()
+
+    with pytest.raises(ReleaseScopeConflict) as caught:
+        repository.open_manifest(
+            manifest_key=f"manifest-{fixture.RUN_TAG}-scope-b",
+            source_scope=f"scope-{fixture.RUN_TAG}-b",
+            release_identity=release, byte_custody="external-versioned")
+
+    conflict = caught.value
+    assert conflict.release_identity == release
+    assert conflict.existing_scope == f"scope-{fixture.RUN_TAG}-a"
+    assert conflict.requested_scope == f"scope-{fixture.RUN_TAG}-b"
+    assert conflict.error_category == "admission_release_scope_conflict"
+    assert release in str(conflict)
+    assert f"scope-{fixture.RUN_TAG}-a" in str(conflict)
+    assert f"scope-{fixture.RUN_TAG}-b" in str(conflict)
+    conn.rollback()
+
+    # AND NOTHING WAS WRITTEN by the refused call: only the first manifest
+    # exists for this release, re-read rather than inferred from the raise.
+    rows = fixture.executor(conn)(
+        "SELECT source_scope FROM admission_manifests"
+        " WHERE release_identity = %s", [release])
+    assert [row[0] for row in rows] == [f"scope-{fixture.RUN_TAG}-a"]
+
+
+def test_reopening_the_same_release_and_scope_is_unaffected_by_the_guard(
+        admission_db):
+    """Idempotent replay keeps working: same release, same scope, twice.
+
+    The guard's own SQL excludes `source_scope = requested_scope`, so a
+    manifest re-opened with the release and scope it already has finds
+    nothing to conflict with. Asserted end to end here rather than trusted
+    from the SQL alone, because `test_opening_a_manifest_twice_returns_the_
+    same_manifest` above predates this guard and would not by itself prove
+    the guard leaves that path alone.
+    """
+    conn, repository, release, cleanup = admission_db
+    key = f"manifest-{fixture.RUN_TAG}-guard-replay"
+    scope = f"scope-{fixture.RUN_TAG}-replay"
+
+    first = repository.open_manifest(
+        manifest_key=key, source_scope=scope, release_identity=release,
+        byte_custody="external-versioned")
+    cleanup["manifests"].append(first.manifest_id)
+    conn.commit()
+
+    second = repository.open_manifest(
+        manifest_key=key, source_scope=scope, release_identity=release,
+        byte_custody="external-versioned")
+    conn.commit()
+    assert second.manifest_id == first.manifest_id
+
+
+def test_the_same_source_scope_under_a_different_release_is_fine(
+        admission_db):
+    """The constraint is PER-RELEASE, not per-scope.
+
+    A deliberate re-release of the same source under a new release identity
+    — an original ingest and a later, intentional re-release of
+    `socsim-r00340` under a fresh release, say — is not the failure this
+    guard exists to catch, and must not be refused. A second, independent
+    release is registered here rather than reusing `admission_db`'s, because
+    the property under test is specifically that TWO DIFFERENT releases may
+    share one scope.
+    """
+    conn, repository, release, cleanup = admission_db
+    other_release = f"admit-{fixture.RUN_TAG}-other-{uuid.uuid4().hex[:8]}"
+    repository.register_release(other_release, manifest_uri=None,
+                                manifest_checksum=None)
+    conn.commit()
+
+    scope = f"scope-{fixture.RUN_TAG}-shared"
+    first = repository.open_manifest(
+        manifest_key=f"manifest-{fixture.RUN_TAG}-shared-a",
+        source_scope=scope, release_identity=release,
+        byte_custody="external-versioned")
+    cleanup["manifests"].append(first.manifest_id)
+    conn.commit()
+
+    second = repository.open_manifest(
+        manifest_key=f"manifest-{fixture.RUN_TAG}-shared-b",
+        source_scope=scope, release_identity=other_release,
+        byte_custody="external-versioned")
+    cleanup["manifests"].append(second.manifest_id)
+    conn.commit()
+
+    assert second.manifest_id != first.manifest_id
+
+    execute = fixture.executor(conn)
+    try:
+        execute("DELETE FROM admission_release_pointer"
+                " WHERE release_identity = %s", [other_release])
+        execute("DELETE FROM admission_releases WHERE release_identity = %s",
+                [other_release])
+        conn.commit()
+    except Exception:                                          # noqa: BLE001
+        conn.rollback()
 
 
 def test_byte_custody_must_be_stated(admission_db):
