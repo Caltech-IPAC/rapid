@@ -47,6 +47,7 @@ from typing import Any, Iterable, Iterator, Protocol, Sequence
 
 from database.modules.utils.checked import RapidDBCallFailed
 from pipeline.repositories.association import AssociationRepository
+from pipeline.repositories.data_class import DataClassRepository
 from pipeline.repositories.errors import RepositoryQueryFailed
 from database.modules.utils.roman_tessellation_db import (
     RomanTessellationClosedForm)
@@ -124,14 +125,6 @@ class UnitSource(Protocol):
     # absent, the batched equivalent of the singular method's `None`.
     def get_info_for_l2files(
             self, rids: Sequence[int]) -> dict[int, Sequence[Any]]: ...
-
-    # The provenance chain's read side (migration 090): the DISTINCT data
-    # classes recorded on the admission manifests covering these rids. A set
-    # rather than one value because a unit spanning manifests of different
-    # classes takes the most restrictive of them, and that combination is
-    # `submission.data_class`'s job, not the query's.
-    def get_data_classes_for_l2files(
-            self, rids: Sequence[int]) -> Sequence[Any]: ...
 
     def get_exposure_filter(self, fid: int) -> Any: ...
 
@@ -424,6 +417,38 @@ def science_facts(handle: UnitSource, rid: int, field: int, fid: int,
     return facts
 
 
+def _data_class_repository(handle):
+    """A `DataClassRepository` over the handle's connection, or `None`.
+
+    **THE CARVED PATH, NOT A `RAPIDDB` METHOD**, and this function exists
+    because the first revision of this change got that wrong: it added
+    `get_data_classes_for_l2files` straight to the frozen `RAPIDDB` and was
+    refused by `pipeline/contract/test_deletion_exclusivity.py`, whose own
+    message records that the D, F and E workers each made the same mistake.
+    Same seam as `_association_repository` above, for the same reason and by
+    the same mechanism: `RAPIDDB.conn` is an attribute, and `CheckedHandle`
+    passes non-callables through unchecked, so no new method is added to the
+    frozen class and none is needed.
+
+    Returns `None` when the handle exposes no usable connection — the
+    operator probes and the gathering stubs. Those callers inherit no class,
+    which is the same answer an input with no admission manifest gives, and
+    is correct for them: a stub has no admission rows to read.
+
+    A test double may inject `data_class_repository` directly, so the stub
+    tier can exercise the inheritance without a database while the contract
+    tier executes the SQL — the division the stub-blind rule draws.
+    """
+    injected = getattr(handle, "data_class_repository", None)
+    if injected is not None:
+        return injected
+
+    conn = getattr(handle, "conn", None)
+    if conn is None:
+        return None
+    return DataClassRepository(conn)
+
+
 def _data_class_for_inputs(handle: UnitSource,
                            rids: Sequence[int]) -> str | None:
     """The class a unit built from these L2 inputs inherits.
@@ -435,10 +460,21 @@ def _data_class_for_inputs(handle: UnitSource,
     The builder's fallback to the deployment-wide parameter is what serves
     those units, and it is a deliberate, documented path — unlike a guess
     made here, which would be indistinguishable from knowledge.
+
+    A FAILED QUERY IS NOT AN ABSENT CLASS. `RepositoryQueryFailed` becomes a
+    named `GatheringError` rather than an empty result, because the two are
+    indistinguishable downstream: both would resolve to "no class", and a
+    transient failure would then file a unit's products under the fallback
+    class instead of its own. This is the failure mode the repository
+    pattern exists to prevent, and the reason this read must not go through
+    a handle method that reports failure by returning None.
     """
+    repository = _data_class_repository(handle)
+    if repository is None:
+        return None
     try:
-        recorded = handle.get_data_classes_for_l2files(list(rids))
-    except RapidDBCallFailed as exc:
+        recorded = repository.classes_for_l2files(list(rids))
+    except RepositoryQueryFailed as exc:
         raise GatheringError(
             f"data-class lookup failed for rids {list(rids)}: {exc}") from exc
     if not recorded:

@@ -102,6 +102,34 @@ class _StubAssociationRepository:
         return self._source.earliest_owed
 
 
+class _StubDataClasses:
+    """A `DataClassRepository` stand-in that can also REFUSE.
+
+    Reads the owning stub's `data_classes` mapping so a test configures the
+    answer where it configures every other fixture, and raises
+    `RepositoryQueryFailed` when `data_class_failure` is set — because a
+    double that can only succeed cannot exercise the path that turns a
+    failed lookup into a named `GatheringError`, and that path is
+    load-bearing: an empty result and a failed query mean opposite things
+    here (no manifest knows the class, versus we could not find out), and
+    conflating them files a unit's products under the fallback class.
+    """
+
+    def __init__(self, owner):
+        self._owner = owner
+        #: Every call's rid list, in order — proves the caller asks once per
+        #: unit rather than once per input.
+        self.calls = []
+
+    def classes_for_l2files(self, rids):
+        self.calls.append(list(rids))
+        failure = getattr(self._owner, "data_class_failure", None)
+        if failure is not None:
+            raise RepositoryQueryFailed("classes_for_l2files", str(failure))
+        classes = self._owner.data_classes
+        return [classes[rid] for rid in rids if rid in classes]
+
+
 class StubSource:
     """The methods gathering uses, and nothing else.
 
@@ -145,6 +173,11 @@ class StubSource:
         # has no admission manifest, so the real query returns nothing for
         # it. Override to exercise the provenance chain.
         self.data_classes = overrides.get("data_classes", {})
+        #: The INJECTED repository `_data_class_repository` prefers over
+        #: building one from `.conn` — the same seam `association_repository`
+        #: uses, so the stub tier exercises the inheritance without a
+        #: database while the contract tier executes the SQL.
+        self.data_class_repository = _StubDataClasses(self)
         self.psf = overrides.get("psf", (77, "s3://prod/psf_sca7.fits"))
         self.reference = overrides.get("reference", None)
         self.filter_name = overrides.get("filter_name", "F146")
@@ -171,25 +204,6 @@ class StubSource:
 
     def get_info_for_l2files(self, rids):
         return {rid: self.info[rid] for rid in rids if rid in self.info}
-
-    def get_data_classes_for_l2files(self, rids):
-        """The admission manifests' classes for these inputs (migration 090).
-
-        Defaults to EMPTY, which is the honest default for this suite: the
-        campaign's L2 rows were registered by the legacy socsim path, which
-        writes no admission manifest, so the real query returns nothing for
-        them and the unit inherits no class. Tests that care about the
-        provenance chain override `data_classes` to say what the manifests
-        hold; every other test gets the same answer production gives for an
-        unadmitted input.
-
-        Returns a LIST, not a single value — a unit's inputs may span
-        manifests of different classes, and combining them is
-        `submission.data_class.most_restrictive`'s job, not the query's.
-        """
-        _refuse_if_failed(self, "get_data_classes_for_l2files")
-        return [self.data_classes[rid] for rid in rids
-                if rid in self.data_classes]
 
     def get_exposure_filter(self, fid):
         return self.filter_name
@@ -244,6 +258,52 @@ class ScienceFactsTests(unittest.TestCase):
         # reintroduce exactly what the retirement removed.
         facts = science_facts(StubSource(), 101, field=4678622, fid=8)
         self.assertEqual(facts["rtid"], facts["field"])
+
+    def test_an_input_with_no_admission_manifest_inherits_no_class(self):
+        # The default, and the state this campaign's own inputs are in: the
+        # legacy socsim registration path writes no admission manifest, so
+        # nothing records a class and the unit inherits none. ABSENT, not
+        # defaulted — the builder's parameter fallback serves these, and a
+        # guess made here would be indistinguishable from knowledge.
+        facts = science_facts(StubSource(), 101, field=4678622, fid=8)
+        self.assertNotIn("data_class", facts)
+
+    def test_the_class_is_inherited_from_the_admission_manifest(self):
+        source = StubSource(data_classes={101: "sim-injected"})
+        facts = science_facts(source, 101, field=4678622, fid=8)
+        self.assertEqual(facts["data_class"], "sim-injected")
+        # Asked ONCE, for this unit's inputs — not once per input.
+        self.assertEqual(source.data_class_repository.calls, [[101]])
+
+    def test_a_unit_spanning_classes_takes_the_most_restrictive(self):
+        # The design's mixed-derivation rule, exercised end to end through
+        # gathering rather than only in `submission.data_class`'s own tests:
+        # a unit whose inputs are science AND simulated-injected is not
+        # science, on either axis.
+        source = StubSource(data_classes={101: "real-pristine",
+                                          102: "sim-injected"})
+        facts = science_facts(source, 101, field=4678622, fid=8)
+        # `science_facts` asks about its own rid only, so seed the mix on
+        # that rid's manifest set by asking for both.
+        self.assertEqual(facts["data_class"], "real-pristine")
+        mixed = gathering._data_class_for_inputs(source, [101, 102])
+        self.assertEqual(mixed, "sim-injected")
+
+    def test_a_failed_lookup_is_a_named_failure_not_an_absent_class(self):
+        """The distinction the repository pattern exists to preserve.
+
+        An empty result means "no manifest knows this input's class"; a
+        failed query means "we could not find out". Both would resolve to
+        `None` if the failure were swallowed, and the unit's products would
+        then be filed under the deployment's fallback class instead of its
+        own — silently. So the failure raises, named.
+        """
+        source = StubSource(data_classes={101: "sim-injected"})
+        source.data_class_failure = "connection reset"
+
+        with self.assertRaises(GatheringError) as caught:
+            science_facts(source, 101, field=4678622, fid=8)
+        self.assertIn("data-class lookup failed", str(caught.exception))
 
     def test_sky_position_is_all_or_nothing(self):
         facts = science_facts(StubSource(), 101, field=4678622, fid=8)
