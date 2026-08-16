@@ -127,6 +127,62 @@ RAPID Pipeline Development
    dev/tessellation_bake_retirement.rst
    analyses/analyses.rst
 
+Development history and evidence
+************************************
+
+These record how the pipeline reached its current shape: review
+dispositions, hardening rounds, per-worker state summaries, and the live
+evidence behind specific rulings. They are the durable home for that kind
+of narration — history belongs here, while the code's own docstrings state
+what is true now.
+
+Every file below existed already and was reachable only by direct link:
+22 of the 27 files under ``dev/`` were absent from every toctree, so Sphinx
+built them without a route in and warned about each one. Adding to that
+collection would have made the problem worse, so it is fixed here instead.
+
+.. toctree::
+   :maxdepth: 1
+   :caption: Reviews and audits
+
+   dev/review_disposition.rst
+   dev/attempt_writer_review.rst
+   dev/execute_command_exit_code_audit.rst
+   dev/config_homes.rst
+   dev/o1_env_policy.rst
+
+.. toctree::
+   :maxdepth: 1
+   :caption: Hardening and fix rounds
+
+   dev/fix_round.rst
+   dev/preq8_hardening.rst
+   dev/smoke_run.rst
+   dev/sfft_environment.rst
+   dev/pooler_client_idle_timeout.rst
+
+.. toctree::
+   :maxdepth: 1
+   :caption: Simulated-data test campaigns
+
+   dev/openuniv_tests.rst
+   dev/rimtimsim_tests.rst
+   dev/socsim_tests.rst
+   dev/gbtds_sim_g0001_registration.rst
+
+.. toctree::
+   :maxdepth: 1
+   :caption: Worker evidence and state summaries
+
+   dev/w5_canary_evidence.rst
+   dev/w6_completion_evidence.rst
+   dev/w6b_state_summary.rst
+   dev/w8_battery.rst
+   dev/w8_state_summary.rst
+   dev/w9_ramp.rst
+   dev/w9_state_summary.rst
+   dev/w9prep_state_summary.rst
+
 RAPID Archive Deliveries
 ************************************
 
