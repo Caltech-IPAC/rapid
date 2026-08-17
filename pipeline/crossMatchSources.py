@@ -146,7 +146,7 @@ print(f"Merges columns: {merges_cols_comma_separated_string}")
 # Custom methods for parallel processing, taking advantage of multiple cores on the job-launcher machine.
 #-------------------------------------------------------------------------------------------------------------
 
-def run_single_core_job_stage_1_crossmatching(tables_to_crossmatch_list,fields,index_thread):
+def run_single_core_job_stage_1_crossmatching(source_tables_to_crossmatch_tuples_list,fields,index_thread):
 
 
     '''
@@ -216,7 +216,7 @@ def run_single_core_job_stage_1_crossmatching(tables_to_crossmatch_list,fields,i
 
         expids_dict = {}
 
-        for table_to_crossmatch_tuple in tables_to_crossmatch_list:
+        for table_to_crossmatch_tuple in source_tables_to_crossmatch_tuples_list:
 
             obs_date = table_to_crossmatch_tuple[0]
             sca = table_to_crossmatch_tuple[1]
@@ -270,7 +270,7 @@ def run_single_core_job_stage_1_crossmatching(tables_to_crossmatch_list,fields,i
             with (open(astroobjects_table_file, "w") as csv_astroobjects_fh,
                  open(merges_table_file, "w") as csv_merges_fh):
 
-                for table_to_crossmatch_tuple in tables_to_crossmatch_list:
+                for table_to_crossmatch_tuple in source_tables_to_crossmatch_tuples_list:
 
                     obs_date = table_to_crossmatch_tuple[0]
                     sca = table_to_crossmatch_tuple[1]
@@ -576,7 +576,7 @@ def run_single_core_job_stage_1_crossmatching(tables_to_crossmatch_list,fields,i
     return message
 
 
-def run_single_core_job_stage_2_crossmatching(tables_to_crossmatch_list,fields,index_thread):
+def run_single_core_job_stage_2_crossmatching(source_tables_to_crossmatch_tuples_list,fields,index_thread):
 
 
     '''
@@ -714,7 +714,7 @@ def run_single_core_job_stage_2_crossmatching(tables_to_crossmatch_list,fields,i
                 # 2. Speed it up by restricting cross-matching within the inclusion radius.
                 # 3. Register Merges_<field> records for cross-matches.
 
-                for table_to_crossmatch_tuple in tables_to_crossmatch_list:
+                for table_to_crossmatch_tuple in source_tables_to_crossmatch_tuples_list:
 
                     obs_date = table_to_crossmatch_tuple[0]
                     sca = table_to_crossmatch_tuple[1]
@@ -868,6 +868,8 @@ def run_single_core_job_stage_2_crossmatching(tables_to_crossmatch_list,fields,i
 
     # Close database connections.
 
+    roman_tessellation_db.close()
+
     dbh.close()
 
     if dbh.exit_code >= 64:
@@ -875,8 +877,6 @@ def run_single_core_job_stage_2_crossmatching(tables_to_crossmatch_list,fields,i
         fh.flush()
         fh.close()
         raise RuntimeError(f"*** Error closing database connection (dbh.exit_code={dbh.exit_code}); quitting...")
-
-    roman_tessellation_db.close()
 
     fh.write(f"\nEnd of run_single_core_job: index_thread={index_thread}\n")
 
@@ -887,13 +887,13 @@ def run_single_core_job_stage_2_crossmatching(tables_to_crossmatch_list,fields,i
     return message
 
 
-def execute_parallel_processes_stage_1_crossmatching(tables_to_crossmatch_list,fields_list,num_cores):
+def execute_parallel_processes_stage_1_crossmatching(source_tables_to_crossmatch_tuples_list,fields_list,num_cores):
 
     print("num_cores =",num_cores)
 
     with ProcessPoolExecutor(max_workers=num_cores) as executor:
         # Submit all tasks to the executor and store the futures in a list
-        futures = [executor.submit(run_single_core_job_stage_1_crossmatching,tables_to_crossmatch_list,fields_list,thread_index) for thread_index in range(num_cores)]
+        futures = [executor.submit(run_single_core_job_stage_1_crossmatching,source_tables_to_crossmatch_tuples_list,fields_list,thread_index) for thread_index in range(num_cores)]
 
         # Iterate over completed futures and update progress
         for i, future in enumerate(as_completed(futures)):
@@ -914,13 +914,13 @@ def execute_parallel_processes_stage_1_crossmatching(tables_to_crossmatch_list,f
         exit(64)
 
 
-def execute_parallel_processes_stage_2_crossmatching(tables_to_crossmatch_list,fields_list,num_cores):
+def execute_parallel_processes_stage_2_crossmatching(source_tables_to_crossmatch_tuples_list,fields_list,num_cores):
 
     print("num_cores =",num_cores)
 
     with ProcessPoolExecutor(max_workers=num_cores) as executor:
         # Submit all tasks to the executor and store the futures in a list
-        futures = [executor.submit(run_single_core_job_stage_2_crossmatching,tables_to_crossmatch_list,fields_list,thread_index) for thread_index in range(num_cores)]
+        futures = [executor.submit(run_single_core_job_stage_2_crossmatching,source_tables_to_crossmatch_tuples_list,fields_list,thread_index) for thread_index in range(num_cores)]
 
         # Iterate over completed futures and update progress
         for i, future in enumerate(as_completed(futures)):
@@ -949,9 +949,9 @@ if __name__ == '__main__':
 
 
     '''
-    Launch parallel tasks to load AstroObjects and Merges database tables
-    for all RAPID science pipelines that already ran on a given processing date,
-    which have Sources database tables already loaded.
+    Launch parallel tasks to do source cross-matching and load AstroObjects and
+    Merges database tables for all RAPID science pipelines that already ran on a
+    given processing date, which have Sources database tables already loaded.
     '''
 
 
@@ -963,181 +963,11 @@ if __name__ == '__main__':
         exit(dbh.exit_code)
 
 
-    # Query database for all normal RAPID science-pipeline Jobs records
-    # that are associated with the given processing date.
-    # Returns a list of job IDs.
+    # Look up for the given processing date the Sources child table names
+    # to cross-match and a distinct list of the fields covered by the sources.
 
-    try:
-        recs = dbh.get_jids_of_normal_science_pipeline_jobs_for_processing_date(proc_date)
-    except Exception as e:
-        print(f"*** Error: Exception raised in dbh.get_jids_of_normal_science_pipeline_jobs_for_processing_date " +
-              f"(proc_date={proc_date},e={e});  quitting...")
-        dbh.close()
-        exit(64)
-
-    if dbh.exit_code >= 64:
-        print("*** Error from {}; quitting ".format(swname))
-        dbh.close()
-        exit(dbh.exit_code)
-
-
-    # Set up to launch multi-processing for cross-matching all sources database tables
-    # that are associated with a given processing date.
-
-    jid_list = []
-    meta_list = []
-
-    for jid in recs:
-
-        try:
-            job_dict = dbh.get_info_for_job(jid)
-        except Exception as e:
-            print(f"*** Error: Exception raised in dbh.get_info_for_job " +
-                  f"(jid={jid},e={e});  quitting...")
-            dbh.close()
-            exit(64)
-
-        if dbh.exit_code >= 64:
-            print(f"*** Error: Exception raised in dbh.get_info_for_job " +
-                  f"(jid={jid});  quitting...")
-            dbh.close()
-            exit(dbh.exit_code)
-
-        rid = job_dict["rid"]
-
-        try:
-            l2file_dict = dbh.get_l2file_info_for_sources(rid)
-        except Exception as e:
-            print(f"*** Error: Exception raised in dbh.get_l2file_info_for_sources " +
-                  f"(rid={rid},e={e});  quitting...")
-            dbh.close()
-            exit(64)
-
-        if dbh.exit_code >= 64:
-            print(f"*** Error: Exception raised in dbh.get_l2file_info_for_sources " +
-                  f"(rid={rid});  quitting...")
-            dbh.close()
-            exit(dbh.exit_code)
-
-        crval1 = l2file_dict['crval1']
-        crval2 = l2file_dict['crval2']
-        crpix1 = l2file_dict['crpix1']
-        crpix2 = l2file_dict['crpix2']
-        cd11 = l2file_dict['cd11']
-        cd12 = l2file_dict['cd12']
-        cd21 = l2file_dict['cd21']
-        cd22 = l2file_dict['cd22']
-        expid = l2file_dict["expid"]
-        sca = l2file_dict["sca"]
-        fid = l2file_dict["fid"]
-        field = l2file_dict["field"]
-        hp6 = l2file_dict["hp6"]
-        hp9 = l2file_dict["hp9"]
-        mjdobs = l2file_dict["mjdobs"]
-        dateobs = l2file_dict["dateobs"]
-
-
-        # Load Sources record metadata into a dictionary that can be appended to a list,
-        # and then unpacked later.
-
-        meta_dict = {}
-
-        meta_dict["jid"] = jid
-        meta_dict["expid"] = expid
-        meta_dict["sca"] = sca
-        meta_dict["fid"] = fid
-        meta_dict["field"] = field
-        meta_dict["hp6"] = hp6
-        meta_dict["hp9"] = hp9
-        meta_dict["mjdobs"] = mjdobs
-        meta_dict["dateobs"] = dateobs
-
-
-        # Append to lists.
-
-        jid_list.append(jid)
-        meta_list.append(meta_dict)
-
-        print("jid =",jid)
-
-
-    # Figure out which Source child tables need to be cross-matched.
-
-    table_crossmatch_obs_date_sca_dict = {}      # Dictionary key is (obs_date,sca) tuple.
-
-    for jid,meta_dict in zip(jid_list,meta_list):
-
-        sca = meta_dict["sca"]
-        dateobs = meta_dict["dateobs"]
-        obs_date = str(dateobs).split()[0].replace("-","")
-
-        sources_tablename = f"sources_{obs_date}_{sca}"
-
-        sql_queries = []
-        sql_queries.append(f"SELECT to_regclass('public.{sources_tablename}') IS NOT NULL;")
-
-        try:
-            records = dbh.execute_sql_queries(sql_queries,debug)
-        except Exception as e:
-            print(f"*** Error: Exception raised in dbh.execute_sql_queries " +
-                  f"(e={e});  quitting...")
-            dbh.close()
-            exit(64)
-
-        if dbh.exit_code >= 64:
-            print("*** Error from {}; quitting ".format(swname))
-            dbh.close()
-            exit(dbh.exit_code)
-
-        table_exists_flag = records[0][0]
-
-        if table_exists_flag:
-
-            table_crossmatch_key = (obs_date,sca)
-            table_crossmatch_obs_date_sca_dict[table_crossmatch_key] = 1
-
-
-    tables_to_crossmatch_list = list(table_crossmatch_obs_date_sca_dict.keys())
-    n_tables_to_crossmatch_list = len(tables_to_crossmatch_list)
-    print("n_tables_to_crossmatch_list =",n_tables_to_crossmatch_list)
-
-
-    # Find all distinct fields covered by the Sources child tables,
-    # only for records with flags=0.
-
-    fields_dict = {}
-
-    for table_to_crossmatch_tuple in tables_to_crossmatch_list:
-
-        obs_date = table_to_crossmatch_tuple[0]
-        sca = table_to_crossmatch_tuple[1]
-
-        sources_tablename = f"sources_{obs_date}_{sca}"
-
-        sql_queries = []
-        sql_queries.append(f"select distinct field from {sources_tablename} WHERE flags = 0;")
-
-        try:
-            records = dbh.execute_sql_queries(sql_queries,debug)
-        except Exception as e:
-            print(f"*** Error: Exception raised in dbh.execute_sql_queries " +
-                  f"(e={e});  quitting...")
-            dbh.close()
-            exit(64)
-
-        if dbh.exit_code >= 64:
-            print("*** Error from {}; quitting ".format(swname))
-            dbh.close()
-            exit(dbh.exit_code)
-
-        for record in records:
-            field = record[0]
-            fields_dict[field] = 1
-
-
-    fields_list = list(fields_dict.keys())
-    nfields = len(fields_list)
-    print("nfields =",nfields)
+    source_tables_to_crossmatch_tuples_list,fields_list = \
+        util.lookup_source_tables_to_crossmatch_and_distinct_fields(dbh,proc_date)
 
 
     # Code-timing benchmark.
@@ -1291,10 +1121,10 @@ if __name__ == '__main__':
     #########################################################################################
 
     if num_cores > 1:
-        execute_parallel_processes_stage_1_crossmatching(tables_to_crossmatch_list,fields_list,num_cores)
+        execute_parallel_processes_stage_1_crossmatching(source_tables_to_crossmatch_tuples_list,fields_list,num_cores)
     else:
         thread_index = 0
-        run_single_core_job_stage_1_crossmatching(tables_to_crossmatch_list,fields_list,thread_index)
+        run_single_core_job_stage_1_crossmatching(source_tables_to_crossmatch_tuples_list,fields_list,thread_index)
 
 
     # Code-timing benchmark.
@@ -1373,10 +1203,10 @@ if __name__ == '__main__':
     #####################################################################################
 
     if num_cores > 1:
-        execute_parallel_processes_stage_2_crossmatching(tables_to_crossmatch_list,fields_list,num_cores)
+        execute_parallel_processes_stage_2_crossmatching(source_tables_to_crossmatch_tuples_list,fields_list,num_cores)
     else:
         thread_index = 0
-        run_single_core_job_stage_2_crossmatching(tables_to_crossmatch_list,fields_list,thread_index)
+        run_single_core_job_stage_2_crossmatching(source_tables_to_crossmatch_tuples_list,fields_list,thread_index)
 
 
     # Code-timing benchmark.
