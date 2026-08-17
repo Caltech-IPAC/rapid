@@ -580,11 +580,15 @@ The VPO code is still evolving, and is not quite in optimal form
 (the number in first row in the above table can be reduced significantly).
 
 The pipeline processing was done in parallel under AWS Batch.
-The RAPID science pipelines took ~1.3 hours per instance for the ``K213`` filter and
-~30 minutes per instance for the ``Z087`` filter.
+
 The two instances of the RAPID reference-image pipeline took
 ~14 minutes for the ``K213`` filter and
 ~33 minutes to run for the ``Z087`` filter.
+Both reference-image pipeline instances stacked 25 input frames, but the longer total execution
+time for the ``Z087`` filter was in the generation of the reference-image PhotUtils catalog.
+
+The RAPID science pipelines took ~1.3 hours per instance for the ``K213`` filter and
+~30 minutes per instance for the ``Z087`` filter.
 As shown in the table below for the longest running science-pipeline instance (``jid=143944``),
 generating PhotUtils catalogs is the dominant factor affecting pipeline performance.
 
@@ -628,15 +632,15 @@ Total elapsed time to run one instance of science pipeline              4896.480
 =================================================================  =====================
 
 
-Here are numbers related to extraction of lightcurves from PSF-fit difference-image catalogs:
+Here are numbers related to extraction of lightcurves from PSF-fit SFFT-difference-image catalogs:
 
 =========================================================================================  =====================
 Item                                                                                        Number
 =========================================================================================  =====================
 Number of sources loaded into Sources_<obsdate>_<sca> database tables                         25,245,610
+Number of merges inside AND outside field, loaded into Merges_<field> database tables         28,147,729
+Number of merges outside field, loaded into Merges_<field> database tables                         8,981
 Number of astroObjects loaded into AstroObjects_<field> database tables                        1,808,659
-Number of merges within AND without field, loaded into Merges_<field> database tables         28,147,729
-Number of merges without field, loaded into Merges_<field> database tables                         8,981
 Number of records loaded into AstroObjectsMeta_<field> database tables                         1,808,659
 Number of Sources_<obsdate>_<sca> database tables                                                     70
 Number of AstroObjects_<field> database tables                                                         7
