@@ -15,8 +15,8 @@ fits_file = 'r0034001001001001001_0001_wfi06_f062_cal_lite.fits'
 
 # Also check SCAs 7, 9, 16, 18 at corners of CCD mosaic.
 
-asdf_file = 'r0034001001001001001_0001_wfi18_f062_cal_lite.asdf'
-fits_file = 'r0034001001001001001_0001_wfi18_f062_cal_lite.fits'
+asdf_file = 'r0034001001001001001_0001_wfi01_f062_cal_lite.asdf'
+fits_file = 'r0034001001001001001_0001_wfi01_f062_cal_lite.fits'
 
 
 def extract_gwcs(af):
