@@ -955,9 +955,12 @@ if __name__ == '__main__':
         end_time_benchmark - start_time_benchmark_at_start)
 
 
-    # Close database connection.
+    # Close database connections.
 
     dbh.close()
+
+    roman_tessellation_db.close()
+
 
     if dbh.exit_code >= 64:
         exit(dbh.exit_code)
