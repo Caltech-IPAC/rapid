@@ -2620,3 +2620,195 @@ def index_to_radec(idx):
     dec_units = idx % 2_138_400_001
     ra_units  = idx // 2_138_400_001
     return ra_units / 11_880_000, dec_units / 11_880_000 - 90.0
+
+
+########################################
+# Look up for the given processing date the Sources child table names
+# to cross-match and a distinct list of the fields covered by the
+# sources in those tables.
+########################################
+
+def lookup_source_tables_to_crossmatch_and_distinct_fields(dbh,proc_date):
+
+
+    # Query database for all normal RAPID science-pipeline Jobs records
+    # that are associated with the given processing date.
+    # Returns a list of job IDs.
+
+    try:
+        recs = dbh.get_jids_of_normal_science_pipeline_jobs_for_processing_date(proc_date)
+    except Exception as e:
+        print(f"*** Error: Exception raised in dbh.get_jids_of_normal_science_pipeline_jobs_for_processing_date " +
+              f"(proc_date={proc_date},e={e});  quitting...")
+        dbh.close()
+        exit(64)
+
+    if dbh.exit_code >= 64:
+        print("*** Error from {}; quitting ".format(swname))
+        dbh.close()
+        exit(dbh.exit_code)
+
+
+    # Loop over job IDs that are associated with a given processing date.
+
+    jid_list = []
+    meta_list = []
+
+    for jid in recs:
+
+        try:
+            job_dict = dbh.get_info_for_job(jid)
+        except Exception as e:
+            print(f"*** Error: Exception raised in dbh.get_info_for_job " +
+                  f"(jid={jid},e={e});  quitting...")
+            dbh.close()
+            exit(64)
+
+        if dbh.exit_code >= 64:
+            print(f"*** Error: Exception raised in dbh.get_info_for_job " +
+                  f"(jid={jid});  quitting...")
+            dbh.close()
+            exit(dbh.exit_code)
+
+        rid = job_dict["rid"]
+
+        try:
+            l2file_dict = dbh.get_l2file_info_for_sources(rid)
+        except Exception as e:
+            print(f"*** Error: Exception raised in dbh.get_l2file_info_for_sources " +
+                  f"(rid={rid},e={e});  quitting...")
+            dbh.close()
+            exit(64)
+
+        if dbh.exit_code >= 64:
+            print(f"*** Error: Exception raised in dbh.get_l2file_info_for_sources " +
+                  f"(rid={rid});  quitting...")
+            dbh.close()
+            exit(dbh.exit_code)
+
+        crval1 = l2file_dict['crval1']
+        crval2 = l2file_dict['crval2']
+        crpix1 = l2file_dict['crpix1']
+        crpix2 = l2file_dict['crpix2']
+        cd11 = l2file_dict['cd11']
+        cd12 = l2file_dict['cd12']
+        cd21 = l2file_dict['cd21']
+        cd22 = l2file_dict['cd22']
+        expid = l2file_dict["expid"]
+        sca = l2file_dict["sca"]
+        fid = l2file_dict["fid"]
+        field = l2file_dict["field"]
+        hp6 = l2file_dict["hp6"]
+        hp9 = l2file_dict["hp9"]
+        mjdobs = l2file_dict["mjdobs"]
+        dateobs = l2file_dict["dateobs"]
+
+
+        # Load Sources record metadata into a dictionary that can be appended to a list,
+        # and then unpacked later.
+
+        meta_dict = {}
+
+        meta_dict["jid"] = jid
+        meta_dict["expid"] = expid
+        meta_dict["sca"] = sca
+        meta_dict["fid"] = fid
+        meta_dict["field"] = field
+        meta_dict["hp6"] = hp6
+        meta_dict["hp9"] = hp9
+        meta_dict["mjdobs"] = mjdobs
+        meta_dict["dateobs"] = dateobs
+
+
+        # Append to lists.
+
+        jid_list.append(jid)
+        meta_list.append(meta_dict)
+
+        print("jid =",jid)
+
+
+    # Figure out which Sources child tables need to be cross-matched.
+
+    table_crossmatch_obs_date_sca_dict = {}      # Dictionary key is (obs_date,sca) tuple.
+
+    for jid,meta_dict in zip(jid_list,meta_list):
+
+        sca = meta_dict["sca"]
+        dateobs = meta_dict["dateobs"]
+        obs_date = str(dateobs).split()[0].replace("-","")
+
+        sources_tablename = f"sources_{obs_date}_{sca}"
+
+        sql_queries = []
+        sql_queries.append(f"SELECT to_regclass('public.{sources_tablename}') IS NOT NULL;")
+
+        try:
+            records = dbh.execute_sql_queries(sql_queries,debug)
+        except Exception as e:
+            print(f"*** Error: Exception raised in dbh.execute_sql_queries " +
+                  f"(e={e});  quitting...")
+            dbh.close()
+            exit(64)
+
+        if dbh.exit_code >= 64:
+            print("*** Error from {}; quitting ".format(swname))
+            dbh.close()
+            exit(dbh.exit_code)
+
+        table_exists_flag = records[0][0]
+
+        if table_exists_flag:
+
+            table_crossmatch_key = (obs_date,sca)
+            table_crossmatch_obs_date_sca_dict[table_crossmatch_key] = 1
+
+
+    source_tables_to_crossmatch_list = list(table_crossmatch_obs_date_sca_dict.keys())
+
+    n_source_tables_to_crossmatch_list = len(source_tables_to_crossmatch_list)
+    print("n_source_tables_to_crossmatch_list =",n_source_tables_to_crossmatch_list)
+
+
+    # Find all distinct fields covered by the Sources child tables,
+    # only for records with flags=0.
+
+    fields_dict = {}
+
+    for table_to_crossmatch_tuple in source_tables_to_crossmatch_list:
+
+        obs_date = table_to_crossmatch_tuple[0]
+        sca = table_to_crossmatch_tuple[1]
+
+        sources_tablename = f"sources_{obs_date}_{sca}"
+
+        sql_queries = []
+        sql_queries.append(f"select distinct field from {sources_tablename} WHERE flags = 0;")
+
+        try:
+            records = dbh.execute_sql_queries(sql_queries,debug)
+        except Exception as e:
+            print(f"*** Error: Exception raised in dbh.execute_sql_queries " +
+                  f"(e={e});  quitting...")
+            dbh.close()
+            exit(64)
+
+        if dbh.exit_code >= 64:
+            print("*** Error from {}; quitting ".format(swname))
+            dbh.close()
+            exit(dbh.exit_code)
+
+        for record in records:
+            field = record[0]
+            fields_dict[field] = 1
+
+
+    fields_list = list(fields_dict.keys())
+
+    nfields = len(fields_list)
+    print("nfields =",nfields)
+
+
+    # Return source_tables_to_crossmatch_list and fields_list.
+
+    return source_tables_to_crossmatch_list,fields_list
