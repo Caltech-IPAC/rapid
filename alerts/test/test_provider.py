@@ -21,15 +21,18 @@ TODO (test plan, not yet implemented):
   E20 CLI surface: --diff-flavor choices enforced, bad args exit nonzero
 """
 
+import io
 import os
 import shutil
+from pathlib import Path
 
 import fastavro
 import pytest
 
 from alerts.produce import (batch_produce, load_schema,
                                   open_alert_archive, produce_alert)
-from alerts.providers import AlertDataProvider, CutoutStagingError
+from alerts.providers import (AlertDataProvider, AssociationError,
+                              CutoutStagingError)
 
 from conftest import CHIP_PID, PRODUCT_OFFSETS, FakeDB
 from test_clips import clip_to_numpy
@@ -54,24 +57,33 @@ def test_resolve_pid_unknown_exposure_raises(make_provider):
 
 
 # ---------------------------------------------------------------------------
-# missing per-field partitions: the real DB can lack merges_<field>/
-# astroobjects_<field> for a chip's field (seen live: pid 339271 ->
-# merges_4686817). Sources there must degrade to unassociated -- alerts
-# with no diaObject -- in both flows, never crash the batch.
+# missing associations are fatal: source cross-matching creates an object
+# for every source, so by alert time every detection has a merges row by
+# definition. A missing merges_<field> partition (seen live: pid 339271 ->
+# merges_4686817) or a missing merges row means cross-matching did not run
+# or failed -- both flows must abort loudly (AssociationError) instead of
+# shipping object-less alerts.
 # ---------------------------------------------------------------------------
 
-def test_missing_field_partition_degrades_to_unassociated(make_provider,
-                                                          chip_data):
+def test_missing_field_partition_aborts(make_provider, chip_data):
     chip_data.partitions_exist = False
     provider = make_provider()
-    sources = list(provider.iter_sources(CHIP_PID))       # batch prefetch
-    assert len(sources) == len(chip_data.sources)
-    for source in sources:
-        assert provider.get_object_for_source(source) is None
+    with pytest.raises(AssociationError, match="merges_"):
+        list(provider.iter_sources(CHIP_PID))             # batch prefetch
 
     single = make_provider()                              # single-alert flow
     detection = single.get_detection(9001)
-    assert single.get_object_for_source(detection) is None
+    with pytest.raises(AssociationError, match="merges_"):
+        single.get_object_for_source(detection)
+
+
+def test_missing_merges_row_aborts(make_provider, chip_data):
+    del chip_data.merges[9003]        # cross-matching missed one source
+    provider = make_provider()
+    sources = list(provider.iter_sources(CHIP_PID))       # prefetch is fine
+    trigger = next(s for s in sources if s.sid == 9003)
+    with pytest.raises(AssociationError, match="sid=9003"):
+        provider.get_object_for_source(trigger)
 
 
 # ---------------------------------------------------------------------------
@@ -95,6 +107,24 @@ def test_diff_flavor_selects_difference_image(make_provider, chip_data):
 def test_invalid_diff_flavor_rejected_at_construction(chip_data):
     with pytest.raises(ValueError):
         AlertDataProvider(FakeDB(chip_data), diff_flavor="hotpants")
+
+
+def test_provider_close_removes_staging_directory(make_provider):
+    provider = make_provider()
+    staging_dir = Path(provider._staging_dir)
+    assert staging_dir.is_dir()
+
+    provider.close()
+    provider.close()                         # cleanup is deliberately idempotent
+
+    assert not staging_dir.exists()
+
+
+def test_provider_context_manager_removes_staging_directory(chip_data):
+    with AlertDataProvider(FakeDB(chip_data)) as provider:
+        staging_dir = Path(provider._staging_dir)
+        assert staging_dir.is_dir()
+    assert not staging_dir.exists()
 
 
 # ---------------------------------------------------------------------------
@@ -203,8 +233,20 @@ def test_s3_staging_default_retries_is_five(make_provider, chip_data,
 # prefetches while produce_alert() issues per-source queries; any semantic
 # drift between the two paths shows up as differing bytes. Byte-identity
 # is deliberately strict -- it also catches nondeterminism in the clip
-# serialization itself.
+# serialization itself. The one legitimate difference is timeProcessedMjd
+# (stamped from the wall clock at assembly), so alerts are compared after
+# nulling it and re-serializing.
 # ---------------------------------------------------------------------------
+
+def _bytes_without_time_processed(alert_bytes, schema):
+    """Re-serialize an alert with every timeProcessedMjd nulled."""
+    alert = fastavro.schemaless_reader(io.BytesIO(alert_bytes), schema)
+    alert["diaSource"]["timeProcessedMjd"] = None
+    for prv in alert["prvDiaSources"] or []:
+        prv["timeProcessedMjd"] = None
+    buf = io.BytesIO()
+    fastavro.schemaless_writer(buf, schema, alert)
+    return buf.getvalue()
 
 class CapturingProducer:
     """Stands in for confluent_kafka.Producer; keeps the alert bytes."""
@@ -257,5 +299,7 @@ def test_batch_and_single_paths_produce_identical_bytes(make_provider,
                             producer.messages))
     for row in chip_data.sources:
         single = produce_alert(make_provider(), row["sid"], schema=schema)
-        assert single == batch_by_sid[row["sid"]], \
+        assert (_bytes_without_time_processed(single, schema)
+                == _bytes_without_time_processed(batch_by_sid[row["sid"]],
+                                                 schema)), \
             f"batch and single alerts differ for sid={row['sid']}"

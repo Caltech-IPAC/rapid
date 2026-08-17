@@ -202,8 +202,8 @@ def main(argv: list[str] | None = None) -> int:
                        codec="null" if args.no_compress else "deflate")
                    if args.save else contextlib.nullcontext())
 
-    # Produce alert to archive
-    with archive_ctx as archive:
+    # Produce alerts, then remove any products staged from S3.
+    with provider, archive_ctx as archive:
         if args.sid is not None:
             alert_bytes = produce_alert(provider, args.sid,
                                         producer=producer, topic=args.topic,

@@ -64,7 +64,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from benchmark import TimingLog, collect_meta, percentile, _mib
+from benchmark import (TimingLog, collect_meta, percentile,
+                       quiet_make_provider, _mib)
 
 logger = logging.getLogger(__name__)
 
@@ -626,8 +627,8 @@ def main(argv=None):
         parser.error(f"--batches must be comma-separated integers, "
                      f"not {args.batches!r}")
 
-    from alerts.cli import make_provider
-    provider = make_provider()
+    # value-free environment summary + suppressed RAPIDDB connect chatter
+    provider = quiet_make_provider()
     pid = (args.pid if args.pid is not None
            else provider.resolve_pid(args.exposure, args.sca))
 

@@ -40,6 +40,13 @@ import pytest
 
 from wcs_eval import tpv_pixel_to_sky
 
+
+def pytest_addoption(parser):
+    parser.addoption(
+        "--require-live", action="store_true", default=False,
+        help=("fail instead of skip when the alerts live DB/S3 integration "
+              "tests cannot run"))
+
 # per-product DC offsets added to chip_image, so a stamp's values identify
 # its source file (see job_dir)
 PRODUCT_OFFSETS = {
@@ -186,17 +193,18 @@ class ChipData:
             {"pid": 100, "expid": 42, "sca": 7, "vbest": 0},
         ]
 
-        # Three on-chip detections: two associated with objects (one shared
-        # object would also be legal; kept distinct for clarity), one
-        # unassociated. Positions include a fractional part so rounding is
-        # always exercised.
+        # Three on-chip detections, every one associated with an object:
+        # source cross-matching creates an object for every source, so an
+        # all-associated chip is the only valid batch input (an sid with
+        # no merges row raises AssociationError). Positions include a
+        # fractional part so rounding is always exercised.
         self.sources = [
             make_source_row(9001, 150.3, 200.6, 60500.5, tpv_header),
             make_source_row(9002, 40.9, 60.2, 60500.5, tpv_header),
             make_source_row(9003, 260.1, 111.7, 60500.5, tpv_header),
         ]
-        # merges_<field>: sid -> aid (9003 stays unassociated)
-        self.merges = {9001: 777, 9002: 888}
+        # merges_<field>: sid -> aid
+        self.merges = {9001: 777, 9002: 888, 9003: 999}
         # astroobjects_<field>: aid -> object row (the full storage row;
         # the SELECT-list projection in FakeCursor trims it per query)
         self.objects = {
@@ -206,10 +214,13 @@ class ChipData:
             888: {"aid": 888, "ra0": 268.10, "dec0": -29.87,
                   "stdevra": 2.5e-05, "stdevdec": 2.1e-05, "nsources": 1,
                   "meanra": 268.10, "meandec": -29.87, "flux0": 800.0},
+            999: {"aid": 999, "ra0": 268.11, "dec0": -29.89,
+                  "stdevra": 3.0e-05, "stdevdec": 2.8e-05, "nsources": 1,
+                  "meanra": 268.11, "meandec": -29.89, "flux0": 500.0},
         }
         # Per-field merges/astroobjects partition tables exist unless a
         # test flips this (the real DB can lack a field's partitions;
-        # the provider must then treat its sources as unassociated).
+        # the provider must then abort with AssociationError).
         self.partitions_exist = True
 
         # Prior detections (other sids of the same objects, earlier mjd,
@@ -361,8 +372,16 @@ def make_provider(chip_data):
     """
     from alerts.providers import AlertDataProvider
 
-    def _make(diff_flavor="sfft", kona_lookup=None, refcat=True):
-        return AlertDataProvider(FakeDB(chip_data), diff_flavor=diff_flavor,
-                                 kona_lookup=kona_lookup, refcat=refcat)
+    providers = []
 
-    return _make
+    def _make(diff_flavor="sfft", kona_lookup=None, refcat=True):
+        provider = AlertDataProvider(
+            FakeDB(chip_data), diff_flavor=diff_flavor,
+            kona_lookup=kona_lookup, refcat=refcat)
+        providers.append(provider)
+        return provider
+
+    yield _make
+
+    for provider in providers:
+        provider.close()

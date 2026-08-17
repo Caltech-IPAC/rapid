@@ -87,6 +87,18 @@ class CutoutStagingError(RuntimeError):
     chip, one such failure would otherwise degrade every source on it.
     """
 
+
+class AssociationError(RuntimeError):
+    """A detection reached alert assembly without an associated object.
+
+    Source cross-matching creates an object for every source it cannot
+    match, so by alert time every detection has a merges_<field> row by
+    definition. A missing association -- or a missing merges/astroobjects
+    partition -- means cross-matching did not run or failed for the field.
+    Raised loudly so the batch aborts instead of shipping alerts built
+    from an inconsistent database state.
+    """
+
 #: For pylance checking
 LoadedImage: TypeAlias = "tuple[np.ndarray | None, FITSHDR | None]"
 
@@ -109,6 +121,9 @@ class Source:
     yfit: float
     band: str
     aid: int | None = None        # associated object; set once known
+    # alert-assembly timestamp (timeProcessedMjd), stamped by
+    # produce.assemble_alert_for_source(); never a storage column
+    time_proc: float | None = None
     xerr: float | None = None
     yerr: float | None = None
     fluxfit: float | None = None
@@ -132,6 +147,10 @@ class Source:
     # association not run for this detection (e.g. all prv sources)
     is_ss_candidate: bool | None = None
 
+    # fields filled after construction (association, assembly stamping,
+    # KONA); never storage columns
+    FILLED_LATER = frozenset({"aid", "time_proc", "is_ss_candidate"})
+
     @property
     def snr(self) -> float | None:
         """float or None: signal-to-noise ratio, fluxfit / fluxerr.
@@ -153,7 +172,7 @@ class Source:
             derived ``band`` key already added.
         strict : bool, optional
             If True, every Source field must be present as a key in `row`
-            (except `aid` and `is_ss_candidate`, which are filled after
+            (except the FILLED_LATER fields, which are filled after
             construction). Errors on dropped columns instead of null.
 
         Returns
@@ -167,7 +186,7 @@ class Source:
         """
         names = {f.name for f in dataclasses.fields(cls)}
         if strict:
-            missing = names - set(row) - {"aid", "is_ss_candidate"}
+            missing = names - set(row) - cls.FILLED_LATER
             if missing:
                 raise KeyError(
                     f"Source row is missing expected columns: "
@@ -240,7 +259,7 @@ class ForcedPhot:
     ra: float
     dec: float
     mjdobs: float
-    time_processed: float
+    time_proc: float
     band: str | None = None
     flux: float | None = None
     fluxerr: float | None = None
@@ -818,7 +837,13 @@ class AlertDataProvider:
         # each chip's downloads replace the previous chip's files.
         self._images_pid: int | None = None
         self._images: dict[str, LoadedImage] = {}  # "diff"|"sci"|"ref" -> (pixels, header)
-        self._staging_dir = tempfile.mkdtemp(prefix="rapid_cutouts_")
+        # Keep ownership of the temporary directory so it is removed both by
+        # explicit close()/context-manager use and, as a fallback, when the
+        # provider is garbage-collected.  A bare mkdtemp() leaked every staged
+        # chip until the operating system eventually cleaned its temp area.
+        self._staging_tmp = tempfile.TemporaryDirectory(
+            prefix="rapid_cutouts_")
+        self._staging_dir = self._staging_tmp.name
         self._s3: Any = None          # lazily built, retry-configured S3 client
         self._forced_phot_logged = False  # log the not-implemented note once
         # Reference-catalog cross-match state. The catalog is a per-
@@ -831,6 +856,25 @@ class AlertDataProvider:
         self._refcat: RefCatalog | None = None
         self._chip_refmatches: dict[
             int, tuple[list[RefMatch], list[RefMatch]]] = {}
+
+    def close(self) -> None:
+        """Remove locally staged S3 products.
+
+        Safe to call more than once. Database-connection ownership remains
+        with the caller that supplied ``db``.
+        """
+        self._images.clear()
+        self._images_pid = None
+        self._refcat = None
+        self._chip_refmatches.clear()
+        self._staging_tmp.cleanup()
+
+    def __enter__(self) -> "AlertDataProvider":
+        return self
+
+    def __exit__(self, exc_type: Any, exc_value: Any,
+                 traceback: Any) -> None:
+        self.close()
 
     def _query(self, sql: str,
                params: Sequence[Any] | None = None) -> list[dict[str, Any]]:
@@ -856,28 +900,27 @@ class AlertDataProvider:
         finally:
             cur.close()
 
-    def _partition_exists(self, field: int) -> bool:
-        """Check that a field's merges/astroobjects partitions exist.
+    def _require_partition(self, field: int) -> None:
+        """Ensure a field's merges/astroobjects partitions exist.
 
         Parameters
         ----------
         field : int
             Roman field identifier.
 
-        Returns
-        -------
-        bool
-            True if ``merges_<field>`` exists (a warning is logged when it
-            does not).
+        Raises
+        ------
+        AssociationError
+            If ``merges_<field>`` does not exist: source cross-matching
+            never ran for the field, so none of its detections can be
+            alerted on.
         """
         rows = self._query("SELECT to_regclass(%s) AS reg",
                            (f"merges_{int(field)}",))
-        exists = bool(rows) and rows[0]["reg"] is not None
-        if not exists:
-            logger.warning(
-                "merges_%s does not exist; sources in field %s are "
-                "treated as unassociated", int(field), field)
-        return exists
+        if not rows or rows[0]["reg"] is None:
+            raise AssociationError(
+                f"merges_{int(field)} does not exist: source cross-matching "
+                f"has not run for field {field}")
 
     def resolve_pid(self, expid: int, sca: int) -> int:
         """Map (exposure, SCA) to the difference-image pid to alert on.
@@ -1014,8 +1057,7 @@ class AlertDataProvider:
         # near a field boundary can land in different partitions, so group
         # the sids by field first (usually a single group).
         for field in sorted({s.field for s in sources}):
-            if not self._partition_exists(field):
-                continue  # those sids stay unassociated
+            self._require_partition(field)
             sids = [s.sid for s in sources if s.field == field]
             object_rows = self._query(f"""
                 SELECT m.sid, a.aid, a.ra0, a.dec0,
@@ -1054,7 +1096,7 @@ class AlertDataProvider:
         self._chip_history = history_by_aid
         self._chip_window_days = window_days
 
-    def get_object_for_source(self, detection: Source) -> ObjectRecord | None:
+    def get_object_for_source(self, detection: Source) -> ObjectRecord:
         """Associate a source with its AstroObject.
 
         Parameters
@@ -1064,23 +1106,31 @@ class AlertDataProvider:
 
         Returns
         -------
-        ObjectRecord or None
-            A fresh ObjectRecord each call, or None for an unassociated
-            detection -- the alert then has no diaObject.
+        ObjectRecord
+            A fresh ObjectRecord each call.
+
+        Raises
+        ------
+        AssociationError
+            If the detection has no merges_<field> row (or the field's
+            partitions do not exist). Cross-matching creates an object for
+            every source, so this is an inconsistent database state; see
+            AssociationError.
         """
         # Batch flow: after iter_sources(pid), every association for the
         # chip is already in memory. An sid absent from the prefetch means
-        # "no associated object" -- no fallback query needed.
+        # "no merges row" -- no fallback query needed.
         if self._chip_pid is not None and self._chip_pid == detection.pid:
             row = self._chip_objects.get(detection.sid)
             if row is None:
-                return None
+                raise AssociationError(
+                    f"sid={detection.sid} has no merges_{detection.field} "
+                    f"row: source cross-matching missed it")
             return ObjectRecord.from_row(row, strict=True)
 
         # Single-alert flow: query for just this sid.
         field = int(detection.field)
-        if not self._partition_exists(field):
-            return None  # no partition -> no association possible
+        self._require_partition(field)
         rows = self._query(f"""
             SELECT m.aid, a.*
             FROM merges_{field} m
@@ -1088,7 +1138,9 @@ class AlertDataProvider:
             WHERE m.sid = %s
         """, (detection.sid,))
         if not rows:
-            return None  # unassociated detection -> alert has no diaObject
+            raise AssociationError(
+                f"sid={detection.sid} has no merges_{field} row: source "
+                f"cross-matching missed it")
         # from_row() keeps only the ObjectRecord columns. Available in the
         # a.* row but currently unused: meanra/meandec (mean position),
         # flux0/meanflux/stdevflux, hp6/hp9.
@@ -1126,9 +1178,8 @@ class AlertDataProvider:
 
         # Single-alert flow: same sources -> Source mapping as
         # get_detection(), but selecting the object's other detections.
+        # `obj` exists, so its field partitions do too -- no check needed.
         field = int(detection.field)
-        if not self._partition_exists(field):
-            return []  # no partition -> no recorded history
         rows = self._query(f"""
             SELECT s.*, f.filter AS filter_name, e.exptime
             FROM sources s

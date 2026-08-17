@@ -35,6 +35,7 @@ import io
 import logging
 from pathlib import Path
 from typing import Any, Iterator, Sequence
+from astropy.time import Time
 
 import fastavro
 import fastavro.schema
@@ -312,34 +313,33 @@ def assemble_alert_for_source(provider: AlertDataProvider,
 
     Raises
     ------
+    providers.AssociationError
+        If the source has no associated object: cross-matching creates an
+        object for every source, so this is an inconsistent database
+        state and the run aborts.
     RuntimeError
         If the assembled packet's keys disagree with ALERT_PARAMS in
         param_registry.py (guards against registry drift).
     """
     obj = provider.get_object_for_source(source)
+    source.aid = obj.aid
 
-    dia_object = None
-    prv_dia_sources = None
-    prv_dia_forced_sources = None
+    time_proc = float(Time.now().mjd) # pyright: ignore[reportArgumentType]
+    source.time_proc = float(time_proc)
 
-    if obj is not None:
-        source.aid = obj.aid
+    prv = provider.get_prv_detections(source, obj,
+                                      window_days=PRV_WINDOW_DAYS)
+    prv_dia_sources = [build_dia_source(p) for p in prv] if prv else None
 
-        prv = provider.get_prv_detections(source, obj,
-                                          window_days=PRV_WINDOW_DAYS)
-        if prv:
-            prv_dia_sources = [build_dia_source(p) for p in prv]
+    mjds = [source.mjdobs] + [p.mjdobs for p in prv]
+    obj.first_mjd = min(mjds)
+    obj.last_mjd = max(mjds)
+    obj.validity_mjd = source.mjdobs
+    dia_object = build_dia_object(obj)
 
-        mjds = [source.mjdobs] + [p.mjdobs for p in prv]
-        obj.first_mjd = min(mjds)
-        obj.last_mjd = max(mjds)
-        obj.validity_mjd = source.mjdobs
-        dia_object = build_dia_object(obj)
-
-        forced = provider.get_forced_photometry(source, obj)
-        if forced:
-            prv_dia_forced_sources = [build_dia_forced_source(fp)
-                                      for fp in forced]
+    forced = provider.get_forced_photometry(source, obj)
+    prv_dia_forced_sources = ([build_dia_forced_source(fp) for fp in forced]
+                              if forced else None)
 
     # Solar-system association; also sets source.is_ss_candidate, so it must
     # run before build_dia_source(source) below. None = association could

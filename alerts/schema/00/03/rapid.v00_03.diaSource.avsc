@@ -22,17 +22,22 @@
         },
         {
             "name": "diaObjectId",
-            "type": [
-                "null",
-                "long"
-            ],
-            "default": null,
+            "type": "long",
             "doc": "Associated diaObject identifier"
         },
         {
             "name": "midpointMjd",
             "type": "double",
             "doc": "Effective mid-observation time (UTC scale) [MJD]"
+        },
+        {
+            "name": "timeProcessedMjd",
+            "type": [
+                "null",
+                "double"
+            ],
+            "default": null,
+            "doc": "Time alert was processed (UTC scale) [MJD]"
         },
         {
             "name": "exposureTime",
